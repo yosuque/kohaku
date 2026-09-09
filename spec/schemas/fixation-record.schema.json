@@ -1,0 +1,450 @@
+{
+  "$id": "https://kohaku-ui.dev/schemas/0.1/fixation-record.schema.json",
+  "title": "kohaku FixationRecord",
+  "description": "Persisted L1->L0 fixation record (StoragePort.getFixation / putFixation). Reference implementation of the storage-boundary validation described in docs/design.md; not itself part of the wire protocol between a Renderer and a host.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "intentHash": {
+      "type": "string"
+    },
+    "canonical": {
+      "type": "string"
+    },
+    "structureHash": {
+      "type": "string"
+    },
+    "pinnedSpec": {
+      "type": "object",
+      "properties": {
+        "kohaku": {
+          "type": "string",
+          "enum": [
+            "0.1",
+            "0.2"
+          ]
+        },
+        "intent": {
+          "type": "object",
+          "properties": {
+            "canonical": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+            },
+            "params": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "hash": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "canonical",
+            "params",
+            "hash"
+          ]
+        },
+        "dataVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "refVersions": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "state": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]{0,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "components": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$"
+              },
+              "type": {
+                "type": "string",
+                "minLength": 1
+              },
+              "version": {
+                "type": "string"
+              },
+              "props": {
+                "default": {},
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              },
+              "children": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z][a-zA-Z0-9_-]{0,63}$"
+                }
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "$ref": {
+                    "type": "string",
+                    "pattern": "^query:\\/\\/[a-z0-9_-]+\\/[^#]+$"
+                  },
+                  "bind": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "$state": {
+                          "type": "string",
+                          "pattern": "^[a-zA-Z][a-zA-Z0-9_]{0,63}$"
+                        },
+                        "values": {
+                          "minItems": 1,
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "$state",
+                        "values"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "$ref"
+                ],
+                "additionalProperties": false
+              },
+              "artifact": {
+                "type": "object",
+                "properties": {
+                  "inline": {
+                    "type": "string"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "sha256"
+                ],
+                "additionalProperties": false
+              },
+              "visibleWhen": {
+                "$ref": "#/$defs/__schema1"
+              }
+            },
+            "required": [
+              "id",
+              "type"
+            ]
+          }
+        },
+        "events": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "on": {
+                "type": "string",
+                "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*\\.[a-zA-Z][a-zA-Z0-9]*$"
+              },
+              "emit": {
+                "type": "string",
+                "enum": [
+                  "intent.patch",
+                  "intent.replace",
+                  "action.invoke",
+                  "state.set"
+                ]
+              },
+              "payload": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                }
+              }
+            },
+            "required": [
+              "on",
+              "emit",
+              "payload"
+            ]
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "properties": {
+            "tier": {
+              "type": "string",
+              "enum": [
+                "L0",
+                "L1",
+                "L2"
+              ]
+            },
+            "composedBy": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "cache": {
+              "type": "string",
+              "enum": [
+                "hit",
+                "miss",
+                "bypass",
+                "fixated"
+              ]
+            },
+            "fallback": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "generation",
+                    "negotiation"
+                  ]
+                }
+              },
+              "required": [
+                "from",
+                "reason"
+              ]
+            },
+            "composedAt": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+            }
+          },
+          "required": [
+            "tier",
+            "composedBy",
+            "cache"
+          ]
+        }
+      },
+      "required": [
+        "kohaku",
+        "intent",
+        "dataVersion",
+        "components",
+        "provenance"
+      ]
+    },
+    "fixatedAt": {
+      "type": "string"
+    },
+    "approver": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "catalogFingerprint": {
+      "type": "string"
+    },
+    "tenant": {
+      "type": "string"
+    },
+    "revision": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "intentHash",
+    "canonical",
+    "structureHash",
+    "pinnedSpec",
+    "fixatedAt",
+    "approver"
+  ],
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    },
+    "__schema1": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string",
+              "pattern": "^\\$state\\.[a-zA-Z][a-zA-Z0-9_]{0,63}$"
+            },
+            "eq": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "ne": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "in": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
+            },
+            "gt": {
+              "type": "number"
+            },
+            "lt": {
+              "type": "number"
+            },
+            "gte": {
+              "type": "number"
+            },
+            "lte": {
+              "type": "number"
+            },
+            "exists": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "all": {
+              "minItems": 1,
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            }
+          },
+          "required": [
+            "all"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "any": {
+              "minItems": 1,
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            }
+          },
+          "required": [
+            "any"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/__schema1"
+            }
+          },
+          "required": [
+            "not"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

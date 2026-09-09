@@ -1,0 +1,485 @@
+# kohaku Specification (Implementation Reference)
+
+English | [日本語](specification.ja.md)
+
+| Item | Value |
+|---|---|
+| Version | v0.1 |
+| Last updated | 2026-09-11 |
+| Status | Reference for the **concrete contracts** of the implementation (schemas, API, Ports). The normative protocol (MUST/SHOULD and conformance requirements) is governed by [../spec/SPEC.md](../spec/SPEC.md) |
+| Audience | Application developers who embed kohaku or implement against it |
+
+---
+
+## 1. UI Spec format
+
+Canonical example: [../spec/examples/quarterly-sales.spec.json](../spec/examples/quarterly-sales.spec.json). Zod schemas: `packages/spec-core/src/schema/`.
+
+### 1.1 Envelope
+
+| Field | Type | Description |
+|---|---|---|
+| `kohaku` | `"0.1" \| "0.2"` | Protocol version. Emitted as `"0.2"`; accepts `{0.1, 0.2}`. New features are 0.2-only (feature gating) |
+| `intent` | CanonicalIntent | The normalized Intent that produced this Spec (§2) |
+| `dataVersion` | string | Data version. When multiple handles are involved, composed into `multi:<hash16>`, a hash of each ref's sorted `uri=version` pairs (so swapping which URI holds which version never collapses onto the same key) |
+| `refVersions` | `Record<string,string>`? | `$ref` URI → per-ref dataVersion. When `multi:`, the Renderer reconciles per reference (SPEC-DATA-002). Always populated whenever there is at least one handle |
+| `state` | `Record<stateKey, JsonValue>`? | Initial values for client-local state (kohaku >= 0.2). Confined to the Renderer and never sent to the server. `stateKey` = `^[a-zA-Z][a-zA-Z0-9_]{0,63}$`. Keys referenced by visibleWhen require an initial value |
+| `components` | ComponentNode[] | Flat list (one or more) |
+| `events` | EventBinding[] | Component → host event declarations |
+| `provenance` | Provenance | Provenance (§1.4) |
+
+### 1.2 ComponentNode
+
+| Field | Type | Constraint |
+|---|---|---|
+| `id` | string | `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`. Unique. `"root"` is required |
+| `type` | string | Catalog component type (e.g. `presentChart`). L2 uses the reserved type `sandbox.html` |
+| `version` | string? | Resolved catalog semver (populated by the composer) |
+| `props` | JsonObject | Typed props (conforming to the catalog's propsSchema) |
+| `children` | string[]? | ID references. Acyclic DAG rooted at root |
+| `data` | `{ $ref: "query://…", bind? }`? | **By reference only.** Embedding bulk data is a schema violation. `bind` is two-way binding (below) |
+| `artifact` | `{ inline?, uri?, sha256 }`? | L2 only. Exactly one of inline / uri, plus sha256 (verified before execution) |
+| `visibleWhen` | `{ ref, <comparison> } \| { all } \| { any } \| { not }`? | Conditional visibility (kohaku >= 0.2). A leaf is `{ ref: "$state.<key>", <comparison> }`, where the comparison is **exactly one** of `eq` / `ne` / `in` / `gt` / `lt` / `gte` / `lte` / `exists` (`gt`/`lt`/`gte`/`lte` are numeric comparisons and are false if the state value is non-numeric; `exists` is the truth value of whether the state value is other than null/undefined). Composites are `{ all: [predicates…] }` (conjunction) / `{ any: [predicates…] }` (disjunction) / `{ not: predicate }` (negation), recursive and nestable (max depth 8, max 16 elements per `all`/`any`). When false, the entire subtree is unmounted |
+
+**Two-way binding `data.bind` (kohaku >= 0.2 [Draft], A1)**: `data.bind = { <param>: { $state: "<key>", values: string[] } }`. It injects the `$state` value into the corresponding query parameter of `$ref` and re-resolves within the client — without a compose (server round-trip / LLM) — (cross-filter). `$ref` is the **concrete canonical URI of the initial variant with the bound parameters filled by their initial `$state` values**, so in the initial state the effective ref = `$ref`. `values` is the static enumeration of the bound value domain (discrete strings), and this is the single source of truth for capability enumeration (§5). The pure functions are `resolveBoundRef(dataRef, state)` (effective ref) / `enumerateBindVariants(dataRef)` (Cartesian-product variants).
+
+Structural-validation error codes (stable): `DUPLICATE_ID` / `MISSING_ROOT` / `DANGLING_CHILD` / `CYCLE` / `ORPHAN_COMPONENT` (warning) / `UNKNOWN_EVENT_TARGET` / `STATE_REF_UNKNOWN` / `STATE_SET_INVALID` / `VERSION_FEATURE_MISMATCH` (all validate state features; the last three are kohaku >= 0.2 related). bind validation (kohaku >= 0.2): `BIND_STATE_UNKNOWN` / `BIND_PARAM_MISSING` / `BIND_VALUE_INVALID` (the three-way agreement of the initial `$ref` value = `spec.state[key]` = an element of `values`) / `BIND_PARAM_RESERVED` (starts with `_`) / `BIND_VARIANT_LIMIT` (total variant count exceeds 256).
+
+### 1.3 EventBinding
+
+```json
+{ "on": "table1.rowClick", "emit": "intent.patch", "payload": { "drilldown": "$row.region" } }
+```
+
+- `on` = `<componentId>.<eventName>`. The target ID must exist. Only names declared in the component's capabilities.events are valid.
+- `emit` = `intent.patch` | `intent.replace` | `action.invoke` | `state.set` (kohaku >= 0.2)
+- Payload templates: `"$row.<key>"` (value of the clicked row) / `"$value"` (current value of the component). The rendering side resolves them at runtime before sending to the host.
+- `state.set` (kohaku >= 0.2) carries in its payload a static `key` (a declared key in `spec.state`) plus a `value` to set. **Handled entirely within the Renderer and not sent to the server** (client-local state; linked to other components via visibleWhen).
+
+### 1.4 Provenance
+
+| Field | Value | Meaning |
+|---|---|---|
+| `tier` | `L0` / `L1` / `L2` | Fixed / declarative composition / free generation |
+| `composedBy` | string | e.g. `composer@0.1.0`; fixed Specs use `fixed-spec-template`, etc. |
+| `model` | string? | Generation model ID for L1/L2 |
+| `cache` | `hit` / `miss` / `bypass` / `fixated` | `fixated` = L1→L0 fixated delivery |
+| `fallback` | `{from, reason, kind?}`? | Trace of a capability negotiation / L1 failure downgrade. `kind` is `generation` (a deterministic fallback where L1/L2 generation was exhausted) / `negotiation` (a capability negotiation downgrade). When both occur, `negotiation` wins last-writer-wins |
+
+## 2. CanonicalIntent and normalization
+
+```json
+{ "canonical": "sales.quarterly_summary", "params": { "fiscalYear": 2026, "groupBy": "region", "quarter": 3 },
+  "hash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5" }
+```
+
+- `canonical`: `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`
+- `hash` = `sha256(canonicalStringify({canonical, params}))`. canonicalStringify = JSON with a deep ascending sort of object keys and undefined stripped. **A different key order in params still yields the same hash.**
+- Cache key: `kohaku:0.2:<intentHash>:<dataVersion>:<catalogFingerprint>[:<generatorVersion>][:<policyFingerprint>]` (the version component is the emitted version `0.2`; delivery keys for existing `0.1` fixations are unchanged). `generatorVersion` is optional (MAY) — a component that separates generated outputs by generation across prompt revisions and model changes. **It is appended as the sixth component only when specified**, and when unspecified the key is byte-for-byte identical to the traditional 5-component key (backward compatible). The default value is the composer's `defaultGeneratorVersion(llm) = "p<PROMPT_REVISION>/<modelId>"`. `policyFingerprint` is an optional 7th, internal-only component (not part of this wire format's contract, since it is never observed off-process) — composer's `policyFingerprint`, a hash derived from `ComposePolicy.outputLanguage` / `designSystem` / `fewShot.id` / `selectComponents.id` / `refConstraint` (only when set to `"validate"` — its default `"schema"` folds in identically to unset) / `effort` (only when set at all) / the identity of any `ComposeContext.llmByTier` model that genuinely differs from the base `llm` (only when `llmByTier` is wired to a differing model — see [design.md#per-tier-llm](design.md#per-tier-llm)), automatically separating caches for policies/contexts that change those fields without a manual `generatorVersion` bump. It is empty (equivalently: omitted) whenever neither the policy nor `llmByTier` touches any of those, and a `-` placeholder fills the 6th slot when this is given without `generatorVersion`, so the two never collide positionally. Details: [design.md#cache-key](design.md#cache-key).
+
+## 3. query:// URI and TabularData
+
+```
+query://<source>/<path>?<params>     e.g. query://sales/summary?fy=2026&groupBy=region&q=3
+```
+
+- `source`: `^[a-z0-9_-]+$` (404 if it does not match the host's `querySource`)
+- Canonical form: query parameters sorted by ascending key and URL-encoded. `parseQueryRef` / `formatQueryRef` do the conversion.
+- `path` becomes the op of `DomainPort.invoke(op, …)` verbatim, and params become its arguments (strings).
+
+The common envelope for data responses, **TabularData**:
+
+```json
+{ "columns": [{ "key": "region", "label": "Region", "type": "string" }],
+  "rows": [{ "region": "Japan", "revenue": 530750000 }],
+  "dataVersion": "sales@seed-20260610.1#bump-0", "total": 576 }
+```
+
+`type` = `string` | `number` | `boolean` | `date`. If `dataVersion` disagrees with the Spec, the BindingClient throws `STALE_VERSION`.
+
+**Server-side paging / sorting**: query parameters beginning with `_` are a reserved namespace (`_cursor` / `_limit` / `_sort` / `_dir`). The client specifies them via `BindingClient.resolve(ref, { page: {cursor?, limit?}, sort: {key, dir} })`, and these map onto the reserved parameters, are merged into the ref, and re-canonicalized (if unspecified, the ref is unchanged = backward compatible). If the response has more, **`TabularData.nextCursor`** (an opaque cursor) is returned, which you pass through as `page.cursor` in the next request. Including a `_`-prefixed parameter in the `$ref` itself yields `BAD_REF`. **Capability verification is performed against the base ref with the reserved parameters removed** (`splitReservedParams` — verification is done as an exact match against the base ref; `_` parameters other than the known keys are rejected with 400 by `assertKnownReservedParams`). The reserved parameters merge with the base's parameters and are passed to `DomainPort.invoke` (the `_` namespace convention — the DomainPort signature is unchanged; reserved parameters cannot bypass the capability scope).
+
+## 4. Port interfaces (the four the product implements)
+
+Definitions: `packages/spec-core/src/ports.ts`. Reference implementations: `apps/sample-api/src/ports/`.
+
+### 4.1 DomainPort — business API (the product's core)
+
+```ts
+interface DomainPort {
+  listOperations(): Promise<OperationDescriptor[]>;          // Enumerate operations (also serves as documentation for the LLM)
+  invoke(op: string, args: JsonObject, ctx: InvocationContext): Promise<unknown>; // Read/write execution
+}
+```
+Invariants (consistency) are upheld by the domain module behind this. For read operations, the return of `invoke` is recommended to be TabularData. **`listOperations` must also enumerate write operations** (those invoked via `action.invoke`, e.g. the sample's `annotate`), not only `query://` reads: hosts restrict a composed capability's write scopes to the names it returns (see "Capability issuance scope" below), silently dropping any `action.invoke` action a composed UI declares that is not listed.
+
+### 4.2 SemanticPort — Intent normalization and deterministic query resolution
+
+```ts
+interface SemanticPort {
+  normalize(input: NLQuery | GuiAction, ctx: SessionContext): Promise<CanonicalIntent>; // hash may be empty (the host calls finalizeIntent)
+  resolveQuery(intent: CanonicalIntent): Promise<QueryHandle | QueryHandle[]>;          // Intent → query:// handle
+  dataVersion(handle: QueryHandle): Promise<string>;                                    // Cache-key component
+  describeShape?(handle: QueryHandle): Promise<DataShape>;   // Optional. Column metadata only (row data forbidden)
+}
+```
+Contract: GUI actions (`GuiAction {action, params, current?}`) are normalized **deterministically, without going through the LLM**. `current` is the basis for an operation on an existing view (drilldown, etc.).
+
+**Catalog generation in the reference implementation (`@kohaku-ui/intents`)**: from `defineVocabulary` (a single source for the value set + labels) and `defineIntent` (a single Intent definition), the sample derives the `IntentDef` used by this `SemanticPort`, the GUI facet descriptor (`FacetView`; emitted to `facet-views.json` by `pnpm intents:emit`), the MCP tool input, and the `valueType` for client coercion. The `SemanticPort` contract and the wire form of `CanonicalIntent` are unchanged; the DSL merely provides a **single definition of the deterministic parts of normalization (value domains, coercion, facet derivation)**.
+
+**Tenant invariant (multi-tenant contract)**: keep `query://` references **tenant-neutral**. Tenant-based data narrowing is done by `DomainPort.invoke` via `InvocationContext.principal` / `capability`, and `resolveQuery` / `dataVersion` are tenant-independent. Therefore **`tenant` is not included in the cache key** (Specs with the same structure should correctly share the cache across tenants). If there is a per-tenant catalog contribution, `catalogFingerprint` is a key component so generations are naturally separated. Tenant separation of the control plane (lineage / promotion aggregation / fixation) is done via `SessionContext.tenant` (below). Full storage isolation (RLS, etc.) is the product's responsibility.
+
+### 4.3 AuthzPort — capability tokens
+
+```ts
+interface AuthzPort {
+  issueCapability(principal, scopes: {kind: "read"|"write", ref: string}[], opts?): Promise<string>;
+  verify(token, req: {kind, ref}): Promise<{ ok, principal?, reason? }>;
+}
+```
+After a compose, the host issues read scopes for all `$ref` within the Spec, and verifies them at `/binding/resolve`.
+
+### 4.4 StoragePort — persistence
+
+Spec cache (get/put), Lineage (append/list), promotion state (get/put/list), fixation (get/put/list). The sample implementation is in-memory + `.data/` files (`createFileStoragePort`). Optional extension `deleteFixation` (if unimplemented, `unfixate` fails fast, and the audit event `intent.unfixated` is not recorded either).
+
+**Tenant arguments**: `getFixation(intentHash, tenant?)` / `listFixations(tenant?)` / `deleteFixation?(intentHash, tenant?)` take an optional second argument `tenant`, and `putFixation` looks at `record.tenant` to key-separate fixations by `(tenant, intentHash)` (the signature is unchanged). `listLineage`'s `LineageFilter.tenant` returns only matching events (unspecified = all, the traditional behavior; old events with no recorded `tenant` appear only under the unspecified filter). **Tenant-unaware storage may ignore the second argument, in which case fixations are shared across tenants (fail-open)** — full tenant isolation (RLS, etc.) is the product's responsibility. The sample's `createFileStoragePort` separates by a composite key (no `tenant` = the `intentHash` itself), so an old `fixations.json` (no `tenant`) loads with backward compatibility without conversion.
+
+### 4.5 LlmPort (framework-internal Port)
+
+```ts
+interface LlmPort {
+  provider: string; modelId: string;
+  generateObject<T>(req: { schema: ZodType<T> | {jsonSchema}, system?, prompt, temperature?, … }): Promise<{object, usage, model}>;
+  generateText(req): Promise<{text, usage}>;
+  // Optional. Source for incremental streaming: notifies onPartial with the accumulated partial while the final result is identical to generateObject.
+  // partial is best-effort (no notification under prompt-JSON fallback, etc.). The consumer reassembles from scratch each time.
+  streamObject?<T>(req: GenerateObjectRequest<T> & { onPartial: (partial: unknown) => void }): Promise<{object, usage, model}>;
+}
+```
+Implementation: `createLlmFromEnv()` (environment variables §9). For tests: FakeLlm in `@kohaku-ui/llm/fake` (reproduces the partial sequence of streamObject via a `partials` script) and FixtureLlm in `@kohaku-ui/evals`.
+
+### 4.6 ThemeTokens (theme-independent color vocabulary, B2)
+
+The Spec envelope **has no theme** (SPEC-ENV-003 — a UI Spec is structure only). The theme is resolved on the Renderer side. Where the related types and values live:
+
+- **Types**: `KnownThemeTokens` in `packages/spec-core/src/ports.ts` (the vocabulary of known tokens; all keys optional) + `ThemeTokens = KnownThemeTokens & Record<string, string | number>` (an open index signature also permits custom tokens = backward compatible).
+- **Defaults**: `defaultLightTheme` / `defaultDarkTheme` in `@kohaku-ui/renderer-core` (spec-core is environment-neutral, so it holds no values). Resolution is done by `resolveToken(theme, name[, fallback])`, which falls back in the order `theme[name] → alias table → explicit fallback (3rd argument) → defaultLightTheme` (placing the explicit fallback ahead of the default net preserves the old API semantics of "respect a fallback that differs from the default"; a 2-argument call that omits the fallback falls into the default net). By type, the 2-argument version takes `keyof KnownThemeTokens` (known tokens; always resolved by the default net or an alias), and arbitrary string tokens are allowed only via the 3-argument version, which requires a fallback (closing the undefined-leak of the 2-argument path at the type level). Because both renderers (React `useToken` / WC `tokenStr`) draw from the same default net, for the same `ThemeTokens`, React = WC match pixel-for-pixel (SPEC-A2 parity).
+- **Aliases**: `color.danger`→`color.negative`, `color.focus`→`color.primary` (they have no concrete entry in the default theme and resolve solely via the alias table).
+- For the full list of tokens, the light/dark defaults, and the dark-mode WCAG AA policy, see [design.md §7.2](design.md). Apps use it composed as base + brand delta in the form `{ ...defaultDarkTheme, ...brand }`.
+
+## 5. REST API reference (host-rest)
+
+Mount example: `app.route("/api/kohaku", createKohakuRoutes(deps))`. Errors use a common envelope across all routes:
+
+```json
+{ "error": { "code": "CAPABILITY_DENIED", "message": "…" } }
+```
+
+Codes: `BAD_REQUEST` (400) / `INTENT_INVALID` (422) / `CAPABILITY_REQUIRED` (401) / `CAPABILITY_DENIED` (403) / `REF_NOT_FOUND` (404) / `SOURCE_MISMATCH` (404) / `NOT_FOUND` (404) / `PROMOTION_INVALID` (422) / `PROMOTION_NOT_PUBLISHED` (409) / `COMPOSE_FAILED` (500) / `INTERNAL` (500) / `NOT_IMPLEMENTED` (501). `NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` are for the named control-plane routes (promotions) (§5.4).
+
+Since the code set is a wire contract, the types `HostErrorCode` / `ErrorEnvelope` are **defined by `@kohaku-ui/spec-core`** (host-rest keeps the server-side generation helper `errorBody` while re-exporting them for backward compatibility). On the client side, using **`@kohaku-ui/client`** (a typed host client SDK) that handles these with types lets you receive responses like `{spec, capability}` and `{error:{code,message}}` as the discriminable exception `KohakuHostError` (`code: HostErrorCode` / `status` / `requestId`) (avoiding the collapse of codes into a bare string that hand-written fetch produces). For SDK usage, see the user guide §6 "Calling from a client."
+
+`ErrorEnvelope.error` also carries an optional **`status`**, present only on the 409 `PROMOTION_NOT_PUBLISHED` envelope: the promotion state the batch transition stopped at (e.g. `"judge_failed"`), **distinct from the HTTP status code of the response itself**. The client SDK exposes it as `KohakuHostError.promotionStatus` (named apart from `KohakuHostError.status`, which is the HTTP status, to avoid confusing the two).
+
+**Error-message policy for unexpected failures**: a 500 (`INTERNAL` / `COMPOSE_FAILED`) response, and the 404 `REF_NOT_FOUND` a raw `DomainPort.invoke` failure maps to, never echo the underlying exception's message to the client — it may carry internals (SQL fragments, stack-trace text, downstream-library wording) unsafe to expose — and instead use a fixed, host-authored message; a "typed" error the host's own code produced (`SpecError` / `ComposeError` / `QueryRefError`, or any error carrying a `code`, per `@kohaku-ui/host-core`'s `isTypedHostError`) still has its own message pass through. The original exception always still reaches `onError` (§ above), correlated by the same `requestId` the response carries, so nothing is lost for diagnosis. The MCP Apps profile applies the same policy to its tool-error text.
+
+> ⚠️ **Production wiring caution (authentication / authorization)**. `createKohakuRoutes(deps)` does not bundle authentication middleware. The framework only prescribes the wiring points (Ports, hooks); the substance of authentication and authorization is the product's responsibility. The following two are **fail-open when unwired** (reachable by anyone), so protection via wiring or external middleware (reverse proxy / API Gateway, etc.) is mandatory for production deployment:
+>
+> 1. **Data plane (`/compose`, `/events`, `/binding/resolve`, etc.)**: the Principal-extraction hook `KohakuHostDeps.auth` (§5.1) **defaults to a demo anonymous principal when unwired**. `/compose` issues to that principal a read capability covering all `$ref` (and `data.bind` variants) in the Spec, and `/binding/resolve` verifies that capability and reaches `DomainPort.invoke`. Therefore, left unwired, **a capability issued to the anonymous principal can reach the data plane.** To narrow data by tenant / authorization, wire `auth` (principal resolution), `AuthzPort` (capability issuance / verification), and `DomainPort` (data narrowing by principal / capability).
+> 2. **Control / audit plane (`/lineage`, `/analytics/summary`, `/telemetry`, `/promotions` family, `/fixations` family)**: the authorization hook `KohakuHostDeps.authorizeGovernance` (§5.4) **applies no authorization when unwired, and the control plane is readable and writable by anyone** (fail-open). Wiring the reference-implementation declarative RBAC evaluator `createGovernancePolicy` (§5.4) or protecting via external middleware is mandatory in production. `GET /catalog` (reading the public component catalog) is exempt from this authorization.
+
+**Correlation ID / `X-Request-Id` (ops)**: every request to the mounted kohaku routes is stamped with a correlation id, resolved once per request from the inbound `X-Request-Id` request header when present and well-formed (trimmed, at most 128 characters, printable ASCII only — otherwise discarded and replaced), or a freshly generated id otherwise. The same id is echoed as the `X-Request-Id` response header on **every** response (success and error alike), used for `error.requestId` on every error envelope, and passed to `onError` (below) — this holds regardless of whether `onError` is wired, so a deployment gets request correlation "for free." A host can override the resolution entirely via `KohakuHostDeps.requestId` (TS) / `request_id` (Python), e.g. to defer to an existing correlation-id convention from upstream infrastructure. This correlation id is unconditionally the per-request id above — it is never derived from a trace context (below), on this profile or the MCP Apps profile.
+
+**Trace context propagation (`traceparent` / `tracestate` request headers, ops)**: `/compose` and `/compose/stream` (and, via the shared fixation-self-heal path, `/events` / `/fixations/approve`) additionally read the standard [W3C Trace Context](https://www.w3.org/TR/trace-context/) `traceparent` / `tracestate` request headers. When `traceparent` is present and strictly well-formed (`00-<32 lowercase hex>-<16 lowercase hex>-<2 lowercase hex>`, with neither the trace-id nor the parent-id all-zero — both invalid per the W3C spec), it is parsed into `ComposeOptions.traceContext` (surfaced on the delivered `ComposeTrace.traceContext` and on `ComposeErrorContext.traceContext` for a failed/degraded compose) so a product-supplied `ComposeObserver` — e.g. `@kohaku-ui/otel`'s `createOtelComposeObserver` — can record the compose as a child span of the caller's own trace. `tracestate`, when present, is carried through opaque up to 512 characters (the W3C-recommended cap); a longer value is dropped (the `traceparent` is still carried). A missing or malformed `traceparent` is never an error — it simply leaves `traceContext` unset (fail-open), the same policy as an unreachable reverse proxy that strips the header. This is the header to check first when a reverse proxy in front of a deployment strips custom headers and traces stop linking up: if `traceContext` never reaches an observer, `traceparent` never arrived. The MCP Apps profile's equivalent is `_meta.traceparent` / `_meta.tracestate` on the tool call (§6 below) — both profiles validate via the same shared parser.
+
+**Observability of failure paths**: wiring `KohakuHostDeps.onError({ endpoint, requestId, error })` (the product's responsibility; the implementation holds the logs/metrics) causes the composition-family handlers (`/intent/normalize`, `/compose`, `/compose/stream`, `/events`, `/fixations/approve`) to be called before they convert a failure into an error envelope. The `requestId` passed matches the response's `error.requestId` and the `X-Request-Id` response header (letting you reconcile logs with the client's error). A `throw` / `reject` from the hook is swallowed and does not propagate to the error response. When embedding the composer directly, `ComposeObserver.onError(ctx, error)` plays the same role and notifies `phase:"hard"` (exception thrown) / `phase:"fallback"` (deterministic downgrade on generation failure) / `phase:"cache"` (the Spec cache backend threw; see `ComposePolicy.cacheFailure` below) (all observation-only and optional; silent when unwired).
+
+### 5.1 Composition family
+
+| Route | Request | Response |
+|---|---|---|
+| `POST /intent/normalize` | `{ input: NLQuery\|GuiAction, session? }` | `{ intent: CanonicalIntent, source: "llm"\|"deterministic" }` |
+| `POST /compose` | `{ intent: {canonical, params} }` or `{ input, session? }` | `{ spec: UISpec, capability: string }` |
+| `POST /compose/stream` | Same as `/compose` | SSE: `event: spec {spec, capability, final}` → `event: patch {patch}` → `event: done {specHash, tier, cache}` (or `event: error`). SPEC §6.1.1 [Draft] |
+| `POST /events` | `{ intent: {canonical, params}, event: {on, payload}, session? }` | `{ spec, capability }` (event → GuiAction → recompose) |
+
+- `session` = `{ surface: "web"\|"chat"\|…, sessionId?, locale? }` (recorded in lineage; `locale` is an optional language tag such as `"en"` / `"ja"` — threaded into `SessionContext.locale` for the NL-normalization hint and, in the sample, the per-session output-language policy. See "Output language of generated text" below)
+- **`NLQuery.locale` vs. `session.locale`**: a `{input}` NLQuery's own optional `locale` field is only an NL-normalization hint — when present it takes precedence over `session.locale` for that single purpose (the sample's `normalizeNl` resolves `input.locale ?? ctx.locale`). Output-language selection (`ComposePolicy` / `policyFor`, below) and the fixation short-circuit's language gate (`fixationLookup`) are driven by `session.locale` alone; a per-call `NLQuery.locale` never substitutes for `session.locale` in either of those.
+- **Tenant**: `SessionContext.tenant` is resolved not from the request body but by `KohakuHostDeps.tenant(c)` (the product's responsibility; the sample uses the `x-kohaku-tenant` header). The resolved value propagates to lineage recording, fixation short-circuiting, and the aggregation scope of the control family. If omitted, it is equivalent to a single tenant (the traditional behavior). **Not included in the cache key** (the invariant in §4.2)
+- `/compose` resolves in the order fixation short-circuit (`fixationLookup`) → Spec cache → composer.
+- `/compose/stream` returns a skeleton (`ui.loading`) immediately, then sends **interim patches during generation (0..N times; only when `LlmPort.streamObject` is implemented — deltas to an interim Spec assembled from the LLM's partial output)** and a `patch` to the finalized form. The receiving side only needs to `applyPatch` in receive order (each application result is always a structurally validated Spec). Fast paths (cache hit / L0 / fixation) complete with a single `final: true` event, and its `capability` is issued **from the final Spec itself** (the same rule as `/compose` — see "Capability issuance scope" below, including any `action.invoke` write scope it declares). A skeleton (`final: false`) has no `$ref` yet, so its `capability` is issued read-only from the resolved refs instead; `data.bind` (two-way binding [Draft]) is declared only on the final Spec and is not opened up to L1/L2 generation, so a skeleton never carries bind variants, and consequently an L1/L2-generated Spec delivered via subsequent patches carries no write scope either (only a single-event `final: true` response can carry `action.invoke` over the stream — a documented limitation). Interim forms (skeleton, interim Spec) are not subject to caching, fixation, or lineage recording (only the final Spec is recorded).
+- **Capability issuance scope**: `/compose`, `/events`, and `/compose/stream`'s `final: true` path issue in accordance with the Spec's declarations. read is all `data.$ref`. A component with `data.bind` (two-way binding [Draft]) enumerates, via `enumerateBindVariants`, the effective refs reachable by the Cartesian product of `values`, and issues each variant with a read scope (including the initial variant = `$ref`). write is the action names of declared `action.invoke`, **intersected with the names `DomainPort.listOperations()` enumerates** — a write scope for an action the DomainPort does not list is dropped before issuance (hardening against an LLM-generated `action.invoke` action name becoming a bearer write scope) and reported to `onError` as `WriteScopeDroppedError` (endpoint = the issuing route); delivery still proceeds without that scope (fail-open). read scopes are never affected by this filter. This authorizes only the refs the client could re-resolve by changing `$state`, so anything outside `values` is 403 (no forgery). The upper limit on the total number of variants is 256, enforced at issuance regardless of path (an overflow on the stream's `final: true` path surfaces as `event: error COMPOSE_FAILED`, matching `/compose`'s 500 `COMPOSE_FAILED`).
+- **Propagation of client disconnect**: `/compose`, `/compose/stream`, `/events` pass `c.req.raw.signal` to the composer as `ComposeOptions.abort` and thread it through the L1/L2 LLM generation (including the repair loop). This aborts full generation for abandoned requests, and is combined with `AbortSignal.timeout`. An exception thrown on abort (`ABORTED`) is classified separately from a transient provider failure and drops immediately to fallback without repair retries and without L2 promotion (threading through to `SemanticPort.normalize` is currently out of scope). The resulting fallback Spec carries `trace.cancelled:true` (`provenance.fallback.kind` stays `"generation"` — a cancel is not a new fallback kind) and is reported to `ComposeObserver.onError` as `phase:"cancelled"` rather than `phase:"fallback"`; hosts skip lineage recording (`view.composed`/`view.fallback`) for a cancelled compose, so an abandoned request does not inflate the generation-fallback-rate analytics the way a real generation failure does.
+- **Cost / token budget guard**: wiring `ComposePolicy.budget` makes the composer evaluate the budget immediately before calling the LLM (before L1 generation, before repair, before L2), and on refusal it skips repair retries and L2 promotion and downgrades to a deterministic fallback (`presentMarkdown`). `perCompose.stopAfterTokens` is **a cumulative token threshold that stops additional LLM calls** (not a hard cap on the total), and `check()` is a global budget hook supplied by the product (a side-effect-free, idempotent read; a `throw` is fail-open and transcribed to `ComposeObserver.onBudgetCheckError`). The downgraded Spec's budget overrun is identifiable by the `reason` of `provenance.fallback` (`kind:"generation"`), and it is **not cached** (`ComposeObserver.onError` carries `budgetExceeded:true`). **If `budget` is unspecified, both behavior and performance are entirely unchanged.** Details: [design.md#budget-guard](design.md#budget-guard).
+- **Compose-wide deadline**: `ComposeBudget.deadlineMs` (milliseconds elapsed since the compose started) is a sibling of `perCompose` that bounds the whole `compose`/`composeStream` call rather than any single LLM call — checked at the same points as the token budget, and additionally aborts a call already in flight once the deadline elapses mid-call. An in-flight abort caused by the deadline is classified the same way as a between-call skip (`ctx.budgetExceeded:true`, **not** `trace.cancelled`) rather than as a caller cancellation, so it counts toward the fallback-rate analytics an operator watches. Unset by default; behavior and performance are unchanged when it is never set. Details: [design.md#deadline-guard](design.md#deadline-guard).
+- **Applying a design system to L2**: wiring `ComposePolicy.designSystem` (`DesignSystemGuide = { tokens?, guidelines?, enforceTokenColors? }`) inserts a "design system" section into the L2 generation prompt, and the output is contracted to write styles by token references `var(--kohaku-*)` (values are injected by the sandbox at render time — preserving the theme-independence of SPEC-ENV-003). `enforceTokenColors` (default true) sends raw color literals back for repair via the `L2_RAW_COLOR` lint (§8). **Because changing the content or toggling on/off changes the prompt content, you must always bump `generatorVersion`** (the same operation as few-shot). If unspecified, both behavior and output bytes are entirely unchanged. Details: design.md §8 "Applying a design system to L2."
+- **Output language of generated text**: `ComposePolicy.outputLanguage` (a language-name string; default `"English"`) selects the language of the user-visible text the LLM generates — the L1 heading title and L2 widget text (`<title>`, labels, annotations) — by inserting an "Output language" section into both generation prompts (so the output follows the requested language regardless of the prompt's own language). It is orthogonal to the renderer i18n override (which only re-skins library-default UI strings). **Because it changes the prompt content, you must always bump `generatorVersion`** (the same operation as few-shot / designSystem); if unspecified, the prompt bytes are entirely unchanged. Per-session selection: `session.locale` + `ComposeContext.policyFor` swap in a per-session policy (the sample's EN/JA pair — JA carries `outputLanguage: "Japanese"`, JA L0 fixed specs, and a `…/ja` generatorVersion token so caches separate per language; the fixation shortcut serves EN sessions only). Details: [design.md#output-language](design.md#output-language).
+- **`data.$ref` constraint stage**: `ComposePolicy.refConstraint: "schema" | "validate"` (default `"schema"`) picks where CMP-GEN-001 (SPEC §4) is enforced. `"schema"` (unchanged default) pins `data.$ref` to an enum of the resolved QueryHandle set in the L1 generation schema itself. `"validate"` instead relaxes it to a plain string in the schema (making the generation grammar Intent-independent — see the trade-off in [design.md#prompt-caching](design.md#prompt-caching)) and checks set-membership explicitly after generation, feeding a `DATA_REF_UNRESOLVED` finding back into the same repair loop L1 already uses for catalog/structural failures. Participates in `policyFingerprint` only when set to `"validate"` — the default `"schema"` (explicit or unset) never perturbs an existing cache key.
+- **Reasoning effort**: `ComposePolicy.effort?: { l1?: LlmEffort; l2?: LlmEffort }` (`LlmEffort = "low"|"medium"|"high"|"xhigh"|"max"`) is threaded independently to the L1 and L2 LLM calls as `GenerateObjectRequest`/`GenerateTextRequest.effort`. A tier left unset sends no `effort` (provider default); a port/provider with no matching option ignores it (see [design.md#reasoning-effort](design.md#reasoning-effort) for the per-provider wiring). Participates in `policyFingerprint` whenever the object is set at all; unset is byte-identical to before this field existed.
+- **Per-tier LLM**: `ComposeContext.llmByTier?: { L1?: LlmPort; L2?: LlmPort }` overrides the single `llm: LlmPort` per tier (the required `llm` stays the fallback for any tier not overridden) — e.g. routing L1 to a small model fine-tuned via `kohaku dataset export` while keeping a larger model for L2. Folds the identity of any genuinely-differing per-tier model into `policyFingerprint`'s extra material so the cache separates automatically; unset (or set to entries matching the base model) is byte-identical to before this field existed. Details: [design.md#per-tier-llm](design.md#per-tier-llm).
+
+```bash
+# Example
+curl -s -X POST http://localhost:8787/api/kohaku/compose \
+  -H 'content-type: application/json' \
+  -d '{"intent":{"canonical":"sales.quarterly_summary","params":{"fiscalYear":2026,"quarter":3,"groupBy":"region"}}}'
+```
+
+### 5.2 Data family
+
+| Route | Authorization | Description |
+|---|---|---|
+| `GET /binding/resolve?ref=<encoded query://…>` | `Authorization: Bearer <capability>` required | Returns TabularData. 401 (none) / 403 (out of scope) / 404 (unknown source/op). The `_` reserved parameters (paging/sorting) are capability-verified against the base ref and merged into the DomainPort |
+| `POST /binding/action` `{action, payload}` | Bearer (write scope) | Direct write path (presentForm submit, etc.) → `{result, invalidates?, refVersions?}` |
+
+The response of `POST /binding/action` is `{result, invalidates?, refVersions?}`. `invalidates` is an array of `query://` URIs (exact match) that the write staled, and `refVersions` is the new per-reference data version (synonymous with the refVersions in §2). They are supplied by the `KohakuHostDeps.actionEffects(action, payload, result)` hook (if unwired, only `{result}` = backward compatible). On success, the client (`BindingClient.invokeAction`) flows `invalidates` onto the data-invalidation bus, causing distant tables to re-resolve in place (**the small loop**; see §6). `DomainPort` is unaltered — the write substance is `domain.invoke`, and only the "declaration" of side effects is separated into `actionEffects`.
+
+### 5.3 Catalog / audit family
+
+| Route | Authorization | Description |
+|---|---|---|
+| `GET /catalog` | — (public read) | `{ components: [{type, version, description, capabilities, implementation, propsSchema(JSON Schema)}], catalogVersion }` |
+| `GET /lineage?type=&intentHash=&artifactId=&specHash=&since=&until=&limit=` | `authorizeGovernance` (when wired) | `{ events: LineageEventRecord[] }`. `since` / `until` are ISO8601 (same normalization / boundary interpretation as `/analytics/summary`), `limit` is capped at 1000 |
+| `GET /analytics/summary?since=&until=&limit=` | `authorizeGovernance` (when wired; `analytics.read`) | `{ window, summary }`. An overview summary aggregated from lineage's raw event stream (below). **A reference-implementation-level extension** (outside the required set of §11) |
+| `POST /telemetry` | `authorizeGovernance` (when wired) | `{ events: [{kind:"rendered", specHash,…} \| {kind:"componentUsed", artifactId, outcome}] }` → `{ok}` |
+
+**Usage analytics (`GET /analytics/summary`, a reference-implementation extension route)**: an aggregation surface for operators to survey fallback rate, tier distribution, and latency. It is enabled only when `KohakuHostDeps.analyticsSummarizer` is wired (inject the pure function `summarizeLineage` from `@kohaku-ui/lineage`; host-rest receives it via structural typing, remaining lineage-independent), and 501 `NOT_IMPLEMENTED` when unwired. The aggregation is implemented with **only reads** from `StoragePort.listLineage`, and **the Lineage event schema is not changed** (it merely counts the existing payloads' `tier` / `cache` / `durationMs` / `intentHash` / `canonical`, and `view.fallback`'s `kind`). The authorization `operation.kind` is `analytics.read` (a read operation; the sample permits it for admin/reviewer/viewer alike). As with the other control surfaces, the tenant is scoped from the **session (`KohakuHostDeps.tenant`)** (server-resolved, not client-declared). **The aggregation window is 200 by default / 1000 max** (the same constraint as `/lineage`), and the response's `window: { limit, truncated, since?, until?, tenant? }` explicitly states the clamped window (not a silent cap; `truncated` indicates that storage returned exactly the window limit and older events may have fallen outside the window). `since` / `until` are **passed to `listLineage` as a `LineageFilter`, applying the time narrowing before the tail slice of `limit`** — the window becomes the latest `limit` events within `[since, until]` (if `until` were applied after the tail slice, the latest `limit` events would all be excluded by `until` and the window would be nearly empty). The same `until` post-filter remains on the `summarizeLineage` side too, but this is an idempotent safeguard; the actual window narrowing completes at the storage stage. `summary` is `{ events, composed, tiers{L0,L1,L2}, cache{hit,miss,bypass,fixated,other}, fallback{total, byKind{generation,negotiation,unspecified}, rate}, durationMs{count,p50,p95,p99,max}, topIntents[{intentHash,canonical,count}], promotions{generated,used,nominated,judged,reviewed,published,withdrawn}, fixations{fixated,unfixated} }`. `fallback.rate = total / (composed + total)` (0 if the denominator is 0), and the `durationMs` percentiles are nearest-rank with only `view.composed` events that have a `durationMs` as the population (a best-effort aggregation of what is available).
+
+### 5.4 Control family (only when promotions / fixations are injected; 501 if not injected)
+
+| Route | Authorization | Description |
+|---|---|---|
+| `GET /promotions` | `authorizeGovernance` (when wired) | `{ candidates: PromotionCandidate[] }`. **Side-effect-free, read-only** (does not auto-nominate). **Can be filtered by state via an optional `?status=<PromotionStatus>`**: when specified, it queries via `listByStatus` (using the snapshot projection `listPromotionStates` as an index, avoiding a full `component.generated` scan). Only `status=in_use` has no persisted state, so it is delegated to an event scan |
+| `POST /promotions/evaluate` | `authorizeGovernance` (when wired) | Runs **auto-nomination (nominate)** at the usage-log threshold and returns `{ candidates }` (a side-effect route split off from GET) |
+| `POST /promotions/reconcile` | `authorizeGovernance` (when wired; kind `promotion.reconcile`) | Operator escape hatch: runs the **projection recovery from snapshot authority** on demand (the same recovery the host already runs at startup) and returns `{ summary: { published, withdrawn, skipped } }`. Not scoped to one artifact or one tenant (it scans across every tenant), so it is serialized under the promotion lock's tenant-neutral bucket rather than `promotionTransition`'s per-`:artifactId` skeleton. `501 NOT_IMPLEMENTED` if `PromotionsApi.reconcile` is not implemented |
+| `GET /promotions/:artifactId` | `authorizeGovernance` (when wired) | `{ candidate }`. Absent → 404 `NOT_FOUND` |
+| `POST /promotions/:artifactId/preview` | `authorizeGovernance` (when wired) | `{ preview: { html, sha256, ref?, capability? } }`. Returns the **material to re-mount the review target itself (the artifact recorded in `component.generated`)**. It does not recompose (preventing the accident where, on a cache miss, the LLM regenerates different content and shows "something different from what is being approved" — identity is guaranteed by `sha256`). If the data reference `ref` used at generation time is recorded, it issues and includes a **read capability limited to that single reference** (no write scope; POST because it issues a new token). The authorization `operation.kind` is **`promotion.preview`** — a separate permission from viewing (`promotion.get`), so as not to open the issuance of data read rights to the viewing role. Unrecorded html / absent → 404 `NOT_FOUND` |
+| `POST /promotions/:artifactId/approve` | `authorizeGovernance` (when wired) | body `{ draft }` (zod-validated) → judge → human approval → schema finalization → publish, all at once → `{ candidate }`. **From `changes_requested` (sent back) or `judge_failed` (a blocking judge failure) as well, it returns to a candidate via nominate and rejoins the same chain (fix and re-approve / re-judge)**. A re-approve of an **already-published** candidate is idempotent: it re-runs the projection hook (`onPublish`) and returns as-is, without repeating nominate/judge/review — converging a projection left un-reflected by a prior partial failure without waiting for the next `reconcile` |
+| `POST /promotions/:artifactId/reject` | `authorizeGovernance` (when wired) | `{ candidate }` (nominate → review.start → review.reject) |
+| `POST /promotions/:artifactId/withdraw` | `authorizeGovernance` (when wired) | body `{ reason? }` → if published, unpublish (published→withdrawn); if non-terminal, withdraw → `{ candidate }` |
+| `POST /promotions/:artifactId/actions` | `authorizeGovernance` (when wired; kind-scoped, see below) | body `{ action }` (validated by the discriminatedUnion of `PromotionActionSchema`) → `{ candidate }` |
+| `GET /fixations` / `GET /fixations/proposals` | `authorizeGovernance` (when wired) | List of fixated / candidates (uses, sessions, structural stability) |
+| `POST /fixations/approve` | `authorizeGovernance` (when wired) | `{ intent: {canonical, params} }` → pin the current composition result → `{ fixation }`. 422 `COMPOSE_FAILED` if the result is a deterministic fallback Spec (a generation failure must not be pinned as L0); 400 `BAD_REQUEST` if the result is an L2 free-form Spec (governed by the promotion pipeline, not fixation) |
+| `POST /fixations/:intentHash/remove` | `authorizeGovernance` (when wired) | Unfixate → `{ok}` |
+
+**Control-plane authorization (`authorizeGovernance`)**: the audit / control routes (§5.3's `GET /lineage`, `GET /analytics/summary`, `POST /telemetry`, and the promotions / fixations set in this section) pass an authorization decision before each request when the `KohakuHostDeps.authorizeGovernance` hook (optional) is wired, returning 403 `CAPABILITY_DENIED` on refusal. When unwired, it is fail-open (see "Production wiring caution" at the top of §5). `GET /catalog` is exempt from this authorization.
+
+**Reference-implementation declarative RBAC evaluator (`createGovernancePolicy`)**: `@kohaku-ui/host-rest` supplies, as a representative implementation of `authorizeGovernance`, the evaluator `createGovernancePolicy(policy)`, which lets you write a role → permitted operation matrix declaratively. `policy.roles` is "role name → array of permit patterns," and a pattern supports an exact-match `operation.kind` (e.g. `promotion.approve`), `<domain>.*` (all within a domain; e.g. `promotion.*`), and `*` (all). The actual set of `operation.kind` is reflected in the type `GovernanceOperationKind` as `GOVERNANCE_OPERATION_KINDS`, catching typos on both the route side and the policy side at compile time. The evaluator is a **pure function** of `(principal, operation, tenant?) → boolean`, and resolving the principal (role) is the wiring side's (`KohakuHostDeps.auth`) responsibility — in line with the division of labor whereby RBAC role resolution is delegated to the product's authentication infrastructure. Note that the bundled evaluator is **role-based only and ignores `tenant`** (a principal holding a role may operate on any tenant the host resolves); to enforce tenant-scoped authorization, supply your own evaluator that verifies the principal↔tenant binding. The default is **deny-by-default** (an operation matching no role's patterns, an unknown role, and no role are all refused). Multiple roles are the union of permissions. The sample (`apps/sample-api`) resolves roles from the `x-kohaku-role` header (for demo; production resolves from the authentication infrastructure) and wires three roles: `admin` (all permitted) / `reviewer` (`promotion.*` + `lineage.read` + `analytics.read`) / `viewer` (read-only; includes `lineage.read` / `analytics.read`). **No header (default) is `admin`**, preserving the traditional demo behavior when unwired (the control surface is reachable by anyone).
+
+**Kind-scoped authorization for the generic action route**: `POST /promotions/:artifactId/actions` first checks the blanket `promotion.act` kind (as in the table above), then, depending on the validated `action.kind`, checks one additional kind before executing — so holding only `promotion.act` cannot reach what the dedicated named routes (`/approve`, `/reject`, `/withdraw`) gate behind their own kinds. The mapping: `review.approve` / `publish` / `schema.propose` → `promotion.approve`; `review.reject` → `promotion.reject`; `withdraw` / `unpublish` → `promotion.withdraw`; `judge.result` → **`promotion.judge`** (a kind added specifically so that recording a judge verdict — which the dedicated `approve` flow trusts — cannot be spoofed by a caller holding only `promotion.act`); `nominate` / `judge.start` / `review.start` / `review.requestChanges` require no additional kind (they have no dedicated named route to mirror). A role granted via the `promotion.*` or `*` pattern already covers `promotion.judge`; a policy that lists governance kinds individually must add it explicitly for any role that should be able to record judge verdicts through the generic route.
+
+**Promotion validation / error conventions**:
+
+- `reviewer` / `by` (`Principal`) **do not accept client declaration; the server-side principal (`KohakuHostDeps.auth` → default anonymous) is injected**. Applies to approve/reject/withdraw/actions alike.
+- zod parse failure → 400 `BAD_REQUEST` (invalid action.kind, missing version for `publish`, missing draft for approve, etc.).
+- artifact absent → 404 `NOT_FOUND` (pre-checked with `get`).
+- transition refusal (`TransitionError`) → 422 `PROMOTION_INVALID`.
+- approve did not reach published (judge failure, etc.) → 409 `PROMOTION_NOT_PUBLISHED` (`{error:{code, message, status}}`).
+- `PromotionsApi`'s `list?` / `get?` / `listByStatus?` / `reconcile?` are optional (in a custom host that doesn't implement them, GET /promotions falls back to `evaluateAndList`, GET /promotions/:id is 501, and POST /promotions/reconcile is 501). If `?status=` is unsupported by `listByStatus`, it degrades compatibly by client-side filtering the `list`/`evaluateAndList` result by state. `approve` / `reject` / `withdraw` are required (a breaking change for external implementations).
+- **Return from `changes_requested` / `judge_failed`**: the state machine's transition table is unchanged (`changes_requested --nominate--> candidate` and `judge_failed --nominate--> candidate` already exist). The entry of the service layer's `approve()` is widened to nominate from `changes_requested` and `judge_failed` in addition to `in_use`, returning a sent-back (or judge-failed) candidate to a candidate and rejoining the same chain of judge → human approval → publish — so a candidate a blocking judge failure once stopped at `judge_failed` can be re-approved and re-judged without a separate recovery API. `reject()`'s recovery targets are currently only `in_use`/`candidate`/`in_review`; rejection from `changes_requested`/`judge_failed` is out of the service layer's recovery scope (abandonment is unified into `withdraw`; sample-web's admin surface likewise does not surface reject for those states).
+- **`reconcile()` is callable on demand, not just at startup**: `POST /promotions/reconcile` (above) lets an operator force the projection-recovery pass (published/withdrawn re-application + audit backfill) at any time, returning a summary `{ published, withdrawn, skipped }` of what it did. A published snapshot reconcile could not rebuild the projection for (neither the snapshot's own duplicated `html` nor `component.generated` had it) is counted in `skipped` and reported individually via the `onError` observability hook.
+
+**Tenant scope**: for the control surface (`GET /promotions`, `POST /promotions/evaluate`, `GET /fixations`, `GET /fixations/proposals`, `POST /fixations/approve`, `POST /fixations/:intentHash/remove`), the tenant is unified to be derived from the **session (`KohakuHostDeps.tenant`), not a query parameter** (to prevent mix-ups). `list` / `evaluateAndList` / `proposals` narrow the aggregation by `scope.tenant`, and `fixate` inscribes the fixation on that tenant. The promotion state-machine actions (`approve` / `reject` / `withdraw` / `act`) also carry the resolved tenant in their trailing `scope` (`{ tenant? }`) argument: it is checked against the candidate's owning tenant (the `component.generated` tenant), and a mismatch is treated as "does not exist" — the caller sees a 404, not a cross-tenant leak. Fixation short-circuit (`fixationLookup(intentHash, session)`) and self-repair (`invalidate` / `refreshFingerprint`) also propagate `session.tenant`.
+
+**Fixation staleness detection**: before delivering a fixation, the **catalog fingerprint** at fixation time (`FixationRecord.catalogFingerprint`, optional = compatible with old `fixations.json`) is reconciled against the current catalog fingerprint.
+
+- **fresh** (fingerprint matches): the structure is deemed unchanged, so re-validation is skipped and it is delivered as-is (`cache:"fixated"` unchanged).
+- **revalidated** (fingerprint mismatch/missing, but `pinnedSpec` re-validated and passing against the current catalog): delivered as-is, and `FixationsApi.refreshFingerprint?` re-inscribes the current fingerprint to fast-path subsequent deliveries (natural migration of old records; delivery is not stopped even on failure).
+- **stale** (validation not passing): the fixation is not delivered; `FixationsApi.invalidate?(intentHash, "stale", { detail?, tenant?, guard? })` performs self-repair invalidation (`deleteFixation` → records `intent.unfixated` with `actor:{kind:"system"}` and `reason:"stale"`), and it falls back to a normal compose. Even if `deleteFixation` is unimplemented and invalidation fails, delivery continues (a degraded operation where the fixation remains and each time revalidation fails → fallback). `guard` is `{ ifCatalogFingerprint?: string; ifFixatedAt?: string }`: `ifFixatedAt` is always supplied (it compares the fixation's `fixatedAt` at the moment stale was judged, protecting even a legacy record with no catalog fingerprint against a concurrent re-approval), and `ifCatalogFingerprint` is added when the fixation carries one.
+- **Reference-set reconciliation (an additional check common to fresh / revalidated)**: even for a fixation that passed the catalog-fingerprint check, before delivery it confirms that the **set of resolved reference URIs** the fixation Spec represents (the key set of `refVersions`; for old records without `refVersions`, the set of `data.$ref` of the pinned components) matches the URI set obtained by resolving the current Intent with `resolveQuery`. If the sets disagree due to added / removed / swapped URIs, then even on a fingerprint match (fresh) it is treated as **stale** and likewise falls back to a normal compose. Because the catalog fingerprint derives from component types/props and is independent of the query mapping, when the reference set drifts due to a code revision or a change in the semantic layer even for the same Intent, the fingerprint check alone cannot catch it. Delivering while drifted would break `refVersions` (SPEC-DATA-002) per-reference reconciliation (a removed reference is always shown STALE, and an added reference is delivered with no corresponding component), so it errs on the safe side.
+
+The decision is returned by the composer's `materializeFixation` as `{result, check}` (`check: "fresh" | "revalidated" | "stale"`), and lineage recording (the self-repair event) is done by the host layer for dependency-direction reasons. The MCP Apps profile (host-mcp-apps) has the same behavior (when `McpHostDeps.fixations?` is wired).
+
+### 5.5 Sample-specific routes (outside host-rest)
+
+`GET /api/health` (LLM, seed, catalog version, intent list) / `POST /api/admin/bump-data-version`.
+
+Promotion approve/reject/withdraw have been promoted to first-class host-rest named routes (§5.4's `POST /promotions/:id/approve|reject|withdraw`). The former `POST /api/admin/promotions/:id/approve|reject` have been removed, and sample-web's admin surface calls those instead (the reviewer injects the server-side principal, so the client does not declare the approver).
+
+## 6. MCP Apps profile (host-mcp-apps)
+
+| Element | Value |
+|---|---|
+| Resource | `ui://kohaku/renderer.html`, mimeType `text/html;profile=mcp-app`. On the resource side, `_meta.ui` explicitly declares csp as an empty allowlist (`{connectDomains: [], resourceDomains: [], frameDomains: [], baseUriDomains: []}` = no external origins needed) (`resourceUiMeta()`; on both resources/list and read contents, contents take precedence). csp / permissions cannot be placed on the tool-side `_meta.ui` (SEP-1865) |
+| `legacyUiResource` (AttachOptions; default off) | mcp-ui legacy host compatibility. When enabled, it appends a self-contained snapshot HTML to the compose-family tool results' content[] as `{type:"resource", resource:{uri:"ui://kohaku/view/<intentHash>", mimeType:"text/html", text}}` (static display, fail-open, ~1MB/result — stays disabled on modern hosts). sample-mcp opts in via env `KOHAKU_MCP_LEGACY_UI=1` |
+| Tool `_meta` (UI declaration) | **Modern and legacy side by side.** modern (nested) = `_meta.ui.{resourceUri, visibility}` (the canonical form since the SEP-1865 formalization on 2026-01-26; ChatGPT and others look here first). legacy (flat) = `_meta["ui/resourceUri"]` / `_meta["ui/visibility"]` (`["model"]` or `["app"]`; backward compatibility for old hosts). The values are identical. The constants are in `packages/host-mcp-apps/src/meta.ts` (`UI_META_KEY` / `RESOURCE_URI_META_KEY` / `VISIBILITY_META_KEY`) |
+| `kohaku_compose` | model-visible. `{question, locale?}` → content[0] = text fallback, structuredContent = `{spec}`, and the capability token rides `_meta["kohaku/capability"]` (MCPAPP-CAP-001; not `structuredContent` — a bearer write token must not enter the model's context) |
+| `kohaku_render_snapshot` | model-visible (registered only when `snapshotWriter` is wired). `{question, locale?}` → writes out a self-contained HTML rendered by the same shared renderer as the Web, and returns the path. Each data in the Spec is pre-resolved by the initial `$ref` + all bind variants and embedded into the renderer's `#kohaku-snapshot` (`{spec, data}`). A static snapshot for display without relying on an iframe on UI-incapable hosts (CLI, etc.) (recompose events are disabled) |
+| `kohaku_resolve_binding` | **app-only.** `{ref, capability}` → `{data: TabularData}` |
+| `kohaku_event` | **app-only.** `{intent, on, payload, locale?}` → structuredContent = `{spec}`, capability again via `_meta["kohaku/capability"]` (same as `kohaku_compose`) |
+| `kohaku_action` | **app-only** (direct write path). `{action, payload?, capability}` → `{result, invalidates?, refVersions?}`. Before verifying the capability, `action` is checked against `DomainPort.listOperations()` (host-core's `createAllowedActions`, shared with capability issuance — an unlisted action is `isError`) and `payload` is capped at 64KB canonical JSON (`isError` if exceeded; full `OperationDescriptor.paramsSchema` validation is a follow-up). It then verifies a write-scope (`{kind:"write", ref:action}`) capability. `invalidates` / `refVersions` are carried only when the side-effect declaration (`McpHostDeps.actionEffects`) is wired; if unwired, only `{result}` = backward compatible |
+| intentTools | Typed tools can be added via `attachKohakuToMcpServer`'s opts. `intentToolsFromCatalog(defs)` (host-mcp-apps) machine-generates them from an array of `{name, description, params: ZodObject}`. Canonical names are normalized to the MCP naming constraint ([A-Za-z0-9_-]) (`sales.quarterly_summary` → `sales_quarterly_summary`); a collision after normalization is an error at registration time |
+| `locale` (shared tool argument) | Every UI-producing tool (`kohaku_compose` / `kohaku_render_snapshot` / the generated intent tools / `kohaku_event`) accepts an optional `locale` (language tag, e.g. `"ja"`). The calling LLM sets it to the user's environment/conversation language (the tool description says so); the host maps it onto `SessionContext.locale` — the same knob as REST's `session.locale` — so NL normalization, the fixation gate (`fixationLookup(hash, session)`; the sample serves pinned Specs to EN only), and the per-session output-language policy all follow it. The name is reserved: it is stripped before the intent params (intent-hash stability), and an intent declaring a `locale` param is rejected at registration |
+| `resultType` (every tool result) | MCP 2026-07-28 (SEP-2322): every tool result — success or `isError` — additionally carries `resultType: "complete"` (this profile never produces the MRTR `"input_required"` interim shape), **or `"task"`** for a task-capable tool call that opted into the Tasks extension (see the row below) — purely additive on TS (SDK v2) and Python (`mcp` 1.x, passthrough result schema) alike |
+| MCP Tasks extension (`io.modelcontextprotocol/tasks`, 2026-07-28 dated-stable, **TS only**) | `kohaku_compose` and the generated intent tools become task-capable **only when `AttachOptions.tasksEnabled` is set (default `false`)** — see below. With it on, a request that declares the extension in its per-request `_meta["io.modelcontextprotocol/clientCapabilities"].extensions["io.modelcontextprotocol/tasks"]` gets back a `CreateTaskResult` (`resultType: "task"`, `taskId`, `status: "working"`, `createdAt`, `lastUpdatedAt`, `ttlMs: 600000`, `pollIntervalMs: 2000`) instead of the synchronous packaged result, and the compose runs in the background. A request that does not declare it gets exactly today's synchronous result (the spec MUST: a server must not return a `CreateTaskResult` to a client that did not opt in on that request). `kohaku_render_snapshot` / `kohaku_resolve_binding` / `kohaku_event` / `kohaku_action` are never task-capable (see docs/design.md §11 for why). `tasks/get` and `tasks/cancel` are implemented (`tasks/update` deliberately is not — compose takes no mid-flight input); **`tasks/get`/`tasks/cancel` are currently unreachable over the wire with the installed `@modelcontextprotocol/server` 2.0.0** — a verified SDK-version gap, not a kohaku bug, detailed (with a re-check procedure) in docs/design.md §11. `tasks/cancel`'s effect (when it does dispatch, or when driven directly against the task store) is the same client-abort path a directly-cancelled tool call already uses (`trace.cancelled`) |
+| `AttachOptions.tasksEnabled` (default `false`) | Kill switch for the whole Tasks extension above, layered on top of the spec's own per-request opt-in. While off (the shipped default): the server does not declare the extension in `ServerCapabilities.extensions`, `tasks/get`/`tasks/cancel` are not registered, and the compose family stays synchronous and byte-identical to before this extension existed — even for a request that itself declares the extension. Rationale: while `tasks/get` is unreachable (the row above), a `CreateTaskResult` is a task handle a declaring client can never resolve, which is worse than none |
+| Correlation id (tool call) | The compose correlation id is **always** the tool call's JSON-RPC request id (TS: SDK v2's `extra.mcpReq.id`; Python: the `mcp` 1.x request id) — never derived from `_meta.traceparent`, even when one is present: a W3C trace-id is shared by an entire trace, so deriving the correlation id from it would give every tool call in one conversation the same id, making a degraded/failed call's `observer.onError` / fixation self-heal report indistinguishable from any other call in the same trace. TS: reaches `ComposeOptions.correlationId` / `ComposeTrace.correlationId` and the fixation self-heal correlation id, exactly like the REST profile's request id. Python: reaches only the failure-path observability hook (`McpErrorInfo.correlation_id`) — `compose_with_fixation`/`ComposeOptions` have no correlation-id sink yet (a pre-existing TS/Python gap) |
+| `_meta.traceparent` / `_meta.tracestate` (tool call input) | MCP 2026-07-28 (SEP-414): when a tool call's `_meta.traceparent` is a well-formed W3C trace-context string (`00-<32 hex>-<16 hex>-<2 hex>`, neither the trace-id nor the parent-id all-zero), it (+ `_meta.tracestate`, opaque up to 512 characters) is parsed into `ComposeOptions.traceContext` — **never** the correlation id above; fail-open on a missing/malformed value. TS: reaches `ComposeOptions.traceContext` / `ComposeTrace.traceContext`, exactly like the REST profile's `traceparent` request header (§5 above). Python: reaches only the failure-path observability hook (`McpErrorInfo.trace_context`) — the same pre-existing sink gap as correlation id above |
+| `ttlMs` / `cacheScope` on `tools/list` / `resources/list` / `resources/read` | MCP 2026-07-28 (SEP-2549, `CacheableResult`): `tools/list`/`resources/list` return `ttlMs=60000, cacheScope="private"` on both languages (Python's `_list_tools`/`_list_resources`; TS's `packages/host-mcp-apps/src/cache-hints.ts` `KOHAKU_MCP_LIST_CACHE_HINT`, wired into `ServerOptions.cacheHints` by `apps/sample-mcp/src/setup.ts`, since that option is constructor-only and host-mcp-apps never constructs the `McpServer`). `resources/read` on the shared renderer resource (`ui://kohaku/renderer.html`) additionally carries `ttlMs=300000, cacheScope="private"` **on TS only** (`RENDERER_RESOURCE_CACHE_HINT`, via SDK v2's registration-time `registerResource(..., {cacheHint})`, overridable per attach via `AttachOptions.rendererResourceCacheHint`) — Python's `read_resource()` decorator has no equivalent hook for a full-result return, so `resources/read` carries no cache fields there (see `python/README.md`'s known-differences list). Only visible to a client that has negotiated the modern (2026-07-28) era — see `docs/design.md`'s "MCP 2026-07-28 / SDK v2 migration" |
+| Transport | The sample (`apps/sample-mcp`) provides two entry points. stdio (`start` / `src/index.ts`; Claude Desktop / terminal hosts) and Streamable HTTP (`start:http` / `src/http.ts`; connected to claude.ai / ChatGPT as a remote connector via a public tunnel; no-auth demo). Common setup (the Ports, `.data`, catalog) is shared in `src/setup.ts`. HTTP is **stateless** (protocol version 2026-07-28 removed protocol-level sessions): `createMcpHandler` (TS SDK v2's `@modelcontextprotocol/server`) builds a fresh `McpServer` per *exchange*, not per connection, with a built-in fallback for still-2025-era clients; `toNodeHandler` (`@modelcontextprotocol/node`) adapts it onto `node:http` — see `docs/design.md`'s "MCP 2026-07-28 / SDK v2 migration" |
+
+On the iframe side, `@modelcontextprotocol/ext-apps`'s `App` receives `ui/notifications/tool-result` and renders it with renderer-react (`apps/sample-mcp/renderer/main.tsx` is the reference implementation). The shared renderer has two modes: when `#kohaku-snapshot` is non-null (the `{spec, data}` embedded by `kohaku_render_snapshot`), it **renders statically from the embedded data without connecting to the bridge** (snapshot mode; interaction events are no-ops).
+
+Widget host integration (feature-detect; a no-op on unsupported hosts; the pure logic is in `renderer/host-integration.ts`):
+- **`ui/update-model-context`**: after a recompose (`kohaku_event`) or a write (`kohaku_action`) via an app-only tool, it flows back to the model context only the summary text of the current view (`specToText` — defined in spec-core) (overwrite semantics; does not pass bulk data; does not send on the first tool-result).
+- **widgetState (ChatGPT-specific)**: feature-detects `window.openai.setWidgetState / widgetState`, and on each view application saves `{kohaku: 1, spec, capability}` and immediately restores it on remount (does not save initialData — data is re-resolved fresh via the bridge).
+- **displayMode (MCP Apps standard)**: declares `["inline", "fullscreen"]` in appCapabilities, and renders the toggle only when the host's `availableDisplayModes` includes fullscreen (`ui/request-display-mode`).
+- **Host-theme adoption (MCP Apps / OpenAI Apps SDK standard)**: at `ui/initialize` and on every `ui/notifications/host-context-changed`, `resolveHostTheme(hostContext)` (`renderer/host-integration.ts`) extracts `{mode, variables}` from `hostContext.theme` (light/dark) and `hostContext.styles.variables` (the host's standard `--color-*`/`--font-*` CSS custom properties, per `@modelcontextprotocol/ext-apps`'s `McpUiStyleVariableKey`). `main.tsx` picks `defaultLightTheme`/`defaultDarkTheme` (`@kohaku-ui/renderer-core`) by `mode` and overlays it with `themeFromHostStyles(variables, base)` — which maps the subset of standard variables that have a 1:1 correspondence to `KnownThemeTokens` (via the exported `HOST_STYLE_VARIABLE_MAP`, a fill token and its foreground token only ever mapped as a pair — notably the host's `-inverse` family is left unmapped since kohaku has no "inverted surface" concept to pair it with) and leaves everything else on `base` — before handing the result to `RendererProvider`'s `theme` prop. Because `host-context-changed`'s params carry only the changed fields, the re-derivation always reads the SDK's already-merged full context (`app.getHostContext()`), not the notification's params directly. Not covered: L2 (freely-generated HTML) is not exposed on the MCP surface in v0.1.
+
+## 7. ComponentDefinition and the core catalog
+
+```ts
+defineComponent({
+  type: "presentChart", version: "1.1.0",
+  description: "…(selection guidance for the LLM; transcribed into the generation prompt)",
+  propsSchema: z.object({...}),            // Zod is authoritative. JSON Schema is derived
+  capabilities: { events: ["pointClick"], data: "required", children: "none", editable?, surfaces? },
+  implementation: { kind: "native" } | { kind: "sandbox-template", html },
+  fallback: { type: "presentSpreadsheet", mapProps: (props) => ({...}) },  // Downgrade chain. Terminal is presentMarkdown
+})
+```
+
+At definition time, `z.toJSONSchema(…, {unrepresentable: "throw"})` fail-fasts on props not representable in JSON (z.date, etc.). In a federated merge (`resolveCatalog(core, ...contribs)`), overriding an existing type is allowed only on a semver increase.
+
+### Core-catalog component props
+
+The 15 components excluding the runtime-only `ui.loading` (a skeleton; `generation:"excluded"`).
+
+| type | props | data | events |
+|---|---|---|---|
+| `layout.stack` | `direction: vertical\|horizontal = vertical`, `gap: none\|sm\|md\|lg = md` | none | — |
+| `layout.grid` | `columns: 1..6 = 2`, `gap = md` | none | — |
+| `layout.tabs` | `stateKey` (state key identifier) | none | select |
+| `layout.tab` | `value`, `label` | none | — |
+| `text.heading` | `level: 1..6`, `text` | none | — |
+| `presentMarkdown` | `markdown` | none | — (the terminal of all fallbacks) |
+| `presentChart` (1.1.0) | `kind: bar\|line\|area\|pie\|scatter`, `x`, `y: string\|string[]`, `series?`, `stacked?`, `title?`, `referenceLines?: [{value, label?, axis?}]` | **required** | pointClick |
+| `presentSpreadsheet` (1.1.0) | `editable = false`, `columns?: [{key,label?,type?}]`, `sortBy?: {field, dir}`, `pageSize?: 1..500`, `serverSide = false` | **required** | rowClick / sortChange / cellEdit |
+| `presentForm` (1.2.0) | `fields: [{name, label?, type: text\|number\|select\|date\|boolean\|textarea\|radio\|multiselect\|email\|url = text, required?, options?, placeholder?, helpText?, defaultValue?, minLength?, maxLength?, pattern?, min?, max?, step?, message?}]`, `submitLabel?`, `successMessage?`, `action` | optional | submit |
+| `presentMetric` | `label`, `valueColumn`, `deltaColumn?`, `format: number\|currency\|percent = number`, `unit?`, `currency?` (default "JPY"), `positiveIsGood = true` | **required** | — |
+| `presentList` | `gap = sm`, `maxItems?: 1..100`, `emptyText` (default `"(No data)"`) | **required** | itemClick |
+| `action.button` | `label`, `variant: primary\|secondary\|danger = primary`, `disabled?` | none | press |
+| `control.select` (A1) | `options: (string\|{value,label})[]` (at least 1), `value?`, `label?`, `placeholder?` | none | change |
+| `overlay.dialog` | `title`, `description?`, `variant: default\|danger = default` | none | close |
+| `overlay.toast` | `message`, `tone: info\|success\|error = info`, `durationMs?` (positive integer) | none | dismiss |
+
+`presentList` treats `children` as a template for each data row, replacing template props' `"$row.<column>"` with each row's value and laying them out (event payloads also resolve the row context with the same `$row` grammar). `layout.tabs` holds the selected tab in client-local state `$state.<stateKey>` (kohaku >= 0.2), rendering only the selected `layout.tab`. `control.select` (kohaku >= 0.2) fires the selected value on a `change` event (payload `$value`), and paired with `emit: "state.set"` it is a lightweight control that updates `$state`. It is used on the input side of two-way binding (`data.bind`). `layout.tabs` / `layout.tab` / `control.select` are `generation:"excluded"` because state / bind are not yet opened to L1 generation (the LLM cannot structurally emit them; they are used in L0 fixed Specs, hand-written Specs, and promotion templates).
+
+`overlay.dialog` / `overlay.toast` (kohaku >= 0.2) are overlay-display components. **They hold no dedicated open/close mechanism, opening and closing declaratively with only the existing `$state` + `emit:"state.set"` + `visibleWhen`** (e.g. `action.button`'s `press` → `state.set(open=true)` → the dialog shows via `visibleWhen: {ref:"$state.open", eq:true}`; you can build a "confirmation flow by declaration alone"). `overlay.dialog` is `role="dialog"` + `aria-modal`, moves focus to the first focusable element on open, closes Tab / Shift+Tab within the dialog (focus trap), and returns focus to the invoker on close. `close` fires on Esc, the × button, or a background click, and **is forwarded upstream only when declared** (control; normally you fold the open flag with `state.set` and close yourself; if undeclared, it is discarded and does not close). The body places arbitrary components (`presentForm` / `action.button`, etc.) in `children`. `overlay.toast` does not steal focus (`role="status"`; the `error` tone is `role="alert"`), and if `durationMs` is specified it fires a `dismiss` event after the elapsed time and auto-dismisses (with a `state.set` declaration it closes itself; if omitted, it does not disappear). Both components are `generation:"excluded"` because of state coupling. Fallbacks are dialog → `layout.stack` (displays the body inline), toast → `presentMarkdown` (displays `message`). **In the `overlay.dialog` downgrade, `title` / `description` are lost** (the "question" of a danger confirmation disappears): capability negotiation goes only as far as "props mapping + carrying over `children`" and cannot inject a new child node (a text component carrying the title), and the downgrade target `layout.stack` has no `title` prop. Making the downgrade target `presentMarkdown` could carry title/description, but `presentMarkdown` is `children:"none"` and drops the body (the confirmation button / completion form) entirely, so it takes `layout.stack`, prioritizing the functional core (children). Focus management and coloring are consumed by both the React / WC renderers from framework-independent shared definitions (`FOCUSABLE_SELECTOR` / overlay styles in `@kohaku-ui/renderer-core`).
+
+`presentForm` (1.2.0) can hold declarative validation on each field. It can declare `required` (rejects unfilled; the notion of empty differs by type — a string is the empty string, `number` is un-numberable/unfilled, `multiselect` is the empty array, `boolean` is non-true), `minLength`/`maxLength` (string length), `pattern` (full match as in HTML), and `min`/`max` (the value range of `number`), and can override the violation message with `message` (if unspecified, the per-kind default message; the wording can be i18n-overridden via the renderer's `RendererMessages`). On submit it validates these, and on a violation, **without sending**, it (a) shows inline errors on the violating field with `aria-invalid` + `aria-describedby`, and (b) shows an aggregated `role="alert"` error at the top of the form (the count and a mention of each field), moving focus to the first violating field. A field group that holds no validation declaration submits as before and is fully backward compatible. The validation logic is a framework-independent pure function (`validateFormValues` in `@kohaku-ui/renderer-core`) shared by both the React / WC renderers.
+
+`presentChart` (1.1.0) can hold data-point-click drilldown and reference lines. Declaring `pointClick` in `events` makes each data point/bar an interactive element and, on click, forwards a `$row`-resolved payload (if undeclared, it is fully non-interactive as before; control is gated by the shared `resolveEmit`). `$row` is the long form of "one logical data point": when `series` is unspecified, it is the source row (the x column + all y columns); when `series` is specified, it reconstructs `{ [x], [series]: series key, [y0]: value }` (the payload template resolves via `$row.<x column>` / `$row.<series column>` / `$row.<y column>`). The conversion from row/point → long row is a framework-independent pure function (`chartPointRow` in `@kohaku-ui/renderer-core`) shared by both the React / WC renderers, guaranteeing the same payload for the same click. pointClick is wired on `bar` / `line` / `area`, which draw hand-written SVG, and is non-interactive on the table-fallback `pie` / `scatter` (aligned across both renderers). `referenceLines` (an array of `{value, label?, axis?}`; v1 is horizontal lines on the y-axis only) draws dashed lines for target values / thresholds, and even if a value exceeds the data maximum, it widens the axis area to always show it. Keyboard operation (Enter/Space) is provided by the WC renderer on SVG points via `role="button"` + `tabindex`. React (Recharts) is limited to pointer operation because the SVG is `aria-hidden`; on either renderer, the visually-hidden data-table alternative is invariant.
+
+Sample contribution: `sales.kpiCard@1.0.0` (props `{label?}`, one data row `{label, value, format: currency\|percent\|number, note?}`).
+
+## 8. sandbox bridge protocol (kohaku-sandbox/0.1)
+
+iframe: `sandbox="allow-scripts"` only + meta CSP `default-src 'none'; script-src 'nonce-<per-mount nonce>'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; worker-src blob:; child-src blob:`. `script-src`/`worker-src`/`child-src` (and `script-src-elem`/`script-src-attr`) are fully runtime-managed — `SandboxPolicy.csp` cannot set them at all, not even to restate the default (`applyRuntimeNonce` substitutes the per-mount nonce into `script-src` after resolution).
+
+Handshake: the trusted document's own runtime → `{kohaku: "kohaku-sandbox/0.1", method: "handshake.ready", nonce}` to `window.parent` → the parent verifies source + nonce → `handshake.init` (+ MessagePort transfer). The MessagePort is held by the trusted document and never transferred into the Worker that runs the generated script.
+
+| Direction | Method | params | Control |
+|---|---|---|---|
+| guest→host | `binding.fetch` | `{ref}` | Only an exact match with that node's `data.$ref`. Violation **-32001**. 30 req/min, 2 concurrent (over → **-32002**), response 1MiB (over → **-32003**), aborted if resolution exceeds 10s (**-32004**). A resolution failure reaches the guest only as the fixed string "binding resolution failed" + `-32000`; the raw error goes to the host's `onTelemetry` instead |
+| guest→host | `event.emit` | `{on, payload}` | Only Spec-declared event names are forwarded. Undeclared → discarded + telemetry. 60 times/min; payload over 16KiB → discarded + telemetry (recompose / storm suppression) |
+| guest→host | `ui.ready` / `ui.resize {height}` / `telemetry.report {kind, detail?}` | | height is clamped to maxHeightPx (4096). resize over 120 times/min → silently discarded, telemetry over 60 times/min → discarded (denied notification only on the first per window) |
+| host→guest | `rpc.result {id, result?, error?}` / `props.update {props}` / `data.invalidate {ref}` / `destroy` | | |
+
+This table is the wire protocol between the parent page and the trusted iframe document, unchanged by the
+Worker move. **Internally**, the trusted document additionally relays a second, non-wire protocol between
+itself and the Worker that actually runs the generated script (`packages/sandbox/src/guest/dom-applier.ts` ⇄
+`guest/worker-shim.ts`): short-array DOM mutation ops (`["c",id,tag,ns?]` create / `["a",...]` append /
+`["s",...]` setAttribute / `["p",...]` style property / etc.), forwarded real DOM events, and the same
+`binding.fetch`/`event.emit`/`telemetry.report`/`ui.ready` primitives re-expressed for that internal channel.
+This internal protocol is not part of the kohaku-sandbox/0.1 wire contract above and may change without a
+protocol version bump; it is entirely an implementation detail of how the sandbox package satisfies
+SBX-EXEC-001.
+
+The only API available to generated code (the sole interface L2-generated HTML may use): `self.kohaku`
+(also reachable as `window.kohaku`) `.fetchData(ref)` / `.emit(on, payload)` / `.onProps(cb)` / `.ready()`.
+These four are the entirety, and the composer inspects the generated HTML with a contract lint
+(`collectL2Issues`), sending failures back through the repair loop. L2 generation outputs a plain HTML
+document via `generateText` rather than a JSON wrapper (because small models systematically break when
+embedding lengthy HTML in JSON; the display title is derived from `<title>`). Inspection items: reference to
+an unknown method (`L2_UNKNOWN_API`) / missing `ready()` (`L2_READY_MISSING`) / JS syntax error in a `<script>`
+(`L2_SCRIPT_SYNTAX` — inspection by compilation via `new Function` only; skipped in environments where dynamic
+code generation is unavailable) / missing `</html>` = output truncated mid-way (`L2_TRUNCATED`) /
+non-deterministic rendering or value fabrication via `Math.random()` (`L2_NONDETERMINISM`) / traces of
+unavailable external libraries — references to D3 / Chart.js, etc., or `.attr()` chains not in the DOM
+(`L2_LIB_UNAVAILABLE`) / a navigation attempt — `<meta http-equiv=refresh>`, `location.href` assignment,
+`location.assign()` / `location.replace()`, or `window.open()` (`L2_NAVIGATION` — navigation APIs do not exist
+in the sandbox runtime — SBX-EXEC-001's Worker already neutralizes this class of attempt structurally, so this
+lint only saves a repair round-trip versus discovering the TypeError at runtime) / markup the DOM applier
+always rejects — a denied element (`<iframe>`/`<object>`/`<embed>`/`<form>`/`<base>`/`<link>`/`<frame>`/
+`<applet>`), an `on*=` attribute or property assignment, a `javascript:` URL, or `<script src=...>`
+(`L2_UNSAFE_MARKUP`) / an API the Worker DOM shim does not provide — canvas `getContext`, `document.write`,
+`alert`/`confirm`/`prompt`, `localStorage`/`sessionStorage`/`indexedDB`, `document.cookie`,
+`MutationObserver`/`IntersectionObserver` (`L2_UNSUPPORTED_DOM`) / raw color literals `#hex` / `rgb()` /
+`hsl()` (`L2_RAW_COLOR` — **only when `ComposePolicy.designSystem` is wired**; sends back for replacement with
+token references `var(--kohaku-*)`).
+
+DOM-shape limits enforced by the trusted document's applier on ops relayed from the Worker:
+`SandboxPolicy.maxDomNodes` (default 20000), `maxDomDepth` (default 64), `mutationsPerMinute` (default 6000).
+An op that would exceed one of these is dropped and reported once per window as `telemetry.report
+kind:"denied"`. (Note: `mountSandbox`'s current implementation always builds the srcdoc with the spec-core
+defaults regardless of these `SandboxPolicy` fields — `buildSrcdoc`'s external signature has no parameter to
+carry a per-mount override through yet; the fields are resolved for forward compatibility.)
+
+Theme-token injection: passing `MountSandboxOptions.theme` (React the `theme` prop of `SandboxFrame`, WC `context.theme`) makes mount inject renderer-core's `sandboxThemeCss(theme)` (merged with the default light theme + decomposes `chart.palette` into `--kohaku-chart-palette-1..7`) into the srcdoc's `<head>` as `<style>:root{--kohaku-*: …}</style>`. Even when theme is unspecified, the default light theme is always injected, so a `var(--kohaku-*)` reference in the generated HTML never falls to undefined. The artifact (the sha256 subject) holds no values and stays theme-independent (the injection is srcdoc composition at mount time, not a rewrite of the artifact).
+
+If a runtime error occurs in the guest before boot (`ui.ready` reached) (`telemetry.report kind:"error"`; the Worker reports both synchronous `error` and `unhandledrejection`, and the trusted document itself reports a Worker boot failure or `messageerror`), mount transitions to the `error` state with the actual error content without waiting for `bootTimeoutMs` (default 5000ms). Errors after ready do not cause a state transition (telemetry observation only).
+
+## 9. Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `KOHAKU_LLM_PROVIDER` | `claude` | `claude` / `openai` / `gemini` / `ollama` / `llama` |
+| `KOHAKU_LLM_MODEL` | Per-provider default (claude-sonnet-5 / gpt-4.1 / gemini-2.5-flash / llama3.3) | `llama` must be specified explicitly |
+| `KOHAKU_LLM_BASE_URL` | ollama: `http://localhost:11434/v1` | Required for `llama` (OpenAI-compatible) |
+| `KOHAKU_LLM_API_KEY` | — | Highest-priority key. If absent, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` |
+| `KOHAKU_LLM_TEMPERATURE` / `KOHAKU_LLM_MAX_OUTPUT_TOKENS` | 0 / 4096 | For L2 free generation, the cap is widened 3× (default 12288) by `outputBudgetFactor=3` |
+| `KOHAKU_LLM_STRUCTURED_MODE` | `auto` | `auto` (native → prompt JSON on failure) / `strict` / `prompt` |
+| `KOHAKU_LLM_TIMEOUT_MS` | 60000 | Timeout for a single LLM call (ms). L2 free generation (long output of full HTML) is widened 3× (default 180s) by `outputBudgetFactor=3` |
+| `KOHAKU_LLM_RETRY_MAX` / `KOHAKU_LLM_RETRY_INITIAL_MS` | 2 / 250 | Jittered exponential-backoff retry for PROVIDER failures (429/5xx). `0` disables. Does not exceed `KOHAKU_LLM_TIMEOUT_MS` overall |
+| `KOHAKU_LLM_PROMPT_CACHE` | `0` (off) | `1` opts into Anthropic prompt caching (`cache_control`) for the `claude` provider only (no-op for every other provider, and a no-op whenever the caller passes no `GenerateObjectRequest`/`GenerateTextRequest.promptParts`) — see [design.md#prompt-caching](design.md#prompt-caching) and `ComposePolicy.refConstraint` below |
+| `KOHAKU_CAPABILITY_SECRET` | `dev-secret-change-me` | The sample's HMAC capability signing key |
+| `KOHAKU_OTEL` | `0` (off) | **sample-api (TS) only.** `1` combines `@kohaku-ui/otel`'s `createOtelComposeObserver()` with the demo's console observer via `@kohaku-ui/composer`'s `composeObservers` (`apps/sample-api/src/app/compose-context.ts`). Unset/any other value returns the exact same observer object as before this option existed (behavior provably unchanged). Ships no exporter/SDK initialization — see [user-guide.md](user-guide.md)'s "Trace context / OTel" section for that setup. With no `TracerProvider` registered, spans are simply discarded (safe no-op) |
+| `PORT` | 8787 | sample-api (the Python sample is 8790) |
+| `KOHAKU_API_URL` | `http://localhost:${PORT ?? 8787}` | Base URL sample-web / sample-wc's Vite dev server proxies `/api` requests to (`apps/sample-web/vite.config.ts` / `apps/sample-wc/vite.config.ts`). Takes priority over `PORT` for the proxy target — set it when sample-api runs on a non-default host (not just a non-default port, which `PORT` alone already covers) |
+| `KOHAKU_SHUTDOWN_GRACE_MS` | 30000 | Graceful-shutdown drain window (ms) for the TS samples (sample-api / sample-mcp). On SIGINT/SIGTERM the process stops accepting new connections and lets in-flight ones drain; if the window elapses first, it logs the number of connections still open and force-exits (exit code 1) rather than a clean exit (0). Non-numeric / `<= 0` falls back to the default. sample-api additionally flips `GET /api/health` to `503 {ok:false, reason:"shutting down"}` immediately on the signal (ahead of the drain), so a load balancer stops routing new traffic here. The Python sample passes the equivalent `uvicorn` option (`timeout_graceful_shutdown=30`) in code rather than reading an env var |
+| `KOHAKU_SHUTDOWN_PRESTOP_MS` | 0 | **sample-api (TS) only.** Extra wait (ms) between flipping `GET /api/health` to not-ready and actually closing the server on SIGINT/SIGTERM. With the default 0, a load balancer's next health poll can race `server.close()` and see `ECONNREFUSED` instead of the intended `503`, because both happen in the same tick. Set it to the load balancer's health-check interval (or a bit more) so at least one `503` is guaranteed to be observed first. Non-numeric / negative falls back to 0 |
+| `KOHAKU_DATA_DIR` | TS: `apps/sample-api/.data`. Python: `python/examples/sales-api/.data` | Persistence directory (promotion, fixation, Lineage). Read by the TS sample-api (`apps/sample-api/src/index.ts`) and by both the Python REST (`python -m sales_api`) and MCP (`python -m sales_api.mcp_main`) samples (`__main__.py` / `mcp_main.py`). The CI `conformance-ts` / `conformance-python` jobs each pass a temporary directory so the black-box run never touches the checked-out repo's local demo state. sample-mcp (TS) uses a fixed path and is **unsupported** |
+| `KOHAKU_SALES_SEED_DIR` | `apps/sample-api/src/domain/seed` (resolved from the repository root) | **Python sample only** (`sales_api/domain.py`). Overrides where the Python sample reads the sales seed JSON from — the TS sample has no equivalent env var (it always reads the checked-out `apps/sample-api/src/domain/seed`) |
+| `KOHAKU_L2_JS` | (unset = on when Node is co-located) | **Python sample only.** `off` disables the JS-sidecar delegation of L2 validation (`sales_api/app.py`). When unset and Node is co-located, it delegates to the CLI (`kohaku smoke-l2`); if not co-located, it is unwired (traditional behavior). The TS samples use in-process `@kohaku-ui/sandbox` and are **unsupported** |
+| `KOHAKU_MCP_HTTP_PORT` | 8788 | The listen port of sample-mcp's Streamable HTTP entry (`start:http` / `src/http.ts`). The **Python sample** (`python -m sales_api.mcp_http`) defaults to **8791** (a separate port to coexist with TS :8788; `mcp_http.py`) |
+| `KOHAKU_MCP_HTTP_HOST` | `127.0.0.1` | The bind address of sample-mcp's Streamable HTTP entry. The default is the local loopback (connectable only from the same machine). Specify explicitly only when widening to LAN or public (because it is a no-auth demo, for public exposure the `KOHAKU_MCP_PUBLIC_URL` + tunnel route is recommended) |
+| `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` | — (unset = protection off) | Comma-separated allowed hosts for DNS-rebinding protection. Enabled only when specified (for localhost-limited operation; e.g. `localhost:8788,127.0.0.1:8788`; via a public tunnel the Host becomes the tunnel's domain, so it is rejected unless enumerated) |
+| `KOHAKU_MCP_PUBLIC_URL` | `http://localhost:{port}` | The base URL for sample-mcp HTTP's static snapshot serving (`/snapshots`). The origin of the URL `kohaku_render_snapshot` returns. Set the tunnel URL when going through a public tunnel (ngrok / cloudflared, etc.) (if unset, a local URL is returned that cannot be opened externally) |
+| `KOHAKU_MCP_SNAPSHOT_TTL_MS` | 86400000 (24h) | The retention TTL (ms) for snapshot HTML files under `.data/snapshots` before the periodic sweep deletes them (each self-contained snapshot is ~1MB and previously accumulated without bound). Non-numeric / `<= 0` falls back to the default (`apps/sample-mcp/src/setup.ts`) |
+
+## 10. List of Lineage event types
+
+| type | main payload | Occurrence point |
+|---|---|---|
+| `view.composed` | specHash, structureHash, intentHash, canonical, params, tier, cache, surface, sessionId?, model?, artifactId? | On compose success (recorder) |
+| `view.rendered` / `view.interacted` | specHash / componentId, on, payload | telemetry / events route |
+| `view.fallback` | specHash, reason, surface, kind (generation/negotiation), intentHash | Recorded when the compose/events response on the REST surface includes `provenance.fallback` (SHOULD). Not recorded on the MCP surface because the recorder is unwired |
+| `component.generated` | artifactId, artifactSha256, html, ref?, request?, intentHash, specHash, model | First L2 composition. `ref` is the `data.$ref` at generation time (material for the promotion-review preview to re-mount with the same data) |
+| `component.used` | artifactId, surface, sessionId?, outcome | Per L2 composition + telemetry |
+| `component.nominated/judged/reviewed/schemaProposed/published/withdrawn` | Each promotion transition (rejection is recorded as `component.reviewed` with decision:"reject") | promotions |
+| `intent.fixated` / `intent.unfixated` | intentHash, canonical, structureHash, approver | fixations |
+| `intent.observed` | — | A reservation in the type catalog (not recorded in v0.1) |
+
+## 11. conformance
+
+Requirements list (machine-readable): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — 32 MUSTs (the manifest is authoritative for the count and categorization).
+
+```bash
+node cli/bin/kohaku.js conformance --self                # SPEC-* 9 items (Spec-format self-inspection)
+node cli/bin/kohaku.js conformance --rest <baseUrl> \
+  [--intent '{"canonical":"…","params":{…}}']             # + REST-* 9 MUST + 6 SHOULD, LIN-PRM-001 (black-box inspection; applicable to any implementation)
+```
+
+The MCP (MCPAPP-*) and sandbox (SBX-*) requirements, plus four documentary Spec-format norms not amenable to black-box checking (SPEC-ENV-003 theme independence, SPEC-EVT-002 undeclared-event forwarding prohibition, SPEC-DATA-002 per-reference version reconciliation, CMP-DET-001 the general form of composition determinism), are internal invariants; the tests in `packages/host-mcp-apps/test` / `packages/sandbox/test` / `packages/renderer-wc/test/parity` + `packages/renderer-core/test` / `packages/composer/test` respectively pin them against the reference implementation (out of scope for black-box inspection; `verification: "reference"` in the manifest). lineage's LIN-PRM-001 has been upgraded to a black-box inspection of `GET /lineage` (confirming that a human approve precedes published in time), is included in `--rest`, and is additionally guaranteed by `packages/lineage/test` (the state machine).

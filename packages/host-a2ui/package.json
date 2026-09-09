@@ -1,0 +1,56 @@
+{
+  "name": "@kohaku-ui/host-a2ui",
+  "version": "0.1.0",
+  "description": "A2UI-compatible profile for kohaku: converts UI Specs and Spec patches into A2UI messages.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/spec-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/host-a2ui#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/host-a2ui"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

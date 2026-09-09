@@ -1,0 +1,57 @@
+{
+  "name": "@kohaku-ui/intents",
+  "version": "0.1.0",
+  "description": "Intent DSL for kohaku: derives SemanticPort definitions, GUI facet descriptors and MCP tool inputs from one declaration of value sets and labels.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/intents#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/intents"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

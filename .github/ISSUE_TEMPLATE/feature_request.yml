@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a new capability or improvement
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please search existing issues first to avoid duplicates.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What are you trying to do, and what currently gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: protocol-impact
+    attributes:
+      label: Does this affect the protocol?
+      description: Would this require a change to spec/SPEC.md (wire format, conformance requirements)?
+      options:
+        - "No — implementation-only change"
+        - "Yes — affects the protocol"
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: protocol-details
+    attributes:
+      label: Protocol impact details
+      description: If the previous answer was "Yes" or "Not sure", describe what in spec/SPEC.md would need to change.

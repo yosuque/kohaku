@@ -1,0 +1,65 @@
+name: Conformance report
+description: Report or discuss the Kohaku Protocol conformance of an implementation (yours or this one)
+title: "[Conformance] "
+labels: ["conformance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the channel for reporting the conformance result of an implementation of the
+        Kohaku Protocol (`spec/SPEC.md`) — including a third-party implementation in another
+        language — against this repository's black-box conformance CLI, and for discussing
+        conformance questions with maintainers.
+  - type: input
+    id: implementation
+    attributes:
+      label: Implementation name and language
+      placeholder: e.g. "kohaku-rs (Rust), unofficial third-party implementation"
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Profile checked
+      options:
+        - REST
+        - MCP
+        - Both
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command run
+      placeholder: node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Full CLI output
+      description: Paste the complete output of the conformance command, unedited.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Overall result
+      options:
+        - CONFORMANT
+        - NON-CONFORMANT
+    validations:
+      required: true
+  - type: input
+    id: failed-requirements
+    attributes:
+      label: Failed requirement IDs
+      description: Comma-separated requirement ids from spec/conformance/manifest.ts's REQUIREMENTS table (e.g. REST-CMP-002, SPEC-STA-001). Leave blank if CONFORMANT.
+      placeholder: REST-BND-002, SPEC-DATA-001
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything else relevant — a suspected spec ambiguity, an intentional deviation, environment details, etc.

@@ -1,0 +1,70 @@
+{
+  "name": "@kohaku-ui/renderer-react",
+  "version": "0.1.0",
+  "description": "React renderer for kohaku UI Specs, with the core component implementations.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./core": "./src/core/index.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^",
+    "@kohaku-ui/renderer-core": "workspace:^",
+    "recharts": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "jsdom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/renderer-react#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/renderer-react"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./core": {
+        "types": "./dist/core/index.d.ts",
+        "default": "./dist/core/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

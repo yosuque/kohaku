@@ -1,0 +1,35 @@
+{
+  "name": "@kohaku-ui-sample/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./renderer-impls": "./src/renderer-impls/index.ts"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kohaku-ui/client": "workspace:^",
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/intents": "workspace:^",
+    "@kohaku-ui/renderer-core": "workspace:^",
+    "@kohaku-ui/renderer-react": "workspace:^",
+    "@kohaku-ui/sandbox": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "react-router-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "jsdom": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

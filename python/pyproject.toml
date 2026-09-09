@@ -1,0 +1,118 @@
+# kohaku Python workspace (uv workspace root).
+# Independent of the pnpm workspace (TS). The contract boundaries are spec/ (SPEC.md + schemas),
+# the pre-built renderer HTML, and (when Node is co-located) the smoke-l2 internal contract only.
+[project]
+name = "kohaku-workspace"
+version = "0.0.0"
+description = "Workspace root of the kohaku Python implementation (not distributed)"
+requires-python = ">=3.12"
+dependencies = ["kohaku"]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["kohaku", "examples/sales-api"]
+
+[tool.uv.sources]
+kohaku = { workspace = true }
+kohaku-sample-sales-api = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "mypy>=1.14",
+    "ruff>=0.9",
+    "import-linter>=2.0",
+    "kohaku-sample-sales-api",
+    "mcp>=1.28.1",
+    "fastapi>=0.139.2",
+    "httpx>=0.28.1",
+    "uvicorn>=0.51.0",
+    # For testing the native LLM adapters (claude / gemini extras). Matches kohaku/pyproject.toml's claude
+    # extra floor: 1.5.0 is the version verified (by reading its installed type stubs, not a changelog) to
+    # carry OutputConfigParam/effort — the field adapters/anthropic_native.py now unconditionally sends on
+    # the wire whenever a caller sets GenerateObjectRequest/GenerateTextRequest.effort. A lower floor could
+    # resolve an older 1.x that fails at runtime (an unexpected keyword to messages.create) rather than at
+    # install time.
+    "anthropic>=1.5",
+    "google-genai>=1.0",
+]
+
+[tool.pytest.ini_options]
+# The examples side uses a different name to avoid a package-name clash with kohaku/tests (both are "tests")
+testpaths = ["kohaku/tests", "examples/sales-api/sales_api_tests"]
+# asyncio tests are written with plain asyncio.run instead of pytest-asyncio (minimizing dependencies)
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["kohaku/src", "examples/sales-api/src"]
+
+[tool.ruff.lint]
+# E/F (pycodestyle/pyflakes) + I (isort) + UP (pyupgrade) + B (bugbear).
+# Naming rules (N) are excluded — camelCase field names are intentional, matching the wire contract.
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501", # line length is delegated to the formatter
+]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["kohaku/src", "kohaku/tests", "examples/sales-api/src", "examples/sales-api/sales_api_tests"]
+mypy_path = ["kohaku/src", "examples/sales-api/src"]
+
+# Mechanical enforcement of the dependency direction (A2). Defines one layer contract corresponding
+# to the TS dependency direction (AGENTS.md "Layout essentials"). Checked via `uv run lint-imports`.
+[tool.importlinter]
+root_package = "kohaku"
+
+[[tool.importlinter.contracts]]
+name = "kohaku layer dependency direction (spec at the bottom; llm is an independent leaf not depending on spec)"
+type = "layers"
+containers = ["kohaku"]
+# Higher → lower (higher layers may import lower ones; never the reverse). `|` marks independent
+# siblings within a layer (no mutual imports). spec is the bottom layer, and llm is an independent
+# sibling at the same layer, mechanically guaranteeing "llm does not depend on spec". data_binding
+# sits one above spec because intents / host_* depend on it. registry / intents / lineage / storage
+# are the middle layer used by composer / host_*. composer is above them. host_core sits one layer
+# above composer: the framework-free shared host core (fixation delivery + self-healing, capability
+# issuance, error-hook helpers) consumed by host_rest and host_mcp as thin adapters — the same
+# relationship renderer-core has with renderer-react/renderer-wc on the TS side. host_rest / host_mcp /
+# evals are at the top.
+layers = [
+    "host_rest | host_mcp | evals",
+    "host_core",
+    "composer",
+    "registry | intents | lineage | storage",
+    "data_binding",
+    "llm | spec",
+]
+
+# Supplements the forward cross-imports forbidden by the TS dependency DAG (AGENTS.md "Layout
+# essentials"). The total order of layers alone cannot sufficiently constrain same-layer siblings or
+# "lower → independent leaf", so forbidden / independence make them explicit. intents → data_binding
+# is allowed, per the TS spec.
+[[tool.importlinter.contracts]]
+name = "registry does not depend on data_binding (TS: independent same-layer siblings)"
+type = "independence"
+modules = [
+    "kohaku.registry",
+    "kohaku.data_binding",
+]
+
+[[tool.importlinter.contracts]]
+name = "only composer / evals may import llm (no inflow from lower packages)"
+type = "forbidden"
+source_modules = [
+    "kohaku.spec",
+    "kohaku.registry",
+    "kohaku.data_binding",
+    "kohaku.intents",
+    "kohaku.lineage",
+    "kohaku.storage",
+]
+forbidden_modules = [
+    "kohaku.llm",
+]

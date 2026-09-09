@@ -1,0 +1,38 @@
+[
+  {
+    "id": "prd-001",
+    "name": "Aurora Analytics",
+    "category": "software",
+    "unitPrice": 1200000
+  },
+  {
+    "id": "prd-002",
+    "name": "Aurora CRM",
+    "category": "software",
+    "unitPrice": 800000
+  },
+  {
+    "id": "prd-003",
+    "name": "EdgeSight Sensor",
+    "category": "hardware",
+    "unitPrice": 150000
+  },
+  {
+    "id": "prd-004",
+    "name": "EdgeSight Gateway",
+    "category": "hardware",
+    "unitPrice": 450000
+  },
+  {
+    "id": "prd-005",
+    "name": "Managed Support",
+    "category": "services",
+    "unitPrice": 300000
+  },
+  {
+    "id": "prd-006",
+    "name": "Onboarding Pack",
+    "category": "services",
+    "unitPrice": 500000
+  }
+]

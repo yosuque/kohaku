@@ -1,0 +1,21 @@
+{
+  "name": "@kohaku-ui-sample/wc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kohaku-ui/client": "workspace:^",
+    "@kohaku-ui/renderer-core": "workspace:^",
+    "@kohaku-ui/renderer-wc": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

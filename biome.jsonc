@@ -1,0 +1,141 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+
+  // Use .gitignore as the single source of exclusions (don't double-maintain node_modules / dist / coverage / .data).
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true, "defaultBranch": "main" },
+
+  "files": {
+    // Target TS/TSX only. JSON is excluded because Biome's JSON formatter collapses short arrays
+    // onto one line, which doesn't match output written by `JSON.stringify(x, null, 2)` and would
+    // break CI's drift check (regenerate → git diff --exit-code).
+    "includes": [
+      "**/*.ts",
+      "**/*.tsx",
+      "!**/node_modules",
+      "!**/dist",
+      "!coverage",
+      "!spec/schemas",                      // output of generate-schemas
+      "!spec/test/fixtures",                // output of generate-cross-language-fixtures
+      "!apps/sample-web/src/generated",     // output of pnpm intents:emit
+      "!apps/sample-api/src/domain/seed",   // output of pnpm seed
+      "!apps/sample-api/test/golden",       // KOHAKU_GOLDEN_UPDATE=1 writes these back via JSON.stringify(...,2)
+      "!python"                             // registry/_data/core-catalog.json (export-core-catalog)
+    ]
+  },
+
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    // Measured (`pnpm biome format --write .` then `git diff --shortstat`, restored via `git checkout` each time):
+    //   100: 332 files changed, 5873 insertions(+), 1824 deletions(-)  -> 7697 changed lines
+    //   110: 277 files changed, 2964 insertions(+), 1986 deletions(-)  -> 4950 changed lines (-35.7% vs 100)
+    //   120: 298 files changed, 2140 insertions(+), 2839 deletions(-)  -> 4979 changed lines (reference only)
+    // Decision rule (fixed beforehand): adopt 110 only if it reduces changed lines by >=20% vs 100, otherwise use 100.
+    // 110 reduces changed lines by 35.7% vs 100 -> adopted.
+    "lineWidth": 110,
+    "lineEnding": "lf",
+    "useEditorconfig": false,
+    "formatWithErrors": false
+  },
+
+  // All of these match Biome's defaults, but are spelled out explicitly to show they are a deliberate
+  // choice based on measuring against the 567 existing files, not an accident.
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double", "jsxQuoteStyle": "double", "semicolons": "always",
+      "trailingCommas": "all", "arrowParentheses": "always", "bracketSpacing": true,
+      "bracketSameLine": false, "quoteProperties": "asNeeded", "attributePosition": "auto"
+    }
+  },
+
+  "json": { "formatter": { "enabled": false }, "linter": { "enabled": false } },
+  "css": { "formatter": { "enabled": false }, "linter": { "enabled": false } },
+  "graphql": { "formatter": { "enabled": false }, "linter": { "enabled": false } },
+
+  "assist": { "enabled": true, "actions": { "source": { "organizeImports": "on" } } },
+
+  "linter": {
+    "enabled": true,
+    "domains": { "react": "recommended", "test": "recommended", "project": "none" },
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        // Measured 612 occurrences (123 files). Mostly index-signature access such as
+        // process.env["X"] or Record<string, unknown>, unchanged in meaning but noisy as a diff.
+        "useLiteralKeys": "off"
+      },
+      "correctness": {
+        // Measured 24 occurrences (8 files, all errors). Mechanically "fixing" dependency arrays
+        // can change runtime behavior (e.g. infinite re-render), so this isn't done alongside adoption.
+        "useExhaustiveDependencies": "off"
+      },
+      "style": {
+        // Measured 990 occurrences (178 files). Mostly deliberate uses like unique[0]! after a
+        // length check; resolving them for real would require reworking the types.
+        "noNonNullAssertion": "off",
+        // Measured 149 occurrences. String concatenation (e.g. `JSON.stringify(x, null, 2) + "\n"`)
+        // is this codebase's established style for building file contents to write out; a mechanical
+        // rewrite to template literals is pure churn that doesn't improve correctness and only adds
+        // diff noise across scripts and tests.
+        "useTemplate": "off"
+      },
+      "suspicious": {
+        // Measured 82 occurrences (11 files). Switching to unknown cascades through the type
+        // graph, so it's out of scope for a gradual rollout.
+        "noExplicitAny": "off",
+        // Domain-gated rule (only enabled when a turbo dependency is detected). This repo uses pnpm
+        // workspaces without turbo, so it measured 0 occurrences (already inactive), but it's kept
+        // explicitly off so that adopting turbo later doesn't turn every KOHAKU_* env var access
+        // into a false positive.
+        "noUndeclaredEnvVars": "off"
+      }
+    }
+  },
+
+  "overrides": [
+    {
+      // domains.test's noExportsInTest only applies to files Biome recognizes as "test files"
+      // (*.test.ts etc.); helper files under test/ (measured 7 files: composer/test/helpers.ts,
+      // host-rest/test/helpers/sse.ts, renderer-wc/test/util.ts and
+      // parity/{corpus,axe-config,render-both,normalize}.ts) have exports but are out of scope,
+      // so the current hit count is 0. Still, exporting things to assemble the subject under test
+      // isn't a problem in itself, so the whole test/ tree is turned off explicitly in case
+      // Biome's file-detection heuristic changes later.
+      // useArrowFunction is off here because a test double is sometimes required to be constructible.
+      // packages/sandbox/test/mount.test.ts replaces window.MessageChannel, which the code under test calls
+      // with `new`; an arrow function is not constructible, so the autofix made the mock return undefined and
+      // three tests failed. An inline biome-ignore does not suppress it in argument position, so the rule is
+      // turned off for the test tree instead -- it has little value there and this is its only hit.
+      "includes": ["**/test/**", "**/*.test.ts", "**/*.test.tsx"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noExportsInTest": "off" },
+          "complexity": { "useArrowFunction": "off" }
+        }
+      }
+    },
+    {
+      // Guest closures are stringified whole via Function.prototype.toString() and evaluated inside
+      // a Worker / iframe srcdoc (see the module comment in worker-shim.ts). They must be
+      // self-contained ("no imports, no module-scope closures"), so an autofix that rewrites a
+      // function's shape must not be applied here. Currently this directory has zero
+      // useArrowFunction violations (the 2 violations found are in sandbox/test/mount.test.ts), but
+      // this is kept off as a preventive measure against a future autofix crossing that boundary.
+      // noRedundantUseStrict is the concrete case: the "use strict" directive at the top of each guest
+      // closure is NOT redundant, because the closure never runs as a module. Dropping it would put the
+      // guest in sloppy mode, where assigning to the getter-only `document.location` silently creates a
+      // property instead of throwing -- the exact mechanism SBX-EXEC-001 relies on (see the comment above
+      // the defineProperty call in worker-shim.ts). The autofix removed it, and no test failed.
+      // noPrototypeBuiltins is off for the same reason in reverse: its fix is sound, but this directory is
+      // a security boundary and is not worth churning for a stylistic rewrite.
+      "includes": ["packages/sandbox/src/guest/**"],
+      "linter": {
+        "rules": {
+          "complexity": { "useArrowFunction": "off" },
+          "suspicious": { "noRedundantUseStrict": "off", "noPrototypeBuiltins": "off" }
+        }
+      }
+    }
+  ]
+}

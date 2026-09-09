@@ -1,0 +1,52 @@
+{
+  "name": "@kohaku-ui/data-binding",
+  "version": "0.1.0",
+  "description": "Pass-by-reference data binding for kohaku: query:// reference resolution, capability tokens and staleness detection.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/spec-core": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/data-binding#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/data-binding"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

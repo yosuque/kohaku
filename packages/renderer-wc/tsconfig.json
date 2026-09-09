@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "comment": "WC builds the real DOM, so the DOM lib is added. renderer-core stays strictly DOM-free (contamination is caught by the core-side typecheck). jsx is unused in src but required because the parity harness (test/parity) pulls in renderer-react .tsx files.",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": []
+  },
+  "include": ["src", "test"]
+}

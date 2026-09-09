@@ -1,0 +1,113 @@
+{
+  "name": "L0 fixed Spec for sales.kpi_overview (FY2026 Q3)",
+  "input": {
+    "kind": "intent",
+    "intent": {
+      "canonical": "sales.kpi_overview",
+      "params": {
+        "fiscalYear": 2026,
+        "quarter": 3
+      }
+    }
+  },
+  "drafts": [],
+  "expected": {
+    "kohaku": "0.2",
+    "intent": {
+      "canonical": "sales.kpi_overview",
+      "params": {
+        "fiscalYear": 2026,
+        "quarter": 3
+      },
+      "hash": "sha256:83edaa857dd9c5fffa025efbdd8980c0fdcae9c7d7d36eddf53127fd827f9021"
+    },
+    "dataVersion": "sales@seed-20260610.1+ade3e9a0a5de#bump-0",
+    "refVersions": {
+      "query://sales/kpi?fy=2026&metric=total_revenue&q=3": "sales@seed-20260610.1+ade3e9a0a5de#bump-0",
+      "query://sales/kpi?fy=2026&metric=yoy&q=3": "sales@seed-20260610.1+ade3e9a0a5de#bump-0",
+      "query://sales/kpi?fy=2026&metric=top_region&q=3": "sales@seed-20260610.1+ade3e9a0a5de#bump-0",
+      "query://sales/kpi?fy=2026&metric=target_attainment&q=3": "sales@seed-20260610.1+ade3e9a0a5de#bump-0"
+    },
+    "components": [
+      {
+        "id": "root",
+        "type": "layout.stack",
+        "version": "1.0.0",
+        "props": {
+          "direction": "vertical",
+          "gap": "md"
+        },
+        "children": [
+          "title1",
+          "grid1"
+        ]
+      },
+      {
+        "id": "title1",
+        "type": "text.heading",
+        "version": "1.0.0",
+        "props": {
+          "level": 2,
+          "text": "FY2026 Q3 Performance Summary"
+        }
+      },
+      {
+        "id": "grid1",
+        "type": "layout.grid",
+        "version": "1.0.0",
+        "props": {
+          "columns": 4,
+          "gap": "md"
+        },
+        "children": [
+          "sales_kpicard1",
+          "sales_kpicard2",
+          "sales_kpicard3",
+          "sales_kpicard4"
+        ]
+      },
+      {
+        "id": "sales_kpicard1",
+        "type": "sales.kpiCard",
+        "version": "1.0.0",
+        "props": {},
+        "data": {
+          "$ref": "query://sales/kpi?fy=2026&metric=total_revenue&q=3"
+        }
+      },
+      {
+        "id": "sales_kpicard2",
+        "type": "sales.kpiCard",
+        "version": "1.0.0",
+        "props": {},
+        "data": {
+          "$ref": "query://sales/kpi?fy=2026&metric=yoy&q=3"
+        }
+      },
+      {
+        "id": "sales_kpicard3",
+        "type": "sales.kpiCard",
+        "version": "1.0.0",
+        "props": {},
+        "data": {
+          "$ref": "query://sales/kpi?fy=2026&metric=top_region&q=3"
+        }
+      },
+      {
+        "id": "sales_kpicard4",
+        "type": "sales.kpiCard",
+        "version": "1.0.0",
+        "props": {},
+        "data": {
+          "$ref": "query://sales/kpi?fy=2026&metric=target_attainment&q=3"
+        }
+      }
+    ],
+    "events": [],
+    "provenance": {
+      "tier": "L0",
+      "composedBy": "composer@0.1.0",
+      "cache": "miss"
+    }
+  }
+}

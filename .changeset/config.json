@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
+  "changelog": ["@changesets/changelog-github", { "repo": "yosuque/kohaku" }],
+  "commit": false,
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "fixed": [["@kohaku-ui/*"]],
+  "linked": [],
+  "ignore": ["@kohaku-ui-sample/api", "@kohaku-ui-sample/web", "@kohaku-ui-sample/wc", "@kohaku-ui-sample/mcp"]
+}

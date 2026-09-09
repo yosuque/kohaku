@@ -1,0 +1,64 @@
+{
+  "name": "@kohaku-ui/composer",
+  "version": "0.1.0",
+  "description": "UI Composition Service for kohaku: L0/L1/L2 generation, the repair loop, deterministic post-processing and the Spec cache.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./l2-api": "./src/l2-api.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^"
+  },
+  "peerDependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/composer#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/composer"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./l2-api": {
+        "types": "./dist/l2-api.d.ts",
+        "default": "./dist/l2-api.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

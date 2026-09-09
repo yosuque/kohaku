@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>kohaku renderer</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+        color: #1a1a2e;
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!--
+      Embedding slot for the self-contained snapshot (for UI-incapable hosts). Default is null (normal mode).
+      host-mcp-apps' kohaku_render_snapshot replaces it with {spec, data} JSON.
+      An inline script of type="application/json" is untouched by Vite/rollup, so it survives the single-file build.
+    -->
+    <script id="kohaku-snapshot" type="application/json">null</script>
+    <script type="module" src="/renderer/main.tsx"></script>
+  </body>
+</html>

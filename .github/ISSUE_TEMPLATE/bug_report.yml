@@ -1,0 +1,75 @@
+name: Bug report
+description: Report something that is not working as expected
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please search existing issues first to avoid duplicates.
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands or actions that trigger the bug.
+      placeholder: |
+        1. `pnpm dev`
+        2. Open http://localhost:5173
+        3. Ask "..." in the Chat view
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: impact-scope
+    attributes:
+      label: Affected implementation
+      options:
+        - TypeScript (packages/*, apps/*, cli)
+        - Python (python/kohaku, python/examples)
+        - Both
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      placeholder: e.g. 24.5.0
+  - type: input
+    id: pnpm-version
+    attributes:
+      label: pnpm version
+      placeholder: e.g. 11.5.2
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: e.g. macOS 15.5, Ubuntu 24.04
+  - type: dropdown
+    id: llm-provider
+    attributes:
+      label: LLM provider (if relevant)
+      options:
+        - Not used / L0 only
+        - claude
+        - openai
+        - gemini
+        - ollama
+        - llama.cpp (OpenAI-compatible)
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Server logs, stack traces, or CLI output. Will be rendered as a code block automatically.
+      render: shell

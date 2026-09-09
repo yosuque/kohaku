@@ -1,0 +1,194 @@
+[
+  {
+    "fiscalYear": 2025,
+    "quarter": 1,
+    "region": "japan",
+    "targetRevenue": 521000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 1,
+    "region": "north_america",
+    "targetRevenue": 654000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 1,
+    "region": "europe",
+    "targetRevenue": 465000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 1,
+    "region": "apac",
+    "targetRevenue": 350000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 2,
+    "region": "japan",
+    "targetRevenue": 542000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 2,
+    "region": "north_america",
+    "targetRevenue": 624000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 2,
+    "region": "europe",
+    "targetRevenue": 422000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 2,
+    "region": "apac",
+    "targetRevenue": 379000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 3,
+    "region": "japan",
+    "targetRevenue": 550000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 3,
+    "region": "north_america",
+    "targetRevenue": 685000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 3,
+    "region": "europe",
+    "targetRevenue": 453000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 3,
+    "region": "apac",
+    "targetRevenue": 335000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 4,
+    "region": "japan",
+    "targetRevenue": 557000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 4,
+    "region": "north_america",
+    "targetRevenue": 706000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 4,
+    "region": "europe",
+    "targetRevenue": 568000000
+  },
+  {
+    "fiscalYear": 2025,
+    "quarter": 4,
+    "region": "apac",
+    "targetRevenue": 407000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 1,
+    "region": "japan",
+    "targetRevenue": 498000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 1,
+    "region": "north_america",
+    "targetRevenue": 669000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 1,
+    "region": "europe",
+    "targetRevenue": 486000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 1,
+    "region": "apac",
+    "targetRevenue": 383000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 2,
+    "region": "japan",
+    "targetRevenue": 543000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 2,
+    "region": "north_america",
+    "targetRevenue": 727000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 2,
+    "region": "europe",
+    "targetRevenue": 500000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 2,
+    "region": "apac",
+    "targetRevenue": 373000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 3,
+    "region": "japan",
+    "targetRevenue": 513000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 3,
+    "region": "north_america",
+    "targetRevenue": 755000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 3,
+    "region": "europe",
+    "targetRevenue": 480000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 3,
+    "region": "apac",
+    "targetRevenue": 364000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 4,
+    "region": "japan",
+    "targetRevenue": 637000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 4,
+    "region": "north_america",
+    "targetRevenue": 823000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 4,
+    "region": "europe",
+    "targetRevenue": 556000000
+  },
+  {
+    "fiscalYear": 2026,
+    "quarter": 4,
+    "region": "apac",
+    "targetRevenue": 441000000
+  }
+]

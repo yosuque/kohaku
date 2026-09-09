@@ -1,0 +1,59 @@
+{
+  "name": "@kohaku-ui/registry",
+  "version": "0.1.0",
+  "description": "Component catalog for kohaku: federated resolution, surface capability negotiation, fallback chains and LLM generation-schema conversion.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
+    "export-core-catalog": "tsx scripts/export-core-catalog.ts"
+  },
+  "dependencies": {
+    "@kohaku-ui/spec-core": "workspace:^",
+    "semver": "catalog:"
+  },
+  "peerDependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/semver": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/registry#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/registry"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

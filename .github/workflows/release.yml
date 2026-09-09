@@ -1,0 +1,114 @@
+name: Release
+# Changesets drives this: merged changesets accumulate into a release pull request, and merging that pull
+# request is what publishes. Nothing is released from a developer's machine, and the version bump for all
+# twenty npm packages plus the Python distribution is reviewed as one diff before anything goes out.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # manual re-run, for when a publish fails partway
+
+# One release at a time, and never cancel one in flight: a cancelled publish can leave some packages
+# published at a version the others do not have.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the release pull request, tag and GitHub release
+      pull-requests: write
+      id-token: write # npm provenance attestation
+    outputs:
+      published: ${{ steps.changesets.outputs.published }}
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      # The same gate the pack-smoke job runs on pull requests, repeated immediately before publishing:
+      # this is the last point at which a broken tarball can still be stopped.
+      - run: pnpm run smoke:pack
+      - id: changesets
+        uses: changesets/action@v1
+        with:
+          version: pnpm run version
+          publish: pnpm run release
+          commit: "chore(release): version packages"
+          title: "chore(release): version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # pnpm's publish has no --provenance flag of its own; it delegates to the npm CLI, which reads
+          # this. Set as an environment variable rather than publishConfig.provenance so that a local
+          # `pnpm publish` does not fail for being unable to produce an attestation outside CI.
+          NPM_CONFIG_PROVENANCE: "true"
+      - id: version
+        if: steps.changesets.outputs.published == 'true'
+        run: echo "value=$(node -p "require('./packages/spec-core/package.json').version")" >> "$GITHUB_OUTPUT"
+
+  pypi:
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Trusted Publishing: PyPI authenticates this workflow in this environment by OIDC, so there is no
+    # long-lived API token to store or rotate.
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      # CI already fails on version drift, but this is the last gate before an asymmetric release: npm is
+      # already published at this point, and a mismatched PyPI version cannot be taken back.
+      - name: Assert the Python version matches the published npm version
+        run: |
+          PY=$(grep -m1 '^version' python/kohaku/pyproject.toml | sed -E 's/.*"(.*)".*/\1/')
+          if [ "$PY" != "${{ needs.release.outputs.version }}" ]; then
+            echo "python $PY != npm ${{ needs.release.outputs.version }}"
+            exit 1
+          fi
+      - run: uv build --package kohaku --out-dir dist
+        working-directory: python
+      # Proves the wheel is self-contained: the test suite reads spec/ from the monorepo root, so an
+      # accidental runtime dependency on the repository layout would only show up here.
+      - name: Import the built wheel in an isolated environment
+        run: uv run --isolated --no-project --with ./dist/*.whl python -c "import kohaku; print(kohaku.__version__)"
+        working-directory: python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist
+
+  github-release:
+    needs: [release, pypi]
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: gh release create "v${{ needs.release.outputs.version }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

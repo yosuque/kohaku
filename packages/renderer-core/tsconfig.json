@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "comment": "Intentionally omits the DOM lib (strictly framework-free / DOM-free). Contamination by document / window / HTMLElement / CSSProperties etc. becomes a typecheck error here.",
+  "include": ["src", "test"]
+}

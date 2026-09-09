@@ -1,0 +1,119 @@
+# Dependabot configuration for the kohaku monorepo.
+#
+# Three ecosystems are configured, matching the three places dependencies actually live:
+#   - npm:            the pnpm workspace (packages/*, apps/*, cli, spec — see pnpm-workspace.yaml).
+#   - uv:              the Python port workspace under /python (python/pyproject.toml +
+#                      python/kohaku/pyproject.toml + python/examples/sales-api/pyproject.toml).
+#   - github-actions:  the CI workflow (.github/workflows/ci.yml).
+#
+# --- Catalog caveat (read before "fixing" a stalled npm PR) ---------------------------------------------
+# Most TS dependency versions are centralized in pnpm-workspace.yaml's `catalog:` block (typescript, zod,
+# react, vite, vitest, ai, @ai-sdk/*, @modelcontextprotocol/*, ...); individual package.json files only
+# reference `"catalog:"`. Dependabot's npm updater may not be able to bump a `"catalog:"`-pinned dependency
+# directly inside pnpm's catalog mechanism, so a Dependabot PR for one of those packages can end up limited
+# to root devDependencies + the lockfile, or fail to open a meaningful diff at all. That is expected, not a
+# bug in this config: catalog entries are meant to keep being bumped by a human editing the catalog block
+# directly (see AGENTS.md), and Dependabot's main value for npm here is *detecting* that an update exists
+# (and updating the handful of root-level, non-catalog devDependencies, if any) rather than opening
+# ready-to-merge PRs for every catalog package.
+#
+# --- minimumReleaseAgeExclude interaction ----------------------------------------------------------------
+# pnpm-workspace.yaml also enforces a release-age supply-chain gate, with a `minimumReleaseAgeExclude` list
+# carved out for a few just-pinned AI SDK packages. A Dependabot PR that bumps a catalog entry to a
+# brand-new version can fail `pnpm install --frozen-lockfile` in CI if that version is too fresh to pass the
+# gate. When actually bumping a catalog version (Dependabot-suggested or otherwise), also revisit the
+# `minimumReleaseAgeExclude` entries per the operating rule already documented next to that list.
+#
+# --- audit interaction ------------------------------------------------------------------------------------
+# CI's `pnpm audit --prod --audit-level=high` step is report-only (continue-on-error), so it does not block
+# merges on its own. Dependabot's security updates are therefore the main *enforced* path for actually
+# landing a fix for a vulnerable dependency, not the audit step.
+
+version: 2
+
+updates:
+  # ---------------------------------------------------------------------------------------------------
+  # npm (pnpm workspace root — pnpm-workspace.yaml packages: packages/*, apps/*, cli, spec)
+  # ---------------------------------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Vercel AI SDK core + provider adapters move together; a version skew between `ai` and an
+      # `@ai-sdk/*` provider package is a known breakage source (see AGENTS.md's ai-sdk.ts pitfall note).
+      ai-sdk:
+        patterns:
+          - "ai"
+          - "@ai-sdk/*"
+      # MCP SDK packages (server/client/core/node/ext-apps) are versioned together upstream.
+      mcp-sdk:
+        patterns:
+          - "@modelcontextprotocol/*"
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      dev-tooling:
+        patterns:
+          - "typescript"
+          - "vitest"
+          - "@vitest/coverage-v8"
+          - "vite"
+          - "@vitejs/plugin-react"
+          - "tsx"
+          - "@types/node"
+      # Catch-all for everything else, but only minor/patch — major bumps outside the named groups above
+      # are left ungrouped so each gets its own PR and its own review (they are more likely to need a
+      # closer look, e.g. a catalog version bump plus a minimumReleaseAgeExclude review as noted above).
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ---------------------------------------------------------------------------------------------------
+  # uv (Python port workspace root — python/pyproject.toml, uv workspace members kohaku + examples/sales-api)
+  # ---------------------------------------------------------------------------------------------------
+  - package-ecosystem: "uv"
+    directory: "/python"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # ---------------------------------------------------------------------------------------------------
+  # github-actions (workflow pinned action versions — .github/workflows/ci.yml)
+  # ---------------------------------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"

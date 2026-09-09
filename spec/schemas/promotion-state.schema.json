@@ -1,0 +1,69 @@
+{
+  "$id": "https://kohaku-ui.dev/schemas/0.1/promotion-state.schema.json",
+  "title": "kohaku PromotionState",
+  "description": "Persisted promotion (L2->L1) state snapshot (StoragePort.getPromotionState / putPromotionState). `data` is intentionally left as a loose JSON object (see PromotionStateSchema's doc comment).",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "artifactId": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "updatedAt": {
+      "type": "string"
+    },
+    "data": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "tenant": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "artifactId",
+    "status",
+    "updatedAt",
+    "data"
+  ],
+  "$defs": {
+    "__schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    }
+  }
+}

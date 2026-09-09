@@ -1,0 +1,45 @@
+{
+  "name": "@kohaku-ui-sample/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/app.ts",
+    "./action-effects": "./src/action-effects.ts",
+    "./ports/authz-port": "./src/ports/authz-port.ts",
+    "./ports/storage-port": "./src/ports/storage-port.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "seed": "tsx scripts/generate-seed.ts",
+    "intents:emit": "tsx scripts/generate-facet-views.ts",
+    "measure-grammar-latency": "tsx scripts/measure-grammar-latency.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kohaku-ui/composer": "workspace:^",
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/evals": "workspace:^",
+    "@kohaku-ui/host-core": "workspace:^",
+    "@kohaku-ui/host-rest": "workspace:^",
+    "@kohaku-ui/intents": "workspace:^",
+    "@kohaku-ui/lineage": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/otel": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^",
+    "@kohaku-ui/sandbox": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@hono/node-server": "catalog:",
+    "@opentelemetry/api": "catalog:",
+    "hono": "catalog:",
+    "jsdom": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

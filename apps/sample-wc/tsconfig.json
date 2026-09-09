@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "comment": "Vanilla Web Components demo. Adds the DOM lib because it uses the real DOM. No JSX (zero React).",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"]
+  },
+  "include": ["src"]
+}

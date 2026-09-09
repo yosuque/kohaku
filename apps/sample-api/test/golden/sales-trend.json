@@ -1,0 +1,115 @@
+{
+  "name": "L1 generation for sales.trend (monthly, revenue)",
+  "input": {
+    "kind": "intent",
+    "intent": {
+      "canonical": "sales.trend",
+      "params": {
+        "metric": "revenue",
+        "granularity": "month"
+      }
+    }
+  },
+  "drafts": [
+    {
+      "components": [
+        {
+          "id": "root",
+          "type": "layout.stack",
+          "props": {
+            "direction": "vertical",
+            "gap": null
+          },
+          "children": [
+            "h",
+            "c"
+          ]
+        },
+        {
+          "id": "h",
+          "type": "text.heading",
+          "props": {
+            "level": 2,
+            "text": "Monthly revenue trend"
+          }
+        },
+        {
+          "id": "c",
+          "type": "presentChart",
+          "props": {
+            "kind": "bar",
+            "x": "month",
+            "y": "revenue",
+            "series": null,
+            "stacked": null,
+            "title": null
+          },
+          "children": null,
+          "data": {
+            "$ref": "query://sales/trend?granularity=month&metric=revenue"
+          }
+        }
+      ],
+      "events": []
+    }
+  ],
+  "expected": {
+    "kohaku": "0.2",
+    "intent": {
+      "canonical": "sales.trend",
+      "params": {
+        "granularity": "month",
+        "metric": "revenue"
+      },
+      "hash": "sha256:d2e516f0b4acebc01af12bf2aa0635a30cfe19fa9b947c41fb610ece43355846"
+    },
+    "dataVersion": "sales@seed-20260610.1+ade3e9a0a5de#bump-0",
+    "refVersions": {
+      "query://sales/trend?granularity=month&metric=revenue": "sales@seed-20260610.1+ade3e9a0a5de#bump-0"
+    },
+    "components": [
+      {
+        "id": "root",
+        "type": "layout.stack",
+        "version": "1.0.0",
+        "props": {
+          "direction": "vertical",
+          "gap": "md"
+        },
+        "children": [
+          "title1",
+          "chart1"
+        ]
+      },
+      {
+        "id": "title1",
+        "type": "text.heading",
+        "version": "1.0.0",
+        "props": {
+          "level": 2,
+          "text": "Monthly revenue trend"
+        }
+      },
+      {
+        "id": "chart1",
+        "type": "presentChart",
+        "version": "1.1.0",
+        "props": {
+          "kind": "line",
+          "x": "month",
+          "y": "revenue"
+        },
+        "data": {
+          "$ref": "query://sales/trend?granularity=month&metric=revenue"
+        }
+      }
+    ],
+    "events": [],
+    "provenance": {
+      "tier": "L1",
+      "composedBy": "composer@0.1.0",
+      "model": "fake-model",
+      "cache": "miss"
+    }
+  }
+}

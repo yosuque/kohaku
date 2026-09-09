@@ -1,0 +1,65 @@
+{
+  "name": "@kohaku-ui/renderer-wc",
+  "version": "0.1.0",
+  "description": "Web Components renderer for kohaku UI Specs: a single <kohaku-surface> custom element with Shadow DOM.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/renderer-core": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^",
+    "@kohaku-ui/sandbox": "workspace:^"
+  },
+  "devDependencies": {
+    "@kohaku-ui/renderer-react": "workspace:^",
+    "@testing-library/react": "^16.3.3",
+    "axe-core": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "jsdom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "recharts": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/renderer-wc#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/renderer-wc"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

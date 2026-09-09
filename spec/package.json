@@ -1,0 +1,63 @@
+{
+  "name": "@kohaku-ui/spec",
+  "version": "0.1.0",
+  "description": "Kohaku Protocol v0.1: the normative specification, its machine-readable requirements and the conformance suite.",
+  "type": "module",
+  "exports": {
+    "./conformance": "./conformance/index.ts",
+    "./examples/quarterly-sales.spec.json": "./examples/quarterly-sales.spec.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build",
+    "generate-schemas": "tsx scripts/generate-schemas.ts",
+    "generate-cross-language-fixtures": "tsx scripts/generate-cross-language-fixtures.ts"
+  },
+  "dependencies": {
+    "@kohaku-ui/spec-core": "workspace:^"
+  },
+  "devDependencies": {
+    "@kohaku-ui-sample/api": "workspace:^",
+    "@kohaku-ui/evals": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "tsx": "catalog:",
+    "zod": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/spec#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "spec"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "examples",
+    "schemas",
+    "SPEC.md",
+    "SPEC.ja.md",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./conformance": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./examples/quarterly-sales.spec.json": "./examples/quarterly-sales.spec.json",
+      "./package.json": "./package.json"
+    }
+  }
+}

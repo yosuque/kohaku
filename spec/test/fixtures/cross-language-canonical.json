@@ -1,0 +1,564 @@
+{
+  "canonical": [
+    {
+      "value": null,
+      "canonical": "null",
+      "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    },
+    {
+      "value": true,
+      "canonical": "true",
+      "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+    },
+    {
+      "value": false,
+      "canonical": "false",
+      "sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa"
+    },
+    {
+      "value": 0,
+      "canonical": "0",
+      "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "value": 0,
+      "canonical": "0",
+      "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+    },
+    {
+      "value": 1,
+      "canonical": "1",
+      "sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    {
+      "value": -1,
+      "canonical": "-1",
+      "sha256": "1bad6b8cf97131fceab8543e81f7757195fbb1d36b376ee994ad1cf17699c464"
+    },
+    {
+      "value": 9007199254740992,
+      "canonical": "9007199254740992",
+      "sha256": "c681da39d7273a6a24c15c9cac3a75526ff2ecf8ba4ee60346a0c70c8163bdb2"
+    },
+    {
+      "value": 0.1,
+      "canonical": "0.1",
+      "sha256": "14be4b45f18e0d8c67b4f719b5144eee88497e413709d11d85b096d8e2346310"
+    },
+    {
+      "value": -0.1,
+      "canonical": "-0.1",
+      "sha256": "ffe616e28103a848cc8a18531f5ba096e153b50c6d597297ad5cb69e39496f6a"
+    },
+    {
+      "value": 1.5,
+      "canonical": "1.5",
+      "sha256": "9f29a130438b81170b92a42650f9a94291ecad60bd47af2a3886e75f7f728725"
+    },
+    {
+      "value": 100000000000000000000,
+      "canonical": "100000000000000000000",
+      "sha256": "c344e9487bfbd5c4e03c9fb90d62a5dde5e00b54d55c46e9f4a803aea162b80c"
+    },
+    {
+      "value": 1e+21,
+      "canonical": "1e+21",
+      "sha256": "241c4643fa70b1dcde1205b71be4e3bebb17e9f880c8e1a33d0ead6c27271d3c"
+    },
+    {
+      "value": 1.5e+21,
+      "canonical": "1.5e+21",
+      "sha256": "2ce57edafd4986d7ab7ed401a2f64d50eb4482ba01766409ffb78316323910b8"
+    },
+    {
+      "value": 0.000001,
+      "canonical": "0.000001",
+      "sha256": "159fb29a827ad04b260aa6c8ab6d8637f8f2b38af5c4f3cb49d6a21205e040f8"
+    },
+    {
+      "value": 1e-7,
+      "canonical": "1e-7",
+      "sha256": "5b33e02f2c5103a05d32f6ba9cb058294452bfbf393967f68bb30c1bdcbbab22"
+    },
+    {
+      "value": 5e-324,
+      "canonical": "5e-324",
+      "sha256": "c46e7ca1be4c8734f373a56530787288fa2058d73d07855e9247e949f811a42a"
+    },
+    {
+      "value": 1.7976931348623157e+308,
+      "canonical": "1.7976931348623157e+308",
+      "sha256": "c2784e1abd6317452708f3fbf9641c16b959561bc621a1d408c23a20aa2cb585"
+    },
+    {
+      "value": 123.456,
+      "canonical": "123.456",
+      "sha256": "52dad41684065ccf8dd86bc21e739e57c750e4e1305f759956b7373308023eae"
+    },
+    {
+      "value": 0.001,
+      "canonical": "0.001",
+      "sha256": "9fca51987c96ba92d35f303353b7065f31114501c9f2afa37463ff1fdffe8f1f"
+    },
+    {
+      "value": 0.3333333333333333,
+      "canonical": "0.3333333333333333",
+      "sha256": "e965f1b975608cb0d1dad8c30d17e0fe1bdea42df938c0bdc29d75c97b45c44b"
+    },
+    {
+      "value": 0.30000000000000004,
+      "canonical": "0.30000000000000004",
+      "sha256": "06bad31060c1212ae832de4c031f7b31e3b48aed57858294478cb19450cf34ca"
+    },
+    {
+      "value": 6.02e+23,
+      "canonical": "6.02e+23",
+      "sha256": "849f7ce2c3918ad7ec11c49305cffecfa4d1c5acdf7364b38ae28765f9848e49"
+    },
+    {
+      "value": 10000000000000000,
+      "canonical": "10000000000000000",
+      "sha256": "139eb393675707818651f879828a526159209ca3ad3b2f94f9f8ec8c4fb5e610"
+    },
+    {
+      "value": "",
+      "canonical": "\"\"",
+      "sha256": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126"
+    },
+    {
+      "value": "abc",
+      "canonical": "\"abc\"",
+      "sha256": "6cc43f858fbb763301637b5af970e2a46b46f461f27e5a0f41e009c59b827b25"
+    },
+    {
+      "value": "日本語",
+      "canonical": "\"日本語\"",
+      "sha256": "d2b94e6e664483bbf04d80902abc235527ab68cecf488e8abe22112a6dd62bd4"
+    },
+    {
+      "value": "emoji 😀",
+      "canonical": "\"emoji 😀\"",
+      "sha256": "809abf863f152dfb73d5cfcb14c3d69e92cd419f782b8ae797206f0e2165aa36"
+    },
+    {
+      "value": "quote\"back\\slash",
+      "canonical": "\"quote\\\"back\\\\slash\"",
+      "sha256": "24d068a2208ac11770a521612a25a1761f627848a50b4a2d29a71c8b6a56413e"
+    },
+    {
+      "value": "\b\t\n\f\r\u0000\u001f",
+      "canonical": "\"\\b\\t\\n\\f\\r\\u0000\\u001f\"",
+      "sha256": "20ad135dc8714fa12811b0718eb7a198ac26e62e993028e733e2852e3fccf776"
+    },
+    {
+      "value": "\ud800",
+      "canonical": "\"\\ud800\"",
+      "sha256": "8c0c59dd0d275aadcd462a5fe12eb352cbdfeaf961eae4f85a4660521df7d2f5"
+    },
+    {
+      "value": "a\udfffb",
+      "canonical": "\"a\\udfffb\"",
+      "sha256": "632efb6c441bc8b2ecf78ac14d5d899a3a9b328693003171ca6948e9b2dea4f3"
+    },
+    {
+      "value": [],
+      "canonical": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "value": [
+        null,
+        true,
+        1.5,
+        "s",
+        [
+          1,
+          2
+        ],
+        {
+          "b": 1,
+          "a": 2
+        }
+      ],
+      "canonical": "[null,true,1.5,\"s\",[1,2],{\"a\":2,\"b\":1}]",
+      "sha256": "da11aa26ff0a7e2ede53b9ed7c6eff268bbbd9fd790d4a46d10c3bfc8d4eb52c"
+    },
+    {
+      "value": {},
+      "canonical": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "value": {
+        "2": 4,
+        "10": 3,
+        "b": 1,
+        "a": 2,
+        "": 5,
+        "A": 6,
+        "_": 7,
+        "😀": 8,
+        "￿": 9
+      },
+      "canonical": "{\"2\":4,\"10\":3,\"\":5,\"A\":6,\"_\":7,\"a\":2,\"b\":1,\"😀\":8,\"￿\":9}",
+      "sha256": "1818b99f517a39450d0546397c7041b1bb79d4ffcd144db7a4fe4d73917e2cce"
+    },
+    {
+      "value": {
+        "nested": {
+          "z": [
+            1,
+            {
+              "y": 2,
+              "x": 3
+            }
+          ],
+          "w": null
+        }
+      },
+      "canonical": "{\"nested\":{\"w\":null,\"z\":[1,{\"x\":3,\"y\":2}]}}",
+      "sha256": "c80c83f425a983591452a5cd903aae0545ae09d603d46aa526aa84484ffe9991"
+    },
+    {
+      "value": {
+        "intentLike": {
+          "canonical": "sales.quarterly_summary",
+          "params": {
+            "fiscalYear": 2026,
+            "groupBy": "region",
+            "quarter": 3
+          }
+        }
+      },
+      "canonical": "{\"intentLike\":{\"canonical\":\"sales.quarterly_summary\",\"params\":{\"fiscalYear\":2026,\"groupBy\":\"region\",\"quarter\":3}}}",
+      "sha256": "95ca5258fa944eb8f7b75743f38b764058770f9716e60de46acaba32f125617e"
+    }
+  ],
+  "intents": [
+    {
+      "canonical": "sales.quarterly_summary",
+      "params": {
+        "fiscalYear": 2026,
+        "groupBy": "region",
+        "quarter": 3
+      },
+      "hash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5"
+    },
+    {
+      "canonical": "sales.trend",
+      "params": {},
+      "hash": "sha256:1a9687d931eb37572dce5a5eb6beec9b61804849186c5f0bb9dede7638b442d7"
+    },
+    {
+      "canonical": "sales.custom",
+      "params": {
+        "request": "売上をカレンダーヒートマップで",
+        "flags": [
+          true,
+          null,
+          1.5
+        ]
+      },
+      "hash": "sha256:98382d1ca6ff632e4803134af1055dd75c66a8b5aa31152340889a6b96d25ac5"
+    },
+    {
+      "canonical": "a.b_c",
+      "params": {
+        "z": {
+          "y": [
+            1,
+            2,
+            3
+          ],
+          "x": "☃"
+        },
+        "ratio": 0.3333333333333333
+      },
+      "hash": "sha256:cc90f27d56b7e4236555fc75460a2c6283ab1b120fd4a0edabac718a59620fb7"
+    }
+  ],
+  "spec": {
+    "file": "spec/examples/quarterly-sales.spec.json",
+    "specHash": "sha256:f4733fbdb58d4142b10bc8d8a70220d9fe1abeea02066e7292610e0bb67e50e3",
+    "structureHash": "sha256:1e5581591f5d5373b5e78fbcc8c768194c620ad2201241fa931ca1aedfb90694"
+  },
+  "cacheKey": [
+    {
+      "parts": {
+        "intentHash": "sha256:aaa",
+        "dataVersion": "v1"
+      },
+      "key": "kohaku:0.2:sha256:aaa:v1:-"
+    },
+    {
+      "parts": {
+        "intentHash": "sha256:aaa",
+        "dataVersion": "v1",
+        "catalogFingerprint": "cat1"
+      },
+      "key": "kohaku:0.2:sha256:aaa:v1:cat1"
+    },
+    {
+      "parts": {
+        "intentHash": "sha256:aaa",
+        "dataVersion": "v1",
+        "catalogFingerprint": "cat1",
+        "generatorVersion": "gv1"
+      },
+      "key": "kohaku:0.2:sha256:aaa:v1:cat1:gv1"
+    },
+    {
+      "parts": {
+        "intentHash": "sha256:aaa",
+        "dataVersion": "v1",
+        "catalogFingerprint": "cat1",
+        "policyFingerprint": "pf1"
+      },
+      "key": "kohaku:0.2:sha256:aaa:v1:cat1:-:pf1"
+    },
+    {
+      "parts": {
+        "intentHash": "sha256:aaa",
+        "dataVersion": "v1",
+        "catalogFingerprint": "cat1",
+        "generatorVersion": "gv1",
+        "policyFingerprint": "pf1"
+      },
+      "key": "kohaku:0.2:sha256:aaa:v1:cat1:gv1:pf1"
+    },
+    {
+      "parts": {
+        "intentHash": "sha256:aaa",
+        "dataVersion": "v1",
+        "catalogFingerprint": "cat1",
+        "policyFingerprint": ""
+      },
+      "key": "kohaku:0.2:sha256:aaa:v1:cat1"
+    }
+  ],
+  "sandboxDom": {
+    "tags": [
+      "article",
+      "b",
+      "br",
+      "button",
+      "caption",
+      "circle",
+      "clippath",
+      "code",
+      "defs",
+      "div",
+      "ellipse",
+      "em",
+      "figcaption",
+      "figure",
+      "footer",
+      "g",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "header",
+      "hr",
+      "i",
+      "input",
+      "label",
+      "li",
+      "line",
+      "lineargradient",
+      "ol",
+      "option",
+      "p",
+      "path",
+      "polygon",
+      "polyline",
+      "pre",
+      "rect",
+      "section",
+      "select",
+      "small",
+      "span",
+      "stop",
+      "strong",
+      "svg",
+      "table",
+      "tbody",
+      "td",
+      "text",
+      "textarea",
+      "tfoot",
+      "th",
+      "thead",
+      "title",
+      "tr",
+      "tspan",
+      "ul"
+    ],
+    "attrs": [
+      "checked",
+      "class",
+      "clip-path",
+      "cols",
+      "colspan",
+      "cx",
+      "cy",
+      "d",
+      "disabled",
+      "fill",
+      "fill-opacity",
+      "font-family",
+      "font-size",
+      "gradienttransform",
+      "gradientunits",
+      "height",
+      "hidden",
+      "id",
+      "max",
+      "min",
+      "name",
+      "offset",
+      "opacity",
+      "placeholder",
+      "points",
+      "preserveaspectratio",
+      "r",
+      "role",
+      "rows",
+      "rowspan",
+      "rx",
+      "ry",
+      "scope",
+      "selected",
+      "step",
+      "stop-color",
+      "stop-opacity",
+      "stroke",
+      "stroke-dasharray",
+      "stroke-linecap",
+      "stroke-linejoin",
+      "stroke-opacity",
+      "stroke-width",
+      "tabindex",
+      "text-anchor",
+      "title",
+      "transform",
+      "type",
+      "value",
+      "viewbox",
+      "width",
+      "x",
+      "x1",
+      "x2",
+      "y",
+      "y1",
+      "y2"
+    ],
+    "styleProps": [
+      "align-content",
+      "align-items",
+      "align-self",
+      "aspect-ratio",
+      "background",
+      "background-color",
+      "background-image",
+      "background-position",
+      "background-repeat",
+      "background-size",
+      "border",
+      "border-bottom",
+      "border-collapse",
+      "border-color",
+      "border-left",
+      "border-radius",
+      "border-right",
+      "border-spacing",
+      "border-style",
+      "border-top",
+      "border-width",
+      "bottom",
+      "box-shadow",
+      "box-sizing",
+      "color",
+      "column-gap",
+      "cursor",
+      "display",
+      "fill",
+      "flex",
+      "flex-basis",
+      "flex-direction",
+      "flex-grow",
+      "flex-shrink",
+      "flex-wrap",
+      "font-family",
+      "font-size",
+      "font-style",
+      "font-weight",
+      "gap",
+      "grid-auto-flow",
+      "grid-column",
+      "grid-gap",
+      "grid-row",
+      "grid-template-columns",
+      "grid-template-rows",
+      "height",
+      "justify-content",
+      "left",
+      "letter-spacing",
+      "line-height",
+      "list-style",
+      "list-style-type",
+      "margin",
+      "margin-bottom",
+      "margin-left",
+      "margin-right",
+      "margin-top",
+      "max-height",
+      "max-width",
+      "min-height",
+      "min-width",
+      "opacity",
+      "order",
+      "outline",
+      "outline-color",
+      "outline-style",
+      "outline-width",
+      "overflow",
+      "overflow-x",
+      "overflow-y",
+      "padding",
+      "padding-bottom",
+      "padding-left",
+      "padding-right",
+      "padding-top",
+      "position",
+      "right",
+      "row-gap",
+      "stroke",
+      "stroke-width",
+      "table-layout",
+      "text-align",
+      "text-decoration",
+      "text-overflow",
+      "text-transform",
+      "top",
+      "transform",
+      "transform-origin",
+      "transition",
+      "transition-duration",
+      "transition-property",
+      "transition-timing-function",
+      "vertical-align",
+      "visibility",
+      "white-space",
+      "width",
+      "word-break",
+      "word-wrap",
+      "z-index"
+    ]
+  },
+  "distillation": {
+    "jsonl": "{\"intent\":{\"canonical\":\"sales.quarterly_summary\",\"params\":{\"fiscalYear\":2026,\"groupBy\":\"region\",\"quarter\":3}},\"meta\":{\"catalogFingerprint\":\"catalog@2026-06-10\",\"fixatedAt\":\"2026-06-10T03:12:00Z\",\"structureHash\":\"sha256:1e5581591f5d5373b5e78fbcc8c768194c620ad2201241fa931ca1aedfb90694\",\"tenant\":\"tenant-acme\"},\"refs\":[\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"],\"source\":\"fixation\",\"target\":{\"components\":[{\"children\":[\"title\",\"chart1\",\"table1\"],\"id\":\"root\",\"props\":{\"direction\":\"vertical\"},\"type\":\"layout.stack\"},{\"id\":\"title\",\"props\":{\"level\":2,\"text\":\"FY2026 Q3 Sales (by Region)\"},\"type\":\"text.heading\"},{\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"},\"id\":\"chart1\",\"props\":{\"kind\":\"bar\",\"x\":\"region\",\"y\":\"revenue\"},\"type\":\"presentChart\"},{\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"},\"id\":\"table1\",\"props\":{\"editable\":false},\"type\":\"presentSpreadsheet\"}],\"events\":[{\"emit\":\"intent.patch\",\"on\":\"table1.rowClick\",\"payload\":{\"drilldown\":\"$row.region\"}}]}}\n{\"intent\":{\"canonical\":\"sales.quarterly_summary\",\"params\":{\"fiscalYear\":2026,\"groupBy\":\"region\",\"quarter\":3}},\"meta\":{},\"refs\":[\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"],\"source\":\"golden\",\"target\":{\"components\":[{\"children\":[\"title\",\"chart1\",\"table1\"],\"id\":\"root\",\"props\":{\"direction\":\"vertical\"},\"type\":\"layout.stack\"},{\"id\":\"title\",\"props\":{\"level\":2,\"text\":\"FY2026 Q3 Sales (by Region)\"},\"type\":\"text.heading\"},{\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"},\"id\":\"chart1\",\"props\":{\"kind\":\"bar\",\"x\":\"region\",\"y\":\"revenue\"},\"type\":\"presentChart\"},{\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"},\"id\":\"table1\",\"props\":{\"editable\":false},\"type\":\"presentSpreadsheet\"}],\"events\":[{\"emit\":\"intent.patch\",\"on\":\"table1.rowClick\",\"payload\":{\"drilldown\":\"$row.region\"}}]}}\n"
+  }
+}

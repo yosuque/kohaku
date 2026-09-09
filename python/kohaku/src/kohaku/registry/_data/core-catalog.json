@@ -1,0 +1,873 @@
+{
+  "generatedBy": "packages/registry/scripts/export-core-catalog.ts",
+  "components": [
+    {
+      "type": "action.button",
+      "version": "1.0.0",
+      "description": "Action button. Fires a declared operation (intent.patch / action.invoke / state.set) on the press event. Use it to prompt the user for a single action. Has a label and an importance (variant: primary=main action / secondary=secondary action / danger=destructive action).",
+      "capabilities": {
+        "events": [
+          "press"
+        ],
+        "data": "none",
+        "children": "none"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "fallbackType": "presentMarkdown",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "variant": {
+            "default": "primary",
+            "type": "string",
+            "enum": [
+              "primary",
+              "secondary",
+              "danger"
+            ]
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label",
+          "variant"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "control.select",
+      "version": "1.0.0",
+      "description": "Select control. Fires the selected value on the change event and, combined with state.set, updates client-local state. Feeding that state into a data-reference parameter via data.bind makes it a cross-filter (a linked update with no compose round-trip). options are static choices (string or {value,label}). Single-value discrete selection only (free input and multi-select are not supported).",
+      "capabilities": {
+        "events": [
+          "change"
+        ],
+        "data": "none",
+        "children": "none"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "generation": "excluded",
+      "fallbackType": "presentMarkdown",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "options": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "label"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "value": {
+            "type": "string"
+          },
+          "placeholder": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "layout.grid",
+      "version": "1.0.0",
+      "description": "Container that arranges child elements in an equal-width grid. Use it for laying out KPI cards side by side, etc.",
+      "capabilities": {
+        "events": [],
+        "data": "none",
+        "children": "optional"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "columns": {
+            "default": 2,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6
+          },
+          "gap": {
+            "default": "md",
+            "type": "string",
+            "enum": [
+              "none",
+              "sm",
+              "md",
+              "lg"
+            ]
+          }
+        },
+        "required": [
+          "columns",
+          "gap"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "layout.stack",
+      "version": "1.0.0",
+      "description": "Container that arranges child elements vertically or horizontally. Use it for the screen's root structure. Children are referenced by ID via children.",
+      "capabilities": {
+        "events": [],
+        "data": "none",
+        "children": "optional"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "direction": {
+            "default": "vertical",
+            "type": "string",
+            "enum": [
+              "vertical",
+              "horizontal"
+            ]
+          },
+          "gap": {
+            "default": "md",
+            "type": "string",
+            "enum": [
+              "none",
+              "sm",
+              "md",
+              "lg"
+            ]
+          }
+        },
+        "required": [
+          "direction",
+          "gap"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "layout.tab",
+      "version": "1.0.0",
+      "description": "A child panel of layout.tabs. value is the tab's identifier value, label is the tab heading. Put the contents in children.",
+      "capabilities": {
+        "events": [],
+        "data": "none",
+        "children": "optional"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "generation": "excluded",
+      "fallbackType": "layout.stack",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "minLength": 1
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "layout.tabs",
+      "version": "1.0.0",
+      "description": "Container that switches child panels (layout.tab) with tabs. The selection is held in state[stateKey], and only the selected tab's layout.tab is rendered.",
+      "capabilities": {
+        "events": [
+          "select"
+        ],
+        "data": "none",
+        "children": "optional"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "generation": "excluded",
+      "fallbackType": "layout.stack",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "stateKey": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]{0,63}$"
+          }
+        },
+        "required": [
+          "stateKey"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "overlay.dialog",
+      "version": "1.0.0",
+      "description": "Modal dialog. Hosts confirmation flows or completion forms. Open/close is not held in props but controlled via visibleWhen; close (Esc / the × button / a backdrop click) is forwarded only when declared (normally you fold the open flag back via state.set). The body goes in children.",
+      "capabilities": {
+        "events": [
+          "close"
+        ],
+        "data": "none",
+        "children": "optional"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "generation": "excluded",
+      "fallbackType": "layout.stack",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string"
+          },
+          "variant": {
+            "default": "default",
+            "type": "string",
+            "enum": [
+              "default",
+              "danger"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "variant"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "overlay.toast",
+      "version": "1.0.0",
+      "description": "Toast notification (transient display for completion / errors). Visibility is controlled via visibleWhen. After durationMs elapses it fires dismiss and auto-vanishes (it closes itself when a state.set is declared; when omitted, it does not disappear). tone sets the coloring; error interrupts via role=alert.",
+      "capabilities": {
+        "events": [
+          "dismiss"
+        ],
+        "data": "none",
+        "children": "none"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "generation": "excluded",
+      "fallbackType": "presentMarkdown",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tone": {
+            "default": "info",
+            "type": "string",
+            "enum": [
+              "info",
+              "success",
+              "error"
+            ]
+          },
+          "durationMs": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "message",
+          "tone"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "presentChart",
+      "version": "1.1.0",
+      "description": "Charts a data reference ($ref). x is the dimension column, y is the numeric column(s). Choose line for time series, bar for category comparison, and pie for composition. Data is passed by reference only and never contains row data. To enable drill-down on a data-point click, declare pointClick in events (the payload resolves to $row.<x column> / when series is set, $row.<series column> and $row.<y column>; valid for bar/line/area). To show horizontal lines for targets/thresholds, list { value, label? } in referenceLines (horizontal lines on the y axis).",
+      "capabilities": {
+        "events": [
+          "pointClick"
+        ],
+        "data": "required",
+        "children": "none"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "fallbackType": "presentSpreadsheet",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bar",
+              "line",
+              "area",
+              "pie",
+              "scatter"
+            ]
+          },
+          "x": {
+            "type": "string",
+            "minLength": 1
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            ]
+          },
+          "series": {
+            "type": "string"
+          },
+          "stacked": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "referenceLines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "number"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "axis": {
+                  "type": "string",
+                  "const": "y"
+                }
+              },
+              "required": [
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "kind",
+          "x",
+          "y"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "presentForm",
+      "version": "1.2.0",
+      "description": "Input form. Fires an action on the submit event. Writes go component → API directly (with a capability token) and never pass through the LLM's context. Field types are text / number / select / date / boolean / textarea / radio / multiselect / email / url. Declaring required / minLength / maxLength / pattern / min / max on a field validates before submit; on a violation it does not send and shows an aggregate error and inline errors (the message can be overridden via message). Giving data ($ref) prefills the first row as initial values, turning it into an \"edit this record\" form.",
+      "capabilities": {
+        "events": [
+          "submit"
+        ],
+        "data": "optional",
+        "children": "none",
+        "editable": true
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "fallbackType": "presentMarkdown",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "fields": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "label": {
+                  "type": "string"
+                },
+                "type": {
+                  "default": "text",
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "number",
+                    "select",
+                    "date",
+                    "boolean",
+                    "textarea",
+                    "radio",
+                    "multiselect",
+                    "email",
+                    "url"
+                  ]
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "value": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "value",
+                          "label"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "placeholder": {
+                  "type": "string"
+                },
+                "helpText": {
+                  "type": "string"
+                },
+                "defaultValue": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  ]
+                },
+                "min": {
+                  "type": "number"
+                },
+                "max": {
+                  "type": "number"
+                },
+                "step": {
+                  "type": "number"
+                },
+                "pattern": {
+                  "type": "string"
+                },
+                "minLength": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "maxLength": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "submitLabel": {
+            "type": "string"
+          },
+          "successMessage": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "fields",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "presentList",
+      "version": "1.0.0",
+      "description": "List that applies the children template to each row of a data reference ($ref) and lays them out. Use it when each row needs a free card-like layout (heading + metric + button, etc.). For a simple table, use presentSpreadsheet. Within the template, props can use \"$row.<column name>\", which is substituted with each row's data.",
+      "capabilities": {
+        "events": [
+          "itemClick"
+        ],
+        "data": "required",
+        "children": "optional"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "fallbackType": "presentSpreadsheet",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "gap": {
+            "default": "sm",
+            "type": "string",
+            "enum": [
+              "none",
+              "sm",
+              "md",
+              "lg"
+            ]
+          },
+          "maxItems": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 100
+          },
+          "emptyText": {
+            "default": "(No data)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gap",
+          "emptyText"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "presentMarkdown",
+      "version": "1.0.0",
+      "description": "Markdown rich text. Descriptions, annotations, and the text-fallback terminal for any component.",
+      "capabilities": {
+        "events": [],
+        "data": "none",
+        "children": "none"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "markdown": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "markdown"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "presentMetric",
+      "version": "1.0.0",
+      "description": "Presents a single KPI value. Displays the value (valueColumn) and the change (deltaColumn) from the first row of a data reference ($ref). Use it when you want to show one number large (a single metric such as sales, count, or ratio). For a table or multiple values, use presentSpreadsheet / presentChart.",
+      "capabilities": {
+        "events": [],
+        "data": "required",
+        "children": "none"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "fallbackType": "presentMarkdown",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "valueColumn": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deltaColumn": {
+            "type": "string"
+          },
+          "format": {
+            "default": "number",
+            "type": "string",
+            "enum": [
+              "number",
+              "currency",
+              "percent"
+            ]
+          },
+          "unit": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "positiveIsGood": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "label",
+          "valueColumn",
+          "format",
+          "positiveIsGood"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "presentSpreadsheet",
+      "version": "1.1.0",
+      "description": "Displays a data reference ($ref) as a table. Omitting the column definitions uses the data's columns as-is. A row click (rowClick) can fire a drill-down event. When serverSide=true, sorting/paging is done not locally but by re-fetching from the server (binding.resolve's page/sort).",
+      "capabilities": {
+        "events": [
+          "rowClick",
+          "sortChange",
+          "cellEdit"
+        ],
+        "data": "required",
+        "children": "none",
+        "editable": true
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "fallbackType": "presentMarkdown",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "editable": {
+            "default": false,
+            "type": "boolean"
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "label": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "date"
+                  ]
+                }
+              },
+              "required": [
+                "key"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "sortBy": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "minLength": 1
+              },
+              "dir": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "dir"
+            ],
+            "additionalProperties": false
+          },
+          "pageSize": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 500
+          },
+          "serverSide": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "editable",
+          "serverSide"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "text.heading",
+      "version": "1.0.0",
+      "description": "Heading text. level 1–6. Use it for a view's title.",
+      "capabilities": {
+        "events": [],
+        "data": "none",
+        "children": "none"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "level",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "type": "ui.loading",
+      "version": "1.0.0",
+      "description": "Loading placeholder (skeleton). A runtime-only component used to show the in-progress form during streaming; it is not a generation target.",
+      "capabilities": {
+        "events": [],
+        "data": "none",
+        "children": "none"
+      },
+      "implementation": {
+        "kind": "native"
+      },
+      "generation": "excluded",
+      "fallbackType": "presentMarkdown",
+      "propsSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "default": "Loading…",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

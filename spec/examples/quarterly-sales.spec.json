@@ -1,0 +1,47 @@
+{
+  "kohaku": "0.2",
+  "intent": {
+    "canonical": "sales.quarterly_summary",
+    "params": { "fiscalYear": 2026, "groupBy": "region", "quarter": 3 },
+    "hash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5"
+  },
+  "dataVersion": "ledger@2026-06-10T03:12:00Z",
+  "components": [
+    {
+      "id": "root",
+      "type": "layout.stack",
+      "props": { "direction": "vertical" },
+      "children": ["title", "chart1", "table1"]
+    },
+    {
+      "id": "title",
+      "type": "text.heading",
+      "props": { "level": 2, "text": "FY2026 Q3 Sales (by Region)" }
+    },
+    {
+      "id": "chart1",
+      "type": "presentChart",
+      "props": { "kind": "bar", "x": "region", "y": "revenue" },
+      "data": { "$ref": "query://ledger/sales_summary?fy=2026&groupBy=region&q=3" }
+    },
+    {
+      "id": "table1",
+      "type": "presentSpreadsheet",
+      "props": { "editable": false },
+      "data": { "$ref": "query://ledger/sales_summary?fy=2026&groupBy=region&q=3" }
+    }
+  ],
+  "events": [
+    {
+      "on": "table1.rowClick",
+      "emit": "intent.patch",
+      "payload": { "drilldown": "$row.region" }
+    }
+  ],
+  "provenance": {
+    "tier": "L1",
+    "composedBy": "composer@0.1.0",
+    "model": "claude-fable-5",
+    "cache": "hit"
+  }
+}

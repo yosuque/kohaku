@@ -1,0 +1,56 @@
+{
+  "name": "@kohaku-ui/cli",
+  "version": "0.1.0",
+  "description": "Command-line tools for kohaku: protocol conformance checks, scaffolding and component validation.",
+  "type": "module",
+  "bin": {
+    "kohaku": "./bin/kohaku.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/composer": "workspace:^",
+    "@kohaku-ui/evals": "workspace:^",
+    "@kohaku-ui/sandbox": "workspace:^",
+    "@kohaku-ui/spec": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "commander": "catalog:",
+    "jsdom": "catalog:",
+    "semver": "catalog:",
+    "tsx": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/semver": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/cli#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "cli"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": true,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "bin": {
+      "kohaku": "./dist/index.js"
+    }
+  }
+}

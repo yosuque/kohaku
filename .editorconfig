@@ -1,0 +1,25 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{ts,tsx,js,mjs,cjs}]
+max_line_length = 110
+
+[*.py]
+indent_size = 4
+max_line_length = 100
+
+[*.md]
+trim_trailing_whitespace = false
+
+# Generated artifacts checked by CI's drift check. If the editor touches trailing whitespace or the
+# final newline, "regenerate -> git diff --exit-code" fails, so disable the editor's normalization here.
+[{spec/schemas/**,spec/test/fixtures/**,apps/sample-web/src/generated/**,apps/sample-api/src/domain/seed/**,apps/sample-api/test/golden/**,python/kohaku/src/kohaku/registry/_data/**}]
+trim_trailing_whitespace = unset
+insert_final_newline = unset

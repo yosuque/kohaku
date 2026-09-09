@@ -1,0 +1,63 @@
+packages:
+  - packages/*
+  - apps/*
+  - cli
+  - spec
+
+allowBuilds:
+  esbuild: true
+
+catalog:
+  typescript: 7.0.2
+  zod: ^4.6.2
+  hono: ^4.13.7
+  "@hono/node-server": ^2.1.1
+  react: 19.3.0
+  react-dom: 19.3.0
+  "@types/react": ^19.3.0
+  "@types/react-dom": ^19.3.0
+  "@types/node": ^25.9.6
+  vite: ^8.3.0
+  "@vitejs/plugin-react": ^6.1.1
+  vitest: ^4.1.11
+  "@vitest/coverage-v8": ^4.1.11
+  jsdom: ^30.0.1
+  recharts: ^3.10.1
+  ai: ^7.0.99
+  "@ai-sdk/anthropic": ^4.0.53
+  "@ai-sdk/openai": ^4.0.66
+  "@ai-sdk/google": ^4.0.69
+  "@ai-sdk/openai-compatible": ^3.0.48
+  "@modelcontextprotocol/server": ^2.0.0
+  "@modelcontextprotocol/client": ^2.0.0
+  "@modelcontextprotocol/core": ^2.0.0
+  "@modelcontextprotocol/node": ^2.0.0
+  "@modelcontextprotocol/ext-apps": ^2.0.0
+  "@opentelemetry/api": ^1.9.1
+  "@tanstack/react-query": ^5.101.0
+  react-router-dom: ^7.17.0
+  tsx: ^4.23.13
+  commander: ^15.0.0
+  semver: ^7.8.5
+  "@types/semver": ^7.8.0
+  ulid: ^3.0.2
+  vite-plugin-singlefile: ^2.3.3
+  axe-core: ^4.13.0
+
+# Each entry below bypasses the release-age supply-chain gate for one AI SDK package because it was pinned
+# in the catalog (or pulled in transitively by a catalog entry) shortly after its own release, so the gate's
+# minimum age had not yet elapsed at pin time. Remove an entry once its package's release age satisfies the
+# gate — in practice, at the next routine dependency update that touches it (`pnpm update` / a version bump
+# in the catalog above), not on a fixed schedule. Do not add a new entry without a version bump that needs it.
+minimumReleaseAgeExclude:
+  - '@ai-sdk/anthropic@4.0.53' # catalog pin (ai-sdk); direct dependency of packages/llm
+  - '@ai-sdk/gateway@4.0.80' # transitive dependency of ai@7.0.99 below, not a direct catalog entry
+  - ai@7.0.99 # catalog pin (ai-sdk); direct dependency of packages/llm
+  - '@ai-sdk/google@4.0.69' # catalog pin (ai-sdk); direct dependency of packages/llm
+  - '@ai-sdk/openai-compatible@3.0.48' # catalog pin (ai-sdk); direct dependency of packages/llm
+  - '@ai-sdk/openai@4.0.66' # catalog pin (ai-sdk); direct dependency of packages/llm
+  - '@ai-sdk/provider-utils@5.0.40' # transitive dependency shared by the @ai-sdk/* packages above
+  - '@ai-sdk/provider@4.0.14' # transitive dependency shared by the @ai-sdk/* packages above
+
+onlyBuiltDependencies:
+  - esbuild

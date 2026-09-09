@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "kohaku-sales": {
+      "command": "pnpm",
+      "args": ["--filter", "@kohaku-ui-sample/mcp", "start"]
+    }
+  }
+}

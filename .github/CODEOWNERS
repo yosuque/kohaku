@@ -1,0 +1,7 @@
+# Default owner for everything in the repository.
+* @yosuque
+
+# spec/ is the normative protocol document and machine-readable conformance requirements
+# (spec/SPEC.md, spec/conformance/manifest.ts) that every implementation — including the
+# Python port — is checked against. Changes here must always be reviewed explicitly.
+/spec/ @yosuque

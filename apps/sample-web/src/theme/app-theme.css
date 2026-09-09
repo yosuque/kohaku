@@ -1,0 +1,38 @@
+/*
+ * Theme variables for the sample's page chrome (header, nav, cards, background — outside the Spec-rendered area).
+ * kohaku's ThemeTokens affect only the parts drawn by the Spec, so the chrome follows light/dark via these --app-* variables.
+ *
+ * Light values match the previous hard-coded literals (= the light appearance is unchanged). Dark values are
+ * AA-measured values aligned with renderer-core's defaultDarkTheme (canvas=background / elevated=surface / border/text/muted/primary).
+ * Each var() reference carries the light literal as its second-argument fallback, so it stays light even without this CSS applied.
+ */
+:root {
+  --app-canvas: #f5f6fa;
+  --app-elevated: #ffffff;
+  --app-border: #e5e7eb;
+  --app-text: #1a1a2e;
+  --app-muted: #6b7280;
+  --app-subtle: #475569;
+  --app-primary: #4f46e5;
+  --app-primary-weak: #eef2ff;
+  --app-track: #f1f5f9;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --app-canvas: #0f1115;
+  --app-elevated: #1a1d24;
+  --app-border: #333a47;
+  --app-text: #e6e8ee;
+  --app-muted: #9aa1ad;
+  --app-subtle: #aab2c0;
+  --app-primary: #5b5ef0;
+  --app-primary-weak: #1e2340;
+  --app-track: #262b35;
+  color-scheme: dark;
+}
+
+body {
+  background: var(--app-canvas);
+  color: var(--app-text);
+}

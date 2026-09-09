@@ -1,0 +1,26 @@
+{
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.biome": "explicit",
+    "source.organizeImports.biome": "explicit"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  // The JSON linter/formatter is disabled in biome.jsonc (Biome's JSON formatter collapses short
+  // arrays onto one line, which conflicts with JSON.stringify(x, null, 2) output and CI's drift
+  // check). Making Biome the default here would mean nothing happens on save and it would look
+  // broken, so explicitly fall back to the built-in JSON language feature.
+  "[json]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  }
+}

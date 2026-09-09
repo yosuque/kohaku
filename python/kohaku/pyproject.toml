@@ -1,0 +1,49 @@
+[project]
+name = "kohaku"
+version = "0.1.0"
+description = "Python reference implementation of kohaku (Kohaku Protocol v0.1) — a generation/serving backend for declarative UI Specs"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+readme = "README.md"
+authors = [{ name = "yosuque" }]
+keywords = ["kohaku", "generative-ui", "ui-spec", "llm", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Software Development :: User Interfaces",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pydantic>=2.10",
+]
+
+[project.optional-dependencies]
+# The REST host (M5) / MCP host (M6) / LLM adapters (M3) are adopted incrementally.
+rest = ["fastapi>=0.115", "uvicorn>=0.34"]
+mcp = ["mcp>=1.9"]
+llm = ["httpx>=0.28"]
+# Native LLM adapters (other than OpenAI-compatible). Symmetric with the TS claude / gemini providers.
+claude = ["anthropic>=1.5"]
+gemini = ["google-genai>=1.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kohaku"]
+
+# The test suite reads spec/ from the monorepo root (see tests/conftest.py), so it cannot run from an
+# sdist. Ship the importable package and its metadata only, rather than tests that cannot pass standalone.
+[tool.hatch.build.targets.sdist]
+include = ["src", "README.md", "LICENSE", "pyproject.toml"]
+
+[project.urls]
+Homepage = "https://github.com/yosuque/kohaku"
+Documentation = "https://github.com/yosuque/kohaku/blob/main/python/README.md"
+Repository = "https://github.com/yosuque/kohaku"
+Issues = "https://github.com/yosuque/kohaku/issues"

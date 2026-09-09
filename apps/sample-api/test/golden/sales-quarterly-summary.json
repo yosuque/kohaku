@@ -1,0 +1,99 @@
+{
+  "name": "L0 fixed Spec for sales.quarterly_summary (FY2026 Q3, by region)",
+  "input": {
+    "kind": "intent",
+    "intent": {
+      "canonical": "sales.quarterly_summary",
+      "params": {
+        "fiscalYear": 2026,
+        "quarter": 3,
+        "groupBy": "region"
+      }
+    }
+  },
+  "drafts": [],
+  "expected": {
+    "kohaku": "0.2",
+    "intent": {
+      "canonical": "sales.quarterly_summary",
+      "params": {
+        "fiscalYear": 2026,
+        "groupBy": "region",
+        "quarter": 3
+      },
+      "hash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5"
+    },
+    "dataVersion": "sales@seed-20260610.1+ade3e9a0a5de#bump-0",
+    "refVersions": {
+      "query://sales/summary?fy=2026&groupBy=region&q=3": "sales@seed-20260610.1+ade3e9a0a5de#bump-0"
+    },
+    "components": [
+      {
+        "id": "root",
+        "type": "layout.stack",
+        "version": "1.0.0",
+        "props": {
+          "direction": "vertical",
+          "gap": "md"
+        },
+        "children": [
+          "title1",
+          "chart1",
+          "table1"
+        ]
+      },
+      {
+        "id": "title1",
+        "type": "text.heading",
+        "version": "1.0.0",
+        "props": {
+          "level": 2,
+          "text": "FY2026 Q3 Sales (by Region)"
+        }
+      },
+      {
+        "id": "chart1",
+        "type": "presentChart",
+        "version": "1.1.0",
+        "props": {
+          "kind": "bar",
+          "x": "region",
+          "y": "revenue"
+        },
+        "data": {
+          "$ref": "query://sales/summary?fy=2026&groupBy=region&q=3"
+        }
+      },
+      {
+        "id": "table1",
+        "type": "presentSpreadsheet",
+        "version": "1.1.0",
+        "props": {
+          "editable": false,
+          "serverSide": false,
+          "sortBy": {
+            "dir": "desc",
+            "field": "revenue"
+          }
+        },
+        "data": {
+          "$ref": "query://sales/summary?fy=2026&groupBy=region&q=3"
+        }
+      }
+    ],
+    "events": [
+      {
+        "on": "table1.rowClick",
+        "emit": "intent.patch",
+        "payload": {
+          "drilldown": "$row.region"
+        }
+      }
+    ],
+    "provenance": {
+      "tier": "L0",
+      "composedBy": "composer@0.1.0",
+      "cache": "miss"
+    }
+  }
+}

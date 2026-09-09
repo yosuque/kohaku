@@ -1,0 +1,41 @@
+{
+  "name": "@kohaku-ui-sample/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:renderer": "vite build --config vite.renderer.config.ts",
+    "start": "tsx src/index.ts",
+    "start:http": "tsx src/http.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kohaku-ui-sample/api": "workspace:^",
+    "@kohaku-ui-sample/web": "workspace:^",
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/host-mcp-apps": "workspace:^",
+    "@kohaku-ui/lineage": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/renderer-core": "workspace:^",
+    "@kohaku-ui/renderer-react": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@modelcontextprotocol/client": "catalog:",
+    "@modelcontextprotocol/ext-apps": "catalog:",
+    "@modelcontextprotocol/node": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plugin-singlefile": "catalog:",
+    "vitest": "catalog:"
+  }
+}
