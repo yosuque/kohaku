@@ -1,3 +1,5 @@
+<img src="docs/assets/kohaku-icon.png" alt="kohaku" width="112">
+
 # kohaku — an AI-native GUI library (reference implementation)
 
 English | [日本語](README.ja.md)

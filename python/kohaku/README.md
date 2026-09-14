@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/yosuque/kohaku/main/docs/assets/kohaku-icon.png" alt="kohaku" width="112">
+
 # kohaku (Python)
 
 Python reference implementation of **Kohaku Protocol v0.1** — a backend for generating and serving

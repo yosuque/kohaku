@@ -1,3 +1,5 @@
+<img src="../docs/assets/kohaku-icon.png" alt="kohaku" width="112">
+
 # kohaku Python Implementation
 
 English | [日本語](README.ja.md)
