@@ -2,7 +2,7 @@
 
 fastapi is a "rest" extra. The route implementation body (_fastapi_routes) imports fastapi / starlette at
 the top level, so it is **lazily loaded** from this module (which does not require fastapi at import time).
-When absent, a RuntimeError prompts `pip install 'kohaku[rest]'`.
+When absent, a RuntimeError prompts `pip install 'kohaku-ui[rest]'`.
 
 The wire shape (endpoint paths, status codes, error envelope {error:{code,message,requestId?}}, SSE format)
 matches the TS reference implementation. The SSE keepalive heartbeat (emits a `: keepalive` comment line at
@@ -48,6 +48,6 @@ def attach_kohaku_routes(
         from ._fastapi_routes import register_routes
     except ImportError as e:  # pragma: no cover - guidance when the dependency is not installed
         raise RuntimeError(
-            "The REST host requires fastapi. Please run `pip install 'kohaku[rest]'`."
+            "The REST host requires fastapi. Please run `pip install 'kohaku-ui[rest]'`."
         ) from e
     return register_routes(app, deps, prefix)

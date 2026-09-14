@@ -332,7 +332,7 @@ def test_create_llm_claude_missing_sdk_raises_config(monkeypatch: pytest.MonkeyP
     with pytest.raises(LlmError) as exc:
         create_llm(resolve_llm_env({"KOHAKU_LLM_PROVIDER": "claude", "KOHAKU_LLM_API_KEY": "k"}))
     assert exc.value.code == "CONFIG"
-    assert "kohaku[claude]" in str(exc.value)
+    assert "kohaku-ui[claude]" in str(exc.value)
 
 
 # --- strict tool use + schema sanitization (_sanitize_for_anthropic / _tool_params) ---------------------

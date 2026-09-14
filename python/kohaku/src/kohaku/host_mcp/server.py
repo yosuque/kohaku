@@ -77,7 +77,7 @@ if TYPE_CHECKING:
     from mcp.server.lowlevel import Server
 
 _MCP_MISSING_MESSAGE = (
-    "MCP host functionality requires the mcp SDK. Please run `pip install 'kohaku[mcp]'`."
+    "MCP host functionality requires the mcp SDK. Please run `pip install 'kohaku-ui[mcp]'`."
 )
 
 # Cumulative size budget (JSON characters) for the initial data co-embedded in the tool result's `_meta`.

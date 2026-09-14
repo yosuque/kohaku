@@ -12,8 +12,8 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "kohaku",
     "kohaku-sample-sales-api",
+    "kohaku-ui",
     "kohaku-workspace",
 ]
 
@@ -693,7 +693,18 @@ wheels = [
 ]
 
 [[package]]
-name = "kohaku"
+name = "kohaku-sample-sales-api"
+version = "0.0.0"
+source = { editable = "examples/sales-api" }
+dependencies = [
+    { name = "kohaku-ui", extra = ["mcp", "rest"] },
+]
+
+[package.metadata]
+requires-dist = [{ name = "kohaku-ui", extras = ["rest", "mcp"], editable = "kohaku" }]
+
+[[package]]
+name = "kohaku-ui"
 version = "0.1.0"
 source = { editable = "kohaku" }
 dependencies = [
@@ -731,22 +742,11 @@ requires-dist = [
 provides-extras = ["rest", "mcp", "llm", "claude", "gemini"]
 
 [[package]]
-name = "kohaku-sample-sales-api"
-version = "0.0.0"
-source = { editable = "examples/sales-api" }
-dependencies = [
-    { name = "kohaku", extra = ["mcp", "rest"] },
-]
-
-[package.metadata]
-requires-dist = [{ name = "kohaku", extras = ["rest", "mcp"], editable = "kohaku" }]
-
-[[package]]
 name = "kohaku-workspace"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "kohaku" },
+    { name = "kohaku-ui" },
 ]
 
 [package.dev-dependencies]
@@ -765,7 +765,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "kohaku", editable = "kohaku" }]
+requires-dist = [{ name = "kohaku-ui", editable = "kohaku" }]
 
 [package.metadata.requires-dev]
 dev = [

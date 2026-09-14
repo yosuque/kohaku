@@ -26,7 +26,7 @@ async def main() -> None:
     except ImportError as err:
         raise RuntimeError(
             "Starting the MCP server requires mcp. Run `uv sync` (dev) or"
-            " `pip install 'kohaku[mcp]'`."
+            " `pip install 'kohaku-ui[mcp]'`."
         ) from err
 
     setup = await create_kohaku_mcp_setup()

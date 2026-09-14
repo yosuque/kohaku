@@ -88,7 +88,7 @@ jobs:
             echo "python $PY != npm ${{ needs.release.outputs.version }}"
             exit 1
           fi
-      - run: uv build --package kohaku --out-dir dist
+      - run: uv build --package kohaku-ui --out-dir dist
         working-directory: python
       # Proves the wheel is self-contained: the test suite reads spec/ from the monorepo root, so an
       # accidental runtime dependency on the repository layout would only show up here.

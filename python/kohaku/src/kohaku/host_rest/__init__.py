@@ -1,7 +1,7 @@
 """kohaku.host_rest — host for the Kohaku Protocol REST profile (port of packages/host-rest).
 
 The public API is attach_kohaku_routes(app, deps, prefix). fastapi is a "rest" extra and is not
-imported until the attach function is called (when absent, a RuntimeError prompts `pip install 'kohaku[rest]'`).
+imported until the attach function is called (when absent, a RuntimeError prompts `pip install 'kohaku-ui[rest]'`).
 """
 
 from .bodies import ComponentUsedEvent, RenderedEvent

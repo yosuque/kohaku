@@ -59,7 +59,7 @@ uv run python -m sales_api.mcp_http
 
 ```
 python/
-├─ kohaku/                # ライブラリ本体(配布物 "kohaku")
+├─ kohaku/                # ライブラリ本体(配布名 "kohaku-ui" / import 名 "kohaku")
 │  ├─ src/kohaku/
 │  │  ├─ spec/             # ← packages/spec-core(スキーマ・正準化・検証・Port 定義)
 │  │  ├─ registry/         # ← packages/registry(カタログ。core は TS export の JSON から構築)
@@ -281,7 +281,7 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch
 > (0..N)→ TS とパリティ化 ③LLM アダプタ「OpenAI 互換のみ」→ claude / gemini ネイティブ
-> アダプタを追加(`uv sync --package kohaku --extra claude` / `--extra gemini`)④semver レンジ部分実装
+> アダプタを追加(`uv sync --package kohaku-ui --extra claude` / `--extra gemini`)④semver レンジ部分実装
 > → node-semver 準拠に完全化(比較演算子・空白 AND・`||` OR・hyphen・x-range・tilde/caret・
 > prerelease 除外規則。build metadata は比較で無視。不正レンジは fail-closed)⑤BindingClient
 > 未移植 → `kohaku.data_binding.create_binding_client` として移植(既定 HTTP フェッチャは

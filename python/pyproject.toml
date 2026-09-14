@@ -6,7 +6,7 @@ name = "kohaku-workspace"
 version = "0.0.0"
 description = "Workspace root of the kohaku Python implementation (not distributed)"
 requires-python = ">=3.12"
-dependencies = ["kohaku"]
+dependencies = ["kohaku-ui"]
 
 [tool.uv]
 package = false
@@ -15,7 +15,7 @@ package = false
 members = ["kohaku", "examples/sales-api"]
 
 [tool.uv.sources]
-kohaku = { workspace = true }
+kohaku-ui = { workspace = true }
 kohaku-sample-sales-api = { workspace = true }
 
 [dependency-groups]

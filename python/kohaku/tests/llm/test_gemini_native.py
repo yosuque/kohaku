@@ -291,7 +291,7 @@ def test_create_llm_gemini_missing_sdk_raises_config(monkeypatch: pytest.MonkeyP
     with pytest.raises(LlmError) as exc:
         create_llm(resolve_llm_env({"KOHAKU_LLM_PROVIDER": "gemini", "KOHAKU_LLM_API_KEY": "k"}))
     assert exc.value.code == "CONFIG"
-    assert "kohaku[gemini]" in str(exc.value)
+    assert "kohaku-ui[gemini]" in str(exc.value)
 
 
 def test_create_llm_rejects_unknown_provider() -> None:

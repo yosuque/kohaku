@@ -325,7 +325,7 @@ def _import_httpx() -> Any:
     except ImportError as e:
         raise RuntimeError(
             "the default HTTP fetcher requires httpx. Install it with `uv sync` or"
-            " `pip install 'kohaku[llm]'`, or inject a fetcher / action_fetcher explicitly"
+            " `pip install 'kohaku-ui[llm]'`, or inject a fetcher / action_fetcher explicitly"
         ) from e
     return httpx
 

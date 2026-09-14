@@ -1,7 +1,7 @@
 """kohaku.host_mcp — the Kohaku Protocol MCP Apps profile (SEP-1865).
 
 Port of packages/host-mcp-apps. Attaches to the low-level Server of the mcp SDK (the official Python SDK).
-mcp is an optional dependency (`pip install 'kohaku[mcp]'`), and its import is deferred until attach runs
+mcp is an optional dependency (`pip install 'kohaku-ui[mcp]'`), and its import is deferred until attach runs
 (importing this package itself does not fail without mcp).
 """
 

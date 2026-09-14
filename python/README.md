@@ -61,7 +61,7 @@ uv run python -m sales_api.mcp_http
 
 ```
 python/
-├─ kohaku/                # library proper (the distributable "kohaku")
+├─ kohaku/                # library proper (distributed as "kohaku-ui", imported as "kohaku")
 │  ├─ src/kohaku/
 │  │  ├─ spec/             # ← packages/spec-core (schema / canonicalization / validation / Port definitions)
 │  │  ├─ registry/         # ← packages/registry (catalog; core is built from the JSON exported by TS)
@@ -307,7 +307,7 @@ surface (`AbortSignal.timeout` / `AbortSignal.any`, used throughout `adapters/_b
 > reconcile for promotion → fully ported PromotedRegistry / projection / startup reconcile
 > to sales-api ② interim patch (0..N) for compose streaming → brought to parity with TS
 > ③ LLM adapter "OpenAI-compatible only" → added native claude / gemini adapters
-> (`uv sync --package kohaku --extra claude` / `--extra gemini`) ④ partial semver range
+> (`uv sync --package kohaku-ui --extra claude` / `--extra gemini`) ④ partial semver range
 > implementation → completed to node-semver compliance (comparison operators, whitespace
 > AND, `||` OR, hyphen, x-range, tilde/caret, prerelease exclusion rule; build metadata is
 > ignored in comparison; invalid ranges are fail-closed) ⑤ BindingClient not ported →

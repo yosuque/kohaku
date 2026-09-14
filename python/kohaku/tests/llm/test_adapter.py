@@ -447,7 +447,7 @@ def test_missing_httpx_raises_runtime_error(monkeypatch: pytest.MonkeyPatch) -> 
         return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    with pytest.raises(RuntimeError, match=r"kohaku\[llm\]"):
+    with pytest.raises(RuntimeError, match=r"kohaku-ui\[llm\]"):
         create_llm(resolve_llm_env({"KOHAKU_LLM_PROVIDER": "ollama"}))
 
 

@@ -1,5 +1,8 @@
 [project]
-name = "kohaku"
+# Distribution name, not the import name: `kohaku` was already registered on PyPI by someone else,
+# so the distribution is `kohaku-ui` (matching the npm scope) while the package still imports as
+# `kohaku`. Installing is `pip install kohaku-ui`; using it is `import kohaku`.
+name = "kohaku-ui"
 version = "0.1.0"
 description = "Python reference implementation of kohaku (Kohaku Protocol v0.1) — a generation/serving backend for declarative UI Specs"
 requires-python = ">=3.12"
@@ -7,7 +10,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 readme = "README.md"
 authors = [{ name = "yosuque" }]
-keywords = ["kohaku", "generative-ui", "ui-spec", "llm", "mcp"]
+keywords = ["kohaku", "kohaku-ui", "generative-ui", "ui-spec", "llm", "mcp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

@@ -152,7 +152,7 @@ def main() -> None:
     except ImportError as err:
         raise RuntimeError(
             "Starting the MCP HTTP server requires uvicorn / starlette. Run `uv sync` (dev) or"
-            " `pip install 'kohaku[rest,mcp]'`."
+            " `pip install 'kohaku-ui[rest,mcp]'`."
         ) from err
 
     port = int(os.environ.get("KOHAKU_MCP_HTTP_PORT", "8791"))

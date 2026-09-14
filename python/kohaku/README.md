@@ -10,10 +10,10 @@ It is wire-compatible with the TypeScript reference implementation: canonical JS
 verified in CI on every commit by the TypeScript CLI's black-box suite.
 
 ```bash
-pip install kohaku            # core
-pip install "kohaku[rest]"    # + the REST host (FastAPI)
-pip install "kohaku[mcp]"     # + the MCP host
-pip install "kohaku[llm]"     # + the OpenAI-compatible LLM adapter
+pip install kohaku-ui            # core
+pip install "kohaku-ui[rest]"    # + the REST host (FastAPI)
+pip install "kohaku-ui[mcp]"     # + the MCP host
+pip install "kohaku-ui[llm]"     # + the OpenAI-compatible LLM adapter
 ```
 
 - Protocol: [spec/SPEC.md](https://github.com/yosuque/kohaku/blob/main/spec/SPEC.md)

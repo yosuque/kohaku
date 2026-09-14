@@ -36,7 +36,7 @@ GUI 操作(Web)  ─┼→ 正規化 Intent → Composition ─┼─ 外部チ�
 
 ## インストール
 
-リファレンス実装は npm に `@kohaku-ui/*`(全パッケージ同一バージョン)、PyPI に `kohaku` として公開されています。
+リファレンス実装は npm に `@kohaku-ui/*`(全パッケージ同一バージョン)、PyPI に `kohaku-ui` として公開されています(配布名。import 名は `kohaku` のままです)。
 
 ```bash
 # REST ホスト + React レンダラ
@@ -46,7 +46,7 @@ npm install @kohaku-ui/host-rest @kohaku-ui/renderer-react @kohaku-ui/composer @
 npx @kohaku-ui/cli conformance --rest http://localhost:8787/api/kohaku
 
 # Python 実装
-pip install "kohaku[rest]"
+pip install "kohaku-ui[rest]"
 ```
 
 kohaku 自体を開発する場合は、以下のクイックスタートと [CONTRIBUTING.ja.md](CONTRIBUTING.ja.md) を参照してください。

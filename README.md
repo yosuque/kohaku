@@ -37,7 +37,7 @@ GUI operations (Web)     ─┼→ canonical Intent → Composition ──┼─
 ## Install
 
 The reference implementation is published to npm as `@kohaku-ui/*` (all packages share one version) and to
-PyPI as `kohaku`.
+PyPI as `kohaku-ui` (the distribution name; it still imports as `kohaku`).
 
 ```bash
 # a REST host + the React renderer
@@ -47,7 +47,7 @@ npm install @kohaku-ui/host-rest @kohaku-ui/renderer-react @kohaku-ui/composer @
 npx @kohaku-ui/cli conformance --rest http://localhost:8787/api/kohaku
 
 # the Python implementation
-pip install "kohaku[rest]"
+pip install "kohaku-ui[rest]"
 ```
 
 Working on kohaku itself rather than building on it? Start from the quick start below and

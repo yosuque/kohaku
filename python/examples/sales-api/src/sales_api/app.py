@@ -204,7 +204,7 @@ async def create_app(
     except ImportError as err:
         raise RuntimeError(
             "Starting sales-api requires fastapi. Run `uv sync` (dev) or"
-            " `pip install 'kohaku[rest]'`."
+            " `pip install 'kohaku-ui[rest]'`."
         ) from err
 
     repo = SalesRepo(seed_dir if seed_dir is not None else default_seed_dir())

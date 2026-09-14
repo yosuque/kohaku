@@ -266,7 +266,7 @@ def _build_httpx_transport(config: LlmConfig) -> ChatTransport:
         import httpx
     except ImportError as err:
         raise RuntimeError(
-            "The OpenAI-compatible adapter requires httpx. Run `pip install 'kohaku[llm]'`."
+            "The OpenAI-compatible adapter requires httpx. Run `pip install 'kohaku-ui[llm]'`."
         ) from err
 
     base_url = config.base_url or (
@@ -327,7 +327,7 @@ def _build_httpx_stream_transport(config: LlmConfig) -> StreamingChatTransport:
         import httpx
     except ImportError as err:
         raise RuntimeError(
-            "The OpenAI-compatible adapter requires httpx. Run `pip install 'kohaku[llm]'`."
+            "The OpenAI-compatible adapter requires httpx. Run `pip install 'kohaku-ui[llm]'`."
         ) from err
 
     resolved = config.base_url or (

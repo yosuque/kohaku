@@ -397,7 +397,7 @@ def _build_sdk_transports(
         raise LlmError(
             "CONFIG",
             'provider "claude" requires the anthropic SDK. '
-            "Run `pip install 'kohaku[claude]'`.",
+            "Run `pip install 'kohaku-ui[claude]'`.",
         ) from err
 
     # Disable the SDK's built-in exponential backoff (default max_retries=2). Retry is centralized in the llm

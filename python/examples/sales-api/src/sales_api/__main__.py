@@ -5,7 +5,7 @@ Environment variables:
 - PORT (default 8790; a separate port so it can coexist with the TS version sample-api's 8787)
 - KOHAKU_LLM_PROVIDER: fake (default, the deterministic pseudo LLM) / claude / openai / gemini / ollama / llama
   (anything other than fake is delegated to kohaku.llm's create_llm_from_env — see KOHAKU_LLM_*; the native
-  claude / gemini adapters require the optional extras `kohaku[claude]` / `kohaku[gemini]`)
+  claude / gemini adapters require the optional extras `kohaku-ui[claude]` / `kohaku-ui[gemini]`)
 - KOHAKU_CAPABILITY_SECRET (default dev-secret-change-me)
 - KOHAKU_DATA_DIR (default python/examples/sales-api/.data)
 """
@@ -38,7 +38,7 @@ def main() -> None:
     except ImportError as err:
         raise RuntimeError(
             "Starting the server requires uvicorn. Run `uv sync` (dev) or"
-            " `pip install 'kohaku[rest]'`."
+            " `pip install 'kohaku-ui[rest]'`."
         ) from err
 
     llm = _create_llm()

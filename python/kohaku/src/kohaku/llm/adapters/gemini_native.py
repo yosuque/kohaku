@@ -209,7 +209,7 @@ def _build_sdk_transports(config: LlmConfig) -> tuple[GeminiTransport, GeminiStr
         raise LlmError(
             "CONFIG",
             'provider "gemini" requires the google-genai SDK. '
-            "Run `pip install 'kohaku[gemini]'`.",
+            "Run `pip install 'kohaku-ui[gemini]'`.",
         ) from err
 
     client_kwargs: dict[str, Any] = {"api_key": config.api_key or "not-required"}
