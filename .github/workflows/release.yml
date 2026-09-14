@@ -34,7 +34,7 @@ jobs:
       # No `version:` input here: package.json's `packageManager` (pnpm@11.5.2) is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
       # "Multiple versions of pnpm specified".
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v4
         with:
           node-version: 24
