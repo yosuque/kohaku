@@ -1,8 +1,9 @@
 """kohaku.host_mcp — the Kohaku Protocol MCP Apps profile (SEP-1865).
 
-Port of packages/host-mcp-apps. Attaches to the low-level Server of the mcp SDK (the official Python SDK).
-mcp is an optional dependency (`pip install 'kohaku-ui[mcp]'`), and its import is deferred until attach runs
-(importing this package itself does not fail without mcp).
+Port of packages/host-mcp-apps. Attaches to the low-level Server of the mcp SDK (the official Python SDK,
+mcp>=2.2), registering tools/list, tools/call, resources/list and resources/read via
+`Server.add_request_handler`. mcp is an optional dependency (`pip install 'kohaku-ui[mcp]'`), and its import
+is deferred until attach runs (importing this package itself does not fail without mcp).
 """
 
 # IntentToolSource is defined in kohaku.intents. Re-exported here as an input type for host_mcp.

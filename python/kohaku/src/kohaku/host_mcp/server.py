@@ -1,9 +1,10 @@
 """The Kohaku Protocol MCP Apps profile (SEP-1865) body.
 
 Port of packages/host-mcp-apps/src/server.ts. TS's McpServer.registerTool / registerResource are consolidated in
-Python's mcp SDK into one handler each of the low-level Server's list_tools / call_tool / list_resources /
-read_resource (tools are dispatched by name). Because CallToolResult can carry structuredContent and _meta directly,
-the same wire shape as TS (co-embedded initial data, both _meta forms) can be reproduced.
+Python's mcp SDK into one handler each for tools/list, tools/call, resources/list and resources/read, registered on
+the low-level Server via `Server.add_request_handler(method, params_type, handler)` (tools are dispatched by name
+inside the tools/call handler). Because CallToolResult can carry structured_content and _meta directly, the same
+wire shape as TS (co-embedded initial data, both _meta forms) can be reproduced.
 
 - kohaku_compose (model-visible): NL -> the same Composition Service -> Spec + text fallback
 - kohaku_resolve_binding / kohaku_event (app-only): callable only from the iframe.
@@ -18,7 +19,7 @@ import inspect
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from kohaku.composer import (
     ComposeContext,
@@ -76,8 +77,7 @@ from .meta import (
 from .snapshot import inject_snapshot
 
 if TYPE_CHECKING:
-    from mcp.server.lowlevel import Server
-    from mcp.shared.context import RequestContext
+    from mcp.server import Server, ServerRequestContext
 
 _MCP_MISSING_MESSAGE = (
     "MCP host functionality requires the mcp SDK. Please run `pip install 'kohaku-ui[mcp]'`."
@@ -149,10 +149,11 @@ def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 
 # TOOL_INTERNAL_ERROR_MESSAGE (server.ts).
 _TOOL_INTERNAL_ERROR_MESSAGE = "internal error; see the observability hook (on_error) for details"
 
-# MCP 2026-07-28 (SEP-2549): freshness/cacheability hint attached to tools/list and resources/list results
-# (CacheableResult.ttlMs / cacheScope). Matches TS host-mcp-apps' equivalent values.
-_LIST_RESULT_TTL_MS = 60_000
-_LIST_RESULT_CACHE_SCOPE = "private"
+# MCP 2026-07-28 (SEP-2549): freshness/cacheability hint attached to tools/list, resources/list, and (mcp
+# 2.x closed a 1.x gap here — see _read_resource's doc comment) resources/read results
+# (CacheableResult.ttl_ms / cache_scope). Matches TS host-mcp-apps' equivalent values.
+_CACHEABLE_RESULT_TTL_MS = 60_000
+_CACHEABLE_RESULT_CACHE_SCOPE: Literal["public", "private"] = "private"
 
 # Shared optional `locale` input for every UI-producing tool (compose / render_snapshot / intent
 # tools / event). The calling LLM sets it to the user's language so the composed UI (fixed-spec
@@ -174,63 +175,34 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
-def _mcp_request_context() -> RequestContext[Any, Any, Any] | None:
-    """Returns the mcp SDK's request-scoped context object (`mcp.server.lowlevel.server.request_ctx`), which
-    the SDK populates for the lifetime of this request's async call chain (Server._handle_request sets it
-    before invoking the registered handler and resets it in a `finally`) — safe to read from any
-    `await`-connected function called while handling one tool call, and concurrent requests each see their own
-    copy (contextvars semantics). Returns None when there is no live request context (e.g. a handler invoked
-    directly, as this port's own tests do).
-
-    Extracted out of `_mcp_request_meta` (below) so `_principal_of` can hand the full context object to
-    `McpHostDeps.resolve_principal` — mirroring TS's `ServerContext` argument to `resolvePrincipal` — rather
-    than only the narrower `(request_id, meta)` pair that function itself needs.
-    """
-    try:
-        from mcp.server.lowlevel.server import request_ctx
-
-        return request_ctx.get()
-    except LookupError:
-        return None
-
-
-def _mcp_request_meta() -> tuple[object | None, object | None]:
-    """Returns (request_id, meta) off the mcp SDK's request-scoped context (see `_mcp_request_context`).
-    Returns (None, None) when there is no live request context."""
-    ctx = _mcp_request_context()
-    if ctx is None:
-        return None, None
-    return ctx.request_id, ctx.meta
-
-
-def _correlation_id_from_request_context() -> str | None:
+def _correlation_id_of(ctx: ServerRequestContext[Any, Any]) -> str | None:
     """The per-call correlation id: always the JSON-RPC request id of this tool call, never derived from
     `_meta.traceparent`. Mirrors TS host-mcp-apps' `requestContextOf().requestId` (used directly as the
     correlation id there too, after the removal of the former `correlationIdOf` helper — see that module's
     history). A W3C trace-id is shared by an entire trace, so deriving the correlation id from it would give
     every tool call in one conversation the SAME id, making it impossible to tell which call a reported
     failure belongs to; the JSON-RPC request id is unique per call. Trace correlation (linking this call's
-    OTel span to the caller's own trace) flows separately, only through `_trace_context_from_request_context`
-    below / McpErrorInfo.trace_context. Port note: see kohaku.host_core.trace_context's module docstring for
-    why this has no ComposeOptions sink yet, so this id is used only for this profile's own failure-path
-    observability hook (McpErrorInfo.correlation_id below). Fail-open: None when there is no live request
-    context.
+    OTel span to the caller's own trace) flows separately, only through `_trace_context_of` below /
+    McpErrorInfo.trace_context. Port note: see kohaku.host_core.trace_context's module docstring for why this
+    has no ComposeOptions sink yet, so this id is used only for this profile's own failure-path observability
+    hook (McpErrorInfo.correlation_id below). Fail-open: None when this call's `ctx.request_id` is unset (a
+    notification has none; every request this profile handles does).
     """
-    request_id, _meta = _mcp_request_meta()
-    return str(request_id) if request_id is not None else None
+    return str(ctx.request_id) if ctx.request_id is not None else None
 
 
-def _trace_context_from_request_context() -> TraceContext | None:
+def _trace_context_of(ctx: ServerRequestContext[Any, Any]) -> TraceContext | None:
     """The `_meta.traceparent` (+ `_meta.tracestate`, when present) as a TraceContext (kohaku.host_core's
     shared parse_trace_context, also used by kohaku.host_rest's `traceparent` request-header counterpart).
-    Same parity-gap pointer as `_correlation_id_from_request_context` above (see
+    `ctx.meta` is a `RequestParamsMeta` TypedDict (dict access, not attribute access — unlike the mcp SDK's
+    pre-2.x `meta` object). Same parity-gap pointer as `_correlation_id_of` above (see
     kohaku.host_core.trace_context's module docstring): used only for this profile's own failure-path
-    observability hook (McpErrorInfo.trace_context). Fail-open: None on a missing/malformed traceparent, or
-    no live request context."""
-    _request_id, meta = _mcp_request_meta()
+    observability hook (McpErrorInfo.trace_context). Fail-open: None on a missing/malformed traceparent, or no
+    `_meta` on this call."""
+    meta = ctx.meta
     if meta is None:
         return None
-    return parse_trace_context(getattr(meta, "traceparent", None), getattr(meta, "tracestate", None))
+    return parse_trace_context(meta.get("traceparent"), meta.get("tracestate"))
 
 
 def _with_locale_input(input_schema: dict[str, Any], tool_name: str) -> dict[str, Any]:
@@ -359,10 +331,10 @@ class McpHostDeps:
     (see `sales_api.mcp_http`, which calls it once), so a single `principal` here is the same identity for
     every caller — wire `resolve_principal` instead to resolve the caller's actual identity per tool call."""
     resolve_principal: (
-        Callable[[RequestContext[Any, Any, Any] | None], Principal | Awaitable[Principal]] | None
+        Callable[[ServerRequestContext[Any, Any]], Principal | Awaitable[Principal]] | None
     ) = None
-    """Resolves the principal for a single tool call (from that call's mcp SDK `RequestContext` — see
-    `_mcp_request_context`'s doc comment — or `None` when no live request context exists). Called once per
+    """Resolves the principal for a single tool call (from that call's mcp SDK `ServerRequestContext` —
+    always available: the mcp SDK hands every registered request handler its own `ctx`). Called once per
     tool call, inside the tool handler itself — before any of the following, all of which see the resolved
     result: `_issue_capability` (the principal the compose-issued capability is bound to),
     `SessionContext.principal` (read by `SemanticPort.normalize` / `ComposeContext.policyFor` / the fixation
@@ -415,7 +387,9 @@ class McpHostDeps:
     """Write side-effect declaration (optional). When unspecified, the response is only `{result}` (backward compatible)."""
 
 
-async def _principal_of(deps: McpHostDeps, fallback_principal: Principal) -> Principal:
+async def _principal_of(
+    deps: McpHostDeps, fallback_principal: Principal, ctx: ServerRequestContext[Any, Any]
+) -> Principal:
     """Resolves the principal for one tool call — see `McpHostDeps.resolve_principal`'s doc comment for the
     full fallback order and rationale. A raise from `deps.resolve_principal` is deliberately NOT caught here:
     it propagates out of the `await _principal_of(...)` call inside each handler's `_safe_tool`-wrapped body,
@@ -424,7 +398,7 @@ async def _principal_of(deps: McpHostDeps, fallback_principal: Principal) -> Pri
     """
     if deps.resolve_principal is None:
         return fallback_principal
-    result = deps.resolve_principal(_mcp_request_context())
+    result = deps.resolve_principal(ctx)
     if inspect.isawaitable(result):
         result = await result
     return result
@@ -481,18 +455,17 @@ def attach_kohaku_to_mcp_server(
     """
     try:
         import mcp.types as mcp_types
-        from mcp.server.lowlevel.helper_types import ReadResourceContents
     except ImportError as exc:  # pragma: no cover — guidance for environments without mcp installed
         raise RuntimeError(_MCP_MISSING_MESSAGE) from exc
 
     prefix = options.tool_prefix if options.tool_prefix is not None else "kohaku"
     fallback_principal = deps.principal if deps.principal is not None else _ANONYMOUS
 
-    async def _current_principal() -> Principal:
+    async def _current_principal(ctx: ServerRequestContext[Any, Any]) -> Principal:
         """Resolves the principal for THIS tool call (see `McpHostDeps.resolve_principal`'s doc comment for the
         full fallback order). Called once per tool call, inside each handler's own `_safe_tool`-wrapped body —
         never memoized across calls, since a shared `Server` (see `sales_api.mcp_http`) serves every session."""
-        return await _principal_of(deps, fallback_principal)
+        return await _principal_of(deps, fallback_principal, ctx)
 
     # Memoized deps.domain.list_operations() names (write-scope hardening; see _issue_capability). McpHostDeps
     # is frozen, so the cache lives here as a closure variable rather than on deps (unlike host_rest's
@@ -507,43 +480,39 @@ def attach_kohaku_to_mcp_server(
         return _allowed_actions_cache
 
     def _tool_error(message: str) -> Any:
-        """Turn a tool-handler failure into a structured tool error (isError) rather than an RPC exception."""
-        result = mcp_types.CallToolResult(
-            content=[mcp_types.TextContent(type="text", text=message)],
-            isError=True,
-        )
-        # MCP 2026-07-28 (SEP-2322) requires every result to carry resultType. An error is still a
-        # *complete* result (this profile never produces an MRTR "input_required" interim result) — see
-        # _safe_tool's doc comment. CallToolResult's pydantic model is extra="allow" (passthrough), so an
-        # SDK-v1 client round-trips this unknown field unmodified. model_copy(update=...) (rather than passing
-        # resultType as a constructor kwarg) keeps this mypy --strict clean: pydantic v2's dataclass_transform
-        # only types declared fields as constructor kwargs, even though extra="allow" accepts more at runtime.
-        return result.model_copy(update={"resultType": "complete"})
+        """Turn a tool-handler failure into a structured tool error (isError) rather than an RPC exception.
 
-    async def _safe_tool(endpoint: str, fn: Callable[[], Awaitable[Any]]) -> Any:
+        MCP 2026-07-28 (SEP-2322) requires every result to carry resultType; an error is still a *complete*
+        result (this profile never produces an MRTR "input_required" interim result — see _safe_tool's doc
+        comment). Unlike mcp 1.x, `CallToolResult.result_type` is a declared field defaulting to "complete",
+        so no post-hoc stamping is needed here any more.
+        """
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text=message)],
+            is_error=True,
+        )
+
+    async def _safe_tool(
+        endpoint: str, ctx: ServerRequestContext[Any, Any], fn: Callable[[], Awaitable[Any]]
+    ) -> Any:
         """Route a handler failure through the observation hook then convert it to a tool error (the success return value is unchanged).
 
         An arbitrary/untyped exception's message never reaches the caller (it may leak internals); a typed
         host error (kohaku.host_core.is_typed_host_error — SpecError/ComposeError/QueryRefError, or any
         exception carrying a string `code`) still has its own message pass through.
 
-        Also the single point where MCP 2026-07-28's required `resultType` field is stamped onto every
-        *successful* tool result this profile returns (every handler routes its return value through
-        _safe_tool, mirroring TS host-mcp-apps' safeTool), and where the tool call's request-id correlation id
-        (_correlation_id_from_request_context) is attached to a reported failure.
+        Also where the tool call's request-id correlation id (_correlation_id_of) and trace context
+        (_trace_context_of) — both read off this call's own `ctx` — are attached to a reported failure.
         """
         try:
-            result = await fn()
-            if isinstance(result, mcp_types.CallToolResult):
-                result = result.model_copy(update={"resultType": "complete"})
-            return result
+            return await fn()
         except Exception as exc:  # noqa: BLE001 — map to a tool error, symmetric with the REST surface's 400
             await _report_mcp_error(
                 deps,
                 endpoint,
                 exc,
-                correlation_id=_correlation_id_from_request_context(),
-                trace_context=_trace_context_from_request_context(),
+                correlation_id=_correlation_id_of(ctx),
+                trace_context=_trace_context_of(ctx),
             )
             message = str(exc) if is_typed_host_error(exc) else _TOOL_INTERNAL_ERROR_MESSAGE
             return _tool_error(message)
@@ -575,7 +544,7 @@ def attach_kohaku_to_mcp_server(
         # set) does not re-invoke domain.invoke for refs already resolved here.
         initial_data, preresolved_refs = await _preresolve_initial_data(result.spec, deps, principal)
         # The capability token is co-embedded in _meta for the same reason as INITIAL_DATA_META_KEY (see
-        # CAPABILITY_META_KEY's doc comment): structuredContent enters the model's context, so a bearer write
+        # CAPABILITY_META_KEY's doc comment): structured_content enters the model's context, so a bearer write
         # token must never ride there.
         meta: dict[str, Any] = {
             **tool_ui_meta(resource_uri=RENDERER_RESOURCE_URI),
@@ -598,8 +567,8 @@ def attach_kohaku_to_mcp_server(
                     mcp_types.EmbeddedResource(
                         type="resource",
                         resource=mcp_types.TextResourceContents(
-                            uri=cast(Any, f"ui://kohaku/view/{result.spec.intent.hash}"),
-                            mimeType="text/html",
+                            uri=f"ui://kohaku/view/{result.spec.intent.hash}",
+                            mime_type="text/html",
                             text=snapshot_html,
                         ),
                     )
@@ -609,23 +578,23 @@ def attach_kohaku_to_mcp_server(
         return mcp_types.CallToolResult(
             content=content,
             # capability is deliberately NOT included here (see CAPABILITY_META_KEY's doc comment):
-            # structuredContent is model-visible, and a bearer write token must never enter the model's context.
-            structuredContent={"spec": result.spec.to_wire()},
+            # structured_content is model-visible, and a bearer write token must never enter the model's context.
+            structured_content={"spec": result.spec.to_wire()},
             _meta=meta,
         )
 
     # --- Tool definitions (name -> Tool + handler) --------------------------
-    registered: list[tuple[Any, Callable[[JsonObject], Awaitable[Any]]]] = []
+    registered: list[tuple[Any, Callable[[ServerRequestContext[Any, Any], JsonObject], Awaitable[Any]]]] = []
 
     # model-visible: natural language -> UI
-    async def _handle_compose(args: JsonObject) -> Any:
+    async def _handle_compose(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
         async def _run() -> Any:
-            principal = await _current_principal()
+            principal = await _current_principal(ctx)
             return await _compose_and_package(
                 _NlSource(text=cast(str, args["question"])), _locale_of(args), principal
             )
 
-        return await _safe_tool(f"{prefix}_compose", _run)
+        return await _safe_tool(f"{prefix}_compose", ctx, _run)
 
     registered.append(
         (
@@ -636,7 +605,7 @@ def attach_kohaku_to_mcp_server(
                     "Converts a natural-language question into a normalized Intent and composes a declarative UI Spec. "
                     "The result includes both a text summary and a structured Spec for UI-capable hosts."
                 ),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "question": {
@@ -659,9 +628,9 @@ def attach_kohaku_to_mcp_server(
     if options.snapshot_writer is not None:
         snapshot_writer = options.snapshot_writer
 
-        async def _handle_render_snapshot(args: JsonObject) -> Any:
+        async def _handle_render_snapshot(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
             async def _run() -> Any:
-                principal = await _current_principal()
+                principal = await _current_principal(ctx)
                 spec, html = await _build_snapshot(
                     _NlSource(text=cast(str, args["question"])),
                     deps,
@@ -680,10 +649,10 @@ def attach_kohaku_to_mcp_server(
                 )
                 return mcp_types.CallToolResult(
                     content=[mcp_types.TextContent(type="text", text=text)],
-                    structuredContent={"path": locator, "spec": spec.to_wire()},
+                    structured_content={"path": locator, "spec": spec.to_wire()},
                 )
 
-            return await _safe_tool(f"{prefix}_render_snapshot", _run)
+            return await _safe_tool(f"{prefix}_render_snapshot", ctx, _run)
 
         registered.append(
             (
@@ -696,7 +665,7 @@ def attach_kohaku_to_mcp_server(
                         "use the returned URL's or local path's HTML directly for display (if the model builds its own "
                         "UI from the tool result, its rendering will diverge from the Web)."
                     ),
-                    inputSchema={
+                    input_schema={
                         "type": "object",
                         "properties": {
                             "question": {
@@ -722,7 +691,7 @@ def attach_kohaku_to_mcp_server(
                 mcp_types.Tool(
                     name=tool.name,
                     description=tool.description,
-                    inputSchema=_with_locale_input(tool.input_schema, tool.name),
+                    input_schema=_with_locale_input(tool.input_schema, tool.name),
                     _meta=tool_ui_meta(resource_uri=RENDERER_RESOURCE_URI, visibility=["model"]),
                 ),
                 _make_intent_handler(tool, _safe_tool, _compose_and_package, _current_principal),
@@ -730,11 +699,11 @@ def attach_kohaku_to_mcp_server(
         )
 
     # app-only: data resolution from the iframe (the landing point of reference-passing)
-    async def _handle_resolve_binding(args: JsonObject) -> Any:
+    async def _handle_resolve_binding(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
         async def _run() -> Any:
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
-            principal = await _current_principal()
+            principal = await _current_principal(ctx)
             # Server-side paging/sorting: verify the capability against base (reserved params removed) and merge
             # the reserved params into domain.invoke. Unknown `_` keys are rejected.
             split = split_reserved_params(cast(str, args["ref"]))
@@ -761,17 +730,17 @@ def attach_kohaku_to_mcp_server(
                         type="text", text=f"resolved {rows} rows from {split.base.raw}"
                     )
                 ],
-                structuredContent={"data": _to_wire_data(data)},
+                structured_content={"data": _to_wire_data(data)},
             )
 
-        return await _safe_tool(f"{prefix}_resolve_binding", _run)
+        return await _safe_tool(f"{prefix}_resolve_binding", ctx, _run)
 
     registered.append(
         (
             mcp_types.Tool(
                 name=f"{prefix}_resolve_binding",
                 description="(app-only) Resolves a Spec's $ref with a capability and returns bulk data",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "ref": {"type": "string"},
@@ -786,9 +755,9 @@ def attach_kohaku_to_mcp_server(
     )
 
     # app-only: component event -> Intent delta -> recompose
-    async def _handle_event(args: JsonObject) -> Any:
+    async def _handle_event(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
         async def _run() -> Any:
-            principal = await _current_principal()
+            principal = await _current_principal(ctx)
             intent_arg = cast(dict[str, Any], args["intent"])
             intent_params = cast(JsonObject, intent_arg["params"])
             payload = cast(JsonObject, args.get("payload", {}))
@@ -834,14 +803,14 @@ def attach_kohaku_to_mcp_server(
                 principal,
             )
 
-        return await _safe_tool(f"{prefix}_event", _run)
+        return await _safe_tool(f"{prefix}_event", ctx, _run)
 
     registered.append(
         (
             mcp_types.Tool(
                 name=f"{prefix}_event",
                 description="(app-only) Recomposes a component event as an Intent delta",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "intent": {
@@ -865,11 +834,11 @@ def attach_kohaku_to_mcp_server(
     )
 
     # app-only: direct write path (presentForm submit / action.button)
-    async def _handle_action(args: JsonObject) -> Any:
+    async def _handle_action(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
         async def _run() -> Any:
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
-            principal = await _current_principal()
+            principal = await _current_principal(ctx)
             action = cast(str, args["action"])
             capability = cast(str, args["capability"])
             payload = cast(JsonObject, args.get("payload", {}))
@@ -925,17 +894,17 @@ def attach_kohaku_to_mcp_server(
                 content=[
                     mcp_types.TextContent(type="text", text=f"Executed action {action}")
                 ],
-                structuredContent=structured,
+                structured_content=structured,
             )
 
-        return await _safe_tool(f"{prefix}_action", _run)
+        return await _safe_tool(f"{prefix}_action", ctx, _run)
 
     registered.append(
         (
             mcp_types.Tool(
                 name=f"{prefix}_action",
                 description="(app-only) Executes a declared action with a capability and returns a result with a side-effect declaration",
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "action": {"type": "string"},
@@ -950,92 +919,102 @@ def attach_kohaku_to_mcp_server(
         )
     )
 
-    by_name: dict[str, Callable[[JsonObject], Awaitable[Any]]] = {
+    by_name: dict[str, Callable[[ServerRequestContext[Any, Any], JsonObject], Awaitable[Any]]] = {
         tool_def.name: handler for tool_def, handler in registered
     }
     tools_list: list[Any] = [tool_def for tool_def, _ in registered]
 
     # --- Register handlers on the low-level Server --------------------------
-    # The mcp SDK's registration decorators are untyped (returning an untyped callback), so call them through Any
-    # (the boundary's public signature keeps server: Server).
-    srv: Any = server
+    # `add_request_handler` replaces mcp 1.x's decorator-based registration (Server.list_tools() /
+    # call_tool() / list_resources() / read_resource()): each handler is `async (ctx, params) -> result`,
+    # validated against `params_type` before being invoked, and `Server.get_capabilities()` derives
+    # ServerCapabilities from whichever methods are registered (unchanged from 1.x's decorator-derived
+    # capabilities — see NotificationOptions).
 
-    @srv.list_tools()  # type: ignore[untyped-decorator]  # the mcp SDK's registration decorators are untyped
-    async def _list_tools() -> Any:
-        # MCP 2026-07-28 (SEP-2549): tools/list must carry ttlMs + cacheScope (CacheableResult). This mcp SDK
-        # version's list_tools() decorator accepts a full ListToolsResult return ("new style", alongside the
-        # legacy bare list[Tool]) and ListToolsResult's pydantic model is extra="allow", so this is a small,
-        # additive change here — unlike the TS profile's McpServer, which exposes no equivalent post-hoc hook
-        # for tools/list (see server.ts's item-5 doc comment / design.md's migration-plan section for why the
+    async def _list_tools(
+        _ctx: ServerRequestContext[Any, Any], _params: mcp_types.PaginatedRequestParams | None
+    ) -> mcp_types.ListToolsResult:
+        # MCP 2026-07-28 (SEP-2549): tools/list must carry ttl_ms + cache_scope (CacheableResult, now a
+        # declared base of ListToolsResult) — no post-hoc model_copy needed, unlike mcp 1.x (see this
+        # module's git history) or the TS profile's McpServer, which exposes no equivalent hook for
+        # tools/list (see server.ts's item-5 doc comment / design.md's migration-plan section for why the
         # same enhancement was skipped there). tools_list is registration order (deterministic; see the
-        # "MCP 2026-07-28 minor #3" test). model_copy(update=...) rather than constructor kwargs for the same
-        # mypy --strict reason as _tool_error's doc comment above.
-        return mcp_types.ListToolsResult(tools=tools_list).model_copy(
-            update={"ttlMs": _LIST_RESULT_TTL_MS, "cacheScope": _LIST_RESULT_CACHE_SCOPE}
+        # "MCP 2026-07-28 minor #3" test).
+        return mcp_types.ListToolsResult(
+            tools=tools_list, ttl_ms=_CACHEABLE_RESULT_TTL_MS, cache_scope=_CACHEABLE_RESULT_CACHE_SCOPE
         )
 
     # NOTE on tool-call cancellation (parity gap with the TS profile's `extra.signal`, tracked deliberately
-    # rather than papered over): the installed mcp SDK's low-level Server exposes no per-call cancellation
-    # object on RequestContext (see mcp.shared.context.RequestContext — no `signal` / `cancel_event` field as
-    # of this SDK version) for a tool handler to check or thread into compose()'s `abort` parameter (which
-    # already exists on this Python port — see ComposeFixationContext.abort in kohaku.host_core.fixation).
-    # Cancellation instead happens structurally: a client's CancelledNotification cancels the anyio task group
-    # running this request (server.py's `tg.cancel_scope.cancel()`), which raises inside whichever `await` this
-    # coroutine (and anything it awaits — domain.invoke, the LLM call) happens to be suspended at, unwinding the
-    # call without ever reaching a return. That already stops wasted work on a cancelled call without any
-    # explicit signal-threading here; there is simply no separate AbortSignal-like object to pass to
-    # composeWithFixation the way the TS profile's `extra.signal` is threaded through. If a future mcp SDK
-    # version adds a per-request cancellation token to RequestContext, thread it into `_compose_with_fixation`'s
-    # `ComposeFixationContext(materialize=deps.compose, abort=...)` the same way the TS `abort` parameter is used.
-    @srv.call_tool()  # type: ignore[untyped-decorator]
-    async def _call_tool(name: str, arguments: JsonObject) -> Any:
-        handler = by_name.get(name)
+    # rather than papered over): the installed mcp SDK's `ServerRequestContext` (handed to every request
+    # handler) exposes no per-call cancellation object for a tool handler to check or thread into compose()'s
+    # `abort` parameter (which already exists on this Python port — see ComposeFixationContext.abort in
+    # kohaku.host_core.fixation); only the richer `mcp.server.context.Context` — which the runner does not
+    # construct for lowlevel handlers — carries one. Cancellation instead happens structurally: this SDK's
+    # request dispatcher applies a client's `notifications/cancelled` by cancelling the task running this
+    # request (the default "interrupt" mode — see `mcp.shared.jsonrpc_dispatcher`), which raises inside
+    # whichever `await` this coroutine (and anything it awaits — domain.invoke, the LLM call) happens to be
+    # suspended at, unwinding the call without ever reaching a return. That already stops wasted work on a
+    # cancelled call without any explicit signal-threading here; there is simply no separate AbortSignal-like
+    # object to pass to composeWithFixation the way the TS profile's `extra.signal` is threaded through. If a
+    # future mcp SDK version adds a per-request cancellation token to `ServerRequestContext`, thread it into
+    # `_compose_with_fixation`'s `ComposeFixationContext(materialize=deps.compose, abort=...)` the same way
+    # the TS `abort` parameter is used.
+    async def _call_tool(
+        ctx: ServerRequestContext[Any, Any], params: mcp_types.CallToolRequestParams
+    ) -> Any:
+        handler = by_name.get(params.name)
         if handler is None:
-            return _tool_error(f'unknown tool "{name}"')
-        return await handler(arguments)
+            return _tool_error(f'unknown tool "{params.name}"')
+        return await handler(ctx, params.arguments or {})
 
-    @srv.list_resources()  # type: ignore[untyped-decorator]
-    async def _list_resources() -> Any:
-        # MCP 2026-07-28 (SEP-2549): resources/list must also carry ttlMs + cacheScope. Same "new style"
-        # full-ListResourcesResult return as _list_tools above (Server.list_resources's decorator supports
-        # it too) — see that function's doc comment for why this is safe/small here but was skipped in TS.
-        result = mcp_types.ListResourcesResult(
+    async def _list_resources(
+        _ctx: ServerRequestContext[Any, Any], _params: mcp_types.PaginatedRequestParams | None
+    ) -> mcp_types.ListResourcesResult:
+        # MCP 2026-07-28 (SEP-2549): resources/list must also carry ttl_ms + cache_scope. Same declared
+        # CacheableResult base as _list_tools above.
+        return mcp_types.ListResourcesResult(
             resources=[
                 mcp_types.Resource(
-                    uri=cast(Any, RENDERER_RESOURCE_URI),
+                    uri=RENDERER_RESOURCE_URI,
                     name="kohaku-renderer",
                     title="kohaku shared renderer",
                     description="Shared renderer that renders the UI Spec with the same rendering code as the Web",
-                    mimeType=RESOURCE_MIME_TYPE,
+                    mime_type=RESOURCE_MIME_TYPE,
                     # Resource-side UI metadata (SEP-1865). Explicitly declares csp as an empty allowlist to tell the host
                     # "no external origins needed" (symmetric with the TS registerResource).
                     _meta=resource_ui_meta(),
                 )
             ],
-        )
-        # model_copy(update=...) rather than constructor kwargs — see _tool_error's doc comment.
-        return result.model_copy(
-            update={"ttlMs": _LIST_RESULT_TTL_MS, "cacheScope": _LIST_RESULT_CACHE_SCOPE}
+            ttl_ms=_CACHEABLE_RESULT_TTL_MS,
+            cache_scope=_CACHEABLE_RESULT_CACHE_SCOPE,
         )
 
-    @srv.read_resource()  # type: ignore[untyped-decorator]
-    async def _read_resource(uri: Any) -> Any:
-        # NOTE: resources/read is NOT given ttlMs/cacheScope (unlike _list_tools / _list_resources above):
-        # this mcp SDK version's read_resource() decorator (see mcp.server.lowlevel.server.Server.read_resource)
-        # always builds its own ReadResourceResult from the Iterable[ReadResourceContents] this function
-        # returns and offers no "new style" full-ReadResourceResult return path the way list_tools /
-        # list_resources do, so there is no small, non-fragile hook to attach top-level result fields here.
-        # Deferred to the SDK v2 migration (mcp 2.x's MCPServer) — see design.md's migration-plan section.
-        if str(uri).rstrip("/") != RENDERER_RESOURCE_URI:
-            raise ValueError(f"unknown resource: {uri}")
+    async def _read_resource(
+        _ctx: ServerRequestContext[Any, Any], params: mcp_types.ReadResourceRequestParams
+    ) -> mcp_types.ReadResourceResult:
+        # resources/read is now (mcp 2.x) also CacheableResult-based (ReadResourceResult inherits it, unlike
+        # 1.x — the ttl_ms/cache_scope asymmetry with tools/list / resources/list this module used to carry a
+        # NOTE about is closed), and the handler builds the full result type directly rather than returning an
+        # Iterable[ReadResourceContents] for the SDK to wrap (that 1.x helper type is gone).
+        if params.uri.rstrip("/") != RENDERER_RESOURCE_URI:
+            raise ValueError(f"unknown resource: {params.uri}")
         html = await _get_renderer_html(options)
-        # The contents-side `_meta.ui` takes precedence over the listing side (SEP-1865). Put the same value on both
-        # (ReadResourceContents.meta is mapped by the lowlevel server into the `_meta` key).
-        return [
-            ReadResourceContents(
-                content=html, mime_type=RESOURCE_MIME_TYPE, meta=resource_ui_meta()
-            )
-        ]
+        # The contents-side `_meta.ui` takes precedence over the listing side (SEP-1865). Put the same value
+        # on both.
+        return mcp_types.ReadResourceResult(
+            contents=[
+                mcp_types.TextResourceContents(
+                    uri=RENDERER_RESOURCE_URI, mime_type=RESOURCE_MIME_TYPE, text=html, _meta=resource_ui_meta()
+                )
+            ],
+            ttl_ms=_CACHEABLE_RESULT_TTL_MS,
+            cache_scope=_CACHEABLE_RESULT_CACHE_SCOPE,
+        )
+
+    server.add_request_handler("tools/list", mcp_types.PaginatedRequestParams, _list_tools)
+    server.add_request_handler("tools/call", mcp_types.CallToolRequestParams, _call_tool)
+    server.add_request_handler("resources/list", mcp_types.PaginatedRequestParams, _list_resources)
+    server.add_request_handler("resources/read", mcp_types.ReadResourceRequestParams, _read_resource)
 
 
 # ---------------------------------------------------------------------------
@@ -1538,22 +1517,22 @@ def _to_wire_data(data: object) -> Any:
 
 def _make_intent_handler(
     tool: IntentToolDef,
-    safe_tool: Callable[[str, Callable[[], Awaitable[Any]]], Awaitable[Any]],
+    safe_tool: Callable[[str, ServerRequestContext[Any, Any], Callable[[], Awaitable[Any]]], Awaitable[Any]],
     compose_and_package: Callable[[_ComposeSource, str | None, Principal], Awaitable[Any]],
-    current_principal: Callable[[], Awaitable[Principal]],
-) -> Callable[[JsonObject], Awaitable[Any]]:
+    current_principal: Callable[[ServerRequestContext[Any, Any]], Awaitable[Principal]],
+) -> Callable[[ServerRequestContext[Any, Any], JsonObject], Awaitable[Any]]:
     """Build the handler for an intent tool (avoids late binding of the loop variable tool)."""
 
-    async def handler(args: JsonObject) -> Any:
+    async def handler(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
         # Pull the shared language input out before it reaches the intent params (ObjectSchema.parse
         # would silently strip it anyway, but the canonical intent must never see it).
         locale = _locale_of(args)
         params = {key: value for key, value in args.items() if key != "locale"}
 
         async def _run() -> Any:
-            principal = await current_principal()
+            principal = await current_principal(ctx)
             return await compose_and_package(_IntentSource(intent=tool.to_intent(params)), locale, principal)
 
-        return await safe_tool(tool.name, _run)
+        return await safe_tool(tool.name, ctx, _run)
 
     return handler

@@ -38,6 +38,7 @@ from ._helpers import (
     _fixed_source,
     connect,
     make_compose_ctx,
+    request_meta,
     trend_spec_builder,
 )
 
@@ -125,10 +126,11 @@ class _RecordingAuthz:
 
 def _meta_principal_resolver(*, sync: bool) -> Any:
     """A resolve_principal reading `_meta.principal` off the request context (falls back to "anon" when
-    absent) — the plan's exact shape (`getattr(ctx.meta, "principal", None)`), in both sync and async form."""
+    absent), in both sync and async form. `ctx.meta` is a `RequestParamsMeta` TypedDict (mcp 2.x) — dict
+    access, not the pre-2.x `getattr(ctx.meta, "principal", None)` attribute access."""
 
     def _resolve(ctx: Any) -> Principal:
-        principal_id = getattr(ctx.meta, "principal", None) if ctx is not None else None
+        principal_id = (ctx.meta or {}).get("principal") if ctx is not None else None
         return Principal(id=str(principal_id) if principal_id is not None else "anon")
 
     if sync:
@@ -156,13 +158,13 @@ class TestPerCallPrincipalResolution:
             )
             async with connect(deps, _OPTIONS) as client:
                 alice = await client.call_tool(
-                    "kohaku_compose", {"question": "Monthly sales trend"}, meta={"principal": "alice"}
+                    "kohaku_compose", {"question": "Monthly sales trend"}, meta=request_meta(principal="alice")
                 )
-                assert not alice.isError
+                assert not alice.is_error
                 bob = await client.call_tool(
-                    "kohaku_compose", {"question": "Monthly sales trend"}, meta={"principal": "bob"}
+                    "kohaku_compose", {"question": "Monthly sales trend"}, meta=request_meta(principal="bob")
                 )
-                assert not bob.isError
+                assert not bob.is_error
 
             assert authz.issued_for == ["alice", "bob"]
             assert domain.principals == ["alice", "bob"]
@@ -185,9 +187,9 @@ class TestPerCallPrincipalResolution:
                 result = await client.call_tool(
                     "kohaku_resolve_binding",
                     {"ref": TREND_REF, "capability": "cap"},
-                    meta={"principal": "alice"},
+                    meta=request_meta(principal="alice"),
                 )
-                assert not result.isError
+                assert not result.is_error
 
             assert domain.principals == ["alice"]
 
@@ -209,9 +211,9 @@ class TestPerCallPrincipalResolution:
                 result = await client.call_tool(
                     "kohaku_action",
                     {"action": "annotate", "payload": {}, "capability": "cap"},
-                    meta={"principal": "bob"},
+                    meta=request_meta(principal="bob"),
                 )
-                assert not result.isError
+                assert not result.is_error
 
             assert domain.principals == ["bob"]
 
@@ -236,9 +238,9 @@ class TestPerCallPrincipalResolution:
                         "on": "c.pointClick",
                         "payload": {},
                     },
-                    meta={"principal": "carol"},
+                    meta=request_meta(principal="carol"),
                 )
-                assert not result.isError
+                assert not result.is_error
 
             assert sessions[0].surface == "mcp-app"
             assert sessions[0].principal is not None
@@ -264,7 +266,7 @@ class TestFallbackOrder:
             )
             async with connect(deps, _OPTIONS) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
-                assert not result.isError
+                assert not result.is_error
 
             assert authz.issued_for == ["mcp-user"]
 
@@ -284,7 +286,7 @@ class TestFallbackOrder:
             )
             async with connect(deps, _OPTIONS) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
-                assert not result.isError
+                assert not result.is_error
 
             assert authz.issued_for == ["svc-account"]
 
@@ -328,7 +330,7 @@ class TestFailClosed:
             async with connect(deps, _OPTIONS) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
 
-            assert result.isError is True
+            assert result.is_error is True
             # A plain (untyped) raised exception never echoes its own message back to the caller
             # (kohaku.host_core.is_typed_host_error) — same rule as every other _safe_tool-caught failure.
             text = result.content[0].text  # type: ignore[union-attr]

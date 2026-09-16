@@ -13,10 +13,12 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from mcp.server import NotificationOptions
 
 from sales_api.fake_llm import create_deterministic_fake_llm
-from sales_api.mcp_http import _serve_snapshot_body, parse_allowed_hosts
+from sales_api.mcp_http import _serve_snapshot_body, build_starlette_app, parse_allowed_hosts
 from sales_api.mcp_setup import (
+    KohakuMcpSetup,
     create_kohaku_mcp_setup,
     make_renderer_html_loader,
     make_snapshot_locator,
@@ -99,6 +101,14 @@ class TestSetupSmoke:
         assert server is not None
         # Multiple Servers can be created from the same setup (equivalent to HTTP sessions).
         assert setup.create_server() is not None
+        # mcp 2.x's `Server.add_request_handler`-based attach (server.py's low-level registration) must still
+        # leave `get_capabilities()` able to see tools/list and resources/list as registered — the one gray
+        # area this attach style has (registering spec methods via the same API custom/extension methods use;
+        # see attach_kohaku_to_mcp_server's risk note) is pinned here so a future SDK change that stops
+        # deriving capabilities from `_request_handlers` fails this test rather than silently under-advertising.
+        capabilities = server.get_capabilities(NotificationOptions(), {})
+        assert capabilities.tools is not None
+        assert capabilities.resources is not None
 
     def test_data_dir_falls_back_to_kohaku_data_dir_env_var(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -121,3 +131,58 @@ class TestSetupSmoke:
             create_kohaku_mcp_setup(llm=create_deterministic_fake_llm(), data_dir=arg_dir)
         )
         assert setup.data_dir == arg_dir
+
+
+class TestBuildStarletteApp:
+    """Constructs the Streamable HTTP ASGI app in-process (via Starlette's TestClient, no real socket) rather
+    than starting mcp_http.main()'s uvicorn server — pins that `build_starlette_app` (mcp 2.x's
+    `Server.streamable_http_app(...)` plus the custom snapshot route and CORS middleware layered on
+    afterward, see mcp_http.py's doc comment) actually serves both the MCP wire and the snapshot route."""
+
+    @staticmethod
+    def _setup(tmp_path: Path) -> KohakuMcpSetup:
+        return asyncio.run(
+            create_kohaku_mcp_setup(llm=create_deterministic_fake_llm(), data_dir=tmp_path)
+        )
+
+    def test_snapshot_route_is_reachable_alongside_the_mcp_route(self, tmp_path: Path) -> None:
+        from starlette.testclient import TestClient
+
+        setup = self._setup(tmp_path)
+        app = build_starlette_app(setup, allowed_hosts=None, host="127.0.0.1")
+        with TestClient(app) as client:
+            # The custom_starlette_routes snapshot route and the SDK-built /mcp route coexist on one app.
+            missing = client.get("/snapshots/does-not-exist.html")
+            assert missing.status_code == 404
+
+            init = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "test-mcp-setup", "version": "0"},
+                    },
+                },
+                headers={"Accept": "application/json, text/event-stream"},
+            )
+            assert init.status_code == 200
+            assert '"protocolVersion":"2025-06-18"' in init.text
+
+    def test_cors_headers_are_present_on_the_mcp_route(self, tmp_path: Path) -> None:
+        from starlette.testclient import TestClient
+
+        setup = self._setup(tmp_path)
+        app = build_starlette_app(setup, allowed_hosts=None, host="127.0.0.1")
+        with TestClient(app) as client:
+            preflight = client.options(
+                "/mcp",
+                headers={
+                    "Origin": "https://claude.ai",
+                    "Access-Control-Request-Method": "POST",
+                },
+            )
+            assert preflight.headers.get("access-control-allow-origin") == "*"

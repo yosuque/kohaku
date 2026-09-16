@@ -145,9 +145,9 @@ class TestIntentToolRegistrationAndRouting:
                         "visibility": ["model"],
                     }
 
-                # inputSchema reflects the zod-equivalent enum / default.
+                # input_schema reflects the zod-equivalent enum / default.
                 summary = by_name["sales_quarterly_summary"]
-                schema_props = summary.inputSchema["properties"]
+                schema_props = summary.input_schema["properties"]
                 assert schema_props["groupBy"]["enum"] == ["region", "product", "channel"]
                 assert schema_props["fiscalYear"]["default"] == 2026
 
@@ -188,8 +188,8 @@ class TestIntentToolRegistrationAndRouting:
             )
             async with connect(_intent_deps(tmp_path), options) as client:
                 result = await client.call_tool("sales_kpi_overview", {})
-                assert not result.isError
-                structured = result.structuredContent
+                assert not result.is_error
+                structured = result.structured_content
                 assert structured is not None
                 spec = parse_spec(structured["spec"])
                 # toMcpToolName changes the name, but the Intent arrives with canonical unchanged.

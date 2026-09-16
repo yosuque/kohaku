@@ -9,11 +9,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from mcp.client.session import ClientSession
-from mcp.server.lowlevel import Server
-from mcp.shared.memory import create_connected_server_and_client_session
+from mcp import Client
+from mcp.server import Server
+from mcp_types import RequestParamsMeta
 
 from kohaku.composer import ComposeContext, ComposePolicy
 from kohaku.host_mcp import AttachOptions, McpHostDeps, attach_kohaku_to_mcp_server
@@ -216,12 +216,32 @@ def make_no_fixed_compose_ctx(
 
 
 @asynccontextmanager
-async def connect(deps: McpHostDeps, options: AttachOptions) -> AsyncIterator[ClientSession]:
-    """Connect an in-process client to the attached low-level Server and yield it."""
+async def connect(
+    deps: McpHostDeps, options: AttachOptions, *, mode: str = "legacy"
+) -> AsyncIterator[Client]:
+    """Connect an in-process client to the attached low-level Server and yield it.
+
+    mcp 2.x removed `mcp.shared.memory.create_connected_server_and_client_session`; `mcp.Client` now accepts a
+    low-level `Server` instance directly and connects to it in-process (no real transport). `mode="legacy"`
+    (the default here) drives the handshake-era `initialize` flow over an in-memory transport, byte-identical
+    to the pre-2.x behavior this test suite was written against; `mode="2026-07-28"` instead dispatches
+    directly (`DirectDispatcher`, no JSON-RPC framing) for tests that specifically exercise the modern wire.
+    `cache=None` disables the client's default response cache (SEP-2549) so a scripted `list_tools()` call
+    count in a test is not silently short-circuited by a cache hit.
+    """
     server = Server("kohaku-host-mcp-test")
     attach_kohaku_to_mcp_server(server, deps, options)
-    async with create_connected_server_and_client_session(server) as client:
+    async with Client(server, mode=cast(Any, mode), cache=None) as client:
         yield client
+
+
+def request_meta(**kwargs: Any) -> RequestParamsMeta:
+    """Build a `RequestParamsMeta` (the `_meta` TypedDict mcp 2.x's `Client.call_tool(..., meta=...)` takes)
+    from keyword arguments (e.g. `request_meta(traceparent=..., tracestate=...)`). A plain dict literal at a
+    call site works fine at runtime (`RequestParamsMeta` is `extra_items=Any`), but mypy does not yet model
+    PEP 728's `extra_items` for a `TypedDict` literal, so a `{"traceparent": ...}` dict literal passed directly
+    as the `meta=` argument is flagged `call-overload`; this `cast` wrapper is the single place that absorbs it."""
+    return cast(RequestParamsMeta, kwargs)
 
 
 RENDERER_HTML_PLAIN = "<!DOCTYPE html><html><body>renderer</body></html>"

@@ -107,7 +107,7 @@ _OPTIONS = AttachOptions(renderer_html=RENDERER_HTML_PLAIN)
 
 
 def _heading_of(result: Any) -> str:
-    spec = parse_spec(result.structuredContent["spec"])
+    spec = parse_spec(result.structured_content["spec"])
     for component in spec.components:
         if component.type == "text.heading":
             return str((component.props or {}).get("text", ""))
@@ -161,10 +161,10 @@ class TestIntentToolLocale:
                 assert _heading_of(result) == "月次売上の推移"
                 # The reserved argument must not pollute the canonical intent params.
                 assert captured[0] == {"metric": "revenue"}
-                # The declared inputSchema advertises the shared locale property.
+                # The declared input_schema advertises the shared locale property.
                 tools = (await client.list_tools()).tools
                 trend = next(t for t in tools if t.name == "sales_trend")
-                assert "locale" in trend.inputSchema["properties"]
+                assert "locale" in trend.input_schema["properties"]
 
         asyncio.run(run())
 
