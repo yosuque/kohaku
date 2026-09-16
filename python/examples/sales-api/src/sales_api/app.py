@@ -20,7 +20,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from kohaku.composer import (
     ComposeBudget,
@@ -64,6 +64,7 @@ from kohaku.registry import Catalog, ResolvedCatalog, core_catalog, resolve_cata
 from kohaku.spec import (
     AuthzPort,
     FixationRecord,
+    Intent,
     InvocationContext,
     JsonObject,
     LineageEventRecord,
@@ -454,8 +455,17 @@ async def create_app(
     # Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
     # to the deterministic fallback on expiry rather than hanging indefinitely behind a slow/hung LLM call.
     compose_budget = ComposeBudget(deadline_ms=_compose_deadline_ms())
+    # allowL2 is on by default (matches the TS sample's unconditional allowL2: true) -- KOHAKU_ALLOW_L2=0 is
+    # an opt-out for this Python sample only, not a TS-parity flag.
+    allow_l2 = os.environ.get("KOHAKU_ALLOW_L2", "1") != "0"
+
+    def route_tier(intent: Intent) -> Literal["L1", "L2"] | None:
+        # Free-form requests (sales.custom) skip L1 and go directly to L2, matching TS sample-api's routeTier.
+        return "L2" if intent.canonical == "sales.custom" else None
+
     policy_en = ComposePolicy(
-        allowL2=os.environ.get("KOHAKU_ALLOW_L2", "") == "1",
+        allowL2=allow_l2,
+        routeTier=route_tier,
         budget=compose_budget,
         # The standard views are L0 fixed Specs (do not pass through the LLM). "App UI = the solidified form of L1".
         fixedSpecs=create_fixed_specs(),
@@ -476,6 +486,7 @@ async def create_app(
     )
     policy_ja = ComposePolicy(
         allowL2=policy_en.allowL2,
+        routeTier=route_tier,
         budget=compose_budget,
         fixedSpecs=create_fixed_specs("ja"),
         designSystem=SALES_DESIGN_SYSTEM,

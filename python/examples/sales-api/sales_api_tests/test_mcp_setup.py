@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from sales_api.fake_llm import create_deterministic_fake_llm
 from sales_api.mcp_http import _serve_snapshot_body, parse_allowed_hosts
 from sales_api.mcp_setup import (
@@ -97,3 +99,25 @@ class TestSetupSmoke:
         assert server is not None
         # Multiple Servers can be created from the same setup (equivalent to HTTP sessions).
         assert setup.create_server() is not None
+
+    def test_data_dir_falls_back_to_kohaku_data_dir_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Mirrors __main__.py's REST-side handling and TS sample-api's: KOHAKU_DATA_DIR overrides the
+        # persistence directory when no explicit data_dir argument is given (e.g. a mktemp'd directory
+        # for CI/conformance runs so they never touch the checked-out repo's local demo state).
+        monkeypatch.setenv("KOHAKU_DATA_DIR", str(tmp_path))
+        setup = asyncio.run(create_kohaku_mcp_setup(llm=create_deterministic_fake_llm()))
+        assert setup.data_dir == tmp_path
+        assert setup.snapshot_dir == tmp_path / "snapshots"
+
+    def test_explicit_data_dir_wins_over_kohaku_data_dir_env_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env_dir = tmp_path / "from-env"
+        arg_dir = tmp_path / "from-arg"
+        monkeypatch.setenv("KOHAKU_DATA_DIR", str(env_dir))
+        setup = asyncio.run(
+            create_kohaku_mcp_setup(llm=create_deterministic_fake_llm(), data_dir=arg_dir)
+        )
+        assert setup.data_dir == arg_dir

@@ -119,7 +119,10 @@ async def create_kohaku_mcp_setup(
         from .__main__ import _create_llm
 
         llm = _create_llm()
-    resolved_data_dir = data_dir if data_dir is not None else _DEFAULT_DATA_DIR
+    # KOHAKU_DATA_DIR overrides the persistence directory (mirrors __main__.py's REST-side handling and
+    # TS sample-api's; e.g. a mktemp'd directory for CI/conformance runs so they never touch the checked-out
+    # repo's local demo state). An explicit data_dir argument still wins over the environment variable.
+    resolved_data_dir = data_dir if data_dir is not None else Path(os.environ.get("KOHAKU_DATA_DIR", _DEFAULT_DATA_DIR))
     storage = FileStoragePort(resolved_data_dir)
     authz = create_hmac_authz_port(
         os.environ.get("KOHAKU_CAPABILITY_SECRET", "dev-secret-change-me")

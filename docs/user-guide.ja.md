@@ -82,7 +82,7 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
   ```
 
 - MCP サーバーは stdio(`uv run python -m sales_api.mcp_main`。Claude Desktop 等)と Streamable HTTP(`uv run python -m sales_api.mcp_http`、:8791。claude.ai / ChatGPT へは公開トンネル経由・認証なしデモ)の 2 エントリ。`ui://` リソースは TS 側ビルドの共有レンダラーを配信します(未ビルドならプレースホルダ。先に `pnpm --filter @kohaku-ui-sample/mcp build:renderer`)。TS サンプルと同じく固定化短絡・lineage 記録・書き込み副作用宣言・`KOHAKU_MCP_LEGACY_UI=1` の opt-in も配線済みです。
-- 永続化ディレクトリは環境変数 `KOHAKU_DATA_DIR`(Python サンプルのみ対応)で差し替えられます。セットアップ・検証・TS との既知の差異は [../python/README.ja.md](../python/README.ja.md) を参照してください。
+- 永続化ディレクトリは環境変数 `KOHAKU_DATA_DIR` で差し替えられます: TS sample-api、Python の両エントリ(REST・MCP〈stdio + Streamable HTTP〉)がすべて対応しています。唯一の例外は `sample-mcp`(TS)で、常に `apps/sample-api/.data` 相対の固定パスを使い、この変数を読みません。セットアップ・検証・TS との既知の差異は [../python/README.ja.md](../python/README.ja.md) を参照してください。
 
 ## 3. 画面の歩き方
 
@@ -515,7 +515,7 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
 | レート制限(429)・一時的な 5xx で即失敗する | PROVIDER 障害は既定で 2 回まで指数バックオフ再試行する(`KOHAKU_LLM_RETRY_MAX`。`KOHAKU_LLM_TIMEOUT_MS` の予算内)。攻めるなら回数・初期待機(`KOHAKU_LLM_RETRY_INITIAL_MS`)を上げる。`0` で無効化 |
 | MCP で UI が出ずテキストだけ | それ自体は仕様(フォールバック)。UI を出すには renderer の事前ビルドと MCP Apps 対応ホストが必要 |
 | MCP でカスタム部品が「未実装の部品タイプ」/「sandbox レンダラーの注入が必要」の通知になる | 仕様(§5 の表示の非対称)。MCP の共有レンダラーはコア部品のみ登録で sandbox 未注入。完全表示は Web で確認 |
-| ポート競合(8787 / 5173) | 既存プロセスを停止するか `PORT` を変更(sample-web / sample-wc の Vite 開発プロキシは `PORT` に自動追従します)。API が `localhost` 以外のホストで動く場合は `KOHAKU_API_URL`(例: `http://localhost:9000`)を直接設定してください — プロキシ先の決定では `PORT` より優先されます |
+| ポート競合(8787 / 5173) | 既存プロセスを停止するか `PORT` を変更(sample-web / sample-wc の Vite 開発プロキシは `.env` でもシェルでも読み取り — どちらでも可 — `PORT` に自動追従します)。API が `localhost` 以外のホストで動く場合は `KOHAKU_API_URL`(例: `http://localhost:9000`)を直接設定してください — プロキシ先の決定では `PORT` より優先されます |
 
 ## 9. FAQ
 

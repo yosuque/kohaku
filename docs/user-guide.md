@@ -82,7 +82,7 @@ uv run python -m sales_api          # Python sample REST host (:8790; the defaul
   ```
 
 - The MCP server has two entry points: stdio (`uv run python -m sales_api.mcp_main`; Claude Desktop, etc.) and Streamable HTTP (`uv run python -m sales_api.mcp_http`, :8791; for claude.ai / ChatGPT, via a public tunnel, no-auth demo). The `ui://` resource serves the shared renderer built on the TS side (a placeholder if not yet built; run `pnpm --filter @kohaku-ui-sample/mcp build:renderer` first). Just like the TS sample, the fixation short-circuit, lineage recording, write side-effect declaration, and the `KOHAKU_MCP_LEGACY_UI=1` opt-in are all wired up.
-- The persistence directory can be swapped via the environment variable `KOHAKU_DATA_DIR` (supported only in the Python sample). For setup, verification, and known differences from TS, see [../python/README.md](../python/README.md).
+- The persistence directory can be swapped via the environment variable `KOHAKU_DATA_DIR`: TS sample-api and both Python entry points (REST and MCP, stdio + Streamable HTTP) all read it. `sample-mcp` (TS) is the one exception — it always uses a fixed path relative to `apps/sample-api/.data` and does not read this variable. For setup, verification, and known differences from TS, see [../python/README.md](../python/README.md).
 
 ## 3. Walking through the screens
 
@@ -515,7 +515,7 @@ Wire your product's `ComposeContext` into the generated `golden.test.ts`'s `make
 | Immediate failure on rate limit (429) / transient 5xx | PROVIDER faults are retried with exponential backoff up to 2 times by default (`KOHAKU_LLM_RETRY_MAX`; within the `KOHAKU_LLM_TIMEOUT_MS` budget). To be aggressive, raise the count and the initial wait (`KOHAKU_LLM_RETRY_INITIAL_MS`). Disable with `0` |
 | MCP shows only text, no UI | That itself is by design (fallback). To show UI, a pre-built renderer and an MCP Apps-capable host are needed |
 | An MCP custom part becomes an "unimplemented part type" / "the sandbox renderer needs to be injected" notice | By design (the display asymmetry in §5). The MCP shared renderer registers only core parts and does not inject the sandbox. Check the full display on the Web |
-| Port conflict (8787 / 5173) | Stop the existing process, or change `PORT` (sample-web/sample-wc's Vite dev proxy follows `PORT` automatically). If the API runs on a different host than `localhost`, set `KOHAKU_API_URL` (e.g. `http://localhost:9000`) instead — it takes priority over `PORT` for the proxy target |
+| Port conflict (8787 / 5173) | Stop the existing process, or change `PORT` (sample-web/sample-wc's Vite dev proxy reads it from `.env` or the shell — either works — and follows it automatically). If the API runs on a different host than `localhost`, set `KOHAKU_API_URL` (e.g. `http://localhost:9000`) instead — it takes priority over `PORT` for the proxy target |
 
 ## 9. FAQ
 
