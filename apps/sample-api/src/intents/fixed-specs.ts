@@ -379,7 +379,16 @@ function recordsView(intent: CanonicalIntent, refs: QueryHandle[], lang: OutputL
     {
       id: "g",
       type: "presentSpreadsheet",
-      props: { editable: false, pageSize: Math.min(Number(p["limit"] ?? 100), 100) },
+      // serverSide: true routes sort/paging through the reserved _sort/_dir/_cursor/_limit params (a plain
+      // data refetch per operation) instead of loading the whole result set into the browser; pageSize seeds
+      // the first page from `limit` in the same round trip as compose. sortChange is deliberately NOT
+      // declared here: wiring it to intent.patch would re-compose (a full server round trip) on every sort
+      // toggle, which defeats the point of resolving sort server-side via a cheap refetch.
+      props: {
+        editable: false,
+        pageSize: Math.min(Math.max(Number(p["limit"] ?? 100), 1), 500),
+        serverSide: true,
+      },
       data: { $ref: ref },
     },
   ];

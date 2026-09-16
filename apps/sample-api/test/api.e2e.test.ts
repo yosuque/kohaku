@@ -229,10 +229,17 @@ describe("sample-api E2E", () => {
     expect(form.props["action"]).toBe("annotate");
     const submit = spec.events.find((e) => e.emit === "action.invoke")!;
     expect(submit.on).toBe(`${form.id}.submit`);
-    const tableRef = spec.components.find((c) => c.type === "presentSpreadsheet")!.data!.$ref;
+    const table = spec.components.find((c) => c.type === "presentSpreadsheet")!;
+    const tableRef = table.data!.$ref;
     // payload.refs is the $ref of the table below (the invalidation target of actionEffects), and note is a single-field extraction template.
     expect((submit.payload as { refs: string[]; note: string }).refs).toEqual([tableRef]);
     expect((submit.payload as { note: string }).note).toBe("$value.note");
+
+    // The table serves server-side paging (sort/paging round-trip through the reserved
+    // _sort/_dir/_cursor/_limit params instead of a one-shot full fetch); pageSize mirrors the
+    // records intent's `limit` param, which defaults to 100.
+    expect(table.props["serverSide"]).toBe(true);
+    expect(table.props["pageSize"]).toBe(100);
 
     // Without a manually issued write capability, writing goes through with only the capability returned by compose
     // (issueCapabilityForSpec attaches a write scope to the declared action).
@@ -260,6 +267,19 @@ describe("sample-api E2E", () => {
     });
     expect(dataRes.status).toBe(200);
     expect(((await dataRes.json()) as TabularData).dataVersion).toBe(writeBody.result.dataVersion);
+
+    // Server-side paging/sort: the same compose-derived capability resolves the table's base ref with the
+    // reserved _limit/_sort/_dir params merged in (capability validation is against the base ref, with
+    // reserved params split off — see host-core's binding-ref.ts), returning a 10-row page sorted by
+    // revenue descending, with a nextCursor since more than 10 of the 576 seed rows remain.
+    const pagedRes = await app.request(
+      `/api/kohaku/binding/resolve?ref=${encodeURIComponent(`${tableRef}&_limit=10&_sort=revenue&_dir=desc`)}`,
+      { headers: { authorization: `Bearer ${capability}` } },
+    );
+    expect(pagedRes.status).toBe(200);
+    const pagedData = (await pagedRes.json()) as TabularData;
+    expect(pagedData.rows).toHaveLength(10);
+    expect(pagedData.nextCursor).toBeDefined();
   });
 
   it("the second compose of the same Intent is a cache hit", async () => {

@@ -76,6 +76,12 @@ class TestFixedSpecsAreL0:
             e.emit == "action.invoke" and "note" in e.payload and "refs" in e.payload
             for e in spec.events
         )
+        # The table serves server-side paging (sort/paging round-trip through the reserved
+        # _sort/_dir/_cursor/_limit params instead of a one-shot full fetch); pageSize mirrors the
+        # records intent's `limit` param (50 here).
+        table = next(c for c in spec.components if c.type == "presentSpreadsheet")
+        assert table.props["serverSide"] is True
+        assert table.props["pageSize"] == 50
 
     def test_target_attainment_is_l0(self) -> None:
         spec = asyncio.run(_compose("sales.target_attainment", {"fiscalYear": 2026, "quarter": 2}))

@@ -18,7 +18,7 @@
  * with console.log("[kohaku] …"), traceable in Claude Desktop's Developer Mode (Cmd+Option+I).
  */
 
-import { type BindingClient, createBindingClient } from "@kohaku-ui/data-binding";
+import { type BindingClient, createBindingClient, splitReservedParams } from "@kohaku-ui/data-binding";
 import { defaultDarkTheme, defaultLightTheme, themeFromHostStyles } from "@kohaku-ui/renderer-core";
 import { type ImplRegistry, RendererProvider, SpecView, type SurfaceEvent } from "@kohaku-ui/renderer-react";
 import { createCoreRegistry } from "@kohaku-ui/renderer-react/core";
@@ -387,12 +387,22 @@ function createBridgeController(app: App, openai: OpenAiWidgetApi | undefined): 
       createBindingClient({
         capability: view.capability,
         fetcher: async (ref) => {
+          // Initial data is embedded (host-mcp-apps' preresolveInitialData) keyed by each component's base
+          // $ref — the literal ref the Spec declares, with no reserved paging/sort params. Once a bound part
+          // is serverSide (e.g. sales.records' presentSpreadsheet), its very first fetch already carries
+          // pageSize as a reserved `_limit` (buildResolveOptions merges it in whenever pageSize is set, even
+          // before any user sort/page interaction — see renderer-core's spreadsheet-remote-controller
+          // start()/refetch()), so ref.raw itself would never match the embedded key and every first paint
+          // would pay a live round trip. Strip reserved params before matching (mirrors host-core's
+          // binding-ref.ts / parseInvokableRef, which validate/merge against the same base-ref split) so the
+          // embedded snapshot still hits regardless of which reserved params happen to be attached.
+          const baseRef = splitReservedParams(ref.raw).base.raw;
           // If initial data is embedded, return it consume-once and avoid going through the host.
           // The reason for consume-once (delete once used): so the invalidation re-resolution after a write does not
           // return stale embedded data (use the embedding only the first time; thereafter fetch the latest via the host).
-          const embedded = view.initialData?.get(ref.raw);
+          const embedded = view.initialData?.get(baseRef);
           if (embedded != null) {
-            view.initialData!.delete(ref.raw);
+            view.initialData!.delete(baseRef);
             console.log(`[kohaku] resolve: ${ref.raw} (initialData hit)`);
             return { status: 200, body: embedded };
           }

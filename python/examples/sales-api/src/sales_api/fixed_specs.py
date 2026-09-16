@@ -235,7 +235,7 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
     # The $ref of the records. The invalidation target of the write loop (the table below) and the form's payload.refs point to the same reference.
     ref = refs[0].uri
     limit = p.get("limit", 100)
-    page_size = min(int(limit) if isinstance(limit, (int, float, str)) else 100, 100)
+    page_size = min(max(int(limit) if isinstance(limit, (int, float, str)) else 100, 1), 500)
     # Demonstration of a declarative confirmation flow: press of the "add a note" button -> state.set(noteOpen=true) ->
     # overlay.dialog opens via visibleWhen. The presentForm inside the dialog is the body of the write loop (on submit,
     # annotate advances the data version and action_effects invalidates the same $ref with the new version -> the table
@@ -297,7 +297,13 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
         {
             "id": "g",
             "type": "presentSpreadsheet",
-            "props": {"editable": False, "pageSize": page_size},
+            # serverSide=True routes sort/paging through the reserved _sort/_dir/_cursor/_limit params (a
+            # plain data refetch per operation) instead of loading the whole result set into the browser;
+            # page_size seeds the first page from `limit` in the same round trip as compose. sortChange is
+            # deliberately NOT declared here: wiring it to intent.patch would re-compose (a full server round
+            # trip) on every sort toggle, which defeats the point of resolving sort server-side via a cheap
+            # refetch. Mirrors TS fixed-specs.ts's recordsView.
+            "props": {"editable": False, "pageSize": page_size, "serverSide": True},
             "data": {"$ref": ref},
         },
     ]
