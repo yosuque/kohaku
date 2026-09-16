@@ -4,6 +4,7 @@ import {
   formatCell,
   hasDeclaredEvent,
   isActivationKey,
+  localFooterTotal,
   resolveColumns,
   rowKey,
   type SpreadsheetRowRuntime,
@@ -94,6 +95,10 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
   }, [data, sort, pageSize, locale, serverSide]);
 
   if (state.status !== "ready") return <DataStateNotice state={state} />;
+
+  // The local (non-serverSide) truncation footer's population count (undefined when nothing was
+  // truncated). serverSide has its own total/pager footer below (data.total is already server-reported).
+  const localTotal = serverSide ? undefined : localFooterTotal(state.data, rows.length);
 
   return (
     <div data-kohaku={node.id} style={{ width: "100%", overflowX: "auto" }}>
@@ -189,10 +194,9 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
           )}
         </div>
       ) : (
-        state.data.total != null &&
-        state.data.total > rows.length && (
+        localTotal != null && (
           <div style={spreadsheetFooterTotalStyle({ muted })}>
-            {messages.spreadsheetTotal(state.data.total.toLocaleString(locale), rows.length)}
+            {messages.spreadsheetTotal(localTotal.toLocaleString(locale), rows.length)}
           </div>
         )
       )}

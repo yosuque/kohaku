@@ -6,6 +6,7 @@ import {
   formatCell,
   hasDeclaredEvent,
   isActivationKey,
+  localFooterTotal,
   resolveColumns,
   type SortState,
   type SpreadsheetTokens,
@@ -255,10 +256,13 @@ function appendFooter(
       bar.appendChild(b);
     }
     wrapper.appendChild(bar);
-  } else if (data.total != null && data.total > shown) {
-    const div = el("div", {}, spreadsheetFooterTotalStyle({ muted }));
-    div.appendChild(text(rt.messages.spreadsheetTotal(data.total.toLocaleString(rt.locale), shown)));
-    wrapper.appendChild(div);
+  } else {
+    const localTotal = localFooterTotal(data, shown);
+    if (localTotal != null) {
+      const div = el("div", {}, spreadsheetFooterTotalStyle({ muted }));
+      div.appendChild(text(rt.messages.spreadsheetTotal(localTotal.toLocaleString(rt.locale), shown)));
+      wrapper.appendChild(div);
+    }
   }
 }
 

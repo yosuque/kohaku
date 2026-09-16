@@ -1,6 +1,15 @@
 import type { JsonObject, TabularColumn } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { compareRows, describeSortHeader, formatCell, rowKey, sortRows } from "../../src/index.js";
+import {
+  applyLocalView,
+  compareRows,
+  describeSortHeader,
+  formatCell,
+  localFooterTotal,
+  rowKey,
+  SPREADSHEET_HARD_ROW_CAP,
+  sortRows,
+} from "../../src/index.js";
 
 const numCol: TabularColumn = { key: "revenue", type: "number" };
 const strCol: TabularColumn = { key: "region", type: "string" };
@@ -95,5 +104,57 @@ describe("describeSortHeader", () => {
     expect(h.active).toBe(true);
     expect(h.ariaSort).toBe("descending");
     expect(h.arrow).toBe("▼");
+  });
+});
+
+describe("applyLocalView", () => {
+  it("returns the identical rows reference when there is no sort and no truncation", () => {
+    const rows: JsonObject[] = [{ region: "a" }, { region: "b" }];
+    expect(applyLocalView(rows, undefined, undefined, "en-US")).toBe(rows);
+    expect(applyLocalView(rows, undefined, 10, "en-US")).toBe(rows);
+  });
+
+  it("truncates to pageSize when rows exceed it (a new array, original untouched)", () => {
+    const rows: JsonObject[] = [{ n: 1 }, { n: 2 }, { n: 3 }];
+    const view = applyLocalView(rows, undefined, 2, "en-US");
+    expect(view).not.toBe(rows);
+    expect(view.map((r) => r["n"])).toEqual([1, 2]);
+    expect(rows).toHaveLength(3);
+  });
+
+  it("caps at SPREADSHEET_HARD_ROW_CAP even with no pageSize declared (501 -> 500)", () => {
+    const rows: JsonObject[] = Array.from({ length: SPREADSHEET_HARD_ROW_CAP + 1 }, (_, i) => ({ n: i }));
+    const view = applyLocalView(rows, undefined, undefined, "en-US");
+    expect(view).toHaveLength(SPREADSHEET_HARD_ROW_CAP);
+    expect(view).not.toBe(rows);
+  });
+
+  it("a declared pageSize can never exceed the hard cap", () => {
+    const rows: JsonObject[] = Array.from({ length: SPREADSHEET_HARD_ROW_CAP + 10 }, (_, i) => ({ n: i }));
+    const view = applyLocalView(rows, undefined, SPREADSHEET_HARD_ROW_CAP + 5, "en-US");
+    expect(view).toHaveLength(SPREADSHEET_HARD_ROW_CAP);
+  });
+
+  it("when sorted, returns a sorted+sliced copy and does not mutate the original", () => {
+    const rows: JsonObject[] = [{ n: 3 }, { n: 1 }, { n: 2 }];
+    const view = applyLocalView(rows, { field: "n", dir: "asc" }, 2, "en-US");
+    expect(view.map((r) => r["n"])).toEqual([1, 2]);
+    expect(rows.map((r) => r["n"])).toEqual([3, 1, 2]);
+  });
+});
+
+describe("localFooterTotal", () => {
+  it("uses data.total when reported and it exceeds shown", () => {
+    expect(localFooterTotal({ total: 10, rows: [{}, {}] }, 2)).toBe(10);
+  });
+
+  it("falls back to the full local row count when total is unreported", () => {
+    const rows = Array.from({ length: 5 }, () => ({}));
+    expect(localFooterTotal({ rows }, 2)).toBe(5);
+  });
+
+  it("returns undefined when nothing was truncated", () => {
+    expect(localFooterTotal({ total: 2, rows: [{}, {}] }, 2)).toBeUndefined();
+    expect(localFooterTotal({ rows: [{}, {}] }, 2)).toBeUndefined();
   });
 });

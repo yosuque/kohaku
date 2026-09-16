@@ -90,8 +90,19 @@ export function resolveColumns(node: ComponentNode, data: { columns?: TabularCol
 }
 
 /**
+ * Absolute upper limit of rows presentSpreadsheet lays out locally (consistent with propsSchema's
+ * pageSize max). A local (non-serverSide) spreadsheet has no server-side paging to fall back on, so
+ * without this cap an unbounded reference-passed dataset would be rendered in full — this is the
+ * safety net regardless of whether props.pageSize is declared. Large datasets are serverSide's domain.
+ */
+export const SPREADSHEET_HARD_ROW_CAP = 500;
+
+/**
  * Local sort + pageSize slicing (when not serverSide).
- * sortRows → pageSize slice. The original array is not modified.
+ * sortRows → slice to min(pageSize, SPREADSHEET_HARD_ROW_CAP). The original array is not modified.
+ * Returns the identical `rows` reference (no copy at all) when there is no sort AND no truncation —
+ * callers that key optimistic state off row-array identity (see the editable working copy) depend on
+ * this to know when the underlying data actually changed.
  */
 export function applyLocalView(
   rows: JsonObject[],
@@ -99,8 +110,27 @@ export function applyLocalView(
   pageSize: number | undefined,
   locale: string,
 ): JsonObject[] {
-  const sorted = sortRows(rows, sort, locale);
-  return pageSize != null ? sorted.slice(0, pageSize) : sorted;
+  const limit = pageSize != null ? Math.min(pageSize, SPREADSHEET_HARD_ROW_CAP) : SPREADSHEET_HARD_ROW_CAP;
+  if (sort == null) {
+    if (rows.length <= limit) return rows;
+    return rows.slice(0, limit);
+  }
+  return sortRows(rows, sort, locale).slice(0, limit);
+}
+
+/**
+ * The "Showing N of T" footer's population count T for a local (non-serverSide) spreadsheet. T is
+ * data.total when the source reported one (e.g. an upstream-truncated result), otherwise the full
+ * local row count (data.rows.length) — that is the true population when no total was reported, so a
+ * pageSize/hard-cap truncation with no declared total is still disclosed honestly. Returns undefined
+ * when nothing was truncated (T <= shown), signaling the footer should not render at all.
+ */
+export function localFooterTotal(
+  data: { total?: number; rows: unknown[] },
+  shown: number,
+): number | undefined {
+  const total = data.total ?? data.rows.length;
+  return total > shown ? total : undefined;
 }
 
 /**

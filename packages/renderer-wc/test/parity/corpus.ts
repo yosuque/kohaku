@@ -141,6 +141,11 @@ export const STRUCTURAL_CORPUS: Record<string, UISpec> = {
     refVersions: { [REF]: "v1" },
   }),
 
+  "presentSpreadsheet(pageSize truncation footer)": spec({
+    components: [{ id: "root", type: "presentSpreadsheet", props: { pageSize: 1 }, data: { $ref: REF } }],
+    refVersions: { [REF]: "v1" },
+  }),
+
   "presentList(row template)": spec({
     components: [
       { id: "root", type: "presentList", props: {}, data: { $ref: REF }, children: ["row"] },
