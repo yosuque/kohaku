@@ -1,4 +1,5 @@
 import { GOVERNANCE_ERROR_DISCRIMINATORS, type Principal, type StoragePort } from "@kohaku-ui/spec-core";
+import { GENERATED_SCAN_WINDOW, RECONCILE_AUDIT_SCAN_WINDOW } from "../constants.js";
 import type { ActorKind, LineageEventType } from "../events.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
@@ -13,7 +14,7 @@ import {
   transition,
 } from "./machine.js";
 import { createNomination } from "./nomination.js";
-import { createUsageIndex } from "./usage.js";
+import { createUsageIndex, tallyUsage, usageIndexKey } from "./usage.js";
 
 export interface PromotionPolicy extends MachinePolicy {
   /** Threshold for candidacy (usage log -> candidate) */
@@ -774,57 +775,85 @@ export function createPromotions(opts: {
    * `onError({endpoint: "promotion.reconcile.projection"})` — the snapshot itself is untouched either way, so it
    * is retried on the next reconcile). The race-driven skips described above are deliberately not counted here
    * (they are not failures).
+   *
+   * N+1 avoidance: before the loop, this builds the same kind of bulk indexes `scanCandidatesWithTenant` /
+   * `listByStatus` already build once instead of once per candidate — a usage index (`usage.index`), the latest
+   * `component.generated` per `(tenant, artifactId)` (fed into `store.load` as `generatedEvent`, falling back to
+   * `loadCandidate`'s own per-artifact lookup for anything outside `GENERATED_SCAN_WINDOW`), and an
+   * existing-audit-record index for both `component.published` and `component.withdrawn(from:"published")` (so
+   * the per-candidate backfill check below is a Set lookup rather than its own `listLineage` round trip).
    */
   async function reconcile(): Promise<ReconcileSummary> {
     const summary: ReconcileSummary = { published: 0, withdrawn: 0, skipped: 0 };
     if (opts.onPublish == null && opts.onUnpublish == null) return summary;
     // Scan snapshots across all tenants (listPromotionStates with tenant omitted returns all). Each state has .tenant.
     const states = await opts.storage.listPromotionStates();
+    const usedByArtifact = await usage.index(undefined);
+    const generatedEvents = await opts.storage.listLineage({
+      type: ["component.generated"],
+      limit: GENERATED_SCAN_WINDOW,
+    });
+    const latestGeneratedByKey = new Map<string, (typeof generatedEvents)[number]>();
+    for (const e of generatedEvents) {
+      const artifactId = e.payload["artifactId"];
+      if (typeof artifactId !== "string") continue;
+      const key = usageIndexKey(e.tenant, artifactId);
+      const prev = latestGeneratedByKey.get(key);
+      if (prev == null || e.ts > prev.ts) latestGeneratedByKey.set(key, e);
+    }
+    const publishedAuditKeys = new Set(
+      (
+        await opts.storage.listLineage({ type: ["component.published"], limit: RECONCILE_AUDIT_SCAN_WINDOW })
+      ).map((e) => usageIndexKey(e.tenant, e.payload["artifactId"] as string)),
+    );
+    const withdrawnFromPublishedAuditKeys = new Set(
+      (await opts.storage.listLineage({ type: ["component.withdrawn"], limit: RECONCILE_AUDIT_SCAN_WINDOW }))
+        .filter((e) => e.payload["from"] === "published")
+        .map((e) => usageIndexKey(e.tenant, e.payload["artifactId"] as string)),
+    );
     for (const state of states) {
       // Only published/withdrawn snapshots can have a projection to converge (see mayHaveProjection's doc).
       // state.status is PromotionState's storage-layer `string` (loosely typed at the StoragePort boundary);
       // cast to PromotionStatus the same way candidate-store.ts's loadCandidate already does for this field.
       if (!mayHaveProjection(state.status as PromotionStatus)) continue;
+      const key = usageIndexKey(state.tenant, state.artifactId);
+      const loadOptions = {
+        tenant: state.tenant,
+        usageStats: tallyUsage(usedByArtifact.get(key) ?? []),
+        generatedEvent: latestGeneratedByKey.get(key),
+      };
       if (state.status === "published") {
-        const candidate = await store.load(state.artifactId, { tenant: state.tenant });
+        const candidate = await store.load(state.artifactId, loadOptions);
         // Re-check the freshest status right after the load (see this function's doc on the scan/load race): a
         // *real* candidate whose status has since moved off "published" is a stale scan entry, not a failure,
         // so skip it uncounted and without onError -- the withdrawn branch converges it (this reconcile or the
         // next). candidate == null is a different, pre-existing case (loadCandidate found no source data at
         // all) and falls through unchanged to the "unrecoverable" skip+onError path below.
         if (candidate != null && candidate.status !== "published") continue;
-        if (candidate?.draft != null) {
-          const existing = await opts.storage.listLineage({
-            type: ["component.published"],
-            artifactId: state.artifactId,
-            limit: 1,
-            ...tenantField(state.tenant),
-          });
-          if (existing.length === 0) {
-            try {
-              await opts.lineage.record(
-                "component.published",
-                {
-                  artifactId: state.artifactId,
-                  componentType: candidate.draft.componentType,
-                  version: candidate.draft.version,
-                  intentName: candidate.draft.intentName,
-                  reconciled: true,
-                },
-                undefined,
-                state.tenant,
-              );
-            } catch (e) {
-              notifyPromotionError(
-                opts.onError,
-                {
-                  endpoint: "promotion.reconcile.audit",
-                  artifactId: state.artifactId,
-                  ...tenantField(state.tenant),
-                },
-                e,
-              );
-            }
+        if (candidate?.draft != null && !publishedAuditKeys.has(key)) {
+          try {
+            await opts.lineage.record(
+              "component.published",
+              {
+                artifactId: state.artifactId,
+                componentType: candidate.draft.componentType,
+                version: candidate.draft.version,
+                intentName: candidate.draft.intentName,
+                reconciled: true,
+              },
+              undefined,
+              state.tenant,
+            );
+          } catch (e) {
+            notifyPromotionError(
+              opts.onError,
+              {
+                endpoint: "promotion.reconcile.audit",
+                artifactId: state.artifactId,
+                ...tenantField(state.tenant),
+              },
+              e,
+            );
           }
         }
         if (opts.onPublish == null) continue;
@@ -855,7 +884,7 @@ export function createPromotions(opts: {
       // mayHaveProjection admits only "published" (handled above) and "withdrawn", so only withdrawn reaches
       // here: re-apply the projection removal for a withdrawal whose onUnpublish failed partway.
       if (opts.onUnpublish == null) continue;
-      const candidate = await store.load(state.artifactId, { tenant: state.tenant });
+      const candidate = await store.load(state.artifactId, loadOptions);
       // Re-check the freshest status for the same race as the published branch above (see this function's own
       // doc): a *real* candidate that has since been re-published is a stale scan entry, not a failure, so it
       // is skipped uncounted and without onError rather than incorrectly unpublished -- the published branch
@@ -868,15 +897,7 @@ export function createPromotions(opts: {
       // Backfill component.withdrawn for a withdrawn snapshot, symmetric with the published side above: matched
       // by `from: "published"` so a pre-promotion withdraw's own (unrelated) withdrawn event does not suppress
       // this backfill.
-      // limit 10: an artifact can carry at most a pre-promotion withdraw plus one published-withdraw per
-      // publish cycle, so this comfortably covers the population without a dedicated scan-window constant.
-      const existingWithdraw = await opts.storage.listLineage({
-        type: ["component.withdrawn"],
-        artifactId: state.artifactId,
-        limit: 10,
-        ...tenantField(state.tenant),
-      });
-      if (!existingWithdraw.some((e) => e.payload["from"] === "published")) {
+      if (!withdrawnFromPublishedAuditKeys.has(key)) {
         try {
           await opts.lineage.record(
             "component.withdrawn",

@@ -537,6 +537,23 @@ class Promotions:
             LineageFilter(type=["component.used"], limit=10_000, tenant=tenant)
         )
         used_by_artifact = _group_used_by_artifact(all_used)
+        # N+1 avoidance for component.generated too (mirrors _gather_candidates' own generated index, and
+        # reconcile's): a single bulk fetch of the most recent 1000 component.generated events, keyed the same
+        # way, so a state whose generated event falls inside that window skips _load_candidate's own individual
+        # list_lineage lookup. A state whose generated event has aged out of the window is simply absent here
+        # and falls back to that per-artifact lookup, unchanged from before.
+        generated_events = await self._storage.list_lineage(
+            LineageFilter(type=["component.generated"], limit=1000, tenant=tenant)
+        )
+        latest_generated_by_key: dict[str, Any] = {}
+        for e in generated_events:
+            artifact_id = e.payload.get("artifactId")
+            if not isinstance(artifact_id, str):
+                continue
+            key = _usage_index_key(e.tenant, artifact_id)
+            prev = latest_generated_by_key.get(key)
+            if prev is None or e.ts > prev.ts:
+                latest_generated_by_key[key] = e
         candidates: list[PromotionCandidate] = []
         for state in states:
             if state.status != status:
@@ -548,10 +565,12 @@ class Promotions:
             # silently falling back to a wrong/incomplete candidate. When a specific tenant was requested,
             # state.tenant already equals it (list_promotion_states(tenant) filters to that tenant), so this is
             # a no-op for that case.
+            key = _usage_index_key(state.tenant, state.artifactId)
             candidate = await self._load_candidate(
                 state.artifactId,
-                _tally_usage(used_by_artifact.get(_usage_index_key(state.tenant, state.artifactId), [])),
+                _tally_usage(used_by_artifact.get(key, [])),
                 state.tenant,
+                latest_generated_by_key.get(key),
             )
             # Something that has state but whose component.generated cannot be pulled (normally impossible) cannot be projected, so exclude it.
             if candidate is not None:
@@ -890,6 +909,13 @@ class Promotions:
         and how many snapshots were skipped because the data needed to rebuild the projection was unrecoverable
         (reported individually via on_error({endpoint: "promotion.reconcile.projection"})). The race-driven
         skips described above are deliberately not counted here (they are not failures).
+
+        N+1 avoidance: before the loop, this builds the same kind of bulk indexes _gather_candidates already
+        builds once instead of once per candidate -- a usage index, the latest component.generated per
+        (tenant, artifactId) (fed into _load_candidate as generated_event, falling back to its own per-artifact
+        lookup for anything outside the window), and an existing-audit-record index for both
+        component.published and component.withdrawn(from:"published") (so the per-candidate backfill check
+        below is a set lookup rather than its own list_lineage round trip).
         """
         summary = ReconcileSummary()
         if self._on_publish is None and self._on_unpublish is None:
@@ -898,14 +924,48 @@ class Promotions:
         withdrawn_count = 0
         skipped_count = 0
         states = await self._storage.list_promotion_states()
+        used_by_artifact = _group_used_by_artifact(
+            await self._storage.list_lineage(LineageFilter(type=["component.used"], limit=10_000))
+        )
+        generated_events = await self._storage.list_lineage(
+            LineageFilter(type=["component.generated"], limit=1000)
+        )
+        latest_generated_by_key: dict[str, Any] = {}
+        for e in generated_events:
+            artifact_id = e.payload.get("artifactId")
+            if not isinstance(artifact_id, str):
+                continue
+            key = _usage_index_key(e.tenant, artifact_id)
+            prev = latest_generated_by_key.get(key)
+            if prev is None or e.ts > prev.ts:
+                latest_generated_by_key[key] = e
+        published_audit_keys = {
+            _usage_index_key(e.tenant, e.payload["artifactId"])
+            for e in await self._storage.list_lineage(
+                LineageFilter(type=["component.published"], limit=10_000)
+            )
+            if isinstance(e.payload.get("artifactId"), str)
+        }
+        withdrawn_from_published_audit_keys = {
+            _usage_index_key(e.tenant, e.payload["artifactId"])
+            for e in await self._storage.list_lineage(
+                LineageFilter(type=["component.withdrawn"], limit=10_000)
+            )
+            if e.payload.get("from") == "published" and isinstance(e.payload.get("artifactId"), str)
+        }
         for state in states:
             # Only published/withdrawn snapshots can have a projection to converge (see may_have_projection's
             # doc). state.status is PromotionState's storage-layer `str` (loosely typed at the StoragePort
             # boundary); cast the same way _load_candidate already does for this field.
             if not may_have_projection(cast("PromotionStatus", state.status)):
                 continue
+            key = _usage_index_key(state.tenant, state.artifactId)
+            usage_stats = _tally_usage(used_by_artifact.get(key, []))
+            generated_event = latest_generated_by_key.get(key)
             if state.status == "published":
-                candidate = await self._load_candidate(state.artifactId, None, state.tenant)
+                candidate = await self._load_candidate(
+                    state.artifactId, usage_stats, state.tenant, generated_event
+                )
                 # Re-check the freshest status right after the load (see this method's own doc on the
                 # scan/load race): a *real* candidate whose status has since moved off "published" is a stale
                 # scan entry, not a failure, so skip it uncounted and without on_error -- the withdrawn branch
@@ -914,39 +974,30 @@ class Promotions:
                 # "unrecoverable" skip+on_error path below.
                 if candidate is not None and candidate.status != "published":
                     continue
-                if candidate is not None and candidate.draft is not None:
-                    existing = await self._storage.list_lineage(
-                        LineageFilter(
-                            type=["component.published"],
-                            artifactId=state.artifactId,
-                            limit=1,
-                            tenant=state.tenant,
+                if candidate is not None and candidate.draft is not None and key not in published_audit_keys:
+                    try:
+                        await self._lineage.record(
+                            "component.published",
+                            {
+                                "artifactId": state.artifactId,
+                                "componentType": candidate.draft.componentType,
+                                "version": candidate.draft.version,
+                                "intentName": candidate.draft.intentName,
+                                "reconciled": True,
+                            },
+                            None,
+                            state.tenant,
                         )
-                    )
-                    if len(existing) == 0:
-                        try:
-                            await self._lineage.record(
-                                "component.published",
-                                {
-                                    "artifactId": state.artifactId,
-                                    "componentType": candidate.draft.componentType,
-                                    "version": candidate.draft.version,
-                                    "intentName": candidate.draft.intentName,
-                                    "reconciled": True,
-                                },
-                                None,
-                                state.tenant,
-                            )
-                        except Exception as e:  # noqa: BLE001 — fail-open, reported via on_error
-                            _notify_promotion_error(
-                                self._on_error,
-                                PromotionErrorContext(
-                                    endpoint="promotion.reconcile.audit",
-                                    artifactId=state.artifactId,
-                                    tenant=state.tenant,
-                                ),
-                                e,
-                            )
+                    except Exception as e:  # noqa: BLE001 — fail-open, reported via on_error
+                        _notify_promotion_error(
+                            self._on_error,
+                            PromotionErrorContext(
+                                endpoint="promotion.reconcile.audit",
+                                artifactId=state.artifactId,
+                                tenant=state.tenant,
+                            ),
+                            e,
+                        )
                 if self._on_publish is None:
                     continue
                 # The projection cannot be reconstructed unless both draft (state, or the snapshot's own
@@ -987,7 +1038,9 @@ class Promotions:
             # reaches here: re-apply the projection removal for a withdrawal whose on_unpublish failed partway.
             if self._on_unpublish is None:
                 continue
-            candidate = await self._load_candidate(state.artifactId, None, state.tenant)
+            candidate = await self._load_candidate(
+                state.artifactId, usage_stats, state.tenant, generated_event
+            )
             # Re-check the freshest status for the same race as the published branch above (see this method's
             # own doc): a *real* candidate that has since been re-published is a stale scan entry, not a
             # failure, so it is skipped uncounted and without on_error rather than incorrectly unpublished --
@@ -1001,17 +1054,7 @@ class Promotions:
             # Backfill component.withdrawn for a withdrawn snapshot, symmetric with the published side above:
             # matched by from:"published" so a pre-promotion withdraw's own (unrelated) withdrawn event does not
             # suppress this backfill.
-            existing_withdraw = await self._storage.list_lineage(
-                LineageFilter(
-                    type=["component.withdrawn"],
-                    artifactId=state.artifactId,
-                    # An artifact can carry at most a pre-promotion withdraw plus one published-withdraw per
-                    # publish cycle, so 10 comfortably covers the population.
-                    limit=10,
-                    tenant=state.tenant,
-                )
-            )
-            if not any(e.payload.get("from") == "published" for e in existing_withdraw):
+            if key not in withdrawn_from_published_audit_keys:
                 try:
                     await self._lineage.record(
                         "component.withdrawn",

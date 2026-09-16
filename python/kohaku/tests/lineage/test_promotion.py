@@ -30,7 +30,7 @@ from kohaku.lineage import (
     create_lineage,
     create_promotions,
 )
-from kohaku.spec import LineageActor, LineageEventRecord, Principal, PromotionState
+from kohaku.spec import LineageActor, LineageEventRecord, LineageFilter, Principal, PromotionState
 from kohaku.storage import FileStoragePort
 
 from ._helpers import seed
@@ -1557,5 +1557,88 @@ def test_reconcile_ignores_non_projection_statuses(tmp_path: Path, status: str) 
         assert errors == []
         events = await storage.list_lineage()
         assert not any(e.type in ("component.withdrawn", "component.published") for e in events)
+
+    asyncio.run(run())
+
+
+# --- N+1 avoidance in reconcile() and list_by_status() (perf, mirrors TS's promotion-n-plus-one.test.ts) ---
+
+
+class _CountingListLineageStorage(FileStoragePort):
+    """A FileStoragePort that counts list_lineage calls, to pin that reconcile()/list_by_status() build a
+    fixed set of bulk indexes once instead of calling list_lineage once per candidate."""
+
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__(data_dir)
+        self.list_lineage_calls = 0
+
+    async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
+        self.list_lineage_calls += 1
+        return await super().list_lineage(filter)
+
+
+async def _seed_published_candidates(storage: FileStoragePort, count: int) -> None:
+    """Seeds `count` independent published candidates, each self-contained (#9: html/sha256 duplicated onto
+    the snapshot) with its own component.generated event, so every candidate can be fully resolved without any
+    per-candidate fallback lookup."""
+    for i in range(count):
+        artifact_id = f"art-{i}"
+        await seed(
+            storage,
+            "component.generated",
+            {"artifactId": artifact_id, "html": f"<html>{i}</html>", "request": "r"},
+            actor=LineageActor(kind="model"),
+        )
+        await storage.put_promotion_state(
+            PromotionState(
+                artifactId=artifact_id,
+                status="published",
+                updatedAt="t",
+                data={
+                    "draft": DRAFT.to_wire(),
+                    "html": f"<html>{i}</html>",
+                    "sha256": "a" * 64,
+                    "componentType": DRAFT.componentType,
+                },
+            )
+        )
+
+
+@pytest.mark.parametrize("count", [3, 30])
+def test_reconcile_list_lineage_calls_do_not_scale_with_candidate_count(tmp_path: Path, count: int) -> None:
+    async def run() -> None:
+        storage = _CountingListLineageStorage(tmp_path)
+        await _seed_published_candidates(storage, count)
+        applied: list[str] = []
+
+        async def on_publish(ctx: PublishContext) -> None:
+            applied.append(ctx.artifactId)
+
+        promotions = create_promotions(lineage=create_lineage(storage), storage=storage, on_publish=on_publish)
+
+        storage.list_lineage_calls = 0
+        summary = await promotions.reconcile()
+        assert len(applied) == count
+        assert summary.published == count
+        # Fixed set of bulk index fetches (usage, component.generated, component.published,
+        # component.withdrawn) regardless of how many candidates were scanned -- not one list_lineage call per
+        # candidate.
+        assert storage.list_lineage_calls == 4
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("count", [3, 30])
+def test_list_by_status_list_lineage_calls_do_not_scale_with_candidate_count(tmp_path: Path, count: int) -> None:
+    async def run() -> None:
+        storage = _CountingListLineageStorage(tmp_path)
+        await _seed_published_candidates(storage, count)
+        promotions = create_promotions(lineage=create_lineage(storage), storage=storage)
+
+        storage.list_lineage_calls = 0
+        candidates = await promotions.list_by_status("published")
+        assert len(candidates) == count
+        # Fixed set of bulk index fetches (usage, component.generated) regardless of candidate count.
+        assert storage.list_lineage_calls == 2
 
     asyncio.run(run())
