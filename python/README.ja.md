@@ -115,6 +115,8 @@ TS のみの対応である。
 
 Python サンプル(`examples/sales-api`)はシード JSON をリポジトリルートの `apps/sample-api/src/domain/seed` から直読みする(データ二重管理を避けるため)。したがって `python/` サブツリー単独ではなく**フル monorepo チェックアウト**が前提。
 
+**`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。
+
 ## クロス言語互換の守り方
 
 - **golden fixture**: `spec/test/fixtures/cross-language-canonical.json` を TS

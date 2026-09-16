@@ -123,6 +123,17 @@ repository root's `apps/sample-api/src/domain/seed` (to avoid maintaining the da
 twice). Therefore it assumes a **full monorepo checkout**, not the `python/` subtree
 alone.
 
+**`storage/`'s `FileStoragePort` durability contract**: it is a reference/demo `StoragePort`
+implementation, not a production storage backend. Writes go through the OS page cache only — there is
+**no `fsync`** anywhere in this module, so the tmp-then-rename pattern it uses guarantees a reader never
+observes a torn/partial file (process-crash resilience) but does **not** guarantee the bytes have actually
+reached disk before a power loss or kernel panic. It also assumes a **single process**: concurrent
+read-modify-write against the same snapshot file is serialized only within one process (a per-path
+`asyncio.Lock`, the counterpart of TS's `createKeyedMutex`) — two processes pointed at the same `data_dir`
+can still race and lose an update. A production deployment should replace it with a DB-backed `StoragePort`
+implementation for real durability, cross-process concurrency safety, and lineage rotation/compaction. See
+`kohaku.storage.file`'s module docstring for the full writeup.
+
 ## How cross-language compatibility is preserved
 
 - **golden fixture**: `spec/test/fixtures/cross-language-canonical.json` is verified by
