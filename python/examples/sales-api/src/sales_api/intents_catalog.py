@@ -347,7 +347,12 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
     define_intent(
         IntentSpec(
             canonical="sales.kpi_overview",
-            description="Show this period's summary KPIs (total revenue, YoY, top region, target attainment) as cards",
+            description=(
+                "Show this period's summary KPIs (total revenue, YoY, top region, target attainment) as cards. "
+                "Each card's underlying `metric` selects the KPI kind "
+                "(total_revenue/yoy/top_region/target_attainment), not the revenue/units metric used "
+                "elsewhere (e.g. sales.trend)."
+            ),
             source=_SOURCE,
             viewLabel="KPI Overview",
             viewLabels={"ja": "KPI概況"},
@@ -452,7 +457,10 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
     define_intent(
         IntentSpec(
             canonical="sales.target_attainment",
-            description="Show targets, actuals, and attainment by region",
+            description=(
+                "Show targets, actuals, and attainment by region. Internally issues a kpi query with "
+                'metric="target_attainment" — a KPI kind, not the revenue/units metric used elsewhere.'
+            ),
             source=_SOURCE,
             viewLabel="Target Attainment",
             viewLabels={"ja": "目標達成"},
@@ -466,8 +474,10 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
                 "地域別の達成率を見せて",
             ],
             facets=[
-                FacetSpec(param="fiscalYear", label="Fiscal year", options=_FY_OPTIONS),
-                FacetSpec(param="quarter", label="Quarter", options=_QUARTER_OPTIONS),
+                FacetSpec(
+                    param="fiscalYear", label="Fiscal year", labels=_JA_FISCAL_YEAR, options=_FY_OPTIONS
+                ),
+                FacetSpec(param="quarter", label="Quarter", labels=_JA_QUARTER, options=_QUARTER_OPTIONS),
             ],
             queries=[
                 QueryTemplate(path="targets", paramMap={"fiscalYear": "fy", "quarter": "q"}),

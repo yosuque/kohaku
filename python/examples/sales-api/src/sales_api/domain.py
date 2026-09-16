@@ -68,6 +68,29 @@ GROUP_AXIS_LABELS: dict[str, str] = {
 DEMO_FISCAL_YEAR = 2026
 
 
+def fiscal_year_of(cal_year: int, cal_month: int) -> int:
+    """The fiscal year (labeled by its start year: FY2026 = 2026-04 to 2027-03) that a calendar
+    year/month falls in. Single source for the fiscal-period convention documented on SalesRecord.fiscal_year
+    below; used by semantic_port.py's fiscal_period_of (real-clock "current period" for the NL prompt).
+    Mirrors TS domain/types.ts's fiscalYearOf.
+    """
+    return cal_year if cal_month >= 4 else cal_year - 1
+
+
+def quarter_of(cal_month: int) -> int:
+    """The fiscal quarter (Q1=Apr-Jun / Q2=Jul-Sep / Q3=Oct-Dec / Q4=Jan-Mar) of a calendar month.
+    Single source for the convention documented on SalesRecord.quarter below; used by semantic_port.py's
+    fiscal_period_of. Mirrors TS domain/types.ts's quarterOf.
+    """
+    if 4 <= cal_month <= 6:
+        return 1
+    if 7 <= cal_month <= 9:
+        return 2
+    if 10 <= cal_month <= 12:
+        return 3
+    return 4
+
+
 @dataclass(frozen=True)
 class Product:
     id: str
@@ -533,6 +556,11 @@ def _clamp_reserved_limit(raw: int | float | None) -> int | None:
 def kpi(repo: SalesRepo, args: QueryArgs) -> TabularData:
     """A single KPI (1 row). metric: total_revenue | yoy | top_region | target_attainment
 
+    Note the ambiguity of the name "metric" across operations: here it selects *which KPI* to compute (a KPI
+    kind), whereas summary()/trend()'s `metric` (units|revenue) selects *which numeric column* to aggregate —
+    the two args are unrelated despite sharing a name. Callers (intents_catalog's sales.kpi_overview /
+    sales.target_attainment) fix this metric per-card via fixedParams; it is never a user-facing facet.
+
     Scope contract: a KPI is a company-wide aggregation filtered only by the fiscal period (fy/q) (it does not
     take dimension filters such as region).
     Missing value: when the denominator is 0, set value=None rather than 0% and show the reason in note.
@@ -572,7 +600,7 @@ def kpi(repo: SalesRepo, args: QueryArgs) -> TabularData:
                 "label": "Top region",
                 "value": _round1(top[1] / current_revenue),
                 "format": "percent",
-                "note": f"{REGION_LABELS[top[0]]} (share)",
+                "note": f"{_dim_label('region', top[0])} (share)",
             }
             if top is not None and current_revenue > 0
             else {
@@ -632,16 +660,24 @@ def targets(repo: SalesRepo, args: QueryArgs) -> TabularData:
         if t.fiscal_year == fy and (q is None or t.quarter == q):
             by_region[t.region] = by_region.get(t.region, 0) + t.target_revenue
 
+    # The row population is the union of both dicts' keys, not just by_region's: a region with actual
+    # revenue but no target row for this (fy, q) must still appear (target=0 / attainment=None / the
+    # existing "No target set" note), rather than silently vanishing from the table.
+    regions = dict.fromkeys([*actual_by_region.keys(), *by_region.keys()])
     result: list[JsonObject] = [
         {
             "region": _dim_label("region", region),
             "actual": actual_by_region.get(region, 0),
-            "target": target,
+            "target": by_region.get(region, 0),
             # A 0 denominator (no target set) is set to None so it is not misread as "0% attainment", with the reason shown in note.
-            "attainment": _round1(actual_by_region.get(region, 0) / target) if target > 0 else None,
-            "note": None if target > 0 else "No target set",
+            "attainment": (
+                _round1(actual_by_region.get(region, 0) / by_region[region])
+                if by_region.get(region, 0) > 0
+                else None
+            ),
+            "note": None if by_region.get(region, 0) > 0 else "No target set",
         }
-        for region, target in by_region.items()
+        for region in regions
     ]
     result.sort(key=lambda row: _as_number(row["actual"]), reverse=True)
 
@@ -703,7 +739,9 @@ __all__ = [
     "SalesRepo",
     "SalesTarget",
     "default_seed_dir",
+    "fiscal_year_of",
     "kpi",
+    "quarter_of",
     "records",
     "shape_of",
     "summary",

@@ -14,6 +14,7 @@ import { z } from "zod";
 import { languageOf } from "../app/compose-context.js";
 import { shapeOf } from "../domain/queries.js";
 import type { SalesRepo } from "../domain/repo.js";
+import { fiscalYearOf, quarterOf } from "../domain/types.js";
 import type { IntentCatalog } from "../intents/catalog.js";
 import { FISCAL_YEAR_MAX, FISCAL_YEAR_MIN } from "../intents/vocab.js";
 
@@ -134,8 +135,9 @@ function normalizeGui(
 }
 
 /**
- * Runtime computation of the fiscal period (starts in April). The FY label is the start year (FY2026 = 2026-04 to 2027-03),
- * and quarters are Q1=Apr-Jun / Q2=Jul-Sep / Q3=Oct-Dec / Q4=Jan-Mar (matching the convention in domain/types.ts).
+ * Runtime computation of the fiscal period (starts in April), delegating the FY-label and quarter conventions
+ * to domain/types.ts's fiscalYearOf/quarterOf (the single source, also used by scripts/generate-seed.ts) so this
+ * real-clock reading and the seed's own fiscal calendar cannot drift apart.
  * Used to derive the NL normalization prompt's "current period", "current quarter", and "prior year" from the current
  * time rather than fixed strings.
  *
@@ -155,9 +157,7 @@ export function fiscalPeriodOf(date: Date): {
 } {
   const year = date.getFullYear();
   const month = date.getMonth() + 1; // 1-12
-  const fiscalYear = month >= 4 ? year : year - 1;
-  const quarter = (month >= 4 ? Math.floor((month - 4) / 3) + 1 : 4) as 1 | 2 | 3 | 4;
-  return { fiscalYear, quarter, year, month };
+  return { fiscalYear: fiscalYearOf(year, month), quarter: quarterOf(month), year, month };
 }
 
 /**

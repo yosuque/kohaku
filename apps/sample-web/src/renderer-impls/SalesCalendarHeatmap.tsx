@@ -3,11 +3,11 @@ import { type ImplProps, useBoundData, useLocale, useToken } from "@kohaku-ui/re
 import { DataStateNotice } from "@kohaku-ui/renderer-react/core";
 import type { ReactNode } from "react";
 
-/** Short month names for the heatmap column headers (Jan–Dec, index 0-11). */
+/**
+ * Short month names for the heatmap column headers, in fiscal-year order (Apr–Mar, index 0-11) — matching
+ * sample-api's fiscal-year convention (FY2026 = 2026-04 to 2027-03; see domain/types.ts's fiscalYearOf/quarterOf).
+ */
 const MONTH_LABELS = [
-  "Jan",
-  "Feb",
-  "Mar",
   "Apr",
   "May",
   "Jun",
@@ -17,7 +17,23 @@ const MONTH_LABELS = [
   "Oct",
   "Nov",
   "Dec",
+  "Jan",
+  "Feb",
+  "Mar",
 ] as const;
+
+/**
+ * The fiscal year (labeled by its start year) that a calendar year/month falls in, and the column index (0=Apr
+ * .. 11=Mar) that calendar month occupies in the fiscal-year row. Mirrors sample-api's domain/types.ts
+ * fiscalYearOf/quarterOf convention; duplicated here in miniature since sample-web has no dependency on
+ * sample-api's domain layer (this component only ever sees the already-aggregated {month, revenue} rows).
+ */
+function fiscalYearOf(calYear: number, calMonth: number): number {
+  return calMonth >= 4 ? calYear : calYear - 1;
+}
+function fiscalColumnOf(calMonth: number): number {
+  return (calMonth + 8) % 12;
+}
 
 /**
  * Native implementation of the promoted part sales.calendarHeatmap (pre-bundled).
@@ -61,7 +77,13 @@ export function SalesCalendarHeatmap({ node }: ImplProps): ReactNode {
   const cells = state.data.rows
     .map((row) => ({ month: String(row[monthKey] ?? ""), value: Number(row[metricKey] ?? 0) }))
     .filter((c) => /^\d{4}-\d{2}$/.test(c.month))
-    .sort((a, b) => a.month.localeCompare(b.month));
+    .map((c) => {
+      const calYear = Number(c.month.slice(0, 4));
+      const calMonth = Number(c.month.slice(5, 7));
+      // Row = fiscal year, column = fiscal month (Apr..Mar), matching sample-api's fiscal-year convention.
+      return { ...c, fiscalYear: fiscalYearOf(calYear, calMonth), fiscalCol: fiscalColumnOf(calMonth) };
+    })
+    .sort((a, b) => a.fiscalYear - b.fiscalYear || a.fiscalCol - b.fiscalCol);
 
   if (cells.length === 0) {
     return <DataStateNotice state={{ status: "error", message: "No monthly data" }} />;
@@ -69,7 +91,7 @@ export function SalesCalendarHeatmap({ node }: ImplProps): ReactNode {
 
   const max = Math.max(...cells.map((c) => c.value));
   const min = Math.min(...cells.map((c) => c.value));
-  const years = [...new Set(cells.map((c) => c.month.slice(0, 4)))].sort();
+  const years = [...new Set(cells.map((c) => c.fiscalYear))].sort((a, b) => a - b);
 
   const intensity = (value: number): number =>
     max === min ? 0.6 : 0.15 + (0.85 * (value - min)) / (max - min);
@@ -91,16 +113,17 @@ export function SalesCalendarHeatmap({ node }: ImplProps): ReactNode {
           </tr>
         </thead>
         <tbody>
-          {years.map((year) => (
-            <tr key={year}>
-              <td style={{ fontSize: 11, color: muted, fontWeight: 700, paddingRight: 6 }}>{year}</td>
-              {Array.from({ length: 12 }, (_, i) => {
-                const month = `${year}-${String(i + 1).padStart(2, "0")}`;
-                const cell = cells.find((c) => c.month === month);
+          {years.map((fiscalYear) => (
+            <tr key={fiscalYear}>
+              <td
+                style={{ fontSize: 11, color: muted, fontWeight: 700, paddingRight: 6 }}
+              >{`FY${fiscalYear}`}</td>
+              {MONTH_LABELS.map((label, col) => {
+                const cell = cells.find((c) => c.fiscalYear === fiscalYear && c.fiscalCol === col);
                 return (
-                  <td key={month}>
+                  <td key={label}>
                     <div
-                      title={cell != null ? tooltipText(month, cell.value) : month}
+                      title={cell != null ? tooltipText(cell.month, cell.value) : `FY${fiscalYear} ${label}`}
                       style={{
                         width: 34,
                         height: 30,

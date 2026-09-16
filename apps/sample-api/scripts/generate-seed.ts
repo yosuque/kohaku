@@ -7,7 +7,14 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHANNELS, type Product, REGIONS, type SalesRecord, type SalesTarget } from "../src/domain/types.js";
+import {
+  CHANNELS,
+  type Product,
+  quarterOf,
+  REGIONS,
+  type SalesRecord,
+  type SalesTarget,
+} from "../src/domain/types.js";
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../src/domain/seed");
 
@@ -50,13 +57,20 @@ function mulberry32(seed: number): () => number {
 
 const rand = mulberry32(20260610);
 
-/** The calendar month ("YYYY-MM") and quarter of the m-th (0-11) month of the FY */
+/**
+ * The calendar month ("YYYY-MM") and quarter of the m-th (0-11) month of the FY.
+ * calYear is derived fy -> calendar (the inverse of types.ts's fiscalYearOf, which goes
+ * calendar -> fy), so it is computed directly here rather than via that helper; quarter is
+ * the forward direction (calMonth -> quarter), so it reuses quarterOf directly (previously a
+ * duplicate `Math.floor(index / 3) + 1` formula — the seed invariant test in test/ confirms
+ * every generated record's quarter equals quarterOf(its own calendar month)).
+ */
 function fiscalMonth(fy: number, index: number): { month: string; quarter: 1 | 2 | 3 | 4 } {
   const calMonth = ((index + 3) % 12) + 1; // 4,5,...,12,1,2,3
   const calYear = calMonth >= 4 ? fy : fy + 1;
   return {
     month: `${calYear}-${String(calMonth).padStart(2, "0")}`,
-    quarter: (Math.floor(index / 3) + 1) as 1 | 2 | 3 | 4,
+    quarter: quarterOf(calMonth),
   };
 }
 

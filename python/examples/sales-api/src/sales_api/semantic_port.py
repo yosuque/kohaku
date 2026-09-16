@@ -37,7 +37,7 @@ from kohaku.spec import (
     parse_query_ref,
 )
 
-from .domain import SalesRepo, shape_of
+from .domain import SalesRepo, fiscal_year_of, quarter_of, shape_of
 from .fixed_specs import language_of
 from .intents_catalog import FISCAL_YEAR_MAX, FISCAL_YEAR_MIN, IntentCatalog
 
@@ -52,7 +52,9 @@ class FiscalPeriod:
 
 
 def fiscal_period_of(date: datetime) -> FiscalPeriod:
-    """Runtime computation of the fiscal period (starts in April). The FY label is the start year; Q1=Apr-Jun/Q2=Jul-Sep/Q3=Oct-Dec/Q4=Jan-Mar.
+    """Runtime computation of the fiscal period, delegating the FY-label and quarter conventions to
+    domain.py's fiscal_year_of/quarter_of (the single source, also used by TS's scripts/generate-seed.ts
+    counterpart) so this real-clock reading and the seed's own fiscal calendar cannot drift apart.
 
     Used to derive the NL normalization prompt's "this period" / "this quarter" / "last year" from the current time
     rather than from a fixed string.
@@ -67,9 +69,7 @@ def fiscal_period_of(date: datetime) -> FiscalPeriod:
     """
     year = date.year
     month = date.month  # 1 to 12
-    fiscal_year = year if month >= 4 else year - 1
-    quarter = (month - 4) // 3 + 1 if month >= 4 else 4
-    return FiscalPeriod(fiscal_year=fiscal_year, quarter=quarter, year=year, month=month)
+    return FiscalPeriod(fiscal_year=fiscal_year_of(year, month), quarter=quarter_of(month), year=year, month=month)
 
 
 def _clamp_fiscal_year(year: int) -> int:

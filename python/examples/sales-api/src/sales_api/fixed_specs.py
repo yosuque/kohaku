@@ -28,6 +28,7 @@ from typing import Any, Literal
 from kohaku.composer import FixedSpecSource
 from kohaku.spec import SPEC_VERSION, Intent, JsonObject, QueryHandle, UISpec
 
+from . import domain
 from .intents_catalog import group_by as group_by_vocab
 from .intents_catalog import region as region_vocab
 
@@ -37,15 +38,15 @@ type OutputLang = Literal["en", "ja"]
 # A fixed-spec builder assembles a UISpec from a normalized Intent and resolved references.
 SpecBuilder = Callable[[Intent, list[QueryHandle]], UISpec]
 
-# The TS GROUP_LABELS (headings for the aggregation axis; a separate curation from vocab's region label).
-_GROUP_LABELS: dict[str, str] = {"region": "Region", "product": "Product", "channel": "Channel"}
-
 
 def _group_by_phrase(group_by: str, lang: OutputLang) -> str:
     """"by Region" (EN title fragment) / "地域別" (JA, straight from the groupBy vocabulary)."""
     if lang == "ja":
         return group_by_vocab.label(group_by, "ja")
-    return f"by {_GROUP_LABELS.get(group_by, group_by)}"
+    # domain.GROUP_AXIS_LABELS is the single source (matches TS domain/types.ts's GROUP_AXIS_LABELS, which
+    # queries.ts's groupLabel and this EN title fragment both draw from) — previously duplicated here as
+    # its own _GROUP_LABELS dict carrying the same values.
+    return f"by {domain.GROUP_AXIS_LABELS.get(group_by, group_by)}"
 
 
 def _period(p: JsonObject, lang: OutputLang) -> str:

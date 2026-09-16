@@ -411,7 +411,11 @@ const KPI_BUILDERS: Record<string, (ctx: KpiContext) => JsonObject> = {
     );
     const top = [...byRegion.entries()].sort((a, b) => b[1] - a[1])[0];
     return top != null && currentRevenue > 0
-      ? percentKpiRow("Top region", ratioPercent(top[1], currentRevenue), `${REGION_LABELS[top[0]]} (share)`)
+      ? percentKpiRow(
+          "Top region",
+          ratioPercent(top[1], currentRevenue),
+          `${REGION_LABELS[top[0]] ?? top[0]} (share)`,
+        )
       : percentKpiRow("Top region", null, "No revenue in period");
   },
   target_attainment: ({ repo, fy, q, currentRevenue }) => {
@@ -436,6 +440,11 @@ const KPI_BUILDERS: Record<string, (ctx: KpiContext) => JsonObject> = {
 
 /**
  * A single KPI (1 row). metric: total_revenue | yoy | top_region | target_attainment
+ *
+ * Note the ambiguity of the name "metric" across operations: here it selects *which KPI* to compute (a KPI
+ * kind), whereas summary()/trend()'s `metric` (units|revenue) selects *which numeric column* to aggregate —
+ * the two args are unrelated despite sharing a name. Callers (catalog's sales.kpi_overview / sales.target_attainment)
+ * fix this metric per-card via fixedParams; it is never exposed as a user-facing facet.
  *
  * Scope contract: a KPI is a company-wide aggregate and filters records only by the fiscal period (fy/q). It does
  * not accept dimension filters such as region/channel/productId. This keeps the numerator (current-period revenue) and
@@ -474,15 +483,23 @@ export function targets(repo: SalesRepo, args: QueryArgs): TabularData {
     (r) => r.region,
     (r) => r.revenue,
   );
-  const targetByRegion = sumByKey(
+  // Keyed by string (not Region) to match actualByRegion's key type — the union below needs both maps'
+  // keys to be the same type.
+  const targetByRegion = sumByKey<string, SalesTarget>(
     targetsFor(repo, fy, q),
     (t) => t.region,
     (t) => t.targetRevenue,
   );
 
-  const result = [...targetByRegion.entries()]
-    .map(([region, target]) => {
+  // The row population is the union of both maps' keys, not just targetByRegion's: a region with actual
+  // revenue but no target row for this (fy, q) must still appear (target: 0 / attainment: null / the
+  // existing "No target set" note), rather than silently vanishing from the table.
+  const regions = new Set([...actualByRegion.keys(), ...targetByRegion.keys()]);
+
+  const result = [...regions]
+    .map((region) => {
       const actual = actualByRegion.get(region) ?? 0;
+      const target = targetByRegion.get(region) ?? 0;
       return {
         // The displayed value is the display label. Aggregation and reconciliation are done with the region code.
         region: dimLabel("region", region),
