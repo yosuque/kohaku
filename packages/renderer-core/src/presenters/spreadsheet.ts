@@ -149,6 +149,149 @@ export function localFooterTotal(
   return total > shown ? total : undefined;
 }
 
+// --- Editable cells (props.editable + cellEdit) -----------------------------------------------
+
+/**
+ * Identifies which cell is currently in edit mode (or none, when the field itself is absent from
+ * the renderer's local state). `invalid` marks a failed coercion attempt on the currently-typed
+ * value — the cell stays in edit mode (aria-invalid) rather than reverting to the button. Shared
+ * shape for both renderers' local "which cell is being edited" state.
+ */
+export type SpreadsheetCellEdit = { rowIndex: number; column: string; invalid?: boolean };
+
+/**
+ * The runtime payload type for cellEdit (invoke("cellEdit", { row, value })). `row` is the row as it
+ * was **before** this edit (i.e. the currently-displayed row, including any earlier edits from the
+ * working copy, but not this one); `value` carries the edited column, its coerced new value, the
+ * previous value, and the row's display index.
+ */
+export type SpreadsheetCellEditRuntime = {
+  row: JsonObject;
+  value: { column: string; value: JsonValue; previousValue: JsonValue; rowIndex: number };
+};
+
+/**
+ * The editable text a cell's <input> starts with when entering edit mode. Unlike formatCell (which
+ * is for display: locale-grouped numbers, JSON-stringified objects), this is meant to be re-parsed
+ * by coerceCellInput, so numbers are plain (no digit grouping) and null is the empty string.
+ */
+export function cellDraft(value: JsonValue | undefined, _col: TabularColumn): string {
+  if (value == null) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+/** The result of coerceCellInput: either a successfully-parsed JsonValue, or a rejected input (kept open, aria-invalid). */
+export type CellCoercion = { ok: true; value: JsonValue } | { ok: false };
+
+/**
+ * Coerces a cell <input>'s raw text per the column's declared type (TabularColumn.type), matching
+ * data-binding's write-side expectations:
+ * - number: "" -> null; a non-numeric string -> invalid; otherwise the parsed number.
+ * - boolean: "true"/"1"/"yes" -> true; "false"/"0"/"no" -> false (case-insensitive); "" -> null;
+ *   anything else -> invalid.
+ * - date: "" -> null; otherwise the raw string passes through unvalidated (no calendar parsing here).
+ * - string (and unspecified): the raw string passes through as-is, including "".
+ */
+export function coerceCellInput(raw: string, col: TabularColumn): CellCoercion {
+  switch (col.type) {
+    case "number": {
+      if (raw === "") return { ok: true, value: null };
+      const n = Number(raw);
+      return Number.isFinite(n) ? { ok: true, value: n } : { ok: false };
+    }
+    case "boolean": {
+      if (raw === "") return { ok: true, value: null };
+      const lower = raw.trim().toLowerCase();
+      if (lower === "true" || lower === "1" || lower === "yes") return { ok: true, value: true };
+      if (lower === "false" || lower === "0" || lower === "no") return { ok: true, value: false };
+      return { ok: false };
+    }
+    case "date":
+      return { ok: true, value: raw === "" ? null : raw };
+    default:
+      return { ok: true, value: raw };
+  }
+}
+
+/**
+ * An optimistic in-memory overlay of pending cell edits on top of a rows array, keyed by the
+ * *reference identity* of that array (`source`) so it is discarded automatically the moment new
+ * data supersedes it (a fresh fetch always produces a new rows array — see applyLocalView's
+ * identical-reference guarantee for the no-op case). Persistence is the host's responsibility;
+ * this overlay exists purely so the edited value is visible immediately, before any round trip.
+ */
+export interface RowsWorkingCopy {
+  /** The rows array this working copy was built against. */
+  source: JsonObject[];
+  /** display row index -> that row with its pending edits applied. */
+  edits: Map<number, JsonObject>;
+}
+
+/**
+ * Records a single cell edit on top of `rows`, returning a new RowsWorkingCopy. If `copy` was built
+ * against a different `rows` reference (new data arrived since the last edit), it is discarded
+ * first — the caller never needs to detect staleness itself, just always pass the current `rows`.
+ */
+export function commitCellEdit(
+  copy: RowsWorkingCopy | undefined,
+  rows: JsonObject[],
+  rowIndex: number,
+  column: string,
+  value: JsonValue,
+): RowsWorkingCopy {
+  const edits = copy != null && copy.source === rows ? new Map(copy.edits) : new Map<number, JsonObject>();
+  const base = edits.get(rowIndex) ?? rows[rowIndex] ?? {};
+  edits.set(rowIndex, { ...base, [column]: value });
+  return { source: rows, edits };
+}
+
+/**
+ * The rows actually displayed: `rows` with any pending edits from `copy` applied. Returns `rows`
+ * itself (the identical reference) when there is nothing to apply — no working copy, a stale one
+ * (built against a different rows reference — see commitCellEdit), or an empty one — so a caller
+ * memoizing on this result's identity does not re-render needlessly.
+ */
+export function effectiveRows(rows: JsonObject[], copy: RowsWorkingCopy | undefined): JsonObject[] {
+  if (copy == null || copy.source !== rows || copy.edits.size === 0) return rows;
+  return rows.map((row, i) => copy.edits.get(i) ?? row);
+}
+
+/** The idle (non-editing) cell's button chrome — reset to read as a plain td while remaining focusable/clickable. */
+export function spreadsheetCellEditButtonStyle(options: { numeric: boolean }) {
+  const { numeric } = options;
+  return {
+    display: "block",
+    width: "100%",
+    textAlign: numeric ? ("right" as const) : ("left" as const),
+    fontVariantNumeric: "tabular-nums",
+    background: "none",
+    border: "none",
+    font: "inherit",
+    color: "inherit",
+    padding: 0,
+    cursor: "pointer",
+  } as const;
+}
+
+/** The editing cell's <input> chrome. */
+export function spreadsheetCellEditInputStyle(
+  tokens: Pick<SpreadsheetTokens, "border">,
+  options: { numeric: boolean },
+) {
+  const { numeric } = options;
+  return {
+    display: "block",
+    width: "100%",
+    boxSizing: "border-box" as const,
+    textAlign: numeric ? ("right" as const) : ("left" as const),
+    font: "inherit",
+    border: `1px solid ${tokens.border}`,
+    borderRadius: 4,
+    padding: "1px 3px",
+  } as const;
+}
+
 /**
  * Deterministically generates a row key (shared by presentSpreadsheet /
  * presentList). Since the schema has no concept of a primary-key column, it

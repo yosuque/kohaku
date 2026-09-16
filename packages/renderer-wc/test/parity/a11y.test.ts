@@ -132,6 +132,27 @@ const VALIDATION_SPEC = parseSpec({
   provenance: { tier: "L1", composedBy: "parity", cache: "hit" },
 });
 
+const EDITABLE_SPREADSHEET_REF = "query://sales/summary";
+
+const EDITABLE_SPREADSHEET_SPEC = parseSpec({
+  kohaku: "0.1",
+  intent: { canonical: "parity.a11y_editable_cell", params: {}, hash: "sha256:" + "0".repeat(64) },
+  dataVersion: "v1",
+  refVersions: { [EDITABLE_SPREADSHEET_REF]: "v1" },
+  components: [
+    {
+      id: "root",
+      type: "presentSpreadsheet",
+      props: { editable: true },
+      data: { $ref: EDITABLE_SPREADSHEET_REF },
+    },
+  ],
+  events: [
+    { on: "root.cellEdit", emit: "action.invoke", payload: { action: "updateCell", value: "$value" } },
+  ],
+  provenance: { tier: "L0", composedBy: "parity", cache: "hit" },
+});
+
 describe("a11y parity (SPEC-A11Y-001): additional open/error DOM states, both renderers", () => {
   afterEach(() => cleanupPair());
 
@@ -212,6 +233,43 @@ describe("a11y parity (SPEC-A11Y-001): additional open/error DOM states, both re
       "WC: no field was marked aria-invalid",
     ).not.toBeNull();
     const wcResults = await axe.run(wcKohakuRoot, AXE_OPTIONS);
+    expect(wcResults.violations, JSON.stringify(wcResults.violations, null, 2)).toEqual([]);
+  });
+
+  it("presentSpreadsheet (editable cell mid-edit, an <input> replacing its button)", async () => {
+    const binding = () => ({
+      async resolve() {
+        return {
+          columns: [{ key: "region", label: "Region", type: "string" as const }],
+          rows: [{ region: "japan" }],
+          dataVersion: "v1",
+        };
+      },
+      async invokeAction() {
+        return { result: { ok: true } };
+      },
+    });
+
+    const { container } = await renderReact(EDITABLE_SPREADSHEET_SPEC, { binding });
+    fireEvent.click(container.querySelector('[data-kohaku="root"] tbody button') as HTMLButtonElement);
+    // Guards against a false-pass: a broken edit-trigger (the cell never enters edit mode) would leave
+    // axe with nothing new to complain about, so assert the <input> actually appeared first.
+    expect(
+      container.querySelector('[data-kohaku="root"] tbody input'),
+      "React: the cell did not enter edit mode",
+    ).not.toBeNull();
+    const reactResults = await axe.run(container, AXE_OPTIONS);
+    expect(reactResults.violations, JSON.stringify(reactResults.violations, null, 2)).toEqual([]);
+    cleanupPair();
+
+    const { surface } = await renderWc(EDITABLE_SPREADSHEET_SPEC, { binding });
+    const wcRoot = surface.shadowRoot!.querySelector(".kohaku-root") as HTMLElement;
+    (wcRoot.querySelector('[data-kohaku="root"] tbody button') as HTMLButtonElement).click();
+    expect(
+      wcRoot.querySelector('[data-kohaku="root"] tbody input'),
+      "WC: the cell did not enter edit mode",
+    ).not.toBeNull();
+    const wcResults = await axe.run(wcRoot, AXE_OPTIONS);
     expect(wcResults.violations, JSON.stringify(wcResults.violations, null, 2)).toEqual([]);
   });
 });

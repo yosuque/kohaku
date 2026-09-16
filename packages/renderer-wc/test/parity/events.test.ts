@@ -78,7 +78,8 @@ type Step =
   | { act: "click"; sel: string }
   | { act: "fill"; sel: string; value: string }
   | { act: "select"; sel: string; value: string }
-  | { act: "submit"; sel: string };
+  | { act: "submit"; sel: string }
+  | { act: "key"; sel: string; key: string };
 
 function recordingBinding(obs: Obs, sc: Scenario): BindingClient {
   return {
@@ -100,6 +101,7 @@ function applyReact(root: ParentNode, step: Step): void {
   if (el == null) throw new Error(`React: element not found: ${step.sel}`);
   if (step.act === "click") fireEvent.click(el);
   else if (step.act === "submit") fireEvent.submit(el);
+  else if (step.act === "key") fireEvent.keyDown(el, { key: step.key });
   else fireEvent.change(el, { target: { value: step.value } });
 }
 
@@ -109,7 +111,9 @@ function applyWc(root: ParentNode, step: Step): void {
   if (el == null) throw new Error(`WC: element not found: ${step.sel}`);
   if (step.act === "click") (el as HTMLElement).click();
   else if (step.act === "submit") el.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-  else {
+  else if (step.act === "key") {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: step.key, bubbles: true, cancelable: true }));
+  } else {
     (el as HTMLInputElement).value = step.value;
     const type = step.act === "fill" ? "input" : "change";
     el.dispatchEvent(new Event(type, { bubbles: true }));
@@ -319,6 +323,75 @@ describe("event behavior parity (control + A1 have identical external observatio
     expect(react.obs.actionResults).toEqual([{ componentId: "f1", action: "annotate", phase: "succeeded" }]);
     expect(wc.obs.actionResults).toEqual(react.obs.actionResults);
     // Since submit is action.invoke, it does not flow to onEvent (governance).
+    expect(react.obs.events).toEqual([]);
+    expect(wc.obs.events).toEqual([]);
+  });
+
+  it("cellEdit (intent.*): forwards an identical { value: { column, value, previousValue, rowIndex } } payload in both", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        components: [
+          { id: "root", type: "layout.stack", props: {}, children: ["table1"] },
+          { id: "table1", type: "presentSpreadsheet", props: { editable: true }, data: { $ref: REF } },
+        ],
+        refVersions: { [REF]: "v1" },
+        events: [{ on: "table1.cellEdit", emit: "intent.patch", payload: { value: "$value" } }],
+      }),
+      steps: [
+        { act: "click", sel: '[data-kohaku="table1"] tbody button[aria-label="Edit Revenue"]' },
+        { act: "fill", sel: '[data-kohaku="table1"] tbody input[aria-label="Edit Revenue"]', value: "999" },
+        { act: "key", sel: '[data-kohaku="table1"] tbody input[aria-label="Edit Revenue"]', key: "Enter" },
+      ],
+    };
+    const { react, wc } = await bothObserve(sc);
+    const expected = [
+      {
+        componentId: "table1",
+        on: "table1.cellEdit",
+        emit: "intent.patch",
+        payload: { value: { column: "revenue", value: 999, previousValue: 498200000, rowIndex: 0 } },
+      },
+    ];
+    expect(react.obs.events).toEqual(expected);
+    expect(wc.obs.events).toEqual(react.obs.events);
+  });
+
+  it("cellEdit -> action.invoke: writes straight through, invokes / actionResults / resolves match in both", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        refVersions: { [REF]: "v1" },
+        components: [
+          { id: "root", type: "layout.stack", props: {}, children: ["table1"] },
+          { id: "table1", type: "presentSpreadsheet", props: { editable: true }, data: { $ref: REF } },
+        ],
+        events: [
+          {
+            on: "table1.cellEdit",
+            emit: "action.invoke",
+            payload: { action: "updateCell", value: "$value.value" },
+          },
+        ],
+      }),
+      invokeResult: { result: { ok: true }, invalidates: [REF], refVersions: { [REF]: "v2" } },
+      steps: [
+        { act: "click", sel: '[data-kohaku="table1"] tbody button[aria-label="Edit Revenue"]' },
+        { act: "fill", sel: '[data-kohaku="table1"] tbody input[aria-label="Edit Revenue"]', value: "999" },
+        { act: "key", sel: '[data-kohaku="table1"] tbody input[aria-label="Edit Revenue"]', key: "Enter" },
+      ],
+    };
+    const { react, wc } = await bothObserve(sc);
+    expect(react.obs.invokes).toEqual([
+      { action: "updateCell", payload: { action: "updateCell", value: 999 } },
+    ]);
+    expect(wc.obs.invokes).toEqual(react.obs.invokes);
+    // The table resolves twice: initial + re-resolution after invalidation.
+    expect(react.obs.resolves).toEqual([REF, REF]);
+    expect(wc.obs.resolves).toEqual(react.obs.resolves);
+    expect(react.obs.actionResults).toEqual([
+      { componentId: "table1", action: "updateCell", phase: "succeeded" },
+    ]);
+    expect(wc.obs.actionResults).toEqual(react.obs.actionResults);
+    // Since cellEdit is action.invoke here, it does not flow to onEvent (governance).
     expect(react.obs.events).toEqual([]);
     expect(wc.obs.events).toEqual([]);
   });
