@@ -19,6 +19,30 @@ import type { PartBuilder, SurfaceContext, Teardown } from "./types.js";
 export const KOHAKU_EVENT = "kohaku-event";
 
 /**
+ * Individual context properties whose change requires tearing down and rebuilding the mounted tree
+ * (they are baked into the RenderRuntime at #render time — binding/theme/locale/messages feed the
+ * BoundDataController / theme resolution / message lookup, and sandbox is read at mount time by the
+ * sandbox.html part builder). `onEvent` / `onNodeError` / `onActionResult` are deliberately **not** in
+ * this set: they are read live from `#context` at call time (see `#dispatchForward` and the wrapper
+ * closures built in `#render`), so reassigning one of them mid-lifecycle must not force a full rebuild.
+ */
+const REBUILD_KEYS = new Set<keyof SurfaceContext>(["binding", "theme", "locale", "messages", "sandbox"]);
+
+/** Every property <kohaku-surface> exposes as a plain instance accessor (used by #upgradeProperty). */
+const UPGRADE_PROPS = [
+  "spec",
+  "context",
+  "binding",
+  "theme",
+  "locale",
+  "messages",
+  "onEvent",
+  "onNodeError",
+  "onActionResult",
+  "sandbox",
+] as const;
+
+/**
  * The single host element <kohaku-surface> (Shadow DOM). It builds the entire UI Spec tree into one shadow root
  * (rather than a Custom Element per part type — a single-element surface). Spec / context are received as properties.
  *
@@ -51,12 +75,28 @@ export class KohakuSurface extends HTMLElement {
   }
 
   connectedCallback(): void {
+    // Standard Custom Elements "upgrade property" pattern: a value assigned on this element before the
+    // class was registered (customElements.define) — a common pattern when the element is constructed
+    // eagerly and defined lazily — lands as a plain own-property that shadows this class's accessor
+    // forever, so its setter logic (patchContext / re-render) would never fire again once the element is
+    // upgraded. Re-apply each such value through its accessor exactly once, here, at upgrade time
+    // (connectedCallback always fires after the class is defined). A no-op for an element created after
+    // define() (no own-property was ever set).
+    for (const prop of UPGRADE_PROPS) this.#upgradeProperty(prop);
     if (this.#spec != null) this.#render();
   }
 
   disconnectedCallback(): void {
     this.#teardown();
     this.#teardown = noop;
+  }
+
+  #upgradeProperty(prop: (typeof UPGRADE_PROPS)[number]): void {
+    const self = this as unknown as Record<string, unknown>;
+    if (!Object.hasOwn(this, prop)) return;
+    const value = self[prop];
+    delete self[prop];
+    self[prop] = value;
   }
 
   /** UI Spec. Setting it triggers resetForIntent → rebuild the tree + reattach the controller. */
@@ -112,15 +152,18 @@ export class KohakuSurface extends HTMLElement {
     // Skip rebuild if there is no effective change after applying the patch (prevents a full rebuild when the same value is re-assigned to a setter).
     // A shallow reference comparison suffices (binding/theme/messages, etc. are updated by swapping object references).
     let changed = false;
+    let needsRebuild = false;
     for (const key of Object.keys(patch) as (keyof SurfaceContext)[]) {
       if (this.#context[key] !== patch[key]) {
         changed = true;
-        break;
+        if (REBUILD_KEYS.has(key)) needsRebuild = true;
       }
     }
     if (!changed) return;
     this.#context = { ...this.#context, ...patch };
-    if (this.#spec != null) this.#render();
+    // onEvent/onNodeError/onActionResult changing does not, by itself, require tearing down and rebuilding
+    // the mounted tree (see REBUILD_KEYS's doc) — they are read live from #context, not baked into it.
+    if (needsRebuild && this.#spec != null) this.#render();
   }
 
   #render(): void {
@@ -156,7 +199,16 @@ export class KohakuSurface extends HTMLElement {
       theme,
       locale,
       messages,
-      ctx: this.#context,
+      // onNodeError/onActionResult are wrapped so RenderRuntime always reads the *current* #context value
+      // at call time, rather than the value snapshotted at this #render — see REBUILD_KEYS's doc: changing
+      // just one of these callbacks does not go through #render again, so RenderRuntime's own onNodeError/
+      // onActionResult fields (baked in once here) must forward through a stable indirection instead of
+      // holding a stale reference to whatever callback existed when the tree was last built.
+      ctx: {
+        ...this.#context,
+        onNodeError: (args) => this.#context.onNodeError?.(args),
+        onActionResult: (args) => this.#context.onActionResult?.(args),
+      },
       registry: this.#registry,
       dispatchForward: (event) => this.#dispatchForward(event),
     });
