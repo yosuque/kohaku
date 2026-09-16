@@ -273,7 +273,7 @@ The server's protocol conformance (resource MIME / `_meta`'s modern+legacy / tex
 
 You can adopt it in stages along the adoption ladder (design doc §12 "Design of the sample implementation").
 
-**Current dependency method**: `@kohaku-ui/*` packages are not published to npm yet (that is planned for v0.2). Today, depend on them from **inside this monorepo**: add your app under `apps/<your-app>`, reference the packages as `workspace:*` in its `package.json`, and run it with `tsx` (packages export `.ts` directly — there is no `dist` build to consume from outside the workspace). The generated `server.ts` below assumes this layout.
+**Dependency method**: `@kohaku-ui/*` packages are published to npm. In a standalone app, `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm zod` (add `@kohaku-ui/composer`, `@kohaku-ui/renderer-react react react-dom`, etc. as you reach the later steps below) and import them normally — each package's `publishConfig` points `exports` at its `dist` build, so this works outside the monorepo with no extra setup. If you are instead building your app **inside this monorepo** (e.g. to contribute back, or to iterate against `src` without a publish step), add it under `apps/<your-app>`, reference the packages as `workspace:*` in its `package.json`, and run it with `tsx` (packages export `.ts` directly in that case — there is no `dist` build to consume from outside the workspace). The generated `server.ts` below assumes the npm-install path; swap the comment's dependency line for `workspace:*` if you took the monorepo path instead.
 
 ### Step 0 — Server-Driven UI without an LLM
 
