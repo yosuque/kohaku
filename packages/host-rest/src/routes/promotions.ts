@@ -164,7 +164,13 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
   // every tenant), so it does not go through `promotionTransition`'s per-:artifactId skeleton (no artifactId
   // param, no ensureArtifact pre-check) — instead it is serialized under the promotion lock's tenant-neutral
   // bucket (`withPromotionLock(undefined, …)`), the same bucket approve/reject/withdraw/actions/evaluate use for
-  // an unscoped call, so it cannot race a concurrent transition's read-modify-write.
+  // an unscoped call. Only unscoped transitions share that bucket, though: a tenant-scoped approve/withdraw
+  // takes its own tenant's bucket and can still interleave with this scan. `reconcile()` itself re-reads each
+  // candidate's status right after its scan and skips a stale entry rather than acting on it (see
+  // reconcile()'s own doc in packages/lineage), so a transition racing with this route cannot make reconcile
+  // apply a projection change against a candidate that has already moved on. Serializing this route against
+  // every per-tenant bucket (two-phase locking) would close the window at the scan level too, but is a
+  // structural follow-up, not implemented here.
   app.post("/promotions/reconcile", async (c) => {
     if (deps.promotions == null) return promotionsNotConfigured(c);
     const promotions = deps.promotions;

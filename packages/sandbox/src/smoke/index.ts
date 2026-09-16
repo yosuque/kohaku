@@ -32,6 +32,18 @@
  * deployment) — never on a path where an end user or other untrusted party can get arbitrary HTML in front of
  * it. If a deployment ever needs that, isolate the smoke run itself first (a worker thread or a separate
  * child process), since `createL2Smoke` provides no isolation on its own.
+ *
+ * "Trusted input" is weaker than it sounds on any route where end-user natural language itself reaches the L2
+ * generation prompt (e.g. `sales.custom`'s free-text description of a chart to build) — the generated HTML is
+ * still composer output, but an adversarial user can steer its content through the prompt (prompt injection),
+ * so "produced by our own pipeline under a fixed system prompt" does not, by itself, rule out attacker-chosen
+ * content reaching this in-process `node:vm` run the way it would for a chart driven only by structured intent
+ * params. This is a known, accepted gap in the reference implementation, not an oversight: `l2Smoke` is opt-in
+ * ComposePolicy wiring (a policy that never sets it never runs generated script in-process at all) and is off
+ * by default when unwired, so the exposure only exists where a deployment has explicitly wired it up. A product
+ * that opens compose to unauthenticated or otherwise untrusted end users and still wants this pre-delivery
+ * check MUST isolate the smoke run itself (a worker thread or a separate child process, as already noted
+ * above) — the L2 lint / fixed-system-prompt story is not a substitute for that isolation on such a route.
  */
 import {
   ALLOWED_ATTR_PREFIXES,

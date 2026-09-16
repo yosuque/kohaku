@@ -47,6 +47,7 @@ from .machine import (
     Unpublish,
     Withdraw,
     component_draft_from_wire,
+    may_have_projection,
     transition,
 )
 
@@ -851,16 +852,30 @@ class Promotions:
         return await self.act(artifact_id, action, actor, tenant)
 
     async def reconcile(self) -> ReconcileSummary:
-        """Projection recovery from snapshot authority. Scans published snapshots across all tenants, assembles
-        each artifact's complete candidate — since #9, candidate.html (and sha256/ref) come from the snapshot's
-        own duplicated copy when present, falling back to component.generated for older snapshots persisted
-        before this change — and idempotently re-applies on_publish. Callable at any time (not just at
-        startup), e.g. host_rest's POST /promotions/reconcile (an operator escape hatch, #11).
+        """Projection recovery from snapshot authority. Scans the published/withdrawn snapshots across all
+        tenants — every other status has no projection to converge, see `may_have_projection` — assembles each
+        artifact's complete candidate — since #9, candidate.html (and sha256/ref) come from the snapshot's own
+        duplicated copy when present, falling back to component.generated for older snapshots persisted before
+        this change — and idempotently re-applies on_publish. Callable at any time (not just at startup), e.g.
+        host_rest's POST /promotions/reconcile (an operator escape hatch, #11).
 
-        Symmetrically, scans every non-published snapshot and re-applies on_unpublish for any whose candidate
-        still has a persisted draft, converging a withdrawal whose projection removal failed partway (the
-        snapshot transitioned to withdrawn, but the catalog/Intent entry was never removed). on_unpublish must
-        likewise be idempotent.
+        Symmetrically, re-applies on_unpublish for every withdrawn snapshot whose candidate still has a
+        persisted draft, converging a withdrawal whose projection removal failed partway (the snapshot
+        transitioned to withdrawn, but the catalog/Intent entry was never removed). on_unpublish must likewise
+        be idempotent.
+
+        Race with a concurrent transition: the scan (list_promotion_states) and each candidate's
+        _load_candidate are two separate reads with no lock held across them (host_rest's POST
+        /promotions/reconcile route only takes the tenant-neutral lock bucket, so a tenant-scoped
+        approve/withdraw can run between the two). _load_candidate always re-reads get_promotion_state, so
+        right after it returns, the candidate's status is already the freshest value on hand — trusting it is
+        all the fix takes. Both branches below re-check that status immediately after the load and skip
+        (uncounted, without on_error; this is a stale scan entry, not an unrecoverable failure) when it no
+        longer matches what the scan expected: the published branch will not re-publish a projection for a
+        candidate that has since been withdrawn, and the withdrawn branch will not unpublish one that has since
+        been re-published. The other branch's own pass (this reconcile or the next) converges the skipped entry
+        instead. Serializing the whole scan+load sequence against every per-tenant lock bucket (two-phase
+        locking) would close this window entirely; that is a structural follow-up, not implemented here.
 
         Also backfills the audit event for either direction: publish's component.published record and
         unpublish's component.withdrawn record are both fail-open (see the Publish / Unpublish branches of
@@ -873,7 +888,8 @@ class Promotions:
 
         Returns a summary (ReconcileSummary, #11) of how many published/withdrawn projections were re-applied
         and how many snapshots were skipped because the data needed to rebuild the projection was unrecoverable
-        (reported individually via on_error({endpoint: "promotion.reconcile.projection"})).
+        (reported individually via on_error({endpoint: "promotion.reconcile.projection"})). The race-driven
+        skips described above are deliberately not counted here (they are not failures).
         """
         summary = ReconcileSummary()
         if self._on_publish is None and self._on_unpublish is None:
@@ -883,8 +899,21 @@ class Promotions:
         skipped_count = 0
         states = await self._storage.list_promotion_states()
         for state in states:
+            # Only published/withdrawn snapshots can have a projection to converge (see may_have_projection's
+            # doc). state.status is PromotionState's storage-layer `str` (loosely typed at the StoragePort
+            # boundary); cast the same way _load_candidate already does for this field.
+            if not may_have_projection(cast("PromotionStatus", state.status)):
+                continue
             if state.status == "published":
                 candidate = await self._load_candidate(state.artifactId, None, state.tenant)
+                # Re-check the freshest status right after the load (see this method's own doc on the
+                # scan/load race): a *real* candidate whose status has since moved off "published" is a stale
+                # scan entry, not a failure, so skip it uncounted and without on_error -- the withdrawn branch
+                # converges it (this reconcile or the next). candidate is None is a different, pre-existing
+                # case (_load_candidate found no source data at all) and falls through unchanged to the
+                # "unrecoverable" skip+on_error path below.
+                if candidate is not None and candidate.status != "published":
+                    continue
                 if candidate is not None and candidate.draft is not None:
                     existing = await self._storage.list_lineage(
                         LineageFilter(
@@ -954,46 +983,52 @@ class Promotions:
                 )
                 published_count += 1
                 continue
-            # Any other status: re-apply the projection removal for a withdrawal whose on_unpublish failed
-            # partway. A candidate with no persisted draft was never published (or its draft is unrecoverable),
-            # so there is no projection to remove and it is skipped.
+            # may_have_projection admits only "published" (handled above) and "withdrawn", so only withdrawn
+            # reaches here: re-apply the projection removal for a withdrawal whose on_unpublish failed partway.
             if self._on_unpublish is None:
                 continue
             candidate = await self._load_candidate(state.artifactId, None, state.tenant)
+            # Re-check the freshest status for the same race as the published branch above (see this method's
+            # own doc): a *real* candidate that has since been re-published is a stale scan entry, not a
+            # failure, so it is skipped uncounted and without on_error rather than incorrectly unpublished --
+            # the published branch converges it instead (candidate is None is the pre-existing "no source data"
+            # case and falls through the same way). A candidate with no persisted draft was never published (or
+            # its draft is unrecoverable), so there is no projection to remove and it is likewise skipped.
+            if candidate is not None and candidate.status != "withdrawn":
+                continue
             if candidate is None or candidate.draft is None:
                 continue
             # Backfill component.withdrawn for a withdrawn snapshot, symmetric with the published side above:
             # matched by from:"published" so a pre-promotion withdraw's own (unrelated) withdrawn event does not
             # suppress this backfill.
-            if state.status == "withdrawn":
-                existing_withdraw = await self._storage.list_lineage(
-                    LineageFilter(
-                        type=["component.withdrawn"],
-                        artifactId=state.artifactId,
-                        # An artifact can carry at most a pre-promotion withdraw plus one published-withdraw per
-                        # publish cycle, so 10 comfortably covers the population.
-                        limit=10,
-                        tenant=state.tenant,
-                    )
+            existing_withdraw = await self._storage.list_lineage(
+                LineageFilter(
+                    type=["component.withdrawn"],
+                    artifactId=state.artifactId,
+                    # An artifact can carry at most a pre-promotion withdraw plus one published-withdraw per
+                    # publish cycle, so 10 comfortably covers the population.
+                    limit=10,
+                    tenant=state.tenant,
                 )
-                if not any(e.payload.get("from") == "published" for e in existing_withdraw):
-                    try:
-                        await self._lineage.record(
-                            "component.withdrawn",
-                            {"artifactId": state.artifactId, "from": "published", "reconciled": True},
-                            None,
-                            state.tenant,
-                        )
-                    except Exception as e:  # noqa: BLE001 — fail-open, reported via on_error
-                        _notify_promotion_error(
-                            self._on_error,
-                            PromotionErrorContext(
-                                endpoint="promotion.reconcile.audit",
-                                artifactId=state.artifactId,
-                                tenant=state.tenant,
-                            ),
-                            e,
-                        )
+            )
+            if not any(e.payload.get("from") == "published" for e in existing_withdraw):
+                try:
+                    await self._lineage.record(
+                        "component.withdrawn",
+                        {"artifactId": state.artifactId, "from": "published", "reconciled": True},
+                        None,
+                        state.tenant,
+                    )
+                except Exception as e:  # noqa: BLE001 — fail-open, reported via on_error
+                    _notify_promotion_error(
+                        self._on_error,
+                        PromotionErrorContext(
+                            endpoint="promotion.reconcile.audit",
+                            artifactId=state.artifactId,
+                            tenant=state.tenant,
+                        ),
+                        e,
+                    )
             await self._on_unpublish(
                 UnpublishContext(
                     artifactId=state.artifactId, draft=candidate.draft, tenant=state.tenant

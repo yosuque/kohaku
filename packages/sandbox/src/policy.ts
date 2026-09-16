@@ -216,7 +216,8 @@ export function resolvePolicy(policy: SandboxPolicy = {}): ResolvedSandboxPolicy
     // its docstring) has no parameter to carry a per-mount override through to the Worker/applier — it always
     // builds with the spec-core DEFAULT_MAX_DOM_* / DEFAULT_MUTATIONS_PER_MINUTE constants regardless of what
     // is resolved here. A caller-supplied override is accepted (no validation error) but currently has no
-    // effect; see docs/design.md §8 for the same caveat surfaced to users.
+    // effect; see docs/specification.md's "DOM-shape limits" paragraph (§8, sandbox bridge protocol) for the
+    // same caveat surfaced to users.
     maxDomNodes: policy.maxDomNodes ?? DEFAULT_MAX_DOM_NODES,
     maxDomDepth: policy.maxDomDepth ?? DEFAULT_MAX_DOM_DEPTH,
     mutationsPerMinute: policy.mutationsPerMinute ?? DEFAULT_MUTATIONS_PER_MINUTE,

@@ -198,6 +198,18 @@ _DEFAULT_MACHINE_POLICY = MachinePolicy(judgeBlocking=True)
 
 _TERMINAL: tuple[PromotionStatus, ...] = ("published", "rejected", "withdrawn")
 
+# Statuses whose snapshot may still have a projection (catalog/Intent entry) that reconcile() needs to
+# converge: "published" (the live projection) and "withdrawn" (a projection removal that may not have
+# completed). Every other status has no projection to converge, including "schema_proposed": it carries a
+# draft, but a draft alone is never published, so no projection was ever applied for it. Port of TS's
+# MAY_HAVE_PROJECTION (packages/lineage/src/promotion/machine.ts).
+_MAY_HAVE_PROJECTION: tuple[PromotionStatus, ...] = ("published", "withdrawn")
+
+
+def may_have_projection(status: PromotionStatus) -> bool:
+    """Whether `status`'s snapshot may still have a projection to converge (see `_MAY_HAVE_PROJECTION`'s doc)."""
+    return status in _MAY_HAVE_PROJECTION
+
 
 class TransitionError(Exception):
     """An invalid state transition (an action the machine does not allow)."""
