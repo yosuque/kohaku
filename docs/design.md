@@ -974,7 +974,7 @@ Recent major decisions not listed in the table above (numbering continues from t
 - Additional renderers such as flutter, host-agui / host-a2a (Reserved in SPEC), `component publish` (federated distribution). **renderer-wc (Web Components) is already implemented in A2** (§7.1)
 - Streaming for renderer-wc (`compose-stream` integration) is out of scope for v1 (WC receives the final Spec; patches are manually applied with `applyPatch`). pie/scatter charts are downgraded to a table fallback in WC v1
 - **SSE incremental streaming (partial delivery of the Spec) is already implemented** (§5 "Incremental streaming"; consumed on the React path by useSpecStream). **The Python implementation is also at parity with provisional patch 0..N support** (`stream_object` is a language adaptation of StreamingLlmPort + TypeGuard; see the "Known differences" section of python/README)
-- Editing of presentSpreadsheet (a write path + a double-entry-bookkeeping-style invariant demo)
+- A double-entry-bookkeeping-style invariant demo on top of presentSpreadsheet editing (the write path itself — `props.editable` + `cellEdit` — is already implemented; see docs/specification.md §7)
 - L2 rendering on the MCP Apps surface (needs consideration of a double sandbox boundary)
 - LLM auto-extraction of the promotion schema (currently a human fixes it in the approval form)
 - A dedicated artifact store (currently the html is embedded in the component.generated event)

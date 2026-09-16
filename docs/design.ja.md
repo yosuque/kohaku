@@ -959,7 +959,7 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
 - flutter 等の追加レンダラー、host-agui / host-a2a(SPEC に Reserved)、`component publish`(federated 配信)。**renderer-wc(Web Components)は A2 で実装済み**(§7.1)
 - renderer-wc のストリーミング(`compose-stream` 統合)は v1 対象外(WC は最終 Spec を受ける。patch は `applyPatch` 手動適用)。pie/scatter chart は WC v1 で表フォールバックに降格
 - **SSE 逐次ストリーミング(Spec の部分配信)は実装済み**(§5「逐次ストリーミング」。React 経路 = useSpecStream が消費)。**Python 実装も暫定 patch 0..N 対応でパリティ**(`stream_object` は StreamingLlmPort + TypeGuard の言語適応。python/README「既知の差異」参照)
-- presentSpreadsheet の編集(write 経路 + 複式簿記的な不変条件デモ)
+- presentSpreadsheet 編集の複式簿記的な不変条件デモ(編集の write 経路自体〈`props.editable` + `cellEdit`〉は実装済み。docs/specification.ja.md §7 参照)
 - MCP Apps サーフェスでの L2 描画(二重サンドボックス境界の検討が必要)
 - 昇格スキーマの LLM 自動抽出(現状は承認フォームで人間が確定)
 - artifact 専用ストア(現状 component.generated イベントに html を内包)
