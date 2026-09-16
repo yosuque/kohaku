@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+# vitest 5 default location for context.annotate() attachments and the blob reporter
+.vitest/
 *.tsbuildinfo
 .env
 .env.local
