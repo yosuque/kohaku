@@ -1,7 +1,7 @@
 import { parseQueryRef } from "@kohaku-ui/data-binding";
 import { notifyHook, parseInvokableRef } from "@kohaku-ui/host-core";
 import { enumerateBindVariants, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
-import type { ToolContext } from "./types.js";
+import type { ToolCallContext } from "./types.js";
 
 /**
  * Cumulative size budget (in JSON characters) for the initial data co-embedded in a tool result's `_meta`.
@@ -72,7 +72,7 @@ function errorMessage(e: unknown): string {
  * embedding target). A domain.invoke failure is propagated to the caller rather than swallowed (the caller chooses total
  * failure or per-ref fail-open).
  */
-async function resolveVariant(variant: string, ctx: ToolContext): Promise<TabularData | null> {
+async function resolveVariant(variant: string, ctx: ToolCallContext): Promise<TabularData | null> {
   // Pure parse/merge via host-core's parseInvokableRef (shared with the REST/MCP resolve_binding sites).
   // Deliberately no verify step here (see the module doc comment above) — an unknown source still yields
   // null (not an embedding target) rather than a thrown error.
@@ -90,7 +90,7 @@ async function resolveVariant(variant: string, ctx: ToolContext): Promise<Tabula
  */
 export async function resolveVariantWithTimeout(
   ref: string,
-  ctx: ToolContext,
+  ctx: ToolCallContext,
   timeoutMs: number,
 ): Promise<TabularData | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -150,7 +150,7 @@ export function collectComponentRefs(spec: UISpec): Array<{ initial: string; var
  */
 export async function resolveRefsBounded(
   refs: readonly string[],
-  ctx: ToolContext,
+  ctx: ToolCallContext,
   timeoutMs: number,
   totalTimeoutMs: number,
 ): Promise<Map<string, TabularData>> {
@@ -246,7 +246,7 @@ export async function resolveRefsBounded(
  */
 export async function preresolveInitialData(
   spec: UISpec,
-  ctx: ToolContext,
+  ctx: ToolCallContext,
 ): Promise<{ data: Record<string, TabularData>; resolved: Map<string, TabularData> }> {
   // Collect the initial variants across all components first, then the other bind variants (initial-display priority).
   const initialRefs: string[] = [];

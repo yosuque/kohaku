@@ -15,7 +15,7 @@ import type {
   SessionContext,
   UISpec,
 } from "@kohaku-ui/spec-core";
-import type { CacheHint, McpServer } from "@modelcontextprotocol/server";
+import type { CacheHint, McpServer, ServerContext } from "@modelcontextprotocol/server";
 import type { z } from "zod";
 import type { TaskStore } from "./tasks.js";
 
@@ -41,7 +41,39 @@ export interface McpHostDeps {
   domain: DomainPort;
   authz: AuthzPort;
   querySource: string;
+  /**
+   * The environment principal used when `resolvePrincipal` is unwired (also the fallback for a call whose
+   * `resolvePrincipal` returns before ever being consulted — see that field's doc comment for the full
+   * fallback order). Suitable for stdio (one process per user) or a per-request `createServer` factory that
+   * already bakes in the caller's identity. **Must not be trusted as-is on a shared Streamable HTTP
+   * deployment**: every connection/session shares one `McpHostDeps`, so a single `principal` here is the same
+   * identity for every caller — wire `resolvePrincipal` instead (or a per-request `McpHostDeps` factory) to
+   * resolve the caller's actual identity per tool call.
+   */
   principal?: Principal;
+  /**
+   * Resolves the principal for a single tool call (from that call's `ServerContext`, e.g. its `_meta` or
+   * whatever request-scoped identity a real deployment layers on top of the MCP transport). Called once per
+   * tool call, inside the tool handler itself — before any of the following, all of which see the resolved
+   * result: `issueCapabilityForSpec` (the principal the compose-issued capability is bound to),
+   * `SessionContext.principal` (read by `SemanticPort.normalize` / `ComposeContext.policyFor` / the fixation
+   * lookup, the same way `SessionContext.locale` already is), the initial-data preresolution's
+   * `domain.invoke` calls (a plain read — no capability is verified there), and the
+   * `verdict.principal ?? principal` fallback `kohaku_resolve_binding` / `kohaku_action` use when the AuthzPort's
+   * `verify` does not itself return a principal.
+   *
+   * Fallback order: `resolvePrincipal(extra)` → `deps.principal` → the built-in anonymous principal. **A throw
+   * from `resolvePrincipal` is fail-closed**: the tool call returns a structured tool error (`isError`) and the
+   * failure is reported to `onError` — it never silently falls back to `deps.principal` or anonymous, since
+   * doing so would let an identity-resolution failure quietly downgrade every subsequent call on this
+   * connection to a shared/anonymous identity.
+   *
+   * Required (or backed by a per-request `McpHostDeps`/`createServer` factory that already resolves identity)
+   * for a shared Streamable HTTP deployment — see `principal`'s doc comment above for why a single static
+   * `principal` is unsafe there. When unwired, every call runs as `principal ?? ANONYMOUS`, unchanged from
+   * before this field existed.
+   */
+  resolvePrincipal?: (extra: ServerContext) => Principal | Promise<Principal>;
   /**
    * The L1→L0 fixation short-circuit. The session (surface "mcp-app" + the caller-provided locale)
    * is passed so products can gate delivery — e.g. serve pinned Specs to EN sessions only, mirroring
@@ -208,15 +240,36 @@ export interface AttachOptions {
  * `tasks` is the one field here that DOES hold state (an in-memory task store — see tasks.ts's
  * `createTaskStore` doc comment for its lifetime/expiry design), still built once per `attachKohakuToMcpServer`
  * call (one store per `McpServer` instance, not per tool call).
+ *
+ * `principalOf` replaces what used to be a single attach-time `principal` field: the principal is now resolved
+ * per tool call (see `McpHostDeps.resolvePrincipal`'s doc comment), so `ToolContext` — built once per attach,
+ * shared by every call on this connection — carries only the resolver, not a resolved value. The resolved
+ * `Principal` for one specific call lives on `ToolCallContext` below, built fresh inside that call's `safeTool`
+ * body via `forCall`. This split is deliberate: it is a type error to pass this attach-level `ToolContext` into
+ * `preresolveInitialData` / `snapshotHtmlFor` / `composeForTool` (all of which need an actual resolved
+ * `principal`), catching at compile time a call site that forgot to resolve the per-call principal first.
  */
 export interface ToolContext {
   server: McpServer;
   deps: McpHostDeps;
   options: AttachOptions;
   prefix: string;
-  principal: Principal;
+  principalOf: (extra: ServerContext) => Promise<Principal>;
   getRendererHtml: () => Promise<string>;
   fixationHost: FixationDeliveryHost;
   allowedActions: () => Promise<ReadonlySet<string>>;
   tasks: TaskStore;
+}
+
+/**
+ * `ToolContext` plus the `Principal` already resolved for one specific tool call (via `ToolContext.principalOf`,
+ * see its doc comment). Built once per tool call by `forCall` (a shallow spread — cheap, and there is nothing on
+ * `ToolContext` a call needs to override besides this field), and threaded through the compose pipeline
+ * (`composeAndAudit` / `composeAndPackage` / `startComposeTask` / `buildSnapshot` / `composeForTool` /
+ * `preresolveInitialData` / `snapshotHtmlFor`) instead of the plain `ToolContext` those functions used to take —
+ * so passing the attach-level `ToolContext` into any of them is a type error, not a latent bug where the wrong
+ * (or no) principal silently rides through.
+ */
+export interface ToolCallContext extends ToolContext {
+  principal: Principal;
 }

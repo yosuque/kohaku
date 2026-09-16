@@ -14,6 +14,7 @@ the same wire shape as TS (co-embedded initial data, both _meta forms) can be re
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -75,6 +76,7 @@ from .snapshot import inject_snapshot
 
 if TYPE_CHECKING:
     from mcp.server.lowlevel import Server
+    from mcp.shared.context import RequestContext
 
 _MCP_MISSING_MESSAGE = (
     "MCP host functionality requires the mcp SDK. Please run `pip install 'kohaku-ui[mcp]'`."
@@ -142,18 +144,31 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
-def _mcp_request_meta() -> tuple[object | None, object | None]:
-    """Returns (request_id, meta) off the mcp SDK's request-scoped context
-    (`mcp.server.lowlevel.server.request_ctx`), which the SDK populates for the lifetime of this request's
-    async call chain (Server._handle_request sets it before invoking the registered handler and resets it in
-    a `finally`) — safe to read from any `await`-connected function called while handling one tool call, and
-    concurrent requests each see their own copy (contextvars semantics). Returns (None, None) when there is
-    no live request context (e.g. a handler invoked directly, as this port's own tests do)."""
+def _mcp_request_context() -> RequestContext[Any, Any, Any] | None:
+    """Returns the mcp SDK's request-scoped context object (`mcp.server.lowlevel.server.request_ctx`), which
+    the SDK populates for the lifetime of this request's async call chain (Server._handle_request sets it
+    before invoking the registered handler and resets it in a `finally`) — safe to read from any
+    `await`-connected function called while handling one tool call, and concurrent requests each see their own
+    copy (contextvars semantics). Returns None when there is no live request context (e.g. a handler invoked
+    directly, as this port's own tests do).
+
+    Extracted out of `_mcp_request_meta` (below) so `_principal_of` can hand the full context object to
+    `McpHostDeps.resolve_principal` — mirroring TS's `ServerContext` argument to `resolvePrincipal` — rather
+    than only the narrower `(request_id, meta)` pair that function itself needs.
+    """
     try:
         from mcp.server.lowlevel.server import request_ctx
 
-        ctx = request_ctx.get()
+        return request_ctx.get()
     except LookupError:
+        return None
+
+
+def _mcp_request_meta() -> tuple[object | None, object | None]:
+    """Returns (request_id, meta) off the mcp SDK's request-scoped context (see `_mcp_request_context`).
+    Returns (None, None) when there is no live request context."""
+    ctx = _mcp_request_context()
+    if ctx is None:
         return None, None
     return ctx.request_id, ctx.meta
 
@@ -307,6 +322,35 @@ class McpHostDeps:
     authz: AuthzPort
     query_source: str
     principal: Principal | None = None
+    """The environment principal used when `resolve_principal` is unwired (also the fallback for a call whose
+    `resolve_principal` returns before ever being consulted — see that field's doc comment for the full
+    fallback order). Suitable for stdio (one process per user). **Must not be trusted as-is on a shared
+    Streamable HTTP deployment**: `create_server()` builds a single `Server` shared by every session/connection
+    (see `sales_api.mcp_http`, which calls it once), so a single `principal` here is the same identity for
+    every caller — wire `resolve_principal` instead to resolve the caller's actual identity per tool call."""
+    resolve_principal: (
+        Callable[[RequestContext[Any, Any, Any] | None], Principal | Awaitable[Principal]] | None
+    ) = None
+    """Resolves the principal for a single tool call (from that call's mcp SDK `RequestContext` — see
+    `_mcp_request_context`'s doc comment — or `None` when no live request context exists). Called once per
+    tool call, inside the tool handler itself — before any of the following, all of which see the resolved
+    result: `_issue_capability` (the principal the compose-issued capability is bound to),
+    `SessionContext.principal` (read by `SemanticPort.normalize` / `ComposeContext.policyFor` / the fixation
+    lookup, the same way `SessionContext.locale` already is), the initial-data preresolution's `domain.invoke`
+    calls (a plain read — no capability is verified there), and the `verdict.principal or principal` fallback
+    `_handle_resolve_binding` / `_handle_action` use when the AuthzPort's `verify` does not itself return a
+    principal. May be sync or async (`inspect.isawaitable` decides whether to await the return value).
+
+    Fallback order: `resolve_principal(ctx)` -> `deps.principal` -> the built-in anonymous principal. **A raise
+    from `resolve_principal` is fail-closed**: the tool call returns a structured tool error (`isError`) and the
+    failure is reported to `on_error` — it never silently falls back to `deps.principal` or anonymous, since
+    doing so would let an identity-resolution failure quietly downgrade every subsequent call on this shared
+    server to a shared/anonymous identity.
+
+    Required for a shared Streamable HTTP deployment (`sales_api.mcp_http`, which builds one `Server` shared by
+    every session) — see `principal`'s doc comment above for why a single static `principal` is unsafe there.
+    When unwired, every call runs as `principal` or the built-in anonymous principal, unchanged from before
+    this field existed."""
     fixation_lookup: Callable[[str, SessionContext], Awaitable[FixationRecord | None]] | None = None
     """Fixation lookup (intentHash, session -> FixationRecord | None). The session (surface
     "mcp-app" + the caller-provided locale) is passed so products can gate delivery — e.g. serve
@@ -328,6 +372,21 @@ class McpHostDeps:
     """Failure-path observability hook. Silent when unwired. Hook throws are swallowed (observation only)."""
     action_effects: Callable[[str, JsonObject, object], Awaitable[ActionEffects]] | None = None
     """Write side-effect declaration (optional). When unspecified, the response is only `{result}` (backward compatible)."""
+
+
+async def _principal_of(deps: McpHostDeps, fallback_principal: Principal) -> Principal:
+    """Resolves the principal for one tool call — see `McpHostDeps.resolve_principal`'s doc comment for the
+    full fallback order and rationale. A raise from `deps.resolve_principal` is deliberately NOT caught here:
+    it propagates out of the `await _principal_of(...)` call inside each handler's `_safe_tool`-wrapped body,
+    so `_safe_tool`'s own except branch turns it into a structured tool error (isError) and reports it to
+    on_error — fail-closed, never silently downgraded to `fallback_principal` or anonymous.
+    """
+    if deps.resolve_principal is None:
+        return fallback_principal
+    result = deps.resolve_principal(_mcp_request_context())
+    if inspect.isawaitable(result):
+        result = await result
+    return result
 
 
 @dataclass(frozen=True)
@@ -386,7 +445,13 @@ def attach_kohaku_to_mcp_server(
         raise RuntimeError(_MCP_MISSING_MESSAGE) from exc
 
     prefix = options.tool_prefix if options.tool_prefix is not None else "kohaku"
-    principal = deps.principal if deps.principal is not None else _ANONYMOUS
+    fallback_principal = deps.principal if deps.principal is not None else _ANONYMOUS
+
+    async def _current_principal() -> Principal:
+        """Resolves the principal for THIS tool call (see `McpHostDeps.resolve_principal`'s doc comment for the
+        full fallback order). Called once per tool call, inside each handler's own `_safe_tool`-wrapped body —
+        never memoized across calls, since a shared `Server` (see `sales_api.mcp_http`) serves every session."""
+        return await _principal_of(deps, fallback_principal)
 
     # Memoized deps.domain.list_operations() names (write-scope hardening; see _issue_capability). McpHostDeps
     # is frozen, so the cache lives here as a closure variable rather than on deps (unlike host_rest's
@@ -442,7 +507,9 @@ def attach_kohaku_to_mcp_server(
             message = str(exc) if is_typed_host_error(exc) else _TOOL_INTERNAL_ERROR_MESSAGE
             return _tool_error(message)
 
-    async def _compose_and_package(source: _ComposeSource, locale: str | None = None) -> Any:
+    async def _compose_and_package(
+        source: _ComposeSource, locale: str | None, principal: Principal
+    ) -> Any:
         result = await _compose_with_fixation(source, deps, locale, principal)
         try:
             allowed = await _allowed_actions()
@@ -511,12 +578,13 @@ def attach_kohaku_to_mcp_server(
 
     # model-visible: natural language -> UI
     async def _handle_compose(args: JsonObject) -> Any:
-        return await _safe_tool(
-            f"{prefix}_compose",
-            lambda: _compose_and_package(
-                _NlSource(text=cast(str, args["question"])), _locale_of(args)
-            ),
-        )
+        async def _run() -> Any:
+            principal = await _current_principal()
+            return await _compose_and_package(
+                _NlSource(text=cast(str, args["question"])), _locale_of(args), principal
+            )
+
+        return await _safe_tool(f"{prefix}_compose", _run)
 
     registered.append(
         (
@@ -552,6 +620,7 @@ def attach_kohaku_to_mcp_server(
 
         async def _handle_render_snapshot(args: JsonObject) -> Any:
             async def _run() -> Any:
+                principal = await _current_principal()
                 spec, html = await _build_snapshot(
                     _NlSource(text=cast(str, args["question"])),
                     deps,
@@ -615,13 +684,16 @@ def attach_kohaku_to_mcp_server(
                     inputSchema=_with_locale_input(tool.input_schema, tool.name),
                     _meta=tool_ui_meta(resource_uri=RENDERER_RESOURCE_URI, visibility=["model"]),
                 ),
-                _make_intent_handler(tool, _safe_tool, _compose_and_package),
+                _make_intent_handler(tool, _safe_tool, _compose_and_package, _current_principal),
             )
         )
 
     # app-only: data resolution from the iframe (the landing point of reference-passing)
     async def _handle_resolve_binding(args: JsonObject) -> Any:
         async def _run() -> Any:
+            # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
+            # the fallback below when the AuthzPort's verify does not itself return a principal.
+            principal = await _current_principal()
             # Server-side paging/sorting: verify the capability against base (reserved params removed) and merge
             # the reserved params into domain.invoke. Unknown `_` keys are rejected.
             split = split_reserved_params(cast(str, args["ref"]))
@@ -675,6 +747,7 @@ def attach_kohaku_to_mcp_server(
     # app-only: component event -> Intent delta -> recompose
     async def _handle_event(args: JsonObject) -> Any:
         async def _run() -> Any:
+            principal = await _current_principal()
             intent_arg = cast(dict[str, Any], args["intent"])
             current = finalize_intent(
                 IntentInput(
@@ -713,6 +786,7 @@ def attach_kohaku_to_mcp_server(
                     intent=IntentInput(canonical=normalized.canonical, params=normalized.params)
                 ),
                 locale,
+                principal,
             )
 
         return await _safe_tool(f"{prefix}_event", _run)
@@ -748,6 +822,9 @@ def attach_kohaku_to_mcp_server(
     # app-only: direct write path (presentForm submit / action.button)
     async def _handle_action(args: JsonObject) -> Any:
         async def _run() -> Any:
+            # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
+            # the fallback below when the AuthzPort's verify does not itself return a principal.
+            principal = await _current_principal()
             action = cast(str, args["action"])
             capability = cast(str, args["capability"])
             payload = cast(JsonObject, args.get("payload", {}))
@@ -951,9 +1028,11 @@ async def _compose_with_fixation(
 ) -> ComposeResult:
     # One session per tool call: the caller-provided locale rides SessionContext.locale so NL
     # normalization, the fixation gate, and the compose policy (ComposeContext.policyFor) all see it.
-    # `principal` is attached symmetrically with _handle_event's _mcp_session(locale, principal) call below —
-    # without it, SemanticPort.normalize / policy_for / the fixation lookup would see an anonymous session on
-    # the compose path only, diverging from the kohaku_event path for the same attached principal.
+    # `principal` here is this call's already-resolved principal (see McpHostDeps.resolve_principal's doc
+    # comment — every caller of this function resolves it once via `_current_principal()` before calling in),
+    # attached symmetrically with _handle_event's own _mcp_session(locale, principal) call — without it,
+    # SemanticPort.normalize / policy_for / the fixation lookup would see an anonymous session on the compose
+    # path only, diverging from the kohaku_event path for the same resolved principal.
     #
     # NOTE (mirrors host-core's TS resolveIntent, which this Python port does not yet have — see
     # kohaku.host_core): the "intent" and "nl" branches below duplicate TS host-core's resolveIntent
@@ -1396,7 +1475,8 @@ def _to_wire_data(data: object) -> Any:
 def _make_intent_handler(
     tool: IntentToolDef,
     safe_tool: Callable[[str, Callable[[], Awaitable[Any]]], Awaitable[Any]],
-    compose_and_package: Callable[[_ComposeSource, str | None], Awaitable[Any]],
+    compose_and_package: Callable[[_ComposeSource, str | None, Principal], Awaitable[Any]],
+    current_principal: Callable[[], Awaitable[Principal]],
 ) -> Callable[[JsonObject], Awaitable[Any]]:
     """Build the handler for an intent tool (avoids late binding of the loop variable tool)."""
 
@@ -1405,9 +1485,11 @@ def _make_intent_handler(
         # would silently strip it anyway, but the canonical intent must never see it).
         locale = _locale_of(args)
         params = {key: value for key, value in args.items() if key != "locale"}
-        return await safe_tool(
-            tool.name,
-            lambda: compose_and_package(_IntentSource(intent=tool.to_intent(params)), locale),
-        )
+
+        async def _run() -> Any:
+            principal = await current_principal()
+            return await compose_and_package(_IntentSource(intent=tool.to_intent(params)), locale, principal)
+
+        return await safe_tool(tool.name, _run)
 
     return handler

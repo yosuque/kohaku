@@ -7,7 +7,7 @@ import {
   preresolveTotalTimeoutMs,
   resolveRefsBounded,
 } from "./initial-data.js";
-import type { ToolContext } from "./types.js";
+import type { ToolCallContext } from "./types.js";
 
 /** Detects the #kohaku-snapshot placeholder (`null`) inside the shared renderer (survives even after the single-file build). */
 const SNAPSHOT_PLACEHOLDER_RE = /(<script id="kohaku-snapshot"[^>]*>)null(<\/script>)/;
@@ -62,7 +62,7 @@ function injectSnapshot(html: string, spec: UISpec, data: Record<string, Tabular
  * preresolveInitialData / resolve_binding) and is excluded from both the "must resolve" set and the output.
  */
 export async function snapshotHtmlFor(
-  ctx: ToolContext,
+  ctx: ToolCallContext,
   result: ComposeResult,
   preresolved?: Map<string, TabularData>,
 ): Promise<string> {

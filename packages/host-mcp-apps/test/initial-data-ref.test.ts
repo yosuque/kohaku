@@ -1,7 +1,7 @@
 import type { DomainPort, JsonObject, TabularData } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { resolveVariantWithTimeout } from "../src/initial-data.js";
-import type { ToolContext } from "../src/types.js";
+import type { ToolCallContext } from "../src/types.js";
 
 // Characterization (pre-refactor): pins the exact ref-parsing / domain.invoke behavior of
 // initial-data.ts's resolveVariant (no verify step here, by design — see the module doc comment)
@@ -32,12 +32,12 @@ function captureDomain(): {
   };
 }
 
-/** A minimal ToolContext stub: resolveVariant only reads deps.domain / deps.querySource / principal. */
-function makeCtx(domain: DomainPort, querySource = "sales"): ToolContext {
+/** A minimal ToolCallContext stub: resolveVariant only reads deps.domain / deps.querySource / principal. */
+function makeCtx(domain: DomainPort, querySource = "sales"): ToolCallContext {
   return {
-    deps: { domain, querySource } as ToolContext["deps"],
+    deps: { domain, querySource } as ToolCallContext["deps"],
     principal: { id: "tester", roles: ["user"] },
-  } as unknown as ToolContext;
+  } as unknown as ToolCallContext;
 }
 
 describe("resolveVariant ref parsing (initial-data.ts / host-core parity)", () => {
