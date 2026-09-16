@@ -89,29 +89,31 @@ python/
 テナント別固定化ロックで直列化して await し、`host_mcp` はバックグラウンドタスクとして発火する)。この戦略と各
 プロファイル固有のエラーフック文字列は、小さな `FixationDeliveryHost` オブジェクトを介してホスト側が供給する。
 
-**MCP 2026-07-28 先行対応**(全体像は `docs/design.ja.md` の「MCP 2026-07-28 / SDK v2 移行計画」参照。SDK v2
-自体はまだ未採用): `host_mcp` は全ツール結果に `resultType: "complete"` を付与する(TS と対称)。失敗経路の観測
-フック(`McpErrorInfo.correlation_id`)に渡す相関 id は**常にツール呼び出し自身の JSON-RPC リクエスト id であり、
-`_meta.traceparent`(SEP-414)からは決して導出しない** — TS と同じルールである。W3C の trace-id は 1 つのトレー
-ス全体で共有されるため、そこから相関 id を導出すると 1 会話内の全ツール呼び出しが同じ id に潰れてしまう。この
-id が到達するのは今のところ `McpErrorInfo.correlation_id` のみで、`compose_with_fixation` / `ComposeOptions`
-にはまだ相関 id パラメータが無い(その修正には `host_core`/`composer` に触る必要がありスコープ外)ため、TS の
-対応物が `ComposeTrace.correlationId` にも到達するのとは異なる。ツール呼び出しの `_meta.traceparent`
+**MCP 2026-07-28**(全体像は `docs/design.ja.md` の「MCP 2026-07-28 / SDK v2 移行」と「Python `mcp` 2.x 移行」
+参照): `host_mcp` は `mcp` 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)上で動く — 低レベル `Server` のハンドラ
+は `mcp` 1.x が使っていたデコレータではなく `Server.add_request_handler(method, params_type, handler)` で登録
+し、各ハンドラはリクエストスコープの contextvar を読む代わりに自身専用の `ServerRequestContext` を受け取る。
+全ツール結果はすでに `result_type: "complete"` を実の宣言済み pydantic フィールドとして持つ(2.x の
+`CallToolResult` 他の `Result` サブクラスが直接宣言している — TS は自身の SDK バージョン事情で引き続き明示的
+にスタンプしているのとは異なり、事後のスタンプ処理は不要)。失敗経路の観測フック(`McpErrorInfo.correlation_id`)
+に渡す相関 id は**常にツール呼び出し自身の JSON-RPC リクエスト id であり、`_meta.traceparent`(SEP-414)からは
+決して導出しない** — TS と同じルールである。W3C の trace-id は 1 つのトレース全体で共有されるため、そこから相関
+id を導出すると 1 会話内の全ツール呼び出しが同じ id に潰れてしまう。この id が到達するのは今のところ
+`McpErrorInfo.correlation_id` のみで、`compose_with_fixation` / `ComposeOptions` にはまだ相関 id パラメータが
+無い(その修正には `host_core`/`composer` に触る必要がありスコープ外)ため、TS の対応物が
+`ComposeTrace.correlationId` にも到達するのとは異なる。ツール呼び出しの `_meta.traceparent`
 (+ `_meta.tracestate`)は、整形式であれば別途 `TraceContext`(`kohaku.host_core.trace_context`。TS の
 `packages/host-core/src/trace-context.ts` をそのまま移植したもの — 全ゼロの trace-id/parent-id の拒否や
 `tracestate` の W3C 推奨 512 文字上限も含む。`host_rest` は同等の `traceparent` / `tracestate` リクエストヘッダ
 を読む)として解析され、同じ理由で `McpErrorInfo.trace_context` / `HostErrorInfo.trace_context` にのみ現れ
 `ComposeTrace` へは到達しない。トレースの相関はこの `TraceContext` だけが担い、相関 id がその役目を兼ねることは
 無い。OTel SDK 自体(スパン生成・エクスポート、`@kohaku-ui/otel`)は TS のみで、この移植の対象外である。さらに
-`host_mcp` は `tools/list` と `resources/list`(`resources/read` は除く)に `ttlMs`/`cacheScope`(SEP-2549)を
-付与する — 導入済み `mcp` SDK の低レベルデコレータがこの 2 箇所については完全な結果オブジェクトを受け付けるた
-めである。TS の `packages/host-mcp-apps` は現在 `tools/list`/`resources/list` について同じ値を付与しており
-(SDK v2 の `ServerOptions.cacheHints`。`apps/sample-mcp/src/setup.ts` が配線)、さらに共有レンダラーリソース
-の `resources/read` も追加でカバーしている(SDK v2 の登録時オプション `registerResource(..., {cacheHint})`)
-— こちらは導入済みの `mcp` SDK バージョンの `read_resource()` デコレータにはまだ同等のフックが無く(常にハン
-ドラの `Iterable[ReadResourceContents]` から自前で `ReadResourceResult` を組み立て直すのみで、`list_tools`/
-`list_resources` のような完全な結果オブジェクトを返す「新スタイル」の経路が無い)、`resources/read` は現状
-TS のみの対応である。
+`host_mcp` は `tools/list`・`resources/list`・**そして `resources/read` にも** `ttl_ms`/`cache_scope`
+(SEP-2549)を設定する — `mcp` 2.x の `ReadResourceResult` が `CacheableResult` を基底クラスとして得た(1.x で
+は持っていなかった)ことで、本ファイルがかつて TS のみと記していたギャップが解消された。これらのフィールドが
+配線上に現れるのは 2026-07-28 以降でネゴシエートした接続に限られる(mcp SDK 自身の結果シリアライザが古いプロ
+トコルバージョンではそれらを篩い落とす)ため、`kohaku/tests/host_mcp` のキャッシュヒントテストは
+`mode="2026-07-28"` で接続している。
 
 Python サンプル(`examples/sales-api`)はシード JSON をリポジトリルートの `apps/sample-api/src/domain/seed` から直読みする(データ二重管理を避けるため)。したがって `python/` サブツリー単独ではなく**フル monorepo チェックアウト**が前提。
 
