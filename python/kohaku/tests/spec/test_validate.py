@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from kohaku.spec import UISpec, validate_spec_structure
+import pytest
+
+from kohaku.spec import (
+    MAX_BIND_VARIANTS,
+    UISpec,
+    collect_capability_scopes,
+    validate_spec_structure,
+)
 
 
 def _spec(**overrides: Any) -> UISpec:
@@ -243,3 +250,36 @@ class TestBindValidation:
             ],
         )
         assert "BIND_VARIANT_LIMIT" in _codes(spec)
+
+    def _single_bind_spec(self, count: int) -> UISpec:
+        values = [f"v{i}" for i in range(count)]
+        return _spec(
+            state={"region": "v0"},
+            components=[
+                {
+                    "id": "root",
+                    "type": "x",
+                    "data": {
+                        "$ref": "query://sales/summary?fy=2026&region=v0",
+                        "bind": {"region": {"$state": "region", "values": values}},
+                    },
+                }
+            ],
+        )
+
+    def test_bind_variant_limit_boundary_256_ok(self) -> None:
+        """256 (== MAX_BIND_VARIANTS) is valid, and collect_capability_scopes agrees (no raise)."""
+        assert MAX_BIND_VARIANTS == 256
+        spec = self._single_bind_spec(256)
+        assert "BIND_VARIANT_LIMIT" not in _codes(spec)
+        scopes = collect_capability_scopes(spec)
+        assert len(scopes) > 0
+
+    def test_bind_variant_limit_boundary_257_trips_limit(self) -> None:
+        """257 (> MAX_BIND_VARIANTS) hits BIND_VARIANT_LIMIT, and collect_capability_scopes raises for
+        the same reason (it is the last line of defense for L0 fixed Specs, which never go through
+        validate_spec_structure -- see its docstring)."""
+        spec = self._single_bind_spec(257)
+        assert "BIND_VARIANT_LIMIT" in _codes(spec)
+        with pytest.raises(ValueError, match="exceed the limit"):
+            collect_capability_scopes(spec)
