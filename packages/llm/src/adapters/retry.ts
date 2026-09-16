@@ -148,18 +148,36 @@ function findApiCallError(err: unknown, depth = 0): ApiCallErrorLike | undefined
   return findApiCallError(e.cause, depth + 1);
 }
 
+/**
+ * A numeric literal grammar (optional sign, digits, optional decimal, optional exponent), matched
+ * against the whole (trimmed) string.
+ */
+const NUMERIC_LITERAL_PATTERN = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/;
+
+/**
+ * Parses a header value as a float, requiring the *entire* string to be numeric -- unlike
+ * `Number.parseFloat`, which only consumes a leading numeric prefix and silently ignores trailing
+ * garbage (e.g. `Number.parseFloat("2abc")` is `2`, not NaN). Mirrors Python's `float(str)` (which
+ * raises on trailing garbage), so a malformed Retry-After header does not parse to a truncated number
+ * in only one language's implementation.
+ */
+function parseFloatStrict(raw: string): number {
+  const trimmed = raw.trim();
+  return NUMERIC_LITERAL_PATTERN.test(trimmed) ? Number.parseFloat(trimmed) : Number.NaN;
+}
+
 /** Interprets Retry-After-equivalent headers (retry-after-ms / retry-after). Follows the AI SDK's implementation. */
 function retryAfterFromHeaders(headers: Record<string, string> | undefined): number | null {
   if (headers == null) return null;
   const retryAfterMs = headers["retry-after-ms"];
   if (retryAfterMs != null) {
-    const ms = Number.parseFloat(retryAfterMs);
+    const ms = parseFloatStrict(retryAfterMs);
     if (Number.isFinite(ms) && ms >= 0) return ms;
   }
   const retryAfter = headers["retry-after"];
   if (retryAfter != null) {
     // Seconds (e.g. "2") or an HTTP date (e.g. "Wed, 21 Oct 2025 07:28:00 GMT").
-    const seconds = Number.parseFloat(retryAfter);
+    const seconds = parseFloatStrict(retryAfter);
     if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
     const dateMs = Date.parse(retryAfter) - Date.now();
     if (Number.isFinite(dateMs) && dateMs >= 0) return dateMs;

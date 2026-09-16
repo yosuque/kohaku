@@ -18,7 +18,6 @@ import contextlib
 import inspect
 import json
 import logging
-import math
 import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -320,15 +319,22 @@ def parse_iso8601(raw: str) -> str | None:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
+# Only a plain decimal-digit string (with an optional decimal point) is accepted -- unlike a bare
+# `float(raw)` conversion, this rejects underscore digit-group separators ("1_000") and scientific
+# notation ("1e3"), both of which Python's float() would otherwise silently accept as a value (unlike
+# JS's Number(), which accepts hex ("0x10") instead). This is the isomorphic parity fix for the TS
+# implementation's parseLimit (packages/host-rest/src/routes/governance.ts).
+_LIMIT_PATTERN = re.compile(r"^\d+(\.\d+)?$")
+
+
 def _parse_limit(raw: str | None, max_limit: int, default: int | None) -> int | None:
-    """Validate limit (reject NaN / negative / oversized values). Invalid or unspecified defers to default."""
-    if raw is None:
+    """Validate limit (only a decimal-digit string is accepted; matches the TS implementation's
+    parseLimit). Rejects NaN / negative / non-decimal-digit-string / oversized values. Invalid or
+    unspecified defers to default."""
+    if raw is None or not _LIMIT_PATTERN.fullmatch(raw):
         return default
-    try:
-        n = float(raw)
-    except ValueError:
-        return default
-    if not math.isfinite(n) or n <= 0:
+    n = float(raw)
+    if n <= 0:
         return default
     return min(int(n), max_limit)
 

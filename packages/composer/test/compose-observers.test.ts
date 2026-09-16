@@ -82,4 +82,40 @@ describe("composeObservers", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(calledB.length).toBe(1);
   });
+
+  // onComposed above is exercised end to end (via a real compose()); onError and onBudgetCheckError get
+  // the same isolation guarantee (per-observer fireObserverHook wrapping inside composeObservers, see its
+  // docstring), so pin it directly at the composeObservers level for both hooks x both failure modes
+  // instead of contriving a real compose failure / budget-hook fault for each combination.
+  describe.each(["onError", "onBudgetCheckError"] as const)("hook: %s", (hookName) => {
+    it.each(["throws synchronously", "rejects asynchronously"] as const)(
+      "isolates an observer that %s: the other observer still runs, nothing propagates",
+      async (label) => {
+        const calledB: unknown[] = [];
+        const observerA: ComposeObserver =
+          label === "throws synchronously"
+            ? {
+                [hookName]: () => {
+                  throw new Error(`${hookName} observer A is broken`);
+                },
+              }
+            : {
+                [hookName]: async () => {
+                  throw new Error(`${hookName} observer A rejects asynchronously`);
+                },
+              };
+        const observerB: ComposeObserver = {
+          [hookName]: (...args: unknown[]) => void calledB.push(args),
+        };
+        const merged = composeObservers(observerA, observerB);
+        const hook = merged[hookName] as ((ctx: unknown, error: unknown) => void) | undefined;
+        expect(hook).toBeDefined();
+
+        expect(() => hook?.({} as never, new Error("boom"))).not.toThrow();
+        // Both onError and onBudgetCheckError are fire-and-forget (fireObserverHook), so wait a tick.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(calledB.length).toBe(1);
+      },
+    );
+  });
 });

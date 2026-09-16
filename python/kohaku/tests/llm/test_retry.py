@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from email.utils import formatdate
 
 import pytest
 
 from kohaku.llm import RetryPolicy
-from kohaku.llm.abort import AbortController, AbortError, AbortSignal
+from kohaku.llm.abort import AbortController, AbortError, AbortSignal, default_sleep
 from kohaku.llm.retry import (
     ApiCallError,
     RetryDeps,
@@ -46,6 +48,42 @@ def _make_deps() -> tuple[list[float], RetryDeps]:
 
 def _fresh_signal() -> AbortSignal:
     return AbortSignal()
+
+
+def test_default_sleep_rejects_immediately_when_already_aborted() -> None:
+    async def run() -> None:
+        controller = AbortController()
+        reason = RuntimeError("already aborted")
+        controller.abort(reason)
+        with pytest.raises(RuntimeError, match="already aborted"):
+            await default_sleep(1000, controller.signal)
+
+    asyncio.run(run())
+
+
+def test_default_sleep_rejects_when_aborted_while_waiting() -> None:
+    async def run() -> None:
+        controller = AbortController()
+        task = asyncio.ensure_future(default_sleep(1000, controller.signal))
+        # Let the task run up to `await future` (registering its abort listener) before aborting, so
+        # this actually exercises the mid-wait abort path rather than the already-aborted short-circuit.
+        await asyncio.sleep(0)
+        controller.abort(RuntimeError("cancelled mid-wait"))
+        with pytest.raises(RuntimeError, match="cancelled mid-wait"):
+            await task
+
+    asyncio.run(run())
+
+
+def test_default_sleep_removes_its_listener_after_normal_completion() -> None:
+    async def run() -> None:
+        controller = AbortController()
+        # ms>0 so the wait actually registers a listener (default_sleep short-circuits for ms<=0
+        # without ever calling add_listener, which would make this assertion vacuous).
+        await default_sleep(5, controller.signal)
+        assert controller.signal._listeners == []  # noqa: SLF001 -- pinning the no-leak contract
+
+    asyncio.run(run())
 
 
 def test_provider_fails_twice_then_succeeds_with_backoff() -> None:
@@ -212,6 +250,23 @@ def test_retryable_provider_error_detection() -> None:
     assert retryable_provider_error(RuntimeError("plain")) == (False, None)
     assert is_retryable_provider_error(_api_error(is_retryable=False)) is False
     assert is_retryable_provider_error(RuntimeError("plain")) is False
+
+
+def test_retry_after_http_date_in_the_future_returns_positive_ms() -> None:
+    future = formatdate(time.time() + 60, usegmt=True)
+    err = _api_error(is_retryable=True, response_headers={"retry-after": future})
+    retryable, retry_after_ms = retryable_provider_error(err)
+    assert retryable is True
+    assert retry_after_ms is not None
+    # Allow slack for the two time.time() calls (this test's and _retry_after_from_headers's) not
+    # landing on the exact same instant.
+    assert retry_after_ms > 50_000
+
+
+def test_retry_after_http_date_in_the_past_is_treated_as_no_retry_after() -> None:
+    past = formatdate(time.time() - 60, usegmt=True)
+    err = _api_error(is_retryable=True, response_headers={"retry-after": past})
+    assert retryable_provider_error(err) == (True, None)
 
 
 def test_detects_api_call_error_buried_in_cause_chain() -> None:
