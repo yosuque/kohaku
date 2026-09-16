@@ -7,10 +7,10 @@
     "url": "git+https://github.com/yosuque/kohaku.git"
   },
   "type": "module",
-  "packageManager": "pnpm@11.5.2",
+  "packageManager": "pnpm@12.4.2",
   "engines": {
     "node": ">=22",
-    "pnpm": ">=11"
+    "pnpm": ">=12"
   },
   "scripts": {
     "typecheck": "pnpm -r --if-present run typecheck",

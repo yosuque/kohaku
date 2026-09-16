@@ -57,5 +57,4 @@ minimumReleaseAgeExclude:
   - '@ai-sdk/provider-utils@5.0.40' # transitive dependency shared by the @ai-sdk/* packages above
   - '@ai-sdk/provider@4.0.14' # transitive dependency shared by the @ai-sdk/* packages above
 
-onlyBuiltDependencies:
-  - esbuild
+# `onlyBuiltDependencies` was removed in pnpm 12; `allowBuilds` above is its replacement.

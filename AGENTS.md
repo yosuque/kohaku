@@ -5,7 +5,7 @@ The reference implementation of "kohaku", an AI-native GUI library. UI is treate
 ## Commands
 
 ```bash
-pnpm install                 # install dependencies (pnpm 11 / Node >= 22)
+pnpm install                 # install dependencies (pnpm 12 / Node >= 22)
 pnpm test                    # all tests (Vitest projects; everything passes without an LLM)
 pnpm vitest run --project composer   # single-package tests (names come from each vitest.config.ts `name`)
 pnpm typecheck               # tsc --noEmit for all packages
