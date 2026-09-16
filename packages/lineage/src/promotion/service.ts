@@ -91,6 +91,10 @@ export const DEFAULT_PROMOTION_POLICY: PromotionPolicy = {
  *   neither the snapshot itself nor `component.generated` could supply the required html (#9).
  * - `promotion.nominate.tenant`: `evaluateAndList` (tenant unspecified) skipped auto-nominating a candidate that
  *   belongs to a specific tenant, to avoid persisting a tenant-neutral state for it (#10; promotion/nomination.ts).
+ * - `promotion.nominate.audit`: the fail-open `component.nominated` audit record (recorded after the status
+ *   transition to `candidate` is already persisted) failed for one nominated candidate (promotion/nomination.ts).
+ *   Unlike publish/unpublish's audit, there is currently no reconcile-style backfill for a missed
+ *   `component.nominated` event, so the audit trail stays incomplete for that artifact until a manual fix.
  * - `storage.record.invalid`: a promotion-state record read back from `StoragePort.getPromotionState`
  *   (candidate-store.ts's `loadCandidate`) failed `@kohaku-ui/spec-core`'s `PromotionStateSchema` (a
  *   corrupted or hand-edited `promotions.json` entry). The reader treats it exactly
@@ -104,6 +108,7 @@ export type PromotionErrorEndpoint =
   | "promotion.reconcile.audit"
   | "promotion.reconcile.projection"
   | "promotion.nominate.tenant"
+  | "promotion.nominate.audit"
   | "storage.record.invalid";
 
 /** Context passed to `createPromotions`' `onError` hook alongside the causing error. */
