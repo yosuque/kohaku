@@ -666,9 +666,13 @@ function registerEventTool(ctx: ToolContext): void {
     {
       description: "(app-only) Recomposes a component event as an Intent delta",
       inputSchema: z.object({
-        intent: z.object({ canonical: z.string(), params: z.record(z.string(), z.unknown()) }),
+        // JsonObjectSchema (not a bare z.record) caps nesting depth the same way kohaku_action's own
+        // `payload` already does (host-rest's ActionBodySchema counterpart), guarding the recursive
+        // canonical-JSON serialization (intent-hash computation) and lineage persistence downstream of
+        // these fields against a pathologically deep but otherwise well-formed payload.
+        intent: z.object({ canonical: z.string(), params: JsonObjectSchema }),
         on: z.string(),
-        payload: z.record(z.string(), z.unknown()).default({}),
+        payload: JsonObjectSchema.default({}),
         locale: LOCALE_INPUT,
       }),
       _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["app"] }),

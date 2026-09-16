@@ -114,6 +114,35 @@ _ANONYMOUS = Principal(id="mcp-user", roles=["user"])
 # MAX_ACTION_PAYLOAD_BYTES (packages/host-mcp-apps/src/server.ts).
 MAX_ACTION_PAYLOAD_BYTES = 64 * 1024
 
+# Upper bound on a JsonObject's nesting depth (the object itself = depth 1). Mirrors
+# packages/spec-core/src/schema/json.ts's JsonObjectSchema depth cap (also mirrored locally by
+# kohaku.host_rest.bodies' own MAX_JSON_OBJECT_DEPTH / _json_depth_ok — duplicated here rather than imported,
+# since host_rest and host_mcp are independent siblings in the import-linter layer contract, same rationale as
+# this module's local ViewRecorderProtocol). Guards the recursive canonical-JSON serialization (intent-hash
+# computation) and lineage persistence downstream of `kohaku_event`'s `payload` / `intent.params` and
+# `kohaku_action`'s `payload` against a pathologically deep but otherwise well-formed payload. On TS, the
+# same-named fields are validated by JsonObjectSchema at the SDK's own input-schema layer, before the handler
+# ever runs; the Python mcp SDK's tool schemas are JSON Schema hints only (no runtime validator wired in), so
+# this is enforced inside each handler instead.
+MAX_JSON_OBJECT_DEPTH = 32
+
+
+def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 1) -> bool:
+    """True while `value`'s nesting stays within `limit` (the object/array itself = depth 1). Only descending
+    into a dict/list counts toward depth — a scalar leaf never does, since it cannot nest any further. Mirrors
+    spec-core/schema/json.ts's exceedsMaxJsonDepth (inverted: True = not exceeded) and
+    kohaku.host_rest.bodies._json_depth_ok (structurally identical; see MAX_JSON_OBJECT_DEPTH's doc comment
+    above for why this module carries its own copy)."""
+    if isinstance(value, dict):
+        if depth > limit:
+            return False
+        return all(_json_depth_ok(v, limit, depth + 1) for v in value.values())
+    if isinstance(value, list):
+        if depth > limit:
+            return False
+        return all(_json_depth_ok(v, limit, depth + 1) for v in value)
+    return True
+
 # The client-visible message for an untyped tool failure (an exception _safe_tool catches that no explicit
 # _tool_error(...) call inside the tool body already produced). Port of TS host-mcp-apps'
 # TOOL_INTERNAL_ERROR_MESSAGE (server.ts).
@@ -749,13 +778,17 @@ def attach_kohaku_to_mcp_server(
         async def _run() -> Any:
             principal = await _current_principal()
             intent_arg = cast(dict[str, Any], args["intent"])
-            current = finalize_intent(
-                IntentInput(
-                    canonical=cast(str, intent_arg["canonical"]),
-                    params=cast(JsonObject, intent_arg["params"]),
-                )
-            )
+            intent_params = cast(JsonObject, intent_arg["params"])
             payload = cast(JsonObject, args.get("payload", {}))
+            # Mirrors TS's JsonObjectSchema on kohaku_event's payload/intent.params (validated there at the
+            # SDK's own input-schema layer, before the handler ever runs, the same way kohaku_action's
+            # payload already is) — the Python mcp SDK's tool schemas are JSON Schema hints only (no runtime
+            # validator wired in), so the depth cap is enforced here instead.
+            if not _json_depth_ok(intent_params) or not _json_depth_ok(payload):
+                return _tool_error(f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})")
+            current = finalize_intent(
+                IntentInput(canonical=cast(str, intent_arg["canonical"]), params=intent_params)
+            )
             locale = _locale_of(args)
             on = cast(str, args["on"])
             normalized = await deps.compose.semantic.normalize(
@@ -828,6 +861,11 @@ def attach_kohaku_to_mcp_server(
             action = cast(str, args["action"])
             capability = cast(str, args["capability"])
             payload = cast(JsonObject, args.get("payload", {}))
+            # Mirrors TS's JsonObjectSchema on kohaku_action's payload (validated there at the SDK's own
+            # input-schema layer, before the handler ever runs) — the Python mcp SDK's tool schemas are JSON
+            # Schema hints only (no runtime validator wired in), so the depth cap is enforced here instead.
+            if not _json_depth_ok(payload):
+                return _tool_error(f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})")
             # Reject an action name the DomainPort does not expose before even attempting capability
             # verification (defense in depth for a host that does not honor this tool's app-only visibility
             # hint, or a prompt-injected instruction — see CAPABILITY_META_KEY's doc comment). Fail-closed on

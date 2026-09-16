@@ -451,6 +451,79 @@ describe("audit recording fail-open (host-mcp-apps, #2)", () => {
   });
 });
 
+describe("kohaku_event payload / intent.params nesting depth cap (JsonObjectSchema, like kohaku_action)", () => {
+  /** Builds a JSON object literal nested `depth` levels deep (a bare `{leaf:true}` is depth 1). Mirrors
+   * host-rest/test/schemas.test.ts's own nestedObject helper. */
+  function nestedObject(depth: number): Record<string, unknown> {
+    let obj: Record<string, unknown> = { leaf: true };
+    for (let i = 1; i < depth; i++) {
+      obj = { nested: obj };
+    }
+    return obj;
+  }
+
+  async function connect(): Promise<Client> {
+    const server = new McpServer({ name: "kohaku-event-depth", version: "0.1.0" });
+    attachKohakuToMcpServer(
+      server,
+      { compose: makeComposeCtx(), domain, authz, querySource: "sales" },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+    const client = new Client({ name: "event-depth-client", version: "0.0.1" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    return client;
+  }
+
+  it("a payload nested 33 levels deep (over the 32 limit) is rejected by the SDK's own input validation before the handler runs", async () => {
+    const client = await connect();
+    const result = await client.callTool({
+      name: "kohaku_event",
+      arguments: {
+        intent: { canonical: "sales.trend", params: {} },
+        on: "c.pointClick",
+        payload: nestedObject(33),
+      },
+    });
+    // The SDK validates inputSchema before ever calling our registerTool callback (an unreachable handler,
+    // not a caught exception from within it), and reports the failure as an isError tool result rather than
+    // a JSON-RPC-level rejection.
+    expect(result.isError).toBe(true);
+    expect((result.content as { type: string; text: string }[])[0]!.text).toContain(
+      "object nesting exceeds the maximum depth (32)",
+    );
+  });
+
+  it("an intent.params nested 33 levels deep (over the 32 limit) is rejected by the SDK's own input validation before the handler runs", async () => {
+    const client = await connect();
+    const result = await client.callTool({
+      name: "kohaku_event",
+      arguments: {
+        intent: { canonical: "sales.trend", params: nestedObject(33) },
+        on: "c.pointClick",
+        payload: {},
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect((result.content as { type: string; text: string }[])[0]!.text).toContain(
+      "object nesting exceeds the maximum depth (32)",
+    );
+  });
+
+  it("a payload nested exactly 32 levels deep (at the limit) passes schema validation and reaches the handler", async () => {
+    const client = await connect();
+    const result = await client.callTool({
+      name: "kohaku_event",
+      arguments: {
+        intent: { canonical: "sales.trend", params: {} },
+        on: "c.pointClick",
+        payload: nestedObject(32),
+      },
+    });
+    expect(result.isError).toBeFalsy();
+  });
+});
+
 describe("correlation id: the tool call's JSON-RPC request id reaches ComposeTrace.correlationId", () => {
   it("kohaku_compose threads extra.requestId through composeForTool -> composeWithFixation -> compose()", async () => {
     let correlationId: string | undefined;

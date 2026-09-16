@@ -1066,6 +1066,84 @@ class TestEventTool:
         asyncio.run(run())
 
 
+def _nested_object(depth: int) -> dict[str, Any]:
+    """A dict literal nested `depth` levels deep (a bare {"leaf": True} is depth 1). Mirrors
+    host_rest/test_bodies.py's own _nested_object."""
+    obj: dict[str, Any] = {"leaf": True}
+    for _ in range(1, depth):
+        obj = {"nested": obj}
+    return obj
+
+
+class TestEventActionPayloadDepthCap:
+    """kohaku_event's payload / intent.params and kohaku_action's payload are all capped at
+    MAX_JSON_OBJECT_DEPTH (32) — TS validates the same fields via JsonObjectSchema at the SDK's own
+    input-schema layer; Python has no such layer, so server.py's _json_depth_ok enforces it in-handler."""
+
+    def test_event_payload_over_32_is_rejected(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": {}},
+                        "on": "c.pointClick",
+                        "payload": _nested_object(33),
+                    },
+                )
+                assert result.isError
+                assert "nesting exceeds the maximum depth (32)" in result.content[0].text  # type: ignore[union-attr]
+
+        asyncio.run(run())
+
+    def test_event_intent_params_over_32_is_rejected(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": _nested_object(33)},
+                        "on": "c.pointClick",
+                        "payload": {},
+                    },
+                )
+                assert result.isError
+                assert "nesting exceeds the maximum depth (32)" in result.content[0].text  # type: ignore[union-attr]
+
+        asyncio.run(run())
+
+    def test_event_payload_at_32_is_accepted(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": {}},
+                        "on": "c.pointClick",
+                        "payload": _nested_object(32),
+                    },
+                )
+                assert not result.isError
+
+        asyncio.run(run())
+
+    def test_action_payload_over_32_is_rejected(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                composed = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
+                capability = _capability_of(composed)
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": _nested_object(33), "capability": capability},
+                )
+                assert result.isError
+                assert "nesting exceeds the maximum depth (32)" in result.content[0].text  # type: ignore[union-attr]
+
+        asyncio.run(run())
+
+
 def test_no_lingering_script_marker_regex() -> None:
     """Regression guard: the snapshot placeholder regex has the expected shape (detects embedding-marker drift)."""
     from kohaku.host_mcp.snapshot import SNAPSHOT_PLACEHOLDER_RE
