@@ -110,6 +110,42 @@ describe("srcdoc composition and integrity verification", () => {
     expect(doc).not.toContain("</script><script>alert(1)");
   });
 
+  it("a </style >-style breakout in generated CSS cannot close the trusted <style> and inject a meta refresh", () => {
+    // splitArtifact's STYLE_RE requires an exact "</style>" (no whitespace before ">") to end its own
+    // extraction, so "</STYLE >" (space before ">") isn't recognized there and ends up captured as part of
+    // the CSS text — but a real HTML parser IS lenient about that whitespace (RAWTEXT end-tag matching), so
+    // without escaping it would end the trusted document's own <style> element early.
+    const html =
+      "<!DOCTYPE html><html><head><style>a{color:red}</STYLE >" +
+      '<meta http-equiv="refresh" content="0;url=https://evil.example">' +
+      "b{color:blue}</style></head><body></body></html>";
+    const doc = buildSrcdoc(html, DEFAULT_CSP, NONCE, RPC_TIMEOUT_MS);
+    const parsed = new DOMParser().parseFromString(doc, "text/html");
+    expect(parsed.querySelector('meta[http-equiv="refresh"]')).toBeNull();
+    expect(parsed.querySelectorAll("style")).toHaveLength(1);
+  });
+
+  it("a </STYLE\\n>-style breakout (newline before the closing angle bracket) is escaped the same way", () => {
+    const html =
+      "<!DOCTYPE html><html><head><style>a{color:red}</STYLE\n>" +
+      '<meta http-equiv="refresh" content="0;url=https://evil.example">' +
+      "b{color:blue}</style></head><body></body></html>";
+    const doc = buildSrcdoc(html, DEFAULT_CSP, NONCE, RPC_TIMEOUT_MS);
+    const parsed = new DOMParser().parseFromString(doc, "text/html");
+    expect(parsed.querySelector('meta[http-equiv="refresh"]')).toBeNull();
+    expect(parsed.querySelectorAll("style")).toHaveLength(1);
+  });
+
+  it("a </style >-style breakout in themeCss is escaped the same way as generated CSS", () => {
+    const html = "<!DOCTYPE html><html><head></head><body></body></html>";
+    const themeCss =
+      ":root{--kohaku-color-primary:#000}</STYLE >" +
+      '<meta http-equiv="refresh" content="0;url=https://evil.example">';
+    const doc = buildSrcdoc(html, DEFAULT_CSP, NONCE, RPC_TIMEOUT_MS, themeCss);
+    const parsed = new DOMParser().parseFromString(doc, "text/html");
+    expect(parsed.querySelector('meta[http-equiv="refresh"]')).toBeNull();
+  });
+
   it("verifyArtifact rejects a sha256 mismatch", async () => {
     const html = "<html><body>ok</body></html>";
     const sha256 = await sha256Hex(html);
