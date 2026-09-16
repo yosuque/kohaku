@@ -3,13 +3,14 @@ import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { appendFile, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createKeyedMutex } from "@kohaku-ui/host-core";
-import type {
-  FixationRecord,
-  LineageEventRecord,
-  LineageFilter,
-  PromotionState,
-  StoragePort,
-  UISpec,
+import {
+  type FixationRecord,
+  type LineageEventRecord,
+  LineageEventRecordSchema,
+  type LineageFilter,
+  type PromotionState,
+  type StoragePort,
+  type UISpec,
 } from "@kohaku-ui/spec-core";
 
 /**
@@ -322,14 +323,31 @@ async function writeJsonAtomicAsync(path: string, data: unknown): Promise<void> 
 function loadJsonl(path: string): LineageEventRecord[] {
   if (!existsSync(path)) return [];
   const out: LineageEventRecord[] = [];
+  let skipped = 0;
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim() === "") continue;
+    let parsed: unknown;
     try {
-      out.push(JSON.parse(line) as LineageEventRecord);
+      parsed = JSON.parse(line);
     } catch {
-      // Skip a trailing in-progress line or corrupted line (recovery from a crash mid-append).
-      console.warn(`[storage] Skipped a malformed line in lineage.jsonl`);
+      // A trailing in-progress line or corrupted JSON (recovery from a crash mid-append).
+      skipped++;
+      continue;
     }
+    // JSON-valid but schema-invalid rows (a hand-edited or pre-migration line, or one written by an older
+    // record shape) must not reach downstream consumers of `lineage` (listLineage / promotion evaluation /
+    // fixation stability tallies), which trust every entry's shape without re-validating it themselves.
+    // Route the same warn-and-skip path as a JSON parse failure, rather than a distinct throw, so one bad
+    // row degrades gracefully instead of aborting startup.
+    const result = LineageEventRecordSchema.safeParse(parsed);
+    if (!result.success) {
+      skipped++;
+      continue;
+    }
+    out.push(result.data as LineageEventRecord);
+  }
+  if (skipped > 0) {
+    console.warn(`[storage] Skipped ${skipped} malformed/invalid line(s) in lineage.jsonl`);
   }
   return out;
 }
