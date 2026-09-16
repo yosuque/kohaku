@@ -1,11 +1,11 @@
 import { withTenantCatalog } from "@kohaku-ui/composer";
+import { createKeyedMutex } from "@kohaku-ui/host-core";
 import { cachedPropsJsonSchema } from "@kohaku-ui/registry";
 import type { Principal } from "@kohaku-ui/spec-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { errorBody } from "./errors.js";
 import type { GovernanceOperation } from "./governance-policy.js";
-import { createKeyedMutex } from "./keyed-mutex.js";
 import { registerBindingRoutes } from "./routes/binding.js";
 import { registerComposeRoutes } from "./routes/compose.js";
 import { registerFixationRoutes } from "./routes/fixations.js";

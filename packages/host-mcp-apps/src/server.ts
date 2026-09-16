@@ -99,13 +99,11 @@ function forCall(ctx: ToolContext, principal: Principal): ToolCallContext {
 
 /**
  * Consolidates every tool handler's access to the SDK-supplied per-call abort signal and JSON-RPC request id
- * into one place (previously each of the 5 tool-registration functions read them directly). Under SDK v2
- * (`@modelcontextprotocol/server` 2.0.0, paired with protocol version 2026-07-28's removal of protocol-level
- * sessions), a tool handler's second argument is `ServerContext`, which always nests the per-request abort
- * signal and JSON-RPC id under `mcpReq` (`extra.mcpReq.signal` / `extra.mcpReq.id`) — there is no longer a flat
- * `signal` / `requestId` to fall back to (that was SDK v1's shape, before this migration). This function is now
- * a thin projection of `ServerContext`, kept as its own helper purely so the 5 tool handlers below keep reading
- * `requestContextOf(extra)` unchanged rather than reaching into `extra.mcpReq` themselves.
+ * into one place, so the 5 tool handlers below read `requestContextOf(extra)` uniformly rather than each
+ * reaching into `extra.mcpReq` themselves. Under SDK v2 (`@modelcontextprotocol/server` 2.0.0, paired with
+ * protocol version 2026-07-28's removal of protocol-level sessions), a tool handler's second argument is
+ * `ServerContext`, which nests the per-request abort signal and JSON-RPC id under `mcpReq`
+ * (`extra.mcpReq.signal` / `extra.mcpReq.id`); this function is a thin projection of that shape.
  *
  * Named `abort` (not `signal`) on the returned object so `{ ...requestContextOf(extra), locale, traceContext:
  * traceContextOf(extra) }` is directly a `ComposeCallContext` — every compose-family tool handler builds its
@@ -121,11 +119,11 @@ function requestContextOf(extra: ServerContext): { abort: AbortSignal; requestId
 /**
  * The compose-pipeline call context: everything about a single tool call (beyond the already-resolved
  * `ToolCallContext.principal`) that composeAndAudit / composeAndPackage / startComposeTask / buildSnapshot /
- * composeForTool need to thread through to host-core's composeWithFixation. Replaces what used to be 4
- * separate positional parameters (`locale? / abort? / requestId? / traceContext?`) repeated across all 5
- * functions — every call site builds one via `{ ...requestContextOf(extra), locale, traceContext:
- * traceContextOf(extra) }` (requestContextOf's returned `{abort, requestId}` already matches this type's
- * field names by construction, so the spread needs only `locale` and `traceContext` added).
+ * composeForTool need to thread through to host-core's composeWithFixation, bundled into one options bag
+ * instead of separate positional parameters. Every call site builds one via `{ ...requestContextOf(extra),
+ * locale, traceContext: traceContextOf(extra) }` (requestContextOf's returned `{abort, requestId}` already
+ * matches this type's field names by construction, so the spread needs only `locale` and `traceContext`
+ * added).
  */
 interface ComposeCallContext {
   locale?: string;
