@@ -66,16 +66,34 @@ jobs:
       # packages went out, which silently skipped the PyPI and GitHub Release jobs below. The registry is
       # the only thing that actually knows, and asking it also makes a re-run converge: whatever npm is
       # missing gets published, and the downstream jobs run whenever npm is at this version.
+      #
+      # npm alone is not enough to gate on, though: once npm has a version, that stays true on every later
+      # workflow run too (every subsequent push to main), which would otherwise re-run the PyPI / GitHub
+      # Release jobs forever even after both already have this version. Those two jobs are individually
+      # idempotent (skip-existing / "release already exists"), but there is no reason to run them at all
+      # once there is nothing left to do — so also check whether the GitHub release or the PyPI upload is
+      # still missing, and only report published when npm has it AND at least one of the other two does not.
       - id: npm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p "require('./packages/spec-core/package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if npm view "@kohaku-ui/spec-core@$VERSION" version >/dev/null 2>&1; then
-            echo "npm is at $VERSION"
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          else
+          if ! npm view "@kohaku-ui/spec-core@$VERSION" version >/dev/null 2>&1; then
             echo "npm does not have $VERSION"
             echo "published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "npm is at $VERSION"
+          GH_HAS=false
+          if gh release view "v$VERSION" >/dev/null 2>&1; then GH_HAS=true; fi
+          PYPI_HAS=false
+          if curl -fsS "https://pypi.org/simple/kohaku-ui/" 2>/dev/null | grep -qF "$VERSION"; then PYPI_HAS=true; fi
+          if [ "$GH_HAS" = "true" ] && [ "$PYPI_HAS" = "true" ]; then
+            echo "the GitHub release and PyPI both already have $VERSION; nothing left to do"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
   pypi:
@@ -89,9 +107,12 @@ jobs:
     permissions:
       id-token: write
     steps:
+      # Pin to the exact commit that triggered this run, not the branch tip: by the time this job runs,
+      # main may have moved on to a later commit (a subsequent push), and checking that out could publish
+      # code that does not match the npm version this job just asserted against.
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
