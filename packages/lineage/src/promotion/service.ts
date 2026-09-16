@@ -7,6 +7,7 @@ import {
   type ComponentDraft,
   type JudgeVerdict,
   type MachinePolicy,
+  mayHaveProjection,
   type PromotionAction,
   type PromotionStatus,
   transition,
@@ -734,14 +735,27 @@ export function createPromotions(opts: {
   }
 
   /**
-   * Projection recovery from snapshot authority. Scans published snapshots across all tenants, assembles each
-   * artifact's complete candidate — since #9, `candidate.html` (and sha256/ref) come from the snapshot's own
-   * duplicated copy when present, falling back to `component.generated` for older snapshots persisted before
-   * this change — and idempotently re-applies onPublish. Called at startup (and callable on demand, e.g.
-   * host-rest's `POST /promotions/reconcile`, #11), projections (catalog/Intent) left un-reflected by a
-   * mid-publish failure converge from the snapshot. Symmetrically, scans every non-published snapshot and
-   * re-applies onUnpublish for any whose candidate still has a persisted draft, converging a withdrawal whose
-   * projection removal failed partway.
+   * Projection recovery from snapshot authority. Scans the published/withdrawn snapshots across all tenants —
+   * every other status has no projection to converge, see `mayHaveProjection` — assembles each artifact's
+   * complete candidate — since #9, `candidate.html` (and sha256/ref) come from the snapshot's own duplicated
+   * copy when present, falling back to `component.generated` for older snapshots persisted before this change —
+   * and idempotently re-applies onPublish. Called at startup (and callable on demand, e.g. host-rest's `POST
+   * /promotions/reconcile`, #11), projections (catalog/Intent) left un-reflected by a mid-publish failure
+   * converge from the snapshot. Symmetrically, re-applies onUnpublish for every withdrawn snapshot whose
+   * candidate still has a persisted draft, converging a withdrawal whose projection removal failed partway.
+   *
+   * Race with a concurrent transition: the scan (`listPromotionStates`) and each candidate's `store.load` are
+   * two separate reads with no lock held across them (host-rest's `POST /promotions/reconcile` route only takes
+   * the tenant-neutral lock bucket, so a tenant-scoped approve/withdraw can run between the two). `store.load`
+   * always re-reads `getPromotionState`, so right after it returns, the candidate's status is already the
+   * freshest value on hand — trusting it is all the fix takes. Both branches below re-check that status
+   * immediately after the load and skip (uncounted, without `onError`; this is a stale scan entry, not an
+   * unrecoverable failure) when it no longer matches what the scan expected: the published branch will not
+   * re-publish a projection for a candidate that has since been withdrawn, and the withdrawn branch will not
+   * unpublish one that has since been re-published. The other branch's own pass (this reconcile or the next)
+   * converges the skipped entry instead. Serializing the whole scan+load sequence against every per-tenant lock
+   * bucket (two-phase locking) would close this window entirely; that is a structural follow-up, not implemented
+   * here.
    *
    * Also backfills the audit event for either direction: publish's `component.published` record and unpublish's
    * `component.withdrawn` record are both fail-open (see handlePublish / handleUnpublish above), so a storage
@@ -758,7 +772,8 @@ export function createPromotions(opts: {
    * how many snapshots were skipped because the data needed to rebuild the projection was unrecoverable (a
    * published snapshot with no draft and no html anywhere, reported individually via
    * `onError({endpoint: "promotion.reconcile.projection"})` — the snapshot itself is untouched either way, so it
-   * is retried on the next reconcile).
+   * is retried on the next reconcile). The race-driven skips described above are deliberately not counted here
+   * (they are not failures).
    */
   async function reconcile(): Promise<ReconcileSummary> {
     const summary: ReconcileSummary = { published: 0, withdrawn: 0, skipped: 0 };
@@ -766,8 +781,18 @@ export function createPromotions(opts: {
     // Scan snapshots across all tenants (listPromotionStates with tenant omitted returns all). Each state has .tenant.
     const states = await opts.storage.listPromotionStates();
     for (const state of states) {
+      // Only published/withdrawn snapshots can have a projection to converge (see mayHaveProjection's doc).
+      // state.status is PromotionState's storage-layer `string` (loosely typed at the StoragePort boundary);
+      // cast to PromotionStatus the same way candidate-store.ts's loadCandidate already does for this field.
+      if (!mayHaveProjection(state.status as PromotionStatus)) continue;
       if (state.status === "published") {
         const candidate = await store.load(state.artifactId, { tenant: state.tenant });
+        // Re-check the freshest status right after the load (see this function's doc on the scan/load race): a
+        // *real* candidate whose status has since moved off "published" is a stale scan entry, not a failure,
+        // so skip it uncounted and without onError -- the withdrawn branch converges it (this reconcile or the
+        // next). candidate == null is a different, pre-existing case (loadCandidate found no source data at
+        // all) and falls through unchanged to the "unrecoverable" skip+onError path below.
+        if (candidate != null && candidate.status !== "published") continue;
         if (candidate?.draft != null) {
           const existing = await opts.storage.listLineage({
             type: ["component.published"],
@@ -827,43 +852,48 @@ export function createPromotions(opts: {
         summary.published++;
         continue;
       }
-      // Any other status: re-apply the projection removal for a withdrawal whose onUnpublish failed partway.
-      // A candidate with no persisted draft was never published (or its draft is unrecoverable), so there is
-      // no projection to remove and it is skipped.
+      // mayHaveProjection admits only "published" (handled above) and "withdrawn", so only withdrawn reaches
+      // here: re-apply the projection removal for a withdrawal whose onUnpublish failed partway.
       if (opts.onUnpublish == null) continue;
       const candidate = await store.load(state.artifactId, { tenant: state.tenant });
+      // Re-check the freshest status for the same race as the published branch above (see this function's own
+      // doc): a *real* candidate that has since been re-published is a stale scan entry, not a failure, so it
+      // is skipped uncounted and without onError rather than incorrectly unpublished -- the published branch
+      // converges it instead. candidate == null is a different, pre-existing case (loadCandidate found no
+      // source data at all) and falls through unchanged to the "no draft" skip right below.
+      if (candidate != null && candidate.status !== "withdrawn") continue;
+      // A candidate with no persisted draft was never published (or its draft is unrecoverable), so there is
+      // no projection to remove and it is skipped.
       if (candidate?.draft == null) continue;
       // Backfill component.withdrawn for a withdrawn snapshot, symmetric with the published side above: matched
       // by `from: "published"` so a pre-promotion withdraw's own (unrelated) withdrawn event does not suppress
       // this backfill.
-      if (state.status === "withdrawn") {
-        // limit 10: an artifact can carry at most a pre-promotion withdraw plus one published-withdraw per
-        // publish cycle, so this comfortably covers the population without a dedicated scan-window constant.
-        const existingWithdraw = await opts.storage.listLineage({
-          type: ["component.withdrawn"],
-          artifactId: state.artifactId,
-          limit: 10,
-          ...tenantField(state.tenant),
-        });
-        if (!existingWithdraw.some((e) => e.payload["from"] === "published")) {
-          try {
-            await opts.lineage.record(
-              "component.withdrawn",
-              { artifactId: state.artifactId, from: "published", reconciled: true },
-              undefined,
-              state.tenant,
-            );
-          } catch (e) {
-            notifyPromotionError(
-              opts.onError,
-              {
-                endpoint: "promotion.reconcile.audit",
-                artifactId: state.artifactId,
-                ...tenantField(state.tenant),
-              },
-              e,
-            );
-          }
+      // limit 10: an artifact can carry at most a pre-promotion withdraw plus one published-withdraw per
+      // publish cycle, so this comfortably covers the population without a dedicated scan-window constant.
+      const existingWithdraw = await opts.storage.listLineage({
+        type: ["component.withdrawn"],
+        artifactId: state.artifactId,
+        limit: 10,
+        ...tenantField(state.tenant),
+      });
+      if (!existingWithdraw.some((e) => e.payload["from"] === "published")) {
+        try {
+          await opts.lineage.record(
+            "component.withdrawn",
+            { artifactId: state.artifactId, from: "published", reconciled: true },
+            undefined,
+            state.tenant,
+          );
+        } catch (e) {
+          notifyPromotionError(
+            opts.onError,
+            {
+              endpoint: "promotion.reconcile.audit",
+              artifactId: state.artifactId,
+              ...tenantField(state.tenant),
+            },
+            e,
+          );
         }
       }
       await opts.onUnpublish({

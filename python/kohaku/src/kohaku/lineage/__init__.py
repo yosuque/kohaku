@@ -78,6 +78,7 @@ from .promotion import (
     component_draft_from_wire,
     create_promotions,
     is_terminal,
+    may_have_projection,
     query_template_from_wire,
     transition,
 )
@@ -150,6 +151,7 @@ __all__ = [
     "create_view_recorder",
     "is_terminal",
     "make_event",
+    "may_have_projection",
     "now_iso",
     "query_template_from_wire",
     "summarize_lineage",
