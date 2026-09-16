@@ -444,7 +444,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 
 ## 11. conformance(適合検査)
 
-要件一覧(機械可読): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — MUST 32 件(件数・区分は manifest を正とする)。
+要件一覧(機械可読): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — MUST 33 件(件数・区分は manifest を正とする)。
 
 ```bash
 node cli/bin/kohaku.js conformance --self                # SPEC-* 9 件(Spec フォーマット自己検査)
@@ -452,4 +452,4 @@ node cli/bin/kohaku.js conformance --rest <baseUrl> \
   [--intent '{"canonical":"…","params":{…}}']             # + REST-* MUST 9 件 + SHOULD 6 件・LIN-PRM-001(黒箱検査・任意の実装に適用可)
 ```
 
-MCP(MCPAPP-*)・sandbox(SBX-*)の要件、および黒箱検査に馴染まない文書規範 4 件(SPEC-ENV-003 テーマ非依存・SPEC-EVT-002 未宣言イベント転送禁止・SPEC-DATA-002 参照単位の版突合・CMP-DET-001 合成決定性の一般形)は内部不変条件で、それぞれ `packages/host-mcp-apps/test` / `packages/sandbox/test` / `packages/renderer-wc/test/parity` + `packages/renderer-core/test` / `packages/composer/test` のテストが参照実装に対して固定している(黒箱検査対象外。manifest の `verification: "reference"`)。lineage の LIN-PRM-001 は `GET /lineage` の黒箱検査(published に人間の approve が時系列先行することを確認)に格上げ済みで `--rest` に含まれ、`packages/lineage/test`(状態機械)でも重ねて担保している。
+MCP(MCPAPP-*)・sandbox(SBX-*)の要件、および黒箱検査に馴染まない文書規範 5 件(SPEC-ENV-003 テーマ非依存・SPEC-EVT-002 未宣言イベント転送禁止・SPEC-DATA-002 参照単位の版突合・CMP-DET-001 合成決定性の一般形・CMP-GEN-001 生成コンポーネントの `data.$ref` QueryHandle 集合制約)は内部不変条件で、それぞれ `packages/host-mcp-apps/test` / `packages/sandbox/test` / `packages/renderer-wc/test/parity` + `packages/renderer-core/test` / `packages/composer/test` のテストが参照実装に対して固定している(黒箱検査対象外。manifest の `verification: "reference"`)。lineage の LIN-PRM-001 は `GET /lineage` の黒箱検査(published に人間の approve が時系列先行することを確認)に格上げ済みで `--rest` に含まれ、`packages/lineage/test`(状態機械)でも重ねて担保している。

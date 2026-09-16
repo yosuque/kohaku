@@ -11,9 +11,9 @@ TS 実装とはワイヤ互換 — canonical JSON がバイト一致するため
 
 **conformance**: TS 側 CLI の黒箱検査(`node cli/bin/kohaku.js conformance --rest`)で
 **MUST 19/19 = CONFORMANT** を通過済み(SHOULD のストリーミング検査を含む。CI の
-`conformance-python` ジョブが毎コミット検査する)。19 は conformance manifest の全 32
-MUST のうち黒箱検査可能なもので、残り 13 件の reference MUST(MCPAPP-* / SBX-*、および
-TS のレンダラー/composer パッケージテストで担保される文書規範 4 件)は
+`conformance-python` ジョブが毎コミット検査する)。19 は conformance manifest の全 33
+MUST のうち黒箱検査可能なもので、残り 14 件の reference MUST(MCPAPP-* / SBX-*、および
+TS のレンダラー/composer パッケージテストで担保される文書規範 5 件)は
 パッケージテスト(この側では pytest)で担保する。
 
 ## セットアップ・検証

@@ -13,8 +13,8 @@ intent.hash / specHash / cache keys / catalogFingerprint match across languages.
 **conformance**: passes **MUST 19/19 = CONFORMANT** under the black-box inspection of
 the TS-side CLI (`node cli/bin/kohaku.js conformance --rest`) (including the SHOULD
 streaming check; CI's `conformance-python` job inspects it on every commit). The 19 are
-the black-box-verifiable MUSTs of the 32 in the conformance manifest; the remaining 13
-reference MUSTs (MCPAPP-* / SBX-*, and four documentary Spec-format norms guaranteed by
+the black-box-verifiable MUSTs of the 33 in the conformance manifest; the remaining 14
+reference MUSTs (MCPAPP-* / SBX-*, and five documentary norms guaranteed by
 the TS renderer/composer package tests) are covered by package tests (pytest on this side).
 
 ## Setup & verification

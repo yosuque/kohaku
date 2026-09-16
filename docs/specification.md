@@ -486,7 +486,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 
 ## 11. conformance
 
-Requirements list (machine-readable): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — 32 MUSTs (the manifest is authoritative for the count and categorization).
+Requirements list (machine-readable): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — 33 MUSTs (the manifest is authoritative for the count and categorization).
 
 ```bash
 node cli/bin/kohaku.js conformance --self                # SPEC-* 9 items (Spec-format self-inspection)
@@ -494,4 +494,4 @@ node cli/bin/kohaku.js conformance --rest <baseUrl> \
   [--intent '{"canonical":"…","params":{…}}']             # + REST-* 9 MUST + 6 SHOULD, LIN-PRM-001 (black-box inspection; applicable to any implementation)
 ```
 
-The MCP (MCPAPP-*) and sandbox (SBX-*) requirements, plus four documentary Spec-format norms not amenable to black-box checking (SPEC-ENV-003 theme independence, SPEC-EVT-002 undeclared-event forwarding prohibition, SPEC-DATA-002 per-reference version reconciliation, CMP-DET-001 the general form of composition determinism), are internal invariants; the tests in `packages/host-mcp-apps/test` / `packages/sandbox/test` / `packages/renderer-wc/test/parity` + `packages/renderer-core/test` / `packages/composer/test` respectively pin them against the reference implementation (out of scope for black-box inspection; `verification: "reference"` in the manifest). lineage's LIN-PRM-001 has been upgraded to a black-box inspection of `GET /lineage` (confirming that a human approve precedes published in time), is included in `--rest`, and is additionally guaranteed by `packages/lineage/test` (the state machine).
+The MCP (MCPAPP-*) and sandbox (SBX-*) requirements, plus five documentary norms not amenable to black-box checking (SPEC-ENV-003 theme independence, SPEC-EVT-002 undeclared-event forwarding prohibition, SPEC-DATA-002 per-reference version reconciliation, CMP-DET-001 the general form of composition determinism, CMP-GEN-001 the `data.$ref` QueryHandle-set constraint on generated components), are internal invariants; the tests in `packages/host-mcp-apps/test` / `packages/sandbox/test` / `packages/renderer-wc/test/parity` + `packages/renderer-core/test` / `packages/composer/test` respectively pin them against the reference implementation (out of scope for black-box inspection; `verification: "reference"` in the manifest). lineage's LIN-PRM-001 has been upgraded to a black-box inspection of `GET /lineage` (confirming that a human approve precedes published in time), is included in `--rest`, and is additionally guaranteed by `packages/lineage/test` (the state machine).

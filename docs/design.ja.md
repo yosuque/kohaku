@@ -106,7 +106,7 @@ flowchart LR
 
 同一プロトコル(Kohaku Protocol v0.1)の **Python フル移植**をモノレポ内に同居させる(`python/` の uv workspace。pnpm workspace 外)。TS 参照実装とは**ワイヤ互換** — canonical JSON がバイト一致するため `intent.hash` / `specHash` / キャッシュキー / `catalogFingerprint` が言語をまたいで一致する。TS ホスト ⇄ Python ホストの conformance 通過が「プロトコルは言語非依存」の実証になる(renderer-react ⇄ renderer-wc の parity が「Spec はレンダラー非依存」の実証であるのと同型)。
 
-- **契約境界は `spec/`**。Python は `spec/`(SPEC.md + JSON Schema)とビルド済みレンダラー HTML にのみ依存し、TS パッケージ内部には触れない。適合状況は conformance **MUST 19/19 = CONFORMANT** — 19 は conformance manifest の全 32 MUST のうち黒箱検査可能なもので、残り 13 件の reference MUST(MCPAPP-* / SBX-*、および文書規範 4 件)はパッケージテストで担保(CI の `conformance-ts` ジョブ〈TS ホスト〉と `conformance-python` ジョブ〈Python ホスト〉がそれぞれのサンプルホストを起動して TS 側 CLI の黒箱検査で毎コミット担保)。
+- **契約境界は `spec/`**。Python は `spec/`(SPEC.md + JSON Schema)とビルド済みレンダラー HTML にのみ依存し、TS パッケージ内部には触れない。適合状況は conformance **MUST 19/19 = CONFORMANT** — 19 は conformance manifest の全 33 MUST のうち黒箱検査可能なもので、残り 14 件の reference MUST(MCPAPP-* / SBX-*、および文書規範 5 件)はパッケージテストで担保(CI の `conformance-ts` ジョブ〈TS ホスト〉と `conformance-python` ジョブ〈Python ホスト〉がそれぞれのサンプルホストを起動して TS 側 CLI の黒箱検査で毎コミット担保)。
 - **パッケージ対応**(`python/kohaku/src/kohaku/` のサブモジュールが TS `packages/*` に対応):
 
 | Python サブモジュール | 対応する TS パッケージ |
