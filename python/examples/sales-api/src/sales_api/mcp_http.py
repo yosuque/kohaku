@@ -86,6 +86,10 @@ def build_starlette_app(setup: KohakuMcpSetup, *, allowed_hosts: list[str] | Non
 
     # Pass a single Server to the SDK's stateful session management (shared across all sessions. TS is per-session,
     # but the Python SDK's convention is sharing a single Server). Idle cleanup is handled by the SDK via session_idle_timeout.
+    # Production hook: because this one Server is shared by every session, mcp_setup.py's McpHostDeps leaves
+    # resolve_principal unwired here (every call runs as the anonymous principal) — a real deployment MUST wire
+    # it (McpHostDeps.resolve_principal, resolved per tool call from that call's mcp SDK RequestContext) rather
+    # than a single static McpHostDeps.principal, which would give every caller the same identity.
     server = setup.create_server()
     security_settings = (
         TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=allowed_hosts)

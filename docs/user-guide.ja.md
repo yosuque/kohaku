@@ -239,7 +239,7 @@ cloudflared tunnel --url http://localhost:8788      # 別ターミナルで公�
 
 トンネルが払い出した `https://<ランダム>.trycloudflare.com` に `/mcp` を付けた URL を、ホストのカスタムコネクタ(claude.ai)/ MCP サーバー(ChatGPT の developer mode)に登録します。
 
-> ⚠️ **認証なしのデモです。** この HTTP エントリには一切の認証がありません。公開トンネルで露出すると、**URL を知る誰もが売上データを閲覧・操作できます**。信頼できる相手にのみ URL を渡し、機微データを載せないでください。停止したらトンネルも閉じます。ブラウザからの Host 偽装を弾く DNS リバインディング保護は `KOHAKU_MCP_HTTP_ALLOWED_HOSTS`(カンマ区切り)を渡したときのみ有効化されますが、公開トンネル経由では Host がトンネルのドメインになるため既定では無効です。
+> ⚠️ **認証なしのデモです。** この HTTP エントリには一切の認証がありません。公開トンネルで露出すると、**URL を知る誰もが売上データを閲覧・操作できます**。信頼できる相手にのみ URL を渡し、機微データを載せないでください。停止したらトンネルも閉じます。ブラウザからの Host 偽装を弾く DNS リバインディング保護は `KOHAKU_MCP_HTTP_ALLOWED_HOSTS`(カンマ区切り)を渡したときのみ有効化されますが、公開トンネル経由では Host がトンネルのドメインになるため既定では無効です。実際の認証を組み込むには、単一の静的な `McpHostDeps.principal` ではなく、呼び出し単位で識別情報を解決する `McpHostDeps.resolvePrincipal`(TS)/ `resolve_principal`(Python)を配線してください(例: リクエストからベアラートークンを読み取り対応する `Principal` を引く)。共有 HTTP サーバーではすべての接続が 1 つの `McpHostDeps` を共有するため、静的な `principal` では全呼び出し元が同一の識別情報になってしまいます。
 
 ### ターミナルホスト向け: `kohaku_render_snapshot`(自己完結スナップショット)
 
