@@ -17,6 +17,7 @@ from kohaku.spec import (
     QueryHandle,
     UISpec,
     combine_data_versions,
+    compute_structure_hash,
     validate_fixation_record,
 )
 
@@ -64,6 +65,29 @@ async def materialize_fixation(
             issues=["fixation record failed schema validation"],
         )
     fixation = validated
+
+    # Deeper corruption than schema validation alone can catch: a hand-edited record whose declared
+    # intentHash / structureHash no longer matches its own pinnedSpec would otherwise sail through the
+    # schema check above (both fields are just strings, structurally valid on their own) and could be
+    # delivered for the wrong Intent, or with a pinnedSpec that was edited without recomputing its
+    # structureHash. Treat either mismatch as corruption, exactly like a schema-validation failure.
+    if fixation.intentHash != intent.hash:
+        return None, FixationCheck(
+            kind="stale",
+            issues=[
+                f"fixation record's intentHash ({fixation.intentHash}) does not match "
+                f"the requested intent ({intent.hash})"
+            ],
+        )
+    actual_structure_hash = compute_structure_hash(fixation.pinnedSpec)
+    if actual_structure_hash != fixation.structureHash:
+        return None, FixationCheck(
+            kind="stale",
+            issues=[
+                f"fixation record's structureHash ({fixation.structureHash}) does not match "
+                f"its pinnedSpec ({actual_structure_hash})"
+            ],
+        )
 
     # Fingerprint fast path: if the catalog fingerprint at fixation time matches the current one, treat the structure as unchanged and skip validation.
     if fixation.catalogFingerprint == ctx.catalog.fingerprint:

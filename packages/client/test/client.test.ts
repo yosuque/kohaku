@@ -9,15 +9,17 @@ import {
 } from "@kohaku-ui/host-rest";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import type {
-  AuthzPort,
-  DomainPort,
-  FixationRecord,
-  LineageEventRecord,
-  LineageFilter,
-  SemanticPort,
-  StoragePort,
-  UISpec,
+import {
+  type AuthzPort,
+  computeStructureHash,
+  type DomainPort,
+  type FixationRecord,
+  finalizeIntent,
+  type LineageEventRecord,
+  type LineageFilter,
+  type SemanticPort,
+  type StoragePort,
+  type UISpec,
 } from "@kohaku-ui/spec-core";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
@@ -132,12 +134,19 @@ function validPinned(): UISpec {
   };
 }
 
-function makeFixation(): FixationRecord {
+// The real resolved hash of the {canonical:"sales.trend", params:{}} intent used below -- resolveIntent
+// always re-derives via finalizeIntent regardless of what stubSemantic.normalize returns, so this must
+// match that, not a placeholder (materializeFixation now verifies fixation.intentHash against it).
+const REQUEST_INTENT = await finalizeIntent({ canonical: "sales.trend", params: {} });
+
+async function makeFixation(): Promise<FixationRecord> {
+  const pinnedSpec = validPinned();
   return {
-    intentHash: "sha256:" + "0".repeat(64),
+    intentHash: REQUEST_INTENT.hash,
     canonical: "sales.trend",
-    structureHash: "sha256:" + "1".repeat(64),
-    pinnedSpec: validPinned(),
+    // The real structureHash of pinnedSpec (not a placeholder): materializeFixation now verifies this matches.
+    structureHash: await computeStructureHash(pinnedSpec),
+    pinnedSpec,
     fixatedAt: "2026-06-10T00:00:00Z",
     approver: { id: "tester" },
     catalogFingerprint: catalog.fingerprint,
@@ -576,7 +585,7 @@ describe("@kohaku-ui/client lineage query", () => {
 
 describe("@kohaku-ui/client composeStream(SSE)", () => {
   it("the fixation short-circuit fast path terminates with spec (final:true) → done", async () => {
-    const client = makeClient({ fixationLookup: async () => makeFixation() });
+    const client = makeClient({ fixationLookup: async () => await makeFixation() });
     const events = [];
     for await (const ev of client.composeStream({ intent: { canonical: "sales.trend", params: {} } })) {
       events.push(ev);

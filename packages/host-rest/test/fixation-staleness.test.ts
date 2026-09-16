@@ -1,13 +1,15 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import type {
-  AuthzPort,
-  DomainPort,
-  FixationRecord,
-  SemanticPort,
-  StoragePort,
-  UISpec,
+import {
+  type AuthzPort,
+  computeStructureHash,
+  type DomainPort,
+  type FixationRecord,
+  finalizeIntent,
+  type SemanticPort,
+  type StoragePort,
+  type UISpec,
 } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { createKohakuRoutes, type FixationsApi, type KohakuHostDeps } from "../src/index.js";
@@ -120,11 +122,18 @@ function validPinned(): UISpec {
   };
 }
 
-function makeFixation(pinnedSpec: UISpec, catalogFingerprint?: string): FixationRecord {
+// The real resolved hash of the /compose request body's intent ({canonical:"sales.trend", params:{}}) --
+// resolveIntent always re-derives via finalizeIntent regardless of what stubSemantic.normalize returns, so
+// this must match that, not a placeholder (materializeFixation now verifies fixation.intentHash against it).
+const REQUEST_INTENT = await finalizeIntent({ canonical: "sales.trend", params: {} });
+
+async function makeFixation(pinnedSpec: UISpec, catalogFingerprint?: string): Promise<FixationRecord> {
   return {
-    intentHash: "sha256:" + "0".repeat(64),
+    intentHash: REQUEST_INTENT.hash,
     canonical: "sales.trend",
-    structureHash: "sha256:" + "1".repeat(64),
+    // The real structureHash of pinnedSpec (not a placeholder): materializeFixation now verifies this
+    // matches, and different tests below pass differently-shaped pinnedSpec content.
+    structureHash: await computeStructureHash(pinnedSpec),
     pinnedSpec,
     fixatedAt: "2026-06-10T00:00:00Z",
     approver: { id: "tester" },
@@ -204,7 +213,7 @@ async function postCompose(hostDeps: KohakuHostDeps): Promise<{ spec: UISpec }> 
 describe("staleness detection of fixation (host-rest /compose)", () => {
   it("fresh (fingerprint match) delivers the fixation and does not call invalidate/refresh", async () => {
     const spy = spyFixations();
-    const fixation = makeFixation(validPinned(), catalog.fingerprint);
+    const fixation = await makeFixation(validPinned(), catalog.fingerprint);
     const body = await postCompose(deps(fixation, spy.api));
 
     expect(body.spec.provenance.cache).toBe("fixated");
@@ -214,7 +223,7 @@ describe("staleness detection of fixation (host-rest /compose)", () => {
 
   it("revalidated (fingerprint mismatch + validation passes) delivers and calls refreshFingerprint", async () => {
     const spy = spyFixations();
-    const fixation = makeFixation(validPinned(), "sha256:stale-fp");
+    const fixation = await makeFixation(validPinned(), "sha256:stale-fp");
     const body = await postCompose(deps(fixation, spy.api));
 
     expect(body.spec.provenance.cache).toBe("fixated");
@@ -230,7 +239,7 @@ describe("staleness detection of fixation (host-rest /compose)", () => {
       { id: "root", type: "layout.stack", props: {}, children: ["ghost"] },
       { id: "ghost", type: "was.promoted.but.removed", props: {} },
     ];
-    const fixation = makeFixation(stalePinned, "sha256:stale-fp");
+    const fixation = await makeFixation(stalePinned, "sha256:stale-fp");
     const body = await postCompose(deps(fixation, spy.api));
 
     // The fixation is not delivered; normal compose (fallback L0) is returned.
@@ -257,7 +266,7 @@ describe("staleness detection of fixation (host-rest /compose)", () => {
       ...validPinned(),
       refVersions: { [REF]: "sales@v0", [legacy]: "sales@v0" },
     };
-    const fixation = makeFixation(driftPinned, catalog.fingerprint);
+    const fixation = await makeFixation(driftPinned, catalog.fingerprint);
     const body = await postCompose(deps(fixation, spy.api));
 
     // The fixation is not delivered; normal compose (fallback L0) is returned.

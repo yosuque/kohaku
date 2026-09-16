@@ -5,6 +5,7 @@ import type { FixationRecord } from "@kohaku-ui/spec-core";
 import {
   applyPatch,
   canonicalStringify,
+  computeStructureHash,
   type GuiAction,
   SANDBOX_HTML_TYPE,
   type UISpec,
@@ -399,7 +400,7 @@ describe("compose: refVersions (per-reference dataVersion matching)", () => {
       intentHash: "sha256:" + "0".repeat(64),
       canonical: "x.y",
       pinnedSpec: pinned,
-      structureHash: "sha256:" + "1".repeat(64),
+      structureHash: await computeStructureHash(pinned),
       fixatedAt: "2026-06-10T00:00:00Z",
       approver: { id: "tester" },
     };
@@ -447,11 +448,13 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
     };
   }
 
-  function makeFixation(pinnedSpec: UISpec, catalogFingerprint?: string): FixationRecord {
+  async function makeFixation(pinnedSpec: UISpec, catalogFingerprint?: string): Promise<FixationRecord> {
     return {
       intentHash: pinnedSpec.intent.hash,
       canonical: pinnedSpec.intent.canonical,
-      structureHash: "sha256:" + "1".repeat(64),
+      // The real structureHash of pinnedSpec (not a placeholder): materializeFixation now verifies this
+      // matches, so every fixture here must stay self-consistent unless a test deliberately breaks it.
+      structureHash: await computeStructureHash(pinnedSpec),
       pinnedSpec,
       fixatedAt: "2026-06-10T00:00:00Z",
       approver: { id: "tester" },
@@ -463,7 +466,7 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
 
   it("a fingerprint match is fresh (skips revalidation and is deliverable)", async () => {
     const ctx = makeCtx1();
-    const fixation = makeFixation(validPinned(), ctx.catalog.fingerprint);
+    const fixation = await makeFixation(validPinned(), ctx.catalog.fingerprint);
     const { result, check } = await materializeFixation(fixation, intent, ctx);
 
     expect(check.kind).toBe("fresh");
@@ -477,7 +480,7 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
     // entry. Fingerprint deliberately matches ctx.catalog.fingerprint, showing the schema check runs before
     // (and independently of) the fingerprint fast path.
     const corrupted = { ...validPinned(), components: [] } as unknown as UISpec;
-    const fixation = makeFixation(corrupted, ctx.catalog.fingerprint);
+    const fixation = await makeFixation(corrupted, ctx.catalog.fingerprint);
     const { result, check } = await materializeFixation(fixation, intent, ctx);
 
     expect(check.kind).toBe("stale");
@@ -489,7 +492,7 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
 
   it("even on a fingerprint mismatch, if it passes validation against the current catalog it is revalidated (deliverable)", async () => {
     const ctx = makeCtx1();
-    const fixation = makeFixation(validPinned(), "sha256:stale-fingerprint");
+    const fixation = await makeFixation(validPinned(), "sha256:stale-fingerprint");
     const { result, check } = await materializeFixation(fixation, intent, ctx);
 
     expect(check.kind).toBe("revalidated");
@@ -505,7 +508,7 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
       { id: "root", type: "layout.stack", props: {}, children: ["ghost"] },
       { id: "ghost", type: "was.promoted.but.removed", props: {} },
     ];
-    const fixation = makeFixation(pinned, "sha256:stale-fingerprint");
+    const fixation = await makeFixation(pinned, "sha256:stale-fingerprint");
     const { result, check } = await materializeFixation(fixation, intent, ctx);
 
     expect(check.kind).toBe("stale");
@@ -518,7 +521,7 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
 
   it("a record missing a fingerprint (old format) enters the revalidation path", async () => {
     const ctx = makeCtx1();
-    const fixation = makeFixation(validPinned()); // no catalogFingerprint
+    const fixation = await makeFixation(validPinned()); // no catalogFingerprint
     const { result, check } = await materializeFixation(fixation, intent, ctx);
 
     // Since the fingerprint is undefined it never matches, so it always takes the validate path → passes since it is core components
@@ -538,7 +541,7 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
         { id: "c1", type: "presentChart", props: {}, data: { $ref: orphan } },
       ],
     };
-    const fixation = makeFixation(pinned, ctx.catalog.fingerprint);
+    const fixation = await makeFixation(pinned, ctx.catalog.fingerprint);
     const { result, check } = await materializeFixation(fixation, intent, ctx);
 
     expect(check.kind).toBe("stale");
@@ -563,7 +566,7 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
       llm: new FakeLlm(),
       policy: {},
     };
-    const fixation = makeFixation(pinned, ctx.catalog.fingerprint);
+    const fixation = await makeFixation(pinned, ctx.catalog.fingerprint);
     const { result, check } = await materializeFixation(fixation, intent, ctx);
 
     expect(check.kind).toBe("stale");
@@ -582,7 +585,7 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
     // The current one resolves only 1 ref (a situation where a ref decreased via a code revision). makeCtx1's resolveQuery returns URI (1 item).
     // Make catalogFingerprint match to show that a removal drift is caught even on the fingerprint fast path.
     const ctx = makeCtx1();
-    const fixation = makeFixation(pinned, ctx.catalog.fingerprint);
+    const fixation = await makeFixation(pinned, ctx.catalog.fingerprint);
     const { result, check } = await materializeFixation(fixation, intent, ctx);
 
     expect(check.kind).toBe("stale");
@@ -591,6 +594,35 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
       // Include the direction (removed) and the disappeared URI in the stale detail (symmetric with the added 1→2 test)
       expect(check.issues.join(" ")).toContain("removed");
       expect(check.issues.join(" ")).toContain(uriB);
+    }
+  });
+
+  it("a hand-edited record whose intentHash no longer matches the requested intent is stale (not deliverable)", async () => {
+    const ctx = makeCtx1();
+    const fixation = await makeFixation(validPinned(), ctx.catalog.fingerprint);
+    // Simulate a hand-edited fixations.json entry: intentHash was changed independently of pinnedSpec.intent.hash.
+    const tampered = { ...fixation, intentHash: "sha256:" + "9".repeat(64) };
+    const { result, check } = await materializeFixation(tampered, intent, ctx);
+
+    expect(check.kind).toBe("stale");
+    expect(result).toBeNull();
+    if (check.kind === "stale") {
+      expect(check.issues.join(" ")).toContain("intentHash");
+    }
+  });
+
+  it("a hand-edited record whose structureHash no longer matches its pinnedSpec is stale (not deliverable)", async () => {
+    const ctx = makeCtx1();
+    const fixation = await makeFixation(validPinned(), ctx.catalog.fingerprint);
+    // Simulate a hand-edited fixations.json entry: pinnedSpec was edited without recomputing structureHash
+    // (or structureHash itself was hand-edited) -- either way the two no longer agree.
+    const tampered = { ...fixation, structureHash: "sha256:" + "9".repeat(64) };
+    const { result, check } = await materializeFixation(tampered, intent, ctx);
+
+    expect(check.kind).toBe("stale");
+    expect(result).toBeNull();
+    if (check.kind === "stale") {
+      expect(check.issues.join(" ")).toContain("structureHash");
     }
   });
 });

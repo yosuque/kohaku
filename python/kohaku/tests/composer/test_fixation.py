@@ -16,6 +16,7 @@ from kohaku.spec import (
     Principal,
     QueryHandle,
     UISpec,
+    compute_structure_hash,
     finalize_intent,
 )
 from kohaku.storage import FileStoragePort
@@ -64,11 +65,14 @@ def _pinned_spec() -> UISpec:
 
 
 def _fixation(fingerprint: str | None) -> FixationRecord:
+    pinned = _pinned_spec()
     return FixationRecord(
         intentHash=_intent().hash,
         canonical="sales.summary",
-        structureHash="sha256:" + "2" * 64,
-        pinnedSpec=_pinned_spec(),
+        # The real structureHash of pinned (not a placeholder): materialize_fixation now verifies this
+        # matches its pinnedSpec.
+        structureHash=compute_structure_hash(pinned),
+        pinnedSpec=pinned,
         fixatedAt="2026-07-17T00:00:00Z",
         approver=Principal(id="admin"),
         catalogFingerprint=fingerprint,
@@ -175,5 +179,39 @@ def test_stale_on_ref_drift(tmp_path: Any) -> None:
         assert check.kind == "stale"
         assert result is None
         assert check.issues is not None and "added" in check.issues[0]
+
+    asyncio.run(run())
+
+
+def test_stale_when_intent_hash_mismatches(tmp_path: Any) -> None:
+    """A hand-edited record whose intentHash no longer matches the requested intent is stale."""
+    from dataclasses import replace
+
+    async def run() -> None:
+        fixation = _fixation(_CATALOG.fingerprint)
+        tampered = replace(fixation, intentHash="sha256:" + "9" * 64)
+
+        result, check = await materialize_fixation(tampered, _intent(), _ctx(tmp_path=tmp_path))
+        assert check.kind == "stale"
+        assert result is None
+        assert check.issues is not None
+        assert any("intentHash" in i for i in check.issues)
+
+    asyncio.run(run())
+
+
+def test_stale_when_structure_hash_mismatches(tmp_path: Any) -> None:
+    """A hand-edited record whose structureHash no longer matches its pinnedSpec is stale."""
+    from dataclasses import replace
+
+    async def run() -> None:
+        fixation = _fixation(_CATALOG.fingerprint)
+        tampered = replace(fixation, structureHash="sha256:" + "9" * 64)
+
+        result, check = await materialize_fixation(tampered, _intent(), _ctx(tmp_path=tmp_path))
+        assert check.kind == "stale"
+        assert result is None
+        assert check.issues is not None
+        assert any("structureHash" in i for i in check.issues)
 
     asyncio.run(run())
