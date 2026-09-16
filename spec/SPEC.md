@@ -88,6 +88,7 @@ The response of the interaction loop (recomposition from GUI interaction / event
 
 - props MUST be JSON-representable (MUST. Dates and the like are expressed as strings).
 - `description` is transcribed into the generation prompt as selection guidance for the LLM (SHOULD be concrete).
+- **Type-naming convention**: a core type's `type` uses `<namespace>.<name>` (e.g. `layout.stack`, `control.select`). The `present*` family (`presentList`, `presentMetric`, `presentChart`, `presentForm`, `presentSpreadsheet`, `presentMarkdown`) is a deliberate exception: it keeps the flat camelCase name it was given when v0.1 fixed the wire contract — renaming it now would change the wire contract and the catalog fingerprint (a breaking change, not a naming cleanup). New core types and product extensions SHOULD use a namespaced name.
 
 ### 3.2 Surface capability negotiation and fallback [Draft]
 

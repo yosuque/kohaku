@@ -481,7 +481,8 @@ _STREAM_SENTINEL = object()
 async def _with_heartbeat(body: AsyncIterator[str], interval_s: float) -> AsyncIterator[str]:
     """Overlay a keepalive comment line (`: keepalive`) onto any SSE body iterator.
 
-    Implements the setInterval equivalent of the TS reference (packages/host-rest/src/routes.ts:522-530) with asyncio.
+    Implements the setInterval equivalent of the TS reference (the heartbeat inside
+    `deliverComposedStream` in packages/host-rest/src/routes/compose.ts) with asyncio.
     Runs the generation body (_compose_stream_body) and keepalive concurrently, sending keepalive to keep the
     connection alive while the body sends nothing for interval_s seconds. The client's SSE parser ignores comment
     lines (leading ":"). On body completion (sentinel) keepalive stops and the generation task is cleaned up. The

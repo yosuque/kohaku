@@ -88,6 +88,7 @@
 
 - props は JSON 表現可能でなければならない(MUST。日時等は文字列で表す)。
 - `description` は LLM の選択ガイダンスとして生成プロンプトに転写される(SHOULD は具体的に)。
+- **型名の命名規約**: コア型の `type` は `<namespace>.<name>`(例: `layout.stack`、`control.select`)を原則とする。`present*` 系(`presentList` / `presentMetric` / `presentChart` / `presentForm` / `presentSpreadsheet` / `presentMarkdown`)は例外で、v0.1 でワイヤ契約を固定した当時のフラットな camelCase 名をそのまま維持している — 今からリネームすると命名整理では済まずワイヤ契約とカタログフィンガープリントが変わってしまう(破壊的変更)ため。新規のコア型・プロダクト拡張は名前空間付きの名前を使うべき(SHOULD)。
 
 ### 3.2 Surface capability negotiation(capability 交渉)とフォールバック [Draft]
 

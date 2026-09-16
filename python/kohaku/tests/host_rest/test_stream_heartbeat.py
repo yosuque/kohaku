@@ -1,9 +1,9 @@
 """SSE keepalive heartbeat (_with_heartbeat) overlay test (SRE-1).
 
-Checks that _with_heartbeat, which realizes the setInterval equivalent of the TS reference
-(packages/host-rest/src/routes.ts:522-530) with asyncio, inserts `: keepalive` into silent intervals while
-preserving the body events. The interval is injected via an argument for fast verification (the default
-SSE_HEARTBEAT_INTERVAL_S=15s is not used).
+Checks that _with_heartbeat, which realizes the setInterval equivalent of the TS reference (the
+heartbeat inside `deliverComposedStream` in packages/host-rest/src/routes/compose.ts) with asyncio,
+inserts `: keepalive` into silent intervals while preserving the body events. The interval is injected
+via an argument for fast verification (the default SSE_HEARTBEAT_INTERVAL_S=15s is not used).
 """
 
 from __future__ import annotations
