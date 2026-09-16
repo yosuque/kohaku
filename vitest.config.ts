@@ -18,8 +18,8 @@ export default defineConfig({
       // those tests instead. The applier (`guest/dom-applier.ts`) is NOT excluded: it runs as a plain
       // function in the trusted document, so its coverage is real.
       exclude: ["packages/sandbox/src/guest/worker-shim.ts"],
-      // A floor pinned below the measured baseline (statements 90.59 / branches 81.27 / functions 88.20 /
-      // lines 92.61 as of this writing), so a coverage regression (e.g. a whole error branch losing its test)
+      // A floor pinned below the measured baseline (statements 91.01 / branches 82.09 / functions 88.68 /
+      // lines 92.95 under vitest 5), so a coverage regression (e.g. a whole error branch losing its test)
       // fails CI instead of silently shipping. autoUpdate is off on purpose: raising the floor is a deliberate
       // decision made when adding tests, not something a coverage run should do for us.
       thresholds: {
