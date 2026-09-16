@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kohaku.composer import (
+    ComposeBudget,
     ComposeContext,
     ComposeErrorContext,
     ComposeObserver,
@@ -126,6 +128,23 @@ def _demo_auth(request: Request) -> Principal:
 def _demo_tenant(request: Request) -> str | None:
     """Tenant resolution (a product responsibility). The demo looks at the x-kohaku-tenant header."""
     return request.headers.get("x-kohaku-tenant") or None
+
+
+# Default compose-wide deadline (ms): one straight-to-L2 run (sales.custom's ~180s L2 timeout under the
+# default outputBudgetFactor=3 widening of KOHAKU_LLM_TIMEOUT_MS) plus headroom for a repair retry. Mirrors
+# the TS sample's apps/sample-api/src/app/compose-context.ts's composeDeadlineMs.
+_DEFAULT_COMPOSE_DEADLINE_MS = 240_000
+
+
+def _compose_deadline_ms(env: Mapping[str, str] | None = None) -> int:
+    """Parses KOHAKU_COMPOSE_DEADLINE_MS as a positive integer; any other value (unset, non-numeric, <= 0)
+    falls back to the default. Exported for testability (mirrors the TS sample's composeDeadlineMs)."""
+    raw = (env if env is not None else os.environ).get("KOHAKU_COMPOSE_DEADLINE_MS")
+    try:
+        parsed = int(raw) if raw is not None else None
+    except ValueError:
+        parsed = None
+    return parsed if parsed is not None and parsed > 0 else _DEFAULT_COMPOSE_DEADLINE_MS
 
 
 class SalesDomainPort:
@@ -421,8 +440,12 @@ async def create_app(
     # prompt (outputLanguage + JA fixed specs), so its generatorVersion carries the "/ja" token
     # (the ComposePolicy contract: prompt-content changes must vary generatorVersion). JA omits
     # fewShot: fixated few-shot examples are EN specs and would bias JA generation toward English.
+    # Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
+    # to the deterministic fallback on expiry rather than hanging indefinitely behind a slow/hung LLM call.
+    compose_budget = ComposeBudget(deadline_ms=_compose_deadline_ms())
     policy_en = ComposePolicy(
         allowL2=os.environ.get("KOHAKU_ALLOW_L2", "") == "1",
+        budget=compose_budget,
         # The standard views are L0 fixed Specs (do not pass through the LLM). "App UI = the solidified form of L1".
         fixedSpecs=create_fixed_specs(),
         # Application of the design system to L2 free generation (identical in content to TS sample-api): presents
@@ -442,6 +465,7 @@ async def create_app(
     )
     policy_ja = ComposePolicy(
         allowL2=policy_en.allowL2,
+        budget=compose_budget,
         fixedSpecs=create_fixed_specs("ja"),
         designSystem=SALES_DESIGN_SYSTEM,
         outputLanguage="Japanese",
