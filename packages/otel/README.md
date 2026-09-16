@@ -7,7 +7,7 @@ Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation 
 (a declarative UI Spec), with generation separated from rendering.
 
 ```bash
-npm install @kohaku-ui/otel
+npm install @kohaku-ui/otel @opentelemetry/api zod
 ```
 
 The packages in this scope share a single version and are designed to be installed together.
