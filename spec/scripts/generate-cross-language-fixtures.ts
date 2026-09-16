@@ -23,9 +23,15 @@ import {
   computeSpecHash,
   computeStructureHash,
   type FixationRecord,
+  type JsonObject,
   parseSpec,
   sha256Hex,
 } from "@kohaku-ui/spec-core";
+// Relative (not "@kohaku-ui/registry") import: the spec package deliberately does not declare
+// @kohaku-ui/registry as a dependency (this generator is its only consumer of the catalog's
+// fallback.mapProps functions), so this reaches the source file directly rather than adding a
+// package.json dependency edge + pnpm-lock.yaml churn for a single script.
+import { coreCatalog } from "../../packages/registry/src/core/index.js";
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../test/fixtures");
 mkdirSync(OUT_DIR, { recursive: true });
@@ -80,6 +86,36 @@ const CANONICAL_VALUES: unknown[] = [
   },
 ];
 
+// Pins the core catalog's fallback.mapProps functions across languages. The Python implementation
+// cannot deserialize a function from core-catalog.json (export-core-catalog.ts's own docstring notes
+// this), so it hand-ports each fallbackType's mapProps into a `_FALLBACK_MAP_PROPS` dict
+// (python/kohaku/src/kohaku/registry/core/__init__.py) that a human keeps in sync with core/*.ts by
+// eye. This fixture is the automated backstop for that hand-port: feed the same inputProps to the TS
+// mapProps here and to Python's _FALLBACK_MAP_PROPS in test_fallback, and require byte-identical
+// mappedProps. Several cases per dynamic type also pin the `??` (nullish, not falsy) coalescing
+// semantics the Python side has to replicate by hand (see js_string / _nullish in that module) --
+// an absent key and a present-but-omitted optional key must map to the same default.
+const FALLBACK_CASES: { type: string; inputProps: JsonObject }[] = [
+  { type: "action.button", inputProps: { label: "Approve", variant: "primary" } },
+  { type: "action.button", inputProps: {} },
+  { type: "presentForm", inputProps: { fields: [{ name: "a" }], action: "save" } },
+  { type: "presentChart", inputProps: { kind: "bar", x: "region", y: "revenue" } },
+  { type: "presentSpreadsheet", inputProps: { editable: false } },
+  { type: "presentList", inputProps: { gap: "sm" } },
+  { type: "presentMetric", inputProps: { label: "Revenue", valueColumn: "revenue" } },
+  { type: "presentMetric", inputProps: { label: "", valueColumn: "revenue" } },
+  { type: "control.select", inputProps: { options: ["a"], label: "Region" } },
+  { type: "control.select", inputProps: { options: ["a"], value: "west" } },
+  { type: "control.select", inputProps: { options: ["a"] } },
+  { type: "ui.loading", inputProps: { label: "Fetching…" } },
+  { type: "ui.loading", inputProps: {} },
+  { type: "layout.tabs", inputProps: { stateKey: "tab" } },
+  { type: "layout.tab", inputProps: { value: "a", label: "A" } },
+  { type: "overlay.dialog", inputProps: { title: "Confirm" } },
+  { type: "overlay.toast", inputProps: { message: "Saved" } },
+  { type: "overlay.toast", inputProps: {} },
+];
+
 const INTENT_CASES: { canonical: string; params: Record<string, unknown> }[] = [
   { canonical: "sales.quarterly_summary", params: { fiscalYear: 2026, groupBy: "region", quarter: 3 } },
   { canonical: "sales.trend", params: {} },
@@ -125,6 +161,14 @@ async function main(): Promise<void> {
       hash: await computeIntentHash({ canonical: c.canonical, params: c.params as never }),
     })),
   );
+
+  const fallbackCases = FALLBACK_CASES.map((c) => {
+    const def = coreCatalog.components.find((d) => d.type === c.type);
+    if (def?.fallback == null) {
+      throw new Error(`FALLBACK_CASES references "${c.type}", which has no fallback in the core catalog`);
+    }
+    return { ...c, mappedProps: def.fallback.mapProps(c.inputProps) };
+  });
 
   const exampleSpec = parseSpec(
     JSON.parse(readFileSync(join(OUT_DIR, "../../examples/quarterly-sales.spec.json"), "utf8")),
@@ -179,13 +223,14 @@ async function main(): Promise<void> {
         cacheKey: cacheKeyCases,
         sandboxDom,
         distillation,
+        fallback: fallbackCases,
       },
       null,
       2,
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, fallback=${fallbackCases.length})`,
   );
 }
 
