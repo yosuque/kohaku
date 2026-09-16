@@ -9,24 +9,24 @@ allowBuilds:
 
 catalog:
   typescript: 7.0.2
-  zod: ^4.6.2
-  hono: ^4.13.7
+  zod: ^4.6.5
+  hono: ^4.13.8
   "@hono/node-server": ^2.1.1
   react: 19.3.0
   react-dom: 19.3.0
   "@types/react": ^19.3.0
   "@types/react-dom": ^19.3.0
-  "@types/node": ^25.9.6
+  "@types/node": ^26.5.1
   vite: ^8.3.0
   "@vitejs/plugin-react": ^6.1.1
   vitest: ^4.1.11
   "@vitest/coverage-v8": ^4.1.11
   jsdom: ^30.0.1
   recharts: ^3.10.1
-  ai: ^7.0.99
+  ai: ^7.0.101
   "@ai-sdk/anthropic": ^4.0.53
   "@ai-sdk/openai": ^4.0.66
-  "@ai-sdk/google": ^4.0.69
+  "@ai-sdk/google": ^4.0.70
   "@ai-sdk/openai-compatible": ^3.0.48
   "@modelcontextprotocol/server": ^2.0.0
   "@modelcontextprotocol/client": ^2.0.0
@@ -51,9 +51,6 @@ catalog:
 # in the catalog above), not on a fixed schedule. Do not add a new entry without a version bump that needs it.
 minimumReleaseAgeExclude:
   - '@ai-sdk/anthropic@4.0.53' # catalog pin (ai-sdk); direct dependency of packages/llm
-  - '@ai-sdk/gateway@4.0.80' # transitive dependency of ai@7.0.99 below, not a direct catalog entry
-  - ai@7.0.99 # catalog pin (ai-sdk); direct dependency of packages/llm
-  - '@ai-sdk/google@4.0.69' # catalog pin (ai-sdk); direct dependency of packages/llm
   - '@ai-sdk/openai-compatible@3.0.48' # catalog pin (ai-sdk); direct dependency of packages/llm
   - '@ai-sdk/openai@4.0.66' # catalog pin (ai-sdk); direct dependency of packages/llm
   - '@ai-sdk/provider-utils@5.0.40' # transitive dependency shared by the @ai-sdk/* packages above
