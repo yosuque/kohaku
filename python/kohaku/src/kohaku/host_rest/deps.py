@@ -229,6 +229,12 @@ class KohakuHostDeps:
     the default is: the inbound `x-request-id` request header when present and well-formed (trimmed, at most
     128 characters, printable ASCII only), otherwise a freshly generated uuid4."""
     capability_ttl_seconds: int | None = None
+    max_body_bytes: int | None = None
+    """Overrides the request-body size cap (bytes) applied by BodyLimitASGIMiddleware (ops; product
+    responsibility). Default when omitted: 1 MiB (see _routes.shared.DEFAULT_MAX_BODY_BYTES; equivalent to
+    TS's DEFAULT_MAX_BODY_BYTES in packages/host-rest/src/routes.ts). A product that already layers its own
+    body-size limit in front of the mount point can leave this at the default — the two checks simply stack —
+    or raise/lower it here to match."""
     fixation_lookup: FixationLookupHook | None = None
     """L1->L0 fixation short-circuit (looked up before compose; resolved per-tenant via the 2nd-argument SessionContext)."""
     recorder: ViewRecorderProtocol | None = None
