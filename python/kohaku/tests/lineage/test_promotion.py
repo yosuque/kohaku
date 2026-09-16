@@ -1121,6 +1121,148 @@ def test_evaluate_and_list_tenant_mismatch_skips_persist(tmp_path: Path) -> None
     asyncio.run(run())
 
 
+# --- nominate's idempotency guard is a (tenant, artifactId) composite key ---
+
+
+def test_nominate_tenant_composite_key_does_not_suppress_cross_tenant_nominate(tmp_path: Path) -> None:
+    """nominate's idempotency guard must be keyed by (tenant, artifactId), not artifactId alone (#10, mirroring
+    candidate-store's own composite key): a past nominate recorded under tenant "acme" for artifactId
+    "shared-z" must not suppress an independently eligible tenant-neutral candidate for that same
+    (globally-unique) artifactId (port of TS promotion-nominate.test.ts)."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        # acme already nominated "shared-z" in the past (a component.nominated event tagged tenant="acme").
+        await seed(storage, "component.nominated", {"artifactId": "shared-z", "by": "policy"}, tenant="acme")
+        # A tenant-neutral candidate for the *same* globally-unique artifactId, independently eligible.
+        await _seed_generated(storage, "shared-z")
+        await seed(storage, "component.used", {"artifactId": "shared-z", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "shared-z", "sessionId": "s2"})
+        await seed(storage, "component.used", {"artifactId": "shared-z", "sessionId": "s3"})
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+        )
+
+        # Before the fix, nominated_ids was keyed by artifactId alone: an all-tenant scan (tenant
+        # unspecified) would pull acme's component.nominated event into the same set as the tenant-neutral
+        # candidate's own check, silently suppressing this eligible in_use candidate forever.
+        candidates = await promotions.evaluate_and_list()
+        neutral = next(c for c in candidates if c.artifactId == "shared-z")
+        assert neutral.status == "candidate"
+        state = await storage.get_promotion_state("shared-z", None)
+        assert state is not None and state.status == "candidate"
+
+    asyncio.run(run())
+
+
+def test_nominate_tenant_composite_key_still_suppresses_same_tenant_reevaluation(tmp_path: Path) -> None:
+    """A tenant's own past nominate must still suppress its own re-evaluation (no regression from the
+    composite-key fix): the idempotency guard is event-log-driven precisely so GET-style repeated calls don't
+    double-record, even when no promotion state was ever persisted for it in this test (a pre-existing
+    nominate that predates this test's own storage snapshot)."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await seed(storage, "component.nominated", {"artifactId": "shared-w", "by": "policy"}, tenant="acme")
+        await _seed_generated(storage, "shared-w", tenant="acme")
+        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s1"}, tenant="acme")
+        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s2"}, tenant="acme")
+        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s3"}, tenant="acme")
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+        )
+
+        await promotions.evaluate_and_list(tenant="acme")
+        nominated = [
+            e
+            for e in await storage.list_lineage(LineageFilter(type=["component.nominated"], tenant="acme"))
+            if e.payload.get("artifactId") == "shared-w"
+        ]
+        assert len(nominated) == 1
+
+    asyncio.run(run())
+
+
+# --- nominate's component.nominated audit is fail-open ---
+
+
+def test_nominate_audit_failure_does_not_block_batch_and_reaches_on_error(tmp_path: Path) -> None:
+    """The status transition (batch persist via _persist_many) already runs before the audit loop, so a
+    storage hiccup recording one candidate's component.nominated event must not stop or undo the rest of the
+    batch -- mirroring handle_publish's own fail-open audit record (port of TS promotion-nominate.test.ts)."""
+
+    async def run() -> None:
+        storage = _FailingAppendStorage(tmp_path)
+        await _seed_generated(storage, "art-a")
+        await seed(storage, "component.used", {"artifactId": "art-a", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "art-a", "sessionId": "s2"})
+        await seed(storage, "component.used", {"artifactId": "art-a", "sessionId": "s3"})
+        await _seed_generated(storage, "art-b")
+        await seed(storage, "component.used", {"artifactId": "art-b", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "art-b", "sessionId": "s2"})
+        await seed(storage, "component.used", {"artifactId": "art-b", "sessionId": "s3"})
+        storage.fail_for.add("component.nominated")
+
+        errors: list[tuple[str, str]] = []
+
+        def on_error(ctx: PromotionErrorContext, error: BaseException) -> None:
+            errors.append((ctx.endpoint, ctx.artifactId))
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+            on_error=on_error,
+        )
+
+        candidates = await promotions.evaluate_and_list()
+        assert next(c for c in candidates if c.artifactId == "art-a").status == "candidate"
+        assert next(c for c in candidates if c.artifactId == "art-b").status == "candidate"
+        state_a = await storage.get_promotion_state("art-a")
+        state_b = await storage.get_promotion_state("art-b")
+        assert state_a is not None and state_a.status == "candidate"
+        assert state_b is not None and state_b.status == "candidate"
+        # Both failures are individually reported (the throw for art-a's own record must not stop art-b's).
+        assert ("promotion.nominate.audit", "art-a") in errors
+        assert ("promotion.nominate.audit", "art-b") in errors
+        assert len(errors) == 2
+        assert not any(e.type == "component.nominated" for e in await storage.list_lineage())
+
+    asyncio.run(run())
+
+
+def test_nominate_audit_recovers_once_recording_is_healthy(tmp_path: Path) -> None:
+    """fail-open is not a permanent swallow: once appendLineage recovers, subsequent nominates are recorded normally."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await _seed_generated(storage, "art-c")
+        await seed(storage, "component.used", {"artifactId": "art-c", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "art-c", "sessionId": "s2"})
+        await seed(storage, "component.used", {"artifactId": "art-c", "sessionId": "s3"})
+
+        errors: list[Any] = []
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+            on_error=lambda ctx, error: errors.append(ctx),
+        )
+
+        candidates = await promotions.evaluate_and_list()
+        assert next(c for c in candidates if c.artifactId == "art-c").status == "candidate"
+        assert any(e.type == "component.nominated" for e in await storage.list_lineage())
+        assert errors == []
+
+    asyncio.run(run())
+
+
 # --- #11: idempotent re-projection on approve() / judge_failed recovery ---
 
 

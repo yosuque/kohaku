@@ -328,6 +328,18 @@ class StoragePort(Protocol):
 
     async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]: ...
 
+    # `put_promotion_states` (batch put) is a *genuinely optional* StoragePort extension -- unlike
+    # `delete_fixation` above (a required method that an unsupporting implementation opts out of via
+    # NotImplementedError), this one is deliberately **not** declared as a Protocol member. TS's counterpart
+    # (packages/spec-core/src/ports.ts) is a real optional interface field (`putPromotionStates?()`), checked
+    # by callers via `storage.putPromotionStates != null`; Python has no equivalent "optional Protocol
+    # member" construct that would not force every existing StoragePort implementation across the codebase
+    # (including minimal test stubs that intentionally implement only a subset of methods) to grow a new
+    # method just to keep type-checking. Callers instead duck-type it at the call site the same way TS does
+    # at runtime: `getattr(storage, "put_promotion_states", None)`, falling back to looping
+    # put_promotion_state when absent. See kohaku.storage.file.FileStoragePort.put_promotion_states for the
+    # reference implementation (one read-modify-write for every state in the batch).
+
     async def get_fixation(
         self, intent_hash: str, tenant: str | None = None
     ) -> FixationRecord | None: ...

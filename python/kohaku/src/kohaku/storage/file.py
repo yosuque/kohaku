@@ -2,6 +2,25 @@
 
 The Spec cache is in-memory (approximate LRU + TTL); Lineage / promotion / fixation are persisted to disk.
 
+**Durability contract (read this before using FileStoragePort in production):**
+- **No fsync.** Every write (`_write_json_atomic`, lineage's `jsonl` append) goes through the OS page cache
+  only; there is no `os.fsync` / `flush`-and-sync call anywhere in this module. The tmp-then-rename pattern
+  guarantees a *reader* never observes a half-written file (process-crash resilience: a crash mid-write
+  leaves the old file intact, not a torn one), but it does **not** guarantee the post-rename bytes have
+  actually reached disk — an OS crash, kernel panic, or power loss between the rename and the page cache
+  being flushed can still lose the write entirely, even though the write already returned success to the
+  caller.
+- **Single-process assumption.** Concurrent read-modify-write against the same snapshot file is serialized
+  only *within one process* (`_lock_for`'s per-path `asyncio.Lock`, the counterpart of TS's
+  `createKeyedMutex`). Two processes pointed at the same `data_dir` (e.g. sample-api and a Python MCP host
+  sharing one `.data` directory) can still race and lose an update — there is no cross-process file lock or
+  optimistic-concurrency check.
+- **This is a reference/demo implementation, not a production storage backend.** It exists to make the
+  reference host runnable out of the box with zero external dependencies. A production deployment should
+  replace it with a DB-backed `StoragePort` implementation (a real transactional store gives durability,
+  cross-process/cross-instance concurrency safety, and — for lineage specifically — proper rotation/
+  compaction instead of an ever-growing `lineage.jsonl`).
+
 Persistence hardening and its limits (same as the TS version):
 - Snapshots (promotions / fixations) are replaced atomically via tmp+rename.
 - Each put is "re-read the disk → swap only that entry → write it back atomically".
@@ -155,7 +174,12 @@ def _fixation_from_wire(data: dict[str, Any]) -> FixationRecord:
 
 
 class FileStoragePort:
-    """StoragePort implementation. The Spec cache is in memory; governance state is persisted to disk."""
+    """StoragePort implementation. The Spec cache is in memory; governance state is persisted to disk.
+
+    See this module's docstring for the full durability contract: no fsync (process-crash resilience only,
+    not power-loss/kernel-panic durability), single-process concurrency only, and reference/demo status —
+    ship a DB-backed StoragePort implementation for production use.
+    """
 
     def __init__(self, data_dir: str | Path) -> None:
         self._dir = Path(data_dir)
@@ -254,6 +278,24 @@ class FileStoragePort:
             _promotion_from_wire,
         )
 
+    async def put_promotion_states(self, states: list[PromotionState]) -> None:
+        """Batch counterpart of put_promotion_state (a genuinely optional StoragePort extension -- duck-typed
+        by callers via getattr; see spec.ports.StoragePort's comment on this method): one read-modify-write
+        for every state in the batch instead of one per state, via _merge_mutate. A batch nomination pass
+        (kohaku.lineage.promotion.service transitioning many candidates from in_use to candidate at once)
+        would otherwise re-read/re-stringify/re-write promotions.json once per candidate. A no-op for an
+        empty list (mirrors TS's early return in storage-port.ts's putPromotionStates)."""
+        if not states:
+            return
+
+        def _mutate(base: dict[str, Any]) -> None:
+            for state in states:
+                base[_promotion_key(state.tenant, state.artifactId)] = _promotion_to_wire(state)
+
+        await self._merge_mutate(
+            self._promotions_path, self._promotions, _promotion_to_wire, _promotion_from_wire, _mutate
+        )
+
     async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]:
         values = list(self._promotions.values())
         return values if tenant is None else [s for s in values if s.tenant == tenant]
@@ -315,11 +357,9 @@ class FileStoragePort:
         *,
         if_present: bool = False,
     ) -> None:
-        """Read the latest from disk, update that key, write it back atomically, and sync memory too.
-
-        On disk corruption, use **the memory Map as the merge base** rather than fallback({}) (using
-        corruption as the base would collapse all healthy state into that single entry and lose it; the
-        corrupted file has already been moved aside to .corrupt).
+        """Read the latest from disk, update **one** key, write it back atomically, and sync memory too. A
+        thin single-key wrapper over `_merge_mutate` (below), which several keys in one call (e.g.
+        `put_promotion_states`) also builds on.
 
         if_present: skip the write-back (memory is still synced to the freshly re-read base) unless `key` is
         already present there. Used by Fixations.refresh_fingerprint (via put_fixation's if_present) so a
@@ -327,6 +367,36 @@ class FileStoragePort:
         fixation — and, since memory is synced to the current disk truth even on this no-op path, the
         caller's own stale in-memory copy of the deleted record is dropped too rather than lingering until an
         unrelated key's put happens to resync it.
+        """
+
+        def _mutate(base: dict[str, Any]) -> bool | None:
+            if if_present and key not in base:
+                return False
+            base[key] = to_wire(value)
+            return None
+
+        await self._merge_mutate(path, memory, to_wire, from_wire, _mutate)
+
+    async def _merge_mutate[T](
+        self,
+        path: Path,
+        memory: dict[str, T],
+        to_wire: Any,
+        from_wire: Any,
+        mutate: Callable[[dict[str, Any]], bool | None],
+    ) -> None:
+        """Read the latest from disk, apply `mutate` to the wire-shaped snapshot dict, write it back
+        atomically (unless `mutate` returns `False`), and sync memory too. The shared primitive `_merge_put`
+        (a single-key set) and `put_promotion_states` (several keys in one read-modify-write, instead of one
+        `_merge_put` call per state) both build on — mirrors TS storage-port.ts's `mergeMutate`, which
+        `mergePut` / the batch `putPromotionStates` likewise both call.
+
+        On disk corruption, use **the memory dict as the merge base** rather than fallback({}) (using
+        corruption as the base would collapse all healthy state into whatever `mutate` writes and lose it;
+        the corrupted file has already been moved aside to .corrupt).
+
+        `mutate` returning `False` skips the write-back (memory is still synced to the freshly re-read base)
+        — see `_merge_put`'s `if_present` doc for why a caller needs this.
 
         The actual disk I/O and memory sync run in a worker thread (`asyncio.to_thread`) so they do not block
         the event loop, guarded by `_lock_for(path)` so two concurrent calls against the same file cannot
@@ -336,9 +406,8 @@ class FileStoragePort:
         def _do() -> None:
             loaded, corrupted = _load_json_snapshot(path, {})
             base = {k: to_wire(v) for k, v in memory.items()} if corrupted else loaded
-            skip_write = if_present and key not in base
-            if not skip_write:
-                base[key] = to_wire(value)
+            should_write = mutate(base) is not False
+            if should_write:
                 _write_json_atomic(path, base)
             memory.clear()
             memory.update({k: from_wire(v) for k, v in base.items()})
@@ -370,7 +439,9 @@ class MemoryStoragePort(FileStoragePort):
 
 
 def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Atomic write that writes to tmp then renames (process-crash resilience only; no fsync).
+    """Atomic write that writes to tmp then renames (process-crash resilience only; no fsync -- see this
+    module's docstring for the full durability contract). The rename guarantees a reader never sees a
+    torn/partial file, but does not guarantee the bytes have reached disk before a power loss or kernel panic.
 
     The tmp name gets a unique suffix (uuid4) in addition to the PID, so that even when two runs in different
     PID namespaces (containers) happen to share a PID, the tmp files do not collide. On any failure after the

@@ -186,6 +186,7 @@ PromotionErrorEndpoint = Literal[
     "promotion.reconcile.audit",
     "promotion.reconcile.projection",
     "promotion.nominate.tenant",
+    "promotion.nominate.audit",
     "storage.record.invalid",
 ]
 """The call sites create_promotions' on_error hook may fire from, named for the observability hook:
@@ -196,6 +197,10 @@ PromotionErrorEndpoint = Literal[
   neither the snapshot itself nor component.generated could supply the required html (#9).
 - promotion.nominate.tenant: evaluate_and_list (tenant unspecified) skipped auto-nominating a candidate that
   belongs to a specific tenant, to avoid persisting a tenant-neutral state for it (#10).
+- promotion.nominate.audit: the fail-open component.nominated audit record (recorded after the status
+  transition to candidate is already persisted) failed for one nominated candidate. Unlike publish/unpublish's
+  audit, there is currently no reconcile-style backfill for a missed component.nominated event, so the audit
+  trail stays incomplete for that artifact until a manual fix.
 - storage.record.invalid: a promotion-state record read back from StoragePort.get_promotion_state
   (_load_candidate) failed kohaku.spec.validate_promotion_state (§4.3 A10 of the 2026-09 review — a
   corrupted or hand-edited promotions.json entry). The reader treats it exactly like a real absence (the
@@ -376,7 +381,11 @@ class Promotions:
             updatedAt=state.updatedAt if state is not None else generated[0].ts,
         )
 
-    async def _persist(self, candidate: PromotionCandidate, tenant: str | None = None) -> None:
+    def _build_promotion_state(
+        self, candidate: PromotionCandidate, tenant: str | None = None
+    ) -> PromotionState:
+        """Pure builder (no I/O) shared by `_persist` (one write) and `_persist_many` (a batch write, so
+        several states can be built up front before issuing a single storage call)."""
         data: dict[str, Any] = {}
         if candidate.verdict is not None:
             data["verdict"] = candidate.verdict
@@ -401,15 +410,35 @@ class Promotions:
                 data["ref"] = candidate.ref
             if candidate.draft is not None:
                 data["componentType"] = candidate.draft.componentType
-        await self._storage.put_promotion_state(
-            PromotionState(
-                artifactId=candidate.artifactId,
-                status=candidate.status,
-                updatedAt=self._clock(),
-                data=data,
-                tenant=tenant,
-            )
+        return PromotionState(
+            artifactId=candidate.artifactId,
+            status=candidate.status,
+            updatedAt=self._clock(),
+            data=data,
+            tenant=tenant,
         )
+
+    async def _persist(self, candidate: PromotionCandidate, tenant: str | None = None) -> None:
+        await self._storage.put_promotion_state(self._build_promotion_state(candidate, tenant))
+
+    async def _persist_many(
+        self, candidates: list[PromotionCandidate], tenant: str | None = None
+    ) -> None:
+        """Batch counterpart of `_persist`: builds every PromotionState up front, then issues either one
+        `StoragePort.put_promotion_states` call (when the storage duck-types it in -- see
+        `kohaku.spec.ports.StoragePort`'s comment on why this is not a declared Protocol member, unlike TS's
+        real optional interface field) or falls back to the legacy one-`put_promotion_state`-call-per-state
+        loop. A no-op for an empty list. Used by the batch nominate persistence in `_gather_candidates` below
+        (mirrors TS nomination.ts's `toPersist` / candidate-store.ts's `persistMany`)."""
+        if not candidates:
+            return
+        states = [self._build_promotion_state(c, tenant) for c in candidates]
+        put_many = getattr(self._storage, "put_promotion_states", None)
+        if put_many is not None:
+            await put_many(states)
+        else:
+            for state in states:
+                await self._storage.put_promotion_state(state)
 
     async def _gather_candidates(
         self, auto_nominate: bool, tenant: str | None = None
@@ -449,6 +478,13 @@ class Promotions:
         used_by_artifact = _group_used_by_artifact(all_used)
 
         # A guard that collects already-nominated artifacts with a single listLineage (prevents double-recording).
+        # Keyed by (tenant, artifactId) composite key (#10), not artifactId alone: artifactId derives from
+        # content sha256 and is globally unique, so the *same* artifactId can be independently nominated by
+        # multiple tenants (mirrors this function's own (tenant, artifactId) candidate keying above, and TS
+        # nomination.ts's own composite-keyed nominatedIds). Keying by artifactId alone would, on an
+        # all-tenant scan (tenant left unspecified), let one tenant's prior component.nominated event
+        # suppress another tenant's own eligible in_use candidate for the same artifactId — a silent no-op
+        # that never transitions it to candidate.
         nominated_ids: set[str] = set()
         if auto_nominate:
             nominated_events = await self._storage.list_lineage(
@@ -457,7 +493,14 @@ class Promotions:
             for e in nominated_events:
                 artifact_id = e.payload.get("artifactId")
                 if isinstance(artifact_id, str):
-                    nominated_ids.add(artifact_id)
+                    nominated_ids.add(_usage_index_key(e.tenant, artifact_id))
+
+        # Nominated-this-pass candidates, batch-persisted once (via _persist_many) and then audited
+        # (fail-open) below — mirrors TS nomination.ts's toPersist: every eligible candidate's status
+        # transition is applied in memory first, then persisted with a single storage write instead of one
+        # per candidate (a scan that nominates many candidates at once, e.g. after a burst of usage, no
+        # longer re-reads/re-stringifies/re-writes promotions.json once per candidate).
+        to_persist: list[PromotionCandidate] = []
 
         candidates: list[PromotionCandidate] = []
         for key in keys:
@@ -474,7 +517,7 @@ class Promotions:
             if (
                 auto_nominate
                 and candidate.status == "in_use"
-                and artifact_id not in nominated_ids
+                and _usage_index_key(record_tenant, artifact_id) not in nominated_ids
                 and candidate.uses >= self._policy.minUses
                 and candidate.sessions >= self._policy.minDistinctSessions
             ):
@@ -503,12 +546,40 @@ class Promotions:
                 candidate.status = transition(
                     candidate.status, Nominate(by="policy"), self._machine_policy
                 )
-                await self._persist(candidate, tenant)
-                await self._lineage.record(
-                    "component.nominated", {"artifactId": artifact_id, "by": "policy"}, None, tenant
-                )
-                nominated_ids.add(artifact_id)
+                to_persist.append(candidate)
+                nominated_ids.add(_usage_index_key(record_tenant, artifact_id))
             candidates.append(candidate)
+
+        # Every eligible candidate's status transition is now applied in memory; persist them all in a single
+        # batch write (see _persist_many's doc for the StoragePort.put_promotion_states duck-type / fallback).
+        await self._persist_many(to_persist, tenant)
+
+        # component.nominated audit events are recorded only after the batch persist above resolves, and are
+        # fail-open (mirroring handle_publish's own audit record): the status transition is already durable
+        # by this point, so a storage hiccup recording the audit event must not stop the batch (or leave a
+        # persisted-but-unaudited candidate silently swallowed along with every candidate still queued after
+        # it) — the failure is instead reported per-candidate via on_error(endpoint="promotion.nominate.audit").
+        # See PromotionErrorEndpoint's doc for why this leaves that one nominate permanently unaudited (no
+        # reconcile-style backfill) even though the candidate is already persisted as "candidate".
+        for candidate in to_persist:
+            try:
+                await self._lineage.record(
+                    "component.nominated",
+                    {"artifactId": candidate.artifactId, "by": "policy"},
+                    None,
+                    tenant,
+                )
+            except Exception as e:  # noqa: BLE001 — fail-open; see doc above
+                _notify_promotion_error(
+                    self._on_error,
+                    PromotionErrorContext(
+                        endpoint="promotion.nominate.audit",
+                        artifactId=candidate.artifactId,
+                        tenant=tenant,
+                    ),
+                    e,
+                )
+
         return sorted(candidates, key=lambda c: c.uses, reverse=True)
 
     async def list_candidates(self, *, tenant: str | None = None) -> list[PromotionCandidate]:
