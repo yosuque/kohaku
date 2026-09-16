@@ -10,7 +10,6 @@ from kohaku.lineage import (
     JudgeStart,
     MachinePolicy,
     Nominate,
-    PromotionStatus,
     Publish,
     ReviewApprove,
     ReviewReject,
@@ -20,7 +19,6 @@ from kohaku.lineage import (
     TransitionError,
     Unpublish,
     Withdraw,
-    may_have_projection,
     transition,
 )
 from kohaku.spec import Principal
@@ -108,23 +106,3 @@ def test_withdraw_on_published_still_transition_error() -> None:
     # Only the dedicated unpublish action can handle published. withdraw keeps being rejected by the terminal guard.
     with pytest.raises(TransitionError):
         transition("published", Withdraw())
-
-
-def test_may_have_projection_truth_table() -> None:
-    """Only published and withdrawn snapshots may have a projection to converge (mirrors TS's machine.test.ts)."""
-    truth_table: dict[PromotionStatus, bool] = {
-        "in_use": False,
-        "candidate": False,
-        "judging": False,
-        "judge_failed": False,
-        "in_review": False,
-        "changes_requested": False,
-        "approved": False,
-        # schema_proposed holds a draft, but a draft alone is never published, so it has no projection either.
-        "schema_proposed": False,
-        "published": True,
-        "rejected": False,
-        "withdrawn": True,
-    }
-    for status, expected in truth_table.items():
-        assert may_have_projection(status) is expected

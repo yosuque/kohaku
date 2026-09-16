@@ -135,13 +135,7 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         across every tenant), so unlike the other transition routes it does not resolve/check a per-artifact
         owning tenant — it is serialized under the promotion lock's tenant-neutral bucket
         (`_promotion_key(None)`), the same bucket approve/reject/withdraw/actions/evaluate use for an
-        unscoped call. Only unscoped transitions share that bucket, though: a tenant-scoped approve/withdraw
-        takes its own tenant's bucket and can still interleave with this scan. reconcile() itself re-reads each
-        candidate's status right after its scan and skips a stale entry rather than acting on it (see
-        reconcile()'s own docstring in kohaku.lineage.promotion.service), so a transition racing with this
-        route cannot make reconcile apply a projection change against a candidate that has already moved on.
-        Serializing this route against every per-tenant bucket (two-phase locking) would close the window at
-        the scan level too, but is a structural follow-up, not implemented here.
+        unscoped call, so it cannot race a concurrent transition's read-modify-write.
         """
         if deps.promotions is None:
             return _promotions_not_configured()

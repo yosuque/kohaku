@@ -21,7 +21,6 @@ from .machine import (
     Withdraw,
     component_draft_from_wire,
     is_terminal,
-    may_have_projection,
     query_template_from_wire,
     transition,
 )
@@ -81,7 +80,6 @@ __all__ = [
     "component_draft_from_wire",
     "create_promotions",
     "is_terminal",
-    "may_have_projection",
     "query_template_from_wire",
     "transition",
 ]
