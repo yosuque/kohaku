@@ -404,6 +404,11 @@ async function main(): Promise<void> {
       console.error(
         `kohaku-sales-sample MCP server: received ${signal}, draining connections (grace ${graceMs}ms)`,
       );
+      // Close idle keep-alive sockets immediately rather than waiting for their keep-alive timeout to
+      // elapse: close() alone only stops accepting *new* connections and waits for every existing one
+      // (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
+      // connection would otherwise stall the drain for no reason.
+      httpServer.closeIdleConnections();
       httpServer.close(() => process.exit(0));
       setTimeout(() => {
         httpServer.getConnections((err, count) => {
