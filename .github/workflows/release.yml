@@ -28,14 +28,14 @@ jobs:
       published: ${{ steps.npm.outputs.published }}
       version: ${{ steps.npm.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      # No `version:` input here: package.json's `packageManager` (pnpm@11.5.2) is the single source of
+      # No `version:` input here: package.json's `packageManager` field is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
       # "Multiple versions of pnpm specified".
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -45,14 +45,14 @@ jobs:
       # this is the last point at which a broken tarball can still be stopped.
       - run: pnpm run smoke:pack
       - id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          version: pnpm run version
-          publish: pnpm run release
-          commit: "chore(release): version packages"
-          title: "chore(release): version packages"
+          version-script: pnpm run version
+          publish-script: pnpm run release
+          commit-message: "chore(release): version packages"
+          pr-title: "chore(release): version packages"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           # Does NOT currently produce an attestation: 0.1.0 went out with registry signatures but no
           # provenance. `pnpm publish` turned out not to delegate to the npm CLI -- it uploads itself and
@@ -110,10 +110,10 @@ jobs:
       # Pin to the exact commit that triggered this run, not the branch tip: by the time this job runs,
       # main may have moved on to a later commit (a subsequent push), and checking that out could publish
       # code that does not match the npm version this job just asserted against.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10
         with:
           python-version: "3.12"
       # CI already fails on version drift, but this is the last gate before an asymmetric release: npm is
@@ -147,7 +147,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # Idempotent for the same reason the PyPI upload is: the gate stays true once npm is at this version,
