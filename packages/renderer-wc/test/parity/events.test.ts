@@ -180,6 +180,31 @@ describe("event behavior parity (control + A1 have identical external observatio
     expect(wc.obs.events).toEqual(react.obs.events);
   });
 
+  it("sortChange fires an identical { value: { field, dir } } payload in both on a user sort toggle", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        components: [
+          { id: "root", type: "layout.stack", props: {}, children: ["table1"] },
+          { id: "table1", type: "presentSpreadsheet", props: {}, data: { $ref: REF } },
+        ],
+        refVersions: { [REF]: "v1" },
+        events: [{ on: "table1.sortChange", emit: "intent.patch", payload: { value: "$value" } }],
+      }),
+      steps: [{ act: "click", sel: '[data-kohaku="table1"] th:nth-child(2) button' }],
+    };
+    const { react, wc } = await bothObserve(sc);
+    const expected = [
+      {
+        componentId: "table1",
+        on: "table1.sortChange",
+        emit: "intent.patch",
+        payload: { value: { field: "revenue", dir: "desc" } },
+      },
+    ];
+    expect(react.obs.events).toEqual(expected);
+    expect(wc.obs.events).toEqual(react.obs.events);
+  });
+
   it("undeclared events are dropped, only declared ones forward (SPEC-EVT-002) and both match", async () => {
     const sc: Scenario = {
       spec: spec({

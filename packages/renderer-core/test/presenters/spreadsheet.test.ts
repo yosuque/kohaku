@@ -6,6 +6,7 @@ import {
   describeSortHeader,
   formatCell,
   localFooterTotal,
+  nextSortState,
   rowKey,
   SPREADSHEET_HARD_ROW_CAP,
   sortRows,
@@ -140,6 +141,37 @@ describe("applyLocalView", () => {
     const view = applyLocalView(rows, { field: "n", dir: "asc" }, 2, "en-US");
     expect(view.map((r) => r["n"])).toEqual([1, 2]);
     expect(rows.map((r) => r["n"])).toEqual([3, 1, 2]);
+  });
+});
+
+describe("nextSortState", () => {
+  it("a newly-clicked column starts descending", () => {
+    expect(nextSortState(undefined, "revenue")).toEqual({ field: "revenue", dir: "desc" });
+    expect(nextSortState({ field: "region", dir: "asc" }, "revenue")).toEqual({
+      field: "revenue",
+      dir: "desc",
+    });
+  });
+
+  it("re-clicking the active column flips desc -> asc", () => {
+    expect(nextSortState({ field: "revenue", dir: "desc" }, "revenue")).toEqual({
+      field: "revenue",
+      dir: "asc",
+    });
+  });
+
+  it("re-clicking the active column flips asc -> desc", () => {
+    expect(nextSortState({ field: "revenue", dir: "asc" }, "revenue")).toEqual({
+      field: "revenue",
+      dir: "desc",
+    });
+  });
+
+  it("switching to a different column resets to desc regardless of the previous column's dir", () => {
+    expect(nextSortState({ field: "revenue", dir: "asc" }, "region")).toEqual({
+      field: "region",
+      dir: "desc",
+    });
   });
 });
 

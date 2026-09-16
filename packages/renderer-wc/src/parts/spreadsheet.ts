@@ -17,7 +17,7 @@ import {
   spreadsheetTdStyle,
   spreadsheetThStyle,
 } from "@kohaku-ui/renderer-core";
-import { type ComponentNode, resolveBoundRef, type TabularData } from "@kohaku-ui/spec-core";
+import { type ComponentNode, type JsonObject, resolveBoundRef, type TabularData } from "@kohaku-ui/spec-core";
 import { el, text } from "../dom.js";
 import type { PartBuilder, RenderRuntime } from "../types.js";
 import { dataStateNotice, tokenStr } from "./kit.js";
@@ -41,6 +41,10 @@ export const presentSpreadsheet: PartBuilder = (rt, parent, node) => {
   const pageSize = node.props["pageSize"] as number | undefined;
   const declaredSort = node.props["sortBy"] as unknown as SortState | undefined;
   const rowClickable = hasDeclaredEvent(rt.spec, node.id, "rowClick");
+  // Whether a Spec-declared sortChange event should be emitted on each user sort toggle. Never
+  // emitted from the Spec-driven syncDeclaredSort path — only a user click/keydown on the header
+  // button below fires it.
+  const sortChangeable = hasDeclaredEvent(rt.spec, node.id, "sortChange");
 
   const ctrl = createSpreadsheetRemoteController({
     binding: rt.binding,
@@ -83,7 +87,12 @@ export const presentSpreadsheet: PartBuilder = (rt, parent, node) => {
         pageSize,
         rowClickable,
         colors: { border, headerBg, accent, muted },
-        onToggleSort: (colKey) => ctrl.toggleSort(colKey),
+        onToggleSort: (colKey) => {
+          const next = ctrl.toggleSort(colKey);
+          // SortState -> JsonObject: a plain { field, dir } shape, just without an index signature —
+          // structurally a JsonObject at runtime.
+          if (sortChangeable) rt.emit(node, "sortChange", { value: next as unknown as JsonObject }, null);
+        },
         onFirstPage: () => ctrl.goFirstPage(),
         onNextPage: (next) => ctrl.goNextPage(next),
       }),

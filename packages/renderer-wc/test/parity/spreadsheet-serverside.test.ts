@@ -14,6 +14,7 @@ import {
   renderReact,
   renderWc,
   type SemanticNode,
+  type SurfaceEvent,
   tick,
 } from "./render-both.js";
 
@@ -55,6 +56,27 @@ function serverSideSpec(extraProps: Record<string, unknown> = {}): UISpec {
       },
     ],
     events: [],
+    provenance: PROVENANCE,
+  });
+}
+
+/** serverSide + pageSize, with sortChange declared (for the onEvent-recording parity test below). */
+function serverSideSpecWithSortChange(): UISpec {
+  return parseSpec({
+    kohaku: "0.1",
+    intent: INTENT,
+    dataVersion: "src@v1",
+    refVersions: { [REF]: "src@v1" },
+    components: [
+      { id: "root", type: "layout.stack", props: {}, children: ["t1"] },
+      {
+        id: "t1",
+        type: "presentSpreadsheet",
+        props: { serverSide: true, pageSize: 2 },
+        data: { $ref: REF },
+      },
+    ],
+    events: [{ on: "t1.sortChange", emit: "intent.patch", payload: { value: "$value" } }],
     provenance: PROVENANCE,
   });
 }
@@ -203,6 +225,36 @@ describe("serverSide spreadsheet parity: React ⇄ WC", () => {
     expect(reactSort.every((o) => o.page?.cursor == null)).toBe(true);
 
     expect(tableNode(wcRoot)).toEqual(tableNode(container));
+  });
+
+  it("sort toggle: onEvent's recorded sortChange payload matches in both when declared", async () => {
+    const reactSeen: ResolveOptions[] = [];
+    const wcSeen: ResolveOptions[] = [];
+    const spec = serverSideSpecWithSortChange();
+    const reactEvents: SurfaceEvent[] = [];
+    const wcEvents: SurfaceEvent[] = [];
+
+    const { container } = await renderReact(spec, { binding: () => makeBinding(reactSeen) }, (e) =>
+      reactEvents.push(e),
+    );
+    const { surface } = await renderWc(spec, { binding: () => makeBinding(wcSeen) }, (e) => wcEvents.push(e));
+    const wcRoot = surface.shadowRoot!;
+
+    clickSortRevenue(container, "react");
+    await flushReact();
+    clickSortRevenue(wcRoot, "wc");
+    await tick();
+
+    const expected = [
+      {
+        componentId: "t1",
+        on: "t1.sortChange",
+        emit: "intent.patch",
+        payload: { value: { field: "revenue", dir: "desc" } },
+      },
+    ];
+    expect(reactEvents).toEqual(expected);
+    expect(wcEvents).toEqual(reactEvents);
   });
 
   it("pagination: next / first-page cursor arguments match in both", async () => {

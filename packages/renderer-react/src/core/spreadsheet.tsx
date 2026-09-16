@@ -8,6 +8,7 @@ import {
   resolveColumns,
   rowKey,
   type SpreadsheetRowRuntime,
+  type SpreadsheetSortRuntime,
   spreadsheetFooterBarStyle,
   spreadsheetFooterTotalStyle,
   spreadsheetPagerButtonStyle,
@@ -15,7 +16,7 @@ import {
   spreadsheetTdStyle,
   spreadsheetThStyle,
 } from "@kohaku-ui/renderer-core";
-import { resolveBoundRef } from "@kohaku-ui/spec-core";
+import { type JsonObject, resolveBoundRef } from "@kohaku-ui/spec-core";
 import { type ReactNode, useMemo } from "react";
 import {
   type ImplProps,
@@ -32,8 +33,9 @@ import { useBoundData } from "../use-bound-data.js";
 import { useSpreadsheetRemote } from "../use-spreadsheet-remote.js";
 import { DataStateNotice } from "./data-states.js";
 
-// The runtime payload type for rowClick uses renderer-core as the single source of truth (the public API is unchanged via re-export).
-export type { SpreadsheetRowRuntime };
+// The runtime payload types for rowClick / sortChange use renderer-core as the single source of
+// truth (the public API is unchanged via re-export).
+export type { SpreadsheetRowRuntime, SpreadsheetSortRuntime };
 
 export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
   // serverSide (opt-in, default false): when true, sorting/paging is done not locally but
@@ -82,6 +84,10 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
   const state = serverSide && remote != null ? remote : base;
 
   const rowClickable = hasDeclaredEvent(spec, node.id, "rowClick");
+  // Whether a Spec-declared sortChange event should be emitted on each user sort toggle. Never
+  // emitted from the Spec-driven syncDeclaredSort inside useSpreadsheetRemote — only a user
+  // interaction with the header button below fires it.
+  const sortChangeable = hasDeclaredEvent(spec, node.id, "sortChange");
 
   const data = state.status === "ready" ? state.data : undefined;
   const columns = useMemo(() => resolveColumns(node, data ?? {}), [node.props, data]);
@@ -115,7 +121,12 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
                       reset the button's default styles and expand the click area to the full cell. */}
                   <button
                     type="button"
-                    onClick={() => ctrl.toggleSort(col.key)}
+                    onClick={() => {
+                      const next = ctrl.toggleSort(col.key);
+                      // SortState -> JsonObject: a plain { field, dir } shape, just without an index
+                      // signature — structurally a JsonObject at runtime.
+                      if (sortChangeable) emit("sortChange", { value: next as unknown as JsonObject });
+                    }}
                     style={spreadsheetSortButtonStyle({ numeric: h.numeric })}
                   >
                     {h.label}

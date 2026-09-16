@@ -10,6 +10,22 @@ export interface SortState {
 /** The runtime payload type for rowClick (emit("rowClick", { row })). */
 export type SpreadsheetRowRuntime = { row: JsonObject };
 
+/** The runtime payload type for sortChange (emit("sortChange", { value })). Mirrors props.sortBy's own shape. */
+export type SpreadsheetSortRuntime = { value: SortState };
+
+/**
+ * The next SortState when a user toggles sort on a column: a newly-clicked column starts
+ * descending; re-clicking the already-active column cycles desc -> asc -> desc. The single source
+ * of truth for this rule (shared by the remote controller's toggleSort and, indirectly, both
+ * renderers' sortChange emission, which uses the value this returns).
+ */
+export function nextSortState(sort: SortState | undefined, colKey: string): SortState {
+  return {
+    field: colKey,
+    dir: sort?.field === colKey && sort.dir === "desc" ? "asc" : "desc",
+  };
+}
+
 /**
  * Formats a cell value. For a number column with a numeric value, digit grouping;
  * for an object, JSON stringification; for null, an empty string. Everything else
