@@ -130,6 +130,17 @@ def _demo_tenant(request: Request) -> str | None:
     return request.headers.get("x-kohaku-tenant") or None
 
 
+def admit_fixation_for_locale(_fixation: FixationRecord, session: SessionContext) -> bool:
+    """The fixation delivery-admission gate shared by both host profiles (REST's
+    `KohakuHostDeps.fixation_admit` / MCP's `McpHostDeps.fixation_admit`, both wired from this module's
+    `create_app` and `mcp_setup.py`'s `create_server`): FixationRecord carries no language and every pinned
+    Spec was fixated from EN traffic, so the shortcut serves EN sessions only; JA sessions fall through to
+    normal compose (JA cache hit or JA generation via the policy pair below). Centralized here (rather than
+    duplicated inside each profile's own fixation-lookup wiring) so REST and MCP apply the exact same
+    policy. Mirrors the TS sample's apps/sample-api/src/app/compose-context.ts's admitFixationForLocale."""
+    return language_of(session.locale) == "en"
+
+
 # Default compose-wide deadline (ms): one straight-to-L2 run (sales.custom's ~180s L2 timeout under the
 # default outputBudgetFactor=3 widening of KOHAKU_LLM_TIMEOUT_MS) plus headroom for a repair retry. Mirrors
 # the TS sample's apps/sample-api/src/app/compose-context.ts's composeDeadlineMs.
@@ -496,14 +507,11 @@ async def create_app(
     )
 
     async def fixation_lookup(intent_hash: str, session: SessionContext) -> FixationRecord | None:
-        """The L1->L0 fixation short-circuit (queried before compose). Looks up the given tenant's fixation by session.tenant.
-
-        Language gate (demo policy): FixationRecord carries no language, and every pinned Spec was
-        fixated from EN traffic — so the shortcut serves EN sessions only. JA sessions fall through
-        to normal compose (JA cache hit or JA generation via the policy pair above).
-        """
-        if language_of(session.locale) != "en":
-            return None
+        """The L1->L0 fixation short-circuit (queried before compose). Looks up the given tenant's fixation
+        by session.tenant. A plain read: delivery gating (the demo's EN-only language policy) is separated
+        out into `admit_fixation_for_locale` below, shared verbatim with the MCP profile's wiring in
+        mcp_setup.py, so this stays a plain read (kohaku.host_core.FixationDeliveryHost.admit is what
+        actually applies the gate)."""
         return await storage.get_fixation(intent_hash, session.tenant)
 
     async def action_effects_hook(
@@ -518,6 +526,7 @@ async def create_app(
         authz=authz,
         query_source="sales",
         fixation_lookup=fixation_lookup,
+        fixation_admit=admit_fixation_for_locale,
         recorder=recorder,
         promotions=promotions,
         fixations=fixations,

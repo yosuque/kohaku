@@ -35,9 +35,8 @@ from kohaku.spec import FixationRecord, JsonObject, SessionContext, UISpec
 from kohaku.storage import FileStoragePort
 
 from .action_effects import sales_action_effects
-from .app import create_app
+from .app import admit_fixation_for_locale, create_app
 from .authz_port import create_hmac_authz_port
-from .fixed_specs import language_of
 
 _REPO_ROOT = Path(__file__).resolve().parents[5]
 _RENDERER_PATH = _REPO_ROOT / "apps/sample-mcp/dist/renderer/index.html"
@@ -149,12 +148,11 @@ async def create_kohaku_mcp_setup(
     async def fixation_lookup(
         intent_hash: str, session: SessionContext
     ) -> FixationRecord | None:
-        # Language gate (demo policy, same as the REST side's app.py): pinned Specs were fixated from
-        # EN traffic and FixationRecord carries no language, so the shortcut serves EN sessions only;
-        # JA tool calls fall through to normal compose (JA cache or JA generation via policyFor).
-        if language_of(session.locale) != "en":
-            return None
-        # Single-tenant operation (surface="mcp-app" / no tenant), so tenant is not passed (default None).
+        # A plain read: delivery gating (the demo's EN-only language policy) is separated out into
+        # admit_fixation_for_locale below, shared verbatim with the REST side's wiring in app.py, so this
+        # stays a plain read (kohaku.host_core.FixationDeliveryHost.admit is what actually applies the
+        # gate). Single-tenant operation (surface="mcp-app" / no tenant), so tenant is not passed (default
+        # None).
         return await storage.get_fixation(intent_hash)
 
     async def on_composed(spec: UISpec, trace: ComposeTrace) -> None:
@@ -187,6 +185,7 @@ async def create_kohaku_mcp_setup(
                 query_source="sales",
                 # Fixation short-circuit (query before compose) + the self-healing entry for staleness detection.
                 fixation_lookup=fixation_lookup,
+                fixation_admit=admit_fixation_for_locale,
                 # McpFixationsApi is now an alias of kohaku.host_core.FixationSelfHealApi (the same Protocol the
                 # REST surface's FixationsApi aliases), which Fixations conforms to structurally as-is. The cast
                 # is kept only because sales.fixations' declared type is the lineage-package concrete class, not

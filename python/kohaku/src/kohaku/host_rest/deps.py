@@ -202,6 +202,9 @@ ActionEffectsHook = Callable[[str, JsonObject, object], Awaitable[ActionEffects]
 OnErrorHook = Callable[[HostErrorInfo], "Awaitable[None] | None"]
 # Fixation short-circuit (L1->L0). Looked up before compose.
 FixationLookupHook = Callable[[str, SessionContext], Awaitable["FixationRecord | None"]]
+# Delivery-admission gate applied to a fixation found via fixation_lookup, before it is checked for
+# staleness (kohaku.host_core's FixationDeliveryHost.admit). Sync or async.
+FixationAdmitHook = Callable[["FixationRecord", SessionContext], "Awaitable[bool] | bool"]
 # Per-request correlation id override (ops; product responsibility). Sync only (mirrors TS's requestId?: (c) => string).
 RequestIdHook = Callable[["Request"], str]
 
@@ -236,7 +239,15 @@ class KohakuHostDeps:
     body-size limit in front of the mount point can leave this at the default — the two checks simply stack —
     or raise/lower it here to match."""
     fixation_lookup: FixationLookupHook | None = None
-    """L1->L0 fixation short-circuit (looked up before compose; resolved per-tenant via the 2nd-argument SessionContext)."""
+    """L1->L0 fixation short-circuit (looked up before compose; resolved per-tenant via the 2nd-argument
+    SessionContext). Prefer keeping this a plain read and expressing any delivery gate (e.g. "serve pinned
+    Specs to EN sessions only") via `fixation_admit` instead of filtering inside this callback — the same
+    gate function can then be shared verbatim with the MCP profile's `McpHostDeps.fixation_admit`."""
+    fixation_admit: FixationAdmitHook | None = None
+    """Delivery-admission gate consulted, when set, after a fixation is found via `fixation_lookup` and
+    before it is checked for staleness (kohaku.host_core's `FixationDeliveryHost.admit`). Lets a product
+    express a "serve this fixation only to the right session" policy once, shared with the MCP profile's
+    `fixation_admit`, instead of duplicating the check inside each profile's own `fixation_lookup`."""
     recorder: ViewRecorderProtocol | None = None
     promotions: PromotionsApi | None = None
     fixations: FixationsApi | None = None

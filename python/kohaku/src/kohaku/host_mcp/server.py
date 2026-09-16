@@ -40,6 +40,7 @@ from kohaku.host_core import (
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
 from kohaku.host_core import compose_with_fixation as _host_core_compose_with_fixation
 from kohaku.host_core import fail_open as _host_core_fail_open
+from kohaku.host_core import get_lock as _get_lock
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
 from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.spec import (
@@ -384,7 +385,18 @@ class McpHostDeps:
     """Fixation lookup (intentHash, session -> FixationRecord | None). The session (surface
     "mcp-app" + the caller-provided locale) is passed so products can gate delivery — e.g. serve
     pinned Specs to EN sessions only, mirroring the REST surface's language gate (FixationRecord
-    carries no language)."""
+    carries no language).
+
+    Prefer keeping this a plain read and expressing any delivery gate via `fixation_admit` instead — the
+    same gate function can then be shared verbatim with the REST profile's `KohakuHostDeps.fixation_admit`
+    rather than being duplicated in both hosts' `fixation_lookup` implementations."""
+    fixation_admit: (
+        Callable[[FixationRecord, SessionContext], Awaitable[bool] | bool] | None
+    ) = None
+    """Delivery-admission gate consulted, when set, after a fixation is found via `fixation_lookup` and
+    before it is checked for staleness (kohaku.host_core's `FixationDeliveryHost.admit`). See
+    `fixation_lookup`'s doc — the same function can be shared with the REST profile's
+    `KohakuHostDeps.fixation_admit`."""
     recorder: ViewRecorderProtocol | None = None
     """View Lineage recording, symmetric with the REST profile's KohakuHostDeps.recorder: `composed` /
     `fallback` are recorded around every compose-family tool call, and `interacted` is recorded by
@@ -1038,22 +1050,36 @@ def _fixation_host(deps: McpHostDeps) -> FixationDeliveryHost:
     immediately without awaiting its completion — matching pre-extraction MCP behavior exactly (fire-and-forget,
     unlike the REST profile which awaits self-heal serialized under its fixation lock). `kind` is mapped to
     MCP's own (pre-existing) endpoint-string convention.
+
+    The spawned call is itself serialized under kohaku.host_core's shared keyed mutex (symmetric with the
+    REST profile's own fixation lock, and with TS host-mcp-apps' server.ts `fixationMutexByDeps`), keyed by
+    `intent_hash` alone: the MCP profile never resolves a tenant, so unlike the REST lock (keyed by
+    `(tenant, intent_hash)`) there is nothing else to key on. `deps` is passed as the lock's `owner` so this
+    profile's self-heal calls only ever contend with each other (never with the REST profile's own, separate,
+    per-deps lock namespace) — a self-heal get->put racing with another self-heal call for the same
+    intent_hash in this same process no longer interleaves.
     """
 
     async def _run_self_heal(
         tenant: str | None,  # noqa: ARG001 — the MCP profile never resolves a tenant
-        intent_hash: str,  # noqa: ARG001 — carried by the spawned coroutine's closure, not needed here
+        intent_hash: str,
         fn: Callable[[], Awaitable[None]],
         kind: Any,
     ) -> None:
         endpoint = (
             "fixation.refreshFingerprint" if kind == "refresh_fingerprint" else "fixation.invalidate"
         )
-        _spawn_fixation_task(deps, endpoint, fn())
+
+        async def _locked() -> None:
+            async with _get_lock(deps, intent_hash):
+                await fn()
+
+        _spawn_fixation_task(deps, endpoint, _locked())
 
     return FixationDeliveryHost(
         run_self_heal=_run_self_heal,
         lookup=deps.fixation_lookup,
+        admit=deps.fixation_admit,
         fixations=deps.fixations,
     )
 

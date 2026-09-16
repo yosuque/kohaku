@@ -225,6 +225,7 @@ def _fixation_host(deps: KohakuHostDeps, request_id: str | None) -> FixationDeli
     return FixationDeliveryHost(
         run_self_heal=_run_self_heal,
         lookup=deps.fixation_lookup,
+        admit=deps.fixation_admit,
         fixations=deps.fixations,
     )
 

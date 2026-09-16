@@ -141,3 +141,120 @@ def test_mcp_selfheal_passes_guard_and_skips_delete_on_mismatch(tmp_path: Path) 
         assert await storage.list_lineage() == []
 
     asyncio.run(run())
+
+
+def test_mcp_fixation_admit_false_falls_back_to_normal_compose(tmp_path: Path) -> None:
+    """fixation_admit gates delivery before the staleness check even runs (host_core's
+    FixationDeliveryHost.admit): a fixation found via fixation_lookup that admit rejects behaves exactly like
+    fixation_lookup having returned None — normal compose (the fixedSpecs fallback) delivers instead, and no
+    self-heal call (refresh_fingerprint/invalidate) ever fires."""
+
+    async def run() -> None:
+        ctx = make_compose_ctx(tmp_path)
+
+        # A fixation whose catalog fingerprint already matches the current one ("fresh" — would deliver as-is,
+        # unchanged, with no self-heal call, if admitted) and whose pinnedSpec is structurally distinct from
+        # the fixedSpecs fallback (trend_spec_builder: root + t + c) so delivery is unambiguous either way.
+        admitted = _fixation(ctx.catalog.fingerprint, "text.heading")
+
+        async def _lookup(h: str, session: SessionContext) -> FixationRecord | None:
+            return admitted if h == _intent_hash() else None
+
+        fixations = _SignalingFixations(
+            create_fixations(lineage=create_lineage(FileStoragePort(tmp_path)), storage=FileStoragePort(tmp_path))
+        )
+
+        deps = McpHostDeps(
+            compose=ctx,
+            domain=TrendDomain(),
+            authz=SimpleAuthz(),
+            query_source="sales",
+            fixation_lookup=_lookup,
+            fixation_admit=lambda _fixation, _session: False,
+            fixations=fixations,
+        )
+
+        result = await _compose_with_fixation(_NlSource(text="Show me the sales trend"), deps)
+
+        # The fixedSpecs fallback (trend_spec_builder: heading + presentChart), not the single-heading
+        # 2-component pinnedSpec above.
+        types = [c.type for c in result.spec.components]
+        assert types == ["layout.stack", "text.heading", "presentChart"]
+        # admit ran before materialize_fixation, so no self-heal call was ever scheduled.
+        await asyncio.sleep(0.05)
+        assert not fixations.invalidated.is_set()
+        assert fixations.last_guard == "UNSET"
+
+    asyncio.run(run())
+
+
+class _ConcurrencyTrackingFixations:
+    """Records how many `invalidate` calls are in flight at once (for the keyed-mutex serialization test
+    below) — `asyncio.sleep` inside the critical section widens the race window a real race would need."""
+
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.calls = 0
+        self.done = asyncio.Event()
+
+    async def invalidate(
+        self,
+        intent_hash: str,
+        reason: str,
+        detail: str | None = None,
+        tenant: str | None = None,
+        guard: dict[str, Any] | None = None,
+    ) -> None:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.05)
+        finally:
+            self.active -= 1
+            self.calls += 1
+            if self.calls >= 2:
+                self.done.set()
+
+    async def refresh_fingerprint(
+        self, intent_hash: str, catalog_fingerprint: str, tenant: str | None = None
+    ) -> None:
+        return None
+
+
+def test_mcp_selfheal_serializes_concurrent_calls_for_the_same_intent_hash(tmp_path: Path) -> None:
+    """Two concurrent tool calls that both judge the same intentHash's fixation stale each fire a
+    fire-and-forget self-heal invalidate — kohaku.host_core's shared keyed mutex (wired in
+    host_mcp.server._fixation_host, keyed by intent_hash alone, symmetric with TS server.ts's
+    fixationMutexByDeps) must serialize them so they never run concurrently (a get->put race that could
+    otherwise interleave)."""
+
+    async def run() -> None:
+        ctx = make_compose_ctx(tmp_path)
+        stale = _fixation("fp-old-stale", "no.such")
+
+        async def _lookup(h: str, session: SessionContext) -> FixationRecord | None:
+            return stale if h == _intent_hash() else None
+
+        fixations = _ConcurrencyTrackingFixations()
+        deps = McpHostDeps(
+            compose=ctx,
+            domain=TrendDomain(),
+            authz=SimpleAuthz(),
+            query_source="sales",
+            fixation_lookup=_lookup,
+            fixations=fixations,
+        )
+
+        results = await asyncio.gather(
+            _compose_with_fixation(_NlSource(text="Show me the sales trend"), deps),
+            _compose_with_fixation(_NlSource(text="Show me the sales trend"), deps),
+        )
+        assert all(r.spec is not None for r in results)
+
+        await asyncio.wait_for(fixations.done.wait(), timeout=2.0)
+        assert fixations.calls == 2
+        # The critical assertion: the two self-heal invalidate calls never overlapped.
+        assert fixations.max_active == 1
+
+    asyncio.run(run())
