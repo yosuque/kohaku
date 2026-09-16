@@ -103,6 +103,19 @@ async function postCompose(deps: KohakuHostDeps, body: unknown): Promise<{ statu
   return { status: res.status, body: await res.json() };
 }
 
+async function postTelemetry(
+  deps: KohakuHostDeps,
+  body: unknown,
+): Promise<{ status: number; body: unknown }> {
+  const app = createKohakuRoutes(deps);
+  const res = await app.request("/telemetry", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json() };
+}
+
 describe("JsonObjectSchema nesting-depth cap (params)", () => {
   it("a params object nested 33 levels deep (over the 32 limit) is rejected with 400", async () => {
     const { status, body } = await postCompose(makeDeps(), {
@@ -137,5 +150,87 @@ describe("SessionSchema sessionId length cap", () => {
       session: { surface: "web", sessionId: "a".repeat(128) },
     });
     expect(status).not.toBe(400);
+  });
+});
+
+describe("SessionSchema surface / locale length caps (§4.5: bound client-supplied strings flowing into lineage records)", () => {
+  it("a surface over 64 characters is rejected with 400", async () => {
+    const { status, body } = await postCompose(makeDeps(), {
+      intent: { canonical: "sales.trend", params: {} },
+      session: { surface: "s".repeat(65) },
+    });
+    expect(status).toBe(400);
+    expect((body as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+
+  it("a surface at exactly 64 characters is accepted (passes schema validation)", async () => {
+    const { status } = await postCompose(makeDeps(), {
+      intent: { canonical: "sales.trend", params: {} },
+      session: { surface: "s".repeat(64) },
+    });
+    expect(status).not.toBe(400);
+  });
+
+  it("a locale over 64 characters is rejected with 400", async () => {
+    const { status, body } = await postCompose(makeDeps(), {
+      intent: { canonical: "sales.trend", params: {} },
+      session: { surface: "web", locale: "l".repeat(65) },
+    });
+    expect(status).toBe(400);
+    expect((body as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+
+  it("a locale at exactly 64 characters is accepted (passes schema validation)", async () => {
+    const { status } = await postCompose(makeDeps(), {
+      intent: { canonical: "sales.trend", params: {} },
+      session: { surface: "web", locale: "l".repeat(64) },
+    });
+    expect(status).not.toBe(400);
+  });
+});
+
+describe("TelemetryBodySchema string length caps (specHash/artifactId .max(128), surface/renderer .max(64))", () => {
+  it("a rendered event's specHash over 128 characters is rejected with 400", async () => {
+    const { status, body } = await postTelemetry(makeDeps(), {
+      events: [{ kind: "rendered", specHash: "h".repeat(129) }],
+    });
+    expect(status).toBe(400);
+    expect((body as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+
+  it("a rendered event's specHash at exactly 128 characters is accepted", async () => {
+    const { status } = await postTelemetry(makeDeps(), {
+      events: [{ kind: "rendered", specHash: "h".repeat(128) }],
+    });
+    expect(status).toBe(200);
+  });
+
+  it("a rendered event's renderer over 64 characters is rejected with 400", async () => {
+    const { status } = await postTelemetry(makeDeps(), {
+      events: [{ kind: "rendered", specHash: "h", renderer: "r".repeat(65) }],
+    });
+    expect(status).toBe(400);
+  });
+
+  it("a componentUsed event's artifactId over 128 characters is rejected with 400", async () => {
+    const { status, body } = await postTelemetry(makeDeps(), {
+      events: [{ kind: "componentUsed", artifactId: "a".repeat(129) }],
+    });
+    expect(status).toBe(400);
+    expect((body as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+
+  it("a componentUsed event's artifactId at exactly 128 characters is accepted", async () => {
+    const { status } = await postTelemetry(makeDeps(), {
+      events: [{ kind: "componentUsed", artifactId: "a".repeat(128) }],
+    });
+    expect(status).toBe(200);
+  });
+
+  it("a componentUsed event's surface over 64 characters is rejected with 400", async () => {
+    const { status } = await postTelemetry(makeDeps(), {
+      events: [{ kind: "componentUsed", artifactId: "a", surface: "s".repeat(65) }],
+    });
+    expect(status).toBe(400);
   });
 });

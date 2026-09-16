@@ -49,6 +49,10 @@ def _as_nonempty_str(value: Any) -> str | None:
     return value if isinstance(value, str) and len(value) > 0 else None
 
 
+def _as_bounded_str(value: Any, max_len: int) -> str | None:
+    return value if isinstance(value, str) and len(value) <= max_len else None
+
+
 # Upper bound on a JsonObject's nesting depth (the object itself = depth 1). Mirrors
 # packages/spec-core/src/schema/json.ts's JsonObjectSchema depth cap: guards the recursive canonical-JSON
 # serialization (cache-key / spec-hash computation) and lineage persistence downstream of request bodies
@@ -58,6 +62,15 @@ MAX_JSON_OBJECT_DEPTH = 32
 # Upper bound (characters) on a client-supplied sessionId. Mirrors TS routes/schemas.ts's SessionSchema
 # sessionId.max(128): bounds a client-controlled string flowing into lineage records / recorder keys.
 MAX_SESSION_ID_LEN = 128
+
+# Upper bound (characters) on client-supplied surface/renderer/locale strings. Mirrors TS routes/schemas.ts's
+# SessionSchema.surface/.locale and TelemetryBodySchema.surface/.renderer, all .max(64): same rationale as
+# MAX_SESSION_ID_LEN above -- these flow into lineage records / recorder keys too.
+MAX_SHORT_STRING_LEN = 64
+
+# Upper bound (characters) on a client-supplied specHash/artifactId. Mirrors TS routes/schemas.ts's
+# TelemetryBodySchema.specHash/.artifactId, both .max(128).
+MAX_HASH_ID_LEN = 128
 
 
 def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 1) -> bool:
@@ -127,7 +140,7 @@ def parse_session(raw: Any) -> SessionBody | None:
     if data is None:
         return None
     surface_raw = data.get("surface", "web")
-    surface = _as_str(surface_raw)
+    surface = _as_bounded_str(surface_raw, MAX_SHORT_STRING_LEN)
     if surface is None:
         return None
     session_id = data.get("sessionId")
@@ -136,7 +149,7 @@ def parse_session(raw: Any) -> SessionBody | None:
     ):
         return None
     locale = data.get("locale")
-    if locale is not None and not isinstance(locale, str):
+    if locale is not None and _as_bounded_str(locale, MAX_SHORT_STRING_LEN) is None:
         return None
     return SessionBody(surface=surface, session_id=session_id, locale=locale)
 
@@ -303,8 +316,14 @@ def parse_telemetry_body(data: Any) -> list[TelemetryEvent] | None:
             return None
         kind = item.get("kind")
         if kind == "rendered":
-            spec_hash = _as_str(item.get("specHash"))
+            spec_hash = _as_bounded_str(item.get("specHash"), MAX_HASH_ID_LEN)
             if spec_hash is None:
+                return None
+            surface_raw = item.get("surface")
+            if surface_raw is not None and _as_bounded_str(surface_raw, MAX_SHORT_STRING_LEN) is None:
+                return None
+            renderer_raw = item.get("renderer")
+            if renderer_raw is not None and _as_bounded_str(renderer_raw, MAX_SHORT_STRING_LEN) is None:
                 return None
             duration = item.get("durationMs")
             if duration is not None and not isinstance(duration, int | float):
@@ -312,14 +331,17 @@ def parse_telemetry_body(data: Any) -> list[TelemetryEvent] | None:
             events.append(
                 RenderedEvent(
                     specHash=spec_hash,
-                    surface=_as_str(item.get("surface")),
-                    renderer=_as_str(item.get("renderer")),
+                    surface=surface_raw,
+                    renderer=renderer_raw,
                     durationMs=float(duration) if duration is not None else None,
                 )
             )
         elif kind == "componentUsed":
-            artifact_id = _as_str(item.get("artifactId"))
+            artifact_id = _as_bounded_str(item.get("artifactId"), MAX_HASH_ID_LEN)
             if artifact_id is None:
+                return None
+            surface_raw = item.get("surface")
+            if surface_raw is not None and _as_bounded_str(surface_raw, MAX_SHORT_STRING_LEN) is None:
                 return None
             outcome = item.get("outcome")
             if outcome is not None and outcome not in ("ok", "error"):
@@ -327,7 +349,7 @@ def parse_telemetry_body(data: Any) -> list[TelemetryEvent] | None:
             events.append(
                 ComponentUsedEvent(
                     artifactId=artifact_id,
-                    surface=_as_str(item.get("surface")),
+                    surface=surface_raw,
                     outcome=outcome,
                     sessionId=_as_str(item.get("sessionId")),
                 )
