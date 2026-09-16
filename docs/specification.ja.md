@@ -92,10 +92,10 @@ query://<source>/<path>?<params>     例: query://sales/summary?fy=2026&groupBy=
 ```json
 { "columns": [{ "key": "region", "label": "Region", "type": "string" }],
   "rows": [{ "region": "Japan", "revenue": 530750000 }],
-  "dataVersion": "sales@seed-20260610.1#bump-0", "total": 576 }
+  "dataVersion": "sales@seed-20260610.1+3f2a9c1e8b04#bump-0" }
 ```
 
-`type` = `string` | `number` | `boolean` | `date`。`dataVersion` が Spec と不一致なら BindingClient は `STALE_VERSION` を投げる。
+`type` = `string` | `number` | `boolean` | `date`。`dataVersion` は不透明な実装定義の文字列で、サンプル自身の形式は `sales@<seedTag>[+<contentHash12>]#bump-N`(`<seedTag>` は手動更新のシードバージョンタグ、任意の `+<contentHash12>` はシード内容のハッシュ先頭 12 桁の16進文字列で `<seedTag>` の更新を忘れてもシードデータの変更を拾えるようにするもの、`bump-N` はデモのキャッシュ無効化ウォークスルー用に手動でインクリメントするカウンタ — design.md §12「サンプル実装の設計」参照)。`dataVersion` が Spec と不一致なら BindingClient は `STALE_VERSION` を投げる。`total?: number`(DomainPort 実装が安価に算出できるときの全体行数)は同じ封筒上の別の任意フィールドで、上の例では省略している(全ての `TabularData` 応答が持つわけではないため。もう一つの任意フィールドである `nextCursor` については同節のサーバーサイドページングの説明を参照)。
 
 **server-side ページング/ソート**: `_` 始まりのクエリパラメータは予約名前空間(`_cursor` / `_limit` / `_sort` / `_dir`)。クライアントは `BindingClient.resolve(ref, { page: {cursor?, limit?}, sort: {key, dir} })` で指定し、これらが予約パラメータに写って ref に合流・再正準化される(未指定なら ref 不変 = 後方互換)。応答に続きがあれば **`TabularData.nextCursor`**(不透明カーソル)が返り、次要求の `page.cursor` にそのまま渡す。`$ref` 自体に `_` 始まりパラメータを含めると `BAD_REF`。**capability 検証は予約パラメータを除いた base ref に対して行う**(`splitReservedParams` — 検証は base ref との完全一致で行う。既知キー以外の `_` パラメータは `assertKnownReservedParams` が 400 で拒否する)。予約パラメータは base のパラメータと合流して `DomainPort.invoke` に渡る(`_` 名前空間規約 — DomainPort シグネチャ不変。予約パラメータで capability スコープは回避できない)。
 

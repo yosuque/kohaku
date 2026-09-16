@@ -124,8 +124,8 @@ Python サンプル(`examples/sales-api`)はシード JSON をリポジトリル
   (`kohaku/tests/spec/test_cross_language_golden.py`)の両方が検証する。
   再生成は `pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures`(TS が正)。
 - **core カタログ**: `pnpm --filter @kohaku-ui/registry run export-core-catalog` が
-  `registry/_data/core-catalog.json` を emit(CI がドリフト検査)。fingerprint(fnv1a64)は
-  TS と同値でキャッシュキーが言語間で一致する。
+  `kohaku/src/kohaku/registry/_data/core-catalog.json` を emit(CI がドリフト検査)。
+  fingerprint(fnv1a64)は TS と同値でキャッシュキーが言語間で一致する。
 - **canonical JSON**: JS `JSON.stringify` とバイト互換(ES の数値表記・array index キーの
   数値昇順優先・UTF-16 コードユニット順ソート・孤立サロゲートのエスケープまで再現)。
   実装は `kohaku/src/kohaku/spec/canonical_json.py`。

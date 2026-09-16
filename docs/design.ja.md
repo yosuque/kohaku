@@ -120,6 +120,7 @@ flowchart LR
 | `lineage/` | lineage(記録・昇格・固定化) |
 | `evals/` | evals(judge / golden / FixtureLlm) |
 | `storage/` | sample-api の storage-port.ts 相当(FileStoragePort) |
+| `host_core/` | host-core の部分移植: `capability.py`(capability 発行)・`errors.py`・`fixation.py`(`FixationDeliveryHost.admit` + self-heal シーケンス)・`keyed_mutex.py`(`host_rest` と `host_mcp` の両方が fixation self-heal を直列化する共有 keyed mutex — REST は `(tenant, intentHash)`、MCP は `intentHash` 単独でキー)・`trace_context.py`。残る TS host-core モジュール(`action-effects.ts` / `allowed-actions.ts` / `binding-ref.ts` / `intent.ts` / `view-recorder.ts`)はまだ Python 側に対応が無く、`host_rest` / `host_mcp` が共有モジュールを import する代わりに相当ロジックを個別実装している(`docs/runbooks/python-mirror.md` の「host-core にモジュールを足したら Python `host_core` にも」チェック参照) |
 | `host_rest/` | host-rest(FastAPI) |
 | `host_mcp/` | host-mcp-apps(MCP Apps プロファイル) |
 
@@ -857,7 +858,7 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
   位置・`resultType: "complete"`・`ui://` リソース宣言・初期データのペイロードはすべて移行前とバイト同一。唯
   一の真にユーザー可視な変更は上述の HTTP セッション面の撤去(すでにこの節で削除予定と文書化済みだったもの)の
   みである。
-- **検証**: リポジトリ全体で `pnpm test`(2037 件・211 ファイル)と `pnpm typecheck` がグリーン、かつ
+- **検証**: リポジトリ全体で `pnpm test` と `pnpm typecheck` がグリーン、かつ
   `pnpm --filter @kohaku-ui-sample/mcp build:renderer` も成功する。MCP の一次情報の適合スイート
   (`@modelcontextprotocol/conformance`)は存在するが、評価の上で**見送った**(下記の項目を参照)。したがって
   本リポジトリ自身の `spec/SPEC.md` セルフチェックと同様、このパッケージ自身のテストスイートが検証ゲートに
@@ -897,7 +898,7 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
 
 - Intent カタログ(7 種 + 昇格分が動的合流)が SemanticPort の唯一の語彙。GUI 操作(view.select / facet.change / rowClick drilldown)は決定的に、NL は LLM でこの語彙にマップされる。
 - **Intent の単一定義(`@kohaku-ui/intents`)**: コア 7 Intent は `defineIntent`(`intents/catalog.ts`)で 1 箇所に定義し、SemanticPort 用 `IntentDef`・GUI ファセット記述子(`FacetView`)・MCP ツール入力・client coerce の `valueType` を導出する。値集合(region / channel / metric / groupBy / granularity)は `defineVocabulary`(`intents/vocab.ts`)が単一源で、Zod enum・GUI options・A1 `data.bind` values(`fixed-specs.ts`)・drilldown のラベル逆引きが全てここから出る(旧: 値集合が types.ts / catalog enum / promoted enum / FacetPanel の 4 箇所に散在していたのを解消)。GUI ファセットは `pnpm intents:emit`(`scripts/generate-facet-views.ts`)が `apps/sample-web/src/generated/facet-views.json` に emit し、sample-web は server コード非依存でこれをデータ import する(生成物はコミット対象・決定的で、CI がドリフト検査)。
-- シードは固定 PRNG(seed=20260610)による決定的生成・コミット済み(576 行)。`dataVersion = "sales@seed-20260610.1#bump-N"` で、bump 管理操作がキャッシュ無効化のデモになる。
+- シードは固定 PRNG(seed=20260610)による決定的生成・コミット済み(576 行)。`dataVersion` は `sales@<seedTag>[+<contentHash12>]#bump-N` の形式(`repo.ts` の `seedTag = SEED_VERSION + seed/meta.json の内容ハッシュ短縮形`。例: `sales@seed-20260610.1+3f2a9c1e8b04#bump-0`)で、bump 管理操作がキャッシュ無効化のデモになる。
 - 可変カタログ: 昇格(publish)でカタログが増えるため、`app.ts` は holder + delegating proxy で `ResolvedCatalog` を差し替え可能にしている(指紋が変わる → キャッシュも自然に切り替わる)。
 - **light/dark テーマ切替の実演(B2, §7.2)**: `apps/sample-web` はヘッダのトグル(prefers-color-scheme 初期化 + localStorage 永続化)でモードを切り替え、`buildTheme(mode) = { ...defaultLight/DarkTheme, ...brand }` を `RendererProvider` の `theme` に注入する。`apps/sample-wc` は同じ流儀で `surface.theme` を差し替える(set theme が再描画を起動)。**Spec 描画の外側のページ chrome**(ヘッダ・カード・背景・Admin)は Renderer の管轄外なので、サンプル側で CSS 変数 `--app-*`(light 値=従来リテラル、dark 値=`defaultDarkTheme` と同期)を `:root[data-theme]` に敷いて追従させる。ブランド差分(`theme/tokens.ts` の `brand`)は空 = サンプルは kohaku 既定の見た目そのまま。L2 iframe 内・L2 host chrome は v1 非対象。
 

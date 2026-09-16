@@ -120,6 +120,7 @@ A **full Python port** of the same protocol (Kohaku Protocol v0.1) is co-located
 | `lineage/` | lineage (recording, promotion, fixation) |
 | `evals/` | evals (judge / golden / FixtureLlm) |
 | `storage/` | equivalent of sample-api's storage-port.ts (FileStoragePort) |
+| `host_core/` | Partial mirror of host-core: `capability.py` (capability issuance), `errors.py`, `fixation.py` (`FixationDeliveryHost.admit` + the self-heal sequence), `keyed_mutex.py` (the shared keyed mutex both `host_rest` and `host_mcp` serialize fixation self-heal through — REST keyed by `(tenant, intentHash)`, MCP by `intentHash` alone), and `trace_context.py`. The remaining TS host-core modules (`action-effects.ts`, `allowed-actions.ts`, `binding-ref.ts`, `intent.ts`, `view-recorder.ts`) have no Python counterpart yet — `host_rest` / `host_mcp` implement the equivalent logic locally instead of importing a shared module (see `docs/runbooks/python-mirror.md`'s "if you add a module to host-core, add it to Python `host_core` too" check) |
 | `host_rest/` | host-rest (FastAPI) |
 | `host_mcp/` | host-mcp-apps (MCP Apps profile) |
 
@@ -871,7 +872,7 @@ documented to still answer a legacy `initialize` request, easing a staged rollou
   `_meta["kohaku/capability"]` location, `resultType: "complete"`, the `ui://` resource declarations, and the
   initial-data payloads are all byte-identical to before. The only genuinely user-visible change is the HTTP
   session surface removed above (which was already documented here as slated for removal).
-- **Verification**: `pnpm test` (2037 tests, 211 files) and `pnpm typecheck` are green across the whole
+- **Verification**: `pnpm test` and `pnpm typecheck` are green across the whole
   repository, and `pnpm --filter @kohaku-ui-sample/mcp build:renderer` succeeds. A first-party MCP
   conformance suite does exist (`@modelcontextprotocol/conformance`) but was evaluated and **declined** — see
   the bullet below — so this package's own test suite is the gate, as it is for this repo's own
@@ -912,7 +913,7 @@ The sales-analysis domain. The key is a tier division that **demonstrates all 3 
 
 - The Intent catalog (7 kinds + promotions merging in dynamically) is the sole vocabulary of SemanticPort. GUI operations (view.select / facet.change / rowClick drilldown) are mapped deterministically, and NL is mapped by the LLM to this vocabulary.
 - **Single definition of an Intent (`@kohaku-ui/intents`)**: the 7 core Intents are defined in one place with `defineIntent` (`intents/catalog.ts`), deriving `IntentDef` for SemanticPort, the GUI facet descriptor (`FacetView`), MCP tool input, and the client-coerce `valueType`. The value sets (region / channel / metric / groupBy / granularity) have a single source in `defineVocabulary` (`intents/vocab.ts`), from which the Zod enum, GUI options, A1 `data.bind` values (`fixed-specs.ts`), and the drilldown label reverse-lookup all emanate (previously the value sets were scattered across 4 places: types.ts / catalog enum / promoted enum / FacetPanel — now resolved). The GUI facets are emitted by `pnpm intents:emit` (`scripts/generate-facet-views.ts`) into `apps/sample-web/src/generated/facet-views.json`, and sample-web data-imports it independently of the server code (the generated artifact is committed and deterministic, and CI checks for drift).
-- The seed is a deterministic generation by a fixed PRNG (seed=20260610) and is committed (576 lines). With `dataVersion = "sales@seed-20260610.1#bump-N"`, the bump-management operation serves as a demo of cache invalidation.
+- The seed is a deterministic generation by a fixed PRNG (seed=20260610) and is committed (576 lines). `dataVersion` follows the format `sales@<seedTag>[+<contentHash12>]#bump-N` (`repo.ts`'s `seedTag = SEED_VERSION + shortened content hash of seed/meta.json`, e.g. `sales@seed-20260610.1+3f2a9c1e8b04#bump-0`); the bump-management operation serves as a demo of cache invalidation.
 - Mutable catalog: because the catalog grows on promotion (publish), `app.ts` makes `ResolvedCatalog` swappable with a holder + delegating proxy (the fingerprint changes → the cache also switches naturally).
 - **Demonstration of light/dark theme switching (B2, §7.2)**: `apps/sample-web` switches mode via a header toggle (prefers-color-scheme initialization + localStorage persistence), and injects `buildTheme(mode) = { ...defaultLight/DarkTheme, ...brand }` into `RendererProvider`'s `theme`. `apps/sample-wc` swaps `surface.theme` in the same style (setting theme triggers a re-render). **The page chrome outside Spec rendering** (header, cards, background, Admin) is outside the Renderer's jurisdiction, so on the sample side CSS variables `--app-*` (light value = the previous literal, dark value = synced with `defaultDarkTheme`) are laid on `:root[data-theme]` to follow. The brand diff (`brand` in `theme/tokens.ts`) is empty = the sample keeps kohaku's default look as-is. Inside the L2 iframe and L2 host chrome are out of scope for v1.
 

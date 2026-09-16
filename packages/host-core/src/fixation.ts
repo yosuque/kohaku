@@ -47,9 +47,9 @@ export type FixationSelfHealEndpoint = "fixation.refreshFingerprint" | "fixation
 /**
  * The host-supplied surface settleFixation / resolveFixatedResult / composeWithFixation need: the fixation
  * shortcut lookup, an optional delivery-admission gate (`admit`), the self-healing API, optional
- * per-(tenant, intentHash) serialization for the self-healing read-modify-write (host-rest wires the fixation
- * lock here; host-mcp-apps leaves it unset — the MCP profile neither resolves tenants nor guards against
- * unfixate/fixate interleaving), and an observability callback for self-healing failures.
+ * serialization for the self-healing read-modify-write (both profiles wire `serialize` to a shared keyed
+ * mutex — host-rest keys it by `(tenant, intentHash)`, host-mcp-apps by `intentHash` alone since the MCP
+ * profile never resolves a tenant), and an observability callback for self-healing failures.
  *
  * onSelfHealError is synchronous by design: the self-heal calls below are fire-and-forget (never awaited by
  * the delivery path), so the failure notification they trigger must also not be awaited here — a host that
@@ -82,7 +82,7 @@ export interface FixationDeliveryHost {
   onSelfHealError(endpoint: FixationSelfHealEndpoint, error: unknown, requestId?: string): void;
 }
 
-/** Identity serialization used when a host does not wire a lock (e.g. the MCP profile). */
+/** Identity serialization fallback for a host that leaves `serialize` unwired (both reference profiles wire it). */
 async function runUnserialized<T>(
   _scope: { tenant: string | undefined; intentHash: string },
   fn: () => Promise<T>,

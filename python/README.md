@@ -141,8 +141,8 @@ implementation for real durability, cross-process concurrency safety, and lineag
   (`kohaku/tests/spec/test_cross_language_golden.py`). Regeneration is
   `pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures` (TS is authoritative).
 - **core catalog**: `pnpm --filter @kohaku-ui/registry run export-core-catalog` emits
-  `registry/_data/core-catalog.json` (CI checks for drift). The fingerprint (fnv1a64) is
-  identical to TS, so the cache key matches across languages.
+  `kohaku/src/kohaku/registry/_data/core-catalog.json` (CI checks for drift). The fingerprint
+  (fnv1a64) is identical to TS, so the cache key matches across languages.
 - **canonical JSON**: byte-compatible with JS `JSON.stringify` (reproducing ES number
   notation, numeric-ascending priority for array-index keys, UTF-16 code-unit order
   sorting, and even the escaping of lone surrogates). The implementation is

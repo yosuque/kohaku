@@ -92,10 +92,10 @@ The common envelope for data responses, **TabularData**:
 ```json
 { "columns": [{ "key": "region", "label": "Region", "type": "string" }],
   "rows": [{ "region": "Japan", "revenue": 530750000 }],
-  "dataVersion": "sales@seed-20260610.1#bump-0", "total": 576 }
+  "dataVersion": "sales@seed-20260610.1+3f2a9c1e8b04#bump-0" }
 ```
 
-`type` = `string` | `number` | `boolean` | `date`. If `dataVersion` disagrees with the Spec, the BindingClient throws `STALE_VERSION`.
+`type` = `string` | `number` | `boolean` | `date`. `dataVersion` is an opaque, implementation-defined string; the sample's own format is `sales@<seedTag>[+<contentHash12>]#bump-N` (`<seedTag>` a hand-bumped seed-version tag, the optional `+<contentHash12>` a 12-hex-char prefix of the seed content's hash so an edit to seed data is picked up even if `<seedTag>` itself is forgotten, `bump-N` a manually incremented counter for the demo's cache-invalidation walkthrough — see design.md §12 "Design of the Sample Implementation"). If `dataVersion` disagrees with the Spec, the BindingClient throws `STALE_VERSION`. `total?: number` (the overall row count, when the DomainPort implementation can cheaply compute it) is a separate, optional field on the same envelope — omitted above since not every `TabularData` response carries it (see below for `nextCursor`, the other optional field, in this same section's server-side paging note).
 
 **Server-side paging / sorting**: query parameters beginning with `_` are a reserved namespace (`_cursor` / `_limit` / `_sort` / `_dir`). The client specifies them via `BindingClient.resolve(ref, { page: {cursor?, limit?}, sort: {key, dir} })`, and these map onto the reserved parameters, are merged into the ref, and re-canonicalized (if unspecified, the ref is unchanged = backward compatible). If the response has more, **`TabularData.nextCursor`** (an opaque cursor) is returned, which you pass through as `page.cursor` in the next request. Including a `_`-prefixed parameter in the `$ref` itself yields `BAD_REF`. **Capability verification is performed against the base ref with the reserved parameters removed** (`splitReservedParams` — verification is done as an exact match against the base ref; `_` parameters other than the known keys are rejected with 400 by `assertKnownReservedParams`). The reserved parameters merge with the base's parameters and are passed to `DomainPort.invoke` (the `_` namespace convention — the DomainPort signature is unchanged; reserved parameters cannot bypass the capability scope).
 
