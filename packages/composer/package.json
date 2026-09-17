@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/composer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "UI Composition Service for kohaku: L0/L1/L2 generation, the repair loop, deterministic post-processing and the Spec cache.",
   "type": "module",
   "exports": {

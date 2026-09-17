@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/sandbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Isolated execution for kohaku's free-form (L2) output: opaque iframe, restrictive CSP and an allowlisted bridge.",
   "type": "module",
   "exports": {

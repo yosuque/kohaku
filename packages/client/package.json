@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Typed client SDK for a kohaku host: compose, stream, bind, act and the governance endpoints.",
   "type": "module",
   "exports": {
