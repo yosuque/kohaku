@@ -79,6 +79,21 @@ export class TransitionError extends Error {
 
 const TERMINAL: PromotionStatus[] = ["published", "rejected", "withdrawn"];
 
+/**
+ * Statuses whose snapshot may still have a projection (catalog/Intent entry) that `reconcile` needs to converge:
+ * "published" (the live projection) and "withdrawn" (a projection removal that may not have completed). Every
+ * other status has no projection to converge, including "schema_proposed": it carries a draft, but a draft alone
+ * is never published, so no projection was ever applied for it. Exported so lineage's `reconcile()`
+ * (promotion/service.ts) can skip non-projection statuses at the top of its scan loop without duplicating this
+ * list.
+ */
+const MAY_HAVE_PROJECTION: PromotionStatus[] = ["published", "withdrawn"];
+
+/** Whether `status`'s snapshot may still have a projection to converge (see `MAY_HAVE_PROJECTION`'s doc). */
+export function mayHaveProjection(status: PromotionStatus): boolean {
+  return MAY_HAVE_PROJECTION.includes(status);
+}
+
 /** Pure-function state transition. An invalid transition throws TransitionError. */
 export function transition(
   status: PromotionStatus,

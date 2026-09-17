@@ -81,9 +81,11 @@ class TestCollectL2Issues:
         L2_SCRIPT_SYNTAX (JS syntax check) requires new-Function-equivalent compilation, and in Python, which
         has no JS runtime, it is skipped per the spec rule "skip in environments where dynamic code generation
         is unavailable" (an intentional difference = expected behavior; see the module docstring of l2_lint.py /
-        the L2_SCRIPT_SYNTAX skip note). The TS side (packages/composer/test/l2-repair.test.ts:206-223)
-        conversely pins the detection expectation (emitting L2_SCRIPT_SYNTAX on a syntax error), and this
-        asymmetry is explicitly pinned by a regression test.
+        the L2_SCRIPT_SYNTAX skip note). The TS side (packages/composer/test/l2-repair.test.ts, describe
+        "collectL2Issues (L2 bridge-contract lint)" > it "detects a raw newline inside a string literal (a
+        SyntaxError observed in the field) as L2_SCRIPT_SYNTAX") conversely pins the detection expectation
+        (emitting L2_SCRIPT_SYNTAX on a syntax error), and this asymmetry is explicitly pinned by a regression
+        test.
         """
         # An unterminated string literal (a '<div> containing a newline) = a JS syntax error. It calls ready(),
         # closes with </html>, and uses only known APIs, so it does not touch the non-syntax lints (READY/TRUNCATED/UNKNOWN_API).

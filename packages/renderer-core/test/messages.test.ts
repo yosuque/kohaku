@@ -20,4 +20,8 @@ describe("DEFAULT_MESSAGES", () => {
     expect(DEFAULT_MESSAGES.metricAriaLabel("Sales", "¥100", "+3")).toBe("Sales: ¥100, change +3");
     expect(DEFAULT_MESSAGES.metricAriaLabel("Sales", "¥100", null)).toBe("Sales: ¥100");
   });
+
+  it("spreadsheetEditCell composes the aria-label of an editable cell's edit-trigger button", () => {
+    expect(DEFAULT_MESSAGES.spreadsheetEditCell("Revenue")).toBe("Edit Revenue");
+  });
 });

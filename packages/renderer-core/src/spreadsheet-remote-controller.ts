@@ -1,5 +1,5 @@
 import type { BindingClient } from "@kohaku-ui/data-binding";
-import { buildResolveOptions, type SortState } from "./presenters/spreadsheet.js";
+import { buildResolveOptions, nextSortState, type SortState } from "./presenters/spreadsheet.js";
 import type { BoundData } from "./stores/bound-data-controller.js";
 import type { DataInvalidationBus } from "./stores/invalidation-bus.js";
 
@@ -67,7 +67,13 @@ export interface SpreadsheetRemoteController {
    * identical content. On change, resets cursor/interacted and refetches.
    */
   syncDeclaredSort(declared: SortState | undefined): void;
-  toggleSort(colKey: string): void;
+  /**
+   * Toggles sort on colKey per nextSortState's rule and returns the resulting SortState so the
+   * caller (React/WC) can emit a Spec-declared sortChange event with it — this never emits anything
+   * itself (that stays a renderer-level governance decision via hasDeclaredEvent, mirroring
+   * syncDeclaredSort's Spec-driven counterpart, which never emits at all).
+   */
+  toggleSort(colKey: string): SortState;
   goFirstPage(): void;
   goNextPage(next: string): void;
   /**
@@ -204,10 +210,7 @@ export function createSpreadsheetRemoteController(
     },
 
     toggleSort(colKey) {
-      sort = {
-        field: colKey,
-        dir: sort?.field === colKey && sort.dir === "desc" ? "asc" : "desc",
-      };
+      sort = nextSortState(sort, colKey);
       if (serverSide) {
         cursor = undefined;
         interacted = true;
@@ -215,6 +218,7 @@ export function createSpreadsheetRemoteController(
       } else {
         notify();
       }
+      return sort;
     },
 
     goFirstPage() {

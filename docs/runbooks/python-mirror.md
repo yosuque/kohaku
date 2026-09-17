@@ -42,6 +42,14 @@ Within `packages/composer`, note one deliberate structural difference: Python do
 ladder / single-flight / result-assembly logic out of `compose.py` into separate modules the way TS
 does — same behavior, coarser file layout.
 
+Within `packages/host-mcp-apps` ↔ `host_mcp/`, note a similar structural difference: what TS splits
+out into `initial-data.ts` / `snapshot.ts` / the eight `register*Tool` functions, Python keeps as
+private functions and closures inside `host_mcp/server.py`'s `attach_kohaku_to_mcp_server` — same
+behavior, no file-level 1:1 mapping there.
+
+**Checklist**: if you add a module to `packages/host-core`, add its Python counterpart to
+`kohaku/src/kohaku/host_core/` (or record the gap in `docs/design.md`'s package table).
+
 ## Cross-language golden fixtures
 
 The shared fixture is [spec/test/fixtures/cross-language-canonical.json](../../spec/test/fixtures/cross-language-canonical.json),

@@ -197,6 +197,67 @@ describe("toA2ui: UISpec → A2UI v0.9.1 messages", () => {
     expect(dmu[0]!.updateDataModel.path).not.toContain("query://");
     expect((dmu[0]!.updateDataModel.value as TabularData).rows).toEqual(data.rows);
   });
+
+  it("resolves multiple distinct refs concurrently, but pushes updateDataModel messages in uniqueRefs (component-scan) order regardless of resolution order", async () => {
+    const REF_A = "query://sales/summary?fy=2026&groupBy=region&q=3";
+    const REF_B = "query://sales/kpi?fy=2026";
+    const spec: UISpec = {
+      kohaku: "0.2",
+      intent: { canonical: "sales.two_refs", params: {}, hash: HASH },
+      dataVersion: "multi:seed-1",
+      refVersions: { [REF_A]: "sales@seed-1", [REF_B]: "kpi@seed-1" },
+      components: [
+        { id: "root", type: "layout.stack", props: {}, children: ["a", "b"] },
+        { id: "a", type: "presentSpreadsheet", props: { editable: false }, data: { $ref: REF_A } },
+        { id: "b", type: "presentChart", props: { kind: "bar", x: "x", y: "y" }, data: { $ref: REF_B } },
+      ],
+      events: [],
+      provenance: { tier: "L0", composedBy: "test", cache: "miss" },
+    };
+
+    function deferred(): { promise: Promise<TabularData>; resolve: (v: TabularData) => void } {
+      let resolve!: (v: TabularData) => void;
+      const promise = new Promise<TabularData>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    }
+
+    const startedOrder: string[] = [];
+    const deferredByRef = new Map<
+      string,
+      { promise: Promise<TabularData>; resolve: (v: TabularData) => void }
+    >();
+    const resultPromise = toA2ui(spec, {
+      resolveData: (ref) => {
+        startedOrder.push(ref);
+        const d = deferred();
+        deferredByRef.set(ref, d);
+        return d.promise;
+      },
+    });
+
+    // A microtask tick is enough for Promise.all(refs.map(resolveData)) to invoke resolveData for every
+    // ref up front (synchronously, before awaiting any of them) — a sequential for-await loop would only
+    // have called it for REF_A at this point, since REF_A's promise has not resolved yet.
+    await Promise.resolve();
+    expect(startedOrder).toEqual([REF_A, REF_B]);
+
+    // Resolve out of scan order (B before A): the final message order must still follow uniqueRefs
+    // (component-scan) order, not resolution order.
+    deferredByRef.get(REF_B)!.resolve({ columns: [], rows: [], dataVersion: "b" });
+    deferredByRef.get(REF_A)!.resolve({ columns: [], rows: [], dataVersion: "a" });
+
+    const { messages } = await resultPromise;
+    const dmu = messages.filter((m) => "updateDataModel" in m) as {
+      updateDataModel: { path?: string; value?: unknown };
+    }[];
+    expect(dmu).toHaveLength(2);
+    expect(dmu[0]!.updateDataModel.path).toBe(`/refs/${escapeJsonPointerToken(REF_A)}`);
+    expect((dmu[0]!.updateDataModel.value as TabularData).dataVersion).toBe("a");
+    expect(dmu[1]!.updateDataModel.path).toBe(`/refs/${escapeJsonPointerToken(REF_B)}`);
+    expect((dmu[1]!.updateDataModel.value as TabularData).dataVersion).toBe("b");
+  });
 });
 
 describe("toA2ui: sidecar preservation of kohaku-specific information", () => {

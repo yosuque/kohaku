@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FixationRecord, PromotionState, UISpec } from "@kohaku-ui/spec-core";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createFileStoragePort } from "../src/ports/storage-port.js";
 
 // Recovery behavior when starting up with corrupt or half-written persistence files (storage-port.ts).
@@ -229,5 +229,54 @@ describe("createFileStoragePort: skip corrupted/partial lines in lineage.jsonl (
     writeFileSync(join(dir, "lineage.jsonl"), "\n\n  \n");
     const storage = createFileStoragePort(dir);
     expect(await storage.listLineage()).toEqual([]);
+  });
+
+  it("skips JSON-valid but schema-invalid rows (a hand-edited/pre-migration entry) and reports an aggregated skip count", async () => {
+    const dir = tmpDir();
+    const lines = [
+      JSON.stringify({
+        id: "e1",
+        ts: "2026-01-01T00:00:00.000Z",
+        actor: { kind: "system" },
+        type: "view.composed",
+        payload: { intentHash: "hA" },
+      }),
+      // Valid JSON but fails LineageEventRecordSchema: actor.kind is not one of "user"/"model"/"system".
+      JSON.stringify({
+        id: "bad1",
+        ts: "2026-01-02T00:00:00.000Z",
+        actor: { kind: "robot" },
+        type: "view.composed",
+        payload: {},
+      }),
+      // Valid JSON but missing the required `type` field.
+      JSON.stringify({
+        id: "bad2",
+        ts: "2026-01-03T00:00:00.000Z",
+        actor: { kind: "system" },
+        payload: {},
+      }),
+      JSON.stringify({
+        id: "e2",
+        ts: "2026-01-04T00:00:00.000Z",
+        actor: { kind: "system" },
+        type: "view.composed",
+        payload: { intentHash: "hB" },
+      }),
+    ];
+    writeFileSync(join(dir, "lineage.jsonl"), lines.join("\n"));
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const storage = createFileStoragePort(dir);
+      const events = await storage.listLineage();
+      // Only the 2 schema-valid entries are read (schema-invalid rows are skipped, same as JSON-parse failures).
+      expect(events.map((e) => e.payload["intentHash"])).toEqual(["hA", "hB"]);
+      // The 2 skipped rows are reported as one aggregated count, not one warning per row.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]?.[0]).toContain("Skipped 2");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

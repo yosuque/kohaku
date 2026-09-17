@@ -11,7 +11,7 @@ at runtime — it never needs a change here.
 Create `packages/registry/src/core/<part>.ts` using `defineComponent`. `present-chart.ts` is a good
 model to copy. `defineComponent` fail-fasts at definition time on:
 
-- `type` — must match the dotted-identifier form `^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)*$`.
+- `type` — must match dot-separated identifier segments (a single segment is also accepted): `^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)*$`. New core types SHOULD use a namespaced (multi-segment) name — see [spec/SPEC.md §3.1](../../spec/SPEC.md#31-componentdefinition-normative)'s type-naming convention.
 - `version` — must be valid semver.
 - `description` — required, non-empty. **This text is transcribed into the L1 generation prompt** as
   the LLM's selection guidance, so write it as such.

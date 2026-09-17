@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  defaultSleep,
   isRetryableProviderError,
   nextDelayMs,
   type RetryDeps,
@@ -49,6 +50,31 @@ function makeDeps(): { sleeps: number[]; deps: RetryDeps; clock: () => number } 
 }
 
 const freshSignal = (): AbortSignal => new AbortController().signal;
+
+describe("defaultSleep", () => {
+  it("rejects immediately with the signal's reason when already aborted", async () => {
+    const controller = new AbortController();
+    const reason = new Error("already aborted");
+    controller.abort(reason);
+    await expect(defaultSleep(1000, controller.signal)).rejects.toBe(reason);
+  });
+
+  it("rejects with the signal's reason when aborted while waiting (does not wait for the timer)", async () => {
+    const controller = new AbortController();
+    const promise = defaultSleep(50, controller.signal);
+    // Abort synchronously before the timer has any chance to fire; the wait must reject right away
+    // rather than resolving after 50ms.
+    controller.abort(new Error("cancelled mid-wait"));
+    await expect(promise).rejects.toThrow("cancelled mid-wait");
+  });
+
+  it("removes its abort listener once the wait resolves normally (no leaked listener)", async () => {
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    await defaultSleep(0, controller.signal);
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+});
 
 describe("withProviderRetry", () => {
   it("PROVIDER fails twice → succeeds on the 3rd (backoff 250ms → 500ms)", async () => {
@@ -183,6 +209,29 @@ describe("retryableProviderError / isRetryableProviderError", () => {
   it("the retry-after-ms header is returned as milliseconds", () => {
     const err = apiError({ isRetryable: true, responseHeaders: { "retry-after-ms": "1500" } });
     expect(retryableProviderError(err)).toBe(1500);
+  });
+
+  it("a retry-after HTTP-date in the future returns a positive number of milliseconds", () => {
+    const futureDate = new Date(Date.now() + 60_000).toUTCString();
+    const err = apiError({ isRetryable: true, responseHeaders: { "retry-after": futureDate } });
+    const ms = retryableProviderError(err);
+    expect(typeof ms).toBe("number");
+    // Allow slack for the two Date.now() calls (test's and retryAfterFromHeaders's) not landing on
+    // the exact same millisecond.
+    expect(ms as number).toBeGreaterThan(50_000);
+  });
+
+  it("a retry-after HTTP-date in the past is treated as no Retry-After (null, left to backoff)", () => {
+    const pastDate = new Date(Date.now() - 60_000).toUTCString();
+    const err = apiError({ isRetryable: true, responseHeaders: { "retry-after": pastDate } });
+    expect(retryableProviderError(err)).toBeNull();
+  });
+
+  it("a numeric header with trailing garbage is not partially parsed (whole-string match, not Number.parseFloat's leading-prefix behavior)", () => {
+    // Number.parseFloat("2abc") is 2 (silently ignores trailing garbage); this must not also parse as
+    // a valid Date (Date.parse("2abc") is NaN too), so the whole value is rejected -> null.
+    const err = apiError({ isRetryable: true, responseHeaders: { "retry-after": "2abc" } });
+    expect(retryableProviderError(err)).toBeNull();
   });
 
   it("a non-retryable PROVIDER / non-APICallError is undefined (=out of scope)", () => {

@@ -176,11 +176,22 @@ function parseTimeWindow(
 }
 
 /**
- * Validation + clamping of the limit query (shared by /lineage and /analytics/summary; isomorphic to the Python
- * implementation's _parse_limit). NaN / negative / 0 are invalid and return undefined (defer to the caller's
- * default); a positive value is floored and clamped to maxLimit (preventing window bloat from huge values).
+ * Only a plain decimal-digit string (with an optional decimal point) is accepted -- unlike a bare
+ * `Number(raw)` conversion, this rejects hex ("0x10"), scientific notation ("1e3"), and numeric-separator
+ * underscores ("1_000"), all of which `Number()` would otherwise silently accept as a value. This is the
+ * isomorphic parity fix for the Python implementation's `_parse_limit`, whose `float(raw)` used to diverge
+ * from `Number(raw)` on exactly these inputs (e.g. Python's `float("1_000")` is a valid 1000.0).
  */
-function parseLimit(raw: string | undefined, maxLimit: number): number | undefined {
-  const n = raw != null ? Number(raw) : NaN;
-  return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), maxLimit) : undefined;
+const LIMIT_PATTERN = /^\d+(\.\d+)?$/;
+
+/**
+ * Validation + clamping of the limit query (shared by /lineage and /analytics/summary; isomorphic to the Python
+ * implementation's _parse_limit). NaN / negative / 0 / non-decimal-digit strings are invalid and return
+ * undefined (defer to the caller's default); a positive value is floored and clamped to maxLimit
+ * (preventing window bloat from huge values).
+ */
+export function parseLimit(raw: string | undefined, maxLimit: number): number | undefined {
+  if (raw == null || !LIMIT_PATTERN.test(raw)) return undefined;
+  const n = Number(raw);
+  return n > 0 ? Math.min(Math.floor(n), maxLimit) : undefined;
 }

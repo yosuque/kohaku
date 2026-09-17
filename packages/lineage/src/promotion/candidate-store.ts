@@ -92,9 +92,14 @@ export function createCandidateStore(opts: {
    * loadCandidate. If usageStats is unset, it individually fetches via usage.forArtifact (get / act path).
    * evaluateAndList computes usage for all artifacts at once from a single listLineage and injects it, avoiding
    * the N+1 (O(K×N)) of linearly scanning the append-only lineage per candidate.
-   * component.generated can similarly be injected via generatedEvent (scanCandidates injects it. The
-   * listByStatus snapshot-index path also handles candidates outside the GENERATED_SCAN_WINDOW, so it keeps to
-   * single lookups).
+   * component.generated can similarly be injected via generatedEvent: scanCandidates always injects it (from its
+   * own component.generated scan), and both listByStatus (below) and reconcile (service.ts) also inject it from
+   * their own single bulk `listLineage({ type: ["component.generated"] })` fetch, keyed the same way
+   * (`usageIndexKey`). A candidate whose generated event has aged out of GENERATED_SCAN_WINDOW (rare -- the
+   * window is large) is simply absent from that bulk fetch, so generatedEvent comes through as `undefined` and
+   * this function falls back to its own per-artifact lookup below, unchanged from before. (A snapshot-duplicate
+   * short-circuit -- skipping the lookup outright when a published snapshot already carries its own html copy,
+   * #9 -- is a separate optimization, not implemented here.)
    */
   async function loadCandidate(
     artifactId: string,
@@ -296,6 +301,24 @@ export function createCandidateStore(opts: {
     // Inject usage into loadCandidate using the same component.used index as scanCandidates
     // (for the window-drift known constraint, see the usage.index doc).
     const usedByArtifact = await usage.index(tenant);
+    // N+1 avoidance for component.generated too (mirrors scanCandidatesWithTenant's own generated index, and
+    // reconcile's, service.ts): a single bulk fetch of the most recent GENERATED_SCAN_WINDOW component.generated
+    // events, keyed the same way, so a state whose generated event falls inside that window skips
+    // loadCandidate's own individual listLineage lookup below. A state whose generated event has aged out of
+    // the window is simply absent here and falls back to that per-artifact lookup, unchanged from before.
+    const generated = await storage.listLineage({
+      type: ["component.generated"],
+      limit: GENERATED_SCAN_WINDOW,
+      ...tenantField(tenant),
+    });
+    const latestGeneratedByKey = new Map<string, (typeof generated)[number]>();
+    for (const e of generated) {
+      const artifactId = e.payload["artifactId"];
+      if (typeof artifactId !== "string") continue;
+      const key = usageIndexKey(e.tenant, artifactId);
+      const prev = latestGeneratedByKey.get(key);
+      if (prev == null || e.ts > prev.ts) latestGeneratedByKey.set(key, e);
+    }
     const candidates: PromotionCandidate[] = [];
     for (const state of states) {
       if (state.status !== status) continue;
@@ -305,9 +328,11 @@ export function createCandidateStore(opts: {
       // component.generated / promotion-state lookups (they are keyed by the actual owning tenant), silently
       // falling back to a wrong/incomplete candidate. When a specific tenant was requested, state.tenant already
       // equals it (listPromotionStates(tenant) filters to that tenant), so this is a no-op for that case.
+      const key = usageIndexKey(state.tenant, state.artifactId);
       const candidate = await loadCandidate(state.artifactId, {
         tenant: state.tenant,
-        usageStats: tallyUsage(usedByArtifact.get(usageIndexKey(state.tenant, state.artifactId)) ?? []),
+        usageStats: tallyUsage(usedByArtifact.get(key) ?? []),
+        generatedEvent: latestGeneratedByKey.get(key),
       });
       // Something that has state but whose component.generated cannot be pulled (normally impossible) cannot be projected, so exclude it.
       if (candidate != null) candidates.push(candidate);

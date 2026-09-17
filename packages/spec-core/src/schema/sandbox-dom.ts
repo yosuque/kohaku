@@ -364,7 +364,12 @@ export function isStyleValueSafe(value: string): boolean {
   return true;
 }
 
-/** Default DOM-shape limits (see SandboxPolicy in packages/sandbox — the applier enforces these). */
+/**
+ * Default DOM-shape limits (see SandboxPolicy in packages/sandbox — the applier enforces these).
+ * DEFAULT_MAX_DOM_NODES bounds the number of nodes currently connected to the document (counted per subtree
+ * as nodes are attached/detached), not the lifetime count of nodes ever created — see dom-applier.ts's module
+ * docstring for the live-node accounting and its own lifetime-record cap on total tracked ids.
+ */
 export const DEFAULT_MAX_DOM_NODES = 20_000;
 export const DEFAULT_MAX_DOM_DEPTH = 64;
 export const DEFAULT_MUTATIONS_PER_MINUTE = 6000;

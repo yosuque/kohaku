@@ -58,9 +58,12 @@ export interface SandboxPolicy {
   maxEventPayloadBytes?: number;
   /**
    * DOM-shape limits enforced by the trusted document's applier on ops relayed from the L2 Worker (default
-   * spec-core's DEFAULT_MAX_DOM_NODES / DEFAULT_MAX_DOM_DEPTH / DEFAULT_MUTATIONS_PER_MINUTE). See
-   * resolvePolicy's docstring: buildSrcdoc's frozen signature currently ignores an override here and always
-   * builds with the defaults — resolved for forward compatibility, not yet load-bearing.
+   * spec-core's DEFAULT_MAX_DOM_NODES / DEFAULT_MAX_DOM_DEPTH / DEFAULT_MUTATIONS_PER_MINUTE). `maxDomNodes`
+   * bounds the number of nodes **currently connected** to the document, counted per subtree as nodes are
+   * attached and detached — not the lifetime count of nodes ever created — so removing nodes frees budget for
+   * new ones (see dom-applier.ts's module docstring for the live-node accounting and its own lifetime-record
+   * memory cap). See resolvePolicy's docstring: buildSrcdoc's frozen signature currently ignores an override
+   * here and always builds with the defaults — resolved for forward compatibility, not yet load-bearing.
    */
   maxDomNodes?: number;
   maxDomDepth?: number;

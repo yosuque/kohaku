@@ -197,9 +197,12 @@ export async function toA2ui(spec: UISpec, opts?: ToA2uiOptions): Promise<A2uiCo
     if (opts.resolveData != null) {
       const refs = uniqueRefs(spec);
       if (refs.length > 0) {
-        // Unlike the v0.9.1 path below (where message order is observable — each ref becomes its own
-        // sequential updateDataModel message), this v1.0 path only fills entries of one order-independent
-        // `dataModel.refs` object, so resolving every ref concurrently is safe.
+        // Both this path and the v0.9.1 path below now resolve every ref concurrently (Promise.all). The
+        // difference is only in what each does with the results: this v1.0 path fills entries of one
+        // order-independent `dataModel.refs` object, so it merely needs every ref's value, in any order.
+        // The v0.9.1 path still cares about order — each ref becomes its own sequential updateDataModel
+        // message — so it pushes the resolved values back in uniqueRefs order even though they were
+        // fetched concurrently.
         const resolveData = opts.resolveData;
         const entries = await Promise.all(
           refs.map(async (ref) => [ref, (await resolveData(ref)) as unknown as JsonValue] as const),
@@ -218,8 +221,13 @@ export async function toA2ui(spec: UISpec, opts?: ToA2uiOptions): Promise<A2uiCo
   ];
 
   if (opts?.resolveData != null) {
-    for (const ref of uniqueRefs(spec)) {
-      const data = await opts.resolveData(ref);
+    const refs = uniqueRefs(spec);
+    const resolveData = opts.resolveData;
+    // Resolve every ref concurrently (same rationale as the v1.0 path above), but push the resulting
+    // messages in uniqueRefs order regardless — this path's message order is observable (each ref becomes
+    // its own sequential updateDataModel message), so concurrent fetching must not reorder them.
+    const values = await Promise.all(refs.map((ref) => resolveData(ref)));
+    for (const [i, ref] of refs.entries()) {
       messages.push({
         version: A2UI_VERSION,
         updateDataModel: {
@@ -227,7 +235,7 @@ export async function toA2ui(spec: UISpec, opts?: ToA2uiOptions): Promise<A2uiCo
           // Place it at `/refs/<raw ref>` in the data model (the raw ref is RFC 6901-escaped).
           path: `/refs/${escapeJsonPointerToken(ref)}`,
           // TabularData is a JSON structure (columns/rows/dataVersion), so it can be preserved as JsonValue.
-          value: data as unknown as JsonValue,
+          value: values[i] as unknown as JsonValue,
         },
       });
     }

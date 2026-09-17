@@ -16,6 +16,20 @@ import type { PromotedRegistry } from "../intents/promoted-registry.js";
 
 export type { OutputLang };
 
+/** Default compose-wide deadline (ms): one straight-to-L2 run (`sales.custom`'s ~180s L2 timeout under
+ * the default `outputBudgetFactor=3` widening of `KOHAKU_LLM_TIMEOUT_MS`) plus headroom for a repair retry. */
+const DEFAULT_COMPOSE_DEADLINE_MS = 240_000;
+
+/**
+ * Parses KOHAKU_COMPOSE_DEADLINE_MS as a positive integer; any other value (unset, non-numeric, <= 0)
+ * falls back to the default. Exported for testability (mirrors apps/sample-mcp/src/setup.ts's snapshotTtlMs).
+ */
+export function composeDeadlineMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["KOHAKU_COMPOSE_DEADLINE_MS"];
+  const parsed = raw != null ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_COMPOSE_DEADLINE_MS;
+}
+
 /**
  * Maps a session locale tag to the output language ("ja" prefix match — "ja", "ja-JP", … → "ja";
  * everything else, including absence, stays the English default).
@@ -47,8 +61,11 @@ export function createComposeContext(args: {
   llm: LlmPort;
 }): ComposeContext {
   const { registry, semantic, storage, llm } = args;
-  const shared: Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem"> = {
+  const shared: Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget"> = {
     allowL2: true,
+    // Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
+    // to the deterministic fallback on expiry rather than hanging indefinitely behind a slow/hung LLM call.
+    budget: { deadlineMs: composeDeadlineMs() },
     // Pre-delivery smoke validation of L2-generated HTML. After passing static lint, it runs in jsdom and sends
     // back to repair any output that does not reach ready() due to a runtime TypeError (crushing the client's boot-timeout blank screen before delivery).
     l2Smoke: createL2Smoke(),

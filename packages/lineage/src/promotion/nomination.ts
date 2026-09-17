@@ -9,6 +9,7 @@ import {
   type PromotionErrorContext,
   type PromotionPolicy,
 } from "./service.js";
+import { usageIndexKey } from "./usage.js";
 
 /**
  * Nomination step of the promotion pipeline, split out of createPromotions (a God-factory split).
@@ -57,6 +58,25 @@ export function createNomination(opts: {
    * tenant — silently mixing single-tenant and multi-tenant governance state. Such a candidate is skipped
    * (left in_use, un-nominated) and reported via onError instead. Single-tenant operation (no record ever
    * carries a tenant) never triggers this: every candidate's own tenant is then also undefined.
+   *
+   * Tenant-keyed idempotency guard: `nominatedIds` is keyed by `usageIndexKey(event's own tenant, artifactId)`,
+   * not by artifactId alone — artifactId derives from content sha256 and is globally unique, so the *same*
+   * artifactId can be independently nominated by multiple tenants (mirrors candidate-store.ts's
+   * `scanCandidatesWithTenant` and usage.ts's own composite key). Keying by artifactId alone (as this used to)
+   * would, on an all-tenant scan (`tenant` unspecified), let one tenant's prior `component.nominated` event
+   * suppress another tenant's own eligible in_use candidate for the same artifactId — a silent no-op that never
+   * transitions it to `candidate`.
+   *
+   * The `component.nominated` audit record is fail-open, mirroring `handlePublish`'s own audit record: the
+   * status transition is already durable (persisted via `persistMany` above) before this loop runs, so a
+   * storage hiccup recording the audit event must not stop the batch (or leave a persisted-but-unaudited
+   * candidate silently swallowed along with every candidate still queued after it) — the failure is instead
+   * reported per-candidate via `onError({ endpoint: "promotion.nominate.audit" })`. There is currently no
+   * reconcile-style backfill for a missed `component.nominated` event (unlike publish/unpublish's audit,
+   * reconcile does not scan `in_use`/`candidate` snapshots), so a failure here leaves that one nominate
+   * permanently unaudited even though the candidate is now persisted as `candidate` — the audit trail is
+   * incomplete for that artifact, but the promotion pipeline itself is unaffected (a status-only fact this
+   * nominate produced, not paired with an artifact-visible side effect like onPublish's projection).
    */
   async function nominateEligible(
     candidates: { candidate: PromotionCandidate; tenant?: string }[],
@@ -70,14 +90,14 @@ export function createNomination(opts: {
     const nominatedIds = new Set<string>();
     for (const e of nominatedEvents) {
       const artifactId = e.payload["artifactId"];
-      if (typeof artifactId === "string") nominatedIds.add(artifactId);
+      if (typeof artifactId === "string") nominatedIds.add(usageIndexKey(e.tenant, artifactId));
     }
     const toPersist: { candidate: PromotionCandidate; tenant?: string }[] = [];
     for (const { candidate, tenant: recordTenant } of candidates) {
       // AUTO: on threshold satisfaction, in_use -> candidate (nomination by policy). Already-nominated ones are not re-recorded.
       if (
         candidate.status === "in_use" &&
-        !nominatedIds.has(candidate.artifactId) &&
+        !nominatedIds.has(usageIndexKey(recordTenant, candidate.artifactId)) &&
         candidate.uses >= policy.minUses &&
         candidate.sessions >= policy.minDistinctSessions
       ) {
@@ -93,19 +113,30 @@ export function createNomination(opts: {
         }
         candidate.status = transition(candidate.status, { kind: "nominate", by: "policy" }, policy);
         toPersist.push({ candidate, tenant });
-        nominatedIds.add(candidate.artifactId);
+        nominatedIds.add(usageIndexKey(recordTenant, candidate.artifactId));
       }
     }
     await persistMany(toPersist);
     // Stamp each nominate event with tenant too (so re-evaluation in the tenant scope finds the same
-    // nominated and becomes idempotent). Recorded only after the batch persist above resolves.
+    // nominated and becomes idempotent). Recorded only after the batch persist above resolves. Fail-open (see
+    // this function's doc): a record failure here must not stop auditing the remaining candidates in the batch,
+    // nor undo the already-persisted status transition (the candidate's snapshot has a draft-free `candidate`
+    // status either way, whether or not the audit record actually landed).
     for (const { candidate } of toPersist) {
-      await lineage.record(
-        "component.nominated",
-        { artifactId: candidate.artifactId, by: "policy" },
-        undefined,
-        tenant,
-      );
+      try {
+        await lineage.record(
+          "component.nominated",
+          { artifactId: candidate.artifactId, by: "policy" },
+          undefined,
+          tenant,
+        );
+      } catch (e) {
+        notifyPromotionError(
+          onError,
+          { endpoint: "promotion.nominate.audit", artifactId: candidate.artifactId, ...tenantField(tenant) },
+          e,
+        );
+      }
     }
     return candidates.map((c) => c.candidate);
   }

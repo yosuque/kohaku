@@ -31,6 +31,15 @@ import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), "golden");
 const UPDATE = process.env["KOHAKU_GOLDEN_UPDATE"] === "1";
+// Update mode rewrites goldens instead of asserting them (see the "how to update goldens" note above),
+// so it must never run unattended in CI -- a stray/leaked KOHAKU_GOLDEN_UPDATE=1 there would silently
+// turn every regression into a new "expected" and report green.
+if (UPDATE && process.env["CI"] != null) {
+  throw new Error(
+    "KOHAKU_GOLDEN_UPDATE=1 must not run in CI (it rewrites goldens instead of asserting them); " +
+      "run it locally, review the git diff, and commit",
+  );
+}
 
 interface GoldenFixture {
   name: string;
@@ -94,7 +103,7 @@ describe("golden regression (sales.trend L1 generation)", () => {
   for (const file of files) {
     const path = join(GOLDEN_DIR, file);
     const fixture = JSON.parse(readFileSync(path, "utf8")) as GoldenFixture;
-    it(fixture.name, async () => {
+    it(UPDATE ? `[UPDATE MODE - NOT ASSERTING] ${fixture.name}` : fixture.name, async () => {
       const ctx = await makeContext(fixture.drafts);
       if (UPDATE) {
         // Update mode: write the actual compose output back as the golden (review the git diff and commit).

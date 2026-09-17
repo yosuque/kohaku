@@ -1,5 +1,6 @@
 import {
   type CanonicalIntent,
+  computeStructureHash,
   type FixationRecord,
   FixationRecordSchema,
   type UISpec,
@@ -55,6 +56,37 @@ export async function materializeFixation(
     };
   }
   fixation = validated.data as FixationRecord;
+
+  // Deeper corruption than FixationRecordSchema alone can catch: a hand-edited record whose declared
+  // intentHash / structureHash no longer matches its own pinnedSpec would otherwise sail through the
+  // schema check above (both fields are just strings, structurally valid on their own) and could be
+  // delivered for the wrong Intent, or with a pinnedSpec that was edited without recomputing its
+  // structureHash (a broken fixation-stability tally, and — if the edit changed refs/components — the
+  // same "structure changed underneath the record" risk the fingerprint/catalog checks below exist to
+  // catch). Treat either mismatch as corruption, exactly like a schema-validation failure.
+  if (fixation.intentHash !== intent.hash) {
+    return {
+      result: null,
+      check: {
+        kind: "stale",
+        issues: [
+          `fixation record's intentHash (${fixation.intentHash}) does not match the requested intent (${intent.hash})`,
+        ],
+      },
+    };
+  }
+  const actualStructureHash = await computeStructureHash(fixation.pinnedSpec);
+  if (actualStructureHash !== fixation.structureHash) {
+    return {
+      result: null,
+      check: {
+        kind: "stale",
+        issues: [
+          `fixation record's structureHash (${fixation.structureHash}) does not match its pinnedSpec (${actualStructureHash})`,
+        ],
+      },
+    };
+  }
 
   // Fingerprint fast path: if the catalog fingerprint at fixation time matches the current one, treat the structure as unchanged and skip validation.
   // Only on mismatch/absence (an old record) is pinnedSpec revalidated against the current catalog.

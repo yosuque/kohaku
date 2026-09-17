@@ -1,15 +1,17 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import type {
-  AuthzPort,
-  DomainPort,
-  FixationRecord,
-  LineageEventRecord,
-  SemanticPort,
-  SessionContext,
-  StoragePort,
-  UISpec,
+import {
+  type AuthzPort,
+  computeStructureHash,
+  type DomainPort,
+  type FixationRecord,
+  finalizeIntent,
+  type LineageEventRecord,
+  type SemanticPort,
+  type SessionContext,
+  type StoragePort,
+  type UISpec,
 } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { createKohakuRoutes, type KohakuHostDeps, type ViewRecorder } from "../src/index.js";
@@ -116,11 +118,17 @@ function validPinned(): UISpec {
   };
 }
 
-function makeFixation(pinnedSpec: UISpec, catalogFingerprint: string): FixationRecord {
+// The real resolved hash of the /compose request body's intent ({canonical:"sales.trend", params:{}}) --
+// resolveIntent always re-derives via finalizeIntent regardless of what stubSemantic.normalize returns, so
+// this must match that, not a placeholder (materializeFixation now verifies fixation.intentHash against it).
+const REQUEST_INTENT = await finalizeIntent({ canonical: "sales.trend", params: {} });
+
+async function makeFixation(pinnedSpec: UISpec, catalogFingerprint: string): Promise<FixationRecord> {
   return {
-    intentHash: "sha256:" + "0".repeat(64),
+    intentHash: REQUEST_INTENT.hash,
     canonical: "sales.trend",
-    structureHash: "sha256:" + "1".repeat(64),
+    // The real structureHash of pinnedSpec (not a placeholder): materializeFixation now verifies this matches.
+    structureHash: await computeStructureHash(pinnedSpec),
     pinnedSpec,
     fixatedAt: "2026-06-10T00:00:00Z",
     approver: { id: "tester" },
@@ -203,7 +211,7 @@ describe("tenant contract (host-rest)", () => {
       session: SessionContext,
     ): Promise<FixationRecord | null> => {
       seen.push(session);
-      return session.tenant === "acme" ? makeFixation(validPinned(), catalog.fingerprint) : null;
+      return session.tenant === "acme" ? await makeFixation(validPinned(), catalog.fingerprint) : null;
     };
     const app = createKohakuRoutes(makeDeps({ fixationLookup }));
 

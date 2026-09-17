@@ -10,9 +10,27 @@ Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation 
 npm install @kohaku-ui/client
 ```
 
+```ts
+import { createKohakuClient, isKohakuHostError } from "@kohaku-ui/client";
+
+const client = createKohakuClient({ baseUrl: "/api/kohaku" });
+
+// synthesis (deterministic path); the response is { spec: UISpec, capability: string }
+const { spec, capability } = await client.compose({
+  input: { kind: "gui", action: "view.select", params: { intent: "sales.trend" } },
+  session: { surface: "web" },
+});
+
+try {
+  await client.compose({});
+} catch (e) {
+  if (isKohakuHostError(e) && e.code === "BAD_REQUEST") { /* e.status / e.requestId */ }
+}
+```
+
 The packages in this scope share a single version and are designed to be installed together.
 
-- Documentation: https://github.com/yosuque/kohaku#readme
+- Documentation: [docs/user-guide.md — Calling it from a client](https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#calling-it-from-a-client-the-typed-host-client-sdk)
 - Source: https://github.com/yosuque/kohaku/tree/main/packages/client
 
 Licensed under the Apache License, Version 2.0.

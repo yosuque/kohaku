@@ -1,11 +1,6 @@
 import { createKeyedMutex, type KeyedMutex } from "@kohaku-ui/host-core";
 import type { KohakuHostDeps } from "./types.js";
 
-// createKeyedMutex / KeyedMutex now live in host-core (the single implementation shared with the sample
-// storage port and host-mcp-apps's fixation self-heal serialization; see host-core/src/keyed-mutex.ts for the
-// doc comment). Re-exported here for backward compatibility with existing importers of this module.
-export { createKeyedMutex, type KeyedMutex };
-
 /**
  * A simple mutex that serializes the fixation's read-modify-write (self-healing's refreshFingerprint / invalidate
  * and the management plane's fixate / unfixate) per (tenant, intentHash) within the process (the same per-tenant

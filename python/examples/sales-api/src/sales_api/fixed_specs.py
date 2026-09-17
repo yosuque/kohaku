@@ -28,6 +28,7 @@ from typing import Any, Literal
 from kohaku.composer import FixedSpecSource
 from kohaku.spec import SPEC_VERSION, Intent, JsonObject, QueryHandle, UISpec
 
+from . import domain
 from .intents_catalog import group_by as group_by_vocab
 from .intents_catalog import region as region_vocab
 
@@ -37,15 +38,15 @@ type OutputLang = Literal["en", "ja"]
 # A fixed-spec builder assembles a UISpec from a normalized Intent and resolved references.
 SpecBuilder = Callable[[Intent, list[QueryHandle]], UISpec]
 
-# The TS GROUP_LABELS (headings for the aggregation axis; a separate curation from vocab's region label).
-_GROUP_LABELS: dict[str, str] = {"region": "Region", "product": "Product", "channel": "Channel"}
-
 
 def _group_by_phrase(group_by: str, lang: OutputLang) -> str:
     """"by Region" (EN title fragment) / "地域別" (JA, straight from the groupBy vocabulary)."""
     if lang == "ja":
         return group_by_vocab.label(group_by, "ja")
-    return f"by {_GROUP_LABELS.get(group_by, group_by)}"
+    # domain.GROUP_AXIS_LABELS is the single source (matches TS domain/types.ts's GROUP_AXIS_LABELS, which
+    # queries.ts's groupLabel and this EN title fragment both draw from) — previously duplicated here as
+    # its own _GROUP_LABELS dict carrying the same values.
+    return f"by {domain.GROUP_AXIS_LABELS.get(group_by, group_by)}"
 
 
 def _period(p: JsonObject, lang: OutputLang) -> str:
@@ -235,7 +236,7 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
     # The $ref of the records. The invalidation target of the write loop (the table below) and the form's payload.refs point to the same reference.
     ref = refs[0].uri
     limit = p.get("limit", 100)
-    page_size = min(int(limit) if isinstance(limit, (int, float, str)) else 100, 100)
+    page_size = min(max(int(limit) if isinstance(limit, (int, float, str)) else 100, 1), 500)
     # Demonstration of a declarative confirmation flow: press of the "add a note" button -> state.set(noteOpen=true) ->
     # overlay.dialog opens via visibleWhen. The presentForm inside the dialog is the body of the write loop (on submit,
     # annotate advances the data version and action_effects invalidates the same $ref with the new version -> the table
@@ -297,7 +298,13 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
         {
             "id": "g",
             "type": "presentSpreadsheet",
-            "props": {"editable": False, "pageSize": page_size},
+            # serverSide=True routes sort/paging through the reserved _sort/_dir/_cursor/_limit params (a
+            # plain data refetch per operation) instead of loading the whole result set into the browser;
+            # page_size seeds the first page from `limit` in the same round trip as compose. sortChange is
+            # deliberately NOT declared here: wiring it to intent.patch would re-compose (a full server round
+            # trip) on every sort toggle, which defeats the point of resolving sort server-side via a cheap
+            # refetch. Mirrors TS fixed-specs.ts's recordsView.
+            "props": {"editable": False, "pageSize": page_size, "serverSide": True},
             "data": {"$ref": ref},
         },
     ]

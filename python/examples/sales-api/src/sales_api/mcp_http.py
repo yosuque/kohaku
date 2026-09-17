@@ -2,8 +2,9 @@
 
 claude.ai / ChatGPT can only connect through remote MCP connectors (Streamable HTTP), so in addition to stdio
 (mcp_main.py) this HTTP entry point is provided. The common setup (Ports, .data, catalog) is shared with
-mcp_setup.py. The transport puts the MCP Python SDK's StreamableHTTPSessionManager on uvicorn/starlette (the SDK
-handles session management, idle cleanup, and optional DNS rebinding protection).
+mcp_setup.py. The transport is the mcp SDK's own `Server.streamable_http_app(...)` (mcp 2.x), which assembles
+the StreamableHTTPSessionManager, the `/mcp` route, and its lifespan for us, run on uvicorn (the SDK handles
+session management, idle cleanup, and optional DNS rebinding protection).
 
 ⚠️ No authentication (demo). This HTTP entry has no authentication whatsoever. It assumes local use
    (127.0.0.1:8791); when connecting claude.ai / ChatGPT through a public tunnel (ngrok / cloudflared, etc.),
@@ -23,10 +24,8 @@ For UI display, run `pnpm --filter @kohaku-ui-sample/mcp build:renderer` beforeh
 
 from __future__ import annotations
 
-import contextlib
 import os
 import sys
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -69,42 +68,43 @@ def _serve_snapshot_body(snapshot_dir: Path, raw_name: str) -> tuple[int, str, b
     return 200, "text/html; charset=utf-8", body
 
 
-def build_starlette_app(setup: KohakuMcpSetup, *, allowed_hosts: list[str] | None = None) -> Any:
+def build_starlette_app(
+    setup: KohakuMcpSetup, *, allowed_hosts: list[str] | None = None, host: str = "127.0.0.1"
+) -> Any:
     """Assembles a Starlette app from setup (passed to uvicorn). Does not listen (the caller decides the port).
 
     Returns a Starlette app (ASGI callable). To keep the design of not top-level importing starlette in the module,
     it returns Any (uvicorn.run accepts it as an ASGI callable).
+
+    Built via `Server.streamable_http_app(...)` (mcp 2.x): the low-level Server itself now assembles the
+    StreamableHTTPSessionManager, the `/mcp` route, and a lifespan that runs the session manager — replacing
+    this module's own hand-rolled `StreamableHTTPSessionManager` + `Mount` + `lifespan` wiring (mcp 1.x had no
+    equivalent single-call constructor). `custom_starlette_routes` adds the snapshot-serving route onto the
+    same returned app, and CORS is layered on afterward via `Starlette.add_middleware` (`streamable_http_app`
+    takes no `middleware` parameter).
     """
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from mcp.server.transport_security import TransportSecuritySettings
-    from starlette.applications import Starlette
-    from starlette.middleware import Middleware
     from starlette.middleware.cors import CORSMiddleware
     from starlette.requests import Request
     from starlette.responses import Response
-    from starlette.routing import Mount, Route
+    from starlette.routing import Route
 
     # Pass a single Server to the SDK's stateful session management (shared across all sessions. TS is per-session,
     # but the Python SDK's convention is sharing a single Server). Idle cleanup is handled by the SDK via session_idle_timeout.
+    # Production hook: because this one Server is shared by every session, mcp_setup.py's McpHostDeps leaves
+    # resolve_principal unwired here (every call runs as the anonymous principal) — a real deployment MUST wire
+    # it (McpHostDeps.resolve_principal, resolved per tool call from that call's mcp SDK ServerRequestContext)
+    # rather than a single static McpHostDeps.principal, which would give every caller the same identity.
     server = setup.create_server()
+    # Off by default (unlike `streamable_http_app`'s own behavior, which auto-enables DNS rebinding protection
+    # whenever `host` is a loopback address): this module's documented policy is protection off unless
+    # KOHAKU_MCP_HTTP_ALLOWED_HOSTS opts in, so an empty allowed_hosts explicitly disables it rather than
+    # leaving `transport_security=None` (which would silently turn protection back on for 127.0.0.1/localhost).
     security_settings = (
         TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=allowed_hosts)
         if allowed_hosts
-        else None
+        else TransportSecuritySettings(enable_dns_rebinding_protection=False)
     )
-    # Unlike the TS entry (http.ts's explicit 4 MiB MAX_BODY_BYTES), request body size limiting is delegated to
-    # the SDK / uvicorn stack here (acceptable for the localhost demo; put a limiting reverse proxy in front
-    # when exposing beyond localhost).
-    session_manager = StreamableHTTPSessionManager(
-        app=server,
-        json_response=False,
-        stateless=False,
-        security_settings=security_settings,
-        session_idle_timeout=1800.0,  # clean up after 30 min idle (equivalent to TS's TTL sweep).
-    )
-
-    async def handle_mcp(scope: object, receive: object, send: object) -> None:
-        await session_manager.handle_request(scope, receive, send)  # type: ignore[arg-type]
 
     async def serve_snapshot(request: Request) -> Response:
         # Static snapshot serving (so it can be opened by URL even in remote MCP). Accepts only a single segment.
@@ -113,37 +113,35 @@ def build_starlette_app(setup: KohakuMcpSetup, *, allowed_hosts: list[str] | Non
         )
         return Response(content=body, status_code=status, media_type=content_type)
 
-    @contextlib.asynccontextmanager
-    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        async with session_manager.run():
-            yield
-
-    middleware = [
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-            # Explicitly allow custom headers from the browser and expose the session id.
-            allow_headers=[
-                "Content-Type",
-                "Accept",
-                "Authorization",
-                "mcp-session-id",
-                "mcp-protocol-version",
-                "Last-Event-ID",
-            ],
-            expose_headers=["mcp-session-id"],
-            max_age=86400,
-        )
-    ]
-    return Starlette(
-        routes=[
-            Route(f"{_SNAPSHOT_PREFIX}/{{file_name}}", serve_snapshot, methods=["GET"]),
-            Mount(_MCP_PATH, app=handle_mcp),
+    app = server.streamable_http_app(
+        streamable_http_path=_MCP_PATH,
+        transport_security=security_settings,
+        session_idle_timeout=1800.0,  # clean up after 30 min idle (equivalent to TS's TTL sweep).
+        # Explicit request-body cap, matching the TS entry's (http.ts) MAX_BODY_BYTES — no longer left to the
+        # SDK/uvicorn defaults now that streamable_http_app exposes the same knob directly.
+        max_request_body_size=4 * 1024 * 1024,
+        host=host,
+        custom_starlette_routes=[
+            Route(f"{_SNAPSHOT_PREFIX}/{{file_name}}", serve_snapshot, methods=["GET"])
         ],
-        middleware=middleware,
-        lifespan=lifespan,
     )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        # Explicitly allow custom headers from the browser and expose the session id.
+        allow_headers=[
+            "Content-Type",
+            "Accept",
+            "Authorization",
+            "mcp-session-id",
+            "mcp-protocol-version",
+            "Last-Event-ID",
+        ],
+        expose_headers=["mcp-session-id"],
+        max_age=86400,
+    )
+    return app
 
 
 def main() -> None:
@@ -165,7 +163,7 @@ def main() -> None:
     import asyncio
 
     setup = asyncio.run(create_kohaku_mcp_setup(snapshot_base_url=public_url))
-    app = build_starlette_app(setup, allowed_hosts=allowed_hosts)
+    app = build_starlette_app(setup, allowed_hosts=allowed_hosts, host=host)
 
     print(
         f"kohaku-sales-sample MCP server: ready (Streamable HTTP) at http://{host}:{port}{_MCP_PATH}",

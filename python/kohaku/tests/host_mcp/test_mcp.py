@@ -41,6 +41,7 @@ from ._helpers import (
     connect,
     make_compose_ctx,
     make_no_fixed_compose_ctx,
+    request_meta,
     write_spec_builder,
 )
 
@@ -87,10 +88,10 @@ class TestResourceAndDeclarations:
                     (r for r in resources.resources if str(r.uri) == RENDERER_RESOURCE_URI), None
                 )
                 assert renderer is not None
-                assert renderer.mimeType == RESOURCE_MIME_TYPE
+                assert renderer.mime_type == RESOURCE_MIME_TYPE
 
                 read = await client.read_resource(renderer.uri)
-                assert read.contents[0].mimeType == RESOURCE_MIME_TYPE
+                assert read.contents[0].mime_type == RESOURCE_MIME_TYPE
                 assert "renderer" in read.contents[0].text  # type: ignore[union-attr]
 
         asyncio.run(run())
@@ -195,7 +196,7 @@ class TestComposeTool:
                 assert "Monthly sales trend" in content.text
                 assert len(content.text) > 20
 
-                structured = result.structuredContent
+                structured = result.structured_content
                 assert structured is not None
                 spec = parse_spec(structured["spec"])
                 assert spec.provenance.tier == "L0"
@@ -221,14 +222,14 @@ class TestComposeTool:
                 ok = await client.call_tool(
                     "kohaku_resolve_binding", {"ref": TREND_REF, "capability": capability}
                 )
-                assert ok.structuredContent is not None
-                assert len(ok.structuredContent["data"]["rows"]) == 2
+                assert ok.structured_content is not None
+                assert len(ok.structured_content["data"]["rows"]) == 2
 
                 denied = await client.call_tool(
                     "kohaku_resolve_binding",
                     {"ref": "query://sales/records?limit=1", "capability": capability},
                 )
-                assert denied.isError is True
+                assert denied.is_error is True
 
         asyncio.run(run())
 
@@ -244,8 +245,8 @@ class TestResultType:
         async def run() -> None:
             async with connect(_deps(tmp_path), _OPTIONS) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
-                assert not result.isError
-                assert result.resultType == "complete"  # type: ignore[attr-defined]
+                assert not result.is_error
+                assert result.result_type == "complete"
 
         asyncio.run(run())
 
@@ -256,33 +257,48 @@ class TestResultType:
                     "kohaku_resolve_binding",
                     {"ref": "query://other/records", "capability": "cap:x"},
                 )
-                assert result.isError
-                assert result.resultType == "complete"  # type: ignore[attr-defined]
+                assert result.is_error
+                assert result.result_type == "complete"
 
         asyncio.run(run())
 
 
 class TestListResultCacheHints:
-    """MCP 2026-07-28 (SEP-2549): tools/list and resources/list carry ttlMs + cacheScope (CacheableResult).
-    Unlike TS host-mcp-apps (see server.ts's item-5 doc comment), this mcp SDK version's list_tools() /
-    list_resources() decorators accept a full result object ("new style"), making this a small additive
-    change here; resources/read has no equivalent hook (see _read_resource's doc comment) and is not covered."""
+    """MCP 2026-07-28 (SEP-2549): tools/list, resources/list and (mcp 2.x closes a 1.x gap here — see
+    _read_resource's doc comment in server.py) resources/read carry ttl_ms + cache_scope (CacheableResult).
+    These fields are wire-real only on a 2026-07-28+ connection: `_call_tool`/`_list_tools`/etc. always
+    construct the typed CacheableResult subclasses, but the mcp SDK's own result serializer sieves ttl_ms /
+    cache_scope out of the wire dump for an older negotiated protocol version (its `serialize_server_result`
+    validates against that version's own wire model), so a "legacy"-mode client — the default `connect()`
+    mode this test module otherwise uses — would deserialize the defaults (`ttl_ms=0, cache_scope="private"`)
+    instead of the values this profile sets. Connect at mode="2026-07-28" here to observe them for real."""
 
     def test_tools_list_has_ttl_and_cache_scope(self, tmp_path: Path) -> None:
         async def run() -> None:
-            async with connect(_deps(tmp_path), _OPTIONS) as client:
+            async with connect(_deps(tmp_path), _OPTIONS, mode="2026-07-28") as client:
                 result = await client.list_tools()
-                assert result.ttlMs == 60_000  # type: ignore[attr-defined]
-                assert result.cacheScope == "private"  # type: ignore[attr-defined]
+                assert result.ttl_ms == 60_000
+                assert result.cache_scope == "private"
 
         asyncio.run(run())
 
     def test_resources_list_has_ttl_and_cache_scope(self, tmp_path: Path) -> None:
         async def run() -> None:
-            async with connect(_deps(tmp_path), _OPTIONS) as client:
+            async with connect(_deps(tmp_path), _OPTIONS, mode="2026-07-28") as client:
                 result = await client.list_resources()
-                assert result.ttlMs == 60_000  # type: ignore[attr-defined]
-                assert result.cacheScope == "private"  # type: ignore[attr-defined]
+                assert result.ttl_ms == 60_000
+                assert result.cache_scope == "private"
+
+        asyncio.run(run())
+
+    def test_read_resource_has_ttl_and_cache_scope(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS, mode="2026-07-28") as client:
+                resources = await client.list_resources()
+                renderer = next(r for r in resources.resources if str(r.uri) == RENDERER_RESOURCE_URI)
+                result = await client.read_resource(renderer.uri)
+                assert result.ttl_ms == 60_000
+                assert result.cache_scope == "private"
 
         asyncio.run(run())
 
@@ -313,9 +329,9 @@ class TestTraceparentCorrelation:
                     result = await client.call_tool(
                         "kohaku_resolve_binding",
                         {"ref": "query://sales/other", "capability": "cap:query://sales/other"},
-                        meta={"traceparent": traceparent},
+                        meta=request_meta(traceparent=traceparent),
                     )
-                    assert result.isError
+                    assert result.is_error
             assert len(seen) == 2
             assert seen[0].correlation_id is not None
             assert seen[1].correlation_id is not None
@@ -343,9 +359,9 @@ class TestTraceparentCorrelation:
                 result = await client.call_tool(
                     "kohaku_resolve_binding",
                     {"ref": "query://sales/other", "capability": "cap:query://sales/other"},
-                    meta={"traceparent": "not-a-real-traceparent"},
+                    meta=request_meta(traceparent="not-a-real-traceparent"),
                 )
-                assert result.isError
+                assert result.is_error
             assert len(seen) == 1
             # A malformed traceparent never affects correlation_id in the first place (it is always the
             # request id) -- fail-open, the call does not raise.
@@ -374,9 +390,9 @@ class TestTraceContextPropagation:
                 result = await client.call_tool(
                     "kohaku_resolve_binding",
                     {"ref": "query://sales/other", "capability": "cap:query://sales/other"},
-                    meta={"traceparent": traceparent, "tracestate": "vendor=value"},
+                    meta=request_meta(traceparent=traceparent, tracestate="vendor=value"),
                 )
-                assert result.isError
+                assert result.is_error
             assert len(seen) == 1
             assert seen[0].trace_context is not None
             assert seen[0].trace_context.traceparent == traceparent
@@ -396,9 +412,9 @@ class TestTraceContextPropagation:
                 result = await client.call_tool(
                     "kohaku_resolve_binding",
                     {"ref": "query://sales/other", "capability": "cap:query://sales/other"},
-                    meta={"traceparent": "not-a-real-traceparent"},
+                    meta=request_meta(traceparent="not-a-real-traceparent"),
                 )
-                assert result.isError
+                assert result.is_error
             assert len(seen) == 1
             assert seen[0].trace_context is None
 
@@ -422,8 +438,8 @@ class TestAuditFailOpen:
             async with connect(deps, _OPTIONS) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
                 # Even if the audit record fails, the result is normal.
-                assert not result.isError
-                assert parse_spec(result.structuredContent["spec"]).provenance.tier == "L0"  # type: ignore[index]
+                assert not result.is_error
+                assert parse_spec(result.structured_content["spec"]).provenance.tier == "L0"
                 # The failure is reported to the observation hook (endpoint = compose).
                 assert len(seen) == 1
                 assert seen[0].endpoint == "compose"
@@ -466,7 +482,7 @@ class TestRenderSnapshot:
                 text = result.content[0].text  # type: ignore[union-attr]
                 assert "/abs/snapshots/" in text
                 assert "Snapshot:" in text
-                structured = result.structuredContent
+                structured = result.structured_content
                 assert structured is not None
                 assert "/abs/snapshots/" in structured["path"]
                 assert parse_spec(structured["spec"]).provenance.tier == "L0"
@@ -556,7 +572,7 @@ class TestRenderSnapshot:
                 result = await client.call_tool(
                     "kohaku_render_snapshot", {"question": "Monthly sales trend"}
                 )
-                assert result.isError is True
+                assert result.is_error is True
                 assert "build:renderer" in result.content[0].text  # type: ignore[union-attr]
 
         asyncio.run(run())
@@ -586,8 +602,8 @@ class TestBindVariantCapability:
                         "capability": capability,
                     },
                 )
-                assert not resolved.isError
-                assert len(resolved.structuredContent["data"]["rows"]) == 2  # type: ignore[index]
+                assert not resolved.is_error
+                assert len(resolved.structured_content["data"]["rows"]) == 2
 
         asyncio.run(run())
 
@@ -671,7 +687,7 @@ class TestInitialDataMeta:
             )
             async with connect(deps, _OPTIONS) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Trend with region switch"})
-                assert not result.isError
+                assert not result.is_error
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
                 keys = list(initial.keys())
@@ -721,7 +737,7 @@ class TestInitialDataMeta:
             async with connect(deps, _OPTIONS) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Trend with region switch"})
                 # Even with a slow ref, the compose response itself returns.
-                assert not result.isError
+                assert not result.is_error
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
                 keys = list(initial.keys())
@@ -784,7 +800,7 @@ class TestInitialDataMeta:
                 started = asyncio.get_event_loop().time()
                 result = await client.call_tool("kohaku_compose", {"question": "8 components"})
                 elapsed = asyncio.get_event_loop().time() - started
-                assert not result.isError
+                assert not result.is_error
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
                 assert len(initial) == component_count
@@ -824,7 +840,7 @@ class TestInitialDataMeta:
                 result = await client.call_tool(
                     "kohaku_compose", {"question": "Trend with region switch"}
                 )
-                assert not result.isError
+                assert not result.is_error
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
                 keys = list(initial.keys())
@@ -912,8 +928,8 @@ class TestActionWritePath:
                         "capability": capability,
                     },
                 )
-                assert not result.isError
-                structured = result.structuredContent
+                assert not result.is_error
+                structured = result.structured_content
                 assert structured is not None
                 assert structured["result"]["ok"] is True
                 assert structured["invalidates"] == [TREND_REF]
@@ -952,8 +968,8 @@ class TestActionWritePath:
                     },
                 )
                 # The write is already committed, so success. The failed effects are omitted, leaving the backward-compatible {result} only.
-                assert not result.isError
-                structured = result.structuredContent
+                assert not result.is_error
+                structured = result.structured_content
                 assert structured is not None
                 assert structured["result"]["ok"] is True
                 assert "invalidates" not in structured
@@ -976,7 +992,7 @@ class TestActionWritePath:
                         "capability": "cap:query://sales/other",
                     },
                 )
-                assert result.isError is True
+                assert result.is_error is True
                 assert "capability denied" in result.content[0].text  # type: ignore[union-attr]
 
         asyncio.run(run())
@@ -1035,7 +1051,7 @@ class TestActionWritePath:
                         "capability": capability,
                     },
                 )
-                assert result.isError is True
+                assert result.is_error is True
                 # The kohaku_action handler's own allowed-actions check (the same DomainPort.list_operations()
                 # source that dropped the write scope above) rejects the action before capability verification.
                 assert "unknown action" in result.content[0].text  # type: ignore[union-attr]
@@ -1057,11 +1073,89 @@ class TestEventTool:
                         "payload": {"month": "2026-05"},
                     },
                 )
-                assert not result.isError
-                spec = parse_spec(result.structuredContent["spec"])  # type: ignore[index]
+                assert not result.is_error
+                spec = parse_spec(result.structured_content["spec"])
                 assert spec.provenance.tier == "L0"
                 assert result.meta is not None
                 assert INITIAL_DATA_META_KEY in result.meta
+
+        asyncio.run(run())
+
+
+def _nested_object(depth: int) -> dict[str, Any]:
+    """A dict literal nested `depth` levels deep (a bare {"leaf": True} is depth 1). Mirrors
+    host_rest/test_bodies.py's own _nested_object."""
+    obj: dict[str, Any] = {"leaf": True}
+    for _ in range(1, depth):
+        obj = {"nested": obj}
+    return obj
+
+
+class TestEventActionPayloadDepthCap:
+    """kohaku_event's payload / intent.params and kohaku_action's payload are all capped at
+    MAX_JSON_OBJECT_DEPTH (32) — TS validates the same fields via JsonObjectSchema at the SDK's own
+    input-schema layer; Python has no such layer, so server.py's _json_depth_ok enforces it in-handler."""
+
+    def test_event_payload_over_32_is_rejected(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": {}},
+                        "on": "c.pointClick",
+                        "payload": _nested_object(33),
+                    },
+                )
+                assert result.is_error
+                assert "nesting exceeds the maximum depth (32)" in result.content[0].text  # type: ignore[union-attr]
+
+        asyncio.run(run())
+
+    def test_event_intent_params_over_32_is_rejected(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": _nested_object(33)},
+                        "on": "c.pointClick",
+                        "payload": {},
+                    },
+                )
+                assert result.is_error
+                assert "nesting exceeds the maximum depth (32)" in result.content[0].text  # type: ignore[union-attr]
+
+        asyncio.run(run())
+
+    def test_event_payload_at_32_is_accepted(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": {}},
+                        "on": "c.pointClick",
+                        "payload": _nested_object(32),
+                    },
+                )
+                assert not result.is_error
+
+        asyncio.run(run())
+
+    def test_action_payload_over_32_is_rejected(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                composed = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
+                capability = _capability_of(composed)
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": _nested_object(33), "capability": capability},
+                )
+                assert result.is_error
+                assert "nesting exceeds the maximum depth (32)" in result.content[0].text  # type: ignore[union-attr]
 
         asyncio.run(run())
 
@@ -1138,16 +1232,16 @@ class TestLegacyUiResource:
             )
             async with connect(_deps(tmp_path), options) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
-                assert not result.isError
+                assert not result.is_error
                 # content[0] is the unchanged text fallback (MCPAPP-FBK-001).
                 assert result.content[0].type == "text"
                 # content[1] is the mcp-ui legacy host's detection form (resource + ui:// + text/html).
                 assert len(result.content) == 2
                 embedded = result.content[1]
                 assert embedded.type == "resource"
-                spec = parse_spec(result.structuredContent["spec"])  # type: ignore[index]
+                spec = parse_spec(result.structured_content["spec"])
                 assert str(embedded.resource.uri) == f"ui://kohaku/view/{spec.intent.hash}"
-                assert embedded.resource.mimeType == "text/html"
+                assert embedded.resource.mime_type == "text/html"
                 # The body is the self-contained snapshot (the placeholder is replaced with {spec, data}).
                 # Being the text form (TextResourceContents) is also under check (not emitted as blob).
                 from mcp.types import TextResourceContents
@@ -1183,7 +1277,7 @@ class TestLegacyUiResource:
             async with connect(deps, options) as client:
                 result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
                 # A normal response with no co-emission (compose itself stays a success).
-                assert not result.isError
+                assert not result.is_error
                 assert len(result.content) == 1
                 assert any(s.endpoint == "compose.legacyUiResource" for s in seen)
 
@@ -1258,12 +1352,12 @@ class TestViewRecorder:
                 composed = await client.call_tool(
                     "kohaku_compose", {"question": "Monthly sales trend"}
                 )
-                assert not composed.isError
+                assert not composed.is_error
                 assert recorder.composed_calls == [{"surface": "mcp-app"}]
                 assert len(recorder.fallback_calls) == 1
                 assert recorder.fallback_calls[0]["kind"] == "generation"
 
-                spec = parse_spec(composed.structuredContent["spec"])  # type: ignore[index]
+                spec = parse_spec(composed.structured_content["spec"])
                 event_result = await client.call_tool(
                     "kohaku_event",
                     {
@@ -1275,7 +1369,7 @@ class TestViewRecorder:
                         "payload": {"month": "2026-05"},
                     },
                 )
-                assert not event_result.isError
+                assert not event_result.is_error
                 # interacted is recorded exactly once, from the tool call's own arguments (not the Spec).
                 assert recorder.interacted_calls == [
                     {
@@ -1306,7 +1400,7 @@ class TestViewRecorder:
                 result = await client.call_tool(
                     "kohaku_compose", {"question": "Monthly sales trend"}
                 )
-                assert not result.isError
+                assert not result.is_error
                 assert recorder.composed_calls == [{"surface": "mcp-app"}]
                 assert on_composed_calls == 0
 
@@ -1378,7 +1472,7 @@ class TestBoundedSnapshotResolution:
                 result = await client.call_tool(
                     "kohaku_render_snapshot", {"question": "20 components"}
                 )
-                assert not result.isError
+                assert not result.is_error
 
         asyncio.run(run())
         # Bounded concurrency: more than one worker ran at once (not serial, unlike the pre-fix one-at-a-time
@@ -1409,7 +1503,7 @@ class TestBoundedSnapshotResolution:
                 result = await client.call_tool(
                     "kohaku_compose", {"question": "Trend with region switch"}
                 )
-                assert not result.isError
+                assert not result.is_error
 
         asyncio.run(run())
         # 3 bind variants (us/eu/jp), each resolved exactly once. Before this fix, the legacyUiResource

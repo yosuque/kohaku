@@ -18,5 +18,13 @@ export const USAGE_SCAN_WINDOW = 10_000;
 /** Tail window for `component.nominated` when checking the idempotency guard before nominating (promotion/nomination.ts). */
 export const NOMINATED_SCAN_WINDOW = 10_000;
 
+/**
+ * Tail window for `component.published` / `component.withdrawn` when `reconcile` (promotion/service.ts) checks
+ * for an existing audit record before backfilling one. Fetched once per `reconcile()` call (across every
+ * artifact/tenant combined) instead of once per published/withdrawn snapshot, avoiding the N+1 of a dedicated
+ * `listLineage` round trip per candidate.
+ */
+export const RECONCILE_AUDIT_SCAN_WINDOW = 10_000;
+
 /** Tail window for `view.composed` when aggregating fixation proposals (fixation/service.ts). */
 export const FIXATION_PROPOSAL_SCAN_WINDOW = 5000;

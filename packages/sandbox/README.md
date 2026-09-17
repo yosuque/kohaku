@@ -7,7 +7,7 @@ Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation 
 (a declarative UI Spec), with generation separated from rendering.
 
 ```bash
-npm install @kohaku-ui/sandbox
+npm install @kohaku-ui/sandbox jsdom react zod
 ```
 
 Subpath entries: `@kohaku-ui/sandbox/react`, `@kohaku-ui/sandbox/smoke`

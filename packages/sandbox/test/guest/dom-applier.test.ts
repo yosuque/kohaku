@@ -256,7 +256,8 @@ describe("domApplierMain", () => {
   });
 
   it("maxDomNodes stops further element creation once the limit is reached", () => {
-    // idToNode starts with the 3 fixed anchors (html/head/body), so maxDomNodes:4 allows exactly one more.
+    // liveCount (the live-attached count, not idToNode's lifetime size) starts at the 3 fixed anchors
+    // (html/head/body), so maxDomNodes:4 allows exactly one more node to become connected.
     domApplierMain(makeConfig({ maxDomNodes: 4 }));
     completeHandshake();
     const worker = FakeWorker.instances[0]!;
@@ -272,6 +273,150 @@ describe("domApplierMain", () => {
     });
     expect(document.body.querySelectorAll("div")).toHaveLength(1);
     expect(document.body.querySelectorAll("span")).toHaveLength(0);
+  });
+
+  it("removing a node before creating another does not count the removed node against maxDomNodes", () => {
+    // 3 anchors + 1 live node is the ceiling; removing n1 before creating n2 frees that budget back up.
+    domApplierMain(makeConfig({ maxDomNodes: 4 }));
+    completeHandshake();
+    const worker = FakeWorker.instances[0]!;
+    worker.emit({
+      t: "ops",
+      seq: 1,
+      ops: [
+        ["c", "n1", "div"],
+        ["a", "body", "n1", null],
+        ["r", "body", "n1"],
+        ["c", "n2", "span"],
+        ["a", "body", "n2", null],
+      ],
+    });
+    expect(document.body.querySelectorAll("div")).toHaveLength(0);
+    expect(document.body.querySelectorAll("span")).toHaveLength(1);
+  });
+
+  it('a node removed then re-appended with a bare "a" (no new "c") is still counted against the limit', () => {
+    // worker-shim's `emitted` latch can re-append a removed id without ever sending a new "c" for it — the
+    // live-node accounting must still count that re-attach.
+    domApplierMain(makeConfig({ maxDomNodes: 4 }));
+    const handshake = completeHandshake();
+    const worker = FakeWorker.instances[0]!;
+    worker.emit({
+      t: "ops",
+      seq: 1,
+      ops: [
+        ["c", "n1", "div"],
+        ["a", "body", "n1", null],
+        ["r", "body", "n1"],
+        ["a", "body", "n1", null], // re-append, no "c" — n1 becomes live again (liveCount back to 4/4)
+        ["c", "n2", "span"],
+        ["a", "body", "n2", null],
+      ],
+    });
+    expect(document.body.querySelectorAll("div")).toHaveLength(1);
+    expect(document.body.querySelectorAll("span")).toHaveLength(0);
+    expect(handshake.sent.some((m: any) => m.params?.kind === "denied")).toBe(true);
+  });
+
+  it("attaching a detached subtree counts every tracked node inside it, not just the root", () => {
+    function buildDetachedSubtree(worker: FakeWorker) {
+      worker.emit({
+        t: "ops",
+        seq: 1,
+        ops: [
+          ["c", "n1", "div"],
+          ["c", "n2", "span"],
+          ["a", "n1", "n2", null],
+          ["c", "n3", "#text"],
+          ["a", "n2", "n3", null],
+        ],
+      });
+    }
+
+    // 3 anchors + the 3-node subtree (div > span > text) = 6, over maxDomNodes:5 — the whole subtree is denied
+    // and stays detached (attaching only the root would have made this look like 3 + 1 = 4, well under 5).
+    domApplierMain(makeConfig({ maxDomNodes: 5 }));
+    const handshakeDenied = completeHandshake();
+    const workerDenied = FakeWorker.instances[0]!;
+    buildDetachedSubtree(workerDenied);
+    workerDenied.emit({ t: "ops", seq: 2, ops: [["a", "body", "n1", null]] });
+    expect(document.body.querySelector("div")).toBeNull();
+    expect(handshakeDenied.sent.some((m: any) => m.params?.kind === "denied")).toBe(true);
+  });
+
+  it("attaching a detached subtree exactly at maxDomNodes succeeds", () => {
+    // Same 3-node subtree as above, but maxDomNodes:6 has exactly enough room (3 anchors + 3).
+    domApplierMain(makeConfig({ maxDomNodes: 6 }));
+    completeHandshake();
+    const worker = FakeWorker.instances[0]!;
+    worker.emit({
+      t: "ops",
+      seq: 1,
+      ops: [
+        ["c", "n1", "div"],
+        ["c", "n2", "span"],
+        ["a", "n1", "n2", null],
+        ["c", "n3", "#text"],
+        ["a", "n2", "n3", null],
+        ["a", "body", "n1", null],
+      ],
+    });
+    expect(document.body.querySelector("div > span")).not.toBeNull();
+    // liveCount is now 6/6 — no further node can become live.
+    worker.emit({
+      t: "ops",
+      seq: 2,
+      ops: [
+        ["c", "n4", "p"],
+        ["a", "body", "n4", null],
+      ],
+    });
+    expect(document.body.querySelector("p")).toBeNull();
+  });
+
+  it('"x" (textContent =) releases the live count held by a connected element\'s tracked descendants', () => {
+    domApplierMain(makeConfig({ maxDomNodes: 5 }));
+    completeHandshake();
+    const worker = FakeWorker.instances[0]!;
+    worker.emit({
+      t: "ops",
+      seq: 1,
+      ops: [
+        ["c", "n1", "div"],
+        ["a", "body", "n1", null], // liveCount 3 -> 4
+        ["c", "n2", "span"],
+        ["a", "n1", "n2", null], // liveCount 4 -> 5 (at the ceiling)
+        ["c", "n3", "p"], // denied: liveCount(5) >= maxDomNodes(5)
+        ["x", "n1", "cleared"], // detaches n2 with no "r" op; releases 1 from liveCount (5 -> 4)
+        ["c", "n3", "p"],
+        ["a", "body", "n3", null], // now fits: liveCount 4 -> 5
+      ],
+    });
+    expect(document.body.querySelector("span")).toBeNull(); // n2 was detached by the textContent assignment
+    expect(document.body.querySelector("div")!.textContent).toBe("cleared");
+    expect(document.body.querySelector("p")).not.toBeNull();
+  });
+
+  it("a lifetime cap on tracked records bounds memory even when every created node is removed", () => {
+    // lifetimeRecordCap = maxDomNodes(4) * LIFETIME_RECORD_FACTOR(10) = 40. Each cycle creates, attaches and
+    // immediately removes a node, so liveCount always returns to 3 — but idToNode never shrinks, so the 38th
+    // cycle's "c" (idToNode.size having reached 40: 3 anchors + 37 prior records) is denied for the records
+    // cap, not for maxDomNodes.
+    domApplierMain(makeConfig({ maxDomNodes: 4 }));
+    const handshake = completeHandshake();
+    const worker = FakeWorker.instances[0]!;
+    const ops: unknown[][] = [];
+    for (let i = 0; i < 40; i += 1) {
+      const id = `n${i}`;
+      ops.push(["c", id, "div"], ["a", "body", id, null], ["r", "body", id]);
+    }
+    worker.emit({ t: "ops", seq: 1, ops });
+    expect(document.body.querySelectorAll("div")).toHaveLength(0);
+    const denied = handshake.sent.find((m: any) => (m as any).params?.kind === "denied") as
+      | { params: { detail: string } }
+      | undefined;
+    expect(denied).toBeDefined();
+    expect(denied!.params.detail).toMatch(/records/);
   });
 
   it("maxDomDepth rejects an append that would exceed it", () => {

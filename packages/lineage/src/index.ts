@@ -34,6 +34,7 @@ export {
   isTerminal,
   type JudgeVerdict,
   type MachinePolicy,
+  mayHaveProjection,
   type PromotionAction,
   type PromotionStatus,
   TransitionError,

@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from kohaku.evals import export_distillation_dataset
+from kohaku.registry.core import core_catalog
 from kohaku.spec import (
     ALLOWED_ATTRS,
     ALLOWED_STYLE_PROPS,
@@ -66,6 +67,20 @@ def test_sandbox_dom_allowlist(cross_language_fixture: dict[str, Any]) -> None:
     assert sorted(ALLOWED_TAGS) == expected["tags"]
     assert sorted(ALLOWED_ATTRS) == expected["attrs"]
     assert sorted(ALLOWED_STYLE_PROPS) == expected["styleProps"]
+
+
+def test_fallback(cross_language_fixture: dict[str, Any]) -> None:
+    """Every core-catalog fallback.map_props hand-port (kohaku.registry.core._FALLBACK_MAP_PROPS) must
+    reproduce the TS mapProps output byte-for-byte for the same inputProps (see generate-cross-language-
+    fixtures.ts's FALLBACK_CASES comment for why this needs a golden rather than a structural check)."""
+    catalog = core_catalog()
+    by_type = {d.type: d for d in catalog.components}
+    for case in cross_language_fixture["fallback"]:
+        definition = by_type.get(case["type"])
+        assert definition is not None, f"core catalog has no component \"{case['type']}\""
+        assert definition.fallback is not None, f"\"{case['type']}\" has no fallback in the Python catalog"
+        mapped = definition.fallback.map_props(case["inputProps"])
+        assert mapped == case["mappedProps"], f"fallback mapProps mismatch for \"{case['type']}\""
 
 
 def test_export_distillation_dataset(cross_language_fixture: dict[str, Any]) -> None:

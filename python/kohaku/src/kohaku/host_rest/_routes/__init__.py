@@ -18,7 +18,13 @@ from .compose import register_compose_routes
 from .fixations import register_fixation_routes
 from .governance import register_governance_routes
 from .promotions import register_promotion_routes
-from .shared import _LOGGER, RequestIdASGIMiddleware, _json, _resolve_tenant
+from .shared import (
+    _LOGGER,
+    BodyLimitASGIMiddleware,
+    RequestIdASGIMiddleware,
+    _json,
+    _resolve_tenant,
+)
 
 
 def register_routes(app: FastAPI, deps: KohakuHostDeps, prefix: str = "/api/kohaku") -> FastAPI:
@@ -73,4 +79,11 @@ def register_routes(app: FastAPI, deps: KohakuHostDeps, prefix: str = "/api/koha
     # under `prefix`, success or failure — see RequestIdASGIMiddleware's docstring for why this is a pure ASGI
     # middleware rather than BaseHTTPMiddleware (streaming safety for /compose/stream's SSE).
     app.add_middleware(RequestIdASGIMiddleware, deps=deps, prefix=prefix)
+    # Standard request-body size cap (a product may still layer its own limit in front of the mount point;
+    # this is a bundled floor so a host that forgets to is not left fully unbounded). Starlette's
+    # add_middleware prepends to the middleware list, and the list is wrapped outermost-last, so calling this
+    # *after* RequestIdASGIMiddleware above makes BodyLimitASGIMiddleware the outermost of the two at request
+    # time: an oversized body is rejected before request_id_of ever runs, matching TS's bodyLimit running
+    # ahead of the request-id middleware in routes.ts.
+    app.add_middleware(BodyLimitASGIMiddleware, deps=deps, prefix=prefix)
     return app

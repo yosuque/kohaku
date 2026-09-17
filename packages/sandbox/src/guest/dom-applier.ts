@@ -10,7 +10,12 @@
  *    (`config.allowlist`, sourced from packages/spec-core/src/schema/sandbox-dom.ts by srcdoc.ts — this file
  *    cannot import spec-core directly, see the guest convention below) — this is the only place real DOM
  *    mutation happens, and the only enforcement point; every op arriving from the Worker is treated as
- *    untrusted regardless of what the shim believes it already validated;
+ *    untrusted regardless of what the shim believes it already validated. `config.maxDomNodes` bounds the
+ *    number of nodes **currently connected** to the document (`liveCount`, tracked per subtree via the real
+ *    DOM's `Node.isConnected` rather than the lifetime size of `idToNode`), so removing nodes frees budget for
+ *    new ones; a separate, larger lifetime cap on `idToNode` itself (`LIFETIME_RECORD_FACTOR × maxDomNodes`)
+ *    bounds memory, since a tracked record can never be deleted while generated JS may still hold a reference
+ *    to its id and re-append it later (see worker-shim.ts's `emitted` latch);
  * 4. forwards real DOM events on the applied elements back into the Worker so widget event handlers still run;
  * 5. tears the Worker down with `worker.terminate()` on destroy (a forced stop that was impossible for the old
  *    same-document `while(true){}` case).
@@ -112,6 +117,13 @@ export function domApplierMain(config: DomApplierConfig): void {
   // -------------------------------------------------------------------------------------------------------
   // real-DOM bookkeeping
   // -------------------------------------------------------------------------------------------------------
+  /**
+   * A tracked node's lifetime record. Once created, a record is never deleted (see the module docstring):
+   * generated JS may hold the id past an `"r"` removal and re-append it later with a bare `"a"` (no `"c"`).
+   * `parentId` only reflects the applier's own bookkeeping of the *intended* parent — whether the node is
+   * actually connected to the document right now is answered by the real DOM (`el.isConnected`), not by this
+   * record, which is why the live-node accounting below reads `isConnected` instead of `parentId != null`.
+   */
   interface Tracked {
     el: any;
     parentId: string | null;
@@ -125,6 +137,27 @@ export function domApplierMain(config: DomApplierConfig): void {
   domToId.set(g.document.documentElement, "html");
   domToId.set(g.document.head, "head");
   domToId.set(g.document.body, "body");
+
+  // -------------------------------------------------------------------------------------------------------
+  // live-node accounting (against config.maxDomNodes) — see the module docstring for the reasoning.
+  // -------------------------------------------------------------------------------------------------------
+  /** Nodes currently connected to the document. The 3 bootstrap anchors above are connected from the start. */
+  let liveCount = 3;
+  /**
+   * Lifetime cap on `idToNode.size`, independent of `liveCount`: records can never be dropped (see Tracked's
+   * doc comment above), so without this a widget that only ever creates and never reuses ids would grow
+   * `idToNode` unboundedly even while staying under `maxDomNodes` live nodes at any instant.
+   */
+  const LIFETIME_RECORD_FACTOR = 10;
+  const lifetimeRecordCap = config.maxDomNodes * LIFETIME_RECORD_FACTOR;
+
+  /** Counts `el` and its tracked (`domToId`-registered) descendants — the unit `liveCount` adjusts by. */
+  function countTracked(el: any): number {
+    let count = domToId.has(el) ? 1 : 0;
+    const children = el.childNodes;
+    for (let i = 0; i < children.length; i += 1) count += countTracked(children[i]);
+    return count;
+  }
 
   // -------------------------------------------------------------------------------------------------------
   // allowlist enforcement (local reimplementation over config.allowlist data — see module docstring)
@@ -226,7 +259,11 @@ export function domApplierMain(config: DomApplierConfig): void {
     switch (kind) {
       case "c": {
         const [, id, tag, ns] = op as [string, string, string, string?];
-        if (idToNode.size >= config.maxDomNodes) {
+        if (idToNode.size >= lifetimeRecordCap) {
+          notifyDenied(`max DOM node records exceeded (${lifetimeRecordCap})`);
+          return;
+        }
+        if (liveCount >= config.maxDomNodes) {
           notifyDenied(`max DOM nodes exceeded (${config.maxDomNodes})`);
           return;
         }
@@ -255,6 +292,10 @@ export function domApplierMain(config: DomApplierConfig): void {
         const [, id, text] = op as [string, string, string];
         const rec = idToNode.get(id);
         if (rec == null || !(rec.el instanceof g.Element)) return;
+        // textContent = ... detaches every descendant with no corresponding "r" op (see the module docstring's
+        // verified premises), so the tracked descendants must be released from liveCount here, before the
+        // assignment discards them from the live tree (countTracked walks the real DOM, so it must run first).
+        if (rec.el.isConnected === true) liveCount -= countTracked(rec.el) - 1;
         rec.el.textContent = text;
         return;
       }
@@ -267,9 +308,21 @@ export function domApplierMain(config: DomApplierConfig): void {
           notifyDenied(`max DOM depth exceeded (${config.maxDomDepth})`);
           return;
         }
+        const wasConnected = childRec.el.isConnected === true;
+        const willConnect = parentRec.el.isConnected === true;
+        const subtree = countTracked(childRec.el);
+        if (willConnect && !wasConnected && liveCount + subtree > config.maxDomNodes) {
+          notifyDenied(`max DOM nodes exceeded (${config.maxDomNodes})`);
+          return;
+        }
         const beforeRec = beforeId != null ? idToNode.get(beforeId) : null;
         parentRec.el.insertBefore(childRec.el, beforeRec?.el ?? null);
         childRec.parentId = parentId;
+        // insertBefore into a connected parent brings a previously-detached subtree live; moving a connected
+        // subtree out to a detached parent releases it. A move within the live tree (both true) or between
+        // two detached parents (both false) leaves liveCount unchanged — insertBefore only relocates it.
+        if (willConnect && !wasConnected) liveCount += subtree;
+        else if (!willConnect && wasConnected) liveCount -= subtree;
         return;
       }
       case "r": {
@@ -277,11 +330,16 @@ export function domApplierMain(config: DomApplierConfig): void {
         const parentRec = idToNode.get(parentId);
         const childRec = idToNode.get(childId);
         if (parentRec == null || childRec == null || !(parentRec.el instanceof g.Element)) return;
+        // Computed before removeChild (isConnected flips to false only after removal); guards against a
+        // double decrement if the child was already detached (e.g. a stale "r" for a node "x" already freed).
+        if (childRec.el.isConnected === true) liveCount -= countTracked(childRec.el);
         try {
           parentRec.el.removeChild(childRec.el);
         } catch (_e) {
           /* already detached — nothing to do */
         }
+        // The record itself is never deleted — see Tracked's doc comment: a removed id can be re-appended
+        // with a bare "a" and no "c" (worker-shim.ts's `emitted` latch), so idToNode must still resolve it.
         childRec.parentId = null;
         return;
       }

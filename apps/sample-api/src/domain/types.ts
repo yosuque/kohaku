@@ -65,3 +65,26 @@ export interface SalesTarget {
   region: Region;
   targetRevenue: number;
 }
+
+/**
+ * The fiscal year (labeled by its start year: FY2026 = 2026-04 to 2027-03) that a calendar
+ * year/month falls in. Single source for the fiscal-period convention documented on SalesRecord.fiscalYear
+ * above; used by ports/semantic-port.ts's fiscalPeriodOf (real-clock "current period" for the NL prompt).
+ */
+export function fiscalYearOf(calYear: number, calMonth: number): number {
+  return calMonth >= 4 ? calYear : calYear - 1;
+}
+
+/**
+ * The fiscal quarter (Q1=Apr-Jun / Q2=Jul-Sep / Q3=Oct-Dec / Q4=Jan-Mar) of a calendar month.
+ * Single source for the convention documented on SalesRecord.quarter above; used by
+ * ports/semantic-port.ts's fiscalPeriodOf. scripts/generate-seed.ts derives the same calendar
+ * month from a (fiscalYear, index-within-FY) pair rather than the other direction, so it calls
+ * this directly but computes its own calYear (see fiscalMonth's doc there).
+ */
+export function quarterOf(calMonth: number): 1 | 2 | 3 | 4 {
+  if (calMonth >= 4 && calMonth <= 6) return 1;
+  if (calMonth >= 7 && calMonth <= 9) return 2;
+  if (calMonth >= 10 && calMonth <= 12) return 3;
+  return 4;
+}

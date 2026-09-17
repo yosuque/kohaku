@@ -25,8 +25,8 @@ import { buildL1GenerationSchema } from "./tiers/l1-generate.js";
 import type { ComposeAttempt, ComposeTrace, TraceBase, TraceContext } from "./trace.js";
 import { buildComposeTrace } from "./trace.js";
 
-// COMPOSER_ID is defined in constants.js (a leaf module) and re-exported here so existing consumers
-// (index.ts, and anyone importing it from "./compose.js" directly) are unaffected.
+// COMPOSER_ID is defined in constants.js (a leaf module) and re-exported here so it stays resolvable
+// from both "./index.js" and "./compose.js".
 export { COMPOSER_ID } from "./constants.js";
 
 export type ComposeInput =
@@ -56,8 +56,8 @@ export interface ComposeOptions {
    * (on every observer.onError call for this compose) and ComposeTrace.correlationId (the delivered
    * result's trace, hit/miss/fallback/follower alike), so a degraded or failed delivery can be tied back
    * to the request that triggered it. host-rest passes its per-request X-Request-Id / error.requestId;
-   * host-mcp-apps passes the tool call's JSON-RPC request id. Purely additive and opt-in: when omitted,
-   * neither field is set and behavior is completely unchanged from before this option existed.
+   * host-mcp-apps passes the tool call's JSON-RPC request id. Purely additive and opt-in: omitting it
+   * leaves both fields unset and does not otherwise affect compose behavior.
    */
   correlationId?: string;
   /**

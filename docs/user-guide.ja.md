@@ -23,7 +23,7 @@ kohaku は「自然言語の質問」と「GUI の絞り込み操作」を**同�
 
 ## 2. セットアップ
 
-前提: Node >= 22、pnpm 11(`npm i -g pnpm`)。下限要件は `package.json` の `engines`(`node >= 22`)で、GitHub Actions CI はテストと型検査のジョブを、宣言下限である Node 22 と Active LTS の Node 24 の両方で実行します(conformance ジョブと Python ジョブは Node 24)。`.node-version`(現在 25.7.0)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは意図的に別です — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 25.7.0` / `fnm install 25.7.0`)か、手元にある Node >= 22 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
+前提: Node >= 22、pnpm 12(`npm i -g pnpm`)。下限要件は `package.json` の `engines`(`node >= 22`)で、GitHub Actions CI はテストと型検査のジョブを、宣言下限である Node 22 と Active LTS の Node 24 の両方で実行します(conformance ジョブと Python ジョブは Node 24)。`.node-version`(現在 25.7.0)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは意図的に別です — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 25.7.0` / `fnm install 25.7.0`)か、手元にある Node >= 22 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
 
 ```bash
 git clone https://github.com/yosuque/kohaku.git && cd kohaku
@@ -82,7 +82,7 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
   ```
 
 - MCP サーバーは stdio(`uv run python -m sales_api.mcp_main`。Claude Desktop 等)と Streamable HTTP(`uv run python -m sales_api.mcp_http`、:8791。claude.ai / ChatGPT へは公開トンネル経由・認証なしデモ)の 2 エントリ。`ui://` リソースは TS 側ビルドの共有レンダラーを配信します(未ビルドならプレースホルダ。先に `pnpm --filter @kohaku-ui-sample/mcp build:renderer`)。TS サンプルと同じく固定化短絡・lineage 記録・書き込み副作用宣言・`KOHAKU_MCP_LEGACY_UI=1` の opt-in も配線済みです。
-- 永続化ディレクトリは環境変数 `KOHAKU_DATA_DIR`(Python サンプルのみ対応)で差し替えられます。セットアップ・検証・TS との既知の差異は [../python/README.ja.md](../python/README.ja.md) を参照してください。
+- 永続化ディレクトリは環境変数 `KOHAKU_DATA_DIR` で差し替えられます: TS sample-api、Python の両エントリ(REST・MCP〈stdio + Streamable HTTP〉)がすべて対応しています。唯一の例外は `sample-mcp`(TS)で、常に `apps/sample-api/.data` 相対の固定パスを使い、この変数を読みません。セットアップ・検証・TS との既知の差異は [../python/README.ja.md](../python/README.ja.md) を参照してください。
 
 ## 3. 画面の歩き方
 
@@ -239,7 +239,7 @@ cloudflared tunnel --url http://localhost:8788      # 別ターミナルで公�
 
 トンネルが払い出した `https://<ランダム>.trycloudflare.com` に `/mcp` を付けた URL を、ホストのカスタムコネクタ(claude.ai)/ MCP サーバー(ChatGPT の developer mode)に登録します。
 
-> ⚠️ **認証なしのデモです。** この HTTP エントリには一切の認証がありません。公開トンネルで露出すると、**URL を知る誰もが売上データを閲覧・操作できます**。信頼できる相手にのみ URL を渡し、機微データを載せないでください。停止したらトンネルも閉じます。ブラウザからの Host 偽装を弾く DNS リバインディング保護は `KOHAKU_MCP_HTTP_ALLOWED_HOSTS`(カンマ区切り)を渡したときのみ有効化されますが、公開トンネル経由では Host がトンネルのドメインになるため既定では無効です。
+> ⚠️ **認証なしのデモです。** この HTTP エントリには一切の認証がありません。公開トンネルで露出すると、**URL を知る誰もが売上データを閲覧・操作できます**。信頼できる相手にのみ URL を渡し、機微データを載せないでください。停止したらトンネルも閉じます。ブラウザからの Host 偽装を弾く DNS リバインディング保護は `KOHAKU_MCP_HTTP_ALLOWED_HOSTS`(カンマ区切り)を渡したときのみ有効化されますが、公開トンネル経由では Host がトンネルのドメインになるため既定では無効です。実際の認証を組み込むには、単一の静的な `McpHostDeps.principal` ではなく、呼び出し単位で識別情報を解決する `McpHostDeps.resolvePrincipal`(TS)/ `resolve_principal`(Python)を配線してください(例: リクエストからベアラートークンを読み取り対応する `Principal` を引く)。共有 HTTP サーバーではすべての接続が 1 つの `McpHostDeps` を共有するため、静的な `principal` では全呼び出し元が同一の識別情報になってしまいます。
 
 ### ターミナルホスト向け: `kohaku_render_snapshot`(自己完結スナップショット)
 
@@ -273,7 +273,7 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 導入ラダー(設計書 §12「サンプル実装の設計」)に沿って段階導入できます。
 
-**現状の依存方法**: `@kohaku-ui/*` パッケージはまだ npm に未公開です(公開は v0.2 で予定)。現状は**このモノレポの中**で依存します: `apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(パッケージは `.ts` を直接 export しており `dist` ビルドが無いため、モノレポ外からの消費はできません)。以下で生成される `server.ts` はこの配置を前提にしています。
+**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm zod`(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
 ### Step 0 — LLM なしの Server-Driven UI
 
@@ -464,6 +464,7 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
   };
   await compose(input, ctx);
   ```
+- **compose 全体のデッドライン(遅延/ハングした LLM 呼び出しへの安全弁)**: サンプルは `KOHAKU_COMPOSE_DEADLINE_MS` 経由で `ComposePolicy.budget.deadlineMs` を配線しており(`apps/sample-api/src/app/compose-context.ts` の `composeDeadlineMs`。既定 240000ms)、1 回の `compose`/`composeStream` 呼び出しが無期限にハングすることはない — 期限超過時は実行中の LLM 呼び出しを中断し、`perCompose` のトークン予算超過と全く同じ決定的フォールバックへ降格する。既定値は L2 直行 1 回分(`sales.custom` の、既定の 3 倍 `outputBudgetFactor` で広がった `KOHAKU_LLM_TIMEOUT_MS` による ~180 秒の L2 タイムアウト)+ repair 再試行分の余白を見込んだもの。自分の L2 プロンプトが常態的にこれより長くかかるなら広げること。Python サンプルは `python/examples/sales-api/src/sales_api/app.py` の `ComposePolicy(budget=ComposeBudget(deadline_ms=...))` で同様にミラーする。
 - **プロンプトキャッシュ・`refConstraint` に触る前に計測する**: kohaku の既定の `data.$ref` 強制(`ComposePolicy.refConstraint: "schema"`)は L1 生成スキーマで `data.$ref` を intent ごとの enum に固定する — これは同時に、構造化出力の文法コンパイルをキャッシュするプロバイダ(Anthropic)がほぼ全ての異なる intent で再コンパイルし、以前のコンパイル結果を再利用できないことも意味する。独立した 2 つの opt-in の逃げ道があり、どちらも既定 off で、自分のモデル/プロバイダ/トラフィックの組み合わせで計測せずに切り替えるべきではない:
   - `KOHAKU_LLM_PROMPT_CACHE=1`(Anthropic の `claude` のみ。他プロバイダは no-op)は L1/L2 プロンプトのバイト不変な接頭辞(末尾の修復フィードバック節を除く全体)に `cache_control` を付け、同一 compose 内の修復再試行がそのキャッシュ済み接頭辞を再処理せず再利用できるようにする。Anthropic はモデルごとの最小サイズ(モデルにもよるがおおよそ 1,000 トークン前後以上)に満たない接頭辞へのキャッシュブレークポイントを黙って無視する — 無害ではあるが、few-shot 例を含まない小さなカタログではキャッシュ対象の接頭辞がその最小値を下回ることがあり、その場合フラグを有効にしても効果が全く測定されない。「効果が無い」と判断する前に、自分のモデルの最小値と実際の接頭辞トークン数を確認すること。
   - `ComposePolicy.refConstraint: "validate"` は生成スキーマの `data.$ref` をプレーンな文字列に緩和し(修復再試行間だけでなく compose 間でも再利用可能な intent 非依存の文法になる)、代わりに生成後に明示的に集合所属を検証する(`DATA_REF_UNRESOLVED`。既存の修復ループに送り返す)。
@@ -514,7 +515,7 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
 | レート制限(429)・一時的な 5xx で即失敗する | PROVIDER 障害は既定で 2 回まで指数バックオフ再試行する(`KOHAKU_LLM_RETRY_MAX`。`KOHAKU_LLM_TIMEOUT_MS` の予算内)。攻めるなら回数・初期待機(`KOHAKU_LLM_RETRY_INITIAL_MS`)を上げる。`0` で無効化 |
 | MCP で UI が出ずテキストだけ | それ自体は仕様(フォールバック)。UI を出すには renderer の事前ビルドと MCP Apps 対応ホストが必要 |
 | MCP でカスタム部品が「未実装の部品タイプ」/「sandbox レンダラーの注入が必要」の通知になる | 仕様(§5 の表示の非対称)。MCP の共有レンダラーはコア部品のみ登録で sandbox 未注入。完全表示は Web で確認 |
-| ポート競合(8787 / 5173) | 既存プロセスを停止するか `PORT` を変更(sample-web / sample-wc の Vite 開発プロキシは `PORT` に自動追従します)。API が `localhost` 以外のホストで動く場合は `KOHAKU_API_URL`(例: `http://localhost:9000`)を直接設定してください — プロキシ先の決定では `PORT` より優先されます |
+| ポート競合(8787 / 5173) | 既存プロセスを停止するか `PORT` を変更(sample-web / sample-wc の Vite 開発プロキシは `.env` でもシェルでも読み取り — どちらでも可 — `PORT` に自動追従します)。API が `localhost` 以外のホストで動く場合は `KOHAKU_API_URL`(例: `http://localhost:9000`)を直接設定してください — プロキシ先の決定では `PORT` より優先されます |
 
 ## 9. FAQ
 

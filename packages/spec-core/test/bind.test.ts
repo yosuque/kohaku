@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { type DataRef, enumerateBindVariants, resolveBoundRef, safeParseSpec } from "../src/index.js";
+import {
+  collectCapabilityScopes,
+  type DataRef,
+  enumerateBindVariants,
+  resolveBoundRef,
+  safeParseSpec,
+  UISpecSchema,
+} from "../src/index.js";
 
 const INTENT = { canonical: "x.y", params: {}, hash: "sha256:" + "0".repeat(64) } as const;
 const PROVENANCE = { tier: "L0", composedBy: "test", cache: "hit" } as const;
@@ -237,5 +244,46 @@ describe("validateSpecStructure: bind validation", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.issues.map((i) => i.code)).toContain("BIND_VARIANT_LIMIT");
+  });
+
+  it("BIND_VARIANT_LIMIT boundary: 256 values passes and 257 trips the limit, with collectCapabilityScopes agreeing", () => {
+    const buildInput = (count: number): Record<string, unknown> => {
+      const values = Array.from({ length: count }, (_, i) => `v${i}`);
+      return bindSpecInput({
+        state: { region: "v0" },
+        components: [
+          { id: "root", type: "layout.stack", props: {}, children: ["kpi"] },
+          {
+            id: "kpi",
+            type: "presentMetric",
+            props: { label: "x", valueColumn: "v" },
+            data: {
+              $ref: "query://sales/summary?fy=2026&region=v0",
+              bind: { region: { $state: "region", values } },
+            },
+          },
+        ],
+      });
+    };
+
+    // 256 (== MAX_BIND_VARIANTS): valid, and collectCapabilityScopes issues scopes without throwing.
+    const okResult = safeParseSpec(buildInput(256));
+    expect(okResult.ok).toBe(true);
+    if (okResult.ok) {
+      expect(() => collectCapabilityScopes(okResult.spec)).not.toThrow();
+      expect(collectCapabilityScopes(okResult.spec).length).toBeGreaterThan(0);
+    }
+
+    // 257 (> MAX_BIND_VARIANTS): BIND_VARIANT_LIMIT, and collectCapabilityScopes throws for the same
+    // reason (it is the "last line of defense" for L0 fixed Specs that never go through
+    // validateSpecStructure -- see its docstring). Zod-level parsing alone does not enforce this
+    // limit (it is a structural/semantic rule), so UISpecSchema.parse still yields a UISpec here even
+    // though safeParseSpec rejects the same input.
+    const overInput = buildInput(257);
+    const overResult = safeParseSpec(overInput);
+    expect(overResult.ok).toBe(false);
+    if (!overResult.ok) expect(overResult.issues.map((i) => i.code)).toContain("BIND_VARIANT_LIMIT");
+    const overSpec = UISpecSchema.parse(overInput);
+    expect(() => collectCapabilityScopes(overSpec)).toThrow(/exceed the limit/);
   });
 });

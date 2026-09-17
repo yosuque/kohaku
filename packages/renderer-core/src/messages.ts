@@ -47,6 +47,8 @@ export interface RendererMessages {
   spreadsheetNextPage: string;
   /** PresentSpreadsheet (serverSide) back-to-first-page button label */
   spreadsheetFirstPage: string;
+  /** PresentSpreadsheet (editable): aria-label of an idle cell's edit-trigger button. column is the column's display label */
+  spreadsheetEditCell: (column: string) => string;
   /** PresentChart default aria-label (when title is unset) */
   chartDefaultLabel: (kind: string) => string;
   /** Fallback text when rendering a node fails */
@@ -87,6 +89,7 @@ export const DEFAULT_MESSAGES: RendererMessages = {
   spreadsheetTotal: (total, shown) => `Showing ${shown} of ${total} rows`,
   spreadsheetNextPage: "Next",
   spreadsheetFirstPage: "First page",
+  spreadsheetEditCell: (column) => `Edit ${column}`,
   chartDefaultLabel: (kind) => `${kind} chart`,
   nodeRenderFailed: (type, id) => `Failed to render component (${type} / ${id})`,
   metricDelta: (delta, direction) =>

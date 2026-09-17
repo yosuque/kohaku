@@ -20,12 +20,12 @@ jobs:
         # duplicate or race them.
         node-version: [22, 24]
     steps:
-      - uses: actions/checkout@v4
-      # No `version:` input here: package.json's `packageManager` (pnpm@11.5.2) is the single source of
+      - uses: actions/checkout@v7
+      # No `version:` input here: package.json's `packageManager` field is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
       # "Multiple versions of pnpm specified".
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -54,7 +54,7 @@ jobs:
       - name: Coverage report
         if: matrix.node-version == 24
         run: pnpm test:coverage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.node-version == 24
         with:
           name: coverage
@@ -107,8 +107,10 @@ jobs:
       run:
         working-directory: python
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      # setup-uv stopped publishing floating major/minor tags after v7 (no `@v10` ref exists), so the full
+      # version tag is required here; Dependabot still bumps exact tags.
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
       - run: uv sync --frozen
@@ -125,9 +127,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -159,14 +161,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
       - run: uv sync --frozen
@@ -207,11 +209,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -230,9 +232,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm

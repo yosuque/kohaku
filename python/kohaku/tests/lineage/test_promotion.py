@@ -6,6 +6,7 @@ Storage is a tmp_path FileStoragePort (uses real tenant key separation and promo
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,7 @@ from kohaku.lineage import (
     create_lineage,
     create_promotions,
 )
-from kohaku.spec import LineageActor, LineageEventRecord, Principal, PromotionState
+from kohaku.spec import LineageActor, LineageEventRecord, LineageFilter, Principal, PromotionState
 from kohaku.storage import FileStoragePort
 
 from ._helpers import seed
@@ -1120,6 +1121,148 @@ def test_evaluate_and_list_tenant_mismatch_skips_persist(tmp_path: Path) -> None
     asyncio.run(run())
 
 
+# --- nominate's idempotency guard is a (tenant, artifactId) composite key ---
+
+
+def test_nominate_tenant_composite_key_does_not_suppress_cross_tenant_nominate(tmp_path: Path) -> None:
+    """nominate's idempotency guard must be keyed by (tenant, artifactId), not artifactId alone (#10, mirroring
+    candidate-store's own composite key): a past nominate recorded under tenant "acme" for artifactId
+    "shared-z" must not suppress an independently eligible tenant-neutral candidate for that same
+    (globally-unique) artifactId (port of TS promotion-nominate.test.ts)."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        # acme already nominated "shared-z" in the past (a component.nominated event tagged tenant="acme").
+        await seed(storage, "component.nominated", {"artifactId": "shared-z", "by": "policy"}, tenant="acme")
+        # A tenant-neutral candidate for the *same* globally-unique artifactId, independently eligible.
+        await _seed_generated(storage, "shared-z")
+        await seed(storage, "component.used", {"artifactId": "shared-z", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "shared-z", "sessionId": "s2"})
+        await seed(storage, "component.used", {"artifactId": "shared-z", "sessionId": "s3"})
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+        )
+
+        # Before the fix, nominated_ids was keyed by artifactId alone: an all-tenant scan (tenant
+        # unspecified) would pull acme's component.nominated event into the same set as the tenant-neutral
+        # candidate's own check, silently suppressing this eligible in_use candidate forever.
+        candidates = await promotions.evaluate_and_list()
+        neutral = next(c for c in candidates if c.artifactId == "shared-z")
+        assert neutral.status == "candidate"
+        state = await storage.get_promotion_state("shared-z", None)
+        assert state is not None and state.status == "candidate"
+
+    asyncio.run(run())
+
+
+def test_nominate_tenant_composite_key_still_suppresses_same_tenant_reevaluation(tmp_path: Path) -> None:
+    """A tenant's own past nominate must still suppress its own re-evaluation (no regression from the
+    composite-key fix): the idempotency guard is event-log-driven precisely so GET-style repeated calls don't
+    double-record, even when no promotion state was ever persisted for it in this test (a pre-existing
+    nominate that predates this test's own storage snapshot)."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await seed(storage, "component.nominated", {"artifactId": "shared-w", "by": "policy"}, tenant="acme")
+        await _seed_generated(storage, "shared-w", tenant="acme")
+        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s1"}, tenant="acme")
+        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s2"}, tenant="acme")
+        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s3"}, tenant="acme")
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+        )
+
+        await promotions.evaluate_and_list(tenant="acme")
+        nominated = [
+            e
+            for e in await storage.list_lineage(LineageFilter(type=["component.nominated"], tenant="acme"))
+            if e.payload.get("artifactId") == "shared-w"
+        ]
+        assert len(nominated) == 1
+
+    asyncio.run(run())
+
+
+# --- nominate's component.nominated audit is fail-open ---
+
+
+def test_nominate_audit_failure_does_not_block_batch_and_reaches_on_error(tmp_path: Path) -> None:
+    """The status transition (batch persist via _persist_many) already runs before the audit loop, so a
+    storage hiccup recording one candidate's component.nominated event must not stop or undo the rest of the
+    batch -- mirroring handle_publish's own fail-open audit record (port of TS promotion-nominate.test.ts)."""
+
+    async def run() -> None:
+        storage = _FailingAppendStorage(tmp_path)
+        await _seed_generated(storage, "art-a")
+        await seed(storage, "component.used", {"artifactId": "art-a", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "art-a", "sessionId": "s2"})
+        await seed(storage, "component.used", {"artifactId": "art-a", "sessionId": "s3"})
+        await _seed_generated(storage, "art-b")
+        await seed(storage, "component.used", {"artifactId": "art-b", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "art-b", "sessionId": "s2"})
+        await seed(storage, "component.used", {"artifactId": "art-b", "sessionId": "s3"})
+        storage.fail_for.add("component.nominated")
+
+        errors: list[tuple[str, str]] = []
+
+        def on_error(ctx: PromotionErrorContext, error: BaseException) -> None:
+            errors.append((ctx.endpoint, ctx.artifactId))
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+            on_error=on_error,
+        )
+
+        candidates = await promotions.evaluate_and_list()
+        assert next(c for c in candidates if c.artifactId == "art-a").status == "candidate"
+        assert next(c for c in candidates if c.artifactId == "art-b").status == "candidate"
+        state_a = await storage.get_promotion_state("art-a")
+        state_b = await storage.get_promotion_state("art-b")
+        assert state_a is not None and state_a.status == "candidate"
+        assert state_b is not None and state_b.status == "candidate"
+        # Both failures are individually reported (the throw for art-a's own record must not stop art-b's).
+        assert ("promotion.nominate.audit", "art-a") in errors
+        assert ("promotion.nominate.audit", "art-b") in errors
+        assert len(errors) == 2
+        assert not any(e.type == "component.nominated" for e in await storage.list_lineage())
+
+    asyncio.run(run())
+
+
+def test_nominate_audit_recovers_once_recording_is_healthy(tmp_path: Path) -> None:
+    """fail-open is not a permanent swallow: once appendLineage recovers, subsequent nominates are recorded normally."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await _seed_generated(storage, "art-c")
+        await seed(storage, "component.used", {"artifactId": "art-c", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "art-c", "sessionId": "s2"})
+        await seed(storage, "component.used", {"artifactId": "art-c", "sessionId": "s3"})
+
+        errors: list[Any] = []
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+            on_error=lambda ctx, error: errors.append(ctx),
+        )
+
+        candidates = await promotions.evaluate_and_list()
+        assert next(c for c in candidates if c.artifactId == "art-c").status == "candidate"
+        assert any(e.type == "component.nominated" for e in await storage.list_lineage())
+        assert errors == []
+
+    asyncio.run(run())
+
+
 # --- #11: idempotent re-projection on approve() / judge_failed recovery ---
 
 
@@ -1359,5 +1502,285 @@ def test_reconcile_rebuilds_published_projection_from_snapshot_after_lineage_los
         assert candidate is not None
         assert candidate.status == "published"
         assert candidate.html == "<html>x</html>"
+
+    asyncio.run(run())
+
+
+# --- reconcile scan/load race (mirrors TS's promotion-reconcile-race.test.ts) ---
+
+
+class _RacingStorage(FileStoragePort):
+    """A FileStoragePort whose get_promotion_state answers `override_status` for one artifact, while
+    list_promotion_states (the scan reconcile uses to build its work list) keeps returning the real,
+    unmodified state. Reproduces "a concurrent transition changed the status between the scan and the load"
+    deterministically, without any real concurrency. Calls super() first (not a bypass) so the on-disk cache
+    semantics of FileStoragePort are preserved; only the returned dataclass's status field is swapped."""
+
+    def __init__(self, data_dir: Path, artifact_id: str, override_status: str) -> None:
+        super().__init__(data_dir)
+        self._racing_artifact_id = artifact_id
+        self._override_status = override_status
+
+    async def get_promotion_state(
+        self, artifact_id: str, tenant: str | None = None
+    ) -> PromotionState | None:
+        real = await super().get_promotion_state(artifact_id, tenant)
+        if real is None or artifact_id != self._racing_artifact_id:
+            return real
+        return dataclasses.replace(real, status=self._override_status)
+
+
+def test_reconcile_does_not_republish_a_candidate_that_became_withdrawn_after_the_scan(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await _seed_schema_proposed(storage, "art-1")
+        seed_promotions = create_promotions(
+            lineage=create_lineage(storage), storage=storage, on_publish=lambda ctx: _noop()
+        )
+        await seed_promotions.act("art-1", Publish(version="1.0.0"), REVIEWER)
+        state = await storage.get_promotion_state("art-1")
+        assert state is not None and state.status == "published"
+        published_events_before = [
+            e for e in await storage.list_lineage() if e.type == "component.published"
+        ]
+        assert len(published_events_before) == 1
+
+        # Simulate the race: list_promotion_states (the scan) still returns "published" (the real, unmodified
+        # state), but get_promotion_state's own read (used by _load_candidate) now answers "withdrawn" -- as if
+        # a tenant-scoped withdraw ran between the scan and this load.
+        racing = _RacingStorage(tmp_path, "art-1", "withdrawn")
+        applied: list[str] = []
+        removed: list[str] = []
+        errors: list[tuple[str, str]] = []
+
+        async def on_publish(ctx: PublishContext) -> None:
+            applied.append(ctx.artifactId)
+
+        async def on_unpublish(ctx: UnpublishContext) -> None:
+            removed.append(ctx.artifactId)
+
+        def on_error(ctx: PromotionErrorContext, error: BaseException) -> None:
+            errors.append((ctx.endpoint, ctx.artifactId))
+
+        promotions = create_promotions(
+            lineage=create_lineage(racing),
+            storage=racing,
+            on_publish=on_publish,
+            on_unpublish=on_unpublish,
+            on_error=on_error,
+        )
+
+        summary = await promotions.reconcile()
+        # Not republished (a stale scan entry): reconcile trusts the fresher load, not the scan's own snapshot.
+        assert applied == []
+        # Not (incorrectly) unpublished either: the withdrawn branch is driven by list_promotion_states' own
+        # status ("published" here, unmodified), so this artifact never enters that branch at all.
+        assert removed == []
+        assert summary.published == 0
+        assert summary.withdrawn == 0
+        assert summary.skipped == 0
+        # A stale scan entry is not a failure: no on_error, and no new component.published audit backfill
+        # (the count stays at the single event the original publish already recorded).
+        assert errors == []
+        published_events_after = [
+            e for e in await storage.list_lineage() if e.type == "component.published"
+        ]
+        assert len(published_events_after) == 1
+
+    asyncio.run(run())
+
+
+def test_reconcile_does_not_unpublish_a_candidate_that_became_published_after_the_scan(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await _seed_schema_proposed(storage, "art-2")
+        seed_promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            on_publish=lambda ctx: _noop(),
+            on_unpublish=lambda ctx: _noop(),
+        )
+        await seed_promotions.act("art-2", Publish(version="1.0.0"), REVIEWER)
+        await seed_promotions.act("art-2", Unpublish(), REVIEWER)
+        state = await storage.get_promotion_state("art-2")
+        assert state is not None and state.status == "withdrawn"
+        withdrawn_events_before = [
+            e
+            for e in await storage.list_lineage()
+            if e.type == "component.withdrawn" and e.payload.get("from") == "published"
+        ]
+        assert len(withdrawn_events_before) == 1
+
+        # Simulate the reverse race: list_promotion_states still returns "withdrawn" (unmodified), but
+        # get_promotion_state's own read now answers "published" -- as if a tenant-scoped re-approve/publish
+        # ran between the scan and this load.
+        racing = _RacingStorage(tmp_path, "art-2", "published")
+        applied: list[str] = []
+        removed: list[str] = []
+        errors: list[tuple[str, str]] = []
+
+        async def on_publish(ctx: PublishContext) -> None:
+            applied.append(ctx.artifactId)
+
+        async def on_unpublish(ctx: UnpublishContext) -> None:
+            removed.append(ctx.artifactId)
+
+        def on_error(ctx: PromotionErrorContext, error: BaseException) -> None:
+            errors.append((ctx.endpoint, ctx.artifactId))
+
+        promotions = create_promotions(
+            lineage=create_lineage(racing),
+            storage=racing,
+            on_publish=on_publish,
+            on_unpublish=on_unpublish,
+            on_error=on_error,
+        )
+
+        summary = await promotions.reconcile()
+        assert removed == []
+        assert applied == []
+        assert summary.published == 0
+        assert summary.withdrawn == 0
+        assert summary.skipped == 0
+        assert errors == []
+        withdrawn_events_after = [
+            e
+            for e in await storage.list_lineage()
+            if e.type == "component.withdrawn" and e.payload.get("from") == "published"
+        ]
+        assert len(withdrawn_events_after) == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "status", ["schema_proposed", "approved", "rejected", "changes_requested", "judge_failed"]
+)
+def test_reconcile_ignores_non_projection_statuses(tmp_path: Path, status: str) -> None:
+    """may_have_projection: reconcile skips a snapshot whose status is not published/withdrawn entirely, before
+    ever loading it -- not calling on_publish/on_unpublish, not counting it as skipped, and not emitting any
+    audit event for it."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await _put_state(storage, f"art-{status}", status, draft=DRAFT)
+
+        applied: list[str] = []
+        removed: list[str] = []
+        errors: list[tuple[str, str]] = []
+
+        async def on_publish(ctx: PublishContext) -> None:
+            applied.append(ctx.artifactId)
+
+        async def on_unpublish(ctx: UnpublishContext) -> None:
+            removed.append(ctx.artifactId)
+
+        def on_error(ctx: PromotionErrorContext, error: BaseException) -> None:
+            errors.append((ctx.endpoint, ctx.artifactId))
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            on_publish=on_publish,
+            on_unpublish=on_unpublish,
+            on_error=on_error,
+        )
+
+        summary = await promotions.reconcile()
+        assert removed == []
+        assert applied == []
+        assert summary.published == 0
+        assert summary.withdrawn == 0
+        assert summary.skipped == 0
+        assert errors == []
+        events = await storage.list_lineage()
+        assert not any(e.type in ("component.withdrawn", "component.published") for e in events)
+
+    asyncio.run(run())
+
+
+# --- N+1 avoidance in reconcile() and list_by_status() (perf, mirrors TS's promotion-n-plus-one.test.ts) ---
+
+
+class _CountingListLineageStorage(FileStoragePort):
+    """A FileStoragePort that counts list_lineage calls, to pin that reconcile()/list_by_status() build a
+    fixed set of bulk indexes once instead of calling list_lineage once per candidate."""
+
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__(data_dir)
+        self.list_lineage_calls = 0
+
+    async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
+        self.list_lineage_calls += 1
+        return await super().list_lineage(filter)
+
+
+async def _seed_published_candidates(storage: FileStoragePort, count: int) -> None:
+    """Seeds `count` independent published candidates, each self-contained (#9: html/sha256 duplicated onto
+    the snapshot) with its own component.generated event, so every candidate can be fully resolved without any
+    per-candidate fallback lookup."""
+    for i in range(count):
+        artifact_id = f"art-{i}"
+        await seed(
+            storage,
+            "component.generated",
+            {"artifactId": artifact_id, "html": f"<html>{i}</html>", "request": "r"},
+            actor=LineageActor(kind="model"),
+        )
+        await storage.put_promotion_state(
+            PromotionState(
+                artifactId=artifact_id,
+                status="published",
+                updatedAt="t",
+                data={
+                    "draft": DRAFT.to_wire(),
+                    "html": f"<html>{i}</html>",
+                    "sha256": "a" * 64,
+                    "componentType": DRAFT.componentType,
+                },
+            )
+        )
+
+
+@pytest.mark.parametrize("count", [3, 30])
+def test_reconcile_list_lineage_calls_do_not_scale_with_candidate_count(tmp_path: Path, count: int) -> None:
+    async def run() -> None:
+        storage = _CountingListLineageStorage(tmp_path)
+        await _seed_published_candidates(storage, count)
+        applied: list[str] = []
+
+        async def on_publish(ctx: PublishContext) -> None:
+            applied.append(ctx.artifactId)
+
+        promotions = create_promotions(lineage=create_lineage(storage), storage=storage, on_publish=on_publish)
+
+        storage.list_lineage_calls = 0
+        summary = await promotions.reconcile()
+        assert len(applied) == count
+        assert summary.published == count
+        # Fixed set of bulk index fetches (usage, component.generated, component.published,
+        # component.withdrawn) regardless of how many candidates were scanned -- not one list_lineage call per
+        # candidate.
+        assert storage.list_lineage_calls == 4
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("count", [3, 30])
+def test_list_by_status_list_lineage_calls_do_not_scale_with_candidate_count(tmp_path: Path, count: int) -> None:
+    async def run() -> None:
+        storage = _CountingListLineageStorage(tmp_path)
+        await _seed_published_candidates(storage, count)
+        promotions = create_promotions(lineage=create_lineage(storage), storage=storage)
+
+        storage.list_lineage_calls = 0
+        candidates = await promotions.list_by_status("published")
+        assert len(candidates) == count
+        # Fixed set of bulk index fetches (usage, component.generated) regardless of candidate count.
+        assert storage.list_lineage_calls == 2
 
     asyncio.run(run())

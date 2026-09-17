@@ -15,6 +15,17 @@ import { type PromotedEntry, promotedIntent } from "./promoted.js";
  */
 const DEFAULT_TENANT_KEY = "";
 
+/**
+ * Cap on the number of distinct tenant keys cached in componentCatalogs / intentCatalogs. Tenants are
+ * assumed bounded in this demo (a fixed/small set), so there is no eviction policy (LRU, etc.) — on
+ * reaching the cap, every cached tenant catalog except the default ("") bucket is cleared naively
+ * (same "clear everything, key space is bounded and rarely reached" policy as registry's
+ * satisfiesCache — see packages/registry/src/negotiate.ts). This exists only to guard a long-lived
+ * process against unbounded growth if that assumption is ever violated (e.g. a per-request synthetic
+ * tenant id), not as a real capacity plan.
+ */
+const TENANT_CATALOG_CACHE_MAX = 64;
+
 function keyOf(tenant?: string): string {
   return tenant ?? DEFAULT_TENANT_KEY;
 }
@@ -45,9 +56,26 @@ export class PromotedRegistry {
     let catalog = this.componentCatalogs.get(k);
     if (catalog == null) {
       catalog = this.buildComponentCatalog([...this.entriesFor(tenant)]);
+      // Guard against unbounded cache growth (see TENANT_CATALOG_CACHE_MAX's doc) before inserting the new
+      // entry, so the cap itself never holds more than TENANT_CATALOG_CACHE_MAX + 1 tenants at once.
+      if (this.componentCatalogs.size >= TENANT_CATALOG_CACHE_MAX) this.clearCachedTenantCatalogs();
       this.componentCatalogs.set(k, catalog);
     }
     return catalog;
+  }
+
+  /**
+   * Clears every cached tenant catalog (component + Intent) except the default ("") bucket. Called once
+   * componentCatalogs.size reaches TENANT_CATALOG_CACHE_MAX; both maps are cleared together because they
+   * track the same tenant key set (invalidate() below always removes from both).
+   */
+  private clearCachedTenantCatalogs(): void {
+    for (const key of [...this.componentCatalogs.keys()]) {
+      if (key !== DEFAULT_TENANT_KEY) this.componentCatalogs.delete(key);
+    }
+    for (const key of [...this.intentCatalogs.keys()]) {
+      if (key !== DEFAULT_TENANT_KEY) this.intentCatalogs.delete(key);
+    }
   }
 
   /** The Intent catalog for the given tenant (for NL normalization; base core Intents + the tenant's promoted Intents). */

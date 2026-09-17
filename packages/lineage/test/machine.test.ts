@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { type PromotionAction, TransitionError, transition } from "../src/index.js";
+import {
+  mayHaveProjection,
+  type PromotionAction,
+  type PromotionStatus,
+  TransitionError,
+  transition,
+} from "../src/index.js";
 
 const reviewer = { id: "alice" };
 const draft = {
@@ -82,5 +88,25 @@ describe("promotion state machine (L2→L1)", () => {
   it("withdraw on published (≠ unpublish) is TransitionError (existing guarantee invariant)", () => {
     // Only the dedicated unpublish action can handle published. withdraw keeps being rejected by the terminal guard.
     expect(() => transition("published", { kind: "withdraw" })).toThrow(TransitionError);
+  });
+
+  it("mayHaveProjection: only published and withdrawn snapshots may have a projection to converge", () => {
+    const truthTable: Record<PromotionStatus, boolean> = {
+      in_use: false,
+      candidate: false,
+      judging: false,
+      judge_failed: false,
+      in_review: false,
+      changes_requested: false,
+      approved: false,
+      // schema_proposed holds a draft, but a draft alone is never published, so it has no projection either.
+      schema_proposed: false,
+      published: true,
+      rejected: false,
+      withdrawn: true,
+    };
+    for (const [status, expected] of Object.entries(truthTable) as [PromotionStatus, boolean][]) {
+      expect(mayHaveProjection(status)).toBe(expected);
+    }
   });
 });

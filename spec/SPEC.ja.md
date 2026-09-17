@@ -88,6 +88,7 @@
 
 - props は JSON 表現可能でなければならない(MUST。日時等は文字列で表す)。
 - `description` は LLM の選択ガイダンスとして生成プロンプトに転写される(SHOULD は具体的に)。
+- **型名の命名規約**: コア型の `type` は `<namespace>.<name>`(例: `layout.stack`、`control.select`)を原則とする。`present*` 系(`presentList` / `presentMetric` / `presentChart` / `presentForm` / `presentSpreadsheet` / `presentMarkdown`)は例外で、v0.1 でワイヤ契約を固定した当時のフラットな camelCase 名をそのまま維持している — 今からリネームすると命名整理では済まずワイヤ契約とカタログフィンガープリントが変わってしまう(破壊的変更)ため。新規のコア型・プロダクト拡張は名前空間付きの名前を使うべき(SHOULD)。
 
 ### 3.2 Surface capability negotiation(capability 交渉)とフォールバック [Draft]
 
@@ -223,9 +224,9 @@ v0.1 では未定義。UISpec / SpecPatch → AG-UI / A2A イベントへの対�
 
 ## 7. Conformance [Normative]
 
-機械可読要件は [conformance/manifest.ts](conformance/manifest.ts)(MUST 32。うち **SPEC-STA-001** は state / visibleWhen / state.set の版宣言・参照整合を、**SPEC-STA-002** は `data.bind` の版宣言・初期 variant 整合(BIND_* エラー無し)を self スイートで検査する。bind は [Draft] のため REST 黒箱 manifest には載せない)。**SPEC-ENV-003**(テーマ非依存)・**SPEC-EVT-002**(Renderer の未宣言イベント転送禁止)・**SPEC-DATA-002**(`refVersions` による参照単位の版突合。§2.3)・**CMP-DET-001**(合成の決定性の一般形)は本文上の文書規範であり、manifest には `verification: "reference"` として載り、参照実装のパッケージテスト(`verifiedBy`。前 3 件は §7.1 のレンダラー適合チェックリストでもある)で担保する — 黒箱スイートで直接検査するのではない(REST ホストに対する決定性は黒箱の **REST-CMP-002** が別途直接検査する)。
+機械可読要件は [conformance/manifest.ts](conformance/manifest.ts)(MUST 33。うち **SPEC-STA-001** は state / visibleWhen / state.set の版宣言・参照整合を、**SPEC-STA-002** は `data.bind` の版宣言・初期 variant 整合(BIND_* エラー無し)を self スイートで検査する。bind は [Draft] のため REST 黒箱 manifest には載せない)。**SPEC-ENV-003**(テーマ非依存)・**SPEC-EVT-002**(Renderer の未宣言イベント転送禁止)・**SPEC-DATA-002**(`refVersions` による参照単位の版突合。§2.3)・**CMP-DET-001**(合成の決定性の一般形)・**CMP-GEN-001**(§4 の、生成コンポーネントの `data.$ref` を QueryHandle 集合に制約する規範)は本文上の文書規範であり、manifest には `verification: "reference"` として載り、参照実装のパッケージテスト(`verifiedBy`。前 3 件は §7.1 のレンダラー適合チェックリストでもある)で担保する — 黒箱スイートで直接検査するのではない(REST ホストに対する決定性は黒箱の **REST-CMP-002** が別途直接検査する)。
 
-各要件は検証区分(`verification`)を 2 つ持つ。**blackbox** は conformance スイート(self / REST 黒箱)が baseUrl だけで直接検査する要件(`SPEC-*` / `REST-*` / `LIN-PRM-001`)。**reference** は黒箱検査に馴染まない内部不変条件(`MCPAPP-*` / `SBX-*`、および上記の文書規範 `SPEC-*` 4 件)で、参照実装のパッケージテスト(manifest の `verifiedBy`)で担保する。レポートは reference 要件を「参照実装テストで担保(黒箱検査対象外)」として、blackbox の未検査(別プロファイルで検査されていない `notCheckedMustIds`)とは区別して表示する — 前者は担保済み、後者は当該スイートの対象外という意味の違いを保つため。「当該スイートの対象外」だけでなく実行時に**検査不能**と判定されることもある: **LIN-PRM-001** は `GET /lineage` 自体が到達不能・エラーを返す場合にこの扱いになる(`component.published` が 0 件で到達はできる場合は空虚な合格として区別する)。この場合、合否の集計から除外され(到達不能な依存先を見かけ上の合格にしてしまうことも、任意の前提条件の失敗で CONFORMANT 判定を止めてしまうこともない)、同じ `notCheckedMustIds` の報告経路に、汎用の「未検査」文言ではなく個別の理由を添えて載る。判定行は `CONFORMANT (N MUST not checked)` と表示される。実行:
+各要件は検証区分(`verification`)を 2 つ持つ。**blackbox** は conformance スイート(self / REST 黒箱)が baseUrl だけで直接検査する要件(`SPEC-*` / `REST-*` / `LIN-PRM-001`)。**reference** は黒箱検査に馴染まない内部不変条件(`MCPAPP-*` / `SBX-*`、および上記の文書規範 5 件)で、参照実装のパッケージテスト(manifest の `verifiedBy`)で担保する。レポートは reference 要件を「参照実装テストで担保(黒箱検査対象外)」として、blackbox の未検査(別プロファイルで検査されていない `notCheckedMustIds`)とは区別して表示する — 前者は担保済み、後者は当該スイートの対象外という意味の違いを保つため。「当該スイートの対象外」だけでなく実行時に**検査不能**と判定されることもある: **LIN-PRM-001** は `GET /lineage` 自体が到達不能・エラーを返す場合にこの扱いになる(`component.published` が 0 件で到達はできる場合は空虚な合格として区別する)。この場合、合否の集計から除外され(到達不能な依存先を見かけ上の合格にしてしまうことも、任意の前提条件の失敗で CONFORMANT 判定を止めてしまうこともない)、同じ `notCheckedMustIds` の報告経路に、汎用の「未検査」文言ではなく個別の理由を添えて載る。判定行は `CONFORMANT (N MUST not checked)` と表示される。実行:
 
 ```bash
 node cli/bin/kohaku.js conformance --self                                   # Spec フォーマット自己検査

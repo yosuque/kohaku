@@ -245,7 +245,9 @@ export const INTENT_DEFINITIONS: IntentBuilder[] = [
   defineIntent({
     canonical: "sales.kpi_overview",
     description:
-      "Show this period's summary KPIs (total revenue, YoY, top region, target attainment) as cards",
+      "Show this period's summary KPIs (total revenue, YoY, top region, target attainment) as cards. " +
+      "Each card's underlying `metric` selects the KPI kind (total_revenue/yoy/top_region/target_attainment), " +
+      "not the revenue/units metric used elsewhere (e.g. sales.trend).",
     source: SOURCE,
     viewLabel: "KPI Overview",
     viewLabels: { ja: "KPI概況" },
@@ -325,7 +327,9 @@ export const INTENT_DEFINITIONS: IntentBuilder[] = [
 
   defineIntent({
     canonical: "sales.target_attainment",
-    description: "Show targets, actuals, and attainment by region",
+    description:
+      "Show targets, actuals, and attainment by region. Internally issues a kpi query with " +
+      '`metric: "target_attainment"` — a KPI kind, not the revenue/units metric used elsewhere.',
     source: SOURCE,
     viewLabel: "Target Attainment",
     viewLabels: { ja: "目標達成" },

@@ -1,13 +1,14 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import type {
-  CanonicalIntent,
-  FixationRecord,
-  SemanticPort,
-  SessionContext,
-  StoragePort,
-  UISpec,
+import {
+  type CanonicalIntent,
+  computeStructureHash,
+  type FixationRecord,
+  type SemanticPort,
+  type SessionContext,
+  type StoragePort,
+  type UISpec,
 } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -107,11 +108,18 @@ function validPinned(): UISpec {
   };
 }
 
+// Every call site in this file builds its fixation from validPinned() verbatim, so its structureHash can be
+// precomputed once at module load (top-level await) rather than making every `it(...)` async and every
+// makeFixation call site await it -- some of the call sites below are inside synchronous `it` callbacks.
+const VALID_PINNED_STRUCTURE_HASH = await computeStructureHash(validPinned());
+
 function makeFixation(pinnedSpec: UISpec, catalogFingerprint?: string): FixationRecord {
   return {
     intentHash: INTENT.hash,
     canonical: "sales.trend",
-    structureHash: "sha256:" + "1".repeat(64),
+    // materializeFixation verifies this against pinnedSpec, so it must stay the real hash of validPinned()'s
+    // content, not a placeholder (every call site here passes validPinned() unmodified).
+    structureHash: VALID_PINNED_STRUCTURE_HASH,
     pinnedSpec,
     fixatedAt: "2026-06-10T00:00:00Z",
     approver: { id: "tester" },

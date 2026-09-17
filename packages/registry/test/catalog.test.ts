@@ -1,8 +1,15 @@
+import type { JsonObject } from "@kohaku-ui/spec-core";
 import { parseSpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import fixture from "../../../spec/examples/quarterly-sales.spec.json";
-import { CatalogConflictError, coreCatalog, defineComponent, resolveCatalog } from "../src/index.js";
+import {
+  CatalogConflictError,
+  type ComponentDefinition,
+  coreCatalog,
+  defineComponent,
+  resolveCatalog,
+} from "../src/index.js";
 
 describe("resolveCatalog (federated merge)", () => {
   it("the core catalog resolves and fingerprint is deterministic", () => {
@@ -155,4 +162,75 @@ describe("validate (catalog matching)", () => {
       }),
     ).toThrow(/not JSON-representable/);
   });
+});
+
+describe("fallback chains (real catalog invariants)", () => {
+  const catalog = resolveCatalog(coreCatalog);
+  const withFallback: ComponentDefinition[] = coreCatalog.components.filter((d) => d.fallback != null);
+
+  /**
+   * Schema-valid representative props for every core component that declares a fallback (kept in sync
+   * with core/*.ts via the "every core fallback has an entry here" guard below). These are the same
+   * inputProps recorded in spec/test/fixtures/cross-language-canonical.json's "fallback" section, so a
+   * mismatch between the two is a signal that one of them drifted.
+   */
+  const REPRESENTATIVE_PROPS: Record<string, JsonObject> = {
+    "action.button": { label: "Approve", variant: "primary" },
+    presentForm: { fields: [{ name: "a" }], action: "save" },
+    presentChart: { kind: "bar", x: "a", y: "b" },
+    "layout.tabs": { stateKey: "tab" },
+    "layout.tab": { value: "a", label: "A" },
+    "ui.loading": { label: "Fetching…" },
+    "control.select": { options: ["a"], label: "Region" },
+    presentSpreadsheet: { editable: false },
+    presentList: { gap: "sm" },
+    "overlay.dialog": { title: "Confirm" },
+    "overlay.toast": { message: "Saved" },
+    presentMetric: { label: "Revenue", valueColumn: "revenue" },
+  };
+
+  it("every core component declaring a fallback has a representative-props entry above", () => {
+    // Guards a new core component with a fallback from silently going unexercised below.
+    const declared = withFallback.map((d) => d.type).sort();
+    const covered = Object.keys(REPRESENTATIVE_PROPS).sort();
+    expect(covered).toEqual(declared);
+  });
+
+  it.each(withFallback.map((d): [string, ComponentDefinition] => [d.type, d]))(
+    "%s: fallback.mapProps runs on representative props and the chain terminates",
+    (type, def) => {
+      const inputProps = REPRESENTATIVE_PROPS[type];
+      expect(inputProps, `no representative props registered for "${type}"`).toBeDefined();
+      // The representative props must actually satisfy the component's own propsSchema, or this
+      // invariant test would be exercising an input no real Spec could ever carry.
+      expect(() => def.propsSchema.parse(inputProps)).not.toThrow();
+
+      let currentType = type;
+      let currentProps: JsonObject = inputProps!;
+      const visited = new Set<string>([currentType]);
+      // Bounded walk (generous relative to the catalog's actual longest chain of 2 hops) so a future
+      // cyclic fallback declaration fails loudly here instead of hanging the test suite.
+      for (let hop = 0; hop < 10; hop++) {
+        const currentDef = catalog.get(currentType);
+        expect(currentDef, `"${currentType}" is missing from the resolved catalog`).toBeDefined();
+        const fb = currentDef!.fallback;
+        if (fb == null) {
+          // A terminal that is not presentMarkdown (e.g. layout.stack) is a legitimate non-text terminal.
+          return;
+        }
+        const mapped = fb.mapProps(currentProps);
+        if (fb.type === "presentMarkdown") {
+          const markdownDef = catalog.get("presentMarkdown")!;
+          const parsed = markdownDef.propsSchema.parse(mapped) as { markdown: string };
+          expect(parsed.markdown.length).toBeGreaterThan(0);
+          return;
+        }
+        expect(visited.has(fb.type), `fallback chain from "${type}" cycles back to "${fb.type}"`).toBe(false);
+        visited.add(fb.type);
+        currentType = fb.type;
+        currentProps = mapped;
+      }
+      throw new Error(`fallback chain from "${type}" did not terminate within 10 hops`);
+    },
+  );
 });

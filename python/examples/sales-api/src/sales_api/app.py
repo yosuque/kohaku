@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from kohaku.composer import (
+    ComposeBudget,
     ComposeContext,
     ComposeErrorContext,
     ComposeObserver,
@@ -62,6 +64,7 @@ from kohaku.registry import Catalog, ResolvedCatalog, core_catalog, resolve_cata
 from kohaku.spec import (
     AuthzPort,
     FixationRecord,
+    Intent,
     InvocationContext,
     JsonObject,
     LineageEventRecord,
@@ -126,6 +129,34 @@ def _demo_auth(request: Request) -> Principal:
 def _demo_tenant(request: Request) -> str | None:
     """Tenant resolution (a product responsibility). The demo looks at the x-kohaku-tenant header."""
     return request.headers.get("x-kohaku-tenant") or None
+
+
+def admit_fixation_for_locale(_fixation: FixationRecord, session: SessionContext) -> bool:
+    """The fixation delivery-admission gate shared by both host profiles (REST's
+    `KohakuHostDeps.fixation_admit` / MCP's `McpHostDeps.fixation_admit`, both wired from this module's
+    `create_app` and `mcp_setup.py`'s `create_server`): FixationRecord carries no language and every pinned
+    Spec was fixated from EN traffic, so the shortcut serves EN sessions only; JA sessions fall through to
+    normal compose (JA cache hit or JA generation via the policy pair below). Centralized here (rather than
+    duplicated inside each profile's own fixation-lookup wiring) so REST and MCP apply the exact same
+    policy. Mirrors the TS sample's apps/sample-api/src/app/compose-context.ts's admitFixationForLocale."""
+    return language_of(session.locale) == "en"
+
+
+# Default compose-wide deadline (ms): one straight-to-L2 run (sales.custom's ~180s L2 timeout under the
+# default outputBudgetFactor=3 widening of KOHAKU_LLM_TIMEOUT_MS) plus headroom for a repair retry. Mirrors
+# the TS sample's apps/sample-api/src/app/compose-context.ts's composeDeadlineMs.
+_DEFAULT_COMPOSE_DEADLINE_MS = 240_000
+
+
+def _compose_deadline_ms(env: Mapping[str, str] | None = None) -> int:
+    """Parses KOHAKU_COMPOSE_DEADLINE_MS as a positive integer; any other value (unset, non-numeric, <= 0)
+    falls back to the default. Exported for testability (mirrors the TS sample's composeDeadlineMs)."""
+    raw = (env if env is not None else os.environ).get("KOHAKU_COMPOSE_DEADLINE_MS")
+    try:
+        parsed = int(raw) if raw is not None else None
+    except ValueError:
+        parsed = None
+    return parsed if parsed is not None and parsed > 0 else _DEFAULT_COMPOSE_DEADLINE_MS
 
 
 class SalesDomainPort:
@@ -421,8 +452,21 @@ async def create_app(
     # prompt (outputLanguage + JA fixed specs), so its generatorVersion carries the "/ja" token
     # (the ComposePolicy contract: prompt-content changes must vary generatorVersion). JA omits
     # fewShot: fixated few-shot examples are EN specs and would bias JA generation toward English.
+    # Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
+    # to the deterministic fallback on expiry rather than hanging indefinitely behind a slow/hung LLM call.
+    compose_budget = ComposeBudget(deadline_ms=_compose_deadline_ms())
+    # allowL2 is on by default (matches the TS sample's unconditional allowL2: true) -- KOHAKU_ALLOW_L2=0 is
+    # an opt-out for this Python sample only, not a TS-parity flag.
+    allow_l2 = os.environ.get("KOHAKU_ALLOW_L2", "1") != "0"
+
+    def route_tier(intent: Intent) -> Literal["L1", "L2"] | None:
+        # Free-form requests (sales.custom) skip L1 and go directly to L2, matching TS sample-api's routeTier.
+        return "L2" if intent.canonical == "sales.custom" else None
+
     policy_en = ComposePolicy(
-        allowL2=os.environ.get("KOHAKU_ALLOW_L2", "") == "1",
+        allowL2=allow_l2,
+        routeTier=route_tier,
+        budget=compose_budget,
         # The standard views are L0 fixed Specs (do not pass through the LLM). "App UI = the solidified form of L1".
         fixedSpecs=create_fixed_specs(),
         # Application of the design system to L2 free generation (identical in content to TS sample-api): presents
@@ -442,6 +486,8 @@ async def create_app(
     )
     policy_ja = ComposePolicy(
         allowL2=policy_en.allowL2,
+        routeTier=route_tier,
+        budget=compose_budget,
         fixedSpecs=create_fixed_specs("ja"),
         designSystem=SALES_DESIGN_SYSTEM,
         outputLanguage="Japanese",
@@ -472,14 +518,11 @@ async def create_app(
     )
 
     async def fixation_lookup(intent_hash: str, session: SessionContext) -> FixationRecord | None:
-        """The L1->L0 fixation short-circuit (queried before compose). Looks up the given tenant's fixation by session.tenant.
-
-        Language gate (demo policy): FixationRecord carries no language, and every pinned Spec was
-        fixated from EN traffic — so the shortcut serves EN sessions only. JA sessions fall through
-        to normal compose (JA cache hit or JA generation via the policy pair above).
-        """
-        if language_of(session.locale) != "en":
-            return None
+        """The L1->L0 fixation short-circuit (queried before compose). Looks up the given tenant's fixation
+        by session.tenant. A plain read: delivery gating (the demo's EN-only language policy) is separated
+        out into `admit_fixation_for_locale` below, shared verbatim with the MCP profile's wiring in
+        mcp_setup.py, so this stays a plain read (kohaku.host_core.FixationDeliveryHost.admit is what
+        actually applies the gate)."""
         return await storage.get_fixation(intent_hash, session.tenant)
 
     async def action_effects_hook(
@@ -494,6 +537,7 @@ async def create_app(
         authz=authz,
         query_source="sales",
         fixation_lookup=fixation_lookup,
+        fixation_admit=admit_fixation_for_locale,
         recorder=recorder,
         promotions=promotions,
         fixations=fixations,

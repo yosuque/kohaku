@@ -43,6 +43,7 @@ from kohaku.registry import (
 )
 from kohaku.spec import JsonObject, QueryHandle, js_string
 
+from .domain import DEMO_FISCAL_YEAR
 from .intents_catalog import fiscal_year, region
 
 
@@ -91,7 +92,7 @@ def promoted_component(entry: PromotedEntry) -> ComponentDefinition:
 # Default Intent params for old promoted.json compatibility (without paramsJsonSchema / queryTemplate).
 # The value ranges of fiscalYear / region reference the same source as catalog (intents_catalog).
 DEFAULT_PROMOTED_PARAMS: ObjectSchema = object_schema(
-    {"fiscalYear": fiscal_year.default(2026), "region": region.enum().optional()}
+    {"fiscalYear": fiscal_year.default(DEMO_FISCAL_YEAR), "region": region.enum().optional()}
 )
 
 

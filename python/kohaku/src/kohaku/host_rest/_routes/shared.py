@@ -2,9 +2,15 @@
 
 Split out of the former monolithic `_fastapi_routes.py` (see that module's docstring for why this package
 performs real top-level imports of fastapi / starlette instead of TYPE_CHECKING-guarded ones). This module
-holds the pieces that do not belong to any single route group: the per-(loop, deps, key) serialization lock,
-principal / tenant / session resolution, small parsing helpers, the JSON response builders, and
-governance-plane authorization (require_governance) — used by governance.py, promotions.py, and fixations.py.
+holds the pieces that do not belong to any single route group: principal / tenant / session resolution, small
+parsing helpers, the JSON response builders, and governance-plane authorization (require_governance) — used
+by governance.py, promotions.py, and fixations.py.
+
+The per-(loop, deps, key) serialization lock (`_get_lock` / `_locks`) used to be defined here but now lives in
+`kohaku.host_core.keyed_mutex` (so `kohaku.host_mcp`'s fixation self-heal serialization can share the exact
+same mechanism, mirroring TS's `@kohaku-ui/host-core` `createKeyedMutex`) — re-exported below under their
+original names, unchanged, for every existing import site in this package (compose.py / promotions.py /
+fixations.py / `_fastapi_routes.py`) and test (`fr._get_lock` / `fr._locks`).
 
 The logger is defined here with an **explicit name** (`kohaku.host_rest._fastapi_routes`, not `__name__`)
 so that every submodule's log records keep the same logger name as before the split — tests attach to it via
@@ -13,29 +19,26 @@ so that every submodule's log records keep the same logger name as before the sp
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import inspect
 import json
 import logging
-import math
 import re
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, cast
 
 from fastapi.responses import JSONResponse
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from kohaku.host_core import DEFAULT_CAPABILITY_TTL_SECONDS, TraceContext
+from kohaku.host_core import DEFAULT_CAPABILITY_TTL_SECONDS, TraceContext, get_lock
 from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.host_core import parse_trace_context as _parse_trace_context
+from kohaku.host_core.keyed_mutex import _locks as _locks
 from kohaku.spec import Principal, SessionContext
 
 from ..bodies import SessionBody
@@ -55,55 +58,21 @@ ANONYMOUS = Principal(id="demo-user", roles=["user"])
 # Sourced from kohaku.host_core (single source of truth, shared with kohaku.host_mcp).
 _DEFAULT_CAPABILITY_TTL = DEFAULT_CAPABILITY_TTL_SECONDS
 
+# Default request-body size cap (bytes) applied by BodyLimitASGIMiddleware when a host does not override
+# deps.max_body_bytes. Mirrors TS's packages/host-rest/src/routes.ts DEFAULT_MAX_BODY_BYTES (1 MiB): comfortable
+# headroom for a real /compose or /events payload (an NL question or an Intent + params), while a request past
+# it is almost certainly abuse or a client bug.
+DEFAULT_MAX_BODY_BYTES = 1_048_576
+
 # ISO8601 validation for since / until. Timestamps require a timezone (Z / ±hh:mm); a date alone is interpreted as UTC.
 _ISO8601_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}(?:[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:[Zz]|[+-]\d{2}:\d{2}))?$"
 )
 
-
-# --- In-process serialization lock -------------------------------------
-# Serializes the read-modify-write of promotion / fixation. Keyed by event loop + deps + key.
-# The loop id is included in the key so it is safe even for a TestClient that spans loops (within the same loop it is
-# serialized). Unused entries are cleaned up after use (reference-counting scheme; the same intent as the TS Promise
-# chain tail cleanup at packages/host-rest/src/routes.ts:428-431, 1258-1260). Cleanup prevents a leak from _locks
-# growing monotonically and also resolves/mitigates the id() address-reuse risk (a freed deps/loop address being
-# reused by another instance and sharing a stale lock).
-
-
-@dataclass
-class _LockEntry:
-    """A serialization lock and its user count (held + waiting to acquire). Cleaned up from _locks when it reaches 0."""
-
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    users: int = 0
-
-
-_locks: dict[tuple[int, int, str], _LockEntry] = {}
-
-
-@contextlib.asynccontextmanager
-async def _get_lock(deps: KohakuHostDeps, key: str) -> AsyncIterator[None]:
-    """async context manager acquiring a per-(loop, deps, key) in-process serialization lock.
-
-    Reference-counts the users and removes the entry from _locks when the last user leaves (without relying on
-    asyncio.Lock private attributes). There is no await between get and increment (atomic under single-threaded
-    asyncio), and waiters are also counted as users, so the entry is not cleaned up while any waiter remains.
-    """
-    loop_id = id(asyncio.get_running_loop())
-    composite = (loop_id, id(deps), key)
-    entry = _locks.get(composite)
-    if entry is None:
-        entry = _LockEntry()
-        _locks[composite] = entry
-    entry.users += 1
-    try:
-        async with entry.lock:
-            yield
-    finally:
-        entry.users -= 1
-        # If we are the last user (no waiters and no holder), clean up the entry.
-        if entry.users == 0 and _locks.get(composite) is entry:
-            del _locks[composite]
+# Re-exported under its original name (this module used to define _get_lock directly — see module docstring
+# above) for backward compatibility with every existing import site (compose.py / promotions.py / fixations.py
+# / _fastapi_routes.py) and test (fr._get_lock).
+_get_lock = get_lock
 
 
 def _promotion_key(tenant: str | None) -> str:
@@ -221,6 +190,98 @@ class RequestIdASGIMiddleware:
         await self.app(scope, receive, send_with_request_id)
 
 
+class BodyLimitASGIMiddleware:
+    """Rejects an oversized request body with 413 before it reaches the mounted kohaku routes (ops). Port of
+    TS routes.ts's `app.use("*", bodyLimit({ maxSize, onError }))` (Hono's bodyLimit middleware).
+
+    A **pure ASGI middleware** (like RequestIdASGIMiddleware above), for the same streaming-safety reason:
+    scoped to `prefix`, so it never touches a body the host handles outside the mounted routes.
+
+    Two admission paths, matching Hono's bodyLimit behavior:
+    - A well-formed `Content-Length` over the limit is rejected immediately, without reading any of the body
+      off the wire.
+    - Otherwise (no `Content-Length`, or one that doesn't parse as bytes — e.g. chunked transfer-encoding),
+      the body is buffered chunk by chunk via `receive()` and rejected the moment the running total exceeds
+      the limit, without ever forwarding a message to the downstream app. When the body turns out to be
+      within the limit, the buffered `http.request` messages are replayed to the downstream app in order (via
+      a wrapped `receive`) so it observes the exact same message sequence it would have without this
+      middleware in front.
+
+    The rejection response body is byte-identical to TS's `errorBody("BAD_REQUEST", "request body too
+    large")`: `{"error":{"code":"BAD_REQUEST","message":"request body too large"}}` (no `requestId` — the
+    same call site in TS passes none either, and this middleware runs before request_id_of has a chance to
+    resolve one, mirroring Hono's `bodyLimit` running ahead of the request-id middleware in routes.ts).
+    """
+
+    def __init__(self, app: ASGIApp, deps: KohakuHostDeps, prefix: str) -> None:
+        self.app = app
+        self.deps = deps
+        self.prefix = prefix
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not scope["path"].startswith(self.prefix):
+            await self.app(scope, receive, send)
+            return
+
+        max_bytes = (
+            self.deps.max_body_bytes
+            if self.deps.max_body_bytes is not None
+            else DEFAULT_MAX_BODY_BYTES
+        )
+
+        declared = Headers(scope=scope).get("content-length")
+        if declared is not None:
+            try:
+                declared_bytes = int(declared)
+            except ValueError:
+                declared_bytes = None
+            if declared_bytes is not None and declared_bytes > max_bytes:
+                await _send_body_too_large(send)
+                return
+
+        # No (usable) Content-Length: accumulate body chunks ourselves before handing anything to the
+        # downstream app, so a chunked/streamed body that turns out to be oversized never reaches it.
+        buffered: list[Message] = []
+        total = 0
+        more_body = True
+        while more_body:
+            message = await receive()
+            buffered.append(message)
+            if message["type"] != "http.request":
+                # A non-body lifecycle message (e.g. http.disconnect) ends the loop; let the app (via the
+                # replay receive below) see it directly rather than trying to size-check it.
+                break
+            total += len(message.get("body", b""))
+            if total > max_bytes:
+                await _send_body_too_large(send)
+                return
+            more_body = bool(message.get("more_body", False))
+
+        queue = buffered
+
+        async def replay_receive() -> Message:
+            if queue:
+                return queue.pop(0)
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+
+async def _send_body_too_large(send: Send) -> None:
+    body = json.dumps(error_body("BAD_REQUEST", "request body too large")).encode("utf-8")
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
 async def report_host_error(
     deps: KohakuHostDeps,
     endpoint: str,
@@ -320,15 +381,22 @@ def parse_iso8601(raw: str) -> str | None:
     return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
+# Only a plain decimal-digit string (with an optional decimal point) is accepted -- unlike a bare
+# `float(raw)` conversion, this rejects underscore digit-group separators ("1_000") and scientific
+# notation ("1e3"), both of which Python's float() would otherwise silently accept as a value (unlike
+# JS's Number(), which accepts hex ("0x10") instead). This is the isomorphic parity fix for the TS
+# implementation's parseLimit (packages/host-rest/src/routes/governance.ts).
+_LIMIT_PATTERN = re.compile(r"^\d+(\.\d+)?$")
+
+
 def _parse_limit(raw: str | None, max_limit: int, default: int | None) -> int | None:
-    """Validate limit (reject NaN / negative / oversized values). Invalid or unspecified defers to default."""
-    if raw is None:
+    """Validate limit (only a decimal-digit string is accepted; matches the TS implementation's
+    parseLimit). Rejects NaN / negative / non-decimal-digit-string / oversized values. Invalid or
+    unspecified defers to default."""
+    if raw is None or not _LIMIT_PATTERN.fullmatch(raw):
         return default
-    try:
-        n = float(raw)
-    except ValueError:
-        return default
-    if not math.isfinite(n) or n <= 0:
+    n = float(raw)
+    if n <= 0:
         return default
     return min(int(n), max_limit)
 

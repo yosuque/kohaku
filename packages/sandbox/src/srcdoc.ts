@@ -43,6 +43,13 @@ export async function verifyArtifact(artifact: SandboxArtifact): Promise<void> {
  * `<style>` before the generated CSS, so the generated HTML's token references `var(--kohaku-*)` resolve here
  * — the artifact (the sha256 target) holds no values and stays theme-independent.
  *
+ * Both `themeCss` and the generated CSS are run through `escapeStyleClose` before being placed inside the
+ * trusted `<style>` element: neither is guaranteed free of a literal `</style>` (or `</STYLE\n>`, `</style >`,
+ * etc. — the closing sequence a browser's HTML parser recognizes regardless of case or trailing whitespace
+ * before `>`), which would otherwise close the trusted element early and let the remaining text be parsed as
+ * document markup. `themeCss` is already sanitized by sandboxThemeCss, but this is defense in depth against a
+ * caller that bypasses it.
+ *
  * NOTE (documented judgment call): SandboxPolicy.maxDomNodes/maxDomDepth/mutationsPerMinute are resolved by
  * resolvePolicy but cannot reach this function without changing its frozen signature (kept exactly as before
  * so mountSandboxNode / renderer-react / renderer-wc / sample-web need no changes) — buildRuntimeJs is always
@@ -67,8 +74,10 @@ export function buildSrcdoc(
     scripts: parts.scripts.join("\n;\n"),
   });
   const titleTag = parts.title !== "" ? `<title>${escapeHtml(parts.title)}</title>` : "";
-  const themeStyle = themeCss != null && themeCss !== "" ? `<style>${themeCss}</style>` : "";
-  const generatedStyle = parts.styles.length > 0 ? `<style>${parts.styles.join("\n")}</style>` : "";
+  const themeStyle =
+    themeCss != null && themeCss !== "" ? `<style>${escapeStyleClose(themeCss)}</style>` : "";
+  const generatedStyle =
+    parts.styles.length > 0 ? `<style>${escapeStyleClose(parts.styles.join("\n"))}</style>` : "";
   const head =
     `<head><meta http-equiv="Content-Security-Policy" content="${escapeAttr(nonceCsp)}">` +
     `${titleTag}${themeStyle}${generatedStyle}` +
@@ -82,6 +91,16 @@ function escapeAttr(value: string): string {
 
 function escapeHtml(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/**
+ * Escapes `</` to `<\/` in CSS text bound for a trusted `<style>` element. `\/` is a valid CSS escape for `/`
+ * (an escaped code point resolves to the character it names), so this changes nothing about how the CSS is
+ * interpreted, but it means the text can no longer contain the literal three-character sequence `</` that an
+ * HTML parser needs to recognize a closing tag — see buildSrcdoc's docstring for why this matters.
+ */
+function escapeStyleClose(value: string): string {
+  return value.replaceAll("</", "<\\/");
 }
 
 /** 128-bit nonce (aids source verification of the handshake) */

@@ -13,6 +13,11 @@ import { createFixedSpecs, type OutputLang } from "../src/intents/fixed-specs.js
 // Note: en/ja variants are written as separate `it()` blocks (not a shared loop) on purpose — each
 // `toMatchInlineSnapshot()` call must sit at its own source location, since the inline-snapshot
 // mechanism keys the expected value by call site, not by test name.
+//
+// sales.records is the one deliberate exception to "any snapshot change means a bug": its "g"
+// (presentSpreadsheet) component's props gained `serverSide: true` (sort/paging now go through the
+// reserved _sort/_dir/_cursor/_limit params instead of a one-shot full fetch), so the four sales.records
+// snapshots below were re-recorded for that reason alone — every other field is unchanged.
 
 /** A deterministic dummy hash — fixed-specs.ts never reads it, only carries it through to spec.intent. */
 const HASH = `sha256:${"0".repeat(64)}`;
@@ -1727,6 +1732,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "props": {
               "editable": false,
               "pageSize": 50,
+              "serverSide": true,
             },
             "type": "presentSpreadsheet",
           },
@@ -1871,6 +1877,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "props": {
               "editable": false,
               "pageSize": 50,
+              "serverSide": true,
             },
             "type": "presentSpreadsheet",
           },
@@ -2005,6 +2012,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "props": {
               "editable": false,
               "pageSize": 100,
+              "serverSide": true,
             },
             "type": "presentSpreadsheet",
           },
@@ -2131,6 +2139,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "props": {
               "editable": false,
               "pageSize": 100,
+              "serverSide": true,
             },
             "type": "presentSpreadsheet",
           },
@@ -2168,6 +2177,140 @@ describe("fixed-specs snapshot: sales.records", () => {
           "canonical": "sales.records",
           "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
           "params": {},
+        },
+        "kohaku": "0.2",
+        "provenance": {
+          "cache": "miss",
+          "composedBy": "fixed-spec-template",
+          "tier": "L0",
+        },
+        "state": {
+          "noteOpen": false,
+        },
+      }
+    `);
+  });
+
+  it("en: limit 500 clamps pageSize to the serverSide upper bound", async () => {
+    const spec = await build(
+      "en",
+      intent("sales.records", { limit: 500 }),
+      refs("query://sales/records?limit=500"),
+    );
+    expect(spec).toMatchInlineSnapshot(`
+      {
+        "components": [
+          {
+            "children": [
+              "t",
+              "openNote",
+              "noteDialog",
+              "g",
+            ],
+            "id": "root",
+            "props": {
+              "direction": "vertical",
+              "gap": "md",
+            },
+            "type": "layout.stack",
+          },
+          {
+            "id": "t",
+            "props": {
+              "level": 2,
+              "text": "Sales Records (All periods)",
+            },
+            "type": "text.heading",
+          },
+          {
+            "id": "openNote",
+            "props": {
+              "label": "Add a note",
+              "variant": "secondary",
+            },
+            "type": "action.button",
+          },
+          {
+            "children": [
+              "noteForm",
+            ],
+            "id": "noteDialog",
+            "props": {
+              "description": "Writes go part → API directly (with a capability token) and never pass through the LLM's context.",
+              "title": "Add a note to these records",
+            },
+            "type": "overlay.dialog",
+            "visibleWhen": {
+              "eq": true,
+              "ref": "$state.noteOpen",
+            },
+          },
+          {
+            "id": "noteForm",
+            "props": {
+              "action": "annotate",
+              "fields": [
+                {
+                  "label": "Note for these records",
+                  "name": "note",
+                  "placeholder": "e.g. Check North America's growth",
+                  "required": true,
+                  "type": "text",
+                },
+              ],
+              "submitLabel": "Save",
+              "successMessage": "Note saved (the table was refetched at the latest data version).",
+            },
+            "type": "presentForm",
+          },
+          {
+            "data": {
+              "$ref": "query://sales/records?limit=500",
+            },
+            "id": "g",
+            "props": {
+              "editable": false,
+              "pageSize": 500,
+              "serverSide": true,
+            },
+            "type": "presentSpreadsheet",
+          },
+        ],
+        "dataVersion": "template",
+        "events": [
+          {
+            "emit": "state.set",
+            "on": "openNote.press",
+            "payload": {
+              "key": "noteOpen",
+              "value": true,
+            },
+          },
+          {
+            "emit": "state.set",
+            "on": "noteDialog.close",
+            "payload": {
+              "key": "noteOpen",
+              "value": false,
+            },
+          },
+          {
+            "emit": "action.invoke",
+            "on": "noteForm.submit",
+            "payload": {
+              "note": "$value.note",
+              "refs": [
+                "query://sales/records?limit=500",
+              ],
+            },
+          },
+        ],
+        "intent": {
+          "canonical": "sales.records",
+          "hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "params": {
+            "limit": 500,
+          },
         },
         "kohaku": "0.2",
         "provenance": {

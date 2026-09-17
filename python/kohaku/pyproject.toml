@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 # The REST host (M5) / MCP host (M6) / LLM adapters (M3) are adopted incrementally.
 rest = ["fastapi>=0.115", "uvicorn>=0.34"]
-mcp = ["mcp>=1.9"]
+mcp = ["mcp>=2.2"]
 llm = ["httpx>=0.28"]
 # Native LLM adapters (other than OpenAI-compatible). Symmetric with the TS claude / gemini providers.
 claude = ["anthropic>=1.5"]

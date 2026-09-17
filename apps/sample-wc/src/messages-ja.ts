@@ -22,6 +22,7 @@ export const JA_MESSAGES: RendererMessages = {
   spreadsheetTotal: (total, shown) => `全 ${total} 行中 ${shown} 行を表示`,
   spreadsheetNextPage: "次へ",
   spreadsheetFirstPage: "最初のページ",
+  spreadsheetEditCell: (column) => `${column}を編集`,
   chartDefaultLabel: (kind) => `${kind} チャート`,
   nodeRenderFailed: (type, id) => `部品の描画に失敗しました(${type} / ${id})`,
   metricDelta: (delta, direction) =>

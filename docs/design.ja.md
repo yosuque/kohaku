@@ -106,7 +106,7 @@ flowchart LR
 
 同一プロトコル(Kohaku Protocol v0.1)の **Python フル移植**をモノレポ内に同居させる(`python/` の uv workspace。pnpm workspace 外)。TS 参照実装とは**ワイヤ互換** — canonical JSON がバイト一致するため `intent.hash` / `specHash` / キャッシュキー / `catalogFingerprint` が言語をまたいで一致する。TS ホスト ⇄ Python ホストの conformance 通過が「プロトコルは言語非依存」の実証になる(renderer-react ⇄ renderer-wc の parity が「Spec はレンダラー非依存」の実証であるのと同型)。
 
-- **契約境界は `spec/`**。Python は `spec/`(SPEC.md + JSON Schema)とビルド済みレンダラー HTML にのみ依存し、TS パッケージ内部には触れない。適合状況は conformance **MUST 19/19 = CONFORMANT** — 19 は conformance manifest の全 32 MUST のうち黒箱検査可能なもので、残り 13 件の reference MUST(MCPAPP-* / SBX-*、および文書規範 4 件)はパッケージテストで担保(CI の `conformance-ts` ジョブ〈TS ホスト〉と `conformance-python` ジョブ〈Python ホスト〉がそれぞれのサンプルホストを起動して TS 側 CLI の黒箱検査で毎コミット担保)。
+- **契約境界は `spec/`**。Python は `spec/`(SPEC.md + JSON Schema)とビルド済みレンダラー HTML にのみ依存し、TS パッケージ内部には触れない。適合状況は conformance **MUST 19/19 = CONFORMANT** — 19 は conformance manifest の全 33 MUST のうち黒箱検査可能なもので、残り 14 件の reference MUST(MCPAPP-* / SBX-*、および文書規範 5 件)はパッケージテストで担保(CI の `conformance-ts` ジョブ〈TS ホスト〉と `conformance-python` ジョブ〈Python ホスト〉がそれぞれのサンプルホストを起動して TS 側 CLI の黒箱検査で毎コミット担保)。
 - **パッケージ対応**(`python/kohaku/src/kohaku/` のサブモジュールが TS `packages/*` に対応):
 
 | Python サブモジュール | 対応する TS パッケージ |
@@ -120,6 +120,7 @@ flowchart LR
 | `lineage/` | lineage(記録・昇格・固定化) |
 | `evals/` | evals(judge / golden / FixtureLlm) |
 | `storage/` | sample-api の storage-port.ts 相当(FileStoragePort) |
+| `host_core/` | host-core の部分移植: `capability.py`(capability 発行)・`errors.py`・`fixation.py`(`FixationDeliveryHost.admit` + self-heal シーケンス)・`keyed_mutex.py`(`host_rest` と `host_mcp` の両方が fixation self-heal を直列化する共有 keyed mutex — REST は `(tenant, intentHash)`、MCP は `intentHash` 単独でキー)・`trace_context.py`。残る TS host-core モジュール(`action-effects.ts` / `allowed-actions.ts` / `binding-ref.ts` / `intent.ts` / `view-recorder.ts`)はまだ Python 側に対応が無く、`host_rest` / `host_mcp` が共有モジュールを import する代わりに相当ロジックを個別実装している(`docs/runbooks/python-mirror.md` の「host-core にモジュールを足したら Python `host_core` にも」チェック参照) |
 | `host_rest/` | host-rest(FastAPI) |
 | `host_mcp/` | host-mcp-apps(MCP Apps プロファイル) |
 
@@ -432,6 +433,7 @@ Anthropic の構造化出力経路はリクエストの出力文法(スキーマ
 - **L2 の出力形式は JSON ラップではなく素の HTML 文書**(`generateText` 経路。表示タイトルは `<title>` から導出し、コードフェンス・前後の説明文は `extractHtmlDocument` が除去する)。小型モデルは「長大な HTML を JSON 文字列フィールドに埋め込む」形式で系統的に壊れるため(文法制約モード = 文字列の早期クローズによる決定的な途中切れ / プロンプト JSON モード = エスケープ崩れ。いずれも実測)、モデルが最も自然に書ける形式に揃えた。その後 `splitArtifact`(`guest/artifact-parts.ts`)がタイトル・`<style>` 内容・`<script>` 本文・body マークアップに分解する — srcdoc は artifact 自身のマークアップを一切載せず、Worker 自身のサニタイズ HTML パーサだけが body を DOM 化し、それも他の変更と同じく applier の許可リスト検査を経る op として現れる。
 - **配信前スモーク検証(`ComposePolicy.l2Smoke`・任意配線)**: 静的 lint 通過後、`@kohaku-ui/sandbox/smoke` の `createL2Smoke()` が**本番と全く同じコードパスをリハーサル**する — `domApplierMain` を、信頼された iframe 文書の代わりとなる jsdom 文書に対して関数として直接呼び出し、Worker 側(`buildWorkerShimJs() + scripts`)は実 Worker の代わりに(jsdom には無いため)`node:vm` で実行し、両者をインメモリのポートで接続する。(疑似)親側に `ui.ready` が届くまで待ち、それより前の実行時例外(`L2_SMOKE_RUNTIME_ERROR` — `ResizeObserver` や `canvas.getContext` 呼び出しのようなシム API の欠落も含む。今やスモークと本番の両方が同じ TypeError を投げる)と、`readyTimeoutMs`(既定 1 秒)内の `ready()` 未到達(`L2_SMOKE_NO_READY`)を検出し、非空なら静的 lint と同じ修復ループに差し戻す。ブラウザが実行するのと同一のシム・applier コードなので、シムの能力ギャップは配信後に発覚するのではなく配信前に捕捉される。jsdom と `node:vm` は optional peer で、いずれか未導入の環境・検証器の throw はすべて fail-open(従来挙動)。vm コンテキスト内では DOM 的な `unhandledrejection` イベントが一切発火されないため、生成スクリプト内の待ち受けられていない async 例外は process レベルで **realm 相関付き**(当該 vm コンテキストの Promise 由来のときだけ記録)により捕捉する。sample-api は既定オンで配線(sample-mcp は createApp 共有で自動追従)。
   - **`createL2Smoke` は信頼済み入力を前提とした検査であり、セキュリティ境界ではない**: LLM 生成の `<script>` を `node:vm` で**ホストプロセス自身の中で**実行し、ホストレルムのクロージャをそのスクリプトの実行コンテキストへ直接注入する — 上記のブラウザ側多重防御(opaque-origin iframe + nonce CSP + Worker + applier 許可リスト + ブリッジ許可リスト)と異なり、悪意あるスクリプトをホストプロセスのメモリ/環境から隔離する仕組みはここには存在しない。現状の配線(検証対象の HTML の出所が composer 自身の固定システムプロンプトによる L1/L2 生成パイプラインのみ)では安全だが、composer の生成を経ずに未信頼の入力が sandbox/smoke の HTML 引数へ直接到達しうる経路には、プロセス/ワーカー単位の隔離を先に追加しない限り接続してはならない。
+  - **「信頼済み入力」はプロンプトインジェクションに対する免疫を意味しない**: `sales.custom` の自由記述のような、利用者の自然言語がそのまま L2 生成プロンプトに入る経路では、生成された HTML はあくまでコンポーザーの出力ではあるものの、悪意ある利用者はプロンプト経由でその内容を誘導できる。「固定のシステムプロンプトの下で自前のパイプラインが生成したものである」という前提だけでは、構造化された intent パラメータのみで駆動されるチャートの場合と異なり、`createL2Smoke` のインプロセス `node:vm` 実行に攻撃者の影響を受けたコンテンツが到達しないことを保証できない。これは参照実装が把握したうえで受容しているギャップである: `l2Smoke` は opt-in の `ComposePolicy` 配線であり(未設定なら生成スクリプトをインプロセスで一切実行しない)、未配線時は既定でオフになる。したがって露出があるのは、あるデプロイが明示的にこれを配線した場合に限られる。信頼できない利用者に compose を開放しつつこの事前配信チェックも使いたい製品は、スモーク実行そのもの(worker スレッドまたは別プロセス)を隔離しなければならない — L2 lint や固定システムプロンプトという前提は、その経路での隔離の代替にはならない。
 - artifact は mount 前に sha256 検証(改ざん・取り違え防止)。
 - boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind:"error"` — Worker が同期 error / unhandledrejection の両方を報告し、applier 自身も Worker 起動失敗や `messageerror` を報告する)が届いたら、boot timeout(既定 5 秒)を待たず実エラーの内容で即 `error` 状態にする。ready 後のエラーは描画済み UI を壊さないため状態遷移しない(telemetry での観測のみ)。
 - **強制停止が可能になった**: destroy 時の `worker.terminate()` は暴走した生成スクリプト(無限ループ等)を実際に停止できる — 旧来の同一文書内実行モデルにはこれに相当する停止手段が無かった。
@@ -487,6 +489,7 @@ stateDiagram-v2
 - **publish 自身の監査記録は fail-open**: `component.published` の記録はスナップショット遷移(既に永続化済み)と投影適用(`onPublish`)の間に位置するため、記録自体が throw しても(ストレージの瞬断など)例外を捕捉し任意の `onError` フック(`{ endpoint: "promotion.publish.audit", artifactId, tenant? }`)へ報告するだけで伝播させない — `onPublish` はそのまま実行される。これは「投影が適用されること」を「監査イベントが確実にログに乗ること」より優先する意図的な設計で、`reconcile` がその差分を埋める: published スナップショットの走査に `component.published` 監査のバックフィルも組み込み、各 published スナップショットについて `listLineage({ type: ["component.published"], artifactId, tenant })` を確認し、見つからなければ `reconciled: true` を監査マーカーとして1件記録する(バックフィル自体の失敗も同じ `onError` フック、エンドポイント `"promotion.reconcile.audit"` で報告される)。2回目の reconcile はバックフィル済みイベントを検出し二重記録しない。`reconciled: true` イベントは `analytics.ts` の `promotions.published` 集計で他のイベントと同様にカウントされる(どちらにせよ投影は 1 回だけ公開されており、遅れたのは監査ログへの記録だけであるため)。**unpublish 自身の `component.withdrawn`(`from: "published"`)監査記録も同様に fail-open**(`onError` エンドポイント `"promotion.unpublish.audit"`)であり、`reconcile` の withdrawn スナップショット走査は対称的に欠損分をバックフィルする(`from: "published"` で照合するため、昇格前の withdraw が記録した無関係な `component.withdrawn` イベントはバックフィルを抑止しない)。
 - **published 投影の自己完結**: `published` 遷移時、`persist` は `html` / `sha256` / `ref` / draft の `componentType` をスナップショット自身の `data` にも複製する(既に保存されている `draft` に加えて)。これ以前は `reconcile` が published 投影の `html` を復元できる手段は `component.generated` の Lineage イベントのみだったため、`lineage.jsonl` の置換・消失が起きると、スナップショット(状態権威)は `published` のままなのに次の reconcile で published コンポーネントがカタログから無音消失する — 「状態権威」と謳いながらスナップショット単体では自己完結していなかった。候補のロードは今はまずスナップショット自身の複製を優先し、それが無い場合(この変更より前に永続化された古いスナップショット、または複製を持たない非 published 状態)のみ `component.generated` にフォールバックする。他の遷移(unpublish 自身の persist を含む。呼び出し時点で候補の状態は既に `withdrawn`)では複製しない — withdrawn/rejected なスナップショットには `html` から再構築すべき投影がそもそも残っていない。
 - **`reconcile` は起動時に限らずオンデマンドで呼べ、結果を返す**: `POST /promotions/reconcile`(オペレータ用の逃げ道、host-rest)は起動時と同じ投影復旧パスを実行する。専用のガバナンス kind(`promotion.reconcile`)で保護され、promotion ロックのテナント無し用バケットで直列化される(1 テナントに限定されない全テナント横断の走査であるため)。`reconcile()` は `{ published, withdrawn, skipped }` を返すようになった: 何件の published/withdrawn スナップショットの投影が再適用されたか、および投影を再構築できず(published スナップショットにスナップショット自身の `html` 複製も `component.generated` も無い)スキップした件数 — 各スキップは黙って握りつぶされず `onError({ endpoint: "promotion.reconcile.projection" })` でも個別に報告される。
+- **`reconcile` は published/withdrawn スナップショットだけを走査し、各候補を並行遷移と突き合わせて再確認する**: `mayHaveProjection(status)` 述語(`published` と `withdrawn` のみ — `schema_proposed` は draft を持つが未公開なので投影を持たない)が、ロードすら行わずに他の全ステータスをスキップする。走査(`listPromotionStates`)と各候補自身のロード(`store.load`。常にスナップショットを読み直す)は間にロックを挟まない別々の読み取りであり、上記の reconcile ルートが取るテナント無し用バケットは *テナント指定の* approve/withdraw とは直列化しないため、走査とロードの間にそれが割り込みうる。`store.load` の読み取りは既に手元にある最新値なので、両分岐ともロード直後にその候補の status を再確認し、走査が期待していた値と食い違っていれば — 陳腐化した走査エントリは失敗ではないので数えず `onError` も出さずに — スキップする(published 分岐は走査後に withdrawn になった候補を再公開せず、withdrawn 分岐は走査後に再公開された候補を unpublish しない)。もう一方の分岐が(この回か次回の reconcile で)スキップされたエントリを収束させる。走査+ロードの一連をテナントごとの全ロックバケットに対して直列化する(2 段ロック)ことで、走査レベルでもこの窓を完全に塞げるはずだが、構造的な後続課題として今回は実装しない。
 - **`approve()` は既に published な候補への再実行を no-op にせず投影を収束させる**: バッチ内の遷移が一つも走る前の時点で候補が既に `published` であった場合の再 `approve()` は、永続化済みの draft/html で `onPublish` を再実行してそのまま返す(以前は投影を再適用せず成功を返すだけだった)。`onPublish` の失敗はスナップショットが `published` に遷移した後にしか起こり得ない(上記の順序)ため、その失敗後に `approve()` を再試行した呼び出し元は以前は「成功」応答を受け取りながら投影は次の `reconcile` まで反映されないままだった — この差分を待たずに即座に収束させる。`reconcile` が既に前提としている `onPublish` の冪等性契約に乗るだけなので安全。
 - **`judge_failed` からの `approve()` による復帰**: 状態機械は既に `judge_failed --nominate--> candidate`(上図)を許可していたが、サービス層 `approve()` の入口は `in_use` / `changes_requested` からしか nominate せず、ブロッキングなジャッジ失敗(`judgeBlocking: true`)で `judge_failed` に留まった候補には明文化された復帰経路が無かった。`approve()` の入口は今は `judge_failed` からも nominate し、candidate → judge → review → publish に再合流する(ジャッジをやり直せば通る可能性がある)— 既存の `changes_requested` 復帰と対称。
 - **テナント安全なスキャン**: `artifactId` はコンテンツの sha256 由来でグローバルに一意なため、同じ artifactId を複数テナントが独立に昇格させることがあり得る。テナント範囲なしで動作しうる読み取り経路(`list`/`evaluateAndList` の読み取りステップである `scanCandidates`、および `listByStatus`)はいずれも、呼び出しレベルの(未指定かもしれない)tenant ではなく各レコード自身が記録した tenant でキー付け・ロードするようになった。これにより全テナント横断のスキャンが、同じ artifactId を持つ 2 テナントの独立した候補を 1 件に潰したり、使用回数を合算したりしなくなる。テナント範囲なしで動作しうる唯一の書き込み経路である `evaluateAndList` の自動 nominate は、テナント付きの候補をテナント無し状態として永続化することは安全にできない(そのテナント自身のガバナンス状態を覆い隠す・汚染することになる)ため、代わりにその候補 1 件の永続化だけをスキップし(`in_use` のまま残す)、`onError({ endpoint: "promotion.nominate.tenant" })` でスキップを報告する — レコードが一切 tenant を持たない単一テナント運用はこのガードの影響を一切受けない。
@@ -551,35 +554,38 @@ attach / deps インスタンスごとにメモ化して `allowedActions` を計
 - ツールの UI 宣言 `_meta` は **modern(ネスト `_meta.ui.{resourceUri, visibility}`。SEP-1865 正式化 2026-01-26 以降の正)と legacy(フラット `_meta["ui/resourceUri"]` / `_meta["ui/visibility"]`)を併記**(`toolUiMeta`)— ChatGPT 等 modern を第一に見るホストと旧ホストのどちらでも UI ツールとして認識される。`kohaku_compose`(+ 任意の intentTools)は `visibility = ["model"]`、**`kohaku_resolve_binding` / `kohaku_event` / `kohaku_action` は `["app"]`(iframe 専用)** — バルクデータ・インタラクション・書き込みがモデルのコンテキストを通らない(§4.3 問題 3 の解を MCP 面でも貫徹)。
 - **`kohaku_action`(app 専用。書き込み直結路)**: REST の `POST /binding/action` に対称な書き込み口。`{action, payload?, capability}` を受け、capability 検証の前にまず `action` を `DomainPort.listOperations()`(host-core の `createAllowedActions`。`issueCapabilityForSpec` の write スコープ絞り込みと同じメモ化済みソース)と突き合わせ、未知の action は capability 検証を試みる前に `isError` で拒否する。`payload` は canonical JSON で 64KB 上限(超過も `isError`。`OperationDescriptor.paramsSchema` によるフル形状検証は後続課題 — 本リポジトリには JSON Schema 検証器がまだ配線されていない)。そのうえで**write スコープ**(`{kind:"write", ref:action}`)で capability を検証してから `domain.invoke(action, payload)` する。capability 発行スコープの収集(read = 全 `$ref` + bind variant、write = UI が宣言した書き込み action 名)は spec-core の `collectCapabilityScopes` に一元化し、host-core の `issueCapabilityForSpec` がそれを消費する。REST と MCP はいずれもこれを直接呼ぶため、3 層とも発行規則が一致する。応答 `structuredContent` は `{result, invalidates?, refVersions?}` で、`invalidates` / `refVersions` は副作用宣言フック `McpHostDeps.actionEffects` 配線時のみ載る(未配線なら `{result}` のみ = 後方互換。data-binding の `parseActionResult` が両形を読む)。TS(`packages/host-mcp-apps/src/server.ts`)/ Python(`python/kohaku/src/kohaku/host_mcp/server.py`)双方に実装。
 - **REST と対称な View Lineage 監査(`McpHostDeps.recorder`)**: host-core の `ViewRecorder` インターフェース(両プロファイルで契約を共有するため host-rest から移設)を REST プロファイルと同じ形で配線する — compose 系ツール呼び出しのたびに `composed` + `fallback`(`spec.provenance.fallback` から判定する `recordViewFallback`。REST の `recordFallbackIfAny` と共有)を記録し、`kohaku_event` は再合成前に `interacted` を記録する(`interacted` を `composed` より先に記録する REST の `/events` と対称)。レガシーの `McpHostDeps.onComposed`(spec と trace のみ。`interacted`/`fallback` は記録しない)は `recorder` 未配線時のみ引き続き呼ばれ、両方配線されていれば `recorder` を優先する(移行中のプロダクトが二重記録しないため)。Python はローカル宣言の `ViewRecorderProtocol` で対称化する(2 プロファイルは import-linter のレイヤー契約上の独立した兄弟なので `host_rest` からは import しない)。
-- **ツール呼び出しのキャンセル伝搬(TS のみ)**: `kohaku_compose` / `kohaku_render_snapshot` / intent tools / `kohaku_event` は MCP SDK のツール呼び出しごとの `extra.signal` を受け取り、`composeWithFixation` に `abort` として通す — クライアントがキャンセルしたツール呼び出しは REST の `c.req.raw.signal` と同様に L1/L2 の LLM 生成を止める(`trace.cancelled` が立つと監査記録をスキップする。上の「クライアントの abort は生成フォールバックと区別する」参照)。`kohaku_action` は書き込み実行前に `extra.signal.aborted` を確認する(その先には `DomainPort.invoke` にキャンセル手段が無いためこれ以上のキャンセル伝搬はできない)。導入済みの Python mcp SDK は `RequestContext` にツール呼び出しごとのキャンセルオブジェクトを持たず、既存の `ComposeFixationContext.abort` へ通せない — 代わりに構造的にキャンセルが起きる(クライアントのキャンセル通知がリクエストを実行する anyio のタスクグループを cancel し、ハンドラが待機中の `await` をどこであれ巻き戻す)。この事情は移植せず `host_mcp/server.py` の `_call_tool` 直上の NOTE コメントとして記録する。
+- **ツール呼び出しのキャンセル伝搬(TS のみ)**: `kohaku_compose` / `kohaku_render_snapshot` / intent tools / `kohaku_event` は MCP SDK のツール呼び出しごとの `extra.signal` を受け取り、`composeWithFixation` に `abort` として通す — クライアントがキャンセルしたツール呼び出しは REST の `c.req.raw.signal` と同様に L1/L2 の LLM 生成を止める(`trace.cancelled` が立つと監査記録をスキップする。上の「クライアントの abort は生成フォールバックと区別する」参照)。`kohaku_action` は書き込み実行前に `extra.signal.aborted` を確認する(その先には `DomainPort.invoke` にキャンセル手段が無いためこれ以上のキャンセル伝搬はできない)。導入済みの Python mcp SDK の `ServerRequestContext`(全ての低レベルリクエストハンドラに渡される。mcp 2.x — 下の「Python `mcp` 2.x 移行」参照)は依然としてツール呼び出しごとのキャンセルオブジェクトを持たず、既存の `ComposeFixationContext.abort` へ通せない(より豊富な `mcp.server.context.Context` にはキャンセルオブジェクトがあるが、ランナーは低レベルハンドラ向けにこれを構築しない)— 代わりに構造的にキャンセルが起きる(SDK のリクエストディスパッチャがクライアントの `notifications/cancelled` を、そのリクエストを実行しているタスクの cancel として適用し、ハンドラが待機中の `await` をどこであれ巻き戻す)。この事情は移植せず `host_mcp/server.py` の `_call_tool` 直上の NOTE コメントとして記録する。
 - **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`、2026-07-28 dated-stable、TS のみ)**: `kohaku_compose` と intent tools は、リクエストごとにオプトインした場合(`_meta["io.modelcontextprotocol/clientCapabilities"].extensions["io.modelcontextprotocol/tasks"]`)にタスク対応になり、L1/L2 生成をブロックする代わりに `CreateTaskResult` を返す。`tasks/get`/`tasks/cancel` は SDK が文書化している拡張手段に対して実装済みだが、導入済みの SDK バージョンでは現状ワイヤ越しに到達不能(検証済みの SDK バージョン制約であり kohaku 側のバグではない)— 設計全体とその制約の詳細は下の「MCP Tasks 拡張」節を参照。
 - 全ツール結果に `specToText(spec)` のテキストフォールバック(content[0])を必ず格納 — UI 非対応ホストでも意味が通る(MCP Apps のオプショナル拡張思想)。**`specToText` の定義元は spec-core**(`spec-text.ts`。widget の `ui/update-model-context` 還流と共有するため。host-mcp-apps は後方互換の再エクスポート)。
 - **リソース側 `_meta.ui`(SEP-1865)**: 共有レンダラーリソースに csp を空 allowlist で明示宣言(`resourceUiMeta()`。外部オリジン不要 = 最も厳しいサンドボックスをホストに許可)。csp / permissions はツール側 `_meta.ui` には置けない(ext-apps 型は `never` で拒否 — 型整合は `test/ext-apps-interop.test.ts` が devDependency の ext-apps 公開型と突き合わせて固定)。resources/list と read contents の両方に同値で載せる(contents 優先の規定)。TS / Python 対称。
 - **mcp-ui レガシー UIResource 併記(`AttachOptions.legacyUiResource`・既定 off)**: SEP-1865 未対応で `ui://` プレフィックス検出だけの mcp-ui レガシーホスト(LibreChat / Smithery / Nanobot 等)向けに、compose 系ツール結果の content[] へ自己完結スナップショット HTML(`snapshotHtmlFor` — render_snapshot と共有)を `{type:"resource", …}` で後置する。静的表示(自己完結スナップショットの思想)・組み立て失敗は fail-open で併記なし・約 1MB/結果のため modern ホストでは無効のまま。sample-mcp は `KOHAKU_MCP_LEGACY_UI=1` で opt-in。TS / Python 対称。
 - **widget(共有レンダラー)のホスト統合**: ①`ui/update-model-context` — app 専用ツール経由の再合成・書き込み後に現在ビューの要約テキスト(specToText)だけをモデルコンテキストへ還流(対応ホストのみ・バルクデータは通さない・初回 tool-result では送らない)。②`widgetState`(ChatGPT 独自。標準機構は無い)— view 適用ごとに `{spec, capability}` を保存し remount 時に即時復元(tool-result / 自己復旧より速い初期表示。復元済みなら自己復旧を抑止)。③`displayMode`(MCP Apps 標準)— appCapabilities で inline / fullscreen を宣言し、fullscreen 対応ホストでのみ切替トグルを描画(`renderer/host-integration.ts` に純ロジックを分離)。④**ホストテーマ追従(MCP Apps / OpenAI Apps SDK 標準)** — MCP Apps / ChatGPT は `hostContext.theme`(light/dark)と `hostContext.styles.variables`(`--color-*` / `--font-*` の CSS カスタムプロパティ。`@modelcontextprotocol/ext-apps` の `McpUiStyleVariableKey`)へ収束しており、kohaku のセマンティックトークン設計(§7.2)がそのまま受け皿になる: `renderer/host-integration.ts` の `resolveHostTheme(hostContext)`(純関数・DOM 非依存)が `ui/initialize` の hostContext(`app.getHostContext()`)と `ui/notifications/host-context-changed`(変更フィールドのみを含む通知なので、常にマージ済みのフルコンテキストから再導出する)の両方から `{mode, variables}` を抽出し、`main.tsx` が `mode` に応じて `defaultLightTheme` / `defaultDarkTheme` を基底に選び、renderer-core の `themeFromHostStyles(variables, base)` で上書きしてから `RendererProvider` の `theme` に渡す。対象外: L2(自由生成 HTML)は v0.1 の MCP 面に露出していないため(上述)、L0/L1 の renderer-react 経路のみが対象。
-- **認可モデル(REST との差)**: MCP の compose / イベント経路の初期データ事前解決(`preresolveInitialData` で tool-result `_meta` に同梱する初期 `$ref` + bind variant のデータ)は、**capability トークンではなく接続の ambient principal(`McpHostDeps.principal`。未配線なら anonymous)**で `DomainPort` を叩く(`packages/host-mcp-apps/src/server.ts` の `deps.principal ?? ANONYMOUS`)。capability(HMAC 署名トークン)は tool result の `_meta["kohaku/capability"]` に載せて発行し(`structuredContent` ではない。決定 #32 参照)、app 専用ツール(`kohaku_resolve_binding` / `kohaku_event` / `kohaku_action`)側の再取得・書き込みで検証する。したがって接続の principal 解決(認証)はプロダクト責務で、未配線の認証なしデモでは anonymous がデータ面へ到達しうる(§14 参照)。`${prefix}_action` は capability 検証の前に `action` を `DomainPort.listOperations()` と突き合わせ `payload` サイズも上限を課す — `kohaku_action` の app-only visibility ヒントを尊重しないホストに対する多層防御である。
+- **認可モデル(REST との差)**: MCP の compose / イベント経路の初期データ事前解決(`preresolveInitialData` で tool-result `_meta` に同梱する初期 `$ref` + bind variant のデータ)は、**その呼び出し 1 回について解決された principal** で `DomainPort` を叩く: `McpHostDeps.resolvePrincipal?: (extra: ServerContext) => Principal | Promise<Principal>`(TS)/ `resolve_principal`(Python)をツール呼び出しごとに 1 回ハンドラ内で解決し、未配線なら `McpHostDeps.principal`、それも未配線なら組み込みの anonymous principal にフォールバックする。`resolvePrincipal` が throw した場合は fail-closed(そのツール呼び出しは構造化されたツールエラーを返し `onError` に報告される。anonymous へ黙って後退することはない)。ここでの処理は capability トークンの検証ではなく、単なる呼び出し単位の identity 解決である。capability(HMAC 署名トークン)は tool result の `_meta["kohaku/capability"]` に載せて発行し(`structuredContent` ではない — 決定 #32 参照)、app 専用ツール(`kohaku_resolve_binding` / `kohaku_event` / `kohaku_action`)側の再取得・書き込みで検証する。これらのツールも `AuthzPort` の `verify` が principal を返さない場合は同じ解決済み principal にフォールバックする(`verdict.principal ?? principal`)。TS では `ToolContext.principalOf`(attach スコープ)が呼び出しごとの `ToolCallContext.principal` に解決され、`forCall` で組み立てられる — compose パイプライン(`composeAndAudit` / `composeAndPackage` / `composeForTool` / `preresolveInitialData` / `snapshotHtmlFor`)は解決済みの principal を伴わずに呼び出すことができない(型エラーになる)ため、暗黙に読める attach 時点の「ambient principal」はもう存在しない。したがって接続の principal 解決(認証)は `resolvePrincipal`(またはリクエスト/セッション単位の `McpHostDeps` ファクトリ)を配線するプロダクト側の責務であり、未配線の認証なしデモでは anonymous(または設定されていれば単一の静的 `principal`)が全接続についてデータ面へ到達しうる(§14 参照)。`${prefix}_action` は capability 検証の前に `action` を `DomainPort.listOperations()` と突き合わせ `payload` サイズも上限を課す — `kohaku_action` の app-only visibility ヒントを尊重しないホストに対する多層防御である。
 - **`kohaku_render_snapshot`(model 可視。`snapshotWriter` 配線時のみ登録)**: UI 非対応ホスト(Claude Code / Codex CLI 等ターミナル)向けに、Web と同一の共有レンダラーで描画する自己完結 HTML を書き出す。Spec の各 data を初期 `$ref` + 全 bind variant で事前解決し、レンダラーの `#kohaku-snapshot` プレースホルダに `{spec, data}` を埋め込む(共有レンダラーはこれを検出すると**ブリッジ非接続の静的描画モード**に入る。再合成イベントは no-op)。iframe を描けないホストでの「同一 Spec → 同一描画」の受け皿。`snapshotHtmlFor` は `_meta` の初期データ事前解決と同じ有界並行数 + 全体デッドラインの共通処理(`resolveRefsBounded`〈TS〉/ `_resolve_refs_bounded`〈Python〉)で ref を解決する — 以前は TS が全体デッドラインの無い無制限並列解決、Python が per-ref タイムアウトも全体デッドラインも無い完全逐次解決だったため、1 件のハングした依存先が `render_snapshot` を無期限に止め得た。後述の `legacyUiResource` 併記は、同じ compose 呼び出しがすでに事前解決した ref マップをそのまま `snapshotHtmlFor` へ渡すため、`domain.invoke` を再度呼ばない。
 - **2 トランスポート**: stdio(`src/index.ts` / `start`。Claude Desktop・ターミナル)と Streamable HTTP(`src/http.ts` / `start:http`。claude.ai / ChatGPT へは公開トンネル経由のリモートコネクタ。認証なしデモ・express 非依存の `node:http`)。共通セットアップ(Port 群・`.data`・カタログ・recorder)は `src/setup.ts` に集約する。下記の TS SDK v2 移行以降、HTTP は**ステートレス**: `createMcpHandler`(`@modelcontextprotocol/server`)が `setup.createServer` から**接続〈セッション〉ごとではなく exchange ごと**(プロトコルレベルのセッションはもう存在しない)に `McpServer` を新規生成し、`toNodeHandler`(`@modelcontextprotocol/node`)がそれを `node:http` にアダプトする。
 - L2 ノードは mcp-app サーフェスでは v0.1 非対応(テキスト代替)。
 
 ### MCP 2026-07-28 / SDK v2 移行
 
-MCP 仕様はプロトコルバージョン 2026-07-28 に進んだ([公式 changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog))。この改訂は 2 段階で採用した: まず changelog のうち**加算的で配線互換な項目**(以下)を、当時導入済みの v1 SDK(TS `@modelcontextprotocol/sdk` 1.x、Python `mcp` 1.x)上でホスト側・SDK 側のアップグレードなしに適用し、その後に**TS の SDK 依存そのものを v2**(`@modelcontextprotocol/server` / `client` / `core` 2.0.0)へ切り替えた(下の「TS SDK v2 移行(完了)」)。**Python は `mcp` 1.x のまま**である — `mcp` 2.x への切替は別途未着手の変更であり、以下の Python 固有の記述(パリティギャップ・`ttlMs`/`cacheScope` のカバレッジ等)はすべて `mcp` 1.x を指す。
+MCP 仕様はプロトコルバージョン 2026-07-28 に進んだ([公式 changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog))。この改訂は 2 段階で採用した: まず changelog のうち**加算的で配線互換な項目**(以下)を、当時導入済みの v1 SDK(TS `@modelcontextprotocol/sdk` 1.x、Python `mcp` 1.x)上でホスト側・SDK 側のアップグレードなしに適用し、その後に**TS の SDK 依存そのものを v2**(`@modelcontextprotocol/server` / `client` / `core` 2.0.0)へ切り替えた(下の「TS SDK v2 移行(完了)」)。**Python もその後 `mcp` 2.x へ移行済み**である(`kohaku-ui[mcp]` の floor `>=2.2`。TS の SDK v2 移行とは別に、より後になって行われた — 下の「Python `mcp` 2.x 移行」参照)。以下の Python 固有の記述は現在すべて `mcp` 2.x の挙動を指す。
 
 TS の SDK メジャーバージョンに関わらず成立する加算的項目:
 
 - **全ツール結果への `resultType: "complete"`**(compose 系 / `resolve_binding` / `event` / `action` /
-  `render_snapshot`、TS + Python)。各言語 1 箇所で付与する(TS: `safeTool`。Python: `_safe_tool` +
-  `_tool_error`)ため、全ハンドラを一様にカバーする。TS 側では SDK v2 切替後も**冗長ではなく引き続き必要**: SDK
-  v2 の 2026-07-28 リクエストごとエンベロープコーデックは `resultType` 自体をスタンプし、cacheable な結果には
-  `ttlMs`/`cacheScope` も充填すると文書化されているが、そのコーデックが動くのは modern(2026 era)の配線経路
-  のみである — このプロファイルの実際の提供経路(`createMcpHandler` の既定 `legacy: "stateless"` フォールバッ
-  ク。現行の実機ホストはすべてこちらを話す。下の「TS SDK v2 移行」参照)も `InMemoryTransport` ベースのテスト
-  も、ハンドラの戻り値をそのまま素通しする — `packages/host-mcp-apps/test/mcp.test.ts` で送出された生の
-  JSON-RPC メッセージを傍受して確認した(SDK v2 の**クライアント**側がパース後に返す `CallToolResult` 型は
-  アプリケーションコードへ渡す前に `resultType` を実際に剥ぎ取る — そこでは `WireOnlyResultKey` 扱いのため、
-  このテストはパース後のクライアントオブジェクトではなく配線バイト自体を読む)。Python の `mcp` 1.x 側の結果
-  スキーマはどちらにせよ影響を受けない(パススルー: `model_config = {"extra": "allow"}`)。
+  `render_snapshot`、TS + Python)。TS 側は 1 箇所(`safeTool`)で付与し、SDK v2 切替後も**冗長ではなく引き続き
+  必要**: SDK v2 の 2026-07-28 リクエストごとエンベロープコーデックは `resultType` 自体をスタンプし、cacheable
+  な結果には `ttlMs`/`cacheScope` も充填すると文書化されているが、そのコーデックが動くのは modern(2026 era)
+  の配線経路のみである — このプロファイルの実際の提供経路(`createMcpHandler` の既定 `legacy: "stateless"`
+  フォールバック。現行の実機ホストはすべてこちらを話す。下の「TS SDK v2 移行」参照)も `InMemoryTransport`
+  ベースのテストも、ハンドラの戻り値をそのまま素通しする — `packages/host-mcp-apps/test/mcp.test.ts` で送出さ
+  れた生の JSON-RPC メッセージを傍受して確認した(SDK v2 の**クライアント**側がパース後に返す `CallToolResult`
+  型はアプリケーションコードへ渡す前に `resultType` を実際に剥ぎ取る — そこでは `WireOnlyResultKey` 扱いのた
+  め、このテストはパース後のクライアントオブジェクトではなく配線バイト自体を読む)。**Python はもうこのスタン
+  プ処理を必要としない**: `mcp` 2.x の `CallToolResult`(および他の全 `Result` サブクラス)は
+  `result_type: ResultType = "complete"` を実フィールドとして宣言しているため、このプロファイルが組み立てる
+  結果はすべて既定でこれを持つ — 移行前の `_safe_tool` + `_tool_error` の
+  `model_copy(update={"resultType": ...})` による回避策(`mcp` 1.x の結果モデルがパススルー
+  `model_config = {"extra": "allow"}` で宣言済みフィールドを持たなかったために必要だった)は削除した。
 - **`_meta.traceparent`(SEP-414)によるトレースコンテキスト、ただし相関 id とは別物**: ツール呼び出しの
   `_meta.traceparent`(+ 存在すれば `_meta.tracestate`)は、厳密な W3C 形式であれば `TraceContext` へパースされ、
   無条件に `ComposeOptions.traceContext` / `ComposeTrace.traceContext` として流れる — **相関 id には決して
@@ -594,7 +600,10 @@ TS の SDK メジャーバージョンに関わらず成立する加算的項目
   `host_core`/`composer` に触る必要があり、この対応が守った host_mcp 限定のファイル範囲の外にある。そのため Python 側は
   `correlation_id`(TS と同じ「相関 id はリクエスト id のみ」というルールで、traceparent 由来には決してしない)
   と `trace_context` を、このプロファイル自身の失敗経路フック(`McpErrorInfo.correlation_id` /
-  `McpErrorInfo.trace_context`。mcp SDK のリクエストスコープ contextvar `request_ctx` 経由で読む)にのみ通す。
+  `McpErrorInfo.trace_context`。mcp SDK が全ての低レベルリクエストハンドラへ直接渡す `ServerRequestContext`
+  〈`ctx`〉から読む — `mcp` 2.x はこれまで使っていたリクエストスコープ contextvar `request_ctx` /
+  デコレータ登録方式を廃止した。`ctx.meta` は `RequestParamsMeta` の TypedDict なので、辞書アクセス
+  〈`meta.get("traceparent")`〉であり属性アクセスではない)にのみ通す。
   完全な対称化(`ComposeOptions`/`ComposeTrace` への `correlation_id`/`trace_context` シンク追加)は、次に
   `host_core`/`composer` に触る WP への持ち越し課題とする。同じ回避策が REST(`HostErrorInfo.trace_context`。
   `traceparent` リクエストヘッダから)にも当てはまる: Python は `traceparent`/`tracestate` の解析・検証自体を
@@ -606,17 +615,21 @@ TS の SDK メジャーバージョンに関わらず成立する加算的項目
   `tools/list` の全ツール名順序(固定ツール → カタログ順の intent tools)を固定し、繰り返し呼んでも同一順序に
   なることを確認するテストを TS(`intent-tools.test.ts`)/ Python(`test_intent_tools.py`)双方に追加した。これ
   で今後の登録順を崩すリファクタが検知可能になる。
-- **list/read 結果への `ttlMs` / `cacheScope`(SEP-2549、`CacheableResult`)**: 両言語とも**小さく壊れにくい
-  フックが存在する箇所にのみ**実装済みで、さらに TS は Python が到達できないエンドポイントを 1 つ追加でカバー
-  している。**Python**: `mcp` 1.28 の低レベル `Server.list_tools()` / `list_resources()` デコレータは(従来の
-  裸のリストに加えて)完全な結果オブジェクトを返す「新スタイル」を受け付ける — `_list_tools` /
-  `_list_resources` は `ttlMs=60_000, cacheScope="private"` を持つ `ListToolsResult` / `ListResourcesResult`
-  を返す(`model_copy(update=...)` 経由。pydantic v2 の `dataclass_transform` が生成する `__init__` は、実行
-  時には `extra="allow"` でもっと受け付けるにも関わらず、宣言済みフィールドのみをコンストラクタキーワード引
-  数として型付けするため、この形が mypy --strict をクリーンに保つ回避策になる)。ただし Python の
-  `read_resource()` デコレータは常にハンドラが返す `Iterable[ReadResourceContents]` から自前で
-  `ReadResourceResult` を組み立て直し、同等の「新スタイル」フックを提供しないため、`resources/read` は対象
-  **外**(`python/README.md` の既知差分一覧を参照)。
+- **list/read 結果への `ttlMs` / `cacheScope`(SEP-2549、`CacheableResult`)**: 両言語とも実装済みで、Python
+  `mcp` 2.x 移行(下記参照)以降は**両言語とも 3 エンドポイントすべて**をカバーする — この節がかつて説明して
+  いた Python 側の「`tools/list`/`resources/list` のみで `resources/read` は対象外」という非対称は解消済み。
+  **Python**: `mcp` 2.x の `ListToolsResult` / `ListResourcesResult` / `ReadResourceResult` はいずれも
+  `CacheableResult`(`ttl_ms: int`、`cache_scope: Literal["public","private"]`)を実際の基底クラスとして宣言
+  している(1.x の `ReadResourceResult` はそうではなかった)ため、`_list_tools` / `_list_resources` /
+  `_read_resource`(廃止されたデコレータ方式ではなく `Server.add_request_handler` 経由で登録)は、これらの
+  フィールドを設定した型付き結果を直接組み立てる — もう事後の `model_copy(update=...)` スタンプは不要(1.x
+  ではコンストラクタキーワード引数を pydantic の `dataclass_transform` がエイリアスでしか型付けしなかったため
+  の回避策だった)。ただしこのパリティは配線条件付きである: mcp SDK 自身の結果シリアライザ
+  (`serialize_server_result`)はハンドラのダンプを**交渉済みのプロトコルバージョン**自身の配線モデルに対し
+  て検証するため、`ttl_ms`/`cache_scope` がクライアントへ届くのは 2026-07-28 以降の接続だけである — legacy
+  ハンドシェイクの接続にはそのフィールドを持つ配線モデルが無く、サーバを出る前に篩い落とされる(kohaku 自身の
+  `kohaku/tests/host_mcp` スイートは、これを実際に観測するためだけに `mode="2026-07-28"` で接続する。
+  `mcp.Client` の `mode` パラメータ参照)。
   **TS**(`packages/host-mcp-apps/src/cache-hints.ts`): `KOHAKU_MCP_LIST_CACHE_HINT`
   (`ttlMs=60_000, cacheScope="private"`)は `tools/list`/`resources/list` について Python の値と厳密に一致さ
   せてあり、両言語が配線上合意する。`ServerOptions.cacheHints`(SDK v2 のコンストラクタ時オプション)には構
@@ -624,8 +637,9 @@ TS の SDK メジャーバージョンに関わらず成立する加算的項目
   け取るだけで自ら構築しないため、host-mcp-apps はこの値を自分でサーバーへ配線できない — そこで
   `defaultMcpListCacheHints()` として値そのものを単一の情報源としてエクスポートし、実際に `McpServer` を構築
   する呼び出し元(`apps/sample-mcp/src/setup.ts`)がコンストラクタの `cacheHints` オプションへ渡す。共有レン
-  ダラーリソース(`ui://kohaku/renderer.html`)の `resources/read` — Python の `read_resource()` デコレータで
-  は到達できないエンドポイント — は TS では**カバー済み**で、SDK v2 の登録時オプション
+  ダラーリソース(`ui://kohaku/renderer.html`)の `resources/read` — Python の `_read_resource` も今ではカバー
+  するが、値は `tools/list`/`resources/list` と同じ 60 秒の `_CACHEABLE_RESULT_TTL_MS` で、リソース固有の値
+  ではない — は TS では意図的に**異なる**TTL でカバーしている。SDK v2 の登録時オプション
   `registerResource(..., { cacheHint })`(`RENDERER_RESOURCE_CACHE_HINT`、`ttlMs=300_000,
   cacheScope="private"`、`AttachOptions.rendererResourceCacheHint` で attach 単位に上書き可能)を使う: レン
   ダラーバンドルは 1 プロセス内のどのクライアントから見ても同一で、プロセスの生存期間中メモ化される
@@ -786,9 +800,8 @@ TS は `@modelcontextprotocol/sdk` 1.30.0 から、分割された v2 パッケ�
 め 2 つのアップグレードは連動する)と、新規の `@modelcontextprotocol/node` 2.0.0(fetch の
 Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` が必要とする — 下記参照)も導入した。
 4 パッケージすべて `pnpm-workspace.yaml` の catalog に固定した(旧 `@modelcontextprotocol/sdk` の catalog
-エントリは削除)。**Python は `mcp` 1.x のまま**である。`mcp` 2.x への切替は意図的に別の未着手の変更としてあ
-る(その `MCPServer` は旧来の `initialize` リクエストにも引き続き応答すると文書化されており、いざ切替える際の
-段階的ロールアウトを容易にする)。
+エントリは削除)。**Python もその後 `mcp` 2.x へ移行済み**である(`kohaku-ui[mcp]` の floor `>=2.2`。この TS の
+切替とは別に、より後になって行われた — 下の「Python `mcp` 2.x 移行」参照)。
 
 - **機械的な部分**: ベンダー codemod(`npx @modelcontextprotocol/codemod v1-to-v2`)が import パスを書き換え
   (`@modelcontextprotocol/sdk/server/mcp.js` → `@modelcontextprotocol/server` 等)、生の shape 形式の
@@ -855,7 +868,7 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
   位置・`resultType: "complete"`・`ui://` リソース宣言・初期データのペイロードはすべて移行前とバイト同一。唯
   一の真にユーザー可視な変更は上述の HTTP セッション面の撤去(すでにこの節で削除予定と文書化済みだったもの)の
   みである。
-- **検証**: リポジトリ全体で `pnpm test`(2037 件・211 ファイル)と `pnpm typecheck` がグリーン、かつ
+- **検証**: リポジトリ全体で `pnpm test` と `pnpm typecheck` がグリーン、かつ
   `pnpm --filter @kohaku-ui-sample/mcp build:renderer` も成功する。MCP の一次情報の適合スイート
   (`@modelcontextprotocol/conformance`)は存在するが、評価の上で**見送った**(下記の項目を参照)。したがって
   本リポジトリ自身の `spec/SPEC.md` セルフチェックと同様、このパッケージ自身のテストスイートが検証ゲートに
@@ -878,10 +891,79 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
   させる大きな expected-failures ベースラインを抱えるかの二択になる。**再評価の条件**: 安定版が批准済み仕様に
   対する 2026-07-28 をカバーし、かつ MCP Apps のシナリオを追加するか、製品サーバがベースラインファイルなしで
   フィクスチャ系シナリオを除外できるようになったとき。
-- **未着手のまま残したもの**: Python `mcp` 2.x への切替(別言語スタックの独立した依存アップグレードであり、
-  この対応では着手していない)。ext-apps の非推奨 `on*` セッターから `addEventListener` への移行。実機ホスト
+- **未着手のまま残したもの**: ext-apps の非推奨 `on*` セッターから `addEventListener` への移行。実機ホスト
   確認(上記)。(このセクションが従来ここに挙げていた `ttlMs`/`cacheScope` の TS 後続課題は、その後上記の
-  「レスポンスキャッシュ」の記述と §13 の決定 #39 の通り着手済み。)
+  「レスポンスキャッシュ」の記述と §13 の決定 #39 の通り着手済み。同じくこのセクションが従来挙げていた
+  Python `mcp` 2.x への切替も、より後の別対応として着手済み — 下の「Python `mcp` 2.x 移行」と §13 の決定
+  #41 参照。)
+
+### Python `mcp` 2.x 移行(完了)
+
+Python は `mcp` 1.28.1 から 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)へ、上記の TS SDK v2 切替とは独立に、
+より後になって移行した。両 SDK はバージョン管理が独立した無関係のパッケージ(Python 側は `mcp`、TS 側は
+`@modelcontextprotocol/*`)であり、ここでの「2.x」は TS の同じメジャーバージョンを指すものではない — 本節を
+通じて記述してきたパリティに関する注記は、すでにすべて `mcp` 2.x の挙動を説明している。
+
+- **コンストラクタベースのハンドラ登録がデコレータに取って代わる**: `mcp` 1.x の低レベル `Server` は
+  `tools/list` / `tools/call` / `resources/list` / `resources/read` を `@srv.list_tools()` /
+  `@srv.call_tool()` 等のデコレータで登録していた。2.x はこれを廃止し、`Server.add_request_handler(method,
+  params_type, handler)`(`handler: async (ctx, params) -> result`)で登録するようになった。
+  `Server.get_capabilities()` は、以前デコレータが埋めていたテーブルと同じように、`_request_handlers` に登録
+  済みのメソッドから `ServerCapabilities` を導出する — そのため `attach_kohaku_to_mcp_server` の公開シグネチャ
+  (`attach(server, deps, options) -> None`)は変更不要で、内部実装のみ変更した。この attach 方式は spec 語彙の
+  メソッド(`tools/list` 等)を、2.x が本来*カスタム*/拡張メソッド向けに文書化している同じ API 経由で登録する
+  ことになる。`test_mcp_setup.py` のテストが `server.get_capabilities(...).tools`/`.resources` を固定し、将来
+  SDK が core メソッドに対して `_request_handlers` から capabilities を導出しなくなる変更への保険としている
+  (`host_mcp/server.py` の `attach_kohaku_to_mcp_server` 自身のリスク注記も参照)。
+- **`ServerRequestContext` がリクエストスコープ contextvar `request_ctx` に取って代わる**: 登録済みの各ハンド
+  ラは、自身専用の `ctx: ServerRequestContext[LifespanResultT, RequestT]`(`session` / `lifespan_context` /
+  `protocol_version` / `method` / `params` / `request_id` / `meta` / `request`)を第一引数として直接受け取るよ
+  うになったため、`McpHostDeps.resolve_principal` は `ctx: ServerRequestContext[Any, Any]` を取る(もはや
+  `| None` ではない — 登録済みハンドラには常に ctx がある)。失敗経路の可観測性ヘルパー
+  (`_correlation_id_of` / `_trace_context_of`)も、`mcp.server.lowlevel.server.request_ctx.get()` を検索する
+  代わりに、これを普通の関数引数として読む。`ctx.meta` は `RequestParamsMeta` の **TypedDict**
+  (`extra_items=Any`)なので、辞書アクセス(`meta.get("traceparent")`)であり、1.x の形(
+  `getattr(meta, "traceparent", None)`)のような属性アクセスではない。
+- **型付き結果フィールドが `extra="allow"` パススルーに取って代わる**: `mcp` 1.x の `Result` サブクラスは
+  `model_config = {"extra": "allow"}` だったため、`resultType` / `ttlMs` / `cacheScope` は構築後に
+  `model_copy(update={...})` で手動スタンプする必要があった(設定できる宣言済みフィールドが無かったため)。
+  2.x はこれらを実フィールドとして宣言している(`Result.result_type: ResultType = "complete"`。
+  `CacheableResult.ttl_ms: int = 0` / `.cache_scope: Literal["public","private"] = "private"` は
+  `ListToolsResult` / `ListResourcesResult` / **そして今や `ReadResourceResult` も**継承する基底クラス — 1.x
+  の `ReadResourceResult` はこれを継承していなかったため、`resources/read` は Python では持てなかったキャッ
+  シュヒント対応を新たに得た)ので、このプロファイルは型付き結果をこれらのフィールドを設定した状態で直接組み
+  立て、`model_copy` によるスタンプ手順は廃止した。フィールド名は `to_camel` エイリアスジェネレータと
+  `populate_by_name=True` を伴う `snake_case`(`structured_content` / `is_error` / `mime_type` /
+  `input_schema` 等であり、`structuredContent` / `isError` 等ではない)— これは `host_mcp/server.py` の
+  `mcp_types` モデルを組み立てる・読み取る全呼び出し箇所と、`CallToolResult`/`Tool`/`Resource` の属性を検証す
+  る全テストに及ぶ。
+- **`mcp.Client` が `create_connected_server_and_client_session` に取って代わる**: 廃止された 1.x のテストヘ
+  ルパ(`mcp.shared.memory`)は `mcp.Client(server, mode=..., cache=...)` に置き換わった。これは低レベル
+  `Server` インスタンスへインプロセスで直接接続する。`mode="legacy"`(このテストスイートの既定 —
+  `kohaku/tests/host_mcp/_helpers.py` の `connect()` 参照)はインメモリトランスポート上で 2026 年以前の
+  `initialize` ハンドシェイクを駆動し、廃止された 1.x ヘルパーの挙動とバイト単位で同一である。
+  `mode="2026-07-28"` は代わりに直接ディスパッチ(`DirectDispatcher`。JSON-RPC フレーミング無し)し、
+  2026-07-28 の配線モデルは持つが legacy でネゴシエートした接続の配線モデルには無いもの(`tools/list` /
+  `resources/list` / `resources/read` の `ttl_ms`/`cache_scope` — 上の `ttlMs`/`cacheScope` の項参照)をテスト
+  が観測する必要がある箇所でのみ使う。`cache=None` はクライアント自身の SEP-2549 レスポンスキャッシュを無効化
+  し、テスト自身の呼び出し回数アサーションがキャッシュヒットで短絡されないようにする。
+- **サンプル HTTP ホスト(`sales_api.mcp_http`)は `Server.streamable_http_app(...)` を使う**: 2.x の低レベル
+  `Server` は、自前の `StreamableHTTPSessionManager`・`/mcp` の `Route`・セッションマネージャを実行する
+  `Starlette` の `lifespan` を組み立てる単一呼び出しのコンストラクタを新たに持つ(1.x には同等物が無かった) —
+  このモジュール自身が手組みしていた `StreamableHTTPSessionManager` + `Mount` + `lifespan` の配線を置き換え
+  た。`custom_starlette_routes` は同じ返り値の app にスナップショット配信ルートを追加し、CORS は
+  `Starlette.add_middleware` で事後に重ねる(`streamable_http_app` 自体には `middleware` パラメータが無いた
+  め)。このモジュールが意図的に上書きしている挙動が一つある: `streamable_http_app` は `host` がループバック
+  アドレスであれば DNS リバインディング防御を自動有効化するが、このサンプルの文書化された方針は
+  `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` が opt-in しない限り防御を*無効*にすることなので、空の `allowed_hosts` は
+  `None`(`127.0.0.1`/`localhost` に対して防御を黙って再有効化してしまう)ではなく明示的な
+  `TransportSecuritySettings(enable_dns_rebinding_protection=False)` を渡すようにした。検証は実際に uvicorn
+  サーバを起動する代わりに、Starlette の `TestClient` で ASGI app をインプロセス構築して行った
+  (`examples/sales-api/sales_api_tests/test_mcp_setup.py` の `TestBuildStarletteApp`): `/mcp` 越しの
+  `initialize` ラウンドトリップと同じルートへの CORS プリフライト、それに既存のスナップショットルートのテスト
+  である。
+- **1.x/2.x の同時サポートは無し**: 登録層・リクエストコンテキストの形・テストヘルパーはいずれも 1.x と 2.x
+  で構造的に異なるため、`kohaku-ui[mcp]` の floor は両対応ではなく直接 `>=2.2` へ引き上げた。
 
 ## 12. サンプル実装の設計
 
@@ -895,7 +977,7 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
 
 - Intent カタログ(7 種 + 昇格分が動的合流)が SemanticPort の唯一の語彙。GUI 操作(view.select / facet.change / rowClick drilldown)は決定的に、NL は LLM でこの語彙にマップされる。
 - **Intent の単一定義(`@kohaku-ui/intents`)**: コア 7 Intent は `defineIntent`(`intents/catalog.ts`)で 1 箇所に定義し、SemanticPort 用 `IntentDef`・GUI ファセット記述子(`FacetView`)・MCP ツール入力・client coerce の `valueType` を導出する。値集合(region / channel / metric / groupBy / granularity)は `defineVocabulary`(`intents/vocab.ts`)が単一源で、Zod enum・GUI options・A1 `data.bind` values(`fixed-specs.ts`)・drilldown のラベル逆引きが全てここから出る(旧: 値集合が types.ts / catalog enum / promoted enum / FacetPanel の 4 箇所に散在していたのを解消)。GUI ファセットは `pnpm intents:emit`(`scripts/generate-facet-views.ts`)が `apps/sample-web/src/generated/facet-views.json` に emit し、sample-web は server コード非依存でこれをデータ import する(生成物はコミット対象・決定的で、CI がドリフト検査)。
-- シードは固定 PRNG(seed=20260610)による決定的生成・コミット済み(576 行)。`dataVersion = "sales@seed-20260610.1#bump-N"` で、bump 管理操作がキャッシュ無効化のデモになる。
+- シードは固定 PRNG(seed=20260610)による決定的生成・コミット済み(576 行)。`dataVersion` は `sales@<seedTag>[+<contentHash12>]#bump-N` の形式(`repo.ts` の `seedTag = SEED_VERSION + seed/meta.json の内容ハッシュ短縮形`。例: `sales@seed-20260610.1+3f2a9c1e8b04#bump-0`)で、bump 管理操作がキャッシュ無効化のデモになる。
 - 可変カタログ: 昇格(publish)でカタログが増えるため、`app.ts` は holder + delegating proxy で `ResolvedCatalog` を差し替え可能にしている(指紋が変わる → キャッシュも自然に切り替わる)。
 - **light/dark テーマ切替の実演(B2, §7.2)**: `apps/sample-web` はヘッダのトグル(prefers-color-scheme 初期化 + localStorage 永続化)でモードを切り替え、`buildTheme(mode) = { ...defaultLight/DarkTheme, ...brand }` を `RendererProvider` の `theme` に注入する。`apps/sample-wc` は同じ流儀で `surface.theme` を差し替える(set theme が再描画を起動)。**Spec 描画の外側のページ chrome**(ヘッダ・カード・背景・Admin)は Renderer の管轄外なので、サンプル側で CSS 変数 `--app-*`(light 値=従来リテラル、dark 値=`defaultDarkTheme` と同期)を `:root[data-theme]` に敷いて追従させる。ブランド差分(`theme/tokens.ts` の `brand`)は空 = サンプルは kohaku 既定の見た目そのまま。L2 iframe 内・L2 host chrome は v1 非対象。
 
@@ -950,15 +1032,16 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
 | 36 | `ComposeContext.llmByTier` を加算的な tier ごとの `LlmPort` 上書きとして追加し、`defaultGeneratorVersion` ではなく `policyFingerprint` の追加引数 `tierLlm` でキャッシュを分離する | 運用者が小型のファインチューニング済みモデル(`kohaku dataset export` の蒸留データセットはまさに L1 の制約付き生成タスクを対象とする)を L1 に割り当てつつ、L2 には大型モデルを維持できるようにする。`defaultGeneratorVersion` はこの分離を確実には担えない — 呼び出し側はしばしばモデル ID を含まない独自文字列で `generatorVersion` を上書きするため(sample-api の `…/ds2`/`…/ds2/ja` サフィックス)。実際の tier ごとのモデル識別を(基底 `llm` と本当に異なる場合に限り)フィンガープリントへ畳み込むことで、呼び出し側の `generatorVersion` 文字列の中身に関わらずキャッシュの正しさを保ちつつ、`llmByTier` 未設定時は cacheKey をバイト同一に保つ |
 | 37 | `ComposeBudget.deadlineMs`(compose 全体の壁時計デッドライン)を `perCompose` の兄弟概念として追加し、呼び出し間の判定に加えて実行中の呼び出しも中断させる | LLM 呼び出し単位のタイムアウト(`KOHAKU_LLM_TIMEOUT_MS`)は compose 全体を縛らない(L1 + 修復 + L2 がそれぞれ自分のタイムアウト内に収まっていても、合計の待ち時間は際限なく伸び得る)。実行中中断の場合も既存のトークン予算降格の形(`TierResult.failure: "budget"`、`ctx.budgetExceeded: true`)を再利用する — デッドライン由来の `ABORTED` と本物の呼び出し元キャンセルの見分けは、`LlmError` 自体を調べるのではなく分類箇所で行う(他の何によっても発火しない、より狭い第二のシグナル `deadlineSignal`)。そのためデッドラインはオペレーターが監視する fallback レート分析に加算され、実際のクライアント切断は引き続き加算されない |
 | 38 | TS を `@modelcontextprotocol/sdk` 1.x から分割 v2 パッケージ(`server`/`client`/`core`/`node` 2.0.0)と `ext-apps` 2.0.0 へ一括で移行し、`apps/sample-mcp` のステートフルな HTTP セッションレジストリを(ベンダー codemod の機械的出力が行うような)`@modelcontextprotocol/node` の `NodeStreamableHTTPServerTransport` への移植ではなく完全撤去とした | プロトコルバージョン 2026-07-28 はプロトコルレベルのセッションをそもそも廃止しており、`createMcpHandler` は SDK 自身のステートレス提供エントリ(exchange ごとに新しい `McpServer` を生成し、まだ 2025-era の旧クライアント向けにステートレスフォールバックも内蔵する)である — 手組みのセッションレジストリ(掃除タイマー・セッション上限・`Mcp-Session-Id` 処理)をその隣に残すのは、利益なく 2 つの競合するステート管理モデルを保守することになり、しかもこのレジストリの撤去自体がこの移行に着手する前からここに「いずれ不要になる」と記録済みだった。`resultType: "complete"` の手動スタンプ(`safeTool`)は SDK 自身の 2026-era コーデックのスタンプに任せず維持した — `InMemoryTransport` も、現行の実機ホストが話す HTTP のステートレスフォールバックも、これを剥ぎ取りも上書きもしないことを配線バイトの傍受で確認した |
-| 39 | TS に `ttlMs`/`cacheScope`(SEP-2549)を実装する: *値*は `host-mcp-apps`(`defaultMcpListCacheHints()`。Python の `tools/list`/`resources/list` のヒントと厳密に一致)に置きつつ、`McpServer` を構築する呼び出し元(`apps/sample-mcp/src/setup.ts`)が `ServerOptions.cacheHints` へ渡す形にする。加えて共有レンダラーリソースの `resources/read`(`registerResource(..., {cacheHint})`、TS のみ — Python の `read_resource()` デコレータには同等のフックがない)をカバーし、そのキャッシュ TTL は 5 分として `KOHAKU_MCP_SNAPSHOT_TTL_MS` とは独立に決めた(無関係なリソースのため) | `ServerOptions.cacheHints` はコンストラクタ時専用(SDK v2 に事後差し替え手段はない)であり、`attachKohakuToMcpServer` は自ら `McpServer` を構築しないため、host-mcp-apps はリソース単位のヒントのように自己配線できない — それでも*値*自体はライブラリに置くことで(各呼び出し元での重複を避け)言語間の単一の情報源であり続けつつ、配線そのものは SDK の API 制約であってプロダクト側の意思決定ではないことを尊重する。検証は `versionNegotiation: {mode:"auto"}` と `createMcpHandler` のインプロセス fetch ブリッジで行った — このバージョンの SDK では手動構築した `McpServer.connect(InMemoryTransport)` は(transport レベルの分類がないため)`supportedProtocolVersions` を何に設定しても modern era を交渉できない |
+| 39 | TS に `ttlMs`/`cacheScope`(SEP-2549)を実装する: *値*は `host-mcp-apps`(`defaultMcpListCacheHints()`。Python の `tools/list`/`resources/list` のヒントと厳密に一致)に置きつつ、`McpServer` を構築する呼び出し元(`apps/sample-mcp/src/setup.ts`)が `ServerOptions.cacheHints` へ渡す形にする。加えて共有レンダラーリソースの `resources/read`(`registerResource(..., {cacheHint})`)をカバーし、そのキャッシュ TTL は 5 分として `KOHAKU_MCP_SNAPSHOT_TTL_MS` とは独立に決めた(無関係なリソースのため)— この決定が着手した時点では Python `mcp` 1.x の `read_resource()` デコレータには `resources/read` に同等のフックが無かったが、決定 #41 の後の Python `mcp` 2.x 移行で Python 側もこのギャップを解消した(ただし値はこの決定の TS 固有の 5 分ではなく、list 系ヒントと共有する 60 秒) | `ServerOptions.cacheHints` はコンストラクタ時専用(SDK v2 に事後差し替え手段はない)であり、`attachKohakuToMcpServer` は自ら `McpServer` を構築しないため、host-mcp-apps はリソース単位のヒントのように自己配線できない — それでも*値*自体はライブラリに置くことで(各呼び出し元での重複を避け)言語間の単一の情報源であり続けつつ、配線そのものは SDK の API 制約であってプロダクト側の意思決定ではないことを尊重する。検証は `versionNegotiation: {mode:"auto"}` と `createMcpHandler` のインプロセス fetch ブリッジで行った — このバージョンの SDK では手動構築した `McpServer.connect(InMemoryTransport)` は(transport レベルの分類がないため)`supportedProtocolVersions` を何に設定しても modern era を交渉できない |
 | 40 | MCP Tasks 拡張(`io.modelcontextprotocol/tasks`、2026-07-28 dated-stable)を kohaku 独自の型(`packages/host-mcp-apps/src/tasks.ts`)で実装し、SDK の廃止済み 2025-11-25 `Task`/`GetTaskRequest`/`CreateTaskResult` 語彙は使わない。タスク対応にするのは `kohaku_compose` と生成された intent tools のみ。`tasks/cancel` は既存のクライアント abort 経路(`ComposeOptions.abort` → `trace.cancelled`)に配線し第二のキャンセル概念にはしない。インメモリの `TaskStore` は遅延評価によるオンアクセス期限切れでタイマーを持たない。**拡張全体を `AttachOptions.tasksEnabled`(既定 `false`)の背後にゲートする** — オフの間は、リクエストが拡張を宣言していても compose 系は本作業以前とバイト単位で不変の同期のままであり、サーバも拡張を宣言せず `tasks/get`/`tasks/cancel` も一切登録しない | SDK 自身の task 型は互換性のない別のワイヤ形状を持つ別拡張(ランタイムなし)のものであり、土台にすべきではない。タスク対応をcompose 系に絞ることは実際のレイテンシの所在(L1/L2 生成)と一致し、マウント済みウィジェット自身の同期呼び出しにポーリング実装を要求せずに済む。abort 経路を再利用する(並行する新経路を発明しない)ことで、単一の既検証済みキャンセル分類を保てる。タイマーを持たないストアは、SDK v2 移行で一度修正した経緯のあるキープアライブタイマーの落とし穴(撤去したセッションスイープタイマー)を最初から回避する — **本実装中に実測で発見**: `tasks/get`/`tasks/cancel` は SDK の文書化された拡張手段で登録されるが、導入済みの `@modelcontextprotocol/server` 2.0.0 自身の受信リクエストルーティングにより、kohaku のハンドラに到達する前に無条件で拒否される(`-32601`)。両メソッド名が廃止済みだが依然認識される 2025-11-25 語彙自身の予約名と衝突しているためであり、検証済みの SDK バージョン上のギャップ(トリップワイヤテストと、数分で再実行できる再確認手順つきで固定)であって kohaku 側のバグではない。`kohaku_compose`/intent tool の `CreateTaskResult` 応答経路はこの影響を受けず、エンドツーエンドで検証済み。**既定オフのゲートはその発見の上に乗せた別個の意図的な判断である**: `tasks/get` をポーリングできない間、`CreateTaskResult` は宣言したクライアントが決して解決できないタスクハンドルであり — ハンドルが無いより悪く、しかも拡張を宣言するだけの高度さを持つクライアントからこそ、動作する同期呼び出しを奪うことになる |
+| 41 | Python を `mcp` 1.28.1 から 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)へ移行する。`attach_kohaku_to_mcp_server` の公開シグネチャは変更せず、廃止されたデコレータ API の代わりに同じ 4 メソッドを `Server.add_request_handler` で再登録し、廃止された `request_ctx` contextvar の代わりに `ServerRequestContext` を全ハンドラへ通し、`result_type`/`ttl_ms`/`cache_scope` が実の宣言済みフィールドになったことで `mcp` 1.x の `model_copy(update={"resultType": ...})` スタンプを廃止する。サンプル HTTP ホストでは、手組みの `StreamableHTTPSessionManager` + `Mount` + `lifespan` 配線を `Server.streamable_http_app(...)` に置き換える | 登録層・リクエストコンテキストの形・1.x のテストヘルパー(`create_connected_server_and_client_session`。2.x で削除)はいずれも 1.x と 2.x で構造的に非互換であり、1.x を 2.x と併存させたまま移行の手数を減らす道は無かった — floor は直接 `>=2.2` へ引き上げた。`attach_kohaku_to_mcp_server` のシグネチャを維持したことで、この移行は `host_mcp` 内部 + サンプルホストの変更にとどまり、`mcp_setup.py` の `McpHostDeps` 配線への波及は `resolve_principal` のパラメータ型以外に生じなかった。`resources/read` が 2.x で `CacheableResult` 対応を得たのは(決定 #39 参照)この移行の副産物であり目的ではない。検証: `kohaku/tests/host_mcp` のスイート全体が(属性名と接続ヘルパーの機構だけを更新した状態で)意図を変えずに通過し、加えて `ttl_ms`/`cache_scope` を配線上で観測するためだけに `mode="2026-07-28"` 接続を追加した(legacy でネゴシエートした接続の配線モデルはそれらを篩い落とす — 上の `ttlMs`/`cacheScope` の項参照)。サンプル HTTP ホストの ASGI app は、実サーバを起動せず Starlette の `TestClient` でインプロセス構築して検証した |
 
 ## 14. 既知の制限と v0.2 候補
 
 - flutter 等の追加レンダラー、host-agui / host-a2a(SPEC に Reserved)、`component publish`(federated 配信)。**renderer-wc(Web Components)は A2 で実装済み**(§7.1)
 - renderer-wc のストリーミング(`compose-stream` 統合)は v1 対象外(WC は最終 Spec を受ける。patch は `applyPatch` 手動適用)。pie/scatter chart は WC v1 で表フォールバックに降格
 - **SSE 逐次ストリーミング(Spec の部分配信)は実装済み**(§5「逐次ストリーミング」。React 経路 = useSpecStream が消費)。**Python 実装も暫定 patch 0..N 対応でパリティ**(`stream_object` は StreamingLlmPort + TypeGuard の言語適応。python/README「既知の差異」参照)
-- presentSpreadsheet の編集(write 経路 + 複式簿記的な不変条件デモ)
+- presentSpreadsheet 編集の複式簿記的な不変条件デモ(編集の write 経路自体〈`props.editable` + `cellEdit`〉は実装済み。docs/specification.ja.md §7 参照)
 - MCP Apps サーフェスでの L2 描画(二重サンドボックス境界の検討が必要)
 - 昇格スキーマの LLM 自動抽出(現状は承認フォームで人間が確定)
 - artifact 専用ストア(現状 component.generated イベントに html を内包)

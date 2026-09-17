@@ -4,7 +4,7 @@ import type { ComponentDraft } from "@kohaku-ui/lineage";
 import { type ComponentDefinition, defineComponent, propsSchemaFromJsonSchema } from "@kohaku-ui/registry";
 import { z } from "zod";
 import type { IntentDef } from "./catalog.js";
-import { fiscalYear, region } from "./vocab.js";
+import { DEMO_FISCAL_YEAR, fiscalYear, region } from "./vocab.js";
 
 /**
  * The artifact of promotion (L2->L1 publish) (an element of the projection held by the per-tenant PromotedRegistry).
@@ -54,7 +54,7 @@ export function promotedComponent(entry: PromotedEntry): ComponentDefinition {
  * The value ranges for fiscalYear / region reference the same source as catalog (vocab.ts) (eliminating the duplicate definition).
  */
 const DEFAULT_PROMOTED_PARAMS = z.object({
-  fiscalYear: fiscalYear.default(2026),
+  fiscalYear: fiscalYear.default(DEMO_FISCAL_YEAR),
   region: region.enum().optional(),
 });
 

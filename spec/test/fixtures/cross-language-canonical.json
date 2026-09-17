@@ -560,5 +560,176 @@
   },
   "distillation": {
     "jsonl": "{\"intent\":{\"canonical\":\"sales.quarterly_summary\",\"params\":{\"fiscalYear\":2026,\"groupBy\":\"region\",\"quarter\":3}},\"meta\":{\"catalogFingerprint\":\"catalog@2026-06-10\",\"fixatedAt\":\"2026-06-10T03:12:00Z\",\"structureHash\":\"sha256:1e5581591f5d5373b5e78fbcc8c768194c620ad2201241fa931ca1aedfb90694\",\"tenant\":\"tenant-acme\"},\"refs\":[\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"],\"source\":\"fixation\",\"target\":{\"components\":[{\"children\":[\"title\",\"chart1\",\"table1\"],\"id\":\"root\",\"props\":{\"direction\":\"vertical\"},\"type\":\"layout.stack\"},{\"id\":\"title\",\"props\":{\"level\":2,\"text\":\"FY2026 Q3 Sales (by Region)\"},\"type\":\"text.heading\"},{\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"},\"id\":\"chart1\",\"props\":{\"kind\":\"bar\",\"x\":\"region\",\"y\":\"revenue\"},\"type\":\"presentChart\"},{\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"},\"id\":\"table1\",\"props\":{\"editable\":false},\"type\":\"presentSpreadsheet\"}],\"events\":[{\"emit\":\"intent.patch\",\"on\":\"table1.rowClick\",\"payload\":{\"drilldown\":\"$row.region\"}}]}}\n{\"intent\":{\"canonical\":\"sales.quarterly_summary\",\"params\":{\"fiscalYear\":2026,\"groupBy\":\"region\",\"quarter\":3}},\"meta\":{},\"refs\":[\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"],\"source\":\"golden\",\"target\":{\"components\":[{\"children\":[\"title\",\"chart1\",\"table1\"],\"id\":\"root\",\"props\":{\"direction\":\"vertical\"},\"type\":\"layout.stack\"},{\"id\":\"title\",\"props\":{\"level\":2,\"text\":\"FY2026 Q3 Sales (by Region)\"},\"type\":\"text.heading\"},{\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"},\"id\":\"chart1\",\"props\":{\"kind\":\"bar\",\"x\":\"region\",\"y\":\"revenue\"},\"type\":\"presentChart\"},{\"data\":{\"$ref\":\"query://ledger/sales_summary?fy=2026&groupBy=region&q=3\"},\"id\":\"table1\",\"props\":{\"editable\":false},\"type\":\"presentSpreadsheet\"}],\"events\":[{\"emit\":\"intent.patch\",\"on\":\"table1.rowClick\",\"payload\":{\"drilldown\":\"$row.region\"}}]}}\n"
-  }
+  },
+  "fallback": [
+    {
+      "type": "action.button",
+      "inputProps": {
+        "label": "Approve",
+        "variant": "primary"
+      },
+      "mappedProps": {
+        "markdown": "(Action \"Approve\" is not available on this surface)"
+      }
+    },
+    {
+      "type": "action.button",
+      "inputProps": {},
+      "mappedProps": {
+        "markdown": "(Action \"\" is not available on this surface)"
+      }
+    },
+    {
+      "type": "presentForm",
+      "inputProps": {
+        "fields": [
+          {
+            "name": "a"
+          }
+        ],
+        "action": "save"
+      },
+      "mappedProps": {
+        "markdown": "(This form is not available on this surface)"
+      }
+    },
+    {
+      "type": "presentChart",
+      "inputProps": {
+        "kind": "bar",
+        "x": "region",
+        "y": "revenue"
+      },
+      "mappedProps": {
+        "editable": false
+      }
+    },
+    {
+      "type": "presentSpreadsheet",
+      "inputProps": {
+        "editable": false
+      },
+      "mappedProps": {
+        "markdown": "(This table does not support text rendering)"
+      }
+    },
+    {
+      "type": "presentList",
+      "inputProps": {
+        "gap": "sm"
+      },
+      "mappedProps": {
+        "editable": false
+      }
+    },
+    {
+      "type": "presentMetric",
+      "inputProps": {
+        "label": "Revenue",
+        "valueColumn": "revenue"
+      },
+      "mappedProps": {
+        "markdown": "**Revenue**"
+      }
+    },
+    {
+      "type": "presentMetric",
+      "inputProps": {
+        "label": "",
+        "valueColumn": "revenue"
+      },
+      "mappedProps": {
+        "markdown": "****"
+      }
+    },
+    {
+      "type": "control.select",
+      "inputProps": {
+        "options": [
+          "a"
+        ],
+        "label": "Region"
+      },
+      "mappedProps": {
+        "markdown": "**Region**"
+      }
+    },
+    {
+      "type": "control.select",
+      "inputProps": {
+        "options": [
+          "a"
+        ],
+        "value": "west"
+      },
+      "mappedProps": {
+        "markdown": "**west**"
+      }
+    },
+    {
+      "type": "control.select",
+      "inputProps": {
+        "options": [
+          "a"
+        ]
+      },
+      "mappedProps": {
+        "markdown": "****"
+      }
+    },
+    {
+      "type": "ui.loading",
+      "inputProps": {
+        "label": "Fetching…"
+      },
+      "mappedProps": {
+        "markdown": "Fetching…"
+      }
+    },
+    {
+      "type": "ui.loading",
+      "inputProps": {},
+      "mappedProps": {
+        "markdown": "Loading…"
+      }
+    },
+    {
+      "type": "layout.tabs",
+      "inputProps": {
+        "stateKey": "tab"
+      },
+      "mappedProps": {}
+    },
+    {
+      "type": "layout.tab",
+      "inputProps": {
+        "value": "a",
+        "label": "A"
+      },
+      "mappedProps": {}
+    },
+    {
+      "type": "overlay.dialog",
+      "inputProps": {
+        "title": "Confirm"
+      },
+      "mappedProps": {}
+    },
+    {
+      "type": "overlay.toast",
+      "inputProps": {
+        "message": "Saved"
+      },
+      "mappedProps": {
+        "markdown": "Saved"
+      }
+    },
+    {
+      "type": "overlay.toast",
+      "inputProps": {},
+      "mappedProps": {
+        "markdown": ""
+      }
+    }
+  ]
 }

@@ -366,6 +366,31 @@ describe("targets() attainment missing value", () => {
       expect(row["note"]).toBeNull();
     }
   });
+
+  it("a region with actual revenue but no target row for the period still appears (target=0, not dropped)", () => {
+    const repo = new SalesRepo();
+    // fy=2027 has no targets at all in the seed (which only covers FY2025/FY2026); push a single actual
+    // record so the region has revenue but no matching target row, exercising the union-of-keys population.
+    repo.records.push({
+      id: "test-actual-no-target",
+      fiscalYear: 2027,
+      quarter: 1,
+      month: "2027-04",
+      region: "north_america",
+      productId: "prd-001",
+      channel: "direct",
+      units: 10,
+      revenue: 1_000_000,
+    });
+    const t = targets(repo, { fy: 2027, q: 1 });
+    expect(t.rows).toHaveLength(1);
+    const row = t.rows[0]!;
+    expect(row["region"]).toBe("North America");
+    expect(row["actual"]).toBe(1_000_000);
+    expect(row["target"]).toBe(0);
+    expect(row["attainment"]).toBeNull();
+    expect(String(row["note"])).toContain("No target set");
+  });
 });
 
 // summary() topN clamping (boundaries). Prevents slice from behaving counter-intuitively for negative / 0 / non-numeric values.

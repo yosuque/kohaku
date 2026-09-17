@@ -191,6 +191,7 @@ def build_harness(
     tenant: TenantHook | None = None,
     auth: AuthHook | None = None,
     action_effects: ActionEffectsHook | None = None,
+    max_body_bytes: int | None = None,
 ) -> Harness:
     storage = FileStoragePort(tmp_path)
     catalog = resolve_catalog(core_catalog())
@@ -224,6 +225,7 @@ def build_harness(
         tenant=tenant,
         auth=auth,
         action_effects=action_effects,
+        max_body_bytes=max_body_bytes,
     )
     app = FastAPI()
     attach_kohaku_routes(app, deps)

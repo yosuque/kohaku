@@ -41,7 +41,14 @@ import {
   TASKS_EXTENSION_ID,
   type TaskStore,
 } from "./tasks.js";
-import type { AttachOptions, ComposeSource, IntentToolDef, McpHostDeps, ToolContext } from "./types.js";
+import type {
+  AttachOptions,
+  ComposeSource,
+  IntentToolDef,
+  McpHostDeps,
+  ToolCallContext,
+  ToolContext,
+} from "./types.js";
 
 // index.ts publicly re-exports these 3 (`export { ..., type AttachOptions, type IntentToolDef, type
 // McpHostDeps } from "./server.js"`) — re-export them from here. ComposeSource and ToolContext stay
@@ -79,20 +86,50 @@ function mcpSession(locale: string | undefined, principal?: Principal): SessionC
 const MCP_APP_SURFACE = "mcp-app" as const;
 
 /**
- * Consolidates every tool handler's access to the SDK-supplied per-call abort signal and JSON-RPC request id
- * into one place (previously each of the 5 tool-registration functions read them directly). Under SDK v2
- * (`@modelcontextprotocol/server` 2.0.0, paired with protocol version 2026-07-28's removal of protocol-level
- * sessions), a tool handler's second argument is `ServerContext`, which always nests the per-request abort
- * signal and JSON-RPC id under `mcpReq` (`extra.mcpReq.signal` / `extra.mcpReq.id`) — there is no longer a flat
- * `signal` / `requestId` to fall back to (that was SDK v1's shape, before this migration). This function is now
- * a thin projection of `ServerContext`, kept as its own helper purely so the 5 tool handlers below keep reading
- * `requestContextOf(extra)` unchanged rather than reaching into `extra.mcpReq` themselves.
+ * Builds this call's `ToolCallContext` from the attach-level `ToolContext` plus the `Principal` already
+ * resolved for this specific call (via `ctx.principalOf(extra)`). A shallow spread is enough — `principal` is
+ * the only field a call needs to add on top of the shared attach-level context (see `ToolCallContext`'s doc
+ * comment in types.ts for why the two are kept as distinct types rather than mutating `principal` onto
+ * `ToolContext` directly: it makes passing the un-resolved attach-level `ctx` into the compose pipeline a type
+ * error instead of a latent "which principal did this call actually use" bug).
  */
-function requestContextOf(extra: ServerContext): { signal: AbortSignal; requestId: string } {
+function forCall(ctx: ToolContext, principal: Principal): ToolCallContext {
+  return { ...ctx, principal };
+}
+
+/**
+ * Consolidates every tool handler's access to the SDK-supplied per-call abort signal and JSON-RPC request id
+ * into one place, so the 5 tool handlers below read `requestContextOf(extra)` uniformly rather than each
+ * reaching into `extra.mcpReq` themselves. Under SDK v2 (`@modelcontextprotocol/server` 2.0.0, paired with
+ * protocol version 2026-07-28's removal of protocol-level sessions), a tool handler's second argument is
+ * `ServerContext`, which nests the per-request abort signal and JSON-RPC id under `mcpReq`
+ * (`extra.mcpReq.signal` / `extra.mcpReq.id`); this function is a thin projection of that shape.
+ *
+ * Named `abort` (not `signal`) on the returned object so `{ ...requestContextOf(extra), locale, traceContext:
+ * traceContextOf(extra) }` is directly a `ComposeCallContext` — every compose-family tool handler builds its
+ * `ComposeCallContext` this way (see that type's doc comment).
+ */
+function requestContextOf(extra: ServerContext): { abort: AbortSignal; requestId: string } {
   return {
-    signal: extra.mcpReq.signal,
+    abort: extra.mcpReq.signal,
     requestId: String(extra.mcpReq.id),
   };
+}
+
+/**
+ * The compose-pipeline call context: everything about a single tool call (beyond the already-resolved
+ * `ToolCallContext.principal`) that composeAndAudit / composeAndPackage / startComposeTask / buildSnapshot /
+ * composeForTool need to thread through to host-core's composeWithFixation, bundled into one options bag
+ * instead of separate positional parameters. Every call site builds one via `{ ...requestContextOf(extra),
+ * locale, traceContext: traceContextOf(extra) }` (requestContextOf's returned `{abort, requestId}` already
+ * matches this type's field names by construction, so the spread needs only `locale` and `traceContext`
+ * added).
+ */
+interface ComposeCallContext {
+  locale?: string;
+  abort?: AbortSignal;
+  requestId?: string;
+  traceContext?: TraceContext;
 }
 
 /**
@@ -176,25 +213,12 @@ function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
  * ComposeOptions.traceContext (additive/opt-in, see composeForTool's doc comment).
  */
 async function composeAndAudit(
-  ctx: ToolContext,
+  ctx: ToolCallContext,
   input: ComposeSource,
   endpoint: string,
-  options?: {
-    afterCompose?: (result: ComposeResult) => Promise<void>;
-    locale?: string;
-    abort?: AbortSignal;
-    requestId?: string;
-    traceContext?: TraceContext;
-  },
+  options?: ComposeCallContext & { afterCompose?: (result: ComposeResult) => Promise<void> },
 ): Promise<ComposeResult> {
-  const result = await composeForTool(
-    input,
-    ctx,
-    options?.locale,
-    options?.abort,
-    options?.requestId,
-    options?.traceContext,
-  );
+  const result = await composeForTool(ctx, input, options);
   if (options?.afterCompose != null) await options.afterCompose(result);
   // The audit record prioritizes delivery availability and is fail-open: a recording failure is swallowed
   // so it does not drag down UI delivery (including a cached Spec), and the failure is reported to the observation
@@ -224,12 +248,9 @@ async function composeAndAudit(
 }
 
 async function composeAndPackage(
-  ctx: ToolContext,
+  ctx: ToolCallContext,
   input: ComposeSource,
-  locale?: string,
-  abort?: AbortSignal,
-  requestId?: string,
-  traceContext?: TraceContext,
+  callCtx?: ComposeCallContext,
   // Optional peek at the raw ComposeResult right after composeAndAudit resolves, before packaging. The only
   // consumer today is startComposeTask below, which needs `result.trace.cancelled` to tell a genuine
   // tasks/cancel-driven cancellation apart from an ordinary completion/fallback when deciding which status
@@ -240,9 +261,7 @@ async function composeAndPackage(
   // The compose → capability → audit-record (fail-open) order is intentional; do not reorder.
   let capability!: string;
   const result = await composeAndAudit(ctx, input, "compose", {
-    abort,
-    requestId,
-    traceContext,
+    ...callCtx,
     afterCompose: async (composed) => {
       // host-core's issueCapabilityForSpec applies the scope-collection rule (SPEC §5 A1; collectCapabilityScopes
       // is the single source of truth), shared with the REST profile so both profiles agree on the issuance rule.
@@ -274,7 +293,6 @@ async function composeAndPackage(
         },
       );
     },
-    locale,
   });
   onComposeResult?.(result);
   // Preresolve the initial data on the server side and co-embed it in the tool result's _meta. This makes the
@@ -354,18 +372,19 @@ const COMPOSE_TASK_POLL_INTERVAL_MS = 2_000;
  * background, and the tool call returns immediately with the task descriptor.
  */
 function startComposeTask(
-  ctx: ToolContext,
+  ctx: ToolCallContext,
   input: ComposeSource,
-  locale: string | undefined,
-  requestId: string | undefined,
-  traceContext: TraceContext | undefined,
+  callCtx: ComposeCallContext,
 ): { resultType: "task" } & DetailedTask {
   const { taskId, abort, task } = ctx.tasks.create({
     ttlMs: COMPOSE_TASK_TTL_MS,
     pollIntervalMs: COMPOSE_TASK_POLL_INTERVAL_MS,
   });
   let cancelled = false;
-  void composeAndPackage(ctx, input, locale, abort.signal, requestId, traceContext, (result) => {
+  // The task's own AbortController (not the synchronous tool call's own abort signal, which is meaningless
+  // once the tool call has already returned a CreateTaskResult) drives cancellation here — see this
+  // function's doc comment on tasks/cancel wiring into the same client-abort path.
+  void composeAndPackage(ctx, input, { ...callCtx, abort: abort.signal }, (result) => {
     cancelled = result.trace.cancelled === true;
   })
     .then((packaged) => {
@@ -385,20 +404,12 @@ function startComposeTask(
  * renderer's #kohaku-snapshot as {spec, data} (landing the reference-passing right here).
  */
 async function buildSnapshot(
-  ctx: ToolContext,
+  ctx: ToolCallContext,
   input: ComposeSource,
-  locale?: string,
-  abort?: AbortSignal,
-  requestId?: string,
-  traceContext?: TraceContext,
+  callCtx?: ComposeCallContext,
 ): Promise<{ spec: UISpec; html: string }> {
   // The audit record is fail-open symmetrically with the existing compose: a recording failure does not drag down HTML generation.
-  const result = await composeAndAudit(ctx, input, "render_snapshot", {
-    locale,
-    abort,
-    requestId,
-    traceContext,
-  });
+  const result = await composeAndAudit(ctx, input, "render_snapshot", callCtx);
   // HTML assembly is shared with the legacy UIResource co-emission path via snapshotHtmlFor (bounded
   // concurrency + an overall deadline, see snapshotHtmlFor's doc). Here the snapshot is the deliverable itself
   // (no other resolution pass to share with), so a resolution failure or timeout is propagated rather than
@@ -484,15 +495,20 @@ function registerComposeTool(ctx: ToolContext): void {
       _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["model"] }),
     },
     async ({ question, locale }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_compose`, () => {
-        const { signal, requestId } = requestContextOf(extra);
+      safeTool(ctx.deps, `${ctx.prefix}_compose`, async () => {
+        const call = forCall(ctx, await ctx.principalOf(extra));
+        const callCtx: ComposeCallContext = {
+          ...requestContextOf(extra),
+          locale,
+          traceContext: traceContextOf(extra),
+        };
         const input: ComposeSource = { kind: "nl", text: question };
         if (taskCapable(ctx, extra)) {
           return asComposePackage<ReturnType<typeof composeAndPackage>>(
-            Promise.resolve(startComposeTask(ctx, input, locale, requestId, traceContextOf(extra))),
+            Promise.resolve(startComposeTask(call, input, callCtx)),
           );
         }
-        return composeAndPackage(ctx, input, locale, signal, requestId, traceContextOf(extra));
+        return composeAndPackage(call, input, callCtx);
       }),
   );
 }
@@ -522,14 +538,15 @@ function registerRenderSnapshotTool(ctx: ToolContext): void {
     },
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, async () => {
-        const { signal, requestId } = requestContextOf(extra);
+        const call = forCall(ctx, await ctx.principalOf(extra));
         const { spec, html } = await buildSnapshot(
-          ctx,
+          call,
           { kind: "nl", text: question },
-          locale,
-          signal,
-          requestId,
-          traceContextOf(extra),
+          {
+            ...requestContextOf(extra),
+            locale,
+            traceContext: traceContextOf(extra),
+          },
         );
         // The file name is derived from the intent hash (identical displays coalesce into the same file and do not collide).
         // The return value is a locator = local path or public URL (branching in snapshotWriter's implementation = host responsibility).
@@ -578,18 +595,23 @@ function registerIntentTools(ctx: ToolContext): void {
         _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["model"] }),
       },
       async (args, extra) =>
-        safeTool(ctx.deps, tool.name, () => {
+        safeTool(ctx.deps, tool.name, async () => {
+          const call = forCall(ctx, await ctx.principalOf(extra));
           // Pull the shared language input out before it reaches the intent params (it must not
           // pollute the canonical intent / intent hash).
           const { locale, ...params } = args as JsonObject & { locale?: string };
-          const { signal, requestId } = requestContextOf(extra);
+          const callCtx: ComposeCallContext = {
+            ...requestContextOf(extra),
+            locale,
+            traceContext: traceContextOf(extra),
+          };
           const input: ComposeSource = { kind: "intent", intent: tool.toIntent(params as JsonObject) };
           if (taskCapable(ctx, extra)) {
             return asComposePackage<ReturnType<typeof composeAndPackage>>(
-              Promise.resolve(startComposeTask(ctx, input, locale, requestId, traceContextOf(extra))),
+              Promise.resolve(startComposeTask(call, input, callCtx)),
             );
           }
-          return composeAndPackage(ctx, input, locale, signal, requestId, traceContextOf(extra));
+          return composeAndPackage(call, input, callCtx);
         }),
     );
   }
@@ -604,9 +626,12 @@ function registerResolveBindingTool(ctx: ToolContext): void {
       inputSchema: z.object({ ref: z.string(), capability: z.string() }),
       _meta: toolUiMeta({ visibility: ["app"] }),
     },
-    async ({ ref, capability }) =>
+    async ({ ref, capability }, extra) =>
       // parseInvokableRef / domain.invoke failures also become tool errors rather than RPC exceptions (symmetric with REST's 400).
       safeTool(ctx.deps, `${ctx.prefix}_resolve_binding`, async () => {
+        // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
+        // fallback below when the AuthzPort's verify does not itself return a principal.
+        const principal = await ctx.principalOf(extra);
         // Server-side paging/sorting: as on the REST surface, verify the capability against base (with reserved
         // parameters removed), and merge the reserved parameters into domain.invoke (the `_` namespace convention).
         // Unknown `_` keys are rejected as on the REST surface (to prevent changing the data range via unauthorized parameters).
@@ -622,7 +647,7 @@ function registerResolveBindingTool(ctx: ToolContext): void {
           return toolError(`capability denied: ${verdict.reason ?? ""}`);
         }
         const data = await ctx.deps.domain.invoke(base.path, params, {
-          principal: verdict.principal ?? ctx.principal,
+          principal: verdict.principal ?? principal,
           capability,
         });
         const rows = (data as { rows?: unknown[] }).rows?.length ?? 0;
@@ -641,15 +666,20 @@ function registerEventTool(ctx: ToolContext): void {
     {
       description: "(app-only) Recomposes a component event as an Intent delta",
       inputSchema: z.object({
-        intent: z.object({ canonical: z.string(), params: z.record(z.string(), z.unknown()) }),
+        // JsonObjectSchema (not a bare z.record) caps nesting depth the same way kohaku_action's own
+        // `payload` already does (host-rest's ActionBodySchema counterpart), guarding the recursive
+        // canonical-JSON serialization (intent-hash computation) and lineage persistence downstream of
+        // these fields against a pathologically deep but otherwise well-formed payload.
+        intent: z.object({ canonical: z.string(), params: JsonObjectSchema }),
         on: z.string(),
-        payload: z.record(z.string(), z.unknown()).default({}),
+        payload: JsonObjectSchema.default({}),
         locale: LOCALE_INPUT,
       }),
       _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["app"] }),
     },
     async ({ intent, on, payload, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_event`, async () => {
+        const call = forCall(ctx, await ctx.principalOf(extra));
         const current = await finalizeIntent({
           canonical: intent.canonical,
           params: intent.params as JsonObject,
@@ -660,7 +690,7 @@ function registerEventTool(ctx: ToolContext): void {
         const { intent: resolved } = await hostCore.resolveIntent(
           ctx.deps.compose.semantic,
           { kind: "gui", current, action: on, params: payload as JsonObject },
-          mcpSession(locale, ctx.principal),
+          mcpSession(locale, call.principal),
         );
         // Record view.interacted symmetrically with the REST surface's /events (which records it before
         // recomposing, via KohakuHostDeps.recorder). Fail-open: a recording failure must not block
@@ -681,14 +711,14 @@ function registerEventTool(ctx: ToolContext): void {
         // Pass the already-resolved CanonicalIntent through as-is ("canonical" kind) rather than
         // re-destructuring it into a plain `{canonical, params}` literal — composeForTool then skips a
         // redundant second normalize+finalize pass over the same Intent (see ComposeSource's doc comment).
-        const { signal, requestId } = requestContextOf(extra);
         return composeAndPackage(
-          ctx,
+          call,
           { kind: "canonical", intent: resolved },
-          locale,
-          signal,
-          requestId,
-          traceContextOf(extra),
+          {
+            ...requestContextOf(extra),
+            locale,
+            traceContext: traceContextOf(extra),
+          },
         );
       }),
   );
@@ -737,9 +767,12 @@ function registerActionTool(ctx: ToolContext): void {
         // there is nothing to propagate the abort signal into once the write is under way — but a call already
         // cancelled by the time it reaches the handler must not still perform the write (a client that has
         // given up should not have its abandoned request silently take effect).
-        if (requestContextOf(extra).signal.aborted) {
+        if (requestContextOf(extra).abort.aborted) {
           return toolError("cancelled");
         }
+        // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
+        // fallback below when the AuthzPort's verify does not itself return a principal.
+        const principal = await ctx.principalOf(extra);
         // Reject an action name the DomainPort does not expose before even attempting capability verification
         // (see this function's doc comment). Fail-closed on a listOperations() rejection too — every action is
         // "unknown" for this call, and the failure is reported to the observability hook.
@@ -763,7 +796,7 @@ function registerActionTool(ctx: ToolContext): void {
           return toolError(`capability denied: ${verdict.reason ?? ""}`);
         }
         const result = await ctx.deps.domain.invoke(action, payload as JsonObject, {
-          principal: verdict.principal ?? ctx.principal,
+          principal: verdict.principal ?? principal,
           capability,
         });
         // The write is already committed; a side-effect-declaration failure is fail-open — see host-core's applyActionEffects.
@@ -798,7 +831,15 @@ function registerActionTool(ctx: ToolContext): void {
  */
 export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, options: AttachOptions): void {
   const prefix = options.toolPrefix ?? "kohaku";
-  const principal = deps.principal ?? ANONYMOUS;
+  const fallbackPrincipal = deps.principal ?? ANONYMOUS;
+
+  // Resolves the principal for one tool call — see McpHostDeps.resolvePrincipal's doc comment for the full
+  // fallback order and rationale. A throw from deps.resolvePrincipal is deliberately NOT caught here: it
+  // propagates out of the `await ctx.principalOf(extra)` call inside each handler's safeTool body, so
+  // safeTool's own try/catch turns it into a structured tool error (isError) and reports it to onError —
+  // fail-closed, never silently downgraded to fallbackPrincipal or anonymous.
+  const principalOf = async (extra: ServerContext): Promise<Principal> =>
+    deps.resolvePrincipal != null ? await deps.resolvePrincipal(extra) : fallbackPrincipal;
 
   const getRendererHtml = async (): Promise<string> =>
     typeof options.rendererHtml === "function" ? options.rendererHtml() : options.rendererHtml;
@@ -807,12 +848,15 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
   // doc comment in types.ts), so there is nothing to gain from rebuilding it on every compose. tasks is the
   // one exception that DOES hold state (the in-memory task store), but it too is scoped to this attach call
   // (one store per McpServer instance) rather than per tool call — see tasks.ts's createTaskStore doc comment.
+  // principalOf, unlike the old attach-time `principal` field it replaces, is resolved per tool call (see
+  // McpHostDeps.resolvePrincipal's doc comment) — each handler calls it once, inside its own safeTool body,
+  // and builds a ToolCallContext (via forCall) to carry the resolved value through the compose pipeline.
   const ctx: ToolContext = {
     server,
     deps,
     options,
     prefix,
-    principal,
+    principalOf,
     getRendererHtml,
     fixationHost: fixationHost(deps),
     allowedActions: hostCore.createAllowedActions(deps.domain),
@@ -961,17 +1005,15 @@ function fixationHost(deps: McpHostDeps): hostCore.FixationDeliveryHost {
  * composeWithFixation the same way, additively (ComposeOptions.traceContext).
  */
 async function composeForTool(
+  ctx: ToolCallContext,
   input: ComposeSource,
-  ctx: ToolContext,
-  locale?: string,
-  abort?: AbortSignal,
-  requestId?: string,
-  traceContext?: TraceContext,
+  callCtx?: ComposeCallContext,
 ): Promise<ComposeResult> {
-  // Attach ctx.principal, symmetric with registerEventTool's mcpSession(locale, ctx.principal) call below —
-  // without it, SemanticPort.normalize / policyFor / the fixation lookup would see an anonymous session on
-  // the compose path only, diverging from the kohaku_event path for the same attached principal.
-  const session = mcpSession(locale, ctx.principal);
+  // Attach ctx.principal (this call's already-resolved principal — see McpHostDeps.resolvePrincipal's doc
+  // comment), symmetric with registerEventTool's mcpSession(locale, call.principal) call — without it,
+  // SemanticPort.normalize / policyFor / the fixation lookup would see an anonymous session on the compose
+  // path only, diverging from the kohaku_event path for the same resolved principal.
+  const session = mcpSession(callCtx?.locale, ctx.principal);
   const intent =
     input.kind === "canonical"
       ? input.intent
@@ -979,10 +1021,10 @@ async function composeForTool(
   return hostCore.composeWithFixation(
     intent,
     session,
-    { materialize: ctx.deps.compose, ...(abort != null ? { abort } : {}) },
+    { materialize: ctx.deps.compose, ...(callCtx?.abort != null ? { abort: callCtx.abort } : {}) },
     ctx.fixationHost,
-    requestId,
-    traceContext,
+    callCtx?.requestId,
+    callCtx?.traceContext,
   );
 }
 

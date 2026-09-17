@@ -314,6 +314,35 @@ class TestTargetsMissing:
             )
             assert row["note"] is None
 
+    def test_region_with_actual_but_no_target_row_still_appears(self) -> None:
+        repo = SalesRepo()
+        # fy=2027 has no targets at all in the seed (which only covers FY2025/FY2026); append a single
+        # actual record so the region has revenue but no matching target row, exercising the
+        # union-of-keys population (previously such a region would be silently dropped).
+        from sales_api.domain import SalesRecord
+
+        repo.records.append(
+            SalesRecord(
+                id="test-actual-no-target",
+                fiscal_year=2027,
+                quarter=1,
+                month="2027-04",
+                region="north_america",
+                product_id="prd-001",
+                channel="direct",
+                units=10,
+                revenue=1_000_000,
+            )
+        )
+        t = targets(repo, {"fy": 2027, "q": 1})
+        assert len(t.rows) == 1
+        row = t.rows[0]
+        assert row["region"] == "North America"
+        assert row["actual"] == 1_000_000
+        assert row["target"] == 0
+        assert row["attainment"] is None
+        assert "No target set" in str(row["note"])
+
 
 class TestTopNClamp:
     """summary()'s topN clamp (boundary)."""

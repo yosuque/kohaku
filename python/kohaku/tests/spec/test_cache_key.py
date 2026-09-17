@@ -2,7 +2,38 @@
 
 from __future__ import annotations
 
-from kohaku.spec import CacheKeyParts, cache_key, combine_data_versions
+import gc
+from collections.abc import Callable
+from importlib import import_module
+
+import pytest
+
+from kohaku.spec import (
+    CacheKeyParts,
+    UISpec,
+    cache_key,
+    combine_data_versions,
+    compute_structure_hash,
+)
+
+# A plain `import kohaku.spec.cache_key as cache_key_module` would actually bind the `cache_key` *function*
+# (kohaku/spec/__init__.py's `from .cache_key import cache_key` rebinds the `cache_key` attribute on the
+# `kohaku.spec` package to the function, shadowing the submodule reference for any later attribute-chain
+# access) -- import_module bypasses that by going through sys.modules directly.
+cache_key_module = import_module("kohaku.spec.cache_key")
+
+
+def _spec(component_id: str = "root") -> UISpec:
+    return UISpec.model_validate(
+        {
+            "kohaku": "0.1",
+            "intent": {"canonical": "x", "params": {}, "hash": "sha256:" + "a" * 64},
+            "dataVersion": "v1",
+            "components": [{"id": component_id, "type": "layout.stack", "props": {}}],
+            "events": [],
+            "provenance": {"tier": "L0", "composedBy": "test", "cache": "miss"},
+        }
+    )
 
 
 class TestCacheKey:
@@ -124,3 +155,53 @@ class TestCombineDataVersions:
             [("kohaku://sales-summary", "v1"), ("kohaku://targets", "v2")]
         )
         assert value == "multi:0d9007cd68b518c8"
+
+
+class TestComputeStructureHashMemo:
+    """compute_structure_hash's memoization (see cache_key.py's _structure_hash_memo doc comment for why this
+    is a plain dict keyed by id(spec), not a weakref.WeakKeyDictionary the way TS's WeakMap-based memo is)."""
+
+    def test_repeated_calls_on_the_same_spec_reuse_the_cached_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = 0
+        original: Callable[[UISpec], str] = cache_key_module._compute_structure_hash_uncached
+
+        def counting(spec: UISpec) -> str:
+            nonlocal calls
+            calls += 1
+            return original(spec)
+
+        monkeypatch.setattr(cache_key_module, "_compute_structure_hash_uncached", counting)
+
+        spec = _spec()
+        first = compute_structure_hash(spec)
+        second = compute_structure_hash(spec)
+        third = compute_structure_hash(spec)
+        assert first == second == third
+        assert calls == 1
+
+    def test_a_different_spec_with_different_content_is_not_conflated(self) -> None:
+        a = compute_structure_hash(_spec("root"))
+        b = compute_structure_hash(_spec("other"))
+        assert a != b
+
+    def test_two_distinct_spec_objects_with_identical_content_each_recompute(self) -> None:
+        """Keyed by id(spec) rather than id(spec.components): two different UISpec objects that happen to
+        hold equal (but not the same-reference) content each get their own memo entry -- a missed
+        optimization versus TS's components-array-keyed WeakMap, never a correctness issue (see the module
+        doc comment)."""
+        a = compute_structure_hash(_spec("same"))
+        b = compute_structure_hash(_spec("same"))
+        assert a == b  # same *value*, computed independently for each object
+
+    def test_memo_entry_is_evicted_once_the_spec_is_garbage_collected(self) -> None:
+        """No leak, and no risk of a later object reusing the same id() and spuriously hitting a stale
+        entry: the memo entry for a spec is removed once that spec itself is collected."""
+        spec = _spec()
+        compute_structure_hash(spec)
+        key = id(spec)
+        assert key in cache_key_module._structure_hash_memo
+        del spec
+        gc.collect()
+        assert key not in cache_key_module._structure_hash_memo

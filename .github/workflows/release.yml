@@ -28,14 +28,14 @@ jobs:
       published: ${{ steps.npm.outputs.published }}
       version: ${{ steps.npm.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      # No `version:` input here: package.json's `packageManager` (pnpm@11.5.2) is the single source of
+      # No `version:` input here: package.json's `packageManager` field is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
       # "Multiple versions of pnpm specified".
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
@@ -45,14 +45,14 @@ jobs:
       # this is the last point at which a broken tarball can still be stopped.
       - run: pnpm run smoke:pack
       - id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          version: pnpm run version
-          publish: pnpm run release
-          commit: "chore(release): version packages"
-          title: "chore(release): version packages"
+          version-script: pnpm run version
+          publish-script: pnpm run release
+          commit-message: "chore(release): version packages"
+          pr-title: "chore(release): version packages"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           # Does NOT currently produce an attestation: 0.1.0 went out with registry signatures but no
           # provenance. `pnpm publish` turned out not to delegate to the npm CLI -- it uploads itself and
@@ -66,16 +66,34 @@ jobs:
       # packages went out, which silently skipped the PyPI and GitHub Release jobs below. The registry is
       # the only thing that actually knows, and asking it also makes a re-run converge: whatever npm is
       # missing gets published, and the downstream jobs run whenever npm is at this version.
+      #
+      # npm alone is not enough to gate on, though: once npm has a version, that stays true on every later
+      # workflow run too (every subsequent push to main), which would otherwise re-run the PyPI / GitHub
+      # Release jobs forever even after both already have this version. Those two jobs are individually
+      # idempotent (skip-existing / "release already exists"), but there is no reason to run them at all
+      # once there is nothing left to do — so also check whether the GitHub release or the PyPI upload is
+      # still missing, and only report published when npm has it AND at least one of the other two does not.
       - id: npm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p "require('./packages/spec-core/package.json').version")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if npm view "@kohaku-ui/spec-core@$VERSION" version >/dev/null 2>&1; then
-            echo "npm is at $VERSION"
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          else
+          if ! npm view "@kohaku-ui/spec-core@$VERSION" version >/dev/null 2>&1; then
             echo "npm does not have $VERSION"
             echo "published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "npm is at $VERSION"
+          GH_HAS=false
+          if gh release view "v$VERSION" >/dev/null 2>&1; then GH_HAS=true; fi
+          PYPI_HAS=false
+          if curl -fsS "https://pypi.org/simple/kohaku-ui/" 2>/dev/null | grep -qF "$VERSION"; then PYPI_HAS=true; fi
+          if [ "$GH_HAS" = "true" ] && [ "$PYPI_HAS" = "true" ]; then
+            echo "the GitHub release and PyPI both already have $VERSION; nothing left to do"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
   pypi:
@@ -89,10 +107,15 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      # Pin to the exact commit that triggered this run, not the branch tip: by the time this job runs,
+      # main may have moved on to a later commit (a subsequent push), and checking that out could publish
+      # code that does not match the npm version this job just asserted against.
+      - uses: actions/checkout@v7
         with:
-          ref: main
-      - uses: astral-sh/setup-uv@v5
+          ref: ${{ github.sha }}
+      # setup-uv stopped publishing floating major/minor tags after v7 (no `@v10` ref exists), so the full
+      # version tag is required here; Dependabot still bumps exact tags.
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
       # CI already fails on version drift, but this is the last gate before an asymmetric release: npm is
@@ -126,7 +149,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # Idempotent for the same reason the PyPI upload is: the gate stays true once npm is at this version,

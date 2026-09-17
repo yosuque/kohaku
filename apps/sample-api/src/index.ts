@@ -76,6 +76,14 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
         `, then draining connections (grace ${graceMs}ms)`,
     );
     setTimeout(() => {
+      // Close idle keep-alive sockets immediately rather than waiting for their keep-alive timeout to
+      // elapse: server.close() alone only stops accepting *new* connections and waits for every existing
+      // one (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
+      // connection would otherwise stall the drain for no reason. ServerType (@hono/node-server) also
+      // covers Http2Server/Http2SecureServer, which do not declare this method — this sample only ever
+      // serves plain HTTP/1.1, so the `in` check is always true at runtime, but narrows the type safely
+      // for the union.
+      if ("closeIdleConnections" in server) server.closeIdleConnections();
       server.close(() => process.exit(0));
       setTimeout(() => {
         server.getConnections((err, count) => {

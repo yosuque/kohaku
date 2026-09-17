@@ -64,9 +64,10 @@ export const storagePort: StoragePort = {
 };
 `;
 
-export const SERVER_TEMPLATE = `// Dependencies this file needs in your app's package.json: "hono", "@hono/node-server", and "tsx"
-// (to run it directly, e.g. "tsx server.ts"). @kohaku-ui/* packages are not published yet (see
-// docs/user-guide.md §6 Step 0) — depend on them from inside this monorepo via "workspace:*".
+export const SERVER_TEMPLATE = `// Dependencies this file needs in your app's package.json: "hono", "@hono/node-server", "tsx",
+// and the @kohaku-ui/* packages imported below (npm install @kohaku-ui/host-rest @kohaku-ui/registry
+// @kohaku-ui/llm zod — see docs/user-guide.md §6 Step 0). Building this inside the kohaku monorepo
+// itself instead of a standalone app? Depend on them via "workspace:*" there instead.
 import { createKohakuRoutes } from "@kohaku-ui/host-rest";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { createLlmFromEnv } from "@kohaku-ui/llm";

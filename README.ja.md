@@ -53,7 +53,7 @@ kohaku 自体を開発する場合は、以下のクイックスタートと [CO
 
 ## クイックスタート(5 分)
 
-前提: Node >= 22、pnpm 11(下限は `package.json` の `engines`。CI は宣言下限の Node 22 と Node 24 の両方で検証、`.node-version` はローカル開発用に 25.7.0 を指定)。
+前提: Node >= 22、pnpm 12(下限は `package.json` の `engines`。CI は宣言下限の Node 22 と Node 24 の両方で検証、`.node-version` はローカル開発用に 25.7.0 を指定)。
 
 ```bash
 cp .env.example .env    # LLM プロバイダ設定(下表)

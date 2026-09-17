@@ -25,13 +25,15 @@ const SemanticInputSchema = z.union([
 
 const SessionSchema = z
   .object({
-    surface: z.string().default("web"),
+    // Bounded so an oversized client-supplied surface tag cannot inflate lineage records / recorder keys
+    // indefinitely (same rationale as sessionId below).
+    surface: z.string().max(64).default("web"),
     // Bounded so an oversized client-supplied sessionId cannot inflate lineage records / recorder keys
     // indefinitely (params/payload get the same treatment below via JsonObjectSchema's depth cap).
     sessionId: z.string().max(128).optional(),
     // Optional locale tag ("en" / "ja"). Threaded to SessionContext.locale so hosts can vary
     // NL normalization hints and (product policy permitting) generation output language.
-    locale: z.string().optional(),
+    locale: z.string().max(64).optional(),
   })
   .default({ surface: "web" });
 
@@ -59,20 +61,23 @@ export const ActionBodySchema = z.object({
 
 export const TelemetryBodySchema = z.object({
   // Per-batch cap. Clamp at 500 to prevent resource exhaustion of the recording process from an oversized batch.
+  // Per-field string bounds (surface/renderer .max(64), specHash/artifactId .max(128)) mirror SessionSchema's
+  // sessionId bound above: these client-supplied strings flow into lineage records / recorder keys, which
+  // must not grow unboundedly from an oversized single field either.
   events: z
     .array(
       z.discriminatedUnion("kind", [
         z.object({
           kind: z.literal("rendered"),
-          specHash: z.string(),
-          surface: z.string().optional(),
-          renderer: z.string().optional(),
+          specHash: z.string().max(128),
+          surface: z.string().max(64).optional(),
+          renderer: z.string().max(64).optional(),
           durationMs: z.number().optional(),
         }),
         z.object({
           kind: z.literal("componentUsed"),
-          artifactId: z.string(),
-          surface: z.string().optional(),
+          artifactId: z.string().max(128),
+          surface: z.string().max(64).optional(),
           outcome: z.enum(["ok", "error"]).optional(),
           sessionId: z.string().optional(),
         }),

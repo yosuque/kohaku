@@ -13,6 +13,7 @@ completion), so that strategy — plus failure reporting — is left to the host
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -59,6 +60,15 @@ FixationSelfHealKind = Literal["refresh_fingerprint", "invalidate"]
 
 FixationLookup = Callable[[str, SessionContext], Awaitable[FixationRecord | None]]
 
+# Delivery-admission gate (port of TS FixationDeliveryHost.admit). Applied to a fixation `lookup` found,
+# before it is checked for staleness. Both host profiles' products previously duplicated a "serve this
+# fixation only for the right session" policy (e.g. language: pinned Specs fixated from EN traffic served to
+# EN sessions only) *inside* their own lookup callback. Centralizing it here instead lets a product keep
+# `lookup` a plain fetch and express the policy once, shared by both host_rest and host_mcp wiring. Returning
+# False is equivalent to `lookup` having returned None (falls through to normal compose). Omitted (None) =
+# admit unconditionally (legacy behavior). Sync or async, mirroring the other optional hooks in this codebase.
+FixationAdmit = Callable[[FixationRecord, SessionContext], "Awaitable[bool] | bool"]
+
 # Runs one self-heal call: schedules `fn` (however the host chooses — awaited inline under a lock, or spawned as a
 # background task), and is responsible for catching `fn`'s failure and reporting it (the host already knows how to
 # reach its own observability hook, so host-core does not prescribe a separate on_self_heal_error callback the way
@@ -79,6 +89,7 @@ class FixationDeliveryHost:
 
     run_self_heal: SelfHealRunner
     lookup: FixationLookup | None = None
+    admit: FixationAdmit | None = None
     fixations: FixationSelfHealApi | None = None
 
 
@@ -173,6 +184,12 @@ async def resolve_fixated_result(
     fixation = await host.lookup(intent.hash, session) if host.lookup is not None else None
     if fixation is None:
         return None
+    if host.admit is not None:
+        verdict = host.admit(fixation, session)
+        if inspect.isawaitable(verdict):
+            verdict = await verdict
+        if not verdict:
+            return None
     materialized = await materialize_fixation(fixation, intent, ctx, session.tenant)
     return await settle_fixation(
         materialized,

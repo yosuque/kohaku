@@ -7,7 +7,7 @@ Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation 
 (a declarative UI Spec), with generation separated from rendering.
 
 ```bash
-npm install @kohaku-ui/host-core
+npm install @kohaku-ui/host-core zod
 ```
 
 The packages in this scope share a single version and are designed to be installed together.

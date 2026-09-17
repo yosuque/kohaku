@@ -119,6 +119,9 @@ export function createMcpHttpServer(options: McpHttpServerOptions): Server {
   // fresh per-request McpServer instance from options.createServer). onerror observes failures the
   // fetch-level handler itself reports (routing/dispatch failures); toNodeHandler's own onerror below
   // observes the narrower node<->fetch adapter failures (request conversion, handler.fetch throwing).
+  // Production hook: this demo's setup.createServer leaves McpHostDeps.resolvePrincipal unwired (every
+  // call runs as the anonymous principal) — this per-request createServer() call is exactly where a real
+  // deployment would derive the caller's identity (e.g. from this request's own auth) and wire it in.
   const mcpHandler = createMcpHandler(() => options.createServer(), {
     onerror: (err) => console.error("[kohaku-mcp-http] MCP handler error:", err),
   });
@@ -401,6 +404,11 @@ async function main(): Promise<void> {
       console.error(
         `kohaku-sales-sample MCP server: received ${signal}, draining connections (grace ${graceMs}ms)`,
       );
+      // Close idle keep-alive sockets immediately rather than waiting for their keep-alive timeout to
+      // elapse: close() alone only stops accepting *new* connections and waits for every existing one
+      // (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
+      // connection would otherwise stall the drain for no reason.
+      httpServer.closeIdleConnections();
       httpServer.close(() => process.exit(0));
       setTimeout(() => {
         httpServer.getConnections((err, count) => {

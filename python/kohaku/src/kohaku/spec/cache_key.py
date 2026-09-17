@@ -6,6 +6,7 @@ synchronous functions.
 
 from __future__ import annotations
 
+import weakref
 from dataclasses import dataclass
 
 from .canonical_json import _utf16_key, canonical_stringify, sha256_hex
@@ -89,13 +90,74 @@ def compute_spec_hash(spec: UISpec) -> str:
     return f"sha256:{sha256_hex(canonical_stringify(spec.to_wire()))}"
 
 
+@dataclass
+class _StructureHashMemoEntry:
+    """One compute_structure_hash memo entry: the identity of the components/events/state it was computed
+    against (a cheap staleness check on hit) plus the resulting hash."""
+
+    components_id: int
+    events_id: int
+    state_id: int
+    value: str
+
+
+# Memoizes compute_structure_hash. A cache hit that returns the same in-memory UISpec object on repeated
+# lookups (a common StoragePort.get_spec_cache shape) means re-hashing it on every single call (once per
+# view.composed recording) is pure waste; this lets such repeats reuse the first computation.
+#
+# TS's structureHashMemo (cache-key.ts) is a `WeakMap<ComponentNode[], ...>` keyed on the Spec's `components`
+# array reference. That exact shape does not carry over to Python: a plain `list` cannot be weakly referenced
+# here (`weakref.ref([])` raises TypeError), and UISpec itself -- the only object in this pipeline pydantic
+# actually allows a weak reference to -- has no `__hash__` (pydantic v2's BaseModel defines value-based
+# `__eq__` without `__hash__`, so plain instances are unhashable and cannot be used as a
+# `weakref.WeakKeyDictionary` key). Making UISpec hashable (`model_config = ConfigDict(frozen=True)`) was
+# rejected as a fix: pydantic's frozen hash is computed from field *values*, which would force hashing the
+# whole Spec structure on every lookup -- defeating the O(1) identity-check this memo exists for.
+#
+# So this is a plain dict keyed by `id(spec)` (the UISpec object's own identity) instead of a
+# WeakKeyDictionary, with cleanup done manually via `weakref.finalize(spec, ...)` when the memo is written
+# (UISpec itself IS weakly-referenceable, confirmed above) -- the same "no leak, no stale hit from an id()
+# address reused by an unrelated later object" guarantee a WeakKeyDictionary would give, without requiring
+# UISpec to become hashable. `components_id` / `events_id` / `state_id` are the secondary identity check on
+# hit (mirroring TS's `cached.events === spec.events && cached.state === spec.state`): keying primarily on
+# `id(spec)` rather than `id(spec.components)` narrows the hit rate slightly versus TS (two distinct UISpec
+# wrapper objects sharing the same underlying components/events/state -- e.g. from `dataclasses.replace`-style
+# rewrapping -- will not share a cache entry here), but that is a missed optimization, never a correctness
+# risk: any actual reference reuse across genuinely different content is still caught by the identity check.
+_structure_hash_memo: dict[int, _StructureHashMemoEntry] = {}
+
+
 def compute_structure_hash(spec: UISpec) -> str:
     """Structure-only hash (components + events; provenance / dataVersion excluded).
 
     Used for the "structural stability" judgment of L1→L0 fixation. state is included in the input only when
     present (the hash of a Spec that does not use state stays completely unchanged from the previous value,
     protecting the fixation stability tally).
+
+    Memoized by `spec`'s own identity (see `_structure_hash_memo`'s doc comment above for why this differs
+    in shape, though not in intent, from TS's WeakMap-based memo).
     """
+    key = id(spec)
+    components_id, events_id, state_id = id(spec.components), id(spec.events), id(spec.state)
+    cached = _structure_hash_memo.get(key)
+    if (
+        cached is not None
+        and cached.components_id == components_id
+        and cached.events_id == events_id
+        and cached.state_id == state_id
+    ):
+        return cached.value
+    value = _compute_structure_hash_uncached(spec)
+    _structure_hash_memo[key] = _StructureHashMemoEntry(
+        components_id=components_id, events_id=events_id, state_id=state_id, value=value
+    )
+    # Evict this entry once `spec` itself is garbage-collected, so the memo neither grows unboundedly nor
+    # risks a later unrelated object reusing this exact `id()` and spuriously hitting a stale entry.
+    weakref.finalize(spec, _structure_hash_memo.pop, key, None)
+    return value
+
+
+def _compute_structure_hash_uncached(spec: UISpec) -> str:
     structure: dict[str, object] = {
         "components": [c.to_wire() for c in spec.components],
         "events": [e.to_wire() for e in spec.events],

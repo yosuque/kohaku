@@ -137,13 +137,7 @@ export interface FixationsClient {
     intent: { canonical: string; params: JsonObject },
     opts?: RequestOptions,
   ): Promise<FixationRecordView>;
-  /**
-   * Remove a fixation (POST /fixations/:intentHash/remove). "Undo a fixation" goes by a different name at
-   * every layer of the stack: this client method / the REST route path / the wire event `fixation.unfixated`
-   * all say "unfixate" or "remove", the host-facing service method is `Fixations.unfixate`, and the storage
-   * primitive is `StoragePort.deleteFixation`. `unfixate` below is the name this client now standardizes on
-   * (matching the service method); `remove` is kept only as a deprecated alias for existing callers.
-   */
+  /** Remove a fixation (POST /fixations/:intentHash/remove). See {@link FixationsClient}'s doc comment for the naming map across layers. */
   unfixate(intentHash: string, opts?: RequestOptions): Promise<void>;
   /** @deprecated Use {@link FixationsClient.unfixate} instead. Kept for backward compatibility; same request. */
   remove(intentHash: string, opts?: RequestOptions): Promise<void>;

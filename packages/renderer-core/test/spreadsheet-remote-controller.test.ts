@@ -277,6 +277,24 @@ describe("createSpreadsheetRemoteController: syncDeclaredSort", () => {
 });
 
 describe("createSpreadsheetRemoteController: toggleSort / goFirstPage / goNextPage", () => {
+  it("toggleSort returns the resulting SortState (so the caller can emit sortChange with it)", async () => {
+    const seen: ResolveOptions[] = [];
+    const ctrl = createSpreadsheetRemoteController({
+      binding: makeImmediateBinding(seen),
+      bus: createDataInvalidationBus(),
+      ref: REF,
+      pageSize: undefined,
+      serverSide: true,
+      declaredSort: undefined,
+    });
+    ctrl.start();
+    await tick();
+
+    expect(ctrl.toggleSort("revenue")).toEqual({ field: "revenue", dir: "desc" });
+    await tick();
+    expect(ctrl.toggleSort("revenue")).toEqual({ field: "revenue", dir: "asc" });
+  });
+
   it("toggleSort on a new column defaults to desc; toggling the same column flips asc<->desc", async () => {
     const seen: ResolveOptions[] = [];
     const ctrl = createSpreadsheetRemoteController({

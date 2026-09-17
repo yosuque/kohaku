@@ -260,9 +260,9 @@ async function deliverComposed(
 
 /**
  * The streaming counterpart of deliverComposed for /compose/stream: fixation shortcut -> SSE
- * skeleton/patch/done -> audit recording, over an SSE response (hono's streamSSE). Extracted out of
- * registerComposeRoutes' /compose/stream handler (previously ~110 lines inline) so the route registration
- * body stays a short list of route -> delivery-function wirings, matching deliverComposed's split for the
+ * skeleton/patch/done -> audit recording, over an SSE response (hono's streamSSE). Kept as its own
+ * function, separate from registerComposeRoutes' route wiring, so that the route registration body
+ * stays a short list of route -> delivery-function wirings, matching deliverComposed's split for the
  * non-streaming path.
  */
 async function deliverComposedStream(

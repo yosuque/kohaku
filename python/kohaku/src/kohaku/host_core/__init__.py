@@ -22,6 +22,7 @@ from .fixation import (
     resolve_fixated_result,
     settle_fixation,
 )
+from .keyed_mutex import get_lock
 from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 
 __all__ = [
@@ -36,6 +37,7 @@ __all__ = [
     "WriteScopeDroppedError",
     "compose_with_fixation",
     "fail_open",
+    "get_lock",
     "is_typed_host_error",
     "issue_capability_for_spec",
     "notify_hook",

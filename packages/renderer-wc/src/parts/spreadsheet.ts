@@ -1,14 +1,25 @@
 import {
   applyLocalView,
   type BoundData,
+  type CellCoercion,
+  cellDraft,
+  coerceCellInput,
+  commitCellEdit,
   createSpreadsheetRemoteController,
   describeSortHeader,
+  effectiveRows,
   formatCell,
   hasDeclaredEvent,
   isActivationKey,
+  localFooterTotal,
+  type RowsWorkingCopy,
   resolveColumns,
   type SortState,
+  type SpreadsheetCellEdit,
+  type SpreadsheetCellEditRuntime,
   type SpreadsheetTokens,
+  spreadsheetCellEditButtonStyle,
+  spreadsheetCellEditInputStyle,
   spreadsheetFooterBarStyle,
   spreadsheetFooterTotalStyle,
   spreadsheetPagerButtonStyle,
@@ -16,7 +27,13 @@ import {
   spreadsheetTdStyle,
   spreadsheetThStyle,
 } from "@kohaku-ui/renderer-core";
-import { type ComponentNode, resolveBoundRef, type TabularData } from "@kohaku-ui/spec-core";
+import {
+  type ComponentNode,
+  type JsonObject,
+  resolveBoundRef,
+  type TabularColumn,
+  type TabularData,
+} from "@kohaku-ui/spec-core";
 import { el, text } from "../dom.js";
 import type { PartBuilder, RenderRuntime } from "../types.js";
 import { dataStateNotice, tokenStr } from "./kit.js";
@@ -25,7 +42,8 @@ import { dataStateNotice, tokenStr } from "./kit.js";
  * presentSpreadsheet — a table (same behavior as renderer-react's PresentSpreadsheet).
  * In-column sorting is an "operation that does not change intent" so it uses local state; a row click is an "operation
  * that changes intent" so it goes upstream via a Spec-declared event. In serverSide (opt-in), sorting/paging is done via
- * binding.resolve refetches. Current sort is indicated by aria-sort / ▲▼.
+ * binding.resolve refetches. Current sort is indicated by aria-sort / ▲▼. When props.editable, cells become
+ * button/input pairs that emit cellEdit via the invoke path (see attemptCommit below).
  *
  * The serverSide refetch state machine's single source of truth is renderer-core's SpreadsheetRemoteController.
  */
@@ -39,7 +57,12 @@ export const presentSpreadsheet: PartBuilder = (rt, parent, node) => {
   const ref = node.data?.$ref;
   const pageSize = node.props["pageSize"] as number | undefined;
   const declaredSort = node.props["sortBy"] as unknown as SortState | undefined;
+  const editable = node.props["editable"] === true;
   const rowClickable = hasDeclaredEvent(rt.spec, node.id, "rowClick");
+  // Whether a Spec-declared sortChange event should be emitted on each user sort toggle. Never
+  // emitted from the Spec-driven syncDeclaredSort path — only a user click/keydown on the header
+  // button below fires it.
+  const sortChangeable = hasDeclaredEvent(rt.spec, node.id, "sortChange");
 
   const ctrl = createSpreadsheetRemoteController({
     binding: rt.binding,
@@ -72,21 +95,121 @@ export const presentSpreadsheet: PartBuilder = (rt, parent, node) => {
     return serverSide && remote != null ? remote : base;
   };
 
+  // Editable cells: an optimistic working copy of pending edits, keyed on the local-view rows
+  // array's own reference identity (see commitCellEdit/effectiveRows — mirrors renderer-react's
+  // useMemo-backed `rows`). rowsCache replicates useMemo's caching by hand: applyLocalView allocates
+  // a *new* array on every call whenever it actually sorts or slices, so recomputing it on every
+  // rerender() (editing/copy toggles included, not just new data) would make the working copy look
+  // stale against its own freshly-recomputed source and silently drop every edit the instant it's
+  // applied. Cache key: data reference + sort's value signature (serverSide/pageSize are fixed for
+  // this part instance's lifetime, so they need not be part of the key).
+  let rowsCache: { data: TabularData; sortSig: string; result: JsonObject[] } | null = null;
+  const computeRows = (data: TabularData, sort: SortState | undefined): JsonObject[] => {
+    if (serverSide) return data.rows;
+    const sortSig = sort != null ? JSON.stringify(sort) : "";
+    if (rowsCache != null && rowsCache.data === data && rowsCache.sortSig === sortSig) {
+      return rowsCache.result;
+    }
+    const result = applyLocalView(data.rows, sort, pageSize, rt.locale);
+    rowsCache = { data, sortSig, result };
+    return result;
+  };
+
+  let copy: RowsWorkingCopy | undefined;
+  let editing: SpreadsheetCellEdit | undefined;
+  // Tracks which `editing` identity was last focused, so a rerender caused by something other than
+  // *starting* an edit (or retrying after an invalid one) does not keep stealing focus back to the
+  // input — mirrors a React useEffect's dependency-array semantics ([editing]).
+  let lastFocusedEditing: SpreadsheetCellEdit | undefined;
+
+  const startEdit = (rowIndex: number, col: TabularColumn): void => {
+    editing = { rowIndex, column: col.key };
+    rerender();
+  };
+
+  const cancelEdit = (): void => {
+    editing = undefined;
+    rerender();
+  };
+
+  /**
+   * The sole commit path for both Enter and blur (native or triggered by Escape/Enter closing the
+   * input). Guarded by `editing` identity + `input.isConnected` so a trailing native blur — fired
+   * when a prior Enter/Escape already rerendered this cell back to its button and detached this very
+   * input — is a no-op rather than a second commit.
+   */
+  const attemptCommit = (
+    rows: JsonObject[],
+    input: HTMLInputElement,
+    rowIndex: number,
+    col: TabularColumn,
+  ): void => {
+    if (editing?.rowIndex !== rowIndex || editing.column !== col.key || !input.isConnected) return;
+    const coercion: CellCoercion = coerceCellInput(input.value, col);
+    if (!coercion.ok) {
+      // Keep the same input node (no rerender): a full rebuild would replace it with a fresh one
+      // reset to the cell's original value, destroying the very text the user is trying to fix.
+      // Refocus it too — a blur-triggered attempt has already lost focus by this point.
+      editing = { rowIndex, column: col.key, invalid: true };
+      input.setAttribute("aria-invalid", "true");
+      input.focus();
+      return;
+    }
+    const displayRow = effectiveRows(rows, copy)[rowIndex];
+    if (displayRow == null) {
+      editing = undefined;
+      rerender();
+      return;
+    }
+    const previousValue = displayRow[col.key] ?? null;
+    if (coercion.value === previousValue) {
+      editing = undefined; // unchanged: close without emitting cellEdit
+      rerender();
+      return;
+    }
+    copy = commitCellEdit(copy, rows, rowIndex, col.key, coercion.value);
+    editing = undefined;
+    rerender();
+    const runtime: SpreadsheetCellEditRuntime = {
+      row: displayRow,
+      value: { column: col.key, value: coercion.value, previousValue, rowIndex },
+    };
+    // SpreadsheetCellEditRuntime -> JsonObject: a plain nested-object shape, just without index
+    // signatures — structurally a JsonObject at runtime.
+    rt.invoke(node, "cellEdit", runtime as unknown as JsonObject, null, () => {});
+  };
+
   const rerender = (): void => {
     const snap = ctrl.getSnapshot();
-    swap(
-      renderTable(rt, node, displayed(), {
-        serverSide,
-        sort: snap.sort,
-        cursor: snap.cursor,
-        pageSize,
-        rowClickable,
-        colors: { border, headerBg, accent, muted },
-        onToggleSort: (colKey) => ctrl.toggleSort(colKey),
-        onFirstPage: () => ctrl.goFirstPage(),
-        onNextPage: (next) => ctrl.goNextPage(next),
-      }),
-    );
+    const state = displayed();
+    const rows = state.status === "ready" ? computeRows(state.data, snap.sort) : [];
+    const rendered = renderTable(rt, node, state, {
+      serverSide,
+      sort: snap.sort,
+      cursor: snap.cursor,
+      rowClickable,
+      editable,
+      rows,
+      copy,
+      editing,
+      colors: { border, headerBg, accent, muted },
+      onToggleSort: (colKey) => {
+        const next = ctrl.toggleSort(colKey);
+        // SortState -> JsonObject: a plain { field, dir } shape, just without an index signature —
+        // structurally a JsonObject at runtime.
+        if (sortChangeable) rt.emit(node, "sortChange", { value: next as unknown as JsonObject }, null);
+      },
+      onFirstPage: () => ctrl.goFirstPage(),
+      onNextPage: (next) => ctrl.goNextPage(next),
+      onStartEdit: startEdit,
+      onCommit: (input, rowIndex, col) => attemptCommit(rows, input, rowIndex, col),
+      onCancel: cancelEdit,
+    });
+    swap(rendered);
+    if (editing != null && editing !== lastFocusedEditing && rendered instanceof Element) {
+      (rendered.querySelector("input") as HTMLInputElement | null)?.focus();
+    }
+    lastFocusedEditing = editing;
   };
 
   // (Re-)attaches base with the currently-correct `enabled` flag, only when that flag actually
@@ -145,12 +268,19 @@ interface RenderOpts {
   serverSide: boolean;
   sort: SortState | undefined;
   cursor: string | undefined;
-  pageSize: number | undefined;
   rowClickable: boolean;
+  editable: boolean;
+  /** The (memoized) local-view rows — see rowsCache in the builder above. Ignored when state is not ready. */
+  rows: JsonObject[];
+  copy: RowsWorkingCopy | undefined;
+  editing: SpreadsheetCellEdit | undefined;
   colors: SpreadsheetTokens;
   onToggleSort: (colKey: string) => void;
   onFirstPage: () => void;
   onNextPage: (next: string) => void;
+  onStartEdit: (rowIndex: number, col: TabularColumn) => void;
+  onCommit: (input: HTMLInputElement, rowIndex: number, col: TabularColumn) => void;
+  onCancel: () => void;
 }
 
 function renderTable(rt: RenderRuntime, node: ComponentNode, state: BoundData, opts: RenderOpts): Node {
@@ -166,7 +296,7 @@ function renderTable(rt: RenderRuntime, node: ComponentNode, state: BoundData, o
   const { border, headerBg, accent } = opts.colors;
 
   const columns = resolveColumns(node, data);
-  const rows = opts.serverSide ? data.rows : applyLocalView(data.rows, opts.sort, opts.pageSize, rt.locale);
+  const displayRows = effectiveRows(opts.rows, opts.copy);
 
   const wrapper = el("div", { "data-kohaku": node.id }, { width: "100%", overflowX: "auto" });
   const table = el("table", {}, { width: "100%", borderCollapse: "collapse", fontSize: 13.5 });
@@ -196,16 +326,23 @@ function renderTable(rt: RenderRuntime, node: ComponentNode, state: BoundData, o
 
   // ---- tbody ----
   const tbody = el("tbody");
-  for (const row of rows) {
+  // editable drops role/tabIndex/keydown entirely (an editable cell's own button/input is already
+  // interactive; nesting that inside a role="button" row trips axe's nested-interactive rule) —
+  // onClick stays wired for rowClick, but each cell's own button/input stops propagation so an edit
+  // interaction never also fires rowClick.
+  const rowKeyboardOperable = !opts.editable && opts.rowClickable;
+  displayRows.forEach((row, rowIndex) => {
     const tr = el(
       "tr",
       {},
       { cursor: opts.rowClickable ? "pointer" : "default", borderBottom: `1px solid ${border}` },
     );
     if (opts.rowClickable) {
+      tr.addEventListener("click", () => rt.emit(node, "rowClick", { row }, null));
+    }
+    if (rowKeyboardOperable) {
       tr.setAttribute("role", "button");
       tr.tabIndex = 0;
-      tr.addEventListener("click", () => rt.emit(node, "rowClick", { row }, null));
       tr.addEventListener("keydown", (e) => {
         if (isActivationKey(e.key)) {
           if (e.key === " ") e.preventDefault();
@@ -214,17 +351,61 @@ function renderTable(rt: RenderRuntime, node: ComponentNode, state: BoundData, o
       });
     }
     for (const col of columns) {
-      const td = el("td", {}, spreadsheetTdStyle({ numeric: col.type === "number" }));
-      td.appendChild(text(formatCell(row[col.key], col, rt.locale)));
+      const numeric = col.type === "number";
+      if (!opts.editable) {
+        const td = el("td", {}, spreadsheetTdStyle({ numeric }));
+        td.appendChild(text(formatCell(row[col.key], col, rt.locale)));
+        tr.appendChild(td);
+        continue;
+      }
+      const td = el("td", {}, spreadsheetTdStyle({ numeric }));
+      const editingHere =
+        opts.editing?.rowIndex === rowIndex && opts.editing.column === col.key ? opts.editing : undefined;
+      if (editingHere != null) {
+        const input = el(
+          "input",
+          {
+            type: "text",
+            "aria-label": rt.messages.spreadsheetEditCell(col.label ?? col.key),
+            ...(editingHere.invalid ? { "aria-invalid": "true" } : {}),
+          },
+          spreadsheetCellEditInputStyle({ border }, { numeric }),
+        ) as HTMLInputElement;
+        input.value = cellDraft(row[col.key], col);
+        input.addEventListener("click", (e) => e.stopPropagation());
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            opts.onCommit(input, rowIndex, col);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            opts.onCancel();
+          }
+        });
+        input.addEventListener("blur", () => opts.onCommit(input, rowIndex, col));
+        td.appendChild(input);
+      } else {
+        const btn = el(
+          "button",
+          { type: "button", "aria-label": rt.messages.spreadsheetEditCell(col.label ?? col.key) },
+          spreadsheetCellEditButtonStyle({ numeric }),
+        );
+        btn.appendChild(text(formatCell(row[col.key], col, rt.locale)));
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          opts.onStartEdit(rowIndex, col);
+        });
+        td.appendChild(btn);
+      }
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
-  }
+  });
   table.appendChild(tbody);
   wrapper.appendChild(table);
 
   // ---- footer / pager ----
-  appendFooter(rt, wrapper, data, rows.length, opts);
+  appendFooter(rt, wrapper, data, displayRows.length, opts);
   return wrapper;
 }
 
@@ -255,10 +436,13 @@ function appendFooter(
       bar.appendChild(b);
     }
     wrapper.appendChild(bar);
-  } else if (data.total != null && data.total > shown) {
-    const div = el("div", {}, spreadsheetFooterTotalStyle({ muted }));
-    div.appendChild(text(rt.messages.spreadsheetTotal(data.total.toLocaleString(rt.locale), shown)));
-    wrapper.appendChild(div);
+  } else {
+    const localTotal = localFooterTotal(data, shown);
+    if (localTotal != null) {
+      const div = el("div", {}, spreadsheetFooterTotalStyle({ muted }));
+      div.appendChild(text(rt.messages.spreadsheetTotal(localTotal.toLocaleString(rt.locale), shown)));
+      wrapper.appendChild(div);
+    }
   }
 }
 
