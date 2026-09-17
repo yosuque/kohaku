@@ -108,7 +108,9 @@ jobs:
         working-directory: python
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv stopped publishing floating major/minor tags after v7 (no `@v10` ref exists), so the full
+      # version tag is required here; Dependabot still bumps exact tags.
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
       - run: uv sync --frozen
@@ -166,7 +168,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
       - run: uv sync --frozen

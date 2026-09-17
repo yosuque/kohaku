@@ -113,7 +113,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv stopped publishing floating major/minor tags after v7 (no `@v10` ref exists), so the full
+      # version tag is required here; Dependabot still bumps exact tags.
+      - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
       # CI already fails on version drift, but this is the last gate before an asymmetric release: npm is
