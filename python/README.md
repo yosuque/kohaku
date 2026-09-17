@@ -92,31 +92,31 @@ only in how a host schedules the self-heal call (`host_rest` awaits it serialize
 lock; `host_mcp` fires it off as a background task) — that strategy, plus each profile's own error-hook endpoint
 strings, stays host-supplied via a small `FixationDeliveryHost` object.
 
-**MCP 2026-07-28 forward-compat** (see `docs/design.md`'s "MCP 2026-07-28 / SDK v2 migration plan" for the
-full picture; SDK v2 itself is not adopted yet): `host_mcp` stamps `resultType: "complete"` on every tool
-result (TS-symmetric). The correlation id fed to the failure-path observability hook
-(`McpErrorInfo.correlation_id`) is **always the tool call's own JSON-RPC request id — never derived from
-`_meta.traceparent`** (SEP-414), the same rule TS enforces: a W3C trace-id is shared by an entire trace, so
-deriving the correlation id from it would collapse every tool call in one conversation onto the same id.
-This id reaches only `McpErrorInfo.correlation_id` today, since `compose_with_fixation` / `ComposeOptions`
-carry no correlation-id parameter yet (`host_core`/`composer` are out of scope for that fix), whereas TS's
-equivalent additionally reaches `ComposeTrace.correlationId`. A tool call's `_meta.traceparent` (+
-`_meta.tracestate`), when well-formed, is separately parsed as a `TraceContext`
+**MCP 2026-07-28** (see `docs/design.md`'s "MCP 2026-07-28 / SDK v2 migration" and "Python `mcp` 2.x migration"
+for the full picture): `host_mcp` runs on the `mcp` 2.x SDK (`kohaku-ui[mcp]` floor `>=2.2`; the low-level
+`Server`'s handlers are registered via `Server.add_request_handler(method, params_type, handler)`, not the
+decorators mcp 1.x used, and every handler receives its own `ServerRequestContext` rather than reading a
+request-scoped contextvar). Every tool result already carries `result_type: "complete"` as a real declared
+pydantic field (2.x's `CallToolResult` and other `Result` subclasses declare it directly — no post-hoc
+stamping needed, unlike TS which still stamps it explicitly for its own SDK-version reasons). The correlation
+id fed to the failure-path observability hook (`McpErrorInfo.correlation_id`) is **always the tool call's own
+JSON-RPC request id — never derived from `_meta.traceparent`** (SEP-414), the same rule TS enforces: a W3C
+trace-id is shared by an entire trace, so deriving the correlation id from it would collapse every tool call
+in one conversation onto the same id. This id reaches only `McpErrorInfo.correlation_id` today, since
+`compose_with_fixation` / `ComposeOptions` carry no correlation-id parameter yet (`host_core`/`composer` are
+out of scope for that fix), whereas TS's equivalent additionally reaches `ComposeTrace.correlationId`. A tool
+call's `_meta.traceparent` (+ `_meta.tracestate`), when well-formed, is separately parsed as a `TraceContext`
 (`kohaku.host_core.trace_context`, a straight port of TS's `packages/host-core/src/trace-context.ts` —
 including rejecting an all-zero trace-id/parent-id and capping `tracestate` at the W3C-recommended 512
 characters; `host_rest` reads the equivalent `traceparent` / `tracestate` request headers) and surfaces the
 same way — only on `McpErrorInfo.trace_context` / `HostErrorInfo.trace_context`, never on `ComposeTrace` — for
 the same reason. Trace correlation is this `TraceContext`'s job alone; it never doubles as the correlation id.
 The OTel SDK itself (span creation/export, `@kohaku-ui/otel`) is TS-only; out of scope for this port.
-`host_mcp` additionally stamps `ttlMs`/`cacheScope` (SEP-2549) on
-`tools/list` and `resources/list` (not `resources/read`) — the installed `mcp` SDK's low-level decorators
-accept a full result object there. TS's `packages/host-mcp-apps` now matches these same values on
-`tools/list`/`resources/list` (SDK v2's `ServerOptions.cacheHints`, wired in by `apps/sample-mcp/src/setup.ts`)
-and additionally covers `resources/read` on the shared renderer resource (SDK v2's registration-time
-`registerResource(..., {cacheHint})`) — a hook this installed `mcp` SDK version's `read_resource()` decorator
-still does not expose (it always rebuilds its own `ReadResourceResult` from the handler's
-`Iterable[ReadResourceContents]`, with no "new style" full-result return path the way `list_tools`/
-`list_resources` have), so `resources/read` stays TS-only.
+`host_mcp` also sets `ttl_ms`/`cache_scope` (SEP-2549) on `tools/list`, `resources/list`, **and
+`resources/read`** — `mcp` 2.x's `ReadResourceResult` gained `CacheableResult` as a base class (1.x's did
+not), closing a gap this file used to document as TS-only. These fields reach the wire only over a
+2026-07-28+ negotiated connection (the mcp SDK's own result serializer sieves them out for an older protocol
+version), which is why `kohaku/tests/host_mcp`'s cache-hint tests connect at `mode="2026-07-28"` specifically.
 
 The Python sample (`examples/sales-api`) reads the seed JSON directly from the
 repository root's `apps/sample-api/src/domain/seed` (to avoid maintaining the data

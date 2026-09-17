@@ -24,7 +24,7 @@
     "react-router-dom": "catalog:"
   },
   "devDependencies": {
-    "@testing-library/react": "^16.3.3",
+    "@testing-library/react": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",

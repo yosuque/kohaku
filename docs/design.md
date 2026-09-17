@@ -559,7 +559,7 @@ scope is issued as-is).
 - A tool's UI declaration `_meta` is written in **both modern (nested `_meta.ui.{resourceUri, visibility}`; the authority since SEP-1865 formalization on 2026-01-26) and legacy (flat `_meta["ui/resourceUri"]` / `_meta["ui/visibility"]`)** (`toolUiMeta`) — so it is recognized as a UI tool by both modern-first hosts like ChatGPT and older hosts. `kohaku_compose` (+ any intentTools) is `visibility = ["model"]`, and **`kohaku_resolve_binding` / `kohaku_event` / `kohaku_action` are `["app"]` (iframe only)** — bulk data, interaction, and writes do not pass through the model's context (carrying through the solution to problem 3 of §4.3 on the MCP side as well).
 - **`kohaku_action` (app-only; direct write path)**: a write port symmetric to REST's `POST /binding/action`. It receives `{action, payload?, capability}` and, before touching capability verification, checks `action` against `DomainPort.listOperations()` (host-core's `createAllowedActions`, the same memoized source `issueCapabilityForSpec`'s write-scope filter uses — an unknown action is rejected outright as `isError`) and caps `payload` at 64KB canonical JSON (`isError` if exceeded; full `OperationDescriptor.paramsSchema` validation is a follow-up, no JSON Schema validator is wired into this repo yet). It then verifies the capability with a **write scope** (`{kind:"write", ref:action}`), and calls `domain.invoke(action, payload)`. The collection of capability-issuance scopes (read = all `$ref` + bind variants, write = the write action names declared by the UI) is consolidated in spec-core's `collectCapabilityScopes`, consumed by host-core's `issueCapabilityForSpec`, which both REST and MCP call directly — so all three layers agree on the issuance rule. The response `structuredContent` is `{result, invalidates?, refVersions?}`, and `invalidates` / `refVersions` are present only when the side-effect declaration hook `McpHostDeps.actionEffects` is wired (if not wired, only `{result}` = backward compatible; data-binding's `parseActionResult` reads both forms). Implemented on both TS (`packages/host-mcp-apps/src/server.ts`) and Python (`python/kohaku/src/kohaku/host_mcp/server.py`).
 - **View Lineage audit symmetric with REST (`McpHostDeps.recorder`)**: host-core's `ViewRecorder` interface (moved there from host-rest so both profiles share one contract) is wired the same way on the MCP profile as on REST — `composed` + `fallback` (`recordViewFallback`, judged from `spec.provenance.fallback`, shared with REST's `recordFallbackIfAny`) around every compose-family tool call, and `interacted` recorded by `kohaku_event` before recomposing (mirroring REST's `/events`, which records `interacted` before `composed`). The legacy `McpHostDeps.onComposed` (spec+trace only, no `interacted`/`fallback`) is still called when `recorder` is unwired; when both are wired, `recorder` takes priority so a migrating product does not double-record. Python mirrors this via a locally-declared `ViewRecorderProtocol` (kept local rather than imported from `host_rest`, since the two profiles are independent siblings under the import-linter layer contract).
-- **Tool-call cancellation (TS only)**: `kohaku_compose` / `kohaku_render_snapshot` / the intent tools / `kohaku_event` accept the MCP SDK's per-call `extra.signal` and thread it into `composeWithFixation` as `abort`, so a client-cancelled tool call stops L1/L2 LLM generation the same way REST's `c.req.raw.signal` does (`trace.cancelled` skips the audit record — see "Client aborts are distinguished from generation fallbacks" above). `kohaku_action` checks `extra.signal.aborted` before performing its write (no cancellation primitive exists past that point — `DomainPort.invoke` takes no signal). The installed Python mcp SDK exposes no per-call cancellation object on `RequestContext` to thread into the existing `ComposeFixationContext.abort`; cancellation there happens structurally instead (a client's cancel notification cancels the anyio task group running the request, unwinding whatever `await` the handler is suspended at) — documented as a NOTE above `_call_tool` in `host_mcp/server.py` rather than mirrored.
+- **Tool-call cancellation (TS only)**: `kohaku_compose` / `kohaku_render_snapshot` / the intent tools / `kohaku_event` accept the MCP SDK's per-call `extra.signal` and thread it into `composeWithFixation` as `abort`, so a client-cancelled tool call stops L1/L2 LLM generation the same way REST's `c.req.raw.signal` does (`trace.cancelled` skips the audit record — see "Client aborts are distinguished from generation fallbacks" above). `kohaku_action` checks `extra.signal.aborted` before performing its write (no cancellation primitive exists past that point — `DomainPort.invoke` takes no signal). The installed Python mcp SDK's `ServerRequestContext` (handed to every low-level request handler; mcp 2.x — see "Python `mcp` 2.x migration" below) still exposes no per-call cancellation object to thread into the existing `ComposeFixationContext.abort` (only the richer `mcp.server.context.Context`, which the runner does not construct for lowlevel handlers, carries one); cancellation there happens structurally instead (the SDK's request dispatcher applies a client's `notifications/cancelled` by cancelling the task running that request, unwinding whatever `await` the handler is suspended at) — documented as a NOTE above `_call_tool` in `host_mcp/server.py` rather than mirrored.
 - **MCP Tasks extension (`io.modelcontextprotocol/tasks`, 2026-07-28 dated-stable, TS only)**: `kohaku_compose` and the intent tools become task-capable for a request that opts in per-call (`_meta["io.modelcontextprotocol/clientCapabilities"].extensions["io.modelcontextprotocol/tasks"]`), returning a `CreateTaskResult` instead of blocking on L1/L2 generation. `tasks/get`/`tasks/cancel` are implemented against the SDK's documented extension seam but currently unreachable over the wire on the installed SDK version (a verified SDK-version limitation, not a kohaku bug) — see the dedicated "MCP Tasks extension" subsection below for the full design and that limitation's writeup.
 - Every tool result always stores a `specToText(spec)` text fallback (content[0]) — so it makes sense even on a UI-incapable host (the optional-extension philosophy of MCP Apps). **The definition home of `specToText` is spec-core** (`spec-text.ts`; shared with the widget's `ui/update-model-context` return flow; host-mcp-apps is a backward-compatible re-export).
 - **Resource-side `_meta.ui` (SEP-1865)**: the shared renderer resource explicitly declares csp with an empty allowlist (`resourceUiMeta()`; no external origin needed = permitting the host the strictest sandbox). csp / permissions cannot be placed in the tool-side `_meta.ui` (the ext-apps type rejects it with `never` — type consistency is fixed by `test/ext-apps-interop.test.ts` matching against ext-apps's published types in devDependency). It is carried at the same value on both resources/list and read contents (with the contents-preferred provision). TS / Python symmetric.
@@ -577,25 +577,27 @@ changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)).
 two stages: first the changelog's **additive, wire-compatible items** (below), run against the then-installed
 v1 SDKs (`@modelcontextprotocol/sdk` 1.x TS, `mcp` 1.x Python) with no host or SDK upgrade required; then the
 **TS SDK dependency itself moved to v2** (`@modelcontextprotocol/server` / `client` / `core` 2.0.0), described
-further down in "TS SDK v2 migration (completed)". **Python stays on `mcp` 1.x** — the `mcp` 2.x switch is a
-separate, not-yet-done change; every Python-specific note below (parity gaps, `ttlMs`/`cacheScope` coverage,
-etc.) still describes `mcp` 1.x.
+further down in "TS SDK v2 migration (completed)". **Python has since moved to the `mcp` 2.x SDK too**
+(`kohaku-ui[mcp]` floor `>=2.2`; a separate, later change than the TS one — see "Python `mcp` 2.x migration"
+below), so every Python-specific note in this section now describes `mcp` 2.x's behavior rather than 1.x's.
 
 The additive items, unaffected by which TS SDK major version is installed:
 
 - **`resultType: "complete"`** on every tool result (compose family / `resolve_binding` / `event` / `action` /
-  `render_snapshot`, TS + Python). Stamped in one place per language (TS: `safeTool`; Python: `_safe_tool` +
-  `_tool_error`) so every handler is covered uniformly. On the TS side this remains necessary, not redundant,
-  after the SDK v2 switch: SDK v2's 2026-07-28 per-request-envelope codec is documented to stamp `resultType`
-  itself and fill `ttlMs`/`cacheScope` on cacheable results, but that codec only runs under the modern
-  (2026-era) wire path; both this profile's actual serving today (`createMcpHandler`'s default
-  `legacy: "stateless"` fallback, which every real host still speaks — see "TS SDK v2 migration" below) and its
-  `InMemoryTransport`-based tests round-trip the handler's own return value unmodified, confirmed by
+  `render_snapshot`, TS + Python). On the TS side this is stamped in one place (`safeTool`) and remains
+  necessary, not redundant, after the SDK v2 switch: SDK v2's 2026-07-28 per-request-envelope codec is
+  documented to stamp `resultType` itself and fill `ttlMs`/`cacheScope` on cacheable results, but that codec
+  only runs under the modern (2026-era) wire path; both this profile's actual serving today (`createMcpHandler`'s
+  default `legacy: "stateless"` fallback, which every real host still speaks — see "TS SDK v2 migration" below)
+  and its `InMemoryTransport`-based tests round-trip the handler's own return value unmodified, confirmed by
   intercepting the raw outgoing JSON-RPC message in `packages/host-mcp-apps/test/mcp.test.ts` (the SDK v2
   *client*'s parsed `CallToolResult` type does strip `resultType` before handing the result to application
   code — it is a `WireOnlyResultKey` there — so those tests read the wire bytes directly rather than the
-  parsed client object). Python's `mcp` 1.x result schema is unaffected either way (passthrough:
-  `model_config = {"extra": "allow"}`).
+  parsed client object). **Python needs no such stamping step any more**: `mcp` 2.x's `CallToolResult` (and
+  every other `Result` subclass) declares `result_type: ResultType = "complete"` as a real pydantic field, so
+  every result this profile constructs already carries it by default — the pre-migration `_safe_tool` +
+  `_tool_error` `model_copy(update={"resultType": ...})` workaround (needed only because `mcp` 1.x's result
+  models were passthrough, `model_config = {"extra": "allow"}`, with no declared field to set) was removed.
 - **`_meta.traceparent` (SEP-414) trace context, kept separate from correlation id**: a tool call's
   `_meta.traceparent` (+ `_meta.tracestate`, when present), when strictly W3C-formatted, is parsed into a
   `TraceContext` and threaded through unconditionally as `ComposeOptions.traceContext` / `ComposeTrace.traceContext`
@@ -611,7 +613,10 @@ The additive items, unaffected by which TS SDK major version is installed:
   touches `host_core`/`composer` — outside the host_mcp-only file scope that work kept to. Python therefore threads
   `correlation_id` (always the JSON-RPC request id — the same request-id-only rule as TS, never derived from the
   traceparent) and `trace_context` only into this profile's own failure-path hook (`McpErrorInfo.correlation_id` /
-  `McpErrorInfo.trace_context`, read via the mcp SDK's request-scoped `request_ctx` contextvar). Reaching full
+  `McpErrorInfo.trace_context`, read off the `ServerRequestContext` (`ctx`) the mcp SDK hands directly to every
+  low-level request handler — `mcp` 2.x removed the request-scoped `request_ctx` contextvar / decorator-registration
+  style this used to read instead; `ctx.meta` is a `RequestParamsMeta` TypedDict, so it is dict-accessed
+  (`meta.get("traceparent")`), not attribute-accessed). Reaching full
   symmetry (a `correlation_id`/`trace_context` sink on `ComposeOptions`/`ComposeTrace`) is a follow-up item for
   whichever WP next touches `host_core`/`composer`. The same workaround applies to REST
   (`HostErrorInfo.trace_context`, from the `traceparent` request header): Python parses and validates
@@ -625,16 +630,19 @@ The additive items, unaffected by which TS SDK major version is installed:
   `tools/list` name sequence (fixed tools, then intent tools in catalog order) and asserting repeat calls
   return the identical order, so a future refactor that reshuffles registration is caught.
 - **`ttlMs` / `cacheScope` on list/read results (SEP-2549, `CacheableResult`)**: implemented on both
-  languages now, each **only where a small, non-fragile hook exists**, and TS additionally covering one
-  operation Python cannot reach at all. **Python**: `mcp` 1.28's low-level `Server.list_tools()` /
-  `list_resources()` decorators accept a full result object ("new style", alongside the legacy bare list) —
-  `_list_tools` / `_list_resources` return `ListToolsResult` / `ListResourcesResult` with
-  `ttlMs=60_000, cacheScope="private"` (via `model_copy(update=...)`, since pydantic v2's
-  `dataclass_transform`-generated `__init__` only types declared fields as constructor kwargs even though
-  `extra="allow"` accepts more at runtime — a mypy-strict-clean workaround). Python's `read_resource()`
-  decorator, however, always rebuilds its own `ReadResourceResult` from the `Iterable[ReadResourceContents]`
-  the handler returns and offers no equivalent "new style" hook, so `resources/read` is **not** covered there
-  — see `python/README.md`'s known-differences list.
+  languages now, and since the Python `mcp` 2.x migration (see below), **both languages cover all three
+  operations** — the `tools/list`/`resources/list`-only asymmetry with `resources/read` this bullet used to
+  describe on the Python side is closed. **Python**: `mcp` 2.x's `ListToolsResult` / `ListResourcesResult` /
+  `ReadResourceResult` all declare `CacheableResult` (`ttl_ms: int`, `cache_scope: Literal["public","private"]`)
+  as a real base class now (1.x's `ReadResourceResult` did not), so `_list_tools` / `_list_resources` /
+  `_read_resource` (registered via `Server.add_request_handler`, not the removed decorator style) construct
+  the typed result directly with those fields set — no post-hoc `model_copy(update=...)` stamping needed any
+  more (1.x's workaround for constructor kwargs pydantic's `dataclass_transform` only typed by alias). This
+  parity is wire-conditional, though: the mcp SDK's own result serializer (`serialize_server_result`) validates
+  the handler's dump against the *negotiated protocol version*'s own wire model, so `ttl_ms`/`cache_scope`
+  reach the client only over a 2026-07-28+ connection — a legacy-handshake connection's wire model has no such
+  fields, and the sieve drops them before they ever leave the server (kohaku's own `kohaku/tests/host_mcp`
+  suite connects at `mode="2026-07-28"` specifically to observe them; see `mcp.Client`'s `mode` parameter).
   **TS** (`packages/host-mcp-apps/src/cache-hints.ts`): `KOHAKU_MCP_LIST_CACHE_HINT` (`ttlMs=60_000,
   cacheScope="private"`) matches Python's values exactly for `tools/list`/`resources/list`, so both
   languages agree on the wire. `ServerOptions.cacheHints` (SDK v2's constructor-time knob) has no
@@ -642,9 +650,11 @@ The additive items, unaffected by which TS SDK major version is installed:
   its caller rather than building one — so host-mcp-apps cannot wire this value into a server on its own; it
   exports `defaultMcpListCacheHints()` as the single source of truth for the *value*, and the caller that
   actually constructs the `McpServer` (`apps/sample-mcp/src/setup.ts`) passes it to the constructor's
-  `cacheHints` option. `resources/read` on the shared renderer resource (`ui://kohaku/renderer.html`) — the
-  one operation Python's `read_resource()` decorator cannot cover — **is** covered on TS, via SDK v2's
-  registration-time `registerResource(..., { cacheHint })` option (`RENDERER_RESOURCE_CACHE_HINT`,
+  `cacheHints` option. `resources/read` on the shared renderer resource (`ui://kohaku/renderer.html`) — which
+  Python's own `_read_resource` now also covers, but with the same 60s `_CACHEABLE_RESULT_TTL_MS` it uses for
+  `tools/list`/`resources/list`, not a resource-specific value — is covered on TS with a deliberately
+  *different* TTL, via SDK v2's registration-time `registerResource(..., { cacheHint })` option
+  (`RENDERER_RESOURCE_CACHE_HINT`,
   `ttlMs=300_000, cacheScope="private"`, overridable per attach via `AttachOptions.rendererResourceCacheHint`):
   the renderer bundle is identical across every client of one process and memoized for that process's
   lifetime (`apps/sample-mcp/src/setup.ts`'s `makeRendererHtmlLoader`), but carries no content-hashed URI to
@@ -804,9 +814,9 @@ TS moved from `@modelcontextprotocol/sdk` 1.30.0 to the split v2 packages `@mode
 `client` / `core` 2.0.0, together with `@modelcontextprotocol/ext-apps` 2.0.0 (which takes SDK v2 as a peer, so
 the two upgrades are coupled) and the new `@modelcontextprotocol/node` 2.0.0 (the fetch-Request/Response ↔
 `node:http` adapter `apps/sample-mcp/src/http.ts` needs — see below). All four are pinned in the
-`pnpm-workspace.yaml` catalog (the old `@modelcontextprotocol/sdk` catalog entry is removed). **Python stays on
-`mcp` 1.x**; the `mcp` 2.x switch is intentionally a separate, not-yet-done change (its `MCPServer` is
-documented to still answer a legacy `initialize` request, easing a staged rollout when it happens).
+`pnpm-workspace.yaml` catalog (the old `@modelcontextprotocol/sdk` catalog entry is removed). **Python has since
+moved to `mcp` 2.x too** (`kohaku-ui[mcp]` floor `>=2.2`) — see "Python `mcp` 2.x migration" below for that
+switch, which happened independently and later than this TS one.
 
 - **Mechanics**: the vendor codemod (`npx @modelcontextprotocol/codemod v1-to-v2`) rewrote import paths
   (`@modelcontextprotocol/sdk/server/mcp.js` → `@modelcontextprotocol/server`, etc.), wrapped every raw-shape
@@ -896,10 +906,79 @@ documented to still answer a legacy `initialize` request, easing a staged rollou
   satisfy the harness, or carrying a large expected-failures baseline that would hide real regressions inside
   the same noise. **Re-evaluate when** a stable release covers 2026-07-28 against the ratified spec and either
   adds MCP Apps scenarios or lets a product server opt out of the fixture scenarios without a baseline file.
-- **Left undone**: the Python `mcp` 2.x switch (a separate, independent dependency upgrade in a different
-  language stack — not started by this work); adopting `addEventListener` over the deprecated ext-apps `on*`
-  setters; real-host verification (see above). (The `ttlMs`/`cacheScope` TS follow-up this section used to
-  list here has since landed — see the "response caching" bullet above and decision #39 in §13.)
+- **Left undone**: adopting `addEventListener` over the deprecated ext-apps `on*` setters; real-host
+  verification (see above). (The `ttlMs`/`cacheScope` TS follow-up this section used to list here has since
+  landed — see the "response caching" bullet above and decision #39 in §13. The Python `mcp` 2.x switch this
+  section used to list here has also since landed, as a separate, later change — see "Python `mcp` 2.x
+  migration" below and decision #41 in §13.)
+
+### Python `mcp` 2.x migration (completed)
+
+Python moved from `mcp` 1.28.1 to the 2.x SDK (`kohaku-ui[mcp]` floor `>=2.2`), independently of and later
+than the TS SDK v2 switch above. The two SDKs are unrelated packages (`mcp` for Python, `@modelcontextprotocol/*`
+for TS) with independent versioning, so "2.x" here is not the same major version as TS's; the parity notes
+throughout this section already describe `mcp` 2.x's behavior.
+
+- **Constructor-based handler registration replaces decorators**: `mcp` 1.x's low-level `Server` registered
+  `tools/list` / `tools/call` / `resources/list` / `resources/read` via `@srv.list_tools()` /
+  `@srv.call_tool()` / etc. decorators. 2.x removed them: a handler is now registered with
+  `Server.add_request_handler(method, params_type, handler)` (`handler: async (ctx, params) -> result`), and
+  `Server.get_capabilities()` derives `ServerCapabilities` from whichever methods are registered in
+  `_request_handlers` the same way it did from the decorator-populated table before — so
+  `attach_kohaku_to_mcp_server`'s public signature (`attach(server, deps, options) -> None`) needed no change,
+  only its internals. This attach style registers spec-vocabulary methods (`tools/list` etc.) through the same
+  API 2.x documents for *custom*/extension methods; a `test_mcp_setup.py` test pins
+  `server.get_capabilities(...).tools`/`.resources` as insurance against a future SDK change that stops
+  deriving capabilities from `_request_handlers` for core methods (see `attach_kohaku_to_mcp_server`'s own risk
+  note in `host_mcp/server.py`).
+- **`ServerRequestContext` replaces the request-scoped `request_ctx` contextvar**: every registered handler now
+  receives its own `ctx: ServerRequestContext[LifespanResultT, RequestT]` directly as its first argument
+  (`session`, `lifespan_context`, `protocol_version`, `method`, `params`, `request_id`, `meta`, `request`), so
+  `McpHostDeps.resolve_principal` takes `ctx: ServerRequestContext[Any, Any]` (no longer `| None` — a
+  registered handler always has one) and the failure-path observability helpers (`_correlation_id_of` /
+  `_trace_context_of`) read it as a plain function parameter instead of looking it up via
+  `mcp.server.lowlevel.server.request_ctx.get()`. `ctx.meta` is a `RequestParamsMeta` **TypedDict**
+  (`extra_items=Any`), so it is dict-accessed (`meta.get("traceparent")`) rather than attribute-accessed
+  (`getattr(meta, "traceparent", None)`, the 1.x shape).
+- **Typed result fields replace `extra="allow"` passthrough**: `mcp` 1.x's `Result` subclasses were
+  `model_config = {"extra": "allow"}`, so `resultType` / `ttlMs` / `cacheScope` had to be hand-stamped via
+  `model_copy(update={...})` after construction (there was no declared field to set). 2.x declares them for
+  real (`Result.result_type: ResultType = "complete"`; `CacheableResult.ttl_ms: int = 0` /
+  `.cache_scope: Literal["public","private"] = "private"`, a base class `ListToolsResult` /
+  `ListResourcesResult` / **and now `ReadResourceResult`** all inherit — 1.x's `ReadResourceResult` did not, so
+  `resources/read` gains cache-hint support Python could not offer before), so this profile constructs the
+  typed result directly with those fields set and the `model_copy` stamping step is gone. Field names are
+  `snake_case` with a `to_camel` alias generator and `populate_by_name=True` (`structured_content` /
+  `is_error` / `mime_type` / `input_schema` / …, not `structuredContent` / `isError` / …) — this reaches every
+  call site in `host_mcp/server.py` that builds or reads an `mcp_types` model, and every test that asserts on
+  a `CallToolResult`/`Tool`/`Resource` attribute.
+- **`mcp.Client` replaces `create_connected_server_and_client_session`**: the removed 1.x test helper
+  (`mcp.shared.memory`) is replaced by `mcp.Client(server, mode=..., cache=...)`, which connects directly to a
+  low-level `Server` instance in-process. `mode="legacy"` (this test suite's default — see
+  `kohaku/tests/host_mcp/_helpers.py`'s `connect()`) drives the pre-2026 `initialize` handshake over an
+  in-memory transport, byte-identical to what the removed 1.x helper did; `mode="2026-07-28"` instead
+  dispatches directly (`DirectDispatcher`, no JSON-RPC framing) and is used only where a test needs to observe
+  something that the 2026-07-28 wire model carries but a legacy-negotiated connection's does not (`ttl_ms`
+  /`cache_scope` on `tools/list` / `resources/list` / `resources/read` — see the `ttlMs`/`cacheScope` bullet
+  above). `cache=None` disables the client's own SEP-2549 response cache so a test's own call-count assertions
+  are not short-circuited by a cache hit.
+- **The sample HTTP host (`sales_api.mcp_http`) uses `Server.streamable_http_app(...)`**: 2.x's low-level
+  `Server` gained a single-call constructor that assembles its own `StreamableHTTPSessionManager`, the `/mcp`
+  `Route`, and a `Starlette` `lifespan` that runs the session manager — replacing this module's own hand-rolled
+  `StreamableHTTPSessionManager` + `Mount` + `lifespan` wiring (1.x had no equivalent). `custom_starlette_routes`
+  adds the snapshot-serving route onto the same returned app, and CORS is layered on afterward via
+  `Starlette.add_middleware` (`streamable_http_app` takes no `middleware` parameter itself). One behavior this
+  module deliberately overrides: `streamable_http_app` auto-enables DNS rebinding protection whenever `host` is
+  a loopback address, but this sample's documented policy is protection *off* unless
+  `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` opts in — so an empty `allowed_hosts` now passes an explicit
+  `TransportSecuritySettings(enable_dns_rebinding_protection=False)` rather than `None` (which would silently
+  re-enable it for `127.0.0.1`/`localhost`). Verified by constructing the ASGI app in-process with Starlette's
+  `TestClient` (`examples/sales-api/sales_api_tests/test_mcp_setup.py`'s `TestBuildStarletteApp`) rather than
+  starting a real uvicorn server: an `initialize` round-trip over `/mcp` and a CORS preflight over the same
+  route, plus the pre-existing snapshot-route tests.
+- **No 1.x/2.x dual support**: the registration layer, the request-context shape, and the test helper are all
+  structurally different between 1.x and 2.x, so `kohaku-ui[mcp]`'s floor moved straight to `>=2.2` rather than
+  supporting both.
 
 ## 12. Design of the Sample Implementation
 
@@ -968,8 +1047,9 @@ Recent major decisions not listed in the table above (numbering continues from t
 | 36 | Add `ComposeContext.llmByTier` as an additive per-tier `LlmPort` override, separating the cache via `policyFingerprint`'s extra `tierLlm` argument rather than `defaultGeneratorVersion` | Lets an operator plug a small fine-tuned model (the `kohaku dataset export` distillation dataset targets exactly L1's constrained-generation task) into L1 while keeping a larger model for L2. `defaultGeneratorVersion` cannot carry this separation reliably because callers often override `generatorVersion` with their own string that does not encode the model id (sample-api's `…/ds2`/`…/ds2/ja` suffixes); folding the *actual* per-tier model identity into the fingerprint — only when it genuinely differs from the base `llm` — keeps the cache correct regardless of what a caller's `generatorVersion` string says, while leaving cacheKey byte-identical whenever `llmByTier` is unset |
 | 37 | Add `ComposeBudget.deadlineMs` (a compose-wide wall-clock deadline) as a sibling of `perCompose`, enforced both between calls and by aborting a call already in flight | A per-LLM-call timeout (`KOHAKU_LLM_TIMEOUT_MS`) does not bound the whole compose (L1 + repair + L2 can each stay under their own timeout while the total wait grows unbounded). Reuses the existing token-budget downgrade shape (`TierResult.failure: "budget"`, `ctx.budgetExceeded: true`) for the in-flight case too — telling a deadline-caused `ABORTED` apart from a genuine caller cancellation at the classification site (a second, narrower `deadlineSignal` armed by nothing else) rather than by inspecting the `LlmError` itself — so a deadline counts toward the fallback-rate analytics an operator watches, while an actual client disconnect still does not |
 | 38 | Move TS from `@modelcontextprotocol/sdk` 1.x to the split v2 packages (`server`/`client`/`core`/`node` 2.0.0) and `ext-apps` 2.0.0 together, removing `apps/sample-mcp`'s stateful HTTP session registry entirely rather than porting it to `@modelcontextprotocol/node`'s `NodeStreamableHTTPServerTransport` (which the vendor codemod's mechanical output would have done) | Protocol version 2026-07-28 removes protocol-level sessions outright, and `createMcpHandler` is the SDK's own stateless serving entry (a fresh per-exchange `McpServer`, with a built-in legacy-stateless fallback for still-2025-era clients) — keeping the hand-rolled session registry (sweep timer, session cap, `Mcp-Session-Id` handling) alongside it would mean maintaining two competing statefulness models for no benefit, and the registry's removal was already flagged as the intended outcome before this migration started. `resultType: "complete"` hand-stamping (`safeTool`) was kept rather than deferred to the SDK's own 2026-era codec stamp, confirmed by intercepting the raw wire message that neither `InMemoryTransport` nor the HTTP legacy-stateless fallback (what every real host still speaks) strips or overrides it |
-| 39 | Land `ttlMs`/`cacheScope` (SEP-2549) on TS: put the *values* in `host-mcp-apps` (`defaultMcpListCacheHints()`, matching Python's `tools/list`/`resources/list` hints exactly) but let the McpServer-constructing caller (`apps/sample-mcp/src/setup.ts`) pass them to `ServerOptions.cacheHints`; additionally cover `resources/read` on the shared renderer resource (`registerResource(..., {cacheHint})`, TS-only — Python's `read_resource()` decorator has no equivalent hook), with a 5-minute TTL chosen independently of `KOHAKU_MCP_SNAPSHOT_TTL_MS` (unrelated resources) | `ServerOptions.cacheHints` is constructor-only (SDK v2 exposes no post-hoc setter) and `attachKohakuToMcpServer` never constructs the `McpServer` it attaches to, so host-mcp-apps cannot self-wire the operation-level hint the way it self-wires the per-resource one; keeping the *value* in the library (rather than duplicating it at each call site) preserves it as the cross-language single source of truth while respecting that the wiring itself is an SDK API constraint, not a product decision. Verified via `versionNegotiation: {mode:"auto"}` plus an in-process `createMcpHandler` fetch bridge, since a hand-constructed `McpServer.connect(InMemoryTransport)` cannot negotiate the modern era on this SDK version at all (no transport-level classification) regardless of `supportedProtocolVersions` |
+| 39 | Land `ttlMs`/`cacheScope` (SEP-2549) on TS: put the *values* in `host-mcp-apps` (`defaultMcpListCacheHints()`, matching Python's `tools/list`/`resources/list` hints exactly) but let the McpServer-constructing caller (`apps/sample-mcp/src/setup.ts`) pass them to `ServerOptions.cacheHints`; additionally cover `resources/read` on the shared renderer resource (`registerResource(..., {cacheHint})`) with a 5-minute TTL chosen independently of `KOHAKU_MCP_SNAPSHOT_TTL_MS` (unrelated resources) — at the time this landed, Python's `mcp` 1.x `read_resource()` decorator had no equivalent hook for `resources/read`; decision #41's later Python `mcp` 2.x migration closed that gap on the Python side too, though with a different (60s, shared with the list hints) TTL rather than this bullet's TS-specific 5-minute one | `ServerOptions.cacheHints` is constructor-only (SDK v2 exposes no post-hoc setter) and `attachKohakuToMcpServer` never constructs the `McpServer` it attaches to, so host-mcp-apps cannot self-wire the operation-level hint the way it self-wires the per-resource one; keeping the *value* in the library (rather than duplicating it at each call site) preserves it as the cross-language single source of truth while respecting that the wiring itself is an SDK API constraint, not a product decision. Verified via `versionNegotiation: {mode:"auto"}` plus an in-process `createMcpHandler` fetch bridge, since a hand-constructed `McpServer.connect(InMemoryTransport)` cannot negotiate the modern era on this SDK version at all (no transport-level classification) regardless of `supportedProtocolVersions` |
 | 40 | Implement the MCP Tasks extension (`io.modelcontextprotocol/tasks`, 2026-07-28 dated-stable) with kohaku's own types (`packages/host-mcp-apps/src/tasks.ts`) rather than the SDK's deprecated 2025-11-25 `Task`/`GetTaskRequest`/`CreateTaskResult` vocabulary; make only `kohaku_compose` and the generated intent tools task-capable; wire `tasks/cancel` onto the existing client-abort path (`ComposeOptions.abort` → `trace.cancelled`) instead of a second cancellation concept; keep the in-memory `TaskStore` timer-free via lazy on-access expiry; **gate the entire extension behind `AttachOptions.tasksEnabled`, default `false`** — with it off, the compose family stays synchronous and byte-identical to before this work even for a request that declares the extension, and the server does not declare the extension or register `tasks/get`/`tasks/cancel` at all | The SDK's own task types are a different, incompatible wire shape for a different (no-runtime) extension, not a starting point to build on. Scoping task-capability to the compose family matches where the actual latency lives (L1/L2 generation) and avoids needing the mounted widget to implement polling for its own synchronous app-only calls. Reusing the abort path (rather than inventing a parallel one) keeps a single, already-tested cancellation classification. A timer-free store sidesteps the exact keep-alive-timer footgun `apps/sample-mcp` already had to fix once during the SDK v2 migration (the removed session-sweep timer) — **discovered empirically while implementing this**: `tasks/get`/`tasks/cancel` are registered via the SDK's documented extension seam but are unconditionally rejected (`-32601`) by the installed `@modelcontextprotocol/server` 2.0.0's own inbound-request routing before reaching kohaku's handler at all, because both method names collide with the deprecated-but-still-recognized 2025-11-25 vocabulary's own reserved names — a verified SDK-version gap (locked in by a tripwire test with a documented, minutes-long re-check procedure), not a kohaku bug; the `kohaku_compose`/intent-tool `CreateTaskResult` response path is unaffected and was verified end-to-end. **The default-off gate is a separate, deliberate decision on top of that finding**: while `tasks/get` cannot be polled, a `CreateTaskResult` is a task handle a declaring client can never resolve — worse than no handle, and it would take a working synchronous call away from exactly the clients sophisticated enough to have declared the extension |
+| 41 | Move Python from `mcp` 1.28.1 to the 2.x SDK (`kohaku-ui[mcp]` floor `>=2.2`), keeping `attach_kohaku_to_mcp_server`'s public signature unchanged by re-registering the same 4 methods via `Server.add_request_handler` instead of the removed decorator API, threading `ServerRequestContext` through every handler instead of reading the removed `request_ctx` contextvar, and dropping the `mcp` 1.x `model_copy(update={"resultType": ...})` stamping now that `result_type`/`ttl_ms`/`cache_scope` are real declared fields; for the sample HTTP host, replace the hand-rolled `StreamableHTTPSessionManager` + `Mount` + `lifespan` wiring with `Server.streamable_http_app(...)` | The registration layer, the request-context shape, and the 1.x test helper (`create_connected_server_and_client_session`, removed in 2.x) are all structurally incompatible between 1.x and 2.x, so there was no reduced-churn path that kept 1.x support alongside 2.x — the floor moved straight to `>=2.2`. Preserving `attach_kohaku_to_mcp_server`'s signature meant the migration stayed a `host_mcp`-internal + sample-host change with no ripple into `mcp_setup.py`'s `McpHostDeps` wiring beyond `resolve_principal`'s parameter type. `resources/read` gaining `CacheableResult` support in 2.x closed a pre-existing Python-only gap (see decision #39) as a side effect, not a goal of this migration. Verified: `kohaku/tests/host_mcp`'s full suite passes unchanged in intent (only attribute-name and connection-helper mechanics updated), plus a `mode="2026-07-28"` connection added specifically to observe `ttl_ms`/`cache_scope` on the wire (a legacy-negotiated connection's wire model sieves them out — see the `ttlMs`/`cacheScope` bullet above); the sample HTTP host's ASGI app is verified by constructing it in-process with Starlette's `TestClient` rather than starting a real server |
 
 ## 14. Known Limitations and v0.2 Candidates
 

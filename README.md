@@ -55,7 +55,7 @@ Working on kohaku itself rather than building on it? Start from the quick start 
 
 ## Quick start (5 minutes)
 
-Prerequisites: Node >= 22, pnpm 11 (the floor is `package.json`'s `engines`; CI verifies on both Node 22 (the declared floor) and Node 24, and `.node-version` pins 25.7.0 for local development).
+Prerequisites: Node >= 22, pnpm 12 (the floor is `package.json`'s `engines`; CI verifies on both Node 22 (the declared floor) and Node 24, and `.node-version` pins 25.7.0 for local development).
 
 ```bash
 cp .env.example .env    # LLM provider settings (table below)

@@ -23,7 +23,7 @@ kohaku は「自然言語の質問」と「GUI の絞り込み操作」を**同�
 
 ## 2. セットアップ
 
-前提: Node >= 22、pnpm 11(`npm i -g pnpm`)。下限要件は `package.json` の `engines`(`node >= 22`)で、GitHub Actions CI はテストと型検査のジョブを、宣言下限である Node 22 と Active LTS の Node 24 の両方で実行します(conformance ジョブと Python ジョブは Node 24)。`.node-version`(現在 25.7.0)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは意図的に別です — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 25.7.0` / `fnm install 25.7.0`)か、手元にある Node >= 22 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
+前提: Node >= 22、pnpm 12(`npm i -g pnpm`)。下限要件は `package.json` の `engines`(`node >= 22`)で、GitHub Actions CI はテストと型検査のジョブを、宣言下限である Node 22 と Active LTS の Node 24 の両方で実行します(conformance ジョブと Python ジョブは Node 24)。`.node-version`(現在 25.7.0)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは意図的に別です — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 25.7.0` / `fnm install 25.7.0`)か、手元にある Node >= 22 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
 
 ```bash
 git clone https://github.com/yosuque/kohaku.git && cd kohaku

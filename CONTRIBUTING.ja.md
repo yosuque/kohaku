@@ -15,7 +15,7 @@ Issue テンプレートはすべて `.github/ISSUE_TEMPLATE/` にあります�
 
 ## 2. 前提条件
 
-- Node >= 22、pnpm 11(`package.json` の `engines` で宣言している下限)。`.node-version` はローカル開発用に 25.7.0 を指定しており、CI は宣言下限の Node 22 と Node 24 の両方で検証します。
+- Node >= 22、pnpm 12(`package.json` の `engines` で宣言している下限)。`.node-version` はローカル開発用に 25.7.0 を指定しており、CI は宣言下限の Node 22 と Node 24 の両方で検証します。
 - [uv](https://docs.astral.sh/uv/) — `python/` 配下を触る場合のみ必要です。
 
 ## 3. セットアップ
