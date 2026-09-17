@@ -101,11 +101,20 @@ pnpm seed
 
 ## 11. リリース
 
-リリースは `main` から Changesets 経由で行います。公開される挙動を変える PR には changeset を添えてください:
+リリースは `main` から Changesets 経由で、2 段階で行います。公開される挙動を変える PR には changeset を添えてください:
 
 ```bash
 pnpm changeset
 ```
+
+changeset を含む PR が `main` にマージされると、Version ワークフローが `chore(release): version packages`
+PR を作成・更新します。マージ前にこの PR の diff をレビューしてください: 20 パッケージのマニフェスト全て、20
+件の `CHANGELOG.md`、`python/kohaku/pyproject.toml`、`python/kohaku/src/kohaku/__init__.py`、ロックファイルが
+変更されます。この PR をマージしても**公開はされません**——下書きの GitHub Release `vX.Y.Z` が現れるだけです
+(本文は CHANGELOG から自動生成されます)。公開は別の、意図的な操作です: まず `main` から Release ワークフロー
+を `dry_run=true` で実行し、次に下書きを公開し(これがタグを作成します)、その後 Release ワークフローが npm →
+PyPI の順に公開するのを見守ります。手順全体と公開前チェックリストは
+[docs/runbooks/release.ja.md](docs/runbooks/release.ja.md) を参照してください。
 
 `@kohaku-ui/*` の 20 パッケージは**常に同一バージョン**です。1 つのワイヤプロトコルの 1 実装であり、バージョンが割れると利用者のツリーに互換性のない `spec-core` が 2 つ入りうるためです。詳細は [.changeset/README.md](.changeset/README.md)。**開発者のマシンから publish することはありません。**
 

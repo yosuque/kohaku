@@ -1,11 +1,26 @@
 name: Release
-# Changesets drives this: merged changesets accumulate into a release pull request, and merging that pull
-# request is what publishes. Nothing is released from a developer's machine, and the version bump for all
-# twenty npm packages plus the Python distribution is reviewed as one diff before anything goes out.
+# Step two of the two-step release: publish. Triggered by a human publishing the draft GitHub Release
+# that version.yml created (GitHub creates the tag, then fires `release: published`), or by hand for a
+# dry run / a re-run of a failed publish. The tag is the source of truth: everything is checked out
+# from it and every version in the tree must equal it before anything is uploaded.
+#
+# The file name is load-bearing: PyPI's trusted publisher for kohaku-ui is registered against
+# `release.yml` in environment `pypi`, and npm's trusted publishers for the twenty packages against
+# `release.yml` in environment `npm`. Renaming this file means re-registering all of them.
 on:
-  push:
-    branches: [main]
-  workflow_dispatch: # manual re-run, for when a publish fails partway
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.2.0). Required for a real publish. On a dry run, leave it empty to exercise the ref this run was started from (normally main, before the draft is published)."
+        required: false
+        type: string
+      dry_run:
+        description: "Run everything except the uploads to npm and PyPI"
+        required: false
+        type: boolean
+        default: true
 
 # One release at a time, and never cancel one in flight: a cancelled publish can leave some packages
 # published at a version the others do not have.
@@ -17,149 +32,238 @@ permissions:
   contents: read
 
 jobs:
-  release:
+  # Resolves what this run is (which tag / ref, dry run or not), refuses to proceed for a tag without a
+  # published release, and re-runs the full gate on the exact tree that will be published.
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: write # create the release pull request, tag and GitHub release
-      pull-requests: write
-      id-token: write # npm provenance attestation
     outputs:
-      published: ${{ steps.npm.outputs.published }}
-      version: ${{ steps.npm.outputs.version }}
+      ref: ${{ steps.plan.outputs.ref }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      dry_run: ${{ steps.plan.outputs.dry_run }}
     steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$EVENT" = "release" ]; then
+            TAG="$RELEASE_TAG"; DRY_RUN=false; REF="refs/tags/$TAG"
+          else
+            DRY_RUN="$INPUT_DRY_RUN"; TAG="$INPUT_TAG"
+            if [ -z "$TAG" ]; then
+              if [ "$DRY_RUN" != "true" ]; then
+                echo "::error::A real publish needs the 'tag' input (e.g. v0.2.0)."; exit 1
+              fi
+              REF="$GITHUB_REF" # dry run against whatever this run was started from
+            else
+              if ! DRAFT=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+                echo "::error::No GitHub release named $TAG. Releases are created as drafts by the Version workflow when the version pull request merges; publish the draft (which creates the tag), then this workflow runs by itself. See docs/runbooks/release.md."; exit 1
+              fi
+              if [ "$DRAFT" = "true" ]; then
+                echo "::error::$TAG is still a draft, so the tag does not exist yet. Publish the draft to release it, or run a dry run without the 'tag' input."; exit 1
+              fi
+              REF="refs/tags/$TAG"
+            fi
+          fi
+          case "$TAG" in
+            "") ;;
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::Tag '$TAG' is not of the form vX.Y.Z."; exit 1 ;;
+          esac
+          {
+            echo "ref=$REF"; echo "tag=$TAG"; echo "version=${TAG#v}"; echo "dry_run=$DRY_RUN"
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-      # No `version:` input here: package.json's `packageManager` field is the single source of
-      # truth for the pnpm version, and specifying both makes action-setup fail outright with
-      # "Multiple versions of pnpm specified".
+          ref: ${{ steps.plan.outputs.ref }}
+          fetch-depth: 0 # needed for the "tag is on main" check below
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
-          registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
+      # The tag, all twenty manifests, and both places Python states its version must agree. CI's drift
+      # check covers the Python side on every push; this is the last gate before an asymmetric release,
+      # and the only place the tag itself is compared with the tree.
+      - name: Assert the tag and every version in the tree agree
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          SPEC_CORE=$(node -p "require('./packages/spec-core/package.json').version")
+          EXPECTED="${TAG#v}"; [ -n "$EXPECTED" ] || EXPECTED="$SPEC_CORE"
+          echo "expected version: $EXPECTED (tag: ${TAG:-none, dry run on $GITHUB_REF})"
+          FAIL=0
+          for DIR in packages/* cli spec; do
+            [ -f "$DIR/package.json" ] || continue
+            node -e "const p=require('./$DIR/package.json'); if (p.publishConfig && p.version !== '$EXPECTED') { console.error('$DIR: ' + p.version); process.exit(1) }" || FAIL=1
+          done
+          PY=$(grep -m1 '^version' python/kohaku/pyproject.toml | sed -E 's/.*"(.*)".*/\1/')
+          [ "$PY" = "$EXPECTED" ] || { echo "python/kohaku/pyproject.toml: $PY"; FAIL=1; }
+          INIT=$(grep -m1 '^__version__' python/kohaku/src/kohaku/__init__.py | sed -E 's/.*"(.*)".*/\1/')
+          [ "$INIT" = "$EXPECTED" ] || { echo "python/kohaku/src/kohaku/__init__.py: $INIT"; FAIL=1; }
+          if [ -n "$TAG" ]; then
+            git fetch --quiet origin main
+            git merge-base --is-ancestor HEAD origin/main || { echo "$TAG is not an ancestor of main"; FAIL=1; }
+          fi
+          [ "$FAIL" = "0" ] || { echo "::error::version mismatch — see above"; exit 1; }
+      - run: pnpm typecheck
+      - run: pnpm test
       # The same gate the pack-smoke job runs on pull requests, repeated immediately before publishing:
       # this is the last point at which a broken tarball can still be stopped.
       - run: pnpm run smoke:pack
-      - id: changesets
-        uses: changesets/action@v2
+
+  npm:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Trusted Publishing: npm authenticates this job by OIDC (repository + this file name + this
+    # environment), so there is no npm token anywhere. pnpm does the token exchange itself: in GitHub
+    # Actions it requests an ID token (audience npm:registry.npmjs.org), exchanges it at the registry's
+    # /-/npm/v1/oidc/token/exchange/package/<name> endpoint, and uses the result in preference to any
+    # static credential. If the exchange is refused (no trusted publisher registered for that package)
+    # it logs "Skipped OIDC: ..." and falls back to static credentials -- which no longer exist here, so
+    # the guard below turns that warning into a failure with a pointer to the checklist. `--provenance`
+    # is explicit rather than left to pnpm's visibility probe so a missing attestation cannot slip
+    # through silently. `pnpm publish` stays (not `npm publish`): only pnpm applies
+    # publishConfig.exports, and every package's `exports` points at src/*.ts until then.
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@kohaku-ui/spec-core/v/${{ needs.verify.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write # OIDC: npm trusted publishing + provenance attestation
+    steps:
+      - uses: actions/checkout@v7
         with:
-          version-script: pnpm run version
-          publish-script: pnpm run release
-          commit-message: "chore(release): version packages"
-          pr-title: "chore(release): version packages"
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # Does NOT currently produce an attestation: 0.1.0 went out with registry signatures but no
-          # provenance. `pnpm publish` turned out not to delegate to the npm CLI -- it uploads itself and
-          # never reads this -- so the variable is inert here, and the run logged "Skipped OIDC:
-          # ERR_PNPM_AUTH_TOKEN_EXCHANGE" for every package. Kept because it costs nothing and becomes live
-          # the moment publishing moves to the npm CLI; getting provenance back is a separate change.
-          NPM_CONFIG_PROVENANCE: "true"
-      # Ask the registry, rather than trusting changesets/action's own `published` output: that output is
-      # derived by parsing `changeset publish`'s log lines, and this repository publishes with
-      # `pnpm -r publish`, whose output it cannot parse. It therefore reported false even after all twenty
-      # packages went out, which silently skipped the PyPI and GitHub Release jobs below. The registry is
-      # the only thing that actually knows, and asking it also makes a re-run converge: whatever npm is
-      # missing gets published, and the downstream jobs run whenever npm is at this version.
-      #
-      # npm alone is not enough to gate on, though: once npm has a version, that stays true on every later
-      # workflow run too (every subsequent push to main), which would otherwise re-run the PyPI / GitHub
-      # Release jobs forever even after both already have this version. Those two jobs are individually
-      # idempotent (skip-existing / "release already exists"), but there is no reason to run them at all
-      # once there is nothing left to do — so also check whether the GitHub release or the PyPI upload is
-      # still missing, and only report published when npm has it AND at least one of the other two does not.
-      - id: npm
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ needs.verify.outputs.ref }}
+      - uses: pnpm/action-setup@v6
+      # No `registry-url` here: it would write an `_authToken=${NODE_AUTH_TOKEN}` line into .npmrc, and
+      # pnpm refuses to start when that variable is unset. The default registry is npmjs.org anyway.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build:dist
+      # Dry run only: perform the OIDC exchange for every publishable package exactly the way pnpm does,
+      # without publishing anything. This is the only way to find out, before the real run, whether all
+      # twenty trusted publishers are registered -- a real run stops at the first package that is not.
+      - name: Probe the npm trusted-publisher registration of every package (dry run only)
+        if: needs.verify.outputs.dry_run == 'true'
         run: |
-          VERSION=$(node -p "require('./packages/spec-core/package.json').version")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if ! npm view "@kohaku-ui/spec-core@$VERSION" version >/dev/null 2>&1; then
-            echo "npm does not have $VERSION"
-            echo "published=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          ID_TOKEN=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).value")
+          MISSING=0
+          for DIR in packages/* cli spec; do
+            NAME=$(node -p "const p=require('./$DIR/package.json'); p.publishConfig ? p.name : ''")
+            [ -n "$NAME" ] || continue
+            ENC=$(node -p "encodeURIComponent('$NAME')")
+            STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $ID_TOKEN" -H "Accept: application/json" -H "Content-Length: 0" \
+              "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$ENC")
+            if [ "$STATUS" = "200" ]; then echo "ok       $NAME"; else echo "MISSING  $NAME (HTTP $STATUS)"; MISSING=1; fi
+          done
+          [ "$MISSING" = "0" ] || { echo "::error::Some packages have no npm trusted publisher for repository ${{ github.repository }}, workflow release.yml, environment npm. See docs/runbooks/release.md, 'npm trusted publishers'."; exit 1; }
+      # pnpm skips any package whose version the registry already has ("pnpm will publish all the
+      # packages that have versions not yet published to the registry"), so a re-run after a partial
+      # failure publishes only what is missing, and a re-run with nothing missing is a no-op. That
+      # per-package check is the right granularity; a job-level "is spec-core on npm?" gate would skip
+      # the other nineteen after a failure that happened after spec-core went out.
+      - name: Publish to npm
+        env:
+          DRY_RUN: ${{ needs.verify.outputs.dry_run }}
+        run: |
+          set -o pipefail
+          FLAGS="--no-git-checks --provenance --report-summary"
+          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
+          pnpm -r publish $FLAGS 2>&1 | tee "$RUNNER_TEMP/publish.log"
+          if grep -q "Skipped OIDC" "$RUNNER_TEMP/publish.log"; then
+            echo "::error::pnpm fell back from OIDC (see 'Skipped OIDC' above). There is no token fallback any more; fix the trusted-publisher registration and re-run."; exit 1
           fi
-          echo "npm is at $VERSION"
-          GH_HAS=false
-          if gh release view "v$VERSION" >/dev/null 2>&1; then GH_HAS=true; fi
-          PYPI_HAS=false
-          if curl -fsS "https://pypi.org/simple/kohaku-ui/" 2>/dev/null | grep -qF "$VERSION"; then PYPI_HAS=true; fi
-          if [ "$GH_HAS" = "true" ] && [ "$PYPI_HAS" = "true" ]; then
-            echo "the GitHub release and PyPI both already have $VERSION; nothing left to do"
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          fi
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: npm-publish
+          path: |
+            pnpm-publish-summary.json
+            ${{ runner.temp }}/publish.log
+          if-no-files-found: ignore
 
   pypi:
-    needs: release
-    if: needs.release.outputs.published == 'true'
+    needs: [verify, npm]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Trusted Publishing: PyPI authenticates this workflow in this environment by OIDC, so there is no
-    # long-lived API token to store or rotate.
-    environment: pypi
+    # long-lived API token to store or rotate. Registered for release.yml + environment pypi.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kohaku-ui/${{ needs.verify.outputs.version }}/
     permissions:
+      contents: read
       id-token: write
     steps:
-      # Pin to the exact commit that triggered this run, not the branch tip: by the time this job runs,
-      # main may have moved on to a later commit (a subsequent push), and checking that out could publish
-      # code that does not match the npm version this job just asserted against.
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.verify.outputs.ref }}
       # setup-uv stopped publishing floating major/minor tags after v7 (no `@v10` ref exists), so the full
       # version tag is required here; Dependabot still bumps exact tags.
       - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
-      # CI already fails on version drift, but this is the last gate before an asymmetric release: npm is
-      # already published at this point, and a mismatched PyPI version cannot be taken back.
-      - name: Assert the Python version matches the published npm version
-        run: |
-          PY=$(grep -m1 '^version' python/kohaku/pyproject.toml | sed -E 's/.*"(.*)".*/\1/')
-          if [ "$PY" != "${{ needs.release.outputs.version }}" ]; then
-            echo "python $PY != npm ${{ needs.release.outputs.version }}"
-            exit 1
-          fi
       - run: uv build --package kohaku-ui --out-dir dist
         working-directory: python
       # Proves the wheel is self-contained: the test suite reads spec/ from the monorepo root, so an
-      # accidental runtime dependency on the repository layout would only show up here.
+      # accidental runtime dependency on the repository layout would only show up here. Also the last
+      # version check: the wheel must report the version that is about to be uploaded.
       - name: Import the built wheel in an isolated environment
-        run: uv run --isolated --no-project --with ./dist/*.whl python -c "import kohaku; print(kohaku.__version__)"
         working-directory: python
+        run: |
+          GOT=$(uv run --isolated --no-project --with ./dist/*.whl python -c "import kohaku; print(kohaku.__version__)")
+          echo "wheel reports $GOT"
+          [ "$GOT" = "${{ needs.verify.outputs.version }}" ] || { echo "::error::wheel version $GOT != ${{ needs.verify.outputs.version }}"; exit 1; }
+      # pypa/gh-action-pypi-publish has no dry-run mode, so the upload is simply skipped on a dry run.
       - uses: pypa/gh-action-pypi-publish@release/v1
+        if: needs.verify.outputs.dry_run != 'true'
         with:
           packages-dir: python/dist
-          # The gate above is "npm is at this version", which stays true on every later run. PyPI refuses a
-          # re-upload of a version it already has, so without this a re-run would fail on work already done.
+          # A re-run after a partial failure must not fail on the upload that already succeeded.
           skip-existing: true
 
-  github-release:
-    needs: [release, pypi]
-    if: needs.release.outputs.published == 'true'
+  summary:
+    needs: [verify, npm, pypi]
+    if: always() && needs.verify.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
-          fetch-depth: 0
-      # Idempotent for the same reason the PyPI upload is: the gate stays true once npm is at this version,
-      # so a re-run must leave an existing release alone rather than fail on "already exists".
+          name: npm-publish
+          path: npm-publish
+        continue-on-error: true
       - run: |
-          TAG="v${{ needs.release.outputs.version }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "release $TAG already exists"
-          else
-            gh release create "$TAG" --generate-notes
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          V="${{ needs.verify.outputs.version }}"
+          {
+            if [ "${{ needs.verify.outputs.dry_run }}" = "true" ]; then echo "## Dry run: $V (nothing uploaded)"; else echo "## Released $V"; fi
+            echo
+            echo "| step | result |"; echo "|---|---|"
+            echo "| verify | ${{ needs.verify.result }} |"
+            echo "| npm | ${{ needs.npm.result }} |"
+            echo "| pypi | ${{ needs.pypi.result }} |"
+            echo
+            if [ -f npm-publish/pnpm-publish-summary.json ]; then
+              echo "### npm packages handled by this run"
+              node -e "const s=require('./npm-publish/pnpm-publish-summary.json'); for (const p of (s.publishedPackages||[])) console.log('- ' + p.name + '@' + p.version)"
+            fi
+            echo
+            echo "- npm: https://www.npmjs.com/package/@kohaku-ui/spec-core/v/$V"
+            echo "- PyPI: https://pypi.org/project/kohaku-ui/$V/"
+            [ -n "${{ needs.verify.outputs.tag }}" ] && echo "- GitHub release: https://github.com/${{ github.repository }}/releases/tag/${{ needs.verify.outputs.tag }}"
+            echo
+            echo "Re-run a failed publish: Actions > Release > Run workflow, tag=${{ needs.verify.outputs.tag }}, dry_run=false (docs/runbooks/release.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
