@@ -120,7 +120,7 @@ A **full Python port** of the same protocol (Kohaku Protocol v0.1) is co-located
 | `lineage/` | lineage (recording, promotion, fixation) |
 | `evals/` | evals (judge / golden / FixtureLlm) |
 | `storage/` | equivalent of sample-api's storage-port.ts (FileStoragePort) |
-| `host_core/` | Partial mirror of host-core: `capability.py` (capability issuance), `errors.py`, `fixation.py` (`FixationDeliveryHost.admit` + the self-heal sequence), `keyed_mutex.py` (the shared keyed mutex both `host_rest` and `host_mcp` serialize fixation self-heal through — REST keyed by `(tenant, intentHash)`, MCP by `intentHash` alone), and `trace_context.py`. The remaining TS host-core modules (`action-effects.ts`, `allowed-actions.ts`, `binding-ref.ts`, `intent.ts`, `view-recorder.ts`) have no Python counterpart yet — `host_rest` / `host_mcp` implement the equivalent logic locally instead of importing a shared module (see `docs/runbooks/python-mirror.md`'s "if you add a module to host-core, add it to Python `host_core` too" check) |
+| `host_core/` | Full mirror of host-core: every TS module now has a Python counterpart, consumed by `host_rest` / `host_mcp` as thin adapters (per-module detail: [../python/README.md](../python/README.md)). One behavioral difference persists: the shared keyed mutex (`keyed_mutex.py`) that both profiles serialize fixation self-heal through differs in key granularity — REST keys it by `(tenant, intentHash)`, MCP by `intentHash` alone |
 | `host_rest/` | host-rest (FastAPI) |
 | `host_mcp/` | host-mcp-apps (MCP Apps profile) |
 

@@ -120,7 +120,7 @@ flowchart LR
 | `lineage/` | lineage(記録・昇格・固定化) |
 | `evals/` | evals(judge / golden / FixtureLlm) |
 | `storage/` | sample-api の storage-port.ts 相当(FileStoragePort) |
-| `host_core/` | host-core の部分移植: `capability.py`(capability 発行)・`errors.py`・`fixation.py`(`FixationDeliveryHost.admit` + self-heal シーケンス)・`keyed_mutex.py`(`host_rest` と `host_mcp` の両方が fixation self-heal を直列化する共有 keyed mutex — REST は `(tenant, intentHash)`、MCP は `intentHash` 単独でキー)・`trace_context.py`。残る TS host-core モジュール(`action-effects.ts` / `allowed-actions.ts` / `binding-ref.ts` / `intent.ts` / `view-recorder.ts`)はまだ Python 側に対応が無く、`host_rest` / `host_mcp` が共有モジュールを import する代わりに相当ロジックを個別実装している(`docs/runbooks/python-mirror.md` の「host-core にモジュールを足したら Python `host_core` にも」チェック参照) |
+| `host_core/` | host-core の完全移植: TS の全モジュールが Python 側に対応を持ち、`host_rest` / `host_mcp` が薄いアダプタとして利用する(モジュール単位の詳細: [../python/README.ja.md](../python/README.ja.md))。挙動差が 1 点だけ残る: 両プロファイルが fixation self-heal を直列化する共有 keyed mutex(`keyed_mutex.py`)は、キー粒度がプロファイル間で異なる — REST は `(tenant, intentHash)`、MCP は `intentHash` 単独でキーする |
 | `host_rest/` | host-rest(FastAPI) |
 | `host_mcp/` | host-mcp-apps(MCP Apps プロファイル) |
 
