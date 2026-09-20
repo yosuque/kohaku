@@ -67,7 +67,8 @@ export interface ViewRecorder {
  * composer, so `record` is skipped entirely — a client disconnect/timeout must not inflate view.composed /
  * view.fallback counts. Otherwise `record` (the host's own composed -> fallback recording, in that order) runs
  * fail-open (host-core's failOpen): a recording failure must not take down an otherwise-successful delivery,
- * and is instead reported to `onError`.
+ * and is instead reported to `onError`. Caveat: this only protects `record`; `onError` itself must not throw
+ * (a throwing `onError` is not caught here and would escape to the caller).
  */
 export async function recordComposedResult(
   result: { spec: UISpec; trace: ComposeTrace },

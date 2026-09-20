@@ -87,51 +87,10 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
   const { deps, getPrincipal, requireGovernance, withPromotionLock } = ctx;
 
   /**
-   * Shared skeleton for promotion transition routes (approve / reject / withdraw / actions). The check order
-   * is unchanged: unwired 501 -> governance authorization -> principal / tenant resolution -> body validation
-   * (prepare) -> artifact existence (owning-tenant) check -> execute the transition under the promotion lock
-   * (per-tenant serialization, preventing interleaving of concurrent approves, double onPublish firing, and
-   * lost updates) -> promotionError mapping.
-   * prepare validates the body and, if invalid, returns a 400 response (each route owns its message); if valid, it
-   * returns a thunk that executes the transition (running inside withPromotionLock).
-   */
-  const promotionTransition = async (
-    c: Context,
-    kind: GovernanceOperation["kind"],
-    prepare: (transitionCtx: {
-      promotions: PromotionsApi;
-      artifactId: string;
-      principal: Principal;
-      tenant: string | undefined;
-      scope: { tenant?: string } | undefined;
-    }) => Promise<Response | (() => Promise<unknown>)>,
-  ): Promise<Response> => {
-    if (deps.promotions == null) return promotionsNotConfigured(c);
-    const promotions = deps.promotions;
-    // Exclusive to /promotions/:artifactId/* routes (the generic Context type makes param string | undefined).
-    const artifactId = c.req.param("artifactId")!;
-    const denied = await requireGovernance(c, { kind, artifactId });
-    if (denied != null) return denied;
-    const principal = await getPrincipal(c);
-    const tenant = await resolveTenant(c, deps);
-    const scope = tenantScopeOf(tenant);
-    const transition = await prepare({ promotions, artifactId, principal, tenant, scope });
-    if (transition instanceof Response) return transition;
-    const notFound = await ensureArtifact(c, promotions, artifactId, scope);
-    if (notFound != null) return notFound;
-    try {
-      const candidate = await withPromotionLock(tenant, transition);
-      return c.json({ candidate });
-    } catch (e) {
-      return promotionError(c, deps, kind, e);
-    }
-  };
-
-  /**
-   * Shared preamble for the read/other promotion routes (list / reconcile / evaluate / get / preview) — the
-   * sibling of `promotionTransition` for routes that are not a mutating per-artifact transition. The check
-   * order is unchanged: unwired 501 -> governance authorization -> handler. On success, invokes `handler` with
-   * the narrowed (non-null) `promotions` API.
+   * Shared preamble for all promotion routes (list / reconcile / evaluate / get / preview / the mutating
+   * per-artifact transitions via `promotionTransition` below). The check order is unchanged: unwired 501 ->
+   * governance authorization -> handler. On success, invokes `handler` with the narrowed (non-null)
+   * `promotions` API.
    */
   const withPromotions = async (
     c: Context,
@@ -143,6 +102,47 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
     const denied = await requireGovernance(c, op);
     if (denied != null) return denied;
     return handler(promotions);
+  };
+
+  /**
+   * Shared skeleton for promotion transition routes (approve / reject / withdraw / actions), expressed on top of
+   * `withPromotions`. The check order is unchanged: unwired 501 -> governance authorization -> principal / tenant
+   * resolution -> body validation (prepare) -> artifact existence (owning-tenant) check -> execute the transition
+   * under the promotion lock (per-tenant serialization, preventing interleaving of concurrent approves, double
+   * onPublish firing, and lost updates) -> promotionError mapping.
+   * prepare validates the body and, if invalid, returns a 400 response (each route owns its message); if valid, it
+   * returns a thunk that executes the transition (running inside withPromotionLock).
+   */
+  const promotionTransition = (
+    c: Context,
+    kind: GovernanceOperation["kind"],
+    prepare: (transitionCtx: {
+      promotions: PromotionsApi;
+      artifactId: string;
+      principal: Principal;
+      tenant: string | undefined;
+      scope: { tenant?: string } | undefined;
+    }) => Promise<Response | (() => Promise<unknown>)>,
+  ): Promise<Response> => {
+    // Exclusive to /promotions/:artifactId/* routes (the generic Context type makes param string | undefined).
+    // A pure read off the already-parsed request, so evaluating it before the not-configured/governance checks
+    // below (inside withPromotions) has no side effect and no observable ordering difference.
+    const artifactId = c.req.param("artifactId")!;
+    return withPromotions(c, { kind, artifactId }, async (promotions) => {
+      const principal = await getPrincipal(c);
+      const tenant = await resolveTenant(c, deps);
+      const scope = tenantScopeOf(tenant);
+      const transition = await prepare({ promotions, artifactId, principal, tenant, scope });
+      if (transition instanceof Response) return transition;
+      const notFound = await ensureArtifact(c, promotions, artifactId, scope);
+      if (notFound != null) return notFound;
+      try {
+        const candidate = await withPromotionLock(tenant, transition);
+        return c.json({ candidate });
+      } catch (e) {
+        return promotionError(c, deps, kind, e);
+      }
+    });
   };
 
   // GET is read-only (with list, no auto-nominate side effect; without it, fall back to the old behavior).

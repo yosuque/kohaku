@@ -173,6 +173,44 @@ describe("issueSpecCapabilitySafely", () => {
     expect(scopes).toContainEqual({ kind: "read", ref: "query://sales/summary?fy=2026" });
   });
 
+  it("reports the rejection plus a WriteScopeDroppedError per dropped write scope, and never lets the write scope reach issueCapability, when allowedActions rejects on a spec that carries an action.invoke", async () => {
+    const issueCapability = vi.fn(
+      async (_p: Principal, _s: Scope[], _o?: { ttlSeconds?: number }) => "cap-token",
+    );
+    const authz: AuthzPort = {
+      issueCapability,
+      async verify() {
+        return { ok: true, principal: PRINCIPAL };
+      },
+    };
+    const listOperationsError = new Error("listOperations failed");
+    const allowedActions = vi.fn(async (): Promise<ReadonlySet<string>> => {
+      throw listOperationsError;
+    });
+    const report = vi.fn();
+
+    // Unlike the read-only spec above, this spec carries a write (action.invoke) scope, so the rejection's
+    // empty allowed set must additionally trigger onDroppedAction for it: report should fire once for the
+    // rejection itself and once more per dropped write scope (1 + N, here N = 1).
+    const token = await issueSpecCapabilitySafely(
+      authz,
+      PRINCIPAL,
+      specWithRefAndAction(),
+      allowedActions,
+      report,
+    );
+
+    expect(token).toBe("cap-token");
+    expect(report).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenNthCalledWith(1, listOperationsError);
+    const droppedError = report.mock.calls[1]![0];
+    expect(droppedError).toBeInstanceOf(WriteScopeDroppedError);
+    expect((droppedError as WriteScopeDroppedError).action).toBe("sales.updateTarget");
+    const [, scopes] = issueCapability.mock.calls[0]!;
+    expect(scopes).not.toContainEqual({ kind: "write", ref: "sales.updateTarget" });
+    expect(scopes).toContainEqual({ kind: "read", ref: "query://sales/summary?fy=2026" });
+  });
+
   it("reports a WriteScopeDroppedError for an action.invoke ref outside allowedActions", async () => {
     const issueCapability = vi.fn(
       async (_p: Principal, _s: Scope[], _o?: { ttlSeconds?: number }) => "cap-token",

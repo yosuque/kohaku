@@ -296,12 +296,7 @@ async function withCacheFailOpen<T>(
   }
 }
 
-/**
- * Fail-open wrapper around ctx.storage.getSpecCache: a thrown error is reported to observer.onError
- * (phase "cache") and treated as a cache miss, so a cache-backend outage does not turn every compose
- * into a hard failure after a successful generation. policy.cacheFailure === "closed" opts back into
- * rethrowing the original error instead.
- */
+/** Fail-open ctx.storage.getSpecCache (treats a failure as a cache miss); see withCacheFailOpen. */
 async function getSpecCacheSafely(
   ctx: ComposeContext,
   policy: ComposePolicy,
@@ -318,11 +313,7 @@ async function getSpecCacheSafely(
   );
 }
 
-/**
- * Fail-open wrapper around ctx.storage.putSpecCache, mirroring getSpecCacheSafely: a thrown error is
- * reported (phase "cache") and swallowed (the Spec was already generated and is still delivered), unless
- * policy.cacheFailure === "closed", in which case it rethrows.
- */
+/** Fail-open ctx.storage.putSpecCache (the Spec is still delivered on failure); see withCacheFailOpen. */
 async function putSpecCacheSafely(
   ctx: ComposeContext,
   prepared: PreparedCompose,

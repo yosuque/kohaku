@@ -67,6 +67,8 @@ function filterAllowedScopes(scopes: Scope[], options?: IssueCapabilityOptions):
  * `allowedActions` itself rejects, the rejection is reported and the capability is still issued but
  * fail-closed for writes (an empty allowed set — every write scope is dropped); every dropped write scope is
  * reported as a WriteScopeDroppedError. Delivery proceeds either way (fail-open on both paths).
+ * Contract: `report` must not reject — the dropped-action report (`onDroppedAction`) is fire-and-forgotten,
+ * so a rejecting `report` would produce an unhandled rejection rather than propagating here.
  */
 export async function issueSpecCapabilitySafely(
   authz: AuthzPort,

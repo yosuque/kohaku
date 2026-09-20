@@ -244,7 +244,7 @@ async function deliverComposed(
         await recordComposed(deps, result, session, specHash);
         await recordFallbackIfAny(deps, result, session, specHash);
       },
-      (e) => report(e),
+      report,
     );
     return c.json({ spec: result.spec, capability });
   } catch (e) {
