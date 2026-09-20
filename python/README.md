@@ -97,7 +97,10 @@ it), the post-write effects response (`host_core.action_effects.apply_action_eff
 already committed by the time it runs, so an effects failure never turns a successful write into a client-visible
 error), and the memoized write-action allowlist (`host_core.allowed_actions.create_allowed_actions`, used to drop
 a hallucinated/injected `action.invoke` action name from an issued capability's write scopes) also live there,
-each replacing what used to be a small duplicate in both `host_rest` and `host_mcp`.
+each replacing what used to be a small duplicate in both `host_rest` and `host_mcp`. Fallback-view recording
+(`host_core.view_recorder.record_view_fallback`, shared by REST's `record_fallback_if_any` and MCP's
+`_audit_compose`) also lives there: the judgment source is `spec.provenance.fallback`, not the compose trace,
+since a capability-negotiation downgrade can recur on a cache hit and the trace alone would miss it.
 
 **MCP 2026-07-28** (see `docs/design.md`'s "MCP 2026-07-28 / SDK v2 migration" and "Python `mcp` 2.x migration"
 for the full picture): `host_mcp` runs on the `mcp` 2.x SDK (`kohaku-ui[mcp]` floor `>=2.2`; the low-level

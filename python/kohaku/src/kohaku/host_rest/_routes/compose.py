@@ -31,6 +31,7 @@ from kohaku.host_core import (
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
 from kohaku.host_core import compose_with_fixation as _host_core_compose_with_fixation
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
+from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
 from kohaku.host_core import resolve_fixated_result as _host_core_resolve_fixated_result
 from kohaku.host_core import settle_fixation as _host_core_settle_fixation
 from kohaku.llm import AbortController, AbortError, AbortSignal
@@ -318,19 +319,18 @@ async def _run_fixation_selfheal(
 async def record_fallback_if_any(
     result: ComposeResult, session: SessionContext, deps: KohakuHostDeps
 ) -> None:
-    """Record view.fallback when the spec includes a fallback (the source of truth is spec.provenance.fallback)."""
-    fallback = result.spec.provenance.fallback
-    if fallback is None:
-        return
-    if deps.recorder is not None:
-        await deps.recorder.fallback(
-            spec=result.spec,
-            reason=fallback.reason,
-            kind=fallback.kind if fallback.kind is not None else "generation",
-            surface=session.surface,
-            session_id=session.sessionId,
-            tenant=session.tenant,
-        )
+    """Record view.fallback when the spec includes a fallback (the source of truth is spec.provenance.fallback).
+
+    Thin wrapper kept for backward-compatible re-export; the fallback-detection rule itself lives in
+    kohaku.host_core.record_view_fallback, shared with the MCP profile's `_audit_compose`.
+    """
+    await _host_core_record_view_fallback(
+        deps.recorder,
+        result.spec,
+        surface=session.surface,
+        session_id=session.sessionId,
+        tenant=session.tenant,
+    )
 
 
 async def _record_composed(

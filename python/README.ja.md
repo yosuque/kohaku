@@ -94,7 +94,10 @@ read-ref のパース(`host_core.binding_ref.parse_invokable_ref`。REST の `/b
 書き込みは実行済みのため、effects の失敗が成功した書き込みをクライアント向けエラーに見せることはない)、
 書き込みアクションの許可集合のメモ化(`host_core.allowed_actions.create_allowed_actions`。ハルシネート/注入された
 `action.invoke` アクション名が発行済み capability の write scope に紛れ込むのを防ぐ)も同様にそこへ一度だけ存在し、
-それぞれ `host_rest` / `host_mcp` 双方にあった小さな重複を置き換える。
+それぞれ `host_rest` / `host_mcp` 双方にあった小さな重複を置き換える。fallback ビューの記録
+(`host_core.view_recorder.record_view_fallback`。REST の `record_fallback_if_any` と MCP の `_audit_compose` で
+共有)もそこに存在する: 判定根拠は compose トレースではなく `spec.provenance.fallback` である — capability
+negotiation によるダウングレードはキャッシュヒット時にも再発しうるため、トレースだけではそれを見逃す。
 
 **MCP 2026-07-28**(全体像は `docs/design.ja.md` の「MCP 2026-07-28 / SDK v2 移行」と「Python `mcp` 2.x 移行」
 参照): `host_mcp` は `mcp` 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)上で動く — 低レベル `Server` のハンドラ

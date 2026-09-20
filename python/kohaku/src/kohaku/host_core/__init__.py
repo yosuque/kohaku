@@ -38,6 +38,7 @@ from .fixation import (
 )
 from .keyed_mutex import get_lock
 from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
+from .view_recorder import record_view_fallback
 
 __all__ = [
     "DEFAULT_CAPABILITY_TTL_SECONDS",
@@ -67,6 +68,7 @@ __all__ = [
     "notify_hook",
     "parse_invokable_ref",
     "parse_trace_context",
+    "record_view_fallback",
     "resolve_fixated_result",
     "settle_fixation",
 ]

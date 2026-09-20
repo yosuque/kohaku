@@ -45,6 +45,7 @@ from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import get_lock as _get_lock
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
 from kohaku.host_core import notify_hook as _host_core_notify_hook
+from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
 from kohaku.spec import (
     AuthzPort,
     DomainPort,
@@ -1148,27 +1149,6 @@ async def _report_mcp_error(
     )
 
 
-async def _record_view_fallback(
-    recorder: ViewRecorderProtocol, spec: UISpec, *, surface: str
-) -> None:
-    """Record view.fallback when the spec includes a fallback (source of truth: spec.provenance.fallback,
-    not the compose trace — capability-negotiation downgrade can recur on a cache hit, which the trace alone
-    would miss). Mirrors the REST profile's record_fallback_if_any (kohaku.host_rest._routes.compose) so both
-    profiles agree on when a fallback is recorded; kept as a local duplicate rather than a shared host_core
-    helper because host_rest and host_mcp are independent siblings in the Python layer contract (see
-    pyproject.toml's importlinter layers) and Python's host_core does not yet host this logic (TS's
-    `@kohaku-ui/host-core` does — see that package's view-recorder.ts)."""
-    fallback = spec.provenance.fallback
-    if fallback is None:
-        return
-    await recorder.fallback(
-        spec=spec,
-        reason=fallback.reason,
-        kind=fallback.kind if fallback.kind is not None else "generation",
-        surface=surface,
-    )
-
-
 async def _audit_compose(deps: McpHostDeps, result: ComposeResult, endpoint: str) -> None:
     """compose + audit record (fail-open), shared by _compose_and_package and _build_snapshot.
 
@@ -1193,7 +1173,7 @@ async def _audit_compose(deps: McpHostDeps, result: ComposeResult, endpoint: str
     async def _record() -> None:
         if recorder is not None:
             await recorder.composed(spec=result.spec, trace=result.trace, surface="mcp-app")
-            await _record_view_fallback(recorder, result.spec, surface="mcp-app")
+            await _host_core_record_view_fallback(recorder, result.spec, surface="mcp-app")
         elif on_composed is not None:
             await on_composed(result.spec, result.trace)
 
