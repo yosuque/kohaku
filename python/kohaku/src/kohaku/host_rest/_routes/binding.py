@@ -124,11 +124,13 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             await report_host_error(deps, "binding/action", request_id, e)
             return _error("REF_NOT_FOUND", _REF_NOT_FOUND_MESSAGE, 404, request_id)
         # Write-already-committed vs. side-effect-declaration failure: see host_core's apply_action_effects.
+        # wide_catch=True preserves REST's pre-branch `except BaseException` at this call site.
         response = await apply_action_effects(
             deps.action_effects,
             body.action,
             payload,
             result,
             lambda e: report_host_error(deps, "binding/action", request_id_of(request, deps), e),
+            wide_catch=True,
         )
         return _json(response)

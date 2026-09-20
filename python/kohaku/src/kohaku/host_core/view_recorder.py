@@ -4,7 +4,7 @@ packages/host-core/src/view-recorder.ts's `recordViewFallback`).
 TS's `view-recorder.ts` additionally defines the shared `ViewRecorder` interface (`composed` / `interacted` /
 `rendered?` / `componentUsed?` / `fallback?`). This port only moves `recordViewFallback` itself — both Python
 hosts already carry their own structurally-equivalent `ViewRecorderProtocol` (kohaku.host_rest.deps,
-kohaku.host_mcp.server), which host_core must not import (host_core may not depend on host_rest/host_mcp per
+kohaku.host_mcp.types), which host_core must not import (host_core may not depend on host_rest/host_mcp per
 the layer contract), so `record_view_fallback` below is typed against a narrow, private, fallback-only
 Protocol that both hosts' `ViewRecorderProtocol` already structurally satisfy.
 """

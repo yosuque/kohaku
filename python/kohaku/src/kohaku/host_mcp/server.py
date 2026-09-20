@@ -688,12 +688,15 @@ def attach_kohaku_to_mcp_server(
             # Side-effect declaration (optional): put the refs the write invalidates and the per-ref new versions
             # into the response (same shape as REST). The write is already committed; a side-effect-declaration
             # failure is fail-open — see host_core's apply_action_effects.
+            # wide_catch=False preserves MCP's pre-branch `except Exception`, letting a BaseException
+            # subclass (asyncio.CancelledError) propagate to _safe_tool as before.
             structured = await apply_action_effects(
                 deps.action_effects,
                 action,
                 payload,
                 result,
                 lambda exc: _report_mcp_error(deps, f"{prefix}_action", exc),
+                wide_catch=False,
             )
             return mcp_types.CallToolResult(
                 content=[

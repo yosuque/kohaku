@@ -27,6 +27,7 @@ def test_with_no_action_effects_declared_returns_only_result() -> None:
             {},
             {"ok": True},
             calls.append,
+            wide_catch=True,
         )
         assert response == {"result": {"ok": True}}
         assert calls == []
@@ -46,6 +47,7 @@ def test_a_none_result_is_normalized_to_none_and_no_invalidates_ref_versions_key
             {},
             None,
             calls.append,
+            wide_catch=True,
         )
         assert response == {"result": None}
         assert "invalidates" not in response
@@ -73,6 +75,7 @@ def test_normal_case_invalidates_and_ref_versions_from_action_effects_pass_throu
             {"fiscalYear": 2026},
             {"updated": True},
             calls.append,
+            wide_catch=True,
         )
         assert seen_calls == [("sales.updateTarget", {"fiscalYear": 2026}, {"updated": True})]
         assert response == {
@@ -100,6 +103,90 @@ def test_fail_open_when_action_effects_raises_on_effects_error_is_called_and_res
             {},
             {"updated": True},
             calls.append,
+            wide_catch=True,
+        )
+        assert calls == [boom]
+        assert response == {"result": {"updated": True}}
+
+    asyncio.run(run())
+
+
+def test_wide_catch_true_catches_a_base_exception_subclass_and_reports_it_fail_open() -> None:
+    """REST's call site (wide_catch=True) preserves the pre-branch `except BaseException` at
+    _routes/binding.py: a BaseException subclass (e.g. asyncio.CancelledError) raised while awaiting the
+    action_effects hook is caught, reported via on_effects_error, and the response still succeeds."""
+    cancelled = asyncio.CancelledError("effects cancelled")
+
+    async def action_effects(action: str, payload: JsonObject, result: object) -> _FakeEffects:
+        raise cancelled
+
+    calls: list[BaseException] = []
+
+    async def run() -> None:
+        response = await apply_action_effects(
+            action_effects,
+            "sales.updateTarget",
+            {},
+            {"updated": True},
+            calls.append,
+            wide_catch=True,
+        )
+        assert calls == [cancelled]
+        assert response == {"result": {"updated": True}}
+
+    asyncio.run(run())
+
+
+def test_wide_catch_false_lets_a_base_exception_subclass_propagate() -> None:
+    """MCP's call site (wide_catch=False) preserves the pre-branch `except Exception`: a BaseException
+    subclass (e.g. asyncio.CancelledError) raised while awaiting the action_effects hook is NOT caught here
+    -- it propagates to the caller (MCP's _safe_tool, which turns it into an isError result), matching
+    host_mcp/server.py's pre-branch behaviour."""
+    cancelled = asyncio.CancelledError("effects cancelled")
+
+    async def action_effects(action: str, payload: JsonObject, result: object) -> _FakeEffects:
+        raise cancelled
+
+    calls: list[BaseException] = []
+
+    async def run() -> None:
+        try:
+            await apply_action_effects(
+                action_effects,
+                "sales.updateTarget",
+                {},
+                {"updated": True},
+                calls.append,
+                wide_catch=False,
+            )
+        except asyncio.CancelledError as e:
+            assert e is cancelled
+        else:
+            raise AssertionError("expected CancelledError to propagate")
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_wide_catch_false_still_catches_an_ordinary_exception() -> None:
+    """wide_catch=False narrows the catch to `Exception`, not to nothing: an ordinary Exception subclass
+    (the common case -- a domain hook raising RuntimeError, ValueError, etc.) is still caught and reported
+    fail-open, matching host_mcp/server.py's pre-branch `except Exception`."""
+    boom = RuntimeError("effects boom")
+
+    async def action_effects(action: str, payload: JsonObject, result: object) -> _FakeEffects:
+        raise boom
+
+    calls: list[BaseException] = []
+
+    async def run() -> None:
+        response = await apply_action_effects(
+            action_effects,
+            "sales.updateTarget",
+            {},
+            {"updated": True},
+            calls.append,
+            wide_catch=False,
         )
         assert calls == [boom]
         assert response == {"result": {"updated": True}}
