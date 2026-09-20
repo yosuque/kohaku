@@ -30,9 +30,10 @@ describe("tallyUsage (uses / sessions aggregation of component.used)", () => {
 });
 
 describe("usageIndexKey (collision-free (tenant, artifactId) composite key)", () => {
-  it("a space-containing tenant/artifactId pair no longer collides across the split (regression: was a space-joined string)", () => {
-    // Before the fix, `${tenant ?? ""} ${artifactId}` made tenant:"a b" + artifactId:"c" produce the same
-    // string as tenant:"a" + artifactId:"b c" (both "a b c").
+  it("a space-containing tenant/artifactId pair does not collide across the split", () => {
+    // The JSON-array encoding is collision-free for any input, including a tenant/artifactId pair that
+    // contains the delimiter the previous encoding used (a NUL byte, not a space -- see usage.ts's doc
+    // comment on usageIndexKey for what the previous encoding actually was).
     expect(usageIndexKey("a b", "c")).not.toBe(usageIndexKey("a", "b c"));
   });
 

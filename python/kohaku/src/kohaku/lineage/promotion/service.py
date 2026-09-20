@@ -262,12 +262,14 @@ def _usage_index_key(tenant: str | None, artifact_id: str) -> str:
     `event.tenant`), not the aggregation's requested scope.
 
     Encoded as a JSON array `[tenant, artifact_id]` rather than a delimiter-joined string, matching TS's
-    `usageIndexKey` (usage.ts) for the same collision-freedom (a plain delimiter join is not collision-free in
-    general). Byte-identical output with the TS side is not required -- this key never crosses the wire, only
-    lives in an in-process dict/set for the lifetime of a single call. `tenant=None` and `tenant=""` are
-    intentionally distinct keys (no caller relies on them being merged). Memory-only: never persisted, since
-    PromotionState stores `tenant` and `artifactId` as separate fields, so its exact encoding is free to
-    change without a migration.
+    `usageIndexKey` (usage.ts) for the same collision-freedom. The previous encoding joined the two values
+    with a single Unit Separator character (`\\x1f`), which is not collision-free by construction for a
+    tenant or artifact_id that could itself contain that character -- a JSON array is, for any input.
+    Byte-identical output with the TS side is not required -- this key never crosses the wire, only lives in
+    an in-process dict/set for the lifetime of a single call. `tenant=None` and `tenant=""` are intentionally
+    distinct keys (no caller relies on them being merged). Memory-only: never persisted, since PromotionState
+    stores `tenant` and `artifactId` as separate fields, so its exact encoding is free to change without a
+    migration.
     """
     return json.dumps([tenant, artifact_id], separators=(",", ":"))
 

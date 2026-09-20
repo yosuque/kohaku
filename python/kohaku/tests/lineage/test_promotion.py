@@ -1792,8 +1792,9 @@ def test_list_by_status_list_lineage_calls_do_not_scale_with_candidate_count(tmp
 
 
 def test_usage_index_key_is_collision_free_for_space_containing_values() -> None:
-    # Before the fix, a plain delimiter join could make tenant "a b" + artifact_id "c" collide with tenant
-    # "a" + artifact_id "b c". The JSON-array encoding does not.
+    # The JSON-array encoding is collision-free for any input, including a tenant/artifact_id pair that
+    # contains the delimiter the previous encoding used (a Unit Separator, not a space -- see
+    # _usage_index_key's docstring for what the previous encoding actually was).
     assert _usage_index_key("a b", "c") != _usage_index_key("a", "b c")
 
 

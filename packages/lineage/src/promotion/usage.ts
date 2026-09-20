@@ -22,12 +22,13 @@ export function tallyUsage(used: { payload: Record<string, unknown> }[]): { uses
  * keeps them separate. `tenant` here is always the *record's own* tenant (e.g. `event.tenant`), not the
  * aggregation's requested scope.
  *
- * Encoded as a JSON array `[tenant ?? null, artifactId]` rather than a delimiter-joined string: a plain
- * `${tenant} ${artifactId}` join is not collision-free (e.g. tenant "a b" + artifactId "c" collided with
- * tenant "a" + artifactId "b c"). `tenant: undefined` and `tenant: ""` are intentionally distinct keys here
- * (no caller relies on them being merged; see usage.test.ts). This key is memory-only -- never persisted,
- * since promotions.json stores `tenant` and `artifactId` as separate fields -- so its exact encoding is free
- * to change without a migration.
+ * Encoded as a JSON array `[tenant ?? null, artifactId]` rather than a delimiter-joined string. The previous
+ * encoding joined the two values with a single delimiter character (a NUL byte), which is not collision-free
+ * by construction for a tenant or artifactId that could itself contain that character -- a JSON array is,
+ * for any input. `tenant: undefined` and `tenant: ""` are intentionally distinct keys here (no caller relies
+ * on them being merged; see usage.test.ts). This key is memory-only -- never persisted, since promotions.json
+ * stores `tenant` and `artifactId` as separate fields -- so its exact encoding is free to change without a
+ * migration.
  */
 export function usageIndexKey(tenant: string | undefined, artifactId: string): string {
   return JSON.stringify([tenant ?? null, artifactId]);
@@ -37,9 +38,12 @@ export function usageIndexKey(tenant: string | undefined, artifactId: string): s
  * Reduces a set of lineage events (typically `component.generated`) to, per `(tenant, artifactId)` key (see
  * `usageIndexKey`), the single event with the greatest `ts`. Shared by the three call sites that each used to
  * build this same "latest generated per key" index with their own copy of the loop (service.ts's `reconcile`,
- * and candidate-store.ts's `scanCandidatesWithTenant` / `listByStatus`). An event whose `payload.artifactId` is
- * not a string is skipped (matches the existing filter at two of those three sites; the third's unchecked cast
- * is subsumed by this stricter, equivalent-in-practice check -- see usage.test.ts).
+ * and candidate-store.ts's `scanCandidatesWithTenant` / `listByStatus`). An event whose `payload.artifactId`
+ * is not a string is skipped: this matches two of those three sites' pre-existing filter exactly, and is a
+ * deliberate behaviour change at the third (`scanCandidatesWithTenant`, which previously used an unchecked
+ * `as string` cast with no guard) -- accepted as low-risk because the write path that produces
+ * `component.generated` always sets a string `artifactId`, so this only changes what happens to an already-
+ * malformed event: it is now skipped outright instead of indexed under a key built from a garbage cast value.
  */
 export function indexLatestGenerated<
   E extends { ts: string; tenant?: string; payload: Record<string, unknown> },
