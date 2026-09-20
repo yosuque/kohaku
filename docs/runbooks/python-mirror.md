@@ -38,17 +38,37 @@ The following are **not ported to Python** — TS-only:
 - `packages/client` (the typed host client SDK)
 - `packages/host-a2ui` (the A2UI-compatible profile skeleton)
 
-Within `packages/composer`, note one deliberate structural difference: Python doesn't split the tier
-ladder / single-flight / result-assembly logic out of `compose.py` into separate modules the way TS
-does — same behavior, coarser file layout.
-
-Within `packages/host-mcp-apps` ↔ `host_mcp/`, note a similar structural difference: what TS splits
-out into `initial-data.ts` / `snapshot.ts` / the eight `register*Tool` functions, Python keeps as
-private functions and closures inside `host_mcp/server.py`'s `attach_kohaku_to_mcp_server` — same
-behavior, no file-level 1:1 mapping there.
+Within `packages/composer`, note one deliberate, permanent structural difference: Python doesn't
+split the tier ladder / single-flight / result-assembly logic (`assemble.ts` / `constants.ts` /
+`observer.ts` / `refs.ts` / `single-flight.ts` / `tier-ladder.ts` / `tiers/`) out of `compose.py`
+into separate modules the way TS does — same behavior, coarser file layout by design. This is an
+intentional exception to the "Layout rule" below, not debt to pay down.
 
 **Checklist**: if you add a module to `packages/host-core`, add its Python counterpart to
 `kohaku/src/kohaku/host_core/` (or record the gap in `docs/design.md`'s package table).
+
+## Layout rule
+
+Outside the `composer` exception noted above, the mirror is meant to be **one TS source file → one
+Python module of the same name** (`initial-data.ts` → `initial_data.py`, `snapshot.ts` →
+`snapshot.py`). This keeps "where does this TS change belong in Python" a mechanical lookup instead
+of a judgment call. When you add a new TS file that needs a Python counterpart, add it as its own
+module — don't fold it into an existing one — and update `python/README.md`'s "Structure" section
+(the directory tree under "## Structure") if the new module is significant enough to list there.
+
+Two spots still owe a split and are tracked here as **known debt** (pre-existing, not something this
+runbook change is asking you to fix as a side effect of an unrelated mirror):
+
+- `kohaku/src/kohaku/host_mcp/server.py` merges four TS files: `server.ts` + `initial-data.ts` +
+  `types.ts` + `cache-hints.ts`. (`host_mcp/fallback.py`, `intent_tools.py`, `meta.py`, and
+  `snapshot.py` are already the correct 1:1 mirrors of `fallback.ts`, `intent-tools.ts`, `meta.ts`,
+  and `snapshot.ts` respectively — only `server.py` is the merged one.)
+- `kohaku/src/kohaku/lineage/promotion/service.py` merges four TS files: `service.ts` +
+  `candidate-store.ts` + `nomination.ts` + `usage.ts`. (`promotion/machine.py` is already the
+  correct 1:1 mirror of `promotion/machine.ts`.)
+
+Don't let a merged file grow further while it's on this list — new logic that TS puts in a new file
+should get a new Python file too, even inside an already-merged module.
 
 ## Cross-language golden fixtures
 
@@ -107,6 +127,27 @@ cd python && uv sync && uv run ruff check && uv run mypy && uv run lint-imports 
 If you add a new Python module or introduce a cross-module import, update `[tool.importlinter]` to
 match — and keep it paired with the TS side's `LAYERS` array in
 `spec/test/dependency-direction.test.ts`, per [protocol-change.md](protocol-change.md) §8.
+
+### The layer-direction contract is enforced in three places, not two
+
+The dependency direction (no reverse flow, A2) has three independent enforcement sites, and none is
+derived from the others — each has to be updated by hand when a package's position in the graph
+changes:
+
+1. **AGENTS.md's arrow sentence** ("Dependency direction (no reverse flow)" under "Layout
+   essentials") — the prose source both mechanical checks below are meant to match.
+2. **`spec/test/dependency-direction.test.ts`'s `LAYERS` array** — the TS-side mechanical check,
+   reading each `packages/*/package.json`'s `dependencies`.
+3. **`python/pyproject.toml`'s `[tool.importlinter]` contracts** — the Python-side mechanical
+   check, listed just above.
+
+The TS and Python layer *orderings* are intentionally not identical — only the *direction* (no
+reverse flow) is contracted, not a shared total order. For example, TS's `LAYERS` places `lineage`
+above `host-core` (in the `sandbox | lineage | evals | host-rest | host-mcp-apps | client | otel`
+layer, one layer above `host-core`), while Python's `layers` places `lineage` below `composer` (in
+the `registry | intents | lineage | storage` layer, one layer below `composer`, two below
+`host_core`). Both are correct for their own language's actual import graph; don't "fix" one to
+match the other's ordering.
 
 ## Note: `ruff` intentionally does not check naming conventions
 

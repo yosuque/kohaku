@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from importlib import resources
 from typing import Any
 
 import pytest
@@ -37,8 +39,16 @@ def _def(
 
 
 class TestCoreCatalog:
-    def test_loads_16_components(self) -> None:
-        assert len(core_catalog().components) == 16
+    def test_loads_every_exported_component(self) -> None:
+        """The component count is derived from the exported catalog JSON (the TS source of
+        truth, `python/kohaku/src/kohaku/registry/_data/core-catalog.json`), not hard-coded —
+        so this test never needs a manual count bump when a component is added or removed."""
+        json_components = json.loads(
+            resources.files("kohaku.registry._data")
+            .joinpath("core-catalog.json")
+            .read_text("utf-8")
+        )["components"]
+        assert len(core_catalog().components) == len(json_components)
 
     def test_all_fallback_types_have_map_props(self) -> None:
         """Every fallbackType in the JSON has a corresponding map_props on the Python side

@@ -22,11 +22,19 @@ Key points that are easy to miss:
   `apps/sample-api/src/domain/seed` directly (see `REPO_ROOT` in
   `python/kohaku/tests/conftest.py`) — it assumes a full monorepo checkout, not
   the `python/` subtree in isolation.
-- The layer-direction contract is enforced twice, independently: TS via
-  `spec/test/dependency-direction.test.ts`'s `LAYERS` array, Python via
+- The layer-direction contract is enforced in **three** places, independently:
+  AGENTS.md's arrow sentence ("Dependency direction (no reverse flow)"), TS via
+  `spec/test/dependency-direction.test.ts`'s `LAYERS` array, and Python via
   `uv run lint-imports` against the `[tool.importlinter]` contracts in
   `python/pyproject.toml`. When a package's position in the dependency graph
-  changes, update both — neither is derived from the other.
+  changes, update all three — none is derived from the others. Only the
+  *direction* is contracted, not a shared ordering: TS's `LAYERS` places
+  `lineage` above `host-core`, Python's `layers` places it below `composer` —
+  that mismatch is intentional (see the runbook).
+- One TS source file mirrors to one Python module of the same name
+  (`initial-data.ts` → `initial_data.py`); `host_mcp/server.py` and
+  `lineage/promotion/service.py` are known exceptions still owing a split (see
+  the runbook's "Layout rule").
 
 Verification:
 ```bash

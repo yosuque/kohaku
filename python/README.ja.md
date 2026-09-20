@@ -303,6 +303,11 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
   返ってきたオブジェクトの検証は、退避前の元のスキーマに対して行われる。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
+- **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`)は未移植**。TS 側
+  (`packages/host-mcp-apps/src/tasks.ts`)では、リクエストがオプトインし、かつ
+  `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と
+  intent ツール群がタスク対応になる。`host_mcp` は compose ファミリを常に同期実行し、
+  リクエストの `_meta` が何を求めていてもこの拡張を宣言しない。
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch

@@ -19,9 +19,10 @@ Key points that are easy to miss:
 - `packages/registry/test/catalog.test.ts` pins the core catalog fingerprint
   (fnv1a64) as a literal string, and
   `python/kohaku/tests/registry/test_fingerprint.py` pins the same value as the
-  cross-language golden. `python/kohaku/tests/registry/test_catalog.py` also
-  hardcodes the component count (`test_loads_16_components`). All of these
-  need updating together.
+  cross-language golden. These two fingerprint pins need updating together.
+  `python/kohaku/tests/registry/test_catalog.py`'s component-count assertion
+  (`test_loads_every_exported_component`) is derived from the exported catalog
+  JSON rather than a separate hardcoded count, so it needs no manual update.
 - On the Python side, a fallback chain's `map_props` lives in
   `_FALLBACK_MAP_PROPS` (`python/kohaku/src/kohaku/registry/core/__init__.py`)
   — it's a hand-ported dict keyed by `fallbackType`, not derived from the JSON
