@@ -163,6 +163,42 @@ describe("PromotionsTab (characterization, pre-refactor)", () => {
     });
   });
 
+  it("offers the reject control only for statuses reject() can actually advance (in_use / candidate / in_review)", async () => {
+    // reject() in packages/lineage/src/promotion/service.ts only advances from in_use (via nominate),
+    // candidate (via review.start), and in_review (via review.reject). Every other non-terminal status
+    // enters none of its `if` steps and throws PromotionNotRejectedError, so the reject control must not
+    // be offered there.
+    const rejectableStatuses = ["in_use", "candidate", "in_review"];
+    const nonRejectableStatuses = [
+      "judging",
+      "judge_failed",
+      "changes_requested",
+      "approved",
+      "schema_proposed",
+      "published",
+      "rejected",
+      "withdrawn",
+    ];
+    for (const status of [...rejectableStatuses, ...nonRejectableStatuses]) {
+      const cand = candidate({ status });
+      const calls = stubFetch({
+        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+      });
+      const view = render(<PromotionsTab onNotice={onNotice} />);
+      await screen.findByText(cand.artifactId as string);
+
+      const rejectBtn = screen.queryByText(dict().admin.promotions.rejectButton);
+      if (rejectableStatuses.includes(status)) {
+        expect(rejectBtn, `expected reject control for status "${status}"`).not.toBeNull();
+      } else {
+        expect(rejectBtn, `did not expect reject control for status "${status}"`).toBeNull();
+      }
+
+      view.unmount();
+      void calls; // referenced only to keep stubFetch's call recording from being flagged unused
+    }
+  });
+
   it("lists every status filter option, in machine order", async () => {
     stubFetch({
       "POST /promotions/evaluate": () => jsonResponse({ candidates: [] }),
