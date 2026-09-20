@@ -732,9 +732,6 @@ importers:
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../spec-core
-      '@modelcontextprotocol/server':
-        specifier: 'catalog:'
-        version: 2.0.0
     devDependencies:
       '@kohaku-ui/llm':
         specifier: workspace:^
@@ -748,6 +745,9 @@ importers:
       '@modelcontextprotocol/ext-apps':
         specifier: 'catalog:'
         version: 2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.0.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.5)
+      '@modelcontextprotocol/server':
+        specifier: 'catalog:'
+        version: 2.0.0
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1
