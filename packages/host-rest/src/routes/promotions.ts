@@ -87,15 +87,33 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
   const { deps, getPrincipal, requireGovernance, withPromotionLock } = ctx;
 
   /**
-   * Shared skeleton for promotion transition routes (approve / reject / withdraw / actions). The check order
-   * is unchanged: unwired 501 -> governance authorization -> principal / tenant resolution -> body validation
-   * (prepare) -> artifact existence (owning-tenant) check -> execute the transition under the promotion lock
-   * (per-tenant serialization, preventing interleaving of concurrent approves, double onPublish firing, and
-   * lost updates) -> promotionError mapping.
+   * Shared preamble for all promotion routes (list / reconcile / evaluate / get / preview / the mutating
+   * per-artifact transitions via `promotionTransition` below). The check order is unchanged: unwired 501 ->
+   * governance authorization -> handler. On success, invokes `handler` with the narrowed (non-null)
+   * `promotions` API.
+   */
+  const withPromotions = async (
+    c: Context,
+    op: GovernanceOperation,
+    handler: (promotions: PromotionsApi) => Promise<Response>,
+  ): Promise<Response> => {
+    if (deps.promotions == null) return promotionsNotConfigured(c);
+    const promotions = deps.promotions;
+    const denied = await requireGovernance(c, op);
+    if (denied != null) return denied;
+    return handler(promotions);
+  };
+
+  /**
+   * Shared skeleton for promotion transition routes (approve / reject / withdraw / actions), expressed on top of
+   * `withPromotions`. The check order is unchanged: unwired 501 -> governance authorization -> principal / tenant
+   * resolution -> body validation (prepare) -> artifact existence (owning-tenant) check -> execute the transition
+   * under the promotion lock (per-tenant serialization, preventing interleaving of concurrent approves, double
+   * onPublish firing, and lost updates) -> promotionError mapping.
    * prepare validates the body and, if invalid, returns a 400 response (each route owns its message); if valid, it
    * returns a thunk that executes the transition (running inside withPromotionLock).
    */
-  const promotionTransition = async (
+  const promotionTransition = (
     c: Context,
     kind: GovernanceOperation["kind"],
     prepare: (transitionCtx: {
@@ -106,58 +124,56 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
       scope: { tenant?: string } | undefined;
     }) => Promise<Response | (() => Promise<unknown>)>,
   ): Promise<Response> => {
-    if (deps.promotions == null) return promotionsNotConfigured(c);
-    const promotions = deps.promotions;
     // Exclusive to /promotions/:artifactId/* routes (the generic Context type makes param string | undefined).
+    // A pure read off the already-parsed request, so evaluating it before the not-configured/governance checks
+    // below (inside withPromotions) has no side effect and no observable ordering difference.
     const artifactId = c.req.param("artifactId")!;
-    const denied = await requireGovernance(c, { kind, artifactId });
-    if (denied != null) return denied;
-    const principal = await getPrincipal(c);
-    const tenant = await resolveTenant(c, deps);
-    const scope = tenantScopeOf(tenant);
-    const transition = await prepare({ promotions, artifactId, principal, tenant, scope });
-    if (transition instanceof Response) return transition;
-    const notFound = await ensureArtifact(c, promotions, artifactId, scope);
-    if (notFound != null) return notFound;
-    try {
-      const candidate = await withPromotionLock(tenant, transition);
-      return c.json({ candidate });
-    } catch (e) {
-      return promotionError(c, deps, kind, e);
-    }
+    return withPromotions(c, { kind, artifactId }, async (promotions) => {
+      const principal = await getPrincipal(c);
+      const tenant = await resolveTenant(c, deps);
+      const scope = tenantScopeOf(tenant);
+      const transition = await prepare({ promotions, artifactId, principal, tenant, scope });
+      if (transition instanceof Response) return transition;
+      const notFound = await ensureArtifact(c, promotions, artifactId, scope);
+      if (notFound != null) return notFound;
+      try {
+        const candidate = await withPromotionLock(tenant, transition);
+        return c.json({ candidate });
+      } catch (e) {
+        return promotionError(c, deps, kind, e);
+      }
+    });
   };
 
   // GET is read-only (with list, no auto-nominate side effect; without it, fall back to the old behavior).
   // The auto-candidacy side effect (usage-log threshold -> candidate) is split off to POST /promotions/evaluate.
-  app.get("/promotions", async (c) => {
-    if (deps.promotions == null) return promotionsNotConfigured(c);
-    const promotions = deps.promotions;
-    const denied = await requireGovernance(c, { kind: "promotion.list" });
-    if (denied != null) return denied;
-    // The management-plane tenant comes from the session (deps.tenant) rather than the query (mix-up prevention).
-    const scope = await tenantScope(c, deps);
-    // For a PromotionsApi without a list implementation, this degrades to evaluateAndList (which includes the
-    // read-modify-write of auto-nominate), so serialize it under the same promotion lock as the act-family
-    // (prevents lost updates from interleaving with approve).
-    const listCandidates = (): Promise<unknown> =>
-      promotions.list != null
-        ? promotions.list(scope)
-        : withPromotionLock(scope?.tenant, () => promotions.evaluateAndList(scope));
-    // status filter. An empty string is treated as unspecified. Authorization stays promotion.list (read-only).
-    const status = c.req.query("status");
-    if (status != null && status !== "") {
-      // If listByStatus exists, query the state index (a snapshot projection, avoiding a full scan of all generated).
-      // For an unsupported PromotionsApi, filter the list/evaluateAndList result by status on the client side for compatibility.
-      const candidates =
-        promotions.listByStatus != null
-          ? await promotions.listByStatus(status, scope)
-          : ((await listCandidates()) as { status?: string }[]).filter(
-              (candidate) => candidate.status === status,
-            );
-      return c.json({ candidates });
-    }
-    return c.json({ candidates: await listCandidates() });
-  });
+  app.get("/promotions", (c) =>
+    withPromotions(c, { kind: "promotion.list" }, async (promotions) => {
+      // The management-plane tenant comes from the session (deps.tenant) rather than the query (mix-up prevention).
+      const scope = await tenantScope(c, deps);
+      // For a PromotionsApi without a list implementation, this degrades to evaluateAndList (which includes the
+      // read-modify-write of auto-nominate), so serialize it under the same promotion lock as the act-family
+      // (prevents lost updates from interleaving with approve).
+      const listCandidates = (): Promise<unknown> =>
+        promotions.list != null
+          ? promotions.list(scope)
+          : withPromotionLock(scope?.tenant, () => promotions.evaluateAndList(scope));
+      // status filter. An empty string is treated as unspecified. Authorization stays promotion.list (read-only).
+      const status = c.req.query("status");
+      if (status != null && status !== "") {
+        // If listByStatus exists, query the state index (a snapshot projection, avoiding a full scan of all generated).
+        // For an unsupported PromotionsApi, filter the list/evaluateAndList result by status on the client side for compatibility.
+        const candidates =
+          promotions.listByStatus != null
+            ? await promotions.listByStatus(status, scope)
+            : ((await listCandidates()) as { status?: string }[]).filter(
+                (candidate) => candidate.status === status,
+              );
+        return c.json({ candidates });
+      }
+      return c.json({ candidates: await listCandidates() });
+    }),
+  );
 
   // Operator escape hatch (#11): force the projection recovery from snapshot authority on demand, the same
   // recovery `reconcile` already runs at startup. Not scoped to one artifact or one tenant (it scans across
@@ -171,47 +187,43 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
   // apply a projection change against a candidate that has already moved on. Serializing this route against
   // every per-tenant bucket (two-phase locking) would close the window at the scan level too, but is a
   // structural follow-up, not implemented here.
-  app.post("/promotions/reconcile", async (c) => {
-    if (deps.promotions == null) return promotionsNotConfigured(c);
-    const promotions = deps.promotions;
-    const denied = await requireGovernance(c, { kind: "promotion.reconcile" });
-    if (denied != null) return denied;
-    if (promotions.reconcile == null) {
-      return c.json(errorBody("NOT_IMPLEMENTED", "promotions.reconcile is not implemented"), 501);
-    }
-    try {
-      const summary = await withPromotionLock(undefined, () => promotions.reconcile!());
-      return c.json({ summary });
-    } catch (e) {
-      return promotionError(c, deps, "promotion.reconcile", e);
-    }
-  });
+  app.post("/promotions/reconcile", (c) =>
+    withPromotions(c, { kind: "promotion.reconcile" }, async (promotions) => {
+      if (promotions.reconcile == null) {
+        return c.json(errorBody("NOT_IMPLEMENTED", "promotions.reconcile is not implemented"), 501);
+      }
+      try {
+        const summary = await withPromotionLock(undefined, () => promotions.reconcile!());
+        return c.json({ summary });
+      } catch (e) {
+        return promotionError(c, deps, "promotion.reconcile", e);
+      }
+    }),
+  );
 
-  app.post("/promotions/evaluate", async (c) => {
-    if (deps.promotions == null) return promotionsNotConfigured(c);
-    const promotions = deps.promotions;
-    const denied = await requireGovernance(c, { kind: "promotion.evaluate" });
-    if (denied != null) return denied;
-    // evaluateAndList includes the read-modify-write of auto-nominate (load -> transition -> persist), so serialize
-    // it under the same promotion lock as the act-family. Outside the lock, a concurrent approve
-    // that advanced the state could be overwritten from a stale snapshot (lost update).
-    const scope = await tenantScope(c, deps);
-    return c.json({
-      candidates: await withPromotionLock(scope?.tenant, () => promotions.evaluateAndList(scope)),
-    });
-  });
+  app.post("/promotions/evaluate", (c) =>
+    withPromotions(c, { kind: "promotion.evaluate" }, async (promotions) => {
+      // evaluateAndList includes the read-modify-write of auto-nominate (load -> transition -> persist), so serialize
+      // it under the same promotion lock as the act-family. Outside the lock, a concurrent approve
+      // that advanced the state could be overwritten from a stale snapshot (lost update).
+      const scope = await tenantScope(c, deps);
+      return c.json({
+        candidates: await withPromotionLock(scope?.tenant, () => promotions.evaluateAndList(scope)),
+      });
+    }),
+  );
 
-  app.get("/promotions/:artifactId", async (c) => {
-    if (deps.promotions == null) return promotionsNotConfigured(c);
-    const denied = await requireGovernance(c, {
-      kind: "promotion.get",
-      artifactId: c.req.param("artifactId"),
-    });
-    if (denied != null) return denied;
-    const loaded = await loadCandidateOrRespond(c, deps, c.req.param("artifactId"));
-    if (loaded instanceof Response) return loaded;
-    return c.json({ candidate: loaded });
-  });
+  app.get("/promotions/:artifactId", (c) =>
+    withPromotions(
+      c,
+      { kind: "promotion.get", artifactId: c.req.param("artifactId") },
+      async (_promotions) => {
+        const loaded = await loadCandidateOrRespond(c, deps, c.req.param("artifactId"));
+        if (loaded instanceof Response) return loaded;
+        return c.json({ candidate: loaded });
+      },
+    ),
+  );
 
   // Preview: returns the material to re-mount the review target itself (the recorded artifact).
   // It does not re-compose — if the LLM regenerated different content on a cache miss, it would show "something
@@ -220,35 +232,37 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
   // If a ref exists, issue a read capability scoped to just that single reference (POST because it mints a new token).
   // Authorization is the dedicated promotion.preview — a separate permission from viewing (promotion.get), so that
   // issuing data-read rights is not opened to the viewer role.
-  app.post("/promotions/:artifactId/preview", async (c) => {
-    if (deps.promotions == null) return promotionsNotConfigured(c);
-    const denied = await requireGovernance(c, {
-      kind: "promotion.preview",
-      artifactId: c.req.param("artifactId"),
-    });
-    if (denied != null) return denied;
-    const loaded = await loadCandidateOrRespond(c, deps, c.req.param("artifactId"));
-    if (loaded instanceof Response) return loaded;
-    const candidate = loaded as { html?: string; sha256?: string; ref?: string };
-    if (candidate.html == null || candidate.sha256 == null) {
-      return c.json(errorBody("NOT_FOUND", "no previewable artifact (html/sha256) is recorded"), 404);
-    }
-    // Paired with the sandbox bridge's allowlist (exact match on data.$ref), issue exactly one read scope.
-    // No write scope is included (preview is read-only).
-    const capability =
-      candidate.ref != null
-        ? await deps.authz.issueCapability(await getPrincipal(c), [{ kind: "read", ref: candidate.ref }], {
-            ttlSeconds: deps.capabilityTtlSeconds ?? DEFAULT_CAPABILITY_TTL_SECONDS,
-          })
-        : undefined;
-    return c.json({
-      preview: {
-        html: candidate.html,
-        sha256: candidate.sha256,
-        ...(candidate.ref != null && capability != null ? { ref: candidate.ref, capability } : {}),
+  app.post("/promotions/:artifactId/preview", (c) =>
+    withPromotions(
+      c,
+      { kind: "promotion.preview", artifactId: c.req.param("artifactId") },
+      async (_promotions) => {
+        const loaded = await loadCandidateOrRespond(c, deps, c.req.param("artifactId"));
+        if (loaded instanceof Response) return loaded;
+        const candidate = loaded as { html?: string; sha256?: string; ref?: string };
+        if (candidate.html == null || candidate.sha256 == null) {
+          return c.json(errorBody("NOT_FOUND", "no previewable artifact (html/sha256) is recorded"), 404);
+        }
+        // Paired with the sandbox bridge's allowlist (exact match on data.$ref), issue exactly one read scope.
+        // No write scope is included (preview is read-only).
+        const capability =
+          candidate.ref != null
+            ? await deps.authz.issueCapability(
+                await getPrincipal(c),
+                [{ kind: "read", ref: candidate.ref }],
+                { ttlSeconds: deps.capabilityTtlSeconds ?? DEFAULT_CAPABILITY_TTL_SECONDS },
+              )
+            : undefined;
+        return c.json({
+          preview: {
+            html: candidate.html,
+            sha256: candidate.sha256,
+            ...(candidate.ref != null && capability != null ? { ref: candidate.ref, capability } : {}),
+          },
+        });
       },
-    });
-  });
+    ),
+  );
 
   // "Approve and register": the bundle of judge -> human approval -> schema finalization -> publish (the reviewer is the server-side principal).
   app.post("/promotions/:artifactId/approve", (c) =>

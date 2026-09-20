@@ -304,6 +304,18 @@ importers:
 
   apps/sample-api:
     dependencies:
+      '@ai-sdk/anthropic':
+        specifier: 'catalog:'
+        version: 4.0.53(zod@4.6.5)
+      '@ai-sdk/google':
+        specifier: 'catalog:'
+        version: 4.0.70(zod@4.6.5)
+      '@ai-sdk/openai':
+        specifier: 'catalog:'
+        version: 4.0.66(zod@4.6.5)
+      '@ai-sdk/openai-compatible':
+        specifier: 'catalog:'
+        version: 3.0.48(zod@4.6.5)
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.1(hono@4.13.8)
@@ -371,6 +383,18 @@ importers:
 
   apps/sample-mcp:
     dependencies:
+      '@ai-sdk/anthropic':
+        specifier: 'catalog:'
+        version: 4.0.53(zod@4.6.5)
+      '@ai-sdk/google':
+        specifier: 'catalog:'
+        version: 4.0.70(zod@4.6.5)
+      '@ai-sdk/openai':
+        specifier: 'catalog:'
+        version: 4.0.66(zod@4.6.5)
+      '@ai-sdk/openai-compatible':
+        specifier: 'catalog:'
+        version: 3.0.48(zod@4.6.5)
       '@kohaku-ui-sample/api':
         specifier: workspace:^
         version: link:../sample-api
@@ -551,9 +575,6 @@ importers:
       semver:
         specifier: 'catalog:'
         version: 7.8.5
-      tsx:
-        specifier: 'catalog:'
-        version: 4.23.13
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -561,6 +582,9 @@ importers:
       '@types/semver':
         specifier: 'catalog:'
         version: 7.8.0
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -732,9 +756,6 @@ importers:
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../spec-core
-      '@modelcontextprotocol/server':
-        specifier: 'catalog:'
-        version: 2.0.0
     devDependencies:
       '@kohaku-ui/llm':
         specifier: workspace:^
@@ -748,6 +769,9 @@ importers:
       '@modelcontextprotocol/ext-apps':
         specifier: 'catalog:'
         version: 2.0.0(@modelcontextprotocol/client@2.0.0)(@modelcontextprotocol/core@2.0.0)(@modelcontextprotocol/server@2.0.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(zod@4.6.5)
+      '@modelcontextprotocol/server':
+        specifier: 'catalog:'
+        version: 2.0.0
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1
@@ -841,6 +865,10 @@ importers:
 
   packages/llm:
     dependencies:
+      ai:
+        specifier: 'catalog:'
+        version: 7.0.101(zod@4.6.5)
+    devDependencies:
       '@ai-sdk/anthropic':
         specifier: 'catalog:'
         version: 4.0.53(zod@4.6.5)
@@ -853,10 +881,6 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: 'catalog:'
         version: 3.0.48(zod@4.6.5)
-      ai:
-        specifier: 'catalog:'
-        version: 7.0.101(zod@4.6.5)
-    devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1

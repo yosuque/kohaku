@@ -6,9 +6,10 @@ export {
   type IssueCapabilityOptions,
   issueCapabilityForRefs,
   issueCapabilityForSpec,
+  issueSpecCapabilitySafely,
   WriteScopeDroppedError,
 } from "./capability.js";
-export { failOpen, isTypedHostError, notifyHook } from "./errors.js";
+export { clientMessageFor, errorMessage, failOpen, isTypedHostError, notifyHook } from "./errors.js";
 export {
   composeWithFixation,
   type FixationDeliveryHost,
@@ -20,4 +21,4 @@ export {
 export { type IntentSource, resolveIntent } from "./intent.js";
 export { createKeyedMutex, type KeyedMutex } from "./keyed-mutex.js";
 export { parseTraceContext, TRACEPARENT_RE } from "./trace-context.js";
-export { recordViewFallback, type ViewRecorder } from "./view-recorder.js";
+export { recordComposedResult, recordViewFallback, type ViewRecorder } from "./view-recorder.js";

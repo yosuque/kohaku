@@ -31,7 +31,11 @@ uv run lint-imports # contract check of layer dependency direction (no back-flow
 ```
 
 CI (the `python` job in `.github/workflows/ci.yml`) also runs everything in the order
-`ruff check` / `mypy` / `lint-imports` / `pytest`.
+`ruff check` / `mypy` / `lint-imports` / `pytest`, on Python 3.12 and 3.13.
+
+Installing the published package (rather than working in this uv workspace): `pip install kohaku-ui`
+(core), or `pip install "kohaku-ui[all]"` for every optional feature set (rest, mcp, llm, claude,
+gemini) in one go — see [python/kohaku/README.md](kohaku/README.md) for the individual extras.
 
 ## Running the sample
 
@@ -74,15 +78,29 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation)
 │  │  ├─ evals/            # ← packages/evals (judge / golden / FixtureLlm / distillation dataset export)
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
-│  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core)
+│  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
+│  │  │                    #   (← intent.ts) + allowed_actions.py (← allowed-actions.ts) +
+│  │  │                    #   action_effects.py (← action-effects.ts) + view_recorder.py
+│  │  │                    #   (← view-recorder.ts) + binding_ref.py (← binding-ref.ts) +
+│  │  │                    #   capability.py (← capability.ts) + fixation.py (← fixation.ts) +
+│  │  │                    #   keyed_mutex.py (← keyed-mutex.ts) + trace_context.py
+│  │  │                    #   (← trace-context.ts) + errors.py (← errors.ts)
 │  │  ├─ host_rest/        # ← packages/host-rest (FastAPI; SPEC §6.1)
-│  │  └─ host_mcp/         # ← packages/host-mcp-apps (MCP Apps profile)
+│  │  └─ host_mcp/         # ← packages/host-mcp-apps (MCP Apps profile): server.py (attach + tool
+│  │                       #   registration; the tool-error / safe-tool / error-observability helpers stay
+│  │                       #   here too, mirroring TS's server.ts) + types.py (← types.ts) +
+│  │                       #   initial_data.py (← initial-data.ts) + cache_hints.py (← cache-hints.ts) +
+│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py (unchanged)
 │  └─ tests/
 └─ examples/
    └─ sales-api/           # ← equivalent to apps/sample-api (REST :8790 + MCP stdio / Streamable HTTP :8791)
 ```
 
-The dependency direction is the same as TS: `spec → {registry, data_binding, intents} → {composer(llm), lineage} → host_core → {host_rest, host_mcp} → examples`.
+The dependency direction has no reverse flow, matching TS. Python's authoritative layer order is
+`python/pyproject.toml`'s `[tool.importlinter]` `layers` contract (enforced by `uv run lint-imports`); it
+is not restated here — see [the python-mirror runbook's "layer-direction contract" section](../docs/runbooks/python-mirror.md#the-layer-direction-contract-is-defined-in-three-places-not-two)
+for why the Python and TS layer *orderings* intentionally differ (only the *direction* is contracted, not
+a shared total order).
 `host_core` is a framework-free shared host core consumed by `host_rest` and `host_mcp` as thin adapters (the
 same relationship `packages/renderer-core` has with `renderer-react` / `renderer-wc` on the TS side): the
 fixation (L1→L0) delivery + staleness self-healing sequence (`compose_with_fixation` / `resolve_fixated_result`
@@ -90,7 +108,21 @@ fixation (L1→L0) delivery + staleness self-healing sequence (`compose_with_fix
 and fail-open observability-hook helpers (`notify_hook` / `fail_open`) live there once. The two profiles differ
 only in how a host schedules the self-heal call (`host_rest` awaits it serialized under its per-tenant fixation
 lock; `host_mcp` fires it off as a background task) — that strategy, plus each profile's own error-hook endpoint
-strings, stays host-supplied via a small `FixationDeliveryHost` object.
+strings, stays host-supplied via a small `FixationDeliveryHost` object. Read-ref parsing
+(`host_core.binding_ref.parse_invokable_ref`, shared by REST's `/binding/resolve`, MCP's `resolve_binding` tool,
+and MCP's initial-data preresolution — each host keeps its own verify step and error → response mapping around
+it), the post-write effects response (`host_core.action_effects.apply_action_effects`, fail-open — the write is
+already committed by the time it runs, so an effects failure never turns a successful write into a client-visible
+error), and the memoized write-action allowlist (`host_core.allowed_actions.create_allowed_actions`, used to drop
+a hallucinated/injected `action.invoke` action name from an issued capability's write scopes) also live there,
+each replacing what used to be a small duplicate in both `host_rest` and `host_mcp`. Fallback-view recording
+(`host_core.view_recorder.record_view_fallback`, shared by REST's `record_fallback_if_any` and MCP's
+`_audit_compose`) also lives there: the judgment source is `spec.provenance.fallback`, not the compose trace,
+since a capability-negotiation downgrade can recur on a cache hit and the trace alone would miss it. Intent
+resolution across the compose/event surfaces (`host_core.intent.resolve_intent`, the three `IntentSource`
+shapes — an already-structured Intent, an NL question, or a GUI event delta — shared by REST's
+`/intent/normalize`, `/compose(/stream)`, and `/events`, and by MCP's compose-tool nl/intent branch) lives
+there too.
 
 **MCP 2026-07-28** (see `docs/design.md`'s "MCP 2026-07-28 / SDK v2 migration" and "Python `mcp` 2.x migration"
 for the full picture): `host_mcp` runs on the `mcp` 2.x SDK (`kohaku-ui[mcp]` floor `>=2.2`; the low-level
@@ -313,6 +345,12 @@ surface (`AbortSignal.timeout` / `AbortSignal.any`, used throughout `adapters/_b
 - Internal APIs (functions and methods that do not appear on the wire) follow Python's
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
+- **The MCP Tasks extension (`io.modelcontextprotocol/tasks`) is not ported.** On the TS
+  side (`packages/host-mcp-apps/src/tasks.ts`), `kohaku_compose` and the intent tools
+  become task-capable for a request that opts in, but only when `AttachOptions.tasksEnabled`
+  is also turned on (default off). `host_mcp` always serves the compose family
+  synchronously and never declares the extension, regardless of what a request's
+  `_meta` asks for.
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant
 > reconcile for promotion → fully ported PromotedRegistry / projection / startup reconcile

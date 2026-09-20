@@ -7,7 +7,7 @@ convention (they are an API the product implements, not a wire contract). Record
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -295,6 +295,30 @@ def validate_promotion_state(raw: object) -> PromotionState | None:
     )
 
 
+@runtime_checkable
+class SupportsBatchPromotionStates(Protocol):
+    """Optional StoragePort extension: a single read-modify-write for several PromotionStates at once (TS's
+    real optional interface field `putPromotionStates?()` on packages/spec-core/src/ports.ts). Deliberately
+    not declared as a member of `StoragePort` itself -- see that Protocol's `put_promotion_states` comment
+    below for why forcing every implementation (including minimal test stubs) to grow it would be wrong.
+    Expressed as its own `runtime_checkable` Protocol so callers can check for support with
+    `isinstance(storage, SupportsBatchPromotionStates)` instead of a manual `getattr` probe. This is
+    **narrower** than that old probe, not just a typed version of it -- verified on CPython 3.14, matching
+    the documented behaviour of `runtime_checkable` since CPython 3.12: `isinstance` against a
+    `runtime_checkable` Protocol resolves each member via `inspect.getattr_static`, which does **not**
+    invoke `__getattr__` or descriptors, so a storage that only *dynamically* exposes
+    `put_promotion_states` (a tracing/instrumentation proxy built on `__getattr__`, or a bare `Mock`/
+    `AsyncMock`) passes the old `getattr(storage, "put_promotion_states", None)` probe but fails
+    `isinstance` here. It also excludes a `None`-valued class attribute of that name (the old `getattr`
+    probe would too, since its default is also `None`, so that one case does agree). Net effect: this
+    detection is deliberately narrower than TS's `storage.putPromotionStates != null` -- a `__getattr__`
+    based or mocked StoragePort that TS would treat as supporting the batch path falls back to the
+    per-state loop here instead. See `python/kohaku/tests/spec/test_ports.py` for tests pinning each case.
+    """
+
+    async def put_promotion_states(self, states: list[PromotionState]) -> None: ...
+
+
 class StoragePort(Protocol):
     """Persistence target for cache, Lineage, and promotion state (RLS multi-tenancy etc. are the product's choice).
 
@@ -330,15 +354,20 @@ class StoragePort(Protocol):
 
     # `put_promotion_states` (batch put) is a *genuinely optional* StoragePort extension -- unlike
     # `delete_fixation` above (a required method that an unsupporting implementation opts out of via
-    # NotImplementedError), this one is deliberately **not** declared as a Protocol member. TS's counterpart
-    # (packages/spec-core/src/ports.ts) is a real optional interface field (`putPromotionStates?()`), checked
-    # by callers via `storage.putPromotionStates != null`; Python has no equivalent "optional Protocol
-    # member" construct that would not force every existing StoragePort implementation across the codebase
-    # (including minimal test stubs that intentionally implement only a subset of methods) to grow a new
-    # method just to keep type-checking. Callers instead duck-type it at the call site the same way TS does
-    # at runtime: `getattr(storage, "put_promotion_states", None)`, falling back to looping
-    # put_promotion_state when absent. See kohaku.storage.file.FileStoragePort.put_promotion_states for the
-    # reference implementation (one read-modify-write for every state in the batch).
+    # NotImplementedError), this one is deliberately **not** declared as a member of this Protocol. TS's
+    # counterpart (packages/spec-core/src/ports.ts) is a real optional interface field
+    # (`putPromotionStates?()`), checked by callers via `storage.putPromotionStates != null`; Python has no
+    # equivalent "optional Protocol member" construct that would not force every existing StoragePort
+    # implementation across the codebase (including minimal test stubs that intentionally implement only a
+    # subset of methods) to grow a new method just to keep type-checking. Callers instead check for it at the
+    # call site via `isinstance(storage, SupportsBatchPromotionStates)` (see that Protocol above -- a typed
+    # check, but a **narrower** one than the old `getattr(storage, "put_promotion_states", None)` probe:
+    # `isinstance` against a `runtime_checkable` Protocol resolves via `inspect.getattr_static`, so it does
+    # not see a `__getattr__`-based dynamic attribute or a `Mock`/`AsyncMock`, and it excludes a
+    # `None`-valued attribute of that name -- deliberately narrower than TS's
+    # `storage.putPromotionStates != null`), falling back to looping put_promotion_state when absent. See
+    # kohaku.storage.file.FileStoragePort.put_promotion_states for the reference implementation (one
+    # read-modify-write for every state in the batch).
 
     async def get_fixation(
         self, intent_hash: str, tenant: str | None = None

@@ -7,6 +7,15 @@ import {
   ALWAYS_DENIED_ATTRS,
 } from "@kohaku-ui/spec-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// H10: the same vector table spec-core's own sandbox-dom.test.ts runs against its predicates
+// (isTagAllowed / isAttrAllowed / isAttrValueSafe / isStyleValueSafe), driven here through the real
+// domApplierMain instead of a re-implementation of those predicates — see the fixture's module docstring for
+// why this is a relative, test-only cross-package import rather than a spec-core `exports` addition.
+import {
+  ATTR_VECTORS,
+  STYLE_VALUE_VECTORS,
+  TAG_VECTORS,
+} from "../../../spec-core/test/fixtures/sandbox-allowlist-vectors.js";
 import { type DomApplierConfig, domApplierMain } from "../../src/guest/dom-applier.js";
 
 /**
@@ -510,5 +519,71 @@ describe("domApplierMain", () => {
     const event = new MouseEvent("click", { bubbles: true, cancelable: true });
     a.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  // H10: shared allow-list vectors (fixtures/sandbox-allowlist-vectors.ts), driven through the real
+  // domApplierMain rather than a re-implementation of its predicates. See spec-core's sandbox-dom.test.ts for
+  // the same table run against isTagAllowed / isAttrAllowed / isAttrValueSafe / isStyleValueSafe directly.
+  describe("shared allow-list vectors (sandbox applier side)", () => {
+    it.each(TAG_VECTORS)("tag $tag: landed in the real DOM === $applier", ({ tag, applier }) => {
+      domApplierMain(makeConfig());
+      completeHandshake();
+      const worker = FakeWorker.instances[0]!;
+      worker.emit({
+        t: "ops",
+        seq: 1,
+        ops: [
+          ["c", "n1", tag],
+          ["a", "body", "n1", null],
+        ],
+      });
+      const landed =
+        tag === "#text"
+          ? Array.from(document.body.childNodes).some((n) => n.nodeType === Node.TEXT_NODE)
+          : document.body.querySelector(tag.toLowerCase()) != null;
+      expect(landed).toBe(applier);
+    });
+
+    it.each(ATTR_VECTORS)(
+      'attr $name="$value": lands on the element === attrAllowed && valueSafe',
+      ({ name, value, attrAllowed, valueSafe }) => {
+        domApplierMain(makeConfig());
+        completeHandshake();
+        const worker = FakeWorker.instances[0]!;
+        worker.emit({
+          t: "ops",
+          seq: 1,
+          ops: [
+            ["c", "n1", "div"],
+            ["a", "body", "n1", null],
+            ["s", "n1", name, value],
+          ],
+        });
+        const el = document.body.querySelector("div")!;
+        const landed = el.getAttribute(name) === value;
+        expect(landed).toBe(attrAllowed && valueSafe);
+      },
+    );
+
+    it.each(STYLE_VALUE_VECTORS)(
+      'style $prop="$value": lands on the element === $safe',
+      ({ prop, value, safe }) => {
+        domApplierMain(makeConfig());
+        completeHandshake();
+        const worker = FakeWorker.instances[0]!;
+        worker.emit({
+          t: "ops",
+          seq: 1,
+          ops: [
+            ["c", "n1", "div"],
+            ["a", "body", "n1", null],
+            ["p", "n1", prop, value],
+          ],
+        });
+        const el = document.body.querySelector("div")! as HTMLElement;
+        const landed = el.style.getPropertyValue(prop) !== "";
+        expect(landed).toBe(safe);
+      },
+    );
   });
 });

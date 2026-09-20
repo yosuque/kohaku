@@ -3,6 +3,7 @@ import type { GenerationSchema } from "@kohaku-ui/registry";
 import type { CanonicalIntent, ComponentNode, EventBinding } from "@kohaku-ui/spec-core";
 import { checkBudget, sumSpentTokens } from "../budget.js";
 import type { ComposeBudget, ComposeContext } from "../context.js";
+import { errorMessage } from "../error-message.js";
 import type { ResolvedRefs } from "../refs.js";
 import type { ComposeAttempt } from "../trace.js";
 
@@ -157,13 +158,15 @@ export interface RepairLoopConfig {
   /** Loop upper bound (initial attempt + repair re-attempts). Typically resolveMaxAttempts(ctx). */
   maxAttempts: number;
   /**
-   * When to run the token/call budget guard before an LLM call:
-   * - "every": check before every attempt including the first (L1 — a zero budget skips the LLM entirely).
-   * - "afterFirst": check only before repair re-attempts, attempt > 0 (L2 — the initial call's budget was
-   *   already checked by compose.ts's runL2Stage immediately before generateL2 runs, so checking again at
-   *   attempt 0 here would double-fire onBudgetCheckError for the same decision).
+   * Whether to run the token/call budget guard before the LLM call for a given (0-based) `attempt`:
+   * - L1 passes `() => true` — check before every attempt including the first (a zero budget skips the
+   *   LLM entirely).
+   * - L2 passes `(attempt) => attempt > 0` — check only before repair re-attempts, not the first
+   *   (attempt 0), because the initial call's budget was already checked by compose.ts's runL2Stage
+   *   immediately before generateL2 runs, so checking again at attempt 0 here would double-fire
+   *   onBudgetCheckError for the same decision.
    */
-  budgetGate: "every" | "afterFirst";
+  shouldCheckBudget: (attempt: number) => boolean;
   /**
    * Performs one LLM call for `attempt`, given the repair feedback (issues) accumulated from the previous
    * attempt (empty on the first attempt). Must throw (an LlmError, ideally) on failure — the loop classifies
@@ -197,11 +200,9 @@ export interface RepairLoopConfig {
 export async function runRepairLoop(
   kind: "l1" | "l2",
   config: RepairLoopConfig,
-  budget: ComposeBudget | undefined,
-  onBudgetCheckError: ((error: unknown) => void) | undefined,
-  startedAt?: number,
-  deadlineSignal?: AbortSignal,
+  req: Pick<TierRequest, "budget" | "onBudgetCheckError" | "startedAt" | "deadlineSignal">,
 ): Promise<TierResult> {
+  const { budget, onBudgetCheckError, startedAt, deadlineSignal } = req;
   const attempts: ComposeAttempt[] = [];
   let feedback: string[] = [];
   let model: string | undefined;
@@ -214,7 +215,7 @@ export async function runRepairLoop(
   let budgetReason: string | undefined;
 
   for (let attempt = 0; attempt < config.maxAttempts; attempt++) {
-    if (budget != null && (config.budgetGate === "every" || attempt > 0)) {
+    if (budget != null && config.shouldCheckBudget(attempt)) {
       const elapsedMs = budget.deadlineMs != null && startedAt != null ? Date.now() - startedAt : undefined;
       const skipped = budgetSkipIfDenied(budget, attempts, onBudgetCheckError, model, elapsedMs);
       if (skipped != null) return skipped;
@@ -230,7 +231,7 @@ export async function runRepairLoop(
       attempts.push({
         kind,
         ok: false,
-        issues: [e instanceof Error ? e.message : String(e)],
+        issues: [errorMessage(e)],
       });
       if (e instanceof LlmError && e.code === "ABORTED") {
         // deadlineSignal fires only from budget.ts's createDeadlineGuard, never from the caller's own

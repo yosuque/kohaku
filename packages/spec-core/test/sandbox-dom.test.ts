@@ -12,6 +12,7 @@ import {
   isTagAllowed,
   toKebabCase,
 } from "../src/schema/sandbox-dom.js";
+import { ATTR_VECTORS, STYLE_VALUE_VECTORS, TAG_VECTORS } from "./fixtures/sandbox-allowlist-vectors.js";
 
 describe("sandbox DOM allowlist (shape)", () => {
   it("ALLOWED_TAGS is a non-empty lowercase set with no overlap with EXPLICITLY_DENIED_TAGS", () => {
@@ -103,4 +104,30 @@ describe("sandbox DOM allowlist (shape)", () => {
     expect(isStyleValueSafe("@import url(evil.css)")).toBe(false);
     expect(isStyleValueSafe("10px solid red")).toBe(true);
   });
+});
+
+// H10: the same vector table (fixtures/sandbox-allowlist-vectors.ts) is also run, unmodified, through the
+// real sandbox guest applier in packages/sandbox/test/guest/dom-applier.test.ts — see that file and the
+// fixture's own module docstring. A drift between the two allow-lists fails a row on one side or the other.
+describe("sandbox DOM allowlist (shared vectors, spec-core side)", () => {
+  it.each(TAG_VECTORS)("isTagAllowed($tag) === $specCore", ({ tag, specCore }) => {
+    expect(isTagAllowed(tag)).toBe(specCore);
+  });
+
+  it.each(ATTR_VECTORS)(
+    "isAttrAllowed($name) === $attrAllowed, isAttrValueSafe($value) === $valueSafe",
+    ({ name, value, attrAllowed, valueSafe }) => {
+      expect(isAttrAllowed(name)).toBe(attrAllowed);
+      expect(isAttrValueSafe(value)).toBe(valueSafe);
+    },
+  );
+
+  it.each(STYLE_VALUE_VECTORS)(
+    "isStyleValueSafe($value) === $safe (prop $prop is itself allowed)",
+    ({ prop, value, safe }) => {
+      // Sanity: the prop held constant per row is itself allowed, so the vector isolates value safety.
+      expect(isStylePropAllowed(prop)).toBe(true);
+      expect(isStyleValueSafe(value)).toBe(safe);
+    },
+  );
 });

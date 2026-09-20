@@ -7,8 +7,11 @@ Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation 
 (a declarative UI Spec), with generation separated from rendering.
 
 ```bash
-npm install @kohaku-ui/host-mcp-apps zod
+npm install @kohaku-ui/host-mcp-apps @modelcontextprotocol/server zod
 ```
+
+`@modelcontextprotocol/server` is a peer dependency because `attachKohakuToMcpServer` attaches to
+the `McpServer` your application constructs — one SDK copy, one set of classes.
 
 The packages in this scope share a single version and are designed to be installed together.
 

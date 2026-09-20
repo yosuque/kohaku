@@ -21,6 +21,29 @@ export function isTypedHostError(e: unknown): boolean {
 }
 
 /**
+ * `e.message` for an Error, else its `String()` form. Shared building block for both host profiles'
+ * observability-hook payloads and for the "typed error message passes through" half of clientMessageFor
+ * below (the same idiom was independently copied at 7 call sites across host-rest / host-mcp-apps before
+ * this was extracted — see the H3 finding).
+ */
+export function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * The client-visible message for a caught exception: the error's own message when it is a "typed" host
+ * error (see isTypedHostError's doc comment for the safe/unsafe distinction), otherwise `fallback` — an
+ * arbitrary/unexpected exception's message must never reach the client verbatim (it may carry internals such
+ * as SQL fragments, stack-trace text, or library-internal wording). Shared building block for both host
+ * profiles' failure-path responses (REST's per-route INTENT_INVALID / COMPOSE_FAILED / FIXATION_INTERNAL_ERROR
+ * fallbacks, MCP's TOOL_INTERNAL_ERROR fallback); the original error still reaches the observability hook via
+ * notifyHook/reportHostError regardless, so nothing is lost for diagnosis.
+ */
+export function clientMessageFor(e: unknown, fallback: string): string {
+  return isTypedHostError(e) ? errorMessage(e) : fallback;
+}
+
+/**
  * Calls an optional observability hook with `info`, swallowing both a synchronous throw and a rejected
  * Promise. Shared building block for both host profiles' failure-path observability (REST's onError /
  * MCP's onError): silent when the hook is unwired, and a throw from the hook itself must never propagate to
@@ -40,8 +63,9 @@ export async function notifyHook<I>(
 
 /**
  * Runs `fn`, and on failure runs `onFailure(error)` instead of rethrowing. Shared building block for
- * fail-open audit recording (REST's safeRecord / MCP's composeAndAudit): prioritizes delivery availability by
- * swallowing a recording failure rather than letting it take down an otherwise-successful response.
+ * fail-open audit recording (view-recorder.ts's recordComposedResult, consumed by both host profiles, and
+ * host-mcp-apps' `${prefix}_event` interacted recording): prioritizes delivery availability by swallowing a
+ * recording failure rather than letting it take down an otherwise-successful response.
  */
 export async function failOpen(
   fn: () => Promise<void>,

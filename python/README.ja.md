@@ -29,7 +29,12 @@ uv run ruff check  # lint
 uv run lint-imports # レイヤ依存方向(逆流禁止)の契約検査(import-linter)
 ```
 
-CI(`.github/workflows/ci.yml` の `python` ジョブ)も `ruff check` / `mypy` / `lint-imports` / `pytest` の順で全部を実行する。
+CI(`.github/workflows/ci.yml` の `python` ジョブ)も `ruff check` / `mypy` / `lint-imports` / `pytest` の順で、
+Python 3.12 と 3.13 の両方で全部を実行する。
+
+この uv workspace で作業するのではなく公開パッケージをインストールする場合: `pip install kohaku-ui`(core)、
+または全オプション機能(rest, mcp, llm, claude, gemini)をまとめて入れる `pip install "kohaku-ui[all]"`。
+個々の extras は [python/kohaku/README.md](kohaku/README.md) を参照。
 
 ## サンプルの起動
 
@@ -72,15 +77,28 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)
 │  │  ├─ evals/            # ← packages/evals(judge / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
-│  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核)
+│  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
+│  │  │                    #   (← intent.ts)+ allowed_actions.py(← allowed-actions.ts)+
+│  │  │                    #   action_effects.py(← action-effects.ts)+ view_recorder.py
+│  │  │                    #   (← view-recorder.ts)+ binding_ref.py(← binding-ref.ts)+
+│  │  │                    #   capability.py(← capability.ts)+ fixation.py(← fixation.ts)+
+│  │  │                    #   keyed_mutex.py(← keyed-mutex.ts)+ trace_context.py
+│  │  │                    #   (← trace-context.ts)+ errors.py(← errors.ts)
 │  │  ├─ host_rest/        # ← packages/host-rest(FastAPI。SPEC §6.1)
-│  │  └─ host_mcp/         # ← packages/host-mcp-apps(MCP Apps プロファイル)
+│  │  └─ host_mcp/         # ← packages/host-mcp-apps(MCP Apps プロファイル): server.py(attach・
+│  │                       #   ツール登録。tool-error / safe-tool / エラー可観測性ヘルパも TS の server.ts
+│  │                       #   と同様ここに残す)+ types.py(← types.ts)+ initial_data.py
+│  │                       #   (← initial-data.ts)+ cache_hints.py(← cache-hints.ts)+
+│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py(変更なし)
 │  └─ tests/
 └─ examples/
    └─ sales-api/           # ← apps/sample-api 相当(REST :8790 + MCP stdio / Streamable HTTP :8791)
 ```
 
-依存方向は TS と同じ: `spec → {registry, data_binding, intents} → {composer(llm), lineage} → host_core → {host_rest, host_mcp} → examples`。
+依存方向は TS と同様、逆流はない。Python の正式なレイヤー順序は `python/pyproject.toml` の
+`[tool.importlinter]` の `layers` 契約(`uv run lint-imports` が検査)であり、ここでは再掲しない —
+Python と TS のレイヤー**順序**が意図的に異なる理由(契約されているのは**方向**のみで、共通の全順序ではない)は
+[python-mirror ランブックの「レイヤー方向の契約は三箇所で定義されている」節](../docs/runbooks/python-mirror.md#the-layer-direction-contract-is-defined-in-three-places-not-two)を参照。
 `host_core` は `host_rest` / `host_mcp` が薄いアダプタとして消費する framework-free な共有ホスト核(TS 側の
 `packages/renderer-core` と `renderer-react` / `renderer-wc` の関係と同型): 固定化(L1→L0)配信 + 陳腐化自己修復の一連
 (`compose_with_fixation` / `resolve_fixated_result` / `settle_fixation`)、生成済み Spec への capability 発行
@@ -88,6 +106,19 @@ python/
 一度だけそこに存在する。両プロファイルの違いは自己修復呼び出しのスケジューリング方式のみ(`host_rest` は自身の
 テナント別固定化ロックで直列化して await し、`host_mcp` はバックグラウンドタスクとして発火する)。この戦略と各
 プロファイル固有のエラーフック文字列は、小さな `FixationDeliveryHost` オブジェクトを介してホスト側が供給する。
+read-ref のパース(`host_core.binding_ref.parse_invokable_ref`。REST の `/binding/resolve`、MCP の
+`resolve_binding` ツール、MCP の initial-data 事前解決で共有され、verify ステップとエラー→レスポンス変換は各ホスト
+側に残る)、書き込み後の effects レスポンス整形(`host_core.action_effects.apply_action_effects`。fail-open —
+書き込みは実行済みのため、effects の失敗が成功した書き込みをクライアント向けエラーに見せることはない)、
+書き込みアクションの許可集合のメモ化(`host_core.allowed_actions.create_allowed_actions`。ハルシネート/注入された
+`action.invoke` アクション名が発行済み capability の write scope に紛れ込むのを防ぐ)も同様にそこへ一度だけ存在し、
+それぞれ `host_rest` / `host_mcp` 双方にあった小さな重複を置き換える。fallback ビューの記録
+(`host_core.view_recorder.record_view_fallback`。REST の `record_fallback_if_any` と MCP の `_audit_compose` で
+共有)もそこに存在する: 判定根拠は compose トレースではなく `spec.provenance.fallback` である — capability
+negotiation によるダウングレードはキャッシュヒット時にも再発しうるため、トレースだけではそれを見逃す。
+compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_intent`。3 つの `IntentSource` 形
+— 構造化済みの Intent、NL の質問、GUI イベントの差分 — を REST の `/intent/normalize`・`/compose(/stream)`・
+`/events`、および MCP の compose ツールの nl/intent 分岐で共有)もそこに存在する。
 
 **MCP 2026-07-28**(全体像は `docs/design.ja.md` の「MCP 2026-07-28 / SDK v2 移行」と「Python `mcp` 2.x 移行」
 参照): `host_mcp` は `mcp` 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)上で動く — 低レベル `Server` のハンドラ
@@ -281,6 +312,11 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
   返ってきたオブジェクトの検証は、退避前の元のスキーマに対して行われる。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
+- **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`)は未移植**。TS 側
+  (`packages/host-mcp-apps/src/tasks.ts`)では、リクエストがオプトインし、かつ
+  `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と
+  intent ツール群がタスク対応になる。`host_mcp` は compose ファミリを常に同期実行し、
+  リクエストの `_meta` が何を求めていてもこの拡張を宣言しない。
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch

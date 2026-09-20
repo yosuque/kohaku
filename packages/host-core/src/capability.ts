@@ -61,6 +61,37 @@ function filterAllowedScopes(scopes: Scope[], options?: IssueCapabilityOptions):
 }
 
 /**
+ * The fail-closed capability issuance shared by both host profiles (REST's issueSpecCapability wrapper and
+ * MCP's composeAndPackage): resolves `allowedActions` (each host's memoized DomainPort.listOperations()
+ * reader), then issues via issueCapabilityForSpec with that set as the write-scope filter. If
+ * `allowedActions` itself rejects, the rejection is reported and the capability is still issued but
+ * fail-closed for writes (an empty allowed set — every write scope is dropped); every dropped write scope is
+ * reported as a WriteScopeDroppedError. Delivery proceeds either way (fail-open on both paths).
+ * Contract: `report` must not reject — the dropped-action report (`onDroppedAction`) is fire-and-forgotten,
+ * so a rejecting `report` would produce an unhandled rejection rather than propagating here.
+ */
+export async function issueSpecCapabilitySafely(
+  authz: AuthzPort,
+  principal: Principal,
+  spec: UISpec,
+  allowedActions: () => Promise<ReadonlySet<string>>,
+  report: (error: unknown) => void | Promise<void>,
+  ttlSeconds?: number,
+): Promise<string> {
+  let allowed: ReadonlySet<string>;
+  try {
+    allowed = await allowedActions();
+  } catch (e) {
+    await report(e);
+    allowed = new Set();
+  }
+  return issueCapabilityForSpec(authz, principal, spec, ttlSeconds, {
+    allowedActions: allowed,
+    onDroppedAction: (action) => void report(new WriteScopeDroppedError(action)),
+  });
+}
+
+/**
  * Issues a read capability covering an explicit set of resolved QueryHandle URIs, rather than a Spec's
  * declarations. Used where the caller already knows the effective refs ahead of a full Spec — e.g. REST's
  * streaming skeleton, which has no $ref until the final event. Refs are deduped before becoming scopes.

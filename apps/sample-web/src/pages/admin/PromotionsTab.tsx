@@ -34,9 +34,12 @@ const STATUS_FILTERS = [
   "all",
   "in_use",
   "candidate",
+  "judging",
+  "judge_failed",
   "in_review",
   "changes_requested",
   "approved",
+  "schema_proposed",
   "published",
   "rejected",
   "withdrawn",
@@ -323,6 +326,12 @@ function PromotionCard(props: {
   const isChangesRequested = candidate.status === "changes_requested";
   // "Request changes (send back)" is offered only for candidate / in_review (drops to changes_requested via actions).
   const canRequestChanges = candidate.status === "candidate" || candidate.status === "in_review";
+  // "Reject" is offered only for in_use / candidate / in_review, the three statuses promotions.reject()
+  // (packages/lineage/src/promotion/service.ts) can actually advance from (via nominate / review.start /
+  // review.reject respectively). Any other non-terminal status enters none of reject()'s `if` steps and
+  // throws PromotionNotRejectedError, so offering the button there would only ever produce an error banner.
+  const canReject =
+    candidate.status === "in_use" || candidate.status === "candidate" || candidate.status === "in_review";
   const built = buildDraftPayload(draft);
 
   return (
@@ -426,14 +435,16 @@ function PromotionCard(props: {
                 {t.admin.promotions.withdrawButton}
               </button>
             ) : (
-              <button
-                type="button"
-                disabled={props.busy}
-                onClick={() => void props.onAction("reject")}
-                style={smallButton}
-              >
-                {t.admin.promotions.rejectButton}
-              </button>
+              canReject && (
+                <button
+                  type="button"
+                  disabled={props.busy}
+                  onClick={() => void props.onAction("reject")}
+                  style={smallButton}
+                >
+                  {t.admin.promotions.rejectButton}
+                </button>
+              )
             )}
           </div>
         </div>

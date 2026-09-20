@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,16 @@ from kohaku.lineage import (
     create_lineage,
     create_promotions,
 )
-from kohaku.spec import LineageActor, LineageEventRecord, LineageFilter, Principal, PromotionState
+from kohaku.lineage.promotion.service import _index_latest_generated, _usage_index_key
+from kohaku.spec import (
+    FixationRecord,
+    LineageActor,
+    LineageEventRecord,
+    LineageFilter,
+    Principal,
+    PromotionState,
+    UISpec,
+)
 from kohaku.storage import FileStoragePort
 
 from ._helpers import seed
@@ -189,6 +199,147 @@ def test_list_readonly_evaluate_nominates(tmp_path: Path) -> None:
         assert evaluated[0].status == "candidate"
         nominated = [e for e in await storage.list_lineage() if e.type == "component.nominated"]
         assert len(nominated) == 1
+
+    asyncio.run(run())
+
+
+# --- _persist_many: batch put_promotion_states support (SupportsBatchPromotionStates) ---
+
+
+class _NoBatchPutStorage:
+    """A StoragePort implementation composed around (not subclassing) a FileStoragePort, so it structurally
+    lacks `put_promotion_states` entirely -- proving `isinstance(storage, SupportsBatchPromotionStates)` is
+    False for it and `_persist_many` still falls back to one `put_promotion_state` call per candidate."""
+
+    def __init__(self, inner: FileStoragePort) -> None:
+        self._inner = inner
+        self.put_promotion_state_calls: list[PromotionState] = []
+
+    async def get_spec_cache(self, key: str) -> UISpec | None:
+        return await self._inner.get_spec_cache(key)
+
+    async def put_spec_cache(
+        self, key: str, spec: UISpec, *, ttl_seconds: int | None = None
+    ) -> None:
+        await self._inner.put_spec_cache(key, spec, ttl_seconds=ttl_seconds)
+
+    async def append_lineage(self, event: LineageEventRecord) -> None:
+        await self._inner.append_lineage(event)
+
+    async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
+        return await self._inner.list_lineage(filter)
+
+    async def get_promotion_state(
+        self, artifact_id: str, tenant: str | None = None
+    ) -> PromotionState | None:
+        return await self._inner.get_promotion_state(artifact_id, tenant)
+
+    async def put_promotion_state(self, state: PromotionState) -> None:
+        self.put_promotion_state_calls.append(state)
+        await self._inner.put_promotion_state(state)
+
+    async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]:
+        return await self._inner.list_promotion_states(tenant)
+
+    async def get_fixation(
+        self, intent_hash: str, tenant: str | None = None
+    ) -> FixationRecord | None:
+        return await self._inner.get_fixation(intent_hash, tenant)
+
+    async def put_fixation(self, record: FixationRecord, *, if_present: bool = False) -> None:
+        await self._inner.put_fixation(record, if_present=if_present)
+
+    async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]:
+        return await self._inner.list_fixations(tenant)
+
+    async def delete_fixation(self, intent_hash: str, tenant: str | None = None) -> None:
+        await self._inner.delete_fixation(intent_hash, tenant)
+
+
+class _BatchPutSpyStorage(FileStoragePort):
+    """A FileStoragePort subclass that records every `put_promotion_states` / `put_promotion_state` call
+    while still delegating to the real implementation, proving `_persist_many` routes a batch nominate
+    through the single `put_promotion_states` call (not one `put_promotion_state` call per candidate) once
+    `isinstance(storage, SupportsBatchPromotionStates)` is True."""
+
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__(data_dir)
+        self.batch_calls: list[list[PromotionState]] = []
+        self.single_calls: list[PromotionState] = []
+
+    async def put_promotion_states(self, states: list[PromotionState]) -> None:
+        self.batch_calls.append(list(states))
+        await super().put_promotion_states(states)
+
+    async def put_promotion_state(self, state: PromotionState) -> None:
+        self.single_calls.append(state)
+        await super().put_promotion_state(state)
+
+
+def test_persist_many_falls_back_to_one_by_one_without_batch_support(tmp_path: Path) -> None:
+    """A storage without `put_promotion_states` (SupportsBatchPromotionStates is False for it) must still
+    persist every nominated candidate, one `put_promotion_state` call at a time."""
+
+    async def run() -> None:
+        inner = FileStoragePort(tmp_path)
+        storage = _NoBatchPutStorage(inner)
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=2, minDistinctSessions=1, judgeBlocking=False),
+        )
+        # Seeded through `inner` (the _seed_generated / seed helpers are typed for the concrete
+        # FileStoragePort); `storage` delegates every StoragePort call to the same `inner`, so both see the
+        # identical lineage state.
+        await _seed_generated(inner, "a1")
+        await seed(inner, "component.used", {"artifactId": "a1", "sessionId": "s1"})
+        await seed(inner, "component.used", {"artifactId": "a1", "sessionId": "s2"})
+        await _seed_generated(inner, "a2")
+        await seed(inner, "component.used", {"artifactId": "a2", "sessionId": "s1"})
+        await seed(inner, "component.used", {"artifactId": "a2", "sessionId": "s2"})
+
+        evaluated = await promotions.evaluate_and_list()
+        assert {c.artifactId for c in evaluated if c.status == "candidate"} == {"a1", "a2"}
+
+        # One put_promotion_state call per nominated candidate -- the batch was never available.
+        assert {s.artifactId for s in storage.put_promotion_state_calls} == {"a1", "a2"}
+        assert len(storage.put_promotion_state_calls) == 2
+
+        assert (await storage.get_promotion_state("a1")).status == "candidate"  # type: ignore[union-attr]
+        assert (await storage.get_promotion_state("a2")).status == "candidate"  # type: ignore[union-attr]
+
+    asyncio.run(run())
+
+
+def test_persist_many_uses_single_batch_call_when_supported(tmp_path: Path) -> None:
+    """A storage that implements `put_promotion_states` (SupportsBatchPromotionStates is True for it) must
+    have every nominated candidate persisted through a single batch call, not one `put_promotion_state` call
+    per candidate."""
+
+    async def run() -> None:
+        storage = _BatchPutSpyStorage(tmp_path)
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=2, minDistinctSessions=1, judgeBlocking=False),
+        )
+        await _seed_generated(storage, "a1")
+        await seed(storage, "component.used", {"artifactId": "a1", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "a1", "sessionId": "s2"})
+        await _seed_generated(storage, "a2")
+        await seed(storage, "component.used", {"artifactId": "a2", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "a2", "sessionId": "s2"})
+
+        evaluated = await promotions.evaluate_and_list()
+        assert {c.artifactId for c in evaluated if c.status == "candidate"} == {"a1", "a2"}
+
+        # Exactly one batch call, carrying both states -- and put_promotion_state (singular) never fires.
+        assert len(storage.batch_calls) == 1
+        assert {s.artifactId for s in storage.batch_calls[0]} == {"a1", "a2"}
+        assert storage.single_calls == []
+
+        assert (await storage.get_promotion_state("a1")).status == "candidate"  # type: ignore[union-attr]
+        assert (await storage.get_promotion_state("a2")).status == "candidate"  # type: ignore[union-attr]
 
     asyncio.run(run())
 
@@ -1355,6 +1506,99 @@ def test_approve_recovers_from_judge_failed(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+# --- Task 4: approve() resumes correctly from every PromotionStatus, including "judging" ---
+
+
+@pytest.mark.parametrize(
+    "status,outcome",
+    [
+        ("in_use", "published"),
+        ("candidate", "published"),
+        ("judging", "published"),
+        ("judge_failed", "published"),
+        ("in_review", "published"),
+        ("changes_requested", "published"),
+        ("approved", "published"),
+        ("schema_proposed", "published"),
+        ("published", "published"),
+        ("rejected", "error"),
+        ("withdrawn", "error"),
+    ],
+)
+def test_approve_resumes_from_every_status(tmp_path: Path, status: str, outcome: str) -> None:
+    """approve() must resume correctly from every one of the 11 PromotionStatus values. Before the fix, a
+    candidate persisted at "judging" (e.g. the process died between judge.start and judge.result) matched none
+    of approve()'s branches and raised PromotionNotPublishedError, even though the machine's
+    judging --judge.result--> in_review | judge_failed edge exists. Mirrors the TS side's
+    promotion-approve-states.test.ts table; the "judging" row is the only one whose outcome changed."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        artifact_id = f"art-{status}"
+        await _seed_generated(storage, artifact_id, html="<html></html>")
+        if status != "in_use":
+            # publish requires candidate.draft to already be set for schema_proposed/published (it was set by
+            # a prior schema.propose); every other status reaches schema.propose via approve()'s own chain.
+            needs_draft = status in ("schema_proposed", "published")
+            await _put_state(storage, artifact_id, status, draft=DRAFT if needs_draft else None)
+
+        applied: list[str] = []
+
+        async def judge(candidate: PromotionCandidate, context: JudgeContext) -> dict[str, Any]:
+            return {"pass": True, "score": 1.0}
+
+        async def on_publish(ctx: PublishContext) -> None:
+            applied.append(ctx.artifactId)
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage), storage=storage, judge=judge, on_publish=on_publish
+        )
+
+        if outcome == "published":
+            result = await promotions.approve(artifact_id, DRAFT, REVIEWER)
+            assert result.status == "published"
+            state = await storage.get_promotion_state(artifact_id)
+            assert state is not None and state.status == "published"
+        else:
+            with pytest.raises(PromotionNotPublishedError):
+                await promotions.approve(artifact_id, DRAFT, REVIEWER)
+            assert applied == []
+
+    asyncio.run(run())
+
+
+async def _assert_approve_calls_judge_once(storage: FileStoragePort, artifact_id: str) -> None:
+    judge_calls = {"n": 0}
+
+    async def judge(candidate: PromotionCandidate, context: JudgeContext) -> dict[str, Any]:
+        judge_calls["n"] += 1
+        return {"pass": True, "score": 1.0}
+
+    promotions = create_promotions(
+        lineage=create_lineage(storage), storage=storage, judge=judge, on_publish=lambda ctx: _noop()
+    )
+
+    result = await promotions.approve(artifact_id, DRAFT, REVIEWER)
+    assert result.status == "published"
+    assert judge_calls["n"] == 1
+
+
+@pytest.mark.parametrize("status", ["judging", "candidate"])
+def test_approve_resumes_judging_without_double_judging(tmp_path: Path, status: str) -> None:
+    """approve() resuming from "judging" (a crash between judge.start and judge.result) must call the judge
+    exactly once. The from-"candidate" path is checked alongside it to confirm the new judging-resume branch is
+    never re-entered for a chain that already ran the judge stage inside the earlier candidate branch."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        artifact_id = "a1"
+        await _seed_generated(storage, artifact_id, html="<html></html>")
+        await _put_state(storage, artifact_id, status)
+        await _assert_approve_calls_judge_once(storage, artifact_id)
+
+    asyncio.run(run())
+
+
 # --- #11: unpublish audit fail-open + reconcile summary/backfill ---
 
 
@@ -1784,3 +2028,62 @@ def test_list_by_status_list_lineage_calls_do_not_scale_with_candidate_count(tmp
         assert storage.list_lineage_calls == 2
 
     asyncio.run(run())
+
+
+# --- _usage_index_key / _index_latest_generated (mirrors TS usage.test.ts) --------------------------------
+
+
+def test_usage_index_key_is_collision_free_for_space_containing_values() -> None:
+    # The JSON-array encoding is collision-free for any input, including a tenant/artifact_id pair that
+    # contains the delimiter the previous encoding used (a Unit Separator, not a space -- see
+    # _usage_index_key's docstring for what the previous encoding actually was).
+    assert _usage_index_key("a b", "c") != _usage_index_key("a", "b c")
+
+
+def test_usage_index_key_treats_none_tenant_and_empty_string_tenant_as_distinct() -> None:
+    # R2: no existing caller relies on tenant=None and tenant="" producing the same key.
+    assert _usage_index_key(None, "x") != _usage_index_key("", "x")
+
+
+def test_usage_index_key_is_a_json_array_of_tenant_and_artifact_id() -> None:
+    assert _usage_index_key("acme", "art-1") == json.dumps(["acme", "art-1"], separators=(",", ":"))
+    assert _usage_index_key(None, "art-1") == json.dumps([None, "art-1"], separators=(",", ":"))
+
+
+def _generated_event(ts: str, tenant: str | None, artifact_id: object) -> LineageEventRecord:
+    return LineageEventRecord(
+        id=f"g-{ts}",
+        ts=ts,
+        actor=LineageActor(kind="model"),
+        type="component.generated",
+        payload={"artifactId": artifact_id},
+        tenant=tenant,
+    )
+
+
+def test_index_latest_generated_keeps_only_the_greatest_ts_event_per_key() -> None:
+    older = _generated_event("2026-01-01T00:00:00.000Z", "acme", "art-1")
+    newer = _generated_event("2026-01-02T00:00:00.000Z", "acme", "art-1")
+    result = _index_latest_generated([older, newer])
+    assert len(result) == 1
+    assert result[_usage_index_key("acme", "art-1")] is newer
+
+
+def test_index_latest_generated_keeps_entries_separate_across_distinct_keys() -> None:
+    a = _generated_event("2026-01-01T00:00:00.000Z", "acme", "art-1")
+    b = _generated_event("2026-01-01T00:00:00.000Z", "other", "art-1")
+    c = _generated_event("2026-01-01T00:00:00.000Z", None, "art-2")
+    result = _index_latest_generated([a, b, c])
+    assert len(result) == 3
+    assert result[_usage_index_key("acme", "art-1")] is a
+    assert result[_usage_index_key("other", "art-1")] is b
+    assert result[_usage_index_key(None, "art-2")] is c
+
+
+def test_index_latest_generated_skips_events_whose_artifact_id_is_not_a_string() -> None:
+    missing = dataclasses.replace(_generated_event("2026-01-01T00:00:00.000Z", "acme", None), payload={})
+    wrong_type = _generated_event("2026-01-02T00:00:00.000Z", "acme", 42)
+    valid = _generated_event("2026-01-03T00:00:00.000Z", "acme", "art-1")
+    result = _index_latest_generated([missing, wrong_type, valid])
+    assert len(result) == 1
+    assert result[_usage_index_key("acme", "art-1")] is valid

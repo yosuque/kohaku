@@ -18,6 +18,9 @@ import type { ComposeTrace } from "./trace.js";
  */
 export type FixationCheck = { kind: "fresh" } | { kind: "revalidated" } | { kind: "stale"; issues: string[] };
 
+/** materializeFixation's return shape: the composed result when deliverable (null when not), plus the staleness verdict. */
+export type FixationMaterialization = { result: ComposeResult | null; check: FixationCheck };
+
 /**
  * Builds the Spec / trace on a fixation (L1→L0) hit.
  *
@@ -38,7 +41,14 @@ export async function materializeFixation(
   intent: CanonicalIntent,
   ctx: ComposeContext,
   tenant?: string,
-): Promise<{ result: ComposeResult | null; check: FixationCheck }> {
+): Promise<FixationMaterialization> {
+  // Shared shape for every "not deliverable" exit below: result=null plus the stale verdict with its
+  // issues (the host's material for falling back to normal compose and, where wired, for lineage recording).
+  const stale = (issues: string[]): FixationMaterialization => ({
+    result: null,
+    check: { kind: "stale", issues },
+  });
+
   // Storage-boundary validation: a corrupted or hand-edited fixation record
   // (most importantly a broken pinnedSpec) must never be delivered just because it happens to carry a
   // matching catalog fingerprint — the fingerprint fast path below only ever compared a *string*, so it
@@ -47,13 +57,7 @@ export async function materializeFixation(
   // through lineage's own FixationRecordSchema-validated getter).
   const validated = FixationRecordSchema.safeParse(fixation);
   if (!validated.success) {
-    return {
-      result: null,
-      check: {
-        kind: "stale",
-        issues: [`fixation record failed schema validation: ${validated.error.message}`],
-      },
-    };
+    return stale([`fixation record failed schema validation: ${validated.error.message}`]);
   }
   fixation = validated.data as FixationRecord;
 
@@ -65,27 +69,15 @@ export async function materializeFixation(
   // same "structure changed underneath the record" risk the fingerprint/catalog checks below exist to
   // catch). Treat either mismatch as corruption, exactly like a schema-validation failure.
   if (fixation.intentHash !== intent.hash) {
-    return {
-      result: null,
-      check: {
-        kind: "stale",
-        issues: [
-          `fixation record's intentHash (${fixation.intentHash}) does not match the requested intent (${intent.hash})`,
-        ],
-      },
-    };
+    return stale([
+      `fixation record's intentHash (${fixation.intentHash}) does not match the requested intent (${intent.hash})`,
+    ]);
   }
   const actualStructureHash = await computeStructureHash(fixation.pinnedSpec);
   if (actualStructureHash !== fixation.structureHash) {
-    return {
-      result: null,
-      check: {
-        kind: "stale",
-        issues: [
-          `fixation record's structureHash (${fixation.structureHash}) does not match its pinnedSpec (${actualStructureHash})`,
-        ],
-      },
-    };
+    return stale([
+      `fixation record's structureHash (${fixation.structureHash}) does not match its pinnedSpec (${actualStructureHash})`,
+    ]);
   }
 
   // Fingerprint fast path: if the catalog fingerprint at fixation time matches the current one, treat the structure as unchanged and skip validation.
@@ -97,10 +89,7 @@ export async function materializeFixation(
     const { issues } = ctx.catalog.validate(fixation.pinnedSpec.components, fixation.pinnedSpec.events);
     if (issues.length > 0) {
       // Validation failure = not deliverable. Format issues into human-readable strings and hand them to the host.
-      return {
-        result: null,
-        check: { kind: "stale", issues: issues.map((i) => `${i.componentId}: ${i.message}`) },
-      };
+      return stale(issues.map((i) => `${i.componentId}: ${i.message}`));
     }
     check = { kind: "revalidated" };
   }
@@ -120,15 +109,9 @@ export async function materializeFixation(
   const resolvedUris = new Set(handles.map((h) => h.uri));
   const drift = detectRefDrift(fixation, resolvedUris);
   if (drift != null) {
-    return {
-      result: null,
-      check: {
-        kind: "stale",
-        issues: [
-          `The fixed Spec's reference set does not match the current Intent's resolution result (${drift.kind}: ${drift.uri})`,
-        ],
-      },
-    };
+    return stale([
+      `The fixed Spec's reference set does not match the current Intent's resolution result (${drift.kind}: ${drift.uri})`,
+    ]);
   }
 
   // pinnedSpec's refVersions is the old version at fixation time, so always drop it and re-fill with the latest version.

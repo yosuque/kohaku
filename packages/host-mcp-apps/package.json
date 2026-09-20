@@ -15,10 +15,10 @@
     "@kohaku-ui/spec-core": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
     "@kohaku-ui/host-core": "workspace:^",
-    "@kohaku-ui/data-binding": "workspace:^",
-    "@modelcontextprotocol/server": "catalog:"
+    "@kohaku-ui/data-binding": "workspace:^"
   },
   "peerDependencies": {
+    "@modelcontextprotocol/server": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -26,6 +26,7 @@
     "@kohaku-ui/llm": "workspace:^",
     "@modelcontextprotocol/client": "catalog:",
     "@modelcontextprotocol/ext-apps": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
@@ -48,7 +49,8 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "access": "public",

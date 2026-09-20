@@ -9,7 +9,7 @@ import { type TenantScope, tenantField } from "../tenant-scope.js";
 import type { ComponentDraft, PromotionStatus } from "./machine.js";
 import { notifyPromotionError, type PromotionCandidate, type PromotionErrorContext } from "./service.js";
 import type { createUsageIndex } from "./usage.js";
-import { tallyUsage, usageIndexKey } from "./usage.js";
+import { indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
 
 type UsageIndex = ReturnType<typeof createUsageIndex>;
 
@@ -232,22 +232,14 @@ export function createCandidateStore(opts: {
     // all-tenant scan) would collapse those tenants' independent generated events (and hence candidates) into
     // one, silently mixing their state. `e.tenant` is each event's own recorded tenant (equal to `tenant` when a
     // specific tenant was requested; the record's own value otherwise).
-    const latestByKey = new Map<
-      string,
-      { event: (typeof generated)[number]; artifactId: string; tenant?: string }
-    >();
-    for (const e of generated) {
-      const artifactId = e.payload["artifactId"] as string;
-      const key = usageIndexKey(e.tenant, artifactId);
-      const prev = latestByKey.get(key);
-      if (prev == null || e.ts > prev.event.ts)
-        latestByKey.set(key, { event: e, artifactId, tenant: e.tenant });
-    }
+    const latestByKey = indexLatestGenerated(generated);
     // Build the (tenant, artifactId)-keyed component.used index with a single fetch (for the window-drift known
     // constraint, see the usage.index doc).
     const usedByArtifact = await usage.index(tenant);
     const candidates: { candidate: PromotionCandidate; tenant?: string }[] = [];
-    for (const { event, artifactId, tenant: recordTenant } of latestByKey.values()) {
+    for (const event of latestByKey.values()) {
+      const artifactId = event.payload["artifactId"] as string;
+      const recordTenant = event.tenant;
       const candidate = await loadCandidate(artifactId, {
         tenant: recordTenant,
         usageStats: tallyUsage(usedByArtifact.get(usageIndexKey(recordTenant, artifactId)) ?? []),
@@ -311,14 +303,7 @@ export function createCandidateStore(opts: {
       limit: GENERATED_SCAN_WINDOW,
       ...tenantField(tenant),
     });
-    const latestGeneratedByKey = new Map<string, (typeof generated)[number]>();
-    for (const e of generated) {
-      const artifactId = e.payload["artifactId"];
-      if (typeof artifactId !== "string") continue;
-      const key = usageIndexKey(e.tenant, artifactId);
-      const prev = latestGeneratedByKey.get(key);
-      if (prev == null || e.ts > prev.ts) latestGeneratedByKey.set(key, e);
-    }
+    const latestGeneratedByKey = indexLatestGenerated(generated);
     const candidates: PromotionCandidate[] = [];
     for (const state of states) {
       if (state.status !== status) continue;

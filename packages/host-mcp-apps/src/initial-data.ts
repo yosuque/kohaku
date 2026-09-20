@@ -1,5 +1,5 @@
 import { parseQueryRef } from "@kohaku-ui/data-binding";
-import { notifyHook, parseInvokableRef } from "@kohaku-ui/host-core";
+import { errorMessage, notifyHook, parseInvokableRef } from "@kohaku-ui/host-core";
 import { enumerateBindVariants, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
 import type { ToolCallContext } from "./types.js";
 
@@ -58,11 +58,6 @@ export function __setPreresolveTotalTimeoutMsForTest(ms: number | null): void {
 /** The current overall preresolveInitialData deadline, honoring the test override. */
 export function preresolveTotalTimeoutMs(): number {
   return preresolveTotalTimeoutMsOverride ?? PRERESOLVE_TOTAL_TIMEOUT_MS;
-}
-
-/** `e.message` for an Error, else its String() form (used only to compose an observability-hook message). */
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 /**

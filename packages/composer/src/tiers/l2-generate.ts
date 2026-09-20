@@ -1,5 +1,6 @@
 import { type ComponentNode, SANDBOX_HTML_TYPE, sha256Hex } from "@kohaku-ui/spec-core";
 import { resolveTierLlm } from "../context.js";
+import { errorMessage } from "../error-message.js";
 import { KOHAKU_API_ALLOWLIST } from "../l2-api.js";
 import { buildL2PromptParts, L2_SYSTEM_PROMPT } from "../prompt.js";
 import { resolveMaxAttempts, runRepairLoop, type TierRequest, type TierResult } from "./shared.js";
@@ -46,7 +47,9 @@ function canCheckScriptSyntax(): boolean {
  * opts.enforceTokenColors is the raw-color check (L2_RAW_COLOR) for when a design system is applied.
  * Default false (the conventional behavior with designSystem unset is completely unchanged). generateL2 wires it from ComposePolicy.designSystem.
  */
-export function collectL2Issues(html: string, opts?: { enforceTokenColors?: boolean }): string[] {
+export type L2LintOptions = { enforceTokenColors?: boolean };
+
+export function collectL2Issues(html: string, opts?: L2LintOptions): string[] {
   const issues: string[] = [];
   const used = new Set<string>();
   // Extract the window.kohaku.xxx / kohaku?.xxx form (on the premise that, since L2_SYSTEM_PROMPT enforces
@@ -54,6 +57,8 @@ export function collectL2Issues(html: string, opts?: { enforceTokenColors?: bool
   for (const m of html.matchAll(/kohaku\s*\??\.\s*([A-Za-z_$][A-Za-z0-9_$]*)/g)) {
     used.add(m[1]!);
   }
+  // The next two checks do not fit the rule table below: L2_UNKNOWN_API emits 0-N issues (one per
+  // hallucinated name found in `used`) and L2_READY_MISSING needs that same `used` set as extra state.
   for (const name of [...used].sort()) {
     if (!KOHAKU_API_ALLOWLIST.has(name)) {
       issues.push(
@@ -70,7 +75,8 @@ export function collectL2Issues(html: string, opts?: { enforceTokenColors?: bool
     );
   }
   // Syntax check (sending back JS syntax errors). Delegated to the carved-out collectScriptSyntaxIssues
-  // (since Python has no JS execution engine, it reuses just this checker from a CLI sidecar).
+  // (since Python has no JS execution engine, it reuses just this checker from a CLI sidecar). Also does
+  // not fit the rule table: it parses <script> bodies and can emit more than one issue.
   issues.push(...collectScriptSyntaxIssues(html));
   // Truncation detection: a complete single HTML document ends with </html> (the L2_SYSTEM_PROMPT contract).
   // An output truncated by the output-token limit etc. is a breeding ground for syntax errors or rendering cutoff, so send it back.
@@ -80,77 +86,14 @@ export function collectL2Issues(html: string, opts?: { enforceTokenColors?: bool
         "Output a complete single HTML document",
     );
   }
-  // Non-deterministic rendering detection: Math.random breaks both "fabricating values not in the data"
-  // (observed in the field: random-generating the tooltip's sales amount) and the cache-premise
-  // determinism of "same data → same display", so send it back. Being a lexical check it also reacts
-  // inside comments, but erring on the side of it being removed by repair is acceptable.
-  if (/Math\s*\.\s*random\s*\(/.test(html)) {
-    issues.push(
-      "L2_NONDETERMINISM: Math.random() is used. The widget must render deterministically " +
-        "from the actual data returned by fetchData (generating fake values from random numbers or dummy data is forbidden)",
-    );
-  }
-  // Navigation detection: the generated script now runs inside a Worker with no document/assignable
-  // location/window.open of its own (SBX-EXEC-001), so this class of attempt is neutralized by the runtime
-  // regardless — but sending it back before delivery still saves a repair round-trip versus letting the model
-  // discover the TypeError only at smoke-validation or runtime.
-  if (L2_NAVIGATION_RE.test(html)) {
-    issues.push(
-      "L2_NAVIGATION: the document navigates (meta refresh / location assignment / window.open). " +
-        "Navigation APIs do not exist in the sandbox runtime; render in place and use window.kohaku.emit for interactions",
-    );
-  }
-  // Markup the applier's allowlist always rejects (packages/spec-core/src/schema/sandbox-dom.ts): sent back
-  // before delivery for the same reason as L2_NAVIGATION above — none of this ever reaches the real DOM once
-  // the applier drops it, so catching it here saves a repair round-trip.
-  if (L2_UNSAFE_MARKUP_RE.test(html)) {
-    issues.push(
-      "L2_UNSAFE_MARKUP: the document contains markup the sandbox's DOM applier always rejects " +
-        "(an <iframe>/<object>/<embed>/<form>/<base>/<link>/<frame>/<applet> element, an on*= event-handler " +
-        "attribute, a javascript: URL, or a <script src=...>). None of these ever reach the real DOM " +
-        "(the applier drops them and the widget renders without them); use the DOM shim API's " +
-        "addEventListener and window.kohaku.emit instead",
-    );
-  }
-  // APIs the Worker DOM shim does not provide at all (see guest/worker-shim.ts's module docstring): calling
-  // one throws a TypeError, so — like L2_UNKNOWN_API for the window.kohaku surface — send it back before
-  // delivery rather than let it surface only as a runtime failure.
-  if (L2_UNSUPPORTED_DOM_RE.test(html)) {
-    issues.push(
-      "L2_UNSUPPORTED_DOM: the code uses an API that does not exist in the sandbox's Worker DOM shim " +
-        "(canvas getContext, document.write, alert/confirm/prompt, localStorage/sessionStorage/indexedDB, " +
-        "document.cookie, or MutationObserver/IntersectionObserver). Calling any of these throws a TypeError " +
-        "at runtime; render only through the DOM shim API and window.kohaku",
-    );
-  }
-  // External-library trace detection: because the sandbox cannot load external scripts under CSP, all
-  // chart-library APIs become a runtime TypeError. What was observed in the field is D3-style method
-  // chains (plain DOM's append() returns undefined, so .attr() gives "Cannot read properties of
-  // undefined"). Since `.attr("...")` is a library-specific form that does not exist on plain DOM, send it
-  // back via a lexical check together with direct references to library names.
-  for (const [pattern, label] of L2_LIB_SIGNATURES) {
-    if (pattern.test(html)) {
-      issues.push(
-        `L2_LIB_UNAVAILABLE: the code uses ${label}. The sandbox cannot load external libraries, ` +
-          "and plain DOM elements have no .attr() or similar methods (it will throw a TypeError at runtime). " +
-          "Build SVG with document.createElementNS + setAttribute, or assemble a string and insert it via innerHTML",
-      );
-    }
-  }
-  // Raw-color detection (only when a design system is applied). Baking in concrete colors cannot follow a
-  // theme switch and breaks the Spec's theme independence (SPEC-ENV-003) and the cache's cross-theme
-  // reuse, so send back a substitution to token references var(--kohaku-*). To avoid reacting to CSS id
-  // selectors (#chart etc.), #hex is judged by 3-8 hex digits + a word boundary (an id with the same form
-  // as a hex value such as #fee is a false positive, but err toward repair).
-  if (opts?.enforceTokenColors === true && L2_RAW_COLOR_RE.test(html)) {
-    issues.push(
-      "L2_RAW_COLOR: hard-coded colors (#hex / rgb() / hsl() etc.) are present. Always specify colors " +
-        "with design tokens var(--kohaku-*) (e.g. color: var(--kohaku-color-text), background " +
-        "var(--kohaku-color-background), chart series var(--kohaku-chart-palette-1) …)",
-    );
-  }
+  // The remaining checks are all a single boolean predicate over (html, opts) producing at most one fixed
+  // message, so they are expressed as a rule table (see L2_LINT_RULES below) rather than repeated ifs.
+  issues.push(...L2_LINT_RULES.filter((rule) => rule.applies(html, opts)).map((rule) => rule.message));
   return issues;
 }
+
+/** One row of the L2 bridge-contract lint's rule table (see L2_LINT_RULES). */
+type L2LintRule = { applies: (html: string, opts?: L2LintOptions) => boolean; message: string };
 
 /** Raw-color detection pattern (hex literal / rgb() / rgba() / hsl() / hsla()). */
 const L2_RAW_COLOR_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/;
@@ -204,7 +147,7 @@ export function collectScriptSyntaxIssues(html: string): string[] {
     try {
       new Function(body);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorMessage(e);
       issues.push(
         `L2_SCRIPT_SYNTAX: <script> #${scriptIndex} has a JavaScript syntax error (${message}). ` +
           "Output syntactically valid, complete code — e.g. never put raw newlines " +
@@ -223,6 +166,85 @@ const L2_LIB_SIGNATURES: readonly [RegExp, string][] = [
   [/\bHighcharts\s*\./, "Highcharts"],
   // A D3 / jQuery-style .attr("...") method chain (does not exist on plain DOM)
   [/\.attr\s*\(\s*["'`]/, "a D3/jQuery-style .attr() chain"],
+];
+
+/**
+ * The bridge-contract lint checks that reduce to "a single boolean predicate over (html, opts) → at most
+ * one fixed message", in the same order collectL2Issues ran them as sequential `if`s before this refactor.
+ * Order matters: the issue strings and their order are part of the repair prompt (repairFeedback) sent to
+ * the LLM, so this table must keep producing byte-identical output in the same order for every input.
+ */
+const L2_LINT_RULES: readonly L2LintRule[] = [
+  // Non-deterministic rendering detection: Math.random breaks both "fabricating values not in the data"
+  // (observed in the field: random-generating the tooltip's sales amount) and the cache-premise
+  // determinism of "same data → same display", so send it back. Being a lexical check it also reacts
+  // inside comments, but erring on the side of it being removed by repair is acceptable.
+  {
+    applies: (html) => /Math\s*\.\s*random\s*\(/.test(html),
+    message:
+      "L2_NONDETERMINISM: Math.random() is used. The widget must render deterministically " +
+      "from the actual data returned by fetchData (generating fake values from random numbers or dummy data is forbidden)",
+  },
+  // Navigation detection: the generated script now runs inside a Worker with no document/assignable
+  // location/window.open of its own (SBX-EXEC-001), so this class of attempt is neutralized by the runtime
+  // regardless — but sending it back before delivery still saves a repair round-trip versus letting the model
+  // discover the TypeError only at smoke-validation or runtime.
+  {
+    applies: (html) => L2_NAVIGATION_RE.test(html),
+    message:
+      "L2_NAVIGATION: the document navigates (meta refresh / location assignment / window.open). " +
+      "Navigation APIs do not exist in the sandbox runtime; render in place and use window.kohaku.emit for interactions",
+  },
+  // Markup the applier's allowlist always rejects (packages/spec-core/src/schema/sandbox-dom.ts): sent back
+  // before delivery for the same reason as L2_NAVIGATION above — none of this ever reaches the real DOM once
+  // the applier drops it, so catching it here saves a repair round-trip.
+  {
+    applies: (html) => L2_UNSAFE_MARKUP_RE.test(html),
+    message:
+      "L2_UNSAFE_MARKUP: the document contains markup the sandbox's DOM applier always rejects " +
+      "(an <iframe>/<object>/<embed>/<form>/<base>/<link>/<frame>/<applet> element, an on*= event-handler " +
+      "attribute, a javascript: URL, or a <script src=...>). None of these ever reach the real DOM " +
+      "(the applier drops them and the widget renders without them); use the DOM shim API's " +
+      "addEventListener and window.kohaku.emit instead",
+  },
+  // APIs the Worker DOM shim does not provide at all (see guest/worker-shim.ts's module docstring): calling
+  // one throws a TypeError, so — like L2_UNKNOWN_API for the window.kohaku surface — send it back before
+  // delivery rather than let it surface only as a runtime failure.
+  {
+    applies: (html) => L2_UNSUPPORTED_DOM_RE.test(html),
+    message:
+      "L2_UNSUPPORTED_DOM: the code uses an API that does not exist in the sandbox's Worker DOM shim " +
+      "(canvas getContext, document.write, alert/confirm/prompt, localStorage/sessionStorage/indexedDB, " +
+      "document.cookie, or MutationObserver/IntersectionObserver). Calling any of these throws a TypeError " +
+      "at runtime; render only through the DOM shim API and window.kohaku",
+  },
+  // External-library trace detection: because the sandbox cannot load external scripts under CSP, all
+  // chart-library APIs become a runtime TypeError. What was observed in the field is D3-style method
+  // chains (plain DOM's append() returns undefined, so .attr() gives "Cannot read properties of
+  // undefined"). Since `.attr("...")` is a library-specific form that does not exist on plain DOM, send it
+  // back via a lexical check together with direct references to library names. One rule per L2_LIB_SIGNATURES
+  // entry, in the same order the original for-loop iterated it.
+  ...L2_LIB_SIGNATURES.map(
+    ([pattern, label]): L2LintRule => ({
+      applies: (html) => pattern.test(html),
+      message:
+        `L2_LIB_UNAVAILABLE: the code uses ${label}. The sandbox cannot load external libraries, ` +
+        "and plain DOM elements have no .attr() or similar methods (it will throw a TypeError at runtime). " +
+        "Build SVG with document.createElementNS + setAttribute, or assemble a string and insert it via innerHTML",
+    }),
+  ),
+  // Raw-color detection (only when a design system is applied). Baking in concrete colors cannot follow a
+  // theme switch and breaks the Spec's theme independence (SPEC-ENV-003) and the cache's cross-theme
+  // reuse, so send back a substitution to token references var(--kohaku-*). To avoid reacting to CSS id
+  // selectors (#chart etc.), #hex is judged by 3-8 hex digits + a word boundary (an id with the same form
+  // as a hex value such as #fee is a false positive, but err toward repair).
+  {
+    applies: (html, opts) => opts?.enforceTokenColors === true && L2_RAW_COLOR_RE.test(html),
+    message:
+      "L2_RAW_COLOR: hard-coded colors (#hex / rgb() / hsl() etc.) are present. Always specify colors " +
+      "with design tokens var(--kohaku-*) (e.g. color: var(--kohaku-color-text), background " +
+      "var(--kohaku-color-background), chart series var(--kohaku-chart-palette-1) …)",
+  },
 ];
 
 /**
@@ -259,7 +281,7 @@ export function extractTitle(html: string, fallback: string): string {
  * back and repair is retried up to maxRepairAttempts times, like L1 (sending back hallucinated APIs before delivery).
  */
 export async function generateL2(req: TierRequest): Promise<TierResult> {
-  const { intent, refs, ctx, signal, budget, onBudgetCheckError, startedAt, deadlineSignal } = req;
+  const { intent, refs, ctx, signal } = req;
   // The sandbox bridge allows only a ref that exactly matches the sandbox node's data.$ref (the sandbox1
   // node below declares only primaryRef=refs.uris[0]). Present only primaryRef as "available" in the
   // prompt too, to match the allowlist and the contract. Presenting a second or later ref would make
@@ -284,7 +306,7 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
       // check already did it immediately before (spent is unchanged too) — even though check() is idempotent,
       // avoid double-firing onBudgetCheckError. A repair re-attempt (attempt 1+) is an additional LLM call
       // that this loop adds, so check it immediately before, like L1.
-      budgetGate: "afterFirst",
+      shouldCheckBudget: (attempt) => attempt > 0,
       async call(feedback) {
         // L2 generates a raw HTML document with generateText (no JSON wrap). Because small models break
         // systematically in the "embed long HTML in a JSON string field" form (see extractHtmlDocument's
@@ -366,9 +388,6 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
         return { ok: false, issues };
       },
     },
-    budget,
-    onBudgetCheckError,
-    startedAt,
-    deadlineSignal,
+    req,
   );
 }

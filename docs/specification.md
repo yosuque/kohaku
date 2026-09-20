@@ -446,7 +446,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 
 | Variable | Default | Description |
 |---|---|---|
-| `KOHAKU_LLM_PROVIDER` | `claude` | `claude` / `openai` / `gemini` / `ollama` / `llama` |
+| `KOHAKU_LLM_PROVIDER` | `claude` | `claude` / `openai` / `gemini` / `ollama` / `llama` — the selected provider's SDK is an optional peer dependency of `@kohaku-ui/llm` and must be installed separately, see [user-guide.md](user-guide.md)'s "Choosing an LLM provider" section |
 | `KOHAKU_LLM_MODEL` | Per-provider default (claude-sonnet-5 / gpt-4.1 / gemini-2.5-flash / llama3.3) | `llama` must be specified explicitly |
 | `KOHAKU_LLM_BASE_URL` | ollama: `http://localhost:11434/v1` | Required for `llama` (OpenAI-compatible) |
 | `KOHAKU_LLM_API_KEY` | — | Highest-priority key. If absent, `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` |

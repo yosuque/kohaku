@@ -22,6 +22,7 @@ import type { ComposeContext, ResolvedRefs } from "./context.js";
 import { resolveEntryContext, resolveTierLlm } from "./context.js";
 import { reportComposeError } from "./observer.js";
 import { runGeneration } from "./single-flight.js";
+import { traceIdentity } from "./trace-identity.js";
 
 /**
  * The minimum wall-clock interval, in milliseconds, between two provisional-patch emissions during
@@ -205,8 +206,7 @@ export async function* composeStream(
       {
         phase: "hard",
         input: toTraceInput(input),
-        ...(opts.correlationId != null ? { correlationId: opts.correlationId } : {}),
-        ...(opts.traceContext != null ? { traceContext: opts.traceContext } : {}),
+        ...traceIdentity(opts),
       },
       e,
     );
