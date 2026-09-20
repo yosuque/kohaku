@@ -474,6 +474,69 @@ async def _compose_stream_body(
         yield _sse("error", error_body("COMPOSE_FAILED", client_message, request_id))
 
 
+def _intent_invalid(e: BaseException, request_id: str) -> Response:
+    """Map an Intent-resolution failure to the INTENT_INVALID 422 response body.
+
+    Shared by /intent/normalize, /compose, /compose/stream and /events: all four call this with the same
+    two-line mapping (typed host errors pass their own message through; anything else collapses to
+    _INTENT_INVALID_MESSAGE). Reporting the error to the observability hook (report_host_error, endpoint- and
+    trace-context-specific per call site) stays the caller's responsibility — this helper only builds the
+    response.
+    """
+    client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
+    return _error("INTENT_INVALID", client_message, 422, request_id)
+
+
+async def _deliver_composed(
+    request: Request,
+    deps: KohakuHostDeps,
+    intent: Intent,
+    session: SessionContext,
+    principal: Principal,
+    request_id: str,
+    endpoint: str,
+    *,
+    pre_record: Callable[[], Awaitable[None]] | None = None,
+) -> Response:
+    """Shared compose-and-respond sequence for /compose and /events: disconnect-abort monitoring ->
+    compose_with_fixation -> issue_capability_for_spec -> cancelled-aware lineage recording -> the same
+    COMPOSE_FAILED except mapping.
+
+    endpoint is the (pre-existing) REST endpoint string ("compose" / "events") recorded into
+    issue_capability_for_spec's on_dropped_action report, safe_record's lineage entry and report_host_error's
+    observability hook alike — /compose and /events already agreed on using their own route name for all
+    three, so a single parameter covers it.
+
+    pre_record, when given, runs before _record_composed inside the same cancelled-aware safe_record callback
+    (only /events needs this, to record the interaction itself via deps.recorder.interacted before recording
+    the resulting Spec — /compose has no such step).
+    """
+    try:
+        # Monitor for client disconnect and, on disconnect, vote to abort generation (single-flight quorum).
+        async with _disconnect_abort(request) as abort:
+            result = await compose_with_fixation(intent, session, deps, abort=abort, request_id=request_id)
+            capability = await issue_capability_for_spec(result.spec, principal, deps, endpoint, request_id)
+
+            async def _rec() -> None:
+                if pre_record is not None:
+                    await pre_record()
+                await _record_composed(deps, result, session)
+
+            # A cancelled compose (the caller's abort fired) is not a generation failure and
+            # observer.onError already received phase="cancelled" from the composer — skip lineage
+            # recording entirely so a client disconnect/timeout does not inflate view.composed /
+            # view.fallback counts. The fallback body is still returned as usual.
+            if not result.trace.cancelled:
+                await safe_record(deps, endpoint, request_id, _rec)
+            return _json({"spec": result.spec.to_wire(), "capability": capability})
+    except BaseException as e:
+        await report_host_error(deps, endpoint, request_id, e, trace_context=trace_context_of(request))
+        # An arbitrary exception's message never reaches the client (it may leak internals); a typed host
+        # error (SpecError/ComposeError) still passes its own message through.
+        client_message = _message(e) if is_typed_host_error(e) else _COMPOSE_FAILED_MESSAGE
+        return _error("COMPOSE_FAILED", client_message, 500, request_id)
+
+
 # Sentinel marking generation completion (the end of the queue; the signal to stop keepalive).
 _STREAM_SENTINEL = object()
 
@@ -574,8 +637,7 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             await report_host_error(
                 deps, "intent/normalize", request_id, e, trace_context=trace_context_of(request)
             )
-            client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
-            return _error("INTENT_INVALID", client_message, 422, request_id)
+            return _intent_invalid(e, request_id)
 
     # --- Compose ------------------------------------------------------------
     @router.post("/compose")
@@ -590,32 +652,8 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             intent = await resolve_intent_from_body(body, session, deps)
         except BaseException as e:
             await report_host_error(deps, "compose", request_id, e, trace_context=trace_context_of(request))
-            client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
-            return _error("INTENT_INVALID", client_message, 422, request_id)
-        try:
-            # Monitor for client disconnect and, on disconnect, vote to abort generation (single-flight quorum).
-            async with _disconnect_abort(request) as abort:
-                result = await compose_with_fixation(intent, session, deps, abort=abort, request_id=request_id)
-                capability = await issue_capability_for_spec(
-                    result.spec, principal, deps, "compose", request_id
-                )
-
-                async def _rec() -> None:
-                    await _record_composed(deps, result, session)
-
-                # A cancelled compose (the caller's abort fired) is not a generation failure and
-                # observer.onError already received phase="cancelled" from the composer — skip lineage
-                # recording entirely so a client disconnect/timeout does not inflate view.composed /
-                # view.fallback counts. The fallback body is still returned as usual.
-                if not result.trace.cancelled:
-                    await safe_record(deps, "compose", request_id, _rec)
-                return _json({"spec": result.spec.to_wire(), "capability": capability})
-        except BaseException as e:
-            await report_host_error(deps, "compose", request_id, e, trace_context=trace_context_of(request))
-            # An arbitrary exception's message never reaches the client (it may leak internals); a typed host
-            # error (SpecError/ComposeError) still passes its own message through.
-            client_message = _message(e) if is_typed_host_error(e) else _COMPOSE_FAILED_MESSAGE
-            return _error("COMPOSE_FAILED", client_message, 500, request_id)
+            return _intent_invalid(e, request_id)
+        return await _deliver_composed(request, deps, intent, session, principal, request_id, "compose")
 
     # --- Compose streaming (SSE) --------------------------------------------
     @router.post("/compose/stream")
@@ -632,8 +670,7 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             await report_host_error(
                 deps, "compose/stream", request_id, e, trace_context=trace_context_of(request)
             )
-            client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
-            return _error("INTENT_INVALID", client_message, 422, request_id)
+            return _intent_invalid(e, request_id)
         return StreamingResponse(
             _compose_stream_events(deps, intent, session, principal, request_id, request),
             media_type="text/event-stream",
@@ -664,37 +701,27 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             intent = finalize_intent(normalized)
         except BaseException as e:
             await report_host_error(deps, "events", request_id, e, trace_context=trace_context_of(request))
-            client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
-            return _error("INTENT_INVALID", client_message, 422, request_id)
-        try:
-            # As with /compose, monitor for disconnect and vote to abort generation.
-            async with _disconnect_abort(request) as abort:
-                result = await compose_with_fixation(intent, session, deps, abort=abort, request_id=request_id)
-                capability = await issue_capability_for_spec(
-                    result.spec, principal, deps, "events", request_id
+            return _intent_invalid(e, request_id)
+
+        async def _record_interaction() -> None:
+            if deps.recorder is not None:
+                await deps.recorder.interacted(
+                    intent_hash=current.hash,
+                    component_id=body.event.on.split(".")[0],
+                    on=body.event.on,
+                    payload=body.event.payload,
+                    surface=session.surface,
+                    session_id=session.sessionId,
+                    tenant=session.tenant,
                 )
 
-                async def _rec() -> None:
-                    if deps.recorder is not None:
-                        await deps.recorder.interacted(
-                            intent_hash=current.hash,
-                            component_id=body.event.on.split(".")[0],
-                            on=body.event.on,
-                            payload=body.event.payload,
-                            surface=session.surface,
-                            session_id=session.sessionId,
-                            tenant=session.tenant,
-                        )
-                    await _record_composed(deps, result, session)
-
-                # Same cancelled-skip as /compose: a client disconnect/timeout must not inflate lineage
-                # counts, and observer.onError already received phase="cancelled" from the composer.
-                if not result.trace.cancelled:
-                    await safe_record(deps, "events", request_id, _rec)
-                return _json({"spec": result.spec.to_wire(), "capability": capability})
-        except BaseException as e:
-            await report_host_error(deps, "events", request_id, e, trace_context=trace_context_of(request))
-            # An arbitrary exception's message never reaches the client (it may leak internals); a typed host
-            # error (SpecError/ComposeError) still passes its own message through.
-            client_message = _message(e) if is_typed_host_error(e) else _COMPOSE_FAILED_MESSAGE
-            return _error("COMPOSE_FAILED", client_message, 500, request_id)
+        return await _deliver_composed(
+            request,
+            deps,
+            intent,
+            session,
+            principal,
+            request_id,
+            "events",
+            pre_record=_record_interaction,
+        )
