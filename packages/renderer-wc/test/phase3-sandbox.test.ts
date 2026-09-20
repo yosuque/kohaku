@@ -129,6 +129,33 @@ describe("Phase 3: L2 sandbox", () => {
     expect(mountCalls[0]!.kitCss).toBeUndefined();
   });
 
+  it("badge: 'visible' (explicit) renders the L2 SANDBOXED badge row", () => {
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    const surface = mount(spec, { sandbox: { bridge, badge: "visible" } });
+    const wrapper = byKohaku(surface, "root")!;
+    expect(wrapper.textContent).toContain("L2 SANDBOXED");
+  });
+
+  it("badge: 'hidden' omits the L2 SANDBOXED badge row", () => {
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    const surface = mount(spec, { sandbox: { bridge, badge: "hidden" } });
+    const wrapper = byKohaku(surface, "root")!;
+    expect(wrapper.textContent).not.toContain("L2 SANDBOXED");
+  });
+
+  it("with no badge key at all, the badge row is rendered (defaults to visible)", () => {
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    const surface = mount(spec, { sandbox: { bridge } });
+    const wrapper = byKohaku(surface, "root")!;
+    expect(wrapper.textContent).toContain("L2 SANDBOXED");
+  });
+
   it("subscribes to write invalidations (invalidates) and bridges them to handle.invalidate", async () => {
     mountCalls.length = 0;
     invalidated.length = 0;

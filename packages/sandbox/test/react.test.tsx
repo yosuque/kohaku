@@ -55,6 +55,11 @@ afterEach(() => {
   cleanup();
 });
 
+/** Renders SandboxFrame with the standard node/spec/bridge, overridable per test. */
+function renderFrame(overrides: Partial<Parameters<typeof SandboxFrame>[0]> = {}) {
+  return render(<SandboxFrame node={node("query://a")} spec={spec} bridge={bridge} {...overrides} />);
+}
+
 describe("SandboxFrame re-mount conditions", () => {
   it("even with the same sha256, a changed $ref re-mounts and destroys the old iframe", () => {
     const { rerender } = render(<SandboxFrame node={node("query://a")} spec={spec} bridge={bridge} />);
@@ -91,5 +96,24 @@ describe("SandboxFrame re-mount conditions", () => {
     expect(destroyed).toContain(0);
     expect(mountCalls).toHaveLength(2);
     expect(mountCalls[1]!.kitCss).toBe(".b{}");
+  });
+});
+
+describe("SandboxFrame chrome (kitCss / badge threading)", () => {
+  it("kitCss='' reaches mountSandbox as '', not undefined (explicit opt-out is preserved)", () => {
+    renderFrame({ kitCss: "" });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kitCss).toBe("");
+    expect(mountCalls[0]!.kitCss).not.toBeUndefined();
+  });
+
+  it("badge='hidden' omits the L2 SANDBOXED badge row", () => {
+    const { container } = renderFrame({ badge: "hidden" });
+    expect(container.textContent).not.toContain("L2 SANDBOXED");
+  });
+
+  it("badge left unset (default) shows the L2 SANDBOXED badge row", () => {
+    const { container } = renderFrame();
+    expect(container.textContent).toContain("L2 SANDBOXED");
   });
 });

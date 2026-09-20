@@ -17,6 +17,30 @@ export type { ActionPhase, SurfaceEvent } from "@kohaku-ui/renderer-core";
 export type Teardown = () => void;
 
 /**
+ * The sandbox (L2) surface's context, mirroring the subset of SandboxFrame's React props that the WC
+ * host wires through `SurfaceContext.sandbox`. If unset entirely, L2 becomes an injection-request
+ * placeholder.
+ */
+export interface SandboxSurfaceContext {
+  /** Bridge required to run L2 (sandbox.html) parts. */
+  bridge: SandboxBridge;
+  /** Origin/permission policy forwarded to mountSandbox (see MountSandboxOptions.policy). */
+  policy?: SandboxPolicy;
+  /**
+   * The design-kit stylesheet forwarded to mountSandbox (see MountSandboxOptions.kitCss): `undefined`
+   * injects renderer-core's `defaultDesignKit.css`, `""` injects nothing, any other string is the
+   * product's own kit (trusted CSS — it is escaped against `</style>` breakout but not otherwise
+   * sanitized).
+   */
+  kitCss?: string;
+  /**
+   * Whether the "L2 SANDBOXED" badge row (the pill + explanatory text above the iframe) is rendered.
+   * Defaults to `"visible"`; `"hidden"` omits the row entirely.
+   */
+  badge?: "visible" | "hidden";
+}
+
+/**
  * Context passed to <kohaku-surface> as properties. Corresponds to React's RendererContextValue.
  * binding / theme / messages / onEvent, etc. are received as properties (objects/functions).
  */
@@ -41,12 +65,8 @@ export interface SurfaceContext {
     result?: unknown;
     message?: string;
   }) => void;
-  /**
-   * Bridge required to run L2 (sandbox.html) parts. If unset, L2 becomes an injection-request placeholder.
-   * `kitCss` is the design-kit stylesheet forwarded to mountSandbox (see MountSandboxOptions.kitCss): `undefined`
-   * injects renderer-core's `defaultDesignKit.css`, `""` injects nothing, any other string is the product's own kit.
-   */
-  sandbox?: { bridge: SandboxBridge; policy?: SandboxPolicy; kitCss?: string };
+  /** Bridge / policy / kit / badge visibility for running L2 (sandbox.html) parts. See {@link SandboxSurfaceContext}. */
+  sandbox?: SandboxSurfaceContext;
 }
 
 /**

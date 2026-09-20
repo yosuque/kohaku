@@ -41,6 +41,12 @@ export function SandboxFrame(props: {
    */
   kitCss?: string;
   /**
+   * Whether the "L2 SANDBOXED" badge row (the pill + explanatory text above the iframe) is rendered.
+   * Defaults to `"visible"`; `"hidden"` omits the row entirely (e.g. for a product surface that
+   * signals sandboxing some other way).
+   */
+  badge?: "visible" | "hidden";
+  /**
    * Passes the mounted sandbox's invalidate (the entry point for the data-invalidation HostMessage) up to the parent.
    * On unmount / re-mount it notifies with null. Through this, the parent can bridge the write loop's data invalidation
    * into the guest's in-place re-fetch (while the capability stays in the parent).
@@ -56,6 +62,7 @@ export function SandboxFrame(props: {
 }): ReactNode {
   const messages: RendererMessages =
     props.messages == null ? DEFAULT_MESSAGES : { ...DEFAULT_MESSAGES, ...props.messages };
+  const theme: ThemeTokens = props.theme ?? {};
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<SandboxState>("loading");
   const [detail, setDetail] = useState<string | undefined>(undefined);
@@ -104,22 +111,36 @@ export function SandboxFrame(props: {
   }, [artifact?.sha256, props.node.id, props.node.data?.$ref, themeKey, props.kitCss]);
 
   if (artifact?.inline == null) {
-    return <Notice tone="error" text={sandboxArtifactMissingText(messages)} />;
+    return <Notice tone="error" text={sandboxArtifactMissingText(messages)} theme={theme} />;
   }
 
   return (
     <div data-kohaku={props.node.id} style={{ width: "100%" }}>
-      <div style={sandboxBadgeRowStyle}>
-        <span style={sandboxBadgePillStyle}>{sandboxBadgeText(messages)}</span>
-        <span style={sandboxBadgeDescriptionStyle}>{sandboxBadgeDescriptionText(messages)}</span>
-      </div>
-      {state === "loading" && <Notice tone="info" text={sandboxLoadingNoticeText(messages)} />}
-      {state === "error" && <Notice tone="error" text={sandboxErrorNoticeText(detail, messages)} />}
+      {props.badge !== "hidden" && (
+        <div style={sandboxBadgeRowStyle(theme)}>
+          <span style={sandboxBadgePillStyle(theme)}>{sandboxBadgeText(messages)}</span>
+          <span style={sandboxBadgeDescriptionStyle(theme)}>{sandboxBadgeDescriptionText(messages)}</span>
+        </div>
+      )}
+      {state === "loading" && <Notice tone="info" text={sandboxLoadingNoticeText(messages)} theme={theme} />}
+      {state === "error" && (
+        <Notice tone="error" text={sandboxErrorNoticeText(detail, messages)} theme={theme} />
+      )}
       <div ref={containerRef} style={{ width: "100%" }} />
     </div>
   );
 }
 
-function Notice({ tone, text }: { tone: SandboxNoticeTone; text: string }): ReactNode {
-  return <div style={{ ...sandboxNoticeBaseStyle, ...sandboxNoticeToneStyle(tone) }}>{text}</div>;
+function Notice({
+  tone,
+  text,
+  theme,
+}: {
+  tone: SandboxNoticeTone;
+  text: string;
+  theme: ThemeTokens;
+}): ReactNode {
+  return (
+    <div style={{ ...sandboxNoticeBaseStyle(theme), ...sandboxNoticeToneStyle(tone, theme) }}>{text}</div>
+  );
 }

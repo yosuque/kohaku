@@ -3,10 +3,13 @@
 // SandboxFrame (React, @kohaku-ui/sandbox/react) and mountSandboxNode (WC, renderer-wc's
 // sandbox-mount.ts). Both wrap the same underlying mountSandbox iframe; before this module they
 // duplicated the wording/colors verbatim, which let the two renderers drift silently. Strings are
-// read from RendererMessages (overridable like any other UI string, i18n'd the same way);
-// the concrete hex colors are kept as plain descriptor values here (token mapping is out of scope).
+// read from RendererMessages (overridable like any other UI string, i18n'd the same way); styles are
+// resolved through resolveToken against the caller's theme so both renderers, given the same theme,
+// resolve byte-identical values (the parity mechanism, see theme.ts's resolveToken docstring).
 
+import type { ThemeTokens } from "@kohaku-ui/spec-core";
 import type { RendererMessages } from "../messages.js";
+import { resolveToken } from "../theme.js";
 
 type StyleRecord = Record<string, string | number>;
 
@@ -61,36 +64,53 @@ export function sandboxBridgeMissingText(
 }
 
 /** The badge row's layout style (flex row holding the pill + description). */
-export const sandboxBadgeRowStyle: StyleRecord = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  fontSize: 11.5,
-  color: "#c2410c",
-  marginBottom: 6,
-};
+export function sandboxBadgeRowStyle(theme: ThemeTokens): StyleRecord {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: resolveToken(theme, "space.2"),
+    fontSize: resolveToken(theme, "font.size.xs"),
+    color: resolveToken(theme, "color.warning.text"),
+    marginBottom: resolveToken(theme, "space.2"),
+  };
+}
 
 /** The "L2 SANDBOXED" pill itself. */
-export const sandboxBadgePillStyle: StyleRecord = {
-  background: "#ffedd5",
-  borderRadius: 4,
-  padding: "2px 8px",
-  fontWeight: 700,
-};
+export function sandboxBadgePillStyle(theme: ThemeTokens): StyleRecord {
+  return {
+    background: resolveToken(theme, "color.warning.surface"),
+    borderRadius: resolveToken(theme, "radius.sm"),
+    padding: "1px 6px",
+    fontWeight: 600,
+  };
+}
 
 /** The muted explanatory text next to the pill. */
-export const sandboxBadgeDescriptionStyle: StyleRecord = { color: "#9ca3af" };
+export function sandboxBadgeDescriptionStyle(theme: ThemeTokens): StyleRecord {
+  return { color: resolveToken(theme, "color.muted") };
+}
 
-/** tone → {background, color} for the status notice box (info = neutral gray, error = red). */
-export function sandboxNoticeToneStyle(tone: SandboxNoticeTone): { background: string; color: string } {
+/** tone → {background, color} for the status notice box (info = neutral surface, error = negative). */
+export function sandboxNoticeToneStyle(
+  tone: SandboxNoticeTone,
+  theme: ThemeTokens,
+): { background: string; color: string } {
   return tone === "error"
-    ? { background: "#fee2e2", color: "#991b1b" }
-    : { background: "#f4f4f7", color: "#6b7280" };
+    ? {
+        background: String(resolveToken(theme, "color.negative.surface")),
+        color: String(resolveToken(theme, "color.negative.text")),
+      }
+    : {
+        background: String(resolveToken(theme, "color.surface")),
+        color: String(resolveToken(theme, "color.muted")),
+      };
 }
 
 /** The notice box's tone-independent layout style (spread together with sandboxNoticeToneStyle). */
-export const sandboxNoticeBaseStyle: StyleRecord = {
-  borderRadius: 6,
-  padding: "8px 12px",
-  fontSize: 12.5,
-};
+export function sandboxNoticeBaseStyle(theme: ThemeTokens): StyleRecord {
+  return {
+    borderRadius: resolveToken(theme, "radius.md"),
+    padding: `${resolveToken(theme, "space.2")} ${resolveToken(theme, "space.3")}`,
+    fontSize: resolveToken(theme, "font.size.sm"),
+  };
+}

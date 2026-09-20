@@ -19,9 +19,10 @@
 // text (badge label, badge description, notice text) is identical, which is what "the chrome wording
 // matches" actually means and is robust to that nesting difference.
 
+import { defaultDarkTheme } from "@kohaku-ui/renderer-core";
 import type { SandboxHandle } from "@kohaku-ui/sandbox";
 import { SandboxFrame } from "@kohaku-ui/sandbox/react";
-import { type ComponentNode, parseSpec, type UISpec } from "@kohaku-ui/spec-core";
+import { type ComponentNode, parseSpec, type ThemeTokens, type UISpec } from "@kohaku-ui/spec-core";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SemanticChild, SemanticNode } from "./normalize.js";
@@ -76,6 +77,17 @@ const bridge = {
   onTelemetry: () => {},
 };
 
+/**
+ * Normalizes a color string through jsdom's CSSOM the same way normalize.ts's `styleOf` does (both read
+ * back through `element.style`, which jsdom rewrites — e.g. a hex literal comes back as `rgb(...)`), so a
+ * pinned expectation can be compared apples-to-apples against a DOM-read-back style value.
+ */
+function cssColor(value: string): string {
+  const probe = document.createElement("div");
+  probe.style.color = value;
+  return probe.style.color;
+}
+
 /** Depth-first flattening of all visible text leaves, in document order. */
 function collectTexts(node: SemanticNode): string[] {
   const out: string[] = [];
@@ -86,20 +98,38 @@ function collectTexts(node: SemanticNode): string[] {
   return out;
 }
 
+/**
+ * Renders both renderers against the same (optional) theme and returns their normalized root nodes.
+ *
+ * The React side's `renderSandbox` callback must explicitly forward `theme` to `<SandboxFrame>` —
+ * renderer-react's SpecView does not inject it automatically (`renderSandbox`'s signature is plain
+ * `(node, spec) => ReactNode`, see SpecView.tsx). This mirrors how production wiring does it
+ * (apps/sample-web's SpecSurface.tsx closes over its own `theme` and passes `theme={theme}` into
+ * SandboxFrame) — closing over the same `theme` this function received, rather than leaving it implicit,
+ * is exactly what makes this a same-input comparison instead of two renderers that happen to agree only
+ * because both silently defaulted to `{}`.
+ */
+async function renderChromePair(theme?: ThemeTokens): Promise<{ react: SemanticNode; wc: SemanticNode }> {
+  const spec = sandboxSpec();
+
+  const { container } = await renderReact(spec, {
+    theme,
+    renderSandbox: (node: ComponentNode, s: UISpec) =>
+      createElement(SandboxFrame, { node, spec: s, bridge, theme }),
+  });
+  const { surface } = await renderWc(spec, { theme, sandbox: { bridge } });
+
+  return {
+    react: normalize(container.querySelector('[data-kohaku="root"]')!),
+    wc: normalize(surface.shadowRoot!.querySelector('[data-kohaku="root"]')!),
+  };
+}
+
 describe("L2 sandbox chrome parity: React tree ≡ WC tree for the badge + error notice", () => {
   afterEach(() => cleanupPair());
 
-  it("badge text and error-notice text match between renderers", async () => {
-    const spec = sandboxSpec();
-
-    const { container } = await renderReact(spec, {
-      renderSandbox: (node: ComponentNode, s: UISpec) =>
-        createElement(SandboxFrame, { node, spec: s, bridge }),
-    });
-    const { surface } = await renderWc(spec, { sandbox: { bridge } });
-
-    const react = normalize(container.querySelector('[data-kohaku="root"]')!);
-    const wc = normalize(surface.shadowRoot!.querySelector('[data-kohaku="root"]')!);
+  it("badge text and error-notice text match between renderers (default theme)", async () => {
+    const { react, wc } = await renderChromePair();
 
     // The badge row is the first child in both renderers, at the same nesting depth — full structural
     // equality is meaningful here (unlike the notice, see the file-level comment above).
@@ -111,5 +141,23 @@ describe("L2 sandbox chrome parity: React tree ≡ WC tree for the badge + error
     const texts = collectTexts(react);
     expect(texts).toEqual(["L2 SANDBOXED", expect.stringContaining("isolated iframe"), ERROR_DETAIL]);
     expect(collectTexts(wc)).toEqual(texts);
+  });
+
+  // Since tokenization, the chrome's colors/sizes come from `theme` rather than literal hex, so the two
+  // renderers only agree if the SAME theme value actually reaches both. The default-theme case above
+  // cannot catch a renderer that silently drops theme (e.g. a renderSandbox wiring that forgets to
+  // forward it) — both sides would coincidentally land on the same default-light values regardless of
+  // whether theme was threaded through at all. Exercising a non-default theme makes that failure mode
+  // observable: React and WC diverge under a dropped theme, and only match here by actually agreeing.
+  it("badge row matches between renderers under a non-default theme (dark)", async () => {
+    const { react, wc } = await renderChromePair(defaultDarkTheme);
+
+    const badgeRowOf = (node: SemanticNode): SemanticChild => node.children[0]!;
+    expect(badgeRowOf(wc)).toEqual(badgeRowOf(react));
+
+    // Pin against the actual dark-theme token value (not just "React === WC") so a bug that resolves both
+    // sides identically but against the wrong (e.g. light-default) theme would still be caught.
+    const badgeRow = badgeRowOf(react) as SemanticNode;
+    expect(badgeRow.style.color).toBe(cssColor(String(defaultDarkTheme["color.warning.text"])));
   });
 });

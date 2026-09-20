@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MESSAGES,
+  defaultDarkTheme,
+  defaultLightTheme,
   sandboxArtifactMissingText,
+  sandboxBadgeDescriptionStyle,
   sandboxBadgeDescriptionText,
+  sandboxBadgePillStyle,
+  sandboxBadgeRowStyle,
   sandboxBadgeText,
   sandboxBridgeMissingText,
   sandboxErrorNoticeText,
   sandboxLoadingNoticeText,
+  sandboxNoticeBaseStyle,
   sandboxNoticeToneStyle,
 } from "../../src/index.js";
 
@@ -34,9 +40,43 @@ describe("sandbox-chrome presenter (shared by SandboxFrame and mountSandboxNode)
     );
   });
 
-  it("tone → style mapping is distinct for info vs error (unknown tones are not accepted by the type)", () => {
-    expect(sandboxNoticeToneStyle("info")).toEqual({ background: "#f4f4f7", color: "#6b7280" });
-    expect(sandboxNoticeToneStyle("error")).toEqual({ background: "#fee2e2", color: "#991b1b" });
+  it("tone → style mapping resolves through the theme (info = surface/muted, error = negative surface/text)", () => {
+    expect(sandboxNoticeToneStyle("info", {})).toEqual({
+      background: defaultLightTheme["color.surface"],
+      color: defaultLightTheme["color.muted"],
+    });
+    expect(sandboxNoticeToneStyle("error", {})).toEqual({
+      background: defaultLightTheme["color.negative.surface"],
+      color: defaultLightTheme["color.negative.text"],
+    });
+    expect(sandboxNoticeToneStyle("error", defaultDarkTheme).background).toBe(
+      defaultDarkTheme["color.negative.surface"],
+    );
+  });
+
+  it("badge chrome is built from warning-tone and sizing tokens (no hard-coded hex)", () => {
+    expect(sandboxBadgeRowStyle({})).toMatchObject({
+      color: defaultLightTheme["color.warning.text"],
+      fontSize: "11px",
+    });
+    expect(sandboxBadgePillStyle({})).toMatchObject({
+      background: defaultLightTheme["color.warning.surface"],
+      borderRadius: "4px",
+    });
+    expect(sandboxBadgeDescriptionStyle({})).toEqual({ color: defaultLightTheme["color.muted"] });
+    expect(sandboxNoticeBaseStyle({})).toMatchObject({ borderRadius: "8px", fontSize: "12.5px" });
+  });
+
+  // The assertions above pin only the default-light resolution, which a hard-coded literal would also
+  // satisfy (defaultLightTheme's warning/muted values are the same strings the old hard-coded hex was).
+  // Re-resolve against defaultDarkTheme (whose warning/muted values are genuinely different strings) so a
+  // regression that hard-codes the light value back in would fail here even though the test above stays green.
+  it("badge chrome re-resolves against a non-default theme (proves it isn't still hard-coded)", () => {
+    expect(sandboxBadgeRowStyle(defaultDarkTheme).color).toBe(defaultDarkTheme["color.warning.text"]);
+    expect(sandboxBadgePillStyle(defaultDarkTheme).background).toBe(
+      defaultDarkTheme["color.warning.surface"],
+    );
+    expect(sandboxBadgeDescriptionStyle(defaultDarkTheme).color).toBe(defaultDarkTheme["color.muted"]);
   });
 
   it("messages are overridable like any other RendererMessages entry", () => {
