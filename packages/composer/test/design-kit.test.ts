@@ -65,7 +65,7 @@ export const EXPECTED_KIT_FRAGMENT = [
   "  - k-bar: bar rect (rounded corners)",
   "  - k-line: line-chart path (no fill, 2px stroke)",
   "- Utilities (exactly these names exist; any other utility name has no effect): flex, grid, hidden, w-full, flex-col, flex-wrap, items-center, items-start, justify-between, justify-end, grid-cols-2, grid-cols-3, grid-cols-4, gap-1, gap-2, gap-3, gap-4, gap-5, gap-6, p-1, p-2, p-3, p-4, p-5, p-6, px-1, px-2, px-3, px-4, px-5, px-6, py-1, py-2, py-3, py-4, py-5, py-6, m-0, mt-1, mt-2, mt-3, mt-4, mt-5, mt-6, mb-1, mb-2, mb-3, mb-4, mb-5, mb-6, text-xs, text-sm, text-md, text-lg, text-xl, text-2xl, text-muted, text-primary, text-positive, text-negative, text-left, text-center, text-right, truncate, tabular-nums, font-medium, font-semibold, font-bold, rounded-sm, rounded-md, rounded-lg, rounded-full, shadow-sm, shadow-md, border, border-b, bg-surface, bg-background",
-  "- Reserved prefixes (kit namespace; never use them for your own class names — pick names like chart-…, panel-…): k-, gap-, p-, px-, py-, m-, mt-, mb-, text-, font-, rounded-, shadow-, bg-, grid-cols-, items-, justify-, flex-, border-, w-",
+  "- Reserved prefixes (kit namespace; never use them for your own class names — pick names like chart-…, panel-…): k-, gap-, p-, px-, py-, pt-, pb-, pl-, pr-, m-, mx-, my-, mt-, mb-, ml-, mr-, text-, font-, rounded-, shadow-, bg-, grid-cols-, items-, justify-, flex-, border-, w-, h-",
   "- Skeleton of a well-formed widget body (adapt it; do not copy verbatim):",
   '  <div class="k-card">',
   '    <div class="k-card-title">Sales by region</div>',

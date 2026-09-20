@@ -1,5 +1,6 @@
 import { type ComponentNode, SANDBOX_HTML_TYPE, sha256Hex } from "@kohaku-ui/spec-core";
 import { resolveTierLlm } from "../context.js";
+import type { DesignKitVocabulary } from "../design-system.js";
 import { KOHAKU_API_ALLOWLIST } from "../l2-api.js";
 import { buildL2PromptParts, L2_SYSTEM_PROMPT } from "../prompt.js";
 import { resolveMaxAttempts, runRepairLoop, type TierRequest, type TierResult } from "./shared.js";
@@ -46,7 +47,13 @@ function canCheckScriptSyntax(): boolean {
  * opts.enforceTokenColors is the raw-color check (L2_RAW_COLOR) for when a design system is applied.
  * Default false (the conventional behavior with designSystem unset is completely unchanged). generateL2 wires it from ComposePolicy.designSystem.
  */
-export function collectL2Issues(html: string, opts?: { enforceTokenColors?: boolean }): string[] {
+export function collectL2Issues(
+  html: string,
+  opts?: {
+    enforceTokenColors?: boolean;
+    kit?: Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">;
+  },
+): string[] {
   const issues: string[] = [];
   const used = new Set<string>();
   // Extract the window.kohaku.xxx / kohaku?.xxx form (on the premise that, since L2_SYSTEM_PROMPT enforces
@@ -149,11 +156,64 @@ export function collectL2Issues(html: string, opts?: { enforceTokenColors?: bool
         "var(--kohaku-color-background), chart series var(--kohaku-chart-palette-1) …)",
     );
   }
+  // Unknown kit class detection (only when a design kit is applied). A class in the kit's namespace that
+  // the vocabulary does not define renders unstyled — exactly the "browser default look" the kit exists
+  // to prevent — so send it back with the list of offenders. Classes outside the namespaces (the
+  // model's own, styled in its <style>) are never flagged.
+  if (opts?.kit != null) {
+    const unknown = collectUnknownKitClasses(html, opts.kit);
+    if (unknown.length > 0) {
+      issues.push(
+        `L2_UNKNOWN_CLASS: these class names look like design-kit classes but do not exist in the kit: ${unknown.join(", ")}. ` +
+          "Use only the component classes and utilities listed in the Design kit section, or rename them to your own classes and style those in <style> with var(--kohaku-*) tokens",
+      );
+    }
+  }
   return issues;
 }
 
 /** Raw-color detection pattern (hex literal / rgb() / rgba() / hsl() / hsla()). */
 const L2_RAW_COLOR_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/;
+
+/**
+ * class="…" / class='…' attributes, className = "…" assignments, classList.add("…", …) calls, and
+ * setAttribute("class", "…") calls (the form SVG elements must use, since className is read-only there).
+ */
+const CLASS_ATTR_RE = /\bclass\s*=\s*(["'])([^"']*)\1/g;
+const CLASS_NAME_ASSIGN_RE = /\bclassName\s*=\s*(["'`])([^"'`]*)\1/g;
+const CLASS_LIST_ADD_RE = /\bclassList\s*\.\s*add\s*\(([^)]*)\)/g;
+const SET_CLASS_ATTR_RE = /\bsetAttribute\s*\(\s*(["'])class\1\s*,\s*(["'`])([^"'`]*)\2\s*\)/g;
+const STRING_LITERAL_RE = /(["'`])([^"'`]*)\1/g;
+
+/**
+ * Collects the sorted, unique class names in the HTML that fall inside the kit's namespaces but are not
+ * defined by the vocabulary (component classes or utilities). Exported for the Python sidecar parity
+ * test and for products that want to pre-check a hand-written artifact.
+ */
+export function collectUnknownKitClasses(
+  html: string,
+  kit: Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">,
+): string[] {
+  const known = new Set<string>([...Object.keys(kit.classes), ...kit.utilities]);
+  const found = new Set<string>();
+  const consider = (list: string): void => {
+    for (const cls of list.split(/\s+/)) {
+      if (cls === "" || known.has(cls)) continue;
+      // A token carrying interpolation (`k-series-${i}`) or a trailing dash (a prefix awaiting
+      // concatenation) resolves to a different string at runtime, so flagging its source text
+      // would reject a valid widget and name a class the model never used.
+      if (cls.includes("${") || cls.endsWith("-")) continue;
+      if (kit.namespaces.some((ns) => cls.startsWith(ns))) found.add(cls);
+    }
+  };
+  for (const m of html.matchAll(CLASS_ATTR_RE)) consider(m[2]!);
+  for (const m of html.matchAll(CLASS_NAME_ASSIGN_RE)) consider(m[2]!);
+  for (const m of html.matchAll(CLASS_LIST_ADD_RE)) {
+    for (const lit of m[1]!.matchAll(STRING_LITERAL_RE)) consider(lit[2]!);
+  }
+  for (const m of html.matchAll(SET_CLASS_ATTR_RE)) consider(m[3]!);
+  return [...found].sort();
+}
 
 /**
  * Navigation detection pattern (meta refresh / location assignment / window.open). Tolerant of spacing and
@@ -272,6 +332,9 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
   // section and the enabling of the raw-color lint (L2_RAW_COLOR) (enforceTokenColors default true).
   const designSystem = ctx.policy?.designSystem;
   const enforceTokenColors = designSystem != null && designSystem.enforceTokenColors !== false;
+  // Design-kit lint (L2_UNKNOWN_CLASS) is enabled when designSystem.kit is set unless enforceKitClasses is false.
+  const kitForLint =
+    designSystem?.kit != null && designSystem.enforceKitClasses !== false ? designSystem.kit : undefined;
   // ComposeContext.llmByTier resolution (additive; resolves to ctx.llm when unset — see resolveTierLlm's doc).
   const llm = resolveTierLlm(ctx, "L2");
   const effort = ctx.policy?.effort?.l2;
@@ -317,7 +380,10 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
       },
       async validate(raw) {
         const html = raw as string;
-        let issues = collectL2Issues(html, { enforceTokenColors });
+        let issues = collectL2Issues(html, {
+          enforceTokenColors,
+          ...(kitForLint != null ? { kit: kitForLint } : {}),
+        });
         // Once the static lint passes, pre-delivery smoke validation (an optional hook). Detects, via jsdom
         // execution, failures that a lexical lint slips past — such as ready() not being reached due to a
         // runtime TypeError — and sends them back for repair. A throw is fail-open (skip the check =
