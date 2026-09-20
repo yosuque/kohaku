@@ -3,6 +3,7 @@ import { GENERATED_SCAN_WINDOW, RECONCILE_AUDIT_SCAN_WINDOW } from "../constants
 import type { ActorKind, LineageEventType } from "../events.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
+import { recordFailOpen } from "./audit.js";
 import { createCandidateStore } from "./candidate-store.js";
 import {
   type ComponentDraft,
@@ -460,25 +461,20 @@ export function createPromotions(opts: {
     //    block the projection below (the whole point of publishing), so it is reported via onError rather than
     //    thrown. The snapshot is already published (step 2), so `reconcile`'s audit backfill (below) later
     //    detects the missing component.published event and re-records it (with reconciled:true).
-    try {
-      await opts.lineage.record(
-        "component.published",
-        {
-          artifactId,
-          componentType: candidate.draft.componentType,
-          version: action.version,
-          intentName: candidate.draft.intentName,
-        },
-        undefined,
-        tenant,
-      );
-    } catch (e) {
-      notifyPromotionError(
-        opts.onError,
-        { endpoint: "promotion.publish.audit", artifactId, ...tenantField(tenant) },
-        e,
-      );
-    }
+    await recordFailOpen(
+      opts.lineage,
+      opts.onError,
+      "promotion.publish.audit",
+      "component.published",
+      {
+        artifactId,
+        componentType: candidate.draft.componentType,
+        version: action.version,
+        intentName: candidate.draft.intentName,
+      },
+      undefined,
+      { tenant, artifactId },
+    );
     // 4. Projection application (idempotent). A failure is a "not-reflected" against the snapshot authority, and reconcile converges it.
     await opts.onPublish?.(publishArgs(candidate, tenant));
     // publish already persisted above (do not run the common persist at the end twice).
@@ -515,25 +511,20 @@ export function createPromotions(opts: {
     //    own audit record: a storage hiccup here must not block the projection removal below (the whole point of
     //    unpublishing). The snapshot is already withdrawn (step 1), so `reconcile`'s audit backfill later detects
     //    the missing component.withdrawn (from:"published") event and re-records it (with reconciled:true).
-    try {
-      await opts.lineage.record(
-        "component.withdrawn",
-        {
-          artifactId,
-          from: "published",
-          by: actor.id,
-          ...(action.reason != null ? { reason: action.reason } : {}),
-        },
-        { kind: "user", id: actor.id },
-        tenant,
-      );
-    } catch (e) {
-      notifyPromotionError(
-        opts.onError,
-        { endpoint: "promotion.unpublish.audit", artifactId, ...tenantField(tenant) },
-        e,
-      );
-    }
+    await recordFailOpen(
+      opts.lineage,
+      opts.onError,
+      "promotion.unpublish.audit",
+      "component.withdrawn",
+      {
+        artifactId,
+        from: "published",
+        by: actor.id,
+        ...(action.reason != null ? { reason: action.reason } : {}),
+      },
+      { kind: "user", id: actor.id },
+      { tenant, artifactId },
+    );
     // 3. Projection removal (idempotent; reconcile re-runs it against any lingering projection).
     await opts.onUnpublish?.({
       artifactId,
@@ -836,30 +827,21 @@ export function createPromotions(opts: {
         // all) and falls through unchanged to the "unrecoverable" skip+onError path below.
         if (candidate != null && candidate.status !== "published") continue;
         if (candidate?.draft != null && !publishedAuditKeys.has(key)) {
-          try {
-            await opts.lineage.record(
-              "component.published",
-              {
-                artifactId: state.artifactId,
-                componentType: candidate.draft.componentType,
-                version: candidate.draft.version,
-                intentName: candidate.draft.intentName,
-                reconciled: true,
-              },
-              undefined,
-              state.tenant,
-            );
-          } catch (e) {
-            notifyPromotionError(
-              opts.onError,
-              {
-                endpoint: "promotion.reconcile.audit",
-                artifactId: state.artifactId,
-                ...tenantField(state.tenant),
-              },
-              e,
-            );
-          }
+          await recordFailOpen(
+            opts.lineage,
+            opts.onError,
+            "promotion.reconcile.audit",
+            "component.published",
+            {
+              artifactId: state.artifactId,
+              componentType: candidate.draft.componentType,
+              version: candidate.draft.version,
+              intentName: candidate.draft.intentName,
+              reconciled: true,
+            },
+            undefined,
+            { tenant: state.tenant, artifactId: state.artifactId },
+          );
         }
         if (opts.onPublish == null) continue;
         // The projection cannot be reconstructed unless both draft (state, or the snapshot's own duplicate) and
@@ -903,24 +885,15 @@ export function createPromotions(opts: {
       // by `from: "published"` so a pre-promotion withdraw's own (unrelated) withdrawn event does not suppress
       // this backfill.
       if (!withdrawnFromPublishedAuditKeys.has(key)) {
-        try {
-          await opts.lineage.record(
-            "component.withdrawn",
-            { artifactId: state.artifactId, from: "published", reconciled: true },
-            undefined,
-            state.tenant,
-          );
-        } catch (e) {
-          notifyPromotionError(
-            opts.onError,
-            {
-              endpoint: "promotion.reconcile.audit",
-              artifactId: state.artifactId,
-              ...tenantField(state.tenant),
-            },
-            e,
-          );
-        }
+        await recordFailOpen(
+          opts.lineage,
+          opts.onError,
+          "promotion.reconcile.audit",
+          "component.withdrawn",
+          { artifactId: state.artifactId, from: "published", reconciled: true },
+          undefined,
+          { tenant: state.tenant, artifactId: state.artifactId },
+        );
       }
       await opts.onUnpublish({
         artifactId: state.artifactId,
