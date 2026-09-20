@@ -263,34 +263,24 @@ async function composeAndPackage(
   const result = await composeAndAudit(ctx, input, "compose", {
     ...callCtx,
     afterCompose: async (composed) => {
-      // host-core's issueCapabilityForSpec applies the scope-collection rule (SPEC §5 A1; collectCapabilityScopes
-      // is the single source of truth), shared with the REST profile so both profiles agree on the issuance rule.
-      // Without read enumeration of bind variants, a bind switch (state.set → effective ref re-resolution) is
-      // rejected by resolve_binding's verify (exact match) and the A1 cross-filter fails on the MCP surface only.
-      // Without write, ${prefix}_action's verify (write) does not pass, and form submission /
-      // action.button always returns 403 on the MCP surface.
+      // host-core's issueSpecCapabilitySafely applies the scope-collection rule (SPEC §5 A1;
+      // collectCapabilityScopes is the single source of truth), shared with the REST profile so both profiles
+      // agree on the issuance rule. Without read enumeration of bind variants, a bind switch (state.set →
+      // effective ref re-resolution) is rejected by resolve_binding's verify (exact match) and the A1
+      // cross-filter fails on the MCP surface only. Without write, ${prefix}_action's verify (write) does not
+      // pass, and form submission / action.button always returns 403 on the MCP surface.
       //
       // Write scopes are additionally restricted to DomainPort.listOperations() names (hardening against a
       // hallucinated/injected action.invoke action name becoming a bearer write scope), symmetric with the
-      // REST profile's issueCapabilityForSpec wrapper. If listOperations rejects, fall back to an empty allowed
-      // set (fail-closed for writes; delivery proceeds).
-      let allowed: ReadonlySet<string>;
-      try {
-        allowed = await ctx.allowedActions();
-      } catch (e) {
-        await reportMcpError(ctx.deps, "compose.capability", e);
-        allowed = new Set();
-      }
-      capability = await hostCore.issueCapabilityForSpec(
+      // REST profile's issueSpecCapability wrapper. If listOperations rejects, issueSpecCapabilitySafely falls
+      // back to an empty allowed set (fail-closed for writes; delivery proceeds) and reports the rejection.
+      capability = await hostCore.issueSpecCapabilitySafely(
         ctx.deps.authz,
         ctx.principal,
         composed.spec,
+        ctx.allowedActions,
+        (e) => reportMcpError(ctx.deps, "compose.capability", e),
         undefined,
-        {
-          allowedActions: allowed,
-          onDroppedAction: (action) =>
-            void reportMcpError(ctx.deps, "compose.capability", new hostCore.WriteScopeDroppedError(action)),
-        },
       );
     },
   });

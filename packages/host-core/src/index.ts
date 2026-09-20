@@ -6,6 +6,7 @@ export {
   type IssueCapabilityOptions,
   issueCapabilityForRefs,
   issueCapabilityForSpec,
+  issueSpecCapabilitySafely,
   WriteScopeDroppedError,
 } from "./capability.js";
 export { clientMessageFor, errorMessage, failOpen, isTypedHostError, notifyHook } from "./errors.js";

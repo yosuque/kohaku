@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_CAPABILITY_TTL_SECONDS,
   issueCapabilityForSpec,
+  issueSpecCapabilitySafely,
   WriteScopeDroppedError,
 } from "../src/capability.js";
 
@@ -134,5 +135,86 @@ describe("issueCapabilityForSpec", () => {
     expect(err.action).toBe("sales.updateTarget");
     expect(err.name).toBe("WriteScopeDroppedError");
     expect(err.message).toContain("sales.updateTarget");
+  });
+});
+
+describe("issueSpecCapabilitySafely", () => {
+  it("reports the error and issues fail-closed (empty allowed set) when allowedActions rejects", async () => {
+    const issueCapability = vi.fn(
+      async (_p: Principal, _s: Scope[], _o?: { ttlSeconds?: number }) => "cap-token",
+    );
+    const authz: AuthzPort = {
+      issueCapability,
+      async verify() {
+        return { ok: true, principal: PRINCIPAL };
+      },
+    };
+    const listOperationsError = new Error("listOperations failed");
+    const allowedActions = vi.fn(async (): Promise<ReadonlySet<string>> => {
+      throw listOperationsError;
+    });
+    const report = vi.fn();
+
+    // No write (action.invoke) scope here on purpose: this spec's only scope is a read $ref, so the empty
+    // allowed set from the rejection cannot additionally trigger onDroppedAction — report must be called
+    // exactly once, for the rejection itself.
+    const readOnlySpec: UISpec = {
+      ...specWithRefAndAction(),
+      events: [],
+    };
+
+    const token = await issueSpecCapabilitySafely(authz, PRINCIPAL, readOnlySpec, allowedActions, report);
+
+    expect(token).toBe("cap-token");
+    expect(report).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledWith(listOperationsError);
+    const [, scopes] = issueCapability.mock.calls[0]!;
+    expect(scopes).not.toContainEqual({ kind: "write", ref: "sales.updateTarget" });
+    expect(scopes).toContainEqual({ kind: "read", ref: "query://sales/summary?fy=2026" });
+  });
+
+  it("reports a WriteScopeDroppedError for an action.invoke ref outside allowedActions", async () => {
+    const issueCapability = vi.fn(
+      async (_p: Principal, _s: Scope[], _o?: { ttlSeconds?: number }) => "cap-token",
+    );
+    const authz: AuthzPort = {
+      issueCapability,
+      async verify() {
+        return { ok: true, principal: PRINCIPAL };
+      },
+    };
+    const allowedActions = vi.fn(async (): Promise<ReadonlySet<string>> => new Set(["a"]));
+    const report = vi.fn();
+
+    const spec = specWithRefAndAction();
+    spec.events = [{ on: "root.submit", emit: "action.invoke", payload: { action: "b" } }];
+
+    const token = await issueSpecCapabilitySafely(authz, PRINCIPAL, spec, allowedActions, report);
+
+    expect(token).toBe("cap-token");
+    expect(report).toHaveBeenCalledTimes(1);
+    const [reportedError] = report.mock.calls[0]!;
+    expect(reportedError).toBeInstanceOf(WriteScopeDroppedError);
+    expect((reportedError as WriteScopeDroppedError).action).toBe("b");
+  });
+
+  it("passes ttlSeconds through to issueCapabilityForSpec", async () => {
+    const issueCapability = vi.fn(
+      async (_p: Principal, _s: Scope[], _o?: { ttlSeconds?: number }) => "cap-token",
+    );
+    const authz: AuthzPort = {
+      issueCapability,
+      async verify() {
+        return { ok: true, principal: PRINCIPAL };
+      },
+    };
+    const allowedActions = vi.fn(async (): Promise<ReadonlySet<string>> => new Set(["sales.updateTarget"]));
+    const report = vi.fn();
+
+    await issueSpecCapabilitySafely(authz, PRINCIPAL, specWithRefAndAction(), allowedActions, report, 120);
+
+    const [, , opts] = issueCapability.mock.calls[0]!;
+    expect(opts).toEqual({ ttlSeconds: 120 });
+    expect(report).not.toHaveBeenCalled();
   });
 });

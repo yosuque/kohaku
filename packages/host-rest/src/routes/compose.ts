@@ -526,16 +526,16 @@ function capabilityTtl(deps: KohakuHostDeps): number {
 
 /**
  * Issues a capability matching the Spec's declarations (components' read references + the /binding/action
- * write-through path). The scope-collection rule itself lives in host-core's issueCapabilityForSpec (which in
- * turn consumes spec-core's collectCapabilityScopes, the single source of truth), shared with the MCP profile
- * (host-mcp-apps' issueCapability) so both profiles agree on the issuance rule.
+ * write-through path). Delegates to host-core's issueSpecCapabilitySafely, the fail-closed wrapper shared with
+ * the MCP profile (host-mcp-apps' composeAndPackage), which in turn consumes issueCapabilityForSpec / spec-core's
+ * collectCapabilityScopes (the single source of truth) so both profiles agree on the issuance rule.
  *
  * Write scopes are additionally restricted to the DomainPort's listOperations() names (hardening against a
  * hallucinated/injected action.invoke action name becoming a bearer write scope): the allowed set is memoized
- * per deps (listOperations is async and must not be awaited on every compose), and a dropped action is
- * reported via the endpoint's onError hook as a WriteScopeDroppedError. If listOperations itself rejects, the
- * capability is still issued but fail-closed for writes (an empty allowed set — every write scope is dropped),
- * and the rejection is reported the same way; delivery proceeds either way.
+ * per deps below (listOperations is async and must not be awaited on every compose). issueSpecCapabilitySafely
+ * reports a dropped action via the endpoint's onError hook as a WriteScopeDroppedError, and — if listOperations
+ * itself rejects — still issues the capability but fail-closed for writes (an empty allowed set), reporting the
+ * rejection the same way; delivery proceeds either way.
  */
 async function issueSpecCapability(
   spec: UISpec,
@@ -544,18 +544,14 @@ async function issueSpecCapability(
   endpoint: string,
   requestId: string,
 ): Promise<string> {
-  let allowed: ReadonlySet<string>;
-  try {
-    allowed = await allowedActions(deps);
-  } catch (e) {
-    await reportHostError(deps, endpoint, requestId, e);
-    allowed = new Set();
-  }
-  return hostCore.issueCapabilityForSpec(deps.authz, principal, spec, capabilityTtl(deps), {
-    allowedActions: allowed,
-    onDroppedAction: (action) =>
-      void reportHostError(deps, endpoint, requestId, new hostCore.WriteScopeDroppedError(action)),
-  });
+  return hostCore.issueSpecCapabilitySafely(
+    deps.authz,
+    principal,
+    spec,
+    () => allowedActions(deps),
+    (e) => reportHostError(deps, endpoint, requestId, e),
+    capabilityTtl(deps),
+  );
 }
 
 /**
