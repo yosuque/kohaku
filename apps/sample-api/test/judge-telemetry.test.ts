@@ -121,7 +121,7 @@ describe("runtime telemetry integration into promotion review (B7 Pillar 2)", ()
     const judged = events.find((e) => e.type === "component.judged");
     const verdict = judged!.payload["verdict"] as Record<string, unknown>;
     expect(verdict["rubricId"]).toBe("l2-promotion");
-    expect(verdict["rubricVersion"]).toBe("0.1");
+    expect(verdict["rubricVersion"]).toBe("0.2");
   });
 });
 

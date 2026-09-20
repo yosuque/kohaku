@@ -49,7 +49,7 @@ describe("createJudge: L2 promotion review (judge)", () => {
     expect(verdict.score).toBe(0.8);
     expect(verdict.pass).toBe(true);
     expect(verdict.rubricId).toBe("l2-promotion");
-    expect(verdict.rubricVersion).toBe("0.1");
+    expect(verdict.rubricVersion).toBe("0.2");
     expect(verdict.summary).toBe("worthy of promotion");
   });
 
@@ -120,7 +120,7 @@ describe("createJudge: L1 quality scoring (judgeSpec)", () => {
 
 describe("createJudge: error cases of missing and unknown criterion", () => {
   it("when the response omits a criterion its score falls back to 0 / reasoning to (not evaluated)", async () => {
-    // A response that omits safety (weight 0.3) and returns full marks for the remaining 4 criteria.
+    // A response that omits safety (weight 0.25) and returns full marks for the remaining 5 criteria.
     const llm = new FakeLlm({
       objects: [
         {
@@ -141,8 +141,8 @@ describe("createJudge: error cases of missing and unknown criterion", () => {
     const safety = verdict.criteria.find((c) => c.id === "safety")!;
     expect(safety.score).toBe(0);
     expect(safety.reasoning).toBe("(not evaluated)");
-    // The missing criterion (weight 0.3) is combined as 0 points: the remaining 4 criteria are full marks, so score = 1 - 0.3 = 0.7.
-    expect(verdict.score).toBe(0.7);
+    // The missing criterion (weight 0.25) is combined as 0 points: the remaining 5 criteria are full marks, so score = 1 - 0.25 = 0.75.
+    expect(verdict.score).toBe(0.75);
   });
 
   it("unknown criterion ids mixed into the response are ignored and do not affect the score", async () => {

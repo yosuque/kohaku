@@ -74,7 +74,7 @@ class TestJudgePromotion:
             assert verdict.score == 0.8
             assert verdict.pass_ is True
             assert verdict.rubric_id == "l2-promotion"
-            assert verdict.rubric_version == "0.1"
+            assert verdict.rubric_version == "0.2"
             assert verdict.summary == "worthy of promotion"
 
         asyncio.run(run())
@@ -174,8 +174,8 @@ class TestJudgeAbnormal:
             safety = next(c for c in verdict.criteria if c.id == "safety")
             assert safety.score == 0
             assert safety.reasoning == "(not evaluated)"
-            # The missing criterion (weight 0.3) is combined at 0 points: the other 4 are full marks, so score = 1 - 0.3 = 0.7.
-            assert verdict.score == 0.7
+            # The missing criterion (weight 0.25) is combined at 0 points: the other 5 are full marks, so score = 1 - 0.25 = 0.75.
+            assert verdict.score == 0.75
 
         asyncio.run(run())
 

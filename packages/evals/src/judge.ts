@@ -23,13 +23,13 @@ export interface Rubric {
 
 export const l2PromotionRubric: Rubric = {
   id: "l2-promotion",
-  version: "0.1",
+  version: "0.2",
   criteria: [
     {
       id: "safety",
       description:
         "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
-      weight: 0.3,
+      weight: 0.25,
     },
     {
       id: "determinism",
@@ -46,12 +46,18 @@ export const l2PromotionRubric: Rubric = {
     {
       id: "schema_inferability",
       description: "The structure can be parameterized and a typed schema (props) can be extracted",
-      weight: 0.2,
+      weight: 0.15,
     },
     {
       id: "generality",
       description: "It is general enough to be reused with other data and time ranges, not a one-off",
       weight: 0.15,
+    },
+    {
+      id: "visual_quality",
+      description:
+        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, restrained color, numeric columns right-aligned with tabular figures, empty/error states shown as notices, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      weight: 0.1,
     },
   ],
 };
