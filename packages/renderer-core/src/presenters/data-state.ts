@@ -1,7 +1,7 @@
 import type { ThemeTokens } from "@kohaku-ui/spec-core";
 import type { RendererMessages } from "../messages.js";
 import type { BoundData } from "../stores/bound-data-controller.js";
-import { resolveToken } from "../theme.js";
+import { resolveToken, type SizingTokens } from "../theme.js";
 
 /** The resolved view for a non-ready BoundData notice (loading / stale / error). */
 export interface DataStateView {
@@ -44,4 +44,15 @@ export function resolveDataStateView(
   // error is an interruptive notification (role=alert); loading/stale are non-interruptive (role=status).
   const role = state.status === "error" ? "alert" : "status";
   return { role, bg: s.bg, fg: s.fg, text: message || s.text };
+}
+
+/** The loading / stale / error notice box (React's DataStateNotice and WC's dataStateNotice). */
+export function dataStateNoticeStyle(view: { bg: string; fg: string }, sizing: SizingTokens) {
+  return {
+    background: view.bg,
+    color: view.fg,
+    borderRadius: sizing.radiusMd,
+    padding: `${sizing.space2} ${sizing.space3}`,
+    fontSize: sizing.fontSm,
+  } as const;
 }

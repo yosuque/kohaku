@@ -74,7 +74,7 @@ export const defaultLightTheme: ThemeDefaults = {
   "chart.palette": DEFAULT_CHART_PALETTE.join(","),
   ...NON_COLOR_DEFAULTS,
   "shadow.sm": "0 1px 2px rgb(0 0 0 / .06)",
-  "shadow.md": "0 4px 16px rgb(0 0 0 / .12)",
+  "shadow.md": "0 8px 32px rgb(0 0 0 / .18)",
 };
 
 /**
@@ -127,7 +127,7 @@ export const defaultDarkTheme: ThemeDefaults = {
   "chart.palette": "#818cf8,#38bdf8,#34d399,#fbbf24,#f87171,#a78bfa,#2dd4bf",
   ...NON_COLOR_DEFAULTS,
   "shadow.sm": "0 1px 2px rgb(0 0 0 / .5)",
-  "shadow.md": "0 4px 16px rgb(0 0 0 / .55)",
+  "shadow.md": "0 8px 32px rgb(0 0 0 / .6)",
 };
 
 /**
@@ -403,3 +403,11 @@ export function resolveSizing(theme: ThemeTokens): SizingTokens {
     motionEasing: t("motion.easing"),
   };
 }
+
+/**
+ * The resolved default-light sizing bag. Presenters take `sizing: SizingTokens = DEFAULT_SIZING` as
+ * their last parameter, so every call site that predates sizing tokens (renderer-react / renderer-wc
+ * call sites that do not yet pass a `sizing` argument) keeps resolving the exact same values it always
+ * has, without needing to be touched.
+ */
+export const DEFAULT_SIZING: SizingTokens = resolveSizing({});

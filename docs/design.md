@@ -379,7 +379,7 @@ Control value → client-local state `$state` → injection into the query param
 | Font size | `font.size.xs / sm / md / lg / xl / 2xl` | `11px / 12.5px / 13.5px / 15px / 20px / 28px` |
 | Space | `space.1 … space.6` | `4px / 8px / 12px / 16px / 24px / 32px` |
 | Radius | `radius.sm / md / lg / full` | `4px / 8px / 12px / 9999px` |
-| Shadow | `shadow.sm / md` | light `0 1px 2px rgb(0 0 0 / .06)` / `0 4px 16px rgb(0 0 0 / .12)`; dark `0 1px 2px rgb(0 0 0 / .5)` / `0 4px 16px rgb(0 0 0 / .55)` |
+| Shadow | `shadow.sm / md` | light `0 1px 2px rgb(0 0 0 / .06)` / `0 8px 32px rgb(0 0 0 / .18)`; dark `0 1px 2px rgb(0 0 0 / .5)` / `0 8px 32px rgb(0 0 0 / .6)` |
 | Motion | `motion.duration / motion.easing` | `150ms` / `cubic-bezier(.2,0,0,1)` |
 
 | Token | light | dark | Usage |

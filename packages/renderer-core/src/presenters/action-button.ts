@@ -1,3 +1,5 @@
+import { DEFAULT_SIZING, type SizingTokens } from "../theme.js";
+
 /** Token bag needed to resolve action.button's variant color scheme. */
 export interface ActionButtonTokens {
   primary: string;
@@ -16,14 +18,16 @@ export function actionButtonStyle(
   variant: string,
   tokens: ActionButtonTokens,
   options: { disabled: boolean },
+  sizing: SizingTokens = DEFAULT_SIZING,
 ) {
   const { disabled } = options;
   const colors = actionButtonVariantColors(variant, tokens);
   return {
     alignSelf: "flex-start",
-    borderRadius: 6,
-    padding: "8px 18px",
-    fontSize: 13.5,
+    borderRadius: sizing.radiusMd,
+    padding: `${sizing.space2} ${sizing.space4}`,
+    fontSize: sizing.fontMd,
+    fontWeight: 600,
     cursor: disabled ? ("not-allowed" as const) : ("pointer" as const),
     opacity: disabled ? 0.5 : 1,
     ...colors,

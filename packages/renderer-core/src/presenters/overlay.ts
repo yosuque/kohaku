@@ -10,7 +10,7 @@
 // mode too).
 
 import type { KnownThemeTokens, ThemeTokens } from "@kohaku-ui/spec-core";
-import { resolveToken } from "../theme.js";
+import { DEFAULT_SIZING, resolveSizing, resolveToken, type SizingTokens } from "../theme.js";
 
 type StyleRecord = Record<string, string | number>;
 
@@ -31,19 +31,20 @@ export const dialogOverlayStyle: StyleRecord = {
 
 /** The dialog body box (a surface floating over the scrim = color.surface). danger indicates severity with a top band (accentBorder). */
 export function dialogBoxStyle(theme: ThemeTokens, accentBorder: string): StyleRecord {
+  const s = resolveSizing(theme);
   return {
     display: "flex",
     flexDirection: "column",
-    gap: 12,
+    gap: s.space3,
     width: "100%",
     maxWidth: 480,
     maxHeight: "calc(100vh - 32px)",
     overflowY: "auto",
-    padding: 20,
+    padding: s.space5,
     background: String(resolveToken(theme, "color.surface")),
-    borderRadius: 10,
+    borderRadius: s.radiusLg,
     borderTop: `4px solid ${accentBorder}`,
-    boxShadow: "0 10px 40px rgba(0, 0, 0, 0.2)",
+    boxShadow: s.shadowMd,
   };
 }
 
@@ -56,8 +57,8 @@ export const dialogHeaderStyle: StyleRecord = {
 };
 
 /** Title heading (pass a danger color for danger, the normal color for default). */
-export function dialogTitleStyle(color: string): StyleRecord {
-  return { margin: 0, fontSize: 16, fontWeight: 700, color };
+export function dialogTitleStyle(color: string, sizing: SizingTokens = DEFAULT_SIZING): StyleRecord {
+  return { margin: 0, fontSize: sizing.fontLg, fontWeight: 700, color };
 }
 
 /** The close (×) button. */
@@ -67,7 +68,7 @@ export function dialogCloseButtonStyle(theme: ThemeTokens): StyleRecord {
     background: "none",
     border: "none",
     padding: 0,
-    fontSize: 18,
+    fontSize: resolveSizing(theme).fontXl,
     lineHeight: 1,
     cursor: "pointer",
     color: String(resolveToken(theme, "color.muted")),
@@ -78,7 +79,7 @@ export function dialogCloseButtonStyle(theme: ThemeTokens): StyleRecord {
 export function dialogDescriptionStyle(theme: ThemeTokens): StyleRecord {
   return {
     margin: 0,
-    fontSize: 13.5,
+    fontSize: resolveSizing(theme).fontMd,
     color: String(resolveToken(theme, "color.muted")),
   };
 }
@@ -126,7 +127,7 @@ export function toastToneColors(theme: ThemeTokens, tone: string): ToastToneColo
 }
 
 /** The toast body style (floating at the bottom center). */
-export function toastStyle(colors: ToastToneColors): StyleRecord {
+export function toastStyle(colors: ToastToneColors, sizing: SizingTokens = DEFAULT_SIZING): StyleRecord {
   return {
     position: "fixed",
     left: "50%",
@@ -134,15 +135,15 @@ export function toastStyle(colors: ToastToneColors): StyleRecord {
     transform: "translateX(-50%)",
     display: "flex",
     alignItems: "center",
-    gap: 12,
+    gap: sizing.space3,
     maxWidth: 480,
-    padding: "10px 16px",
+    padding: `${sizing.space3} ${sizing.space4}`,
     background: colors.bg,
     color: colors.fg,
     border: `1px solid ${colors.border}`,
-    borderRadius: 8,
-    fontSize: 13.5,
-    boxShadow: "0 4px 16px rgba(0, 0, 0, 0.12)",
+    borderRadius: sizing.radiusMd,
+    fontSize: sizing.fontMd,
+    boxShadow: sizing.shadowMd,
     zIndex: 1000,
   };
 }

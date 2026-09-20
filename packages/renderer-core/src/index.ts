@@ -39,7 +39,7 @@ export {
   prepareRows,
   resolveChartConfig,
 } from "./presenters/chart.js";
-export { type DataStateView, resolveDataStateView } from "./presenters/data-state.js";
+export { type DataStateView, dataStateNoticeStyle, resolveDataStateView } from "./presenters/data-state.js";
 export {
   asStringArray,
   buildDefaults,
@@ -56,16 +56,18 @@ export {
   type FieldViolationRule,
   FORM_ROOT_STYLE,
   type FormSubmitPlan,
+  fieldRowStyle,
   focusFieldSelectors,
   formControlBaseStyle,
   formFillKey,
+  formRootStyle,
   formSubmitButtonStyle,
   mergeRow,
   normalizeOptions,
   planFormSubmit,
   validateFormValues,
 } from "./presenters/form.js";
-export { GAP, HARD_ROW_CAP } from "./presenters/layout.js";
+export { GAP, gapFor, HARD_ROW_CAP } from "./presenters/layout.js";
 export {
   type MarkdownBlock,
   type MarkdownInline,
@@ -81,8 +83,20 @@ export {
   type MetricFormat,
   type MetricView,
   type MetricViewTokens,
+  metricCardStyle,
+  metricDeltaStyle,
+  metricLabelStyle,
+  metricValueStyle,
   resolveMetricView,
 } from "./presenters/metric.js";
+export {
+  chartCaptionStyle,
+  chartTableStyle,
+  controlSelectStyle,
+  listEmptyStyle,
+  loadingStyle,
+  renderFailureNoticeStyle,
+} from "./presenters/misc-style.js";
 export {
   dialogBoxStyle,
   dialogCloseButtonStyle,
@@ -154,6 +168,14 @@ export {
   tabButtonStyle,
 } from "./presenters/tabs.js";
 export {
+  textBodyStyle,
+  textCodeStyle,
+  textHeadingStyle,
+  textListStyle,
+  textPreStyle,
+  textSubheadingStyle,
+} from "./presenters/text-style.js";
+export {
   createSpreadsheetRemoteController,
   type SpreadsheetRemoteController,
   type SpreadsheetRemoteControllerDeps,
@@ -180,6 +202,7 @@ export {
   type SpecStateStore,
 } from "./stores/spec-state-store.js";
 export {
+  DEFAULT_SIZING,
   defaultDarkTheme,
   defaultLightTheme,
   HOST_STYLE_VARIABLE_MAP,

@@ -1,6 +1,7 @@
 import type { PresentFormField } from "@kohaku-ui/registry";
 import type { ComponentNode, JsonObject, JsonValue } from "@kohaku-ui/spec-core";
 import type { RendererMessages } from "../messages.js";
+import { DEFAULT_SIZING, type SizingTokens } from "../theme.js";
 
 /** The type is defined solely in registry (present-form.ts); here it is shared via a type-only import. */
 export type FieldDef = PresentFormField;
@@ -296,9 +297,13 @@ export function describeControl(field: FieldDef): ControlDescriptor {
   }
 }
 
-// --- Style constants shared verbatim by both renderers (React's style prop and WC's setStyle consume the same shape). ---
+// --- Style constants/functions shared verbatim by both renderers (React's style prop and WC's setStyle consume the same shape). ---
 
-/** The form root's layout. */
+/**
+ * The form root's layout.
+ * @deprecated Use `formRootStyle`, which reads `gap` from `SizingTokens` (the space scale)
+ * instead of a hard-coded literal.
+ */
 export const FORM_ROOT_STYLE = {
   display: "flex",
   flexDirection: "column",
@@ -306,7 +311,11 @@ export const FORM_ROOT_STYLE = {
   maxWidth: 480,
 } as const;
 
-/** One field row's layout. */
+/**
+ * One field row's layout.
+ * @deprecated Use `fieldRowStyle`, which reads `gap` / `fontSize` from `SizingTokens`
+ * instead of hard-coded literals.
+ */
 export const FIELD_ROW_STYLE = {
   display: "flex",
   flexDirection: "column",
@@ -314,27 +323,43 @@ export const FIELD_ROW_STYLE = {
   fontSize: 13,
 } as const;
 
+/** The form root's layout. */
+export function formRootStyle(sizing: SizingTokens = DEFAULT_SIZING) {
+  return { display: "flex", flexDirection: "column", gap: sizing.space3, maxWidth: 480 } as const;
+}
+
+/** One field row's layout. */
+export function fieldRowStyle(sizing: SizingTokens = DEFAULT_SIZING) {
+  return { display: "flex", flexDirection: "column", gap: sizing.space1, fontSize: sizing.fontSm } as const;
+}
+
 /** The base look of input/select/textarea controls. */
-export function formControlBaseStyle(border: string) {
+export function formControlBaseStyle(border: string, sizing: SizingTokens = DEFAULT_SIZING) {
   return {
     border: `1px solid ${border}`,
-    borderRadius: 6,
-    padding: "7px 10px",
-    fontSize: 13.5,
+    borderRadius: sizing.radiusMd,
+    padding: `${sizing.space2} ${sizing.space3}`,
+    fontSize: sizing.fontMd,
   } as const;
 }
 
 /** The submit button (busy switches the affordance without disabling resubmission after a failure). */
-export function formSubmitButtonStyle(accent: string, onPrimary: string, options: { busy: boolean }) {
+export function formSubmitButtonStyle(
+  accent: string,
+  onPrimary: string,
+  options: { busy: boolean },
+  sizing: SizingTokens = DEFAULT_SIZING,
+) {
   const { busy } = options;
   return {
     alignSelf: "flex-start",
     background: accent,
     color: onPrimary,
     border: "none",
-    borderRadius: 6,
-    padding: "8px 18px",
-    fontSize: 13.5,
+    borderRadius: sizing.radiusMd,
+    padding: `${sizing.space2} ${sizing.space4}`,
+    fontSize: sizing.fontMd,
+    fontWeight: 600,
     cursor: busy ? ("not-allowed" as const) : ("pointer" as const),
     opacity: busy ? 0.6 : 1,
   } as const;
