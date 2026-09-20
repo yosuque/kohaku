@@ -100,7 +100,11 @@ a hallucinated/injected `action.invoke` action name from an issued capability's 
 each replacing what used to be a small duplicate in both `host_rest` and `host_mcp`. Fallback-view recording
 (`host_core.view_recorder.record_view_fallback`, shared by REST's `record_fallback_if_any` and MCP's
 `_audit_compose`) also lives there: the judgment source is `spec.provenance.fallback`, not the compose trace,
-since a capability-negotiation downgrade can recur on a cache hit and the trace alone would miss it.
+since a capability-negotiation downgrade can recur on a cache hit and the trace alone would miss it. Intent
+resolution across the compose/event surfaces (`host_core.intent.resolve_intent`, the three `IntentSource`
+shapes — an already-structured Intent, an NL question, or a GUI event delta — shared by REST's
+`/intent/normalize`, `/compose(/stream)`, and `/events`, and by MCP's compose-tool nl/intent branch) lives
+there too.
 
 **MCP 2026-07-28** (see `docs/design.md`'s "MCP 2026-07-28 / SDK v2 migration" and "Python `mcp` 2.x migration"
 for the full picture): `host_mcp` runs on the `mcp` 2.x SDK (`kohaku-ui[mcp]` floor `>=2.2`; the low-level

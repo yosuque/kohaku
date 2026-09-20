@@ -31,6 +31,8 @@ from kohaku.host_core import (
     ComposeFixationContext,
     FixationDeliveryHost,
     FixationSelfHealApi,
+    IntentSourceIntent,
+    IntentSourceNl,
     ParsedInvokableRefOk,
     TraceContext,
     apply_action_effects,
@@ -46,6 +48,7 @@ from kohaku.host_core import get_lock as _get_lock
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
 from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
+from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.spec import (
     AuthzPort,
     DomainPort,
@@ -54,7 +57,6 @@ from kohaku.spec import (
     IntentInput,
     InvocationContext,
     JsonObject,
-    NLQuery,
     Principal,
     SessionContext,
     TabularData,
@@ -1095,19 +1097,18 @@ async def _compose_with_fixation(
     # SemanticPort.normalize / policy_for / the fixation lookup would see an anonymous session on the compose
     # path only, diverging from the kohaku_event path for the same resolved principal.
     #
-    # NOTE (mirrors host-core's TS resolveIntent, which this Python port does not yet have — see
-    # kohaku.host_core): the "intent" and "nl" branches below duplicate TS host-core's resolveIntent
-    # inline instead of delegating to a shared helper, because no Python host_core module for it exists yet.
+    # Intent resolution via host-core's resolveIntent (shared with the REST profile's /compose(/stream) and
+    # /intent/normalize) rather than a local duplicate.
     session = _mcp_session(locale, principal)
     if isinstance(source, _IntentSource):
-        intent = finalize_intent(source.intent)
+        resolved = await _host_core_resolve_intent(
+            deps.compose.semantic, IntentSourceIntent(intent=source.intent), session
+        )
     else:
-        normalized = await deps.compose.semantic.normalize(
-            NLQuery(kind="nl", text=source.text), session
+        resolved = await _host_core_resolve_intent(
+            deps.compose.semantic, IntentSourceNl(text=source.text), session
         )
-        intent = finalize_intent(
-            IntentInput(canonical=normalized.canonical, params=normalized.params)
-        )
+    intent = resolved.intent
 
     # Delegates the fixation shortcut -> staleness check -> self-heal -> normal-compose-fallback sequence to
     # kohaku.host_core (shared with kohaku.host_rest). The MCP profile has a single ComposeContext, so it is

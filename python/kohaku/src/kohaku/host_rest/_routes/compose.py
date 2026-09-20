@@ -26,6 +26,9 @@ from kohaku.host_core import (
     ComposeFixationContext,
     FixationDeliveryHost,
     FixationTarget,
+    IntentSourceGui,
+    IntentSourceIntent,
+    IntentSourceNl,
     is_typed_host_error,
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
@@ -33,6 +36,7 @@ from kohaku.host_core import compose_with_fixation as _host_core_compose_with_fi
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
 from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
 from kohaku.host_core import resolve_fixated_result as _host_core_resolve_fixated_result
+from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.host_core import settle_fixation as _host_core_settle_fixation
 from kohaku.llm import AbortController, AbortError, AbortSignal
 from kohaku.spec import (
@@ -40,6 +44,7 @@ from kohaku.spec import (
     GuiAction,
     Intent,
     IntentInput,
+    NLQuery,
     Principal,
     Scope,
     SessionContext,
@@ -351,15 +356,42 @@ async def _record_composed(
     await record_fallback_if_any(result, session, deps)
 
 
+async def resolve_semantic_input(
+    input: NLQuery | GuiAction, session: SessionContext, deps: KohakuHostDeps
+) -> Intent:
+    """Resolves a CanonicalIntent from a raw SemanticInput (NLQuery | GuiAction) via host-core's shared
+    resolve_intent — shared by /intent/normalize and resolve_intent_from_body so both go through the same
+    normalization/finalization sequence as the MCP profile's compose-tool nl branch and REST/MCP's own "gui"
+    event paths. host-core's "gui" IntentSource variant takes `current` as optional (mirroring GuiAction), so
+    a currentless GuiAction (a fresh gui action against no prior Intent) also resolves through resolve_intent
+    — no direct semantic.normalize bypass is needed here.
+    """
+    if isinstance(input, NLQuery):
+        resolved = await _host_core_resolve_intent(
+            deps.compose.semantic, IntentSourceNl(text=input.text, locale=input.locale), session
+        )
+        return resolved.intent
+    resolved = await _host_core_resolve_intent(
+        deps.compose.semantic,
+        IntentSourceGui(action=input.action, params=input.params, current=input.current),
+        session,
+    )
+    return resolved.intent
+
+
 async def resolve_intent_from_body(
     body: ComposeBody, session: SessionContext, deps: KohakuHostDeps
 ) -> Intent:
-    """Resolve an Intent from a ComposeBody. If body.intent exists, finalize it; otherwise normalize -> finalize."""
+    """Resolve an Intent from a ComposeBody (shared by /compose and /compose/stream). If body.intent is
+    present, resolved directly (host-core's "intent" source); otherwise delegated to resolve_semantic_input.
+    """
     if body.intent is not None:
-        return finalize_intent(body.intent)
+        resolved = await _host_core_resolve_intent(
+            deps.compose.semantic, IntentSourceIntent(intent=body.intent), session
+        )
+        return resolved.intent
     assert body.input is not None
-    normalized = await deps.compose.semantic.normalize(body.input, session)
-    return finalize_intent(normalized)
+    return await resolve_semantic_input(body.input, session, deps)
 
 
 # --- SSE helpers ----------------------------------------------------------------
@@ -629,8 +661,7 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             body.session, await _get_principal(deps, request), await _resolve_tenant(deps, request)
         )
         try:
-            normalized = await deps.compose.semantic.normalize(body.input, session)
-            intent = finalize_intent(normalized)
+            intent = await resolve_semantic_input(body.input, session, deps)
             source = "llm" if body.input.kind == "nl" else "deterministic"
             return _json({"intent": intent.to_wire(), "source": source})
         except BaseException as e:
@@ -688,17 +719,15 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         principal = await _get_principal(deps, request)
         session = to_session(body.session, principal, await _resolve_tenant(deps, request))
         try:
+            # Intent resolution via host-core's resolve_intent (shared with the MCP profile's compose-tool
+            # nl/intent branch), rather than a local semantic.normalize copy.
             current = finalize_intent(body.intent)
-            normalized = await deps.compose.semantic.normalize(
-                GuiAction(
-                    kind="gui",
-                    action=body.event.on,
-                    params=body.event.payload,
-                    current=current,
-                ),
+            resolved = await _host_core_resolve_intent(
+                deps.compose.semantic,
+                IntentSourceGui(action=body.event.on, params=body.event.payload, current=current),
                 session,
             )
-            intent = finalize_intent(normalized)
+            intent = resolved.intent
         except BaseException as e:
             await report_host_error(deps, "events", request_id, e, trace_context=trace_context_of(request))
             return _intent_invalid(e, request_id)

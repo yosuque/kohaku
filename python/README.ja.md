@@ -98,6 +98,9 @@ read-ref のパース(`host_core.binding_ref.parse_invokable_ref`。REST の `/b
 (`host_core.view_recorder.record_view_fallback`。REST の `record_fallback_if_any` と MCP の `_audit_compose` で
 共有)もそこに存在する: 判定根拠は compose トレースではなく `spec.provenance.fallback` である — capability
 negotiation によるダウングレードはキャッシュヒット時にも再発しうるため、トレースだけではそれを見逃す。
+compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_intent`。3 つの `IntentSource` 形
+— 構造化済みの Intent、NL の質問、GUI イベントの差分 — を REST の `/intent/normalize`・`/compose(/stream)`・
+`/events`、および MCP の compose ツールの nl/intent 分岐で共有)もそこに存在する。
 
 **MCP 2026-07-28**(全体像は `docs/design.ja.md` の「MCP 2026-07-28 / SDK v2 移行」と「Python `mcp` 2.x 移行」
 参照): `host_mcp` は `mcp` 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)上で動く — 低レベル `Server` のハンドラ

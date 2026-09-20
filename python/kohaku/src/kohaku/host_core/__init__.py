@@ -36,6 +36,14 @@ from .fixation import (
     resolve_fixated_result,
     settle_fixation,
 )
+from .intent import (
+    IntentSource,
+    IntentSourceGui,
+    IntentSourceIntent,
+    IntentSourceNl,
+    ResolvedIntent,
+    resolve_intent,
+)
 from .keyed_mutex import get_lock
 from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 from .view_recorder import record_view_fallback
@@ -52,10 +60,15 @@ __all__ = [
     "FixationSelfHealApi",
     "FixationSelfHealKind",
     "FixationTarget",
+    "IntentSource",
+    "IntentSourceGui",
+    "IntentSourceIntent",
+    "IntentSourceNl",
     "InvokableRef",
     "ParsedInvokableRef",
     "ParsedInvokableRefOk",
     "ParsedInvokableRefSourceMismatch",
+    "ResolvedIntent",
     "TraceContext",
     "WriteScopeDroppedError",
     "apply_action_effects",
@@ -70,5 +83,6 @@ __all__ = [
     "parse_trace_context",
     "record_view_fallback",
     "resolve_fixated_result",
+    "resolve_intent",
     "settle_fixation",
 ]
