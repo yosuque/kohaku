@@ -78,7 +78,13 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation)
 │  │  ├─ evals/            # ← packages/evals (judge / golden / FixtureLlm / distillation dataset export)
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
-│  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core)
+│  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
+│  │  │                    #   (← intent.ts) + allowed_actions.py (← allowed-actions.ts) +
+│  │  │                    #   action_effects.py (← action-effects.ts) + view_recorder.py
+│  │  │                    #   (← view-recorder.ts) + binding_ref.py (← binding-ref.ts) +
+│  │  │                    #   capability.py (← capability.ts) + fixation.py (← fixation.ts) +
+│  │  │                    #   keyed_mutex.py (← keyed-mutex.ts) + trace_context.py
+│  │  │                    #   (← trace-context.ts) + errors.py (← errors.ts)
 │  │  ├─ host_rest/        # ← packages/host-rest (FastAPI; SPEC §6.1)
 │  │  └─ host_mcp/         # ← packages/host-mcp-apps (MCP Apps profile): server.py (attach + tool
 │  │                       #   registration; the tool-error / safe-tool / error-observability helpers stay
@@ -90,7 +96,11 @@ python/
    └─ sales-api/           # ← equivalent to apps/sample-api (REST :8790 + MCP stdio / Streamable HTTP :8791)
 ```
 
-The dependency direction is the same as TS: `spec → {registry, data_binding, intents} → {composer(llm), lineage} → host_core → {host_rest, host_mcp} → examples`.
+The dependency direction has no reverse flow, matching TS. Python's authoritative layer order is
+`python/pyproject.toml`'s `[tool.importlinter]` `layers` contract (enforced by `uv run lint-imports`); it
+is not restated here — see [the python-mirror runbook's "layer-direction contract" section](../docs/runbooks/python-mirror.md#the-layer-direction-contract-is-defined-in-three-places-not-two)
+for why the Python and TS layer *orderings* intentionally differ (only the *direction* is contracted, not
+a shared total order).
 `host_core` is a framework-free shared host core consumed by `host_rest` and `host_mcp` as thin adapters (the
 same relationship `packages/renderer-core` has with `renderer-react` / `renderer-wc` on the TS side): the
 fixation (L1→L0) delivery + staleness self-healing sequence (`compose_with_fixation` / `resolve_fixated_result`

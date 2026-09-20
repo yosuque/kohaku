@@ -77,7 +77,13 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)
 │  │  ├─ evals/            # ← packages/evals(judge / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
-│  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核)
+│  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
+│  │  │                    #   (← intent.ts)+ allowed_actions.py(← allowed-actions.ts)+
+│  │  │                    #   action_effects.py(← action-effects.ts)+ view_recorder.py
+│  │  │                    #   (← view-recorder.ts)+ binding_ref.py(← binding-ref.ts)+
+│  │  │                    #   capability.py(← capability.ts)+ fixation.py(← fixation.ts)+
+│  │  │                    #   keyed_mutex.py(← keyed-mutex.ts)+ trace_context.py
+│  │  │                    #   (← trace-context.ts)+ errors.py(← errors.ts)
 │  │  ├─ host_rest/        # ← packages/host-rest(FastAPI。SPEC §6.1)
 │  │  └─ host_mcp/         # ← packages/host-mcp-apps(MCP Apps プロファイル): server.py(attach・
 │  │                       #   ツール登録。tool-error / safe-tool / エラー可観測性ヘルパも TS の server.ts
@@ -89,7 +95,10 @@ python/
    └─ sales-api/           # ← apps/sample-api 相当(REST :8790 + MCP stdio / Streamable HTTP :8791)
 ```
 
-依存方向は TS と同じ: `spec → {registry, data_binding, intents} → {composer(llm), lineage} → host_core → {host_rest, host_mcp} → examples`。
+依存方向は TS と同様、逆流はない。Python の正式なレイヤー順序は `python/pyproject.toml` の
+`[tool.importlinter]` の `layers` 契約(`uv run lint-imports` が検査)であり、ここでは再掲しない —
+Python と TS のレイヤー**順序**が意図的に異なる理由(契約されているのは**方向**のみで、共通の全順序ではない)は
+[python-mirror ランブックの「レイヤー方向の契約は三箇所で定義されている」節](../docs/runbooks/python-mirror.md#the-layer-direction-contract-is-defined-in-three-places-not-two)を参照。
 `host_core` は `host_rest` / `host_mcp` が薄いアダプタとして消費する framework-free な共有ホスト核(TS 側の
 `packages/renderer-core` と `renderer-react` / `renderer-wc` の関係と同型): 固定化(L1→L0)配信 + 陳腐化自己修復の一連
 (`compose_with_fixation` / `resolve_fixated_result` / `settle_fixation`)、生成済み Spec への capability 発行
