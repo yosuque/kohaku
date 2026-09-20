@@ -140,8 +140,9 @@ def test_wide_catch_true_catches_a_base_exception_subclass_and_reports_it_fail_o
 def test_wide_catch_false_lets_a_base_exception_subclass_propagate() -> None:
     """MCP's call site (wide_catch=False) preserves the pre-branch `except Exception`: a BaseException
     subclass (e.g. asyncio.CancelledError) raised while awaiting the action_effects hook is NOT caught here
-    -- it propagates to the caller (MCP's _safe_tool, which turns it into an isError result), matching
-    host_mcp/server.py's pre-branch behaviour."""
+    -- it propagates past this call site, and also past MCP's `_safe_tool` (which itself catches only
+    `except Exception`), out to the MCP server's own request/task-cancellation handling, not into a
+    structured isError CallToolResult -- matching host_mcp/server.py's pre-branch behaviour."""
     cancelled = asyncio.CancelledError("effects cancelled")
 
     async def action_effects(action: str, payload: JsonObject, result: object) -> _FakeEffects:
