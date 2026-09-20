@@ -79,12 +79,12 @@ jobs:
           {
             echo "ref=$REF"; echo "tag=$TAG"; echo "version=${TAG#v}"; echo "dry_run=$DRY_RUN"
           } >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.plan.outputs.ref }}
           fetch-depth: 0 # needed for the "tag is on main" check below
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -140,13 +140,13 @@ jobs:
       contents: read
       id-token: write # OIDC: npm trusted publishing + provenance attestation
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.ref }}
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
       # No `registry-url` here: it would write an `_authToken=${NODE_AUTH_TOKEN}` line into .npmrc, and
       # pnpm refuses to start when that variable is unset. The default registry is npmjs.org anyway.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -186,7 +186,7 @@ jobs:
           if grep -q "Skipped OIDC" "$RUNNER_TEMP/publish.log"; then
             echo "::error::pnpm fell back from OIDC (see 'Skipped OIDC' above). There is no token fallback any more; fix the trusted-publisher registration and re-run."; exit 1
           fi
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: npm-publish
@@ -208,12 +208,12 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.ref }}
       # setup-uv stopped publishing floating major/minor tags after v7 (no `@v10` ref exists), so the full
       # version tag is required here; Dependabot still bumps exact tags.
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
           enable-cache: true
@@ -229,7 +229,7 @@ jobs:
           echo "wheel reports $GOT"
           [ "$GOT" = "${{ needs.verify.outputs.version }}" ] || { echo "::error::wheel version $GOT != ${{ needs.verify.outputs.version }}"; exit 1; }
       # pypa/gh-action-pypi-publish has no dry-run mode, so the upload is simply skipped on a dry run.
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         if: needs.verify.outputs.dry_run != 'true'
         with:
           packages-dir: python/dist
@@ -242,7 +242,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-publish
           path: npm-publish
