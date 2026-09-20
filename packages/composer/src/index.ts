@@ -34,8 +34,12 @@ export {
   withTenantCatalog,
 } from "./context.js";
 export {
+  DEFAULT_KIT_SKELETON,
+  DEFAULT_KIT_VOCABULARY,
   DEFAULT_TOKEN_DESCRIPTIONS,
+  type DesignKitVocabulary,
   type DesignSystemGuide,
+  designKitPromptFragment,
   designSystemPromptFragment,
   tokenToCssVar,
 } from "./design-system.js";

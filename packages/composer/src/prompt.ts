@@ -2,7 +2,11 @@ import type { LlmPort, PromptParts } from "@kohaku-ui/llm";
 import { type ResolvedCatalog, selectGenerationTypes } from "@kohaku-ui/registry";
 import { type CanonicalIntent, canonicalStringify, type DataShape } from "@kohaku-ui/spec-core";
 import type { FewShotExample } from "./context.js";
-import { type DesignSystemGuide, designSystemPromptFragment } from "./design-system.js";
+import {
+  type DesignSystemGuide,
+  designKitPromptFragment,
+  designSystemPromptFragment,
+} from "./design-system.js";
 
 /**
  * The L1/L2 prompt revision. Always bump it when changing the prompts (L1_SYSTEM_PROMPT /
@@ -268,7 +272,14 @@ export const L2_SYSTEM_PROMPT = [
   "- When drawing a chart, always draw tick values and axis labels (column name and unit) on both the X and Y axes. Compute positions from the actual data values (SVG is allowed)",
   "- Libraries such as D3 / Chart.js / jQuery do not exist and cannot be loaded. Use only the raw DOM API. Build SVG with document.createElementNS + setAttribute, or assemble a string and insert it via innerHTML (DOM elements have no .attr() method)",
   "- fetch / XMLHttpRequest / WebSocket / import are forbidden",
-  "- Keep the design simple and readable",
+  "- Design brief (follow every point):",
+  "  - one clear heading; secondary text in the muted color",
+  "  - consistent spacing from the design tokens (or the kit utilities when a design kit is provided)",
+  "  - use the primary color for one emphasis at most; tone colors only when they carry meaning",
+  "  - right-align numeric columns with tabular figures",
+  "  - show empty / error / loading states as a notice, never a blank area",
+  "  - never use fixed pixel widths — fill the container width",
+  "  - never leave browser-default styling on tables, buttons or inputs",
 ].join("\n");
 
 export interface BuildL2PromptStaticArgs {
@@ -298,6 +309,7 @@ export function buildL2PromptStatic(args: BuildL2PromptStaticArgs): string {
   ];
   if (args.designSystem != null) {
     sections.push(designSystemPromptFragment(args.designSystem));
+    if (args.designSystem.kit != null) sections.push(designKitPromptFragment(args.designSystem.kit));
   }
   sections.push(
     `## Output language\nWrite all user-visible text (the <title>, labels, annotations) in ${args.outputLanguage ?? "English"}.`,
