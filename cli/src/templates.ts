@@ -66,8 +66,10 @@ export const storagePort: StoragePort = {
 
 export const SERVER_TEMPLATE = `// Dependencies this file needs in your app's package.json: "hono", "@hono/node-server", "tsx",
 // and the @kohaku-ui/* packages imported below (npm install @kohaku-ui/host-rest @kohaku-ui/registry
-// @kohaku-ui/llm zod — see docs/user-guide.md §6 Step 0). Building this inside the kohaku monorepo
-// itself instead of a standalone app? Depend on them via "workspace:*" there instead.
+// @kohaku-ui/llm @ai-sdk/anthropic zod — @ai-sdk/anthropic is the provider SDK for Claude, an optional
+// peer dependency of @kohaku-ui/llm; swap it for @ai-sdk/openai / @ai-sdk/google / @ai-sdk/openai-compatible
+// depending on the provider you configure — see docs/user-guide.md §6 Step 0). Building this inside the
+// kohaku monorepo itself instead of a standalone app? Depend on them via "workspace:*" there instead.
 import { createKohakuRoutes } from "@kohaku-ui/host-rest";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { createLlmFromEnv } from "@kohaku-ui/llm";

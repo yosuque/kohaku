@@ -40,9 +40,12 @@ The following are **not ported to Python** — TS-only:
 
 Within `packages/composer`, note one deliberate, permanent structural difference: Python doesn't
 split the tier ladder / single-flight / result-assembly logic (`assemble.ts` / `constants.ts` /
-`observer.ts` / `refs.ts` / `single-flight.ts` / `tier-ladder.ts` / `tiers/`) out of `compose.py`
-into separate modules the way TS does — same behavior, coarser file layout by design. This is an
-intentional exception to the "Layout rule" below, not debt to pay down.
+`observer.ts` / `refs.ts` / `single-flight.ts` / `tier-ladder.ts` / `tiers/shared.ts`) out of
+`compose.py` into separate modules the way TS does — same behavior, coarser file layout by design.
+This is an intentional exception to the "Layout rule" below, not debt to pay down. It does **not**
+cover the rest of `tiers/`: `tiers/l1-generate.ts` and `tiers/l2-generate.ts` are mirrored 1:1 as
+`composer/l1_generate.py` and `composer/l2_generate.py` (each module's docstring names the TS file
+it ports) — fold a new tier module into `compose.py` and you've broken that mirror, not followed it.
 
 **Checklist**: if you add a module to `packages/host-core`, add its Python counterpart to
 `kohaku/src/kohaku/host_core/` (or record the gap in `docs/design.md`'s package table).
@@ -56,8 +59,10 @@ of a judgment call. When you add a new TS file that needs a Python counterpart, 
 module — don't fold it into an existing one — and update `python/README.md`'s "Structure" section
 (the directory tree under "## Structure") if the new module is significant enough to list there.
 
-Two spots still owe a split and are tracked here as **known debt** (pre-existing, not something this
-runbook change is asking you to fix as a side effect of an unrelated mirror):
+This rule is **forward-looking**: it applies to new files from here on and has not been
+retro-applied to the existing mirror, which was written before the rule existed. The two largest
+merges are tracked here as **known debt** (pre-existing, not something this runbook change is
+asking you to fix as a side effect of an unrelated mirror):
 
 - `kohaku/src/kohaku/host_mcp/server.py` merges four TS files: `server.ts` + `initial-data.ts` +
   `types.ts` + `cache-hints.ts`. (`host_mcp/fallback.py`, `intent_tools.py`, `meta.py`, and
@@ -69,6 +74,20 @@ runbook change is asking you to fix as a side effect of an unrelated mirror):
 
 Don't let a merged file grow further while it's on this list — new logic that TS puts in a new file
 should get a new Python file too, even inside an already-merged module.
+
+These two are the largest, not the only, departures from the rule — do not read this section as
+"1:1 except for two files." At least these packages also differ, pre-existing and out of scope for
+this runbook change:
+
+- `host-core`: `intent.ts`, `allowed-actions.ts`, `action-effects.ts`, `view-recorder.ts`, and
+  `binding-ref.ts` have no dedicated Python module; their logic is inlined into
+  `host_rest/_routes/*.py` and `host_mcp/server.py` instead.
+- `lineage`: `constants.ts` and `tenant-scope.ts` have no Python counterpart, and the
+  `fixation/service.ts` directory is mirrored as a single flat `fixation.py`.
+- `registry`: `json-schema.ts` and `from-json-schema.ts` are merged into one renamed
+  `props_schema.py`.
+- `spec-core`: `errors.ts` and `rest-errors.ts` are merged into one `errors.py` (its docstring
+  names both TS files it ports).
 
 ## Cross-language golden fixtures
 
@@ -128,18 +147,19 @@ If you add a new Python module or introduce a cross-module import, update `[tool
 match — and keep it paired with the TS side's `LAYERS` array in
 `spec/test/dependency-direction.test.ts`, per [protocol-change.md](protocol-change.md) §8.
 
-### The layer-direction contract is enforced in three places, not two
+### The layer-direction contract is defined in three places, not two
 
-The dependency direction (no reverse flow, A2) has three independent enforcement sites, and none is
+The dependency direction (no reverse flow, A2) is defined in three independent places, and none is
 derived from the others — each has to be updated by hand when a package's position in the graph
-changes:
+changes. Only two of the three are mechanically checked; the third is prose that nothing verifies:
 
 1. **AGENTS.md's arrow sentence** ("Dependency direction (no reverse flow)" under "Layout
-   essentials") — the prose source both mechanical checks below are meant to match.
+   essentials") — the prose source both mechanical checks below are meant to match. **Not
+   mechanically checked** — nothing reconciles it against the other two, so it can drift silently.
 2. **`spec/test/dependency-direction.test.ts`'s `LAYERS` array** — the TS-side mechanical check,
-   reading each `packages/*/package.json`'s `dependencies`.
+   reading each `packages/*/package.json`'s `dependencies`. Run by `pnpm test`.
 3. **`python/pyproject.toml`'s `[tool.importlinter]` contracts** — the Python-side mechanical
-   check, listed just above.
+   check, listed just above. Run by `uv run lint-imports`.
 
 The TS and Python layer *orderings* are intentionally not identical — only the *direction* (no
 reverse flow) is contracted, not a shared total order. For example, TS's `LAYERS` places `lineage`
@@ -148,6 +168,21 @@ layer, one layer above `host-core`), while Python's `layers` places `lineage` be
 the `registry | intents | lineage | storage` layer, one layer below `composer`, two below
 `host_core`). Both are correct for their own language's actual import graph; don't "fix" one to
 match the other's ordering.
+
+### Not yet mechanised
+
+Two mechanical checks were suggested for this contract and deliberately deferred — they are scope
+decisions for the user, not something a runbook edit should silently add:
+
+- A test reconciling AGENTS.md's arrow sentence (item 1 above) against
+  `spec/test/dependency-direction.test.ts`'s `LAYERS` array, so the prose source can't drift from
+  the TS-side mechanical check unnoticed.
+- A machine check of `python/README.md`'s "Structure" table (the TS-package ↔ Python-module
+  correspondence referenced at the top of this runbook) against the actual `python/` tree, so a
+  renamed or added module can't leave the table stale.
+
+Until one of these is scoped and written, keep both in sync by hand when you touch the files they
+would check.
 
 ## Note: `ruff` intentionally does not check naming conventions
 
