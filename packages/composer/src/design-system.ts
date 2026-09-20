@@ -8,6 +8,12 @@ import type { KnownThemeTokens } from "@kohaku-ui/spec-core";
  * usage descriptions**, and the output is made to write token references (var(--kohaku-*)). The actual
  * values are injected by the sandbox as `:root` CSS custom properties at render time (renderer-core's
  * sandboxThemeCss). This makes the output follow light/dark switching and brand-theme swaps without regeneration.
+ *
+ * This module is exposed under the `@kohaku-ui/composer/design-system` subpath (alongside the barrel)
+ * so that downstream node-independent packages (e.g. sandbox's `"types": []`) can import
+ * DEFAULT_KIT_VOCABULARY without pulling in composer's full index.ts, which re-exports compose.ts and
+ * therefore `@kohaku-ui/llm`'s `process.env` usage — the same reason l2-api.ts carries its own note.
+ * Keep this module's own import graph free of `@kohaku-ui/llm` so that guarantee holds.
  */
 export interface DesignSystemGuide {
   /**
