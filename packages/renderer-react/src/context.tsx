@@ -1,10 +1,13 @@
 import type { BindingClient } from "@kohaku-ui/data-binding";
 import {
   DEFAULT_LOCALE,
+  PARTS_STATE_CSS,
   resolveEmit,
   resolvePayloadTemplate,
   resolveRowProps,
+  resolveSizing,
   resolveToken,
+  type SizingTokens,
   type SurfaceEvent,
 } from "@kohaku-ui/renderer-core";
 import type { ComponentNode, JsonObject, KnownThemeTokens, ThemeTokens, UISpec } from "@kohaku-ui/spec-core";
@@ -92,6 +95,11 @@ export function RendererProvider(props: { value: RendererContextValue; children:
   return (
     <RendererContext.Provider value={props.value}>
       <DataInvalidationContext.Provider value={busRef.current}>
+        {/* Theme-neutral hover/active/focus-visible rules for the parts. React 19 hoists a <style> with href +
+            precedence into <head> and de-duplicates it by href, so N providers yield one stylesheet. */}
+        <style href="kohaku-parts-state" precedence="default">
+          {PARTS_STATE_CSS}
+        </style>
         {props.children}
       </DataInvalidationContext.Provider>
     </RendererContext.Provider>
@@ -126,6 +134,12 @@ export function useToken(name: string, fallback?: string | number): string | num
   return fallback === undefined
     ? resolveToken(theme, name as keyof KnownThemeTokens)
     : resolveToken(theme, name, fallback);
+}
+
+/** The non-color tokens of the current theme as a flat bag (memoized per theme object). */
+export function useSizing(): SizingTokens {
+  const { theme } = useRenderer();
+  return useMemo(() => resolveSizing(theme), [theme]);
 }
 
 /** Display language tag (default "en-US", see DEFAULT_LOCALE). Used as the collation locale for number/date formatting and sort collation. */

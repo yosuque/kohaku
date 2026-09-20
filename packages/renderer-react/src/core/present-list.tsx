@@ -1,6 +1,13 @@
-import { GAP, HARD_ROW_CAP, hasDeclaredEvent, isActivationKey, rowKey } from "@kohaku-ui/renderer-core";
+import {
+  gapFor,
+  HARD_ROW_CAP,
+  hasDeclaredEvent,
+  isActivationKey,
+  listEmptyStyle,
+  rowKey,
+} from "@kohaku-ui/renderer-core";
 import type { ReactNode } from "react";
-import { type ImplProps, useEmitEvent, useSpec, useToken } from "../context.js";
+import { type ImplProps, useEmitEvent, useSizing, useSpec, useToken } from "../context.js";
 import { RowProvider } from "../spec-state.js";
 import { useBoundData } from "../use-bound-data.js";
 import { DataStateNotice } from "./data-states.js";
@@ -15,9 +22,12 @@ export function PresentList({ node, children }: ImplProps): ReactNode {
   const state = useBoundData(node);
   const emit = useEmitEvent(node);
   const spec = useSpec();
+  const sizing = useSizing();
   const muted = String(useToken("color.muted"));
 
-  const gap = GAP[(node.props["gap"] as string) ?? "sm"] ?? 8;
+  // Unset gap defaulted to "sm" (8px) before tokenization; gapFor's own default is "md" (16px), so the
+  // "sm" default is preserved explicitly here to keep the existing look unchanged (see task-13-report.md).
+  const gap = gapFor(sizing, (node.props["gap"] as string | undefined) ?? "sm");
   const maxItems = node.props["maxItems"] as number | undefined;
   const emptyText = String(node.props["emptyText"] ?? "(No data)");
   const itemClickable = hasDeclaredEvent(spec, node.id, "itemClick");
@@ -29,7 +39,7 @@ export function PresentList({ node, children }: ImplProps): ReactNode {
 
   if (rows.length === 0) {
     return (
-      <div data-kohaku={node.id} style={{ color: muted, fontSize: 13, padding: "8px 2px" }}>
+      <div data-kohaku={node.id} style={listEmptyStyle(muted, sizing)}>
         {emptyText}
       </div>
     );

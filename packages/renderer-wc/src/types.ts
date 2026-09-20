@@ -4,6 +4,7 @@ import type {
   BoundDataController,
   DataInvalidationBus,
   RendererMessages,
+  SizingTokens,
   SpecStateStore,
   SurfaceEvent,
 } from "@kohaku-ui/renderer-core";
@@ -60,6 +61,8 @@ export interface RenderRuntime {
   controller: BoundDataController;
   binding: BindingClient | undefined;
   theme: ThemeTokens;
+  /** Non-color theme tokens (radius/space/font/shadow), resolved once per render from `theme` (see resolveSizing). */
+  sizing: SizingTokens;
   locale: string;
   messages: RendererMessages;
   onNodeError: SurfaceContext["onNodeError"];

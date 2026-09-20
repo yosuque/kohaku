@@ -6,7 +6,7 @@ import {
   tabButtonStyle,
 } from "@kohaku-ui/renderer-core";
 import { Children, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useRef } from "react";
-import { type ImplProps, useEmitEvent, useSpec, useToken } from "../context.js";
+import { type ImplProps, useEmitEvent, useSizing, useSpec, useToken } from "../context.js";
 import { useSpecState } from "../spec-state.js";
 
 /**
@@ -20,6 +20,7 @@ export function LayoutTabs({ node, children }: ImplProps): ReactNode {
   const spec = useSpec();
   const stateState = useSpecState();
   const emit = useEmitEvent(node);
+  const sizing = useSizing();
   const accent = String(useToken("color.primary"));
   const border = String(useToken("color.border"));
   const muted = String(useToken("color.muted"));
@@ -55,8 +56,14 @@ export function LayoutTabs({ node, children }: ImplProps): ReactNode {
   const selectedIds = describeTab(node.id, selected.value);
 
   return (
-    <div data-kohaku={node.id} style={{ display: "flex", flexDirection: "column", gap: 12, width: "100%" }}>
-      <div role="tablist" style={{ display: "flex", gap: 4, borderBottom: `1px solid ${border}` }}>
+    <div
+      data-kohaku={node.id}
+      style={{ display: "flex", flexDirection: "column", gap: sizing.space3, width: "100%" }}
+    >
+      <div
+        role="tablist"
+        style={{ display: "flex", gap: sizing.space1, borderBottom: `1px solid ${border}` }}
+      >
         {tabs.map((tab, pos) => {
           const isSelected = tab.value === selected.value;
           const { tabId } = describeTab(node.id, tab.value);
@@ -74,7 +81,7 @@ export function LayoutTabs({ node, children }: ImplProps): ReactNode {
               tabIndex={isSelected ? 0 : -1}
               onClick={() => select(tab)}
               onKeyDown={(e) => onKeyDown(e, pos)}
-              style={tabButtonStyle({ accent, muted }, { active: isSelected })}
+              style={tabButtonStyle({ accent, muted }, { active: isSelected }, sizing)}
             >
               {tab.label}
             </button>
@@ -93,8 +100,12 @@ export function LayoutTabs({ node, children }: ImplProps): ReactNode {
  * It is rendered only while selected (unselected is unmounted).
  */
 export function LayoutTab({ node, children }: ImplProps): ReactNode {
+  const sizing = useSizing();
   return (
-    <div data-kohaku={node.id} style={{ display: "flex", flexDirection: "column", gap: 16, width: "100%" }}>
+    <div
+      data-kohaku={node.id}
+      style={{ display: "flex", flexDirection: "column", gap: sizing.space4, width: "100%" }}
+    >
       {children}
     </div>
   );

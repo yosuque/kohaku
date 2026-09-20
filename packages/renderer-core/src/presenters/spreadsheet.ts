@@ -351,12 +351,11 @@ export interface SpreadsheetTokens {
 
 /**
  * The header cell's base look (independent of sort state; the sort affordance lives in the embedded
- * button). `muted` is optional so existing (unedited) call sites that predate the header's
- * muted/small/semibold treatment keep compiling and keep their prior look (no explicit color = inherit);
- * a caller that passes it gets the token-derived header color.
+ * button). `muted` is required: every call site must supply the token-derived header color, so a call
+ * site that forgets it is a compile error rather than a silently inherited color.
  */
 export function spreadsheetThStyle(
-  tokens: Pick<SpreadsheetTokens, "headerBg" | "border"> & Partial<Pick<SpreadsheetTokens, "muted">>,
+  tokens: Pick<SpreadsheetTokens, "headerBg" | "border" | "muted">,
   sizing: SizingTokens = DEFAULT_SIZING,
 ) {
   return {

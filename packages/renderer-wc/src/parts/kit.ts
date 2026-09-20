@@ -1,4 +1,9 @@
-import { type BoundData, resolveDataStateView, resolveToken } from "@kohaku-ui/renderer-core";
+import {
+  type BoundData,
+  dataStateNoticeStyle,
+  resolveDataStateView,
+  resolveToken,
+} from "@kohaku-ui/renderer-core";
 import type { ComponentNode, KnownThemeTokens } from "@kohaku-ui/spec-core";
 import { el, noop, text } from "../dom.js";
 import type { RenderRuntime, Teardown } from "../types.js";
@@ -25,11 +30,7 @@ export function tokenStr(rt: RenderRuntime, name: string, fallback?: string): st
 export function dataStateNotice(rt: RenderRuntime, state: BoundData): HTMLElement | null {
   const view = resolveDataStateView(state, rt.theme, rt.messages);
   if (view == null) return null;
-  const node = el(
-    "div",
-    { role: view.role },
-    { background: view.bg, color: view.fg, borderRadius: 6, padding: "10px 12px", fontSize: 13 },
-  );
+  const node = el("div", { role: view.role }, dataStateNoticeStyle({ bg: view.bg, fg: view.fg }, rt.sizing));
   node.appendChild(text(view.text));
   return node;
 }

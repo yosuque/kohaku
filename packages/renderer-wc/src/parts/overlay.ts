@@ -71,7 +71,7 @@ export const overlayDialog: PartBuilder = (rt, parent, node, row) => {
     dialogBoxStyle(rt.theme, accentBorder),
   );
   const header = el("div", {}, dialogHeaderStyle);
-  const heading = el("h2", { id: titleId }, dialogTitleStyle(titleColor));
+  const heading = el("h2", { id: titleId }, dialogTitleStyle(titleColor, rt.sizing));
   heading.appendChild(text(title));
   const closeBtn = el("button", { type: "button", "aria-label": "Close" }, dialogCloseButtonStyle(rt.theme));
   closeBtn.appendChild(text("×"));
@@ -140,7 +140,7 @@ export const overlayToast: PartBuilder = (rt, parent, node, row) => {
   const durationMs = node.props["durationMs"];
   const colors = toastToneColors(rt.theme, tone);
 
-  const toast = el("div", { "data-kohaku": node.id, role: toastRole(tone) }, toastStyle(colors));
+  const toast = el("div", { "data-kohaku": node.id, role: toastRole(tone) }, toastStyle(colors, rt.sizing));
   const label = el("span");
   label.appendChild(text(message));
   const dismissBtn = el("button", { type: "button", "aria-label": "Close" }, toastDismissButtonStyle);

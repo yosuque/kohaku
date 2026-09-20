@@ -1,9 +1,10 @@
 import {
   type BoundData,
-  GAP,
+  gapFor,
   HARD_ROW_CAP,
   hasDeclaredEvent,
   isActivationKey,
+  listEmptyStyle,
 } from "@kohaku-ui/renderer-core";
 import type { ComponentNode, JsonObject } from "@kohaku-ui/spec-core";
 import { el, noop, text } from "../dom.js";
@@ -17,7 +18,9 @@ import { dataStateNotice, mountBoundPart, tokenStr } from "./kit.js";
  */
 export const presentList: PartBuilder = (rt, parent, node) => {
   const itemClickable = hasDeclaredEvent(rt.spec, node.id, "itemClick");
-  const gap = GAP[(node.props["gap"] as string) ?? "sm"] ?? 8;
+  // Unset gap defaults to "sm" (matching the pre-tokenization default; gapFor's own default is "md"
+  // (16px), which would silently double the gap for an unset prop — see task-14-brief addendum 3).
+  const gap = gapFor(rt.sizing, (node.props["gap"] as string | undefined) ?? "sm");
   const maxItems = node.props["maxItems"] as number | undefined;
   const emptyText = String(node.props["emptyText"] ?? "(No data)");
 
@@ -31,7 +34,7 @@ function renderList(
   rt: RenderRuntime,
   node: ComponentNode,
   allRows: JsonObject[],
-  opts: { itemClickable: boolean; gap: number; maxItems: number | undefined; emptyText: string },
+  opts: { itemClickable: boolean; gap: string; maxItems: number | undefined; emptyText: string },
 ): { el: HTMLElement; teardown: Teardown } {
   const limit = Math.min(opts.maxItems ?? HARD_ROW_CAP, HARD_ROW_CAP);
   const rows = allRows.slice(0, limit);
@@ -40,7 +43,7 @@ function renderList(
     const empty = el(
       "div",
       { "data-kohaku": node.id },
-      { color: tokenStr(rt, "color.muted"), fontSize: 13, padding: "8px 2px" },
+      listEmptyStyle(tokenStr(rt, "color.muted"), rt.sizing),
     );
     empty.appendChild(text(opts.emptyText));
     return { el: empty, teardown: noop };

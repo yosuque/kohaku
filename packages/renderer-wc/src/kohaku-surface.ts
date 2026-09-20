@@ -4,6 +4,7 @@ import {
   type DataInvalidationBus,
   DEFAULT_LOCALE,
   DEFAULT_MESSAGES,
+  PARTS_STATE_CSS,
   type RendererMessages,
   type SpecStateStore,
   type SurfaceEvent,
@@ -67,8 +68,11 @@ export class KohakuSurface extends HTMLElement {
     super();
     const shadow = this.attachShadow({ mode: "open" });
     const style = document.createElement("style");
-    // Minimal reset only (appearance is carried by each part's inline style = the pixel-match mechanism).
-    style.textContent = ":host{display:block}";
+    // Minimal reset (appearance is carried by each part's inline style = the pixel-match mechanism), plus
+    // the theme-neutral L1 state stylesheet (hover/active/focus-visible rules for the parts). Unlike
+    // renderer-react, which hoists one de-duplicated <style> per document (React 19's href/precedence),
+    // each shadow root is its own style scope, so it is injected here once per <kohaku-surface> instance.
+    style.textContent = `:host{display:block}${PARTS_STATE_CSS}`;
     this.#root = document.createElement("div");
     this.#root.className = "kohaku-root";
     shadow.append(style, this.#root);

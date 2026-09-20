@@ -1,4 +1,11 @@
-import { type BoundData, resolveMetricView } from "@kohaku-ui/renderer-core";
+import {
+  type BoundData,
+  metricCardStyle,
+  metricDeltaStyle,
+  metricLabelStyle,
+  metricValueStyle,
+  resolveMetricView,
+} from "@kohaku-ui/renderer-core";
 import type { ComponentNode } from "@kohaku-ui/spec-core";
 import { el, text } from "../dom.js";
 import type { PartBuilder, RenderRuntime } from "../types.js";
@@ -22,6 +29,8 @@ function renderMetric(rt: RenderRuntime, node: ComponentNode, state: BoundData):
   }
 
   const muted = tokenStr(rt, "color.muted");
+  const surface = tokenStr(rt, "color.surface");
+  const border = tokenStr(rt, "color.border");
   const view = resolveMetricView(
     node,
     state.data.rows[0],
@@ -37,21 +46,17 @@ function renderMetric(rt: RenderRuntime, node: ComponentNode, state: BoundData):
   const container = el(
     "div",
     { "data-kohaku": node.id, role: "group", "aria-label": view.ariaLabel },
-    { display: "flex", flexDirection: "column", gap: 4, padding: "12px 14px" },
+    metricCardStyle({ surface, border }, rt.sizing),
   );
 
-  const labelSpan = el("span", { "aria-hidden": "true" }, { fontSize: 12.5, color: muted });
+  const labelSpan = el("span", { "aria-hidden": "true" }, metricLabelStyle(muted, rt.sizing));
   labelSpan.appendChild(text(view.label));
-  const valueSpan = el("span", { "aria-hidden": "true" }, { fontSize: 28, fontWeight: 700, lineHeight: 1.1 });
+  const valueSpan = el("span", { "aria-hidden": "true" }, metricValueStyle(rt.sizing));
   valueSpan.appendChild(text(view.valueText));
   container.append(labelSpan, valueSpan);
 
   if (view.delta != null) {
-    const deltaSpan = el(
-      "span",
-      { "aria-hidden": "true" },
-      { fontSize: 13, color: view.deltaColor, fontWeight: 600 },
-    );
+    const deltaSpan = el("span", { "aria-hidden": "true" }, metricDeltaStyle(view.deltaColor, rt.sizing));
     deltaSpan.appendChild(text(`${view.delta.arrow} ${view.delta.signed}`));
     container.appendChild(deltaSpan);
   }

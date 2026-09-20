@@ -2,6 +2,7 @@ import {
   applyLocalView,
   type CellCoercion,
   cellDraft,
+  chartTableStyle,
   coerceCellInput,
   commitCellEdit,
   describeSortHeader,
@@ -34,6 +35,7 @@ import {
   useLocale,
   useMessages,
   useRenderer,
+  useSizing,
   useSpec,
   useToken,
 } from "../context.js";
@@ -88,6 +90,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
   // leave such a spreadsheet permanently blank, since the remote controller only fetches once active.
   const base = useBoundData(node, { enabled: !(serverSide && remoteActive) });
 
+  const sizing = useSizing();
   const border = String(useToken("color.border"));
   const headerBg = String(useToken("color.surface"));
   const accent = String(useToken("color.primary"));
@@ -164,7 +167,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
 
   return (
     <div data-kohaku={node.id} style={{ width: "100%", overflowX: "auto" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+      <table style={chartTableStyle(sizing)}>
         <thead>
           <tr>
             {columns.map((col) => {
@@ -172,7 +175,11 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
               // shared with renderer-wc); it emits ascending/descending only on the currently sorted column.
               const h = describeSortHeader(col, sort);
               return (
-                <th key={col.key} aria-sort={h.ariaSort} style={spreadsheetThStyle({ headerBg, border })}>
+                <th
+                  key={col.key}
+                  aria-sort={h.ariaSort}
+                  style={spreadsheetThStyle({ headerBg, border, muted }, sizing)}
+                >
                   {/* Move the sort trigger into a button so it can also be activated by keyboard. To keep the appearance as a th,
                       reset the button's default styles and expand the click area to the full cell. */}
                   <button
@@ -183,7 +190,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
                       // signature — structurally a JsonObject at runtime.
                       if (sortChangeable) emit("sortChange", { value: next as unknown as JsonObject });
                     }}
-                    style={spreadsheetSortButtonStyle({ numeric: h.numeric })}
+                    style={spreadsheetSortButtonStyle({ numeric: h.numeric }, sizing)}
                   >
                     {h.label}
                     {h.active && (
@@ -233,7 +240,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
               {columns.map((col) => {
                 if (!editable) {
                   return (
-                    <td key={col.key} style={spreadsheetTdStyle({ numeric: col.type === "number" })}>
+                    <td key={col.key} style={spreadsheetTdStyle({ numeric: col.type === "number" }, sizing)}>
                       {formatCell(row[col.key], col, locale)}
                     </td>
                   );
@@ -242,14 +249,14 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
                 const numeric = col.type === "number";
                 if (isEditingThis) {
                   return (
-                    <td key={col.key} style={spreadsheetTdStyle({ numeric })}>
+                    <td key={col.key} style={spreadsheetTdStyle({ numeric }, sizing)}>
                       <input
                         ref={inputRef}
                         type="text"
                         aria-label={messages.spreadsheetEditCell(col.label ?? col.key)}
                         aria-invalid={editing.invalid ? "true" : undefined}
                         defaultValue={cellDraft(row[col.key], col)}
-                        style={spreadsheetCellEditInputStyle({ border }, { numeric })}
+                        style={spreadsheetCellEditInputStyle({ border }, { numeric }, sizing)}
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
@@ -274,7 +281,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
                   );
                 }
                 return (
-                  <td key={col.key} style={spreadsheetTdStyle({ numeric })}>
+                  <td key={col.key} style={spreadsheetTdStyle({ numeric }, sizing)}>
                     <button
                       type="button"
                       aria-label={messages.spreadsheetEditCell(col.label ?? col.key)}
@@ -295,7 +302,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
       </table>
       {serverSide ? (
         // serverSide: total count + paging (back to first / next). Whether a next page exists is judged by nextCursor.
-        <div style={spreadsheetFooterBarStyle({ muted })}>
+        <div style={spreadsheetFooterBarStyle({ muted }, sizing)}>
           {state.data.total != null && (
             <span>
               {messages.spreadsheetTotal(state.data.total.toLocaleString(locale), displayRows.length)}
@@ -305,7 +312,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
             <button
               type="button"
               onClick={() => ctrl.goFirstPage()}
-              style={spreadsheetPagerButtonStyle({ border, accent })}
+              style={spreadsheetPagerButtonStyle({ border, accent }, sizing)}
             >
               {messages.spreadsheetFirstPage}
             </button>
@@ -314,7 +321,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
             <button
               type="button"
               onClick={() => ctrl.goNextPage(state.data.nextCursor!)}
-              style={spreadsheetPagerButtonStyle({ border, accent })}
+              style={spreadsheetPagerButtonStyle({ border, accent }, sizing)}
             >
               {messages.spreadsheetNextPage}
             </button>
@@ -322,7 +329,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
         </div>
       ) : (
         localTotal != null && (
-          <div style={spreadsheetFooterTotalStyle({ muted })}>
+          <div style={spreadsheetFooterTotalStyle({ muted }, sizing)}>
             {messages.spreadsheetTotal(localTotal.toLocaleString(locale), displayRows.length)}
           </div>
         )

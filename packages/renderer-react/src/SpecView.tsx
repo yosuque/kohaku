@@ -1,3 +1,4 @@
+import { renderFailureNoticeStyle } from "@kohaku-ui/renderer-core";
 import {
   type ComponentNode,
   evaluateVisibleWhen,
@@ -6,7 +7,7 @@ import {
   type UISpec,
 } from "@kohaku-ui/spec-core";
 import { memo, type ReactNode, useMemo, ViewTransition } from "react";
-import { resolveRowProps, SpecProvider, useMessages, useRenderer, useToken } from "./context.js";
+import { resolveRowProps, SpecProvider, useMessages, useRenderer, useSizing, useToken } from "./context.js";
 import { NodeErrorBoundary } from "./node-error-boundary.js";
 import { SpecStateProvider, useRowContext, useSpecStateSelector } from "./spec-state.js";
 
@@ -169,17 +170,9 @@ const NodeView = memo(function NodeView({
 function NodeNotice({ message }: { message: string }): ReactNode {
   // Highlight the render-failure note with an error color (color.negative.text).
   const noticeColor = String(useToken("color.negative.text"));
+  const sizing = useSizing();
   return (
-    <div
-      role="note"
-      style={{
-        border: `1px dashed ${noticeColor}`,
-        color: noticeColor,
-        borderRadius: 6,
-        padding: "8px 12px",
-        fontSize: 13,
-      }}
-    >
+    <div role="note" style={renderFailureNoticeStyle(noticeColor, sizing)}>
       {message}
     </div>
   );

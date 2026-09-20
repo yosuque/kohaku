@@ -98,6 +98,37 @@ describe("Phase 3: L2 sandbox", () => {
     expect(mountCalls[0]!.theme).toEqual({});
   });
 
+  it("passes context.sandbox.kitCss through to mountSandbox's kitCss (product kit override)", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    mount(spec, { sandbox: { bridge, kitCss: ".x{}" } });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kitCss).toBe(".x{}");
+  });
+
+  it("passes an empty kitCss (opt-out of the default kit) through as '', not undefined", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    mount(spec, { sandbox: { bridge, kitCss: "" } });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kitCss).toBe("");
+    expect(mountCalls[0]!.kitCss).not.toBeUndefined();
+  });
+
+  it("with no kitCss key at all, mountSandbox's kitCss is undefined (injects the default kit)", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    mount(spec, { sandbox: { bridge } });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kitCss).toBeUndefined();
+  });
+
   it("subscribes to write invalidations (invalidates) and bridges them to handle.invalidate", async () => {
     mountCalls.length = 0;
     invalidated.length = 0;

@@ -1,6 +1,8 @@
 // Groundwork for the raw-DOM builders. Generating strings equivalent to React's inline-style expansion is
 // the mechanism behind pixel-match. The px-suffixing rules for style values follow React's dangerousStyleValue.
 
+import { renderFailureNoticeStyle, type SizingTokens } from "@kohaku-ui/renderer-core";
+
 /** A teardown function that does nothing. */
 export const noop = (): void => {};
 
@@ -137,18 +139,8 @@ export function text(value: string): Text {
  * Generic placeholder for when a part cannot be rendered (unimplemented type / sandbox not injected / render failure).
  * Same markup as renderer-react's NodeNotice (SpecView.tsx).
  */
-export function nodeNotice(message: string, color: string): HTMLElement {
-  const node = el(
-    "div",
-    { role: "note" },
-    {
-      border: `1px dashed ${color}`,
-      color,
-      borderRadius: 6,
-      padding: "8px 12px",
-      fontSize: 13,
-    },
-  );
+export function nodeNotice(message: string, color: string, sizing: SizingTokens): HTMLElement {
+  const node = el("div", { role: "note" }, renderFailureNoticeStyle(color, sizing));
   node.appendChild(text(message));
   return node;
 }

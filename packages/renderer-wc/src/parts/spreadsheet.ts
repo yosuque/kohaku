@@ -3,6 +3,7 @@ import {
   type BoundData,
   type CellCoercion,
   cellDraft,
+  chartTableStyle,
   coerceCellInput,
   commitCellEdit,
   createSpreadsheetRemoteController,
@@ -14,6 +15,7 @@ import {
   localFooterTotal,
   type RowsWorkingCopy,
   resolveColumns,
+  type SizingTokens,
   type SortState,
   type SpreadsheetCellEdit,
   type SpreadsheetCellEditRuntime,
@@ -293,13 +295,14 @@ function renderTable(rt: RenderRuntime, node: ComponentNode, state: BoundData, o
     return dataStateNotice(rt, state) ?? document.createComment(`kohaku:idle:${node.id}`);
   }
   const data = state.data;
-  const { border, headerBg, accent } = opts.colors;
+  const { border, headerBg, accent, muted } = opts.colors;
+  const sizing = rt.sizing;
 
   const columns = resolveColumns(node, data);
   const displayRows = effectiveRows(opts.rows, opts.copy);
 
   const wrapper = el("div", { "data-kohaku": node.id }, { width: "100%", overflowX: "auto" });
-  const table = el("table", {}, { width: "100%", borderCollapse: "collapse", fontSize: 13.5 });
+  const table = el("table", {}, chartTableStyle(sizing));
 
   // ---- thead ----
   const thead = el("thead");
@@ -308,9 +311,9 @@ function renderTable(rt: RenderRuntime, node: ComponentNode, state: BoundData, o
     // aria-sort / label / arrow are all derived by renderer-core's describeSortHeader (single source of truth
     // shared with renderer-react).
     const h = describeSortHeader(col, opts.sort);
-    const th = el("th", {}, spreadsheetThStyle({ headerBg, border }));
+    const th = el("th", {}, spreadsheetThStyle({ headerBg, border, muted }, sizing));
     if (h.ariaSort != null) th.setAttribute("aria-sort", h.ariaSort);
-    const btn = el("button", { type: "button" }, spreadsheetSortButtonStyle({ numeric: h.numeric }));
+    const btn = el("button", { type: "button" }, spreadsheetSortButtonStyle({ numeric: h.numeric }, sizing));
     btn.appendChild(text(h.label));
     if (h.arrow != null) {
       const arrow = el("span", { "aria-hidden": "true" }, { color: accent });
@@ -353,12 +356,12 @@ function renderTable(rt: RenderRuntime, node: ComponentNode, state: BoundData, o
     for (const col of columns) {
       const numeric = col.type === "number";
       if (!opts.editable) {
-        const td = el("td", {}, spreadsheetTdStyle({ numeric }));
+        const td = el("td", {}, spreadsheetTdStyle({ numeric }, sizing));
         td.appendChild(text(formatCell(row[col.key], col, rt.locale)));
         tr.appendChild(td);
         continue;
       }
-      const td = el("td", {}, spreadsheetTdStyle({ numeric }));
+      const td = el("td", {}, spreadsheetTdStyle({ numeric }, sizing));
       const editingHere =
         opts.editing?.rowIndex === rowIndex && opts.editing.column === col.key ? opts.editing : undefined;
       if (editingHere != null) {
@@ -369,7 +372,7 @@ function renderTable(rt: RenderRuntime, node: ComponentNode, state: BoundData, o
             "aria-label": rt.messages.spreadsheetEditCell(col.label ?? col.key),
             ...(editingHere.invalid ? { "aria-invalid": "true" } : {}),
           },
-          spreadsheetCellEditInputStyle({ border }, { numeric }),
+          spreadsheetCellEditInputStyle({ border }, { numeric }, sizing),
         ) as HTMLInputElement;
         input.value = cellDraft(row[col.key], col);
         input.addEventListener("click", (e) => e.stopPropagation());
@@ -417,21 +420,22 @@ function appendFooter(
   opts: RenderOpts,
 ): void {
   const { border, accent, muted } = opts.colors;
+  const sizing = rt.sizing;
   if (opts.serverSide) {
-    const bar = el("div", {}, spreadsheetFooterBarStyle({ muted }));
+    const bar = el("div", {}, spreadsheetFooterBarStyle({ muted }, sizing));
     if (data.total != null) {
       const span = el("span");
       span.appendChild(text(rt.messages.spreadsheetTotal(data.total.toLocaleString(rt.locale), shown)));
       bar.appendChild(span);
     }
     if (opts.cursor != null) {
-      const b = pagerButton(rt.messages.spreadsheetFirstPage, { border, accent });
+      const b = pagerButton(rt.messages.spreadsheetFirstPage, { border, accent }, sizing);
       b.addEventListener("click", () => opts.onFirstPage());
       bar.appendChild(b);
     }
     if (data.nextCursor != null) {
       const next = data.nextCursor;
-      const b = pagerButton(rt.messages.spreadsheetNextPage, { border, accent });
+      const b = pagerButton(rt.messages.spreadsheetNextPage, { border, accent }, sizing);
       b.addEventListener("click", () => opts.onNextPage(next));
       bar.appendChild(b);
     }
@@ -439,15 +443,19 @@ function appendFooter(
   } else {
     const localTotal = localFooterTotal(data, shown);
     if (localTotal != null) {
-      const div = el("div", {}, spreadsheetFooterTotalStyle({ muted }));
+      const div = el("div", {}, spreadsheetFooterTotalStyle({ muted }, sizing));
       div.appendChild(text(rt.messages.spreadsheetTotal(localTotal.toLocaleString(rt.locale), shown)));
       wrapper.appendChild(div);
     }
   }
 }
 
-function pagerButton(label: string, tokens: Pick<SpreadsheetTokens, "border" | "accent">): HTMLElement {
-  const b = el("button", { type: "button" }, spreadsheetPagerButtonStyle(tokens));
+function pagerButton(
+  label: string,
+  tokens: Pick<SpreadsheetTokens, "border" | "accent">,
+  sizing: SizingTokens,
+): HTMLElement {
+  const b = el("button", { type: "button" }, spreadsheetPagerButtonStyle(tokens, sizing));
   b.appendChild(text(label));
   return b;
 }

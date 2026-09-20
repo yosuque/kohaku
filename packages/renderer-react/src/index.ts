@@ -12,6 +12,7 @@ export {
   useLocale,
   useMessages,
   useRenderer,
+  useSizing,
   useSpec,
   useToken,
 } from "./context.js";
