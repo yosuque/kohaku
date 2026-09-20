@@ -318,8 +318,12 @@ const designSystem: DesignSystemGuide = {
   // the design kit vocabulary (component classes + utilities the model composes with); the built-in kit
   // shown here, or bring your own — see step 3
   kit: DEFAULT_KIT_VOCABULARY,
-  // natural-language style rules (typography, spacing, tone, etc.)
-  guidelines: ["spacing is a multiple of 4px", "corner radius is 8px"],
+  // natural-language style rules (typography, spacing, tone, etc.) — never a concrete value (a color, a
+  // px number); values belong only in tokens/kit, see apps/sample-api/src/design-system.ts
+  guidelines: [
+    "Style table header rows with the k-table class (muted header on the surface color).",
+    "When indicating increases/decreases, use k-kpi-delta with is-up / is-down (or var(--kohaku-color-positive) / var(--kohaku-color-negative)) and also show a symbol like ▲▼ (do not rely on color alone).",
+  ],
   // lint send-back for hardcoded colors (default true; set false if repair does not converge on a small model)
   // enforceTokenColors: false,
 };
@@ -340,7 +344,7 @@ const policy = {
 // WC: just set it on <kohaku-surface>'s context.theme (or the theme property)
 ```
 
-3. **(Optional) Bring your own kit**: pass your vocabulary as `designSystem.kit` (`{ id, version, classes, utilities, namespaces }`) and your stylesheet as `kitCss` (`SandboxFrame`'s prop / `context.sandbox.kitCss` on `<kohaku-surface>`). Write the CSS with `var(--kohaku-*)` only; brand web fonts can be embedded as `@font-face` data URIs. `kitCss: ""` disables the built-in kit entirely. Bump `version` (and `generatorVersion`) when class semantics change.
+3. **(Optional) Bring your own kit**: pass your vocabulary as `designSystem.kit` (`{ id, version, classes, utilities, namespaces }`) and your stylesheet as `kitCss` (`SandboxFrame`'s prop / `context.sandbox.kitCss` on `<kohaku-surface>`). Write the CSS so every colour is a `var(--kohaku-color-*)` reference or `currentColor` — no raw colour values. Dimensions should be tokens too, except for deliberate literals like the built-in kit's own (hairline 1px borders, the 2px focus ring, the 480px grid breakpoint, SVG chart geometry); layout and effects such as `display:flex`, `color-mix()`, and `filter` are unrestricted — the shipped kit uses all three. Brand web fonts can be embedded as `@font-face` data URIs. `kitCss: ""` disables the built-in kit entirely. Bump `version` (and `generatorVersion`) when class semantics change.
 
 4. **Verify**: L2 generation (e.g., a free-form request in chat) → if the generated HTML uses `var(--kohaku-color-*)` and the header's theme switch makes the custom component's palette follow, it is OK. If hardcoded colors slip in, they are automatically retried for repair as `L2_RAW_COLOR`; an unrecognized kit-namespaced class name is retried the same way as `L2_UNKNOWN_CLASS`.
 

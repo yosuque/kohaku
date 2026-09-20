@@ -318,8 +318,12 @@ const designSystem: DesignSystemGuide = {
   // デザインキット語彙(モデルが組み立てに使うコンポーネントクラス + ユーティリティ)。ここでは組み込みキットを
   // 指定しているが、独自キットを持ち込む場合はステップ 3 を参照
   kit: DEFAULT_KIT_VOCABULARY,
-  // 自然言語のスタイル規則(タイポグラフィ・余白・トーンなど)
-  guidelines: ["余白は 4px の倍数", "角丸は 8px"],
+  // 自然言語のスタイル規則(タイポグラフィ・余白・トーンなど)— 具体値(色や px 数値)は書かないこと。値が
+  // 属するのはトークン/キットだけ。apps/sample-api/src/design-system.ts を参照
+  guidelines: [
+    "テーブルのヘッダー行は k-table クラスでスタイルする(サーフェス色の背景に、控えめな配色のヘッダーになる)。",
+    "増減を示すときは k-kpi-delta を is-up / is-down とともに使う(または var(--kohaku-color-positive) / var(--kohaku-color-negative))。さらに ▲▼ のような記号も表示し、色だけに頼らないこと。",
+  ],
   // 色直書きの lint 差し戻し(既定 true。小型モデルで修復が収束しないなら false)
   // enforceTokenColors: false,
 };
@@ -340,7 +344,7 @@ const policy = {
 // WC: <kohaku-surface> の context.theme(または theme プロパティ)に設定するだけ
 ```
 
-3. **(任意)独自キットを持ち込む**: 語彙を `designSystem.kit`(`{ id, version, classes, utilities, namespaces }`)として、スタイルシートを `kitCss`(`SandboxFrame` の prop / `<kohaku-surface>` の `context.sandbox.kitCss`)として渡す。CSS は `var(--kohaku-*)` のみで書くこと。ブランドの Web フォントは `@font-face` の data URI として埋め込める。`kitCss: ""` で組み込みキットを完全に無効化できる。クラスの意味を変更したら `version`(および `generatorVersion`)を bump する。
+3. **(任意)独自キットを持ち込む**: 語彙を `designSystem.kit`(`{ id, version, classes, utilities, namespaces }`)として、スタイルシートを `kitCss`(`SandboxFrame` の prop / `<kohaku-surface>` の `context.sandbox.kitCss`)として渡す。色はすべて `var(--kohaku-color-*)` 参照か `currentColor` で書き、色の直書きはしないこと。寸法もトークンで書くが、組み込みキット自身が使っているような意図的なリテラル(1px のヘアラインボーダー、2px のフォーカスリング、480px のグリッドブレークポイント、SVG チャートの寸法)は例外とする。`display:flex`・`color-mix()`・`filter` のようなレイアウトやエフェクトは制限されない(組み込みキットもこの 3 つを使っている)。ブランドの Web フォントは `@font-face` の data URI として埋め込める。`kitCss: ""` で組み込みキットを完全に無効化できる。クラスの意味を変更したら `version`(および `generatorVersion`)を bump する。
 
 4. **確認**: L2 生成(例: チャットで自由形式の要求)→ 生成 HTML に `var(--kohaku-color-*)` が使われ、ヘッダのテーマ切替でカスタムコンポーネントの配色が追従すれば OK。色直書きが混ざると `L2_RAW_COLOR` として、語彙にないキット名前空間のクラス名が混ざると同様に `L2_UNKNOWN_CLASS` として自動で修復再試行されます。
 
