@@ -8,6 +8,7 @@ import { ComposeBodySchema } from "./schemas.js";
 import {
   message,
   parseBody,
+  type RestCallContext,
   type RouteContext,
   reportHostError,
   requestIdOf,
@@ -57,20 +58,19 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
     if (body.intent == null) {
       return c.json(errorBody("BAD_REQUEST", "intent (canonical + params) is required"), 400);
     }
+    const call: RestCallContext = {
+      requestId,
+      endpoint: "fixations/approve",
+      signal: c.req.raw.signal,
+      traceContext: traceContextOf(c),
+    };
     try {
       // Fetch the current composition result (should be cached) and fix its structure. The fixation is stamped onto this tenant.
       const intent = await finalizeIntent({
         canonical: body.intent.canonical,
         params: body.intent.params,
       });
-      const result = await composeForRest(
-        intent,
-        toSession(undefined, principal, tenant),
-        deps,
-        c.req.raw.signal,
-        requestId,
-        traceContextOf(c),
-      );
+      const result = await composeForRest(intent, toSession(undefined, principal, tenant), deps, call);
       // A generation failure must not be pinned as L0 for everyone: a deterministic fallback Spec
       // ("Could not render") is not fixatable.
       const fb = result.spec.provenance.fallback;
@@ -106,7 +106,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
       );
       return c.json({ fixation: record });
     } catch (e) {
-      await reportHostError(deps, "fixations/approve", requestId, e);
+      await reportHostError(deps, call.endpoint, call.requestId, e);
       // An arbitrary exception's message never reaches the client (it may leak internals); a typed host error
       // (SpecError/ComposeError) still passes its own message through. The original error still reaches
       // onError via reportHostError above.

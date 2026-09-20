@@ -18,7 +18,9 @@ import { withFixationLock } from "../keyed-mutex.js";
 import type { KohakuHostDeps } from "../types.js";
 import { ComposeBodySchema, EventsBodySchema } from "./schemas.js";
 import {
+  errorReporterFor,
   parseBody,
+  type RestCallContext,
   type RouteContext,
   reportHostError,
   requestIdOf,
@@ -88,10 +90,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       session,
       principal,
       deps,
-      requestId,
-      traceContext,
-      endpoint: "compose",
-      signal: c.req.raw.signal,
+      call: { requestId, endpoint: "compose", signal: c.req.raw.signal, traceContext },
     });
   });
 
@@ -146,10 +145,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       session,
       principal,
       deps,
-      requestId,
-      traceContext,
-      endpoint: "events",
-      signal: c.req.raw.signal,
+      call: { requestId, endpoint: "events", signal: c.req.raw.signal, traceContext },
       // /events-specific: record interacted before recordComposed (preserve execution order).
       beforeRecord: async () => {
         await deps.recorder?.interacted({
@@ -208,7 +204,7 @@ async function resolveComposeRequest(
 /**
  * Shared skeleton for the latter half of /compose and /events: composeForRest -> capability issuance ->
  * audit recording (fail-open) -> JSON response.
- * Failures are COMPOSE_FAILED 500. The endpoint name is passed as-is to logs / error reporting.
+ * Failures are COMPOSE_FAILED 500. The endpoint name (call.endpoint) is passed as-is to logs / error reporting.
  * beforeRecord runs inside recordComposedResult's record callback, before recordComposed (for /events' interacted).
  */
 async function deliverComposed(
@@ -218,18 +214,18 @@ async function deliverComposed(
     session: SessionContext;
     principal: Principal;
     deps: KohakuHostDeps;
-    requestId: string;
-    traceContext?: TraceContext;
-    endpoint: string;
-    signal: AbortSignal;
+    call: RestCallContext;
     beforeRecord?: () => Promise<void>;
   },
 ): Promise<Response> {
-  const { intent, session, principal, deps, requestId, traceContext, endpoint, signal, beforeRecord } = args;
+  const { intent, session, principal, deps, call, beforeRecord } = args;
+  // Used twice below (the audit-recording failure callback and the outer catch), hence errorReporterFor
+  // rather than two direct reportHostError(deps, call.endpoint, call.requestId, e) calls.
+  const { report } = errorReporterFor(deps, call);
   try {
-    // Propagate client-disconnect / timeout aborts through to compose (the L1/L2 LLM calls).
-    const result = await composeForRest(intent, session, deps, signal, requestId, traceContext);
-    const capability = await issueSpecCapability(result.spec, principal, deps, endpoint, requestId);
+    // Propagate client-disconnect / timeout aborts through to compose (the L1/L2 LLM calls; call.signal).
+    const result = await composeForRest(intent, session, deps, call);
+    const capability = await issueSpecCapability(result.spec, principal, deps, call);
     // Audit recording is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the MCP
     // profile's composeAndAudit): swallow recorder failures so they do not take down delivery (including
     // cached Specs), notify the observability hook (onError) of the failure, and still return a successful
@@ -248,13 +244,13 @@ async function deliverComposed(
         await recordComposed(deps, result, session, specHash);
         await recordFallbackIfAny(deps, result, session, specHash);
       },
-      (e) => reportHostError(deps, endpoint, requestId, e),
+      (e) => report(e),
     );
     return c.json({ spec: result.spec, capability });
   } catch (e) {
-    await reportHostError(deps, endpoint, requestId, e);
+    await report(e);
     const clientMessage = hostCore.clientMessageFor(e, COMPOSE_FAILED_MESSAGE);
-    return c.json(errorBody("COMPOSE_FAILED", clientMessage, requestId), 500);
+    return c.json(errorBody("COMPOSE_FAILED", clientMessage, call.requestId), 500);
   }
 }
 
@@ -279,6 +275,9 @@ async function deliverComposedStream(
   const { intent, session, principal, deps, requestId, traceContext } = args;
   // Propagate client-disconnect / timeout aborts through to composeStream (the L1/L2 LLM calls).
   const abort = c.req.raw.signal;
+  // Built once and threaded through resolveFixatedForRest / issueSpecCapability / finishStream below (all
+  // /compose/stream calls, hence the fixed "compose/stream" endpoint).
+  const call: RestCallContext = { requestId, endpoint: "compose/stream", signal: abort, traceContext };
 
   return streamSSE(c, async (stream) => {
     // During generation (after the skeleton is sent, until L1 generation/repair completes) there can be a long
@@ -295,20 +294,14 @@ async function deliverComposedStream(
       // on hit, a single final:true event + done. The capability is issued from the $ref inside the fixed Spec
       // (no skeleton is involved, so refs-based issuance is unnecessary). No fixation / stale (staleness
       // detection) returns null = fall through to the streaming generation path below.
-      const fixated = await resolveFixatedForRest(intent, session, deps, requestId);
+      const fixated = await resolveFixatedForRest(intent, session, deps, call);
       if (fixated != null) {
-        const capability = await issueSpecCapability(
-          fixated.spec,
-          principal,
-          deps,
-          "compose/stream",
-          requestId,
-        );
+        const capability = await issueSpecCapability(fixated.spec, principal, deps, call);
         await stream.writeSSE({
           event: "spec",
           data: JSON.stringify({ spec: fixated.spec, capability, final: true }),
         });
-        await finishStream(deps, stream, fixated, session, requestId);
+        await finishStream(deps, stream, fixated, session, call);
         return;
       }
 
@@ -339,7 +332,7 @@ async function deliverComposedStream(
       })) {
         if (ev.kind === "spec") {
           capability ??= ev.final
-            ? await issueSpecCapability(ev.spec, principal, deps, "compose/stream", requestId)
+            ? await issueSpecCapability(ev.spec, principal, deps, call)
             : await hostCore.issueCapabilityForRefs(deps.authz, principal, ev.refs, capabilityTtl(deps));
           await stream.writeSSE({
             event: "spec",
@@ -352,7 +345,7 @@ async function deliverComposedStream(
         }
       }
       // recorder / view.fallback runs exactly once against the final Spec (the skeleton is not recorded).
-      if (final != null) await finishStream(deps, stream, final, session, requestId);
+      if (final != null) await finishStream(deps, stream, final, session, call);
     } catch (e) {
       // A client disconnect / request timeout surfaces here too (composeStream's for-await loop / a
       // stream.writeSSE call above rejects once the underlying connection is gone). That is not a
@@ -362,7 +355,7 @@ async function deliverComposedStream(
       // stack). Skip both and let `finally` alone clean up.
       if (!abort.aborted) {
         // The HTTP status cannot be changed once the stream has started, so terminate with an error event.
-        await reportHostError(deps, "compose/stream", requestId, e);
+        await reportHostError(deps, call.endpoint, call.requestId, e);
         const clientMessage = hostCore.clientMessageFor(e, COMPOSE_FAILED_MESSAGE);
         await stream
           .writeSSE({
@@ -437,32 +430,33 @@ async function resolveFixatedForRest(
   intent: CanonicalIntent,
   session: SessionContext,
   deps: KohakuHostDeps,
-  requestId?: string,
+  call: RestCallContext,
 ): Promise<ComposeResult | null> {
   return hostCore.resolveFixatedResult(
     intent,
     session,
     withTenantCatalog(deps.compose, session.tenant),
     fixationHost(deps),
-    requestId,
+    call.requestId,
   );
 }
 
 /**
- * Fixation shortcut -> normal compose (shared by /compose, /events, and /fixations/approve). requestId, when
- * passed, is threaded into host-core's fixation self-healing (FixationDeliveryHost.onSelfHealError) so a
- * self-heal failure can be tied back to the request that triggered it. traceContext, when passed (the
+ * Fixation shortcut -> normal compose (shared by /compose, /events, and /fixations/approve). call.requestId is
+ * threaded into host-core's fixation self-healing (FixationDeliveryHost.onSelfHealError) so a self-heal
+ * failure can be tied back to the request that triggered it. call.traceContext, when present (the
  * `traceparent` request header via shared.ts's traceContextOf), is threaded into the normal-compose fallback
  * as ComposeOptions.traceContext -- additive/opt-in, same as requestId/correlationId (see host-core's
- * composeWithFixation doc comment).
+ * composeWithFixation doc comment). call.signal is the client-disconnect / timeout abort signal.
+ * call.endpoint is accepted for a uniform call-site shape shared with resolveFixatedForRest /
+ * issueSpecCapability / finishStream, though composeForRest itself has no direct use for it (its callers
+ * report their own failures via errorReporterFor / reportHostError).
  */
 export async function composeForRest(
   intent: CanonicalIntent,
   session: SessionContext,
   deps: KohakuHostDeps,
-  abort?: AbortSignal,
-  requestId?: string,
-  traceContext?: TraceContext,
+  call: RestCallContext,
 ): Promise<ComposeResult> {
   // materialize validates against the tenant catalog; the normal-compose fallback runs against the untenanted
   // deps.compose (compose() re-applies tenant/session internally).
@@ -472,11 +466,11 @@ export async function composeForRest(
     {
       materialize: withTenantCatalog(deps.compose, session.tenant),
       compose: deps.compose,
-      ...(abort != null ? { abort } : {}),
+      ...(call.signal != null ? { abort: call.signal } : {}),
     },
     fixationHost(deps),
-    requestId,
-    traceContext,
+    call.requestId,
+    call.traceContext,
   );
 }
 
@@ -542,15 +536,14 @@ async function issueSpecCapability(
   spec: UISpec,
   principal: Principal,
   deps: KohakuHostDeps,
-  endpoint: string,
-  requestId: string,
+  call: RestCallContext,
 ): Promise<string> {
   return hostCore.issueSpecCapabilitySafely(
     deps.authz,
     principal,
     spec,
     () => allowedActions(deps),
-    (e) => reportHostError(deps, endpoint, requestId, e),
+    (e) => reportHostError(deps, call.endpoint, call.requestId, e),
     capabilityTtl(deps),
   );
 }
@@ -579,7 +572,7 @@ async function finishStream(
   stream: SSEStreamingApi,
   result: ComposeResult,
   session: SessionContext,
-  requestId: string,
+  call: RestCallContext,
 ): Promise<void> {
   // Compute specHash exactly once per request and share it between the recorder (view.composed) and the done
   // event, avoiding hashing the same Spec twice.
@@ -595,7 +588,7 @@ async function finishStream(
       await recordComposed(deps, result, session, specHash);
       await recordFallbackIfAny(deps, result, session, specHash);
     },
-    (e) => reportHostError(deps, "compose/stream", requestId, e),
+    (e) => reportHostError(deps, call.endpoint, call.requestId, e),
   );
   await stream.writeSSE({
     event: "done",
