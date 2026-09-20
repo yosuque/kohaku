@@ -67,6 +67,7 @@ export interface UIStrings {
     tabAnalytics: string;
     tabPromotions: string;
     tabFixations: string;
+    tabGallery: string;
     bumpButton: string;
     bumpNotice: (dataVersion: string) => string;
     refresh: string;
@@ -153,6 +154,12 @@ export interface UIStrings {
       previewFetchFailed: (message: string) => string;
       previewMalformed: string;
     };
+    gallery: {
+      description: string;
+      kitToggle: string;
+      pasteLabel: string;
+      pastePlaceholder: string;
+    };
   };
 }
 
@@ -225,6 +232,7 @@ const EN: UIStrings = {
     tabAnalytics: "Analytics",
     tabPromotions: "Promotion Review (L2→L1)",
     tabFixations: "Fixation (L1→L0)",
+    tabGallery: "Gallery",
     bumpButton: "Simulate data update (bump)",
     bumpNotice: (v) => `dataVersion → ${v} (the next compose will be a cache MISS)`,
     refresh: "Refresh",
@@ -325,6 +333,13 @@ const EN: UIStrings = {
       previewFetchFailed: (message) => `Could not fetch the preview: ${message}`,
       previewMalformed: "The preview response is malformed",
     },
+    gallery: {
+      description: "Canned fixture data; this tab never calls the API.",
+      kitToggle: "Inject the default design kit",
+      pasteLabel: "L2 artifact HTML",
+      pastePlaceholder:
+        "Paste a generated L2 artifact (from the Promotion Review (L2→L1) tab's generated HTML) to preview it with the current theme and kit",
+    },
   },
 };
 
@@ -396,6 +411,7 @@ const JA: UIStrings = {
     tabAnalytics: "アナリティクス",
     tabPromotions: "昇格レビュー(L2→L1)",
     tabFixations: "固定化(L1→L0)",
+    tabGallery: "ギャラリー",
     bumpButton: "データ更新をシミュレート(bump)",
     bumpNotice: (v) => `dataVersion → ${v}(次の compose はキャッシュ MISS になります)`,
     refresh: "更新",
@@ -494,6 +510,13 @@ const JA: UIStrings = {
         "この候補にはデータ参照が記録されていないため、データ取得はエラーになります(見た目の骨格のみ確認できます)。",
       previewFetchFailed: (message) => `プレビューを取得できませんでした: ${message}`,
       previewMalformed: "プレビュー応答が不正です",
+    },
+    gallery: {
+      description: "缶詰データを使用しており、このタブは API を呼び出しません。",
+      kitToggle: "既定デザインキットを注入する",
+      pasteLabel: "L2 アーティファクト HTML",
+      pastePlaceholder:
+        "生成された L2 アーティファクト(昇格レビュー(L2→L1)タブの生成 HTML)を貼り付けると、現在のテーマとキットでプレビューします",
     },
   },
 };

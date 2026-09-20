@@ -4,6 +4,7 @@ import { bumpDataVersion } from "../kohaku/client.js";
 import { useTenant } from "../kohaku/tenant.js";
 import { AnalyticsTab } from "./admin/AnalyticsTab.js";
 import { FixationsTab } from "./admin/FixationsTab.js";
+import { GalleryTab } from "./admin/GalleryTab.js";
 import { LineageTab } from "./admin/LineageTab.js";
 import { PromotionsTab } from "./admin/PromotionsTab.js";
 import { ErrorBanner, type Notice, type PushNotice } from "./admin/ui.js";
@@ -13,7 +14,7 @@ import { ErrorBanner, type Notice, type PushNotice } from "./admin/ui.js";
  * The place where "a workflow written nowhere in the code" becomes visible as a sequence of events.
  */
 export function AdminPage(): ReactNode {
-  const [tab, setTab] = useState<"lineage" | "analytics" | "promotions" | "fixations">("lineage");
+  const [tab, setTab] = useState<"lineage" | "analytics" | "promotions" | "fixations" | "gallery">("lineage");
   const [notice, setNotice] = useState<Notice | null>(null);
   // Switching tenant remounts the tab and re-fetches (the control plane is isolated by tenant).
   // Switching role does not remount — to demonstrate the 403 by listing candidates as admin, then switching to viewer and pressing
@@ -32,6 +33,7 @@ export function AdminPage(): ReactNode {
             ["analytics", t.admin.tabAnalytics],
             ["promotions", t.admin.tabPromotions],
             ["fixations", t.admin.tabFixations],
+            ["gallery", t.admin.tabGallery],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -84,6 +86,7 @@ export function AdminPage(): ReactNode {
       {tab === "analytics" && <AnalyticsTab key={tenant} onNotice={pushNotice} />}
       {tab === "promotions" && <PromotionsTab key={tenant} onNotice={pushNotice} />}
       {tab === "fixations" && <FixationsTab key={tenant} onNotice={pushNotice} />}
+      {tab === "gallery" && <GalleryTab key={tenant} />}
     </div>
   );
 }
