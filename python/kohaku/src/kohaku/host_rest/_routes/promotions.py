@@ -51,57 +51,75 @@ def _promotions_not_configured() -> Response:
 class _PromotionCtx:
     """The resolved context handed back by `_enter_promotion_route` once every guard in its preamble has
     passed. `promotions` is `deps.promotions` narrowed to non-None (the 501 guard already ruled out None),
-    saving every call site its own `assert deps.promotions is not None`."""
+    saving every call site its own `assert deps.promotions is not None`. `principal` / `tenant` are `None`
+    when the call opted out of resolving them (`need_principal=False` / `need_tenant=False`) -- a route that
+    never called `_get_principal` / `_resolve_tenant` on its own before this fold must not gain a new
+    `deps.auth` / `deps.tenant` invocation just because folding made resolving them convenient."""
 
     deps: KohakuHostDeps
     promotions: PromotionsApi
-    principal: Principal
+    principal: Principal | None
     tenant: str | None
 
 
 async def _enter_promotion_route(
-    deps: KohakuHostDeps, request: Request, kind: str, *, artifact_id: str | None = None
+    deps: KohakuHostDeps,
+    request: Request,
+    kind: str,
+    *,
+    governance_artifact_id: str | None = None,
+    check_artifact_id: str | None = None,
+    need_principal: bool = True,
+    need_tenant: bool = True,
 ) -> _PromotionCtx | Response:
     """The guard preamble shared by all nine `/promotions*` routes, folded into one call. Order preserved
-    exactly: promotions-not-configured (501) -> require_governance -> principal -> tenant -> (artifact
-    existence 404, only when `artifact_id` is given).
+    exactly: promotions-not-configured (501) -> require_governance -> principal (if `need_principal`) ->
+    tenant (if `need_tenant`) -> artifact existence 404 (only when `check_artifact_id` is given).
 
     A plain function, not a decorator: FastAPI introspects each route handler's own signature to build its
     request model, so wrapping the handler itself would be fragile here. The lock acquisition (`_get_lock` /
     `_promotion_key`) is intentionally left to each route -- it is not part of the shared preamble.
 
-    Not every route wants every guard. `artifact_id` should be passed only when the route's own guard order
-    truly has the generic "does this artifact exist" check land immediately after tenant resolution, with the
-    exact message this function uses (`f"unknown artifact {artifact_id}"`, mirroring the former nested
-    `_ensure_artifact` helper) -- today that is only POST /promotions/{artifact_id}/reject. The other five
-    artifact-scoped routes each deviate from that shape and must not be forced through it:
-    - GET /promotions/{artifact_id} and POST /promotions/{artifact_id}/preview fetch the candidate themselves
-      (they need the value, not just its existence) and report a *different* 404 message ("unknown artifact",
-      no id) -- reusing this function's generic check here would silently change that response body.
-    - POST .../approve, .../withdraw and .../actions read/validate the request body (and, for actions, run an
-      extra kind-scoped governance check) *between* tenant resolution and the artifact-existence check; that
-      body validation must still fail with 400 before the artifact check ever runs, exactly as today.
-    For all five, `artifact_id` is left as None here (skipping the trailing check) and the route keeps
-    resolving/checking the artifact itself in its original position -- see the module's task-7-report.md for
-    the one accepted, disclosed consequence: the `GovernanceOperation` this function builds for those five
-    routes carries `artifactId=None` rather than the route's real artifact id, since the same single
-    `artifact_id` argument would otherwise also drag the generic check into the wrong place. This does not
-    change any HTTP-observable behavior against the bundled governance evaluator (kind/tenant only, never
-    artifactId) or any existing test.
+    Two independent knobs govern the artifact id, because a route can need one without the other:
+    - `governance_artifact_id` is threaded into `GovernanceOperation.artifactId` for the blanket
+      `require_governance` call. Every route that has an artifact id in its URL passes its real one here,
+      matching today's `GovernanceOperation(kind=..., artifactId=artifact_id)` byte for byte -- this is a
+      security-relevant input to a host-supplied `authorize_governance` hook and must never be substituted.
+    - `check_artifact_id` triggers the generic trailing existence check (404 `f"unknown artifact {id}"`,
+      mirroring the former nested `_ensure_artifact` helper), run only when given, immediately after tenant
+      resolution. Only POST /promotions/{artifact_id}/reject passes this (its guard order matches exactly);
+      the other five artifact-scoped routes leave it None and keep resolving/checking the artifact
+      themselves, in their original position, because:
+      - GET /promotions/{artifact_id} and POST /promotions/{artifact_id}/preview fetch the candidate
+        themselves (they need the value, not just its existence) and report a *different* 404 message
+        ("unknown artifact", no id) -- routing them through the generic check would change that response body.
+      - POST .../approve, .../withdraw and .../actions read/validate the request body (and, for actions, run
+        an extra kind-scoped governance check) *between* tenant resolution and the artifact-existence check;
+        that validation must still fail with 400 before the artifact check ever runs, exactly as today.
+
+    `need_principal` / `need_tenant` default to True (every route resolves both, matching most of the nine),
+    but a caller that never resolved one of these before folding must pass False so `_get_principal` /
+    `_resolve_tenant` -- both host-supplied callbacks (`deps.auth` / `deps.tenant`) -- are not invoked where
+    they previously were not. This is independent of what `require_governance` itself does internally (it
+    resolves both, unconditionally, whenever `deps.authorize_governance` is wired) -- that was already true
+    before this fold and is unchanged by it. A route whose principal resolution is conditional on data only
+    known after this call returns (POST .../preview, on whether the fetched candidate has a `ref`) passes
+    `need_principal=False` and resolves it itself, at its original position and condition, via `_get_principal`
+    directly -- not through this function's ctx.
     """
     if deps.promotions is None:
         return _promotions_not_configured()
     denied = await require_governance(
-        deps, request, GovernanceOperation(kind=kind, artifactId=artifact_id)
+        deps, request, GovernanceOperation(kind=kind, artifactId=governance_artifact_id)
     )
     if denied is not None:
         return denied
-    principal = await _get_principal(deps, request)
-    tenant = await _resolve_tenant(deps, request)
-    if artifact_id is not None:
-        candidate = await deps.promotions.get(artifact_id, tenant=tenant)
+    principal = await _get_principal(deps, request) if need_principal else None
+    tenant = await _resolve_tenant(deps, request) if need_tenant else None
+    if check_artifact_id is not None:
+        candidate = await deps.promotions.get(check_artifact_id, tenant=tenant)
         if candidate is None:
-            return _error("NOT_FOUND", f"unknown artifact {artifact_id}", 404)
+            return _error("NOT_FOUND", f"unknown artifact {check_artifact_id}", 404)
     return _PromotionCtx(deps=deps, promotions=deps.promotions, principal=principal, tenant=tenant)
 
 
@@ -177,7 +195,7 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
 
     @router.get("/promotions")
     async def promotions_list(request: Request) -> Response:
-        ctx = await _enter_promotion_route(deps, request, "promotion.list")
+        ctx = await _enter_promotion_route(deps, request, "promotion.list", need_principal=False)
         if isinstance(ctx, Response):
             return ctx
         status = request.query_params.get("status")
@@ -202,7 +220,9 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         Serializing this route against every per-tenant bucket (two-phase locking) would close the window at
         the scan level too, but is a structural follow-up, not implemented here.
         """
-        ctx = await _enter_promotion_route(deps, request, "promotion.reconcile")
+        ctx = await _enter_promotion_route(
+            deps, request, "promotion.reconcile", need_principal=False, need_tenant=False
+        )
         if isinstance(ctx, Response):
             return ctx
         try:
@@ -214,7 +234,7 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
 
     @router.post("/promotions/evaluate")
     async def promotions_evaluate(request: Request) -> Response:
-        ctx = await _enter_promotion_route(deps, request, "promotion.evaluate")
+        ctx = await _enter_promotion_route(deps, request, "promotion.evaluate", need_principal=False)
         if isinstance(ctx, Response):
             return ctx
         async with _get_lock(deps, _promotion_key(ctx.tenant)):
@@ -223,10 +243,13 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
 
     @router.get("/promotions/{artifact_id}")
     async def promotions_get(request: Request, artifact_id: str) -> Response:
-        # artifact_id intentionally not passed to _enter_promotion_route: this route fetches the candidate
-        # itself (it needs the value, not just a yes/no) and reports a distinct "unknown artifact" message
-        # (no id) on a miss -- see _enter_promotion_route's docstring.
-        ctx = await _enter_promotion_route(deps, request, "promotion.get")
+        # check_artifact_id intentionally not passed: this route fetches the candidate itself (it needs the
+        # value, not just a yes/no) and reports a distinct "unknown artifact" message (no id) on a miss --
+        # see _enter_promotion_route's docstring. governance_artifact_id is still the real id: the blanket
+        # governance call must see it, unchanged. need_principal=False: this route never resolved a principal.
+        ctx = await _enter_promotion_route(
+            deps, request, "promotion.get", governance_artifact_id=artifact_id, need_principal=False
+        )
         if isinstance(ctx, Response):
             return ctx
         candidate = await ctx.promotions.get(artifact_id, tenant=ctx.tenant)
@@ -236,8 +259,12 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
 
     @router.post("/promotions/{artifact_id}/preview")
     async def promotions_preview(request: Request, artifact_id: str) -> Response:
-        # Same reasoning as promotions_get above.
-        ctx = await _enter_promotion_route(deps, request, "promotion.preview")
+        # Same artifact-check reasoning as promotions_get above. need_principal=False: this route resolves a
+        # principal only conditionally (below, when the candidate has a ref) -- that condition is data-
+        # dependent and only known after this call returns, so it cannot be expressed as a ctx field here.
+        ctx = await _enter_promotion_route(
+            deps, request, "promotion.preview", governance_artifact_id=artifact_id, need_principal=False
+        )
         if isinstance(ctx, Response):
             return ctx
         candidate = await ctx.promotions.get(artifact_id, tenant=ctx.tenant)
@@ -253,7 +280,7 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         capability: str | None = None
         if ref is not None:
             capability = await deps.authz.issue_capability(
-                ctx.principal,
+                await _get_principal(deps, request),
                 [Scope(kind="read", ref=ref)],
                 ttl_seconds=deps.capability_ttl_seconds
                 if deps.capability_ttl_seconds is not None
@@ -267,13 +294,15 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
 
     @router.post("/promotions/{artifact_id}/approve")
     async def promotions_approve(request: Request, artifact_id: str) -> Response:
-        # artifact_id intentionally not passed to _enter_promotion_route: the draft body must be read and
-        # validated (400 on a bad draft) before the artifact-existence check runs, exactly as today -- see
-        # _enter_promotion_route's docstring. _ensure_artifact below reproduces that check in its original
-        # position.
-        ctx = await _enter_promotion_route(deps, request, "promotion.approve")
+        # check_artifact_id intentionally not passed: the draft body must be read and validated (400 on a bad
+        # draft) before the artifact-existence check runs, exactly as today -- see _enter_promotion_route's
+        # docstring. _ensure_artifact below reproduces that check in its original position.
+        # governance_artifact_id is still the real id, unchanged. need_principal / need_tenant default True:
+        # this route always resolved both.
+        ctx = await _enter_promotion_route(deps, request, "promotion.approve", governance_artifact_id=artifact_id)
         if isinstance(ctx, Response):
             return ctx
+        assert ctx.principal is not None  # need_principal defaults True above
         data = await _read_json(request)
         draft = parse_component_draft(data.get("draft")) if isinstance(data, dict) else None
         if draft is None:
@@ -297,10 +326,17 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     @router.post("/promotions/{artifact_id}/reject")
     async def promotions_reject(request: Request, artifact_id: str) -> Response:
         # The one route whose guard order matches _enter_promotion_route's built-in artifact-existence check
-        # exactly (immediately after tenant, same message) -- so it is the only one passing artifact_id here.
-        ctx = await _enter_promotion_route(deps, request, "promotion.reject", artifact_id=artifact_id)
+        # exactly (immediately after tenant, same message) -- so it is the only one passing check_artifact_id.
+        ctx = await _enter_promotion_route(
+            deps,
+            request,
+            "promotion.reject",
+            governance_artifact_id=artifact_id,
+            check_artifact_id=artifact_id,
+        )
         if isinstance(ctx, Response):
             return ctx
+        assert ctx.principal is not None  # need_principal defaults True above
         try:
             async with _get_lock(deps, _promotion_key(ctx.tenant)):
                 candidate = await ctx.promotions.reject(artifact_id, ctx.principal, tenant=ctx.tenant)
@@ -311,9 +347,10 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     @router.post("/promotions/{artifact_id}/withdraw")
     async def promotions_withdraw(request: Request, artifact_id: str) -> Response:
         # Same reasoning as promotions_approve above: the optional reason body must be validated first.
-        ctx = await _enter_promotion_route(deps, request, "promotion.withdraw")
+        ctx = await _enter_promotion_route(deps, request, "promotion.withdraw", governance_artifact_id=artifact_id)
         if isinstance(ctx, Response):
             return ctx
+        assert ctx.principal is not None  # need_principal defaults True above
         data = await _read_json(request)
         reason = None
         if isinstance(data, dict) and data.get("reason") is not None:
@@ -336,9 +373,10 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     async def promotions_actions(request: Request, artifact_id: str) -> Response:
         # Same reasoning as promotions_approve above: the action body (and the extra kind-scoped governance
         # check it may trigger) must run before the artifact-existence check.
-        ctx = await _enter_promotion_route(deps, request, "promotion.act")
+        ctx = await _enter_promotion_route(deps, request, "promotion.act", governance_artifact_id=artifact_id)
         if isinstance(ctx, Response):
             return ctx
+        assert ctx.principal is not None  # need_principal defaults True above
         data = await _read_json(request)
         raw_action = data.get("action") if isinstance(data, dict) else None
         action = parse_promotion_action(raw_action, ctx.principal)
