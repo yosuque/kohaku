@@ -24,6 +24,7 @@ export {
 } from "./control/invoke.js";
 export { resolveRowProps, substituteRow } from "./control/row-template.js";
 export { boundStateKey, normalizeSelectOptions, type SelectOption } from "./control/select-options.js";
+export { type DesignKit, defaultDesignKit, PARTS_STATE_CSS } from "./design-kit.js";
 // Messages
 export { DEFAULT_LOCALE, DEFAULT_MESSAGES, type RendererMessages } from "./messages.js";
 export { type ActionButtonTokens, actionButtonStyle } from "./presenters/action-button.js";
