@@ -468,8 +468,20 @@ export type { ResolvedRefs } from "./refs.js";
  *
  * fewShot / selectComponents are functions (their actual behavior cannot be inspected), so only their
  * optional `id` participates (default `"anonymous"` when unset — not required, so existing callers that
- * never set `id` see no change in the fingerprint they already had). designSystem's entire body
- * participates (its content, not just its presence, changes L2 prompt bytes).
+ * never set `id` see no change in the fingerprint they already had). designSystem folds in a fixed pick of
+ * fields — `tokens`, `guidelines`, `enforceTokenColors` — plus two design-kit fields added by Task 7b:
+ * `kit` folds in the whole object whenever set (a different `id`, `version`, `classes`, `utilities`,
+ * `namespaces` or `skeleton` all separate the cache, matching `designKitPromptFragment`'s effect on the L2
+ * prompt), and `enforceKitClasses` folds in **only when explicitly `false`** — the same non-default-only
+ * pattern as `refConstraint` below, because both `true` and unset mean "the lint runs" and must stay
+ * indistinguishable so a kit-less or already-linted cache key is untouched by this addition.
+ * **A field folded in "only when non-default" must be written as an ABSENT key (`?? undefined`), never
+ * as an explicit `null`**: `canonicalStringify`'s `sortDeep` (spec-core/canonical-json.ts) drops
+ * `undefined` entries but keeps `null` ones, so a `null` default would still change the hashed bytes —
+ * and therefore the cache key — for every policy that never touches that field. `refConstraint` below
+ * folds to `null` in its default case only because that key has been part of this material's byte
+ * layout since this function was introduced; a newly added key does not have that grandfathering and
+ * must use `undefined` to stay truly additive.
  *
  * `refConstraint` participates **only when set to `"validate"`** — its default `"schema"` (whether set
  * explicitly or left unset) folds in as `null`, identically to being unset, so introducing this field
@@ -514,6 +526,15 @@ export async function policyFingerprint(
             tokens: designSystem.tokens ?? null,
             guidelines: designSystem.guidelines ?? null,
             enforceTokenColors: designSystem.enforceTokenColors ?? null,
+            // Folded in only when non-default, and as an ABSENT key (undefined) rather than an
+            // explicit null: canonicalStringify's sortDeep drops undefined entries but KEEPS null
+            // ones (packages/spec-core/src/canonical-json.ts), so writing `?? null` here would add
+            // "kit":null / "enforceKitClasses":null to the hashed bytes of every existing
+            // designSystem-bearing policy that never touches either field, silently invalidating
+            // its compose cache. `undefined` is the only value that reproduces the pre-existing
+            // byte layout exactly.
+            kit: designSystem.kit ?? undefined,
+            enforceKitClasses: designSystem.enforceKitClasses === false ? false : undefined,
           }
         : null,
     fewShotId: fewShot != null ? (fewShot.id ?? "anonymous") : null,

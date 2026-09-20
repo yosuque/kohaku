@@ -1,7 +1,14 @@
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { GuiAction } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { type ComposeContext, type ComposePolicy, compose, policyFingerprint } from "../src/index.js";
+import {
+  type ComposeContext,
+  type ComposePolicy,
+  compose,
+  DEFAULT_KIT_VOCABULARY,
+  type DesignKitVocabulary,
+  policyFingerprint,
+} from "../src/index.js";
 import { catalog, goodRawDraft, makeSemantic, makeStorage } from "./helpers.js";
 
 const GUI_INPUT: GuiAction = {
@@ -118,6 +125,56 @@ describe("policyFingerprint", () => {
     const bare = await compose(GUI_INPUT, makeCtx({ generatorVersion: "gv1" }));
     const withEffort = await compose(GUI_INPUT, makeCtx({ generatorVersion: "gv1", effort: { l1: "high" } }));
     expect(bare.trace.cacheKey).not.toBe(withEffort.trace.cacheKey);
+  });
+
+  it("designSystem.kit changes the fingerprint (Task 7b: the kit was previously invisible to the cache key)", async () => {
+    const withoutKit = await policyFingerprint({
+      designSystem: { tokens: { "--kohaku-color-primary": "brand color" } },
+    });
+    const withKit = await policyFingerprint({
+      designSystem: { tokens: { "--kohaku-color-primary": "brand color" }, kit: DEFAULT_KIT_VOCABULARY },
+    });
+    expect(withKit).not.toBe(withoutKit);
+  });
+
+  it("two kits differing only in version produce different fingerprints", async () => {
+    const kitV1: DesignKitVocabulary = DEFAULT_KIT_VOCABULARY;
+    const kitV2: DesignKitVocabulary = { ...DEFAULT_KIT_VOCABULARY, version: "2" };
+    const fpV1 = await policyFingerprint({ designSystem: { kit: kitV1 } });
+    const fpV2 = await policyFingerprint({ designSystem: { kit: kitV2 } });
+    expect(fpV1).not.toBe(fpV2);
+  });
+
+  it("enforceKitClasses: false differs from unset, while true is indistinguishable from unset", async () => {
+    const unset = await policyFingerprint({ designSystem: { kit: DEFAULT_KIT_VOCABULARY } });
+    const explicitTrue = await policyFingerprint({
+      designSystem: { kit: DEFAULT_KIT_VOCABULARY, enforceKitClasses: true },
+    });
+    const explicitFalse = await policyFingerprint({
+      designSystem: { kit: DEFAULT_KIT_VOCABULARY, enforceKitClasses: false },
+    });
+    expect(explicitTrue).toBe(unset);
+    expect(explicitFalse).not.toBe(unset);
+  });
+
+  it("a kit-less policy's fingerprint is unchanged by the kit fold-in (regression guard)", async () => {
+    const a = await policyFingerprint({
+      designSystem: { tokens: { "--kohaku-color-primary": "brand color" }, guidelines: ["x"] },
+    });
+    const b = await policyFingerprint({
+      designSystem: { tokens: { "--kohaku-color-primary": "brand color" }, guidelines: ["x"] },
+    });
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("folding in the kit is additive — a kit-less design-system fingerprint is unchanged", async () => {
+    // Pinned against the value produced BEFORE kit / enforceKitClasses joined the material.
+    // If this changes, the new keys are being serialized (even as null) for policies that do not use
+    // them, which silently invalidates every existing design-system consumer's compose cache.
+    expect(
+      await policyFingerprint({ designSystem: { tokens: { "color.primary": "brand" }, guidelines: ["a"] } }),
+    ).toBe("a88d021f77ce79fd");
   });
 
   it("two composes with the same fingerprinted policy shape land on the same cache key (cache hit)", async () => {
