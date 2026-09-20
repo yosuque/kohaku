@@ -157,21 +157,12 @@ describe("policyFingerprint", () => {
     expect(explicitFalse).not.toBe(unset);
   });
 
-  it("a kit-less policy's fingerprint is unchanged by the kit fold-in (regression guard)", async () => {
-    const a = await policyFingerprint({
-      designSystem: { tokens: { "--kohaku-color-primary": "brand color" }, guidelines: ["x"] },
-    });
-    const b = await policyFingerprint({
-      designSystem: { tokens: { "--kohaku-color-primary": "brand color" }, guidelines: ["x"] },
-    });
-    expect(a).toBe(b);
-    expect(a).toMatch(/^[0-9a-f]{16}$/);
-  });
-
   it("folding in the kit is additive — a kit-less design-system fingerprint is unchanged", async () => {
     // Pinned against the value produced BEFORE kit / enforceKitClasses joined the material.
     // If this changes, the new keys are being serialized (even as null) for policies that do not use
     // them, which silently invalidates every existing design-system consumer's compose cache.
+    // If this goes red, fix the material so the new key is absent by default — never update this
+    // expected value. Re-pinning it is how the guarantee is lost.
     expect(
       await policyFingerprint({ designSystem: { tokens: { "color.primary": "brand" }, guidelines: ["a"] } }),
     ).toBe("a88d021f77ce79fd");
