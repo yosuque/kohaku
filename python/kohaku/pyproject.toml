@@ -16,6 +16,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
     "Topic :: Software Development :: User Interfaces",
     "Typing :: Typed",
@@ -32,6 +33,8 @@ llm = ["httpx>=0.28"]
 # Native LLM adapters (other than OpenAI-compatible). Symmetric with the TS claude / gemini providers.
 claude = ["anthropic>=1.5"]
 gemini = ["google-genai>=1.0"]
+# Convenience bundle: every optional feature set, for demos and quickstarts that don't want to pick individually.
+all = ["kohaku-ui[rest,mcp,llm,claude,gemini]"]
 
 [build-system]
 requires = ["hatchling"]

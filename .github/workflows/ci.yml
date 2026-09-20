@@ -103,6 +103,9 @@ jobs:
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
     defaults:
       run:
         working-directory: python
@@ -112,7 +115,7 @@ jobs:
       # version tag is required here; Dependabot still bumps exact tags.
       - uses: astral-sh/setup-uv@v10.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - run: uv sync --frozen
       - run: uv run ruff check
       - run: uv run mypy

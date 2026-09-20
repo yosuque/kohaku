@@ -31,7 +31,11 @@ uv run lint-imports # contract check of layer dependency direction (no back-flow
 ```
 
 CI (the `python` job in `.github/workflows/ci.yml`) also runs everything in the order
-`ruff check` / `mypy` / `lint-imports` / `pytest`.
+`ruff check` / `mypy` / `lint-imports` / `pytest`, on Python 3.12 and 3.13.
+
+Installing the published package (rather than working in this uv workspace): `pip install kohaku-ui`
+(core), or `pip install "kohaku-ui[all]"` for every optional feature set (rest, mcp, llm, claude,
+gemini) in one go — see [python/kohaku/README.md](kohaku/README.md) for the individual extras.
 
 ## Running the sample
 

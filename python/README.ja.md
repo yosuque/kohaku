@@ -29,7 +29,12 @@ uv run ruff check  # lint
 uv run lint-imports # レイヤ依存方向(逆流禁止)の契約検査(import-linter)
 ```
 
-CI(`.github/workflows/ci.yml` の `python` ジョブ)も `ruff check` / `mypy` / `lint-imports` / `pytest` の順で全部を実行する。
+CI(`.github/workflows/ci.yml` の `python` ジョブ)も `ruff check` / `mypy` / `lint-imports` / `pytest` の順で、
+Python 3.12 と 3.13 の両方で全部を実行する。
+
+この uv workspace で作業するのではなく公開パッケージをインストールする場合: `pip install kohaku-ui`(core)、
+または全オプション機能(rest, mcp, llm, claude, gemini)をまとめて入れる `pip install "kohaku-ui[all]"`。
+個々の extras は [python/kohaku/README.md](kohaku/README.md) を参照。
 
 ## サンプルの起動
 

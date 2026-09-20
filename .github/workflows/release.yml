@@ -224,7 +224,7 @@ jobs:
       - name: Import the built wheel in an isolated environment
         working-directory: python
         run: |
-          GOT=$(uv run --isolated --no-project --with ./dist/*.whl python -c "import kohaku; print(kohaku.__version__)")
+          GOT=$(uv run --isolated --no-project --with ./dist/*.whl python -c "import kohaku; from kohaku.registry import core_catalog; core_catalog(); print(kohaku.__version__)")
           echo "wheel reports $GOT"
           [ "$GOT" = "${{ needs.verify.outputs.version }}" ] || { echo "::error::wheel version $GOT != ${{ needs.verify.outputs.version }}"; exit 1; }
       # pypa/gh-action-pypi-publish has no dry-run mode, so the upload is simply skipped on a dry run.
