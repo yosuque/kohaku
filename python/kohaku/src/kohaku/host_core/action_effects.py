@@ -65,11 +65,15 @@ async def apply_action_effects(
     `except Exception`. Folding both call sites into one helper must not silently widen MCP's narrower catch
     to REST's wider one — doing so would swallow an `asyncio.CancelledError` raised while awaiting
     `deps.action_effects` in the MCP tool handler (e.g. a client disconnect, or a surrounding
-    `TaskGroup`/`asyncio.timeout` firing) instead of letting it propagate to `_safe_tool`, which previously
-    produced an `isError` result; REST's `report_host_error` call site was always fine catching it. REST
-    therefore passes `wide_catch=True` (catches `BaseException`, matching its pre-branch behaviour and TS's
-    `catch (e)`), and MCP passes `wide_catch=False` (catches only `Exception`, matching its pre-branch
-    behaviour and letting `BaseException` subclasses such as `asyncio.CancelledError` propagate).
+    `TaskGroup`/`asyncio.timeout` firing) instead of letting it propagate uncaught. Note that with
+    `wide_catch=False` the `CancelledError` propagates not just past this helper but also past the MCP
+    tool handler's `_safe_tool` wrapper (`_safe_tool` itself catches only `except Exception`, and
+    `CancelledError` is a `BaseException` subclass, not an `Exception` subclass) — it reaches the MCP
+    server's own request/task-cancellation handling, not a structured `isError` `CallToolResult`; REST's
+    `report_host_error` call site was always fine catching it either way. REST therefore passes
+    `wide_catch=True` (catches `BaseException`, matching its pre-branch behaviour and TS's `catch (e)`),
+    and MCP passes `wide_catch=False` (catches only `Exception`, matching its pre-branch behaviour and
+    letting `BaseException` subclasses such as `asyncio.CancelledError` propagate all the way out).
     """
     effects: ActionEffectsResult | None = None
     if action_effects is not None:

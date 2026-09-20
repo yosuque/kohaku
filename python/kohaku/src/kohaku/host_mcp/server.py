@@ -685,7 +685,9 @@ def attach_kohaku_to_mcp_server(
             # into the response (same shape as REST). The write is already committed; a side-effect-declaration
             # failure is fail-open — see host_core's apply_action_effects.
             # wide_catch=False preserves MCP's pre-branch `except Exception`, letting a BaseException
-            # subclass (asyncio.CancelledError) propagate to _safe_tool as before.
+            # subclass (asyncio.CancelledError) propagate uncaught -- past this call site, and also past
+            # _safe_tool below (it too catches only `except Exception`), out to the MCP server's own
+            # request/task-cancellation handling, not into a structured isError CallToolResult.
             structured = await apply_action_effects(
                 deps.action_effects,
                 action,
