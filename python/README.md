@@ -76,7 +76,11 @@ python/
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
 │  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core)
 │  │  ├─ host_rest/        # ← packages/host-rest (FastAPI; SPEC §6.1)
-│  │  └─ host_mcp/         # ← packages/host-mcp-apps (MCP Apps profile)
+│  │  └─ host_mcp/         # ← packages/host-mcp-apps (MCP Apps profile): server.py (attach + tool
+│  │                       #   registration; the tool-error / safe-tool / error-observability helpers stay
+│  │                       #   here too, mirroring TS's server.ts) + types.py (← types.ts) +
+│  │                       #   initial_data.py (← initial-data.ts) + cache_hints.py (← cache-hints.ts) +
+│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py (unchanged)
 │  └─ tests/
 └─ examples/
    └─ sales-api/           # ← equivalent to apps/sample-api (REST :8790 + MCP stdio / Streamable HTTP :8791)
