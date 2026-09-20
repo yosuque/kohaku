@@ -370,7 +370,17 @@ Anthropic の構造化出力経路はリクエストの出力文法(スキーマ
 - **アプリの使い方**: 「基底テーマ(既定 light/dark)を spread → ブランド差分を重ねる」= `{ ...defaultDarkTheme, ...brand }`。部分テーマでキーが欠落して dark が light に落ちて割れる事故を防ぐため、必ず基底を先に spread する。
 - **MCP Apps / OpenAI Apps SDK のホストテーマ取り込み**: `themeFromHostStyles(variables, base, map = HOST_STYLE_VARIABLE_MAP)`(renderer-core・純関数・DOM 非依存)は、`base` に対しホスト標準の `hostContext.styles.variables`(`--color-background-primary` / `--color-text-primary` など。`@modelcontextprotocol/ext-apps` の `McpUiStyleVariableKey`)のうち `KnownThemeTokens` へ 1:1 対応が付くものだけを `map`(既定はエクスポート済みの写像表 `HOST_STYLE_VARIABLE_MAP`。ホスト統合側が独自の写像表を渡すことで `themeFromHostStyles` 自体をフォークせずに製品固有のホスト変数を追加できる)経由で上書きする。未知のホスト変数名や空白のみ/欠損値は `base` を維持する(フェイルオープン・例外なし)。fill トークンとその foreground トークンは常にペアでのみ写像する。写像対象外: `color.primary`(汎用ブランド/アクセント色に対応するホスト標準変数が無い)、ホストの `-inverse` 系一式(`--color-background-inverse` / `--color-text-inverse` / `--color-border-inverse`。ホスト側の語彙では「反転した背景面に載せるコンテンツ用」を意味し、kohaku には対応する「反転面」概念が無い。kohaku 側の `color.on-primary` は `color.primary` / `color.negative` という fill の上に載る foreground であり、その白値は kohaku 自身の fill との組み合わせで ≥4.5:1 になるよう測定して選んでいるため、fill 側を kohaku の既定のままにホストの inverse テキスト色だけを採用するとこの測定済みペアリングが壊れる)、`chart.axis` / `chart.palette`(ホスト側にチャート色の対応が無い)— いずれも `base` を維持する。`apps/sample-mcp/renderer/main.tsx` が利用(§11 の「widget のホスト統合」④を参照)。
 
-**トークン語彙(v1 は色トークンに限定)**。ステータス色は `{solid, surface, text, border}` の面モデルで最小化する。`spacing.*` / `radius.*` / `font.size.*` などの非色トークン、L2 host chrome の色、high-contrast テーマは v1 非対象。L2 iframe 内へのテーマ伝播は §8 の「L2 へのデザインシステム適用」で対応済み(`sandboxThemeCss` が `:root` の CSS 変数として注入)。
+**トークン語彙**。ステータス色は `{solid, surface, text, border}` の面モデルで最小化する。v2 以降は語彙に**非色トークン**も含む — `font.family.sans|mono`、`font.size.xs|sm|md|lg|xl|2xl`、`space.1..6`(4px 基準)、`radius.sm|md|lg|full`、`shadow.sm|md`(dark 値が異なる唯一の非色ファミリー)、`motion.duration|easing`。値は単位付きの CSS 文字列(`"8px"`)なので両レンダラーが同一のテキストを inline 展開し parity は構造上成立する。`resolveSizing(theme)`(renderer-core)がこれらをフラットな `SizingTokens` にまとめて解決し、presenter に渡す。L2 host chrome の色と high-contrast テーマは引き続き対象外。L2 iframe 内へのテーマ伝播は §8 の「L2 へのデザインシステム適用」で対応済み(`sandboxThemeCss` が全トークンを `:root` の CSS 変数として注入)。
+
+| ファミリー | キー | 既定値 |
+|---|---|---|
+| フォントファミリー | `font.family.sans` | `system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif` |
+| | `font.family.mono` | `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace` |
+| フォントサイズ | `font.size.xs / sm / md / lg / xl / 2xl` | `11px / 12.5px / 13.5px / 15px / 20px / 28px` |
+| スペース | `space.1 … space.6` | `4px / 8px / 12px / 16px / 24px / 32px` |
+| 角丸 | `radius.sm / md / lg / full` | `4px / 8px / 12px / 9999px` |
+| シャドウ | `shadow.sm / md` | light `0 1px 2px rgb(0 0 0 / .06)` / `0 4px 16px rgb(0 0 0 / .12)`;dark `0 1px 2px rgb(0 0 0 / .5)` / `0 4px 16px rgb(0 0 0 / .55)` |
+| モーション | `motion.duration / motion.easing` | `150ms` / `cubic-bezier(.2,0,0,1)` |
 
 | トークン | light | dark | 用途 |
 |---|---|---|---|
