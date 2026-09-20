@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from kohaku.composer import ComposeContext
-from kohaku.host_core import TraceContext
+from kohaku.host_core import AllowedActions, TraceContext
 from kohaku.spec import (
     AuthzPort,
     DomainPort,
@@ -260,6 +260,8 @@ class KohakuHostDeps:
     placed on the error envelope / X-Request-Id header regardless of whether this hook is wired (ops)."""
     authorize_governance: AuthorizeGovernanceHook | None = None
     """Governance/audit plane authorization hook. When unwired, allowed without authorization by default (backward compatible)."""
-    _allowed_actions: frozenset[str] | None = field(default=None, init=False, repr=False, compare=False)
-    """Memoized cache of domain.list_operations() names (write-scope hardening; see _routes.shared.allowed_actions).
-    Not part of the public constructor — populated lazily on first capability issuance."""
+    _allowed_actions_fn: AllowedActions | None = field(default=None, init=False, repr=False, compare=False)
+    """Memoized `AllowedActions` closure (host_core's `create_allowed_actions`, write-scope hardening; see
+    _routes.shared.allowed_actions). Not part of the public constructor — built lazily on first capability
+    issuance, one per `KohakuHostDeps` instance (list_operations is async and must not be re-awaited on every
+    compose)."""

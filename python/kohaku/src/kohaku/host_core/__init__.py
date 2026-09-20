@@ -12,6 +12,7 @@ from .action_effects import (
     ActionEffectsResult,
     apply_action_effects,
 )
+from .allowed_actions import AllowedActions, create_allowed_actions
 from .binding_ref import (
     InvokableRef,
     ParsedInvokableRef,
@@ -44,6 +45,7 @@ __all__ = [
     "ActionEffectsHook",
     "ActionEffectsResponse",
     "ActionEffectsResult",
+    "AllowedActions",
     "ComposeFixationContext",
     "FixationDeliveryHost",
     "FixationSelfHealApi",
@@ -57,6 +59,7 @@ __all__ = [
     "WriteScopeDroppedError",
     "apply_action_effects",
     "compose_with_fixation",
+    "create_allowed_actions",
     "fail_open",
     "get_lock",
     "is_typed_host_error",

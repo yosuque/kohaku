@@ -40,6 +40,7 @@ from kohaku.host_core import (
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
 from kohaku.host_core import compose_with_fixation as _host_core_compose_with_fixation
+from kohaku.host_core import create_allowed_actions as _host_core_create_allowed_actions
 from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import get_lock as _get_lock
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
@@ -478,17 +479,11 @@ def attach_kohaku_to_mcp_server(
         never memoized across calls, since a shared `Server` (see `sales_api.mcp_http`) serves every session."""
         return await _principal_of(deps, fallback_principal, ctx)
 
-    # Memoized deps.domain.list_operations() names (write-scope hardening; see _issue_capability). McpHostDeps
-    # is frozen, so the cache lives here as a closure variable rather than on deps (unlike host_rest's
-    # per-deps field). list_operations is async and must not be re-awaited on every compose.
-    _allowed_actions_cache: frozenset[str] | None = None
-
-    async def _allowed_actions() -> frozenset[str]:
-        nonlocal _allowed_actions_cache
-        if _allowed_actions_cache is None:
-            ops = await deps.domain.list_operations()
-            _allowed_actions_cache = frozenset(op.name for op in ops)
-        return _allowed_actions_cache
+    # Memoized deps.domain.list_operations() names (write-scope hardening; see _issue_capability). Built once
+    # per attach call (host_core's create_allowed_actions, shared with the REST profile so both agree on how
+    # a DomainPort's list_operations() names are cached and retried) rather than stored on deps — McpHostDeps
+    # is frozen, so the cache lives here as a closure variable (unlike host_rest's per-deps field).
+    _allowed_actions = _host_core_create_allowed_actions(deps.domain)
 
     def _tool_error(message: str) -> mcp_types.CallToolResult:
         """Turn a tool-handler failure into a structured tool error (isError) rather than an RPC exception.

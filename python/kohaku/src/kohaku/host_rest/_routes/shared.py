@@ -35,6 +35,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from kohaku.host_core import DEFAULT_CAPABILITY_TTL_SECONDS, TraceContext, get_lock
+from kohaku.host_core import create_allowed_actions as _host_core_create_allowed_actions
 from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.host_core import parse_trace_context as _parse_trace_context
@@ -305,20 +306,19 @@ async def report_host_error(
 
 async def allowed_actions(deps: KohakuHostDeps) -> frozenset[str]:
     """Memoized `deps.domain.list_operations()` names, used to restrict issued capability write scopes
-    (hardening against a hallucinated/injected action.invoke action name). list_operations is async and must
-    not be re-awaited on every compose, so the resolved set is cached on `deps._allowed_actions`.
+    (hardening against a hallucinated/injected action.invoke action name). Backed by host_core's
+    `create_allowed_actions` (shared with the MCP profile so both agree on how a DomainPort's
+    list_operations() names are cached and retried), built once per `deps` and cached on
+    `deps._allowed_actions_fn` (list_operations is async and must not be re-awaited on every compose).
 
     Raises on failure rather than swallowing it: the caller (compose.py's issue_capability_for_spec) already
     knows the endpoint/request_id needed to report through on_error, so it catches this and falls back to an
     empty frozenset (fail-closed for writes; delivery still proceeds). Nothing is cached on failure, so the
     next call retries against the DomainPort.
     """
-    if deps._allowed_actions is not None:
-        return deps._allowed_actions
-    ops = await deps.domain.list_operations()
-    allowed = frozenset(op.name for op in ops)
-    deps._allowed_actions = allowed
-    return allowed
+    if deps._allowed_actions_fn is None:
+        deps._allowed_actions_fn = _host_core_create_allowed_actions(deps.domain)
+    return await deps._allowed_actions_fn()
 
 
 async def safe_record(
