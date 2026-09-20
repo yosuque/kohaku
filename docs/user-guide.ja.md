@@ -47,6 +47,8 @@ pnpm dev                 # API :8787 + Web :5173
 | **Ollama(キー不要・ローカル)** | `KOHAKU_LLM_PROVIDER=ollama` + `KOHAKU_LLM_MODEL=gemma4:e4b` 等(モデル未指定時の既定は `llama3.3`) |
 | llama.cpp / vLLM 等 | `KOHAKU_LLM_PROVIDER=llama` + `KOHAKU_LLM_BASE_URL=http://…/v1` + `KOHAKU_LLM_MODEL=…` |
 
+`@kohaku-ui/llm` と一緒にプロバイダの SDK をインストールしてください: Claude → `@ai-sdk/anthropic`、OpenAI → `@ai-sdk/openai`、Gemini → `@ai-sdk/google`、Ollama / llama.cpp → `@ai-sdk/openai-compatible`(任意の peer dependency。使わないプロバイダの分は何もインストールされません)。
+
 > **Ollama の注意**: 非思考(non-reasoning)のインストラクトモデルを推奨します。思考モデル(qwen3.5 等)は推論で出力トークンを使い切り、UI 合成が遅い・空になることがあります。また llama.cpp 系は大きなスキーマの構造化出力が不安定なことがありますが、既定の `KOHAKU_LLM_STRUCTURED_MODE=auto` が自動でプロンプト JSON 方式にフォールバックします。
 
 > **LLM なしで試す**: キーを設定しなくても Dashboard の定番 4 ビュー(L0 固定)は完全動作します。LLM が必要なのは Chat の自然言語と、推移/製品ランキング(L1)・自由要求(L2)です。
@@ -273,7 +275,7 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 導入ラダー(設計書 §12「サンプル実装の設計」)に沿って段階導入できます。
 
-**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm zod`(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
+**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm @ai-sdk/anthropic zod`(`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
 ### Step 0 — LLM なしの Server-Driven UI
 

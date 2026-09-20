@@ -27,25 +27,108 @@ import {
 } from "../port.js";
 import { defaultRetryDeps, isRetryableProviderError, type RetryDeps, withProviderRetry } from "./retry.js";
 
+/**
+ * Maps each provider to the AI SDK package `resolveModel` dynamically imports for it. Since
+ * packages/llm/package.json 0.1.0's dependency-hygiene change, these are optional peer dependencies of
+ * @kohaku-ui/llm (installed lazily per provider, not all four at once) — see `importProvider` below for
+ * what happens when the one a caller's `provider` needs is not installed.
+ */
+const PROVIDER_PACKAGES: Record<LlmConfig["provider"], string> = {
+  claude: "@ai-sdk/anthropic",
+  openai: "@ai-sdk/openai",
+  gemini: "@ai-sdk/google",
+  ollama: "@ai-sdk/openai-compatible",
+  llama: "@ai-sdk/openai-compatible",
+};
+
+/**
+ * Reads a Node-style `code` off an error, falling back to one level of `.cause`. A dynamic `import()`
+ * failure is sometimes re-thrown by a wrapping layer (a bundler/loader, or — as exercised by
+ * test/ai-sdk-missing-provider.test.ts — Vitest's own module mocker) with the original error attached as
+ * `cause` rather than exposed directly, so both shapes are checked.
+ */
+function importErrorCode(e: unknown): string | undefined {
+  const code = (e as { code?: unknown })?.code;
+  if (typeof code === "string") return code;
+  const causeCode = (e as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof causeCode === "string" ? causeCode : undefined;
+}
+
+/** Node's own ERR_MODULE_NOT_FOUND/MODULE_NOT_FOUND message shape: `Cannot find package/module '<name>' …`. */
+const MISSING_PACKAGE_MESSAGE = /Cannot find (?:package|module) '([^']+)'/;
+
+/**
+ * Extracts the package/module name Node's loader reports as missing from an error's message, checking the
+ * error's own message and (see importErrorCode's doc comment for why) one level of `.cause`'s message.
+ * Returns undefined when neither matches the expected shape at all — importProvider then treats that the
+ * same as a name mismatch and rethrows unclassified.
+ *
+ * A plain substring search for the peer's package name in the message is not enough: Node's message also
+ * names the *importing* file/package in its "imported from …" clause, and when the failure is inside an
+ * *installed* @ai-sdk/anthropic's own transitive import (a partial/corrupted node_modules, a broken
+ * workspace link, a subpath-exports mismatch under an unexpected Node version, etc.), that clause's path
+ * naturally contains "@ai-sdk/anthropic" too — so only the *quoted, missing* name is trustworthy evidence
+ * of which package actually failed to resolve.
+ */
+function missingPackageName(e: unknown): string | undefined {
+  const message = (e as { message?: unknown })?.message;
+  const own = typeof message === "string" ? MISSING_PACKAGE_MESSAGE.exec(message)?.[1] : undefined;
+  if (own != null) return own;
+  const causeMessage = (e as { cause?: { message?: unknown } })?.cause?.message;
+  return typeof causeMessage === "string" ? MISSING_PACKAGE_MESSAGE.exec(causeMessage)?.[1] : undefined;
+}
+
+/**
+ * Wraps a provider SDK's dynamic `import()` so a missing optional peer dependency fails with an
+ * actionable LlmError naming the package to install, instead of surfacing Node's raw
+ * "Cannot find package '<pkg>'" (ERR_MODULE_NOT_FOUND) error unexplained.
+ *
+ * Classification requires both an ERR_MODULE_NOT_FOUND/MODULE_NOT_FOUND code AND that the specific package
+ * Node's message names as missing is this provider's own peer (see missingPackageName). Node throws the
+ * same code when the requested package *is* installed but one of its own transitive dependencies fails to
+ * resolve — in that case the code alone is not evidence that *this* peer is the one missing, so the raw
+ * error is rethrown unclassified rather than telling the caller to (re)install something already present.
+ */
+async function importProvider<T>(provider: LlmConfig["provider"], load: () => Promise<T>): Promise<T> {
+  try {
+    return await load();
+  } catch (e) {
+    const code = importErrorCode(e);
+    const isMissingModule = code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
+    const pkg = PROVIDER_PACKAGES[provider];
+    if (isMissingModule && missingPackageName(e) === pkg) {
+      throw new LlmError(
+        "CONFIG",
+        `kohaku: provider "${provider}" needs the optional peer dependency "${pkg}" of @kohaku-ui/llm — install it next to @kohaku-ui/llm`,
+        { provider, cause: e },
+      );
+    }
+    throw e;
+  }
+}
+
 async function resolveModel(config: LlmConfig): Promise<LanguageModel> {
   switch (config.provider) {
     case "claude": {
-      const { createAnthropic } = await import("@ai-sdk/anthropic");
+      const { createAnthropic } = await importProvider("claude", () => import("@ai-sdk/anthropic"));
       return createAnthropic({ ...(config.apiKey != null ? { apiKey: config.apiKey } : {}) })(config.model);
     }
     case "openai": {
-      const { createOpenAI } = await import("@ai-sdk/openai");
+      const { createOpenAI } = await importProvider("openai", () => import("@ai-sdk/openai"));
       return createOpenAI({ ...(config.apiKey != null ? { apiKey: config.apiKey } : {}) })(config.model);
     }
     case "gemini": {
-      const { createGoogleGenerativeAI } = await import("@ai-sdk/google");
+      const { createGoogleGenerativeAI } = await importProvider("gemini", () => import("@ai-sdk/google"));
       return createGoogleGenerativeAI({
         ...(config.apiKey != null ? { apiKey: config.apiKey } : {}),
       })(config.model);
     }
     case "ollama":
     case "llama": {
-      const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await importProvider(
+        config.provider,
+        () => import("@ai-sdk/openai-compatible"),
+      );
       return createOpenAICompatible({
         name: config.provider,
         baseURL: config.baseUrl!,

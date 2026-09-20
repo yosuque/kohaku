@@ -10,6 +10,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import type { ComposeContext, ResolvedRefs } from "../context.js";
 import { resolveTierLlm } from "../context.js";
+import { errorMessage } from "../error-message.js";
 import {
   appendL1RepairFeedback,
   buildL1PromptStatic,
@@ -94,8 +95,7 @@ export function buildL1GenerationSchema(
  * signal passes through to the LLM call as req.abort, and an abort immediately falls to ok:false (failure="transient").
  */
 export async function generateL1(req: TierRequest): Promise<TierResult> {
-  const { intent, refs, ctx, signal, budget, onBudgetCheckError, onDraftPartial, startedAt, deadlineSignal } =
-    req;
+  const { intent, refs, ctx, signal, onDraftPartial } = req;
   // Candidate narrowing. selectComponents is deterministic with respect to the intent. Pass the
   // same includeTypes through both the schema and the prompt to prevent a mismatch in the generation vocabulary (the guardrail union is guaranteed downstream).
   // req.l1Schema (PreparedCompose.getL1Schema, threaded in by tier-ladder.ts) is memoized per compose —
@@ -136,7 +136,7 @@ export async function generateL1(req: TierRequest): Promise<TierResult> {
     {
       maxAttempts,
       // Budget checked before every attempt including the first (a zero budget skips the LLM call entirely).
-      budgetGate: "every",
+      shouldCheckBudget: () => true,
       async call(feedback, attempt) {
         const request = {
           schema: { jsonSchema: generation.jsonSchema },
@@ -180,15 +180,12 @@ export async function generateL1(req: TierRequest): Promise<TierResult> {
           // it transient; put it on the repair loop as feedback (making it a hard exception would turn the
           // whole compose into INTERNAL / host 500). runRepairLoop always classifies a validate() failure as
           // "invalid" regardless of cause, matching this.
-          const message = e instanceof Error ? e.message : String(e);
+          const message = errorMessage(e);
           return { ok: false, issues: [message] };
         }
       },
     },
-    budget,
-    onBudgetCheckError,
-    startedAt,
-    deadlineSignal,
+    req,
   );
 }
 

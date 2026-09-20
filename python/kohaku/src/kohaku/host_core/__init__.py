@@ -6,6 +6,20 @@ source of truth for the fixation (L1->L0) delivery + staleness self-healing sequ
 a composed Spec, and fail-open observability-hook helpers.
 """
 
+from .action_effects import (
+    ActionEffectsHook,
+    ActionEffectsResponse,
+    ActionEffectsResult,
+    apply_action_effects,
+)
+from .allowed_actions import AllowedActions, create_allowed_actions
+from .binding_ref import (
+    InvokableRef,
+    ParsedInvokableRef,
+    ParsedInvokableRefOk,
+    ParsedInvokableRefSourceMismatch,
+    parse_invokable_ref,
+)
 from .capability import (
     DEFAULT_CAPABILITY_TTL_SECONDS,
     WriteScopeDroppedError,
@@ -22,26 +36,53 @@ from .fixation import (
     resolve_fixated_result,
     settle_fixation,
 )
+from .intent import (
+    IntentSource,
+    IntentSourceGui,
+    IntentSourceIntent,
+    IntentSourceNl,
+    ResolvedIntent,
+    resolve_intent,
+)
 from .keyed_mutex import get_lock
 from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
+from .view_recorder import record_view_fallback
 
 __all__ = [
     "DEFAULT_CAPABILITY_TTL_SECONDS",
     "TRACEPARENT_RE",
+    "ActionEffectsHook",
+    "ActionEffectsResponse",
+    "ActionEffectsResult",
+    "AllowedActions",
     "ComposeFixationContext",
     "FixationDeliveryHost",
     "FixationSelfHealApi",
     "FixationSelfHealKind",
     "FixationTarget",
+    "IntentSource",
+    "IntentSourceGui",
+    "IntentSourceIntent",
+    "IntentSourceNl",
+    "InvokableRef",
+    "ParsedInvokableRef",
+    "ParsedInvokableRefOk",
+    "ParsedInvokableRefSourceMismatch",
+    "ResolvedIntent",
     "TraceContext",
     "WriteScopeDroppedError",
+    "apply_action_effects",
     "compose_with_fixation",
+    "create_allowed_actions",
     "fail_open",
     "get_lock",
     "is_typed_host_error",
     "issue_capability_for_spec",
     "notify_hook",
+    "parse_invokable_ref",
     "parse_trace_context",
+    "record_view_fallback",
     "resolve_fixated_result",
+    "resolve_intent",
     "settle_fixation",
 ]

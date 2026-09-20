@@ -1,5 +1,6 @@
 import type { ComposeTrace } from "@kohaku-ui/composer";
 import type { JsonObject, Surface, UISpec } from "@kohaku-ui/spec-core";
+import { failOpen } from "./errors.js";
 
 /**
  * Recording hooks for View Lineage (@kohaku-ui/lineage supplies the implementation; no recording if unset).
@@ -57,6 +58,27 @@ export interface ViewRecorder {
     /** Precomputed hash. If passed, the recorder implementation does not re-hash the Spec. If unset, computed internally (backward compatible). */
     specHash?: string;
   }): Promise<void>;
+}
+
+/**
+ * The cancelled-aware, fail-open "record the composed result" sequence shared by both host profiles (REST's
+ * deliverComposed/finishStream and the MCP profile's composeAndAudit): a cancelled compose (the caller's
+ * abort fired) is not a generation failure and observer.onError already received phase:"cancelled" from the
+ * composer, so `record` is skipped entirely — a client disconnect/timeout must not inflate view.composed /
+ * view.fallback counts. Otherwise `record` (the host's own composed -> fallback recording, in that order) runs
+ * fail-open (host-core's failOpen): a recording failure must not take down an otherwise-successful delivery,
+ * and is instead reported to `onError`. Caveat: this only protects `record`; `onError` itself must not throw
+ * (a throwing `onError` is not caught here and would escape to the caller).
+ */
+export async function recordComposedResult(
+  result: { spec: UISpec; trace: ComposeTrace },
+  record: () => Promise<void>,
+  onError: (e: unknown) => void | Promise<void>,
+): Promise<void> {
+  if (result.trace.cancelled === true) return;
+  await failOpen(record, async (e) => {
+    await onError(e);
+  });
 }
 
 /**

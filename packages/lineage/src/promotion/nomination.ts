@@ -2,6 +2,7 @@ import type { StoragePort } from "@kohaku-ui/spec-core";
 import { NOMINATED_SCAN_WINDOW } from "../constants.js";
 import type { Lineage } from "../lineage.js";
 import { tenantField } from "../tenant-scope.js";
+import { recordFailOpen } from "./audit.js";
 import { transition } from "./machine.js";
 import {
   notifyPromotionError,
@@ -123,20 +124,15 @@ export function createNomination(opts: {
     // nor undo the already-persisted status transition (the candidate's snapshot has a draft-free `candidate`
     // status either way, whether or not the audit record actually landed).
     for (const { candidate } of toPersist) {
-      try {
-        await lineage.record(
-          "component.nominated",
-          { artifactId: candidate.artifactId, by: "policy" },
-          undefined,
-          tenant,
-        );
-      } catch (e) {
-        notifyPromotionError(
-          onError,
-          { endpoint: "promotion.nominate.audit", artifactId: candidate.artifactId, ...tenantField(tenant) },
-          e,
-        );
-      }
+      await recordFailOpen(
+        lineage,
+        onError,
+        "promotion.nominate.audit",
+        "component.nominated",
+        { artifactId: candidate.artifactId, by: "policy" },
+        undefined,
+        { tenant, artifactId: candidate.artifactId },
+      );
     }
     return candidates.map((c) => c.candidate);
   }

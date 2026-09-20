@@ -14,6 +14,7 @@ pip install kohaku-ui            # core
 pip install "kohaku-ui[rest]"    # + the REST host (FastAPI)
 pip install "kohaku-ui[mcp]"     # + the MCP host
 pip install "kohaku-ui[llm]"     # + the OpenAI-compatible LLM adapter
+pip install "kohaku-ui[all]"     # + every optional feature set (rest, mcp, llm, claude, gemini)
 ```
 
 - Protocol: [spec/SPEC.md](https://github.com/yosuque/kohaku/blob/main/spec/SPEC.md)

@@ -1,6 +1,11 @@
 import type { JsonObject } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { prepareRows } from "../../src/index.js";
+import {
+  A11Y_TABLE_ROW_CAP,
+  CHART_TOKEN_KEYS,
+  describeChartDataTable,
+  prepareRows,
+} from "../../src/index.js";
 
 describe("prepareRows", () => {
   it("without series, rows pass through as-is and yKeys come from the y prop", () => {
@@ -34,5 +39,58 @@ describe("prepareRows", () => {
       { x: "a", s: "2", value: 2 },
     ];
     expect(prepareRows(rows, "x", "value", "s").yKeys).toEqual(["2", "10"]);
+  });
+});
+
+describe("describeChartDataTable", () => {
+  it("headers are [x, ...yKeys], in that order", () => {
+    const rows: JsonObject[] = [{ month: "1", revenue: 10, cost: 4 }];
+    const out = describeChartDataTable("month", ["revenue", "cost"], rows);
+    expect(out.headers).toEqual(["month", "revenue", "cost"]);
+  });
+
+  it("cells stringify each row in header order", () => {
+    const rows: JsonObject[] = [
+      { month: "1", revenue: 10, cost: 4 },
+      { month: "2", revenue: 20, cost: 8 },
+    ];
+    const out = describeChartDataTable("month", ["revenue", "cost"], rows);
+    expect(out.cells).toEqual([
+      ["1", "10", "4"],
+      ["2", "20", "8"],
+    ]);
+  });
+
+  it("null/undefined cell values become the empty string", () => {
+    const rows: JsonObject[] = [{ month: "1", revenue: null }, { month: "2" }];
+    const out = describeChartDataTable("month", ["revenue"], rows);
+    expect(out.cells).toEqual([
+      ["1", ""],
+      ["2", ""],
+    ]);
+  });
+
+  it("rows beyond A11Y_TABLE_ROW_CAP are dropped", () => {
+    const rows: JsonObject[] = Array.from({ length: A11Y_TABLE_ROW_CAP + 1 }, (_, i) => ({
+      month: String(i),
+      revenue: i,
+    }));
+    const out = describeChartDataTable("month", ["revenue"], rows);
+    expect(out.cells).toHaveLength(A11Y_TABLE_ROW_CAP);
+    expect(out.cells[out.cells.length - 1]).toEqual([
+      String(A11Y_TABLE_ROW_CAP - 1),
+      String(A11Y_TABLE_ROW_CAP - 1),
+    ]);
+  });
+});
+
+describe("CHART_TOKEN_KEYS", () => {
+  it("matches the theme token keys both renderers resolve", () => {
+    expect(CHART_TOKEN_KEYS).toEqual({
+      palette: "chart.palette",
+      axis: "chart.axis",
+      dotStroke: "color.background",
+      axisLabel: "color.muted",
+    });
   });
 });

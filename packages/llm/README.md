@@ -10,6 +10,8 @@ Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation 
 npm install @kohaku-ui/llm zod
 ```
 
+Also install the provider SDK(s) you configure — they are optional peer dependencies, not installed automatically: Claude → `@ai-sdk/anthropic`, OpenAI → `@ai-sdk/openai`, Gemini → `@ai-sdk/google`, Ollama / llama.cpp → `@ai-sdk/openai-compatible`. A provider whose SDK is not installed fails at call time with an error naming the package to add.
+
 Subpath entries: `@kohaku-ui/llm/fake`
 
 The packages in this scope share a single version and are designed to be installed together.

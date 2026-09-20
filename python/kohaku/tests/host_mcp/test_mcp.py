@@ -706,10 +706,15 @@ class TestInitialDataMeta:
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         """per-ref timeout: even with a ref whose resolution never returns, the compose response returns and that ref is not co-embedded."""
-        import kohaku.host_mcp.server as server_mod
+        # PRERESOLVE_TIMEOUT_S is read (as a module global) by kohaku.host_mcp.initial_data's
+        # _preresolve_initial_data / _resolve_ref_bounded, not by kohaku.host_mcp.server — patch it there
+        # (patching kohaku.host_mcp.server.PRERESOLVE_TIMEOUT_S, an independent name binding created by that
+        # module's own `from .initial_data import PRERESOLVE_TIMEOUT_S`, would silently not affect the value
+        # those functions actually read).
+        import kohaku.host_mcp.initial_data as initial_data_mod
 
         # Shrink the timeout to make the test fast (semantics unchanged: timeout = skip).
-        monkeypatch.setattr(server_mod, "PRERESOLVE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(initial_data_mod, "PRERESOLVE_TIMEOUT_S", 0.05)
         eu_ref = "query://sales/trend?granularity=month&metric=revenue&region=eu"
         jp_ref = "query://sales/trend?granularity=month&metric=revenue&region=jp"
 
@@ -813,9 +818,12 @@ class TestInitialDataMeta:
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         """The overall deadline cuts the wait short so the tool call still returns even with a ref that never resolves."""
-        import kohaku.host_mcp.server as server_mod
+        # See test_per_ref_timeout_skips_slow_ref's comment above: PRERESOLVE_TOTAL_TIMEOUT_S must be patched
+        # on kohaku.host_mcp.initial_data (where _preresolve_initial_data actually reads it), not on
+        # kohaku.host_mcp.server.
+        import kohaku.host_mcp.initial_data as initial_data_mod
 
-        monkeypatch.setattr(server_mod, "PRERESOLVE_TOTAL_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(initial_data_mod, "PRERESOLVE_TOTAL_TIMEOUT_S", 0.05)
         jp_ref = "query://sales/trend?granularity=month&metric=revenue&region=jp"
         eu_ref = "query://sales/trend?granularity=month&metric=revenue&region=eu"
 
@@ -837,9 +845,11 @@ class TestInitialDataMeta:
             async with connect(deps, _OPTIONS) as client:
                 # A response returns promptly even though eu never resolves (without the total deadline this
                 # would hang until the per-ref timeout, 2s by default).
+                started = asyncio.get_event_loop().time()
                 result = await client.call_tool(
                     "kohaku_compose", {"question": "Trend with region switch"}
                 )
+                elapsed = asyncio.get_event_loop().time() - started
                 assert not result.is_error
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
@@ -847,6 +857,11 @@ class TestInitialDataMeta:
                 assert BIND_REF_US in keys
                 assert jp_ref in keys
                 assert eu_ref not in keys
+                # Discriminates the total deadline (patched to 0.05s) from the per-ref timeout (2s, not
+                # patched here): without the total-deadline mechanism this would only return once the
+                # per-ref timeout fired on eu_ref, i.e. after ~2s. See Minor #3 of the 2026-09-20 final
+                # review -- this assertion is what makes the test actually exercise the total deadline.
+                assert elapsed < 1.0
 
         asyncio.run(run())
 

@@ -1,11 +1,8 @@
 import {
   applyLocalView,
   type BoundData,
-  type CellCoercion,
   cellDraft,
   chartTableStyle,
-  coerceCellInput,
-  commitCellEdit,
   createSpreadsheetRemoteController,
   describeSortHeader,
   effectiveRows,
@@ -13,12 +10,12 @@ import {
   hasDeclaredEvent,
   isActivationKey,
   localFooterTotal,
+  planCellEdit,
   type RowsWorkingCopy,
   resolveColumns,
   type SizingTokens,
   type SortState,
   type SpreadsheetCellEdit,
-  type SpreadsheetCellEditRuntime,
   type SpreadsheetTokens,
   spreadsheetCellEditButtonStyle,
   spreadsheetCellEditInputStyle,
@@ -147,38 +144,29 @@ export const presentSpreadsheet: PartBuilder = (rt, parent, node) => {
     col: TabularColumn,
   ): void => {
     if (editing?.rowIndex !== rowIndex || editing.column !== col.key || !input.isConnected) return;
-    const coercion: CellCoercion = coerceCellInput(input.value, col);
-    if (!coercion.ok) {
-      // Keep the same input node (no rerender): a full rebuild would replace it with a fresh one
-      // reset to the cell's original value, destroying the very text the user is trying to fix.
-      // Refocus it too — a blur-triggered attempt has already lost focus by this point.
-      editing = { rowIndex, column: col.key, invalid: true };
-      input.setAttribute("aria-invalid", "true");
-      input.focus();
-      return;
+    const plan = planCellEdit({ rows, copy, rowIndex, col, raw: input.value });
+    switch (plan.kind) {
+      case "invalid":
+        // Keep the same input node (no rerender): a full rebuild would replace it with a fresh one
+        // reset to the cell's original value, destroying the very text the user is trying to fix.
+        // Refocus it too — a blur-triggered attempt has already lost focus by this point.
+        editing = { rowIndex, column: col.key, invalid: true };
+        input.setAttribute("aria-invalid", "true");
+        input.focus();
+        return;
+      case "close":
+        editing = undefined; // vanished row, or unchanged value: close without emitting cellEdit
+        rerender();
+        return;
+      case "commit":
+        copy = plan.copy;
+        editing = undefined;
+        rerender();
+        // SpreadsheetCellEditRuntime -> JsonObject: a plain nested-object shape, just without index
+        // signatures — structurally a JsonObject at runtime.
+        rt.invoke(node, "cellEdit", plan.runtime as unknown as JsonObject, null, () => {});
+        return;
     }
-    const displayRow = effectiveRows(rows, copy)[rowIndex];
-    if (displayRow == null) {
-      editing = undefined;
-      rerender();
-      return;
-    }
-    const previousValue = displayRow[col.key] ?? null;
-    if (coercion.value === previousValue) {
-      editing = undefined; // unchanged: close without emitting cellEdit
-      rerender();
-      return;
-    }
-    copy = commitCellEdit(copy, rows, rowIndex, col.key, coercion.value);
-    editing = undefined;
-    rerender();
-    const runtime: SpreadsheetCellEditRuntime = {
-      row: displayRow,
-      value: { column: col.key, value: coercion.value, previousValue, rowIndex },
-    };
-    // SpreadsheetCellEditRuntime -> JsonObject: a plain nested-object shape, just without index
-    // signatures — structurally a JsonObject at runtime.
-    rt.invoke(node, "cellEdit", runtime as unknown as JsonObject, null, () => {});
   };
 
   const rerender = (): void => {

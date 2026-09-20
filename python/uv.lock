@@ -833,6 +833,14 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "anthropic" },
+    { name = "fastapi" },
+    { name = "google-genai" },
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "uvicorn" },
+]
 claude = [
     { name = "anthropic" },
 ]
@@ -856,11 +864,12 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'rest'", specifier = ">=0.115" },
     { name = "google-genai", marker = "extra == 'gemini'", specifier = ">=1.0" },
     { name = "httpx", marker = "extra == 'llm'", specifier = ">=0.28" },
+    { name = "kohaku-ui", extras = ["rest", "mcp", "llm", "claude", "gemini"], marker = "extra == 'all'", editable = "kohaku" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.2" },
     { name = "pydantic", specifier = ">=2.10" },
     { name = "uvicorn", marker = "extra == 'rest'", specifier = ">=0.34" },
 ]
-provides-extras = ["rest", "mcp", "llm", "claude", "gemini"]
+provides-extras = ["rest", "mcp", "llm", "claude", "gemini", "all"]
 
 [[package]]
 name = "kohaku-workspace"

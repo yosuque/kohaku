@@ -14,6 +14,7 @@ Differences from TS:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -21,10 +22,12 @@ from typing import Any, Literal, cast
 from kohaku.spec import (
     GovernanceErrorDiscriminators,
     LineageActor,
+    LineageEventRecord,
     LineageFilter,
     Principal,
     PromotionState,
     StoragePort,
+    SupportsBatchPromotionStates,
     validate_promotion_state,
 )
 
@@ -258,8 +261,37 @@ def _usage_index_key(tenant: str | None, artifact_id: str) -> str:
     together whenever an aggregation scans without a tenant filter (tenant left unspecified); keying by
     (tenant, artifactId) instead keeps them separate. `tenant` here is always the *record's own* tenant (e.g.
     `event.tenant`), not the aggregation's requested scope.
+
+    Encoded as a JSON array `[tenant, artifact_id]` rather than a delimiter-joined string, matching TS's
+    `usageIndexKey` (usage.ts) for the same collision-freedom. The previous encoding joined the two values
+    with a single Unit Separator character (`\\x1f`), which is not collision-free by construction for a
+    tenant or artifact_id that could itself contain that character -- a JSON array is, for any input.
+    Byte-identical output with the TS side is not required -- this key never crosses the wire, only lives in
+    an in-process dict/set for the lifetime of a single call. `tenant=None` and `tenant=""` are intentionally
+    distinct keys (no caller relies on them being merged). Memory-only: never persisted, since PromotionState
+    stores `tenant` and `artifactId` as separate fields, so its exact encoding is free to change without a
+    migration.
     """
-    return f"{tenant or ''}\x1f{artifact_id}"
+    return json.dumps([tenant, artifact_id], separators=(",", ":"))
+
+
+def _index_latest_generated(events: list[LineageEventRecord]) -> dict[str, LineageEventRecord]:
+    """Reduce a set of lineage events (typically component.generated) to, per (tenant, artifact_id) key (see
+    `_usage_index_key`), the single event with the greatest `ts` (port of TS's indexLatestGenerated, usage.ts).
+    Shared by the three call sites that each used to build this same "latest generated per key" index with
+    their own copy of the loop (`_gather_candidates`, `list_by_status`, `reconcile`). An event whose
+    `payload["artifactId"]` is not a string is skipped.
+    """
+    latest: dict[str, LineageEventRecord] = {}
+    for e in events:
+        artifact_id = e.payload.get("artifactId")
+        if not isinstance(artifact_id, str):
+            continue
+        key = _usage_index_key(e.tenant, artifact_id)
+        prev = latest.get(key)
+        if prev is None or e.ts > prev.ts:
+            latest[key] = e
+    return latest
 
 
 def _group_used_by_artifact(used: list[Any]) -> dict[str, list[Any]]:
@@ -425,17 +457,18 @@ class Promotions:
         self, candidates: list[PromotionCandidate], tenant: str | None = None
     ) -> None:
         """Batch counterpart of `_persist`: builds every PromotionState up front, then issues either one
-        `StoragePort.put_promotion_states` call (when the storage duck-types it in -- see
-        `kohaku.spec.ports.StoragePort`'s comment on why this is not a declared Protocol member, unlike TS's
-        real optional interface field) or falls back to the legacy one-`put_promotion_state`-call-per-state
-        loop. A no-op for an empty list. Used by the batch nominate persistence in `_gather_candidates` below
-        (mirrors TS nomination.ts's `toPersist` / candidate-store.ts's `persistMany`)."""
+        `StoragePort.put_promotion_states` call (when the storage implements
+        `kohaku.spec.ports.SupportsBatchPromotionStates` -- see that Protocol's comment, and
+        `kohaku.spec.ports.StoragePort`'s comment on why it is not a declared `StoragePort` Protocol member,
+        unlike TS's real optional interface field) or falls back to the legacy one-`put_promotion_state`-call
+        -per-state loop. A no-op for an empty list. Used by the batch nominate persistence in
+        `_gather_candidates` below (mirrors TS nomination.ts's `toPersist` / candidate-store.ts's
+        `persistMany`)."""
         if not candidates:
             return
         states = [self._build_promotion_state(c, tenant) for c in candidates]
-        put_many = getattr(self._storage, "put_promotion_states", None)
-        if put_many is not None:
-            await put_many(states)
+        if isinstance(self._storage, SupportsBatchPromotionStates):
+            await self._storage.put_promotion_states(states)
         else:
             for state in states:
                 await self._storage.put_promotion_state(state)
@@ -453,22 +486,7 @@ class Promotions:
         # would collapse those tenants' independent generated events (and hence candidates) into one, silently
         # mixing their state. `e.tenant` is each event's own recorded tenant (equal to `tenant` when a specific
         # tenant was requested; the record's own value otherwise).
-        keys: list[str] = []
-        seen: set[str] = set()
-        latest_generated: dict[str, Any] = {}
-        record_of: dict[str, tuple[str, str | None]] = {}  # key -> (artifact_id, tenant)
-        for e in generated:
-            artifact_id = e.payload.get("artifactId")
-            if not isinstance(artifact_id, str):
-                continue
-            key = _usage_index_key(e.tenant, artifact_id)
-            if key not in seen:
-                seen.add(key)
-                keys.append(key)
-                record_of[key] = (artifact_id, e.tenant)
-            prev = latest_generated.get(key)
-            if prev is None or e.ts > prev.ts:
-                latest_generated[key] = e
+        latest_generated = _index_latest_generated(generated)
 
         # Avoid the N+1 of calling listLineage per candidate; fetch component.used once and group it (by the
         # same (tenant, artifactId) composite key, #10).
@@ -503,13 +521,14 @@ class Promotions:
         to_persist: list[PromotionCandidate] = []
 
         candidates: list[PromotionCandidate] = []
-        for key in keys:
-            artifact_id, record_tenant = record_of[key]
+        for key, event in latest_generated.items():
+            artifact_id = cast("str", event.payload["artifactId"])
+            record_tenant = event.tenant
             candidate = await self._load_candidate(
                 artifact_id,
                 _tally_usage(used_by_artifact.get(key, [])),
                 record_tenant,
-                latest_generated.get(key),
+                event,
             )
             if candidate is None:
                 continue
@@ -551,7 +570,7 @@ class Promotions:
             candidates.append(candidate)
 
         # Every eligible candidate's status transition is now applied in memory; persist them all in a single
-        # batch write (see _persist_many's doc for the StoragePort.put_promotion_states duck-type / fallback).
+        # batch write (see _persist_many's doc for the SupportsBatchPromotionStates isinstance check / fallback).
         await self._persist_many(to_persist, tenant)
 
         # component.nominated audit events are recorded only after the batch persist above resolves, and are
@@ -616,15 +635,7 @@ class Promotions:
         generated_events = await self._storage.list_lineage(
             LineageFilter(type=["component.generated"], limit=1000, tenant=tenant)
         )
-        latest_generated_by_key: dict[str, Any] = {}
-        for e in generated_events:
-            artifact_id = e.payload.get("artifactId")
-            if not isinstance(artifact_id, str):
-                continue
-            key = _usage_index_key(e.tenant, artifact_id)
-            prev = latest_generated_by_key.get(key)
-            if prev is None or e.ts > prev.ts:
-                latest_generated_by_key[key] = e
+        latest_generated_by_key = _index_latest_generated(generated_events)
         candidates: list[PromotionCandidate] = []
         for state in states:
             if state.status != status:
@@ -819,6 +830,27 @@ class Promotions:
         await self._persist(candidate, tenant)
         return candidate
 
+    async def _run_judge(self, candidate: PromotionCandidate, tenant: str | None = None) -> dict[str, Any]:
+        """Resolve the judge verdict for `candidate` (port of TS's `runJudge`).
+
+        judge unset (no review hook) is treated as a pass with no advice -> straight to human review. Whether
+        promotion is allowed is delegated to the machine's judgeBlocking policy at the judge.result transition
+        -- this method only resolves the verdict value.
+        """
+        # judge unset (no review hook) is treated as a pass with no advice -> straight to human review.
+        if self._judge is None:
+            return {"pass": True, "score": 0}
+        try:
+            return await self._judge(candidate, JudgeContext(tenant=tenant))
+        except Exception as e:
+            # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
+            # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.
+            return {
+                "pass": False,
+                "score": 0,
+                "reason": f"judge could not run: {e}",
+            }
+
     async def approve(
         self,
         artifact_id: str,
@@ -834,6 +866,11 @@ class Promotions:
         subsequent judge -> review -> approve chain (= the "fix and re-approve" flow — a fresh judge run gives
         it another chance to pass). The transition table is unchanged and the path from candidate onward is
         identical to the first approve, so LIN-PRM-001 (a human review.approve precedes publish) is preserved.
+
+        Recovery from judging: a candidate persisted at judging (the process died between judge.start and
+        judge.result, so no verdict was ever recorded) is resumed in place by running the judge and calling
+        judge.result, then falling through to the same in_review/approved/schema_proposed steps below -- it is
+        not routed back through nominate, since it never left candidate/judging in the first place.
 
         Idempotent re-projection on an already-published candidate (#11): a retry against a candidate that is
         *already* published (loaded as such, before any of the transitions below run) previously returned
@@ -864,21 +901,16 @@ class Promotions:
             candidate = await self.act(artifact_id, Nominate(by=reviewer), reviewer, tenant)
         if candidate.status == "candidate":
             candidate = await self.act(artifact_id, JudgeStart(), reviewer, tenant)
-            # judge unset (no review hook) is treated as a pass with no advice -> straight to human review.
-            verdict: dict[str, Any] = {"pass": True, "score": 0}
-            if self._judge is not None:
-                try:
-                    verdict = await self._judge(
-                        candidate, JudgeContext(tenant=tenant)
-                    )
-                except Exception as e:
-                    # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
-                    # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.
-                    verdict = {
-                        "pass": False,
-                        "score": 0,
-                        "reason": f"judge could not run: {e}",
-                    }
+            verdict = await self._run_judge(candidate, tenant)
+            candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
+        # Resumes a candidate persisted at "judging" (e.g. the process died between judge.start and
+        # judge.result): the machine's judging --judge.result--> in_review | judge_failed edge exists, but until
+        # this branch was added no if above matched "judging," so such a candidate fell straight through to the
+        # "did not reach published" guard below. A candidate that just transitioned candidate -> judging inside
+        # the block above is unaffected here: judge.result already advanced it to in_review/judge_failed by the
+        # time this runs, so this if's own condition is false for that path (no double-judge).
+        if candidate.status == "judging":
+            verdict = await self._run_judge(candidate, tenant)
             candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
         if candidate.status == "in_review":
             candidate = await self.act(
@@ -1001,15 +1033,7 @@ class Promotions:
         generated_events = await self._storage.list_lineage(
             LineageFilter(type=["component.generated"], limit=1000)
         )
-        latest_generated_by_key: dict[str, Any] = {}
-        for e in generated_events:
-            artifact_id = e.payload.get("artifactId")
-            if not isinstance(artifact_id, str):
-                continue
-            key = _usage_index_key(e.tenant, artifact_id)
-            prev = latest_generated_by_key.get(key)
-            if prev is None or e.ts > prev.ts:
-                latest_generated_by_key[key] = e
+        latest_generated_by_key = _index_latest_generated(generated_events)
         published_audit_keys = {
             _usage_index_key(e.tenant, e.payload["artifactId"])
             for e in await self._storage.list_lineage(

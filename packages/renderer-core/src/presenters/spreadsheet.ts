@@ -258,6 +258,53 @@ export function effectiveRows(rows: JsonObject[], copy: RowsWorkingCopy | undefi
   return rows.map((row, i) => copy.edits.get(i) ?? row);
 }
 
+/**
+ * The decision made when a cell edit is committed (on blur, or Enter/Escape triggering a blur), shared
+ * by renderer-react's commitEdit and renderer-wc's attemptCommit so the two cannot drift on what
+ * counts as invalid/unchanged/a real commit. Callers own only their own state effects:
+ * - "invalid": the raw text failed coerceCellInput. Stay in edit mode, mark aria-invalid.
+ * - "close": the row vanished since editing started (index no longer resolves), or the coerced value
+ *   equals the cell's current (possibly already-edited) value. Leave edit mode; nothing else changes.
+ * - "commit": a real value change. `copy` is the new working copy (to replace the caller's own copy
+ *   state) and `runtime` is the exact cellEdit invoke payload to send.
+ */
+export type CellEditPlan =
+  | { kind: "invalid" }
+  | { kind: "close" }
+  | { kind: "commit"; copy: RowsWorkingCopy; runtime: SpreadsheetCellEditRuntime };
+
+/**
+ * Decides what a cell-edit commit attempt should do, from the same inputs both renderers have on
+ * hand: the base `rows` + the pending working `copy` (from which the currently-displayed row is
+ * derived via effectiveRows, so both callers computing effectiveRows themselves first and passing
+ * that in would just recompute the same thing — passing rows + copy keeps this the single place that
+ * does so), which cell (`rowIndex` + `col`), and the just-typed raw text.
+ */
+export function planCellEdit(args: {
+  rows: JsonObject[];
+  copy: RowsWorkingCopy | undefined;
+  rowIndex: number;
+  col: TabularColumn;
+  raw: string;
+}): CellEditPlan {
+  const { rows, copy, rowIndex, col, raw } = args;
+  const coercion = coerceCellInput(raw, col);
+  if (!coercion.ok) return { kind: "invalid" };
+
+  const row = effectiveRows(rows, copy)[rowIndex];
+  if (row == null) return { kind: "close" };
+
+  const previousValue = row[col.key] ?? null;
+  if (coercion.value === previousValue) return { kind: "close" };
+
+  const nextCopy = commitCellEdit(copy, rows, rowIndex, col.key, coercion.value);
+  const runtime: SpreadsheetCellEditRuntime = {
+    row,
+    value: { column: col.key, value: coercion.value, previousValue, rowIndex },
+  };
+  return { kind: "commit", copy: nextCopy, runtime };
+}
+
 /** The idle (non-editing) cell's button chrome — reset to read as a plain td while remaining focusable/clickable. */
 export function spreadsheetCellEditButtonStyle(options: { numeric: boolean }) {
   const { numeric } = options;

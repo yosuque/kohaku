@@ -16,43 +16,40 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from kohaku.composer import (
-    ComposeContext,
     ComposeResult,
-    ComposeTrace,
 )
-from kohaku.data_binding import (
-    assert_known_reserved_params,
-    split_reserved_params,
-)
+from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
     ComposeFixationContext,
     FixationDeliveryHost,
-    FixationSelfHealApi,
+    IntentSourceIntent,
+    IntentSourceNl,
+    ParsedInvokableRefOk,
     TraceContext,
+    apply_action_effects,
     is_typed_host_error,
+    parse_invokable_ref,
     parse_trace_context,
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
 from kohaku.host_core import compose_with_fixation as _host_core_compose_with_fixation
+from kohaku.host_core import create_allowed_actions as _host_core_create_allowed_actions
 from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import get_lock as _get_lock
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
 from kohaku.host_core import notify_hook as _host_core_notify_hook
+from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
+from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.spec import (
     AuthzPort,
-    DomainPort,
-    FixationRecord,
     GuiAction,
     IntentInput,
     InvocationContext,
     JsonObject,
-    NLQuery,
     Principal,
     SessionContext,
     TabularData,
@@ -61,10 +58,12 @@ from kohaku.spec import (
     canonical_stringify,
     enumerate_bind_variants,
     finalize_intent,
-    parse_query_ref,
 )
 
+from . import initial_data as _initial_data
+from .cache_hints import _CACHEABLE_RESULT_CACHE_SCOPE, _CACHEABLE_RESULT_TTL_MS
 from .fallback import spec_to_text
+from .initial_data import _preresolve_initial_data, _resolve_refs_bounded
 from .intent_tools import IntentToolDef
 from .meta import (
     CAPABILITY_META_KEY,
@@ -75,37 +74,27 @@ from .meta import (
     tool_ui_meta,
 )
 from .snapshot import inject_snapshot
+from .types import (
+    AttachOptions,
+    McpErrorInfo,
+    McpHostDeps,
+    _ComposeSource,
+    _IntentSource,
+)
+
+# `_NlSource` is re-exported explicitly (self-aliased) because kohaku/tests/host_mcp/test_fixation_selfheal.py
+# imports it directly from this submodule (`from kohaku.host_mcp.server import _NlSource`), predating this
+# module split — mypy's strict / --no-implicit-reexport mode only treats an `X as X` import as intentionally
+# re-exported.
+from .types import _NlSource as _NlSource
 
 if TYPE_CHECKING:
+    import mcp.types as mcp_types
     from mcp.server import Server, ServerRequestContext
 
 _MCP_MISSING_MESSAGE = (
     "MCP host functionality requires the mcp SDK. Please run `pip install 'kohaku-ui[mcp]'`."
 )
-
-# Cumulative size budget (JSON characters) for the initial data co-embedded in the tool result's `_meta`.
-# Claude-family hosts spill tool results over about 150k characters to the sandbox side and the widget does not
-# hydrate, so cut off at 100k characters, leaving room for the structured Spec + text fallback.
-INITIAL_DATA_BUDGET_CHARS = 100_000
-
-# Per-ref timeout (seconds; same value as TS PRERESOLVE_TIMEOUT_MS = 2000) for initial-data preresolution.
-# So a slow / unresponsive ref does not block the compose response, a timeout is treated as skip (that ref is not
-# co-embedded), the same as the existing per-ref fail-open.
-PRERESOLVE_TIMEOUT_S = 2.0
-
-# Bounded concurrency (ops; mirrors TS PRERESOLVE_CONCURRENCY) for _preresolve_initial_data's ref resolution.
-# Refs are resolved concurrently (up to this many in flight at once) rather than serially, so one slow-but-not-
-# hung DomainPort call no longer holds up the others; the budget below is still applied afterward in the fixed
-# initial-then-secondary order, so which refs end up embedded on overflow does not depend on completion order.
-PRERESOLVE_CONCURRENCY = 8
-
-# Overall wall-clock deadline (seconds; ops; mirrors TS PRERESOLVE_TOTAL_TIMEOUT_MS) for the whole
-# _preresolve_initial_data call, on top of the per-ref timeout above. With up to 256 bind variants across many
-# components, even healthy-but-slow resolutions can push total latency well past what a tool caller will wait
-# for. Once this elapses, no further refs are started, and any still-in-flight resolution's eventual result
-# (success or failure) is discarded rather than embedded — reported through the same per-ref fail-open on_error
-# path as an ordinary per-ref failure, with a message identifying it as a deadline discard.
-PRERESOLVE_TOTAL_TIMEOUT_S = 10.0
 
 _ANONYMOUS = Principal(id="mcp-user", roles=["user"])
 
@@ -149,12 +138,6 @@ def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 
 # TOOL_INTERNAL_ERROR_MESSAGE (server.ts).
 _TOOL_INTERNAL_ERROR_MESSAGE = "internal error; see the observability hook (on_error) for details"
 
-# MCP 2026-07-28 (SEP-2549): freshness/cacheability hint attached to tools/list, resources/list, and (mcp
-# 2.x closed a 1.x gap here — see _read_resource's doc comment) resources/read results
-# (CacheableResult.ttl_ms / cache_scope). Matches TS host-mcp-apps' equivalent values.
-_CACHEABLE_RESULT_TTL_MS = 60_000
-_CACHEABLE_RESULT_CACHE_SCOPE: Literal["public", "private"] = "private"
-
 # Shared optional `locale` input for every UI-producing tool (compose / render_snapshot / intent
 # tools / event). The calling LLM sets it to the user's language so the composed UI (fixed-spec
 # titles, generated labels, L2 widget text) comes out localized — it maps onto the compose
@@ -175,7 +158,7 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
-def _correlation_id_of(ctx: ServerRequestContext[Any, Any]) -> str | None:
+def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
     """The per-call correlation id: always the JSON-RPC request id of this tool call, never derived from
     `_meta.traceparent`. Mirrors TS host-mcp-apps' `requestContextOf().requestId` (used directly as the
     correlation id there too, after the removal of the former `correlationIdOf` helper — see that module's
@@ -191,7 +174,7 @@ def _correlation_id_of(ctx: ServerRequestContext[Any, Any]) -> str | None:
     return str(ctx.request_id) if ctx.request_id is not None else None
 
 
-def _trace_context_of(ctx: ServerRequestContext[Any, Any]) -> TraceContext | None:
+def _trace_context_of(ctx: ServerRequestContext[Any]) -> TraceContext | None:
     """The `_meta.traceparent` (+ `_meta.tracestate`, when present) as a TraceContext (kohaku.host_core's
     shared parse_trace_context, also used by kohaku.host_rest's `traceparent` request-header counterpart).
     `ctx.meta` is a `RequestParamsMeta` TypedDict (dict access, not attribute access — unlike the mcp SDK's
@@ -226,169 +209,18 @@ def _locale_of(args: JsonObject) -> str | None:
     return locale if isinstance(locale, str) else None
 
 
-# ---------------------------------------------------------------------------
-# Dependency / option types
-# ---------------------------------------------------------------------------
-
-
-# The fixation self-healing surface: an alias of kohaku.host_core.FixationSelfHealApi (also aliased by
-# the REST profile's FixationsApi), which kohaku.lineage's Fixations satisfies as-is. The MCP surface is
-# single-tenant (surface="mcp-app" / no tenant), so `tenant` is never passed (the tenant/lock asymmetry with the
-# REST surface is intentional). The invalidate TOCTOU guard (`ifCatalogFingerprint`) is threaded through just
-# like the REST surface (kohaku.host_core.settle_fixation), so a fixation that was re-approved after the stale
-# check is not deleted by mistake.
-McpFixationsApi = FixationSelfHealApi
-
-
-class ViewRecorderProtocol(Protocol):
-    """View Lineage recording hooks for the MCP profile, symmetric with the REST profile's
-    ViewRecorderProtocol (kohaku.host_rest.deps) and TS's shared `@kohaku-ui/host-core` ViewRecorder.
-    kohaku.lineage's ViewRecorder conforms structurally as-is.
-
-    Defined locally rather than imported from kohaku.host_rest: the two host profiles are independent
-    siblings in the Python layer contract (pyproject.toml's `[tool.importlinter]` layers list
-    `host_rest | host_mcp | evals` at the same level, forbidding mutual imports), so this profile
-    carries its own structural copy instead of depending on the REST package. Only the 3 methods this
-    profile actually records (`composed` / `interacted` / `fallback`) are declared — `rendered` /
-    `component_used` are REST-only (telemetry has no MCP surface).
-    """
-
-    async def composed(
-        self,
-        *,
-        spec: UISpec,
-        trace: Any,
-        surface: str,
-        session_id: str | None = ...,
-        tenant: str | None = ...,
-        spec_hash: str | None = ...,
-        structure_hash: str | None = ...,
-    ) -> None: ...
-
-    async def interacted(
-        self,
-        *,
-        intent_hash: str,
-        component_id: str,
-        on: str,
-        payload: JsonObject,
-        surface: str,
-        session_id: str | None = ...,
-        tenant: str | None = ...,
-    ) -> None: ...
-
-    async def fallback(
-        self,
-        *,
-        spec: UISpec,
-        reason: str,
-        kind: str,
-        surface: str,
-        session_id: str | None = ...,
-        tenant: str | None = ...,
-    ) -> None: ...
-
-
-@dataclass(frozen=True)
-class McpErrorInfo:
-    """Information passed to the failure-path observability hook (same shape as REST's onError; the MCP surface has no requestId)."""
-
-    endpoint: str
-    error: BaseException
-    correlation_id: str | None = None
-    """The per-call JSON-RPC request id (see _correlation_id_from_request_context's doc comment — never a
-    trace-id derived from `_meta.traceparent`; that would collapse every tool call in one trace onto the same
-    id). Populated only for failures reported from _safe_tool's except branch (every tool handler routes
-    through it); other report sites in this module (fixation self-heal, initial-data preresolution, etc.)
-    still pass None, unchanged from before this field existed."""
-    trace_context: TraceContext | None = None
-    """The same `_meta.traceparent` (+ `_meta.tracestate`) as a TraceContext (see
-    _trace_context_from_request_context's doc comment for the same parity-gap caveat as correlation_id
-    above). Populated the same way and at the same call site as correlation_id."""
-
-
-@dataclass(frozen=True)
-class ActionEffects:
-    """Side-effect declaration for a write (action). Same-shaped return value as the REST surface's salesActionEffects."""
-
-    invalidates: list[str] | None = None
-    refVersions: dict[str, str] | None = None
-
-
-@dataclass(frozen=True)
-class McpHostDeps:
-    """The full set of MCP host wiring dependencies (same shape as TS McpHostDeps)."""
-
-    compose: ComposeContext
-    domain: DomainPort
-    authz: AuthzPort
-    query_source: str
-    principal: Principal | None = None
-    """The environment principal used when `resolve_principal` is unwired (also the fallback for a call whose
-    `resolve_principal` returns before ever being consulted — see that field's doc comment for the full
-    fallback order). Suitable for stdio (one process per user). **Must not be trusted as-is on a shared
-    Streamable HTTP deployment**: `create_server()` builds a single `Server` shared by every session/connection
-    (see `sales_api.mcp_http`, which calls it once), so a single `principal` here is the same identity for
-    every caller — wire `resolve_principal` instead to resolve the caller's actual identity per tool call."""
-    resolve_principal: (
-        Callable[[ServerRequestContext[Any, Any]], Principal | Awaitable[Principal]] | None
-    ) = None
-    """Resolves the principal for a single tool call (from that call's mcp SDK `ServerRequestContext` —
-    always available: the mcp SDK hands every registered request handler its own `ctx`). Called once per
-    tool call, inside the tool handler itself — before any of the following, all of which see the resolved
-    result: `_issue_capability` (the principal the compose-issued capability is bound to),
-    `SessionContext.principal` (read by `SemanticPort.normalize` / `ComposeContext.policyFor` / the fixation
-    lookup, the same way `SessionContext.locale` already is), the initial-data preresolution's `domain.invoke`
-    calls (a plain read — no capability is verified there), and the `verdict.principal or principal` fallback
-    `_handle_resolve_binding` / `_handle_action` use when the AuthzPort's `verify` does not itself return a
-    principal. May be sync or async (`inspect.isawaitable` decides whether to await the return value).
-
-    Fallback order: `resolve_principal(ctx)` -> `deps.principal` -> the built-in anonymous principal. **A raise
-    from `resolve_principal` is fail-closed**: the tool call returns a structured tool error (`isError`) and the
-    failure is reported to `on_error` — it never silently falls back to `deps.principal` or anonymous, since
-    doing so would let an identity-resolution failure quietly downgrade every subsequent call on this shared
-    server to a shared/anonymous identity.
-
-    Required for a shared Streamable HTTP deployment (`sales_api.mcp_http`, which builds one `Server` shared by
-    every session) — see `principal`'s doc comment above for why a single static `principal` is unsafe there.
-    When unwired, every call runs as `principal` or the built-in anonymous principal, unchanged from before
-    this field existed."""
-    fixation_lookup: Callable[[str, SessionContext], Awaitable[FixationRecord | None]] | None = None
-    """Fixation lookup (intentHash, session -> FixationRecord | None). The session (surface
-    "mcp-app" + the caller-provided locale) is passed so products can gate delivery — e.g. serve
-    pinned Specs to EN sessions only, mirroring the REST surface's language gate (FixationRecord
-    carries no language).
-
-    Prefer keeping this a plain read and expressing any delivery gate via `fixation_admit` instead — the
-    same gate function can then be shared verbatim with the REST profile's `KohakuHostDeps.fixation_admit`
-    rather than being duplicated in both hosts' `fixation_lookup` implementations."""
-    fixation_admit: (
-        Callable[[FixationRecord, SessionContext], Awaitable[bool] | bool] | None
-    ) = None
-    """Delivery-admission gate consulted, when set, after a fixation is found via `fixation_lookup` and
-    before it is checked for staleness (kohaku.host_core's `FixationDeliveryHost.admit`). See
-    `fixation_lookup`'s doc — the same function can be shared with the REST profile's
-    `KohakuHostDeps.fixation_admit`."""
-    recorder: ViewRecorderProtocol | None = None
-    """View Lineage recording, symmetric with the REST profile's KohakuHostDeps.recorder: `composed` /
-    `fallback` are recorded around every compose-family tool call, and `interacted` is recorded by
-    _handle_event before recomposing (matching the REST surface's /events, which records `interacted`
-    before `composed`/`fallback`). When both `recorder` and the legacy `on_composed` are wired,
-    `recorder` takes priority (on_composed is not also called)."""
-    on_composed: Callable[[UISpec, ComposeTrace], Awaitable[None]] | None = None
-    """Deprecated: superseded by `recorder`, which additionally records `interacted` and `fallback`
-    (symmetric with the REST profile). Kept for backward compatibility: still called when `recorder` is
-    unwired. Failures are fail-open (they do not drag down UI delivery) and reported to on_error."""
-    fixations: McpFixationsApi | None = None
-    """The self-healing surface for fixation staleness detection. When unwired, stale -> only the normal compose fallback."""
-    on_error: Callable[[McpErrorInfo], Awaitable[None] | None] | None = None
-    """Failure-path observability hook. Silent when unwired. Hook throws are swallowed (observation only)."""
-    action_effects: Callable[[str, JsonObject, object], Awaitable[ActionEffects]] | None = None
-    """Write side-effect declaration (optional). When unspecified, the response is only `{result}` (backward compatible)."""
+def _arg_str(args: JsonObject, key: str) -> str:
+    """Read `args[key]` as `str`, for a required tool-input property this profile's own `input_schema`
+    already declares `{"type": "string"}` for. The Python mcp SDK's tool schemas are JSON Schema hints only
+    (no runtime validator wired in — same caveat as MAX_JSON_OBJECT_DEPTH's doc comment), so this narrows the
+    static type without adding a runtime check; a malformed caller-supplied value still surfaces as
+    whatever downstream (e.g. `finalize_intent`) does with a non-`str`, unchanged from the previous
+    per-call-site `cast(str, args[key])`."""
+    return cast(str, args[key])
 
 
 async def _principal_of(
-    deps: McpHostDeps, fallback_principal: Principal, ctx: ServerRequestContext[Any, Any]
+    deps: McpHostDeps, fallback_principal: Principal, ctx: ServerRequestContext[Any]
 ) -> Principal:
     """Resolves the principal for one tool call — see `McpHostDeps.resolve_principal`'s doc comment for the
     full fallback order and rationale. A raise from `deps.resolve_principal` is deliberately NOT caught here:
@@ -402,42 +234,6 @@ async def _principal_of(
     if inspect.isawaitable(result):
         result = await result
     return result
-
-
-@dataclass(frozen=True)
-class AttachOptions:
-    """attach options (same shape as TS AttachOptions)."""
-
-    renderer_html: str | Callable[[], Awaitable[str]]
-    """The shared renderer bundle (the same rendering code as the Web = strategy A pixel parity)."""
-    intent_tools: list[IntentToolDef] | None = None
-    tool_prefix: str | None = None
-    snapshot_writer: Callable[[str, str], Awaitable[str]] | None = None
-    """The save hook for self-contained snapshot HTML (for UI-incapable hosts). Registers
-    `${prefix}_render_snapshot` (model-visible) only when wired. Receives fileName and HTML and returns a locator
-    (a local path or public URL). Delivery, saving, and URL-ification are the host implementation's responsibility."""
-    legacy_ui_resource: bool = False
-    """UIResource co-emission for mcp-ui legacy host compatibility (default False = fully backward compatible).
-    When enabled, appends the self-contained snapshot HTML to the content[] of compose-family tool results as
-    `{type:"resource", resource:{uri:"ui://kohaku/view/<intentHash>", mimeType:"text/html", text}}`
-    (same shape as TS AttachOptions.legacyUiResource). A static display path for legacy hosts that do not support
-    SEP-1865 and render only mcp-ui's UIResource (`ui://` prefix detection). The HTML bundles the shared renderer at
-    about 1MB/result, so do not enable it on modern hosts (Claude / ChatGPT). An assembly failure is swallowed,
-    reported to the observation hook, and answered normally without co-emission (fail-open)."""
-
-
-# Internal: the source of a compose (NL / structured Intent).
-@dataclass(frozen=True)
-class _NlSource:
-    text: str
-
-
-@dataclass(frozen=True)
-class _IntentSource:
-    intent: IntentInput
-
-
-_ComposeSource = _NlSource | _IntentSource
 
 
 # ---------------------------------------------------------------------------
@@ -461,25 +257,19 @@ def attach_kohaku_to_mcp_server(
     prefix = options.tool_prefix if options.tool_prefix is not None else "kohaku"
     fallback_principal = deps.principal if deps.principal is not None else _ANONYMOUS
 
-    async def _current_principal(ctx: ServerRequestContext[Any, Any]) -> Principal:
+    async def _current_principal(ctx: ServerRequestContext[Any]) -> Principal:
         """Resolves the principal for THIS tool call (see `McpHostDeps.resolve_principal`'s doc comment for the
         full fallback order). Called once per tool call, inside each handler's own `_safe_tool`-wrapped body —
         never memoized across calls, since a shared `Server` (see `sales_api.mcp_http`) serves every session."""
         return await _principal_of(deps, fallback_principal, ctx)
 
-    # Memoized deps.domain.list_operations() names (write-scope hardening; see _issue_capability). McpHostDeps
-    # is frozen, so the cache lives here as a closure variable rather than on deps (unlike host_rest's
-    # per-deps field). list_operations is async and must not be re-awaited on every compose.
-    _allowed_actions_cache: frozenset[str] | None = None
+    # Memoized deps.domain.list_operations() names (write-scope hardening; see _issue_capability). Built once
+    # per attach call (host_core's create_allowed_actions, shared with the REST profile so both agree on how
+    # a DomainPort's list_operations() names are cached and retried) rather than stored on deps — McpHostDeps
+    # is frozen, so the cache lives here as a closure variable (unlike host_rest's per-deps field).
+    _allowed_actions = _host_core_create_allowed_actions(deps.domain)
 
-    async def _allowed_actions() -> frozenset[str]:
-        nonlocal _allowed_actions_cache
-        if _allowed_actions_cache is None:
-            ops = await deps.domain.list_operations()
-            _allowed_actions_cache = frozenset(op.name for op in ops)
-        return _allowed_actions_cache
-
-    def _tool_error(message: str) -> Any:
+    def _tool_error(message: str) -> mcp_types.CallToolResult:
         """Turn a tool-handler failure into a structured tool error (isError) rather than an RPC exception.
 
         MCP 2026-07-28 (SEP-2322) requires every result to carry resultType; an error is still a *complete*
@@ -493,8 +283,10 @@ def attach_kohaku_to_mcp_server(
         )
 
     async def _safe_tool(
-        endpoint: str, ctx: ServerRequestContext[Any, Any], fn: Callable[[], Awaitable[Any]]
-    ) -> Any:
+        endpoint: str,
+        ctx: ServerRequestContext[Any],
+        fn: Callable[[], Awaitable[mcp_types.CallToolResult]],
+    ) -> mcp_types.CallToolResult:
         """Route a handler failure through the observation hook then convert it to a tool error (the success return value is unchanged).
 
         An arbitrary/untyped exception's message never reaches the caller (it may leak internals); a typed
@@ -519,7 +311,7 @@ def attach_kohaku_to_mcp_server(
 
     async def _compose_and_package(
         source: _ComposeSource, locale: str | None, principal: Principal
-    ) -> Any:
+    ) -> mcp_types.CallToolResult:
         result = await _compose_with_fixation(source, deps, locale, principal)
         try:
             allowed = await _allowed_actions()
@@ -584,14 +376,18 @@ def attach_kohaku_to_mcp_server(
         )
 
     # --- Tool definitions (name -> Tool + handler) --------------------------
-    registered: list[tuple[Any, Callable[[ServerRequestContext[Any, Any], JsonObject], Awaitable[Any]]]] = []
+    registered: list[
+        tuple[mcp_types.Tool, Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]]
+    ] = []
 
     # model-visible: natural language -> UI
-    async def _handle_compose(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
-        async def _run() -> Any:
+    async def _handle_compose(
+        ctx: ServerRequestContext[Any], args: JsonObject
+    ) -> mcp_types.CallToolResult:
+        async def _run() -> mcp_types.CallToolResult:
             principal = await _current_principal(ctx)
             return await _compose_and_package(
-                _NlSource(text=cast(str, args["question"])), _locale_of(args), principal
+                _NlSource(text=_arg_str(args, "question")), _locale_of(args), principal
             )
 
         return await _safe_tool(f"{prefix}_compose", ctx, _run)
@@ -628,11 +424,13 @@ def attach_kohaku_to_mcp_server(
     if options.snapshot_writer is not None:
         snapshot_writer = options.snapshot_writer
 
-        async def _handle_render_snapshot(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
-            async def _run() -> Any:
+        async def _handle_render_snapshot(
+            ctx: ServerRequestContext[Any], args: JsonObject
+        ) -> mcp_types.CallToolResult:
+            async def _run() -> mcp_types.CallToolResult:
                 principal = await _current_principal(ctx)
                 spec, html = await _build_snapshot(
-                    _NlSource(text=cast(str, args["question"])),
+                    _NlSource(text=_arg_str(args, "question")),
                     deps,
                     options,
                     principal,
@@ -699,26 +497,30 @@ def attach_kohaku_to_mcp_server(
         )
 
     # app-only: data resolution from the iframe (the landing point of reference-passing)
-    async def _handle_resolve_binding(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
-        async def _run() -> Any:
+    async def _handle_resolve_binding(
+        ctx: ServerRequestContext[Any], args: JsonObject
+    ) -> mcp_types.CallToolResult:
+        async def _run() -> mcp_types.CallToolResult:
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
             # Server-side paging/sorting: verify the capability against base (reserved params removed) and merge
-            # the reserved params into domain.invoke. Unknown `_` keys are rejected.
-            split = split_reserved_params(cast(str, args["ref"]))
-            assert_known_reserved_params(split.reserved)
-            if split.base.source != deps.query_source:
-                return _tool_error(f'unknown query source "{split.base.source}"')
-            capability = cast(str, args["capability"])
+            # the reserved params into domain.invoke. Unknown `_` keys are rejected. parse_invokable_ref
+            # (host_core, shared with REST's /binding/resolve and this module's initial-data preresolution)
+            # does the pure parse/merge; the verify step and error mapping stay here.
+            parsed = parse_invokable_ref(_arg_str(args, "ref"), deps.query_source)
+            if not isinstance(parsed, ParsedInvokableRefOk):
+                return _tool_error(f'unknown query source "{parsed.source}"')
+            base, params = parsed.ref.base, parsed.ref.params
+            capability = _arg_str(args, "capability")
             verdict = await deps.authz.verify(
-                capability, VerifyRequest(kind="read", ref=split.base.raw)
+                capability, VerifyRequest(kind="read", ref=base.raw)
             )
             if not verdict.ok:
                 return _tool_error(f"capability denied: {verdict.reason or ''}")
             data = await deps.domain.invoke(
-                split.base.path,
-                {**split.base.params, **split.reserved},
+                base.path,
+                params,
                 InvocationContext(
                     principal=verdict.principal or principal, capability=capability
                 ),
@@ -727,7 +529,7 @@ def attach_kohaku_to_mcp_server(
             return mcp_types.CallToolResult(
                 content=[
                     mcp_types.TextContent(
-                        type="text", text=f"resolved {rows} rows from {split.base.raw}"
+                        type="text", text=f"resolved {rows} rows from {base.raw}"
                     )
                 ],
                 structured_content={"data": _to_wire_data(data)},
@@ -755,10 +557,12 @@ def attach_kohaku_to_mcp_server(
     )
 
     # app-only: component event -> Intent delta -> recompose
-    async def _handle_event(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
-        async def _run() -> Any:
+    async def _handle_event(
+        ctx: ServerRequestContext[Any], args: JsonObject
+    ) -> mcp_types.CallToolResult:
+        async def _run() -> mcp_types.CallToolResult:
             principal = await _current_principal(ctx)
-            intent_arg = cast(dict[str, Any], args["intent"])
+            intent_arg = cast(JsonObject, args["intent"])
             intent_params = cast(JsonObject, intent_arg["params"])
             payload = cast(JsonObject, args.get("payload", {}))
             # Mirrors TS's JsonObjectSchema on kohaku_event's payload/intent.params (validated there at the
@@ -768,10 +572,10 @@ def attach_kohaku_to_mcp_server(
             if not _json_depth_ok(intent_params) or not _json_depth_ok(payload):
                 return _tool_error(f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})")
             current = finalize_intent(
-                IntentInput(canonical=cast(str, intent_arg["canonical"]), params=intent_params)
+                IntentInput(canonical=_arg_str(intent_arg, "canonical"), params=intent_params)
             )
             locale = _locale_of(args)
-            on = cast(str, args["on"])
+            on = _arg_str(args, "on")
             normalized = await deps.compose.semantic.normalize(
                 GuiAction(kind="gui", action=on, params=payload, current=current),
                 _mcp_session(locale, principal),
@@ -834,13 +638,15 @@ def attach_kohaku_to_mcp_server(
     )
 
     # app-only: direct write path (presentForm submit / action.button)
-    async def _handle_action(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
-        async def _run() -> Any:
+    async def _handle_action(
+        ctx: ServerRequestContext[Any], args: JsonObject
+    ) -> mcp_types.CallToolResult:
+        async def _run() -> mcp_types.CallToolResult:
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
-            action = cast(str, args["action"])
-            capability = cast(str, args["capability"])
+            action = _arg_str(args, "action")
+            capability = _arg_str(args, "capability")
             payload = cast(JsonObject, args.get("payload", {}))
             # Mirrors TS's JsonObjectSchema on kohaku_action's payload (validated there at the SDK's own
             # input-schema layer, before the handler ever runs) — the Python mcp SDK's tool schemas are JSON
@@ -875,21 +681,21 @@ def attach_kohaku_to_mcp_server(
                     principal=verdict.principal or principal, capability=capability
                 ),
             )
-            # Side-effect declaration (optional): put the refs the write invalidates and the per-ref new versions into
-            # the response (same shape as REST). The write is already committed. An effects failure does not make
-            # the committed write look like an error: swallow it individually, report it to the observation hook, and
-            # return success with only {result} (the effects-omitted backward-compatible shape) — failing the whole
-            # _run would make _safe_tool set isError, and a client retry could duplicate a non-idempotent write.
-            structured: dict[str, Any] = {"result": result if result is not None else None}
-            if deps.action_effects is not None:
-                try:
-                    effects = await deps.action_effects(action, payload, result)
-                    if effects.invalidates is not None:
-                        structured["invalidates"] = effects.invalidates
-                    if effects.refVersions is not None:
-                        structured["refVersions"] = effects.refVersions
-                except Exception as exc:  # noqa: BLE001 — an effects failure does not drag down the committed write
-                    await _report_mcp_error(deps, f"{prefix}_action", exc)
+            # Side-effect declaration (optional): put the refs the write invalidates and the per-ref new versions
+            # into the response (same shape as REST). The write is already committed; a side-effect-declaration
+            # failure is fail-open — see host_core's apply_action_effects.
+            # wide_catch=False preserves MCP's pre-branch `except Exception`, letting a BaseException
+            # subclass (asyncio.CancelledError) propagate uncaught -- past this call site, and also past
+            # _safe_tool below (it too catches only `except Exception`), out to the MCP server's own
+            # request/task-cancellation handling, not into a structured isError CallToolResult.
+            structured = await apply_action_effects(
+                deps.action_effects,
+                action,
+                payload,
+                result,
+                lambda exc: _report_mcp_error(deps, f"{prefix}_action", exc),
+                wide_catch=False,
+            )
             return mcp_types.CallToolResult(
                 content=[
                     mcp_types.TextContent(type="text", text=f"Executed action {action}")
@@ -919,10 +725,10 @@ def attach_kohaku_to_mcp_server(
         )
     )
 
-    by_name: dict[str, Callable[[ServerRequestContext[Any, Any], JsonObject], Awaitable[Any]]] = {
-        tool_def.name: handler for tool_def, handler in registered
-    }
-    tools_list: list[Any] = [tool_def for tool_def, _ in registered]
+    by_name: dict[
+        str, Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]
+    ] = {tool_def.name: handler for tool_def, handler in registered}
+    tools_list: list[mcp_types.Tool] = [tool_def for tool_def, _ in registered]
 
     # --- Register handlers on the low-level Server --------------------------
     # `add_request_handler` replaces mcp 1.x's decorator-based registration (Server.list_tools() /
@@ -932,7 +738,7 @@ def attach_kohaku_to_mcp_server(
     # capabilities — see NotificationOptions).
 
     async def _list_tools(
-        _ctx: ServerRequestContext[Any, Any], _params: mcp_types.PaginatedRequestParams | None
+        _ctx: ServerRequestContext[Any], _params: mcp_types.PaginatedRequestParams | None
     ) -> mcp_types.ListToolsResult:
         # MCP 2026-07-28 (SEP-2549): tools/list must carry ttl_ms + cache_scope (CacheableResult, now a
         # declared base of ListToolsResult) — no post-hoc model_copy needed, unlike mcp 1.x (see this
@@ -960,15 +766,15 @@ def attach_kohaku_to_mcp_server(
     # `_compose_with_fixation`'s `ComposeFixationContext(materialize=deps.compose, abort=...)` the same way
     # the TS `abort` parameter is used.
     async def _call_tool(
-        ctx: ServerRequestContext[Any, Any], params: mcp_types.CallToolRequestParams
-    ) -> Any:
+        ctx: ServerRequestContext[Any], params: mcp_types.CallToolRequestParams
+    ) -> mcp_types.CallToolResult:
         handler = by_name.get(params.name)
         if handler is None:
             return _tool_error(f'unknown tool "{params.name}"')
         return await handler(ctx, params.arguments or {})
 
     async def _list_resources(
-        _ctx: ServerRequestContext[Any, Any], _params: mcp_types.PaginatedRequestParams | None
+        _ctx: ServerRequestContext[Any], _params: mcp_types.PaginatedRequestParams | None
     ) -> mcp_types.ListResourcesResult:
         # MCP 2026-07-28 (SEP-2549): resources/list must also carry ttl_ms + cache_scope. Same declared
         # CacheableResult base as _list_tools above.
@@ -990,7 +796,7 @@ def attach_kohaku_to_mcp_server(
         )
 
     async def _read_resource(
-        _ctx: ServerRequestContext[Any, Any], params: mcp_types.ReadResourceRequestParams
+        _ctx: ServerRequestContext[Any], params: mcp_types.ReadResourceRequestParams
     ) -> mcp_types.ReadResourceResult:
         # resources/read is now (mcp 2.x) also CacheableResult-based (ReadResourceResult inherits it, unlike
         # 1.x — the ttl_ms/cache_scope asymmetry with tools/list / resources/list this module used to carry a
@@ -1077,19 +883,18 @@ async def _compose_with_fixation(
     # SemanticPort.normalize / policy_for / the fixation lookup would see an anonymous session on the compose
     # path only, diverging from the kohaku_event path for the same resolved principal.
     #
-    # NOTE (mirrors host-core's TS resolveIntent, which this Python port does not yet have — see
-    # kohaku.host_core): the "intent" and "nl" branches below duplicate TS host-core's resolveIntent
-    # inline instead of delegating to a shared helper, because no Python host_core module for it exists yet.
+    # Intent resolution via host-core's resolveIntent (shared with the REST profile's /compose(/stream) and
+    # /intent/normalize) rather than a local duplicate.
     session = _mcp_session(locale, principal)
     if isinstance(source, _IntentSource):
-        intent = finalize_intent(source.intent)
+        resolved = await _host_core_resolve_intent(
+            deps.compose.semantic, IntentSourceIntent(intent=source.intent), session
+        )
     else:
-        normalized = await deps.compose.semantic.normalize(
-            NLQuery(kind="nl", text=source.text), session
+        resolved = await _host_core_resolve_intent(
+            deps.compose.semantic, IntentSourceNl(text=source.text), session
         )
-        intent = finalize_intent(
-            IntentInput(canonical=normalized.canonical, params=normalized.params)
-        )
+    intent = resolved.intent
 
     # Delegates the fixation shortcut -> staleness check -> self-heal -> normal-compose-fallback sequence to
     # kohaku.host_core (shared with kohaku.host_rest). The MCP profile has a single ComposeContext, so it is
@@ -1131,27 +936,6 @@ async def _report_mcp_error(
     )
 
 
-async def _record_view_fallback(
-    recorder: ViewRecorderProtocol, spec: UISpec, *, surface: str
-) -> None:
-    """Record view.fallback when the spec includes a fallback (source of truth: spec.provenance.fallback,
-    not the compose trace — capability-negotiation downgrade can recur on a cache hit, which the trace alone
-    would miss). Mirrors the REST profile's record_fallback_if_any (kohaku.host_rest._routes.compose) so both
-    profiles agree on when a fallback is recorded; kept as a local duplicate rather than a shared host_core
-    helper because host_rest and host_mcp are independent siblings in the Python layer contract (see
-    pyproject.toml's importlinter layers) and Python's host_core does not yet host this logic (TS's
-    `@kohaku-ui/host-core` does — see that package's view-recorder.ts)."""
-    fallback = spec.provenance.fallback
-    if fallback is None:
-        return
-    await recorder.fallback(
-        spec=spec,
-        reason=fallback.reason,
-        kind=fallback.kind if fallback.kind is not None else "generation",
-        surface=surface,
-    )
-
-
 async def _audit_compose(deps: McpHostDeps, result: ComposeResult, endpoint: str) -> None:
     """compose + audit record (fail-open), shared by _compose_and_package and _build_snapshot.
 
@@ -1176,7 +960,7 @@ async def _audit_compose(deps: McpHostDeps, result: ComposeResult, endpoint: str
     async def _record() -> None:
         if recorder is not None:
             await recorder.composed(spec=result.spec, trace=result.trace, surface="mcp-app")
-            await _record_view_fallback(recorder, result.spec, surface="mcp-app")
+            await _host_core_record_view_fallback(recorder, result.spec, surface="mcp-app")
         elif on_composed is not None:
             await on_composed(result.spec, result.trace)
 
@@ -1211,190 +995,6 @@ async def _issue_capability(
     )
 
 
-async def _resolve_variant(
-    variant: str, deps: McpHostDeps, principal: Principal
-) -> TabularData | None:
-    """Shared helper that preresolves a single effective ref with read. An unknown source is None (not co-embedded)."""
-    split = split_reserved_params(variant)
-    assert_known_reserved_params(split.reserved)
-    if split.base.source != deps.query_source:
-        return None
-    resolved = await deps.domain.invoke(
-        split.base.path,
-        {**split.base.params, **split.reserved},
-        InvocationContext(principal=principal),
-    )
-    return cast(TabularData, resolved)
-
-
-class _PreresolveDeadline:
-    """Mutable flag shared by every in-flight `_resolve_ref_bounded` call for one `_preresolve_initial_data`
-    invocation (a plain object rather than a closure `nonlocal`, since the flag must be visible to tasks
-    created before it is set). Mirrors TS resolveRefsBounded's `deadlineExceeded` local."""
-
-    __slots__ = ("exceeded",)
-
-    def __init__(self) -> None:
-        self.exceeded = False
-
-
-async def _resolve_ref_bounded(
-    ref: str,
-    deps: McpHostDeps,
-    principal: Principal,
-    semaphore: asyncio.Semaphore,
-    results: dict[str, TabularData],
-    deadline: _PreresolveDeadline,
-    timeout_s: float,
-) -> None:
-    """Resolves one ref under the shared concurrency semaphore, writing a successful result into `results`.
-
-    Once `deadline.exceeded` is set (the overall preresolution deadline elapsed), a task that has not started
-    its DomainPort call yet skips it entirely, and a task already in flight discards its eventual outcome
-    (success or failure) instead of writing to `results` — reported via the same per-ref fail-open path as an
-    ordinary failure, with a message identifying it as a deadline discard. Mirrors TS's resolveOne.
-
-    `timeout_s` is a parameter (rather than the module-level PRERESOLVE_TIMEOUT_S constant) so
-    _resolve_refs_bounded can share this exact primitive between _preresolve_initial_data and
-    _snapshot_html_for — both pass PRERESOLVE_TIMEOUT_S today, but keeping it a parameter avoids a
-    hidden coupling to that specific caller.
-    """
-    async with semaphore:
-        if deadline.exceeded:
-            return
-        try:
-            # per-ref timeout: cut off so a ref that never returns does not hold its concurrency slot forever.
-            resolved = await asyncio.wait_for(
-                _resolve_variant(ref, deps, principal), timeout=timeout_s
-            )
-        except Exception as exc:  # noqa: BLE001 — per-ref fail-open (including timeout)
-            if deadline.exceeded:
-                await _report_mcp_error(deps, "compose.initialData", _discard_error(ref, exc))
-            else:
-                await _report_mcp_error(deps, "compose.initialData", exc)
-            return
-        if deadline.exceeded:
-            # Resolved successfully, but too late: the caller already stopped waiting and moved on.
-            await _report_mcp_error(deps, "compose.initialData", _discard_error(ref))
-            return
-        if resolved is None:
-            return  # do not co-embed an unknown source
-        results[ref] = resolved
-
-
-def _discard_error(ref: str, cause: BaseException | None = None) -> RuntimeError:
-    """Builds the observability-hook error for a ref discarded by the overall preresolution deadline (ops)."""
-    detail = f" ({cause})" if cause is not None else ""
-    return RuntimeError(
-        f"Initial-data preresolution discarded (total deadline {PRERESOLVE_TOTAL_TIMEOUT_S}s "
-        f"exceeded before this ref resolved): {ref}{detail}"
-    )
-
-
-async def _resolve_refs_bounded(
-    refs: list[str],
-    deps: McpHostDeps,
-    principal: Principal,
-    *,
-    timeout_s: float,
-    total_timeout_s: float,
-) -> dict[str, TabularData]:
-    """Resolves `refs` with bounded concurrency (PRERESOLVE_CONCURRENCY workers via a Semaphore) subject to an
-    overall wall-clock deadline (`total_timeout_s`), on top of a per-ref timeout (`timeout_s`). Port of TS
-    initial-data.ts's resolveRefsBounded, shared here by _preresolve_initial_data (the `_meta` co-embed) and
-    _snapshot_html_for (the self-contained-snapshot ref set) so a single hung DomainPort dependency can no
-    longer stall either one — previously (§2 #6) _snapshot_html_for resolved refs one at a time with neither a
-    per-ref timeout nor an overall deadline, so one stuck ref stopped render_snapshot from ever returning.
-
-    Once `total_timeout_s` elapses, no further refs are claimed and any still-in-flight resolution's eventual
-    outcome is discarded (see _resolve_ref_bounded). Returns whatever resolved in time; a ref missing from the
-    result is either an unknown source (deliberately not embeddable), a genuine per-ref failure/timeout, or a
-    deadline discard — callers that need to tell these apart pre-filter unknown-source refs before calling this
-    (see _snapshot_html_for).
-    """
-    resolved: dict[str, TabularData] = {}
-    if not refs:
-        return resolved
-    semaphore = asyncio.Semaphore(PRERESOLVE_CONCURRENCY)
-    deadline = _PreresolveDeadline()
-    tasks = [
-        asyncio.ensure_future(
-            _resolve_ref_bounded(ref, deps, principal, semaphore, resolved, deadline, timeout_s)
-        )
-        for ref in refs
-    ]
-    # asyncio.wait (unlike wait_for) does not cancel pending tasks on timeout: any ref still resolving (or
-    # still queued behind the concurrency limit) when the deadline elapses keeps running in the background,
-    # and _resolve_ref_bounded discards its outcome via the `deadline` flag flipped below.
-    _done, pending = await asyncio.wait(tasks, timeout=total_timeout_s)
-    if pending:
-        deadline.exceeded = True
-    return resolved
-
-
-async def _preresolve_initial_data(
-    spec: UISpec, deps: McpHostDeps, principal: Principal
-) -> tuple[dict[str, TabularData], dict[str, TabularData]]:
-    """Preresolve the initial data `{effective ref: TabularData}` co-embedded in the tool result's _meta.
-
-    - Fill each component's initial variant ($ref) across all components first, and fill bind's other variants with the
-      remaining budget (initial display has top priority). What exceeds the budget is not co-embedded (partial embedding).
-    - Refs are resolved with bounded concurrency (_resolve_refs_bounded, PRERESOLVE_CONCURRENCY workers) subject
-      to an overall deadline (PRERESOLVE_TOTAL_TIMEOUT_S), on top of the existing per-ref timeout. The budget
-      above is still applied afterward in the fixed initial-then-secondary order, so which refs end up embedded
-      on overflow does not depend on completion order.
-    - per-ref fail-open: a preresolution failure (or a ref discarded by the overall deadline) skips that ref
-      and reports to on_error (compose stays a success).
-
-    Returns `(data, resolved)`: `data` is the existing budget-trimmed `_meta` co-embedding; `resolved` is the
-    full pre-budget map, returned so a caller that also needs the same Spec's refs resolved for a second
-    purpose (_compose_and_package's legacyUiResource co-emission, via _snapshot_html_for) can reuse this call's
-    domain.invoke results instead of resolving the identical ref set a second time.
-    """
-    initial_refs: list[str] = []
-    secondary_refs: list[str] = []
-    for component in spec.components:
-        if component.data is None:
-            continue
-        initial = parse_query_ref(component.data.ref).raw
-        initial_refs.append(initial)
-        for variant in enumerate_bind_variants(component.data):
-            if variant != initial:
-                secondary_refs.append(variant)
-
-    # Dedup while preserving the initial-then-secondary priority order (the budget loop below walks this same
-    # order), so a ref shared by several components/variants is resolved exactly once regardless of concurrency.
-    ordered_refs: list[str] = []
-    seen_refs: set[str] = set()
-    for ref in [*initial_refs, *secondary_refs]:
-        if ref in seen_refs:
-            continue
-        seen_refs.add(ref)
-        ordered_refs.append(ref)
-
-    resolved = await _resolve_refs_bounded(
-        ordered_refs,
-        deps,
-        principal,
-        timeout_s=PRERESOLVE_TIMEOUT_S,
-        total_timeout_s=PRERESOLVE_TOTAL_TIMEOUT_S,
-    )
-
-    data: dict[str, TabularData] = {}
-    used = 0
-    for ref in ordered_refs:
-        value = resolved.get(ref)
-        if value is None:
-            continue  # failed / timed out / unknown source / cut off by the overall deadline
-        # Measure the budget (cumulative JSON characters) and, once exceeded, co-embed no more (partial embedding).
-        size = len(json.dumps({ref: value.to_wire()}, ensure_ascii=False, separators=(",", ":")))
-        if used + size > INITIAL_DATA_BUDGET_CHARS:
-            break
-        used += size
-        data[ref] = value
-    return data, resolved
-
-
 async def _build_snapshot(
     source: _ComposeSource,
     deps: McpHostDeps,
@@ -1419,7 +1019,10 @@ async def _build_snapshot(
 def _is_resolvable_ref(ref: str, deps: McpHostDeps) -> bool:
     """True when `ref`'s source matches `deps.query_source` (a cheap, I/O-free check mirroring
     _resolve_variant's own None-on-mismatch rule). Used by _snapshot_html_for to separate "not an embedding
-    target" (never an error) from "should have resolved but didn't" (a genuine failure worth raising on)."""
+    target" (never an error) from "should have resolved but didn't" (a genuine failure worth raising on).
+    Calls `split_reserved_params` directly rather than the shared `parse_invokable_ref`: that helper raises
+    on an unknown reserved param, which would turn "not an embedding target" (a ref from an unrelated
+    source, expected and common) into an error here."""
     return split_reserved_params(ref).base.source == deps.query_source
 
 
@@ -1481,8 +1084,13 @@ async def _snapshot_html_for(
             missing,
             deps,
             principal,
-            timeout_s=PRERESOLVE_TIMEOUT_S,
-            total_timeout_s=PRERESOLVE_TOTAL_TIMEOUT_S,
+            # Read from the initial_data module at call time (not imported by value into this module's own
+            # namespace) so a test that patches kohaku.host_mcp.initial_data.PRERESOLVE_*_S -- the module
+            # _resolve_refs_bounded and _preresolve_initial_data actually read -- also bounds this snapshot
+            # path, instead of needing a second, separate patch of this module's own copy. See Minor #7 of
+            # the 2026-09-20 final review.
+            timeout_s=_initial_data.PRERESOLVE_TIMEOUT_S,
+            total_timeout_s=_initial_data.PRERESOLVE_TOTAL_TIMEOUT_S,
         )
         if missing
         else {}
@@ -1517,19 +1125,22 @@ def _to_wire_data(data: object) -> Any:
 
 def _make_intent_handler(
     tool: IntentToolDef,
-    safe_tool: Callable[[str, ServerRequestContext[Any, Any], Callable[[], Awaitable[Any]]], Awaitable[Any]],
-    compose_and_package: Callable[[_ComposeSource, str | None, Principal], Awaitable[Any]],
-    current_principal: Callable[[ServerRequestContext[Any, Any]], Awaitable[Principal]],
-) -> Callable[[ServerRequestContext[Any, Any], JsonObject], Awaitable[Any]]:
+    safe_tool: Callable[
+        [str, ServerRequestContext[Any], Callable[[], Awaitable[mcp_types.CallToolResult]]],
+        Awaitable[mcp_types.CallToolResult],
+    ],
+    compose_and_package: Callable[[_ComposeSource, str | None, Principal], Awaitable[mcp_types.CallToolResult]],
+    current_principal: Callable[[ServerRequestContext[Any]], Awaitable[Principal]],
+) -> Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]:
     """Build the handler for an intent tool (avoids late binding of the loop variable tool)."""
 
-    async def handler(ctx: ServerRequestContext[Any, Any], args: JsonObject) -> Any:
+    async def handler(ctx: ServerRequestContext[Any], args: JsonObject) -> mcp_types.CallToolResult:
         # Pull the shared language input out before it reaches the intent params (ObjectSchema.parse
         # would silently strip it anyway, but the canonical intent must never see it).
         locale = _locale_of(args)
         params = {key: value for key, value in args.items() if key != "locale"}
 
-        async def _run() -> Any:
+        async def _run() -> mcp_types.CallToolResult:
             principal = await current_principal(ctx)
             return await compose_and_package(_IntentSource(intent=tool.to_intent(params)), locale, principal)
 

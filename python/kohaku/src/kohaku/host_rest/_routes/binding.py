@@ -5,13 +5,11 @@ Split out of the former monolithic `_fastapi_routes.py` to mirror packages/host-
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
-from kohaku.data_binding import assert_known_reserved_params, split_reserved_params
+from kohaku.host_core import ParsedInvokableRefOk, apply_action_effects, parse_invokable_ref
 from kohaku.spec import InvocationContext, Principal, QueryRefError, VerifyRequest, VerifyResult
 
 from ..bodies import parse_action_body
@@ -62,14 +60,19 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return _error(
                 "CAPABILITY_REQUIRED", "Authorization: Bearer <capability> is required", 401
             )
+        # Server-side paging/sorting: parse ref into base (with reserved params removed) and reserved via
+        # host_core's parse_invokable_ref (shared with the MCP profile's resolve_binding tool / initial-data
+        # preresolution). Capability verification is an exact match against base.raw (= the canonical form of
+        # the $ref the Spec declared). Only known reserved-param keys (_cursor/_limit/_sort/_dir) are allowed —
+        # since the reserved namespace is outside authorization checks, passing an unknown `_` key through would
+        # let the data range be changed with parameters outside the capability.
         try:
-            split = split_reserved_params(ref_param)
-            assert_known_reserved_params(split.reserved)
+            parsed = parse_invokable_ref(ref_param, deps.query_source)
         except (QueryRefError, ValueError) as e:
             return _error("BAD_REQUEST", _message(e), 400)
-        base, reserved = split.base, split.reserved
-        if base.source != deps.query_source:
-            return _error("SOURCE_MISMATCH", f'unknown query source "{base.source}"', 404)
+        if not isinstance(parsed, ParsedInvokableRefOk):
+            return _error("SOURCE_MISMATCH", f'unknown query source "{parsed.source}"', 404)
+        base, params = parsed.ref.base, parsed.ref.params
         verdict = await deps.authz.verify(token, VerifyRequest(kind="read", ref=base.raw))
         if not verdict.ok:
             return _error("CAPABILITY_DENIED", verdict.reason or "capability denied", 403)
@@ -79,7 +82,7 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         try:
             data = await deps.domain.invoke(
                 base.path,
-                {**base.params, **reserved},
+                params,
                 InvocationContext(principal=principal, capability=token),
             )
             return _json(data)
@@ -120,18 +123,14 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             request_id = request_id_of(request, deps)
             await report_host_error(deps, "binding/action", request_id, e)
             return _error("REF_NOT_FOUND", _REF_NOT_FOUND_MESSAGE, 404, request_id)
-        # The write is already committed. Do not make an action_effects (side-effect declaration) failure look
-        # like the committed write failing: swallow effects individually, report the failure to the observation hook,
-        # and return only {result} (the effects-omitted backward-compatible shape). Failing the whole thing here could
-        # duplicate a non-idempotent write on client retry.
-        resp: dict[str, Any] = {"result": result}
-        if deps.action_effects is not None:
-            try:
-                effects = await deps.action_effects(body.action, payload, result)
-                if effects.invalidates is not None:
-                    resp["invalidates"] = effects.invalidates
-                if effects.refVersions is not None:
-                    resp["refVersions"] = effects.refVersions
-            except BaseException as e:
-                await report_host_error(deps, "binding/action", request_id_of(request, deps), e)
-        return _json(resp)
+        # Write-already-committed vs. side-effect-declaration failure: see host_core's apply_action_effects.
+        # wide_catch=True preserves REST's pre-branch `except BaseException` at this call site.
+        response = await apply_action_effects(
+            deps.action_effects,
+            body.action,
+            payload,
+            result,
+            lambda e: report_host_error(deps, "binding/action", request_id_of(request, deps), e),
+            wide_catch=True,
+        )
+        return _json(response)

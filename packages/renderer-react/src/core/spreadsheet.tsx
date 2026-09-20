@@ -1,16 +1,14 @@
 import {
   applyLocalView,
-  type CellCoercion,
   cellDraft,
   chartTableStyle,
-  coerceCellInput,
-  commitCellEdit,
   describeSortHeader,
   effectiveRows,
   formatCell,
   hasDeclaredEvent,
   isActivationKey,
   localFooterTotal,
+  planCellEdit,
   type RowsWorkingCopy,
   resolveColumns,
   rowKey,
@@ -135,28 +133,20 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
   }, [editing]);
 
   const commitEdit = (rowIndex: number, col: TabularColumn, raw: string): void => {
-    const coercion: CellCoercion = coerceCellInput(raw, col);
-    if (!coercion.ok) {
-      setEditing({ rowIndex, column: col.key, invalid: true });
-      return;
+    const plan = planCellEdit({ rows, copy, rowIndex, col, raw });
+    switch (plan.kind) {
+      case "invalid":
+        setEditing({ rowIndex, column: col.key, invalid: true });
+        return;
+      case "close":
+        setEditing(undefined); // vanished row, or unchanged value: close without emitting cellEdit
+        return;
+      case "commit":
+        setCopy(plan.copy);
+        setEditing(undefined);
+        void invokeCellEdit("cellEdit", plan.runtime as unknown as JsonObject);
+        return;
     }
-    const row = displayRows[rowIndex];
-    if (row == null) {
-      setEditing(undefined);
-      return;
-    }
-    const previousValue = row[col.key] ?? null;
-    if (coercion.value === previousValue) {
-      setEditing(undefined); // unchanged: close without emitting cellEdit
-      return;
-    }
-    setCopy((prev) => commitCellEdit(prev, rows, rowIndex, col.key, coercion.value));
-    setEditing(undefined);
-    const runtime: SpreadsheetCellEditRuntime = {
-      row,
-      value: { column: col.key, value: coercion.value, previousValue, rowIndex },
-    };
-    void invokeCellEdit("cellEdit", runtime as unknown as JsonObject);
   };
 
   if (state.status !== "ready") return <DataStateNotice state={state} />;

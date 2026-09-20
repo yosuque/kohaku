@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from kohaku.composer import ComposeContext, ComposePolicy
 from kohaku.host_core import WriteScopeDroppedError
@@ -705,6 +706,98 @@ def test_promotions_preview(tmp_path: Path) -> None:
         headers={"authorization": f"Bearer {preview['capability']}"},
     )
     assert resolved.status_code == 200
+
+
+def test_promotion_routes_governance_artifact_id_matches_url(tmp_path: Path) -> None:
+    """Task-7 fold regression (orchestrator-c fix round 1, finding 1): each route's *blanket*
+    require_governance call must carry the same GovernanceOperation.artifactId it carried before the guard
+    preamble was folded into _enter_promotion_route -- the route's own real artifact id for the six
+    artifact-scoped routes, None for the three that have none. Before the fix, folding gave `get`, `preview`,
+    `approve`, `withdraw` and `actions` an artifactId of None on this call (only `reject`'s was correct)."""
+    recorded: list[tuple[str, str | None]] = []
+
+    def _record(principal: Principal, operation: GovernanceOperation, tenant: str | None) -> bool:
+        recorded.append((operation.kind, operation.artifactId))
+        return True
+
+    harness = build_harness(tmp_path, authorize_governance=_record)
+    _seed_generated(harness, "art-gov")
+
+    cases: list[tuple[str, str, dict[str, Any] | None, str, str | None]] = [
+        ("GET", "/promotions", None, "promotion.list", None),
+        ("POST", "/promotions/reconcile", None, "promotion.reconcile", None),
+        ("POST", "/promotions/evaluate", None, "promotion.evaluate", None),
+        ("GET", "/promotions/art-gov", None, "promotion.get", "art-gov"),
+        ("POST", "/promotions/art-gov/preview", None, "promotion.preview", "art-gov"),
+        ("POST", "/promotions/art-gov/approve", {"draft": _DRAFT}, "promotion.approve", "art-gov"),
+        ("POST", "/promotions/art-gov/reject", None, "promotion.reject", "art-gov"),
+        ("POST", "/promotions/art-gov/withdraw", None, "promotion.withdraw", "art-gov"),
+        ("POST", "/promotions/art-gov/actions", {"action": {"kind": "nominate"}}, "promotion.act", "art-gov"),
+    ]
+
+    for method, path, body, expected_kind, expected_artifact_id in cases:
+        recorded.clear()
+        if method == "GET":
+            harness.client.get(_url(path))
+        else:
+            harness.client.post(_url(path), json=body)
+        assert recorded, f"{path} never reached require_governance"
+        blanket_kind, blanket_artifact_id = recorded[0]
+        assert blanket_kind == expected_kind, f"{path}: kind {blanket_kind!r} != {expected_kind!r}"
+        assert blanket_artifact_id == expected_artifact_id, (
+            f"{path}: artifactId {blanket_artifact_id!r} != {expected_artifact_id!r}"
+        )
+
+
+def test_promotion_routes_auth_and_tenant_call_profile(tmp_path: Path) -> None:
+    """Task-7 fold regression (orchestrator-c fix round 1, finding 2): each route must invoke deps.auth /
+    deps.tenant exactly as many times as it did before the guard preamble was folded into
+    _enter_promotion_route. Governance is left unwired so require_governance's own internal auth/tenant
+    resolution (unchanged, pre-existing behavior whenever authorize_governance is wired) never fires here,
+    isolating the counts to each route's own explicit resolution -- the part the fold touched. Before the
+    fix, `list`/`get` gained a spurious auth call, `reconcile` gained an auth+tenant call, and `preview`'s
+    conditional auth call became unconditional."""
+    auth_calls = 0
+    tenant_calls = 0
+
+    def _auth(_request: Request) -> Principal:
+        nonlocal auth_calls
+        auth_calls += 1
+        return Principal(id="demo-user", roles=["user"])
+
+    def _tenant(_request: Request) -> str | None:
+        nonlocal tenant_calls
+        tenant_calls += 1
+        return None
+
+    harness = build_harness(tmp_path, auth=_auth, tenant=_tenant)
+    _seed_generated(harness, "art-cnt")
+    _seed_generated(harness, "art-cnt-preview", with_preview=True)
+
+    cases: list[tuple[str, str, dict[str, Any] | None, int, int]] = [
+        ("GET", "/promotions", None, 0, 1),
+        ("POST", "/promotions/reconcile", None, 0, 0),
+        ("POST", "/promotions/evaluate", None, 0, 1),
+        ("GET", "/promotions/art-cnt", None, 0, 1),
+        # No html/sha256 recorded -> the 404 short-circuit fires before the ref-gated principal resolution.
+        ("POST", "/promotions/art-cnt/preview", None, 0, 1),
+        # Has a ref -> the principal is resolved exactly once, at its original (conditional) call site.
+        ("POST", "/promotions/art-cnt-preview/preview", None, 1, 1),
+        ("POST", "/promotions/art-cnt/approve", {"draft": _DRAFT}, 1, 1),
+        ("POST", "/promotions/art-cnt/reject", None, 1, 1),
+        ("POST", "/promotions/art-cnt/withdraw", None, 1, 1),
+        ("POST", "/promotions/art-cnt/actions", {"action": {"kind": "nominate"}}, 1, 1),
+    ]
+
+    for method, path, body, expected_auth, expected_tenant in cases:
+        auth_calls = 0
+        tenant_calls = 0
+        if method == "GET":
+            harness.client.get(_url(path))
+        else:
+            harness.client.post(_url(path), json=body)
+        assert auth_calls == expected_auth, f"{path}: auth calls {auth_calls} != {expected_auth}"
+        assert tenant_calls == expected_tenant, f"{path}: tenant calls {tenant_calls} != {expected_tenant}"
 
 
 # --- Fixation (L1->L0) ------------------------------------------------------

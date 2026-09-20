@@ -25,14 +25,14 @@ jobs:
       contents: write # push changeset-release/main; create the draft release
       pull-requests: write # open / update the version pull request
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # changeset status and the tag lookup below need history and tags
       # No `version:` input here: package.json's `packageManager` field is the single source of
       # truth for the pnpm version, and specifying both makes action-setup fail outright with
       # "Multiple versions of pnpm specified".
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -45,7 +45,7 @@ jobs:
       # Requires Settings > Actions > General > "Allow GitHub Actions to create and approve pull
       # requests" (the run after PR #9 failed exactly there).
       - id: changesets
-        uses: changesets/action@v2
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           version-script: pnpm run version
           commit-message: "chore(release): version packages"
@@ -83,30 +83,39 @@ jobs:
           echo "create=true" >> "$GITHUB_OUTPUT"
       - name: Generate the release notes from the package CHANGELOGs
         if: steps.detect.outputs.create == 'true'
-        run: node scripts/release-notes.mjs "${{ steps.detect.outputs.version }}" > "$RUNNER_TEMP/release-notes.md"
+        env:
+          VERSION: ${{ steps.detect.outputs.version }}
+        run: node scripts/release-notes.mjs "$VERSION" > "$RUNNER_TEMP/release-notes.md"
       # `--target` is this push's merge commit, so the tag GitHub creates on publish points at exactly
       # the tree the version PR produced, even if main moves on before anyone publishes.
       - name: Create the draft release
         if: steps.detect.outputs.create == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.detect.outputs.tag }}
         run: |
-          gh release create "${{ steps.detect.outputs.tag }}" \
+          gh release create "$TAG" \
             --draft \
             --target "$GITHUB_SHA" \
-            --title "${{ steps.detect.outputs.tag }}" \
+            --title "$TAG" \
             --notes-file "$RUNNER_TEMP/release-notes.md"
       - name: Summary
         if: always()
+        env:
+          HAS_CHANGESETS: ${{ steps.changesets.outputs.has-changesets }}
+          PR_NUMBER: ${{ steps.changesets.outputs.pr-number }}
+          CREATE: ${{ steps.detect.outputs.create }}
+          TAG: ${{ steps.detect.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           {
             echo "## Version"
-            if [ "${{ steps.changesets.outputs.has-changesets }}" = "true" ]; then
-              echo "- Changesets pending: version pull request #${{ steps.changesets.outputs.pr-number }} created or updated."
-            elif [ "${{ steps.detect.outputs.create }}" = "true" ]; then
-              echo "- Draft release **${{ steps.detect.outputs.tag }}** created: https://github.com/${{ github.repository }}/releases/tag/${{ steps.detect.outputs.tag }}"
+            if [ "$HAS_CHANGESETS" = "true" ]; then
+              echo "- Changesets pending: version pull request #${PR_NUMBER} created or updated."
+            elif [ "$CREATE" = "true" ]; then
+              echo "- Draft release **${TAG}** created: https://github.com/${REPOSITORY}/releases/tag/${TAG}"
               echo "- Next: run the dry run (Release workflow, dry_run=true), then publish the draft. See docs/runbooks/release.md."
             else
-              echo "- No changesets pending and ${{ steps.detect.outputs.tag || 'the current version' }} is already tagged/released: nothing to do."
+              echo "- No changesets pending and ${TAG:-the current version} is already tagged/released: nothing to do."
             fi
           } >> "$GITHUB_STEP_SUMMARY"

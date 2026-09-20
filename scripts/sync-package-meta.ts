@@ -103,7 +103,10 @@ for (const dir of PUBLISHED_DIRS) {
   // example Spec that the conformance suite reads at run time through a path relative to its own
   // module (which is why its build output is flat under dist/, not dist/conformance/).
   const extraFiles = dir === "spec" ? ["examples", "schemas", "SPEC.md", "SPEC.ja.md"] : [];
-  setField(manifest, "files", ["dist", ...extraFiles, "LICENSE", "README.md"]);
+  // Changesets writes CHANGELOG.md into a package once it has shipped a released version (0.1.1
+  // on), so it is listed here too; a package that has no CHANGELOG.md yet on disk simply has
+  // nothing there to pack — `files` entries that don't exist are silently skipped, not an error.
+  setField(manifest, "files", ["dist", ...extraFiles, "LICENSE", "README.md", "CHANGELOG.md"]);
 
   const publishConfig = (manifest["publishConfig"] as Json | undefined) ?? {};
   publishConfig["access"] = "public";

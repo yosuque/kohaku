@@ -12,7 +12,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import { assembleSpec, cacheLabelOf, postAndValidate, shouldPersist } from "./assemble.js";
 import { COMPOSER_ID } from "./constants.js";
-import type { ComposeContext, ComposePolicy, FixedSpecSource } from "./context.js";
+import type { ComposeContext, ComposeErrorContext, ComposePolicy, FixedSpecSource } from "./context.js";
 import { policyFingerprint, resolveEntryContext, tierLlmFingerprintMaterial } from "./context.js";
 import { ComposeError } from "./errors.js";
 import { buildFallbackSpec } from "./fallback.js";
@@ -24,6 +24,7 @@ import { runTierGeneration, type TierOutcome } from "./tier-ladder.js";
 import { buildL1GenerationSchema } from "./tiers/l1-generate.js";
 import type { ComposeAttempt, ComposeTrace, TraceBase, TraceContext } from "./trace.js";
 import { buildComposeTrace } from "./trace.js";
+import { traceIdentity } from "./trace-identity.js";
 
 // COMPOSER_ID is defined in constants.js (a leaf module) and re-exported here so it stays resolvable
 // from both "./index.js" and "./compose.js".
@@ -174,8 +175,7 @@ export async function compose(
       {
         phase: "hard",
         input: toTraceInput(input),
-        ...(opts.correlationId != null ? { correlationId: opts.correlationId } : {}),
-        ...(opts.traceContext != null ? { traceContext: opts.traceContext } : {}),
+        ...traceIdentity(opts),
       },
       e,
     );
@@ -229,8 +229,7 @@ export async function prepareCompose(
     refs: refs.uris,
     dataVersion: refs.dataVersion,
     cacheKey: key,
-    ...(opts.correlationId != null ? { correlationId: opts.correlationId } : {}),
-    ...(opts.traceContext != null ? { traceContext: opts.traceContext } : {}),
+    ...traceIdentity(opts),
   };
 
   // 4. Cache lookup (only when cacheMode==="default")
@@ -275,11 +274,29 @@ export async function prepareCompose(
 }
 
 /**
- * Fail-open wrapper around ctx.storage.getSpecCache: a thrown error is reported to observer.onError
- * (phase "cache") and treated as a cache miss, so a cache-backend outage does not turn every compose
- * into a hard failure after a successful generation. policy.cacheFailure === "closed" opts back into
- * rethrowing the original error instead.
+ * Shared fail-open template for the Spec cache: runs fn(), and on a thrown error reports it to
+ * observer.onError (phase "cache") and returns fallback instead of propagating, so a cache-backend
+ * outage does not turn every compose into a hard failure after a successful generation (or lookup).
+ * policy.cacheFailure === "closed" opts back into rethrowing the original error instead. Shared by
+ * getSpecCacheSafely (fallback null) and putSpecCacheSafely (fallback undefined).
  */
+async function withCacheFailOpen<T>(
+  ctx: ComposeContext,
+  policy: ComposePolicy,
+  errCtx: Omit<ComposeErrorContext, "phase">,
+  fn: () => Promise<T>,
+  fallback: T,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    reportComposeError(ctx, { phase: "cache", ...errCtx }, e);
+    if (policy.cacheFailure === "closed") throw e;
+    return fallback;
+  }
+}
+
+/** Fail-open ctx.storage.getSpecCache (treats a failure as a cache miss); see withCacheFailOpen. */
 async function getSpecCacheSafely(
   ctx: ComposeContext,
   policy: ComposePolicy,
@@ -287,55 +304,33 @@ async function getSpecCacheSafely(
   intent: CanonicalIntent,
   key: string,
 ): Promise<UISpec | null> {
-  try {
-    return await ctx.storage.getSpecCache(key);
-  } catch (e) {
-    reportComposeError(
-      ctx,
-      {
-        phase: "cache",
-        input: traceBase.input,
-        intent,
-        cacheKey: key,
-        ...(traceBase.correlationId != null ? { correlationId: traceBase.correlationId } : {}),
-        ...(traceBase.traceContext != null ? { traceContext: traceBase.traceContext } : {}),
-      },
-      e,
-    );
-    if (policy.cacheFailure === "closed") throw e;
-    return null;
-  }
+  return withCacheFailOpen(
+    ctx,
+    policy,
+    { input: traceBase.input, intent, cacheKey: key, ...traceIdentity(traceBase) },
+    () => ctx.storage.getSpecCache(key),
+    null,
+  );
 }
 
-/**
- * Fail-open wrapper around ctx.storage.putSpecCache, mirroring getSpecCacheSafely: a thrown error is
- * reported (phase "cache") and swallowed (the Spec was already generated and is still delivered), unless
- * policy.cacheFailure === "closed", in which case it rethrows.
- */
+/** Fail-open ctx.storage.putSpecCache (the Spec is still delivered on failure); see withCacheFailOpen. */
 async function putSpecCacheSafely(
   ctx: ComposeContext,
   prepared: PreparedCompose,
   spec: UISpec,
 ): Promise<void> {
-  try {
-    await ctx.storage.putSpecCache(prepared.key, spec, prepared.policy.ttlSeconds);
-  } catch (e) {
-    reportComposeError(
-      ctx,
-      {
-        phase: "cache",
-        input: prepared.traceBase.input,
-        intent: prepared.intent,
-        cacheKey: prepared.key,
-        ...(prepared.traceBase.correlationId != null
-          ? { correlationId: prepared.traceBase.correlationId }
-          : {}),
-        ...(prepared.traceBase.traceContext != null ? { traceContext: prepared.traceBase.traceContext } : {}),
-      },
-      e,
-    );
-    if (prepared.policy.cacheFailure === "closed") throw e;
-  }
+  await withCacheFailOpen(
+    ctx,
+    prepared.policy,
+    {
+      input: prepared.traceBase.input,
+      intent: prepared.intent,
+      cacheKey: prepared.key,
+      ...traceIdentity(prepared.traceBase),
+    },
+    () => ctx.storage.putSpecCache(prepared.key, spec, prepared.policy.ttlSeconds),
+    undefined,
+  );
 }
 
 /**
@@ -434,8 +429,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
       tier: outcome.from,
       reason: outcome.reason,
       ...(outcome.budgetExceeded ? { budgetExceeded: true } : {}),
-      ...(traceBase.correlationId != null ? { correlationId: traceBase.correlationId } : {}),
-      ...(traceBase.traceContext != null ? { traceContext: traceBase.traceContext } : {}),
+      ...traceIdentity(traceBase),
     },
     undefined,
   );

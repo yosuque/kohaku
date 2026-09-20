@@ -168,6 +168,12 @@ export function domApplierMain(config: DomApplierConfig): void {
   const allowedStyleProps = new Set(config.allowlist.styleProps);
   const allowedPropertyOps = new Set(config.allowlist.propertyOps);
 
+  // "#text" acceptance here is intentional and NOT a gap relative to spec-core's own isTagAllowed (which
+  // deliberately excludes it): text nodes are created by the applier itself (see the "c" op's
+  // `tag === "#text"` branch below), never named by generated markup arriving from the Worker, so there is
+  // nothing for spec-core's predicate to allow. See packages/spec-core/test/fixtures/sandbox-allowlist-
+  // vectors.ts (H10) for the shared vector table that pins this as the one documented divergence between
+  // the two allow-lists.
   function isTagAllowed(tag: string): boolean {
     return tag === "#text" || allowedTags.has(tag.toLowerCase());
   }

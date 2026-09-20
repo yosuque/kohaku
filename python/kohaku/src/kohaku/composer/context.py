@@ -179,14 +179,106 @@ def _kit_fingerprint_material(kit: DesignKitVocabulary) -> dict[str, object]:
     }
 
 
+def _fp_output_language(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
+) -> object:
+    return policy.outputLanguage
+
+
+def _fp_design_system(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
+) -> object:
+    design_system = policy.designSystem
+    if design_system is None:
+        return None
+    return {
+        "tokens": design_system.tokens,
+        "guidelines": design_system.guidelines,
+        "enforceTokenColors": design_system.enforceTokenColors,
+        # Folded in only when non-default, and as an ABSENT key (UNDEFINED) rather than an
+        # explicit None — see policy_fingerprint's own docstring for why. UNDEFINED is the only
+        # value that reproduces the pre-existing byte layout exactly for every design-system
+        # policy that never touches either field.
+        "kit": (
+            _kit_fingerprint_material(design_system.kit)
+            if design_system.kit is not None
+            else UNDEFINED
+        ),
+        "enforceKitClasses": (False if design_system.enforceKitClasses is False else UNDEFINED),
+    }
+
+
+def _fp_few_shot_id(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+    few_shot = policy.fewShot
+    if few_shot is None:
+        return None
+    return few_shot.id if few_shot.id is not None else "anonymous"
+
+
+def _fp_select_components_id(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
+) -> object:
+    select_components = policy.selectComponents
+    if select_components is None:
+        return None
+    return getattr(select_components, "id", None) or "anonymous"
+
+
+def _fp_ref_constraint(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+    return "validate" if policy.refConstraint == "validate" else None
+
+
+def _fp_effort(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+    effort = policy.effort
+    if effort is None:
+        return None
+    return {"l1": effort.l1, "l2": effort.l2}
+
+
+def _fp_tier_llm(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+    if tier_llm is None:
+        return None
+    return {
+        "l1": (
+            {"provider": tier_llm.l1.provider, "modelId": tier_llm.l1.model_id}
+            if tier_llm.l1 is not None
+            else None
+        ),
+        "l2": (
+            {"provider": tier_llm.l2.provider, "modelId": tier_llm.l2.model_id}
+            if tier_llm.l2 is not None
+            else None
+        ),
+    }
+
+
+_FINGERPRINTED: list[
+    tuple[str, Callable[[ComposePolicy, TierLlmFingerprintMaterial | None], object]]
+] = [
+    ("outputLanguage", _fp_output_language),
+    ("designSystem", _fp_design_system),
+    ("fewShotId", _fp_few_shot_id),
+    ("selectComponentsId", _fp_select_components_id),
+    ("refConstraint", _fp_ref_constraint),
+    ("effort", _fp_effort),
+    ("tierLlm", _fp_tier_llm),
+]
+"""Ordered table of (material key, extractor) driving policy_fingerprint(). One row per
+ComposePolicy field that changes prompt content but was, until now, only enforced by the
+operational convention of bumping generatorVersion by hand. Each extractor returns None when
+its field contributes nothing (unset / default), and every row's key is always emitted into
+`material` — including a None value — so the shape of the fingerprinted JSON is stable
+regardless of which fields are set. Add a new row here (and, if needed, a new extractor above)
+to fingerprint another field; do not hand-sync a guard condition and a dict literal separately."""
+
+
 def policy_fingerprint(
     policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None = None
 ) -> str:
     """Canonical fingerprint (16 hex characters) of the ComposePolicy fields that change prompt content but
-    were, until now, only enforced by the operational convention of bumping generatorVersion by hand
-    (outputLanguage / designSystem / fewShot's supply source / selectComponents' narrowing function).
-    prepare_compose feeds the result into cache_key() as the 7th component (port of TS composer/
-    context.ts's policyFingerprint).
+    were, until now, only enforced by the operational convention of bumping generatorVersion by hand.
+    Driven by the `_FINGERPRINTED` table (one row per field); prepare_compose feeds the result into
+    cache_key() as the 7th component (port of TS composer/context.ts's policyFingerprint).
 
     **Returns the empty string when none of the fields are set to a non-default value** — cache_key()
     treats an empty policyFingerprint exactly like an omitted one, so a policy that never touches these
@@ -227,72 +319,9 @@ def policy_fingerprint(
     e.g. DesignSystemGuide.enforceTokenColors defaults to True in Python vs. unset (None) in TS. Only the
     empty-string-iff-nothing-set invariant is a cross-language contract.
     """
-    output_language = policy.outputLanguage
-    design_system = policy.designSystem
-    few_shot = policy.fewShot
-    select_components = policy.selectComponents
-    effort = policy.effort
-    has_non_default_ref_constraint = policy.refConstraint == "validate"
-    has_effort = effort is not None
-    has_tier_llm = tier_llm is not None
-    if (
-        output_language is None
-        and design_system is None
-        and few_shot is None
-        and select_components is None
-        and not has_non_default_ref_constraint
-        and not has_effort
-        and not has_tier_llm
-    ):
+    material: dict[str, object] = {key: extract(policy, tier_llm) for key, extract in _FINGERPRINTED}
+    if all(v is None for v in material.values()):
         return ""
-    material: dict[str, object] = {
-        "outputLanguage": output_language,
-        "designSystem": (
-            {
-                "tokens": design_system.tokens,
-                "guidelines": design_system.guidelines,
-                "enforceTokenColors": design_system.enforceTokenColors,
-                # Folded in only when non-default, and as an ABSENT key (UNDEFINED) rather than an
-                # explicit None — see this function's own docstring for why. UNDEFINED is the only value
-                # that reproduces the pre-existing byte layout exactly for every design-system policy that
-                # never touches either field.
-                "kit": (
-                    _kit_fingerprint_material(design_system.kit)
-                    if design_system.kit is not None
-                    else UNDEFINED
-                ),
-                "enforceKitClasses": (
-                    False if design_system.enforceKitClasses is False else UNDEFINED
-                ),
-            }
-            if design_system is not None
-            else None
-        ),
-        "fewShotId": (
-            (few_shot.id if few_shot.id is not None else "anonymous") if few_shot is not None else None
-        ),
-        "selectComponentsId": (
-            (getattr(select_components, "id", None) or "anonymous") if select_components is not None else None
-        ),
-        "refConstraint": "validate" if has_non_default_ref_constraint else None,
-        "effort": {"l1": effort.l1, "l2": effort.l2} if effort is not None else None,
-        "tierLlm": (
-            {
-                "l1": (
-                    {"provider": tier_llm.l1.provider, "modelId": tier_llm.l1.model_id}
-                    if tier_llm.l1 is not None
-                    else None
-                ),
-                "l2": (
-                    {"provider": tier_llm.l2.provider, "modelId": tier_llm.l2.model_id}
-                    if tier_llm.l2 is not None
-                    else None
-                ),
-            }
-            if tier_llm is not None
-            else None
-        ),
-    }
     return sha256_hex(canonical_stringify(material))[:16]
 
 

@@ -220,30 +220,28 @@ async function composeAndAudit(
 ): Promise<ComposeResult> {
   const result = await composeForTool(ctx, input, options);
   if (options?.afterCompose != null) await options.afterCompose(result);
-  // The audit record prioritizes delivery availability and is fail-open: a recording failure is swallowed
-  // so it does not drag down UI delivery (including a cached Spec), and the failure is reported to the observation
-  // hook (onError) while the result returns normally. Built on host-core's failOpen (the shared fail-open
-  // building block, also consumed by the REST profile's safeRecord).
-  // A cancelled compose (the caller's abort fired) is not a generation failure and observer.onError already
-  // received phase:"cancelled" from the composer — skip the audit record so a client disconnect/timeout does not
-  // inflate audit counts (parity with the REST profile's deliverComposed/finishStream guard).
-  if (result.trace.cancelled !== true) {
-    await hostCore.failOpen(
-      async () => {
-        if (ctx.deps.recorder != null) {
-          await ctx.deps.recorder.composed({
-            spec: result.spec,
-            trace: result.trace,
-            surface: MCP_APP_SURFACE,
-          });
-          await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, { surface: MCP_APP_SURFACE });
-        } else {
-          await ctx.deps.onComposed?.(result.spec, result.trace);
-        }
-      },
-      (e) => reportMcpError(ctx.deps, endpoint, e),
-    );
-  }
+  // The audit record is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the REST
+  // profile's deliverComposed/finishStream): a recording failure is swallowed so it does not drag down UI
+  // delivery (including a cached Spec), and the failure is reported to the observation hook (onError) while
+  // the result returns normally. A cancelled compose (the caller's abort fired) is not a generation failure
+  // and observer.onError already received phase:"cancelled" from the composer — recordComposedResult skips
+  // the audit record so a client disconnect/timeout does not inflate audit counts.
+  await hostCore.recordComposedResult(
+    result,
+    async () => {
+      if (ctx.deps.recorder != null) {
+        await ctx.deps.recorder.composed({
+          spec: result.spec,
+          trace: result.trace,
+          surface: MCP_APP_SURFACE,
+        });
+        await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, { surface: MCP_APP_SURFACE });
+      } else {
+        await ctx.deps.onComposed?.(result.spec, result.trace);
+      }
+    },
+    (e) => reportMcpError(ctx.deps, endpoint, e),
+  );
   return result;
 }
 
@@ -263,34 +261,24 @@ async function composeAndPackage(
   const result = await composeAndAudit(ctx, input, "compose", {
     ...callCtx,
     afterCompose: async (composed) => {
-      // host-core's issueCapabilityForSpec applies the scope-collection rule (SPEC §5 A1; collectCapabilityScopes
-      // is the single source of truth), shared with the REST profile so both profiles agree on the issuance rule.
-      // Without read enumeration of bind variants, a bind switch (state.set → effective ref re-resolution) is
-      // rejected by resolve_binding's verify (exact match) and the A1 cross-filter fails on the MCP surface only.
-      // Without write, ${prefix}_action's verify (write) does not pass, and form submission /
-      // action.button always returns 403 on the MCP surface.
+      // host-core's issueSpecCapabilitySafely applies the scope-collection rule (SPEC §5 A1;
+      // collectCapabilityScopes is the single source of truth), shared with the REST profile so both profiles
+      // agree on the issuance rule. Without read enumeration of bind variants, a bind switch (state.set →
+      // effective ref re-resolution) is rejected by resolve_binding's verify (exact match) and the A1
+      // cross-filter fails on the MCP surface only. Without write, ${prefix}_action's verify (write) does not
+      // pass, and form submission / action.button always returns 403 on the MCP surface.
       //
       // Write scopes are additionally restricted to DomainPort.listOperations() names (hardening against a
       // hallucinated/injected action.invoke action name becoming a bearer write scope), symmetric with the
-      // REST profile's issueCapabilityForSpec wrapper. If listOperations rejects, fall back to an empty allowed
-      // set (fail-closed for writes; delivery proceeds).
-      let allowed: ReadonlySet<string>;
-      try {
-        allowed = await ctx.allowedActions();
-      } catch (e) {
-        await reportMcpError(ctx.deps, "compose.capability", e);
-        allowed = new Set();
-      }
-      capability = await hostCore.issueCapabilityForSpec(
+      // REST profile's issueSpecCapability wrapper. If listOperations rejects, issueSpecCapabilitySafely falls
+      // back to an empty allowed set (fail-closed for writes; delivery proceeds) and reports the rejection.
+      capability = await hostCore.issueSpecCapabilitySafely(
         ctx.deps.authz,
         ctx.principal,
         composed.spec,
+        ctx.allowedActions,
+        (e) => reportMcpError(ctx.deps, "compose.capability", e),
         undefined,
-        {
-          allowedActions: allowed,
-          onDroppedAction: (action) =>
-            void reportMcpError(ctx.deps, "compose.capability", new hostCore.WriteScopeDroppedError(action)),
-        },
       );
     },
   });
@@ -393,7 +381,7 @@ function startComposeTask(
     })
     .catch((e) => {
       void reportMcpError(ctx.deps, "tasks.compose", e);
-      ctx.tasks.fail(taskId, { message: e instanceof Error ? e.message : String(e) });
+      ctx.tasks.fail(taskId, { message: hostCore.errorMessage(e) });
     });
   return createTaskResult(task);
 }
@@ -1090,11 +1078,7 @@ async function safeTool<T extends object>(
     // observation hook before converting it to a tool error, rather than leaving the failure rate inferable only via the
     // isError response to the model.
     await reportMcpError(deps, endpoint, e);
-    const clientMessage = hostCore.isTypedHostError(e)
-      ? e instanceof Error
-        ? e.message
-        : String(e)
-      : TOOL_INTERNAL_ERROR_MESSAGE;
+    const clientMessage = hostCore.clientMessageFor(e, TOOL_INTERNAL_ERROR_MESSAGE);
     return toolError(clientMessage);
   }
 }

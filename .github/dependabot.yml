@@ -4,7 +4,7 @@
 #   - npm:            the pnpm workspace (packages/*, apps/*, cli, spec — see pnpm-workspace.yaml).
 #   - uv:              the Python port workspace under /python (python/pyproject.toml +
 #                      python/kohaku/pyproject.toml + python/examples/sales-api/pyproject.toml).
-#   - github-actions:  every workflow under .github/workflows/ (ci.yml, release.yml, version.yml).
+#   - github-actions:  every workflow under .github/workflows/ (ci.yml, release.yml, version.yml, codeql.yml).
 #
 # --- Catalog caveat (read before "fixing" a stalled npm PR) ---------------------------------------------
 # Most TS dependency versions are centralized in pnpm-workspace.yaml's `catalog:` block (typescript, zod,

@@ -11,6 +11,7 @@ import {
   formatCell,
   localFooterTotal,
   nextSortState,
+  planCellEdit,
   type RowsWorkingCopy,
   rowKey,
   SPREADSHEET_HARD_ROW_CAP,
@@ -274,5 +275,66 @@ describe("commitCellEdit / effectiveRows", () => {
     // commitCellEdit itself also starts a fresh copy rather than reusing the stale one
     const freshCopy = commitCellEdit(copy, freshRows, 0, "revenue", 5);
     expect(effectiveRows(freshRows, freshCopy)[0]).toEqual({ region: "japan", revenue: 5 });
+  });
+});
+
+describe("planCellEdit", () => {
+  const rows: JsonObject[] = [
+    { region: "japan", revenue: 1 },
+    { region: "us", revenue: 2 },
+  ];
+
+  it("a failed coercion plans 'invalid' (keep editing, no copy/commit change)", () => {
+    const plan = planCellEdit({ rows, copy: undefined, rowIndex: 0, col: numCol, raw: "abc" });
+    expect(plan).toEqual({ kind: "invalid" });
+  });
+
+  it("a missing row (vanished since editing started) plans 'close'", () => {
+    const plan = planCellEdit({ rows, copy: undefined, rowIndex: 5, col: numCol, raw: "42" });
+    expect(plan).toEqual({ kind: "close" });
+  });
+
+  it("an unchanged value plans 'close' without emitting cellEdit", () => {
+    const plan = planCellEdit({ rows, copy: undefined, rowIndex: 0, col: numCol, raw: "1" });
+    expect(plan).toEqual({ kind: "close" });
+  });
+
+  it("unchanged also respects an existing working copy's already-edited value", () => {
+    const copy = commitCellEdit(undefined, rows, 0, "revenue", 99);
+    const plan = planCellEdit({ rows, copy, rowIndex: 0, col: numCol, raw: "99" });
+    expect(plan).toEqual({ kind: "close" });
+  });
+
+  it("a real change plans 'commit' with the exact runtime payload and an updated copy", () => {
+    const plan = planCellEdit({ rows, copy: undefined, rowIndex: 0, col: numCol, raw: "42" });
+    expect(plan.kind).toBe("commit");
+    if (plan.kind !== "commit") throw new Error("expected commit");
+    expect(plan.runtime).toEqual({
+      row: { region: "japan", revenue: 1 },
+      value: { column: "revenue", value: 42, previousValue: 1, rowIndex: 0 },
+    });
+    expect(effectiveRows(rows, plan.copy)[0]).toEqual({ region: "japan", revenue: 42 });
+    // the row passed through as 'row' is the row before this edit (previously-displayed row),
+    // not mutated by the copy this same call produces
+    expect(rows[0]).toEqual({ region: "japan", revenue: 1 });
+  });
+
+  it("a commit on top of an existing working copy carries forward earlier edits", () => {
+    const copy = commitCellEdit(undefined, rows, 1, "region", "eu");
+    const plan = planCellEdit({ rows, copy, rowIndex: 0, col: numCol, raw: "42" });
+    expect(plan.kind).toBe("commit");
+    if (plan.kind !== "commit") throw new Error("expected commit");
+    expect(effectiveRows(rows, plan.copy)).toEqual([
+      { region: "japan", revenue: 42 },
+      { region: "eu", revenue: 2 },
+    ]);
+  });
+
+  it("null previousValue when the cell was previously unset", () => {
+    const sparseRows: JsonObject[] = [{ region: "japan" }];
+    const plan = planCellEdit({ rows: sparseRows, copy: undefined, rowIndex: 0, col: numCol, raw: "5" });
+    expect(plan.kind).toBe("commit");
+    if (plan.kind !== "commit") throw new Error("expected commit");
+    expect(plan.runtime.value.previousValue).toBeNull();
   });
 });

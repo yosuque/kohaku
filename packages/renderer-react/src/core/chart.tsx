@@ -1,11 +1,12 @@
 import {
-  A11Y_TABLE_ROW_CAP,
+  CHART_TOKEN_KEYS,
   type ChartColors,
   type ChartConfig,
   type ChartReferenceLine,
   chartCaptionStyle,
   chartPointRow,
   chartTableStyle,
+  describeChartDataTable,
   prepareRows,
   resolveChartConfig,
   type SizingTokens,
@@ -46,10 +47,10 @@ export function PresentChart({ node }: ImplProps): ReactNode {
   const spec = useSpec();
   const messages = useMessages();
   const sizing = useSizing();
-  const palette = String(useToken("chart.palette")).split(",");
+  const palette = String(useToken(CHART_TOKEN_KEYS.palette)).split(",");
   // Resolve from tokens: the reference-line/axis color (a mid gray distinguishable from data series) and the dots' knockout stroke (= background color).
-  const axisColor = String(useToken("chart.axis"));
-  const bgColor = String(useToken("color.background"));
+  const axisColor = String(useToken(CHART_TOKEN_KEYS.axis));
+  const bgColor = String(useToken(CHART_TOKEN_KEYS.dotStroke));
 
   // The config / view model (prop defaults, default label, pointClickable) comes from renderer-core; only the markup is emitted here.
   // resolveChartConfig does a long→wide pivot + sort (prepareRows) over every row, so it is memoized:
@@ -105,7 +106,7 @@ function ChartDataTable({
   rows: JsonObject[];
   sizing: SizingTokens;
 }): ReactNode {
-  const shown = rows.slice(0, A11Y_TABLE_ROW_CAP);
+  const { headers, cells } = describeChartDataTable(x, yKeys, rows);
   // The a11y alternative must stay visually hidden regardless of sizing, so visuallyHiddenStyle's
   // position/width/height/clip win over chartTableStyle's own width -- only borderCollapse/fontSize
   // survive from it (a purely additive consistency pickup; the table was previously unstyled beyond
@@ -116,23 +117,23 @@ function ChartDataTable({
       <caption>{label}</caption>
       <thead>
         <tr>
-          <th scope="col">{x}</th>
-          {yKeys.map((key) => (
-            <th key={key} scope="col">
-              {key}
+          {headers.map((header) => (
+            <th key={header} scope="col">
+              {header}
             </th>
           ))}
         </tr>
       </thead>
       <tbody>
-        {shown.map((row, i) => (
-          // Key is content-based (row[x]); the index is appended only as a tiebreaker for duplicate
+        {cells.map((row, i) => (
+          // Key is content-based (the x cell); the index is appended only as a tiebreaker for duplicate
           // x values, not as the primary key -- this is a visually-hidden a11y table of stateless cells.
           // biome-ignore lint/suspicious/noArrayIndexKey: content-based key with an index tiebreaker for duplicates.
-          <tr key={`${String(row[x])}-${i}`}>
-            <td>{String(row[x] ?? "")}</td>
-            {yKeys.map((key) => (
-              <td key={key}>{String(row[key] ?? "")}</td>
+          <tr key={`${row[0]}-${i}`}>
+            {row.map((cell, j) => (
+              // Column position is stable within a row (it mirrors `headers`); only the cell content varies per row.
+              // biome-ignore lint/suspicious/noArrayIndexKey: column position is stable; content varies per row only.
+              <td key={j}>{cell}</td>
             ))}
           </tr>
         ))}
@@ -197,6 +198,23 @@ function clickableDot(opts: {
   };
 }
 
+/**
+ * The CartesianGrid/XAxis/YAxis/Tooltip/Legend?/reference-lines block shared by the line/area/bar cases
+ * below (identical for all three; pie and scatter each need a different axis/legend shape, so they build
+ * their own). Returned in the same order they render in today, since Recharts' rendering and overlap
+ * order is observable.
+ */
+function frame(x: string, yKeys: string[], refs: ReactElement[]): ReactElement[] {
+  return [
+    <CartesianGrid key="grid" strokeDasharray="3 3" />,
+    <XAxis key="x-axis" dataKey={x} fontSize={12} />,
+    <YAxis key="y-axis" fontSize={12} width={80} />,
+    <Tooltip key="tooltip" />,
+    ...(yKeys.length > 1 ? [<Legend key="legend" />] : []),
+    ...refs,
+  ];
+}
+
 function renderChart(
   cfg: ChartConfig,
   colors: Pick<ChartColors, "axis" | "dotStroke">,
@@ -213,12 +231,7 @@ function renderChart(
     case "line":
       return (
         <LineChart {...common}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={x} fontSize={12} />
-          <YAxis fontSize={12} width={80} />
-          <Tooltip />
-          {yKeys.length > 1 && <Legend />}
-          {refs}
+          {frame(x, yKeys, refs)}
           {yKeys.map((key, i) => (
             <Line
               key={key}
@@ -237,12 +250,7 @@ function renderChart(
     case "area":
       return (
         <AreaChart {...common}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={x} fontSize={12} />
-          <YAxis fontSize={12} width={80} />
-          <Tooltip />
-          {yKeys.length > 1 && <Legend />}
-          {refs}
+          {frame(x, yKeys, refs)}
           {yKeys.map((key, i) => (
             <Area
               key={key}
@@ -292,12 +300,7 @@ function renderChart(
     default:
       return (
         <BarChart {...common}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey={x} fontSize={12} />
-          <YAxis fontSize={12} width={80} />
-          <Tooltip />
-          {yKeys.length > 1 && <Legend />}
-          {refs}
+          {frame(x, yKeys, refs)}
           {yKeys.map((key, i) => (
             <Bar
               key={key}

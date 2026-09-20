@@ -14,7 +14,10 @@ from kohaku.composer import (
     ComposePolicy,
     DesignKitVocabulary,
     DesignSystemGuide,
+    EffortPolicy,
     FewShotPolicy,
+    TierLlmFingerprintMaterial,
+    TierModelIdentity,
     compose,
     policy_fingerprint,
 )
@@ -29,6 +32,50 @@ _HEX16_RE = re.compile(r"^[0-9a-f]{16}$")
 
 async def _empty_examples(intent: Intent) -> list[Any]:
     return []
+
+
+def _select_components_with_id(intent: Intent, catalog: Any) -> list[str] | None:
+    return None
+
+
+_select_components_with_id.id = "narrow-v1"  # type: ignore[attr-defined]
+
+
+class TestPolicyFingerprintCharacterization:
+    """Pins the exact fingerprint bytes produced by the pre-refactor implementation (table-driven
+    refactor of policy_fingerprint, H15). These three literals were computed against the
+    implementation as it stood before the refactor and must never change — the refactor
+    (Step 2) is only allowed to reshape *how* the fingerprint is computed, never *what* it
+    computes. Do not regenerate these values from the new code; if any of them would need to
+    change, the refactor is not behaviour-preserving and must stop."""
+
+    def test_pinned_all_default_policy(self) -> None:
+        """(a) An all-default policy fingerprints as the empty string."""
+        assert policy_fingerprint(ComposePolicy()) == ""
+
+    def test_pinned_output_language_only(self) -> None:
+        """(b) A policy with only outputLanguage set."""
+        assert policy_fingerprint(ComposePolicy(outputLanguage="Japanese")) == "51b1deb410b1f29c"
+
+    def test_pinned_every_fingerprinted_field_set(self) -> None:
+        """(c) A policy with every fingerprinted field set (including tier_llm material)."""
+        policy = ComposePolicy(
+            outputLanguage="Japanese",
+            designSystem=DesignSystemGuide(
+                tokens={"color.primary": "custom primary"},
+                guidelines=["be concise", "use tokens"],
+                enforceTokenColors=False,
+            ),
+            fewShot=FewShotPolicy(examples=_empty_examples, id="v2"),
+            selectComponents=_select_components_with_id,
+            refConstraint="validate",
+            effort=EffortPolicy(l1="high", l2="low"),
+        )
+        tier_llm = TierLlmFingerprintMaterial(
+            l1=TierModelIdentity(provider="openai", model_id="gpt-4"),
+            l2=TierModelIdentity(provider="anthropic", model_id="claude-3"),
+        )
+        assert policy_fingerprint(policy, tier_llm) == "4d9163508504fc99"
 
 
 class TestPolicyFingerprint:

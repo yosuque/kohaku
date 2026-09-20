@@ -404,7 +404,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 
 | 変数 | 既定 | 説明 |
 |---|---|---|
-| `KOHAKU_LLM_PROVIDER` | `claude` | `claude` / `openai` / `gemini` / `ollama` / `llama` |
+| `KOHAKU_LLM_PROVIDER` | `claude` | `claude` / `openai` / `gemini` / `ollama` / `llama` — 選択したプロバイダの SDK は `@kohaku-ui/llm` の任意 peer dependency であり別途インストールが必要。[user-guide.md](user-guide.ja.md) の「LLM プロバイダの選択」節を参照 |
 | `KOHAKU_LLM_MODEL` | プロバイダ別既定(claude-sonnet-5 / gpt-4.1 / gemini-2.5-flash / llama3.3) | `llama` は必須指定 |
 | `KOHAKU_LLM_BASE_URL` | ollama: `http://localhost:11434/v1` | `llama`(OpenAI 互換)は必須 |
 | `KOHAKU_LLM_API_KEY` | — | 最優先キー。なければ `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` |

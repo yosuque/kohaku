@@ -22,11 +22,21 @@ Key points that are easy to miss:
   `apps/sample-api/src/domain/seed` directly (see `REPO_ROOT` in
   `python/kohaku/tests/conftest.py`) — it assumes a full monorepo checkout, not
   the `python/` subtree in isolation.
-- The layer-direction contract is enforced twice, independently: TS via
-  `spec/test/dependency-direction.test.ts`'s `LAYERS` array, Python via
-  `uv run lint-imports` against the `[tool.importlinter]` contracts in
-  `python/pyproject.toml`. When a package's position in the dependency graph
-  changes, update both — neither is derived from the other.
+- The layer-direction contract is defined in **three** places, independently:
+  AGENTS.md's arrow sentence, `spec/test/dependency-direction.test.ts`'s
+  `LAYERS` array, and `python/pyproject.toml`'s `[tool.importlinter]`
+  contracts. Update all three together — none is derived from the others.
+  Only the latter two are mechanically checked (`pnpm test` /
+  `uv run lint-imports`); AGENTS.md's arrow sentence is prose nothing
+  verifies. The TS and Python layer orderings intentionally differ (only the
+  direction is contracted) — see the runbook's section for the worked
+  example and the deferred checks.
+- One TS source file mirrors to one Python module of the same name
+  (`initial-data.ts` → `initial_data.py`); `lineage/promotion/service.py` is
+  the known exception still owing a split (see the runbook's "Layout rule").
+  `host_mcp/server.py` used to be a second exception, but that split has
+  already landed — `types.py`, `initial_data.py`, and `cache_hints.py` are now
+  their own 1:1 mirrors and `server.py` mirrors only `server.ts`.
 
 Verification:
 ```bash
