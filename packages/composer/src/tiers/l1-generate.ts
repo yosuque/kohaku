@@ -95,8 +95,7 @@ export function buildL1GenerationSchema(
  * signal passes through to the LLM call as req.abort, and an abort immediately falls to ok:false (failure="transient").
  */
 export async function generateL1(req: TierRequest): Promise<TierResult> {
-  const { intent, refs, ctx, signal, budget, onBudgetCheckError, onDraftPartial, startedAt, deadlineSignal } =
-    req;
+  const { intent, refs, ctx, signal, onDraftPartial } = req;
   // Candidate narrowing. selectComponents is deterministic with respect to the intent. Pass the
   // same includeTypes through both the schema and the prompt to prevent a mismatch in the generation vocabulary (the guardrail union is guaranteed downstream).
   // req.l1Schema (PreparedCompose.getL1Schema, threaded in by tier-ladder.ts) is memoized per compose —
@@ -137,7 +136,7 @@ export async function generateL1(req: TierRequest): Promise<TierResult> {
     {
       maxAttempts,
       // Budget checked before every attempt including the first (a zero budget skips the LLM call entirely).
-      budgetGate: "every",
+      shouldCheckBudget: () => true,
       async call(feedback, attempt) {
         const request = {
           schema: { jsonSchema: generation.jsonSchema },
@@ -186,10 +185,7 @@ export async function generateL1(req: TierRequest): Promise<TierResult> {
         }
       },
     },
-    budget,
-    onBudgetCheckError,
-    startedAt,
-    deadlineSignal,
+    req,
   );
 }
 

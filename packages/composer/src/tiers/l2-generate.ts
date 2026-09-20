@@ -260,7 +260,7 @@ export function extractTitle(html: string, fallback: string): string {
  * back and repair is retried up to maxRepairAttempts times, like L1 (sending back hallucinated APIs before delivery).
  */
 export async function generateL2(req: TierRequest): Promise<TierResult> {
-  const { intent, refs, ctx, signal, budget, onBudgetCheckError, startedAt, deadlineSignal } = req;
+  const { intent, refs, ctx, signal } = req;
   // The sandbox bridge allows only a ref that exactly matches the sandbox node's data.$ref (the sandbox1
   // node below declares only primaryRef=refs.uris[0]). Present only primaryRef as "available" in the
   // prompt too, to match the allowlist and the contract. Presenting a second or later ref would make
@@ -285,7 +285,7 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
       // check already did it immediately before (spent is unchanged too) — even though check() is idempotent,
       // avoid double-firing onBudgetCheckError. A repair re-attempt (attempt 1+) is an additional LLM call
       // that this loop adds, so check it immediately before, like L1.
-      budgetGate: "afterFirst",
+      shouldCheckBudget: (attempt) => attempt > 0,
       async call(feedback) {
         // L2 generates a raw HTML document with generateText (no JSON wrap). Because small models break
         // systematically in the "embed long HTML in a JSON string field" form (see extractHtmlDocument's
@@ -367,9 +367,6 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
         return { ok: false, issues };
       },
     },
-    budget,
-    onBudgetCheckError,
-    startedAt,
-    deadlineSignal,
+    req,
   );
 }
