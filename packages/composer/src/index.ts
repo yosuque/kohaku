@@ -41,7 +41,7 @@ export {
 } from "./design-system.js";
 export { ComposeError, type ComposeErrorCode } from "./errors.js";
 export { buildFallbackSpec } from "./fallback.js";
-export { type FixationCheck, materializeFixation } from "./fixation.js";
+export { type FixationCheck, type FixationMaterialization, materializeFixation } from "./fixation.js";
 // The allowlist of window.kohaku bridge APIs that L2-generated HTML may use (single source of truth).
 // The drift check against the surface the sandbox runtime actually exposes imports directly from
 // the node-independent `@kohaku-ui/composer/l2-api` subpath (going through the barrel would pull
