@@ -60,14 +60,10 @@ from kohaku.spec import (
     finalize_intent,
 )
 
+from . import initial_data as _initial_data
 from .cache_hints import _CACHEABLE_RESULT_CACHE_SCOPE, _CACHEABLE_RESULT_TTL_MS
 from .fallback import spec_to_text
-from .initial_data import (
-    PRERESOLVE_TIMEOUT_S,
-    PRERESOLVE_TOTAL_TIMEOUT_S,
-    _preresolve_initial_data,
-    _resolve_refs_bounded,
-)
+from .initial_data import _preresolve_initial_data, _resolve_refs_bounded
 from .intent_tools import IntentToolDef
 from .meta import (
     CAPABILITY_META_KEY,
@@ -1021,7 +1017,10 @@ async def _build_snapshot(
 def _is_resolvable_ref(ref: str, deps: McpHostDeps) -> bool:
     """True when `ref`'s source matches `deps.query_source` (a cheap, I/O-free check mirroring
     _resolve_variant's own None-on-mismatch rule). Used by _snapshot_html_for to separate "not an embedding
-    target" (never an error) from "should have resolved but didn't" (a genuine failure worth raising on)."""
+    target" (never an error) from "should have resolved but didn't" (a genuine failure worth raising on).
+    Calls `split_reserved_params` directly rather than the shared `parse_invokable_ref`: that helper raises
+    on an unknown reserved param, which would turn "not an embedding target" (a ref from an unrelated
+    source, expected and common) into an error here."""
     return split_reserved_params(ref).base.source == deps.query_source
 
 
@@ -1083,8 +1082,13 @@ async def _snapshot_html_for(
             missing,
             deps,
             principal,
-            timeout_s=PRERESOLVE_TIMEOUT_S,
-            total_timeout_s=PRERESOLVE_TOTAL_TIMEOUT_S,
+            # Read from the initial_data module at call time (not imported by value into this module's own
+            # namespace) so a test that patches kohaku.host_mcp.initial_data.PRERESOLVE_*_S -- the module
+            # _resolve_refs_bounded and _preresolve_initial_data actually read -- also bounds this snapshot
+            # path, instead of needing a second, separate patch of this module's own copy. See Minor #7 of
+            # the 2026-09-20 final review.
+            timeout_s=_initial_data.PRERESOLVE_TIMEOUT_S,
+            total_timeout_s=_initial_data.PRERESOLVE_TOTAL_TIMEOUT_S,
         )
         if missing
         else {}
