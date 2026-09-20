@@ -16,16 +16,22 @@ import type { PromotionActionSchema } from "../../../packages/host-rest/src/rout
  * If the three drift structurally, the generic action route (packages/host-rest/src/routes/promotions.ts)
  * breaks at runtime even though each side typechecks on its own.
  *
- * Neither `PromotionActionSchema` nor the client's `PromotionAction` is part of its package's public export
- * surface (unlike `ComponentDraftSchema` / `ComponentDraftInput`, which the sibling
- * component-draft-contract.test.ts guards the same way through `@kohaku-ui/host-rest`'s barrel export, and
- * which `@kohaku-ui/client` is not currently a dependency of sample-api at all). This test is scoped to add no
- * production code, so both are reached with a relative import straight into their source files instead of
- * `@kohaku-ui/host-rest` / `@kohaku-ui/client` — the only way to pin the *actual* declared types here without
- * hand-copying them (a hand-copied mirror would guard nothing: it could drift from the real declarations the
- * same way the three originals already can). Flagged as a concern in the task-3 report; a tidier follow-up
- * would export a `PromotionActionInput` type from host-rest (mirroring `ComponentDraftInput`) and add
- * `@kohaku-ui/client` as a sample-api devDependency, so this reaches both through the ordinary package API.
+ * Both non-lineage types are reached with a relative import straight into their source files instead of
+ * `@kohaku-ui/host-rest` / `@kohaku-ui/client`, but for two different reasons:
+ * - The client's `PromotionAction` *is* exported from `@kohaku-ui/client`'s public barrel
+ *   (packages/client/src/index.ts). The obstacle is only that `@kohaku-ui/client` is not a dependency of
+ *   sample-api, and this task deliberately avoids editing `package.json` / `pnpm-lock.yaml` — this branch is
+ *   one of several streams being integrated in parallel, and a lockfile edit is a needless merge-conflict
+ *   surface.
+ * - Host-rest's `PromotionActionSchema` is genuinely not on the package's public surface: its barrel exports
+ *   `ComponentDraftInput` (the sibling component-draft-contract.test.ts's guard) but nothing equivalent for
+ *   promotion actions, and adding a `PromotionActionInput` export would grow a published package's public
+ *   API, which this task's constraints do not permit.
+ * Reaching into source directly is the only way to pin the *actual* declared types here without hand-copying
+ * them (a hand-copied mirror would guard nothing: it could drift from the real declarations the same way the
+ * three originals already can). A tidier follow-up would export a `PromotionActionInput` type from host-rest
+ * (mirroring `ComponentDraftInput`) and add `@kohaku-ui/client` as a sample-api devDependency, so this reaches
+ * both through the ordinary package API.
  *
  * host-rest's `withPrincipal` (routes/promotions.ts) is the actual point where the wire shape becomes the
  * domain shape: it injects the server-side principal onto `by` for `nominate` and onto `reviewer` for
