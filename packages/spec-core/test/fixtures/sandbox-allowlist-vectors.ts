@@ -67,8 +67,14 @@ export interface StyleValueVector {
 export const STYLE_VALUE_VECTORS: readonly StyleValueVector[] = [
   { prop: "background-image", value: "url(#g)", safe: true },
   { prop: "background-image", value: "url(http://x)", safe: false },
-  { prop: "width", value: "expression(alert(1))", safe: false },
-  { prop: "color", value: "@import url(evil.css)", safe: false },
+  // These two rows replace `{ prop: "width", value: "expression(alert(1))" }` and
+  // `{ prop: "color", value: "@import url(evil.css)" }`, which duplicated `sandbox-dom.test.ts` and were
+  // tautological on the applier side: cssstyle rejects both as invalid CSS outright, so they could never
+  // detect a drift between the two allow-lists. Wrapping the same substrings inside a syntactically valid
+  // `url(...)` value is accepted by cssstyle (verified empirically) while `isStyleValueSafe`'s
+  // `expression(`/`@import` substring check still rejects it, so these actually exercise the allow-list.
+  { prop: "background-image", value: 'url("http://x/?e=expression(1)")', safe: false },
+  { prop: "background-image", value: 'url("@import.css")', safe: false },
   { prop: "color", value: "red", safe: true },
   { prop: "background-image", value: "URL(#X)", safe: true },
 ];

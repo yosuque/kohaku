@@ -162,4 +162,28 @@ describe("PromotionsTab (characterization, pre-refactor)", () => {
       },
     });
   });
+
+  it("lists every status filter option, in machine order", async () => {
+    stubFetch({
+      "POST /promotions/evaluate": () => jsonResponse({ candidates: [] }),
+    });
+
+    render(<PromotionsTab onNotice={onNotice} />);
+    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
+    const values = Array.from(select.options).map((option) => option.value);
+    expect(values).toEqual([
+      "all",
+      "in_use",
+      "candidate",
+      "judging",
+      "judge_failed",
+      "in_review",
+      "changes_requested",
+      "approved",
+      "schema_proposed",
+      "published",
+      "rejected",
+      "withdrawn",
+    ]);
+  });
 });

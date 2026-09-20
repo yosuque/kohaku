@@ -134,9 +134,12 @@ export function StatusBadge({ status }: { status: string }): ReactNode {
   const colors: Record<string, { bg: string; fg: string }> = {
     in_use: { bg: "#f1f5f9", fg: "var(--app-subtle, #475569)" },
     candidate: { bg: "#fef3c7", fg: "#92400e" },
+    judging: { bg: "#fef9c3", fg: "#854d0e" },
+    judge_failed: { bg: "#ffe4e6", fg: "#9f1239" },
     in_review: { bg: "#e0f2fe", fg: "#075985" },
     changes_requested: { bg: "#ffedd5", fg: "#9a3412" },
     approved: { bg: "#eef2ff", fg: "#3730a3" },
+    schema_proposed: { bg: "#ccfbf1", fg: "#115e59" },
     published: { bg: "#dcfce7", fg: "#166534" },
     rejected: { bg: "#fee2e2", fg: "#991b1b" },
     withdrawn: { bg: "#f1f5f9", fg: "#64748b" },
