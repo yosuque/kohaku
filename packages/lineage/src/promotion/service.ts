@@ -15,7 +15,7 @@ import {
   transition,
 } from "./machine.js";
 import { createNomination } from "./nomination.js";
-import { createUsageIndex, tallyUsage, usageIndexKey } from "./usage.js";
+import { createUsageIndex, indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
 
 export interface PromotionPolicy extends MachinePolicy {
   /** Threshold for candidacy (usage log -> candidate) */
@@ -789,14 +789,7 @@ export function createPromotions(opts: {
       type: ["component.generated"],
       limit: GENERATED_SCAN_WINDOW,
     });
-    const latestGeneratedByKey = new Map<string, (typeof generatedEvents)[number]>();
-    for (const e of generatedEvents) {
-      const artifactId = e.payload["artifactId"];
-      if (typeof artifactId !== "string") continue;
-      const key = usageIndexKey(e.tenant, artifactId);
-      const prev = latestGeneratedByKey.get(key);
-      if (prev == null || e.ts > prev.ts) latestGeneratedByKey.set(key, e);
-    }
+    const latestGeneratedByKey = indexLatestGenerated(generatedEvents);
     const publishedAuditKeys = new Set(
       (
         await opts.storage.listLineage({ type: ["component.published"], limit: RECONCILE_AUDIT_SCAN_WINDOW })

@@ -14,6 +14,7 @@ Differences from TS:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
@@ -21,6 +22,7 @@ from typing import Any, Literal, cast
 from kohaku.spec import (
     GovernanceErrorDiscriminators,
     LineageActor,
+    LineageEventRecord,
     LineageFilter,
     Principal,
     PromotionState,
@@ -258,8 +260,35 @@ def _usage_index_key(tenant: str | None, artifact_id: str) -> str:
     together whenever an aggregation scans without a tenant filter (tenant left unspecified); keying by
     (tenant, artifactId) instead keeps them separate. `tenant` here is always the *record's own* tenant (e.g.
     `event.tenant`), not the aggregation's requested scope.
+
+    Encoded as a JSON array `[tenant, artifact_id]` rather than a delimiter-joined string, matching TS's
+    `usageIndexKey` (usage.ts) for the same collision-freedom (a plain delimiter join is not collision-free in
+    general). Byte-identical output with the TS side is not required -- this key never crosses the wire, only
+    lives in an in-process dict/set for the lifetime of a single call. `tenant=None` and `tenant=""` are
+    intentionally distinct keys (no caller relies on them being merged). Memory-only: never persisted, since
+    PromotionState stores `tenant` and `artifactId` as separate fields, so its exact encoding is free to
+    change without a migration.
     """
-    return f"{tenant or ''}\x1f{artifact_id}"
+    return json.dumps([tenant, artifact_id], separators=(",", ":"))
+
+
+def _index_latest_generated(events: list[LineageEventRecord]) -> dict[str, LineageEventRecord]:
+    """Reduce a set of lineage events (typically component.generated) to, per (tenant, artifact_id) key (see
+    `_usage_index_key`), the single event with the greatest `ts` (port of TS's indexLatestGenerated, usage.ts).
+    Shared by the three call sites that each used to build this same "latest generated per key" index with
+    their own copy of the loop (`_gather_candidates`, `list_by_status`, `reconcile`). An event whose
+    `payload["artifactId"]` is not a string is skipped.
+    """
+    latest: dict[str, LineageEventRecord] = {}
+    for e in events:
+        artifact_id = e.payload.get("artifactId")
+        if not isinstance(artifact_id, str):
+            continue
+        key = _usage_index_key(e.tenant, artifact_id)
+        prev = latest.get(key)
+        if prev is None or e.ts > prev.ts:
+            latest[key] = e
+    return latest
 
 
 def _group_used_by_artifact(used: list[Any]) -> dict[str, list[Any]]:
@@ -453,22 +482,7 @@ class Promotions:
         # would collapse those tenants' independent generated events (and hence candidates) into one, silently
         # mixing their state. `e.tenant` is each event's own recorded tenant (equal to `tenant` when a specific
         # tenant was requested; the record's own value otherwise).
-        keys: list[str] = []
-        seen: set[str] = set()
-        latest_generated: dict[str, Any] = {}
-        record_of: dict[str, tuple[str, str | None]] = {}  # key -> (artifact_id, tenant)
-        for e in generated:
-            artifact_id = e.payload.get("artifactId")
-            if not isinstance(artifact_id, str):
-                continue
-            key = _usage_index_key(e.tenant, artifact_id)
-            if key not in seen:
-                seen.add(key)
-                keys.append(key)
-                record_of[key] = (artifact_id, e.tenant)
-            prev = latest_generated.get(key)
-            if prev is None or e.ts > prev.ts:
-                latest_generated[key] = e
+        latest_generated = _index_latest_generated(generated)
 
         # Avoid the N+1 of calling listLineage per candidate; fetch component.used once and group it (by the
         # same (tenant, artifactId) composite key, #10).
@@ -503,13 +517,14 @@ class Promotions:
         to_persist: list[PromotionCandidate] = []
 
         candidates: list[PromotionCandidate] = []
-        for key in keys:
-            artifact_id, record_tenant = record_of[key]
+        for key, event in latest_generated.items():
+            artifact_id = cast("str", event.payload["artifactId"])
+            record_tenant = event.tenant
             candidate = await self._load_candidate(
                 artifact_id,
                 _tally_usage(used_by_artifact.get(key, [])),
                 record_tenant,
-                latest_generated.get(key),
+                event,
             )
             if candidate is None:
                 continue
@@ -616,15 +631,7 @@ class Promotions:
         generated_events = await self._storage.list_lineage(
             LineageFilter(type=["component.generated"], limit=1000, tenant=tenant)
         )
-        latest_generated_by_key: dict[str, Any] = {}
-        for e in generated_events:
-            artifact_id = e.payload.get("artifactId")
-            if not isinstance(artifact_id, str):
-                continue
-            key = _usage_index_key(e.tenant, artifact_id)
-            prev = latest_generated_by_key.get(key)
-            if prev is None or e.ts > prev.ts:
-                latest_generated_by_key[key] = e
+        latest_generated_by_key = _index_latest_generated(generated_events)
         candidates: list[PromotionCandidate] = []
         for state in states:
             if state.status != status:
@@ -1001,15 +1008,7 @@ class Promotions:
         generated_events = await self._storage.list_lineage(
             LineageFilter(type=["component.generated"], limit=1000)
         )
-        latest_generated_by_key: dict[str, Any] = {}
-        for e in generated_events:
-            artifact_id = e.payload.get("artifactId")
-            if not isinstance(artifact_id, str):
-                continue
-            key = _usage_index_key(e.tenant, artifact_id)
-            prev = latest_generated_by_key.get(key)
-            if prev is None or e.ts > prev.ts:
-                latest_generated_by_key[key] = e
+        latest_generated_by_key = _index_latest_generated(generated_events)
         published_audit_keys = {
             _usage_index_key(e.tenant, e.payload["artifactId"])
             for e in await self._storage.list_lineage(

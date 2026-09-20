@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from kohaku.lineage import (
     create_lineage,
     create_promotions,
 )
+from kohaku.lineage.promotion.service import _index_latest_generated, _usage_index_key
 from kohaku.spec import LineageActor, LineageEventRecord, LineageFilter, Principal, PromotionState
 from kohaku.storage import FileStoragePort
 
@@ -1784,3 +1786,61 @@ def test_list_by_status_list_lineage_calls_do_not_scale_with_candidate_count(tmp
         assert storage.list_lineage_calls == 2
 
     asyncio.run(run())
+
+
+# --- _usage_index_key / _index_latest_generated (mirrors TS usage.test.ts) --------------------------------
+
+
+def test_usage_index_key_is_collision_free_for_space_containing_values() -> None:
+    # Before the fix, a plain delimiter join could make tenant "a b" + artifact_id "c" collide with tenant
+    # "a" + artifact_id "b c". The JSON-array encoding does not.
+    assert _usage_index_key("a b", "c") != _usage_index_key("a", "b c")
+
+
+def test_usage_index_key_treats_none_tenant_and_empty_string_tenant_as_distinct() -> None:
+    # R2: no existing caller relies on tenant=None and tenant="" producing the same key.
+    assert _usage_index_key(None, "x") != _usage_index_key("", "x")
+
+
+def test_usage_index_key_is_a_json_array_of_tenant_and_artifact_id() -> None:
+    assert _usage_index_key("acme", "art-1") == json.dumps(["acme", "art-1"], separators=(",", ":"))
+    assert _usage_index_key(None, "art-1") == json.dumps([None, "art-1"], separators=(",", ":"))
+
+
+def _generated_event(ts: str, tenant: str | None, artifact_id: object) -> LineageEventRecord:
+    return LineageEventRecord(
+        id=f"g-{ts}",
+        ts=ts,
+        actor=LineageActor(kind="model"),
+        type="component.generated",
+        payload={"artifactId": artifact_id},
+        tenant=tenant,
+    )
+
+
+def test_index_latest_generated_keeps_only_the_greatest_ts_event_per_key() -> None:
+    older = _generated_event("2026-01-01T00:00:00.000Z", "acme", "art-1")
+    newer = _generated_event("2026-01-02T00:00:00.000Z", "acme", "art-1")
+    result = _index_latest_generated([older, newer])
+    assert len(result) == 1
+    assert result[_usage_index_key("acme", "art-1")] is newer
+
+
+def test_index_latest_generated_keeps_entries_separate_across_distinct_keys() -> None:
+    a = _generated_event("2026-01-01T00:00:00.000Z", "acme", "art-1")
+    b = _generated_event("2026-01-01T00:00:00.000Z", "other", "art-1")
+    c = _generated_event("2026-01-01T00:00:00.000Z", None, "art-2")
+    result = _index_latest_generated([a, b, c])
+    assert len(result) == 3
+    assert result[_usage_index_key("acme", "art-1")] is a
+    assert result[_usage_index_key("other", "art-1")] is b
+    assert result[_usage_index_key(None, "art-2")] is c
+
+
+def test_index_latest_generated_skips_events_whose_artifact_id_is_not_a_string() -> None:
+    missing = dataclasses.replace(_generated_event("2026-01-01T00:00:00.000Z", "acme", None), payload={})
+    wrong_type = _generated_event("2026-01-02T00:00:00.000Z", "acme", 42)
+    valid = _generated_event("2026-01-03T00:00:00.000Z", "acme", "art-1")
+    result = _index_latest_generated([missing, wrong_type, valid])
+    assert len(result) == 1
+    assert result[_usage_index_key("acme", "art-1")] is valid
