@@ -18,6 +18,36 @@ import { DEFAULT_CHART_PALETTE } from "./presenters/chart.js";
  */
 type ThemeDefaults = Required<Omit<KnownThemeTokens, "color.danger" | "color.focus">>;
 
+/**
+ * Non-color token defaults shared verbatim by light and dark (only shadow.* differs per theme). The
+ * values are CSS strings with units so both renderers inline the identical text (parity by construction).
+ * The font sizes match the px values the L1 parts used before tokenization (13.5 body, 12.5 captions,
+ * 28 KPI values), so adopting the tokens does not shift the existing look.
+ */
+const NON_COLOR_DEFAULTS = {
+  "font.family.sans":
+    'system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif',
+  "font.family.mono": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  "font.size.xs": "11px",
+  "font.size.sm": "12.5px",
+  "font.size.md": "13.5px",
+  "font.size.lg": "15px",
+  "font.size.xl": "20px",
+  "font.size.2xl": "28px",
+  "space.1": "4px",
+  "space.2": "8px",
+  "space.3": "12px",
+  "space.4": "16px",
+  "space.5": "24px",
+  "space.6": "32px",
+  "radius.sm": "4px",
+  "radius.md": "8px",
+  "radius.lg": "12px",
+  "radius.full": "9999px",
+  "motion.duration": "150ms",
+  "motion.easing": "cubic-bezier(.2,0,0,1)",
+} as const;
+
 /** The default light theme (the light values preserve the original hard-coded look). */
 export const defaultLightTheme: ThemeDefaults = {
   "color.background": "#ffffff",
@@ -42,6 +72,9 @@ export const defaultLightTheme: ThemeDefaults = {
   "color.info.border": "#bfdbfe",
   "chart.axis": "#374151",
   "chart.palette": DEFAULT_CHART_PALETTE.join(","),
+  ...NON_COLOR_DEFAULTS,
+  "shadow.sm": "0 1px 2px rgb(0 0 0 / .06)",
+  "shadow.md": "0 4px 16px rgb(0 0 0 / .12)",
 };
 
 /**
@@ -92,6 +125,9 @@ export const defaultDarkTheme: ThemeDefaults = {
   "color.info.border": "#2b4a6b",
   "chart.axis": "#9aa1ad",
   "chart.palette": "#818cf8,#38bdf8,#34d399,#fbbf24,#f87171,#a78bfa,#2dd4bf",
+  ...NON_COLOR_DEFAULTS,
+  "shadow.sm": "0 1px 2px rgb(0 0 0 / .5)",
+  "shadow.md": "0 4px 16px rgb(0 0 0 / .55)",
 };
 
 /**
@@ -191,9 +227,19 @@ export function themeTokensToCssVars(theme: ThemeTokens): Record<string, string>
  *   mapped.
  * - `chart.axis` / `chart.palette`: no host variable corresponds to chart-specific
  *   colors — left unmapped.
- * - Font variables (`--font-*`): kohaku's `KnownThemeTokens` has no font-family /
- *   font-size tokens (`resolveToken` calls are for color-carrying parts only), so
- *   there is nothing to map them onto.
+ * - Font, radius and shadow variables (`--font-*`, `--border-radius-*`,
+ *   `--shadow-*`): before this file had non-color tokens, none of these had
+ *   anything to map onto. That is no longer true for family and shape:
+ *   `--font-sans` / `--font-mono` correspond 1:1 to `font.family.sans` /
+ *   `font.family.mono`, and the host's radius (`--border-radius-xs`…`full`) and
+ *   shadow (`--shadow-hairline`/`sm`/`md`/`lg`) families correspond to `radius.*`
+ *   / `shadow.*`. They are left unmapped by this change anyway, deliberately:
+ *   adopting host values here would change rendering for MCP hosts, a behavior
+ *   change this task does not carry (no test, no changeset). Font size has no
+ *   single mapping regardless — the host splits text (4 steps) and heading
+ *   (7 steps) into two ladders against kohaku's one six-step `font.size.xs`…
+ *   `2xl`, so a size mapping needs a decision, not a rename. Wiring any of this
+ *   up is a follow-up.
  *
  * Exported so a host integration can extend or override it (e.g. add a
  * product-specific host's variables) without forking `themeFromHostStyles`.
@@ -298,4 +344,62 @@ export function sandboxThemeCss(theme?: ThemeTokens): string {
     .map(([name, value]) => `${name}:${value.replace(/[<>{};]/g, "")};`)
     .join("");
   return `:root{${body}}`;
+}
+
+/**
+ * The non-color tokens resolved into a flat, string-typed bag. Presenters take this instead of calling
+ * resolveToken per size token (one resolution per render, identical for React and WC). Resolution goes
+ * through resolveToken so the default-light net and theme overrides apply exactly as for colors.
+ */
+export interface SizingTokens {
+  fontSans: string;
+  fontMono: string;
+  fontXs: string;
+  fontSm: string;
+  fontMd: string;
+  fontLg: string;
+  fontXl: string;
+  font2xl: string;
+  space1: string;
+  space2: string;
+  space3: string;
+  space4: string;
+  space5: string;
+  space6: string;
+  radiusSm: string;
+  radiusMd: string;
+  radiusLg: string;
+  radiusFull: string;
+  shadowSm: string;
+  shadowMd: string;
+  motionDuration: string;
+  motionEasing: string;
+}
+
+export function resolveSizing(theme: ThemeTokens): SizingTokens {
+  const t = (name: keyof KnownThemeTokens): string => String(resolveToken(theme, name));
+  return {
+    fontSans: t("font.family.sans"),
+    fontMono: t("font.family.mono"),
+    fontXs: t("font.size.xs"),
+    fontSm: t("font.size.sm"),
+    fontMd: t("font.size.md"),
+    fontLg: t("font.size.lg"),
+    fontXl: t("font.size.xl"),
+    font2xl: t("font.size.2xl"),
+    space1: t("space.1"),
+    space2: t("space.2"),
+    space3: t("space.3"),
+    space4: t("space.4"),
+    space5: t("space.5"),
+    space6: t("space.6"),
+    radiusSm: t("radius.sm"),
+    radiusMd: t("radius.md"),
+    radiusLg: t("radius.lg"),
+    radiusFull: t("radius.full"),
+    shadowSm: t("shadow.sm"),
+    shadowMd: t("shadow.md"),
+    motionDuration: t("motion.duration"),
+    motionEasing: t("motion.easing"),
+  };
 }
