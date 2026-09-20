@@ -706,10 +706,15 @@ class TestInitialDataMeta:
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         """per-ref timeout: even with a ref whose resolution never returns, the compose response returns and that ref is not co-embedded."""
-        import kohaku.host_mcp.server as server_mod
+        # PRERESOLVE_TIMEOUT_S is read (as a module global) by kohaku.host_mcp.initial_data's
+        # _preresolve_initial_data / _resolve_ref_bounded, not by kohaku.host_mcp.server — patch it there
+        # (patching kohaku.host_mcp.server.PRERESOLVE_TIMEOUT_S, an independent name binding created by that
+        # module's own `from .initial_data import PRERESOLVE_TIMEOUT_S`, would silently not affect the value
+        # those functions actually read).
+        import kohaku.host_mcp.initial_data as initial_data_mod
 
         # Shrink the timeout to make the test fast (semantics unchanged: timeout = skip).
-        monkeypatch.setattr(server_mod, "PRERESOLVE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(initial_data_mod, "PRERESOLVE_TIMEOUT_S", 0.05)
         eu_ref = "query://sales/trend?granularity=month&metric=revenue&region=eu"
         jp_ref = "query://sales/trend?granularity=month&metric=revenue&region=jp"
 
@@ -813,9 +818,12 @@ class TestInitialDataMeta:
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         """The overall deadline cuts the wait short so the tool call still returns even with a ref that never resolves."""
-        import kohaku.host_mcp.server as server_mod
+        # See test_per_ref_timeout_skips_slow_ref's comment above: PRERESOLVE_TOTAL_TIMEOUT_S must be patched
+        # on kohaku.host_mcp.initial_data (where _preresolve_initial_data actually reads it), not on
+        # kohaku.host_mcp.server.
+        import kohaku.host_mcp.initial_data as initial_data_mod
 
-        monkeypatch.setattr(server_mod, "PRERESOLVE_TOTAL_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(initial_data_mod, "PRERESOLVE_TOTAL_TIMEOUT_S", 0.05)
         jp_ref = "query://sales/trend?granularity=month&metric=revenue&region=jp"
         eu_ref = "query://sales/trend?granularity=month&metric=revenue&region=eu"
 
