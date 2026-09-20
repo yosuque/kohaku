@@ -16,6 +16,21 @@ export const DEFAULT_CHART_PALETTE = [
 /** Maximum number of rows enumerated by the visually-hidden data-table alternative. */
 export const A11Y_TABLE_ROW_CAP = 100;
 
+/**
+ * Theme token keys resolved by presentChart's colors (shared by renderer-react's useToken calls and
+ * renderer-wc's resolveToken calls, so the two renderers cannot drift on which token backs which color).
+ */
+export const CHART_TOKEN_KEYS = {
+  /** Series color palette (comma-separated). */
+  palette: "chart.palette",
+  /** Reference-line / axis color. */
+  axis: "chart.axis",
+  /** The knocked-out stroke of data points. */
+  dotStroke: "color.background",
+  /** Text color of axis labels (used by renderer-wc's inline SVG; renderer-react's ticks are drawn by Recharts itself). */
+  axisLabel: "color.muted",
+} as const;
+
 /** The result of prepareRows (the pivoted rows and the list of y series keys). */
 export interface PreparedChart {
   rows: JsonObject[];
@@ -122,6 +137,24 @@ export function chartPointRow(
   if (series == null) return wideRow;
   const y0 = Array.isArray(yProp) ? String(yProp[0]) : String(yProp ?? "value");
   return { [x]: wideRow[x] ?? null, [series]: yKey, [y0]: wideRow[yKey] ?? null };
+}
+
+/**
+ * Builds the visually-hidden a11y data-table's content (shared by renderer-react's ChartDataTable and
+ * renderer-wc's a11yTable/visibleFallbackTable, so header order / row cap / null handling cannot drift
+ * between the two renderers). Headers are [x, ...yKeys]; cells stringify each row in that same order,
+ * with a missing or null value becoming "". Rows beyond A11Y_TABLE_ROW_CAP are dropped.
+ */
+export function describeChartDataTable(
+  x: string,
+  yKeys: string[],
+  rows: JsonObject[],
+): { headers: string[]; cells: string[][] } {
+  const headers = [x, ...yKeys];
+  const cells = rows
+    .slice(0, A11Y_TABLE_ROW_CAP)
+    .map((row) => [String(row[x] ?? ""), ...yKeys.map((key) => String(row[key] ?? ""))]);
+  return { headers, cells };
 }
 
 /** If there is a series column, pivots long → wide and returns the list of y series keys. */

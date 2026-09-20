@@ -1,7 +1,8 @@
 import {
-  A11Y_TABLE_ROW_CAP,
   type BoundData,
+  CHART_TOKEN_KEYS,
   chartPointRow,
+  describeChartDataTable,
   resolveChartConfig,
   resolveToken,
   visuallyHiddenStyle,
@@ -24,12 +25,12 @@ export const presentChart: PartBuilder = (rt, parent, node) =>
 function renderChart(rt: RenderRuntime, node: ComponentNode, state: BoundData): Node {
   if (state.status !== "ready") return dataStateNotice(rt, state)!;
 
-  const palette = String(resolveToken(rt.theme, "chart.palette")).split(",");
+  const palette = String(resolveToken(rt.theme, CHART_TOKEN_KEYS.palette)).split(",");
   // Resolve the colors of reference lines / axes / point strokes / axis labels from tokens (equivalent to React's useToken path).
   const chartColors = {
-    axis: String(resolveToken(rt.theme, "chart.axis")),
-    dotStroke: String(resolveToken(rt.theme, "color.background")),
-    axisLabel: String(resolveToken(rt.theme, "color.muted")),
+    axis: String(resolveToken(rt.theme, CHART_TOKEN_KEYS.axis)),
+    dotStroke: String(resolveToken(rt.theme, CHART_TOKEN_KEYS.dotStroke)),
+    axisLabel: String(resolveToken(rt.theme, CHART_TOKEN_KEYS.axisLabel)),
   };
 
   // The config / view model (prop defaults, default label, pointClickable) comes from renderer-core; only the markup is emitted here.
@@ -78,49 +79,45 @@ function renderChart(rt: RenderRuntime, node: ComponentNode, state: BoundData): 
 
 /** Visually hidden data-table substitute (same as renderer-react's ChartDataTable). Row count is truncated at the cap. */
 function a11yTable(label: string, x: string, yKeys: string[], rows: JsonObject[]): HTMLElement {
+  const { headers, cells } = describeChartDataTable(x, yKeys, rows);
   const table = el("table");
   setStyle(table, visuallyHiddenStyle);
   const caption = el("caption");
   caption.appendChild(text(label));
   table.appendChild(caption);
-  table.appendChild(headRow(x, yKeys));
-  table.appendChild(bodyRows(x, yKeys, rows.slice(0, A11Y_TABLE_ROW_CAP)));
+  table.appendChild(headRow(headers));
+  table.appendChild(bodyRows(cells));
   return table;
 }
 
 /** Visible fallback table for pie/scatter (a plain visible table). */
 function visibleFallbackTable(x: string, yKeys: string[], rows: JsonObject[]): HTMLElement {
+  const { headers, cells } = describeChartDataTable(x, yKeys, rows);
   const table = el("table", {}, { width: "100%", borderCollapse: "collapse", fontSize: 13.5 });
-  table.appendChild(headRow(x, yKeys));
-  table.appendChild(bodyRows(x, yKeys, rows.slice(0, A11Y_TABLE_ROW_CAP)));
+  table.appendChild(headRow(headers));
+  table.appendChild(bodyRows(cells));
   return table;
 }
 
-function headRow(x: string, yKeys: string[]): HTMLElement {
+function headRow(headers: string[]): HTMLElement {
   const thead = el("thead");
   const tr = el("tr");
-  const xh = el("th", { scope: "col" });
-  xh.appendChild(text(x));
-  tr.appendChild(xh);
-  for (const key of yKeys) {
+  for (const header of headers) {
     const th = el("th", { scope: "col" });
-    th.appendChild(text(key));
+    th.appendChild(text(header));
     tr.appendChild(th);
   }
   thead.appendChild(tr);
   return thead;
 }
 
-function bodyRows(x: string, yKeys: string[], rows: JsonObject[]): HTMLElement {
+function bodyRows(cells: string[][]): HTMLElement {
   const tbody = el("tbody");
-  for (const row of rows) {
+  for (const row of cells) {
     const tr = el("tr");
-    const xd = el("td");
-    xd.appendChild(text(String(row[x] ?? "")));
-    tr.appendChild(xd);
-    for (const key of yKeys) {
+    for (const cell of row) {
       const td = el("td");
-      td.appendChild(text(String(row[key] ?? "")));
+      td.appendChild(text(cell));
       tr.appendChild(td);
     }
     tbody.appendChild(tr);

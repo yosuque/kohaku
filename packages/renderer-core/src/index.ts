@@ -29,11 +29,13 @@ export { DEFAULT_LOCALE, DEFAULT_MESSAGES, type RendererMessages } from "./messa
 export { type ActionButtonTokens, actionButtonStyle } from "./presenters/action-button.js";
 export {
   A11Y_TABLE_ROW_CAP,
+  CHART_TOKEN_KEYS,
   type ChartColors,
   type ChartConfig,
   type ChartReferenceLine,
   chartPointRow,
   DEFAULT_CHART_PALETTE,
+  describeChartDataTable,
   type PreparedChart,
   prepareRows,
   resolveChartConfig,
