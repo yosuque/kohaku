@@ -844,6 +844,11 @@ class Promotions:
         it another chance to pass). The transition table is unchanged and the path from candidate onward is
         identical to the first approve, so LIN-PRM-001 (a human review.approve precedes publish) is preserved.
 
+        Recovery from judging: a candidate persisted at judging (the process died between judge.start and
+        judge.result, so no verdict was ever recorded) is resumed in place by running the judge and calling
+        judge.result, then falling through to the same in_review/approved/schema_proposed steps below -- it is
+        not routed back through nominate, since it never left candidate/judging in the first place.
+
         Idempotent re-projection on an already-published candidate (#11): a retry against a candidate that is
         *already* published (loaded as such, before any of the transitions below run) previously returned
         success without re-running on_publish. If the original publish's projection application had failed
@@ -880,6 +885,26 @@ class Promotions:
                     verdict = await self._judge(
                         candidate, JudgeContext(tenant=tenant)
                     )
+                except Exception as e:
+                    # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
+                    # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.
+                    verdict = {
+                        "pass": False,
+                        "score": 0,
+                        "reason": f"judge could not run: {e}",
+                    }
+            candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
+        # Resumes a candidate persisted at "judging" (e.g. the process died between judge.start and
+        # judge.result): the machine's judging --judge.result--> in_review | judge_failed edge exists, but until
+        # this branch was added no if above matched "judging," so such a candidate fell straight through to the
+        # "did not reach published" guard below. A candidate that just transitioned candidate -> judging inside
+        # the block above is unaffected here: judge.result already advanced it to in_review/judge_failed by the
+        # time this runs, so this if's own condition is false for that path (no double-judge).
+        if candidate.status == "judging":
+            verdict = {"pass": True, "score": 0}
+            if self._judge is not None:
+                try:
+                    verdict = await self._judge(candidate, JudgeContext(tenant=tenant))
                 except Exception as e:
                     # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
                     # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.

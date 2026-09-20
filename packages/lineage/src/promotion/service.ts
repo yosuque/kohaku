@@ -619,6 +619,11 @@ export function createPromotions(opts: {
    * table is unchanged and the path from candidate onward is identical to the first approve, so LIN-PRM-001 (a
    * human review.approve precedes publish) is preserved.
    *
+   * Recovery from judging: a candidate persisted at judging (the process died between judge.start and
+   * judge.result, so no verdict was ever recorded) is resumed in place by running the judge and calling
+   * judge.result, then falling through to the same in_review/approved/schema_proposed steps below -- it is not
+   * routed back through nominate, since it never left candidate/judging in the first place.
+   *
    * Idempotent re-projection on an already-published candidate (#11): approve() is not itself idempotent end to
    * end (each call re-runs judge/review), but a retry against a candidate that is *already* published (loaded as
    * such, before any of the transitions below run) previously returned success without re-running onPublish. If
@@ -654,6 +659,16 @@ export function createPromotions(opts: {
     }
     if (candidate.status === "candidate") {
       candidate = await act(artifactId, { kind: "judge.start" }, reviewer, scope);
+      const verdict = await runJudge(candidate, tenant);
+      candidate = await act(artifactId, { kind: "judge.result", verdict }, reviewer, scope);
+    }
+    // Resumes a candidate persisted at "judging" (e.g. the process died between judge.start and judge.result):
+    // machine.ts's judging --judge.result--> in_review | judge_failed edge exists, but until this branch was
+    // added no if above matched "judging," so such a candidate fell straight through to the
+    // "did not reach published" guard below. A candidate that just transitioned candidate -> judging inside the
+    // block above is unaffected here: judge.result already advanced it to in_review/judge_failed by the time
+    // this runs, so this if's own condition is false for that path (no double-judge).
+    if (candidate.status === "judging") {
       const verdict = await runJudge(candidate, tenant);
       candidate = await act(artifactId, { kind: "judge.result", verdict }, reviewer, scope);
     }

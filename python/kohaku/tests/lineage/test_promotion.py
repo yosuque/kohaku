@@ -1357,6 +1357,99 @@ def test_approve_recovers_from_judge_failed(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+# --- Task 4: approve() resumes correctly from every PromotionStatus, including "judging" ---
+
+
+@pytest.mark.parametrize(
+    "status,outcome",
+    [
+        ("in_use", "published"),
+        ("candidate", "published"),
+        ("judging", "published"),
+        ("judge_failed", "published"),
+        ("in_review", "published"),
+        ("changes_requested", "published"),
+        ("approved", "published"),
+        ("schema_proposed", "published"),
+        ("published", "published"),
+        ("rejected", "error"),
+        ("withdrawn", "error"),
+    ],
+)
+def test_approve_resumes_from_every_status(tmp_path: Path, status: str, outcome: str) -> None:
+    """approve() must resume correctly from every one of the 11 PromotionStatus values. Before the fix, a
+    candidate persisted at "judging" (e.g. the process died between judge.start and judge.result) matched none
+    of approve()'s branches and raised PromotionNotPublishedError, even though the machine's
+    judging --judge.result--> in_review | judge_failed edge exists. Mirrors the TS side's
+    promotion-approve-states.test.ts table; the "judging" row is the only one whose outcome changed."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        artifact_id = f"art-{status}"
+        await _seed_generated(storage, artifact_id, html="<html></html>")
+        if status != "in_use":
+            # publish requires candidate.draft to already be set for schema_proposed/published (it was set by
+            # a prior schema.propose); every other status reaches schema.propose via approve()'s own chain.
+            needs_draft = status in ("schema_proposed", "published")
+            await _put_state(storage, artifact_id, status, draft=DRAFT if needs_draft else None)
+
+        applied: list[str] = []
+
+        async def judge(candidate: PromotionCandidate, context: JudgeContext) -> dict[str, Any]:
+            return {"pass": True, "score": 1.0}
+
+        async def on_publish(ctx: PublishContext) -> None:
+            applied.append(ctx.artifactId)
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage), storage=storage, judge=judge, on_publish=on_publish
+        )
+
+        if outcome == "published":
+            result = await promotions.approve(artifact_id, DRAFT, REVIEWER)
+            assert result.status == "published"
+            state = await storage.get_promotion_state(artifact_id)
+            assert state is not None and state.status == "published"
+        else:
+            with pytest.raises(PromotionNotPublishedError):
+                await promotions.approve(artifact_id, DRAFT, REVIEWER)
+            assert applied == []
+
+    asyncio.run(run())
+
+
+async def _assert_approve_calls_judge_once(storage: FileStoragePort, artifact_id: str) -> None:
+    judge_calls = {"n": 0}
+
+    async def judge(candidate: PromotionCandidate, context: JudgeContext) -> dict[str, Any]:
+        judge_calls["n"] += 1
+        return {"pass": True, "score": 1.0}
+
+    promotions = create_promotions(
+        lineage=create_lineage(storage), storage=storage, judge=judge, on_publish=lambda ctx: _noop()
+    )
+
+    result = await promotions.approve(artifact_id, DRAFT, REVIEWER)
+    assert result.status == "published"
+    assert judge_calls["n"] == 1
+
+
+@pytest.mark.parametrize("status", ["judging", "candidate"])
+def test_approve_resumes_judging_without_double_judging(tmp_path: Path, status: str) -> None:
+    """approve() resuming from "judging" (a crash between judge.start and judge.result) must call the judge
+    exactly once. The from-"candidate" path is checked alongside it to confirm the new judging-resume branch is
+    never re-entered for a chain that already ran the judge stage inside the earlier candidate branch."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        artifact_id = "a1"
+        await _seed_generated(storage, artifact_id, html="<html></html>")
+        await _put_state(storage, artifact_id, status)
+        await _assert_approve_calls_judge_once(storage, artifact_id)
+
+    asyncio.run(run())
+
+
 # --- #11: unpublish audit fail-open + reconcile summary/backfill ---
 
 
