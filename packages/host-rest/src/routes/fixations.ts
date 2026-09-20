@@ -1,4 +1,4 @@
-import { isTypedHostError } from "@kohaku-ui/host-core";
+import { clientMessageFor } from "@kohaku-ui/host-core";
 import { finalizeIntent, GOVERNANCE_ERROR_DISCRIMINATORS } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
@@ -110,7 +110,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
       // An arbitrary exception's message never reaches the client (it may leak internals); a typed host error
       // (SpecError/ComposeError) still passes its own message through. The original error still reaches
       // onError via reportHostError above.
-      const clientMessage = isTypedHostError(e) ? message(e) : COMPOSE_FAILED_MESSAGE;
+      const clientMessage = clientMessageFor(e, COMPOSE_FAILED_MESSAGE);
       return c.json(errorBody("COMPOSE_FAILED", clientMessage, requestId), 500);
     }
   });
@@ -141,7 +141,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
       }
       const requestId = requestIdOf(c, deps);
       await reportHostError(deps, "fixations/remove", requestId, e);
-      const clientMessage = isTypedHostError(e) ? message(e) : FIXATION_INTERNAL_ERROR_MESSAGE;
+      const clientMessage = clientMessageFor(e, FIXATION_INTERNAL_ERROR_MESSAGE);
       return c.json(errorBody("INTERNAL", clientMessage, requestId), 500);
     }
     return c.json({ ok: true });

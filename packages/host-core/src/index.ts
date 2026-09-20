@@ -8,7 +8,7 @@ export {
   issueCapabilityForSpec,
   WriteScopeDroppedError,
 } from "./capability.js";
-export { failOpen, isTypedHostError, notifyHook } from "./errors.js";
+export { clientMessageFor, errorMessage, failOpen, isTypedHostError, notifyHook } from "./errors.js";
 export {
   composeWithFixation,
   type FixationDeliveryHost,

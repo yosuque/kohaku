@@ -393,7 +393,7 @@ function startComposeTask(
     })
     .catch((e) => {
       void reportMcpError(ctx.deps, "tasks.compose", e);
-      ctx.tasks.fail(taskId, { message: e instanceof Error ? e.message : String(e) });
+      ctx.tasks.fail(taskId, { message: hostCore.errorMessage(e) });
     });
   return createTaskResult(task);
 }
@@ -1090,11 +1090,7 @@ async function safeTool<T extends object>(
     // observation hook before converting it to a tool error, rather than leaving the failure rate inferable only via the
     // isError response to the model.
     await reportMcpError(deps, endpoint, e);
-    const clientMessage = hostCore.isTypedHostError(e)
-      ? e instanceof Error
-        ? e.message
-        : String(e)
-      : TOOL_INTERNAL_ERROR_MESSAGE;
+    const clientMessage = hostCore.clientMessageFor(e, TOOL_INTERNAL_ERROR_MESSAGE);
     return toolError(clientMessage);
   }
 }

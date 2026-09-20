@@ -3,6 +3,7 @@ import type { GenerationSchema } from "@kohaku-ui/registry";
 import type { CanonicalIntent, ComponentNode, EventBinding } from "@kohaku-ui/spec-core";
 import { checkBudget, sumSpentTokens } from "../budget.js";
 import type { ComposeBudget, ComposeContext } from "../context.js";
+import { errorMessage } from "../error-message.js";
 import type { ResolvedRefs } from "../refs.js";
 import type { ComposeAttempt } from "../trace.js";
 
@@ -230,7 +231,7 @@ export async function runRepairLoop(
       attempts.push({
         kind,
         ok: false,
-        issues: [e instanceof Error ? e.message : String(e)],
+        issues: [errorMessage(e)],
       });
       if (e instanceof LlmError && e.code === "ABORTED") {
         // deadlineSignal fires only from budget.ts's createDeadlineGuard, never from the caller's own

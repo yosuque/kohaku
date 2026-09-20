@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { TraceContext } from "@kohaku-ui/composer";
-import { failOpen, notifyHook, parseTraceContext } from "@kohaku-ui/host-core";
+import { errorMessage, failOpen, notifyHook, parseTraceContext } from "@kohaku-ui/host-core";
 import type { Principal, SessionContext, Surface } from "@kohaku-ui/spec-core";
 import type { Context } from "hono";
 import type { z } from "zod";
@@ -80,8 +80,9 @@ export async function tenantScope(
   return tenantScopeOf(await resolveTenant(c, deps));
 }
 
+/** Thin alias of host-core's errorMessage, kept so its many importers here are untouched by this refactor. */
 export function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  return errorMessage(e);
 }
 
 /**

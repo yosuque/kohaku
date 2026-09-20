@@ -10,6 +10,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import type { ComposeContext, ResolvedRefs } from "../context.js";
 import { resolveTierLlm } from "../context.js";
+import { errorMessage } from "../error-message.js";
 import {
   appendL1RepairFeedback,
   buildL1PromptStatic,
@@ -180,7 +181,7 @@ export async function generateL1(req: TierRequest): Promise<TierResult> {
           // it transient; put it on the repair loop as feedback (making it a hard exception would turn the
           // whole compose into INTERNAL / host 500). runRepairLoop always classifies a validate() failure as
           // "invalid" regardless of cause, matching this.
-          const message = e instanceof Error ? e.message : String(e);
+          const message = errorMessage(e);
           return { ok: false, issues: [message] };
         }
       },

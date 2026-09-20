@@ -1,5 +1,6 @@
 import { type ComponentNode, SANDBOX_HTML_TYPE, sha256Hex } from "@kohaku-ui/spec-core";
 import { resolveTierLlm } from "../context.js";
+import { errorMessage } from "../error-message.js";
 import { KOHAKU_API_ALLOWLIST } from "../l2-api.js";
 import { buildL2PromptParts, L2_SYSTEM_PROMPT } from "../prompt.js";
 import { resolveMaxAttempts, runRepairLoop, type TierRequest, type TierResult } from "./shared.js";
@@ -204,7 +205,7 @@ export function collectScriptSyntaxIssues(html: string): string[] {
     try {
       new Function(body);
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = errorMessage(e);
       issues.push(
         `L2_SCRIPT_SYNTAX: <script> #${scriptIndex} has a JavaScript syntax error (${message}). ` +
           "Output syntactically valid, complete code — e.g. never put raw newlines " +

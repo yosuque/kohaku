@@ -18,7 +18,6 @@ import { withFixationLock } from "../keyed-mutex.js";
 import type { KohakuHostDeps } from "../types.js";
 import { ComposeBodySchema, EventsBodySchema } from "./schemas.js";
 import {
-  message,
   parseBody,
   type RouteContext,
   reportHostError,
@@ -73,7 +72,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       });
     } catch (e) {
       await reportHostError(deps, "intent/normalize", requestId, e);
-      const clientMessage = hostCore.isTypedHostError(e) ? message(e) : INTENT_INVALID_MESSAGE;
+      const clientMessage = hostCore.clientMessageFor(e, INTENT_INVALID_MESSAGE);
       return c.json(errorBody("INTENT_INVALID", clientMessage, requestId), 422);
     }
   });
@@ -139,7 +138,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       ));
     } catch (e) {
       await reportHostError(deps, "events", requestId, e);
-      const clientMessage = hostCore.isTypedHostError(e) ? message(e) : INTENT_INVALID_MESSAGE;
+      const clientMessage = hostCore.clientMessageFor(e, INTENT_INVALID_MESSAGE);
       return c.json(errorBody("INTENT_INVALID", clientMessage, requestId), 422);
     }
 
@@ -202,7 +201,7 @@ async function resolveComposeRequest(
     return { intent, session, principal, requestId, traceContext };
   } catch (e) {
     await reportHostError(deps, endpoint, requestId, e);
-    const clientMessage = hostCore.isTypedHostError(e) ? message(e) : INTENT_INVALID_MESSAGE;
+    const clientMessage = hostCore.clientMessageFor(e, INTENT_INVALID_MESSAGE);
     return c.json(errorBody("INTENT_INVALID", clientMessage, requestId), 422);
   }
 }
@@ -253,7 +252,7 @@ async function deliverComposed(
     return c.json({ spec: result.spec, capability });
   } catch (e) {
     await reportHostError(deps, endpoint, requestId, e);
-    const clientMessage = hostCore.isTypedHostError(e) ? message(e) : COMPOSE_FAILED_MESSAGE;
+    const clientMessage = hostCore.clientMessageFor(e, COMPOSE_FAILED_MESSAGE);
     return c.json(errorBody("COMPOSE_FAILED", clientMessage, requestId), 500);
   }
 }
@@ -363,7 +362,7 @@ async function deliverComposedStream(
       if (!abort.aborted) {
         // The HTTP status cannot be changed once the stream has started, so terminate with an error event.
         await reportHostError(deps, "compose/stream", requestId, e);
-        const clientMessage = hostCore.isTypedHostError(e) ? message(e) : COMPOSE_FAILED_MESSAGE;
+        const clientMessage = hostCore.clientMessageFor(e, COMPOSE_FAILED_MESSAGE);
         await stream
           .writeSSE({
             event: "error",
