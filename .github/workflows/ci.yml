@@ -104,6 +104,16 @@ jobs:
         run: |
           pnpm python:version
           git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        if: matrix.node-version == 24
+        with:
+          enable-cache: true
+      # Report-only static analysis of the workflows themselves (template injection, unpinned actions,
+      # excessive permissions). Same stance as the dependency audit: visible, not yet blocking.
+      - name: Workflow lint (zizmor, report only)
+        if: matrix.node-version == 24
+        run: uvx zizmor --format plain .github/workflows
+        continue-on-error: true
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -203,7 +213,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm changeset status --since=origin/${{ github.base_ref }}
+      - env:
+          BASE_REF: ${{ github.base_ref }}
+        run: pnpm changeset status --since="origin/$BASE_REF"
         continue-on-error: true
   # The `ci` job above typechecks and tests against `src/*.ts` directly (packages export source; publishConfig
   # only applies once a package is packed). That means nothing in `ci` ever notices a missing publishConfig

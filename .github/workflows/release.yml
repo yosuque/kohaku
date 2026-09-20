@@ -71,11 +71,7 @@ jobs:
               REF="refs/tags/$TAG"
             fi
           fi
-          case "$TAG" in
-            "") ;;
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo "::error::Tag '$TAG' is not of the form vX.Y.Z."; exit 1 ;;
-          esac
+          if [ -n "$TAG" ] && ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::Tag '$TAG' is not of the form vX.Y.Z."; exit 1; fi
           {
             echo "ref=$REF"; echo "tag=$TAG"; echo "version=${TAG#v}"; echo "dry_run=$DRY_RUN"
           } >> "$GITHUB_OUTPUT"
@@ -224,10 +220,12 @@ jobs:
       # version check: the wheel must report the version that is about to be uploaded.
       - name: Import the built wheel in an isolated environment
         working-directory: python
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
         run: |
           GOT=$(uv run --isolated --no-project --with ./dist/*.whl python -c "import kohaku; from kohaku.registry import core_catalog; core_catalog(); print(kohaku.__version__)")
           echo "wheel reports $GOT"
-          [ "$GOT" = "${{ needs.verify.outputs.version }}" ] || { echo "::error::wheel version $GOT != ${{ needs.verify.outputs.version }}"; exit 1; }
+          [ "$GOT" = "$VERSION" ] || { echo "::error::wheel version $GOT != $VERSION"; exit 1; }
       # pypa/gh-action-pypi-publish has no dry-run mode, so the upload is simply skipped on a dry run.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         if: needs.verify.outputs.dry_run != 'true'
@@ -247,15 +245,23 @@ jobs:
           name: npm-publish
           path: npm-publish
         continue-on-error: true
-      - run: |
-          V="${{ needs.verify.outputs.version }}"
+      - env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          DRY_RUN: ${{ needs.verify.outputs.dry_run }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          NPM_RESULT: ${{ needs.npm.result }}
+          PYPI_RESULT: ${{ needs.pypi.result }}
+          TAG: ${{ needs.verify.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          V="$VERSION"
           {
-            if [ "${{ needs.verify.outputs.dry_run }}" = "true" ]; then echo "## Dry run: $V (nothing uploaded)"; else echo "## Released $V"; fi
+            if [ "$DRY_RUN" = "true" ]; then echo "## Dry run: $V (nothing uploaded)"; else echo "## Released $V"; fi
             echo
             echo "| step | result |"; echo "|---|---|"
-            echo "| verify | ${{ needs.verify.result }} |"
-            echo "| npm | ${{ needs.npm.result }} |"
-            echo "| pypi | ${{ needs.pypi.result }} |"
+            echo "| verify | $VERIFY_RESULT |"
+            echo "| npm | $NPM_RESULT |"
+            echo "| pypi | $PYPI_RESULT |"
             echo
             if [ -f npm-publish/pnpm-publish-summary.json ]; then
               echo "### npm packages handled by this run"
@@ -264,7 +270,7 @@ jobs:
             echo
             echo "- npm: https://www.npmjs.com/package/@kohaku-ui/spec-core/v/$V"
             echo "- PyPI: https://pypi.org/project/kohaku-ui/$V/"
-            [ -n "${{ needs.verify.outputs.tag }}" ] && echo "- GitHub release: https://github.com/${{ github.repository }}/releases/tag/${{ needs.verify.outputs.tag }}"
+            [ -n "$TAG" ] && echo "- GitHub release: https://github.com/$REPOSITORY/releases/tag/$TAG"
             echo
-            echo "Re-run a failed publish: Actions > Release > Run workflow, tag=${{ needs.verify.outputs.tag }}, dry_run=false (docs/runbooks/release.md)."
+            echo "Re-run a failed publish: Actions > Release > Run workflow, tag=$TAG, dry_run=false (docs/runbooks/release.md)."
           } >> "$GITHUB_STEP_SUMMARY"
