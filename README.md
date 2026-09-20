@@ -74,6 +74,8 @@ pnpm dev                # API (:8787) + Web (:5173) together
 | Ollama (no key) | `KOHAKU_LLM_PROVIDER=ollama` + `KOHAKU_LLM_MODEL=gemma4:e4b` etc. | non-reasoning models recommended (default when unset is `llama3.3`) |
 | llama.cpp etc. | `KOHAKU_LLM_PROVIDER=llama` + `KOHAKU_LLM_BASE_URL` + `KOHAKU_LLM_MODEL` | OpenAI-compatible |
 
+Install the provider SDK next to `@kohaku-ui/llm`: Claude → `@ai-sdk/anthropic`, OpenAI → `@ai-sdk/openai`, Gemini → `@ai-sdk/google`, Ollama / llama.cpp → `@ai-sdk/openai-compatible` (optional peer dependencies; nothing is installed for providers you do not use).
+
 Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are fully functional.
 
 ## What you can experience ([detailed steps](docs/user-guide.md#4-demo-walkthroughs-8))

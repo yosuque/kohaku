@@ -27,25 +27,76 @@ import {
 } from "../port.js";
 import { defaultRetryDeps, isRetryableProviderError, type RetryDeps, withProviderRetry } from "./retry.js";
 
+/**
+ * Maps each provider to the AI SDK package `resolveModel` dynamically imports for it. Since
+ * packages/llm/package.json 0.1.0's dependency-hygiene change, these are optional peer dependencies of
+ * @kohaku-ui/llm (installed lazily per provider, not all four at once) — see `importProvider` below for
+ * what happens when the one a caller's `provider` needs is not installed.
+ */
+const PROVIDER_PACKAGES: Record<LlmConfig["provider"], string> = {
+  claude: "@ai-sdk/anthropic",
+  openai: "@ai-sdk/openai",
+  gemini: "@ai-sdk/google",
+  ollama: "@ai-sdk/openai-compatible",
+  llama: "@ai-sdk/openai-compatible",
+};
+
+/**
+ * Reads a Node-style `code` off an error, falling back to one level of `.cause`. A dynamic `import()`
+ * failure is sometimes re-thrown by a wrapping layer (a bundler/loader, or — as exercised by
+ * test/ai-sdk-missing-provider.test.ts — Vitest's own module mocker) with the original error attached as
+ * `cause` rather than exposed directly, so both shapes are checked.
+ */
+function importErrorCode(e: unknown): string | undefined {
+  const code = (e as { code?: unknown })?.code;
+  if (typeof code === "string") return code;
+  const causeCode = (e as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof causeCode === "string" ? causeCode : undefined;
+}
+
+/**
+ * Wraps a provider SDK's dynamic `import()` so a missing optional peer dependency fails with an
+ * actionable LlmError naming the package to install, instead of surfacing Node's raw
+ * "Cannot find package '<pkg>'" (ERR_MODULE_NOT_FOUND) error unexplained.
+ */
+async function importProvider<T>(provider: LlmConfig["provider"], load: () => Promise<T>): Promise<T> {
+  try {
+    return await load();
+  } catch (e) {
+    const code = importErrorCode(e);
+    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+      throw new LlmError(
+        "CONFIG",
+        `kohaku: provider "${provider}" needs the optional peer dependency "${PROVIDER_PACKAGES[provider]}" of @kohaku-ui/llm — install it next to @kohaku-ui/llm`,
+        { provider, cause: e },
+      );
+    }
+    throw e;
+  }
+}
+
 async function resolveModel(config: LlmConfig): Promise<LanguageModel> {
   switch (config.provider) {
     case "claude": {
-      const { createAnthropic } = await import("@ai-sdk/anthropic");
+      const { createAnthropic } = await importProvider("claude", () => import("@ai-sdk/anthropic"));
       return createAnthropic({ ...(config.apiKey != null ? { apiKey: config.apiKey } : {}) })(config.model);
     }
     case "openai": {
-      const { createOpenAI } = await import("@ai-sdk/openai");
+      const { createOpenAI } = await importProvider("openai", () => import("@ai-sdk/openai"));
       return createOpenAI({ ...(config.apiKey != null ? { apiKey: config.apiKey } : {}) })(config.model);
     }
     case "gemini": {
-      const { createGoogleGenerativeAI } = await import("@ai-sdk/google");
+      const { createGoogleGenerativeAI } = await importProvider("gemini", () => import("@ai-sdk/google"));
       return createGoogleGenerativeAI({
         ...(config.apiKey != null ? { apiKey: config.apiKey } : {}),
       })(config.model);
     }
     case "ollama":
     case "llama": {
-      const { createOpenAICompatible } = await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await importProvider(
+        config.provider,
+        () => import("@ai-sdk/openai-compatible"),
+      );
       return createOpenAICompatible({
         name: config.provider,
         baseURL: config.baseUrl!,

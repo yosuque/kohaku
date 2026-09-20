@@ -72,6 +72,8 @@ pnpm dev                # API(:8787)+ Web(:5173)同時起動
 | Ollama(キー不要) | `KOHAKU_LLM_PROVIDER=ollama` + `KOHAKU_LLM_MODEL=gemma4:e4b` 等 | 非思考モデル推奨(モデル未指定時の既定は `llama3.3`) |
 | llama.cpp 等 | `KOHAKU_LLM_PROVIDER=llama` + `KOHAKU_LLM_BASE_URL` + `KOHAKU_LLM_MODEL` | OpenAI 互換 |
 
+`@kohaku-ui/llm` と一緒にプロバイダの SDK をインストールしてください: Claude → `@ai-sdk/anthropic`、OpenAI → `@ai-sdk/openai`、Gemini → `@ai-sdk/google`、Ollama / llama.cpp → `@ai-sdk/openai-compatible`(任意の peer dependency。使わないプロバイダの分は何もインストールされません)。
+
 LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作します。
 
 ## 何が体験できるか([詳細手順](docs/user-guide.ja.md#4-デモウォークスルー8-本))

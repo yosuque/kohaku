@@ -304,6 +304,18 @@ importers:
 
   apps/sample-api:
     dependencies:
+      '@ai-sdk/anthropic':
+        specifier: 'catalog:'
+        version: 4.0.53(zod@4.6.5)
+      '@ai-sdk/google':
+        specifier: 'catalog:'
+        version: 4.0.70(zod@4.6.5)
+      '@ai-sdk/openai':
+        specifier: 'catalog:'
+        version: 4.0.66(zod@4.6.5)
+      '@ai-sdk/openai-compatible':
+        specifier: 'catalog:'
+        version: 3.0.48(zod@4.6.5)
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.1(hono@4.13.8)
@@ -371,6 +383,18 @@ importers:
 
   apps/sample-mcp:
     dependencies:
+      '@ai-sdk/anthropic':
+        specifier: 'catalog:'
+        version: 4.0.53(zod@4.6.5)
+      '@ai-sdk/google':
+        specifier: 'catalog:'
+        version: 4.0.70(zod@4.6.5)
+      '@ai-sdk/openai':
+        specifier: 'catalog:'
+        version: 4.0.66(zod@4.6.5)
+      '@ai-sdk/openai-compatible':
+        specifier: 'catalog:'
+        version: 3.0.48(zod@4.6.5)
       '@kohaku-ui-sample/api':
         specifier: workspace:^
         version: link:../sample-api
@@ -841,6 +865,10 @@ importers:
 
   packages/llm:
     dependencies:
+      ai:
+        specifier: 'catalog:'
+        version: 7.0.101(zod@4.6.5)
+    devDependencies:
       '@ai-sdk/anthropic':
         specifier: 'catalog:'
         version: 4.0.53(zod@4.6.5)
@@ -853,10 +881,6 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: 'catalog:'
         version: 3.0.48(zod@4.6.5)
-      ai:
-        specifier: 'catalog:'
-        version: 7.0.101(zod@4.6.5)
-    devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1
