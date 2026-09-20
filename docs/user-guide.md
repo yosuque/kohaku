@@ -350,6 +350,8 @@ const policy = {
 
 Even without specifying a theme, a default light theme is always injected into the sandbox, so `var()` never falls to undefined. The Python implementation (`python/kohaku`) has the same feature too (`ComposePolicy(designSystem=DesignSystemGuide(...))`) (sample: `python/examples/sales-api/src/sales_api/design_system.py`).
 
+To eyeball the kit without an LLM, the sample app's Admin → Gallery tab (`apps/sample-web/src/pages/admin/GalleryTab.tsx`) renders a hand-written showcase artifact (`gallery-showcase.ts`) through the real `SandboxFrame`, exercising every kit component class; a checkbox toggles the kit on and off so the difference is visible side by side, and a paste box below it previews any generated L2 artifact the same way. It follows the app header's light/dark setting, and since its data is canned fixtures, the tab needs neither the API nor a model.
+
 ### Calling it from a client (the typed host client SDK)
 
 When calling the REST host from the frontend (or Node), using `@kohaku-ui/client` instead of hand-written fetch lets you handle responses (`{spec, capability}`, etc.) and error codes in a typed way. `fetch` is a transport DI, and in tests it can be swapped for an in-memory host (works in both browser and Node).

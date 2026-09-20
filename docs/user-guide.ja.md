@@ -350,6 +350,8 @@ const policy = {
 
 theme 未指定でも既定ライトテーマが sandbox に常時注入されるため、`var()` が未定義に落ちることはありません。Python 実装(`python/kohaku`)も同一機能(`ComposePolicy(designSystem=DesignSystemGuide(...))`)を持ちます(サンプル: `python/examples/sales-api/src/sales_api/design_system.py`)。
 
+モデルなしでキットを目視確認したいときは、サンプルアプリの Admin → Gallery タブ(`apps/sample-web/src/pages/admin/GalleryTab.tsx`)を使います。手書きのショーケースアーティファクト(`gallery-showcase.ts`)を実際の `SandboxFrame` で描画し、キットの全コンポーネントクラスを網羅しています。チェックボックスでキットの適用有無を切り替えられるため差分を並べて確認でき、その下のペーストボックスは任意の生成済み L2 アーティファクトを同じ方法でプレビューします。表示はアプリヘッダーのライト/ダーク設定に追従し、データは缶詰データなので、このタブは API もモデルも必要としません。
+
 ### クライアントから叩く(型付きホストクライアント SDK)
 
 フロントエンド(または Node)から REST ホストを叩くときは、手書き fetch の代わりに `@kohaku-ui/client` を使うと、応答(`{spec, capability}` 等)とエラーコードが型付きで扱えます。`fetch` はトランスポート DI で、テストではインメモリのホストに差し替えられます(ブラウザ / Node 両用)。
