@@ -42,7 +42,13 @@ class TestCoreCatalog:
     def test_loads_every_exported_component(self) -> None:
         """The component count is derived from the exported catalog JSON (the TS source of
         truth, `python/kohaku/src/kohaku/registry/_data/core-catalog.json`), not hard-coded —
-        so this test never needs a manual count bump when a component is added or removed."""
+        so this test never needs a manual count bump when a component is added or removed.
+
+        This only guards against `core_catalog()` acquiring filtering, deduplication or
+        partial-load behavior that silently drops or duplicates entries — it is not a check on
+        the catalog's *contents*. Content is pinned by the two fingerprint tests:
+        `packages/registry/test/catalog.test.ts` and
+        `python/kohaku/tests/registry/test_fingerprint.py`."""
         json_components = json.loads(
             resources.files("kohaku.registry._data")
             .joinpath("core-catalog.json")
