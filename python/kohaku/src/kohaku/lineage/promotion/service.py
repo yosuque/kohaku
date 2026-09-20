@@ -828,6 +828,27 @@ class Promotions:
         await self._persist(candidate, tenant)
         return candidate
 
+    async def _run_judge(self, candidate: PromotionCandidate, tenant: str | None = None) -> dict[str, Any]:
+        """Resolve the judge verdict for `candidate` (port of TS's `runJudge`).
+
+        judge unset (no review hook) is treated as a pass with no advice -> straight to human review. Whether
+        promotion is allowed is delegated to the machine's judgeBlocking policy at the judge.result transition
+        -- this method only resolves the verdict value.
+        """
+        # judge unset (no review hook) is treated as a pass with no advice -> straight to human review.
+        if self._judge is None:
+            return {"pass": True, "score": 0}
+        try:
+            return await self._judge(candidate, JudgeContext(tenant=tenant))
+        except Exception as e:
+            # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
+            # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.
+            return {
+                "pass": False,
+                "score": 0,
+                "reason": f"judge could not run: {e}",
+            }
+
     async def approve(
         self,
         artifact_id: str,
@@ -878,21 +899,7 @@ class Promotions:
             candidate = await self.act(artifact_id, Nominate(by=reviewer), reviewer, tenant)
         if candidate.status == "candidate":
             candidate = await self.act(artifact_id, JudgeStart(), reviewer, tenant)
-            # judge unset (no review hook) is treated as a pass with no advice -> straight to human review.
-            verdict: dict[str, Any] = {"pass": True, "score": 0}
-            if self._judge is not None:
-                try:
-                    verdict = await self._judge(
-                        candidate, JudgeContext(tenant=tenant)
-                    )
-                except Exception as e:
-                    # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
-                    # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.
-                    verdict = {
-                        "pass": False,
-                        "score": 0,
-                        "reason": f"judge could not run: {e}",
-                    }
+            verdict = await self._run_judge(candidate, tenant)
             candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
         # Resumes a candidate persisted at "judging" (e.g. the process died between judge.start and
         # judge.result): the machine's judging --judge.result--> in_review | judge_failed edge exists, but until
@@ -901,18 +908,7 @@ class Promotions:
         # the block above is unaffected here: judge.result already advanced it to in_review/judge_failed by the
         # time this runs, so this if's own condition is false for that path (no double-judge).
         if candidate.status == "judging":
-            verdict = {"pass": True, "score": 0}
-            if self._judge is not None:
-                try:
-                    verdict = await self._judge(candidate, JudgeContext(tenant=tenant))
-                except Exception as e:
-                    # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
-                    # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.
-                    verdict = {
-                        "pass": False,
-                        "score": 0,
-                        "reason": f"judge could not run: {e}",
-                    }
+            verdict = await self._run_judge(candidate, tenant)
             candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
         if candidate.status == "in_review":
             candidate = await self.act(
