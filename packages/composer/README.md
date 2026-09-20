@@ -24,7 +24,7 @@ const { spec, trace } = await compose(
 console.log(trace.tier); // "L0" | "L1" | "L2" — which pipeline stage produced this Spec
 ```
 
-Subpath entries: `@kohaku-ui/composer/l2-api`
+Subpath entries: `@kohaku-ui/composer/l2-api`, `@kohaku-ui/composer/design-system`
 
 The packages in this scope share a single version and are designed to be installed together.
 

@@ -305,16 +305,19 @@ If you register fixed Spec templates (the sample is `apps/sample-api/src/intents
 
 ### Applying a design system to L2
 
-A three-part set for making your product's design system take effect on L2 free generation (custom components). The generated artifact is written not with hardcoded colors but with token references `var(--kohaku-*)`, and the values are injected at render time, so it **follows light/dark switching and brand changes without regeneration**.
+A three-part set (plus an optional fourth step to bring your own design kit) for making your product's design system take effect on L2 free generation (custom components). The generated artifact is written not with hardcoded colors but with token references `var(--kohaku-*)`, and the values are injected at render time, so it **follows light/dark switching and brand changes without regeneration**.
 
 1. **Define the design system and wire it to the compose policy** (sample: `apps/sample-api/src/design-system.ts`):
 
 ```ts
-import type { DesignSystemGuide } from "@kohaku-ui/composer";
+import { DEFAULT_KIT_VOCABULARY, type DesignSystemGuide } from "@kohaku-ui/composer";
 
 const designSystem: DesignSystemGuide = {
   // custom tokens added to the default token vocabulary (the full KnownThemeTokens), and description overrides (optional)
   tokens: { "brand.accent": "accent color (badges, highlights)" },
+  // the design kit vocabulary (component classes + utilities the model composes with); the built-in kit
+  // shown here, or bring your own — see step 3
+  kit: DEFAULT_KIT_VOCABULARY,
   // natural-language style rules (typography, spacing, tone, etc.)
   guidelines: ["spacing is a multiple of 4px", "corner radius is 8px"],
   // lint send-back for hardcoded colors (default true; set false if repair does not converge on a small model)
@@ -337,7 +340,9 @@ const policy = {
 // WC: just set it on <kohaku-surface>'s context.theme (or the theme property)
 ```
 
-3. **Verify**: L2 generation (e.g., a free-form request in chat) → if the generated HTML uses `var(--kohaku-color-*)` and the header's theme switch makes the custom component's palette follow, it is OK. If hardcoded colors slip in, they are automatically retried for repair as `L2_RAW_COLOR`.
+3. **(Optional) Bring your own kit**: pass your vocabulary as `designSystem.kit` (`{ id, version, classes, utilities, namespaces }`) and your stylesheet as `kitCss` (`SandboxFrame`'s prop / `context.sandbox.kitCss` on `<kohaku-surface>`). Write the CSS with `var(--kohaku-*)` only; brand web fonts can be embedded as `@font-face` data URIs. `kitCss: ""` disables the built-in kit entirely. Bump `version` (and `generatorVersion`) when class semantics change.
+
+4. **Verify**: L2 generation (e.g., a free-form request in chat) → if the generated HTML uses `var(--kohaku-color-*)` and the header's theme switch makes the custom component's palette follow, it is OK. If hardcoded colors slip in, they are automatically retried for repair as `L2_RAW_COLOR`; an unrecognized kit-namespaced class name is retried the same way as `L2_UNKNOWN_CLASS`.
 
 Even without specifying a theme, a default light theme is always injected into the sandbox, so `var()` never falls to undefined. The Python implementation (`python/kohaku`) has the same feature too (`ComposePolicy(designSystem=DesignSystemGuide(...))`) (sample: `python/examples/sales-api/src/sales_api/design_system.py`).
 

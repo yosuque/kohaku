@@ -26,6 +26,10 @@ as the source of truth if this table and the README ever disagree.
 | `packages/host-mcp-apps` | `kohaku/src/kohaku/host_mcp/` |
 | `apps/sample-api` | `examples/sales-api/` |
 
+design kit: `design-system.ts` ⇄ `design_system.py` (vocabulary + fragment), `l2-generate.ts`'s
+`collectUnknownKitClasses` ⇄ `l2_lint.py`; goldens in `test/design-kit.test.ts` ⇄
+`tests/composer/test_design_kit.py`.
+
 `kohaku/src/kohaku/storage/` is Python-specific (`FileStoragePort`, equivalent to sample-api's
 `storage-port.ts`) — it has no dedicated TS package counterpart because on the TS side that role is
 folded into the sample app.

@@ -92,8 +92,8 @@ export function createComposeContext(args: {
       fixedSpecs: createFixedSpecs(),
       // Mix the generator version into the cache key. A prompt revision (PROMPT_REVISION) or model change separates
       // the cache of generated output by generation. The version that made few-shot on by default is PROMPT_REVISION="2".
-      // "/ds2" is the designSystem version (bump when you change the content — the practice of separating prompt content changes by generation).
-      generatorVersion: `${defaultGeneratorVersion(llm)}/ds2`,
+      // "/ds3" is the designSystem version (bump when you change the content — the practice of separating prompt content changes by generation).
+      generatorVersion: `${defaultGeneratorVersion(llm)}/ds3`,
       // few-shot self-reinforcement (3-9): supplies fixated (review-passed) Specs as models for L1 generation.
       // Deterministic (canonical match first -> the first 2 in intentHash ascending order). While there are 0 fixations
       // it returns an empty array and the generation prompt is byte-identical to the previous version (models increase gradually).
@@ -103,7 +103,7 @@ export function createComposeContext(args: {
       ...shared,
       fixedSpecs: createFixedSpecs("ja"),
       outputLanguage: "Japanese",
-      generatorVersion: `${defaultGeneratorVersion(llm)}/ds2/ja`,
+      generatorVersion: `${defaultGeneratorVersion(llm)}/ds3/ja`,
     },
   };
   return {

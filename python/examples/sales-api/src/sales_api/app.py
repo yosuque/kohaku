@@ -475,9 +475,9 @@ async def create_app(
         # sandbox at render time (SPEC-ENV-003).
         designSystem=SALES_DESIGN_SYSTEM,
         # Mixes the generator version into the cache key. Generation separation via the prompt revision of the
-        # version that turned few-shot on by default. "/ds2" is the designSystem version (bump it when the content
+        # version that turned few-shot on by default. "/ds3" is the designSystem version (bump it when the content
         # changes — an operation that separates generations by prompt-content change).
-        generatorVersion=f"{default_generator_version(llm.model_id)}/ds2",
+        generatorVersion=f"{default_generator_version(llm.model_id)}/ds3",
         # few-shot self-reinforcement (3-9): supplies fixated (review-passed) Specs as examples for L1 generation.
         fewShot=create_fixation_fewshot(storage),
         # The L2 verification JS sidecar (non-None only when Node is co-located. See the is_available check above).
@@ -491,7 +491,7 @@ async def create_app(
         fixedSpecs=create_fixed_specs("ja"),
         designSystem=SALES_DESIGN_SYSTEM,
         outputLanguage="Japanese",
-        generatorVersion=f"{default_generator_version(llm.model_id)}/ds2/ja",
+        generatorVersion=f"{default_generator_version(llm.model_id)}/ds3/ja",
         l2ScriptSyntax=l2_script_syntax,
         l2Smoke=l2_smoke,
     )

@@ -305,16 +305,19 @@ composer の `policy.fixedSpecs` に固定 Spec テンプレート(`apps/sample-
 
 ### L2 にデザインシステムを適用する
 
-L2 自由生成(カスタムコンポーネント)にプロダクトのデザインシステムを効かせる 3 点セット。生成物は色を直書きせずトークン参照 `var(--kohaku-*)` で書かれ、値は描画時に注入されるため、ライト/ダーク切替・ブランド変更に**再生成なしで追従**します。
+L2 自由生成(カスタムコンポーネント)にプロダクトのデザインシステムを効かせる 3 点セット(加えて、独自のデザインキットを持ち込む任意の 4 番目のステップ)。生成物は色を直書きせずトークン参照 `var(--kohaku-*)` で書かれ、値は描画時に注入されるため、ライト/ダーク切替・ブランド変更に**再生成なしで追従**します。
 
 1. **デザインシステムを定義して compose policy に配線**(サンプル: `apps/sample-api/src/design-system.ts`):
 
 ```ts
-import type { DesignSystemGuide } from "@kohaku-ui/composer";
+import { DEFAULT_KIT_VOCABULARY, type DesignSystemGuide } from "@kohaku-ui/composer";
 
 const designSystem: DesignSystemGuide = {
   // 既定のトークン語彙(KnownThemeTokens 全網)に足す独自トークン・説明の上書き(任意)
   tokens: { "brand.accent": "アクセント色(バッジ・ハイライト)" },
+  // デザインキット語彙(モデルが組み立てに使うコンポーネントクラス + ユーティリティ)。ここでは組み込みキットを
+  // 指定しているが、独自キットを持ち込む場合はステップ 3 を参照
+  kit: DEFAULT_KIT_VOCABULARY,
   // 自然言語のスタイル規則(タイポグラフィ・余白・トーンなど)
   guidelines: ["余白は 4px の倍数", "角丸は 8px"],
   // 色直書きの lint 差し戻し(既定 true。小型モデルで修復が収束しないなら false)
@@ -337,7 +340,9 @@ const policy = {
 // WC: <kohaku-surface> の context.theme(または theme プロパティ)に設定するだけ
 ```
 
-3. **確認**: L2 生成(例: チャットで自由形式の要求)→ 生成 HTML に `var(--kohaku-color-*)` が使われ、ヘッダのテーマ切替でカスタムコンポーネントの配色が追従すれば OK。色直書きが混ざると `L2_RAW_COLOR` として自動で修復再試行されます。
+3. **(任意)独自キットを持ち込む**: 語彙を `designSystem.kit`(`{ id, version, classes, utilities, namespaces }`)として、スタイルシートを `kitCss`(`SandboxFrame` の prop / `<kohaku-surface>` の `context.sandbox.kitCss`)として渡す。CSS は `var(--kohaku-*)` のみで書くこと。ブランドの Web フォントは `@font-face` の data URI として埋め込める。`kitCss: ""` で組み込みキットを完全に無効化できる。クラスの意味を変更したら `version`(および `generatorVersion`)を bump する。
+
+4. **確認**: L2 生成(例: チャットで自由形式の要求)→ 生成 HTML に `var(--kohaku-color-*)` が使われ、ヘッダのテーマ切替でカスタムコンポーネントの配色が追従すれば OK。色直書きが混ざると `L2_RAW_COLOR` として、語彙にないキット名前空間のクラス名が混ざると同様に `L2_UNKNOWN_CLASS` として自動で修復再試行されます。
 
 theme 未指定でも既定ライトテーマが sandbox に常時注入されるため、`var()` が未定義に落ちることはありません。Python 実装(`python/kohaku`)も同一機能(`ComposePolicy(designSystem=DesignSystemGuide(...))`)を持ちます(サンプル: `python/examples/sales-api/src/sales_api/design_system.py`)。
 
