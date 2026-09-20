@@ -24,6 +24,7 @@ The sample apps under `apps/` are ignored — they are demonstrations and are ne
 
 ## Releasing
 
-Releases run from `main` through the Release workflow. Merged changesets accumulate into a release pull
-request; merging that one publishes to npm, publishes the Python distribution to PyPI at the matching
-version, and creates the GitHub release. Nothing is published from a developer's machine.
+Releases run from `main` in two steps. Merged changesets accumulate into a `chore(release): version
+packages` pull request; merging that one does **not** publish — it makes a draft GitHub Release appear.
+Publishing that draft creates the tag, and the tag is what drives the publish workflow to npm and then
+PyPI. See [docs/runbooks/release.md](../docs/runbooks/release.md) for the full procedure.

@@ -14,7 +14,7 @@ pnpm check:ci                # Biome: verify only (what CI runs)
 pnpm build:dist              # emit dist for the 20 publishable packages (same tsc as typecheck; dist is gitignored)
 pnpm smoke:pack              # pack every package and verify the tarballs outside the workspace (own CI job)
 pnpm meta:sync               # regenerate the publishing metadata / publishConfig (CI checks for drift)
-pnpm changeset               # record a version bump for a change (releases run from main)
+pnpm changeset               # record a version bump for a change (a version PR is opened from main; publishing is a separate, tag-driven step — docs/runbooks/release.md)
 pnpm seed                    # regenerate the sales seed (deterministic — regeneration produces no git diff)
 pnpm dev                     # sample-api (:8787) + sample-web (:5173) together
 node cli/bin/kohaku.js conformance --self                                    # spec self-check
@@ -24,6 +24,7 @@ pnpm --filter @kohaku-ui-sample/mcp start:http       # MCP over Streamable HTTP 
 pnpm --filter @kohaku-ui/spec run generate-schemas   # regenerate spec/schemas after changing spec-core Zod (CI checks for drift)
 node cli/bin/kohaku.js dataset export --fixations <fixations.json> [--golden <dir>] [--tenant <id>] --out <file.jsonl>  # distillation dataset (docs/user-guide.md)
 KOHAKU_LLM_PROVIDER=claude pnpm --filter @kohaku-ui-sample/api run measure-grammar-latency  # calls a real LLM; excluded from `pnpm test` (docs/design.md#prompt-caching)
+node scripts/release-notes.mjs 0.2.0    # preview the draft GitHub release body generated from the package CHANGELOGs
 ```
 
 **Python implementation (python/)**: a wire-compatible full port of the TS implementation (conformance CONFORMANT). Details: [python/README.md](python/README.md).
@@ -78,5 +79,6 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog           # re-export 
 | [docs/user-guide.md](docs/user-guide.md) | User guide (setup, demos, embedding, operations). Japanese: [docs/user-guide.ja.md](docs/user-guide.ja.md) |
 | [spec/SPEC.md](spec/SPEC.md) | Kohaku Protocol v0.1 (normative; MUST/SHOULD and conformance requirements). Japanese: [spec/SPEC.ja.md](spec/SPEC.ja.md) |
 | [docs/runbooks/](docs/runbooks/) | Step-by-step runbooks for the recurring change chains (protocol change, adding a core component, mirroring to Python) |
+| [docs/runbooks/release.md](docs/runbooks/release.md) | The two-step release procedure (version PR, draft release, pre-publish checklist, npm/PyPI trusted publishing). Japanese: [docs/runbooks/release.ja.md](docs/runbooks/release.ja.md) |
 
 Both languages of a document must be kept in sync: English (unsuffixed) is canonical; update the `.ja.md` counterpart in the same change.

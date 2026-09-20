@@ -22,6 +22,7 @@
     "test:coverage": "vitest run --coverage",
     "seed": "pnpm --filter @kohaku-ui-sample/api run seed",
     "smoke:pack": "node scripts/pack-smoke.mjs",
+    "release:notes": "node scripts/release-notes.mjs",
     "intents:emit": "pnpm --filter @kohaku-ui-sample/api run intents:emit",
     "dev": "pnpm -r --parallel --filter @kohaku-ui-sample/api --filter @kohaku-ui-sample/web run dev",
     "format": "biome format --write .",
