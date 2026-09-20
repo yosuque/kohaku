@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
-from kohaku.data_binding import assert_known_reserved_params, split_reserved_params
+from kohaku.host_core import ParsedInvokableRefOk, parse_invokable_ref
 from kohaku.spec import InvocationContext, Principal, QueryRefError, VerifyRequest, VerifyResult
 
 from ..bodies import parse_action_body
@@ -62,14 +62,19 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return _error(
                 "CAPABILITY_REQUIRED", "Authorization: Bearer <capability> is required", 401
             )
+        # Server-side paging/sorting: parse ref into base (with reserved params removed) and reserved via
+        # host_core's parse_invokable_ref (shared with the MCP profile's resolve_binding tool / initial-data
+        # preresolution). Capability verification is an exact match against base.raw (= the canonical form of
+        # the $ref the Spec declared). Only known reserved-param keys (_cursor/_limit/_sort/_dir) are allowed —
+        # since the reserved namespace is outside authorization checks, passing an unknown `_` key through would
+        # let the data range be changed with parameters outside the capability.
         try:
-            split = split_reserved_params(ref_param)
-            assert_known_reserved_params(split.reserved)
+            parsed = parse_invokable_ref(ref_param, deps.query_source)
         except (QueryRefError, ValueError) as e:
             return _error("BAD_REQUEST", _message(e), 400)
-        base, reserved = split.base, split.reserved
-        if base.source != deps.query_source:
-            return _error("SOURCE_MISMATCH", f'unknown query source "{base.source}"', 404)
+        if not isinstance(parsed, ParsedInvokableRefOk):
+            return _error("SOURCE_MISMATCH", f'unknown query source "{parsed.source}"', 404)
+        base, params = parsed.ref.base, parsed.ref.params
         verdict = await deps.authz.verify(token, VerifyRequest(kind="read", ref=base.raw))
         if not verdict.ok:
             return _error("CAPABILITY_DENIED", verdict.reason or "capability denied", 403)
@@ -79,7 +84,7 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         try:
             data = await deps.domain.invoke(
                 base.path,
-                {**base.params, **reserved},
+                params,
                 InvocationContext(principal=principal, capability=token),
             )
             return _json(data)

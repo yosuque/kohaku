@@ -6,6 +6,13 @@ source of truth for the fixation (L1->L0) delivery + staleness self-healing sequ
 a composed Spec, and fail-open observability-hook helpers.
 """
 
+from .binding_ref import (
+    InvokableRef,
+    ParsedInvokableRef,
+    ParsedInvokableRefOk,
+    ParsedInvokableRefSourceMismatch,
+    parse_invokable_ref,
+)
 from .capability import (
     DEFAULT_CAPABILITY_TTL_SECONDS,
     WriteScopeDroppedError,
@@ -33,6 +40,10 @@ __all__ = [
     "FixationSelfHealApi",
     "FixationSelfHealKind",
     "FixationTarget",
+    "InvokableRef",
+    "ParsedInvokableRef",
+    "ParsedInvokableRefOk",
+    "ParsedInvokableRefSourceMismatch",
     "TraceContext",
     "WriteScopeDroppedError",
     "compose_with_fixation",
@@ -41,6 +52,7 @@ __all__ = [
     "is_typed_host_error",
     "issue_capability_for_spec",
     "notify_hook",
+    "parse_invokable_ref",
     "parse_trace_context",
     "resolve_fixated_result",
     "settle_fixation",

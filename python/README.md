@@ -90,7 +90,14 @@ fixation (L1→L0) delivery + staleness self-healing sequence (`compose_with_fix
 and fail-open observability-hook helpers (`notify_hook` / `fail_open`) live there once. The two profiles differ
 only in how a host schedules the self-heal call (`host_rest` awaits it serialized under its per-tenant fixation
 lock; `host_mcp` fires it off as a background task) — that strategy, plus each profile's own error-hook endpoint
-strings, stays host-supplied via a small `FixationDeliveryHost` object.
+strings, stays host-supplied via a small `FixationDeliveryHost` object. Read-ref parsing
+(`host_core.binding_ref.parse_invokable_ref`, shared by REST's `/binding/resolve`, MCP's `resolve_binding` tool,
+and MCP's initial-data preresolution — each host keeps its own verify step and error → response mapping around
+it), the post-write effects response (`host_core.action_effects.apply_action_effects`, fail-open — the write is
+already committed by the time it runs, so an effects failure never turns a successful write into a client-visible
+error), and the memoized write-action allowlist (`host_core.allowed_actions.create_allowed_actions`, used to drop
+a hallucinated/injected `action.invoke` action name from an issued capability's write scopes) also live there,
+each replacing what used to be a small duplicate in both `host_rest` and `host_mcp`.
 
 **MCP 2026-07-28** (see `docs/design.md`'s "MCP 2026-07-28 / SDK v2 migration" and "Python `mcp` 2.x migration"
 for the full picture): `host_mcp` runs on the `mcp` 2.x SDK (`kohaku-ui[mcp]` floor `>=2.2`; the low-level

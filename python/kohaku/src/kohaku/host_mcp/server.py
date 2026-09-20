@@ -26,16 +26,15 @@ from kohaku.composer import (
     ComposeResult,
     ComposeTrace,
 )
-from kohaku.data_binding import (
-    assert_known_reserved_params,
-    split_reserved_params,
-)
+from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
     ComposeFixationContext,
     FixationDeliveryHost,
     FixationSelfHealApi,
+    ParsedInvokableRefOk,
     TraceContext,
     is_typed_host_error,
+    parse_invokable_ref,
     parse_trace_context,
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
@@ -726,20 +725,22 @@ def attach_kohaku_to_mcp_server(
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
             # Server-side paging/sorting: verify the capability against base (reserved params removed) and merge
-            # the reserved params into domain.invoke. Unknown `_` keys are rejected.
-            split = split_reserved_params(_arg_str(args, "ref"))
-            assert_known_reserved_params(split.reserved)
-            if split.base.source != deps.query_source:
-                return _tool_error(f'unknown query source "{split.base.source}"')
+            # the reserved params into domain.invoke. Unknown `_` keys are rejected. parse_invokable_ref
+            # (host_core, shared with REST's /binding/resolve and this module's initial-data preresolution)
+            # does the pure parse/merge; the verify step and error mapping stay here.
+            parsed = parse_invokable_ref(_arg_str(args, "ref"), deps.query_source)
+            if not isinstance(parsed, ParsedInvokableRefOk):
+                return _tool_error(f'unknown query source "{parsed.source}"')
+            base, params = parsed.ref.base, parsed.ref.params
             capability = _arg_str(args, "capability")
             verdict = await deps.authz.verify(
-                capability, VerifyRequest(kind="read", ref=split.base.raw)
+                capability, VerifyRequest(kind="read", ref=base.raw)
             )
             if not verdict.ok:
                 return _tool_error(f"capability denied: {verdict.reason or ''}")
             data = await deps.domain.invoke(
-                split.base.path,
-                {**split.base.params, **split.reserved},
+                base.path,
+                params,
                 InvocationContext(
                     principal=verdict.principal or principal, capability=capability
                 ),
@@ -748,7 +749,7 @@ def attach_kohaku_to_mcp_server(
             return mcp_types.CallToolResult(
                 content=[
                     mcp_types.TextContent(
-                        type="text", text=f"resolved {rows} rows from {split.base.raw}"
+                        type="text", text=f"resolved {rows} rows from {base.raw}"
                     )
                 ],
                 structured_content={"data": _to_wire_data(data)},
@@ -1239,14 +1240,19 @@ async def _issue_capability(
 async def _resolve_variant(
     variant: str, deps: McpHostDeps, principal: Principal
 ) -> TabularData | None:
-    """Shared helper that preresolves a single effective ref with read. An unknown source is None (not co-embedded)."""
-    split = split_reserved_params(variant)
-    assert_known_reserved_params(split.reserved)
-    if split.base.source != deps.query_source:
+    """Shared helper that preresolves a single effective ref with read. An unknown source is None (not co-embedded).
+
+    Pure parse/merge via host_core's parse_invokable_ref (shared with the REST/MCP resolve_binding sites).
+    Deliberately no verify step here (this is preresolution, not a caller-supplied capability check) — an
+    unknown source still yields None (not an embedding target) rather than a raised error.
+    """
+    parsed = parse_invokable_ref(variant, deps.query_source)
+    if not isinstance(parsed, ParsedInvokableRefOk):
         return None
+    base, params = parsed.ref.base, parsed.ref.params
     resolved = await deps.domain.invoke(
-        split.base.path,
-        {**split.base.params, **split.reserved},
+        base.path,
+        params,
         InvocationContext(principal=principal),
     )
     return cast(TabularData, resolved)

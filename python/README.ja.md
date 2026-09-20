@@ -88,6 +88,13 @@ python/
 一度だけそこに存在する。両プロファイルの違いは自己修復呼び出しのスケジューリング方式のみ(`host_rest` は自身の
 テナント別固定化ロックで直列化して await し、`host_mcp` はバックグラウンドタスクとして発火する)。この戦略と各
 プロファイル固有のエラーフック文字列は、小さな `FixationDeliveryHost` オブジェクトを介してホスト側が供給する。
+read-ref のパース(`host_core.binding_ref.parse_invokable_ref`。REST の `/binding/resolve`、MCP の
+`resolve_binding` ツール、MCP の initial-data 事前解決で共有され、verify ステップとエラー→レスポンス変換は各ホスト
+側に残る)、書き込み後の effects レスポンス整形(`host_core.action_effects.apply_action_effects`。fail-open —
+書き込みは実行済みのため、effects の失敗が成功した書き込みをクライアント向けエラーに見せることはない)、
+書き込みアクションの許可集合のメモ化(`host_core.allowed_actions.create_allowed_actions`。ハルシネート/注入された
+`action.invoke` アクション名が発行済み capability の write scope に紛れ込むのを防ぐ)も同様にそこへ一度だけ存在し、
+それぞれ `host_rest` / `host_mcp` 双方にあった小さな重複を置き換える。
 
 **MCP 2026-07-28**(全体像は `docs/design.ja.md` の「MCP 2026-07-28 / SDK v2 移行」と「Python `mcp` 2.x 移行」
 参照): `host_mcp` は `mcp` 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)上で動く — 低レベル `Server` のハンドラ
