@@ -54,20 +54,52 @@ function importErrorCode(e: unknown): string | undefined {
   return typeof causeCode === "string" ? causeCode : undefined;
 }
 
+/** Node's own ERR_MODULE_NOT_FOUND/MODULE_NOT_FOUND message shape: `Cannot find package/module '<name>' …`. */
+const MISSING_PACKAGE_MESSAGE = /Cannot find (?:package|module) '([^']+)'/;
+
+/**
+ * Extracts the package/module name Node's loader reports as missing from an error's message, checking the
+ * error's own message and (see importErrorCode's doc comment for why) one level of `.cause`'s message.
+ * Returns undefined when neither matches the expected shape at all — importProvider then treats that the
+ * same as a name mismatch and rethrows unclassified.
+ *
+ * A plain substring search for the peer's package name in the message is not enough: Node's message also
+ * names the *importing* file/package in its "imported from …" clause, and when the failure is inside an
+ * *installed* @ai-sdk/anthropic's own transitive import (a partial/corrupted node_modules, a broken
+ * workspace link, a subpath-exports mismatch under an unexpected Node version, etc.), that clause's path
+ * naturally contains "@ai-sdk/anthropic" too — so only the *quoted, missing* name is trustworthy evidence
+ * of which package actually failed to resolve.
+ */
+function missingPackageName(e: unknown): string | undefined {
+  const message = (e as { message?: unknown })?.message;
+  const own = typeof message === "string" ? MISSING_PACKAGE_MESSAGE.exec(message)?.[1] : undefined;
+  if (own != null) return own;
+  const causeMessage = (e as { cause?: { message?: unknown } })?.cause?.message;
+  return typeof causeMessage === "string" ? MISSING_PACKAGE_MESSAGE.exec(causeMessage)?.[1] : undefined;
+}
+
 /**
  * Wraps a provider SDK's dynamic `import()` so a missing optional peer dependency fails with an
  * actionable LlmError naming the package to install, instead of surfacing Node's raw
  * "Cannot find package '<pkg>'" (ERR_MODULE_NOT_FOUND) error unexplained.
+ *
+ * Classification requires both an ERR_MODULE_NOT_FOUND/MODULE_NOT_FOUND code AND that the specific package
+ * Node's message names as missing is this provider's own peer (see missingPackageName). Node throws the
+ * same code when the requested package *is* installed but one of its own transitive dependencies fails to
+ * resolve — in that case the code alone is not evidence that *this* peer is the one missing, so the raw
+ * error is rethrown unclassified rather than telling the caller to (re)install something already present.
  */
 async function importProvider<T>(provider: LlmConfig["provider"], load: () => Promise<T>): Promise<T> {
   try {
     return await load();
   } catch (e) {
     const code = importErrorCode(e);
-    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+    const isMissingModule = code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND";
+    const pkg = PROVIDER_PACKAGES[provider];
+    if (isMissingModule && missingPackageName(e) === pkg) {
       throw new LlmError(
         "CONFIG",
-        `kohaku: provider "${provider}" needs the optional peer dependency "${PROVIDER_PACKAGES[provider]}" of @kohaku-ui/llm — install it next to @kohaku-ui/llm`,
+        `kohaku: provider "${provider}" needs the optional peer dependency "${pkg}" of @kohaku-ui/llm — install it next to @kohaku-ui/llm`,
         { provider, cause: e },
       );
     }

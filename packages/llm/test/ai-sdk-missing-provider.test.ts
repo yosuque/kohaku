@@ -47,4 +47,54 @@ describe("createAiSdkLlm: missing optional provider SDK", () => {
     ).rejects.toThrow(/@ai-sdk\/anthropic.*@kohaku-ui\/llm/s);
     await expect(llm.generateText({ prompt: "p" })).rejects.toThrow(/@ai-sdk\/anthropic.*@kohaku-ui\/llm/s);
   });
+
+  // The installed @ai-sdk/anthropic package itself can fail to load with the very same
+  // ERR_MODULE_NOT_FOUND code when one of ITS OWN transitive dependencies fails to resolve (a partial or
+  // corrupted node_modules, a broken workspace link, a subpath-exports mismatch under an unexpected Node
+  // version, etc.) — the peer dependency the caller was asked to configure is not the thing missing here.
+  // importProvider must not misreport this as "install @ai-sdk/anthropic" (it is already installed); the
+  // original error, naming the actually-missing module, must propagate unclassified instead.
+  it("does not misreport an installed provider SDK's own broken transitive import as a missing peer", async () => {
+    vi.doMock("@ai-sdk/anthropic", () => {
+      // Shaped like Node's real ERR_MODULE_NOT_FOUND message for a failure *inside* an installed package:
+      // the "imported from" clause names a path under the (installed, resolvable) @ai-sdk/anthropic
+      // package itself — that substring must not be mistaken for "the @ai-sdk/anthropic peer is missing".
+      const e = new Error(
+        "Cannot find package 'some-transitive-dep' imported from " +
+          "/repo/node_modules/@ai-sdk/anthropic/dist/index.js",
+      );
+      (e as NodeJS.ErrnoException).code = "ERR_MODULE_NOT_FOUND";
+      throw e;
+    });
+
+    const { createAiSdkLlm } = await import("../src/adapters/ai-sdk.js");
+    const { resolveLlmEnv } = await import("../src/env.js");
+
+    const config = resolveLlmEnv({
+      KOHAKU_LLM_PROVIDER: "claude",
+      KOHAKU_LLM_MODEL: "claude-sonnet-5",
+      ANTHROPIC_API_KEY: "test-key",
+    });
+    const llm = createAiSdkLlm(config);
+
+    // The rejection must be the ORIGINAL error, not an LlmError re-diagnosing it as a missing peer.
+    // (Not `.rejects.toThrow(regex)`: that matcher only inspects the rejected error's own top-level
+    // `.message`, and — as documented at the top of this file — Vitest's module mocker re-throws a
+    // factory's thrown error wrapped in its own generic message with the original attached as `.cause`, so
+    // the real content here is one level down; the assertions below check both levels directly.)
+    let caught: unknown;
+    try {
+      await llm.generateObject({ schema: { jsonSchema: { type: "object" } }, prompt: "p" });
+    } catch (e) {
+      caught = e;
+    }
+    const messages = [
+      (caught as { message?: unknown })?.message,
+      (caught as { cause?: { message?: unknown } })?.cause?.message,
+    ];
+    expect(messages.some((m) => typeof m === "string" && m.includes("some-transitive-dep"))).toBe(true);
+    expect(
+      messages.some((m) => typeof m === "string" && m.includes("needs the optional peer dependency")),
+    ).toBe(false);
+  });
 });
