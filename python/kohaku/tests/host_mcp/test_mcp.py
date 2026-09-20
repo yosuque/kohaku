@@ -845,9 +845,11 @@ class TestInitialDataMeta:
             async with connect(deps, _OPTIONS) as client:
                 # A response returns promptly even though eu never resolves (without the total deadline this
                 # would hang until the per-ref timeout, 2s by default).
+                started = asyncio.get_event_loop().time()
                 result = await client.call_tool(
                     "kohaku_compose", {"question": "Trend with region switch"}
                 )
+                elapsed = asyncio.get_event_loop().time() - started
                 assert not result.is_error
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
@@ -855,6 +857,11 @@ class TestInitialDataMeta:
                 assert BIND_REF_US in keys
                 assert jp_ref in keys
                 assert eu_ref not in keys
+                # Discriminates the total deadline (patched to 0.05s) from the per-ref timeout (2s, not
+                # patched here): without the total-deadline mechanism this would only return once the
+                # per-ref timeout fired on eu_ref, i.e. after ~2s. See Minor #3 of the 2026-09-20 final
+                # review -- this assertion is what makes the test actually exercise the total deadline.
+                assert elapsed < 1.0
 
         asyncio.run(run())
 
