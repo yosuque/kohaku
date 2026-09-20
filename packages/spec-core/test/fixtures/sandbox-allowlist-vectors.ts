@@ -54,6 +54,14 @@ export const ATTR_VECTORS: readonly AttrVector[] = [
   { name: "srcdoc", value: "<p>x</p>", attrAllowed: false, valueSafe: true },
   { name: "cx", value: "10", attrAllowed: true, valueSafe: true },
   { name: "style", value: "color:red", attrAllowed: false, valueSafe: true },
+  // Every genuinely URL-bearing attribute (href, xlink:href, src, srcdoc, srcset, ...) is already blocked at
+  // the name level via ALWAYS_DENIED_ATTRS, so isAttrValueSafe's javascript: check never gets to run on those.
+  // Without a row where attrAllowed is true AND valueSafe is false, the value predicate is untested on the
+  // applier side (a "c"/"a" op's landed check reduces to attrAllowed alone), so a regression that stops
+  // applying it would go unnoticed. "title" and "fill" are both allowed by name (GLOBAL_ATTRS / SVG_ATTRS)
+  // but must still be rejected when the value itself carries a javascript: scheme.
+  { name: "title", value: "javascript:alert(1)", attrAllowed: true, valueSafe: false },
+  { name: "fill", value: "javascript:alert(1)", attrAllowed: true, valueSafe: false },
 ];
 
 export interface StyleValueVector {
