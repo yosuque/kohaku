@@ -6,6 +6,12 @@ source of truth for the fixation (L1->L0) delivery + staleness self-healing sequ
 a composed Spec, and fail-open observability-hook helpers.
 """
 
+from .action_effects import (
+    ActionEffectsHook,
+    ActionEffectsResponse,
+    ActionEffectsResult,
+    apply_action_effects,
+)
 from .binding_ref import (
     InvokableRef,
     ParsedInvokableRef,
@@ -35,6 +41,9 @@ from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 __all__ = [
     "DEFAULT_CAPABILITY_TTL_SECONDS",
     "TRACEPARENT_RE",
+    "ActionEffectsHook",
+    "ActionEffectsResponse",
+    "ActionEffectsResult",
     "ComposeFixationContext",
     "FixationDeliveryHost",
     "FixationSelfHealApi",
@@ -46,6 +55,7 @@ __all__ = [
     "ParsedInvokableRefSourceMismatch",
     "TraceContext",
     "WriteScopeDroppedError",
+    "apply_action_effects",
     "compose_with_fixation",
     "fail_open",
     "get_lock",

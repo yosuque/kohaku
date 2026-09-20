@@ -33,6 +33,7 @@ from kohaku.host_core import (
     FixationSelfHealApi,
     ParsedInvokableRefOk,
     TraceContext,
+    apply_action_effects,
     is_typed_host_error,
     parse_invokable_ref,
     parse_trace_context,
@@ -901,21 +902,16 @@ def attach_kohaku_to_mcp_server(
                     principal=verdict.principal or principal, capability=capability
                 ),
             )
-            # Side-effect declaration (optional): put the refs the write invalidates and the per-ref new versions into
-            # the response (same shape as REST). The write is already committed. An effects failure does not make
-            # the committed write look like an error: swallow it individually, report it to the observation hook, and
-            # return success with only {result} (the effects-omitted backward-compatible shape) — failing the whole
-            # _run would make _safe_tool set isError, and a client retry could duplicate a non-idempotent write.
-            structured: dict[str, Any] = {"result": result if result is not None else None}
-            if deps.action_effects is not None:
-                try:
-                    effects = await deps.action_effects(action, payload, result)
-                    if effects.invalidates is not None:
-                        structured["invalidates"] = effects.invalidates
-                    if effects.refVersions is not None:
-                        structured["refVersions"] = effects.refVersions
-                except Exception as exc:  # noqa: BLE001 — an effects failure does not drag down the committed write
-                    await _report_mcp_error(deps, f"{prefix}_action", exc)
+            # Side-effect declaration (optional): put the refs the write invalidates and the per-ref new versions
+            # into the response (same shape as REST). The write is already committed; a side-effect-declaration
+            # failure is fail-open — see host_core's apply_action_effects.
+            structured = await apply_action_effects(
+                deps.action_effects,
+                action,
+                payload,
+                result,
+                lambda exc: _report_mcp_error(deps, f"{prefix}_action", exc),
+            )
             return mcp_types.CallToolResult(
                 content=[
                     mcp_types.TextContent(type="text", text=f"Executed action {action}")

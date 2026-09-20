@@ -5,13 +5,11 @@ Split out of the former monolithic `_fastapi_routes.py` to mirror packages/host-
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
-from kohaku.host_core import ParsedInvokableRefOk, parse_invokable_ref
+from kohaku.host_core import ParsedInvokableRefOk, apply_action_effects, parse_invokable_ref
 from kohaku.spec import InvocationContext, Principal, QueryRefError, VerifyRequest, VerifyResult
 
 from ..bodies import parse_action_body
@@ -125,18 +123,12 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             request_id = request_id_of(request, deps)
             await report_host_error(deps, "binding/action", request_id, e)
             return _error("REF_NOT_FOUND", _REF_NOT_FOUND_MESSAGE, 404, request_id)
-        # The write is already committed. Do not make an action_effects (side-effect declaration) failure look
-        # like the committed write failing: swallow effects individually, report the failure to the observation hook,
-        # and return only {result} (the effects-omitted backward-compatible shape). Failing the whole thing here could
-        # duplicate a non-idempotent write on client retry.
-        resp: dict[str, Any] = {"result": result}
-        if deps.action_effects is not None:
-            try:
-                effects = await deps.action_effects(body.action, payload, result)
-                if effects.invalidates is not None:
-                    resp["invalidates"] = effects.invalidates
-                if effects.refVersions is not None:
-                    resp["refVersions"] = effects.refVersions
-            except BaseException as e:
-                await report_host_error(deps, "binding/action", request_id_of(request, deps), e)
-        return _json(resp)
+        # Write-already-committed vs. side-effect-declaration failure: see host_core's apply_action_effects.
+        response = await apply_action_effects(
+            deps.action_effects,
+            body.action,
+            payload,
+            result,
+            lambda e: report_host_error(deps, "binding/action", request_id_of(request, deps), e),
+        )
+        return _json(response)
