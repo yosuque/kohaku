@@ -83,7 +83,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: pnpm
+          # Deliberately no `cache: pnpm` in the release workflow: a restored cache is a supply-chain input
+          # to the artifacts this workflow publishes, so it runs cache-free (zizmor: cache-poisoning). CI
+          # keeps its caches; pnpm's lockfile integrity hashes still verify every package here.
+          package-manager-cache: false
       - run: pnpm install --frozen-lockfile
       # The tag, all twenty manifests, and both places Python states its version must agree. CI's drift
       # check covers the Python side on every push; this is the last gate before an asymmetric release,
@@ -145,7 +148,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: pnpm
+          # Deliberately no `cache: pnpm` in the release workflow: a restored cache is a supply-chain input
+          # to the artifacts this workflow publishes, so it runs cache-free (zizmor: cache-poisoning). CI
+          # keeps its caches; pnpm's lockfile integrity hashes still verify every package here.
+          package-manager-cache: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build:dist
       # Dry run only: perform the OIDC exchange for every publishable package exactly the way pnpm does,
