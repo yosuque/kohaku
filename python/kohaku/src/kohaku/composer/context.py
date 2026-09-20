@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from kohaku.llm import LlmEffort, LlmPort
 from kohaku.registry import ResolvedCatalog, SurfaceCapabilities
 from kohaku.spec import (
+    UNDEFINED,
     DataShape,
     Intent,
     QueryHandle,
@@ -21,7 +22,7 @@ from kohaku.spec import (
 )
 
 from .budget import ComposeBudget
-from .design_system import DesignSystemGuide
+from .design_system import DesignKitVocabulary, DesignSystemGuide
 from .prompt import FewShotExample
 from .trace import ComposeTrace, TraceInput
 
@@ -162,6 +163,22 @@ class ComposePolicy:
     """Per-tier Adaptive Reasoning effort. See `EffortPolicy`'s doc for the full contract."""
 
 
+def _kit_fingerprint_material(kit: DesignKitVocabulary) -> dict[str, object]:
+    """Converts a DesignKitVocabulary to policy_fingerprint material (port of the object TS folds in
+    verbatim via `designSystem.kit ?? undefined` — see that field's own note in `policy_fingerprint`'s
+    docstring). `skeleton` is folded in as an ABSENT key (`UNDEFINED`), not `None`, when unset — mirroring
+    the TS side, where an unset optional `skeleton?: string` is simply not a present key on the object
+    literal (not an explicit `undefined`)."""
+    return {
+        "id": kit.id,
+        "version": kit.version,
+        "classes": dict(kit.classes),
+        "utilities": list(kit.utilities),
+        "namespaces": list(kit.namespaces),
+        "skeleton": kit.skeleton if kit.skeleton is not None else UNDEFINED,
+    }
+
+
 def policy_fingerprint(
     policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None = None
 ) -> str:
@@ -177,7 +194,22 @@ def policy_fingerprint(
     only when set to "validate" (its default "schema" is indistinguishable from unset).
 
     fewShot / selectComponents are callables (their behavior cannot be inspected), so only their optional
-    `id` participates (default "anonymous" when unset). designSystem's entire body participates.
+    `id` participates (default "anonymous" when unset). designSystem folds in `tokens`, `guidelines`, and
+    `enforceTokenColors` unconditionally, plus two design-kit fields added by the Task 7b/10 mirror: `kit`
+    folds in the whole object (via `_kit_fingerprint_material`) whenever set — a different `id`, `version`,
+    `classes`, `utilities`, `namespaces` or `skeleton` all separate the cache, matching
+    `design_kit_prompt_fragment`'s effect on the L2 prompt — and `enforceKitClasses` folds in **only when
+    explicitly `False`**, the same non-default-only pattern as `refConstraint` below, because both `True`
+    and unset mean "the lint runs" and must stay indistinguishable so a kit-less or already-linted cache key
+    is untouched by this addition.
+
+    **A field folded in "only when non-default" must be written as `UNDEFINED` (the sentinel
+    `kohaku.spec.canonical_json` drops from a dict), never as an explicit `None`**: `canonical_stringify`
+    keeps a `None` dict value as JSON `null` but drops an `UNDEFINED` one entirely (mirroring the TS
+    `canonicalStringify`'s `sortDeep`, which drops `undefined` entries but keeps `null` ones) — so a `None`
+    default here would still change the hashed bytes, and therefore the cache key, for every policy that
+    never touches `kit` / `enforceKitClasses`. `UNDEFINED` is the only value that reproduces the
+    pre-existing byte layout exactly (see the pinned regression in test_policy_fingerprint.py).
 
     `policy.effort` participates in full (both l1/l2, defaulted to None when only one is set) whenever the
     object is set at all — effort changes generated output for the same Intent/model, so any caller that
@@ -220,6 +252,18 @@ def policy_fingerprint(
                 "tokens": design_system.tokens,
                 "guidelines": design_system.guidelines,
                 "enforceTokenColors": design_system.enforceTokenColors,
+                # Folded in only when non-default, and as an ABSENT key (UNDEFINED) rather than an
+                # explicit None — see this function's own docstring for why. UNDEFINED is the only value
+                # that reproduces the pre-existing byte layout exactly for every design-system policy that
+                # never touches either field.
+                "kit": (
+                    _kit_fingerprint_material(design_system.kit)
+                    if design_system.kit is not None
+                    else UNDEFINED
+                ),
+                "enforceKitClasses": (
+                    False if design_system.enforceKitClasses is False else UNDEFINED
+                ),
             }
             if design_system is not None
             else None

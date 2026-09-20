@@ -49,8 +49,12 @@ from .context import (
     tier_llm_fingerprint_material,
 )
 from .design_system import (
+    DEFAULT_KIT_SKELETON,
+    DEFAULT_KIT_VOCABULARY,
     DEFAULT_TOKEN_DESCRIPTIONS,
+    DesignKitVocabulary,
     DesignSystemGuide,
+    design_kit_prompt_fragment,
     design_system_prompt_fragment,
     token_to_css_var,
 )
@@ -58,7 +62,12 @@ from .errors import ComposeError, ComposeErrorCode
 from .fallback import build_fallback_spec
 from .fixation import FixationCheck, materialize_fixation
 from .l2_js_sidecar import L2JsSidecar, create_l2_js_sidecar
-from .l2_lint import collect_l2_issues, extract_html_document, extract_title
+from .l2_lint import (
+    collect_l2_issues,
+    collect_unknown_kit_classes,
+    extract_html_document,
+    extract_title,
+)
 from .post import (
     STANDARD_RULES,
     PostProcessContext,
@@ -88,6 +97,8 @@ from .trace import ComposeAttempt, ComposeTrace, TokenUsage, TraceInput
 
 __all__ = [
     "COMPOSER_ID",
+    "DEFAULT_KIT_SKELETON",
+    "DEFAULT_KIT_VOCABULARY",
     "DEFAULT_TOKEN_DESCRIPTIONS",
     "L1_SYSTEM_PROMPT",
     "L2_SYSTEM_PROMPT",
@@ -109,6 +120,7 @@ __all__ = [
     "ComposeStreamEvent",
     "ComposeTrace",
     "DeadlineGuard",
+    "DesignKitVocabulary",
     "DesignSystemGuide",
     "EffortPolicy",
     "FewShotExample",
@@ -143,11 +155,13 @@ __all__ = [
     "chart_kind",
     "check_budget",
     "collect_l2_issues",
+    "collect_unknown_kit_classes",
     "compose",
     "compose_stream",
     "create_deadline_guard",
     "create_l2_js_sidecar",
     "default_generator_version",
+    "design_kit_prompt_fragment",
     "design_system_prompt_fragment",
     "extract_html_document",
     "extract_title",

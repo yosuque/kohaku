@@ -10,7 +10,9 @@ import re
 from typing import Any
 
 from kohaku.composer import (
+    DEFAULT_KIT_VOCABULARY,
     ComposePolicy,
+    DesignKitVocabulary,
     DesignSystemGuide,
     FewShotPolicy,
     compose,
@@ -121,3 +123,67 @@ class TestPolicyFingerprint:
             assert bare.trace.cacheKey != with_output_language.trace.cacheKey
 
         asyncio.run(run())
+
+
+class TestDesignKitFingerprint:
+    """Task 7b/10 mirror: designSystem.kit / enforceKitClasses must be visible to policy_fingerprint (they
+    were previously invisible to the cache key). The TS-side pair is the same-named `it` blocks in
+    packages/composer/test/policy-fingerprint.test.ts."""
+
+    def test_kit_changes_the_fingerprint(self) -> None:
+        without_kit = policy_fingerprint(
+            ComposePolicy(designSystem=DesignSystemGuide(tokens={"color.primary": "brand color"}))
+        )
+        with_kit = policy_fingerprint(
+            ComposePolicy(
+                designSystem=DesignSystemGuide(
+                    tokens={"color.primary": "brand color"}, kit=DEFAULT_KIT_VOCABULARY
+                )
+            )
+        )
+        assert with_kit != without_kit
+
+    def test_two_kits_differing_only_in_version_produce_different_fingerprints(self) -> None:
+        kit_v2 = DesignKitVocabulary(
+            id=DEFAULT_KIT_VOCABULARY.id,
+            version="2",
+            classes=DEFAULT_KIT_VOCABULARY.classes,
+            utilities=DEFAULT_KIT_VOCABULARY.utilities,
+            namespaces=DEFAULT_KIT_VOCABULARY.namespaces,
+            skeleton=DEFAULT_KIT_VOCABULARY.skeleton,
+        )
+        fp_v1 = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))
+        fp_v2 = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=kit_v2)))
+        assert fp_v1 != fp_v2
+
+    def test_enforce_kit_classes_false_differs_true_is_indistinguishable_from_unset(self) -> None:
+        unset = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))
+        explicit_true = policy_fingerprint(
+            ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=True))
+        )
+        explicit_false = policy_fingerprint(
+            ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=False))
+        )
+        assert explicit_true == unset
+        assert explicit_false != unset
+
+    def test_kit_less_design_system_fingerprint_is_unchanged(self) -> None:
+        """Pinned against the value produced BEFORE kit / enforceKitClasses joined the material (computed
+        with `uv run python -c "..."` against the pre-Task-10 policy_fingerprint).
+
+        If this changes, the new keys are being serialized (even as null) for policies that do not use
+        them, which silently invalidates every existing design-system consumer's compose cache. If this
+        goes red, fix the material so the new key is absent by default (UNDEFINED, not None) — never
+        update this expected value. Re-pinning it is how the guarantee is lost. (The TS-side pin is a
+        different literal value — "a88d021f77ce79fd" — because Python's fingerprint is deterministic and
+        reproducible but not cross-language-pinned: it is not required to byte-match TS's for an
+        equivalent policy; see policy_fingerprint's own docstring.)
+        """
+        assert (
+            policy_fingerprint(
+                ComposePolicy(
+                    designSystem=DesignSystemGuide(tokens={"color.primary": "brand"}, guidelines=["a"])
+                )
+            )
+            == "65df86e493a4cb0c"
+        )
