@@ -60,34 +60,41 @@ module — don't fold it into an existing one — and update `python/README.md`'
 (the directory tree under "## Structure") if the new module is significant enough to list there.
 
 This rule is **forward-looking**: it applies to new files from here on and has not been
-retro-applied to the existing mirror, which was written before the rule existed. The two largest
-merges are tracked here as **known debt** (pre-existing, not something this runbook change is
-asking you to fix as a side effect of an unrelated mirror):
+retro-applied to the existing mirror, which was written before the rule existed. The largest
+remaining merge is tracked here as **known debt** (pre-existing, not something this runbook change
+is asking you to fix as a side effect of an unrelated mirror):
 
-- `kohaku/src/kohaku/host_mcp/server.py` merges four TS files: `server.ts` + `initial-data.ts` +
-  `types.ts` + `cache-hints.ts`. (`host_mcp/fallback.py`, `intent_tools.py`, `meta.py`, and
-  `snapshot.py` are already the correct 1:1 mirrors of `fallback.ts`, `intent-tools.ts`, `meta.ts`,
-  and `snapshot.ts` respectively — only `server.py` is the merged one.)
 - `kohaku/src/kohaku/lineage/promotion/service.py` merges four TS files: `service.ts` +
   `candidate-store.ts` + `nomination.ts` + `usage.ts`. (`promotion/machine.py` is already the
   correct 1:1 mirror of `promotion/machine.ts`.)
 
+`kohaku/src/kohaku/host_mcp/server.py` used to merge `server.ts` + `initial-data.ts` + `types.ts` +
+`cache-hints.ts` as well; that debt has been paid down — `types.py`, `initial_data.py`, and
+`cache_hints.py` are now their own 1:1 mirrors of `types.ts`, `initial-data.ts`, and
+`cache-hints.ts` respectively, and `server.py` is a 1:1 mirror of `server.ts` (`host_mcp/fallback.py`,
+`intent_tools.py`, `meta.py`, and `snapshot.py` remain the correct 1:1 mirrors of `fallback.ts`,
+`intent-tools.ts`, `meta.ts`, and `snapshot.ts`). TS's `tasks.ts` (the MCP Tasks extension) is not
+ported at all — see `python/README.md`'s "Known differences" section — so it has no Python
+counterpart to merge into anything.
+
 Don't let a merged file grow further while it's on this list — new logic that TS puts in a new file
 should get a new Python file too, even inside an already-merged module.
 
-These two are the largest, not the only, departures from the rule — do not read this section as
-"1:1 except for two files." At least these packages also differ, pre-existing and out of scope for
-this runbook change:
+This is the largest, not the only, departure from the rule — do not read this section as "1:1
+except for one file." At least these packages also differ, pre-existing and out of scope for this
+runbook change:
 
-- `host-core`: `intent.ts`, `allowed-actions.ts`, `action-effects.ts`, `view-recorder.ts`, and
-  `binding-ref.ts` have no dedicated Python module; their logic is inlined into
-  `host_rest/_routes/*.py` and `host_mcp/server.py` instead.
 - `lineage`: `constants.ts` and `tenant-scope.ts` have no Python counterpart, and the
   `fixation/service.ts` directory is mirrored as a single flat `fixation.py`.
 - `registry`: `json-schema.ts` and `from-json-schema.ts` are merged into one renamed
   `props_schema.py`.
 - `spec-core`: `errors.ts` and `rest-errors.ts` are merged into one `errors.py` (its docstring
   names both TS files it ports).
+
+`host-core`'s `intent.ts`, `allowed-actions.ts`, `action-effects.ts`, `view-recorder.ts`, and
+`binding-ref.ts` used to have no dedicated Python module (their logic was inlined into
+`host_rest/_routes/*.py` and `host_mcp/server.py`); that debt has also been paid down — all five now
+have dedicated 1:1 Python modules under `kohaku/src/kohaku/host_core/`.
 
 ## Cross-language golden fixtures
 

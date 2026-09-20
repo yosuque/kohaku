@@ -32,9 +32,11 @@ Key points that are easy to miss:
   direction is contracted) — see the runbook's section for the worked
   example and the deferred checks.
 - One TS source file mirrors to one Python module of the same name
-  (`initial-data.ts` → `initial_data.py`); `host_mcp/server.py` and
-  `lineage/promotion/service.py` are known exceptions still owing a split (see
-  the runbook's "Layout rule").
+  (`initial-data.ts` → `initial_data.py`); `lineage/promotion/service.py` is
+  the known exception still owing a split (see the runbook's "Layout rule").
+  `host_mcp/server.py` used to be a second exception, but that split has
+  already landed — `types.py`, `initial_data.py`, and `cache_hints.py` are now
+  their own 1:1 mirrors and `server.py` mirrors only `server.ts`.
 
 Verification:
 ```bash
