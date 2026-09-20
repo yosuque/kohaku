@@ -19,12 +19,12 @@
     "@kohaku-ui/spec-core": "workspace:^",
     "commander": "catalog:",
     "jsdom": "catalog:",
-    "semver": "catalog:",
-    "tsx": "catalog:"
+    "semver": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
     "@types/semver": "catalog:",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },

@@ -551,9 +551,6 @@ importers:
       semver:
         specifier: 'catalog:'
         version: 7.8.5
-      tsx:
-        specifier: 'catalog:'
-        version: 4.23.13
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -561,6 +558,9 @@ importers:
       '@types/semver':
         specifier: 'catalog:'
         version: 7.8.0
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.13
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
