@@ -40,8 +40,12 @@ export interface SurfaceContext {
     result?: unknown;
     message?: string;
   }) => void;
-  /** Bridge required to run L2 (sandbox.html) parts. If unset, L2 becomes an injection-request placeholder. */
-  sandbox?: { bridge: SandboxBridge; policy?: SandboxPolicy };
+  /**
+   * Bridge required to run L2 (sandbox.html) parts. If unset, L2 becomes an injection-request placeholder.
+   * `kitCss` is the design-kit stylesheet forwarded to mountSandbox (see MountSandboxOptions.kitCss): `undefined`
+   * injects renderer-core's `defaultDesignKit.css`, `""` injects nothing, any other string is the product's own kit.
+   */
+  sandbox?: { bridge: SandboxBridge; policy?: SandboxPolicy; kitCss?: string };
 }
 
 /**

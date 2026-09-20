@@ -118,4 +118,11 @@ export interface MountSandboxOptions {
    * On theme switch a re-mount (rebuilding the srcdoc) is required — SandboxFrame / renderer-wc include it as a dependency.
    */
   theme?: ThemeTokens;
+  /**
+   * The design-kit stylesheet injected into the srcdoc after the theme variables and before the generated
+   * CSS (so generated styles can override it). `undefined` injects renderer-core's `defaultDesignKit.css`;
+   * `""` injects nothing; any other string is the product's own kit (trusted CSS — it is escaped against
+   * `</style>` breakout but not otherwise sanitized). Pairs with composer's `DesignSystemGuide.kit`.
+   */
+  kitCss?: string;
 }

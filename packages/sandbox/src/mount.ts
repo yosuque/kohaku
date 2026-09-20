@@ -1,4 +1,4 @@
-import { sandboxThemeCss } from "@kohaku-ui/renderer-core";
+import { defaultDesignKit, sandboxThemeCss } from "@kohaku-ui/renderer-core";
 import { SandboxHostBridge, type SandboxPortLike } from "./host-bridge.js";
 import { createNavigationGuard } from "./navigation-guard.js";
 import { resolvePolicy, SANDBOX_ATTRIBUTE, utf8ByteLength } from "./policy.js";
@@ -139,6 +139,7 @@ export function mountSandbox(options: MountSandboxOptions): SandboxHandle {
         nonce,
         policy.rpcTimeoutMs,
         sandboxThemeCss(options.theme),
+        options.kitCss ?? defaultDesignKit.css,
       );
       // Registered before appendChild so the guard's load counter is deterministic: jsdom (used in unit tests)
       // ignores srcdoc, loads about:blank instead, and fires "load" synchronously on attach — attaching the

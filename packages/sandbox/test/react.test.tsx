@@ -79,4 +79,17 @@ describe("SandboxFrame re-mount conditions", () => {
     expect(mountCalls).toHaveLength(1);
     expect(destroyed).toHaveLength(0);
   });
+
+  it("re-mounts the iframe when kitCss changes and passes it through", () => {
+    const { rerender } = render(
+      <SandboxFrame node={node("query://a")} spec={spec} bridge={bridge} kitCss=".a{}" />,
+    );
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kitCss).toBe(".a{}");
+
+    rerender(<SandboxFrame node={node("query://a")} spec={spec} bridge={bridge} kitCss=".b{}" />);
+    expect(destroyed).toContain(0);
+    expect(mountCalls).toHaveLength(2);
+    expect(mountCalls[1]!.kitCss).toBe(".b{}");
+  });
 });

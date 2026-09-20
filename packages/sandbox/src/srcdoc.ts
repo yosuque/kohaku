@@ -43,8 +43,13 @@ export async function verifyArtifact(artifact: SandboxArtifact): Promise<void> {
  * `<style>` before the generated CSS, so the generated HTML's token references `var(--kohaku-*)` resolve here
  * — the artifact (the sha256 target) holds no values and stays theme-independent.
  *
- * Both `themeCss` and the generated CSS are run through `escapeStyleClose` before being placed inside the
- * trusted `<style>` element: neither is guaranteed free of a literal `</style>` (or `</STYLE\n>`, `</style >`,
+ * `kitCss` (the design-kit stylesheet — mount.ts defaults it to renderer-core's `defaultDesignKit.css` when
+ * unspecified) is injected as its own `<style>` between `themeCss` and the generated CSS, so the generated
+ * HTML's kit class references (`.k-card`, etc.) resolve against it while still letting the generated CSS,
+ * which is placed after it in source order, override the kit at equal specificity.
+ *
+ * `themeCss`, `kitCss` and the generated CSS are all run through `escapeStyleClose` before being placed inside
+ * the trusted `<style>` element: none is guaranteed free of a literal `</style>` (or `</STYLE\n>`, `</style >`,
  * etc. — the closing sequence a browser's HTML parser recognizes regardless of case or trailing whitespace
  * before `>`), which would otherwise close the trusted element early and let the remaining text be parsed as
  * document markup. `themeCss` is already sanitized by sandboxThemeCss, but this is defense in depth against a
@@ -61,6 +66,7 @@ export function buildSrcdoc(
   nonce: string,
   rpcTimeoutMs: number,
   themeCss?: string,
+  kitCss?: string,
 ): string {
   const parts = splitArtifact(html);
   const nonceCsp = applyRuntimeNonce(csp, nonce);
@@ -76,11 +82,12 @@ export function buildSrcdoc(
   const titleTag = parts.title !== "" ? `<title>${escapeHtml(parts.title)}</title>` : "";
   const themeStyle =
     themeCss != null && themeCss !== "" ? `<style>${escapeStyleClose(themeCss)}</style>` : "";
+  const kitStyle = kitCss != null && kitCss !== "" ? `<style>${escapeStyleClose(kitCss)}</style>` : "";
   const generatedStyle =
     parts.styles.length > 0 ? `<style>${escapeStyleClose(parts.styles.join("\n"))}</style>` : "";
   const head =
     `<head><meta http-equiv="Content-Security-Policy" content="${escapeAttr(nonceCsp)}">` +
-    `${titleTag}${themeStyle}${generatedStyle}` +
+    `${titleTag}${themeStyle}${kitStyle}${generatedStyle}` +
     `<script nonce="${nonce}">${runtimeJs}</script></head>`;
   return `<!DOCTYPE html><html>${head}<body></body></html>`;
 }

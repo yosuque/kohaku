@@ -66,6 +66,7 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
     initialProps: node.props,
     bridge: rt.sandbox.bridge,
     ...(rt.sandbox.policy != null ? { policy: rt.sandbox.policy } : {}),
+    ...(rt.sandbox.kitCss != null ? { kitCss: rt.sandbox.kitCss } : {}),
     // Inject theme tokens into the srcdoc (the same handoff as SandboxFrame). A theme change rides on the surface's
     // full re-render (rt rebuild → teardown / mount), so no subscription is needed here.
     theme: rt.theme,

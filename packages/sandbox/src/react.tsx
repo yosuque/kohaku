@@ -33,6 +33,14 @@ export function SandboxFrame(props: {
    */
   theme?: ThemeTokens;
   /**
+   * The design-kit stylesheet injected into the srcdoc after the theme variables and before the generated
+   * CSS (so generated styles can override it). `undefined` injects renderer-core's `defaultDesignKit.css`;
+   * `""` injects nothing; any other string is the product's own kit (trusted CSS — it is escaped against
+   * `</style>` breakout but not otherwise sanitized). A change in value re-mounts the iframe to rebuild the
+   * srcdoc, the same as `theme`.
+   */
+  kitCss?: string;
+  /**
    * Passes the mounted sandbox's invalidate (the entry point for the data-invalidation HostMessage) up to the parent.
    * On unmount / re-mount it notifies with null. Through this, the parent can bridge the write loop's data invalidation
    * into the guest's in-place re-fetch (while the capability stays in the parent).
@@ -73,6 +81,7 @@ export function SandboxFrame(props: {
       bridge: props.bridge,
       ...(props.policy != null ? { policy: props.policy } : {}),
       ...(props.theme != null ? { theme: props.theme } : {}),
+      ...(props.kitCss != null ? { kitCss: props.kitCss } : {}),
     });
     handle.onStateChange((next, d) => {
       setState(next);
@@ -90,8 +99,9 @@ export function SandboxFrame(props: {
     // Including node.id and $ref as dependencies ensures it is rebuilt whenever they are swapped out.
     // (allowedEvents is derived from node.id and spec.events, so it is sufficiently covered by these two dependencies.)
     // themeKey is the dependency for rebuilding the srcdoc on a change in theme content (light/dark switch).
+    // props.kitCss is included alongside it for the same reason (it too is baked into the srcdoc).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [artifact?.sha256, props.node.id, props.node.data?.$ref, themeKey]);
+  }, [artifact?.sha256, props.node.id, props.node.data?.$ref, themeKey, props.kitCss]);
 
   if (artifact?.inline == null) {
     return <Notice tone="error" text={sandboxArtifactMissingText(messages)} />;

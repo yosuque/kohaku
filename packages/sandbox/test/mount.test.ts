@@ -158,6 +158,46 @@ describe("mountSandbox theme token injection", () => {
   });
 });
 
+describe("mountSandbox design kit CSS injection", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  async function mountAndGetSrcdoc(kitCss?: string) {
+    const html = "<!DOCTYPE html><html><body>widget</body></html>";
+    const artifact: SandboxArtifact = { inline: html, sha256: await sha256Hex(html) };
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const handle = mountSandbox({
+      container,
+      componentId: "sb-kit",
+      allowedEvents: [],
+      artifact,
+      bridge,
+      ...(kitCss != null ? { kitCss } : {}),
+    });
+    let iframe: HTMLIFrameElement | null = null;
+    for (let i = 0; i < 50 && iframe == null; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      iframe = container.querySelector("iframe");
+    }
+    expect(iframe).not.toBeNull();
+    const srcdoc = iframe!.srcdoc;
+    handle.destroy();
+    return srcdoc;
+  }
+
+  it("injects the default design kit CSS when kitCss is unspecified, and none when kitCss is ''", async () => {
+    const withDefault = await mountAndGetSrcdoc();
+    expect(withDefault).toContain(".k-card{");
+    const without = await mountAndGetSrcdoc("");
+    expect(without).not.toContain(".k-card{");
+    const custom = await mountAndGetSrcdoc(".acme-tile{display:block}");
+    expect(custom).toContain(".acme-tile{display:block}");
+    expect(custom).not.toContain(".k-card{");
+  });
+});
+
 describe("mountSandbox immediate failure on a guest error during boot", () => {
   afterEach(() => {
     vi.restoreAllMocks();
