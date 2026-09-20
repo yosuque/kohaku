@@ -46,8 +46,13 @@ import { type DesignSystemGuide, designSystemPromptFragment } from "./design-sys
  * docs/design.md §8): one <style> in <head>, a single <script> just before </body> (concatenate multiple),
  * and which DOM shim APIs work normally versus which measurement APIs are only approximate or which globals
  * do not exist at all (paired with l2-generate's new L2_UNSAFE_MARKUP / L2_UNSUPPORTED_DOM lints).
+ * "12": the version that extended the design-system token vocabulary beyond colors (font / space /
+ * radius / shadow / motion — DEFAULT_TOKEN_DESCRIPTIONS), replaced L2_SYSTEM_PROMPT's "keep the design
+ * simple" line with a design brief, and added the optional "Design kit" section (designKitPromptFragment,
+ * paired with the L2_UNKNOWN_CLASS lint). When ComposePolicy.designSystem is unspecified the L2 prompt
+ * still differs from "11" (the brief), so this bump separates every cached L2 generation.
  */
-export const PROMPT_REVISION = "11";
+export const PROMPT_REVISION = "12";
 
 /**
  * The default value of generatorVersion. Composes the prompt version + model ID.
