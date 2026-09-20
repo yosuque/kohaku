@@ -32,7 +32,15 @@ from kohaku.lineage import (
     create_promotions,
 )
 from kohaku.lineage.promotion.service import _index_latest_generated, _usage_index_key
-from kohaku.spec import LineageActor, LineageEventRecord, LineageFilter, Principal, PromotionState
+from kohaku.spec import (
+    FixationRecord,
+    LineageActor,
+    LineageEventRecord,
+    LineageFilter,
+    Principal,
+    PromotionState,
+    UISpec,
+)
 from kohaku.storage import FileStoragePort
 
 from ._helpers import seed
@@ -191,6 +199,147 @@ def test_list_readonly_evaluate_nominates(tmp_path: Path) -> None:
         assert evaluated[0].status == "candidate"
         nominated = [e for e in await storage.list_lineage() if e.type == "component.nominated"]
         assert len(nominated) == 1
+
+    asyncio.run(run())
+
+
+# --- _persist_many: batch put_promotion_states support (SupportsBatchPromotionStates) ---
+
+
+class _NoBatchPutStorage:
+    """A StoragePort implementation composed around (not subclassing) a FileStoragePort, so it structurally
+    lacks `put_promotion_states` entirely -- proving `isinstance(storage, SupportsBatchPromotionStates)` is
+    False for it and `_persist_many` still falls back to one `put_promotion_state` call per candidate."""
+
+    def __init__(self, inner: FileStoragePort) -> None:
+        self._inner = inner
+        self.put_promotion_state_calls: list[PromotionState] = []
+
+    async def get_spec_cache(self, key: str) -> UISpec | None:
+        return await self._inner.get_spec_cache(key)
+
+    async def put_spec_cache(
+        self, key: str, spec: UISpec, *, ttl_seconds: int | None = None
+    ) -> None:
+        await self._inner.put_spec_cache(key, spec, ttl_seconds=ttl_seconds)
+
+    async def append_lineage(self, event: LineageEventRecord) -> None:
+        await self._inner.append_lineage(event)
+
+    async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
+        return await self._inner.list_lineage(filter)
+
+    async def get_promotion_state(
+        self, artifact_id: str, tenant: str | None = None
+    ) -> PromotionState | None:
+        return await self._inner.get_promotion_state(artifact_id, tenant)
+
+    async def put_promotion_state(self, state: PromotionState) -> None:
+        self.put_promotion_state_calls.append(state)
+        await self._inner.put_promotion_state(state)
+
+    async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]:
+        return await self._inner.list_promotion_states(tenant)
+
+    async def get_fixation(
+        self, intent_hash: str, tenant: str | None = None
+    ) -> FixationRecord | None:
+        return await self._inner.get_fixation(intent_hash, tenant)
+
+    async def put_fixation(self, record: FixationRecord, *, if_present: bool = False) -> None:
+        await self._inner.put_fixation(record, if_present=if_present)
+
+    async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]:
+        return await self._inner.list_fixations(tenant)
+
+    async def delete_fixation(self, intent_hash: str, tenant: str | None = None) -> None:
+        await self._inner.delete_fixation(intent_hash, tenant)
+
+
+class _BatchPutSpyStorage(FileStoragePort):
+    """A FileStoragePort subclass that records every `put_promotion_states` / `put_promotion_state` call
+    while still delegating to the real implementation, proving `_persist_many` routes a batch nominate
+    through the single `put_promotion_states` call (not one `put_promotion_state` call per candidate) once
+    `isinstance(storage, SupportsBatchPromotionStates)` is True."""
+
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__(data_dir)
+        self.batch_calls: list[list[PromotionState]] = []
+        self.single_calls: list[PromotionState] = []
+
+    async def put_promotion_states(self, states: list[PromotionState]) -> None:
+        self.batch_calls.append(list(states))
+        await super().put_promotion_states(states)
+
+    async def put_promotion_state(self, state: PromotionState) -> None:
+        self.single_calls.append(state)
+        await super().put_promotion_state(state)
+
+
+def test_persist_many_falls_back_to_one_by_one_without_batch_support(tmp_path: Path) -> None:
+    """A storage without `put_promotion_states` (SupportsBatchPromotionStates is False for it) must still
+    persist every nominated candidate, one `put_promotion_state` call at a time."""
+
+    async def run() -> None:
+        inner = FileStoragePort(tmp_path)
+        storage = _NoBatchPutStorage(inner)
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=2, minDistinctSessions=1, judgeBlocking=False),
+        )
+        # Seeded through `inner` (the _seed_generated / seed helpers are typed for the concrete
+        # FileStoragePort); `storage` delegates every StoragePort call to the same `inner`, so both see the
+        # identical lineage state.
+        await _seed_generated(inner, "a1")
+        await seed(inner, "component.used", {"artifactId": "a1", "sessionId": "s1"})
+        await seed(inner, "component.used", {"artifactId": "a1", "sessionId": "s2"})
+        await _seed_generated(inner, "a2")
+        await seed(inner, "component.used", {"artifactId": "a2", "sessionId": "s1"})
+        await seed(inner, "component.used", {"artifactId": "a2", "sessionId": "s2"})
+
+        evaluated = await promotions.evaluate_and_list()
+        assert {c.artifactId for c in evaluated if c.status == "candidate"} == {"a1", "a2"}
+
+        # One put_promotion_state call per nominated candidate -- the batch was never available.
+        assert {s.artifactId for s in storage.put_promotion_state_calls} == {"a1", "a2"}
+        assert len(storage.put_promotion_state_calls) == 2
+
+        assert (await storage.get_promotion_state("a1")).status == "candidate"  # type: ignore[union-attr]
+        assert (await storage.get_promotion_state("a2")).status == "candidate"  # type: ignore[union-attr]
+
+    asyncio.run(run())
+
+
+def test_persist_many_uses_single_batch_call_when_supported(tmp_path: Path) -> None:
+    """A storage that implements `put_promotion_states` (SupportsBatchPromotionStates is True for it) must
+    have every nominated candidate persisted through a single batch call, not one `put_promotion_state` call
+    per candidate."""
+
+    async def run() -> None:
+        storage = _BatchPutSpyStorage(tmp_path)
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=2, minDistinctSessions=1, judgeBlocking=False),
+        )
+        await _seed_generated(storage, "a1")
+        await seed(storage, "component.used", {"artifactId": "a1", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "a1", "sessionId": "s2"})
+        await _seed_generated(storage, "a2")
+        await seed(storage, "component.used", {"artifactId": "a2", "sessionId": "s1"})
+        await seed(storage, "component.used", {"artifactId": "a2", "sessionId": "s2"})
+
+        evaluated = await promotions.evaluate_and_list()
+        assert {c.artifactId for c in evaluated if c.status == "candidate"} == {"a1", "a2"}
+
+        # Exactly one batch call, carrying both states -- and put_promotion_state (singular) never fires.
+        assert len(storage.batch_calls) == 1
+        assert {s.artifactId for s in storage.batch_calls[0]} == {"a1", "a2"}
+        assert storage.single_calls == []
+
+        assert (await storage.get_promotion_state("a1")).status == "candidate"  # type: ignore[union-attr]
+        assert (await storage.get_promotion_state("a2")).status == "candidate"  # type: ignore[union-attr]
 
     asyncio.run(run())
 

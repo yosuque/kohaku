@@ -27,6 +27,7 @@ from kohaku.spec import (
     Principal,
     PromotionState,
     StoragePort,
+    SupportsBatchPromotionStates,
     validate_promotion_state,
 )
 
@@ -456,17 +457,18 @@ class Promotions:
         self, candidates: list[PromotionCandidate], tenant: str | None = None
     ) -> None:
         """Batch counterpart of `_persist`: builds every PromotionState up front, then issues either one
-        `StoragePort.put_promotion_states` call (when the storage duck-types it in -- see
-        `kohaku.spec.ports.StoragePort`'s comment on why this is not a declared Protocol member, unlike TS's
-        real optional interface field) or falls back to the legacy one-`put_promotion_state`-call-per-state
-        loop. A no-op for an empty list. Used by the batch nominate persistence in `_gather_candidates` below
-        (mirrors TS nomination.ts's `toPersist` / candidate-store.ts's `persistMany`)."""
+        `StoragePort.put_promotion_states` call (when the storage implements
+        `kohaku.spec.ports.SupportsBatchPromotionStates` -- see that Protocol's comment, and
+        `kohaku.spec.ports.StoragePort`'s comment on why it is not a declared `StoragePort` Protocol member,
+        unlike TS's real optional interface field) or falls back to the legacy one-`put_promotion_state`-call
+        -per-state loop. A no-op for an empty list. Used by the batch nominate persistence in
+        `_gather_candidates` below (mirrors TS nomination.ts's `toPersist` / candidate-store.ts's
+        `persistMany`)."""
         if not candidates:
             return
         states = [self._build_promotion_state(c, tenant) for c in candidates]
-        put_many = getattr(self._storage, "put_promotion_states", None)
-        if put_many is not None:
-            await put_many(states)
+        if isinstance(self._storage, SupportsBatchPromotionStates):
+            await self._storage.put_promotion_states(states)
         else:
             for state in states:
                 await self._storage.put_promotion_state(state)
@@ -568,7 +570,7 @@ class Promotions:
             candidates.append(candidate)
 
         # Every eligible candidate's status transition is now applied in memory; persist them all in a single
-        # batch write (see _persist_many's doc for the StoragePort.put_promotion_states duck-type / fallback).
+        # batch write (see _persist_many's doc for the SupportsBatchPromotionStates isinstance check / fallback).
         await self._persist_many(to_persist, tenant)
 
         # component.nominated audit events are recorded only after the batch persist above resolves, and are

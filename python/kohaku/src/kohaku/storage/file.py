@@ -279,12 +279,13 @@ class FileStoragePort:
         )
 
     async def put_promotion_states(self, states: list[PromotionState]) -> None:
-        """Batch counterpart of put_promotion_state (a genuinely optional StoragePort extension -- duck-typed
-        by callers via getattr; see spec.ports.StoragePort's comment on this method): one read-modify-write
-        for every state in the batch instead of one per state, via _merge_mutate. A batch nomination pass
-        (kohaku.lineage.promotion.service transitioning many candidates from in_use to candidate at once)
-        would otherwise re-read/re-stringify/re-write promotions.json once per candidate. A no-op for an
-        empty list (mirrors TS's early return in storage-port.ts's putPromotionStates)."""
+        """Batch counterpart of put_promotion_state (a genuinely optional StoragePort extension -- checked by
+        callers via isinstance against spec.ports.SupportsBatchPromotionStates; see spec.ports.StoragePort's
+        comment on this method): one read-modify-write for every state in the batch instead of one per state,
+        via _merge_mutate. A batch nomination pass (kohaku.lineage.promotion.service transitioning many
+        candidates from in_use to candidate at once) would otherwise re-read/re-stringify/re-write
+        promotions.json once per candidate. A no-op for an empty list (mirrors TS's early return in
+        storage-port.ts's putPromotionStates)."""
         if not states:
             return
 
@@ -352,8 +353,8 @@ class FileStoragePort:
         memory: dict[str, T],
         key: str,
         value: T,
-        to_wire: Any,
-        from_wire: Any,
+        to_wire: Callable[[T], dict[str, Any]],
+        from_wire: Callable[[dict[str, Any]], T],
         *,
         if_present: bool = False,
     ) -> None:
@@ -381,8 +382,8 @@ class FileStoragePort:
         self,
         path: Path,
         memory: dict[str, T],
-        to_wire: Any,
-        from_wire: Any,
+        to_wire: Callable[[T], dict[str, Any]],
+        from_wire: Callable[[dict[str, Any]], T],
         mutate: Callable[[dict[str, Any]], bool | None],
     ) -> None:
         """Read the latest from disk, apply `mutate` to the wire-shaped snapshot dict, write it back

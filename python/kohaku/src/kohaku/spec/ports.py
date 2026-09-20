@@ -7,7 +7,7 @@ convention (they are an API the product implements, not a wire contract). Record
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -295,6 +295,21 @@ def validate_promotion_state(raw: object) -> PromotionState | None:
     )
 
 
+@runtime_checkable
+class SupportsBatchPromotionStates(Protocol):
+    """Optional StoragePort extension: a single read-modify-write for several PromotionStates at once (TS's
+    real optional interface field `putPromotionStates?()` on packages/spec-core/src/ports.ts). Deliberately
+    not declared as a member of `StoragePort` itself -- see that Protocol's `put_promotion_states` comment
+    below for why forcing every implementation (including minimal test stubs) to grow it would be wrong.
+    Expressed as its own `runtime_checkable` Protocol so callers can check for support with
+    `isinstance(storage, SupportsBatchPromotionStates)` instead of a manual `getattr` probe. Like that old
+    probe, `isinstance` against a `runtime_checkable` Protocol only checks that the named attribute is
+    present, not that its signature matches -- the same presence-only semantics, just typed.
+    """
+
+    async def put_promotion_states(self, states: list[PromotionState]) -> None: ...
+
+
 class StoragePort(Protocol):
     """Persistence target for cache, Lineage, and promotion state (RLS multi-tenancy etc. are the product's choice).
 
@@ -330,15 +345,17 @@ class StoragePort(Protocol):
 
     # `put_promotion_states` (batch put) is a *genuinely optional* StoragePort extension -- unlike
     # `delete_fixation` above (a required method that an unsupporting implementation opts out of via
-    # NotImplementedError), this one is deliberately **not** declared as a Protocol member. TS's counterpart
-    # (packages/spec-core/src/ports.ts) is a real optional interface field (`putPromotionStates?()`), checked
-    # by callers via `storage.putPromotionStates != null`; Python has no equivalent "optional Protocol
-    # member" construct that would not force every existing StoragePort implementation across the codebase
-    # (including minimal test stubs that intentionally implement only a subset of methods) to grow a new
-    # method just to keep type-checking. Callers instead duck-type it at the call site the same way TS does
-    # at runtime: `getattr(storage, "put_promotion_states", None)`, falling back to looping
-    # put_promotion_state when absent. See kohaku.storage.file.FileStoragePort.put_promotion_states for the
-    # reference implementation (one read-modify-write for every state in the batch).
+    # NotImplementedError), this one is deliberately **not** declared as a member of this Protocol. TS's
+    # counterpart (packages/spec-core/src/ports.ts) is a real optional interface field
+    # (`putPromotionStates?()`), checked by callers via `storage.putPromotionStates != null`; Python has no
+    # equivalent "optional Protocol member" construct that would not force every existing StoragePort
+    # implementation across the codebase (including minimal test stubs that intentionally implement only a
+    # subset of methods) to grow a new method just to keep type-checking. Callers instead check for it at the
+    # call site via `isinstance(storage, SupportsBatchPromotionStates)` (see that Protocol above -- a typed,
+    # runtime_checkable equivalent of a manual `getattr(storage, "put_promotion_states", None)` probe, with
+    # the same presence-only semantics), falling back to looping put_promotion_state when absent. See
+    # kohaku.storage.file.FileStoragePort.put_promotion_states for the reference implementation (one
+    # read-modify-write for every state in the batch).
 
     async def get_fixation(
         self, intent_hash: str, tenant: str | None = None
