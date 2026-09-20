@@ -7,6 +7,10 @@ on:
 # token to read-only explicitly — this also applies to pull_request runs from forks.
 permissions:
   contents: read
+# A newer push to the same PR supersedes the run in flight; pushes to main are never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   ci:
     runs-on: ubuntu-latest
@@ -45,15 +49,15 @@ jobs:
       - name: Production dependency audit (report only)
         run: pnpm audit --prod --audit-level=high
         continue-on-error: true
-      - run: pnpm test
+      # One run of the suite per leg: the 24 leg runs it under coverage (the thresholds in
+      # vitest.config.ts are the gate), the 22 leg runs it plain to prove the declared Node floor.
+      - name: Test (with coverage on the primary leg)
+        run: ${{ matrix.node-version == 24 && 'pnpm test:coverage' || 'pnpm test' }}
       - run: pnpm typecheck
       - run: node cli/bin/kohaku.js conformance --self
       # Everything below this line must run exactly once per CI run (a coverage upload artifact name
       # collision, or two legs racing to write/verify the same generated files), so it is gated to a single
       # matrix leg rather than duplicated across node-version 22 and 24.
-      - name: Coverage report
-        if: matrix.node-version == 24
-        run: pnpm test:coverage
       - uses: actions/upload-artifact@v7
         if: matrix.node-version == 24
         with:
@@ -116,6 +120,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: ${{ matrix.python-version }}
+          enable-cache: true
       - run: uv sync --frozen
       - run: uv run ruff check
       - run: uv run mypy
@@ -144,19 +149,7 @@ jobs:
           SERVER_PID=$!
           # Always stop the server regardless of the conformance outcome (cleanup).
           trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-          ready=""
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8787/api/kohaku/catalog >/dev/null; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          if [ -z "$ready" ]; then
-            echo "sample-api did not start within 30 seconds. Server log:"
-            cat "$LOG"
-            exit 1
-          fi
+          scripts/wait-for-http.sh http://localhost:8787/api/kohaku/catalog 30 "$LOG"
           node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku
   # Conformance black-box check against the Python host (guarantees cross-implementation spec conformance in CI).
   # The LLM uses the example (sales-api) deterministic pseudo-LLM (KOHAKU_LLM_PROVIDER=fake by default); no real LLM required.
@@ -174,6 +167,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
+          enable-cache: true
       - run: uv sync --frozen
         working-directory: python
       # The L2 JS sidecar live test requires Node+CLI. The python job has no Node and always skips it, so we run it
@@ -189,19 +183,7 @@ jobs:
           SERVER_PID=$!
           # Always stop the server regardless of the conformance outcome (cleanup).
           trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-          ready=""
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:8790/api/kohaku/catalog >/dev/null; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          if [ -z "$ready" ]; then
-            echo "sales-api did not start within 30 seconds. Server log:"
-            cat "$LOG"
-            exit 1
-          fi
+          scripts/wait-for-http.sh http://localhost:8790/api/kohaku/catalog 30 "$LOG"
           node cli/bin/kohaku.js conformance --rest http://localhost:8790/api/kohaku
   # Reports whether a pull request carries a changeset, without blocking on it: documentation, CI and
   # internal-tooling changes legitimately have none, and a hard gate on those would only teach people to

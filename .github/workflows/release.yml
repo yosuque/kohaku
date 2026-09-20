@@ -216,6 +216,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.1.0
         with:
           python-version: "3.12"
+          enable-cache: true
       - run: uv build --package kohaku-ui --out-dir dist
         working-directory: python
       # Proves the wheel is self-contained: the test suite reads spec/ from the monorepo root, so an
