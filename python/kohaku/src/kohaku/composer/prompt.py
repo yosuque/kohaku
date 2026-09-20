@@ -16,7 +16,7 @@ from kohaku.spec import DataShape, Intent, JsonObject, UISpec, canonical_stringi
 
 from .design_system import DesignSystemGuide, design_system_prompt_fragment
 
-PROMPT_REVISION = "11"
+PROMPT_REVISION = "12"
 """Revision of the L1/L2 prompts (in sync with TS's PROMPT_REVISION). Always bump it when changed.
 
 "8": the version that introduced the design-system section (design_system_prompt_fragment) into
@@ -34,6 +34,14 @@ work normally versus which measurement APIs are only approximate or which global
 (paired with l2_lint's new L2_UNSAFE_MARKUP / L2_UNSUPPORTED_DOM checks). Python has no sandbox runtime of
 its own (see the TS PROMPT_REVISION docstring and packages/spec-core/src/schema/sandbox-dom.ts's own note),
 so this is a text-only mirror kept byte-identical with the TS prompt.
+"12": the version that extends the design-system token vocabulary beyond colors (font / space / radius /
+shadow / motion — DEFAULT_TOKEN_DESCRIPTIONS). On the TS side this revision also replaces
+L2_SYSTEM_PROMPT's "keep the design simple" line with a design brief and adds the optional "Design kit"
+section (designKitPromptFragment, paired with the L2_UNKNOWN_CLASS lint); those two additions land in the
+Python port in a later mirroring task, not this one. Bumping PROMPT_REVISION here regardless keeps the
+Python cacheKey (default_generator_version) separated from "11", matching the TS side's rule that any
+observable prompt-content change — including one not yet mirrored to this language — gets its own
+revision rather than silently reusing an old one.
 """
 
 
