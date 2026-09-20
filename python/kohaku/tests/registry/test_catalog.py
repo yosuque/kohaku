@@ -40,21 +40,25 @@ def _def(
 
 class TestCoreCatalog:
     def test_loads_every_exported_component(self) -> None:
-        """The component count is derived from the exported catalog JSON (the TS source of
-        truth, `python/kohaku/src/kohaku/registry/_data/core-catalog.json`), not hard-coded —
-        so this test never needs a manual count bump when a component is added or removed.
+        """The expected identifier set is derived from the exported catalog JSON (the TS source
+        of truth, `python/kohaku/src/kohaku/registry/_data/core-catalog.json`), not hard-coded —
+        so this test never needs a manual list/count bump when a component is added or removed.
 
-        This only guards against `core_catalog()` acquiring filtering, deduplication or
-        partial-load behavior that silently drops or duplicates entries — it is not a check on
-        the catalog's *contents*. Content is pinned by the two fingerprint tests:
-        `packages/registry/test/catalog.test.ts` and
+        Asserts set equality of component `type` identifiers between `core_catalog()` and the
+        JSON, so it catches a loader that drops, duplicates, or renames an entry (a length-only
+        comparison cannot: it stays equal under a drop+duplicate or a rename, since both leave the
+        count unchanged). It is still not a check on the catalog's *contents* (each component's
+        version, propsSchema, capabilities, etc.) — content is pinned by the two fingerprint
+        tests: `packages/registry/test/catalog.test.ts` and
         `python/kohaku/tests/registry/test_fingerprint.py`."""
         json_components = json.loads(
             resources.files("kohaku.registry._data")
             .joinpath("core-catalog.json")
             .read_text("utf-8")
         )["components"]
-        assert len(core_catalog().components) == len(json_components)
+        json_types = {c["type"] for c in json_components}
+        loaded_types = {d.type for d in core_catalog().components}
+        assert loaded_types == json_types
 
     def test_all_fallback_types_have_map_props(self) -> None:
         """Every fallbackType in the JSON has a corresponding map_props on the Python side
