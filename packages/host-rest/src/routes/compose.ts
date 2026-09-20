@@ -23,7 +23,6 @@ import {
   reportHostError,
   requestIdOf,
   resolveTenant,
-  safeRecord,
   sessionMeta,
   toSession,
   traceContextOf,
@@ -210,7 +209,7 @@ async function resolveComposeRequest(
  * Shared skeleton for the latter half of /compose and /events: composeForRest -> capability issuance ->
  * audit recording (fail-open) -> JSON response.
  * Failures are COMPOSE_FAILED 500. The endpoint name is passed as-is to logs / error reporting.
- * beforeRecord runs inside safeRecord, before recordComposed (for /events' interacted).
+ * beforeRecord runs inside recordComposedResult's record callback, before recordComposed (for /events' interacted).
  */
 async function deliverComposed(
   c: Context,
@@ -231,15 +230,16 @@ async function deliverComposed(
     // Propagate client-disconnect / timeout aborts through to compose (the L1/L2 LLM calls).
     const result = await composeForRest(intent, session, deps, signal, requestId, traceContext);
     const capability = await issueSpecCapability(result.spec, principal, deps, endpoint, requestId);
-    // Audit recording is fail-open, prioritizing delivery availability: swallow recorder failures so they do
-    // not take down delivery (including cached Specs), notify the observability hook (onError) of the failure, and
-    // still return a successful response.
-    // A cancelled compose (the caller's abort fired) is not a generation failure and observer.onError
-    // already received phase:"cancelled" from the composer — skip lineage recording entirely so a client
-    // disconnect/timeout does not inflate view.composed / view.fallback counts. The fallback body is still
-    // returned as usual.
-    if (result.trace.cancelled !== true) {
-      await safeRecord(deps, endpoint, requestId, async () => {
+    // Audit recording is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the MCP
+    // profile's composeAndAudit): swallow recorder failures so they do not take down delivery (including
+    // cached Specs), notify the observability hook (onError) of the failure, and still return a successful
+    // response. A cancelled compose (the caller's abort fired) is not a generation failure and observer.onError
+    // already received phase:"cancelled" from the composer — recordComposedResult skips lineage recording
+    // entirely so a client disconnect/timeout does not inflate view.composed / view.fallback counts. The
+    // fallback body is still returned as usual.
+    await hostCore.recordComposedResult(
+      result,
+      async () => {
         await beforeRecord?.();
         // Compute specHash exactly once and share it between recordComposed and recordFallbackIfAny
         // (mirroring finishStream): without it, each independently hashes the same Spec when a fallback
@@ -247,8 +247,9 @@ async function deliverComposed(
         const specHash = await computeSpecHash(result.spec);
         await recordComposed(deps, result, session, specHash);
         await recordFallbackIfAny(deps, result, session, specHash);
-      });
-    }
+      },
+      (e) => reportHostError(deps, endpoint, requestId, e),
+    );
     return c.json({ spec: result.spec, capability });
   } catch (e) {
     await reportHostError(deps, endpoint, requestId, e);
@@ -583,16 +584,19 @@ async function finishStream(
   // Compute specHash exactly once per request and share it between the recorder (view.composed) and the done
   // event, avoiding hashing the same Spec twice.
   const specHash = await computeSpecHash(result.spec);
-  // Audit recording is fail-open, prioritizing delivery availability: swallow recorder failures so they do
-  // not take down emitting the done event (= normal termination), and notify the observability hook (onError) of the failure.
-  // Same cancelled-skip as deliverComposed: a client disconnect/timeout must not inflate view.composed /
-  // view.fallback counts, and observer.onError already received phase:"cancelled" from the composer.
-  if (result.trace.cancelled !== true) {
-    await safeRecord(deps, "compose/stream", requestId, async () => {
+  // Audit recording is cancelled-aware and fail-open (host-core's recordComposedResult): swallow recorder
+  // failures so they do not take down emitting the done event (= normal termination), and notify the
+  // observability hook (onError) of the failure. Same cancelled-skip as deliverComposed: a client
+  // disconnect/timeout must not inflate view.composed / view.fallback counts, and observer.onError already
+  // received phase:"cancelled" from the composer.
+  await hostCore.recordComposedResult(
+    result,
+    async () => {
       await recordComposed(deps, result, session, specHash);
       await recordFallbackIfAny(deps, result, session, specHash);
-    });
-  }
+    },
+    (e) => reportHostError(deps, "compose/stream", requestId, e),
+  );
   await stream.writeSSE({
     event: "done",
     data: JSON.stringify({

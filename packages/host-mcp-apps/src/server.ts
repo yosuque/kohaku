@@ -220,30 +220,28 @@ async function composeAndAudit(
 ): Promise<ComposeResult> {
   const result = await composeForTool(ctx, input, options);
   if (options?.afterCompose != null) await options.afterCompose(result);
-  // The audit record prioritizes delivery availability and is fail-open: a recording failure is swallowed
-  // so it does not drag down UI delivery (including a cached Spec), and the failure is reported to the observation
-  // hook (onError) while the result returns normally. Built on host-core's failOpen (the shared fail-open
-  // building block, also consumed by the REST profile's safeRecord).
-  // A cancelled compose (the caller's abort fired) is not a generation failure and observer.onError already
-  // received phase:"cancelled" from the composer — skip the audit record so a client disconnect/timeout does not
-  // inflate audit counts (parity with the REST profile's deliverComposed/finishStream guard).
-  if (result.trace.cancelled !== true) {
-    await hostCore.failOpen(
-      async () => {
-        if (ctx.deps.recorder != null) {
-          await ctx.deps.recorder.composed({
-            spec: result.spec,
-            trace: result.trace,
-            surface: MCP_APP_SURFACE,
-          });
-          await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, { surface: MCP_APP_SURFACE });
-        } else {
-          await ctx.deps.onComposed?.(result.spec, result.trace);
-        }
-      },
-      (e) => reportMcpError(ctx.deps, endpoint, e),
-    );
-  }
+  // The audit record is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the REST
+  // profile's deliverComposed/finishStream): a recording failure is swallowed so it does not drag down UI
+  // delivery (including a cached Spec), and the failure is reported to the observation hook (onError) while
+  // the result returns normally. A cancelled compose (the caller's abort fired) is not a generation failure
+  // and observer.onError already received phase:"cancelled" from the composer — recordComposedResult skips
+  // the audit record so a client disconnect/timeout does not inflate audit counts.
+  await hostCore.recordComposedResult(
+    result,
+    async () => {
+      if (ctx.deps.recorder != null) {
+        await ctx.deps.recorder.composed({
+          spec: result.spec,
+          trace: result.trace,
+          surface: MCP_APP_SURFACE,
+        });
+        await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, { surface: MCP_APP_SURFACE });
+      } else {
+        await ctx.deps.onComposed?.(result.spec, result.trace);
+      }
+    },
+    (e) => reportMcpError(ctx.deps, endpoint, e),
+  );
   return result;
 }
 

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { TraceContext } from "@kohaku-ui/composer";
-import { errorMessage, failOpen, notifyHook, parseTraceContext } from "@kohaku-ui/host-core";
+import { errorMessage, notifyHook, parseTraceContext } from "@kohaku-ui/host-core";
 import type { Principal, SessionContext, Surface } from "@kohaku-ui/spec-core";
 import type { Context } from "hono";
 import type { z } from "zod";
@@ -181,19 +181,4 @@ export async function reportHostError(
   error: unknown,
 ): Promise<void> {
   await notifyHook(deps.onError, { endpoint, requestId, error });
-}
-
-/**
- * Runs audit recording (recorder / view.fallback) fail-open.
- * Tradeoff: prioritize delivery availability over missing audit records, so a record failure does not take down
- * delivery (including delivery of a cached Spec and emitting the SSE done). Failures are notified to the
- * observability hook (onError) via host-core's failOpen (the shared fail-open building block).
- */
-export async function safeRecord(
-  deps: KohakuHostDeps,
-  endpoint: string,
-  requestId: string,
-  record: () => Promise<void>,
-): Promise<void> {
-  await failOpen(record, (e) => reportHostError(deps, endpoint, requestId, e));
 }

@@ -63,8 +63,9 @@ export async function notifyHook<I>(
 
 /**
  * Runs `fn`, and on failure runs `onFailure(error)` instead of rethrowing. Shared building block for
- * fail-open audit recording (REST's safeRecord / MCP's composeAndAudit): prioritizes delivery availability by
- * swallowing a recording failure rather than letting it take down an otherwise-successful response.
+ * fail-open audit recording (view-recorder.ts's recordComposedResult, consumed by both host profiles):
+ * prioritizes delivery availability by swallowing a recording failure rather than letting it take down an
+ * otherwise-successful response.
  */
 export async function failOpen(
   fn: () => Promise<void>,
