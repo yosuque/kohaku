@@ -84,6 +84,17 @@ describe("design-kit contract (composer vocabulary ⇄ renderer-core CSS)", () =
     expect(undocumented).toEqual([]);
   });
 
+  it("every reserved namespace prefix has at least one utility or class behind it", () => {
+    // A namespace with nothing behind it means the model can write the Tailwind-natural class (mx-auto,
+    // pt-2, h-full, …) and get bounced by L2_UNKNOWN_CLASS every time — the bug commit 1 of this branch
+    // fixes. Exclude nothing: if a prefix has no utility or class starting with it, this must fail.
+    const known = [...Object.keys(DEFAULT_KIT_VOCABULARY.classes), ...DEFAULT_KIT_VOCABULARY.utilities];
+    const uncovered = DEFAULT_KIT_VOCABULARY.namespaces.filter(
+      (ns) => !known.some((name) => name.startsWith(ns)),
+    );
+    expect(uncovered).toEqual([]);
+  });
+
   it("every var(--kohaku-…) the kit CSS references is emitted by sandboxThemeCss", () => {
     const referenced = [
       ...new Set([...defaultDesignKit.css.matchAll(/var\((--kohaku-[a-z0-9-]+)\)/g)].map((m) => m[1]!)),

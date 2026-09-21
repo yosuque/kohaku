@@ -128,6 +128,7 @@ _KIT_UTILITIES: tuple[str, ...] = (
     "grid",
     "hidden",
     "w-full",
+    "h-full",
     "flex-col",
     "flex-wrap",
     "items-center",
@@ -141,9 +142,19 @@ _KIT_UTILITIES: tuple[str, ...] = (
     *[f"p-{n}" for n in _SCALE],
     *[f"px-{n}" for n in _SCALE],
     *[f"py-{n}" for n in _SCALE],
+    *[f"pt-{n}" for n in _SCALE],
+    *[f"pb-{n}" for n in _SCALE],
+    *[f"pl-{n}" for n in _SCALE],
+    *[f"pr-{n}" for n in _SCALE],
     "m-0",
+    *[f"m-{n}" for n in _SCALE],
+    "mx-auto",
+    *[f"mx-{n}" for n in _SCALE],
+    *[f"my-{n}" for n in _SCALE],
     *[f"mt-{n}" for n in _SCALE],
     *[f"mb-{n}" for n in _SCALE],
+    *[f"ml-{n}" for n in _SCALE],
+    *[f"mr-{n}" for n in _SCALE],
     "text-xs",
     "text-sm",
     "text-md",
@@ -173,7 +184,7 @@ _KIT_UTILITIES: tuple[str, ...] = (
     "bg-surface",
     "bg-background",
 )
-"""78 utility class names (same set, in the same order, as TS's KIT_UTILITIES)."""
+"""134 utility class names (same set, in the same order, as TS's KIT_UTILITIES)."""
 
 
 DEFAULT_KIT_VOCABULARY = DesignKitVocabulary(

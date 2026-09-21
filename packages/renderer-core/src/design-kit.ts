@@ -120,6 +120,7 @@ const UTILITY_CSS = [
   ".grid{display:grid}",
   ".hidden{display:none}",
   ".w-full{width:100%}",
+  ".h-full{height:100%}",
   ".flex-col{flex-direction:column}",
   ".flex-wrap{flex-wrap:wrap}",
   ".items-center{align-items:center}",
@@ -139,10 +140,20 @@ const UTILITY_CSS = [
   ...SCALE.map(
     (n) => `.py-${n}{padding-top:var(--kohaku-space-${n});padding-bottom:var(--kohaku-space-${n})}`,
   ),
+  ...SCALE.map((n) => `.pt-${n}{padding-top:var(--kohaku-space-${n})}`),
+  ...SCALE.map((n) => `.pb-${n}{padding-bottom:var(--kohaku-space-${n})}`),
+  ...SCALE.map((n) => `.pl-${n}{padding-left:var(--kohaku-space-${n})}`),
+  ...SCALE.map((n) => `.pr-${n}{padding-right:var(--kohaku-space-${n})}`),
   // margin
   ".m-0{margin:0}",
+  ...SCALE.map((n) => `.m-${n}{margin:var(--kohaku-space-${n})}`),
+  ".mx-auto{margin-left:auto;margin-right:auto}",
+  ...SCALE.map((n) => `.mx-${n}{margin-left:var(--kohaku-space-${n});margin-right:var(--kohaku-space-${n})}`),
+  ...SCALE.map((n) => `.my-${n}{margin-top:var(--kohaku-space-${n});margin-bottom:var(--kohaku-space-${n})}`),
   ...SCALE.map((n) => `.mt-${n}{margin-top:var(--kohaku-space-${n})}`),
   ...SCALE.map((n) => `.mb-${n}{margin-bottom:var(--kohaku-space-${n})}`),
+  ...SCALE.map((n) => `.ml-${n}{margin-left:var(--kohaku-space-${n})}`),
+  ...SCALE.map((n) => `.mr-${n}{margin-right:var(--kohaku-space-${n})}`),
   // text
   ".text-xs{font-size:var(--kohaku-font-size-xs)}",
   ".text-sm{font-size:var(--kohaku-font-size-sm)}",

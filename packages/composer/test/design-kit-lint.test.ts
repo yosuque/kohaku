@@ -75,10 +75,10 @@ describe("collectUnknownKitClasses", () => {
     expect(collectUnknownKitClasses(html, DEFAULT_KIT_VOCABULARY)).toEqual(["k-tickz"]);
   });
 
-  it("flags the newly covered spacing prefixes", () => {
+  it("does not flag the now-covered spacing and sizing utilities", () => {
     expect(
-      collectUnknownKitClasses(widget('<div class="mx-auto pt-2"></div>'), DEFAULT_KIT_VOCABULARY),
-    ).toEqual(["mx-auto", "pt-2"]);
+      collectUnknownKitClasses(widget('<div class="mx-auto pt-2 h-full"></div>'), DEFAULT_KIT_VOCABULARY),
+    ).toEqual([]);
   });
 });
 

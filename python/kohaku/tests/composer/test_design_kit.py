@@ -91,7 +91,7 @@ _EXPECTED_KIT_FRAGMENT = "\n".join(
         "  - k-series-7: series color 7",
         "  - k-bar: bar rect (rounded corners)",
         "  - k-line: line-chart path (no fill, 2px stroke)",
-        "- Utilities (exactly these names exist; any other utility name has no effect): flex, grid, hidden, w-full, flex-col, flex-wrap, items-center, items-start, justify-between, justify-end, grid-cols-2, grid-cols-3, grid-cols-4, gap-1, gap-2, gap-3, gap-4, gap-5, gap-6, p-1, p-2, p-3, p-4, p-5, p-6, px-1, px-2, px-3, px-4, px-5, px-6, py-1, py-2, py-3, py-4, py-5, py-6, m-0, mt-1, mt-2, mt-3, mt-4, mt-5, mt-6, mb-1, mb-2, mb-3, mb-4, mb-5, mb-6, text-xs, text-sm, text-md, text-lg, text-xl, text-2xl, text-muted, text-primary, text-positive, text-negative, text-left, text-center, text-right, truncate, tabular-nums, font-medium, font-semibold, font-bold, rounded-sm, rounded-md, rounded-lg, rounded-full, shadow-sm, shadow-md, border, border-b, bg-surface, bg-background",
+        "- Utilities (exactly these names exist; any other utility name has no effect): flex, grid, hidden, w-full, h-full, flex-col, flex-wrap, items-center, items-start, justify-between, justify-end, grid-cols-2, grid-cols-3, grid-cols-4, gap-1, gap-2, gap-3, gap-4, gap-5, gap-6, p-1, p-2, p-3, p-4, p-5, p-6, px-1, px-2, px-3, px-4, px-5, px-6, py-1, py-2, py-3, py-4, py-5, py-6, pt-1, pt-2, pt-3, pt-4, pt-5, pt-6, pb-1, pb-2, pb-3, pb-4, pb-5, pb-6, pl-1, pl-2, pl-3, pl-4, pl-5, pl-6, pr-1, pr-2, pr-3, pr-4, pr-5, pr-6, m-0, m-1, m-2, m-3, m-4, m-5, m-6, mx-auto, mx-1, mx-2, mx-3, mx-4, mx-5, mx-6, my-1, my-2, my-3, my-4, my-5, my-6, mt-1, mt-2, mt-3, mt-4, mt-5, mt-6, mb-1, mb-2, mb-3, mb-4, mb-5, mb-6, ml-1, ml-2, ml-3, ml-4, ml-5, ml-6, mr-1, mr-2, mr-3, mr-4, mr-5, mr-6, text-xs, text-sm, text-md, text-lg, text-xl, text-2xl, text-muted, text-primary, text-positive, text-negative, text-left, text-center, text-right, truncate, tabular-nums, font-medium, font-semibold, font-bold, rounded-sm, rounded-md, rounded-lg, rounded-full, shadow-sm, shadow-md, border, border-b, bg-surface, bg-background",
         "- Reserved prefixes (kit namespace; never use them for your own class names — pick names like chart-…, panel-…): k-, gap-, p-, px-, py-, pt-, pb-, pl-, pr-, m-, mx-, my-, mt-, mb-, ml-, mr-, text-, font-, rounded-, shadow-, bg-, grid-cols-, items-, justify-, flex-, border-, w-, h-",
         "- Skeleton of a well-formed widget body (adapt it; do not copy verbatim):",
         '  <div class="k-card">',
@@ -132,10 +132,10 @@ _INTENT_INPUT = IntentComposeInput(intent=IntentInput(canonical="sales.summary",
 
 class TestVocabularyAndFragment:
     def test_counts(self) -> None:
-        """48 classes, 78 utilities, 28 namespaces (the Task 6/7/7b-updated counts; the brief's Step 1
-        template predates these and is stale — see the task-10-brief.md addendum)."""
+        """48 classes, 134 utilities, 28 namespaces (every reserved margin/padding/sizing prefix in
+        `namespaces` now has at least one utility behind it — see the design-kit-contract test)."""
         assert len(DEFAULT_KIT_VOCABULARY.classes) == 48
-        assert len(DEFAULT_KIT_VOCABULARY.utilities) == 78
+        assert len(DEFAULT_KIT_VOCABULARY.utilities) == 134
         assert len(DEFAULT_KIT_VOCABULARY.namespaces) == 28
 
     def test_id_and_version(self) -> None:
@@ -240,10 +240,13 @@ class TestUnknownClassLint:
         )
         assert collect_unknown_kit_classes(html, DEFAULT_KIT_VOCABULARY) == ["k-tickz"]
 
-    def test_flags_the_newly_covered_spacing_prefixes(self) -> None:
-        assert collect_unknown_kit_classes(
-            _widget('<div class="mx-auto pt-2"></div>'), DEFAULT_KIT_VOCABULARY
-        ) == ["mx-auto", "pt-2"]
+    def test_does_not_flag_the_now_covered_spacing_and_sizing_utilities(self) -> None:
+        assert (
+            collect_unknown_kit_classes(
+                _widget('<div class="mx-auto pt-2 h-full"></div>'), DEFAULT_KIT_VOCABULARY
+            )
+            == []
+        )
 
     def test_issue_only_with_kit(self) -> None:
         assert collect_l2_issues(_UNKNOWN_HTML) == []
