@@ -6,7 +6,8 @@ export type Lang = "en" | "ja";
 /**
  * Repository-relative roots mirrored into the site. Everything the mirrored Markdown links to that is NOT
  * under one of these is rewritten to a GitHub URL, so the site never has a dead link and never carries a
- * second copy of a file that is not documentation.
+ * second copy of a file that is not documentation. Entries are mixed granularity: some are directories
+ * walked recursively (e.g. "docs", "spec/examples"), others are single files (e.g. "spec/SPEC.md").
  */
 export const MIRROR_ROOTS: readonly string[] = [
   "docs",
@@ -95,6 +96,10 @@ function rewriteOne(href: string, entry: MirrorEntry, mirrored: ReadonlySet<stri
   const anchor = hashAt >= 0 ? href.slice(hashAt) : "";
   if (path === "") return href;
   const repoPath = resolveRepoPath(entry, path);
+  // An out-of-mirror target is treated as an opaque repository path: we do not stat the filesystem to
+  // tell a file from a directory (that would make this pure function depend on the working tree), so a
+  // directory target (e.g. "../packages/spec-core") also gets the GITHUB_BLOB_BASE URL below. This is
+  // acceptable because GitHub redirects `/blob/<ref>/<dir>` to `/tree/<ref>/<dir>` for a directory path.
   if (!mirrored.has(repoPath)) return `${GITHUB_BLOB_BASE}${repoPath}${anchor}`;
   const [targetEntry] = planMirror([repoPath]);
   if (targetEntry.kind === "asset") return `/${repoPath}${anchor}`;
@@ -107,6 +112,12 @@ function rewriteOne(href: string, entry: MirrorEntry, mirrored: ReadonlySet<stri
  * and a raw-HTML `src="..."` attribute (e.g. `<img src="../docs/assets/x.png">`) are rewritten through the
  * same resolver, since some pages (the Python READMEs) open with a raw `<img>` tag rather than Markdown
  * image syntax.
+ *
+ * Known limitations, both dormant against the current mirrored corpus (no occurrences today): only fenced
+ * (``` / ~~~) code blocks are tracked and skipped — an inline code span (single backticks) on an otherwise
+ * rewritten line is not protected, and neither is CommonMark's other code-block form (four-space
+ * indentation). Link-shaped or `src=`-shaped text inside either would be rewritten. A reader adding such
+ * content later should extend the fence/line handling below.
  */
 export function rewriteLinks(markdown: string, entry: MirrorEntry, mirrored: ReadonlySet<string>): string {
   const lines = markdown.split("\n");

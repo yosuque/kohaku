@@ -41,6 +41,7 @@ const EN_RELEASE: MirrorEntry = {
   lang: "en",
   kind: "page",
 };
+const EN_SPEC: MirrorEntry = { source: "spec/SPEC.md", target: "spec/SPEC.md", lang: "en", kind: "page" };
 const PYTHON_README: MirrorEntry = {
   source: "python/README.md",
   target: "python/README.md",
@@ -122,6 +123,13 @@ describe("rewriteLinks", () => {
     );
     expect(rewriteLinks("[agents](../AGENTS.md)", EN_GUIDE, MIRRORED)).toBe(
       `[agents](${GITHUB_BLOB_BASE}AGENTS.md)`,
+    );
+  });
+
+  it("sends a link to an out-of-mirror DIRECTORY to a GitHub blob URL (GitHub redirects blob->tree for directories)", () => {
+    // Real occurrence: spec/SPEC.md links `[packages/spec-core](../packages/spec-core)`.
+    expect(rewriteLinks("[packages/spec-core](../packages/spec-core)", EN_SPEC, MIRRORED)).toBe(
+      `[packages/spec-core](${GITHUB_BLOB_BASE}packages/spec-core)`,
     );
   });
 
