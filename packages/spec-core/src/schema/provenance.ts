@@ -25,6 +25,14 @@ export const ProvenanceSchema = z.object({
     })
     .optional(),
   composedAt: z.iso.datetime().optional(),
+  /** The host's generator identity in effect at composition time (prompt revision / model / design-system generation). */
+  generatorVersion: z.string().optional(),
+  /**
+   * The design kit the generated markup was written against (component's DesignSystemGuide.kit, if set).
+   * Lets a render-side surface compare its own kit identity against this and detect a version mismatch
+   * instead of rendering unstyled markup silently (spec/SPEC.md §2.1, SPEC-KIT-001).
+   */
+  kit: z.object({ id: z.string(), version: z.string() }).optional(),
 });
 
 export type Provenance = z.infer<typeof ProvenanceSchema>;
