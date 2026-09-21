@@ -10,7 +10,7 @@
 // mode too).
 
 import type { KnownThemeTokens, ThemeTokens } from "@kohaku-ui/spec-core";
-import { resolveSizing, resolveToken, type SizingTokens } from "../theme.js";
+import { resolveToken, type SizingTokens } from "../theme.js";
 
 type StyleRecord = Record<string, string | number>;
 
@@ -30,21 +30,20 @@ export const dialogOverlayStyle: StyleRecord = {
 };
 
 /** The dialog body box (a surface floating over the scrim = color.surface). danger indicates severity with a top band (accentBorder). */
-export function dialogBoxStyle(theme: ThemeTokens, accentBorder: string): StyleRecord {
-  const s = resolveSizing(theme);
+export function dialogBoxStyle(theme: ThemeTokens, accentBorder: string, sizing: SizingTokens): StyleRecord {
   return {
     display: "flex",
     flexDirection: "column",
-    gap: s.space3,
+    gap: sizing.space3,
     width: "100%",
     maxWidth: 480,
     maxHeight: "calc(100vh - 32px)",
     overflowY: "auto",
-    padding: s.space5,
+    padding: sizing.space5,
     background: String(resolveToken(theme, "color.surface")),
-    borderRadius: s.radiusLg,
+    borderRadius: sizing.radiusLg,
     borderTop: `4px solid ${accentBorder}`,
-    boxShadow: s.shadowMd,
+    boxShadow: sizing.shadowMd,
   };
 }
 
@@ -62,13 +61,13 @@ export function dialogTitleStyle(color: string, sizing: SizingTokens): StyleReco
 }
 
 /** The close (×) button. */
-export function dialogCloseButtonStyle(theme: ThemeTokens): StyleRecord {
+export function dialogCloseButtonStyle(theme: ThemeTokens, sizing: SizingTokens): StyleRecord {
   return {
     flexShrink: 0,
     background: "none",
     border: "none",
     padding: 0,
-    fontSize: resolveSizing(theme).fontXl,
+    fontSize: sizing.fontXl,
     lineHeight: 1,
     cursor: "pointer",
     color: String(resolveToken(theme, "color.muted")),
@@ -76,10 +75,10 @@ export function dialogCloseButtonStyle(theme: ThemeTokens): StyleRecord {
 }
 
 /** Description text (secondary text lighter than the title = color.muted). */
-export function dialogDescriptionStyle(theme: ThemeTokens): StyleRecord {
+export function dialogDescriptionStyle(theme: ThemeTokens, sizing: SizingTokens): StyleRecord {
   return {
     margin: 0,
-    fontSize: resolveSizing(theme).fontMd,
+    fontSize: sizing.fontMd,
     color: String(resolveToken(theme, "color.muted")),
   };
 }

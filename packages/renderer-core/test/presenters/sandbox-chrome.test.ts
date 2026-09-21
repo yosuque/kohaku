@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MESSAGES,
+  DEFAULT_SIZING,
   defaultDarkTheme,
   defaultLightTheme,
+  resolveSizing,
   sandboxArtifactMissingText,
   sandboxBadgeDescriptionStyle,
   sandboxBadgeDescriptionText,
@@ -55,16 +57,16 @@ describe("sandbox-chrome presenter (shared by SandboxFrame and mountSandboxNode)
   });
 
   it("badge chrome is built from warning-tone and sizing tokens (no hard-coded hex)", () => {
-    expect(sandboxBadgeRowStyle({})).toMatchObject({
+    expect(sandboxBadgeRowStyle({}, DEFAULT_SIZING)).toMatchObject({
       color: defaultLightTheme["color.warning.text"],
       fontSize: "11px",
     });
-    expect(sandboxBadgePillStyle({})).toMatchObject({
+    expect(sandboxBadgePillStyle({}, DEFAULT_SIZING)).toMatchObject({
       background: defaultLightTheme["color.warning.surface"],
       borderRadius: "4px",
     });
     expect(sandboxBadgeDescriptionStyle({})).toEqual({ color: defaultLightTheme["color.muted"] });
-    expect(sandboxNoticeBaseStyle({})).toMatchObject({ borderRadius: "8px", fontSize: "12.5px" });
+    expect(sandboxNoticeBaseStyle(DEFAULT_SIZING)).toMatchObject({ borderRadius: "8px", fontSize: "12.5px" });
   });
 
   // The assertions above pin only the default-light resolution, which a hard-coded literal would also
@@ -72,8 +74,11 @@ describe("sandbox-chrome presenter (shared by SandboxFrame and mountSandboxNode)
   // Re-resolve against defaultDarkTheme (whose warning/muted values are genuinely different strings) so a
   // regression that hard-codes the light value back in would fail here even though the test above stays green.
   it("badge chrome re-resolves against a non-default theme (proves it isn't still hard-coded)", () => {
-    expect(sandboxBadgeRowStyle(defaultDarkTheme).color).toBe(defaultDarkTheme["color.warning.text"]);
-    expect(sandboxBadgePillStyle(defaultDarkTheme).background).toBe(
+    const darkSizing = resolveSizing(defaultDarkTheme);
+    expect(sandboxBadgeRowStyle(defaultDarkTheme, darkSizing).color).toBe(
+      defaultDarkTheme["color.warning.text"],
+    );
+    expect(sandboxBadgePillStyle(defaultDarkTheme, darkSizing).background).toBe(
       defaultDarkTheme["color.warning.surface"],
     );
     expect(sandboxBadgeDescriptionStyle(defaultDarkTheme).color).toBe(defaultDarkTheme["color.muted"]);

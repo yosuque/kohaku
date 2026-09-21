@@ -1,7 +1,9 @@
 import {
   DEFAULT_MESSAGES,
   type RendererMessages,
+  resolveSizing,
   type SandboxNoticeTone,
+  type SizingTokens,
   sandboxArtifactMissingText,
   sandboxBadgeDescriptionStyle,
   sandboxBadgeDescriptionText,
@@ -88,6 +90,7 @@ export function SandboxFrame(props: {
   const messages: RendererMessages =
     props.messages == null ? DEFAULT_MESSAGES : { ...DEFAULT_MESSAGES, ...props.messages };
   const theme: ThemeTokens = props.theme ?? {};
+  const sizing = resolveSizing(theme);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<SandboxState>("loading");
   const [detail, setDetail] = useState<string | undefined>(undefined);
@@ -156,20 +159,22 @@ export function SandboxFrame(props: {
   }, [artifact?.sha256, props.node.id, props.node.data?.$ref, themeKey, kitKey, props.kitCss]);
 
   if (artifact?.inline == null) {
-    return <Notice tone="error" text={sandboxArtifactMissingText(messages)} theme={theme} />;
+    return <Notice tone="error" text={sandboxArtifactMissingText(messages)} theme={theme} sizing={sizing} />;
   }
 
   return (
     <div data-kohaku={props.node.id} style={{ width: "100%" }}>
       {props.badge !== "hidden" && (
-        <div style={sandboxBadgeRowStyle(theme)}>
-          <span style={sandboxBadgePillStyle(theme)}>{sandboxBadgeText(messages)}</span>
+        <div style={sandboxBadgeRowStyle(theme, sizing)}>
+          <span style={sandboxBadgePillStyle(theme, sizing)}>{sandboxBadgeText(messages)}</span>
           <span style={sandboxBadgeDescriptionStyle(theme)}>{sandboxBadgeDescriptionText(messages)}</span>
         </div>
       )}
-      {state === "loading" && <Notice tone="info" text={sandboxLoadingNoticeText(messages)} theme={theme} />}
+      {state === "loading" && (
+        <Notice tone="info" text={sandboxLoadingNoticeText(messages)} theme={theme} sizing={sizing} />
+      )}
       {state === "error" && (
-        <Notice tone="error" text={sandboxErrorNoticeText(detail, messages)} theme={theme} />
+        <Notice tone="error" text={sandboxErrorNoticeText(detail, messages)} theme={theme} sizing={sizing} />
       )}
       <div ref={containerRef} style={{ width: "100%" }} />
     </div>
@@ -180,12 +185,14 @@ function Notice({
   tone,
   text,
   theme,
+  sizing,
 }: {
   tone: SandboxNoticeTone;
   text: string;
   theme: ThemeTokens;
+  sizing: SizingTokens;
 }): ReactNode {
   return (
-    <div style={{ ...sandboxNoticeBaseStyle(theme), ...sandboxNoticeToneStyle(tone, theme) }}>{text}</div>
+    <div style={{ ...sandboxNoticeBaseStyle(sizing), ...sandboxNoticeToneStyle(tone, theme) }}>{text}</div>
   );
 }

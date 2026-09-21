@@ -129,8 +129,12 @@ describe("presenter sizing (non-color tokens flow into every inline style)", () 
   });
 
   it("overlay, notices, text and chart caption follow the bag", () => {
-    expect(dialogBoxStyle({ ...defaultLightTheme, "radius.lg": "20px" }, "#000").borderRadius).toBe("20px");
-    expect(dialogBoxStyle(defaultLightTheme, "#000").boxShadow).toBe(defaultLightTheme["shadow.md"]);
+    // dialogBoxStyle reads radius/shadow from the pre-resolved `sizing` bag now (not from `theme`), so an
+    // override must be resolved into `sizing` first for it to reach borderRadius (see m-4's theme+sizing split).
+    expect(dialogBoxStyle({}, "#000", resolveSizing({ "radius.lg": "20px" })).borderRadius).toBe("20px");
+    expect(dialogBoxStyle(defaultLightTheme, "#000", defaults).boxShadow).toBe(
+      defaultLightTheme["shadow.md"],
+    );
     expect(dialogTitleStyle("#000", sizing)).toMatchObject({ fontSize: defaults.fontLg, fontWeight: 700 });
     expect(toastStyle({ bg: "#fff", fg: "#000", border: "#eee" }, sizing).borderRadius).toBe("3px");
     expect(dataStateNoticeStyle({ bg: "#fff", fg: "#000" }, sizing)).toMatchObject({

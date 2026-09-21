@@ -1,6 +1,7 @@
 import {
   type RendererMessages,
   type SandboxNoticeTone,
+  type SizingTokens,
   sandboxArtifactMissingText,
   sandboxBadgeDescriptionStyle,
   sandboxBadgeDescriptionText,
@@ -32,11 +33,11 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
 
   const artifact = node.artifact;
   if (artifact?.inline == null) {
-    wrapper.appendChild(notice("error", sandboxArtifactMissingText(messages), rt.theme));
+    wrapper.appendChild(notice("error", sandboxArtifactMissingText(messages), rt.theme, rt.sizing));
     return noop;
   }
   if (rt.sandbox == null) {
-    wrapper.appendChild(notice("error", sandboxBridgeMissingText(node.type, messages), rt.theme));
+    wrapper.appendChild(notice("error", sandboxBridgeMissingText(node.type, messages), rt.theme, rt.sizing));
     return noop;
   }
 
@@ -46,8 +47,8 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
   const statusHolder = el("div", {}, { width: "100%" });
   const container = el("div", {}, { width: "100%" });
   if (rt.sandbox.badge !== "hidden") {
-    const badgeRow = el("div", {}, sandboxBadgeRowStyle(rt.theme));
-    const badge = el("span", {}, sandboxBadgePillStyle(rt.theme));
+    const badgeRow = el("div", {}, sandboxBadgeRowStyle(rt.theme, rt.sizing));
+    const badge = el("span", {}, sandboxBadgePillStyle(rt.theme, rt.sizing));
     badge.appendChild(text(sandboxBadgeText(messages)));
     const badgeNote = el("span", {}, sandboxBadgeDescriptionStyle(rt.theme));
     badgeNote.appendChild(text(sandboxBadgeDescriptionText(messages)));
@@ -87,9 +88,11 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
   const renderStatus = (state: SandboxState, detail?: string): void => {
     statusHolder.replaceChildren();
     if (state === "loading") {
-      statusHolder.appendChild(notice("info", sandboxLoadingNoticeText(messages), rt.theme));
+      statusHolder.appendChild(notice("info", sandboxLoadingNoticeText(messages), rt.theme, rt.sizing));
     } else if (state === "error") {
-      statusHolder.appendChild(notice("error", sandboxErrorNoticeText(detail, messages), rt.theme));
+      statusHolder.appendChild(
+        notice("error", sandboxErrorNoticeText(detail, messages), rt.theme, rt.sizing),
+      );
     }
   };
   handle.onStateChange(renderStatus);
@@ -104,8 +107,13 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
   };
 }
 
-function notice(tone: SandboxNoticeTone, message: string, theme: ThemeTokens): HTMLElement {
-  const node = el("div", {}, { ...sandboxNoticeBaseStyle(theme), ...sandboxNoticeToneStyle(tone, theme) });
+function notice(
+  tone: SandboxNoticeTone,
+  message: string,
+  theme: ThemeTokens,
+  sizing: SizingTokens,
+): HTMLElement {
+  const node = el("div", {}, { ...sandboxNoticeBaseStyle(sizing), ...sandboxNoticeToneStyle(tone, theme) });
   node.appendChild(text(message));
   return node;
 }

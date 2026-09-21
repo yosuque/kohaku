@@ -68,19 +68,23 @@ export const overlayDialog: PartBuilder = (rt, parent, node, row) => {
   const box = el(
     "div",
     { role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "aria-describedby": descId },
-    dialogBoxStyle(rt.theme, accentBorder),
+    dialogBoxStyle(rt.theme, accentBorder, rt.sizing),
   );
   const header = el("div", {}, dialogHeaderStyle);
   const heading = el("h2", { id: titleId }, dialogTitleStyle(titleColor, rt.sizing));
   heading.appendChild(text(title));
-  const closeBtn = el("button", { type: "button", "aria-label": "Close" }, dialogCloseButtonStyle(rt.theme));
+  const closeBtn = el(
+    "button",
+    { type: "button", "aria-label": "Close" },
+    dialogCloseButtonStyle(rt.theme, rt.sizing),
+  );
   closeBtn.appendChild(text("×"));
   closeBtn.addEventListener("click", () => close());
   header.append(heading, closeBtn);
   box.appendChild(header);
 
   if (description != null) {
-    const desc = el("p", { id: descId }, dialogDescriptionStyle(rt.theme));
+    const desc = el("p", { id: descId }, dialogDescriptionStyle(rt.theme, rt.sizing));
     desc.appendChild(text(description));
     box.appendChild(desc);
   }

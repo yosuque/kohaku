@@ -9,7 +9,7 @@
 
 import type { ThemeTokens } from "@kohaku-ui/spec-core";
 import type { RendererMessages } from "../messages.js";
-import { resolveToken } from "../theme.js";
+import { resolveToken, type SizingTokens } from "../theme.js";
 
 type StyleRecord = Record<string, string | number>;
 
@@ -64,33 +64,36 @@ export function sandboxBridgeMissingText(
 }
 
 /** The badge row's layout style (flex row holding the pill + description). */
-export function sandboxBadgeRowStyle(theme: ThemeTokens): StyleRecord {
+export function sandboxBadgeRowStyle(theme: ThemeTokens, sizing: SizingTokens): StyleRecord {
   return {
     display: "flex",
     alignItems: "center",
-    gap: resolveToken(theme, "space.2"),
-    fontSize: resolveToken(theme, "font.size.xs"),
+    gap: sizing.space2,
+    fontSize: sizing.fontXs,
     color: resolveToken(theme, "color.warning.text"),
-    marginBottom: resolveToken(theme, "space.2"),
+    marginBottom: sizing.space2,
   };
 }
 
 /** The "L2 SANDBOXED" pill itself. */
-export function sandboxBadgePillStyle(theme: ThemeTokens): StyleRecord {
+export function sandboxBadgePillStyle(theme: ThemeTokens, sizing: SizingTokens): StyleRecord {
   return {
     background: resolveToken(theme, "color.warning.surface"),
-    borderRadius: resolveToken(theme, "radius.sm"),
+    borderRadius: sizing.radiusSm,
     padding: "1px 6px",
     fontWeight: 600,
   };
 }
 
-/** The muted explanatory text next to the pill. */
+/** The muted explanatory text next to the pill. Colors-only, so it takes `theme` alone (no non-color token to read). */
 export function sandboxBadgeDescriptionStyle(theme: ThemeTokens): StyleRecord {
   return { color: resolveToken(theme, "color.muted") };
 }
 
-/** tone → {background, color} for the status notice box (info = neutral surface, error = negative). */
+/**
+ * tone → {background, color} for the status notice box (info = neutral surface, error = negative).
+ * Colors-only, so it takes `theme` alone (no non-color token to read).
+ */
 export function sandboxNoticeToneStyle(
   tone: SandboxNoticeTone,
   theme: ThemeTokens,
@@ -106,11 +109,15 @@ export function sandboxNoticeToneStyle(
       };
 }
 
-/** The notice box's tone-independent layout style (spread together with sandboxNoticeToneStyle). */
-export function sandboxNoticeBaseStyle(theme: ThemeTokens): StyleRecord {
+/**
+ * The notice box's tone-independent layout style (spread together with sandboxNoticeToneStyle).
+ * Non-color-only, so it takes `sizing` alone (no color token to read — colors come from
+ * sandboxNoticeToneStyle above).
+ */
+export function sandboxNoticeBaseStyle(sizing: SizingTokens): StyleRecord {
   return {
-    borderRadius: resolveToken(theme, "radius.md"),
-    padding: `${resolveToken(theme, "space.2")} ${resolveToken(theme, "space.3")}`,
-    fontSize: resolveToken(theme, "font.size.sm"),
+    borderRadius: sizing.radiusMd,
+    padding: `${sizing.space2} ${sizing.space3}`,
+    fontSize: sizing.fontSm,
   };
 }

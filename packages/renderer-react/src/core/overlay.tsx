@@ -112,7 +112,7 @@ export function OverlayDialog({ node, children }: ImplProps): ReactNode {
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
-        style={dialogBoxStyle(theme, accentBorder) as CSSProperties}
+        style={dialogBoxStyle(theme, accentBorder, sizing) as CSSProperties}
       >
         <div style={dialogHeaderStyle as CSSProperties}>
           <h2 id={titleId} style={dialogTitleStyle(titleColor, sizing) as CSSProperties}>
@@ -122,13 +122,13 @@ export function OverlayDialog({ node, children }: ImplProps): ReactNode {
             type="button"
             aria-label="Close"
             onClick={close}
-            style={dialogCloseButtonStyle(theme) as CSSProperties}
+            style={dialogCloseButtonStyle(theme, sizing) as CSSProperties}
           >
             {"×"}
           </button>
         </div>
         {description != null && (
-          <p id={descId} style={dialogDescriptionStyle(theme) as CSSProperties}>
+          <p id={descId} style={dialogDescriptionStyle(theme, sizing) as CSSProperties}>
             {description}
           </p>
         )}
