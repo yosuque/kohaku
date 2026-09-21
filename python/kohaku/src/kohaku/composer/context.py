@@ -200,7 +200,10 @@ def _fp_design_system(
     if design_system is None:
         return None
     return {
-        "tokens": design_system.tokens,
+        # dict(...): design_system.tokens is typed Mapping (n-9), and canonical_json's own dict branch
+        # checks isinstance(value, dict) — a Mapping that is not a dict (e.g. MappingProxyType) would
+        # otherwise fall through unserialized. Mirrors _kit_fingerprint_material's dict(kit.classes) above.
+        "tokens": dict(design_system.tokens) if design_system.tokens is not None else None,
         "guidelines": design_system.guidelines,
         "enforceTokenColors": design_system.enforceTokenColors,
         # Folded in only when non-default, and as an ABSENT key (UNDEFINED) rather than an

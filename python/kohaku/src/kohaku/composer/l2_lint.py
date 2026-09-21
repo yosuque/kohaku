@@ -16,8 +16,32 @@ require JS execution are split out into injectable hooks.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
+from typing import Protocol
 
-from .design_system import DesignKitVocabulary
+
+class KitClassesVocabulary(Protocol):
+    """Structural counterpart of TS's `Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">`
+    (packages/composer/src/tiers/l2-generate.ts). `collect_l2_issues`'s `kit` parameter and
+    `collect_unknown_kit_classes` below read only these three fields — never `id`/`version` — so requiring
+    the full `DesignKitVocabulary` dataclass (which also demands `id`/`version`) was a stricter contract
+    than TS's: a duck-typed kit object with just `classes`/`utilities`/`namespaces` type-checks fine against
+    TS's `Pick<...>` but used to fail mypy here. `DesignKitVocabulary` itself satisfies this Protocol
+    structurally, so passing one still works unchanged. Declared via `@property` (read-only) rather than
+    plain attribute annotations: a plain `classes: Mapping[str, str]` would declare a *settable* Protocol
+    member, which mypy then checks invariantly and rejects a frozen dataclass's read-only attributes
+    against (frozen fields are not assignable, so they cannot satisfy a "settable" structural member) —
+    the same reason `utilities`/`namespaces` also need covariance (`tuple[str, ...]` satisfying
+    `Sequence[str]`) that only a read-only property gets.
+    """
+
+    @property
+    def classes(self) -> Mapping[str, str]: ...
+    @property
+    def utilities(self) -> Sequence[str]: ...
+    @property
+    def namespaces(self) -> Sequence[str]: ...
+
 
 # Allowed APIs of the window.kohaku bridge (paired with the surface exposed by the sandbox's runtime.ts).
 _KOHAKU_API_ALLOWLIST = frozenset({"fetchData", "emit", "onProps", "ready"})
@@ -74,7 +98,7 @@ def collect_l2_issues(
     html: str,
     *,
     enforce_token_colors: bool = False,
-    kit: DesignKitVocabulary | None = None,
+    kit: KitClassesVocabulary | None = None,
 ) -> list[str]:
     """Bridge-contract lint. Because it is a lexical check, it may react to strings inside comments, but a
     false positive only wastes one repair retry and never errs toward dropping a correct output.
@@ -180,7 +204,7 @@ _SET_CLASS_ATTR_RE = re.compile(r"\bsetAttribute\s*\(\s*([\"'])class\1\s*,\s*([\
 _STRING_LITERAL_RE = re.compile(r"([\"'`])([^\"'`]*)\1")
 
 
-def collect_unknown_kit_classes(html: str, kit: DesignKitVocabulary) -> list[str]:
+def collect_unknown_kit_classes(html: str, kit: KitClassesVocabulary) -> list[str]:
     """Collects the sorted, unique class names in the HTML that fall inside the kit's namespaces but are not
     defined by the vocabulary (kit classes or utilities) — port of TS's collectUnknownKitClasses.
     Exported (via kohaku.composer's package init) for products/tests that want to pre-check a
@@ -212,6 +236,7 @@ def collect_unknown_kit_classes(html: str, kit: DesignKitVocabulary) -> list[str
     for m in _SET_CLASS_ATTR_RE.finditer(html):
         consider(m.group(3))
     return sorted(found)
+
 
 _FENCE_RE = re.compile(r"```(?:html)?\s*([\s\S]*?)```", re.IGNORECASE)
 _DOCTYPE_RE = re.compile(r"<!DOCTYPE\s+html", re.IGNORECASE)

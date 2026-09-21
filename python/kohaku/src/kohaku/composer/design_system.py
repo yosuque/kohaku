@@ -17,7 +17,9 @@ must be **character-for-character identical** with TS's designKitPromptFragment.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 DEFAULT_TOKEN_DESCRIPTIONS: dict[str, str] = {
     "color.background": "page/root background",
@@ -91,13 +93,18 @@ class DesignKitVocabulary:
     """Must equal the render-side kit's id (e.g. "kohaku")."""
     version: str
     """Must equal the render-side kit's version."""
-    classes: dict[str, str]
-    """Kit class name → usage description. Presented **sorted by name** (not insertion order) in the L2
-    prompt (Task 8/m-15): Python dict iteration keeps insertion order while JS's own key ordering treats
-    integer-like keys (e.g. a product kit's "2col") specially (they sort numerically-first, ahead of every
-    non-numeric key, regardless of declaration order), so the two languages could otherwise emit different
-    design_kit_prompt_fragment bytes for the identical vocabulary content. Sorting output makes the
-    fragment a pure function of *content*, not *insertion order* — see design_kit_prompt_fragment's own
+    classes: Mapping[str, str]
+    """Kit class name → usage description. `Mapping`, not `dict` (n-9): `frozen=True` only stops
+    reassigning the field itself, not mutating a `dict` value through it, so a plain `dict` field here
+    would let `DEFAULT_KIT_VOCABULARY.classes["x"] = "y"` silently corrupt the shared default vocabulary
+    every compose call in the process reads. `DEFAULT_KIT_VOCABULARY` below wraps its own literal in
+    `MappingProxyType` to close that hole at runtime, not just in the type checker; a caller may still pass
+    a plain `dict` (it satisfies `Mapping` structurally). Presented **sorted by name** (not insertion order)
+    in the L2 prompt (Task 8/m-15): Python dict iteration keeps insertion order while JS's own key ordering
+    treats integer-like keys (e.g. a product kit's "2col") specially (they sort numerically-first, ahead of
+    every non-numeric key, regardless of declaration order), so the two languages could otherwise emit
+    different design_kit_prompt_fragment bytes for the identical vocabulary content. Sorting output makes
+    the fragment a pure function of *content*, not *insertion order* — see design_kit_prompt_fragment's own
     note and policy_fingerprint's `kit` material (context.py), which dropped its `classesOrder` entry for
     the same reason."""
     utilities: tuple[str, ...]
@@ -202,7 +209,7 @@ _KIT_UTILITIES: tuple[str, ...] = (
 DEFAULT_KIT_VOCABULARY = DesignKitVocabulary(
     id="kohaku",
     version="1",
-    classes={
+    classes=MappingProxyType({
         "k-card": "surface container (border, large radius, subtle shadow, padding); put k-card-title first inside it",
         "k-card-title": "title block of a k-card (bold, spaced below)",
         "k-title": "section title text",
@@ -251,7 +258,7 @@ DEFAULT_KIT_VOCABULARY = DesignKitVocabulary(
         "k-series-7": "series color 7",
         "k-bar": "bar rect (rounded corners)",
         "k-line": "line-chart path (no fill, 2px stroke)",
-    },
+    }),
     utilities=_KIT_UTILITIES,
     namespaces=(
         "k-",
@@ -353,9 +360,12 @@ def design_kit_prompt_fragment(kit: DesignKitVocabulary) -> str:
 class DesignSystemGuide:
     """Design system for L2 free-form generation (ComposePolicy.designSystem; paired with TS's DesignSystemGuide)."""
 
-    tokens: dict[str, str] | None = None
+    tokens: Mapping[str, str] | None = None
     """Token vocabulary (token name → usage description). Merged into the default vocabulary — used both to
-    override descriptions and to add custom tokens. **Do not write values here** (the values live in the render-side theme)."""
+    override descriptions and to add custom tokens. **Do not write values here** (the values live in the
+    render-side theme). `Mapping`, not `dict` (n-9) — the same practice as `DesignKitVocabulary.classes`
+    above, so the two frozen dataclasses in this module agree on how they type a string-to-string vocabulary
+    field; a plain `dict` still satisfies `Mapping` structurally, so existing callers are unaffected."""
     guidelines: list[str] | None = None
     """Natural-language style rules (typography, spacing, tone, etc.)."""
     enforceTokenColors: bool = True
