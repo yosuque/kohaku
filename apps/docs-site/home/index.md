@@ -6,11 +6,11 @@ hero:
   tagline: UI as data. Generation separated from rendering. The same request produces the same screen, from chat or from the GUI.
   actions:
     - theme: brand
+      text: Why kohaku
+      link: /docs/why-kohaku
+    - theme: alt
       text: User guide
       link: /docs/user-guide
-    - theme: alt
-      text: Implementation design
-      link: /docs/design
     - theme: alt
       text: GitHub
       link: https://github.com/yosuque/kohaku

@@ -22,6 +22,10 @@ export const NAV_JA: SidebarItem[] = [
 
 export const SIDEBAR_EN: SidebarGroup[] = [
   {
+    text: "Start here",
+    items: [{ text: "Why kohaku", link: "/docs/why-kohaku" }],
+  },
+  {
     text: "Guides",
     items: [
       { text: "User guide", link: "/docs/user-guide" },
@@ -46,6 +50,10 @@ export const SIDEBAR_EN: SidebarGroup[] = [
 ];
 
 export const SIDEBAR_JA: SidebarGroup[] = [
+  {
+    text: "まずここから",
+    items: [{ text: "なぜ kohaku か", link: "/ja/docs/why-kohaku" }],
+  },
   {
     text: "ガイド",
     items: [

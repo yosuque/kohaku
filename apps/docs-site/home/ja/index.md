@@ -6,11 +6,11 @@ hero:
   tagline: UI をデータとして扱い、生成と描画を分離する。チャットからでも GUI からでも、同じ要求は同じ画面になる。
   actions:
     - theme: brand
+      text: なぜ kohaku か
+      link: /ja/docs/why-kohaku
+    - theme: alt
       text: ユーザーガイド
       link: /ja/docs/user-guide
-    - theme: alt
-      text: 実装設計書
-      link: /ja/docs/design
     - theme: alt
       text: GitHub
       link: https://github.com/yosuque/kohaku
