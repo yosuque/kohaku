@@ -24,7 +24,7 @@ describe("defaultDesignKit", () => {
       ".k-card{",
       ".k-kpi-value{",
       ".k-btn-primary{",
-      ".k-table th{",
+      ":where(.k-table) th{",
       ".k-badge-positive{",
       ".k-notice-negative{",
       ".k-grid-3{",
@@ -48,6 +48,56 @@ describe("defaultDesignKit", () => {
 
   it("cannot break out of the trusted <style> element", () => {
     expect(defaultDesignKit.css).not.toContain("</");
+  });
+});
+
+/**
+ * A minimal CSS specificity (a,b,c) calculator — id / class-or-pseudo-class / type — sufficient for the
+ * kit's own selectors (no attribute selectors, no pseudo-elements, `:where(...)` explicitly zeroed since
+ * that is its whole purpose here). Not a general selector parser; just enough to pin the cascade
+ * decisions m-13 depends on as an explicit, regression-proof relation instead of an implicit one.
+ */
+function specificity(selector: string): [id: number, classLike: number, type: number] {
+  const withoutWhere = selector.replace(/:where\([^)]*\)/g, " ");
+  const id = (withoutWhere.match(/#[a-zA-Z0-9_-]+/g) ?? []).length;
+  const classLike =
+    (withoutWhere.match(/\.[a-zA-Z0-9_-]+/g) ?? []).length +
+    (withoutWhere.match(/:[a-zA-Z-]+(\([^)]*\))?/g) ?? []).length;
+  const withoutClassesAndPseudo = withoutWhere
+    .replace(/\.[a-zA-Z0-9_-]+/g, " ")
+    .replace(/:[a-zA-Z-]+(\([^)]*\))?/g, " ");
+  const type = (withoutClassesAndPseudo.match(/\b[a-zA-Z][a-zA-Z0-9]*\b/g) ?? []).length;
+  return [id, classLike, type];
+}
+
+/** True when `winner`'s selector out-specificities (or ties, relying on later-wins order) `loser`'s. */
+function outranksOrTies(winner: string, loser: string): boolean {
+  const [wa, wb, wc] = specificity(winner);
+  const [la, lb, lc] = specificity(loser);
+  if (wa !== la) return wa > la;
+  if (wb !== lb) return wb > lb;
+  return wc >= lc;
+}
+
+describe("k-table cascade (m-13: utilities must be able to override the base th/td, k-num must not)", () => {
+  const BASE_TH = ":where(.k-table) th";
+  const BASE_TD = ":where(.k-table) td";
+  const K_NUM = ":where(.k-table) th.k-num";
+  const A_UTILITY = ".text-right"; // representative one-class utility (.text-muted, .p-2, … are the same shape)
+
+  it("the base th/td selectors are written with :where(.k-table), not a bare ancestor class", () => {
+    expect(defaultDesignKit.css).toContain(`${BASE_TH}{`);
+    expect(defaultDesignKit.css).toContain(`${BASE_TD}{`);
+    expect(defaultDesignKit.css).toContain(`${K_NUM},:where(.k-table) td.k-num{`);
+  });
+
+  it("a plain utility outranks the (lowered) base th — UTILITY_CSS can override it, per the kit's own load-bearing concatenation order", () => {
+    expect(outranksOrTies(A_UTILITY, BASE_TH)).toBe(true);
+  });
+
+  it("k-num still outranks the base th, and still beats a plain utility — it is a real class, not zeroed by :where()", () => {
+    expect(outranksOrTies(K_NUM, BASE_TH)).toBe(true);
+    expect(outranksOrTies(K_NUM, A_UTILITY)).toBe(true);
   });
 });
 
@@ -203,7 +253,7 @@ function assertWellFormedCss(css: string, minRuleCount: number): void {
 
 describe("kit CSS structural parser", () => {
   it("defaultDesignKit.css is a well-formed sequence of balanced rules (>= 140 of them)", () => {
-    // Measured at HEAD: 202 rules (204 "{" including the two @media preludes), 358 declarations, 13500 chars.
+    // Measured at HEAD: 202 rules (204 "{" including the two @media preludes), 358 declarations, 13540 chars.
     assertWellFormedCss(defaultDesignKit.css, 140);
   });
 

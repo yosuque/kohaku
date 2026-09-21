@@ -75,10 +75,17 @@ const COMPONENT_CSS = [
   ".k-btn-danger{background:var(--kohaku-color-negative);color:var(--kohaku-color-on-primary);border-color:transparent}",
   // table
   ".k-table{width:100%;border-collapse:collapse;font-size:var(--kohaku-font-size-md)}",
-  ".k-table th{background:var(--kohaku-color-surface);color:var(--kohaku-color-muted);font-weight:600;font-size:var(--kohaku-font-size-sm);text-align:left;padding:var(--kohaku-space-2) var(--kohaku-space-3);border-bottom:1px solid var(--kohaku-color-border);white-space:nowrap}",
-  ".k-table td{padding:var(--kohaku-space-2) var(--kohaku-space-3);border-bottom:1px solid var(--kohaku-color-border);vertical-align:middle}",
-  ".k-table tbody tr:hover td{background:color-mix(in srgb,currentColor 5%,transparent)}",
-  ".k-table th.k-num,.k-table td.k-num{text-align:right}",
+  // :where(.k-table) zeroes the ancestor's contribution to specificity (down to the plain `th`/`td`
+  // it wraps), so UTILITY_CSS's plain-class utilities (.text-right, .text-muted, .p-2, …) can still
+  // override these declarations — a bare ".k-table th" would out-specificity a one-class utility and
+  // contradict the "UTILITY_CSS overrides COMPONENT_CSS" principle above.
+  ":where(.k-table) th{background:var(--kohaku-color-surface);color:var(--kohaku-color-muted);font-weight:600;font-size:var(--kohaku-font-size-sm);text-align:left;padding:var(--kohaku-space-2) var(--kohaku-space-3);border-bottom:1px solid var(--kohaku-color-border);white-space:nowrap}",
+  ":where(.k-table) td{padding:var(--kohaku-space-2) var(--kohaku-space-3);border-bottom:1px solid var(--kohaku-color-border);vertical-align:middle}",
+  ":where(.k-table) tbody tr:hover td{background:color-mix(in srgb,currentColor 5%,transparent)}",
+  // k-num keeps a real (non-:where()) class in its own selector, so it still outranks both a plain
+  // utility (e.g. .text-left) and the (lowered) base th/td above — it is the vocabulary's canonical
+  // escape hatch for numeric alignment, not a one-off override a generic utility should be able to beat.
+  ":where(.k-table) th.k-num,:where(.k-table) td.k-num{text-align:right}",
   // badge / notice
   ".k-badge{display:inline-block;border-radius:var(--kohaku-radius-full);padding:2px var(--kohaku-space-2);font-size:var(--kohaku-font-size-xs);font-weight:600;line-height:1.4;background:var(--kohaku-color-surface);color:var(--kohaku-color-muted);border:1px solid var(--kohaku-color-border)}",
   `.k-badge-positive{${TONE_SURFACE("positive")}}`,
