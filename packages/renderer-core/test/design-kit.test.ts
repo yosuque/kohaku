@@ -51,8 +51,8 @@ describe("defaultDesignKit", () => {
   });
 });
 
-describe("k-grid-N (m-11: self-sufficient without .k-grid)", () => {
-  it("k-grid-2/3/4 each declare display:grid and a gap on their own rule", () => {
+describe("k-grid-N / grid-cols-N (m-11, m-12)", () => {
+  it("k-grid-2/3/4 each declare display:grid and a gap on their own rule (self-sufficient without .k-grid)", () => {
     for (const n of [2, 3, 4]) {
       const match = defaultDesignKit.css.match(new RegExp(`\\.k-grid-${n}\\{([^}]*)\\}`));
       expect(match, `.k-grid-${n} rule not found`).not.toBeNull();
@@ -60,6 +60,15 @@ describe("k-grid-N (m-11: self-sufficient without .k-grid)", () => {
       expect(body).toContain("display:grid");
       expect(body).toMatch(/gap:var\(--kohaku-space-\d\)/);
     }
+  });
+
+  it('grid-cols-2/3/4 fold to one column at the same 480px breakpoint as k-grid-2/3/4 (the two spellings behave identically together, e.g. "k-grid k-grid-2 grid-cols-2")', () => {
+    expect(defaultDesignKit.css).toContain(
+      "@media (max-width:480px){.k-grid-2,.k-grid-3,.k-grid-4{grid-template-columns:1fr}}",
+    );
+    expect(defaultDesignKit.css).toContain(
+      "@media (max-width:480px){.grid-cols-2,.grid-cols-3,.grid-cols-4{grid-template-columns:1fr}}",
+    );
   });
 });
 
@@ -87,9 +96,10 @@ describe("PARTS_STATE_CSS (theme-neutral L1 state styles)", () => {
  * present or absent; none of them would fail if a `}` went missing anywhere in the file.
  *
  * Both kit CSS strings have exactly the shape: a flat concatenation of "selector{declarations}" rules
- * (declarations `;`-separated, no trailing `;`), plus — in defaultDesignKit.css only — a single
- * `@media (max-width:480px){ nested-rule{...} }` wrapper around one nested rule. That one wrapper is
- * unwrapped explicitly below; this is not a general at-rule parser.
+ * (declarations `;`-separated, no trailing `;`), plus — in defaultDesignKit.css only — a small, fixed
+ * number of `@media (max-width:480px){ nested-rule{...} }` wrappers, each around one nested rule (m-12
+ * added a second such wrapper alongside the pre-existing .k-grid-2/3/4 breakpoint, for .grid-cols-2/3/4).
+ * Each wrapper is located and unwrapped explicitly below; this is not a general at-rule parser.
  */
 interface ParsedCssRule {
   selector: string;
@@ -102,8 +112,29 @@ interface ParsedCss {
   rules: ParsedCssRule[];
   /** Index of every place in the source where two "}" occur back to back. */
   doubleBraceIndices: number[];
-  /** The one such index that is legitimate (the @media block's own close), or null if there is none. */
-  expectedDoubleBraceIndex: number | null;
+  /** The indices among those that are legitimate (each @media block's own close). */
+  expectedDoubleBraceIndices: number[];
+}
+
+/** One `@media (...){ nested-rule{...} }` wrapper's boundaries, located against the original CSS text. */
+interface MediaBlock {
+  /** Index of the "@" that starts the block. */
+  start: number;
+  /** Index right after the prelude's own "{". */
+  preludeEnd: number;
+  /** Index of the first "}" of the block's closing "}}" (the nested rule's own close). */
+  close: number;
+}
+
+function findMediaBlocks(css: string): MediaBlock[] {
+  const blocks: MediaBlock[] = [];
+  for (const m of css.matchAll(/@media[^{]*\{/g)) {
+    if (m.index === undefined) continue;
+    const preludeEnd = m.index + m[0].length;
+    const close = css.indexOf("}}", preludeEnd);
+    if (close !== -1) blocks.push({ start: m.index, preludeEnd, close });
+  }
+  return blocks;
 }
 
 function parseKitCss(css: string): ParsedCss {
@@ -115,19 +146,19 @@ function parseKitCss(css: string): ParsedCss {
     if (css[i] === "}" && css[i + 1] === "}") doubleBraceIndices.push(i);
   }
 
-  // Unwrap the single @media block (if present): strip its "@media (...){" prelude and one of the two
-  // closing braces that follow it, leaving the nested rule in place as an ordinary "selector{...}" rule.
+  // Unwrap every @media block: strip its "@media (...){" prelude and one of the two closing braces that
+  // follow it, leaving the nested rule in place as an ordinary "selector{...}" rule. Blocks are located
+  // once against the ORIGINAL css (so their indices line up with doubleBraceIndices above), then applied
+  // to `flat` right-to-left so an earlier (more-to-the-left) block's indices stay valid in `flat` while a
+  // later one is removed first.
+  const mediaBlocks = findMediaBlocks(css);
+  const expectedDoubleBraceIndices = mediaBlocks.map((b) => b.close);
   let flat = css;
-  let expectedDoubleBraceIndex: number | null = null;
-  const mediaMatch = css.match(/@media[^{]*\{/);
-  if (mediaMatch?.index !== undefined) {
-    const preludeEnd = mediaMatch.index + mediaMatch[0].length;
-    const mediaClose = css.indexOf("}}", preludeEnd);
-    if (mediaClose !== -1) {
-      expectedDoubleBraceIndex = mediaClose;
-      flat =
-        css.slice(0, mediaMatch.index) + css.slice(preludeEnd, mediaClose + 1) + css.slice(mediaClose + 2);
-    }
+  for (const block of [...mediaBlocks].reverse()) {
+    flat =
+      flat.slice(0, block.start) +
+      flat.slice(block.preludeEnd, block.close + 1) +
+      flat.slice(block.close + 2);
   }
 
   // What remains is a plain sequence of "selector{declarations}" rules with nothing between them, so
@@ -143,7 +174,7 @@ function parseKitCss(css: string): ParsedCss {
     return { selector, declarations };
   });
 
-  return { openBraceCount, closeBraceCount, rules, doubleBraceIndices, expectedDoubleBraceIndex };
+  return { openBraceCount, closeBraceCount, rules, doubleBraceIndices, expectedDoubleBraceIndices };
 }
 
 /** Runs every structural check below against one parsed CSS string, with a minimum rule-count floor. */
@@ -162,15 +193,17 @@ function assertWellFormedCss(css: string, minRuleCount: number): void {
     }
   }
 
-  const strayDoubleBraces = parsed.doubleBraceIndices.filter((i) => i !== parsed.expectedDoubleBraceIndex);
-  expect(strayDoubleBraces, '"}}" found outside the @media block, at these indices').toEqual([]);
+  const strayDoubleBraces = parsed.doubleBraceIndices.filter(
+    (i) => !parsed.expectedDoubleBraceIndices.includes(i),
+  );
+  expect(strayDoubleBraces, '"}}" found outside an @media block, at these indices').toEqual([]);
 
   expect(parsed.rules.length, "rule count").toBeGreaterThanOrEqual(minRuleCount);
 }
 
 describe("kit CSS structural parser", () => {
   it("defaultDesignKit.css is a well-formed sequence of balanced rules (>= 140 of them)", () => {
-    // Measured at HEAD: 201 rules (202 "{" including the @media prelude), 357 declarations, 13409 chars.
+    // Measured at HEAD: 202 rules (204 "{" including the two @media preludes), 358 declarations, 13500 chars.
     assertWellFormedCss(defaultDesignKit.css, 140);
   });
 

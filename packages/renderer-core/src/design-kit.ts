@@ -134,6 +134,9 @@ const UTILITY_CSS = [
   ".grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}",
   ".grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}",
   ".grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}",
+  // Same 480px collapse as .k-grid-2/3/4, so the two spellings behave identically when combined
+  // (e.g. "k-grid k-grid-2 grid-cols-2") regardless of which one a generated widget leans on.
+  "@media (max-width:480px){.grid-cols-2,.grid-cols-3,.grid-cols-4{grid-template-columns:1fr}}",
   // gap
   ...SCALE.map((n) => `.gap-${n}{gap:var(--kohaku-space-${n})}`),
   // padding
