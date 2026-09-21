@@ -21,7 +21,7 @@ describe("gallery showcase artifact", () => {
     ).toEqual([]);
   });
 
-  it("exercises every component class of the kit at least once", () => {
+  it("exercises every kit class at least once", () => {
     const tokens = staticClassTokens(GALLERY_SHOWCASE_HTML);
     for (const cls of Object.keys(DEFAULT_KIT_VOCABULARY.classes)) {
       expect(tokens.has(cls), cls).toBe(true);

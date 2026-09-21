@@ -512,7 +512,7 @@ const JA: UIStrings = {
       previewMalformed: "プレビュー応答が不正です",
     },
     gallery: {
-      description: "缶詰データを使用しており、このタブは API を呼び出しません。",
+      description: "固定のフィクスチャデータを使用しており、このタブは API を呼び出しません。",
       kitToggle: "既定デザインキットを注入する",
       pasteLabel: "L2 アーティファクト HTML",
       pastePlaceholder:

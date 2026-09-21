@@ -11,13 +11,13 @@ import { DEFAULT_KIT_VOCABULARY, type DesignSystemGuide } from "@kohaku-ui/compo
  * When adding a custom token, declare it here in tokens and **also supply a value under the same name in
  * sample-web's brand (theme/tokens.ts)** (vocabulary and value are two halves; without a value, var() falls to undefined).
  *
- * If you change the content, always bump the ds suffix of generatorVersion in app.ts
+ * If you change the content, always bump the ds suffix of generatorVersion in app/compose-context.ts
  * (a change in prompt content = generational separation of the cache; the same practice as few-shot).
  *
  * Never write a concrete value (a color, a px number) here — values live only in the tokens/kit, never in this guide.
  */
 export const SALES_DESIGN_SYSTEM: DesignSystemGuide = {
-  // The built-in kit: component classes + utilities the model composes with. The CSS is injected by the
+  // The built-in kit: kit classes + utilities the model composes with. The CSS is injected by the
   // sandbox at render time (renderer-core's defaultDesignKit — sample-web passes nothing, so the default applies).
   kit: DEFAULT_KIT_VOCABULARY,
   guidelines: [

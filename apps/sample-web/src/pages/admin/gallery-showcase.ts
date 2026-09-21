@@ -32,7 +32,7 @@ export const GALLERY_SHOWCASE_HTML = [
   '<div class="k-stack">',
   '  <div class="k-card">',
   '    <div class="k-card-title">Sales by region <span class="k-badge k-badge-info">FY2026 Q3</span></div>',
-  '    <div class="k-subtitle mb-4">Kit showcase — every component class in one widget</div>',
+  '    <div class="k-subtitle mb-4">Kit showcase — every kit class in one widget</div>',
   '    <div class="k-grid k-grid-3 mb-4">',
   '      <div class="k-kpi"><span class="k-kpi-label">Total sales</span><span class="k-kpi-value" id="kpi-total">—</span><span class="k-kpi-delta is-up">▲ +12.4%</span></div>',
   '      <div class="k-kpi"><span class="k-kpi-label">Orders</span><span class="k-kpi-value">1,208</span><span class="k-kpi-delta is-down">▼ -3.1%</span></div>',

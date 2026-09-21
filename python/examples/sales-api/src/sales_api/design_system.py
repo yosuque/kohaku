@@ -15,7 +15,7 @@ from __future__ import annotations
 from kohaku.composer import DEFAULT_KIT_VOCABULARY, DesignSystemGuide
 
 SALES_DESIGN_SYSTEM = DesignSystemGuide(
-    # The built-in kit: component classes + utilities the model composes with. The CSS is injected by the
+    # The built-in kit: kit classes + utilities the model composes with. The CSS is injected by the
     # sandbox at render time (renderer-core's defaultDesignKit — sample-web passes nothing, so the default applies).
     kit=DEFAULT_KIT_VOCABULARY,
     guidelines=[

@@ -17,7 +17,7 @@ describe("defaultDesignKit", () => {
     expect(defaultDesignKit.css).toContain("var(--kohaku-font-family-sans)");
   });
 
-  it("defines the base, the component classes, the chart classes and the utilities", () => {
+  it("defines the base, the kit classes, the chart classes and the utilities", () => {
     for (const selector of [
       "body{",
       ":focus-visible{",

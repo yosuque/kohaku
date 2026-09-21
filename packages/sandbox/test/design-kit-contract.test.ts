@@ -45,7 +45,7 @@ describe("design-kit contract (composer vocabulary ⇄ renderer-core CSS)", () =
     expect(DEFAULT_KIT_VOCABULARY.version).toBe(defaultDesignKit.version);
   });
 
-  it("every component class in the vocabulary has a selector in the CSS", () => {
+  it("every kit class in the vocabulary has a selector in the CSS", () => {
     const missing = Object.keys(DEFAULT_KIT_VOCABULARY.classes).filter((c) => !hasSelector(c));
     expect(missing).toEqual([]);
   });
@@ -62,9 +62,9 @@ describe("design-kit contract (composer vocabulary ⇄ renderer-core CSS)", () =
     // Reverse partner of the "every utility in the vocabulary has a selector" test above: that one only
     // checks vocabulary -> CSS, so an emptied or truncated `utilities` array would still pass it silently.
     // This walks CSS -> vocabulary instead, the way the "every k-* selector..." test below already does
-    // for component classes — but for the utility (non "k-") namespace.
+    // for kit classes — but for the utility (non "k-") namespace.
     const inCss = extractSimpleClassSelectors(defaultDesignKit.css);
-    // Guard against the check passing vacuously if the extraction ever stops matching. 48 component
+    // Guard against the check passing vacuously if the extraction ever stops matching. 48 kit
     // classes + 134 utilities = 182 possible entries; 13 of them (the k-axis…k-line chart classes, which
     // per their own vocabulary descriptions only ever appear as compound/descendant selectors scoped
     // under .k-chart, e.g. ".k-chart .k-axis") never surface as a standalone single-class token, leaving

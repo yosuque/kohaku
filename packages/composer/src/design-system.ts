@@ -221,6 +221,13 @@ export const DEFAULT_KIT_SKELETON = [
   "</div>",
 ].join("\n");
 
+/**
+ * 134 utility class names (same set, in the same order, as Python's `_KIT_UTILITIES` in
+ * design_system.py). Like `classes` in `DEFAULT_KIT_VOCABULARY` below, every entry here is pinned by
+ * the contract test in packages/sandbox/test/design-kit-contract.test.ts ("every utility in the
+ * vocabulary has a selector in the CSS") — add one here and it needs a matching selector in
+ * renderer-core's `defaultDesignKit` CSS, or that test fails.
+ */
 const KIT_UTILITIES: readonly string[] = [
   "flex",
   "grid",
