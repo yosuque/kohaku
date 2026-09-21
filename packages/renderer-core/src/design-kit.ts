@@ -94,9 +94,11 @@ const COMPONENT_CSS = [
   ".k-stack{display:flex;flex-direction:column;gap:var(--kohaku-space-4)}",
   ".k-row{display:flex;flex-direction:row;align-items:center;gap:var(--kohaku-space-3);flex-wrap:wrap}",
   ".k-grid{display:grid;gap:var(--kohaku-space-4);grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}",
-  ".k-grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}",
-  ".k-grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}",
-  ".k-grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}",
+  // .k-grid-2/3/4 carry their own display:grid + gap so they render correctly used alone (without
+  // .k-grid); combined with .k-grid the values are identical, so the pairing stays idempotent.
+  ".k-grid-2{display:grid;gap:var(--kohaku-space-4);grid-template-columns:repeat(2,minmax(0,1fr))}",
+  ".k-grid-3{display:grid;gap:var(--kohaku-space-4);grid-template-columns:repeat(3,minmax(0,1fr))}",
+  ".k-grid-4{display:grid;gap:var(--kohaku-space-4);grid-template-columns:repeat(4,minmax(0,1fr))}",
   "@media (max-width:480px){.k-grid-2,.k-grid-3,.k-grid-4{grid-template-columns:1fr}}",
   // form
   ".k-label{font-size:var(--kohaku-font-size-sm);font-weight:600;color:var(--kohaku-color-text)}",

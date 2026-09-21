@@ -51,6 +51,18 @@ describe("defaultDesignKit", () => {
   });
 });
 
+describe("k-grid-N (m-11: self-sufficient without .k-grid)", () => {
+  it("k-grid-2/3/4 each declare display:grid and a gap on their own rule", () => {
+    for (const n of [2, 3, 4]) {
+      const match = defaultDesignKit.css.match(new RegExp(`\\.k-grid-${n}\\{([^}]*)\\}`));
+      expect(match, `.k-grid-${n} rule not found`).not.toBeNull();
+      const body = match![1]!;
+      expect(body).toContain("display:grid");
+      expect(body).toMatch(/gap:var\(--kohaku-space-\d\)/);
+    }
+  });
+});
+
 describe("PARTS_STATE_CSS (theme-neutral L1 state styles)", () => {
   it("scopes every selector to a kohaku subtree and holds no color values", () => {
     const rules = PARTS_STATE_CSS.split("}").filter((r) => r.trim() !== "");
@@ -158,7 +170,7 @@ function assertWellFormedCss(css: string, minRuleCount: number): void {
 
 describe("kit CSS structural parser", () => {
   it("defaultDesignKit.css is a well-formed sequence of balanced rules (>= 140 of them)", () => {
-    // Measured at HEAD: 145 rules (146 "{" including the @media prelude), 282 declarations, 10642 chars.
+    // Measured at HEAD: 201 rules (202 "{" including the @media prelude), 357 declarations, 13409 chars.
     assertWellFormedCss(defaultDesignKit.css, 140);
   });
 
