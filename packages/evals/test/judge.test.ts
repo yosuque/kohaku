@@ -9,6 +9,7 @@ import {
   l1QualityRubric,
   l2PromotionRubric,
   l2PromotionRubricV0_1,
+  l2PromotionRubricV0_2,
   type Rubric,
   runQuality,
 } from "../src/index.js";
@@ -46,11 +47,13 @@ describe("createJudge: L2 promotion review (judge)", () => {
       request: "as a heatmap",
       usage: { uses: 3, sessions: 2 },
     });
-    // All criteria 0.8 and weights sum to 1.0, so the combined score is also 0.8.
+    // All criteria 0.8 and weights sum to 1.0, so the combined score is also 0.8. safety's floor is 0.5,
+    // and 0.8 clears it, so nothing is vetoed.
     expect(verdict.score).toBe(0.8);
     expect(verdict.pass).toBe(true);
+    expect(verdict.vetoedBy).toEqual([]);
     expect(verdict.rubricId).toBe("l2-promotion");
-    expect(verdict.rubricVersion).toBe("0.2");
+    expect(verdict.rubricVersion).toBe("0.3");
     expect(verdict.summary).toBe("worthy of promotion");
   });
 
@@ -120,8 +123,9 @@ describe("createJudge: L1 quality scoring (judgeSpec)", () => {
 });
 
 describe("createJudge: error cases of missing and unknown criterion", () => {
-  it("when the response omits a criterion its score falls back to 0 / reasoning to (not evaluated)", async () => {
-    // A response that omits safety (weight 0.25) and returns full marks for the remaining 5 criteria.
+  it("when the response omits a criterion its score falls back to 0 / reasoning to (not evaluated); missing safety also vetoes the verdict (n-7)", async () => {
+    // A response that omits safety (weight 0.25, floor 0.5) and returns full marks for the remaining 5
+    // criteria.
     const llm = new FakeLlm({
       objects: [
         {
@@ -142,8 +146,14 @@ describe("createJudge: error cases of missing and unknown criterion", () => {
     const safety = verdict.criteria.find((c) => c.id === "safety")!;
     expect(safety.score).toBe(0);
     expect(safety.reasoning).toBe("(not evaluated)");
-    // The missing criterion (weight 0.25) is combined as 0 points: the remaining 5 criteria are full marks, so score = 1 - 0.25 = 0.75.
+    // The missing criterion (weight 0.25) is combined as 0 points: the remaining 5 criteria are full marks, so the weighted-average score = 1 - 0.25 = 0.75.
     expect(verdict.score).toBe(0.75);
+    // n-7: before the safety floor existed, 0.75 >= passScore (0.5) alone made this a passing verdict —
+    // exactly the "safety score 0 but other criteria compensate" escape hatch the floor closes. safety's
+    // score (0) is strictly below its floor (0.5), so the verdict is now vetoed and does NOT pass, even
+    // though the weighted-average score still clears passScore.
+    expect(verdict.vetoedBy).toEqual(["safety"]);
+    expect(verdict.pass).toBe(false);
   });
 
   it("unknown criterion ids mixed into the response are ignored and do not affect the score", async () => {
@@ -169,6 +179,11 @@ describe("createJudge: error cases of missing and unknown criterion", () => {
     expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubric.criteria.map((c) => c.id));
     // All criteria 0.5, so the combination is also 0.5 (the unknown criterion's full mark 1.0 is ignored).
     expect(verdict.score).toBe(0.5);
+    // safety's own score (0.5) equals its floor (0.5) exactly — the floor only vetoes a score strictly
+    // below it, so this is not a veto (a mid-scale score should not be indistinguishable from a clear
+    // safety violation).
+    expect(verdict.vetoedBy).toEqual([]);
+    expect(verdict.pass).toBe(true);
   });
 });
 
@@ -306,16 +321,16 @@ describe("runQuality: L1 quality regression harness", () => {
   });
 });
 
-describe("l2PromotionRubric (v0.2, current — pinned criteria id order and weights)", () => {
-  // m-21: uniformVerdict(l2PromotionRubric, ...) generates its expectations FROM l2PromotionRubric's own
-  // criteria (see the tests above), so a weight/id-order change to the rubric would pass every one of them
-  // silently. Pin the shape directly, following the same literal-value style already used for
-  // l2PromotionRubricV0_1 below. Task 8 is expected to rebalance visual_quality/generality to 0.3 — when it
-  // does, this test's weights array is exactly what it must update (and that update is the proof the pin
-  // actually bites).
-  it("is version 0.2 with 6 criteria (safety/determinism/a11y/schema_inferability/generality/visual_quality) and weights summing to 1.0", () => {
+describe("l2PromotionRubric (v0.3, current — pinned criteria id order, weights, and safety's floor)", () => {
+  // m-21/Task 8: uniformVerdict(l2PromotionRubric, ...) generates its expectations FROM l2PromotionRubric's
+  // own criteria (see the tests above), so a weight/id-order change to the rubric would pass every one of
+  // them silently. Pin the shape directly, following the same literal-value style already used for
+  // l2PromotionRubricV0_1/l2PromotionRubricV0_2 below. m-22 rebalanced generality/visual_quality; n-7 added
+  // safety's floor — this test's weights/floor are exactly what a further rebalance must update (and that
+  // update is the proof the pin actually bites).
+  it("is version 0.3 with 6 criteria (safety/determinism/a11y/schema_inferability/generality/visual_quality) and weights summing to 1.0", () => {
     expect(l2PromotionRubric.id).toBe("l2-promotion");
-    expect(l2PromotionRubric.version).toBe("0.2");
+    expect(l2PromotionRubric.version).toBe("0.3");
     expect(l2PromotionRubric.criteria.map((c) => c.id)).toEqual([
       "safety",
       "determinism",
@@ -324,9 +339,33 @@ describe("l2PromotionRubric (v0.2, current — pinned criteria id order and weig
       "generality",
       "visual_quality",
     ]);
-    expect(l2PromotionRubric.criteria.map((c) => c.weight)).toEqual([0.25, 0.2, 0.15, 0.15, 0.15, 0.1]);
+    expect(l2PromotionRubric.criteria.map((c) => c.weight)).toEqual([0.25, 0.2, 0.15, 0.15, 0.05, 0.2]);
     const sum = l2PromotionRubric.criteria.reduce((s, c) => s + c.weight, 0);
     expect(sum).toBeCloseTo(1.0);
+  });
+
+  it("n-7: only safety carries a floor, pinned to 0.5", () => {
+    expect(l2PromotionRubric.criteria.map((c) => c.floor)).toEqual([
+      0.5,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("n-6/n-8: visual_quality's description covers loading states, fluid width, and the countable restrained-color wording", () => {
+    const visualQuality = l2PromotionRubric.criteria.find((c) => c.id === "visual_quality")!;
+    // n-6: previously-unscored brief items now named explicitly.
+    expect(visualQuality.description).toContain("loading");
+    expect(visualQuality.description).toContain("never use fixed pixel widths — fill the container width");
+    // n-8: "restrained color" (2 words, not scorable from markup) replaced by the L2 brief's own
+    // countable wording (prompt.ts's L2_SYSTEM_PROMPT design-brief bullet, verbatim).
+    expect(visualQuality.description).not.toContain("restrained color");
+    expect(visualQuality.description).toContain(
+      "use the primary color for one emphasis at most; tone colors only when they carry meaning",
+    );
   });
 });
 
@@ -357,5 +396,60 @@ describe("l2PromotionRubricV0_1 (pinned pre-visual_quality rubric)", () => {
     });
     expect(verdict.rubricVersion).toBe("0.1");
     expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubricV0_1.criteria.map((c) => c.id));
+  });
+});
+
+describe("l2PromotionRubricV0_2 (pinned pre-Task-8 rubric)", () => {
+  it("is version 0.2 with the 6 pre-Task-8 criteria, weights summing to 1.0, and no floors", () => {
+    expect(l2PromotionRubricV0_2.id).toBe("l2-promotion");
+    expect(l2PromotionRubricV0_2.version).toBe("0.2");
+    expect(l2PromotionRubricV0_2.criteria.map((c) => c.id)).toEqual([
+      "safety",
+      "determinism",
+      "a11y",
+      "schema_inferability",
+      "generality",
+      "visual_quality",
+    ]);
+    expect(l2PromotionRubricV0_2.criteria.map((c) => c.weight)).toEqual([0.25, 0.2, 0.15, 0.15, 0.15, 0.1]);
+    expect(l2PromotionRubricV0_2.criteria.map((c) => c.floor)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    const sum = l2PromotionRubricV0_2.criteria.reduce((s, c) => s + c.weight, 0);
+    expect(sum).toBeCloseTo(1.0);
+  });
+
+  it("a caller can pin it via judge()'s rubric option and get rubricVersion 0.2 in the verdict, with no floor veto even at safety=0", async () => {
+    const llm = new FakeLlm({
+      objects: [
+        {
+          criteria: l2PromotionRubricV0_2.criteria.map((c) => ({
+            id: c.id,
+            score: c.id === "safety" ? 0 : 1,
+            reasoning: c.id,
+          })),
+          summary: "pinned v0.2, safety scored 0",
+        },
+      ],
+    });
+    const judge = createJudge({ llm, passScore: 0.5, rubric: l2PromotionRubricV0_2 });
+    const verdict = await judge.judge({
+      kind: "l2-component",
+      html: "<html><body><script>window.kohaku.ready()</script></body></html>",
+      request: "as a table",
+      usage: { uses: 1, sessions: 1 },
+    });
+    expect(verdict.rubricVersion).toBe("0.2");
+    expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubricV0_2.criteria.map((c) => c.id));
+    // Task 8's safety floor lives only on the current l2PromotionRubric (v0.3), not on this pinned
+    // pre-Task-8 snapshot — a consumer who pinned v0.2 keeps the exact pre-Task-8 behavior, including the
+    // pre-n-7 "safety 0, rest full marks still passes" shape.
+    expect(verdict.vetoedBy).toEqual([]);
+    expect(verdict.pass).toBe(true);
   });
 });

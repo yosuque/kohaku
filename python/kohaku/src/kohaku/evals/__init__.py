@@ -30,6 +30,7 @@ from .judge import (
     l1_quality_rubric,
     l2_promotion_rubric,
     l2_promotion_rubric_v0_1,
+    l2_promotion_rubric_v0_2,
 )
 from .quality import (
     QualityCase,
@@ -64,6 +65,7 @@ __all__ = [
     "l1_quality_rubric",
     "l2_promotion_rubric",
     "l2_promotion_rubric_v0_1",
+    "l2_promotion_rubric_v0_2",
     "normalize_for_match",
     "run_golden",
     "run_quality",
