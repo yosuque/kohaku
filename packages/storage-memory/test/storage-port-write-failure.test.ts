@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FixationRecord, UISpec } from "@kohaku-ui/spec-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { createFileStoragePort } from "../src/ports/storage-port.js";
+import { createFileStoragePort } from "../src/index.js";
 
 // Isolated in its own file because it mocks node:fs/promises for the whole file (vi.mock is hoisted and applies
 // to every test here), which would otherwise interfere with the other storage-port tests' real file I/O.
