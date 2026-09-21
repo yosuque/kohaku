@@ -306,6 +306,30 @@ describe("runQuality: L1 quality regression harness", () => {
   });
 });
 
+describe("l2PromotionRubric (v0.2, current — pinned criteria id order and weights)", () => {
+  // m-21: uniformVerdict(l2PromotionRubric, ...) generates its expectations FROM l2PromotionRubric's own
+  // criteria (see the tests above), so a weight/id-order change to the rubric would pass every one of them
+  // silently. Pin the shape directly, following the same literal-value style already used for
+  // l2PromotionRubricV0_1 below. Task 8 is expected to rebalance visual_quality/generality to 0.3 — when it
+  // does, this test's weights array is exactly what it must update (and that update is the proof the pin
+  // actually bites).
+  it("is version 0.2 with 6 criteria (safety/determinism/a11y/schema_inferability/generality/visual_quality) and weights summing to 1.0", () => {
+    expect(l2PromotionRubric.id).toBe("l2-promotion");
+    expect(l2PromotionRubric.version).toBe("0.2");
+    expect(l2PromotionRubric.criteria.map((c) => c.id)).toEqual([
+      "safety",
+      "determinism",
+      "a11y",
+      "schema_inferability",
+      "generality",
+      "visual_quality",
+    ]);
+    expect(l2PromotionRubric.criteria.map((c) => c.weight)).toEqual([0.25, 0.2, 0.15, 0.15, 0.15, 0.1]);
+    const sum = l2PromotionRubric.criteria.reduce((s, c) => s + c.weight, 0);
+    expect(sum).toBeCloseTo(1.0);
+  });
+});
+
 describe("l2PromotionRubricV0_1 (pinned pre-visual_quality rubric)", () => {
   it("is version 0.1 with the 5 pre-rebalance criteria and weights summing to 1.0", () => {
     expect(l2PromotionRubricV0_1.id).toBe("l2-promotion");

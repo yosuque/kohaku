@@ -128,6 +128,9 @@ describe("cross-language golden (prompt fragments)", () => {
   it("the design brief inside L2_SYSTEM_PROMPT reproduces the fixture", () => {
     const lines = L2_SYSTEM_PROMPT.split("\n");
     const start = lines.indexOf("- Design brief (follow every point):");
+    // indexOf returns -1 (not found) rather than throwing, and lines.slice(-1) would silently compare
+    // against just the prompt's last line instead of failing outright — assert the line is actually present.
+    expect(start).toBeGreaterThan(-1);
     expect(lines.slice(start)).toEqual(fixture.promptFragments.designBrief);
   });
 

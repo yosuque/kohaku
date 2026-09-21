@@ -366,6 +366,26 @@ class TestWeightNormalization:
         asyncio.run(run())
 
 
+class TestL2PromotionRubric:
+    """l2_promotion_rubric (v0.2, current — pinned criteria id order and weights; mirrors TS's
+    l2PromotionRubric test, m-21)."""
+
+    def test_shape(self) -> None:
+        assert l2_promotion_rubric.id == "l2-promotion"
+        assert l2_promotion_rubric.version == "0.2"
+        assert [c.id for c in l2_promotion_rubric.criteria] == [
+            "safety",
+            "determinism",
+            "a11y",
+            "schema_inferability",
+            "generality",
+            "visual_quality",
+        ]
+        weights = [c.weight for c in l2_promotion_rubric.criteria]
+        assert weights == [0.25, 0.2, 0.15, 0.15, 0.15, 0.1]
+        assert sum(weights) == pytest.approx(1.0)
+
+
 class TestL2PromotionRubricV0_1:
     """l2_promotion_rubric_v0_1 (pinned pre-visual_quality rubric; mirrors TS's l2PromotionRubricV0_1)."""
 
