@@ -8,6 +8,15 @@
 // functions go through resolveToken, as long as both renderers pull this shared
 // record the resolved values match mechanically (parity guaranteed; follows dark
 // mode too).
+//
+// Deliberate literals (no non-color token fits, so these stay hard-coded; same
+// convention as design-kit.ts's own list): `zIndex: 1000` (dialogOverlayStyle,
+// toastStyle — layering has no size-scale token), `maxWidth: 480` (dialogBoxStyle,
+// toastStyle — a fixed overlay width, not a spacing/sizing value), `borderTop:
+// "4px solid …"` (dialogBoxStyle's danger accent band — a one-off accent width, not
+// the border-hairline family below), and the `1px solid` hairline border
+// (toastStyle — grouped with the other hairline borders across renderer-core, none
+// of which map to the radius/space scale).
 
 import type { KnownThemeTokens, ThemeTokens } from "@kohaku-ui/spec-core";
 import { resolveToken, type SizingTokens } from "../theme.js";
@@ -15,19 +24,21 @@ import { resolveToken, type SizingTokens } from "../theme.js";
 type StyleRecord = Record<string, string | number>;
 
 /** Dialog background (the modal overlay). Covers the whole viewport with fixed positioning and centers the box. */
-export const dialogOverlayStyle: StyleRecord = {
-  position: "fixed",
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 16,
-  background: "rgba(17, 24, 39, 0.45)",
-  zIndex: 1000,
-};
+export function dialogOverlayStyle(theme: ThemeTokens, sizing: SizingTokens): StyleRecord {
+  return {
+    position: "fixed",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: sizing.space4,
+    background: String(resolveToken(theme, "color.scrim")),
+    zIndex: 1000,
+  };
+}
 
 /** The dialog body box (a surface floating over the scrim = color.surface). danger indicates severity with a top band (accentBorder). */
 export function dialogBoxStyle(theme: ThemeTokens, accentBorder: string, sizing: SizingTokens): StyleRecord {
@@ -37,7 +48,7 @@ export function dialogBoxStyle(theme: ThemeTokens, accentBorder: string, sizing:
     gap: sizing.space3,
     width: "100%",
     maxWidth: 480,
-    maxHeight: "calc(100vh - 32px)",
+    maxHeight: `calc(100vh - ${sizing.space6})`,
     overflowY: "auto",
     padding: sizing.space5,
     background: String(resolveToken(theme, "color.surface")),
@@ -48,12 +59,14 @@ export function dialogBoxStyle(theme: ThemeTokens, accentBorder: string, sizing:
 }
 
 /** Header row (title + close button). */
-export const dialogHeaderStyle: StyleRecord = {
-  display: "flex",
-  alignItems: "flex-start",
-  justifyContent: "space-between",
-  gap: 12,
-};
+export function dialogHeaderStyle(sizing: SizingTokens): StyleRecord {
+  return {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: sizing.space3,
+  };
+}
 
 /** Title heading (pass a danger color for danger, the normal color for default). */
 export function dialogTitleStyle(color: string, sizing: SizingTokens): StyleRecord {
@@ -130,7 +143,7 @@ export function toastStyle(colors: ToastToneColors, sizing: SizingTokens): Style
   return {
     position: "fixed",
     left: "50%",
-    bottom: 20,
+    bottom: sizing.space5,
     transform: "translateX(-50%)",
     display: "flex",
     alignItems: "center",
@@ -148,16 +161,18 @@ export function toastStyle(colors: ToastToneColors, sizing: SizingTokens): Style
 }
 
 /** The toast dismiss (×) button. */
-export const toastDismissButtonStyle: StyleRecord = {
-  flexShrink: 0,
-  background: "none",
-  border: "none",
-  padding: 0,
-  fontSize: 16,
-  lineHeight: 1,
-  cursor: "pointer",
-  color: "inherit",
-};
+export function toastDismissButtonStyle(sizing: SizingTokens): StyleRecord {
+  return {
+    flexShrink: 0,
+    background: "none",
+    border: "none",
+    padding: 0,
+    fontSize: sizing.fontLg,
+    lineHeight: 1,
+    cursor: "pointer",
+    color: "inherit",
+  };
+}
 
 /** The error tone is an interruptive notification (role=alert); everything else is non-interruptive (role=status). */
 export function toastRole(tone: string): "alert" | "status" {

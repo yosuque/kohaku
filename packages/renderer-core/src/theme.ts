@@ -73,6 +73,7 @@ export const defaultLightTheme: ThemeDefaults = {
   "color.info.surface": "#eff6ff",
   "color.info.text": "#1e40af",
   "color.info.border": "#bfdbfe",
+  "color.scrim": "rgba(17, 24, 39, 0.45)",
   "chart.axis": "#374151",
   "chart.palette": DEFAULT_CHART_PALETTE.join(","),
   ...NON_COLOR_DEFAULTS,
@@ -101,6 +102,10 @@ export const defaultLightTheme: ThemeDefaults = {
  *   1.18–1.31:1) and do not hit the 1.4.11 essential-boundary requirement, so 3:1
  *   is not imposed. For structural visibility on a dark background, they are only
  *   lifted slightly from #2c313c → #333a47.
+ * - color.scrim (the dialog backdrop) is not a foreground/background text pairing, so
+ *   contrast ratios don't apply; it is a heavier black (0.6 vs light's 0.45 alpha)
+ *   because the page behind it already sits on a dark background, so a lighter scrim
+ *   would barely read as a dim.
  *
  * So a missing key does not fall through to light and break dark, apps use it as
  * `{ ...defaultDarkTheme, ...brand }`.
@@ -126,6 +131,7 @@ export const defaultDarkTheme: ThemeDefaults = {
   "color.info.surface": "#172a3f",
   "color.info.text": "#93c5fd",
   "color.info.border": "#2b4a6b",
+  "color.scrim": "rgba(0, 0, 0, 0.6)",
   "chart.axis": "#9aa1ad",
   "chart.palette": "#818cf8,#38bdf8,#34d399,#fbbf24,#f87171,#a78bfa,#2dd4bf",
   ...NON_COLOR_DEFAULTS,

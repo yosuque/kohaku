@@ -85,6 +85,13 @@ describe("designSystemPromptFragment (design-system section)", () => {
     expect(fragment).not.toContain("Additional style rules");
   });
 
+  it("color.scrim (the dialog backdrop) is not part of the L2 generation vocabulary, like the deprecated aliases and chart.palette", () => {
+    const fragment = designSystemPromptFragment({});
+    expect(fragment).not.toContain("--kohaku-color-scrim");
+    expect(fragment).not.toContain("--kohaku-color-danger");
+    expect(fragment).not.toContain("--kohaku-color-focus");
+  });
+
   it("tokenToCssVar replaces . in the token name with - and prepends the --kohaku- prefix", () => {
     expect(tokenToCssVar("color.positive.surface")).toBe("--kohaku-color-positive-surface");
   });

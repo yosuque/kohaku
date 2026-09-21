@@ -11,7 +11,7 @@ export function textSubheadingStyle(sizing: SizingTokens) {
   return { margin: `${sizing.space2} 0 ${sizing.space1}`, fontWeight: 650 } as const;
 }
 export function textListStyle(sizing: SizingTokens) {
-  return { margin: `${sizing.space1} 0`, paddingLeft: 20 } as const;
+  return { margin: `${sizing.space1} 0`, paddingLeft: sizing.space5 } as const;
 }
 export function textPreStyle(surface: string, sizing: SizingTokens) {
   return {
@@ -27,7 +27,10 @@ export function textCodeStyle(surface: string, sizing: SizingTokens) {
   return {
     background: surface,
     borderRadius: sizing.radiusSm,
-    padding: "1px 5px",
+    // The 1px vertical inset has no close non-color token (space.1 is 4px, 4x too
+    // large) and stays a deliberate literal, the same as renderer-core's other
+    // hairline-scale values; only the 5px horizontal inset maps onto space.1.
+    padding: `1px ${sizing.space1}`,
     fontSize: sizing.fontSm,
     fontFamily: sizing.fontMono,
   } as const;

@@ -1,4 +1,5 @@
 ---
+"@kohaku-ui/spec-core": minor
 "@kohaku-ui/renderer-core": minor
 "@kohaku-ui/renderer-react": minor
 ---
@@ -37,6 +38,20 @@ this branch has already applied elsewhere).
   alias (`export type SizingTokens = NonColorTokens`), so existing type annotations keep compiling
   unchanged. `resolveSizing` / `useSizing` / `RenderRuntime.sizing` keep their names (unifying that
   naming is a separate follow-up).
+
+- `dialogOverlayStyle` / `dialogHeaderStyle` / `toastDismissButtonStyle` (`presenters/overlay.ts`) were the
+  last plain `const` style objects in `overlay.ts` and are now functions, matching every other style export
+  in the file: `dialogOverlayStyle(theme, sizing)`, `dialogHeaderStyle(sizing)`,
+  `toastDismissButtonStyle(sizing)`. This also finishes tokenizing the file's remaining literals
+  (`dialogOverlayStyle`'s padding, `dialogHeaderStyle`'s gap, `dialogBoxStyle`'s `calc()` max-height,
+  `toastStyle`'s bottom offset, `toastDismissButtonStyle`'s font size) and `text-style.ts`'s
+  `textListStyle`/`textCodeStyle` padding — both renderers' own call sites already resolve `theme`/`sizing`
+  once per render, so this is a pure signature change for them.
+- New token `color.scrim` (`@kohaku-ui/spec-core`'s `KnownThemeTokens`): the dialog backdrop color, now
+  themeable instead of a hard-coded `rgba(17, 24, 39, 0.45)` (dark theme gets its own heavier value). Like
+  `color.danger` / `color.focus` / `chart.palette`, it is excluded from the L2 generation vocabulary (the
+  sandbox never renders a dialog), so this does not change `designSystemPromptFragment`'s output or
+  `PROMPT_REVISION`.
 
 `@kohaku-ui/renderer-react`:
 

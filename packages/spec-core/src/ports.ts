@@ -344,6 +344,14 @@ export interface KnownThemeTokens {
   "color.info.border"?: string;
   /** A deprecated alias (= color.negative). Kept for backward compatibility. */
   "color.danger"?: string;
+  /**
+   * The modal dialog backdrop (overlay.dialog's full-viewport scrim behind the box). Has its own
+   * concrete light/dark value (unlike color.danger / color.focus, it is not an alias), but — like
+   * color.danger / color.focus / chart.palette — is excluded from the L2 generation vocabulary
+   * (composer's BuiltinTokenName): the sandbox never renders a dialog backdrop, so there is nothing
+   * for the model to target with it.
+   */
+  "color.scrim"?: string;
   /** Chart axis lines, reference lines, grid, and ticks. */
   "chart.axis"?: string;
   /** Chart series colors (comma-separated CSV). */

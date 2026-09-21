@@ -8,6 +8,8 @@ import {
   dataStateNoticeStyle,
   defaultLightTheme,
   dialogBoxStyle,
+  dialogHeaderStyle,
+  dialogOverlayStyle,
   dialogTitleStyle,
   fieldRowStyle,
   formControlBaseStyle,
@@ -31,7 +33,9 @@ import {
   textBodyStyle,
   textCodeStyle,
   textHeadingStyle,
+  textListStyle,
   textPreStyle,
+  toastDismissButtonStyle,
   toastStyle,
 } from "../../src/index.js";
 
@@ -135,16 +139,28 @@ describe("presenter sizing (non-color tokens flow into every inline style)", () 
     expect(dialogBoxStyle(defaultLightTheme, "#000", defaults).boxShadow).toBe(
       defaultLightTheme["shadow.md"],
     );
+    expect(dialogBoxStyle(defaultLightTheme, "#000", defaults).maxHeight).toBe(
+      `calc(100vh - ${defaults.space6})`,
+    );
+    expect(dialogOverlayStyle(defaultLightTheme, sizing)).toMatchObject({
+      padding: "17px",
+      background: defaultLightTheme["color.scrim"],
+    });
+    expect(dialogHeaderStyle(sizing).gap).toBe("11px");
     expect(dialogTitleStyle("#000", sizing)).toMatchObject({ fontSize: defaults.fontLg, fontWeight: 700 });
     expect(toastStyle({ bg: "#fff", fg: "#000", border: "#eee" }, sizing).borderRadius).toBe("3px");
+    expect(toastStyle({ bg: "#fff", fg: "#000", border: "#eee" }, sizing).bottom).toBe(sizing.space5);
+    expect(toastDismissButtonStyle(sizing).fontSize).toBe(sizing.fontLg);
     expect(dataStateNoticeStyle({ bg: "#fff", fg: "#000" }, sizing)).toMatchObject({
       borderRadius: "3px",
       fontSize: "12px",
     });
     expect(textHeadingStyle("#111")).toEqual({ margin: 0, color: "#111", fontWeight: 650, lineHeight: 1.3 });
     expect(textBodyStyle("#000", sizing)).toMatchObject({ color: "#000", fontSize: "14px", lineHeight: 1.7 });
+    expect(textListStyle(sizing).paddingLeft).toBe(sizing.space5);
     expect(textPreStyle("#f8f8f8", sizing).borderRadius).toBe("3px");
     expect(textCodeStyle("#f8f8f8", sizing).fontSize).toBe("12px");
+    expect(textCodeStyle("#f8f8f8", sizing).padding).toBe(`1px ${sizing.space1}`);
     expect(loadingStyle("#888", sizing)).toMatchObject({ gap: "9px", fontSize: "14px" });
     expect(listEmptyStyle("#888", sizing).fontSize).toBe("14px");
     expect(chartCaptionStyle(sizing)).toMatchObject({ fontSize: "14px", fontWeight: 600 });

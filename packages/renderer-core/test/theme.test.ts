@@ -70,6 +70,12 @@ describe("default theme", () => {
     expect("color.focus" in defaultLightTheme).toBe(false);
   });
 
+  it("color.scrim (the dialog backdrop) has its own concrete light/dark value, unlike the deprecated aliases", () => {
+    expect(defaultLightTheme["color.scrim"]).toBe("rgba(17, 24, 39, 0.45)");
+    expect(defaultDarkTheme["color.scrim"]).toBe("rgba(0, 0, 0, 0.6)");
+    expect(defaultDarkTheme["color.scrim"]).not.toBe(defaultLightTheme["color.scrim"]);
+  });
+
   it("resolves with dark values when the dark theme is passed", () => {
     expect(resolveToken(defaultDarkTheme, "color.background")).toBe("#0f1115");
     expect(resolveToken(defaultDarkTheme, "color.text")).toBe("#e6e8ee");

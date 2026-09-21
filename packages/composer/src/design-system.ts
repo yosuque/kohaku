@@ -56,10 +56,14 @@ export interface DesignSystemGuide {
 
 /**
  * The subset of KnownThemeTokens this table documents: every known token except the two deprecated
- * aliases (color.danger / color.focus, not put on the generation vocabulary) and chart.palette (a
- * CSV-string token guided separately, in indexed form, by designSystemPromptFragment itself).
+ * aliases (color.danger / color.focus, not put on the generation vocabulary), chart.palette (a
+ * CSV-string token guided separately, in indexed form, by designSystemPromptFragment itself), and
+ * color.scrim (the dialog backdrop — the sandbox never renders one, so it has no generation-time use).
  */
-type BuiltinTokenName = Exclude<keyof KnownThemeTokens, "color.danger" | "color.focus" | "chart.palette">;
+type BuiltinTokenName = Exclude<
+  keyof KnownThemeTokens,
+  "color.danger" | "color.focus" | "chart.palette" | "color.scrim"
+>;
 
 /**
  * Default token vocabulary (usage descriptions for KnownThemeTokens). For prompt presentation only and

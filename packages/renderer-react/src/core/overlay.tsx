@@ -104,7 +104,7 @@ export function OverlayDialog({ node, children }: ImplProps): ReactNode {
         // Close only on a backdrop click (the overlay itself). Ignore clicks inside the box.
         if (e.target === overlayRef.current) close();
       }}
-      style={dialogOverlayStyle as CSSProperties}
+      style={dialogOverlayStyle(theme, sizing) as CSSProperties}
     >
       <div
         ref={boxRef}
@@ -114,7 +114,7 @@ export function OverlayDialog({ node, children }: ImplProps): ReactNode {
         aria-describedby={descId}
         style={dialogBoxStyle(theme, accentBorder, sizing) as CSSProperties}
       >
-        <div style={dialogHeaderStyle as CSSProperties}>
+        <div style={dialogHeaderStyle(sizing) as CSSProperties}>
           <h2 id={titleId} style={dialogTitleStyle(titleColor, sizing) as CSSProperties}>
             {title}
           </h2>
@@ -169,7 +169,7 @@ export function OverlayToast({ node }: ImplProps): ReactNode {
         type="button"
         aria-label="Close"
         onClick={() => emit("dismiss", {})}
-        style={toastDismissButtonStyle as CSSProperties}
+        style={toastDismissButtonStyle(sizing) as CSSProperties}
       >
         {"×"}
       </button>

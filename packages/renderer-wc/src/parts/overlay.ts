@@ -64,13 +64,13 @@ export const overlayDialog: PartBuilder = (rt, parent, node, row) => {
 
   const close = (): void => rt.emit(node, "close", {}, row);
 
-  const overlay = el("div", { "data-kohaku": node.id }, dialogOverlayStyle);
+  const overlay = el("div", { "data-kohaku": node.id }, dialogOverlayStyle(rt.theme, rt.sizing));
   const box = el(
     "div",
     { role: "dialog", "aria-modal": "true", "aria-labelledby": titleId, "aria-describedby": descId },
     dialogBoxStyle(rt.theme, accentBorder, rt.sizing),
   );
-  const header = el("div", {}, dialogHeaderStyle);
+  const header = el("div", {}, dialogHeaderStyle(rt.sizing));
   const heading = el("h2", { id: titleId }, dialogTitleStyle(titleColor, rt.sizing));
   heading.appendChild(text(title));
   const closeBtn = el(
@@ -147,7 +147,11 @@ export const overlayToast: PartBuilder = (rt, parent, node, row) => {
   const toast = el("div", { "data-kohaku": node.id, role: toastRole(tone) }, toastStyle(colors, rt.sizing));
   const label = el("span");
   label.appendChild(text(message));
-  const dismissBtn = el("button", { type: "button", "aria-label": "Close" }, toastDismissButtonStyle);
+  const dismissBtn = el(
+    "button",
+    { type: "button", "aria-label": "Close" },
+    toastDismissButtonStyle(rt.sizing),
+  );
   dismissBtn.appendChild(text("×"));
   dismissBtn.addEventListener("click", () => rt.emit(node, "dismiss", {}, row));
   toast.append(label, dismissBtn);
