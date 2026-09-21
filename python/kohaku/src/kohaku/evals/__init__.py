@@ -29,6 +29,7 @@ from .judge import (
     create_judge,
     l1_quality_rubric,
     l2_promotion_rubric,
+    l2_promotion_rubric_v0_1,
 )
 from .quality import (
     QualityCase,
@@ -62,6 +63,7 @@ __all__ = [
     "export_distillation_dataset",
     "l1_quality_rubric",
     "l2_promotion_rubric",
+    "l2_promotion_rubric_v0_1",
     "normalize_for_match",
     "run_golden",
     "run_quality",

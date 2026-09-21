@@ -8,6 +8,7 @@ import {
   type JudgeSpecInput,
   l1QualityRubric,
   l2PromotionRubric,
+  l2PromotionRubricV0_1,
   type Rubric,
   runQuality,
 } from "../src/index.js";
@@ -302,5 +303,35 @@ describe("runQuality: L1 quality regression harness", () => {
     expect(report.pass).toBe(false);
     // durationMs is measured (not deterministic) but is still typed as a number.
     expect(typeof report.cases[0]!.durationMs).toBe("number");
+  });
+});
+
+describe("l2PromotionRubricV0_1 (pinned pre-visual_quality rubric)", () => {
+  it("is version 0.1 with the 5 pre-rebalance criteria and weights summing to 1.0", () => {
+    expect(l2PromotionRubricV0_1.id).toBe("l2-promotion");
+    expect(l2PromotionRubricV0_1.version).toBe("0.1");
+    expect(l2PromotionRubricV0_1.criteria.map((c) => c.id)).toEqual([
+      "safety",
+      "determinism",
+      "a11y",
+      "schema_inferability",
+      "generality",
+    ]);
+    expect(l2PromotionRubricV0_1.criteria.map((c) => c.weight)).toEqual([0.3, 0.2, 0.15, 0.2, 0.15]);
+    const sum = l2PromotionRubricV0_1.criteria.reduce((s, c) => s + c.weight, 0);
+    expect(sum).toBeCloseTo(1.0);
+  });
+
+  it("a caller can pin it via judge()'s rubric option and get rubricVersion 0.1 in the verdict", async () => {
+    const llm = new FakeLlm({ objects: [uniformVerdict(l2PromotionRubricV0_1, 0.9)] });
+    const judge = createJudge({ llm, passScore: 0.5, rubric: l2PromotionRubricV0_1 });
+    const verdict = await judge.judge({
+      kind: "l2-component",
+      html: "<html><body><script>window.kohaku.ready()</script></body></html>",
+      request: "as a table",
+      usage: { uses: 1, sessions: 1 },
+    });
+    expect(verdict.rubricVersion).toBe("0.1");
+    expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubricV0_1.criteria.map((c) => c.id));
   });
 });

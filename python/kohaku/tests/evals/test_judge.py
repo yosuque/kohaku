@@ -23,6 +23,7 @@ from kohaku.evals import (
     create_judge,
     l1_quality_rubric,
     l2_promotion_rubric,
+    l2_promotion_rubric_v0_1,
 )
 from kohaku.llm import FakeLlm
 from kohaku.spec import UISpec, parse_spec
@@ -361,5 +362,41 @@ class TestWeightNormalization:
             assert verdict.score == 0.5
             assert verdict.rubric_id == "custom"
             assert verdict.rubric_version == "9.9"
+
+        asyncio.run(run())
+
+
+class TestL2PromotionRubricV0_1:
+    """l2_promotion_rubric_v0_1 (pinned pre-visual_quality rubric; mirrors TS's l2PromotionRubricV0_1)."""
+
+    def test_shape(self) -> None:
+        assert l2_promotion_rubric_v0_1.id == "l2-promotion"
+        assert l2_promotion_rubric_v0_1.version == "0.1"
+        assert [c.id for c in l2_promotion_rubric_v0_1.criteria] == [
+            "safety",
+            "determinism",
+            "a11y",
+            "schema_inferability",
+            "generality",
+        ]
+        weights = [c.weight for c in l2_promotion_rubric_v0_1.criteria]
+        assert weights == [0.3, 0.2, 0.15, 0.2, 0.15]
+        assert sum(weights) == pytest.approx(1.0)
+
+    def test_pinned_via_judge_rubric_option(self) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_uniform_verdict(l2_promotion_rubric_v0_1, 0.9)])
+            judge = create_judge(llm=llm, pass_score=0.5, rubric=l2_promotion_rubric_v0_1)
+            verdict = await judge.judge(
+                JudgeInput(
+                    html="<html><body><script>window.kohaku.ready()</script></body></html>",
+                    request="as a table",
+                    usage=JudgeUsage(uses=1, sessions=1),
+                )
+            )
+            assert verdict.rubric_version == "0.1"
+            assert [c.id for c in verdict.criteria] == [
+                c.id for c in l2_promotion_rubric_v0_1.criteria
+            ]
 
         asyncio.run(run())

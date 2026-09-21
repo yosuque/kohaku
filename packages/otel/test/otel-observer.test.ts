@@ -178,6 +178,76 @@ describe("createOtelComposeObserver", () => {
     expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.tier]).toBe("L0");
   });
 
+  it("a clean single-attempt compose emits repair_attempts=1 and no repair_issue_codes", () => {
+    const tracer = new FakeTracer();
+    const observer = createOtelComposeObserver({ tracer });
+    observer.onComposed?.(baseTrace({ attempts: [{ kind: "l1", ok: true }] }), {} as never);
+
+    const span = tracer.spans[0]!;
+    expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairAttempts]).toBe(1);
+    expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairIssueCodes]).toBeUndefined();
+  });
+
+  it("omits both repair attributes when attempts is empty (a cache hit / L0 fixed Spec never attempted generation)", () => {
+    const tracer = new FakeTracer();
+    const observer = createOtelComposeObserver({ tracer });
+    observer.onComposed?.(baseTrace({ tier: "L0", cache: "hit", attempts: [] }), {} as never);
+
+    const span = tracer.spans[0]!;
+    expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairAttempts]).toBeUndefined();
+    expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairIssueCodes]).toBeUndefined();
+  });
+
+  it("a fallback trace with a failed L2_UNKNOWN_CLASS attempt emits that code and no message text", () => {
+    const tracer = new FakeTracer();
+    const observer = createOtelComposeObserver({ tracer });
+    const trace = baseTrace({
+      tier: "L2",
+      fallback: { reason: "L2 free-form generation failed" },
+      attempts: [
+        {
+          kind: "l2",
+          ok: false,
+          issues: [
+            "L2_UNKNOWN_CLASS: these class names look like design-kit classes but do not exist in the kit: k-panel, k-tile",
+          ],
+        },
+      ],
+    });
+    observer.onComposed?.(trace, {} as never);
+
+    const span = tracer.spans[0]!;
+    expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairAttempts]).toBe(1);
+    expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairIssueCodes]).toBe("L2_UNKNOWN_CLASS");
+    // Never the message body (it can contain model-generated text, e.g. the offending class names).
+    expect(String(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairIssueCodes])).not.toContain("k-panel");
+  });
+
+  it("repair_issue_codes reflects only the LAST failed attempt, deduplicated, in a multi-attempt repair loop", () => {
+    const tracer = new FakeTracer();
+    const observer = createOtelComposeObserver({ tracer });
+    const trace = baseTrace({
+      tier: "L1",
+      fallback: { reason: "l1_invalid" },
+      attempts: [
+        { kind: "l1", ok: false, issues: ["EVENT_INVALID (events[0]): bad payload"] },
+        {
+          kind: "l1",
+          ok: false,
+          issues: [
+            "DATA_REF_UNRESOLVED (root): data.$ref is not in the resolved reference set",
+            "DATA_REF_UNRESOLVED (child): data.$ref is not in the resolved reference set",
+          ],
+        },
+      ],
+    });
+    observer.onComposed?.(trace, {} as never);
+
+    const span = tracer.spans[0]!;
+    expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairAttempts]).toBe(2);
+    expect(span.attributes[DEFAULT_OTEL_ATTRIBUTE_NAMES.repairIssueCodes]).toBe("DATA_REF_UNRESOLVED");
+  });
+
   it("marks a fallback-delivered trace's span ERROR with the fallback reason", () => {
     const tracer = new FakeTracer();
     const observer = createOtelComposeObserver({ tracer });

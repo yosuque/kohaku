@@ -63,6 +63,50 @@ export const l2PromotionRubric: Rubric = {
 };
 
 /**
+ * The L2 promotion rubric exactly as it was before `visual_quality` joined it (version "0.1"): the same
+ * 5 criteria (safety / determinism / a11y / schema_inferability / generality), with the pre-rebalance
+ * weights (safety 0.3, schema_inferability 0.2 — see .changeset/evals-visual-quality-criterion.md for the
+ * rebalance that produced today's `l2PromotionRubric`, version "0.2"). Exported so a consumer who is not
+ * ready for the up-to-0.10 score shift that adding a sixth criterion causes can pin the old promotion
+ * behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_1 })`. Mirrored in Python as
+ * `kohaku.evals.judge.l2_promotion_rubric_v0_1`.
+ */
+export const l2PromotionRubricV0_1: Rubric = {
+  id: "l2-promotion",
+  version: "0.1",
+  criteria: [
+    {
+      id: "safety",
+      description:
+        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      weight: 0.3,
+    },
+    {
+      id: "determinism",
+      description:
+        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      weight: 0.2,
+    },
+    {
+      id: "a11y",
+      description:
+        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      weight: 0.15,
+    },
+    {
+      id: "schema_inferability",
+      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      weight: 0.2,
+    },
+    {
+      id: "generality",
+      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      weight: 0.15,
+    },
+  ],
+};
+
+/**
  * Quality rubric for declarative L1 Specs. The set of criteria that auto-scores the result of
  * catalog selection + props filling.
  * Runs alongside golden (whether the output Spec matches the expectation); this one scores "how good"
