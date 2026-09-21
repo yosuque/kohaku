@@ -1,6 +1,7 @@
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { GuiAction } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
+import { FINGERPRINTED } from "../src/context.js";
 import {
   type ComposeContext,
   type ComposePolicy,
@@ -86,6 +87,23 @@ describe("policyFingerprint", () => {
     const bareFp = await policyFingerprint({ selectComponents: bare });
     const idFp = await policyFingerprint({ selectComponents: withId });
     expect(bareFp).not.toBe(idFp);
+  });
+
+  it('selectComponents.id = "" is nullish, not falsy: it fingerprints as "" itself, not as anonymous (M-4 cross-language parity)', async () => {
+    // `?? "anonymous"` (nullish) is the correct read of ComposePolicy.selectComponents.id — an empty
+    // string is a present id, distinct from "no id at all". The Python port's extractor used to use
+    // `or "anonymous"` (falsy), which collapses "" into the same fingerprint as unset, diverging from
+    // this implementation for that one input; see the sibling test in test_policy_fingerprint.py.
+    const bare: ComposePolicy["selectComponents"] = () => undefined;
+    const emptyId: ComposePolicy["selectComponents"] = Object.assign(() => undefined, { id: "" });
+    const anonymousFp = await policyFingerprint({ selectComponents: bare });
+    const emptyIdFp = await policyFingerprint({ selectComponents: emptyId });
+    expect(emptyIdFp).not.toBe(anonymousFp);
+    // Pinned against the Python-side value for the identical policy shape: with no other fingerprinted
+    // field set, Python's usual designSystem cross-language divergence (enforceTokenColors' differing
+    // default) does not apply, so this is one of the rare inputs where the two implementations' hashes
+    // are expected to match byte-for-byte.
+    expect(emptyIdFp).toBe("d6098cb7b6cf8828");
   });
 
   it("effort: unset is indistinguishable from a policy that never mentions the field", async () => {
@@ -181,6 +199,64 @@ describe("policyFingerprint", () => {
     expect(
       await policyFingerprint({ designSystem: { tokens: { "color.primary": "brand" }, guidelines: ["a"] } }),
     ).toBe("a88d021f77ce79fd");
+  });
+
+  it("designSystem.kit alone is pinned to an exact fingerprint byte value (M-4 absolute pin)", async () => {
+    // Absolute pin, unlike the relative-difference tests above (which only assert "differs from X" and
+    // would stay green even if the kit material's byte layout was reshuffled). If this goes red, the kit
+    // material's bytes changed — that silently invalidates the compose cache of every caller using a
+    // design kit. Fix the code so it doesn't; never re-pin this value.
+    expect(await policyFingerprint({ designSystem: { kit: DEFAULT_KIT_VOCABULARY } })).toBe(
+      "d515948ce457d0d6",
+    );
+  });
+
+  it("designSystem.kit + enforceKitClasses: false is pinned to an exact fingerprint byte value (M-4 absolute pin)", async () => {
+    // Same rationale as the kit-alone pin above, extended to cover enforceKitClasses's own byte
+    // contribution once it participates.
+    expect(
+      await policyFingerprint({
+        designSystem: { kit: DEFAULT_KIT_VOCABULARY, enforceKitClasses: false },
+      }),
+    ).toBe("7e6c3acf65782fa7");
+  });
+
+  it("effort with only l1 set is pinned to an exact fingerprint byte value (M-4 absolute pin)", async () => {
+    // If this goes red, effort's material bytes changed — every caller wiring adaptive-effort control
+    // gets its compose cache silently invalidated. Fix the code, never re-pin this value.
+    expect(await policyFingerprint({ effort: { l1: "high" } })).toBe("76b12e4c25cbdf74");
+  });
+
+  it("effort with both l1 and l2 set is pinned to an exact fingerprint byte value (M-4 absolute pin)", async () => {
+    expect(await policyFingerprint({ effort: { l1: "high", l2: "low" } })).toBe("5bfd57f3558ec560");
+  });
+
+  it("tierLlm differing from the base model is pinned to an exact fingerprint byte value (M-4 absolute pin)", async () => {
+    // tierLlm had no test coverage at all before M-4, absolute or relative — a policy-shape/byte-layout
+    // regression here would have gone completely undetected. If this goes red, tierLlm's material bytes
+    // changed — every caller wiring llmByTier away from the base model gets its compose cache silently
+    // invalidated.
+    expect(await policyFingerprint({}, { l1: { provider: "openai", modelId: "gpt-4" } })).toBe(
+      "a1d7a984ef2d138e",
+    );
+  });
+
+  it("fingerprints exactly the known set of ComposePolicy fields (detects an added/removed material key)", () => {
+    // A new fingerprinted field must add a row to FINGERPRINTED (context.ts) *and* update this list in
+    // the same change — this test exists so a forgotten update fails loudly instead of silently leaving
+    // a field unfingerprinted (or an accidental key rename perturbing every existing cache key
+    // unnoticed). See "the material key set" in context.ts's own doc comment for the M-4 discipline.
+    expect(FINGERPRINTED.map(([key]) => key).sort()).toEqual(
+      [
+        "outputLanguage",
+        "designSystem",
+        "fewShotId",
+        "selectComponentsId",
+        "refConstraint",
+        "effort",
+        "tierLlm",
+      ].sort(),
+    );
   });
 
   it("two composes with the same fingerprinted policy shape land on the same cache key (cache hit)", async () => {

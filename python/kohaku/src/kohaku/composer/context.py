@@ -228,7 +228,12 @@ def _fp_select_components_id(
     select_components = policy.selectComponents
     if select_components is None:
         return None
-    return getattr(select_components, "id", None) or "anonymous"
+    # Nullish, not falsy: `id=""` must fold in as "" here, matching the TS port
+    # (context.ts's `selectComponents.id ?? "anonymous"`) — `or "anonymous"` would treat an
+    # empty-string id the same as no id at all, diverging from TS for that one input and
+    # putting the same intent on two different cache-key partitions across languages.
+    select_id = getattr(select_components, "id", None)
+    return select_id if select_id is not None else "anonymous"
 
 
 def _fp_ref_constraint(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
@@ -320,6 +325,19 @@ def policy_fingerprint(
     `ComposeContext.llmByTier` is wired to something that actually differs from the base `ctx.llm`. None
     (its default) whenever `llmByTier` is unset or matches the base model everywhere, so a caller that never
     touches `llmByTier` sees no change here either.
+
+    Which keys fold to None vs. an absent key, and why the material below looks inconsistent: ten of the
+    keys this function emits — outputLanguage, designSystem itself, designSystem.tokens,
+    designSystem.guidelines, designSystem.enforceTokenColors, fewShotId, selectComponentsId, refConstraint,
+    effort, tierLlm — fold to an explicit None in their default case. That is safe *only* because all ten
+    have been part of this material's hashed byte layout since the day each field was added: every caller
+    that has ever computed a fingerprint already has those None-as-null bytes baked into its current cache
+    key, so leaving them None changes nothing further. It is not the pattern to copy — `_fp_design_system`
+    above appears to write a bare field ten times over, but that is historical grandfathering, not a model
+    for a new field. `kit` / `enforceKitClasses` (Task 7b) show the correct shape for a field added *after*
+    callers already depend on this material's bytes: fold to UNDEFINED (an absent key), never None — see
+    the UNDEFINED paragraph above. Any new fingerprinted field must follow `kit`/`enforceKitClasses`, not
+    the other ten.
 
     Note: this is an internal, process-local cache-partitioning hash, not a wire value — it is not required
     to (and in general will not) byte-match the TS implementation's hash for an equivalent policy, since

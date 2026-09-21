@@ -21,6 +21,7 @@ from kohaku.composer import (
     compose,
     policy_fingerprint,
 )
+from kohaku.composer.context import _FINGERPRINTED
 from kohaku.llm import FakeLlm
 from kohaku.spec import Intent
 from kohaku.storage import FileStoragePort
@@ -143,6 +144,75 @@ class TestPolicyFingerprint:
         id_fp = policy_fingerprint(ComposePolicy(selectComponents=with_id))
         assert bare_fp != id_fp
 
+    def test_select_components_empty_id_is_nullish_not_falsy(self) -> None:
+        """Cross-language parity (M-4): `id=""` must fold in as `""` (present, not the "anonymous"
+        default), matching the TS port's `selectComponents.id ?? "anonymous"` (nullish coalescing, not
+        `getattr(...) or "anonymous"`, which treats an empty string the same as no id at all and would
+        put the same policy shape on two different cache-key partitions across languages). See the
+        sibling test in packages/composer/test/policy-fingerprint.test.ts."""
+
+        def bare(intent: Intent, catalog: Any) -> list[str] | None:
+            return None
+
+        def with_empty_id(intent: Intent, catalog: Any) -> list[str] | None:
+            return None
+
+        with_empty_id.id = ""  # type: ignore[attr-defined]
+
+        anonymous_fp = policy_fingerprint(ComposePolicy(selectComponents=bare))
+        empty_id_fp = policy_fingerprint(ComposePolicy(selectComponents=with_empty_id))
+        assert empty_id_fp != anonymous_fp  # "" must not collapse into the "anonymous" default
+        # Pinned against the TS-side value for the identical policy shape: with no other fingerprinted
+        # field set, Python's usual designSystem cross-language divergence (enforceTokenColors'
+        # differing default) does not apply, so this is one of the rare inputs where the two
+        # implementations' hashes are expected to match byte-for-byte.
+        assert empty_id_fp == "d6098cb7b6cf8828"
+
+    def test_fingerprinted_table_has_exactly_the_known_keys(self) -> None:
+        """Detects an added/removed material key (M-4). A new fingerprinted field must add a row to
+        `_FINGERPRINTED` *and* update this list in the same change — this test exists so a forgotten
+        update fails loudly instead of silently leaving a field unfingerprinted (or an accidental key
+        rename perturbing every existing cache key unnoticed). See the sibling test in
+        packages/composer/test/policy-fingerprint.test.ts."""
+        assert sorted(key for key, _ in _FINGERPRINTED) == sorted(
+            [
+                "outputLanguage",
+                "designSystem",
+                "fewShotId",
+                "selectComponentsId",
+                "refConstraint",
+                "effort",
+                "tierLlm",
+            ]
+        )
+
+    def test_effort_l1_only_pinned_to_exact_value(self) -> None:
+        """Absolute pin (M-4), unlike the relative-difference coverage that predates it: a bug that
+        reshuffled effort's material bytes while preserving every relative inequality would pass the
+        existing tests and silently invalidate every effort-using caller's compose cache. If this goes
+        red, fix the code so the bytes don't change — never re-pin this value."""
+        assert policy_fingerprint(ComposePolicy(effort=EffortPolicy(l1="high"))) == "76b12e4c25cbdf74"
+
+    def test_effort_both_tiers_pinned_to_exact_value(self) -> None:
+        assert (
+            policy_fingerprint(ComposePolicy(effort=EffortPolicy(l1="high", l2="low")))
+            == "5bfd57f3558ec560"
+        )
+
+    def test_tier_llm_differing_from_base_pinned_to_exact_value(self) -> None:
+        """tierLlm had no test coverage at all before M-4, absolute or relative — a policy-shape/byte-
+        layout regression here would have gone completely undetected. If this goes red, fix the code so
+        tierLlm's material bytes don't change — never re-pin this value.
+
+        Not cross-language-pinned (the TS-side value for the same shape is a different literal,
+        "a1d7a984ef2d138e"): `TierLlmFingerprintMaterial` is a frozen dataclass, so `_fp_tier_llm`
+        always emits both `l1` and `l2` keys (the unset tier as an explicit `None`/JSON `null`), while
+        TS's `tierLlmFingerprintMaterial` (context.ts) only ever assigns the tiers `llmByTier` actually
+        sets, leaving an unset tier's key genuinely absent. Same category of expected divergence as
+        `enforceTokenColors`'s differing default — see policy_fingerprint's own docstring."""
+        tier_llm = TierLlmFingerprintMaterial(l1=TierModelIdentity(provider="openai", model_id="gpt-4"))
+        assert policy_fingerprint(ComposePolicy(), tier_llm) == "326747975e703454"
+
     def test_cache_key_unchanged_when_no_fingerprinted_field_set(self, tmp_path: Any) -> None:
         async def run() -> None:
             storage = FileStoragePort(tmp_path)
@@ -234,6 +304,31 @@ class TestDesignKitFingerprint:
         )
         assert explicit_true == unset
         assert explicit_false != unset
+
+    def test_kit_alone_pinned_to_exact_value(self) -> None:
+        """Absolute pin (M-4), unlike the relative-difference tests above (which only assert "differs
+        from X" and would stay green even if the kit material's byte layout was reshuffled). If this
+        goes red, the kit material's bytes changed — that silently invalidates the compose cache of
+        every caller using a design kit. Fix the code so it doesn't; never re-pin this value. (Not
+        cross-language-pinned — same enforceTokenColors-default divergence as
+        test_kit_less_design_system_fingerprint_is_unchanged below; the TS-side pin for the identical
+        shape is a different literal, "d515948ce457d0d6".)"""
+        assert (
+            policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))
+            == "cdb241d966765782"
+        )
+
+    def test_kit_plus_enforce_kit_classes_false_pinned_to_exact_value(self) -> None:
+        """Same rationale as test_kit_alone_pinned_to_exact_value, extended to cover
+        enforceKitClasses's own byte contribution once it participates."""
+        assert (
+            policy_fingerprint(
+                ComposePolicy(
+                    designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=False)
+                )
+            )
+            == "5227fd6679be65b0"
+        )
 
     def test_kit_less_design_system_fingerprint_is_unchanged(self) -> None:
         """Pinned against the value produced BEFORE kit / enforceKitClasses joined the material (computed
