@@ -95,7 +95,7 @@ const NodeView = memo(function NodeView({
   byId: Map<string, ComponentNode>;
   id: string;
 }): ReactNode {
-  const { impls, renderSandbox, onNodeError } = useRenderer();
+  const { impls, renderSandbox, onNodeError, theme } = useRenderer();
   const messages = useMessages();
   const row = useRowContext();
   const rawNode = byId.get(id);
@@ -135,7 +135,7 @@ const NodeView = memo(function NodeView({
     if (renderSandbox != null) {
       return (
         <NodeErrorBoundary node={node} fallback={fallback} onError={handleError}>
-          {renderSandbox(node, spec)}
+          {renderSandbox(node, spec, theme)}
         </NodeErrorBoundary>
       );
     }

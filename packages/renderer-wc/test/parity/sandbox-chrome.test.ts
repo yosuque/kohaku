@@ -101,21 +101,19 @@ function collectTexts(node: SemanticNode): string[] {
 /**
  * Renders both renderers against the same (optional) theme and returns their normalized root nodes.
  *
- * The React side's `renderSandbox` callback must explicitly forward `theme` to `<SandboxFrame>` —
- * renderer-react's SpecView does not inject it automatically (`renderSandbox`'s signature is plain
- * `(node, spec) => ReactNode`, see SpecView.tsx). This mirrors how production wiring does it
- * (apps/sample-web's SpecSurface.tsx closes over its own `theme` and passes `theme={theme}` into
- * SandboxFrame) — closing over the same `theme` this function received, rather than leaving it implicit,
- * is exactly what makes this a same-input comparison instead of two renderers that happen to agree only
- * because both silently defaulted to `{}`.
+ * The React side's `renderSandbox` callback forwards the `theme` renderer-react's SpecView injects as
+ * its 3rd argument (RendererContextValue.theme — the same `theme` passed to `renderReact` below), rather
+ * than closing over a `theme` variable of its own — proving the auto-injection path actually carries the
+ * value, the same way apps/sample-web's SpecSurface.tsx no longer needs to thread `theme` through its own
+ * closure either (see SpecView.tsx / context.tsx's `renderSandbox` doc comment).
  */
 async function renderChromePair(theme?: ThemeTokens): Promise<{ react: SemanticNode; wc: SemanticNode }> {
   const spec = sandboxSpec();
 
   const { container } = await renderReact(spec, {
     theme,
-    renderSandbox: (node: ComponentNode, s: UISpec) =>
-      createElement(SandboxFrame, { node, spec: s, bridge, theme }),
+    renderSandbox: (node: ComponentNode, s: UISpec, injectedTheme: ThemeTokens) =>
+      createElement(SandboxFrame, { node, spec: s, bridge, theme: injectedTheme }),
   });
   const { surface } = await renderWc(spec, { theme, sandbox: { bridge } });
 
@@ -145,10 +143,11 @@ describe("L2 sandbox chrome parity: React tree ≡ WC tree for the badge + error
 
   // Since tokenization, the chrome's colors/sizes come from `theme` rather than literal hex, so the two
   // renderers only agree if the SAME theme value actually reaches both. The default-theme case above
-  // cannot catch a renderer that silently drops theme (e.g. a renderSandbox wiring that forgets to
-  // forward it) — both sides would coincidentally land on the same default-light values regardless of
-  // whether theme was threaded through at all. Exercising a non-default theme makes that failure mode
-  // observable: React and WC diverge under a dropped theme, and only match here by actually agreeing.
+  // cannot catch a renderer that silently drops theme (e.g. SpecView's auto-injection regressing, or a
+  // renderSandbox implementation that ignores its 3rd argument) — both sides would coincidentally land on
+  // the same default-light values regardless of whether theme was threaded through at all. Exercising a
+  // non-default theme makes that failure mode observable: React and WC diverge under a dropped theme, and
+  // only match here by actually agreeing.
   it("badge row matches between renderers under a non-default theme (dark)", async () => {
     const { react, wc } = await renderChromePair(defaultDarkTheme);
 

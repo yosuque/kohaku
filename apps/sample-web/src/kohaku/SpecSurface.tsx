@@ -29,7 +29,7 @@ export function SpecSurface(props: {
   onEvent?: (event: SurfaceEvent) => void;
   /** Write (action.invoke) completion notification. Since emit no longer reaches onEvent, it is received here as an alternative path. */
   onActionResult?: RendererContextValue["onActionResult"];
-  renderSandbox?: (node: ComponentNode, spec: UISpec) => ReactNode;
+  renderSandbox?: (node: ComponentNode, spec: UISpec, theme: ThemeTokens) => ReactNode;
   /** Demo pass-through for SpecView's opt-in enableViewTransitions prop. Default off (see SpecView.tsx). */
   enableViewTransitions?: boolean;
 }): ReactNode {
@@ -60,10 +60,11 @@ export function SpecSurface(props: {
   // Delegation of L2 (sandbox.html) rendering. The capability stays in this bridge (the parent side) and
   // never enters the iframe — the parent proxies data resolution. It subscribes to the data invalidation bus and
   // bridges the write loop's in-place re-fetch to sandbox's invalidate (SandboxWithInvalidation).
-  // useCallback keeps this stable across renders where theme/binding/onEvent are unchanged, so it does
-  // not by itself force the RendererProvider value below to change identity.
+  // SpecView now injects `theme` as this callback's 3rd argument (renderer-react's own RendererContextValue.theme),
+  // so this no longer needs to close over the `theme` variable above — useCallback is stable across renders where
+  // binding/onEvent are unchanged, so it does not by itself force the RendererProvider value below to change identity.
   const renderSandbox = useCallback(
-    (node: ComponentNode, spec: UISpec): ReactNode => (
+    (node: ComponentNode, spec: UISpec, theme: ThemeTokens): ReactNode => (
       <SandboxWithInvalidation
         node={node}
         spec={spec}
@@ -77,7 +78,7 @@ export function SpecSurface(props: {
         }
       />
     ),
-    [theme, binding, props.onEvent],
+    [binding, props.onEvent],
   );
 
   // Memoized so every useRenderer() consumer across the whole Spec tree doesn't re-render whenever

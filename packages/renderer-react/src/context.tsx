@@ -60,8 +60,13 @@ export interface RendererContextValue {
   theme: ThemeTokens;
   /** Only events declared in the Spec's events reach here */
   onEvent?: (event: SurfaceEvent) => void;
-  /** Delegates rendering of sandbox.html nodes (injects SandboxFrame from @kohaku-ui/sandbox) */
-  renderSandbox?: (node: ComponentNode, spec: UISpec) => ReactNode;
+  /**
+   * Delegates rendering of sandbox.html nodes (injects SandboxFrame from @kohaku-ui/sandbox). SpecView
+   * calls this with this provider's own `theme` as the 3rd argument, so a host wiring `SandboxFrame`
+   * (or `<kohaku-surface>`'s equivalent on the WC side, which is already automatic — see sandbox-mount.ts)
+   * does not need to separately thread `theme` through its own closure to keep it in sync.
+   */
+  renderSandbox?: (node: ComponentNode, spec: UISpec, theme: ThemeTokens) => ReactNode;
   /** Display language tag. Used for number/date formatting and sort collation (default "en-US", see DEFAULT_LOCALE). */
   locale?: string;
   /** Partial override of the default messages (DEFAULT_MESSAGES). If unspecified, output is identical to before. */

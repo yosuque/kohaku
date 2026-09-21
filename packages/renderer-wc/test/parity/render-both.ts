@@ -44,7 +44,7 @@ export interface ParityContext {
   onEvent?: (event: SurfaceEvent) => void;
   onActionResult?: (arg: ActionResultArg) => void;
   /** L2 (sandbox.html) delegation, React side (RendererProvider.renderSandbox). */
-  renderSandbox?: (node: ComponentNode, spec: UISpec) => ReactNode;
+  renderSandbox?: (node: ComponentNode, spec: UISpec, theme: ThemeTokens) => ReactNode;
   /** L2 (sandbox.html) delegation, WC side (context.sandbox: the bridge + optional policy). */
   sandbox?: SurfaceContext["sandbox"];
 }
