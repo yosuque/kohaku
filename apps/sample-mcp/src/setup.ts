@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import {
   attachKohakuToMcpServer,
   defaultMcpListCacheHints,
@@ -22,11 +23,10 @@ import {
 import { createViewRecorder } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { admitFixationForLocale, createApp } from "@kohaku-ui-sample/api";
-// Reuse sample-api's Port implementations / side-effect declarations (via the package's exports subpaths)
+// Reuse sample-api's side-effect declarations (via the package's exports subpath)
 import { salesActionEffects } from "@kohaku-ui-sample/api/action-effects";
-import { createHmacAuthzPort } from "@kohaku-ui-sample/api/ports/authz-port";
-import { createFileStoragePort } from "@kohaku-ui-sample/api/ports/storage-port";
 import { McpServer } from "@modelcontextprotocol/server";
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));

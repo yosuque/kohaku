@@ -1,9 +1,9 @@
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { FixationRecord, UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { PROMOTION_MIN_USES } from "../src/app/promotions.js";
 import { createApp, FIXATION_MIN_USES } from "../src/app.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 // M7 reconciliation test: sample-web's i18n copy ("candidates appear after N uses", ui.ts's
 // admin.fixations.candidatesEmpty / admin.promotions.emptyAll) reads its threshold numbers from

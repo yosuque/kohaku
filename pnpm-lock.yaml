@@ -319,6 +319,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.1(hono@4.13.8)
+      '@kohaku-ui/authz-hmac':
+        specifier: workspace:^
+        version: link:../../packages/authz-hmac
       '@kohaku-ui/composer':
         specifier: workspace:^
         version: link:../../packages/composer
@@ -355,6 +358,9 @@ importers:
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../../packages/spec-core
+      '@kohaku-ui/storage-memory':
+        specifier: workspace:^
+        version: link:../../packages/storage-memory
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.1
@@ -401,6 +407,9 @@ importers:
       '@kohaku-ui-sample/web':
         specifier: workspace:^
         version: link:../sample-web
+      '@kohaku-ui/authz-hmac':
+        specifier: workspace:^
+        version: link:../../packages/authz-hmac
       '@kohaku-ui/data-binding':
         specifier: workspace:^
         version: link:../../packages/data-binding
@@ -422,6 +431,9 @@ importers:
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../../packages/spec-core
+      '@kohaku-ui/storage-memory':
+        specifier: workspace:^
+        version: link:../../packages/storage-memory
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.0.0
@@ -1179,6 +1191,9 @@ importers:
       '@kohaku-ui-sample/api':
         specifier: workspace:^
         version: link:../apps/sample-api
+      '@kohaku-ui/authz-hmac':
+        specifier: workspace:^
+        version: link:../packages/authz-hmac
       '@kohaku-ui/evals':
         specifier: workspace:^
         version: link:../packages/evals

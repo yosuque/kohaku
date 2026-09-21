@@ -2,11 +2,11 @@ import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
+import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { afterAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
-import { createFileStoragePort } from "../src/ports/storage-port.js";
 
 // sample-api wiring test for the multi-tenant contract.
 // The x-kohaku-tenant header -> KohakuHostDeps.tenant -> SessionContext.tenant -> lineage recording all the way through.
