@@ -65,6 +65,8 @@
 | `model` | string? | L1/L2 の生成モデル ID |
 | `cache` | `hit` / `miss` / `bypass` / `fixated` | `fixated` = L1→L0 固定化配信 |
 | `fallback` | `{from, reason, kind?}`? | capability 交渉・L1 失敗の降格痕跡。`kind` は `generation`(L1/L2 生成が尽きた決定的フォールバック)/ `negotiation`(capability 交渉降格)。両方発生時は last-writer-wins で `negotiation` |
+| `generatorVersion` | string? | 合成時点で有効だったホストの生成器 identity(composer の `ComposePolicy.generatorVersion`。設定時のみ)。tier を問わず刻まれ、キャッシュヒットや L1→L0 固定化をまたいでも変化しない |
+| `kit` | `{id, version}`? | 生成されたマークアップが書かれた対象の design kit(composer の `DesignSystemGuide.kit`。設定時のみ)。SPEC-KIT-001(SHOULD): design kit のスタイルシートを注入する surface は自身の identity をこれと突合し、無スタイルのまま黙って描画するのではなく不一致を(fail-open で)通知することが望ましい — 詳細は [user-guide.ja.md](user-guide.ja.md) の design kit 節を参照 |
 
 ## 2. CanonicalIntent と正規化
 

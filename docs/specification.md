@@ -65,6 +65,8 @@ Structural-validation error codes (stable): `DUPLICATE_ID` / `MISSING_ROOT` / `D
 | `model` | string? | Generation model ID for L1/L2 |
 | `cache` | `hit` / `miss` / `bypass` / `fixated` | `fixated` = L1→L0 fixated delivery |
 | `fallback` | `{from, reason, kind?}`? | Trace of a capability negotiation / L1 failure downgrade. `kind` is `generation` (a deterministic fallback where L1/L2 generation was exhausted) / `negotiation` (a capability negotiation downgrade). When both occur, `negotiation` wins last-writer-wins |
+| `generatorVersion` | string? | The host's generator identity in effect at composition time (composer's `ComposePolicy.generatorVersion`, when set). Stamped regardless of tier, and preserved unchanged through a cache hit or an L1→L0 fixation |
+| `kit` | `{id, version}`? | The design kit the generated markup was written against (composer's `DesignSystemGuide.kit`, when set). SPEC-KIT-001 (SHOULD): a surface injecting a design-kit stylesheet compares its own identity against this and reports a mismatch (fail-open) rather than rendering unstyled markup silently — see [user-guide.md](user-guide.md)'s design-kit section |
 
 ## 2. CanonicalIntent and normalization
 

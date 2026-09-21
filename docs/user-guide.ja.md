@@ -346,13 +346,30 @@ const policy = {
 // WC: <kohaku-surface> の context.theme(または theme プロパティ)に設定するだけ
 ```
 
-3. **(任意)独自キットを持ち込む**: 語彙を `designSystem.kit`(`{ id, version, classes, utilities, namespaces }`)として、スタイルシートを `kitCss`(`SandboxFrame` の prop / `mountSandbox` のオプション / `<kohaku-surface>` の `context.sandbox.kitCss`)として渡す。`classes`/`utilities` に列挙したクラス名と、CSS が実際にセレクタを持つクラス名は**双方向で一致**させること。語彙にあって CSS に対応セレクタがないクラスは無地のまま描画され(モデルには存在すると伝えているのに何も描画されない)、逆に CSS にあって語彙に載っていないクラスは `L2_UNKNOWN_CLASS` lint では検出できない(この lint はモデルが書いたクラスを語彙と突き合わせるだけで、CSS 側は見ていない)。`namespaces` は lint が「キットのクラスらしい」とみなすプレフィックス(`"k-"`・`"gap-"` など)であり、そのいずれかで始まりながら `classes`/`utilities` に無いクラスは差し戻される。どの名前空間にも属さないクラスは、キットの有無に関わらず lint から常に無視される。`skeleton`(自分のクラスを使った本文フラグメント)も併せて渡すこと — 渡さないと、モデルが知らされていない `k-*` クラス名で書かれた組み込みキットのスケルトンが構成例として提示されてしまい、存在しないクラスをモデルに使わせる原因になる。自分の語彙/CSS ペアを固定する際のテンプレートとしては `packages/sandbox/test/design-kit-contract.test.ts` を参照。CSS は色をすべて `var(--kohaku-color-*)` 参照・`currentColor`・キーワード `transparent` のいずれかで書き、色の直書きはしないこと。寸法もトークンで書くが、組み込みキット自身が使っているような意図的なリテラル(1px のヘアラインボーダー、2px のフォーカスリング、480px のグリッドブレークポイント、SVG チャートの寸法)は例外とする。`display:flex`・`color-mix()`・`filter` のようなレイアウトやエフェクトは制限されない(組み込みキットもこの 3 つを使っている)。ブランドの Web フォントは `@font-face` の data URI として埋め込める。`kitCss: ""` で組み込みキットを完全に無効化できる。クラスの意味を変更したら `version`(および `generatorVersion`)を bump する。
+3. **(任意)独自キットを持ち込む**: 語彙を `designSystem.kit`(`{ id, version, classes, utilities, namespaces }`)として、スタイルシートを `kit`(`DesignKitStylesheet` — `{ id, version, css }` — を `SandboxFrame` の prop / `mountSandbox` のオプション / `<kohaku-surface>` の `context.sandbox.kit` として渡す)として渡す。旧来の `kitCss: string` オプションも引き続き動作し廃止予定もないが、版情報を持たない(詳細は後述の「古いキットの検出」を参照)。`classes`/`utilities` に列挙したクラス名と、CSS が実際にセレクタを持つクラス名は**双方向で一致**させること。語彙にあって CSS に対応セレクタがないクラスは無地のまま描画され(モデルには存在すると伝えているのに何も描画されない)、逆に CSS にあって語彙に載っていないクラスは `L2_UNKNOWN_CLASS` lint では検出できない(この lint はモデルが書いたクラスを語彙と突き合わせるだけで、CSS 側は見ていない)。`namespaces` は lint が「キットのクラスらしい」とみなすプレフィックス(`"k-"`・`"gap-"` など)であり、そのいずれかで始まりながら `classes`/`utilities` に無いクラスは差し戻される。どの名前空間にも属さないクラスは、キットの有無に関わらず lint から常に無視される。`skeleton`(自分のクラスを使った本文フラグメント)も併せて渡すこと — 渡さないと、モデルが知らされていない `k-*` クラス名で書かれた組み込みキットのスケルトンが構成例として提示されてしまい、存在しないクラスをモデルに使わせる原因になる。自分の語彙/CSS ペアを固定する際のテンプレートとしては `packages/sandbox/test/design-kit-contract.test.ts` を参照。CSS は色をすべて `var(--kohaku-color-*)` 参照・`currentColor`・キーワード `transparent` のいずれかで書き、色の直書きはしないこと。寸法もトークンで書くが、組み込みキット自身が使っているような意図的なリテラル(1px のヘアラインボーダー、2px のフォーカスリング、480px のグリッドブレークポイント、SVG チャートの寸法)は例外とする。`display:flex`・`color-mix()`・`filter` のようなレイアウトやエフェクトは制限されない(組み込みキットもこの 3 つを使っている)。ブランドの Web フォントは `@font-face` の data URI として埋め込める。空文字列の CSS(`kit: ""` または `kitCss: ""`)で組み込みキットを完全に無効化できる。クラスの意味を変更したら `version`(および `generatorVersion`)を bump する。
 
 4. **確認**: L2 生成(例: チャットで自由形式の要求)→ 生成 HTML に `var(--kohaku-color-*)` が使われ、ヘッダのテーマ切替でカスタムコンポーネントの配色が追従すれば OK。色直書きが混ざると `L2_RAW_COLOR` として、語彙にないキット名前空間のクラス名が混ざると同様に `L2_UNKNOWN_CLASS` として自動で修復再試行されます。
 
-theme 未指定でも既定ライトテーマが sandbox に常時注入されるため、`var()` が未定義に落ちることはありません。Python 実装(`python/kohaku`)も同一機能(`ComposePolicy(designSystem=DesignSystemGuide(...))`)を持ちます(サンプル: `python/examples/sales-api/src/sales_api/design_system.py`)。
+theme 未指定でも既定ライトテーマが sandbox に常時注入されるため、`var()` が未定義に落ちることはありません。Python 実装(`python/kohaku`)も同一機能(`ComposePolicy(designSystem=DesignSystemGuide(...))`)を持ちます(サンプル: `python/examples/sales-api/src/sales_api/design_system.py`)。Python には sandbox ランタイムが無いため、これ以降(`kit` の受け口・突合検査・ロールバック用リゾルバ)は TS 限定です。Python 側の役割は合成済み Spec への `provenance.generatorVersion` / `provenance.kit` の刻印(後述)であり、TS でホストされる sandbox 側は同じ値をそのまま読み取ります。
 
-**アップグレード時の注意**: 組み込みキットの CSS はすべての sandbox マウントに注入されます。これにはすでに compose キャッシュにあるもの・すでに fixation 済みのもの・すでにカタログへ昇格済みのアーティファクトも含まれます。この既存アーティファクトへの影響を避けたい場合は、`kitCss: ""`(`SandboxFrame` の prop / `mountSandbox` のオプション / `<kohaku-surface>` の `context.sandbox.kitCss`)がサーフェスごとのオプトアウトになります。
+**古いキットの検出(SPEC-KIT-001)**: composer は `ComposePolicy.generatorVersion` / `designSystem.kit` のいずれかが設定されているとき、合成された Spec の `provenance.generatorVersion` / `provenance.kit`(`{id, version}`)を刻みます — tier を問わず、キャッシュヒットや L1→L0 固定化を経ても値は保たれます(固定化済み Spec は、現在のポリシーが何を指していようと、固定化時点で刻まれたキットを報告し続けます)。バージョン情報付きの `kit`(`DesignKitStylesheet` 形。素の文字列ではない)を渡すと、sandbox は自身の `id`/`version` を Spec 自身の `provenance.kit` と突き合わせます。不一致時は `bridge.onTelemetry({ componentId, kind: "kit-mismatch", detail })` で通知しますが、**描画は続行**します(fail-open — 古いキットは無スタイルまたは微妙に誤った見た目であって、セキュリティ上の欠陥ではないため、これは観測可能性のためのシグナルであり、ブロックではありません)。`onTelemetry` を自前のログ/メトリクスに配線しておくと、描画側のキットと合成側の語彙がロールアウト中にずれてしまったケースを検知できます。
+
+**キット変更をアーティファクト単位でロールバックする(M-2)**: `kit` は**リゾルバ**形式 `(node, spec) => DesignKitStylesheet | string | undefined` も受け付けます。そのノード自身の `ComponentNode`/`UISpec` を渡して呼び出されます — React では `SandboxFrame` の prop、WC では `<kohaku-surface>` の `context.sandbox.kit`(両レンダラーとも同じ口を提供)。リゾルバの中で `spec.provenance.kit` を読めば、サーフェス全体で 1 つの CSS を使う代わりに、**各アーティファクト自身の合成時点のキット**に一致する CSS を選べます:
+
+```tsx
+<SandboxFrame
+  node={node}
+  spec={spec}
+  bridge={bridge}
+  kit={(node, spec) =>
+    spec.provenance.kit?.version === "1" ? { id: "acme", version: "1", css: KIT_V1_CSS } : KIT_V2_CSS
+  }
+/>
+```
+
+このフックが無かった頃、唯一のロールバック手段は `kitCss: ""`(またはサーフェス全体の `kitCss` 文字列を戻すこと)だけで、これは全か無かの選択でした — 新しく生成された v2 アーティファクトの崩れを止めようとすると、既にキャッシュ・固定化・昇格済みの v1 アーティファクトのスタイルまで一緒に剥がれてしまい、逆に v1 のスタイルを取り戻そうとすると今度は v2 側が剥がれてしまいます。`provenance.kit` をキーにしたリゾルバなら、各アーティファクトに実際に書かれた対象のスタイルシートをそれぞれ提供できるため、サーフェス全体の既定値をロールバックしても両者の板挟みになりません。
+
+**アップグレード時の注意**: 組み込みキットの CSS はすべての sandbox マウントに注入されます。これにはすでに compose キャッシュにあるもの・すでに fixation 済みのもの・すでにカタログへ昇格済みのアーティファクトも含まれます。この既存アーティファクトへの影響を避けたい場合は、空文字列の CSS(`kit: ""` / `kitCss: ""`。`SandboxFrame` の prop / `mountSandbox` のオプション / `<kohaku-surface>` の `context.sandbox.kit`)がサーフェスごとのオプトアウトになり、`designSystem.kit` にバージョンを付けていれば上記のリゾルバ形式がより細かい粒度の代替手段になります。
 
 モデルなしでキットを目視確認したいときは、サンプルアプリの Admin → Gallery タブ(`apps/sample-web/src/pages/admin/GalleryTab.tsx`)を使います。手書きのショーケースアーティファクト(`gallery-showcase.ts`)を実際の `SandboxFrame` で描画し、キットの全コンポーネントクラスを網羅しています。チェックボックスでキットの適用有無を切り替えるとプレビューが再マウントされ差分を確認でき、その下のペーストボックスは任意の生成済み L2 アーティファクトを同じ方法でプレビューします。表示はアプリヘッダーのライト/ダーク設定に追従し、データは缶詰データなので、このタブは API もモデルも必要としません。
 
