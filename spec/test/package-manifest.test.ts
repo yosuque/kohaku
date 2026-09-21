@@ -24,13 +24,6 @@ import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** Must stay in step with PUBLISHED_DIRS in scripts/sync-package-meta.ts. */
-const PUBLISHED_DIRS = [
-  ...readdirSync(join(REPO_ROOT, "packages")).map((name) => `packages/${name}`),
-  "cli",
-  "spec",
-];
-
 interface Manifest {
   name: string;
   private?: boolean;
@@ -50,6 +43,20 @@ interface Manifest {
 function readManifest(dir: string): Manifest {
   return JSON.parse(readFileSync(join(REPO_ROOT, dir, "package.json"), "utf8")) as Manifest;
 }
+
+/**
+ * Must stay in step with PUBLISHED_DIRS in scripts/sync-package-meta.ts: every workspace package
+ * directory, minus any that is explicitly `private` (e.g. @kohaku-ui/port-contracts, a test-only
+ * suite package never meant to ship). Derived rather than hand-listed a second time, so a new
+ * private package under packages/ does not have to be excluded here by hand.
+ */
+const PUBLISHED_DIRS = [
+  ...readdirSync(join(REPO_ROOT, "packages"))
+    .map((name) => `packages/${name}`)
+    .filter((dir) => readManifest(dir).private !== true),
+  "cli",
+  "spec",
+];
 
 /** The catalog's own specifier for a dependency name, or undefined when it has no catalog entry. */
 function catalogSpecifier(name: string): string | undefined {
