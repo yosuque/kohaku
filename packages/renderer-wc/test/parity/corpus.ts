@@ -274,6 +274,17 @@ export const STRUCTURAL_CORPUS: Record<string, UISpec> = {
     events: [{ on: "root.submit", emit: "action.invoke", payload: { memo: "$value.memo" } }],
   }),
 
+  // Neither renderer has this component type registered, so both fall back to the generic
+  // "couldn't render this node" notice (SpecView.tsx's NodeNotice / dom.ts's nodeNotice — role="note",
+  // renderFailureNoticeStyle). That path had no parity coverage at all (m-19 #1): every other corpus entry
+  // uses a registered type, so the render-failure notice never appeared in either renderer's structural tree.
+  "render-failure notice (unimplemented component type)": spec({
+    components: [
+      { id: "root", type: "layout.stack", props: {}, children: ["bad"] },
+      { id: "bad", type: "totally.unknown", props: {} },
+    ],
+  }),
+
   "A1 two-way binding(initial variant)": spec({
     state: { region: "japan" },
     refVersions: { [BIND_REF]: "v1" },
