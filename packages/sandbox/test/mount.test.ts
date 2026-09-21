@@ -158,6 +158,158 @@ describe("mountSandbox theme token injection", () => {
   });
 });
 
+describe("mountSandbox design kit CSS injection", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  async function mountAndGetSrcdoc(kitCss?: string) {
+    const html = "<!DOCTYPE html><html><body>widget</body></html>";
+    const artifact: SandboxArtifact = { inline: html, sha256: await sha256Hex(html) };
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const handle = mountSandbox({
+      container,
+      componentId: "sb-kit",
+      allowedEvents: [],
+      artifact,
+      bridge,
+      ...(kitCss != null ? { kitCss } : {}),
+    });
+    let iframe: HTMLIFrameElement | null = null;
+    for (let i = 0; i < 50 && iframe == null; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      iframe = container.querySelector("iframe");
+    }
+    expect(iframe).not.toBeNull();
+    const srcdoc = iframe!.srcdoc;
+    handle.destroy();
+    return srcdoc;
+  }
+
+  it("injects the default design kit CSS when kitCss is unspecified, and none when kitCss is ''", async () => {
+    const withDefault = await mountAndGetSrcdoc();
+    expect(withDefault).toContain(".k-card{");
+    const without = await mountAndGetSrcdoc("");
+    expect(without).not.toContain(".k-card{");
+    const custom = await mountAndGetSrcdoc(".acme-tile{display:block}");
+    expect(custom).toContain(".acme-tile{display:block}");
+    expect(custom).not.toContain(".k-card{");
+  });
+});
+
+// Task 3 (M-1): the versioned `kit` option (DesignKitStylesheet) and the provenanceKit mismatch check
+// (SPEC-KIT-001). Backward compatibility with the deprecated `kitCss` string option is pinned by the
+// "design kit CSS injection" block above, unmodified.
+describe("mountSandbox versioned kit (DesignKitStylesheet) and provenanceKit mismatch telemetry", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  async function mountWithKit(
+    kit?: Parameters<typeof mountSandbox>[0]["kit"],
+    provenanceKit?: Parameters<typeof mountSandbox>[0]["provenanceKit"],
+  ) {
+    const html = "<!DOCTYPE html><html><body>widget</body></html>";
+    const artifact: SandboxArtifact = { inline: html, sha256: await sha256Hex(html) };
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const telemetry: SandboxTelemetryEvent[] = [];
+    const handle = mountSandbox({
+      container,
+      componentId: "sb-kit-version",
+      allowedEvents: [],
+      artifact,
+      bridge: {
+        resolveBinding: async () => ({}),
+        onEvent: () => {},
+        onTelemetry: (e) => telemetry.push(e),
+      },
+      ...(kit != null ? { kit } : {}),
+      ...(provenanceKit != null ? { provenanceKit } : {}),
+    });
+    let iframe: HTMLIFrameElement | null = null;
+    for (let i = 0; i < 50 && iframe == null; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      iframe = container.querySelector("iframe");
+    }
+    expect(iframe).not.toBeNull();
+    const srcdoc = iframe!.srcdoc;
+    handle.destroy();
+    return { srcdoc, telemetry };
+  }
+
+  it("a DesignKitStylesheet's css is injected the same way a bare string is", async () => {
+    const { srcdoc } = await mountWithKit({ id: "acme", version: "3", css: ".acme-tile{display:block}" });
+    expect(srcdoc).toContain(".acme-tile{display:block}");
+    expect(srcdoc).not.toContain(".k-card{");
+  });
+
+  it("kit (DesignKitStylesheet) supersedes kitCss when both are given", async () => {
+    const html = "<!DOCTYPE html><html><body>widget</body></html>";
+    const artifact: SandboxArtifact = { inline: html, sha256: await sha256Hex(html) };
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const handle = mountSandbox({
+      container,
+      componentId: "sb-kit-precedence",
+      allowedEvents: [],
+      artifact,
+      bridge,
+      kit: { id: "acme", version: "3", css: ".acme-tile{display:block}" },
+      kitCss: ".ignored{display:none}",
+    });
+    let iframe: HTMLIFrameElement | null = null;
+    for (let i = 0; i < 50 && iframe == null; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+      iframe = container.querySelector("iframe");
+    }
+    expect(iframe!.srcdoc).toContain(".acme-tile{display:block}");
+    expect(iframe!.srcdoc).not.toContain(".ignored{display:none}");
+    handle.destroy();
+  });
+
+  it("matching kit id/version against provenanceKit fires no telemetry", async () => {
+    const { telemetry } = await mountWithKit(
+      { id: "kohaku", version: "1", css: ".k-card{border:1px solid}" },
+      { id: "kohaku", version: "1" },
+    );
+    expect(telemetry.filter((e) => e.kind === "kit-mismatch")).toEqual([]);
+  });
+
+  it("a version mismatch against provenanceKit fires onTelemetry(kind: 'kit-mismatch') but still renders (fail-open)", async () => {
+    const { srcdoc, telemetry } = await mountWithKit(
+      { id: "kohaku", version: "2", css: ".k-card{border:2px solid}" },
+      { id: "kohaku", version: "1" },
+    );
+    // Rendering is unaffected: the resolved kit's CSS is still injected regardless of the mismatch.
+    expect(srcdoc).toContain(".k-card{border:2px solid}");
+    const mismatches = telemetry.filter((e) => e.kind === "kit-mismatch");
+    expect(mismatches).toHaveLength(1);
+    expect(mismatches[0]!.componentId).toBe("sb-kit-version");
+    expect(mismatches[0]!.detail).toContain("kohaku@1");
+    expect(mismatches[0]!.detail).toContain("kohaku@2");
+  });
+
+  it("an id mismatch (different kit entirely) also fires kit-mismatch", async () => {
+    const { telemetry } = await mountWithKit(
+      { id: "acme", version: "1", css: ".acme{}" },
+      { id: "kohaku", version: "1" },
+    );
+    expect(telemetry.filter((e) => e.kind === "kit-mismatch")).toHaveLength(1);
+  });
+
+  it("a bare-string kit (no version identity) never fires kit-mismatch, even with provenanceKit set", async () => {
+    const { telemetry } = await mountWithKit(".acme-tile{display:block}", { id: "kohaku", version: "1" });
+    expect(telemetry.filter((e) => e.kind === "kit-mismatch")).toEqual([]);
+  });
+
+  it("provenanceKit without kit carrying its own id/version performs no comparison", async () => {
+    const { telemetry } = await mountWithKit(undefined, { id: "kohaku", version: "1" });
+    expect(telemetry.filter((e) => e.kind === "kit-mismatch")).toEqual([]);
+  });
+});
+
 describe("mountSandbox immediate failure on a guest error during boot", () => {
   afterEach(() => {
     vi.restoreAllMocks();

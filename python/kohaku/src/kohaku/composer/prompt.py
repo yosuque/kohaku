@@ -14,9 +14,13 @@ from kohaku.llm import PromptParts
 from kohaku.registry import ResolvedCatalog, select_generation_types
 from kohaku.spec import DataShape, Intent, JsonObject, UISpec, canonical_stringify
 
-from .design_system import DesignSystemGuide, design_system_prompt_fragment
+from .design_system import (
+    DesignSystemGuide,
+    design_kit_prompt_fragment,
+    design_system_prompt_fragment,
+)
 
-PROMPT_REVISION = "11"
+PROMPT_REVISION = "13"
 """Revision of the L1/L2 prompts (in sync with TS's PROMPT_REVISION). Always bump it when changed.
 
 "8": the version that introduced the design-system section (design_system_prompt_fragment) into
@@ -34,6 +38,21 @@ work normally versus which measurement APIs are only approximate or which global
 (paired with l2_lint's new L2_UNSAFE_MARKUP / L2_UNSUPPORTED_DOM checks). Python has no sandbox runtime of
 its own (see the TS PROMPT_REVISION docstring and packages/spec-core/src/schema/sandbox-dom.ts's own note),
 so this is a text-only mirror kept byte-identical with the TS prompt.
+"12": the version that extends the design-system token vocabulary beyond colors (font / space / radius /
+shadow / motion — DEFAULT_TOKEN_DESCRIPTIONS), replaces L2_SYSTEM_PROMPT's "keep the design simple" line
+with a design brief, and adds the optional "Design kit" section (design_kit_prompt_fragment, paired with
+the L2_UNKNOWN_CLASS lint — build_l2_prompt_static inserts it right after the design-system section, only
+when design_system.kit is set). When ComposePolicy.designSystem is unspecified the L2 prompt still differs
+from "11" (the brief), so this bump separates every cached L2 generation (same rule as TS's own note on
+this revision).
+"13" (Task 8): reworded the design brief's spacing line so it no longer refers to "the design tokens" as an
+antecedent that may not exist in the prompt (m-24 — the line used to presuppose a "## Design system"
+section that is only inserted when ComposePolicy.designSystem is set); added the empty-input guard and
+sorted-by-name class ordering to design_kit_prompt_fragment (m-14/m-15 — bytes for the built-in kit are
+unchanged, only a kit-less/empty/unsorted-input fragment differs); and renamed "component class(es)" to
+"kit class(es)" throughout the L2 prompt and its repair feedback (n-3, to stop colliding with the Spec's
+own ComponentDefinition vocabulary). Every one of these can change L2 prompt bytes for at least some
+ComposePolicy.designSystem shape, so this bump separates every cached L2 generation (same rule as "12").
 """
 
 
@@ -261,7 +280,14 @@ L2_SYSTEM_PROMPT = "\n".join(
         "- When drawing a chart, always draw tick values and axis labels (column name and unit) on both the X and Y axes. Compute positions from the actual data values (SVG is allowed)",
         "- Libraries such as D3 / Chart.js / jQuery do not exist and cannot be loaded. Use only the raw DOM API. Build SVG with document.createElementNS + setAttribute, or assemble a string and insert it via innerHTML (DOM elements have no .attr() method)",
         "- fetch / XMLHttpRequest / WebSocket / import are forbidden",
-        "- Keep the design simple and readable",
+        "- Design brief (follow every point):",
+        "  - one clear heading; secondary text in the muted color",
+        "  - one consistent spacing scale throughout; use the design tokens or kit utilities when the prompt supplies them",
+        "  - use the primary color for one emphasis at most; tone colors only when they carry meaning",
+        "  - right-align numeric columns with tabular figures",
+        "  - show empty / error / loading states as a notice, never a blank area",
+        "  - never use fixed pixel widths — fill the container width",
+        "  - never leave browser-default styling on tables, buttons or inputs",
     ]
 )
 
@@ -286,6 +312,10 @@ def build_l2_prompt_static(
     # The design-system section goes after the data shape and before the instructions (same position as TS). Output bytes unchanged when unset.
     if design_system is not None:
         sections.append(design_system_prompt_fragment(design_system))
+        # The "Design kit" section directly follows the design-system section, only when a kit is set
+        # (same position/condition as TS's buildL2PromptStatic).
+        if design_system.kit is not None:
+            sections.append(design_kit_prompt_fragment(design_system.kit))
     lang = output_language if output_language is not None else "English"
     sections.append(
         f"## Output language\nWrite all user-visible text (the <title>, labels, annotations) in {lang}."

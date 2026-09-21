@@ -18,6 +18,39 @@ import { DEFAULT_CHART_PALETTE } from "./presenters/chart.js";
  */
 type ThemeDefaults = Required<Omit<KnownThemeTokens, "color.danger" | "color.focus">>;
 
+/**
+ * Non-color token defaults shared verbatim by light and dark (only shadow.* differs per theme). The
+ * values are CSS strings with units so both renderers inline the identical text (parity by construction).
+ * The font sizes match the px values the L1 parts used before tokenization (13.5 body, 12.5 captions,
+ * 28 KPI values) — but adopting these tokens does deliberately shift the existing look in a few places
+ * that had no equivalent literal before: the metric (KPI) now renders as a card, tables gained a muted
+ * 1px header divider, and `shadow.md` (dialogs/toasts) was raised to a stronger elevation. See
+ * `.changeset/l1-parts-tokens.md` for the full list of visual changes this release carries.
+ */
+const NON_COLOR_DEFAULTS = {
+  "font.family.sans":
+    'system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif',
+  "font.family.mono": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+  "font.size.xs": "11px",
+  "font.size.sm": "12.5px",
+  "font.size.md": "13.5px",
+  "font.size.lg": "15px",
+  "font.size.xl": "20px",
+  "font.size.2xl": "28px",
+  "space.1": "4px",
+  "space.2": "8px",
+  "space.3": "12px",
+  "space.4": "16px",
+  "space.5": "24px",
+  "space.6": "32px",
+  "radius.sm": "4px",
+  "radius.md": "8px",
+  "radius.lg": "12px",
+  "radius.full": "9999px",
+  "motion.duration": "150ms",
+  "motion.easing": "cubic-bezier(.2,0,0,1)",
+} as const;
+
 /** The default light theme (the light values preserve the original hard-coded look). */
 export const defaultLightTheme: ThemeDefaults = {
   "color.background": "#ffffff",
@@ -40,8 +73,12 @@ export const defaultLightTheme: ThemeDefaults = {
   "color.info.surface": "#eff6ff",
   "color.info.text": "#1e40af",
   "color.info.border": "#bfdbfe",
+  "color.scrim": "rgba(17, 24, 39, 0.45)",
   "chart.axis": "#374151",
   "chart.palette": DEFAULT_CHART_PALETTE.join(","),
+  ...NON_COLOR_DEFAULTS,
+  "shadow.sm": "0 1px 2px rgb(0 0 0 / .06)",
+  "shadow.md": "0 8px 32px rgb(0 0 0 / .18)",
 };
 
 /**
@@ -65,6 +102,10 @@ export const defaultLightTheme: ThemeDefaults = {
  *   1.18–1.31:1) and do not hit the 1.4.11 essential-boundary requirement, so 3:1
  *   is not imposed. For structural visibility on a dark background, they are only
  *   lifted slightly from #2c313c → #333a47.
+ * - color.scrim (the dialog backdrop) is not a foreground/background text pairing, so
+ *   contrast ratios don't apply; it is a heavier black (0.6 vs light's 0.45 alpha)
+ *   because the page behind it already sits on a dark background, so a lighter scrim
+ *   would barely read as a dim.
  *
  * So a missing key does not fall through to light and break dark, apps use it as
  * `{ ...defaultDarkTheme, ...brand }`.
@@ -90,8 +131,12 @@ export const defaultDarkTheme: ThemeDefaults = {
   "color.info.surface": "#172a3f",
   "color.info.text": "#93c5fd",
   "color.info.border": "#2b4a6b",
+  "color.scrim": "rgba(0, 0, 0, 0.6)",
   "chart.axis": "#9aa1ad",
   "chart.palette": "#818cf8,#38bdf8,#34d399,#fbbf24,#f87171,#a78bfa,#2dd4bf",
+  ...NON_COLOR_DEFAULTS,
+  "shadow.sm": "0 1px 2px rgb(0 0 0 / .5)",
+  "shadow.md": "0 8px 32px rgb(0 0 0 / .6)",
 };
 
 /**
@@ -191,9 +236,19 @@ export function themeTokensToCssVars(theme: ThemeTokens): Record<string, string>
  *   mapped.
  * - `chart.axis` / `chart.palette`: no host variable corresponds to chart-specific
  *   colors — left unmapped.
- * - Font variables (`--font-*`): kohaku's `KnownThemeTokens` has no font-family /
- *   font-size tokens (`resolveToken` calls are for color-carrying parts only), so
- *   there is nothing to map them onto.
+ * - Font, radius and shadow variables (`--font-*`, `--border-radius-*`,
+ *   `--shadow-*`): before this file had non-color tokens, none of these had
+ *   anything to map onto. That is no longer true for family and shape:
+ *   `--font-sans` / `--font-mono` correspond 1:1 to `font.family.sans` /
+ *   `font.family.mono`, and the host's radius (`--border-radius-xs`…`full`) and
+ *   shadow (`--shadow-hairline`/`sm`/`md`/`lg`) families correspond to `radius.*`
+ *   / `shadow.*`. They are left unmapped by this change anyway, deliberately:
+ *   adopting host values here would change rendering for MCP hosts, a behavior
+ *   change this task does not carry (no test, no changeset). Font size has no
+ *   single mapping regardless — the host splits text (4 steps) and heading
+ *   (7 steps) into two ladders against kohaku's one six-step `font.size.xs`…
+ *   `2xl`, so a size mapping needs a decision, not a rename. Wiring any of this
+ *   up is a follow-up.
  *
  * Exported so a host integration can extend or override it (e.g. add a
  * product-specific host's variables) without forking `themeFromHostStyles`.
@@ -299,3 +354,69 @@ export function sandboxThemeCss(theme?: ThemeTokens): string {
     .join("");
   return `:root{${body}}`;
 }
+
+/**
+ * The single dot-name -> camelCase mapping for the non-color tokens. Previously this table was
+ * hand-duplicated across `NonColorTokens` (the field list) and `resolveSizing` (the field ->
+ * `resolveToken` call list), so the two could drift silently if a field was added to one and not the
+ * other. Both now derive from this one object: `NonColorTokens` maps over its keys (below) and
+ * `resolveSizing` iterates its entries. Kept module-private (closed within theme.ts) — external code
+ * only ever sees the derived `NonColorTokens` type and the resolved bag `resolveSizing` returns.
+ */
+const SIZING_TOKEN_MAP = {
+  fontSans: "font.family.sans",
+  fontMono: "font.family.mono",
+  fontXs: "font.size.xs",
+  fontSm: "font.size.sm",
+  fontMd: "font.size.md",
+  fontLg: "font.size.lg",
+  fontXl: "font.size.xl",
+  font2xl: "font.size.2xl",
+  space1: "space.1",
+  space2: "space.2",
+  space3: "space.3",
+  space4: "space.4",
+  space5: "space.5",
+  space6: "space.6",
+  radiusSm: "radius.sm",
+  radiusMd: "radius.md",
+  radiusLg: "radius.lg",
+  radiusFull: "radius.full",
+  shadowSm: "shadow.sm",
+  shadowMd: "shadow.md",
+  motionDuration: "motion.duration",
+  motionEasing: "motion.easing",
+} satisfies Record<string, keyof KnownThemeTokens>;
+
+/**
+ * The non-color tokens resolved into a flat, string-typed bag. Presenters take this instead of calling
+ * resolveToken per size token (one resolution per render, identical for React and WC). Resolution goes
+ * through resolveToken so the default-light net and theme overrides apply exactly as for colors.
+ * Derived from SIZING_TOKEN_MAP (one field per key); the field set and names are unchanged from before.
+ */
+export type NonColorTokens = { [K in keyof typeof SIZING_TOKEN_MAP]: string };
+
+/**
+ * Kept as an alias: `resolveSizing` / `useSizing` / `RenderRuntime.sizing` still say "sizing" (unifying
+ * that naming is a separate scope), but the type itself is `NonColorTokens` — 6 of its 22 fields
+ * (`fontSans`/`fontMono`, `shadowSm`/`shadowMd`, `motionDuration`/`motionEasing`) are not sizes, and
+ * "non-color tokens" is already how the docs and this file's own comments describe the whole group.
+ */
+export type SizingTokens = NonColorTokens;
+
+export function resolveSizing(theme: ThemeTokens): NonColorTokens {
+  const result = {} as Record<keyof NonColorTokens, string>;
+  for (const key of Object.keys(SIZING_TOKEN_MAP) as (keyof typeof SIZING_TOKEN_MAP)[]) {
+    result[key] = String(resolveToken(theme, SIZING_TOKEN_MAP[key]));
+  }
+  return result;
+}
+
+/**
+ * The resolved default-light sizing bag. Presenters take `sizing: SizingTokens` as a required last
+ * parameter (every renderer-react / renderer-wc call site already passes its own resolved `sizing`
+ * explicitly). Kept exported for **external** consumers: a product calling a presenter style function
+ * directly (outside the two renderers) can pass `DEFAULT_SIZING` to reproduce the exact values a call
+ * with no `sizing` argument used to resolve, before `sizing` became mandatory.
+ */
+export const DEFAULT_SIZING: NonColorTokens = resolveSizing({});

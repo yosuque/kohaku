@@ -2,7 +2,11 @@ import type { LlmPort, PromptParts } from "@kohaku-ui/llm";
 import { type ResolvedCatalog, selectGenerationTypes } from "@kohaku-ui/registry";
 import { type CanonicalIntent, canonicalStringify, type DataShape } from "@kohaku-ui/spec-core";
 import type { FewShotExample } from "./context.js";
-import { type DesignSystemGuide, designSystemPromptFragment } from "./design-system.js";
+import {
+  type DesignSystemGuide,
+  designKitPromptFragment,
+  designSystemPromptFragment,
+} from "./design-system.js";
 
 /**
  * The L1/L2 prompt revision. Always bump it when changing the prompts (L1_SYSTEM_PROMPT /
@@ -46,8 +50,21 @@ import { type DesignSystemGuide, designSystemPromptFragment } from "./design-sys
  * docs/design.md §8): one <style> in <head>, a single <script> just before </body> (concatenate multiple),
  * and which DOM shim APIs work normally versus which measurement APIs are only approximate or which globals
  * do not exist at all (paired with l2-generate's new L2_UNSAFE_MARKUP / L2_UNSUPPORTED_DOM lints).
+ * "12": the version that extended the design-system token vocabulary beyond colors (font / space /
+ * radius / shadow / motion — DEFAULT_TOKEN_DESCRIPTIONS), replaced L2_SYSTEM_PROMPT's "keep the design
+ * simple" line with a design brief, and added the optional "Design kit" section (designKitPromptFragment,
+ * paired with the L2_UNKNOWN_CLASS lint). When ComposePolicy.designSystem is unspecified the L2 prompt
+ * still differs from "11" (the brief), so this bump separates every cached L2 generation.
+ * "13" (Task 8): reworded the design brief's spacing line so it no longer refers to "the design tokens" as
+ * an antecedent that may not exist in the prompt (m-24 — the line used to presuppose a "## Design system"
+ * section that is only inserted when ComposePolicy.designSystem is set); added the empty-input guard and
+ * sorted-by-name class ordering to designKitPromptFragment (m-14/m-15 — bytes for the built-in kit are
+ * unchanged, only a kit-less/empty/unsorted-input fragment differs); and renamed "component class(es)" to
+ * "kit class(es)" throughout the L2 prompt and its repair feedback (n-3, to stop colliding with the Spec's
+ * own ComponentDefinition vocabulary). Every one of these can change L2 prompt bytes for at least some
+ * ComposePolicy.designSystem shape, so this bump separates every cached L2 generation (same rule as "12").
  */
-export const PROMPT_REVISION = "11";
+export const PROMPT_REVISION = "13";
 
 /**
  * The default value of generatorVersion. Composes the prompt version + model ID.
@@ -263,7 +280,14 @@ export const L2_SYSTEM_PROMPT = [
   "- When drawing a chart, always draw tick values and axis labels (column name and unit) on both the X and Y axes. Compute positions from the actual data values (SVG is allowed)",
   "- Libraries such as D3 / Chart.js / jQuery do not exist and cannot be loaded. Use only the raw DOM API. Build SVG with document.createElementNS + setAttribute, or assemble a string and insert it via innerHTML (DOM elements have no .attr() method)",
   "- fetch / XMLHttpRequest / WebSocket / import are forbidden",
-  "- Keep the design simple and readable",
+  "- Design brief (follow every point):",
+  "  - one clear heading; secondary text in the muted color",
+  "  - one consistent spacing scale throughout; use the design tokens or kit utilities when the prompt supplies them",
+  "  - use the primary color for one emphasis at most; tone colors only when they carry meaning",
+  "  - right-align numeric columns with tabular figures",
+  "  - show empty / error / loading states as a notice, never a blank area",
+  "  - never use fixed pixel widths — fill the container width",
+  "  - never leave browser-default styling on tables, buttons or inputs",
 ].join("\n");
 
 export interface BuildL2PromptStaticArgs {
@@ -293,6 +317,7 @@ export function buildL2PromptStatic(args: BuildL2PromptStaticArgs): string {
   ];
   if (args.designSystem != null) {
     sections.push(designSystemPromptFragment(args.designSystem));
+    if (args.designSystem.kit != null) sections.push(designKitPromptFragment(args.designSystem.kit));
   }
   sections.push(
     `## Output language\nWrite all user-visible text (the <title>, labels, annotations) in ${args.outputLanguage ?? "English"}.`,

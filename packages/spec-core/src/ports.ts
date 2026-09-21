@@ -344,10 +344,48 @@ export interface KnownThemeTokens {
   "color.info.border"?: string;
   /** A deprecated alias (= color.negative). Kept for backward compatibility. */
   "color.danger"?: string;
+  /**
+   * The modal dialog backdrop (overlay.dialog's full-viewport scrim behind the box). Has its own
+   * concrete light/dark value (unlike color.danger / color.focus, it is not an alias), but — like
+   * color.danger / color.focus / chart.palette — is excluded from the L2 generation vocabulary
+   * (composer's BuiltinTokenName): the sandbox never renders a dialog backdrop, so there is nothing
+   * for the model to target with it.
+   */
+  "color.scrim"?: string;
   /** Chart axis lines, reference lines, grid, and ticks. */
   "chart.axis"?: string;
   /** Chart series colors (comma-separated CSV). */
   "chart.palette"?: string;
+  // --- Non-color tokens (v2). Values are CSS strings with units; both renderers expand the same string inline. ---
+  /** Sans-serif font stack for all UI text. */
+  "font.family.sans"?: string;
+  /** Monospace font stack (code, raw values). */
+  "font.family.mono"?: string;
+  /** Font size scale: xs (captions/ticks) → 2xl (KPI values). */
+  "font.size.xs"?: string;
+  "font.size.sm"?: string;
+  "font.size.md"?: string;
+  "font.size.lg"?: string;
+  "font.size.xl"?: string;
+  "font.size.2xl"?: string;
+  /** Spacing scale (4px base): 1=4px … 6=32px. */
+  "space.1"?: string;
+  "space.2"?: string;
+  "space.3"?: string;
+  "space.4"?: string;
+  "space.5"?: string;
+  "space.6"?: string;
+  /** Corner radii: sm (inputs/badges), md (buttons/notices), lg (cards/dialogs), full (pills). */
+  "radius.sm"?: string;
+  "radius.md"?: string;
+  "radius.lg"?: string;
+  "radius.full"?: string;
+  /** Elevation shadows: sm (cards), md (dialogs/toasts). Dark themes use stronger values. */
+  "shadow.sm"?: string;
+  "shadow.md"?: string;
+  /** Motion: duration and easing for hover/active transitions. */
+  "motion.duration"?: string;
+  "motion.easing"?: string;
 }
 
 /**

@@ -35,6 +35,17 @@ describe("chart parity: semantic equivalence (figure role + a11y table contents)
 
       // The a11y data table's structure and contents (caption / thead / tbody / cell values) match exactly.
       expect(normalize(a11yTable(wcFigure))).toEqual(normalize(a11yTable(reactFigure)));
+
+      // The figure's own <figcaption> (the chart title, distinct from the a11y table's own <caption> above)
+      // — only rendered when the `title` prop is set (the "bar" entry of CHART_CORPUS is the only one that
+      // sets it) — was previously untouched by this test (m-19 #2): neither its presence/absence nor its
+      // content/style were ever compared between renderers.
+      const reactCaption = reactFigure.querySelector("figcaption");
+      const wcCaption = wcFigure.querySelector("figcaption");
+      expect(wcCaption != null).toBe(reactCaption != null);
+      if (reactCaption != null && wcCaption != null) {
+        expect(normalize(wcCaption)).toEqual(normalize(reactCaption));
+      }
     });
   }
 

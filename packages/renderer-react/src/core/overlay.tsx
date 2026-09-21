@@ -19,7 +19,7 @@ import {
   useEffect,
   useRef,
 } from "react";
-import { type ImplProps, useEmitEvent, useRenderer, useToken } from "../context.js";
+import { type ImplProps, useEmitEvent, useRenderer, useSizing, useToken } from "../context.js";
 
 /**
  * Modal dialog (overlay.dialog). Open/close is not held in props but controlled by visibleWhen, so
@@ -34,6 +34,7 @@ import { type ImplProps, useEmitEvent, useRenderer, useToken } from "../context.
 export function OverlayDialog({ node, children }: ImplProps): ReactNode {
   const emit = useEmitEvent(node);
   const { theme } = useRenderer();
+  const sizing = useSizing();
   const danger = String(useToken("color.danger"));
   const text = String(useToken("color.text"));
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -103,7 +104,7 @@ export function OverlayDialog({ node, children }: ImplProps): ReactNode {
         // Close only on a backdrop click (the overlay itself). Ignore clicks inside the box.
         if (e.target === overlayRef.current) close();
       }}
-      style={dialogOverlayStyle as CSSProperties}
+      style={dialogOverlayStyle(theme, sizing) as CSSProperties}
     >
       <div
         ref={boxRef}
@@ -111,23 +112,23 @@ export function OverlayDialog({ node, children }: ImplProps): ReactNode {
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descId}
-        style={dialogBoxStyle(theme, accentBorder) as CSSProperties}
+        style={dialogBoxStyle(theme, accentBorder, sizing) as CSSProperties}
       >
-        <div style={dialogHeaderStyle as CSSProperties}>
-          <h2 id={titleId} style={dialogTitleStyle(titleColor) as CSSProperties}>
+        <div style={dialogHeaderStyle(sizing) as CSSProperties}>
+          <h2 id={titleId} style={dialogTitleStyle(titleColor, sizing) as CSSProperties}>
             {title}
           </h2>
           <button
             type="button"
             aria-label="Close"
             onClick={close}
-            style={dialogCloseButtonStyle(theme) as CSSProperties}
+            style={dialogCloseButtonStyle(theme, sizing) as CSSProperties}
           >
             {"×"}
           </button>
         </div>
         {description != null && (
-          <p id={descId} style={dialogDescriptionStyle(theme) as CSSProperties}>
+          <p id={descId} style={dialogDescriptionStyle(theme, sizing) as CSSProperties}>
             {description}
           </p>
         )}
@@ -145,6 +146,7 @@ export function OverlayDialog({ node, children }: ImplProps): ReactNode {
 export function OverlayToast({ node }: ImplProps): ReactNode {
   const emit = useEmitEvent(node);
   const { theme } = useRenderer();
+  const sizing = useSizing();
   // Hold emit in a ref so the timer's callback can grab the latest emit (the effect is set up once with []).
   const emitRef = useRef(emit);
   emitRef.current = emit;
@@ -161,13 +163,13 @@ export function OverlayToast({ node }: ImplProps): ReactNode {
   }, [durationMs]);
 
   return (
-    <div data-kohaku={node.id} role={toastRole(tone)} style={toastStyle(colors) as CSSProperties}>
+    <div data-kohaku={node.id} role={toastRole(tone)} style={toastStyle(colors, sizing) as CSSProperties}>
       <span>{message}</span>
       <button
         type="button"
         aria-label="Close"
         onClick={() => emit("dismiss", {})}
-        style={toastDismissButtonStyle as CSSProperties}
+        style={toastDismissButtonStyle(sizing) as CSSProperties}
       >
         {"×"}
       </button>

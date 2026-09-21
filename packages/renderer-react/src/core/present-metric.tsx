@@ -1,6 +1,12 @@
-import { resolveMetricView } from "@kohaku-ui/renderer-core";
+import {
+  metricCardStyle,
+  metricDeltaStyle,
+  metricLabelStyle,
+  metricValueStyle,
+  resolveMetricView,
+} from "@kohaku-ui/renderer-core";
 import type { ReactNode } from "react";
-import { type ImplProps, useLocale, useMessages, useToken } from "../context.js";
+import { type ImplProps, useLocale, useMessages, useSizing, useToken } from "../context.js";
 import { useBoundData } from "../use-bound-data.js";
 import { DataStateNotice } from "./data-states.js";
 
@@ -16,9 +22,12 @@ export function PresentMetric({ node }: ImplProps): ReactNode {
   const state = useBoundData(node);
   const messages = useMessages();
   const locale = useLocale();
+  const sizing = useSizing();
   const muted = String(useToken("color.muted"));
   const positiveColor = String(useToken("color.positive"));
   const negativeColor = String(useToken("color.negative"));
+  const surface = String(useToken("color.surface"));
+  const border = String(useToken("color.border"));
 
   if (state.status !== "ready") return <DataStateNotice state={state} />;
 
@@ -40,16 +49,16 @@ export function PresentMetric({ node }: ImplProps): ReactNode {
       data-kohaku={node.id}
       role="group"
       aria-label={view.ariaLabel}
-      style={{ display: "flex", flexDirection: "column", gap: 4, padding: "12px 14px" }}
+      style={metricCardStyle({ surface, border }, sizing)}
     >
-      <span aria-hidden="true" style={{ fontSize: 12.5, color: muted }}>
+      <span aria-hidden="true" style={metricLabelStyle(muted, sizing)}>
         {view.label}
       </span>
-      <span aria-hidden="true" style={{ fontSize: 28, fontWeight: 700, lineHeight: 1.1 }}>
+      <span aria-hidden="true" style={metricValueStyle(sizing)}>
         {view.valueText}
       </span>
       {view.delta != null && (
-        <span aria-hidden="true" style={{ fontSize: 13, color: view.deltaColor, fontWeight: 600 }}>
+        <span aria-hidden="true" style={metricDeltaStyle(view.deltaColor, sizing)}>
           {view.delta.arrow} {view.delta.signed}
         </span>
       )}

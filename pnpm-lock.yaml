@@ -527,6 +527,9 @@ importers:
         specifier: 'catalog:'
         version: 7.18.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
     devDependencies:
+      '@kohaku-ui/composer':
+        specifier: workspace:^
+        version: link:../../packages/composer
       '@testing-library/react':
         specifier: 'catalog:'
         version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

@@ -625,6 +625,37 @@ describe("materializeFixation: staleness detection (FixationCheck)", () => {
       expect(check.issues.join(" ")).toContain("structureHash");
     }
   });
+
+  // M-2's actual rollback mechanism: a fixation short-circuits before assembleSpec ever runs, spreading
+  // pinnedSpec.provenance verbatim (fixation.ts). So a Spec pinned while the compose-time kit was v1 keeps
+  // reporting provenance.kit v1 forever, even after the *current* policy passed to materializeFixation has
+  // since moved on to v2 (a new deploy, a bumped design-system version, …) — this is what lets a host
+  // compare a served Spec's own provenance.kit against its render-side kit and detect a stale artifact,
+  // rather than the fixation silently starting to report "v2" the moment the policy changes underneath it.
+  it("provenance.kit / generatorVersion are the values pinned at fixation time, independent of the current policy's designSystem.kit", async () => {
+    const pinnedAtV1 = { ...validPinned() };
+    pinnedAtV1.provenance = {
+      ...pinnedAtV1.provenance,
+      generatorVersion: "p1/gpt-5",
+      kit: { id: "kohaku", version: "1" },
+    };
+    const fixation = await makeFixation(pinnedAtV1, catalog.fingerprint);
+    // The runtime ctx's own policy has since moved to kit v2 — materializeFixation must not consult it at
+    // all for a fixation delivery (fixedSpecs/generation policy plays no role in the L0 short-circuit).
+    const ctx: ComposeContext = {
+      ...makeCtx1(),
+      policy: {
+        generatorVersion: "p2/gpt-6",
+        designSystem: { kit: { id: "kohaku", version: "2", classes: {}, utilities: [], namespaces: [] } },
+      },
+    };
+    const { result, check } = await materializeFixation(fixation, intent, ctx);
+
+    expect(check.kind).toBe("fresh");
+    expect(result).not.toBeNull();
+    expect(result!.spec.provenance.kit).toEqual({ id: "kohaku", version: "1" });
+    expect(result!.spec.provenance.generatorVersion).toBe("p1/gpt-5");
+  });
 });
 
 describe("recompose (interaction loop)", () => {
@@ -696,6 +727,77 @@ describe("compose: generatorVersion (cache generation separation)", () => {
     expect(llm.calls).toHaveLength(1);
     // The conventional 5-component key (no generatorVersion component appended at the end)
     expect(first.trace.cacheKey).not.toMatch(/:p\d+\//);
+  });
+});
+
+// Task 3 (M-1/M-2): provenance.generatorVersion / provenance.kit let a host tell which generator/kit
+// version a delivered Spec was actually written against, independent of the host's *current* config —
+// see assembleSpec's own doc for why both are stamped regardless of tier.
+describe("compose: provenance.generatorVersion / kit stamping", () => {
+  const KIT = { id: "kohaku", version: "1", classes: {}, utilities: [], namespaces: [] };
+
+  it("L1 generation stamps both fields onto provenance when the policy sets them", async () => {
+    const llm = new FakeLlm({ objects: [goodRawDraft()] });
+    const ctx = makeCtx(llm, { generatorVersion: "p1/gpt-5", designSystem: { kit: KIT } });
+    const { spec } = await compose(GUI_INPUT, ctx);
+
+    expect(spec.provenance.tier).toBe("L1");
+    expect(spec.provenance.generatorVersion).toBe("p1/gpt-5");
+    expect(spec.provenance.kit).toEqual({ id: "kohaku", version: "1" });
+  });
+
+  it("neither field is present when the policy does not set them (no behavior change)", async () => {
+    const llm = new FakeLlm({ objects: [goodRawDraft()] });
+    const { spec } = await compose(GUI_INPUT, makeCtx(llm));
+
+    expect(spec.provenance.generatorVersion).toBeUndefined();
+    expect(spec.provenance.kit).toBeUndefined();
+  });
+
+  it("the L0 fixed-spec path stamps kit/generatorVersion too — recording is not gated on tier", async () => {
+    const ctx: ComposeContext = {
+      catalog,
+      semantic: makeSemantic(),
+      storage: makeStorage(),
+      llm: new FakeLlm(),
+      policy: {
+        generatorVersion: "p1/gpt-5",
+        designSystem: { kit: KIT },
+        fixedSpecs: {
+          async lookup() {
+            return {
+              kohaku: "0.1",
+              intent: { canonical: "x", params: {}, hash: "sha256:" + "0".repeat(64) },
+              dataVersion: "v1",
+              components: [{ id: "root", type: "presentMarkdown", props: { markdown: "fixed" } }],
+              events: [],
+              provenance: { tier: "L0", composedBy: "fixed-spec-template", cache: "miss" },
+            } as unknown as UISpec;
+          },
+        },
+      },
+    };
+    const { spec } = await compose(GUI_INPUT, ctx);
+
+    expect(spec.provenance.tier).toBe("L0");
+    expect(spec.provenance.generatorVersion).toBe("p1/gpt-5");
+    expect(spec.provenance.kit).toEqual({ id: "kohaku", version: "1" });
+  });
+
+  it("a cache hit returns the composed-time kit unchanged (provenance is never re-stamped from current policy on hit)", async () => {
+    const llm = new FakeLlm({ objects: [goodRawDraft()] });
+    const ctx = makeCtx(llm, { designSystem: { kit: KIT } });
+
+    const first = await compose(GUI_INPUT, ctx);
+    expect(first.spec.provenance.cache).toBe("miss");
+    expect(first.spec.provenance.kit).toEqual({ id: "kohaku", version: "1" });
+
+    const second = await compose(GUI_INPUT, ctx);
+    expect(second.spec.provenance.cache).toBe("hit");
+    // Still the value stamped at compose time — a hit returns the stored Spec as-is, it does not re-run
+    // assembleSpec against ctx.policy.designSystem.kit a second time.
+    expect(second.spec.provenance.kit).toEqual({ id: "kohaku", version: "1" });
+    expect(llm.calls).toHaveLength(1);
   });
 });
 

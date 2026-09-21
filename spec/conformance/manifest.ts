@@ -76,6 +76,8 @@ export const REQUIREMENTS: Requirement[] = [
   { id: "SBX-EXEC-001", level: "MUST", target: "sandbox", verification: "reference", verifiedBy: "packages/sandbox/test", description: "Generated script runs in a dedicated Worker with no document/assignable location/window.open/importScripts/network access, and the applier rejects any element/attribute/style outside its allowlist" },
   { id: "SBX-NAV-001", level: "MUST", target: "sandbox", verification: "reference", verifiedBy: "packages/sandbox/test", description: "A navigation of the sandbox document is treated as a fault: the host tears the iframe down and does not let the guest continue running in the replaced document" },
   { id: "SBX-BRG-001", level: "MUST", target: "sandbox", verification: "reference", verifiedBy: "packages/sandbox/test", description: "A binding.fetch of an undeclared $ref is rejected with -32001" },
+  // SPEC-KIT-001 is SHOULD (not MUST), so it does not change the manifest's MUST count (spec/SPEC.md §7).
+  { id: "SPEC-KIT-001", level: "SHOULD", target: "sandbox", verification: "reference", verifiedBy: "packages/sandbox/test/mount.test.ts", description: "A sandbox mount that injects a versioned design-kit stylesheet (kit: {id, version, css}) compares it against Spec.provenance.kit and reports a mismatch via onTelemetry({kind:\"kit-mismatch\"}) rather than rendering unstyled markup silently; the mismatch is fail-open and never blocks rendering" },
 
   // --- lineage ----------------------------------------------------------------
   // LIN-PRM-001 is promoted to a black-box check of GET /lineage (a human component.reviewed(approve) precedes published in time order).

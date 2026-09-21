@@ -5,17 +5,18 @@ import {
   describeControl,
   describedByOf,
   describeFieldRow,
-  FIELD_ROW_STYLE,
   type FieldDef,
   type FieldViolation,
-  FORM_ROOT_STYLE,
+  fieldRowStyle,
   focusFieldSelectors,
   formControlBaseStyle,
   formFillKey,
+  formRootStyle,
   formSubmitButtonStyle,
   mergeRow,
   normalizeOptions,
   planFormSubmit,
+  type SizingTokens,
 } from "@kohaku-ui/renderer-core";
 import type { JsonObject, JsonValue } from "@kohaku-ui/spec-core";
 import { el, noop, setAttrs, setStyle, text } from "../dom.js";
@@ -46,7 +47,7 @@ export const presentForm: PartBuilder = (rt, parent, node, row) => {
   const applyError = new Map<string, (v: FieldViolation | undefined) => void>();
   const disablers: ((disabled: boolean) => void)[] = [];
 
-  const form = el("form", { "data-kohaku": node.id }, FORM_ROOT_STYLE) as HTMLFormElement;
+  const form = el("form", { "data-kohaku": node.id }, formRootStyle(rt.sizing)) as HTMLFormElement;
 
   // Aggregated error slot for validation violations (at the form's start; inserts a role="alert" div).
   const summarySlot = document.createComment(`kohaku:form-summary:${node.id}`);
@@ -98,7 +99,7 @@ export const presentForm: PartBuilder = (rt, parent, node, row) => {
     else form.removeAttribute("aria-busy");
     if (submitting) submit.setAttribute("aria-busy", "true");
     else submit.removeAttribute("aria-busy");
-    setStyle(submit, formSubmitButtonStyle(accent, onPrimary, { busy }));
+    setStyle(submit, formSubmitButtonStyle(accent, onPrimary, { busy }, rt.sizing));
   };
   applyBusy();
 
@@ -107,11 +108,11 @@ export const presentForm: PartBuilder = (rt, parent, node, row) => {
     applyBusy();
     if (phase.phase === "succeeded") {
       const msg = String((node.props["successMessage"] as string) ?? rt.messages.formSubmitted);
-      const div = el("div", { role: "status" }, { color: positiveText, fontSize: 13 });
+      const div = el("div", { role: "status" }, { color: positiveText, fontSize: rt.sizing.fontSm });
       div.appendChild(text(msg));
       setResult(div);
     } else if (phase.phase === "failed") {
-      const div = el("div", { role: "alert" }, { color: negativeText, fontSize: 13 });
+      const div = el("div", { role: "alert" }, { color: negativeText, fontSize: rt.sizing.fontSm });
       div.appendChild(text(phase.message));
       setResult(div);
     }
@@ -128,7 +129,9 @@ export const presentForm: PartBuilder = (rt, parent, node, row) => {
     const byField = new Map(found.map((v) => [v.field, v]));
     for (const field of fields) applyError.get(field.name)?.(byField.get(field.name));
     setSummary(
-      found.length > 0 ? buildSummary(rt.messages.formErrorSummary(found.length), found, negativeText) : null,
+      found.length > 0
+        ? buildSummary(rt.messages.formErrorSummary(found.length), found, negativeText, rt.sizing)
+        : null,
     );
   };
 
@@ -191,7 +194,7 @@ function buildFieldRow(
   // ids / label / grouping come from renderer-core's describeFieldRow (the shared id scheme with renderer-react).
   const { fieldId, helpId, errorId, labelText, required, isGroup } = describeFieldRow(node.id, field);
 
-  const rowEl = el("div", {}, FIELD_ROW_STYLE);
+  const rowEl = el("div", {}, fieldRowStyle(rt.sizing));
   if (isGroup) setAttrs(rowEl, { role: "group", "aria-label": labelText });
 
   const labelEl = el(isGroup ? "span" : "label", {}, { fontWeight: 600 });
@@ -208,7 +211,7 @@ function buildFieldRow(
   rowEl.appendChild(controlEl);
 
   if (field.helpText != null) {
-    const help = el("span", { id: helpId }, { color: muted, fontSize: 12 });
+    const help = el("span", { id: helpId }, { color: muted, fontSize: rt.sizing.fontXs });
     help.appendChild(text(field.helpText));
     rowEl.appendChild(help);
   }
@@ -223,7 +226,7 @@ function buildFieldRow(
     : [...controlEl.querySelectorAll("input,select,textarea")];
   applyError.set(field.name, (violation) => {
     if (violation != null) {
-      const span = el("span", { id: errorId }, { color: errorColor, fontSize: 12 });
+      const span = el("span", { id: errorId }, { color: errorColor, fontSize: rt.sizing.fontXs });
       span.appendChild(text(violation.message));
       errorNode.replaceWith(span);
       errorNode = span;
@@ -247,8 +250,13 @@ function buildFieldRow(
 }
 
 /** Aggregated error for validation violations (role="alert"; a count heading + a mention of each field). Semantically equivalent to React's aggregated div. */
-function buildSummary(heading: string, violations: FieldViolation[], errorColor: string): HTMLElement {
-  const div = el("div", { role: "alert" }, { color: errorColor, fontSize: 13 });
+function buildSummary(
+  heading: string,
+  violations: FieldViolation[],
+  errorColor: string,
+  sizing: SizingTokens,
+): HTMLElement {
+  const div = el("div", { role: "alert" }, { color: errorColor, fontSize: sizing.fontSm });
   const head = el("span");
   head.appendChild(text(heading));
   div.appendChild(head);
@@ -276,7 +284,7 @@ function buildControl(
   // The per-type decisions (tag / input type / constraint attributes / inputmode / rows / minHeight)
   // come from renderer-core's describeControl; only the element assembly and event wiring live here.
   const desc = describeControl(field);
-  const baseStyle = formControlBaseStyle(border);
+  const baseStyle = formControlBaseStyle(border, rt.sizing);
   const common = (elm: HTMLElement): void => {
     elm.id = fieldId;
     if (field.required === true) elm.setAttribute("aria-required", "true");
@@ -332,10 +340,14 @@ function buildControl(
       return select;
     }
     case "radio": {
-      const group = el("div", {}, { display: "flex", flexDirection: "column", gap: 4 });
+      const group = el("div", {}, { display: "flex", flexDirection: "column", gap: rt.sizing.space1 });
       const inputs: HTMLInputElement[] = [];
       for (const opt of normalizeOptions(field.options)) {
-        const lbl = el("label", {}, { display: "flex", alignItems: "center", gap: 6, fontWeight: 400 });
+        const lbl = el(
+          "label",
+          {},
+          { display: "flex", alignItems: "center", gap: rt.sizing.space2, fontWeight: 400 },
+        );
         const input = el("input", { type: "radio", name: fieldId, value: opt.value }) as HTMLInputElement;
         if (helpId != null) input.setAttribute("aria-describedby", helpId);
         input.checked = String(values[name] ?? "") === opt.value;

@@ -85,6 +85,46 @@ describe("srcdoc composition and integrity verification", () => {
     );
   });
 
+  it("kitCss is injected as its own <style> after themeCss and before the generated CSS", () => {
+    const html =
+      "<!DOCTYPE html><html><head><style>.gen{color:var(--kohaku-color-text)}</style></head><body></body></html>";
+    const doc = buildSrcdoc(
+      html,
+      DEFAULT_CSP,
+      NONCE,
+      RPC_TIMEOUT_MS,
+      ":root{--kohaku-color-text:#111}",
+      ".k-card{padding:4px}",
+    );
+    const themeAt = doc.indexOf(":root{--kohaku-color-text:#111}");
+    const kitAt = doc.indexOf(".k-card{padding:4px}");
+    const genAt = doc.indexOf(".gen{");
+    expect(themeAt).toBeGreaterThan(-1);
+    expect(kitAt).toBeGreaterThan(themeAt);
+    expect(genAt).toBeGreaterThan(kitAt);
+  });
+
+  it("an empty kitCss injects no kit <style> (srcdoc identical to the pre-kit form)", () => {
+    const html = "<!DOCTYPE html><html><head></head><body></body></html>";
+    expect(buildSrcdoc(html, DEFAULT_CSP, NONCE, RPC_TIMEOUT_MS, ":root{}", "")).toBe(
+      buildSrcdoc(html, DEFAULT_CSP, NONCE, RPC_TIMEOUT_MS, ":root{}"),
+    );
+  });
+
+  it("a </style> breakout in kitCss is escaped like themeCss", () => {
+    const html = "<!DOCTYPE html><html><head></head><body></body></html>";
+    const doc = buildSrcdoc(
+      html,
+      DEFAULT_CSP,
+      NONCE,
+      RPC_TIMEOUT_MS,
+      undefined,
+      ".x{}</style><meta http-equiv=refresh>",
+    );
+    expect(doc).not.toContain("</style><meta");
+    expect(doc).toContain("<\\/style>");
+  });
+
   it("CSP blocks the network by default and authorizes only the trusted document's own nonce'd script and its blob Worker", () => {
     expect(DEFAULT_CSP).toContain("connect-src 'none'");
     expect(DEFAULT_CSP).toContain("default-src 'none'");

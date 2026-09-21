@@ -4,21 +4,22 @@ import {
   describeControl,
   describedByOf,
   describeFieldRow,
-  FIELD_ROW_STYLE,
   type FieldDef,
   type FieldViolation,
-  FORM_ROOT_STYLE,
+  fieldRowStyle,
   focusFieldSelectors,
   formControlBaseStyle,
   formFillKey,
+  formRootStyle,
   formSubmitButtonStyle,
   mergeRow,
   normalizeOptions,
   planFormSubmit,
+  type SizingTokens,
 } from "@kohaku-ui/renderer-core";
 import type { JsonObject, JsonValue } from "@kohaku-ui/spec-core";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { type ImplProps, useMessages, useToken } from "../context.js";
+import { type ImplProps, useMessages, useSizing, useToken } from "../context.js";
 import type { RendererMessages } from "../messages.js";
 import { useBoundData } from "../use-bound-data.js";
 import { useInvokeAction } from "../use-invoke-action.js";
@@ -29,6 +30,7 @@ import { DataStateNotice } from "./data-states.js";
 
 export function PresentForm({ node }: ImplProps): ReactNode {
   const messages = useMessages();
+  const sizing = useSizing();
   const accent = String(useToken("color.primary"));
   const border = String(useToken("color.border"));
   const onPrimary = String(useToken("color.on-primary"));
@@ -96,10 +98,10 @@ export function PresentForm({ node }: ImplProps): ReactNode {
         }
         void invoke("submit", plan.payload);
       }}
-      style={FORM_ROOT_STYLE}
+      style={formRootStyle(sizing)}
     >
       {violations.length > 0 && (
-        <div role="alert" style={{ color: negativeText, fontSize: 13 }}>
+        <div role="alert" style={{ color: negativeText, fontSize: sizing.fontSm }}>
           <span>{messages.formErrorSummary(violations.length)}</span>
           <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
             {violations.map((v) => (
@@ -120,24 +122,25 @@ export function PresentForm({ node }: ImplProps): ReactNode {
           colors={fieldRowColors}
           messages={messages}
           violation={violationByField.get(field.name)}
+          sizing={sizing}
         />
       ))}
       <button
         type="submit"
         disabled={busy}
         aria-busy={submitting || undefined}
-        style={formSubmitButtonStyle(accent, onPrimary, { busy })}
+        style={formSubmitButtonStyle(accent, onPrimary, { busy }, sizing)}
       >
         {(node.props["submitLabel"] as string) ?? messages.formSubmit}
       </button>
       {/* Submit result: success surfaces as non-interrupting (status), failure as interrupting (alert). */}
       {actionState.phase === "succeeded" && (
-        <div role="status" style={{ color: positiveText, fontSize: 13 }}>
+        <div role="status" style={{ color: positiveText, fontSize: sizing.fontSm }}>
           {(node.props["successMessage"] as string) ?? messages.formSubmitted}
         </div>
       )}
       {actionState.phase === "failed" && (
-        <div role="alert" style={{ color: negativeText, fontSize: 13 }}>
+        <div role="alert" style={{ color: negativeText, fontSize: sizing.fontSm }}>
           {actionState.message}
         </div>
       )}
@@ -163,6 +166,7 @@ function FieldRow({
   colors,
   messages,
   violation,
+  sizing,
 }: {
   field: FieldDef;
   nodeId: string;
@@ -172,6 +176,7 @@ function FieldRow({
   colors: FieldRowColors;
   messages: RendererMessages;
   violation: FieldViolation | undefined;
+  sizing: SizingTokens;
 }): ReactNode {
   const { border, muted, requiredColor, errorColor } = colors;
   // ids / label / grouping come from renderer-core's describeFieldRow (the shared id scheme with renderer-wc).
@@ -187,7 +192,7 @@ function FieldRow({
   ) : null;
   const help =
     field.helpText != null ? (
-      <span id={helpId} style={{ color: muted, fontSize: 12 }}>
+      <span id={helpId} style={{ color: muted, fontSize: sizing.fontXs }}>
         {field.helpText}
       </span>
     ) : null;
@@ -197,7 +202,7 @@ function FieldRow({
   // creates a double association with htmlFor and causes assistive tech/tests to double-detect, so do not wrap; tie with htmlFor alone.
   const isGroup = meta.isGroup;
   return (
-    <div {...(isGroup ? { role: "group", "aria-label": labelText } : {})} style={FIELD_ROW_STYLE}>
+    <div {...(isGroup ? { role: "group", "aria-label": labelText } : {})} style={fieldRowStyle(sizing)}>
       {isGroup ? (
         <span style={{ fontWeight: 600 }}>
           {labelText}
@@ -209,10 +214,10 @@ function FieldRow({
           {requiredMark}
         </label>
       )}
-      {renderControl(field, fieldId, helpId, errorId, value, set, disabled, border, messages)}
+      {renderControl(field, fieldId, helpId, errorId, value, set, disabled, border, messages, sizing)}
       {help}
       {violation != null && (
-        <span id={errorId} style={{ color: errorColor, fontSize: 12 }}>
+        <span id={errorId} style={{ color: errorColor, fontSize: sizing.fontXs }}>
           {violation.message}
         </span>
       )}
@@ -230,11 +235,12 @@ function renderControl(
   disabled: boolean,
   border: string,
   messages: RendererMessages,
+  sizing: SizingTokens,
 ): ReactNode {
   // The per-type decisions (tag / input type / constraint attributes / inputMode / rows / minHeight)
   // come from renderer-core's describeControl; only the JSX emission and event wiring live here.
   const desc = describeControl(field);
-  const baseStyle = formControlBaseStyle(border);
+  const baseStyle = formControlBaseStyle(border, sizing);
   // Bundle both help and error into aria-describedby (order fixed as help → error).
   const describedBy = describedByOf(helpId, errorId);
   const common = {
@@ -286,9 +292,12 @@ function renderControl(
       );
     case "radio":
       return (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: sizing.space1 }}>
           {normalizeOptions(field.options).map((opt) => (
-            <label key={opt.value} style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
+            <label
+              key={opt.value}
+              style={{ display: "flex", alignItems: "center", gap: sizing.space2, fontWeight: 400 }}
+            >
               <input
                 type="radio"
                 name={fieldId}

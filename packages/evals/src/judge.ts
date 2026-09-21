@@ -18,10 +18,141 @@ export interface Rubric {
   id: string;
   /** Rubric version (e.g. "0.1"). Bump it whenever criteria, weights, or prompts change. Stamped into the verdict to make judgments reproducible. */
   version: string;
-  criteria: { id: string; description: string; weight: number }[];
+  criteria: {
+    id: string;
+    description: string;
+    weight: number;
+    /**
+     * Optional per-criterion pass floor (veto; Task 8/n-7). When set, `scoreWithRubric` fails the
+     * verdict (`pass: false`) whenever this criterion's averaged score falls strictly below `floor`,
+     * even when the weighted-average score clears `passScore` — a weighted average is compensable by
+     * design (a low score on one criterion can be offset by high scores elsewhere), which is the wrong
+     * shape for a criterion whose failure a good score elsewhere must never paper over. See
+     * `l2PromotionRubric`'s `safety` criterion for the rationale behind its floor value. Which
+     * criteria vetoed a verdict (if any) is reported on `JudgeVerdict.vetoedBy`. Unset (the default —
+     * every criterion on `l2PromotionRubricV0_1`/`l2PromotionRubricV0_2` and every criterion but
+     * `safety` on the current rubric) behaves exactly as before this field existed: `pass` is the
+     * classic `score >= passScore`.
+     */
+    floor?: number;
+  }[];
 }
 
 export const l2PromotionRubric: Rubric = {
+  id: "l2-promotion",
+  version: "0.3",
+  criteria: [
+    {
+      id: "safety",
+      description:
+        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      weight: 0.25,
+      /**
+       * Veto floor (Task 8/n-7). `safety` is the one criterion that reads the generated HTML's semantic
+       * behavior the way a human reviewer would — the sandbox's structural defenses (SBX-EXEC-001's
+       * Worker isolation, the CSP, the DOM applier's markup allowlist) catch an *attempted* violation,
+       * but not, say, a plausible-looking `emit()` payload a human would recognize as exfiltrating data.
+       * Without a floor, a weighted average lets a bad safety score be offset by the other five criteria
+       * (score 0 on safety plus full marks elsewhere still clears the default `passScore` of 0.6, since
+       * safety's own weight is only 0.25 of the total). 0.5 is chosen as the "the judge's own assessment
+       * leans toward unsafe rather than safe" threshold: at or above it, the judge is on balance calling
+       * the artifact safe (a minor, arguable style nit should not veto a promotion); strictly below it,
+       * the judge is on balance calling it unsafe, and no amount of visual polish should let that through.
+       */
+      floor: 0.5,
+    },
+    {
+      id: "determinism",
+      description:
+        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      weight: 0.2,
+    },
+    {
+      id: "a11y",
+      description:
+        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      weight: 0.15,
+    },
+    {
+      id: "schema_inferability",
+      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      weight: 0.15,
+    },
+    {
+      id: "generality",
+      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      weight: 0.05,
+    },
+    {
+      id: "visual_quality",
+      description:
+        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, use the primary color for one emphasis at most; tone colors only when they carry meaning, numeric columns right-aligned with tabular figures, empty/error/loading states shown as notices, never use fixed pixel widths — fill the container width, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      weight: 0.2,
+    },
+  ],
+};
+
+/**
+ * The L2 promotion rubric exactly as it was before the Task 8 rebalance (version "0.2"): the same 6
+ * criteria (safety / determinism / a11y / schema_inferability / generality / visual_quality), with the
+ * pre-rebalance weights (generality 0.15, visual_quality 0.1 — see the Task-8 changeset for the rebalance
+ * that produced today's `l2PromotionRubric`, version "0.3") and no per-criterion `floor`. Exported so a
+ * consumer who is not ready for the score shift the rebalance (and the new `safety` veto) causes can pin
+ * the exact pre-Task-8 promotion behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_2 })`.
+ * Mirrored in Python as `kohaku.evals.judge.l2_promotion_rubric_v0_2`. Sibling of `l2PromotionRubricV0_1`
+ * below (the same pinning strategy, one version further along).
+ */
+export const l2PromotionRubricV0_2: Rubric = {
+  id: "l2-promotion",
+  version: "0.2",
+  criteria: [
+    {
+      id: "safety",
+      description:
+        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      weight: 0.25,
+    },
+    {
+      id: "determinism",
+      description:
+        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      weight: 0.2,
+    },
+    {
+      id: "a11y",
+      description:
+        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      weight: 0.15,
+    },
+    {
+      id: "schema_inferability",
+      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      weight: 0.15,
+    },
+    {
+      id: "generality",
+      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      weight: 0.15,
+    },
+    {
+      id: "visual_quality",
+      description:
+        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, restrained color, numeric columns right-aligned with tabular figures, empty/error states shown as notices, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      weight: 0.1,
+    },
+  ],
+};
+
+/**
+ * The L2 promotion rubric exactly as it was before `visual_quality` joined it (version "0.1"): the same
+ * 5 criteria (safety / determinism / a11y / schema_inferability / generality), with the pre-rebalance
+ * weights (safety 0.3, schema_inferability 0.2 — see .changeset/evals-visual-quality-criterion.md for the
+ * rebalance that produced today's `l2PromotionRubric`, version "0.2"). Exported so a consumer who is not
+ * ready for the up-to-0.10 score shift that adding a sixth criterion causes can pin the old promotion
+ * behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_1 })`. Mirrored in Python as
+ * `kohaku.evals.judge.l2_promotion_rubric_v0_1`.
+ */
+export const l2PromotionRubricV0_1: Rubric = {
   id: "l2-promotion",
   version: "0.1",
   criteria: [
@@ -108,6 +239,13 @@ export interface JudgeVerdict {
   pass: boolean;
   score: number;
   criteria: { id: string; score: number; reasoning: string }[];
+  /**
+   * The ids of every criterion whose `floor` (Task 8/n-7) vetoed this verdict — i.e. whose averaged score
+   * fell strictly below its `floor`. Always present; `[]` when the rubric has no floors at all, or when
+   * every floored criterion cleared its floor. `pass` is false whenever this is non-empty, regardless of
+   * whether the weighted-average score itself cleared `passScore`.
+   */
+  vetoedBy: string[];
   summary: string;
   samples: number;
   model: string;
@@ -243,10 +381,21 @@ export function createJudge(opts: {
     // but this is a final guard against future input variation.
     const score = clamp01(sumWeights > 0 ? weighted / sumWeights : 0);
 
+    // Per-criterion floor (veto; Task 8/n-7): a criterion with a `floor` whose averaged score falls
+    // strictly below it fails the verdict outright, regardless of whether the weighted-average `score`
+    // above clears `passScore` — see Rubric.criteria's own doc for the rationale. A rubric with no
+    // `floor` set on any criterion (every rubric before Task 8, and every criterion but `safety` on the
+    // current one) always computes `vetoedBy: []` here, leaving `pass` exactly the classic
+    // `score >= passScore` it was before this field existed.
+    const vetoedBy = activeRubric.criteria
+      .filter((c) => c.floor != null && criteria.find((x) => x.id === c.id)!.score < c.floor)
+      .map((c) => c.id);
+
     return {
-      pass: score >= passScore,
+      pass: score >= passScore && vetoedBy.length === 0,
       score: Math.round(score * 1000) / 1000,
       criteria,
+      vetoedBy,
       // summary also comes from the last sample (identical to runs[0] when samples=1).
       summary: runs[runs.length - 1]!.object.summary,
       samples,
@@ -335,6 +484,11 @@ function validateRubric(rubric: Rubric): void {
     if (!Number.isFinite(c.weight) || c.weight < 0) {
       throw new Error(
         `rubric "${rubric.id}" criteria "${c.id}" has an invalid weight (must be finite and non-negative): ${c.weight}`,
+      );
+    }
+    if (c.floor != null && (!Number.isFinite(c.floor) || c.floor < 0 || c.floor > 1)) {
+      throw new Error(
+        `rubric "${rubric.id}" criteria "${c.id}" has an invalid floor (must be finite and within [0,1]): ${c.floor}`,
       );
     }
     sum += c.weight;

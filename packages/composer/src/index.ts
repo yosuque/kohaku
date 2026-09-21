@@ -34,8 +34,12 @@ export {
   withTenantCatalog,
 } from "./context.js";
 export {
+  DEFAULT_KIT_SKELETON,
+  DEFAULT_KIT_VOCABULARY,
   DEFAULT_TOKEN_DESCRIPTIONS,
+  type DesignKitVocabulary,
   type DesignSystemGuide,
+  designKitPromptFragment,
   designSystemPromptFragment,
   tokenToCssVar,
 } from "./design-system.js";
@@ -76,5 +80,8 @@ export {
 } from "./prompt.js";
 // <script> syntax check for L2-generated HTML (new Function compilation). The Python implementation,
 // which has no JS execution engine, reuses just this checker from a CLI sidecar (kohaku smoke-l2 --lint).
-export { collectScriptSyntaxIssues } from "./tiers/l2-generate.js";
+// collectL2Issues (the full bridge-contract + design-system lint) and collectUnknownKitClasses (the
+// design-kit class lint alone) are exported alongside it for products/tests that want to pre-check a
+// hand-written artifact (e.g. apps/sample-web's gallery showcase test).
+export { collectL2Issues, collectScriptSyntaxIssues, collectUnknownKitClasses } from "./tiers/l2-generate.js";
 export type { ComposeAttempt, ComposeTrace, TraceContext } from "./trace.js";

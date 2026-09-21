@@ -1,4 +1,5 @@
 import type { ComponentNode } from "@kohaku-ui/spec-core";
+import type { SizingTokens } from "../theme.js";
 
 /** A single tab's resolved metadata (derived from its layout.tab child node). */
 export interface TabMeta {
@@ -57,7 +58,7 @@ export interface TabButtonTokens {
 }
 
 /** A tab button's look (the underline + color/weight swap between selected and unselected). */
-export function tabButtonStyle(tokens: TabButtonTokens, options: { active: boolean }) {
+export function tabButtonStyle(tokens: TabButtonTokens, options: { active: boolean }, sizing: SizingTokens) {
   const { active } = options;
   return {
     background: "none",
@@ -65,8 +66,8 @@ export function tabButtonStyle(tokens: TabButtonTokens, options: { active: boole
     borderBottom: `2px solid ${active ? tokens.accent : "transparent"}`,
     color: active ? tokens.accent : tokens.muted,
     fontWeight: active ? 700 : 500,
-    fontSize: 13.5,
-    padding: "8px 12px",
+    fontSize: sizing.fontMd,
+    padding: `${sizing.space2} ${sizing.space3}`,
     marginBottom: -1,
     cursor: "pointer",
   } as const;

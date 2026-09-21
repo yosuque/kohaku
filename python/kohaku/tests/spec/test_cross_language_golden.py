@@ -10,6 +10,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from kohaku.composer import (
+    DEFAULT_KIT_VOCABULARY,
+    L2_SYSTEM_PROMPT,
+    PROMPT_REVISION,
+    DesignSystemGuide,
+    design_kit_prompt_fragment,
+    design_system_prompt_fragment,
+)
 from kohaku.evals import export_distillation_dataset
 from kohaku.registry.core import core_catalog
 from kohaku.spec import (
@@ -99,3 +107,35 @@ def test_export_distillation_dataset(cross_language_fixture: dict[str, Any]) -> 
     )
     # golden=[spec] shares the fixation's intentHash, also pinning the fixation-before-golden tie-break.
     assert export_distillation_dataset([record], [spec]) == cross_language_fixture["distillation"]["jsonl"]
+
+
+def test_design_kit_prompt_fragment(cross_language_fixture: dict[str, Any]) -> None:
+    """design_kit_prompt_fragment(DEFAULT_KIT_VOCABULARY) must reproduce the TS-generated fixture. Needs no
+    separate input in the fixture: both languages already own an identical exported DEFAULT_KIT_VOCABULARY
+    constant (itself pinned by this same golden — a divergent constant changes the rendered fragment)."""
+    assert (
+        design_kit_prompt_fragment(DEFAULT_KIT_VOCABULARY)
+        == cross_language_fixture["promptFragments"]["designKit"]
+    )
+
+
+def test_design_system_prompt_fragment(cross_language_fixture: dict[str, Any]) -> None:
+    """design_system_prompt_fragment must reproduce the fixture. Unlike the kit vocabulary, the guide is
+    not an exported constant on either side (it is a local test fixture), so its input travels in the
+    fixture itself rather than being hand-duplicated a third time."""
+    case = cross_language_fixture["promptFragments"]["designSystem"]
+    guide = DesignSystemGuide(tokens=case["guide"]["tokens"], guidelines=case["guide"]["guidelines"])
+    assert design_system_prompt_fragment(guide) == case["fragment"]
+
+
+def test_design_brief_lines(cross_language_fixture: dict[str, Any]) -> None:
+    """The design brief inside L2_SYSTEM_PROMPT (its trailing block, from the header line through the end)
+    must reproduce the fixture's pinned lines."""
+    lines = L2_SYSTEM_PROMPT.split("\n")
+    start = lines.index("- Design brief (follow every point):")
+    assert lines[start:] == cross_language_fixture["promptFragments"]["designBrief"]
+
+
+def test_prompt_revision(cross_language_fixture: dict[str, Any]) -> None:
+    """Catches an unbumped PROMPT_REVISION drift between the two languages' prompt.py/prompt.ts."""
+    assert PROMPT_REVISION == cross_language_fixture["promptFragments"]["promptRevision"]

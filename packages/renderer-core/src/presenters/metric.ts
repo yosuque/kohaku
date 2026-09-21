@@ -1,5 +1,6 @@
 import type { ComponentNode, JsonObject, JsonValue } from "@kohaku-ui/spec-core";
 import type { RendererMessages } from "../messages.js";
+import type { SizingTokens } from "../theme.js";
 
 export type MetricFormat = "number" | "currency" | "percent";
 
@@ -120,4 +121,40 @@ export function computeDelta(
   const magnitude = formatNumber(value, format, currency, locale);
   const signed = `${sign}${magnitude}${unit != null && unit !== "" ? unit : ""}`;
   return { direction, arrow, signed };
+}
+
+// --- Style functions shared verbatim by both renderers (React's style prop and WC's setStyle consume the same shape). ---
+
+/** The KPI container: a card on the surface color (the L1 twin of the kit's k-card + k-kpi). */
+export function metricCardStyle(tokens: { surface: string; border: string }, sizing: SizingTokens) {
+  return {
+    display: "flex",
+    flexDirection: "column",
+    gap: sizing.space1,
+    padding: sizing.space4,
+    background: tokens.surface,
+    border: `1px solid ${tokens.border}`,
+    borderRadius: sizing.radiusLg,
+    boxShadow: sizing.shadowSm,
+  } as const;
+}
+
+/** The metric's label text (small, muted). */
+export function metricLabelStyle(muted: string, sizing: SizingTokens) {
+  return { fontSize: sizing.fontSm, color: muted } as const;
+}
+
+/** The metric's headline value text. */
+export function metricValueStyle(sizing: SizingTokens) {
+  return {
+    fontSize: sizing.font2xl,
+    fontWeight: 700,
+    lineHeight: 1.1,
+    fontVariantNumeric: "tabular-nums",
+  } as const;
+}
+
+/** The metric's period-over-period delta text (color conveys direction, alongside the arrow/sign). */
+export function metricDeltaStyle(color: string, sizing: SizingTokens) {
+  return { fontSize: sizing.fontSm, color, fontWeight: 600 } as const;
 }

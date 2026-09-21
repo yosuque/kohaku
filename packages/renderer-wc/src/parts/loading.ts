@@ -1,3 +1,4 @@
+import { loadingStyle } from "@kohaku-ui/renderer-core";
 import { el, svgEl, text } from "../dom.js";
 import type { PartBuilder } from "../types.js";
 import { tokenStr } from "./kit.js";
@@ -14,7 +15,7 @@ export const uiLoading: PartBuilder = (rt, parent, node) => {
   const container = el(
     "div",
     { "data-kohaku": node.id, role: "status", "aria-busy": "true" },
-    { display: "flex", alignItems: "center", gap: 10, color: muted, fontSize: 13, padding: "10px 12px" },
+    loadingStyle(muted, rt.sizing),
   );
 
   const svg = svgEl(

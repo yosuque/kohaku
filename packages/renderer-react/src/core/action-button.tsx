@@ -1,6 +1,6 @@
 import { actionButtonStyle } from "@kohaku-ui/renderer-core";
 import type { CSSProperties, ReactNode } from "react";
-import { type ImplProps, useToken } from "../context.js";
+import { type ImplProps, useSizing, useToken } from "../context.js";
 import { useInvokeAction } from "../use-invoke-action.js";
 
 /**
@@ -13,6 +13,7 @@ import { useInvokeAction } from "../use-invoke-action.js";
  */
 export function ActionButton({ node }: ImplProps): ReactNode {
   const { state, invoke } = useInvokeAction(node);
+  const sizing = useSizing();
   const primary = String(useToken("color.primary"));
   const border = String(useToken("color.border"));
   const danger = String(useToken("color.danger"));
@@ -24,7 +25,12 @@ export function ActionButton({ node }: ImplProps): ReactNode {
   const pending = state.phase === "pending";
   const disabled = node.props["disabled"] === true || pending;
 
-  const style = actionButtonStyle(variant, { primary, border, danger, text, onPrimary }, { disabled });
+  const style = actionButtonStyle(
+    variant,
+    { primary, border, danger, text, onPrimary },
+    { disabled },
+    sizing,
+  );
 
   return (
     <button

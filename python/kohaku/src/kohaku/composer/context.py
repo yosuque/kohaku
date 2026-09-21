@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from kohaku.llm import LlmEffort, LlmPort
 from kohaku.registry import ResolvedCatalog, SurfaceCapabilities
 from kohaku.spec import (
+    UNDEFINED,
     DataShape,
     Intent,
     QueryHandle,
@@ -21,7 +22,7 @@ from kohaku.spec import (
 )
 
 from .budget import ComposeBudget
-from .design_system import DesignSystemGuide
+from .design_system import DesignKitVocabulary, DesignSystemGuide
 from .prompt import FewShotExample
 from .trace import ComposeTrace, TraceInput
 
@@ -162,6 +163,30 @@ class ComposePolicy:
     """Per-tier Adaptive Reasoning effort. See `EffortPolicy`'s doc for the full contract."""
 
 
+def _kit_fingerprint_material(kit: DesignKitVocabulary) -> dict[str, object]:
+    """Converts a DesignKitVocabulary to policy_fingerprint material (port of the object TS folds in
+    verbatim — see that field's own note in `policy_fingerprint`'s docstring). `skeleton` is folded in as
+    an ABSENT key (`UNDEFINED`), not `None`, when unset — mirroring the TS side, where an unset optional
+    `skeleton?: string` is simply not a present key on the object literal (not an explicit `undefined`).
+
+    No `classesOrder` key (removed by Task 8/m-15, mirroring the TS side): until then,
+    `design_kit_prompt_fragment` iterated `kit.classes.items()` in insertion order, so two vocabularies
+    differing only in that order emitted different L2 prompt bytes even though canonical-json
+    serialization sorts dict keys before hashing and so would otherwise hash them identically — a
+    `classesOrder` list (not reordered by the hash) used to be carried here to force the cache key to
+    separate on that difference too. Task 8/m-15 made `design_kit_prompt_fragment` present classes
+    **sorted by name** instead, so the prompt is now a pure function of `kit.classes`' *content*, not its
+    insertion order — `classesOrder` no longer corresponds to anything the prompt bytes depend on."""
+    return {
+        "id": kit.id,
+        "version": kit.version,
+        "classes": dict(kit.classes),
+        "utilities": list(kit.utilities),
+        "namespaces": list(kit.namespaces),
+        "skeleton": kit.skeleton if kit.skeleton is not None else UNDEFINED,
+    }
+
+
 def _fp_output_language(
     policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
 ) -> object:
@@ -175,9 +200,22 @@ def _fp_design_system(
     if design_system is None:
         return None
     return {
-        "tokens": design_system.tokens,
+        # dict(...): design_system.tokens is typed Mapping (n-9), and canonical_json's own dict branch
+        # checks isinstance(value, dict) — a Mapping that is not a dict (e.g. MappingProxyType) would
+        # otherwise fall through unserialized. Mirrors _kit_fingerprint_material's dict(kit.classes) above.
+        "tokens": dict(design_system.tokens) if design_system.tokens is not None else None,
         "guidelines": design_system.guidelines,
         "enforceTokenColors": design_system.enforceTokenColors,
+        # Folded in only when non-default, and as an ABSENT key (UNDEFINED) rather than an
+        # explicit None — see policy_fingerprint's own docstring for why. UNDEFINED is the only
+        # value that reproduces the pre-existing byte layout exactly for every design-system
+        # policy that never touches either field.
+        "kit": (
+            _kit_fingerprint_material(design_system.kit)
+            if design_system.kit is not None
+            else UNDEFINED
+        ),
+        "enforceKitClasses": (False if design_system.enforceKitClasses is False else UNDEFINED),
     }
 
 
@@ -194,7 +232,12 @@ def _fp_select_components_id(
     select_components = policy.selectComponents
     if select_components is None:
         return None
-    return getattr(select_components, "id", None) or "anonymous"
+    # Nullish, not falsy: `id=""` must fold in as "" here, matching the TS port
+    # (context.ts's `selectComponents.id ?? "anonymous"`) — `or "anonymous"` would treat an
+    # empty-string id the same as no id at all, diverging from TS for that one input and
+    # putting the same intent on two different cache-key partitions across languages.
+    select_id = getattr(select_components, "id", None)
+    return select_id if select_id is not None else "anonymous"
 
 
 def _fp_ref_constraint(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
@@ -255,7 +298,50 @@ def policy_fingerprint(
 
     **Returns the empty string when none of the fields are set to a non-default value** — cache_key()
     treats an empty policyFingerprint exactly like an omitted one, so a policy that never touches these
-    fields produces a cache key byte-identical to before this function existed.
+    fields produces a cache key byte-identical to before this function existed. `refConstraint` folds in
+    only when set to "validate" (its default "schema" is indistinguishable from unset).
+
+    fewShot / selectComponents are callables (their behavior cannot be inspected), so only their optional
+    `id` participates (default "anonymous" when unset). designSystem folds in `tokens`, `guidelines`, and
+    `enforceTokenColors` unconditionally, plus two design-kit fields added by the Task 7b/10 mirror: `kit`
+    folds in the whole object (via `_kit_fingerprint_material`) whenever set — a different `id`, `version`,
+    `classes`, `utilities`, `namespaces` or `skeleton` all separate the cache, matching
+    `design_kit_prompt_fragment`'s effect on the L2 prompt — and `enforceKitClasses` folds in **only when
+    explicitly `False`**, the same non-default-only pattern as `refConstraint` below, because both `True`
+    and unset mean "the lint runs" and must stay indistinguishable so a kit-less or already-linted cache key
+    is untouched by this addition.
+
+    **A field folded in "only when non-default" must be written as `UNDEFINED` (the sentinel
+    `kohaku.spec.canonical_json` drops from a dict), never as an explicit `None`**: `canonical_stringify`
+    keeps a `None` dict value as JSON `null` but drops an `UNDEFINED` one entirely (mirroring the TS
+    `canonicalStringify`'s `sortDeep`, which drops `undefined` entries but keeps `null` ones) — so a `None`
+    default here would still change the hashed bytes, and therefore the cache key, for every policy that
+    never touches `kit` / `enforceKitClasses`. `UNDEFINED` is the only value that reproduces the
+    pre-existing byte layout exactly (see the pinned regression in test_policy_fingerprint.py).
+
+    `policy.effort` participates in full (both l1/l2, defaulted to None when only one is set) whenever the
+    object is set at all — effort changes generated output for the same Intent/model, so any caller that
+    wires it (even to `EffortPolicy()` with neither tier set — an edge case, but still a distinct policy
+    shape from never wiring the field) gets a separated cache key. Never set is indistinguishable from unset.
+
+    The optional `tier_llm` argument (compose.py computes it via `tier_llm_fingerprint_material(ctx)` — see
+    that function's own doc) folds in the identity of the models actually used per tier when
+    `ComposeContext.llmByTier` is wired to something that actually differs from the base `ctx.llm`. None
+    (its default) whenever `llmByTier` is unset or matches the base model everywhere, so a caller that never
+    touches `llmByTier` sees no change here either.
+
+    Which keys fold to None vs. an absent key, and why the material below looks inconsistent: ten of the
+    keys this function emits — outputLanguage, designSystem itself, designSystem.tokens,
+    designSystem.guidelines, designSystem.enforceTokenColors, fewShotId, selectComponentsId, refConstraint,
+    effort, tierLlm — fold to an explicit None in their default case. That is safe *only* because all ten
+    have been part of this material's hashed byte layout since the day each field was added: every caller
+    that has ever computed a fingerprint already has those None-as-null bytes baked into its current cache
+    key, so leaving them None changes nothing further. It is not the pattern to copy — `_fp_design_system`
+    above appears to write a bare field ten times over, but that is historical grandfathering, not a model
+    for a new field. `kit` / `enforceKitClasses` (Task 7b) show the correct shape for a field added *after*
+    callers already depend on this material's bytes: fold to UNDEFINED (an absent key), never None — see
+    the UNDEFINED paragraph above. Any new fingerprinted field must follow `kit`/`enforceKitClasses`, not
+    the other ten.
 
     Note: this is an internal, process-local cache-partitioning hash, not a wire value — it is not required
     to (and in general will not) byte-match the TS implementation's hash for an equivalent policy, since

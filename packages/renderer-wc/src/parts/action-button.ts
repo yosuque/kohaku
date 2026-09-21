@@ -29,7 +29,7 @@ export const actionButton: PartBuilder = (rt, parent, node, row) => {
     (button as HTMLButtonElement).disabled = disabled;
     if (pending) button.setAttribute("aria-busy", "true");
     else button.removeAttribute("aria-busy");
-    setStyle(button, actionButtonStyle(variant, tokens, { disabled }));
+    setStyle(button, actionButtonStyle(variant, tokens, { disabled }, rt.sizing));
   };
   apply({ phase: "idle" });
 

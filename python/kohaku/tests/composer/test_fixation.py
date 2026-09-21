@@ -5,7 +5,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from kohaku.composer import ComposeContext, materialize_fixation
+from kohaku.composer import (
+    ComposeContext,
+    ComposePolicy,
+    DesignKitVocabulary,
+    DesignSystemGuide,
+    materialize_fixation,
+)
 from kohaku.llm import FakeLlm
 from kohaku.registry import core_catalog, resolve_catalog
 from kohaku.spec import (
@@ -79,7 +85,9 @@ def _fixation(fingerprint: str | None) -> FixationRecord:
     )
 
 
-def _ctx(semantic: _Semantic | None = None, tmp_path: Any = None) -> ComposeContext:
+def _ctx(
+    semantic: _Semantic | None = None, tmp_path: Any = None, policy: Any = None
+) -> ComposeContext:
     import tempfile
 
     return ComposeContext(
@@ -87,6 +95,7 @@ def _ctx(semantic: _Semantic | None = None, tmp_path: Any = None) -> ComposeCont
         semantic=semantic if semantic is not None else _Semantic(),
         storage=FileStoragePort(tmp_path if tmp_path is not None else tempfile.mkdtemp()),
         llm=FakeLlm(),
+        policy=policy,
     )
 
 
@@ -213,5 +222,48 @@ def test_stale_when_structure_hash_mismatches(tmp_path: Any) -> None:
         assert result is None
         assert check.issues is not None
         assert any("structureHash" in i for i in check.issues)
+
+    asyncio.run(run())
+
+
+def test_provenance_kit_is_pinned_at_fixation_time_independent_of_the_current_policy(
+    tmp_path: Any,
+) -> None:
+    """Port of the TS side's materializeFixation test of the same name (Task 3, M-2's actual rollback
+    mechanism): materialize_fixation short-circuits before _assemble_spec ever runs, spreading
+    pinnedSpec.provenance verbatim (fixation.py's dict-merge of pinned_wire["provenance"]). So a Spec
+    pinned while the compose-time kit was v1 keeps reporting provenance.kit v1 forever, even after the
+    *current* policy passed to materialize_fixation has since moved on to v2."""
+
+    async def run() -> None:
+        pinned_wire = _pinned_spec().to_wire()
+        pinned_wire["provenance"] = {
+            **pinned_wire["provenance"],
+            "generatorVersion": "p1/gpt-5",
+            "kit": {"id": "kohaku", "version": "1"},
+        }
+        pinned_at_v1 = UISpec.model_validate(pinned_wire)
+        from dataclasses import replace
+
+        fixation = replace(
+            _fixation(_CATALOG.fingerprint),
+            pinnedSpec=pinned_at_v1,
+            structureHash=compute_structure_hash(pinned_at_v1),
+        )
+        # The runtime ctx's own policy has since moved to kit v2 — materialize_fixation must not consult
+        # it at all for a fixation delivery.
+        v2_kit = DesignKitVocabulary(id="kohaku", version="2", classes={}, utilities=(), namespaces=())
+        policy = ComposePolicy(
+            generatorVersion="p2/gpt-6", designSystem=DesignSystemGuide(kit=v2_kit)
+        )
+
+        result, check = await materialize_fixation(
+            fixation, _intent(), _ctx(tmp_path=tmp_path, policy=policy)
+        )
+        assert check.kind == "fresh"
+        assert result is not None
+        assert result.spec.provenance.kit is not None
+        assert result.spec.provenance.kit.to_wire() == {"id": "kohaku", "version": "1"}
+        assert result.spec.provenance.generatorVersion == "p1/gpt-5"
 
     asyncio.run(run())

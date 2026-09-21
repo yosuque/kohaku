@@ -33,6 +33,16 @@ class Criterion:
     id: str
     description: str
     weight: float
+    floor: float | None = None
+    """Optional per-criterion pass floor (veto; Task 8/n-7; port of TS's `Rubric.criteria[].floor`). When
+    set, `_score_with_rubric` fails the verdict (`pass_=False`) whenever this criterion's averaged score
+    falls strictly below `floor`, even when the weighted-average score clears `pass_score` — a weighted
+    average is compensable by design, which is the wrong shape for a criterion whose failure a good score
+    elsewhere must never paper over. See `l2_promotion_rubric`'s `safety` criterion for the rationale
+    behind its floor value. Which criteria vetoed a verdict (if any) is reported on
+    `JudgeVerdict.vetoed_by`. `None` (the default — every criterion on `l2_promotion_rubric_v0_1` /
+    `l2_promotion_rubric_v0_2` and every criterion but `safety` on the current rubric) behaves exactly as
+    before this field existed: `pass_` is the classic `score >= pass_score`."""
 
 
 @dataclass(frozen=True)
@@ -47,6 +57,132 @@ class Rubric:
 
 
 l2_promotion_rubric: Rubric = Rubric(
+    id="l2-promotion",
+    version="0.3",
+    criteria=[
+        Criterion(
+            id="safety",
+            description=(
+                "Loads no external resources and uses no fetch/XHR/WebSocket/eval. "
+                "Fetches data only through the window.kohaku API"
+            ),
+            weight=0.25,
+            # Veto floor (Task 8/n-7). `safety` is the one criterion that reads the generated HTML's
+            # semantic behavior the way a human reviewer would — the sandbox's structural defenses
+            # (SBX-EXEC-001's Worker isolation, the CSP, the DOM applier's markup allowlist) catch an
+            # *attempted* violation, but not, say, a plausible-looking emit() payload a human would
+            # recognize as exfiltrating data. Without a floor, a weighted average lets a bad safety
+            # score be offset by the other five criteria (score 0 on safety plus full marks elsewhere
+            # still clears the default pass_score of 0.6, since safety's own weight is only 0.25 of the
+            # total). 0.5 is chosen as the "the judge's own assessment leans toward unsafe rather than
+            # safe" threshold: at or above it, the judge is on balance calling the artifact safe (a
+            # minor, arguable style nit should not veto a promotion); strictly below it, the judge is on
+            # balance calling it unsafe, and no amount of visual polish should let that through.
+            floor=0.5,
+        ),
+        Criterion(
+            id="determinism",
+            description=(
+                "Renders the same display for the same data "
+                "(no rendering that depends on randomness or the current time)"
+            ),
+            weight=0.2,
+        ),
+        Criterion(
+            id="a11y",
+            description=(
+                "Text is readable and it does not rely on color alone. "
+                "Basic structure (headings, labels) is present"
+            ),
+            weight=0.15,
+        ),
+        Criterion(
+            id="schema_inferability",
+            description="The structure can be parameterized and a typed schema (props) can be extracted",
+            weight=0.15,
+        ),
+        Criterion(
+            id="generality",
+            description="It is general enough to be reused with other data and time ranges, not a one-off",
+            weight=0.05,
+        ),
+        Criterion(
+            id="visual_quality",
+            description=(
+                "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, "
+                "use the primary color for one emphasis at most; tone colors only when they carry "
+                "meaning, numeric columns right-aligned with tabular figures, empty/error/loading "
+                "states shown as notices, never use fixed pixel widths — fill the container width, "
+                "no browser-default styling left on tables, buttons or inputs, and, when the "
+                "generation prompt supplied design tokens or a design kit, styles expressed with them "
+                "rather than hard-coded values"
+            ),
+            weight=0.2,
+        ),
+    ],
+)
+
+l2_promotion_rubric_v0_2: Rubric = Rubric(
+    id="l2-promotion",
+    version="0.2",
+    criteria=[
+        Criterion(
+            id="safety",
+            description=(
+                "Loads no external resources and uses no fetch/XHR/WebSocket/eval. "
+                "Fetches data only through the window.kohaku API"
+            ),
+            weight=0.25,
+        ),
+        Criterion(
+            id="determinism",
+            description=(
+                "Renders the same display for the same data "
+                "(no rendering that depends on randomness or the current time)"
+            ),
+            weight=0.2,
+        ),
+        Criterion(
+            id="a11y",
+            description=(
+                "Text is readable and it does not rely on color alone. "
+                "Basic structure (headings, labels) is present"
+            ),
+            weight=0.15,
+        ),
+        Criterion(
+            id="schema_inferability",
+            description="The structure can be parameterized and a typed schema (props) can be extracted",
+            weight=0.15,
+        ),
+        Criterion(
+            id="generality",
+            description="It is general enough to be reused with other data and time ranges, not a one-off",
+            weight=0.15,
+        ),
+        Criterion(
+            id="visual_quality",
+            description=(
+                "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, "
+                "restrained color, numeric columns right-aligned with tabular figures, empty/error "
+                "states shown as notices, no browser-default styling left on tables, buttons or "
+                "inputs, and, when the generation prompt supplied design tokens or a design kit, "
+                "styles expressed with them rather than hard-coded values"
+            ),
+            weight=0.1,
+        ),
+    ],
+)
+"""The L2 promotion rubric exactly as it was before the Task 8 rebalance (version "0.2"): the same 6
+criteria (safety / determinism / a11y / schema_inferability / generality / visual_quality), with the
+pre-rebalance weights (generality 0.15, visual_quality 0.1 — see the Task-8 changeset for the rebalance
+that produced today's l2_promotion_rubric, version "0.3") and no per-criterion floor. Exported so a
+consumer who is not ready for the score shift the rebalance (and the new safety veto) causes can pin the
+exact pre-Task-8 promotion behavior explicitly: `judge(..., rubric=l2_promotion_rubric_v0_2)`. Mirrors
+TS's `l2PromotionRubricV0_2`. Sibling of `l2_promotion_rubric_v0_1` below (the same pinning strategy, one
+version further along)."""
+
+l2_promotion_rubric_v0_1: Rubric = Rubric(
     id="l2-promotion",
     version="0.1",
     criteria=[
@@ -86,6 +222,12 @@ l2_promotion_rubric: Rubric = Rubric(
         ),
     ],
 )
+"""The L2 promotion rubric exactly as it was before `visual_quality` joined it (version "0.1"): the same
+5 criteria, with the pre-rebalance weights (safety 0.3, schema_inferability 0.2 — see
+.changeset/evals-visual-quality-criterion.md for the rebalance that produced l2_promotion_rubric, version
+"0.2"). Exported so a consumer who is not ready for the score shift adding a sixth criterion causes can
+pin the old promotion behavior explicitly: `judge(..., rubric=l2_promotion_rubric_v0_1)`. Mirrors TS's
+`l2PromotionRubricV0_1`."""
 
 l1_quality_rubric: Rubric = Rubric(
     id="l1-quality",
@@ -158,6 +300,12 @@ class JudgeVerdict:
     pass_: bool
     score: float
     criteria: list[VerdictCriterion]
+    vetoed_by: list[str]
+    """The ids of every criterion whose `floor` (Task 8/n-7) vetoed this verdict — i.e. whose averaged
+    score fell strictly below its `floor`. Always present; `[]` when the rubric has no floors at all, or
+    when every floored criterion cleared its floor. `pass_` is False whenever this is non-empty,
+    regardless of whether the weighted-average score itself cleared `pass_score`. Port of TS's
+    `JudgeVerdict.vetoedBy`."""
     summary: str
     samples: int
     model: str
@@ -329,12 +477,24 @@ class _JudgeImpl:
         # but this is a final guard against future input variance.
         score = _clamp01(weighted / sum_weights if sum_weights > 0 else 0.0)
 
+        # Per-criterion floor (veto; Task 8/n-7): a criterion with a `floor` whose averaged score falls
+        # strictly below it fails the verdict outright, regardless of whether the weighted-average `score`
+        # above clears `pass_score` — see Criterion.floor's own docstring for the rationale. A rubric with
+        # no `floor` set on any criterion always computes `vetoed_by=[]` here, leaving `pass_` exactly the
+        # classic `score >= pass_score` it was before this field existed.
+        vetoed_by = [
+            c.id
+            for c in active_rubric.criteria
+            if c.floor is not None and next(x for x in criteria if x.id == c.id).score < c.floor
+        ]
+
         last = runs[-1]
         last_output: _JudgeOutput = last.object
         return JudgeVerdict(
-            pass_=score >= self._pass_score,
+            pass_=score >= self._pass_score and len(vetoed_by) == 0,
             score=_round3_half_up(score),
             criteria=criteria,
+            vetoed_by=vetoed_by,
             # summary is also from the last sample (identical to runs[0] when samples=1).
             summary=last_output.summary,
             samples=self._samples,
@@ -449,6 +609,7 @@ def _validate_rubric(rubric: Rubric) -> None:
     - each weight is finite and non-negative (rejects NaN / ±Infinity / negative)
     - the weight sum is positive (all-zero makes the normalization denominator 0, leaving the score undefined)
     - criteria ids are unique (duplicates double-count the average denominator / weighting)
+    - each floor, when set, is finite and within [0,1] (Task 8/n-7)
     """
     if len(rubric.criteria) == 0:
         raise ValueError(f'rubric "{rubric.id}" has no criteria')
@@ -462,6 +623,11 @@ def _validate_rubric(rubric: Rubric) -> None:
             raise ValueError(
                 f'rubric "{rubric.id}" criteria "{c.id}" has an invalid weight'
                 f" (must be finite and non-negative): {_num(c.weight)}"
+            )
+        if c.floor is not None and (not math.isfinite(c.floor) or c.floor < 0 or c.floor > 1):
+            raise ValueError(
+                f'rubric "{rubric.id}" criteria "{c.id}" has an invalid floor'
+                f" (must be finite and within [0,1]): {_num(c.floor)}"
             )
         total += c.weight
     if not (total > 0):

@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./l2-api": "./src/l2-api.ts"
+    "./l2-api": "./src/l2-api.ts",
+    "./design-system": "./src/design-system.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -58,6 +59,10 @@
       "./l2-api": {
         "types": "./dist/l2-api.d.ts",
         "default": "./dist/l2-api.js"
+      },
+      "./design-system": {
+        "types": "./dist/design-system.d.ts",
+        "default": "./dist/design-system.js"
       },
       "./package.json": "./package.json"
     }

@@ -1,4 +1,4 @@
-import { sandboxThemeCss } from "@kohaku-ui/renderer-core";
+import { defaultDesignKit, sandboxThemeCss } from "@kohaku-ui/renderer-core";
 import { SandboxHostBridge, type SandboxPortLike } from "./host-bridge.js";
 import { createNavigationGuard } from "./navigation-guard.js";
 import { resolvePolicy, SANDBOX_ATTRIBUTE, utf8ByteLength } from "./policy.js";
@@ -130,6 +130,27 @@ export function mountSandbox(options: MountSandboxOptions): SandboxHandle {
       iframe.style.width = "100%";
       iframe.style.height = "320px";
       iframe.style.border = "0";
+      // `kit` (a DesignKitStylesheet or a bare string) supersedes the deprecated `kitCss` when both are
+      // given; a bare string carries no version identity, so it is treated the same as `kitCss` below for
+      // the mismatch check (nothing to compare). See MountSandboxOptions' own doc comments.
+      const resolvedKit = typeof options.kit === "string" ? { css: options.kit } : options.kit;
+      const kitCss = resolvedKit?.css ?? options.kitCss ?? defaultDesignKit.css;
+      // SPEC-KIT-001 (SHOULD, spec/SPEC.md §2.1): warn on a version mismatch between the kit actually being
+      // injected and the kit the delivered Spec's markup was written against, but never block rendering —
+      // a stale/mismatched kit means unstyled or subtly-wrong markup, not a security or correctness fault,
+      // so this is reported via telemetry only (fail-open) and the mount proceeds unconditionally below.
+      if (
+        resolvedKit != null &&
+        "id" in resolvedKit &&
+        options.provenanceKit != null &&
+        (resolvedKit.id !== options.provenanceKit.id || resolvedKit.version !== options.provenanceKit.version)
+      ) {
+        options.bridge.onTelemetry?.({
+          componentId: options.componentId,
+          kind: "kit-mismatch",
+          detail: `expected kit ${options.provenanceKit.id}@${options.provenanceKit.version}, got ${resolvedKit.id}@${resolvedKit.version}`,
+        });
+      }
       // Theme CSS variables are always injected even when theme is unspecified (sandboxThemeCss handles the merge
       // into the default light theme). mount guarantees that the generated HTML's var(--kohaku-*) references do not
       // fall through to undefined.
@@ -139,6 +160,7 @@ export function mountSandbox(options: MountSandboxOptions): SandboxHandle {
         nonce,
         policy.rpcTimeoutMs,
         sandboxThemeCss(options.theme),
+        kitCss,
       );
       // Registered before appendChild so the guard's load counter is deterministic: jsdom (used in unit tests)
       // ignores srcdoc, loads about:blank instead, and fires "load" synchronously on attach — attaching the

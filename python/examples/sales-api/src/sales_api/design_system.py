@@ -6,18 +6,20 @@ at render time — it follows light/dark switching without regeneration.
 
 Whenever the content changes, be sure to bump the ds suffix of app.py's generatorVersion (a change in prompt content =
 generation separation of the cache; the same operation as few-shot).
+
+Never write a concrete value (a color, a px number) here — values live only in the tokens/kit, never in this guide.
 """
 
 from __future__ import annotations
 
-from kohaku.composer import DesignSystemGuide
+from kohaku.composer import DEFAULT_KIT_VOCABULARY, DesignSystemGuide
 
 SALES_DESIGN_SYSTEM = DesignSystemGuide(
+    # The built-in kit: kit classes + utilities the model composes with. The CSS is injected by the
+    # sandbox at render time (renderer-core's defaultDesignKit — sample-web passes nothing, so the default applies).
+    kit=DEFAULT_KIT_VOCABULARY,
     guidelines=[
-        "Use spacing in multiples of 4px (4/8/12/16/24).",
-        "Use an 8px corner radius and a 1px solid var(--kohaku-color-border) border by default.",
-        "Use system-ui fonts (font-family: system-ui, sans-serif); body around 13px and headings around 15px.",
-        "Style table header rows with background var(--kohaku-color-surface) and text var(--kohaku-color-muted).",
-        "When indicating increases/decreases, use var(--kohaku-color-positive) / var(--kohaku-color-negative) and also show a symbol like ▲▼ (do not rely on color alone).",
+        "Style table header rows with the k-table class (muted header on the surface color).",
+        "When indicating increases/decreases, use k-kpi-delta with is-up / is-down (or var(--kohaku-color-positive) / var(--kohaku-color-negative)) and also show a symbol like ▲▼ (do not rely on color alone).",
     ],
 )

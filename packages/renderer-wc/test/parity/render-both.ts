@@ -44,7 +44,7 @@ export interface ParityContext {
   onEvent?: (event: SurfaceEvent) => void;
   onActionResult?: (arg: ActionResultArg) => void;
   /** L2 (sandbox.html) delegation, React side (RendererProvider.renderSandbox). */
-  renderSandbox?: (node: ComponentNode, spec: UISpec) => ReactNode;
+  renderSandbox?: (node: ComponentNode, spec: UISpec, theme: ThemeTokens) => ReactNode;
   /** L2 (sandbox.html) delegation, WC side (context.sandbox: the bridge + optional policy). */
   sandbox?: SurfaceContext["sandbox"];
 }
@@ -108,7 +108,14 @@ export async function renderReact(
     );
   });
   await flushReact();
-  return { container, rootEl: container.firstElementChild as Element };
+  // Select the part carrying `data-kohaku` explicitly rather than assuming it is
+  // `container.firstElementChild` — that assumption only held because React 19 hoists
+  // RendererProvider's state `<style href="kohaku-parts-state" precedence>` (see
+  // packages/renderer-react/src/context.tsx) into `<head>`, leaving the part as the sole child of
+  // `container`. Querying by the attribute every part's root carries keeps this helper correct even if
+  // that hoisting behavior ever changes (a different React version, or a host opting the stylesheet out).
+  const rootEl = container.querySelector("[data-kohaku]") as Element;
+  return { container, rootEl };
 }
 
 /** Renders the WC surface and returns the root component node (the topmost under .kohaku-root). */

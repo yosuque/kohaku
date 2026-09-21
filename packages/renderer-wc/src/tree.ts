@@ -6,6 +6,7 @@ import {
   resolveEmit,
   resolveInvokeTarget,
   resolveRowProps,
+  resolveSizing,
   resolveToken,
   runInvokeTarget,
   type SpecStateStore,
@@ -58,6 +59,7 @@ export function createRuntime(deps: RuntimeDeps): RenderRuntime {
     controller,
     binding: deps.ctx.binding,
     theme: deps.theme,
+    sizing: resolveSizing(deps.theme),
     locale: deps.locale,
     messages: deps.messages,
     onNodeError: deps.ctx.onNodeError,
@@ -166,6 +168,7 @@ function mountVisibleNode(
         nodeNotice(
           `Unimplemented component type: ${node.type}`,
           String(resolveToken(rt.theme, "color.negative.text")),
+          rt.sizing,
         ),
       );
       return noop;
@@ -178,6 +181,7 @@ function mountVisibleNode(
       nodeNotice(
         rt.messages.nodeRenderFailed(node.type, node.id),
         String(resolveToken(rt.theme, "color.negative.text")),
+        rt.sizing,
       ),
     );
     return noop;

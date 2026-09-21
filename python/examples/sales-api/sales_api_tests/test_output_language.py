@@ -64,9 +64,9 @@ class TestOutputLanguageL0:
             # Both policies set designSystem (and EN also fewShot), so policy_fingerprint (a
             # belt-and-suspenders check on top of the manual generatorVersion bump both policies already do)
             # appends a 7th component after generatorVersion — hence a regex here rather than an exact
-            # "/ds2" / "/ds2/ja" suffix match.
-            assert re.search(r"/ds2:[0-9a-f]{16}$", en.trace.cacheKey)
-            assert re.search(r"/ds2/ja:[0-9a-f]{16}$", ja.trace.cacheKey)
+            # "/ds3" / "/ds3/ja" suffix match.
+            assert re.search(r"/ds3:[0-9a-f]{16}$", en.trace.cacheKey)
+            assert re.search(r"/ds3/ja:[0-9a-f]{16}$", ja.trace.cacheKey)
             # The EN entry was cached first; the JA request must have missed it.
             assert ja.spec.provenance.cache == "miss"
             ja_again = await compose(

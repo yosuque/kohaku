@@ -121,8 +121,55 @@ describe("form validation parity (required violation blocks submit + aggregated 
     // In both, annotate is called once with the note-resolved payload
     expect(reactInvokes).toEqual([{ action: "annotate", payload: { note: "Confirm" } }]);
     expect(wcInvokes).toEqual(reactInvokes);
-    // No aggregated error
+    // No aggregated (violation) error
     expect(container.querySelector('[role="alert"]')).toBeNull();
     expect(wcRoot.querySelector('[role="alert"]')).toBeNull();
+    // m-19 #3: the post-submit success message (role=status, distinct from the violation-aggregation
+    // role=alert above) was previously uncovered by any parity test — each renderer hand-writes its own
+    // "succeeded" branch (React's form.tsx / WC's parts/form.ts), so this is the only check standing
+    // between the two silently drifting.
+    const reactStatus = container.querySelector('[role="status"]');
+    const wcStatus = wcRoot.querySelector('[role="status"]');
+    expect(reactStatus, "React: no role=status after a successful submit").not.toBeNull();
+    expect(wcStatus, "WC: no role=status after a successful submit").not.toBeNull();
+    expect(wcStatus!.textContent).toBe(reactStatus!.textContent);
+  });
+
+  it("a rejected invokeAction shows role=alert with the failure message in both renderers (m-19 #3)", async () => {
+    // Distinct from the required-violation role=alert above (planFormSubmit never runs it, since the
+    // required field is filled here): this is the submit-*result* alert, driven by actionState.phase ===
+    // "failed" — a separate hand-written role="alert" in both React's form.tsx and WC's parts/form.ts that
+    // had no parity coverage at all before this test.
+    const failingBinding = (): BindingClient => ({
+      async resolve() {
+        return { columns: [], rows: [], dataVersion: "v1" };
+      },
+      async invokeAction(): Promise<ActionResult> {
+        throw new Error("save failed");
+      },
+    });
+
+    const { container } = await renderReact(validationSpec(), { binding: failingBinding });
+    fireEvent.change(container.querySelector("#f1-note") as HTMLInputElement, {
+      target: { value: "Confirm" },
+    });
+    fireEvent.submit(container.querySelector('form[data-kohaku="f1"]') as HTMLFormElement);
+    await flushReact();
+    const reactAlert = container.querySelector('[role="alert"]');
+    expect(reactAlert, "React: no role=alert after a failed submit").not.toBeNull();
+    expect(reactAlert!.textContent).toBe("save failed");
+
+    const { surface } = await renderWc(validationSpec(), { binding: failingBinding });
+    const wcRoot = surface.shadowRoot!;
+    const wNote = wcRoot.querySelector("#f1-note") as HTMLInputElement;
+    wNote.value = "Confirm";
+    wNote.dispatchEvent(new Event("input", { bubbles: true }));
+    (wcRoot.querySelector('form[data-kohaku="f1"]') as HTMLFormElement).dispatchEvent(
+      new Event("submit", { bubbles: true, cancelable: true }),
+    );
+    await tick();
+    const wcAlert = wcRoot.querySelector('[role="alert"]');
+    expect(wcAlert, "WC: no role=alert after a failed submit").not.toBeNull();
+    expect(wcAlert!.textContent).toBe(reactAlert!.textContent);
   });
 });

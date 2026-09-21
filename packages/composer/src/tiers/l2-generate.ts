@@ -1,5 +1,6 @@
 import { type ComponentNode, SANDBOX_HTML_TYPE, sha256Hex } from "@kohaku-ui/spec-core";
 import { resolveTierLlm } from "../context.js";
+import type { DesignKitVocabulary } from "../design-system.js";
 import { errorMessage } from "../error-message.js";
 import { KOHAKU_API_ALLOWLIST } from "../l2-api.js";
 import { buildL2PromptParts, L2_SYSTEM_PROMPT } from "../prompt.js";
@@ -47,7 +48,10 @@ function canCheckScriptSyntax(): boolean {
  * opts.enforceTokenColors is the raw-color check (L2_RAW_COLOR) for when a design system is applied.
  * Default false (the conventional behavior with designSystem unset is completely unchanged). generateL2 wires it from ComposePolicy.designSystem.
  */
-export type L2LintOptions = { enforceTokenColors?: boolean };
+export type L2LintOptions = {
+  enforceTokenColors?: boolean;
+  kit?: Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">;
+};
 
 export function collectL2Issues(html: string, opts?: L2LintOptions): string[] {
   const issues: string[] = [];
@@ -89,6 +93,21 @@ export function collectL2Issues(html: string, opts?: L2LintOptions): string[] {
   // The remaining checks are all a single boolean predicate over (html, opts) producing at most one fixed
   // message, so they are expressed as a rule table (see L2_LINT_RULES below) rather than repeated ifs.
   issues.push(...L2_LINT_RULES.filter((rule) => rule.applies(html, opts)).map((rule) => rule.message));
+  // Unknown kit class detection (only when a design kit is applied). A class in the kit's namespace that
+  // the vocabulary does not define renders unstyled — exactly the "browser default look" the kit exists
+  // to prevent — so send it back with the list of offenders. Classes outside the namespaces (the
+  // model's own, styled in its <style>) are never flagged. This is the one lint rule whose message is
+  // computed per-input (the offending class list), so it stays an explicit block here rather than joining
+  // L2_LINT_RULES above, which holds only fixed-message rules.
+  if (opts?.kit != null) {
+    const unknown = collectUnknownKitClasses(html, opts.kit);
+    if (unknown.length > 0) {
+      issues.push(
+        `L2_UNKNOWN_CLASS: these class names look like design-kit classes but do not exist in the kit: ${unknown.join(", ")}. ` +
+          "Use only the kit classes and utilities listed in the Design kit section, or rename them to your own classes and style those in <style> with var(--kohaku-*) tokens",
+      );
+    }
+  }
   return issues;
 }
 
@@ -97,6 +116,51 @@ type L2LintRule = { applies: (html: string, opts?: L2LintOptions) => boolean; me
 
 /** Raw-color detection pattern (hex literal / rgb() / rgba() / hsl() / hsla()). */
 const L2_RAW_COLOR_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/;
+
+/**
+ * class="…" / class='…' attributes, className = "…" assignments, classList.add/toggle/remove/replace("…", …)
+ * calls, and setAttribute("class", "…") calls (the form SVG elements must use, since className is
+ * read-only there). classList.toggle/remove/replace are scanned alongside add because a model that
+ * conditionally applies a kit class via `el.classList.toggle("k-hiddenn", cond)` is just as likely to
+ * misspell it as one using add — restricting the scan to add only let those escapes past the lint.
+ */
+const CLASS_ATTR_RE = /\bclass\s*=\s*(["'])([^"']*)\1/g;
+const CLASS_NAME_ASSIGN_RE = /\bclassName\s*=\s*(["'`])([^"'`]*)\1/g;
+const CLASS_LIST_MUTATION_RE = /\bclassList\s*\.\s*(?:add|toggle|remove|replace)\s*\(([^)]*)\)/g;
+const SET_CLASS_ATTR_RE = /\bsetAttribute\s*\(\s*(["'])class\1\s*,\s*(["'`])([^"'`]*)\2\s*\)/g;
+const STRING_LITERAL_RE = /(["'`])([^"'`]*)\1/g;
+
+/**
+ * Collects the sorted, unique class names in the HTML that fall inside the kit's namespaces but are not
+ * defined by the vocabulary (kit classes or utilities). Exported alongside collectL2Issues from
+ * the package barrel (index.ts) for products/tests that want to pre-check a hand-written artifact
+ * (e.g. apps/sample-web's gallery showcase test) — not for the Python sidecar, which reuses only
+ * collectScriptSyntaxIssues (no JS execution engine on that side to run this check against).
+ */
+export function collectUnknownKitClasses(
+  html: string,
+  kit: Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">,
+): string[] {
+  const known = new Set<string>([...Object.keys(kit.classes), ...kit.utilities]);
+  const found = new Set<string>();
+  const consider = (list: string): void => {
+    for (const cls of list.split(/\s+/)) {
+      if (cls === "" || known.has(cls)) continue;
+      // A token carrying interpolation (`k-series-${i}`) or a trailing dash (a prefix awaiting
+      // concatenation) resolves to a different string at runtime, so flagging its source text
+      // would reject a valid widget and name a class the model never used.
+      if (cls.includes("${") || cls.endsWith("-")) continue;
+      if (kit.namespaces.some((ns) => cls.startsWith(ns))) found.add(cls);
+    }
+  };
+  for (const m of html.matchAll(CLASS_ATTR_RE)) consider(m[2]!);
+  for (const m of html.matchAll(CLASS_NAME_ASSIGN_RE)) consider(m[2]!);
+  for (const m of html.matchAll(CLASS_LIST_MUTATION_RE)) {
+    for (const lit of m[1]!.matchAll(STRING_LITERAL_RE)) consider(lit[2]!);
+  }
+  for (const m of html.matchAll(SET_CLASS_ATTR_RE)) consider(m[3]!);
+  return [...found].sort();
+}
 
 /**
  * Navigation detection pattern (meta refresh / location assignment / window.open). Tolerant of spacing and
@@ -294,6 +358,9 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
   // section and the enabling of the raw-color lint (L2_RAW_COLOR) (enforceTokenColors default true).
   const designSystem = ctx.policy?.designSystem;
   const enforceTokenColors = designSystem != null && designSystem.enforceTokenColors !== false;
+  // Design-kit lint (L2_UNKNOWN_CLASS) is enabled when designSystem.kit is set unless enforceKitClasses is false.
+  const kitForLint =
+    designSystem?.kit != null && designSystem.enforceKitClasses !== false ? designSystem.kit : undefined;
   // ComposeContext.llmByTier resolution (additive; resolves to ctx.llm when unset — see resolveTierLlm's doc).
   const llm = resolveTierLlm(ctx, "L2");
   const effort = ctx.policy?.effort?.l2;
@@ -339,7 +406,10 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
       },
       async validate(raw) {
         const html = raw as string;
-        let issues = collectL2Issues(html, { enforceTokenColors });
+        let issues = collectL2Issues(html, {
+          enforceTokenColors,
+          ...(kitForLint != null ? { kit: kitForLint } : {}),
+        });
         // Once the static lint passes, pre-delivery smoke validation (an optional hook). Detects, via jsdom
         // execution, failures that a lexical lint slips past — such as ready() not being reached due to a
         // runtime TypeError — and sends them back for repair. A throw is fail-open (skip the check =

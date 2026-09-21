@@ -74,6 +74,14 @@ async def generate_l2(
     # enabling of the hard-coded-color lint (L2_RAW_COLOR) (enforceTokenColors default True) as a pair (same as TS).
     design_system = ctx.policy.designSystem if ctx.policy is not None else None
     enforce_token_colors = design_system is not None and design_system.enforceTokenColors
+    # Design-kit lint (L2_UNKNOWN_CLASS) is enabled when design_system.kit is set unless enforceKitClasses is
+    # explicitly False (same pair-wiring rule as enforce_token_colors above, and the same default-true safety
+    # valve as TS's kitForLint in tiers/l2-generate.ts).
+    kit_for_lint = (
+        design_system.kit
+        if design_system is not None and design_system.kit is not None and design_system.enforceKitClasses
+        else None
+    )
     feedback: list[str] = []
     model: str | None = None
     failure: Literal["transient", "invalid", "aborted", "budget"] = "invalid"
@@ -175,7 +183,7 @@ async def generate_l2(
             failure = "invalid"
             continue
 
-        issues = collect_l2_issues(html, enforce_token_colors=enforce_token_colors)
+        issues = collect_l2_issues(html, enforce_token_colors=enforce_token_colors, kit=kit_for_lint)
         # JS syntax check (L2_SCRIPT_SYNTAX): Python has no JS runtime, so it is injectable (TS builds it into
         # collect_l2_issues via new Function). Call it only when wired, and merge the returned issues into the
         # existing lint (into the same repair loop). A throw is fail-open (check skipped = classic behavior).

@@ -3,13 +3,16 @@ import {
   type ChartColors,
   type ChartConfig,
   type ChartReferenceLine,
+  chartCaptionStyle,
   chartPointRow,
+  chartTableStyle,
   describeChartDataTable,
   prepareRows,
   resolveChartConfig,
+  type SizingTokens,
 } from "@kohaku-ui/renderer-core";
 import type { JsonObject } from "@kohaku-ui/spec-core";
-import { type ReactElement, type ReactNode, useMemo } from "react";
+import { type CSSProperties, type ReactElement, type ReactNode, useMemo } from "react";
 import {
   Area,
   AreaChart,
@@ -30,7 +33,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { type ImplProps, useEmitEvent, useMessages, useSpec, useToken } from "../context.js";
+import { type ImplProps, useEmitEvent, useMessages, useSizing, useSpec, useToken } from "../context.js";
 import { useBoundData } from "../use-bound-data.js";
 import { visuallyHiddenStyle } from "./a11y.js";
 import { DataStateNotice } from "./data-states.js";
@@ -43,6 +46,7 @@ export function PresentChart({ node }: ImplProps): ReactNode {
   const emit = useEmitEvent(node);
   const spec = useSpec();
   const messages = useMessages();
+  const sizing = useSizing();
   const palette = String(useToken(CHART_TOKEN_KEYS.palette)).split(",");
   // Resolve from tokens: the reference-line/axis color (a mid gray distinguishable from data series) and the dots' knockout stroke (= background color).
   const axisColor = String(useToken(CHART_TOKEN_KEYS.axis));
@@ -75,9 +79,7 @@ export function PresentChart({ node }: ImplProps): ReactNode {
     // Give the chart a name via figure's implicit "figure" role + aria-label. Do not add role="img"
     // (adding it makes descendants presentational, so the data-table alternative below becomes unreadable to assistive tech).
     <figure data-kohaku={node.id} aria-label={label} style={{ margin: 0, width: "100%" }}>
-      {title != null && (
-        <figcaption style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>{title}</figcaption>
-      )}
+      {title != null && <figcaption style={chartCaptionStyle(sizing)}>{title}</figcaption>}
       {/* recharts' SVG is meaningless to assistive tech, so hide it and convey the content via the data table below instead.
           Clickable points are also placed under aria-hidden (due to Recharts constraints, keyboard operation is provided only on the WC side). */}
       <div aria-hidden="true" style={{ width: "100%", height: 320 }}>
@@ -85,7 +87,7 @@ export function PresentChart({ node }: ImplProps): ReactNode {
           {renderChart(cfg, colors, palette, emitPoint)}
         </ResponsiveContainer>
       </div>
-      <ChartDataTable label={label} x={x} yKeys={yKeys} rows={rows} />
+      <ChartDataTable label={label} x={x} yKeys={yKeys} rows={rows} sizing={sizing} />
     </figure>
   );
 }
@@ -96,15 +98,22 @@ function ChartDataTable({
   x,
   yKeys,
   rows,
+  sizing,
 }: {
   label: string;
   x: string;
   yKeys: string[];
   rows: JsonObject[];
+  sizing: SizingTokens;
 }): ReactNode {
   const { headers, cells } = describeChartDataTable(x, yKeys, rows);
+  // The a11y alternative must stay visually hidden regardless of sizing, so visuallyHiddenStyle's
+  // position/width/height/clip win over chartTableStyle's own width -- only borderCollapse/fontSize
+  // survive from it (a purely additive consistency pickup; the table was previously unstyled beyond
+  // visuallyHiddenStyle).
+  const style: CSSProperties = { ...chartTableStyle(sizing), ...visuallyHiddenStyle };
   return (
-    <table style={visuallyHiddenStyle}>
+    <table style={style}>
       <caption>{label}</caption>
       <thead>
         <tr>

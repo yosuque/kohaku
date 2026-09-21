@@ -1,6 +1,6 @@
-import { boundStateKey, normalizeSelectOptions } from "@kohaku-ui/renderer-core";
+import { boundStateKey, controlSelectStyle, normalizeSelectOptions } from "@kohaku-ui/renderer-core";
 import type { ReactNode } from "react";
-import { type ImplProps, useEmitEvent, useSpec, useToken } from "../context.js";
+import { type ImplProps, useEmitEvent, useSizing, useSpec, useToken } from "../context.js";
 import { useSpecState } from "../spec-state.js";
 
 /**
@@ -20,6 +20,7 @@ export function ControlSelect({ node }: ImplProps): ReactNode {
   const spec = useSpec();
   const stateApi = useSpecState();
   const emit = useEmitEvent(node);
+  const sizing = useSizing();
   const border = String(useToken("color.border"));
 
   const options = normalizeSelectOptions(node.props["options"]);
@@ -37,13 +38,7 @@ export function ControlSelect({ node }: ImplProps): ReactNode {
       {...(label != null ? { "aria-label": String(label) } : {})}
       value={value}
       onChange={(e) => emit("change", { value: e.target.value })}
-      style={{
-        border: `1px solid ${border}`,
-        borderRadius: 6,
-        padding: "7px 10px",
-        fontSize: 13.5,
-        alignSelf: "flex-start",
-      }}
+      style={{ ...controlSelectStyle(border, sizing), alignSelf: "flex-start" }}
     >
       {placeholder != null && <option value="">{String(placeholder)}</option>}
       {options.map((opt) => (

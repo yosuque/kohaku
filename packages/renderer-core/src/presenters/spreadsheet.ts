@@ -1,5 +1,6 @@
 import type { ResolveOptions } from "@kohaku-ui/data-binding";
 import type { ComponentNode, JsonObject, JsonValue, TabularColumn } from "@kohaku-ui/spec-core";
+import type { SizingTokens } from "../theme.js";
 
 /** Local sort state (column + ascending/descending). */
 export interface SortState {
@@ -325,6 +326,7 @@ export function spreadsheetCellEditButtonStyle(options: { numeric: boolean }) {
 export function spreadsheetCellEditInputStyle(
   tokens: Pick<SpreadsheetTokens, "border">,
   options: { numeric: boolean },
+  sizing: SizingTokens,
 ) {
   const { numeric } = options;
   return {
@@ -334,7 +336,7 @@ export function spreadsheetCellEditInputStyle(
     textAlign: numeric ? ("right" as const) : ("left" as const),
     font: "inherit",
     border: `1px solid ${tokens.border}`,
-    borderRadius: 4,
+    borderRadius: sizing.radiusSm,
     padding: "1px 3px",
   } as const;
 }
@@ -394,11 +396,21 @@ export interface SpreadsheetTokens {
   muted: string;
 }
 
-/** The header cell's base look (independent of sort state; the sort affordance lives in the embedded button). */
-export function spreadsheetThStyle(tokens: Pick<SpreadsheetTokens, "headerBg" | "border">) {
+/**
+ * The header cell's base look (independent of sort state; the sort affordance lives in the embedded
+ * button). `muted` is required: every call site must supply the token-derived header color, so a call
+ * site that forgets it is a compile error rather than a silently inherited color.
+ */
+export function spreadsheetThStyle(
+  tokens: Pick<SpreadsheetTokens, "headerBg" | "border" | "muted">,
+  sizing: SizingTokens,
+) {
   return {
     background: tokens.headerBg,
-    borderBottom: `2px solid ${tokens.border}`,
+    color: tokens.muted,
+    fontSize: sizing.fontSm,
+    fontWeight: 600,
+    borderBottom: `1px solid ${tokens.border}`,
     padding: 0,
     whiteSpace: "nowrap",
   } as const;
@@ -409,29 +421,29 @@ export function spreadsheetThStyle(tokens: Pick<SpreadsheetTokens, "headerBg" | 
  * expands the hit area to the full cell so it can also be activated by keyboard. Numeric columns right-align
  * the trigger content to match the column's own alignment.
  */
-export function spreadsheetSortButtonStyle(options: { numeric: boolean }) {
+export function spreadsheetSortButtonStyle(options: { numeric: boolean }, sizing: SizingTokens) {
   const { numeric } = options;
   return {
     display: "flex",
     alignItems: "center",
-    gap: 4,
+    gap: sizing.space1,
     justifyContent: numeric ? ("flex-end" as const) : ("flex-start" as const),
     width: "100%",
     background: "none",
     border: "none",
     font: "inherit",
     color: "inherit",
-    padding: "8px 10px",
+    padding: `${sizing.space2} ${sizing.space3}`,
     cursor: "pointer",
     userSelect: "none",
   } as const;
 }
 
 /** A body cell's style (numeric columns right-align with tabular figures for column alignment). */
-export function spreadsheetTdStyle(options: { numeric: boolean }) {
+export function spreadsheetTdStyle(options: { numeric: boolean }, sizing: SizingTokens) {
   const { numeric } = options;
   return {
-    padding: "7px 10px",
+    padding: `${sizing.space2} ${sizing.space3}`,
     textAlign: numeric ? ("right" as const) : ("left" as const),
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
@@ -439,36 +451,39 @@ export function spreadsheetTdStyle(options: { numeric: boolean }) {
 }
 
 /** The serverSide footer bar (total count + first/next pager buttons). */
-export function spreadsheetFooterBarStyle(tokens: Pick<SpreadsheetTokens, "muted">) {
+export function spreadsheetFooterBarStyle(tokens: Pick<SpreadsheetTokens, "muted">, sizing: SizingTokens) {
   return {
     display: "flex",
     alignItems: "center",
-    gap: 10,
-    fontSize: 12,
+    gap: sizing.space2,
+    fontSize: sizing.fontSm,
     color: tokens.muted,
-    padding: "6px 2px",
+    padding: `${sizing.space2} 2px`,
   } as const;
 }
 
 /** The local (non-serverSide) "N of total" notice shown below the table when rows were truncated. */
-export function spreadsheetFooterTotalStyle(tokens: Pick<SpreadsheetTokens, "muted">) {
+export function spreadsheetFooterTotalStyle(tokens: Pick<SpreadsheetTokens, "muted">, sizing: SizingTokens) {
   return {
-    fontSize: 12,
+    fontSize: sizing.fontSm,
     color: tokens.muted,
-    padding: "6px 2px",
+    padding: `${sizing.space2} 2px`,
   } as const;
 }
 
 /** The serverSide pager buttons (first page / next page). */
-export function spreadsheetPagerButtonStyle(tokens: Pick<SpreadsheetTokens, "border" | "accent">) {
+export function spreadsheetPagerButtonStyle(
+  tokens: Pick<SpreadsheetTokens, "border" | "accent">,
+  sizing: SizingTokens,
+) {
   return {
     background: "none",
     border: `1px solid ${tokens.border}`,
-    borderRadius: 6,
+    borderRadius: sizing.radiusMd,
     color: tokens.accent,
     font: "inherit",
-    fontSize: 12,
-    padding: "3px 10px",
+    fontSize: sizing.fontSm,
+    padding: `${sizing.space1} ${sizing.space3}`,
     cursor: "pointer",
   } as const;
 }

@@ -1,4 +1,4 @@
-import { boundStateKey, normalizeSelectOptions } from "@kohaku-ui/renderer-core";
+import { boundStateKey, controlSelectStyle, normalizeSelectOptions } from "@kohaku-ui/renderer-core";
 import { el, text } from "../dom.js";
 import type { PartBuilder } from "../types.js";
 import { tokenStr } from "./kit.js";
@@ -18,13 +18,7 @@ export const controlSelect: PartBuilder = (rt, parent, node, row) => {
   const select = el(
     "select",
     { "data-kohaku": node.id },
-    {
-      border: `1px solid ${border}`,
-      borderRadius: 6,
-      padding: "7px 10px",
-      fontSize: 13.5,
-      alignSelf: "flex-start",
-    },
+    { ...controlSelectStyle(border, rt.sizing), alignSelf: "flex-start" },
   ) as HTMLSelectElement;
   if (label != null) select.setAttribute("aria-label", String(label));
 

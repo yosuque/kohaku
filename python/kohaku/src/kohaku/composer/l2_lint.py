@@ -16,6 +16,32 @@ require JS execution are split out into injectable hooks.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
+from typing import Protocol
+
+
+class KitClassesVocabulary(Protocol):
+    """Structural counterpart of TS's `Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">`
+    (packages/composer/src/tiers/l2-generate.ts). `collect_l2_issues`'s `kit` parameter and
+    `collect_unknown_kit_classes` below read only these three fields — never `id`/`version` — so requiring
+    the full `DesignKitVocabulary` dataclass (which also demands `id`/`version`) was a stricter contract
+    than TS's: a duck-typed kit object with just `classes`/`utilities`/`namespaces` type-checks fine against
+    TS's `Pick<...>` but used to fail mypy here. `DesignKitVocabulary` itself satisfies this Protocol
+    structurally, so passing one still works unchanged. Declared via `@property` (read-only) rather than
+    plain attribute annotations: a plain `classes: Mapping[str, str]` would declare a *settable* Protocol
+    member, which mypy then checks invariantly and rejects a frozen dataclass's read-only attributes
+    against (frozen fields are not assignable, so they cannot satisfy a "settable" structural member) —
+    the same reason `utilities`/`namespaces` also need covariance (`tuple[str, ...]` satisfying
+    `Sequence[str]`) that only a read-only property gets.
+    """
+
+    @property
+    def classes(self) -> Mapping[str, str]: ...
+    @property
+    def utilities(self) -> Sequence[str]: ...
+    @property
+    def namespaces(self) -> Sequence[str]: ...
+
 
 # Allowed APIs of the window.kohaku bridge (paired with the surface exposed by the sandbox's runtime.ts).
 _KOHAKU_API_ALLOWLIST = frozenset({"fetchData", "emit", "onProps", "ready"})
@@ -68,13 +94,22 @@ _L2_LIB_SIGNATURES: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-def collect_l2_issues(html: str, *, enforce_token_colors: bool = False) -> list[str]:
+def collect_l2_issues(
+    html: str,
+    *,
+    enforce_token_colors: bool = False,
+    kit: KitClassesVocabulary | None = None,
+) -> list[str]:
     """Bridge-contract lint. Because it is a lexical check, it may react to strings inside comments, but a
     false positive only wastes one repair retry and never errs toward dropping a correct output.
 
     enforce_token_colors is the hard-coded-color check (L2_RAW_COLOR) for when the design system is applied.
     Default False (behavior with designSystem unset is completely unchanged). generate_l2 wires it from
     ComposePolicy.designSystem.
+
+    kit is the unknown-kit-class check (L2_UNKNOWN_CLASS) for when a design kit is applied (only when
+    ComposePolicy.designSystem.kit is set and enforceKitClasses is not explicitly False). Default None
+    (behavior with no kit is completely unchanged).
     """
     issues: list[str] = []
     used = {m.group(1) for m in _KOHAKU_METHOD_RE.finditer(html)}
@@ -136,11 +171,72 @@ def collect_l2_issues(html: str, *, enforce_token_colors: bool = False) -> list[
             "with design tokens var(--kohaku-*) (e.g. color: var(--kohaku-color-text), background "
             "var(--kohaku-color-background), chart series var(--kohaku-chart-palette-1) …)"
         )
+    # Unknown kit class detection (only when a design kit is applied). A class in the kit's namespace that
+    # the vocabulary does not define renders unstyled — exactly the "browser default look" the kit exists
+    # to prevent — so send it back with the list of offenders. Classes outside the namespaces (the model's
+    # own, styled in its <style>) are never flagged.
+    if kit is not None:
+        unknown = collect_unknown_kit_classes(html, kit)
+        if unknown:
+            issues.append(
+                "L2_UNKNOWN_CLASS: these class names look like design-kit classes but do not exist in the kit: "
+                + ", ".join(unknown)
+                + ". Use only the kit classes and utilities listed in the Design kit section, or rename "
+                "them to your own classes and style those in <style> with var(--kohaku-*) tokens"
+            )
     return issues
 
 
 _RAW_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(")
 """Hard-coded-color detection pattern (hex literal / rgb() / rgba() / hsl() / hsla(); same as TS's L2_RAW_COLOR_RE)."""
+
+# class="…" / class='…' attributes, className = "…" assignments,
+# classList.add/toggle/remove/replace("…", …) calls, and setAttribute("class", "…") calls (the form SVG
+# elements must use, since className is read-only there). classList.toggle/remove/replace are scanned
+# alongside add for the same reason as TS's CLASS_LIST_MUTATION_RE: a conditionally-applied kit class via
+# toggle() is just as likely to be misspelled as one added via add(). Mirrored verbatim from TS's
+# CLASS_ATTR_RE / CLASS_NAME_ASSIGN_RE / CLASS_LIST_MUTATION_RE / SET_CLASS_ATTR_RE
+# (packages/composer/src/tiers/l2-generate.ts).
+_CLASS_ATTR_RE = re.compile(r"\bclass\s*=\s*([\"'])([^\"']*)\1")
+_CLASS_NAME_ASSIGN_RE = re.compile(r"\bclassName\s*=\s*([\"'`])([^\"'`]*)\1")
+_CLASS_LIST_MUTATION_RE = re.compile(r"\bclassList\s*\.\s*(?:add|toggle|remove|replace)\s*\(([^)]*)\)")
+_SET_CLASS_ATTR_RE = re.compile(r"\bsetAttribute\s*\(\s*([\"'])class\1\s*,\s*([\"'`])([^\"'`]*)\2\s*\)")
+_STRING_LITERAL_RE = re.compile(r"([\"'`])([^\"'`]*)\1")
+
+
+def collect_unknown_kit_classes(html: str, kit: KitClassesVocabulary) -> list[str]:
+    """Collects the sorted, unique class names in the HTML that fall inside the kit's namespaces but are not
+    defined by the vocabulary (kit classes or utilities) — port of TS's collectUnknownKitClasses.
+    Exported (via kohaku.composer's package init) for products/tests that want to pre-check a
+    hand-written artifact — not for the Python sidecar, which reuses only collect_script_syntax_issues
+    from the TS side (see this module's own docstring for why: no JS execution engine on this side).
+    """
+    known = set(kit.classes) | set(kit.utilities)
+    found: set[str] = set()
+
+    def consider(class_list: str) -> None:
+        for cls in class_list.split():
+            if cls == "" or cls in known:
+                continue
+            # A token carrying interpolation (`k-series-${i}`) or a trailing dash (a prefix awaiting
+            # concatenation) resolves to a different string at runtime, so flagging its source text would
+            # reject a valid widget and name a class the model never used.
+            if "${" in cls or cls.endswith("-"):
+                continue
+            if any(cls.startswith(ns) for ns in kit.namespaces):
+                found.add(cls)
+
+    for m in _CLASS_ATTR_RE.finditer(html):
+        consider(m.group(2))
+    for m in _CLASS_NAME_ASSIGN_RE.finditer(html):
+        consider(m.group(2))
+    for m in _CLASS_LIST_MUTATION_RE.finditer(html):
+        for lit in _STRING_LITERAL_RE.finditer(m.group(1)):
+            consider(lit.group(2))
+    for m in _SET_CLASS_ATTR_RE.finditer(html):
+        consider(m.group(3))
+    return sorted(found)
+
 
 _FENCE_RE = re.compile(r"```(?:html)?\s*([\s\S]*?)```", re.IGNORECASE)
 _DOCTYPE_RE = re.compile(r"<!DOCTYPE\s+html", re.IGNORECASE)

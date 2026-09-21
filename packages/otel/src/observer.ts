@@ -34,6 +34,15 @@ export interface OtelAttributeNames {
   intentHash: string;
   correlationId: string;
   durationMs: string;
+  /** The number of L1/L2 attempts recorded in ComposeTrace.attempts. */
+  repairAttempts: string;
+  /**
+   * The distinct issue codes (the `CODE` prefix only, never the message body -- see extractIssueCodes'
+   * doc comment) of the last failed attempt in ComposeTrace.attempts, comma-joined. Lets an operator tell
+   * a fallback caused by L2_UNKNOWN_CLASS apart from one caused by a truncation or a provider error,
+   * something the fixed "L2 free-form generation failed" fallback reason (tier-ladder.ts) cannot.
+   */
+  repairIssueCodes: string;
 }
 
 /** createOtelComposeObserver's default attribute key names (see OtelAttributeNames' doc comment). */
@@ -48,6 +57,8 @@ export const DEFAULT_OTEL_ATTRIBUTE_NAMES: OtelAttributeNames = {
   intentHash: "kohaku.intent_hash",
   correlationId: "kohaku.correlation_id",
   durationMs: "kohaku.duration_ms",
+  repairAttempts: "kohaku.repair_attempts",
+  repairIssueCodes: "kohaku.repair_issue_codes",
 };
 
 /** The span name onComposed / onError record under (a real compose attempt). */
@@ -123,6 +134,34 @@ function providerNameFor(
   return typeof providerName === "function" ? providerName(model) : providerName;
 }
 
+/**
+ * The leading `CODE` / `CODE (context)` token of one repair-loop issue string (e.g. `l2-generate.ts`'s
+ * `L2_UNKNOWN_CLASS: ...` or `l1-generate.ts`'s `DATA_REF_UNRESOLVED (root): ...`), never the message body
+ * that follows -- the message can contain model-generated text (e.g. the offending class names), which
+ * must not be attached to a span attribute. Returns undefined for an issue string with no such prefix
+ * (e.g. l1-generate.ts's bare `"components is empty"`).
+ */
+const ISSUE_CODE_RE = /^([A-Z][A-Z0-9_]*)\b/;
+function issueCode(issue: string): string | undefined {
+  return ISSUE_CODE_RE.exec(issue)?.[1];
+}
+
+/**
+ * The distinct issue codes of the LAST failed attempt in `attempts` (the one closest to whatever the
+ * ladder finally settled on -- an earlier attempt's issues were already superseded by a later repair
+ * re-attempt), or undefined when every attempt succeeded / there are no attempts. Comma-joined by the
+ * caller; codes only, per issueCode's own doc comment.
+ */
+function lastFailedAttemptIssueCodes(attempts: ComposeTrace["attempts"]): string[] | undefined {
+  for (let i = attempts.length - 1; i >= 0; i--) {
+    const attempt = attempts[i]!;
+    if (attempt.ok) continue;
+    const codes = [...new Set((attempt.issues ?? []).map(issueCode).filter((c) => c != null))];
+    return codes;
+  }
+  return undefined;
+}
+
 /** Builds the onComposed span's attributes from a ComposeTrace (see OtelAttributeNames' doc comment). */
 function composedAttributes(
   trace: ComposeTrace,
@@ -145,6 +184,13 @@ function composedAttributes(
   if (trace.usage != null) {
     attrs[names.usageInputTokens] = trace.usage.inputTokens;
     attrs[names.usageOutputTokens] = trace.usage.outputTokens;
+  }
+  // A cache hit / L0 / coalesced compose never attempted generation at all (attempts is empty) -- omit
+  // both repair attributes entirely rather than asserting attempts=0, which would carry no information.
+  if (trace.attempts.length > 0) {
+    attrs[names.repairAttempts] = trace.attempts.length;
+    const codes = lastFailedAttemptIssueCodes(trace.attempts);
+    if (codes != null && codes.length > 0) attrs[names.repairIssueCodes] = codes.join(",");
   }
   return attrs;
 }

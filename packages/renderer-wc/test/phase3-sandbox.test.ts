@@ -98,6 +98,122 @@ describe("Phase 3: L2 sandbox", () => {
     expect(mountCalls[0]!.theme).toEqual({});
   });
 
+  it("passes context.sandbox.kitCss through to mountSandbox's kitCss (product kit override)", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    mount(spec, { sandbox: { bridge, kitCss: ".x{}" } });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kitCss).toBe(".x{}");
+  });
+
+  it("passes an empty kitCss (opt-out of the default kit) through as '', not undefined", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    mount(spec, { sandbox: { bridge, kitCss: "" } });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kitCss).toBe("");
+    expect(mountCalls[0]!.kitCss).not.toBeUndefined();
+  });
+
+  it("with no kitCss key at all, mountSandbox's kitCss is undefined (injects the default kit)", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    mount(spec, { sandbox: { bridge } });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kitCss).toBeUndefined();
+  });
+
+  // Task 3 (M-1/M-2): the versioned `kit` option and its resolver form — the WC-side counterpart to
+  // SandboxFrame's `kit` prop (packages/sandbox/src/react.tsx), closing the asymmetry the brief calls out
+  // (context.sandbox.kitCss was surface-wide only, with no per-node hook on the WC side).
+  it("passes a DesignKitStylesheet value through to mountSandbox's kit as-is, and its own id/version as provenanceKit", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+      provenance: { kit: { id: "kohaku", version: "1" } },
+    });
+    mount(spec, { sandbox: { bridge, kit: { id: "kohaku", version: "2", css: ".k-card{border:2px}" } } });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kit).toEqual({ id: "kohaku", version: "2", css: ".k-card{border:2px}" });
+    expect(mountCalls[0]!.provenanceKit).toEqual({ id: "kohaku", version: "1" });
+  });
+
+  it("kit supersedes the deprecated kitCss when both are set", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    mount(spec, {
+      sandbox: { bridge, kit: { id: "acme", version: "1", css: ".acme{}" }, kitCss: ".ignored{}" },
+    });
+    expect(mountCalls[0]!.kit).toEqual({ id: "acme", version: "1", css: ".acme{}" });
+    expect(mountCalls[0]!.kitCss).toBeUndefined();
+  });
+
+  it("rollback: a resolver picks the kit matching each node's own provenance.kit (parity with SandboxFrame's rollback use case)", () => {
+    mountCalls.length = 0;
+    const V1 = { id: "kohaku", version: "1", css: ".k-card{border:1px}" };
+    const V2 = { id: "kohaku", version: "2", css: ".k-card{border:2px}" };
+    const resolver = (_node: unknown, s: { provenance: { kit?: { version: string } } }): typeof V1 =>
+      s.provenance.kit?.version === "1" ? V1 : V2;
+
+    const oldSpec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+      provenance: { kit: { id: "kohaku", version: "1" } },
+    });
+    mount(oldSpec, { sandbox: { bridge, kit: resolver } });
+    expect(mountCalls[0]!.kit).toEqual(V1);
+
+    const newSpec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+      provenance: { kit: { id: "kohaku", version: "2" } },
+    });
+    mount(newSpec, { sandbox: { bridge, kit: resolver } });
+    expect(mountCalls[1]!.kit).toEqual(V2);
+  });
+
+  it("a resolver returning undefined falls back to kitCss / the default kit", () => {
+    mountCalls.length = 0;
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    mount(spec, { sandbox: { bridge, kit: () => undefined } });
+    expect(mountCalls[0]!.kit).toBeUndefined();
+  });
+
+  it("badge: 'visible' (explicit) renders the L2 SANDBOXED badge row", () => {
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    const surface = mount(spec, { sandbox: { bridge, badge: "visible" } });
+    const wrapper = byKohaku(surface, "root")!;
+    expect(wrapper.textContent).toContain("L2 SANDBOXED");
+  });
+
+  it("badge: 'hidden' omits the L2 SANDBOXED badge row", () => {
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    const surface = mount(spec, { sandbox: { bridge, badge: "hidden" } });
+    const wrapper = byKohaku(surface, "root")!;
+    expect(wrapper.textContent).not.toContain("L2 SANDBOXED");
+  });
+
+  it("with no badge key at all, the badge row is rendered (defaults to visible)", () => {
+    const spec = buildSpec({
+      components: [{ id: "root", type: "sandbox.html", props: {}, artifact: { inline: HTML, sha256: SHA } }],
+    });
+    const surface = mount(spec, { sandbox: { bridge } });
+    const wrapper = byKohaku(surface, "root")!;
+    expect(wrapper.textContent).toContain("L2 SANDBOXED");
+  });
+
   it("subscribes to write invalidations (invalidates) and bridges them to handle.invalidate", async () => {
     mountCalls.length = 0;
     invalidated.length = 0;

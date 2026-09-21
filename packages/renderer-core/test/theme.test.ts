@@ -4,6 +4,7 @@ import {
   defaultDarkTheme,
   defaultLightTheme,
   HOST_STYLE_VARIABLE_MAP,
+  resolveSizing,
   resolveToken,
   sandboxThemeCss,
   themeFromHostStyles,
@@ -69,9 +70,60 @@ describe("default theme", () => {
     expect("color.focus" in defaultLightTheme).toBe(false);
   });
 
+  it("color.scrim (the dialog backdrop) has its own concrete light/dark value, unlike the deprecated aliases", () => {
+    expect(defaultLightTheme["color.scrim"]).toBe("rgba(17, 24, 39, 0.45)");
+    expect(defaultDarkTheme["color.scrim"]).toBe("rgba(0, 0, 0, 0.6)");
+    expect(defaultDarkTheme["color.scrim"]).not.toBe(defaultLightTheme["color.scrim"]);
+  });
+
   it("resolves with dark values when the dark theme is passed", () => {
     expect(resolveToken(defaultDarkTheme, "color.background")).toBe("#0f1115");
     expect(resolveToken(defaultDarkTheme, "color.text")).toBe("#e6e8ee");
+  });
+
+  it("non-color tokens (v2) are defined in both themes, and only shadow.* differs between light and dark", () => {
+    const nonColorKeys = [
+      "font.family.sans",
+      "font.family.mono",
+      "font.size.xs",
+      "font.size.sm",
+      "font.size.md",
+      "font.size.lg",
+      "font.size.xl",
+      "font.size.2xl",
+      "space.1",
+      "space.2",
+      "space.3",
+      "space.4",
+      "space.5",
+      "space.6",
+      "radius.sm",
+      "radius.md",
+      "radius.lg",
+      "radius.full",
+      "shadow.sm",
+      "shadow.md",
+      "motion.duration",
+      "motion.easing",
+    ] as const;
+    for (const key of nonColorKeys) {
+      expect(typeof defaultLightTheme[key]).toBe("string");
+      expect(typeof defaultDarkTheme[key]).toBe("string");
+      if (!key.startsWith("shadow.")) expect(defaultDarkTheme[key]).toBe(defaultLightTheme[key]);
+    }
+    expect(defaultDarkTheme["shadow.sm"]).not.toBe(defaultLightTheme["shadow.sm"]);
+    expect(defaultLightTheme["font.size.md"]).toBe("13.5px");
+    expect(defaultLightTheme["space.4"]).toBe("16px");
+    expect(defaultLightTheme["radius.md"]).toBe("8px");
+  });
+
+  it("every default token converts to a CSS custom property name and survives sandboxThemeCss sanitization", () => {
+    const css = sandboxThemeCss(defaultLightTheme);
+    expect(css).toContain("--kohaku-font-family-sans:system-ui");
+    expect(css).toContain("--kohaku-font-size-2xl:28px;");
+    expect(css).toContain("--kohaku-radius-full:9999px;");
+    expect(css).toContain("--kohaku-motion-easing:cubic-bezier(.2,0,0,1);");
+    expect(css).toContain("--kohaku-shadow-sm:0 1px 2px rgb(0 0 0 / .06);");
   });
 });
 
@@ -390,5 +442,23 @@ describe("sandboxThemeCss (token-injection CSS for the L2 sandbox)", () => {
     const css = sandboxThemeCss(defaultDarkTheme);
     expect(css).toContain("--kohaku-color-background:#0f1115;");
     expect(css).toContain("--kohaku-color-text:#e6e8ee;");
+  });
+});
+
+describe("resolveSizing", () => {
+  it("resolves the non-color tokens into a flat bag (default light net when unspecified)", () => {
+    const s = resolveSizing({});
+    expect(s.fontSans).toBe(defaultLightTheme["font.family.sans"]);
+    expect(s.fontMd).toBe("13.5px");
+    expect(s.space2).toBe("8px");
+    expect(s.radiusLg).toBe("12px");
+    expect(s.shadowSm).toBe(defaultLightTheme["shadow.sm"]);
+    expect(s.motionDuration).toBe("150ms");
+  });
+
+  it("follows theme overrides", () => {
+    const s = resolveSizing({ "radius.md": "2px", "font.size.md": "14px" });
+    expect(s.radiusMd).toBe("2px");
+    expect(s.fontMd).toBe("14px");
   });
 });

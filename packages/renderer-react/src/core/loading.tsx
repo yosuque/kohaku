@@ -1,5 +1,6 @@
+import { loadingStyle } from "@kohaku-ui/renderer-core";
 import type { ReactNode } from "react";
-import { type ImplProps, useToken } from "../context.js";
+import { type ImplProps, useSizing, useToken } from "../context.js";
 
 /**
  * Skeleton for the in-progress streaming form (ui.loading). role="status" + aria-busy="true"
@@ -8,22 +9,11 @@ import { type ImplProps, useToken } from "../context.js";
  */
 export function UiLoading({ node }: ImplProps): ReactNode {
   const label = String(node.props["label"] ?? "Loading…");
+  const sizing = useSizing();
   const muted = String(useToken("color.muted"));
   const border = String(useToken("color.border"));
   return (
-    <div
-      data-kohaku={node.id}
-      role="status"
-      aria-busy="true"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        color: muted,
-        fontSize: 13,
-        padding: "10px 12px",
-      }}
-    >
+    <div data-kohaku={node.id} role="status" aria-busy="true" style={loadingStyle(muted, sizing)}>
       <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16" style={{ flexShrink: 0 }}>
         <circle cx="8" cy="8" r="6" fill="none" stroke={border} strokeWidth="2" />
         <path d="M8 2 a6 6 0 0 1 6 6" fill="none" stroke={muted} strokeWidth="2" strokeLinecap="round">

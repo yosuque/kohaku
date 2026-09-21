@@ -1,10 +1,13 @@
 import {
   type BoundData,
   CHART_TOKEN_KEYS,
+  chartCaptionStyle,
   chartPointRow,
+  chartTableStyle,
   describeChartDataTable,
   resolveChartConfig,
   resolveToken,
+  type SizingTokens,
   visuallyHiddenStyle,
 } from "@kohaku-ui/renderer-core";
 import type { ComponentNode, JsonObject } from "@kohaku-ui/spec-core";
@@ -54,14 +57,14 @@ function renderChart(rt: RenderRuntime, node: ComponentNode, state: BoundData): 
   const figure = el("figure", { "data-kohaku": node.id, "aria-label": label }, { margin: 0, width: "100%" });
 
   if (title != null) {
-    const caption = el("figcaption", {}, { fontSize: 13, fontWeight: 600, marginBottom: 6 });
+    const caption = el("figcaption", {}, chartCaptionStyle(rt.sizing));
     caption.appendChild(text(title));
     figure.appendChild(caption);
   }
 
   if (kind === "pie" || kind === "scatter") {
     // Not a hand-drawn SVG kind. Substitute with a visible data table (a visible table separate from the a11y table).
-    figure.appendChild(visibleFallbackTable(x, yKeys, rows));
+    figure.appendChild(visibleFallbackTable(x, yKeys, rows, rt.sizing));
   } else {
     // When non-interactive, mark the SVG aria-hidden and defer to the a11y table. When interactive, remove aria-hidden
     // so focusable points aren't hidden from AT, and give the holder role="group" + a name (points are role="button").
@@ -73,15 +76,26 @@ function renderChart(rt: RenderRuntime, node: ComponentNode, state: BoundData): 
     figure.appendChild(svgHolder);
   }
 
-  figure.appendChild(a11yTable(label, x, yKeys, rows));
+  figure.appendChild(a11yTable(label, x, yKeys, rows, rt.sizing));
   return figure;
 }
 
-/** Visually hidden data-table substitute (same as renderer-react's ChartDataTable). Row count is truncated at the cap. */
-function a11yTable(label: string, x: string, yKeys: string[], rows: JsonObject[]): HTMLElement {
+/**
+ * Visually hidden data-table substitute (same as renderer-react's ChartDataTable). Row count is truncated
+ * at the cap. The a11y alternative must stay visually hidden regardless of sizing, so visuallyHiddenStyle's
+ * position/width/height/clip win over chartTableStyle's own width -- only borderCollapse/fontSize survive
+ * from it (a purely additive consistency pickup; the table was previously unstyled beyond visuallyHiddenStyle).
+ */
+function a11yTable(
+  label: string,
+  x: string,
+  yKeys: string[],
+  rows: JsonObject[],
+  sizing: SizingTokens,
+): HTMLElement {
   const { headers, cells } = describeChartDataTable(x, yKeys, rows);
   const table = el("table");
-  setStyle(table, visuallyHiddenStyle);
+  setStyle(table, { ...chartTableStyle(sizing), ...visuallyHiddenStyle });
   const caption = el("caption");
   caption.appendChild(text(label));
   table.appendChild(caption);
@@ -91,9 +105,14 @@ function a11yTable(label: string, x: string, yKeys: string[], rows: JsonObject[]
 }
 
 /** Visible fallback table for pie/scatter (a plain visible table). */
-function visibleFallbackTable(x: string, yKeys: string[], rows: JsonObject[]): HTMLElement {
+function visibleFallbackTable(
+  x: string,
+  yKeys: string[],
+  rows: JsonObject[],
+  sizing: SizingTokens,
+): HTMLElement {
   const { headers, cells } = describeChartDataTable(x, yKeys, rows);
-  const table = el("table", {}, { width: "100%", borderCollapse: "collapse", fontSize: 13.5 });
+  const table = el("table", {}, chartTableStyle(sizing));
   table.appendChild(headRow(headers));
   table.appendChild(bodyRows(cells));
   return table;

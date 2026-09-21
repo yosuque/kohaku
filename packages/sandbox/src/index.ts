@@ -50,6 +50,7 @@ export {
   verifyArtifact,
 } from "./srcdoc.js";
 export type {
+  DesignKitStylesheet,
   MountSandboxOptions,
   ResolvedSandboxPolicy,
   SandboxArtifact,

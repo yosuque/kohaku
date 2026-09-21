@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useState } from "react";
+import { lazy, type ReactNode, Suspense, useCallback, useState } from "react";
 import { t as dict, useT } from "../i18n/ui.js";
 import { bumpDataVersion } from "../kohaku/client.js";
 import { useTenant } from "../kohaku/tenant.js";
@@ -9,11 +9,26 @@ import { PromotionsTab } from "./admin/PromotionsTab.js";
 import { ErrorBanner, type Notice, type PushNotice } from "./admin/ui.js";
 
 /**
+ * The Gallery tab (n-16) is dev/admin-only tooling — its hand-written showcase artifact
+ * (gallery-showcase.ts) has no reason to reach production users. It is loaded via React.lazy, and the
+ * dynamic import itself sits behind a literal `if (import.meta.env.DEV)` statement rather than only a
+ * runtime check inside JSX: Vite replaces `import.meta.env.DEV` with the literal `false` at build time,
+ * and Rollup's dead-code elimination then drops the whole `if` branch — including the import() call —
+ * before it ever becomes a reachable module, so a production build never emits gallery-showcase.ts's
+ * code at all (not even as a separate, unreferenced lazy chunk). Verify with
+ * `pnpm --filter @kohaku-ui-sample/web build` and grep the `dist/` output for "gallery-showcase".
+ */
+let LazyGalleryTab: ReturnType<typeof lazy> | null = null;
+if (import.meta.env.DEV) {
+  LazyGalleryTab = lazy(() => import("./admin/GalleryTab.js").then((m) => ({ default: m.GalleryTab })));
+}
+
+/**
  * The governance surface: View Lineage's audit timeline, L2→L1 promotion review, L1→L0 fixation.
  * The place where "a workflow written nowhere in the code" becomes visible as a sequence of events.
  */
 export function AdminPage(): ReactNode {
-  const [tab, setTab] = useState<"lineage" | "analytics" | "promotions" | "fixations">("lineage");
+  const [tab, setTab] = useState<"lineage" | "analytics" | "promotions" | "fixations" | "gallery">("lineage");
   const [notice, setNotice] = useState<Notice | null>(null);
   // Switching tenant remounts the tab and re-fetches (the control plane is isolated by tenant).
   // Switching role does not remount — to demonstrate the 403 by listing candidates as admin, then switching to viewer and pressing
@@ -32,6 +47,9 @@ export function AdminPage(): ReactNode {
             ["analytics", t.admin.tabAnalytics],
             ["promotions", t.admin.tabPromotions],
             ["fixations", t.admin.tabFixations],
+            // Only listed when the lazy import above is actually wired (dev) — otherwise the button
+            // would be a dead end pointing at a tab whose content never renders.
+            ...(LazyGalleryTab != null ? ([["gallery", t.admin.tabGallery]] as const) : []),
           ] as const
         ).map(([key, label]) => (
           <button
@@ -84,6 +102,11 @@ export function AdminPage(): ReactNode {
       {tab === "analytics" && <AnalyticsTab key={tenant} onNotice={pushNotice} />}
       {tab === "promotions" && <PromotionsTab key={tenant} onNotice={pushNotice} />}
       {tab === "fixations" && <FixationsTab key={tenant} onNotice={pushNotice} />}
+      {tab === "gallery" && LazyGalleryTab != null && (
+        <Suspense fallback={<p>Loading…</p>}>
+          <LazyGalleryTab key={tenant} />
+        </Suspense>
+      )}
     </div>
   );
 }

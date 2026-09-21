@@ -23,6 +23,8 @@ from kohaku.evals import (
     create_judge,
     l1_quality_rubric,
     l2_promotion_rubric,
+    l2_promotion_rubric_v0_1,
+    l2_promotion_rubric_v0_2,
 )
 from kohaku.llm import FakeLlm
 from kohaku.spec import UISpec, parse_spec
@@ -70,11 +72,13 @@ class TestJudgePromotion:
                     usage=JudgeUsage(uses=3, sessions=2),
                 )
             )
-            # All criteria 0.8 and weight sum 1.0, so the combined score is also 0.8.
+            # All criteria 0.8 and weight sum 1.0, so the combined score is also 0.8. safety's floor is
+            # 0.5, and 0.8 clears it, so nothing is vetoed.
             assert verdict.score == 0.8
             assert verdict.pass_ is True
+            assert verdict.vetoed_by == []
             assert verdict.rubric_id == "l2-promotion"
-            assert verdict.rubric_version == "0.1"
+            assert verdict.rubric_version == "0.3"
             assert verdict.summary == "worthy of promotion"
 
         asyncio.run(run())
@@ -154,7 +158,8 @@ class TestJudgeSpec:
 class TestJudgeAbnormal:
     def test_missing_criterion_falls_back_to_zero(self) -> None:
         async def run() -> None:
-            # A response that omits safety (weight 0.3) and returns the remaining 4 criteria at full marks.
+            # A response that omits safety (weight 0.25, floor 0.5) and returns the remaining 5 criteria
+            # at full marks.
             llm = FakeLlm(
                 objects=[
                     {
@@ -174,8 +179,13 @@ class TestJudgeAbnormal:
             safety = next(c for c in verdict.criteria if c.id == "safety")
             assert safety.score == 0
             assert safety.reasoning == "(not evaluated)"
-            # The missing criterion (weight 0.3) is combined at 0 points: the other 4 are full marks, so score = 1 - 0.3 = 0.7.
-            assert verdict.score == 0.7
+            # The missing criterion (weight 0.25) is combined at 0 points: the other 5 are full marks, so the weighted-average score = 1 - 0.25 = 0.75.
+            assert verdict.score == 0.75
+            # n-7: before the safety floor existed, 0.75 >= pass_score (0.5) alone made this a passing
+            # verdict. safety's score (0) is strictly below its floor (0.5), so the verdict is now vetoed
+            # and does NOT pass, even though the weighted-average score still clears pass_score.
+            assert verdict.vetoed_by == ["safety"]
+            assert verdict.pass_ is False
 
         asyncio.run(run())
 
@@ -205,6 +215,10 @@ class TestJudgeAbnormal:
             ]
             # All criteria 0.5, so the combination is also 0.5 (the unknown criterion's full mark 1.0 is ignored).
             assert verdict.score == 0.5
+            # safety's own score (0.5) equals its floor (0.5) exactly — the floor only vetoes a score
+            # strictly below it, so this is not a veto.
+            assert verdict.vetoed_by == []
+            assert verdict.pass_ is True
 
         asyncio.run(run())
 
@@ -361,5 +375,135 @@ class TestWeightNormalization:
             assert verdict.score == 0.5
             assert verdict.rubric_id == "custom"
             assert verdict.rubric_version == "9.9"
+
+        asyncio.run(run())
+
+
+class TestL2PromotionRubric:
+    """l2_promotion_rubric (v0.3, current — pinned criteria id order, weights, and safety's floor;
+    mirrors TS's l2PromotionRubric test, m-21/Task 8)."""
+
+    def test_shape(self) -> None:
+        assert l2_promotion_rubric.id == "l2-promotion"
+        assert l2_promotion_rubric.version == "0.3"
+        assert [c.id for c in l2_promotion_rubric.criteria] == [
+            "safety",
+            "determinism",
+            "a11y",
+            "schema_inferability",
+            "generality",
+            "visual_quality",
+        ]
+        weights = [c.weight for c in l2_promotion_rubric.criteria]
+        assert weights == [0.25, 0.2, 0.15, 0.15, 0.05, 0.2]
+        assert sum(weights) == pytest.approx(1.0)
+
+    def test_only_safety_has_a_floor(self) -> None:
+        assert [c.floor for c in l2_promotion_rubric.criteria] == [0.5, None, None, None, None, None]
+
+    def test_visual_quality_description_covers_loading_fluid_width_and_countable_color_wording(
+        self,
+    ) -> None:
+        visual_quality = next(c for c in l2_promotion_rubric.criteria if c.id == "visual_quality")
+        # n-6: previously-unscored brief items now named explicitly.
+        assert "loading" in visual_quality.description
+        assert "never use fixed pixel widths — fill the container width" in visual_quality.description
+        # n-8: "restrained color" (2 words, not scorable from markup) replaced by the L2 brief's own
+        # countable wording (prompt.py's L2_SYSTEM_PROMPT design-brief bullet, verbatim).
+        assert "restrained color" not in visual_quality.description
+        assert (
+            "use the primary color for one emphasis at most; tone colors only when they carry meaning"
+            in visual_quality.description
+        )
+
+
+class TestL2PromotionRubricV0_1:
+    """l2_promotion_rubric_v0_1 (pinned pre-visual_quality rubric; mirrors TS's l2PromotionRubricV0_1)."""
+
+    def test_shape(self) -> None:
+        assert l2_promotion_rubric_v0_1.id == "l2-promotion"
+        assert l2_promotion_rubric_v0_1.version == "0.1"
+        assert [c.id for c in l2_promotion_rubric_v0_1.criteria] == [
+            "safety",
+            "determinism",
+            "a11y",
+            "schema_inferability",
+            "generality",
+        ]
+        weights = [c.weight for c in l2_promotion_rubric_v0_1.criteria]
+        assert weights == [0.3, 0.2, 0.15, 0.2, 0.15]
+        assert sum(weights) == pytest.approx(1.0)
+
+    def test_pinned_via_judge_rubric_option(self) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_uniform_verdict(l2_promotion_rubric_v0_1, 0.9)])
+            judge = create_judge(llm=llm, pass_score=0.5, rubric=l2_promotion_rubric_v0_1)
+            verdict = await judge.judge(
+                JudgeInput(
+                    html="<html><body><script>window.kohaku.ready()</script></body></html>",
+                    request="as a table",
+                    usage=JudgeUsage(uses=1, sessions=1),
+                )
+            )
+            assert verdict.rubric_version == "0.1"
+            assert [c.id for c in verdict.criteria] == [
+                c.id for c in l2_promotion_rubric_v0_1.criteria
+            ]
+
+        asyncio.run(run())
+
+
+class TestL2PromotionRubricV0_2:
+    """l2_promotion_rubric_v0_2 (pinned pre-Task-8 rubric; mirrors TS's l2PromotionRubricV0_2)."""
+
+    def test_shape(self) -> None:
+        assert l2_promotion_rubric_v0_2.id == "l2-promotion"
+        assert l2_promotion_rubric_v0_2.version == "0.2"
+        assert [c.id for c in l2_promotion_rubric_v0_2.criteria] == [
+            "safety",
+            "determinism",
+            "a11y",
+            "schema_inferability",
+            "generality",
+            "visual_quality",
+        ]
+        weights = [c.weight for c in l2_promotion_rubric_v0_2.criteria]
+        assert weights == [0.25, 0.2, 0.15, 0.15, 0.15, 0.1]
+        assert sum(weights) == pytest.approx(1.0)
+        assert [c.floor for c in l2_promotion_rubric_v0_2.criteria] == [None] * 6
+
+    def test_pinned_via_judge_rubric_option_no_floor_veto_even_at_safety_zero(self) -> None:
+        async def run() -> None:
+            llm = FakeLlm(
+                objects=[
+                    {
+                        "criteria": [
+                            {
+                                "id": c.id,
+                                "score": 0 if c.id == "safety" else 1,
+                                "reasoning": c.id,
+                            }
+                            for c in l2_promotion_rubric_v0_2.criteria
+                        ],
+                        "summary": "pinned v0.2, safety scored 0",
+                    }
+                ]
+            )
+            judge = create_judge(llm=llm, pass_score=0.5, rubric=l2_promotion_rubric_v0_2)
+            verdict = await judge.judge(
+                JudgeInput(
+                    html="<html><body><script>window.kohaku.ready()</script></body></html>",
+                    request="as a table",
+                    usage=JudgeUsage(uses=1, sessions=1),
+                )
+            )
+            assert verdict.rubric_version == "0.2"
+            assert [c.id for c in verdict.criteria] == [
+                c.id for c in l2_promotion_rubric_v0_2.criteria
+            ]
+            # Task 8's safety floor lives only on the current l2_promotion_rubric (v0.3), not on this
+            # pinned pre-Task-8 snapshot — a consumer who pinned v0.2 keeps the exact pre-Task-8 behavior.
+            assert verdict.vetoed_by == []
+            assert verdict.pass_ is True
 
         asyncio.run(run())

@@ -31,6 +31,17 @@ export function assembleSpec(args: {
   cache: "miss" | "bypass";
   model?: string;
   /**
+   * The state of `ComposePolicy.generatorVersion` / `designSystem?.kit` at composition time, stamped onto
+   * `provenance` only when present (spec/SPEC.md §2.1 Appendix item 13, both MAY). `generatorVersion` and
+   * `kit` (id/version only — the CSS itself lives on the render side) let a host tell an old L2 artifact
+   * apart from a new one after either changes, without them the host has no way to distinguish a cached/
+   * fixated artifact composed under a superseded kit from one composed under the current kit (M-1/M-2).
+   * Stamped regardless of tier (including L0): kit identity is a property of when the markup was written,
+   * not of how it was delivered.
+   */
+  generatorVersion?: string;
+  kit?: { id: string; version: string };
+  /**
    * The initial value of client-local state. Passed when the L0 fixed template has state.
    * Dropping it makes a template with visibleWhen fail structural validation with STATE_REF_UNKNOWN as
    * INTERNAL, or otherwise silently loses the initial state. Kept symmetric with materializeFixation (which preserves state via spread).
@@ -51,6 +62,8 @@ export function assembleSpec(args: {
       composedBy: COMPOSER_ID,
       ...(args.model != null ? { model: args.model } : {}),
       cache: args.cache,
+      ...(args.generatorVersion != null ? { generatorVersion: args.generatorVersion } : {}),
+      ...(args.kit != null ? { kit: args.kit } : {}),
     },
   };
 }

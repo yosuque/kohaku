@@ -8,6 +8,12 @@ import type { KnownThemeTokens } from "@kohaku-ui/spec-core";
  * usage descriptions**, and the output is made to write token references (var(--kohaku-*)). The actual
  * values are injected by the sandbox as `:root` CSS custom properties at render time (renderer-core's
  * sandboxThemeCss). This makes the output follow light/dark switching and brand-theme swaps without regeneration.
+ *
+ * This module is exposed under the `@kohaku-ui/composer/design-system` subpath (alongside the barrel)
+ * so that downstream node-independent packages (e.g. sandbox's `"types": []`) can import
+ * DEFAULT_KIT_VOCABULARY without pulling in composer's full index.ts, which re-exports compose.ts and
+ * therefore `@kohaku-ui/llm`'s `process.env` usage — the same reason l2-api.ts carries its own note.
+ * Keep this module's own import graph free of `@kohaku-ui/llm` so that guarantee holds.
  */
 export interface DesignSystemGuide {
   /**
@@ -31,7 +37,33 @@ export interface DesignSystemGuide {
    * (the prompt instruction remains).
    */
   enforceTokenColors?: boolean;
+  /**
+   * The design kit vocabulary (class names + descriptions, utilities, lint namespaces). When set, the
+   * L2 prompt gains a "Design kit" section (designKitPromptFragment) and the L2_UNKNOWN_CLASS lint
+   * rejects kit-namespaced class names that are not in the vocabulary. The other wheel is the render
+   * side: the kit CSS the sandbox injects (renderer-core's defaultDesignKit.css by default, or the
+   * product's own via mountSandbox's kitCss). Use DEFAULT_KIT_VOCABULARY for the built-in kit.
+   * Explicit opt-in: unset keeps the prompt bytes of a kit-less design system unchanged.
+   */
+  kit?: DesignKitVocabulary;
+  /**
+   * Whether to lint (L2_UNKNOWN_CLASS) kit-namespaced class names that are not in `kit`. Default true
+   * once `kit` is set. The same safety valve as enforceTokenColors: set false when repair does not
+   * converge on a small model (the prompt section remains).
+   */
+  enforceKitClasses?: boolean;
 }
+
+/**
+ * The subset of KnownThemeTokens this table documents: every known token except the two deprecated
+ * aliases (color.danger / color.focus, not put on the generation vocabulary), chart.palette (a
+ * CSV-string token guided separately, in indexed form, by designSystemPromptFragment itself), and
+ * color.scrim (the dialog backdrop — the sandbox never renders one, so it has no generation-time use).
+ */
+type BuiltinTokenName = Exclude<
+  keyof KnownThemeTokens,
+  "color.danger" | "color.focus" | "chart.palette" | "color.scrim"
+>;
 
 /**
  * Default token vocabulary (usage descriptions for KnownThemeTokens). For prompt presentation only and
@@ -41,6 +73,13 @@ export interface DesignSystemGuide {
  * in indexed form (--kohaku-chart-palette-N).
  *
  * The ordering is the prompt output order itself (a contract to string-match the Python implementation; change both languages together).
+ *
+ * Typed `satisfies Record<BuiltinTokenName, string>` (a Required record over every documented known
+ * token, not `Partial<...> & Record<string, string>`) so both a typo in a key and an accidentally
+ * omitted known token are compile errors: the previous intersection's open `Record<string, string>`
+ * index signature absorbed any key, so neither case was ever caught. Product-specific custom tokens are
+ * still accepted where they actually are — DesignSystemGuide.tokens' own `Record<string, string>` — this
+ * table only documents the fixed built-in vocabulary and is not where a product adds its own tokens.
  */
 export const DEFAULT_TOKEN_DESCRIPTIONS: Readonly<Record<string, string>> = {
   "color.background": "page/root background",
@@ -64,7 +103,29 @@ export const DEFAULT_TOKEN_DESCRIPTIONS: Readonly<Record<string, string>> = {
   "color.info.text": "text color of info notices",
   "color.info.border": "border of info notices",
   "chart.axis": "chart axis lines, ticks, grid lines",
-} satisfies Partial<Record<keyof KnownThemeTokens, string>> & Record<string, string>;
+  "font.family.sans": "sans-serif font stack for all text",
+  "font.family.mono": "monospace font stack (code, raw values)",
+  "font.size.xs": "smallest text (captions, axis ticks)",
+  "font.size.sm": "small text (labels, helper text)",
+  "font.size.md": "body text",
+  "font.size.lg": "section titles",
+  "font.size.xl": "page titles",
+  "font.size.2xl": "large KPI values",
+  "space.1": "4px spacing step",
+  "space.2": "8px spacing step",
+  "space.3": "12px spacing step",
+  "space.4": "16px spacing step",
+  "space.5": "24px spacing step",
+  "space.6": "32px spacing step",
+  "radius.sm": "small corner radius (inputs, badges)",
+  "radius.md": "medium corner radius (buttons, notices)",
+  "radius.lg": "large corner radius (cards, dialogs)",
+  "radius.full": "pill radius",
+  "shadow.sm": "subtle elevation shadow (cards)",
+  "shadow.md": "stronger elevation shadow (dialogs, toasts)",
+  "motion.duration": "transition duration",
+  "motion.easing": "transition easing",
+} satisfies Record<BuiltinTokenName, string>;
 
 /** Token name → CSS custom property name (same conversion rule as renderer-core's themeTokensToCssVars). */
 export function tokenToCssVar(name: string): string {
@@ -102,6 +163,287 @@ export function designSystemPromptFragment(guide: DesignSystemGuide): string {
     for (const rule of guide.guidelines) {
       lines.push(`  - ${rule}`);
     }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The class vocabulary of a design kit as presented to the L2 model. Holds names and usage descriptions
+ * only — the CSS lives on the render side (renderer-core's defaultDesignKit for the built-in kit).
+ */
+export interface DesignKitVocabulary {
+  /** Must equal the render-side kit's id (e.g. "kohaku"). */
+  id: string;
+  /** Must equal the render-side kit's version. */
+  version: string;
+  /**
+   * Kit class name → usage description. Presented **sorted by name** (not insertion order) in the L2
+   * prompt (Task 8/m-15): JS's own key ordering treats integer-like keys (e.g. a product kit's "2col")
+   * specially (they sort numerically-first, ahead of every non-numeric key, regardless of declaration
+   * order) while Python dict iteration keeps insertion order, so the two languages could otherwise emit
+   * different `designKitPromptFragment` bytes for the identical vocabulary content. Sorting output makes
+   * the fragment a pure function of *content*, not *insertion order* — see `designKitPromptFragment`'s
+   * own note and `policyFingerprint`'s `kit` material (context.ts), which dropped its `classesOrder`
+   * entry for the same reason.
+   */
+  classes: Record<string, string>;
+  /** Utility class names that exist (exactly these; listed on one prompt line). */
+  utilities: readonly string[];
+  /**
+   * Prefixes the L2_UNKNOWN_CLASS lint treats as "kit namespace": a class starting with one of these
+   * but absent from `classes` / `utilities` is sent back for repair. Dash-less utilities (flex, grid,
+   * border, …) are matched exactly and are not namespaces, so a model's own `grid-container` passes.
+   */
+  namespaces: readonly string[];
+  /**
+   * A body fragment (using this kit's own classes) shown in the prompt as an example of a well-formed
+   * widget. **No fallback**: unset means no Skeleton section is shown at all — there is no automatic
+   * substitution of the built-in kit's skeleton for a kit that happens to share its id/version or was
+   * derived from it (see designKitPromptFragment's own doc for why a fallback was rejected). The built-in
+   * `DEFAULT_KIT_VOCABULARY` below declares its own `skeleton: DEFAULT_KIT_SKELETON`; a product's own kit
+   * that wants a skeleton in the prompt declares its own the same way.
+   */
+  skeleton?: string;
+}
+
+/** A minimal, well-formed widget body using the built-in kit (shown in the prompt, indented by two spaces). */
+export const DEFAULT_KIT_SKELETON = [
+  '<div class="k-card">',
+  '  <div class="k-card-title">Sales by region</div>',
+  '  <div class="k-grid k-grid-3 mb-4">',
+  '    <div class="k-kpi"><span class="k-kpi-label">Total</span><span class="k-kpi-value">1,234</span><span class="k-kpi-delta is-up">▲ +12%</span></div>',
+  "  </div>",
+  '  <table class="k-table">',
+  '    <thead><tr><th>Region</th><th class="k-num">Sales</th></tr></thead>',
+  '    <tbody><tr><td>East</td><td class="k-num">1,234</td></tr></tbody>',
+  "  </table>",
+  '  <div class="k-notice k-notice-info mt-4 hidden" id="empty">No data for this period</div>',
+  "</div>",
+].join("\n");
+
+/**
+ * 134 utility class names (same set, in the same order, as Python's `_KIT_UTILITIES` in
+ * design_system.py). Like `classes` in `DEFAULT_KIT_VOCABULARY` below, every entry here is pinned by
+ * the contract test in packages/sandbox/test/design-kit-contract.test.ts ("every utility in the
+ * vocabulary has a selector in the CSS") — add one here and it needs a matching selector in
+ * renderer-core's `defaultDesignKit` CSS, or that test fails.
+ */
+const KIT_UTILITIES: readonly string[] = [
+  "flex",
+  "grid",
+  "hidden",
+  "w-full",
+  "h-full",
+  "flex-col",
+  "flex-wrap",
+  "items-center",
+  "items-start",
+  "justify-between",
+  "justify-end",
+  "grid-cols-2",
+  "grid-cols-3",
+  "grid-cols-4",
+  ...[1, 2, 3, 4, 5, 6].map((n) => `gap-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `p-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `px-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `py-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `pt-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `pb-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `pl-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `pr-${n}`),
+  "m-0",
+  ...[1, 2, 3, 4, 5, 6].map((n) => `m-${n}`),
+  "mx-auto",
+  ...[1, 2, 3, 4, 5, 6].map((n) => `mx-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `my-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `mt-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `mb-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `ml-${n}`),
+  ...[1, 2, 3, 4, 5, 6].map((n) => `mr-${n}`),
+  "text-xs",
+  "text-sm",
+  "text-md",
+  "text-lg",
+  "text-xl",
+  "text-2xl",
+  "text-muted",
+  "text-primary",
+  "text-positive",
+  "text-negative",
+  "text-left",
+  "text-center",
+  "text-right",
+  "truncate",
+  "tabular-nums",
+  "font-medium",
+  "font-semibold",
+  "font-bold",
+  "rounded-sm",
+  "rounded-md",
+  "rounded-lg",
+  "rounded-full",
+  "shadow-sm",
+  "shadow-md",
+  "border",
+  "border-b",
+  "bg-surface",
+  "bg-background",
+];
+
+/**
+ * The built-in kit vocabulary (pairs with renderer-core's defaultDesignKit; the contract test in
+ * packages/sandbox/test/design-kit-contract.test.ts pins every class here to a selector there).
+ * `classes`' declaration order here is otherwise arbitrary (Task 8/m-15): `designKitPromptFragment`
+ * presents them sorted by name, not in this object's insertion order.
+ */
+export const DEFAULT_KIT_VOCABULARY: DesignKitVocabulary = {
+  id: "kohaku",
+  version: "1",
+  classes: {
+    "k-card":
+      "surface container (border, large radius, subtle shadow, padding); put k-card-title first inside it",
+    "k-card-title": "title block of a k-card (bold, spaced below)",
+    "k-title": "section title text",
+    "k-subtitle": "small muted text under a title",
+    "k-muted": "muted (secondary) text color",
+    "k-num": "numeric cell/text — tabular figures, right-aligned",
+    "k-kpi": "a KPI block; children k-kpi-label, k-kpi-value, k-kpi-delta",
+    "k-kpi-label": "small muted label above a KPI value",
+    "k-kpi-value": "the large KPI number",
+    "k-kpi-delta": "change indicator; add is-up or is-down for the color and keep a ▲/▼ symbol in the text",
+    "k-btn": "button base; combine with k-btn-primary, k-btn-secondary or k-btn-danger",
+    "k-btn-primary": "filled brand-color button",
+    "k-btn-secondary": "outline button",
+    "k-btn-danger": "filled danger button",
+    "k-table": "data table (muted header row, row dividers, hover); add k-num to numeric th/td",
+    "k-badge":
+      "small pill; add k-badge-positive / k-badge-negative / k-badge-warning / k-badge-info for tone",
+    "k-badge-positive": "success tone badge",
+    "k-badge-negative": "error/decline tone badge",
+    "k-badge-warning": "warning tone badge",
+    "k-badge-info": "info tone badge",
+    "k-notice":
+      "inline notice box for empty / error / loading states; add k-notice-positive / k-notice-negative / k-notice-warning / k-notice-info for tone",
+    "k-notice-positive": "success notice",
+    "k-notice-negative": "error notice",
+    "k-notice-warning": "warning notice",
+    "k-notice-info": "info notice",
+    "k-stack": "vertical flex column with medium gap",
+    "k-row": "horizontal flex row, centered, wrapping, small gap",
+    "k-grid":
+      "responsive auto-fit grid; add k-grid-2 / k-grid-3 / k-grid-4 for a fixed column count (collapses to one column on narrow widths)",
+    "k-grid-2": "two equal columns",
+    "k-grid-3": "three equal columns",
+    "k-grid-4": "four equal columns",
+    "k-label": "form field label",
+    "k-input": "text input, full width",
+    "k-select": "select control, full width",
+    "k-chart":
+      "put on the <svg> root (full width, auto height, block-level; set your own fixed viewBox); the chart classes below (k-axis … k-line) apply only to elements inside it",
+    "k-axis": "axis line (<line>/<path>)",
+    "k-gridline": "dashed horizontal grid line",
+    "k-tick": "tick label (<text>)",
+    "k-axis-label": "axis title (<text>)",
+    "k-series-1": "series color 1 (fill and stroke); k-series-2 … k-series-7 likewise",
+    "k-series-2": "series color 2",
+    "k-series-3": "series color 3",
+    "k-series-4": "series color 4",
+    "k-series-5": "series color 5",
+    "k-series-6": "series color 6",
+    "k-series-7": "series color 7",
+    "k-bar": "bar rect (rounded corners)",
+    "k-line": "line-chart path (no fill, 2px stroke)",
+  },
+  utilities: KIT_UTILITIES,
+  // Declared explicitly (not left to a designKitPromptFragment fallback — see that function's own
+  // doc for why a reference-identity fallback was rejected in review). A product's own kit that wants
+  // a skeleton in the prompt must declare its own the same way.
+  skeleton: DEFAULT_KIT_SKELETON,
+  namespaces: [
+    "k-",
+    "gap-",
+    "p-",
+    "px-",
+    "py-",
+    "pt-",
+    "pb-",
+    "pl-",
+    "pr-",
+    "m-",
+    "mx-",
+    "my-",
+    "mt-",
+    "mb-",
+    "ml-",
+    "mr-",
+    "text-",
+    "font-",
+    "rounded-",
+    "shadow-",
+    "bg-",
+    "grid-cols-",
+    "items-",
+    "justify-",
+    "flex-",
+    "border-",
+    "w-",
+    "h-",
+  ],
+};
+
+/**
+ * Builds the "Design kit" section of the L2 prompt (buildL2PromptStatic inserts it right after the
+ * design-system section, only when designSystem.kit is set). Character-for-character identical with
+ * Python's design_kit_prompt_fragment.
+ *
+ * **Empty-input guard (Task 8/m-14):** a section whose backing list is empty is omitted entirely (its
+ * header line included) rather than emitted with nothing after it — an empty `classes` used to leave a
+ * dangling "- Component classes:" heading, and empty `utilities`/`namespaces` used to leave a
+ * self-contradicting "…exist: " / "…names): " line trailing on a colon. This guard fires only for
+ * genuinely empty input; the built-in `DEFAULT_KIT_VOCABULARY` has all three non-empty, so its own
+ * fragment is unchanged.
+ *
+ * **No skeleton fallback (Task 8/m-14, revised in review):** the "Skeleton of a well-formed widget body"
+ * section is shown iff `kit.skeleton` is itself set — there is no fallback to the built-in
+ * `DEFAULT_KIT_SKELETON` for some other kit that merely "looks like" the built-in one. An earlier version
+ * of this guard fell back to `DEFAULT_KIT_SKELETON` when `kit === DEFAULT_KIT_VOCABULARY` (reference
+ * identity), but that breaks silently and toward the "safe" (skeleton-omitted) side whenever the caller's
+ * `DEFAULT_KIT_VOCABULARY` reference isn't the exact same object this module exported — an ESM dual-package
+ * hazard (a nested/duplicated `@kohaku-ui/composer` install), a `ComposePolicy` that round-trips through
+ * JSON (a config file, a queue), or (Python) `dataclasses.replace(DEFAULT_KIT_VOCABULARY, ...)` all produce
+ * a structurally-identical-but-not-`===`-identical object, silently dropping the skeleton and changing the
+ * L2 prompt with no test or observability to catch it. `DEFAULT_KIT_VOCABULARY` below instead **declares
+ * its own `skeleton: DEFAULT_KIT_SKELETON`**, so the built-in kit shows a skeleton for the ordinary reason
+ * every other kit does — because it has one — and this function never needs to know which kit is "the"
+ * built-in one at all. A custom kit that wants a skeleton in the prompt declares its own the same way (see
+ * docs/user-guide.md's bring-your-own-kit section).
+ */
+export function designKitPromptFragment(kit: DesignKitVocabulary): string {
+  const lines: string[] = [
+    `## Design kit (${kit.id} v${kit.version})`,
+    "- The host injects a base stylesheet: body already has the font, text color, background and line-height; headings are scaled; :focus-visible rings are provided. Do not restate these",
+    "- Prefer the kit classes below for common blocks; use the utilities for layout and spacing; write custom CSS only for what they do not cover, and then only with var(--kohaku-*) tokens",
+  ];
+  // Sorted by name, not Object.entries' insertion order (m-15): see DesignKitVocabulary.classes' own doc
+  // for why insertion order is not a cross-language-safe contract.
+  const classNames = Object.keys(kit.classes).sort();
+  if (classNames.length > 0) {
+    lines.push("- Kit classes:");
+    for (const name of classNames) lines.push(`  - ${name}: ${kit.classes[name]}`);
+  }
+  if (kit.utilities.length > 0) {
+    lines.push(
+      `- Utilities (exactly these names exist; any other utility name has no effect): ${kit.utilities.join(", ")}`,
+    );
+  }
+  if (kit.namespaces.length > 0) {
+    lines.push(
+      `- Reserved prefixes (kit namespace; never use them for your own class names — pick names like chart-…, panel-…): ${kit.namespaces.join(", ")}`,
+    );
+  }
+  if (kit.skeleton != null) {
+    lines.push("- Skeleton of a well-formed widget body (adapt it; do not copy verbatim):");
+    for (const line of kit.skeleton.split("\n")) lines.push(`  ${line}`);
   }
   return lines.join("\n");
 }

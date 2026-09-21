@@ -1,6 +1,7 @@
 import {
   type RendererMessages,
   type SandboxNoticeTone,
+  type SizingTokens,
   sandboxArtifactMissingText,
   sandboxBadgeDescriptionStyle,
   sandboxBadgeDescriptionText,
@@ -14,7 +15,7 @@ import {
   sandboxNoticeToneStyle,
 } from "@kohaku-ui/renderer-core";
 import { mountSandbox, type SandboxState } from "@kohaku-ui/sandbox";
-import type { ComponentNode } from "@kohaku-ui/spec-core";
+import type { ComponentNode, ThemeTokens } from "@kohaku-ui/spec-core";
 import { el, noop, text } from "./dom.js";
 import type { RenderRuntime, Teardown } from "./types.js";
 
@@ -32,30 +33,39 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
 
   const artifact = node.artifact;
   if (artifact?.inline == null) {
-    wrapper.appendChild(notice("error", sandboxArtifactMissingText(messages)));
+    wrapper.appendChild(notice("error", sandboxArtifactMissingText(messages), rt.theme, rt.sizing));
     return noop;
   }
   if (rt.sandbox == null) {
-    wrapper.appendChild(notice("error", sandboxBridgeMissingText(node.type, messages)));
+    wrapper.appendChild(notice("error", sandboxBridgeMissingText(node.type, messages), rt.theme, rt.sizing));
     return noop;
   }
 
   // L2 badge (makes it explicit that isolated execution is in progress). Same wording as renderer-react
-  // (both consume renderer-core's sandbox-chrome presenter, the single source of truth).
-  const badgeRow = el("div", {}, sandboxBadgeRowStyle);
-  const badge = el("span", {}, sandboxBadgePillStyle);
-  badge.appendChild(text(sandboxBadgeText(messages)));
-  const badgeNote = el("span", {}, sandboxBadgeDescriptionStyle);
-  badgeNote.appendChild(text(sandboxBadgeDescriptionText(messages)));
-  badgeRow.append(badge, badgeNote);
-
+  // (both consume renderer-core's sandbox-chrome presenter, the single source of truth). Omitted
+  // entirely when the host opts out via `sandbox.badge === "hidden"`.
   const statusHolder = el("div", {}, { width: "100%" });
   const container = el("div", {}, { width: "100%" });
-  wrapper.append(badgeRow, statusHolder, container);
+  if (rt.sandbox.badge !== "hidden") {
+    const badgeRow = el("div", {}, sandboxBadgeRowStyle(rt.theme, rt.sizing));
+    const badge = el("span", {}, sandboxBadgePillStyle(rt.theme, rt.sizing));
+    badge.appendChild(text(sandboxBadgeText(messages)));
+    const badgeNote = el("span", {}, sandboxBadgeDescriptionStyle(rt.theme));
+    badgeNote.appendChild(text(sandboxBadgeDescriptionText(messages)));
+    badgeRow.append(badge, badgeNote);
+    wrapper.appendChild(badgeRow);
+  }
+  wrapper.append(statusHolder, container);
 
   const allowedEvents = rt.spec.events
     .filter((e) => e.on.startsWith(`${node.id}.`))
     .map((e) => e.on.slice(node.id.length + 1));
+
+  // Resolve the M-2 rollback hook (mirrors SandboxFrame's `kit` prop on the React side): a function form
+  // is called with this node's own ComponentNode/UISpec. `<kohaku-surface>` rebuilds its whole RenderRuntime
+  // on every Spec swap (see RenderRuntime's own doc comment), so — unlike React — no re-mount-dependency
+  // tracking is needed here: a Spec change already produces a fresh mountSandboxNode call end to end.
+  const resolvedKit = typeof rt.sandbox.kit === "function" ? rt.sandbox.kit(node, rt.spec) : rt.sandbox.kit;
 
   const handle = mountSandbox({
     container,
@@ -66,6 +76,9 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
     initialProps: node.props,
     bridge: rt.sandbox.bridge,
     ...(rt.sandbox.policy != null ? { policy: rt.sandbox.policy } : {}),
+    ...(resolvedKit !== undefined ? { kit: resolvedKit } : {}),
+    ...(resolvedKit === undefined && rt.sandbox.kitCss != null ? { kitCss: rt.sandbox.kitCss } : {}),
+    ...(rt.spec.provenance?.kit != null ? { provenanceKit: rt.spec.provenance.kit } : {}),
     // Inject theme tokens into the srcdoc (the same handoff as SandboxFrame). A theme change rides on the surface's
     // full re-render (rt rebuild → teardown / mount), so no subscription is needed here.
     theme: rt.theme,
@@ -74,9 +87,12 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
   // Keep the loading / error display in sync with state transitions (cleared on ready).
   const renderStatus = (state: SandboxState, detail?: string): void => {
     statusHolder.replaceChildren();
-    if (state === "loading") statusHolder.appendChild(notice("info", sandboxLoadingNoticeText(messages)));
-    else if (state === "error") {
-      statusHolder.appendChild(notice("error", sandboxErrorNoticeText(detail, messages)));
+    if (state === "loading") {
+      statusHolder.appendChild(notice("info", sandboxLoadingNoticeText(messages), rt.theme, rt.sizing));
+    } else if (state === "error") {
+      statusHolder.appendChild(
+        notice("error", sandboxErrorNoticeText(detail, messages), rt.theme, rt.sizing),
+      );
     }
   };
   handle.onStateChange(renderStatus);
@@ -91,8 +107,13 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
   };
 }
 
-function notice(tone: SandboxNoticeTone, message: string): HTMLElement {
-  const node = el("div", {}, { ...sandboxNoticeBaseStyle, ...sandboxNoticeToneStyle(tone) });
+function notice(
+  tone: SandboxNoticeTone,
+  message: string,
+  theme: ThemeTokens,
+  sizing: SizingTokens,
+): HTMLElement {
+  const node = el("div", {}, { ...sandboxNoticeBaseStyle(sizing), ...sandboxNoticeToneStyle(tone, theme) });
   node.appendChild(text(message));
   return node;
 }

@@ -24,6 +24,7 @@ export {
 } from "./control/invoke.js";
 export { resolveRowProps, substituteRow } from "./control/row-template.js";
 export { boundStateKey, normalizeSelectOptions, type SelectOption } from "./control/select-options.js";
+export { type DesignKit, defaultDesignKit, PARTS_STATE_CSS } from "./design-kit.js";
 // Messages
 export { DEFAULT_LOCALE, DEFAULT_MESSAGES, type RendererMessages } from "./messages.js";
 export { type ActionButtonTokens, actionButtonStyle } from "./presenters/action-button.js";
@@ -33,40 +34,50 @@ export {
   type ChartColors,
   type ChartConfig,
   type ChartReferenceLine,
+  chartCaptionStyle,
   chartPointRow,
+  chartTableStyle,
   DEFAULT_CHART_PALETTE,
   describeChartDataTable,
   type PreparedChart,
   prepareRows,
   resolveChartConfig,
 } from "./presenters/chart.js";
-export { type DataStateView, resolveDataStateView } from "./presenters/data-state.js";
+export {
+  type DataStateView,
+  dataStateNoticeStyle,
+  loadingStyle,
+  renderFailureNoticeStyle,
+  resolveDataStateView,
+} from "./presenters/data-state.js";
 export {
   asStringArray,
   buildDefaults,
   type ControlDescriptor,
   coerceFieldValues,
   constraintAttrs,
+  controlSelectStyle,
   describeControl,
   describedByOf,
   describeFieldRow,
-  FIELD_ROW_STYLE,
   type FieldDef,
   type FieldRowMeta,
   type FieldViolation,
   type FieldViolationRule,
-  FORM_ROOT_STYLE,
   type FormSubmitPlan,
+  fieldRowStyle,
   focusFieldSelectors,
   formControlBaseStyle,
   formFillKey,
+  formRootStyle,
   formSubmitButtonStyle,
   mergeRow,
   normalizeOptions,
   planFormSubmit,
   validateFormValues,
 } from "./presenters/form.js";
-export { GAP, HARD_ROW_CAP } from "./presenters/layout.js";
+export { gapFor, HARD_ROW_CAP } from "./presenters/layout.js";
+export { listEmptyStyle } from "./presenters/list-style.js";
 export {
   type MarkdownBlock,
   type MarkdownInline,
@@ -82,6 +93,10 @@ export {
   type MetricFormat,
   type MetricView,
   type MetricViewTokens,
+  metricCardStyle,
+  metricDeltaStyle,
+  metricLabelStyle,
+  metricValueStyle,
   resolveMetricView,
 } from "./presenters/metric.js";
 export {
@@ -157,6 +172,14 @@ export {
   tabButtonStyle,
 } from "./presenters/tabs.js";
 export {
+  textBodyStyle,
+  textCodeStyle,
+  textHeadingStyle,
+  textListStyle,
+  textPreStyle,
+  textSubheadingStyle,
+} from "./presenters/text-style.js";
+export {
   createSpreadsheetRemoteController,
   type SpreadsheetRemoteController,
   type SpreadsheetRemoteControllerDeps,
@@ -183,10 +206,14 @@ export {
   type SpecStateStore,
 } from "./stores/spec-state-store.js";
 export {
+  DEFAULT_SIZING,
   defaultDarkTheme,
   defaultLightTheme,
   HOST_STYLE_VARIABLE_MAP,
+  type NonColorTokens,
+  resolveSizing,
   resolveToken,
+  type SizingTokens,
   sandboxThemeCss,
   themeFromHostStyles,
   themeTokensToCssVars,

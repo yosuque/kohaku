@@ -80,6 +80,32 @@ def test_provenance_composed_at_requires_seconds() -> None:
     Provenance.model_validate({**base, "composedAt": "2026-01-01T00:00:00Z"})
 
 
+def test_provenance_generator_version_and_kit() -> None:
+    """Mirrors the TS side's provenance.test.ts (Task 3, M-1/M-2): generatorVersion and kit ({id, version})
+    are both optional, round-trip when present, and kit requires both id and version once given."""
+    base = {"tier": "L1", "composedBy": "composer", "cache": "miss"}
+
+    neither = Provenance.model_validate(base)
+    assert neither.generatorVersion is None
+    assert neither.kit is None
+
+    with_gen = Provenance.model_validate({**base, "generatorVersion": "p12/gpt-5"})
+    assert with_gen.generatorVersion == "p12/gpt-5"
+
+    with_kit = Provenance.model_validate({**base, "kit": {"id": "kohaku", "version": "1"}})
+    assert with_kit.kit is not None
+    assert with_kit.kit.to_wire() == {"id": "kohaku", "version": "1"}
+
+    with pytest.raises(ValidationError):
+        Provenance.model_validate({**base, "kit": {"id": "kohaku"}})
+
+    both = Provenance.model_validate(
+        {**base, "generatorVersion": "p12/gpt-5", "kit": {"id": "acme", "version": "3"}}
+    )
+    assert both.to_wire()["generatorVersion"] == "p12/gpt-5"
+    assert both.to_wire()["kit"] == {"id": "acme", "version": "3"}
+
+
 def test_artifact_exactly_one_of_inline_uri() -> None:
     sha = "0" * 64
     SandboxArtifactRef.model_validate({"inline": "<html/>", "sha256": sha})

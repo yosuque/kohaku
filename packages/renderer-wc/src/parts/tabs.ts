@@ -36,7 +36,7 @@ export const layoutTabs: PartBuilder = (rt, parent, node, row) => {
     {
       display: "flex",
       flexDirection: "column",
-      gap: 12,
+      gap: rt.sizing.space3,
       width: "100%",
     },
   );
@@ -45,7 +45,7 @@ export const layoutTabs: PartBuilder = (rt, parent, node, row) => {
     { role: "tablist" },
     {
       display: "flex",
-      gap: 4,
+      gap: rt.sizing.space1,
       borderBottom: `1px solid ${border}`,
     },
   );
@@ -104,7 +104,7 @@ export const layoutTabs: PartBuilder = (rt, parent, node, row) => {
       btn.setAttribute("aria-selected", String(isSelected));
       btn.setAttribute("aria-controls", selectedIds.panelId);
       btn.tabIndex = isSelected ? 0 : -1;
-      setStyle(btn, tabButtonStyle({ accent, muted }, { active: isSelected }));
+      setStyle(btn, tabButtonStyle({ accent, muted }, { active: isSelected }, rt.sizing));
     });
 
     panel.setAttribute("id", selectedIds.panelId);
@@ -132,7 +132,7 @@ export const layoutTab: PartBuilder = (rt: RenderRuntime, parent, node, row) => 
     {
       display: "flex",
       flexDirection: "column",
-      gap: 16,
+      gap: rt.sizing.space4,
       width: "100%",
     },
   );

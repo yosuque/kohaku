@@ -1,5 +1,17 @@
+import { PARTS_STATE_CSS } from "@kohaku-ui/renderer-core";
 import { describe, expect, it, vi } from "vitest";
+import type { KohakuSurface } from "../src/index.js";
 import { buildSpec, byKohaku, mount, root } from "./util.js";
+
+describe("shadow root state stylesheet", () => {
+  it("the shadow root carries the theme-neutral L1 state stylesheet", () => {
+    const surface = document.createElement("kohaku-surface") as KohakuSurface;
+    document.body.appendChild(surface);
+    const style = surface.shadowRoot!.querySelector("style")!;
+    expect(style.textContent).toContain(":host{display:block}");
+    expect(style.textContent).toContain(PARTS_STATE_CSS);
+  });
+});
 
 describe("per-node error isolation", () => {
   it("isolates one part's render exception, falls back (role=note) + onNodeError, siblings survive", () => {

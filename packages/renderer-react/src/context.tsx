@@ -1,10 +1,13 @@
 import type { BindingClient } from "@kohaku-ui/data-binding";
 import {
   DEFAULT_LOCALE,
+  PARTS_STATE_CSS,
   resolveEmit,
   resolvePayloadTemplate,
   resolveRowProps,
+  resolveSizing,
   resolveToken,
+  type SizingTokens,
   type SurfaceEvent,
 } from "@kohaku-ui/renderer-core";
 import type { ComponentNode, JsonObject, KnownThemeTokens, ThemeTokens, UISpec } from "@kohaku-ui/spec-core";
@@ -57,8 +60,13 @@ export interface RendererContextValue {
   theme: ThemeTokens;
   /** Only events declared in the Spec's events reach here */
   onEvent?: (event: SurfaceEvent) => void;
-  /** Delegates rendering of sandbox.html nodes (injects SandboxFrame from @kohaku-ui/sandbox) */
-  renderSandbox?: (node: ComponentNode, spec: UISpec) => ReactNode;
+  /**
+   * Delegates rendering of sandbox.html nodes (injects SandboxFrame from @kohaku-ui/sandbox). SpecView
+   * calls this with this provider's own `theme` as the 3rd argument, so a host wiring `SandboxFrame`
+   * (or `<kohaku-surface>`'s equivalent on the WC side, which is already automatic — see sandbox-mount.ts)
+   * does not need to separately thread `theme` through its own closure to keep it in sync.
+   */
+  renderSandbox?: (node: ComponentNode, spec: UISpec, theme: ThemeTokens) => ReactNode;
   /** Display language tag. Used for number/date formatting and sort collation (default "en-US", see DEFAULT_LOCALE). */
   locale?: string;
   /** Partial override of the default messages (DEFAULT_MESSAGES). If unspecified, output is identical to before. */
@@ -79,6 +87,22 @@ export interface RendererContextValue {
     result?: unknown;
     message?: string;
   }) => void;
+  /**
+   * `nonce` passed through to the `<style href="kohaku-parts-state">` RendererProvider injects (see
+   * `PARTS_STATE_CSS`'s own doc comment). A host running a strict `style-src-elem` CSP with a per-request
+   * nonce has no other way to authorize this element (React 19 hoists it into `<head>`, so it cannot be
+   * wrapped or styled by the host's own CSP-exempt markup). Omitted by default — byte-identical to before
+   * this field existed.
+   */
+  stateStylesNonce?: string;
+  /**
+   * Set to `false` to skip injecting the `<style href="kohaku-parts-state">` element entirely (opt-out).
+   * Use this when the host cannot satisfy its CSP for the element even with a nonce, or already supplies
+   * an equivalent stylesheet of its own — the state styles are theme-neutral and taken from
+   * `PARTS_STATE_CSS`, which a host can inline itself. Default (omitted / any value other than `false`)
+   * keeps today's behavior: the element is always injected.
+   */
+  stateStyles?: false;
 }
 
 const RendererContext = createContext<RendererContextValue | null>(null);
@@ -92,6 +116,19 @@ export function RendererProvider(props: { value: RendererContextValue; children:
   return (
     <RendererContext.Provider value={props.value}>
       <DataInvalidationContext.Provider value={busRef.current}>
+        {/* Theme-neutral hover/active/focus-visible rules for the parts. React 19 hoists a <style> with href +
+            precedence into <head> and de-duplicates it by href, so N providers yield one stylesheet.
+            stateStyles: false skips this entirely (opt-out); stateStylesNonce passes a CSP nonce through
+            (both RendererContextValue fields default to today's unconditional-injection behavior). */}
+        {props.value.stateStyles !== false && (
+          <style
+            href="kohaku-parts-state"
+            precedence="default"
+            {...(props.value.stateStylesNonce != null ? { nonce: props.value.stateStylesNonce } : {})}
+          >
+            {PARTS_STATE_CSS}
+          </style>
+        )}
         {props.children}
       </DataInvalidationContext.Provider>
     </RendererContext.Provider>
@@ -126,6 +163,12 @@ export function useToken(name: string, fallback?: string | number): string | num
   return fallback === undefined
     ? resolveToken(theme, name as keyof KnownThemeTokens)
     : resolveToken(theme, name, fallback);
+}
+
+/** The non-color tokens of the current theme as a flat bag (memoized per theme object). */
+export function useSizing(): SizingTokens {
+  const { theme } = useRenderer();
+  return useMemo(() => resolveSizing(theme), [theme]);
 }
 
 /** Display language tag (default "en-US", see DEFAULT_LOCALE). Used as the collation locale for number/date formatting and sort collation. */

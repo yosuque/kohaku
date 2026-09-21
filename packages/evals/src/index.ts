@@ -23,6 +23,8 @@ export {
   type JudgeVerdict,
   l1QualityRubric,
   l2PromotionRubric,
+  l2PromotionRubricV0_1,
+  l2PromotionRubricV0_2,
   type Rubric,
 } from "./judge.js";
 export {

@@ -307,18 +307,25 @@ If you register fixed Spec templates (the sample is `apps/sample-api/src/intents
 
 ### Applying a design system to L2
 
-A three-part set for making your product's design system take effect on L2 free generation (custom components). The generated artifact is written not with hardcoded colors but with token references `var(--kohaku-*)`, and the values are injected at render time, so it **follows light/dark switching and brand changes without regeneration**.
+A four-step set (the third of which is optional: bring your own design kit) for making your product's design system take effect on L2 free generation (custom components). The generated artifact is written not with hardcoded colors but with token references `var(--kohaku-*)`, and the values are injected at render time, so it **follows light/dark switching and brand changes without regeneration**.
 
 1. **Define the design system and wire it to the compose policy** (sample: `apps/sample-api/src/design-system.ts`):
 
 ```ts
-import type { DesignSystemGuide } from "@kohaku-ui/composer";
+import { DEFAULT_KIT_VOCABULARY, type DesignSystemGuide } from "@kohaku-ui/composer";
 
 const designSystem: DesignSystemGuide = {
   // custom tokens added to the default token vocabulary (the full KnownThemeTokens), and description overrides (optional)
   tokens: { "brand.accent": "accent color (badges, highlights)" },
-  // natural-language style rules (typography, spacing, tone, etc.)
-  guidelines: ["spacing is a multiple of 4px", "corner radius is 8px"],
+  // the design kit vocabulary (kit classes + utilities the model composes with); the built-in kit
+  // shown here, or bring your own — see step 3
+  kit: DEFAULT_KIT_VOCABULARY,
+  // natural-language style rules (typography, spacing, tone, etc.) — never a concrete value (a color, a
+  // px number); values belong only in tokens/kit, see apps/sample-api/src/design-system.ts
+  guidelines: [
+    "Style table header rows with the k-table class (muted header on the surface color).",
+    "When indicating increases/decreases, use k-kpi-delta with is-up / is-down (or var(--kohaku-color-positive) / var(--kohaku-color-negative)) and also show a symbol like ▲▼ (do not rely on color alone).",
+  ],
   // lint send-back for hardcoded colors (default true; set false if repair does not converge on a small model)
   // enforceTokenColors: false,
 };
@@ -339,9 +346,32 @@ const policy = {
 // WC: just set it on <kohaku-surface>'s context.theme (or the theme property)
 ```
 
-3. **Verify**: L2 generation (e.g., a free-form request in chat) → if the generated HTML uses `var(--kohaku-color-*)` and the header's theme switch makes the custom component's palette follow, it is OK. If hardcoded colors slip in, they are automatically retried for repair as `L2_RAW_COLOR`.
+3. **(Optional) Bring your own kit**: pass your vocabulary as `designSystem.kit` (`{ id, version, classes, utilities, namespaces }`) and your stylesheet as `kit` (a `DesignKitStylesheet` — `{ id, version, css }` — passed to the `SandboxFrame` prop / `mountSandbox`'s option / `context.sandbox.kit` on `<kohaku-surface>`; the older `kitCss: string` option still works and is not going away, but carries no version identity — see "Detecting a stale kit" below). The class names in `classes`/`utilities` and the class names your CSS actually defines selectors for must match **one-to-one** in both directions: a vocabulary class with no matching CSS selector renders unstyled (the model was told it exists but nothing draws it), and a CSS class the vocabulary never lists cannot be caught by the `L2_UNKNOWN_CLASS` lint (the lint only ever checks what the model wrote against the vocabulary, never the CSS). `namespaces` are the prefixes (`"k-"`, `"gap-"`, …) the lint treats as "this looks like a kit class" — a class starting with one of them but absent from `classes`/`utilities` is sent back for repair; a class outside every namespace is always ignored by the lint, kit or not. Also supply `skeleton` (a body fragment using your own classes) — without it, no Skeleton section appears in the prompt at all (the built-in kit's own skeleton, written in `k-*` class names your kit may not define, never leaks through: `designKitPromptFragment` only ever shows a kit's own declared `skeleton`, with no fallback to the built-in one). `packages/sandbox/test/design-kit-contract.test.ts` is the template for pinning your own vocabulary/CSS pair the same way the built-in kit pins itself. Write the CSS so every colour is a `var(--kohaku-color-*)` reference, `currentColor`, or the keyword `transparent` — no raw colour values. Dimensions should be tokens too, except for deliberate literals like the built-in kit's own (hairline 1px borders, the 2px focus ring, the 480px grid breakpoint, SVG chart geometry); layout and effects such as `display:flex`, `color-mix()`, and `filter` are unrestricted — the shipped kit uses all three. Brand web fonts can be embedded as `@font-face` data URIs. An empty CSS string (`kit: ""` or `kitCss: ""`) disables the built-in kit entirely. Bump `version` (and `generatorVersion`) when class semantics change.
 
-Even without specifying a theme, a default light theme is always injected into the sandbox, so `var()` never falls to undefined. The Python implementation (`python/kohaku`) has the same feature too (`ComposePolicy(designSystem=DesignSystemGuide(...))`) (sample: `python/examples/sales-api/src/sales_api/design_system.py`).
+4. **Verify**: L2 generation (e.g., a free-form request in chat) → if the generated HTML uses `var(--kohaku-color-*)` and the header's theme switch makes the custom component's palette follow, it is OK. If hardcoded colors slip in, they are automatically retried for repair as `L2_RAW_COLOR`; an unrecognized kit-namespaced class name is retried the same way as `L2_UNKNOWN_CLASS`.
+
+Even without specifying a theme, a default light theme is always injected into the sandbox, so `var()` never falls to undefined. The Python implementation (`python/kohaku`) has the same feature too (`ComposePolicy(designSystem=DesignSystemGuide(...))`) (sample: `python/examples/sales-api/src/sales_api/design_system.py`). Python has no sandbox runtime, so everything below this point (the `kit` receiver, the mismatch check, the rollback resolver) is TS-only; the Python side's contribution is stamping `provenance.generatorVersion` / `provenance.kit` on the composed Spec (see below), which a TS-hosted sandbox still reads the same way.
+
+**Detecting a stale kit (SPEC-KIT-001)**: composer stamps the *composed* Spec's `provenance.generatorVersion` / `provenance.kit` (`{id, version}`) from `ComposePolicy.generatorVersion` / `designSystem.kit` whenever either is set — on every tier, and preserved as-is through a cache hit or an L1→L0 fixation (a fixated Spec keeps reporting the kit it was pinned under, not whatever the policy says today). Passing a versioned `kit` (the `DesignKitStylesheet` form, not a bare string) lets the sandbox compare its own `id`/`version` against the Spec's own `provenance.kit`: on a mismatch it reports `bridge.onTelemetry({ componentId, kind: "kit-mismatch", detail })` but **still renders** (fail-open — a stale kit is unstyled or subtly-wrong markup, not a security fault, so this is an observability signal, not a block). Wire `onTelemetry` to your own logging/metrics to catch a rollout where the render-side kit and the compose-side vocabulary have drifted apart.
+
+**Rolling a kit change back per artifact (M-2)**: `kit` also accepts a **resolver**, `(node, spec) => DesignKitStylesheet | string | undefined`, called with that node's own `ComponentNode`/`UISpec` — `SandboxFrame`'s prop on React, `context.sandbox.kit` on `<kohaku-surface>` (WC; both renderers offer the same hook). Reading `spec.provenance.kit` inside the resolver lets a host pick the CSS matching *each artifact's own* compose-time kit, rather than one CSS for the whole surface:
+
+```tsx
+<SandboxFrame
+  node={node}
+  spec={spec}
+  bridge={bridge}
+  kit={(node, spec) =>
+    spec.provenance.kit?.version === "1" ? { id: "acme", version: "1", css: KIT_V1_CSS } : KIT_V2_CSS
+  }
+/>
+```
+
+Before this hook existed, the only rollback lever was `kitCss: ""` (or reverting the whole surface's `kitCss` string), which is all-or-nothing: silencing a regression in newly generated v2 artifacts also strips styling from every v1 artifact already cached, fixated, or promoted, and getting v1 artifacts their styling back means every v2 artifact loses it in turn. A resolver keyed on `provenance.kit` instead serves each artifact the stylesheet it was actually written against, so a rollback of the surface-wide default does not force a choice between the two.
+
+**Upgrade note**: the built-in kit's CSS is injected into every sandbox mount, including artifacts already in the compose cache, already fixated, and already promoted into a catalog — an empty CSS string (`kit: ""` / `kitCss: ""`, the `SandboxFrame` prop / `mountSandbox`'s option / `<kohaku-surface>`'s `context.sandbox.kit`) is the per-surface opt-out if that shift in already-generated artifacts is not wanted, and the resolver form above is the finer-grained alternative once `designSystem.kit` is versioned.
+
+To eyeball the kit without an LLM, the sample app's Admin → Gallery tab (`apps/sample-web/src/pages/admin/GalleryTab.tsx`) renders a hand-written showcase artifact (`gallery-showcase.ts`) through the real `SandboxFrame`, exercising every kit class; a checkbox toggles the kit on and off, re-mounting the preview so the difference can be compared, and a paste box below it previews any generated L2 artifact the same way. It follows the app header's light/dark setting, and since its data is canned fixtures, the tab needs neither the API nor a model.
 
 ### Calling it from a client (the typed host client SDK)
 
@@ -551,6 +581,4 @@ export function buildTheme(mode: "light" | "dark"): ThemeTokens {
 }
 ```
 
-Pass this to `RendererProvider`'s `theme` (React) / `surface.theme` (Web Components). For the full list of the token vocabulary (`color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `chart.axis` / `chart.palette`, plus the deprecated alias `color.danger`→negative and the reserved `color.focus`→primary), its default values, and the dark AA policy, see design doc §7.2. You can freely add custom tokens (keys outside the vocabulary) too (`ThemeTokens` is an open type). Note that v1 has **color tokens only**; non-color tokens such as `spacing.*` / `radius.*` / `font.size.*` are out of scope.
-</content>
-</invoke>
+Pass this to `RendererProvider`'s `theme` (React) / `surface.theme` (Web Components). The color token vocabulary is `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`, plus the deprecated alias `color.danger`→negative and the reserved `color.focus`→primary. `color.scrim` (the modal dialog backdrop) has its own light/dark value like any other listed token — it is simply not part of the *L2 generation* vocabulary the model sees, since the sandbox never renders a dialog backdrop (design.md §7.2 has the full default-value table). You can freely add custom tokens (keys outside the vocabulary) too (`ThemeTokens` is an open type). Non-color tokens (`font.family.*`, `font.size.*`, `space.*`, `radius.*`, `shadow.*`, `motion.*`) are part of the vocabulary too and take CSS strings with units (e.g. `"radius.md": "4px"` for a squarer brand). See design doc §7.2 for the full list of both, their default values, and the dark AA policy. Non-color tokens shape the built-in parts too (e.g. `"radius.md": "2px"` squares every button and input); the `L2 SANDBOXED` badge can be hidden with `badge="hidden"` on `SandboxFrame` / `context.sandbox.badge` — but hide it only on a surface that signals sandboxing some other way, and if a brand theme overrides `color.warning.surface` / `color.warning.text` (the pill's background/text pair), keep the two readable together, since the badge is the only consumer of that pairing today.
