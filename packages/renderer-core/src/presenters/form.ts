@@ -319,6 +319,11 @@ export function formControlBaseStyle(border: string, sizing: SizingTokens) {
   } as const;
 }
 
+/** The control-bar select (e.g. a spreadsheet/list filter) and a form's <select> deliberately share one chrome. */
+export function controlSelectStyle(border: string, sizing: SizingTokens) {
+  return formControlBaseStyle(border, sizing);
+}
+
 /** The submit button (busy switches the affordance without disabling resubmission after a failure). */
 export function formSubmitButtonStyle(
   accent: string,

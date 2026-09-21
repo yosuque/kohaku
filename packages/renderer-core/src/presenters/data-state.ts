@@ -56,3 +56,26 @@ export function dataStateNoticeStyle(view: { bg: string; fg: string }, sizing: S
     fontSize: sizing.fontSm,
   } as const;
 }
+
+/** The part-level loading row (a spinner/icon slot + label; React's Loading and WC's loading part). */
+export function loadingStyle(muted: string, sizing: SizingTokens) {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: sizing.space2,
+    color: muted,
+    fontSize: sizing.fontMd,
+    padding: `${sizing.space2} ${sizing.space3}`,
+  } as const;
+}
+
+/** The "couldn't render this node" fallback notice (SpecView / dom.ts's render-failure path; a dashed border in the error color). */
+export function renderFailureNoticeStyle(color: string, sizing: SizingTokens) {
+  return {
+    border: `1px dashed ${color}`,
+    color,
+    borderRadius: sizing.radiusMd,
+    padding: `${sizing.space2} ${sizing.space3}`,
+    fontSize: sizing.fontSm,
+  } as const;
+}

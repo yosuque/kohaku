@@ -1,6 +1,7 @@
 import type { ComponentNode, JsonObject, UISpec } from "@kohaku-ui/spec-core";
 import { hasDeclaredEvent } from "../control/emit.js";
 import type { RendererMessages } from "../messages.js";
+import type { SizingTokens } from "../theme.js";
 
 /** Default palette for series colors (shared by renderer-react's Recharts and renderer-wc's inline SVG). */
 export const DEFAULT_CHART_PALETTE = [
@@ -190,4 +191,16 @@ export function prepareRows(
     rows: [...byX.values()],
     yKeys: [...seriesValues].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
   };
+}
+
+// --- Style constants/functions shared verbatim by both renderers (React's style prop and WC's setStyle consume the same shape). ---
+
+/** The chart's title caption (React's figcaption / WC's figcaption). */
+export function chartCaptionStyle(sizing: SizingTokens) {
+  return { fontSize: sizing.fontMd, fontWeight: 600, marginBottom: sizing.space2 } as const;
+}
+
+/** The visually-hidden a11y data table's own style (also reused by presentSpreadsheet's a11y table). */
+export function chartTableStyle(sizing: SizingTokens) {
+  return { width: "100%", borderCollapse: "collapse", fontSize: sizing.fontMd } as const;
 }
