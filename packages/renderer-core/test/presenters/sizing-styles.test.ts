@@ -8,6 +8,8 @@ import {
   dataStateNoticeStyle,
   defaultLightTheme,
   dialogBoxStyle,
+  dialogCloseButtonStyle,
+  dialogDescriptionStyle,
   dialogHeaderStyle,
   dialogOverlayStyle,
   dialogTitleStyle,
@@ -24,7 +26,9 @@ import {
   metricValueStyle,
   renderFailureNoticeStyle,
   resolveSizing,
+  spreadsheetCellEditInputStyle,
   spreadsheetFooterBarStyle,
+  spreadsheetFooterTotalStyle,
   spreadsheetPagerButtonStyle,
   spreadsheetSortButtonStyle,
   spreadsheetTdStyle,
@@ -35,11 +39,13 @@ import {
   textHeadingStyle,
   textListStyle,
   textPreStyle,
+  textSubheadingStyle,
   toastDismissButtonStyle,
   toastStyle,
 } from "../../src/index.js";
 
 const sizing = resolveSizing({
+  "radius.sm": "6px",
   "radius.md": "3px",
   "radius.lg": "22px",
   "space.2": "9px",
@@ -47,6 +53,7 @@ const sizing = resolveSizing({
   "space.4": "17px",
   "font.size.md": "14px",
   "font.size.sm": "12px",
+  "font.size.xl": "19px",
   "font.size.2xl": "31px",
   "shadow.sm": "none",
 });
@@ -174,5 +181,34 @@ describe("presenter sizing (non-color tokens flow into every inline style)", () 
       borderRadius: "3px",
       fontSize: "12px",
     });
+  });
+
+  // m-18: these five presenter style functions had no test anywhere in the repo (a sixth, textListStyle,
+  // already had one above). Each assertion below targets a sizing key that the override bag sets to a
+  // value distinct from its default (adding radius.sm / font.size.xl to the bag for this purpose), so a
+  // presenter that read the wrong key, or fell back to DEFAULT_SIZING, would produce a different literal
+  // than the one asserted here.
+  it("the spreadsheet footer/cell-edit, dialog close/description and text subheading presenters also read the bag", () => {
+    expect(spreadsheetFooterTotalStyle({ muted: "#666" }, sizing)).toMatchObject({
+      fontSize: "12px",
+      color: "#666",
+      padding: "9px 2px",
+    });
+    expect(spreadsheetCellEditInputStyle({ border: "#eee" }, { numeric: false }, sizing).borderRadius).toBe(
+      "6px",
+    );
+    expect(dialogCloseButtonStyle(defaultLightTheme, sizing)).toMatchObject({
+      fontSize: "19px",
+      color: defaultLightTheme["color.muted"],
+    });
+    expect(dialogDescriptionStyle(defaultLightTheme, sizing)).toMatchObject({
+      fontSize: "14px",
+      color: defaultLightTheme["color.muted"],
+    });
+    // textSubheadingStyle's margin is built from two different sizing keys (space.2 then space.1), so it
+    // gets its own override pair (distinct from the shared `sizing` bag's un-overridden space.1, which
+    // other assertions above rely on staying at its default) to prove both halves come from the right key.
+    const subheadingSizing = resolveSizing({ "space.1": "6px", "space.2": "13px" });
+    expect(textSubheadingStyle(subheadingSizing).margin).toBe("13px 0 6px");
   });
 });
