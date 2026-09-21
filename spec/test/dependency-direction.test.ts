@@ -26,7 +26,7 @@ import { describe, expect, it } from "vitest";
 // not "devDependencies") only on packages in a strictly earlier layer.
 const LAYERS: string[][] = [
   ["spec-core", "llm"],
-  ["registry", "data-binding", "host-a2ui", "storage-memory"],
+  ["registry", "data-binding", "host-a2ui", "storage-memory", "authz-hmac"],
   ["intents"],
   ["composer", "renderer-core"],
   ["host-core"],

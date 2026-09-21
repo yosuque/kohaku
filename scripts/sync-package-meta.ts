@@ -29,6 +29,7 @@ const HOMEPAGE = "https://github.com/yosuque/kohaku";
 /** Workspace directories whose packages are published to npm. `apps/*` are samples and stay private. */
 const PUBLISHED_DIRS = [
   ...[
+    "authz-hmac",
     "client",
     "composer",
     "data-binding",
