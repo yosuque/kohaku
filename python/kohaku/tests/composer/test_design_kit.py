@@ -164,20 +164,38 @@ class TestVocabularyAndFragment:
         assert "Skeleton of a well-formed widget body" in fragment
         assert "  <div>ok</div>" in fragment
 
-    def test_structural_copy_of_default_kit_gets_no_default_skeleton(self) -> None:
-        """The built-in-skeleton fallback is an identity check (`kit is DEFAULT_KIT_VOCABULARY`), not a
-        structural id/version match. A caller that reconstructs an equivalent vocabulary (rather than
-        importing and passing the constant itself) gets no skeleton at all, not a silently-reused built-in
-        one."""
+    def test_structural_copy_of_default_kit_still_shows_the_skeleton(self) -> None:
+        """m-14, revised in review: design_kit_prompt_fragment no longer special-cases
+        DEFAULT_KIT_VOCABULARY by reference identity (an earlier version did, and broke silently whenever
+        a caller's DEFAULT_KIT_VOCABULARY reference wasn't `is`-identical to this module's own —
+        dataclasses.replace(), a JSON round-trip, etc.). DEFAULT_KIT_VOCABULARY instead declares its own
+        `skeleton=DEFAULT_KIT_SKELETON`, so a structural copy carries it over like any other field — no
+        identity dependency left to break."""
         copy = DesignKitVocabulary(
             id=DEFAULT_KIT_VOCABULARY.id,
             version=DEFAULT_KIT_VOCABULARY.version,
             classes=dict(DEFAULT_KIT_VOCABULARY.classes),
             utilities=DEFAULT_KIT_VOCABULARY.utilities,
             namespaces=DEFAULT_KIT_VOCABULARY.namespaces,
+            skeleton=DEFAULT_KIT_VOCABULARY.skeleton,
         )
         assert copy is not DEFAULT_KIT_VOCABULARY
         fragment = design_kit_prompt_fragment(copy)
+        assert "Skeleton of a well-formed widget body" in fragment
+        assert "Sales by region" in fragment
+
+    def test_lookalike_kit_with_no_skeleton_of_its_own_gets_no_skeleton(self) -> None:
+        """The failure m-14 originally set out to prevent: an id/version match alone must not resurrect
+        the built-in skeleton (whose k-card/k-grid-3/k-table classes this kit may not even define). The
+        declared `skeleton` field governs, not a structural id/version match."""
+        lookalike = DesignKitVocabulary(
+            id=DEFAULT_KIT_VOCABULARY.id,
+            version=DEFAULT_KIT_VOCABULARY.version,
+            classes={"k-tile": "tile"},
+            utilities=(),
+            namespaces=(),
+        )
+        fragment = design_kit_prompt_fragment(lookalike)
         assert "Skeleton of a well-formed widget body" not in fragment
 
     def test_system_prompt_ends_with_design_brief(self) -> None:

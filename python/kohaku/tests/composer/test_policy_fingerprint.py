@@ -312,33 +312,40 @@ class TestDesignKitFingerprint:
     def test_kit_alone_pinned_to_exact_value(self) -> None:
         """Absolute pin (M-4), unlike the relative-difference tests above (which only assert "differs
         from X" and would stay green even if the kit material's byte layout was reshuffled). If this
-        goes red for a reason OTHER than the Task 8/m-15 `classesOrder` removal noted below, the kit
-        material's bytes changed — that silently invalidates the compose cache of every caller using a
-        design kit. Fix the code so it doesn't; never re-pin this value. (Not cross-language-pinned —
-        same enforceTokenColors-default divergence as test_kit_less_design_system_fingerprint_is_unchanged
-        below; the TS-side pin for the identical shape is a different literal, "910dd7582fefced5".)
+        goes red for a reason OTHER than the two Task 8 re-pins noted below, the kit material's bytes
+        changed — that silently invalidates the compose cache of every caller using a design kit. Fix the
+        code so it doesn't; never re-pin this value. (Not cross-language-pinned — same
+        enforceTokenColors-default divergence as test_kit_less_design_system_fingerprint_is_unchanged
+        below; the TS-side pin for the identical shape is a different literal, "1e12b4ee8f905503".)
 
-        Task 8/m-15: this value WAS re-pinned once, deliberately, when `classesOrder` was dropped from
-        `_kit_fingerprint_material` (context.py) for the same reason as the TS sibling pin — see that
-        test's comment in packages/composer/test/policy-fingerprint.test.ts. Recomputed via
+        Task 8/m-15: re-pinned once when `classesOrder` was dropped from `_kit_fingerprint_material`
+        (context.py) for the same reason as the TS sibling pin — see that test's comment in
+        packages/composer/test/policy-fingerprint.test.ts.
+
+        Task 8/m-14, revised in review: re-pinned a second time when DEFAULT_KIT_VOCABULARY started
+        declaring its own `skeleton=DEFAULT_KIT_SKELETON` (replacing a reference-identity fallback in
+        design_kit_prompt_fragment that broke silently whenever a caller's DEFAULT_KIT_VOCABULARY
+        reference wasn't `is`-identical to this module's own) — `skeleton` went from UNDEFINED (an absent
+        key) to a present string, which necessarily changes every fingerprint that includes `kit`. Both
+        re-pins are one-time, expected consequences of those changes (recomputed via
         `policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))`
-        against the post-m-15 code — do not re-pin it again after this."""
+        against the current code) — do not re-pin it again after this."""
         assert (
             policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))
-            == "c101030ddefc2d38"
+            == "9f4c7c51828fe1f7"
         )
 
     def test_kit_plus_enforce_kit_classes_false_pinned_to_exact_value(self) -> None:
         """Same rationale as test_kit_alone_pinned_to_exact_value, extended to cover
-        enforceKitClasses's own byte contribution once it participates. Also re-pinned once for the same
-        Task 8/m-15 `classesOrder` removal."""
+        enforceKitClasses's own byte contribution once it participates. Also re-pinned twice for the same
+        two Task 8 reasons."""
         assert (
             policy_fingerprint(
                 ComposePolicy(
                     designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=False)
                 )
             )
-            == "2b1cc36e98021fa2"
+            == "9009a75d672e2372"
         )
 
     def test_kit_less_design_system_fingerprint_is_unchanged(self) -> None:

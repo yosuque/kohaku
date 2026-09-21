@@ -140,14 +140,30 @@ describe("designKitPromptFragment", () => {
     expect(fragment).toContain("  <div>ok</div>");
   });
 
-  it("m-14: a DEFAULT_KIT_VOCABULARY structural copy (same id/version/classes, not the same object) gets no default skeleton — only the exact constant does", () => {
-    // The built-in-skeleton fallback is an identity check (`kit === DEFAULT_KIT_VOCABULARY`), not a
-    // structural id/version match — see designKitPromptFragment's own doc for why. A caller that
-    // reconstructs an equivalent object (rather than importing and passing the constant itself) gets no
-    // skeleton at all, not a silently-reused built-in one.
+  it("m-14 (revised in review): a DEFAULT_KIT_VOCABULARY structural copy (not the same object) still shows the skeleton — it inherited the declared `skeleton` field, not the built-in identity", () => {
+    // designKitPromptFragment no longer special-cases DEFAULT_KIT_VOCABULARY by reference identity (an
+    // earlier version did, and broke silently whenever a caller's DEFAULT_KIT_VOCABULARY reference wasn't
+    // ===-identical to this module's own — an ESM dual-package hazard, a JSON round-trip, etc.).
+    // DEFAULT_KIT_VOCABULARY instead declares its own `skeleton: DEFAULT_KIT_SKELETON`, so a plain spread
+    // copies it like any other field — no identity dependency left to break.
     const copy = { ...DEFAULT_KIT_VOCABULARY };
     expect(copy).not.toBe(DEFAULT_KIT_VOCABULARY);
     const fragment = designKitPromptFragment(copy);
+    expect(fragment).toContain("Skeleton of a well-formed widget body");
+    expect(fragment).toContain("Sales by region");
+  });
+
+  it("m-14: a kit sharing DEFAULT_KIT_VOCABULARY's id/version but declaring no skeleton of its own gets no skeleton — the declared field governs, not a structural id/version match", () => {
+    // The failure m-14 originally set out to prevent: an id/version match alone must not resurrect the
+    // built-in skeleton (whose k-card/k-grid-3/k-table classes this kit may not even define).
+    const lookalike = {
+      id: DEFAULT_KIT_VOCABULARY.id,
+      version: DEFAULT_KIT_VOCABULARY.version,
+      classes: { "k-tile": "tile" },
+      utilities: [],
+      namespaces: [],
+    };
+    const fragment = designKitPromptFragment(lookalike);
     expect(fragment).not.toContain("Skeleton of a well-formed widget body");
   });
 });

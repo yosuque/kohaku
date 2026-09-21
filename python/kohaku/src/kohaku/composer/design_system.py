@@ -107,7 +107,12 @@ class DesignKitVocabulary:
     absent from `classes` / `utilities` is sent back for repair. Dash-less utilities (flex, grid, border, …)
     are matched exactly and are not namespaces, so a model's own `grid-container` passes."""
     skeleton: str | None = None
-    """Overrides the built-in DEFAULT_KIT_SKELETON in the prompt (a body fragment using the kit classes)."""
+    """A body fragment (using this kit's own classes) shown in the prompt as an example of a well-formed
+    widget. **No fallback**: unset means no Skeleton section is shown at all — there is no automatic
+    substitution of the built-in kit's skeleton for a kit that happens to share its id/version or was
+    derived from it (see design_kit_prompt_fragment's own docstring for why a fallback was rejected). The
+    built-in `DEFAULT_KIT_VOCABULARY` below declares its own `skeleton=DEFAULT_KIT_SKELETON`; a product's
+    own kit that wants a skeleton in the prompt declares its own the same way."""
 
 
 DEFAULT_KIT_SKELETON = "\n".join(
@@ -278,6 +283,10 @@ DEFAULT_KIT_VOCABULARY = DesignKitVocabulary(
         "w-",
         "h-",
     ),
+    # Declared explicitly (not left to a design_kit_prompt_fragment fallback — see that function's own
+    # docstring for why a reference-identity fallback was rejected in review). A product's own kit that
+    # wants a skeleton in the prompt must declare its own the same way.
+    skeleton=DEFAULT_KIT_SKELETON,
 )
 """The built-in kit vocabulary (pairs with renderer-core's defaultDesignKit; same content and
 character-for-character description text as TS's DEFAULT_KIT_VOCABULARY — a cross-language string
@@ -297,13 +306,19 @@ def design_kit_prompt_fragment(kit: DesignKitVocabulary) -> str:
     genuinely empty input; the built-in `DEFAULT_KIT_VOCABULARY` has all three non-empty, so its own
     fragment is unchanged.
 
-    **Skeleton fallback (Task 8/m-14):** when `kit.skeleton` is unset, the built-in `DEFAULT_KIT_SKELETON`
-    (which uses `k-card`/`k-grid-3`/`k-table`/… — classes that only exist in the *built-in* kit's CSS) is
-    shown only when `kit` **is** `DEFAULT_KIT_VOCABULARY` (identity, not a structural id/version match —
-    every caller that means to use the built-in kit already imports and passes this exact constant, e.g.
-    python/examples/sales-api/src/sales_api/design_system.py's `kit=DEFAULT_KIT_VOCABULARY`). For any other
-    kit with no `skeleton` of its own, the whole "Skeleton of a well-formed widget body" section is omitted
-    rather than falling back to the built-in one.
+    **No skeleton fallback (Task 8/m-14, revised in review):** the "Skeleton of a well-formed widget body"
+    section is shown iff `kit.skeleton` is itself set — there is no fallback to the built-in
+    `DEFAULT_KIT_SKELETON` for some other kit that merely "looks like" the built-in one. An earlier version
+    of this guard fell back to `DEFAULT_KIT_SKELETON` when `kit is DEFAULT_KIT_VOCABULARY` (reference
+    identity), but that breaks silently and toward the "safe" (skeleton-omitted) side whenever the caller's
+    `DEFAULT_KIT_VOCABULARY` reference isn't the exact same object this module exported — a `ComposePolicy`
+    that round-trips through JSON (a config file, a queue), `dataclasses.replace(DEFAULT_KIT_VOCABULARY,
+    ...)`, or (TS) an ESM dual-package hazard all produce a structurally-identical-but-not-identical object,
+    silently dropping the skeleton and changing the L2 prompt with no test or observability to catch it.
+    `DEFAULT_KIT_VOCABULARY` below instead **declares its own `skeleton=DEFAULT_KIT_SKELETON`**, so the
+    built-in kit shows a skeleton for the ordinary reason every other kit does — because it has one — and
+    this function never needs to know which kit is "the" built-in one at all. A custom kit that wants a
+    skeleton in the prompt declares its own the same way.
     """
     lines: list[str] = [
         f"## Design kit ({kit.id} v{kit.version})",
@@ -327,12 +342,9 @@ def design_kit_prompt_fragment(kit: DesignKitVocabulary) -> str:
             "- Reserved prefixes (kit namespace; never use them for your own class names — pick names like "
             "chart-…, panel-…): " + ", ".join(kit.namespaces)
         )
-    skeleton = kit.skeleton if kit.skeleton is not None else (
-        DEFAULT_KIT_SKELETON if kit is DEFAULT_KIT_VOCABULARY else None
-    )
-    if skeleton is not None:
+    if kit.skeleton is not None:
         lines.append("- Skeleton of a well-formed widget body (adapt it; do not copy verbatim):")
-        for line in skeleton.split("\n"):
+        for line in kit.skeleton.split("\n"):
             lines.append(f"  {line}")
     return "\n".join(lines)
 
