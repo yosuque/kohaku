@@ -55,8 +55,16 @@ import {
  * simple" line with a design brief, and added the optional "Design kit" section (designKitPromptFragment,
  * paired with the L2_UNKNOWN_CLASS lint). When ComposePolicy.designSystem is unspecified the L2 prompt
  * still differs from "11" (the brief), so this bump separates every cached L2 generation.
+ * "13" (Task 8): reworded the design brief's spacing line so it no longer refers to "the design tokens" as
+ * an antecedent that may not exist in the prompt (m-24 — the line used to presuppose a "## Design system"
+ * section that is only inserted when ComposePolicy.designSystem is set); added the empty-input guard and
+ * sorted-by-name class ordering to designKitPromptFragment (m-14/m-15 — bytes for the built-in kit are
+ * unchanged, only a kit-less/empty/unsorted-input fragment differs); and renamed "component class(es)" to
+ * "kit class(es)" throughout the L2 prompt and its repair feedback (n-3, to stop colliding with the Spec's
+ * own ComponentDefinition vocabulary). Every one of these can change L2 prompt bytes for at least some
+ * ComposePolicy.designSystem shape, so this bump separates every cached L2 generation (same rule as "12").
  */
-export const PROMPT_REVISION = "12";
+export const PROMPT_REVISION = "13";
 
 /**
  * The default value of generatorVersion. Composes the prompt version + model ID.

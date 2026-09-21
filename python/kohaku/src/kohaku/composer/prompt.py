@@ -20,7 +20,7 @@ from .design_system import (
     design_system_prompt_fragment,
 )
 
-PROMPT_REVISION = "12"
+PROMPT_REVISION = "13"
 """Revision of the L1/L2 prompts (in sync with TS's PROMPT_REVISION). Always bump it when changed.
 
 "8": the version that introduced the design-system section (design_system_prompt_fragment) into
@@ -45,6 +45,14 @@ the L2_UNKNOWN_CLASS lint — build_l2_prompt_static inserts it right after the 
 when design_system.kit is set). When ComposePolicy.designSystem is unspecified the L2 prompt still differs
 from "11" (the brief), so this bump separates every cached L2 generation (same rule as TS's own note on
 this revision).
+"13" (Task 8): reworded the design brief's spacing line so it no longer refers to "the design tokens" as an
+antecedent that may not exist in the prompt (m-24 — the line used to presuppose a "## Design system"
+section that is only inserted when ComposePolicy.designSystem is set); added the empty-input guard and
+sorted-by-name class ordering to design_kit_prompt_fragment (m-14/m-15 — bytes for the built-in kit are
+unchanged, only a kit-less/empty/unsorted-input fragment differs); and renamed "component class(es)" to
+"kit class(es)" throughout the L2 prompt and its repair feedback (n-3, to stop colliding with the Spec's
+own ComponentDefinition vocabulary). Every one of these can change L2 prompt bytes for at least some
+ComposePolicy.designSystem shape, so this bump separates every cached L2 generation (same rule as "12").
 """
 
 
