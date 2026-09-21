@@ -166,13 +166,16 @@ def collect_l2_issues(
 _RAW_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(")
 """Hard-coded-color detection pattern (hex literal / rgb() / rgba() / hsl() / hsla(); same as TS's L2_RAW_COLOR_RE)."""
 
-# class="…" / class='…' attributes, className = "…" assignments, classList.add("…", …) calls, and
-# setAttribute("class", "…") calls (the form SVG elements must use, since className is read-only there).
-# Mirrored verbatim from TS's CLASS_ATTR_RE / CLASS_NAME_ASSIGN_RE / CLASS_LIST_ADD_RE / SET_CLASS_ATTR_RE
+# class="…" / class='…' attributes, className = "…" assignments,
+# classList.add/toggle/remove/replace("…", …) calls, and setAttribute("class", "…") calls (the form SVG
+# elements must use, since className is read-only there). classList.toggle/remove/replace are scanned
+# alongside add for the same reason as TS's CLASS_LIST_MUTATION_RE: a conditionally-applied kit class via
+# toggle() is just as likely to be misspelled as one added via add(). Mirrored verbatim from TS's
+# CLASS_ATTR_RE / CLASS_NAME_ASSIGN_RE / CLASS_LIST_MUTATION_RE / SET_CLASS_ATTR_RE
 # (packages/composer/src/tiers/l2-generate.ts).
 _CLASS_ATTR_RE = re.compile(r"\bclass\s*=\s*([\"'])([^\"']*)\1")
 _CLASS_NAME_ASSIGN_RE = re.compile(r"\bclassName\s*=\s*([\"'`])([^\"'`]*)\1")
-_CLASS_LIST_ADD_RE = re.compile(r"\bclassList\s*\.\s*add\s*\(([^)]*)\)")
+_CLASS_LIST_MUTATION_RE = re.compile(r"\bclassList\s*\.\s*(?:add|toggle|remove|replace)\s*\(([^)]*)\)")
 _SET_CLASS_ATTR_RE = re.compile(r"\bsetAttribute\s*\(\s*([\"'])class\1\s*,\s*([\"'`])([^\"'`]*)\2\s*\)")
 _STRING_LITERAL_RE = re.compile(r"([\"'`])([^\"'`]*)\1")
 
@@ -202,7 +205,7 @@ def collect_unknown_kit_classes(html: str, kit: DesignKitVocabulary) -> list[str
         consider(m.group(2))
     for m in _CLASS_NAME_ASSIGN_RE.finditer(html):
         consider(m.group(2))
-    for m in _CLASS_LIST_ADD_RE.finditer(html):
+    for m in _CLASS_LIST_MUTATION_RE.finditer(html):
         for lit in _STRING_LITERAL_RE.finditer(m.group(1)):
             consider(lit.group(2))
     for m in _SET_CLASS_ATTR_RE.finditer(html):

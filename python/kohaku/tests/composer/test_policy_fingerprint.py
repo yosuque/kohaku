@@ -190,6 +190,27 @@ class TestDesignKitFingerprint:
         )
         assert with_kit != without_kit
 
+    def test_two_kits_differing_only_in_classes_insertion_order_produce_different_fingerprints(
+        self,
+    ) -> None:
+        """kit.classes is a dict, and the canonical-json hash sorts dict keys, so without classesOrder
+        two vocabularies differing only in declaration order would hash identically even though
+        design_kit_prompt_fragment iterates classes.items() in that order and emits different prompt
+        bytes for each."""
+        reordered = DesignKitVocabulary(
+            id=DEFAULT_KIT_VOCABULARY.id,
+            version=DEFAULT_KIT_VOCABULARY.version,
+            classes=dict(reversed(list(DEFAULT_KIT_VOCABULARY.classes.items()))),
+            utilities=DEFAULT_KIT_VOCABULARY.utilities,
+            namespaces=DEFAULT_KIT_VOCABULARY.namespaces,
+            skeleton=DEFAULT_KIT_VOCABULARY.skeleton,
+        )
+        fp_original = policy_fingerprint(
+            ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY))
+        )
+        fp_reordered = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=reordered)))
+        assert fp_reordered != fp_original
+
     def test_two_kits_differing_only_in_version_produce_different_fingerprints(self) -> None:
         kit_v2 = DesignKitVocabulary(
             id=DEFAULT_KIT_VOCABULARY.id,

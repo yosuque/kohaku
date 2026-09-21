@@ -248,6 +248,22 @@ class TestUnknownClassLint:
             == []
         )
 
+    def test_scans_class_list_toggle_remove_replace(self) -> None:
+        html = _widget(
+            '<div class="k-card"></div>',
+            'el.classList.toggle("k-hiddenn", x); el.classList.remove("k-tilee"); '
+            'el.classList.replace("k-oldd", "hidden");',
+        )
+        assert collect_unknown_kit_classes(html, DEFAULT_KIT_VOCABULARY) == [
+            "k-hiddenn",
+            "k-oldd",
+            "k-tilee",
+        ]
+
+    def test_class_list_toggle_with_a_real_kit_class_is_not_flagged(self) -> None:
+        html = _widget('<div class="k-card"></div>', 'el.classList.toggle("hidden", x);')
+        assert collect_unknown_kit_classes(html, DEFAULT_KIT_VOCABULARY) == []
+
     def test_issue_only_with_kit(self) -> None:
         assert collect_l2_issues(_UNKNOWN_HTML) == []
         assert collect_l2_issues(_UNKNOWN_HTML, enforce_token_colors=True) == []

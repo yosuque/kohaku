@@ -80,6 +80,23 @@ describe("collectUnknownKitClasses", () => {
       collectUnknownKitClasses(widget('<div class="mx-auto pt-2 h-full"></div>'), DEFAULT_KIT_VOCABULARY),
     ).toEqual([]);
   });
+
+  it("scans classList.toggle/remove/replace, not only add", () => {
+    const html = widget(
+      '<div class="k-card"></div>',
+      '  el.classList.toggle("k-hiddenn", x); el.classList.remove("k-tilee"); el.classList.replace("k-oldd", "hidden");',
+    );
+    expect(collectUnknownKitClasses(html, DEFAULT_KIT_VOCABULARY)).toEqual([
+      "k-hiddenn",
+      "k-oldd",
+      "k-tilee",
+    ]);
+  });
+
+  it("classList.toggle with a real kit class is not flagged", () => {
+    const html = widget('<div class="k-card"></div>', '  el.classList.toggle("hidden", x);');
+    expect(collectUnknownKitClasses(html, DEFAULT_KIT_VOCABULARY)).toEqual([]);
+  });
 });
 
 describe("collectL2Issues with a kit", () => {

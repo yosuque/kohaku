@@ -118,12 +118,15 @@ type L2LintRule = { applies: (html: string, opts?: L2LintOptions) => boolean; me
 const L2_RAW_COLOR_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/;
 
 /**
- * class="…" / class='…' attributes, className = "…" assignments, classList.add("…", …) calls, and
- * setAttribute("class", "…") calls (the form SVG elements must use, since className is read-only there).
+ * class="…" / class='…' attributes, className = "…" assignments, classList.add/toggle/remove/replace("…", …)
+ * calls, and setAttribute("class", "…") calls (the form SVG elements must use, since className is
+ * read-only there). classList.toggle/remove/replace are scanned alongside add because a model that
+ * conditionally applies a kit class via `el.classList.toggle("k-hiddenn", cond)` is just as likely to
+ * misspell it as one using add — restricting the scan to add only let those escapes past the lint.
  */
 const CLASS_ATTR_RE = /\bclass\s*=\s*(["'])([^"']*)\1/g;
 const CLASS_NAME_ASSIGN_RE = /\bclassName\s*=\s*(["'`])([^"'`]*)\1/g;
-const CLASS_LIST_ADD_RE = /\bclassList\s*\.\s*add\s*\(([^)]*)\)/g;
+const CLASS_LIST_MUTATION_RE = /\bclassList\s*\.\s*(?:add|toggle|remove|replace)\s*\(([^)]*)\)/g;
 const SET_CLASS_ATTR_RE = /\bsetAttribute\s*\(\s*(["'])class\1\s*,\s*(["'`])([^"'`]*)\2\s*\)/g;
 const STRING_LITERAL_RE = /(["'`])([^"'`]*)\1/g;
 
@@ -150,7 +153,7 @@ export function collectUnknownKitClasses(
   };
   for (const m of html.matchAll(CLASS_ATTR_RE)) consider(m[2]!);
   for (const m of html.matchAll(CLASS_NAME_ASSIGN_RE)) consider(m[2]!);
-  for (const m of html.matchAll(CLASS_LIST_ADD_RE)) {
+  for (const m of html.matchAll(CLASS_LIST_MUTATION_RE)) {
     for (const lit of m[1]!.matchAll(STRING_LITERAL_RE)) consider(lit[2]!);
   }
   for (const m of html.matchAll(SET_CLASS_ATTR_RE)) consider(m[3]!);

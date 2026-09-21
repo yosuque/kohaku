@@ -533,7 +533,18 @@ export async function policyFingerprint(
             // designSystem-bearing policy that never touches either field, silently invalidating
             // its compose cache. `undefined` is the only value that reproduces the pre-existing
             // byte layout exactly.
-            kit: designSystem.kit ?? undefined,
+            //
+            // `kit.classes` is folded in as-is below, but canonicalStringify's sortDeep
+            // (packages/spec-core/src/canonical-json.ts) sorts object keys before hashing, so two
+            // vocabularies differing only in the insertion order of `classes` would hash identically
+            // even though designKitPromptFragment iterates Object.entries in that same insertion
+            // order and therefore emits different L2 prompt bytes for each. `classesOrder` carries
+            // that order explicitly (an array, which sortDeep does not reorder) so a reordering of
+            // the vocabulary always separates the cache key, matching its effect on the prompt.
+            kit:
+              designSystem.kit != null
+                ? { ...designSystem.kit, classesOrder: Object.keys(designSystem.kit.classes) }
+                : undefined,
             enforceKitClasses: designSystem.enforceKitClasses === false ? false : undefined,
           }
         : null,

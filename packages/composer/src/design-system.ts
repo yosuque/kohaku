@@ -55,6 +55,13 @@ export interface DesignSystemGuide {
 }
 
 /**
+ * The subset of KnownThemeTokens this table documents: every known token except the two deprecated
+ * aliases (color.danger / color.focus, not put on the generation vocabulary) and chart.palette (a
+ * CSV-string token guided separately, in indexed form, by designSystemPromptFragment itself).
+ */
+type BuiltinTokenName = Exclude<keyof KnownThemeTokens, "color.danger" | "color.focus" | "chart.palette">;
+
+/**
  * Default token vocabulary (usage descriptions for KnownThemeTokens). For prompt presentation only and
  * **holds no values** (the values are owned by renderer-core's default theme and injected at render time).
  * Deprecated aliases (color.danger / color.focus) are not put on the generation vocabulary.
@@ -62,6 +69,13 @@ export interface DesignSystemGuide {
  * in indexed form (--kohaku-chart-palette-N).
  *
  * The ordering is the prompt output order itself (a contract to string-match the Python implementation; change both languages together).
+ *
+ * Typed `satisfies Record<BuiltinTokenName, string>` (a Required record over every documented known
+ * token, not `Partial<...> & Record<string, string>`) so both a typo in a key and an accidentally
+ * omitted known token are compile errors: the previous intersection's open `Record<string, string>`
+ * index signature absorbed any key, so neither case was ever caught. Product-specific custom tokens are
+ * still accepted where they actually are — DesignSystemGuide.tokens' own `Record<string, string>` — this
+ * table only documents the fixed built-in vocabulary and is not where a product adds its own tokens.
  */
 export const DEFAULT_TOKEN_DESCRIPTIONS: Readonly<Record<string, string>> = {
   "color.background": "page/root background",
@@ -107,7 +121,7 @@ export const DEFAULT_TOKEN_DESCRIPTIONS: Readonly<Record<string, string>> = {
   "shadow.md": "stronger elevation shadow (dialogs, toasts)",
   "motion.duration": "transition duration",
   "motion.easing": "transition easing",
-} satisfies Partial<Record<keyof KnownThemeTokens, string>> & Record<string, string>;
+} satisfies Record<BuiltinTokenName, string>;
 
 /** Token name → CSS custom property name (same conversion rule as renderer-core's themeTokensToCssVars). */
 export function tokenToCssVar(name: string): string {

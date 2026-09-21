@@ -137,6 +137,21 @@ describe("policyFingerprint", () => {
     expect(withKit).not.toBe(withoutKit);
   });
 
+  it("two kits differing only in the insertion order of `classes` produce different fingerprints", async () => {
+    // kit.classes is an object, and canonicalStringify's sortDeep sorts object keys before hashing, so
+    // without classesOrder in the fingerprint material two vocabularies that differ only in the order
+    // their classes were declared would hash identically — even though designKitPromptFragment iterates
+    // Object.entries(kit.classes) in that declaration order and therefore emits different L2 prompt bytes.
+    const entries = Object.entries(DEFAULT_KIT_VOCABULARY.classes);
+    const reordered: DesignKitVocabulary = {
+      ...DEFAULT_KIT_VOCABULARY,
+      classes: Object.fromEntries([...entries].reverse()),
+    };
+    const fpOriginal = await policyFingerprint({ designSystem: { kit: DEFAULT_KIT_VOCABULARY } });
+    const fpReordered = await policyFingerprint({ designSystem: { kit: reordered } });
+    expect(fpReordered).not.toBe(fpOriginal);
+  });
+
   it("two kits differing only in version produce different fingerprints", async () => {
     const kitV1: DesignKitVocabulary = DEFAULT_KIT_VOCABULARY;
     const kitV2: DesignKitVocabulary = { ...DEFAULT_KIT_VOCABULARY, version: "2" };
