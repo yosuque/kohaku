@@ -317,7 +317,7 @@ import { DEFAULT_KIT_VOCABULARY, type DesignSystemGuide } from "@kohaku-ui/compo
 const designSystem: DesignSystemGuide = {
   // 既定のトークン語彙(KnownThemeTokens 全網)に足す独自トークン・説明の上書き(任意)
   tokens: { "brand.accent": "アクセント色(バッジ・ハイライト)" },
-  // デザインキット語彙(モデルが組み立てに使うコンポーネントクラス + ユーティリティ)。ここでは組み込みキットを
+  // デザインキット語彙(モデルが組み立てに使うキットクラス + ユーティリティ)。ここでは組み込みキットを
   // 指定しているが、独自キットを持ち込む場合はステップ 3 を参照
   kit: DEFAULT_KIT_VOCABULARY,
   // 自然言語のスタイル規則(タイポグラフィ・余白・トーンなど)— 具体値(色や px 数値)は書かないこと。値が

@@ -92,7 +92,14 @@ class DesignKitVocabulary:
     version: str
     """Must equal the render-side kit's version."""
     classes: dict[str, str]
-    """Component class name → usage description, in prompt order."""
+    """Kit class name → usage description. Presented **sorted by name** (not insertion order) in the L2
+    prompt (Task 8/m-15): Python dict iteration keeps insertion order while JS's own key ordering treats
+    integer-like keys (e.g. a product kit's "2col") specially (they sort numerically-first, ahead of every
+    non-numeric key, regardless of declaration order), so the two languages could otherwise emit different
+    design_kit_prompt_fragment bytes for the identical vocabulary content. Sorting output makes the
+    fragment a pure function of *content*, not *insertion order* — see design_kit_prompt_fragment's own
+    note and policy_fingerprint's `kit` material (context.py), which dropped its `classesOrder` entry for
+    the same reason."""
     utilities: tuple[str, ...]
     """Utility class names that exist (exactly these; listed on one prompt line)."""
     namespaces: tuple[str, ...]
@@ -192,7 +199,7 @@ DEFAULT_KIT_VOCABULARY = DesignKitVocabulary(
     version="1",
     classes={
         "k-card": "surface container (border, large radius, subtle shadow, padding); put k-card-title first inside it",
-        "k-card-title": "title row of a k-card",
+        "k-card-title": "title block of a k-card (bold, spaced below)",
         "k-title": "section title text",
         "k-subtitle": "small muted text under a title",
         "k-muted": "muted (secondary) text color",
@@ -223,9 +230,9 @@ DEFAULT_KIT_VOCABULARY = DesignKitVocabulary(
         "k-grid-3": "three equal columns",
         "k-grid-4": "four equal columns",
         "k-label": "form field label",
-        "k-input": "text input",
-        "k-select": "select control",
-        "k-chart": "put on the <svg> root (width 100%, fixed viewBox); the chart classes below (k-axis … k-line) apply only to elements inside it",
+        "k-input": "text input, full width",
+        "k-select": "select control, full width",
+        "k-chart": "put on the <svg> root (full width, auto height, block-level; set your own fixed viewBox); the chart classes below (k-axis … k-line) apply only to elements inside it",
         "k-axis": "axis line (<line>/<path>)",
         "k-gridline": "dashed horizontal grid line",
         "k-tick": "tick label (<text>)",
@@ -272,35 +279,61 @@ DEFAULT_KIT_VOCABULARY = DesignKitVocabulary(
         "h-",
     ),
 )
-"""The built-in kit vocabulary (pairs with renderer-core's defaultDesignKit; same content, order and
-character-for-character description text as TS's DEFAULT_KIT_VOCABULARY — a cross-language string contract)."""
+"""The built-in kit vocabulary (pairs with renderer-core's defaultDesignKit; same content and
+character-for-character description text as TS's DEFAULT_KIT_VOCABULARY — a cross-language string
+contract). `classes`' declaration order here is otherwise arbitrary (Task 8/m-15):
+design_kit_prompt_fragment presents them sorted by name, not in this dict's insertion order."""
 
 
 def design_kit_prompt_fragment(kit: DesignKitVocabulary) -> str:
     """The "Design kit" section of the L2 prompt (character-for-character identical with TS's
     designKitPromptFragment). build_l2_prompt_static inserts it right after the design-system section, only
     when design_system.kit is set.
+
+    **Empty-input guard (Task 8/m-14):** a section whose backing list is empty is omitted entirely (its
+    header line included) rather than emitted with nothing after it — an empty `classes` used to leave a
+    dangling "- Component classes:" heading, and empty `utilities`/`namespaces` used to leave a
+    self-contradicting "…exist: " / "…names): " line trailing on a colon. This guard fires only for
+    genuinely empty input; the built-in `DEFAULT_KIT_VOCABULARY` has all three non-empty, so its own
+    fragment is unchanged.
+
+    **Skeleton fallback (Task 8/m-14):** when `kit.skeleton` is unset, the built-in `DEFAULT_KIT_SKELETON`
+    (which uses `k-card`/`k-grid-3`/`k-table`/… — classes that only exist in the *built-in* kit's CSS) is
+    shown only when `kit` **is** `DEFAULT_KIT_VOCABULARY` (identity, not a structural id/version match —
+    every caller that means to use the built-in kit already imports and passes this exact constant, e.g.
+    python/examples/sales-api/src/sales_api/design_system.py's `kit=DEFAULT_KIT_VOCABULARY`). For any other
+    kit with no `skeleton` of its own, the whole "Skeleton of a well-formed widget body" section is omitted
+    rather than falling back to the built-in one.
     """
     lines: list[str] = [
         f"## Design kit ({kit.id} v{kit.version})",
         "- The host injects a base stylesheet: body already has the font, text color, background and line-height; headings are scaled; :focus-visible rings are provided. Do not restate these",
-        "- Prefer the component classes below for common blocks; use the utilities for layout and spacing; write custom CSS only for what they do not cover, and then only with var(--kohaku-*) tokens",
-        "- Component classes:",
+        "- Prefer the kit classes below for common blocks; use the utilities for layout and spacing; write custom CSS only for what they do not cover, and then only with var(--kohaku-*) tokens",
     ]
-    for name, description in kit.classes.items():
-        lines.append(f"  - {name}: {description}")
-    lines.append(
-        "- Utilities (exactly these names exist; any other utility name has no effect): "
-        + ", ".join(kit.utilities)
+    # Sorted by name, not dict.items()' insertion order (m-15): see DesignKitVocabulary.classes' own
+    # docstring for why insertion order is not a cross-language-safe contract.
+    class_names = sorted(kit.classes)
+    if class_names:
+        lines.append("- Kit classes:")
+        for name in class_names:
+            lines.append(f"  - {name}: {kit.classes[name]}")
+    if kit.utilities:
+        lines.append(
+            "- Utilities (exactly these names exist; any other utility name has no effect): "
+            + ", ".join(kit.utilities)
+        )
+    if kit.namespaces:
+        lines.append(
+            "- Reserved prefixes (kit namespace; never use them for your own class names — pick names like "
+            "chart-…, panel-…): " + ", ".join(kit.namespaces)
+        )
+    skeleton = kit.skeleton if kit.skeleton is not None else (
+        DEFAULT_KIT_SKELETON if kit is DEFAULT_KIT_VOCABULARY else None
     )
-    lines.append(
-        "- Reserved prefixes (kit namespace; never use them for your own class names — pick names like "
-        "chart-…, panel-…): " + ", ".join(kit.namespaces)
-    )
-    lines.append("- Skeleton of a well-formed widget body (adapt it; do not copy verbatim):")
-    skeleton = kit.skeleton if kit.skeleton is not None else DEFAULT_KIT_SKELETON
-    for line in skeleton.split("\n"):
-        lines.append(f"  {line}")
+    if skeleton is not None:
+        lines.append("- Skeleton of a well-formed widget body (adapt it; do not copy verbatim):")
+        for line in skeleton.split("\n"):
+            lines.append(f"  {line}")
     return "\n".join(lines)
 
 

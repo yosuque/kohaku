@@ -176,7 +176,16 @@ export interface DesignKitVocabulary {
   id: string;
   /** Must equal the render-side kit's version. */
   version: string;
-  /** Component class name → usage description, in prompt order. */
+  /**
+   * Kit class name → usage description. Presented **sorted by name** (not insertion order) in the L2
+   * prompt (Task 8/m-15): JS's own key ordering treats integer-like keys (e.g. a product kit's "2col")
+   * specially (they sort numerically-first, ahead of every non-numeric key, regardless of declaration
+   * order) while Python dict iteration keeps insertion order, so the two languages could otherwise emit
+   * different `designKitPromptFragment` bytes for the identical vocabulary content. Sorting output makes
+   * the fragment a pure function of *content*, not *insertion order* — see `designKitPromptFragment`'s
+   * own note and `policyFingerprint`'s `kit` material (context.ts), which dropped its `classesOrder`
+   * entry for the same reason.
+   */
   classes: Record<string, string>;
   /** Utility class names that exist (exactly these; listed on one prompt line). */
   utilities: readonly string[];
@@ -270,7 +279,8 @@ const KIT_UTILITIES: readonly string[] = [
 /**
  * The built-in kit vocabulary (pairs with renderer-core's defaultDesignKit; the contract test in
  * packages/sandbox/test/design-kit-contract.test.ts pins every class here to a selector there).
- * Insertion order is the prompt order (a cross-language string contract with Python's DEFAULT_KIT_VOCABULARY).
+ * `classes`' declaration order here is otherwise arbitrary (Task 8/m-15): `designKitPromptFragment`
+ * presents them sorted by name, not in this object's insertion order.
  */
 export const DEFAULT_KIT_VOCABULARY: DesignKitVocabulary = {
   id: "kohaku",
@@ -278,7 +288,7 @@ export const DEFAULT_KIT_VOCABULARY: DesignKitVocabulary = {
   classes: {
     "k-card":
       "surface container (border, large radius, subtle shadow, padding); put k-card-title first inside it",
-    "k-card-title": "title row of a k-card",
+    "k-card-title": "title block of a k-card (bold, spaced below)",
     "k-title": "section title text",
     "k-subtitle": "small muted text under a title",
     "k-muted": "muted (secondary) text color",
@@ -312,10 +322,10 @@ export const DEFAULT_KIT_VOCABULARY: DesignKitVocabulary = {
     "k-grid-3": "three equal columns",
     "k-grid-4": "four equal columns",
     "k-label": "form field label",
-    "k-input": "text input",
-    "k-select": "select control",
+    "k-input": "text input, full width",
+    "k-select": "select control, full width",
     "k-chart":
-      "put on the <svg> root (width 100%, fixed viewBox); the chart classes below (k-axis … k-line) apply only to elements inside it",
+      "put on the <svg> root (full width, auto height, block-level; set your own fixed viewBox); the chart classes below (k-axis … k-line) apply only to elements inside it",
     "k-axis": "axis line (<line>/<path>)",
     "k-gridline": "dashed horizontal grid line",
     "k-tick": "tick label (<text>)",
@@ -367,22 +377,50 @@ export const DEFAULT_KIT_VOCABULARY: DesignKitVocabulary = {
  * Builds the "Design kit" section of the L2 prompt (buildL2PromptStatic inserts it right after the
  * design-system section, only when designSystem.kit is set). Character-for-character identical with
  * Python's design_kit_prompt_fragment.
+ *
+ * **Empty-input guard (Task 8/m-14):** a section whose backing list is empty is omitted entirely (its
+ * header line included) rather than emitted with nothing after it — an empty `classes` used to leave a
+ * dangling "- Component classes:" heading, and empty `utilities`/`namespaces` used to leave a
+ * self-contradicting "…exist: " / "…names): " line trailing on a colon. This guard fires only for
+ * genuinely empty input; the built-in `DEFAULT_KIT_VOCABULARY` has all three non-empty, so its own
+ * fragment is unchanged.
+ *
+ * **Skeleton fallback (Task 8/m-14):** when `kit.skeleton` is unset, the built-in `DEFAULT_KIT_SKELETON`
+ * (which uses `k-card`/`k-grid-3`/`k-table`/… — classes that only exist in the *built-in* kit's CSS) is
+ * shown only when `kit` **is** `DEFAULT_KIT_VOCABULARY` (identity, not a structural id/version match —
+ * every caller that means to use the built-in kit already imports and passes this exact constant, e.g.
+ * apps/sample-api/src/design-system.ts's `kit: DEFAULT_KIT_VOCABULARY`; see docs/user-guide.md's warning
+ * that an unrelated custom vocabulary must not be shown a skeleton built from classes it does not define).
+ * For any other kit with no `skeleton` of its own, the whole "Skeleton of a well-formed widget body"
+ * section is omitted rather than falling back to the built-in one.
  */
 export function designKitPromptFragment(kit: DesignKitVocabulary): string {
   const lines: string[] = [
     `## Design kit (${kit.id} v${kit.version})`,
     "- The host injects a base stylesheet: body already has the font, text color, background and line-height; headings are scaled; :focus-visible rings are provided. Do not restate these",
-    "- Prefer the component classes below for common blocks; use the utilities for layout and spacing; write custom CSS only for what they do not cover, and then only with var(--kohaku-*) tokens",
-    "- Component classes:",
+    "- Prefer the kit classes below for common blocks; use the utilities for layout and spacing; write custom CSS only for what they do not cover, and then only with var(--kohaku-*) tokens",
   ];
-  for (const [name, description] of Object.entries(kit.classes)) lines.push(`  - ${name}: ${description}`);
-  lines.push(
-    `- Utilities (exactly these names exist; any other utility name has no effect): ${kit.utilities.join(", ")}`,
-  );
-  lines.push(
-    `- Reserved prefixes (kit namespace; never use them for your own class names — pick names like chart-…, panel-…): ${kit.namespaces.join(", ")}`,
-  );
-  lines.push("- Skeleton of a well-formed widget body (adapt it; do not copy verbatim):");
-  for (const line of (kit.skeleton ?? DEFAULT_KIT_SKELETON).split("\n")) lines.push(`  ${line}`);
+  // Sorted by name, not Object.entries' insertion order (m-15): see DesignKitVocabulary.classes' own doc
+  // for why insertion order is not a cross-language-safe contract.
+  const classNames = Object.keys(kit.classes).sort();
+  if (classNames.length > 0) {
+    lines.push("- Kit classes:");
+    for (const name of classNames) lines.push(`  - ${name}: ${kit.classes[name]}`);
+  }
+  if (kit.utilities.length > 0) {
+    lines.push(
+      `- Utilities (exactly these names exist; any other utility name has no effect): ${kit.utilities.join(", ")}`,
+    );
+  }
+  if (kit.namespaces.length > 0) {
+    lines.push(
+      `- Reserved prefixes (kit namespace; never use them for your own class names — pick names like chart-…, panel-…): ${kit.namespaces.join(", ")}`,
+    );
+  }
+  const skeleton = kit.skeleton ?? (kit === DEFAULT_KIT_VOCABULARY ? DEFAULT_KIT_SKELETON : undefined);
+  if (skeleton != null) {
+    lines.push("- Skeleton of a well-formed widget body (adapt it; do not copy verbatim):");
+    for (const line of skeleton.split("\n")) lines.push(`  ${line}`);
+  }
   return lines.join("\n");
 }

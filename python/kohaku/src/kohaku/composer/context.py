@@ -169,17 +169,18 @@ def _kit_fingerprint_material(kit: DesignKitVocabulary) -> dict[str, object]:
     an ABSENT key (`UNDEFINED`), not `None`, when unset — mirroring the TS side, where an unset optional
     `skeleton?: string` is simply not a present key on the object literal (not an explicit `undefined`).
 
-    `classesOrder` mirrors TS's own addition: `kit.classes` is a dict, and canonical-json serialization
-    sorts object keys before hashing, so two vocabularies differing only in the insertion order of
-    `classes` would otherwise hash identically even though `design_kit_prompt_fragment` iterates
-    `kit.classes.items()` in that same insertion order and so emits different L2 prompt bytes. Carrying
-    the order explicitly (a list, which is not reordered) makes a reordering of the vocabulary always
-    separate the cache key, matching its effect on the prompt."""
+    No `classesOrder` key (removed by Task 8/m-15, mirroring the TS side): until then,
+    `design_kit_prompt_fragment` iterated `kit.classes.items()` in insertion order, so two vocabularies
+    differing only in that order emitted different L2 prompt bytes even though canonical-json
+    serialization sorts dict keys before hashing and so would otherwise hash them identically — a
+    `classesOrder` list (not reordered by the hash) used to be carried here to force the cache key to
+    separate on that difference too. Task 8/m-15 made `design_kit_prompt_fragment` present classes
+    **sorted by name** instead, so the prompt is now a pure function of `kit.classes`' *content*, not its
+    insertion order — `classesOrder` no longer corresponds to anything the prompt bytes depend on."""
     return {
         "id": kit.id,
         "version": kit.version,
         "classes": dict(kit.classes),
-        "classesOrder": list(kit.classes),
         "utilities": list(kit.utilities),
         "namespaces": list(kit.namespaces),
         "skeleton": kit.skeleton if kit.skeleton is not None else UNDEFINED,

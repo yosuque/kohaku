@@ -110,6 +110,76 @@ class TestVocabularyAndFragment:
         assert '  <div class="k-tile">x</div>' in fragment
         assert "Sales by region" not in fragment
 
+    def test_classes_sorted_by_name_not_insertion_order(self) -> None:
+        """m-15: mirrors the TS sibling test. Python dict iteration is insertion order, so this is the
+        side of the cross-language pair that would silently pass even with no sort at all if "2col" were
+        not included — "2col" only diverges from TS (which special-cases integer-like keys ahead of every
+        non-numeric one, sorted-or-not) once both languages actually sort by name."""
+        fragment = design_kit_prompt_fragment(
+            DesignKitVocabulary(
+                id="custom",
+                version="1",
+                classes={"zebra": "z", "2col": "two columns", "alpha": "a"},
+                utilities=(),
+                namespaces=(),
+            )
+        )
+        class_lines = [line for line in fragment.split("\n") if line.startswith("  - ")]
+        assert class_lines == ["  - 2col: two columns", "  - alpha: a", "  - zebra: z"]
+
+    def test_empty_sections_omitted_entirely(self) -> None:
+        """m-14: an empty classes/utilities/namespaces section is omitted (heading included), not left
+        dangling on a colon."""
+        fragment = design_kit_prompt_fragment(
+            DesignKitVocabulary(id="empty", version="1", classes={}, utilities=(), namespaces=())
+        )
+        assert "Kit classes" not in fragment
+        assert "Component classes" not in fragment
+        assert "Utilities (" not in fragment
+        assert "Reserved prefixes" not in fragment
+        for line in fragment.split("\n"):
+            assert not line.rstrip().endswith(":")
+
+    def test_no_skeleton_without_explicit_one_on_a_non_built_in_kit(self) -> None:
+        """m-14: without an explicit skeleton, a non-built-in kit gets no Skeleton section at all — never
+        the built-in k-* skeleton, which uses classes this kit does not define."""
+        fragment = design_kit_prompt_fragment(
+            DesignKitVocabulary(id="empty", version="1", classes={}, utilities=(), namespaces=())
+        )
+        assert "Skeleton of a well-formed widget body" not in fragment
+        assert "k-card" not in fragment
+        assert "Sales by region" not in fragment
+
+    def test_explicit_skeleton_still_honored(self) -> None:
+        fragment = design_kit_prompt_fragment(
+            DesignKitVocabulary(
+                id="empty",
+                version="1",
+                classes={},
+                utilities=(),
+                namespaces=(),
+                skeleton="<div>ok</div>",
+            )
+        )
+        assert "Skeleton of a well-formed widget body" in fragment
+        assert "  <div>ok</div>" in fragment
+
+    def test_structural_copy_of_default_kit_gets_no_default_skeleton(self) -> None:
+        """The built-in-skeleton fallback is an identity check (`kit is DEFAULT_KIT_VOCABULARY`), not a
+        structural id/version match. A caller that reconstructs an equivalent vocabulary (rather than
+        importing and passing the constant itself) gets no skeleton at all, not a silently-reused built-in
+        one."""
+        copy = DesignKitVocabulary(
+            id=DEFAULT_KIT_VOCABULARY.id,
+            version=DEFAULT_KIT_VOCABULARY.version,
+            classes=dict(DEFAULT_KIT_VOCABULARY.classes),
+            utilities=DEFAULT_KIT_VOCABULARY.utilities,
+            namespaces=DEFAULT_KIT_VOCABULARY.namespaces,
+        )
+        assert copy is not DEFAULT_KIT_VOCABULARY
+        fragment = design_kit_prompt_fragment(copy)
+        assert "Skeleton of a well-formed widget body" not in fragment
+
     def test_system_prompt_ends_with_design_brief(self) -> None:
         assert "Keep the design simple and readable" not in L2_SYSTEM_PROMPT
         assert "- Design brief (follow every point):" in L2_SYSTEM_PROMPT

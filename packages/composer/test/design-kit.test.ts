@@ -60,7 +60,7 @@ describe("designKitPromptFragment", () => {
     expect(designKitPromptFragment(DEFAULT_KIT_VOCABULARY)).toBe(EXPECTED_KIT_FRAGMENT);
   });
 
-  it("a custom kit is rendered with its own id/version, classes in insertion order, and an optional skeleton", () => {
+  it("a custom kit is rendered with its own id/version, an optional skeleton, and its own classes sorted by name", () => {
     const fragment = designKitPromptFragment({
       id: "acme",
       version: "3",
@@ -77,6 +77,78 @@ describe("designKitPromptFragment", () => {
     // Custom skeleton replaces the default one, indented the same way.
     expect(fragment).toContain('  <div class="k-tile">x</div>');
     expect(fragment).not.toContain("Sales by region");
+  });
+
+  it("m-15: classes are sorted by name, not Object.entries' insertion order — matters for an integer-like key", () => {
+    // JS treats an integer-like key ("2col") specially: Object.keys/entries would sort it *before* every
+    // non-numeric key regardless of declaration order, which is exactly the kind of divergence from
+    // Python's insertion-order dict iteration this sort exists to close. Declare "zebra" (a normal string
+    // key that sorts last) before "2col" and "alpha" (which both sort before it) to prove the fragment
+    // does not simply echo declaration order either.
+    const fragment = designKitPromptFragment({
+      id: "custom",
+      version: "1",
+      classes: { zebra: "z", "2col": "two columns", alpha: "a" },
+      utilities: [],
+      namespaces: [],
+    });
+    const classLines = fragment.split("\n").filter((l) => l.startsWith("  - "));
+    expect(classLines).toEqual(["  - 2col: two columns", "  - alpha: a", "  - zebra: z"]);
+  });
+
+  it("m-14: an empty classes/utilities/namespaces section is omitted entirely (heading included), not left dangling on a colon", () => {
+    const fragment = designKitPromptFragment({
+      id: "empty",
+      version: "1",
+      classes: {},
+      utilities: [],
+      namespaces: [],
+    });
+    expect(fragment).not.toContain("Kit classes");
+    expect(fragment).not.toContain("Component classes");
+    expect(fragment).not.toContain("Utilities (");
+    expect(fragment).not.toContain("Reserved prefixes");
+    // No line ends with a bare, self-contradicting trailing colon/paren from an emptied-out list.
+    for (const line of fragment.split("\n")) {
+      expect(line.trimEnd().endsWith(":")).toBe(false);
+    }
+  });
+
+  it("m-14: without an explicit skeleton, a non-built-in kit gets no Skeleton section at all (never the built-in k-* skeleton)", () => {
+    const fragment = designKitPromptFragment({
+      id: "empty",
+      version: "1",
+      classes: {},
+      utilities: [],
+      namespaces: [],
+    });
+    expect(fragment).not.toContain("Skeleton of a well-formed widget body");
+    expect(fragment).not.toContain("k-card");
+    expect(fragment).not.toContain("Sales by region");
+  });
+
+  it("m-14: an explicit skeleton is still honored on a kit with otherwise-empty sections", () => {
+    const fragment = designKitPromptFragment({
+      id: "empty",
+      version: "1",
+      classes: {},
+      utilities: [],
+      namespaces: [],
+      skeleton: "<div>ok</div>",
+    });
+    expect(fragment).toContain("Skeleton of a well-formed widget body");
+    expect(fragment).toContain("  <div>ok</div>");
+  });
+
+  it("m-14: a DEFAULT_KIT_VOCABULARY structural copy (same id/version/classes, not the same object) gets no default skeleton — only the exact constant does", () => {
+    // The built-in-skeleton fallback is an identity check (`kit === DEFAULT_KIT_VOCABULARY`), not a
+    // structural id/version match — see designKitPromptFragment's own doc for why. A caller that
+    // reconstructs an equivalent object (rather than importing and passing the constant itself) gets no
+    // skeleton at all, not a silently-reused built-in one.
+    const copy = { ...DEFAULT_KIT_VOCABULARY };
+    expect(copy).not.toBe(DEFAULT_KIT_VOCABULARY);
+    const fragment = designKitPromptFragment(copy);
+    expect(fragment).not.toContain("Skeleton of a well-formed widget body");
   });
 });
 

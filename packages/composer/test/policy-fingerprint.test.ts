@@ -155,11 +155,14 @@ describe("policyFingerprint", () => {
     expect(withKit).not.toBe(withoutKit);
   });
 
-  it("two kits differing only in the insertion order of `classes` produce different fingerprints", async () => {
-    // kit.classes is an object, and canonicalStringify's sortDeep sorts object keys before hashing, so
-    // without classesOrder in the fingerprint material two vocabularies that differ only in the order
-    // their classes were declared would hash identically — even though designKitPromptFragment iterates
-    // Object.entries(kit.classes) in that declaration order and therefore emits different L2 prompt bytes.
+  it("two kits differing only in the insertion order of `classes` now produce the SAME fingerprint (Task 8/m-15)", async () => {
+    // Before Task 8, designKitPromptFragment iterated Object.entries(kit.classes) in insertion order, so
+    // this fingerprint material used to carry an explicit `classesOrder` array (sortDeep sorts object
+    // keys before hashing, so `classes` alone would have hashed two such vocabularies identically even
+    // though they emitted different L2 prompt bytes). Task 8/m-15 made designKitPromptFragment present
+    // classes sorted by name instead, so the prompt is now a pure function of `classes`' *content*, not
+    // its insertion order — `classesOrder` was removed accordingly (context.ts), and insertion-order-only
+    // differences correctly stop separating the cache key too.
     const entries = Object.entries(DEFAULT_KIT_VOCABULARY.classes);
     const reordered: DesignKitVocabulary = {
       ...DEFAULT_KIT_VOCABULARY,
@@ -167,7 +170,7 @@ describe("policyFingerprint", () => {
     };
     const fpOriginal = await policyFingerprint({ designSystem: { kit: DEFAULT_KIT_VOCABULARY } });
     const fpReordered = await policyFingerprint({ designSystem: { kit: reordered } });
-    expect(fpReordered).not.toBe(fpOriginal);
+    expect(fpReordered).toBe(fpOriginal);
   });
 
   it("two kits differing only in version produce different fingerprints", async () => {
@@ -203,22 +206,32 @@ describe("policyFingerprint", () => {
 
   it("designSystem.kit alone is pinned to an exact fingerprint byte value (M-4 absolute pin)", async () => {
     // Absolute pin, unlike the relative-difference tests above (which only assert "differs from X" and
-    // would stay green even if the kit material's byte layout was reshuffled). If this goes red, the kit
-    // material's bytes changed — that silently invalidates the compose cache of every caller using a
-    // design kit. Fix the code so it doesn't; never re-pin this value.
+    // would stay green even if the kit material's byte layout was reshuffled). If this goes red for a
+    // reason OTHER than the Task 8/m-15 `classesOrder` removal noted below, the kit material's bytes
+    // changed — that silently invalidates the compose cache of every caller using a design kit. Fix the
+    // code so it doesn't; never re-pin this value.
+    //
+    // Task 8/m-15: this value WAS re-pinned once, deliberately, when `classesOrder` was dropped from the
+    // kit fingerprint material (context.ts's fingerprintDesignSystem) — designKitPromptFragment now sorts
+    // classes by name instead of relying on `Object.entries` insertion order, so the material carrying
+    // that order explicitly no longer corresponds to anything the prompt bytes depend on. Removing a key
+    // from the material necessarily changes every fingerprint that includes `kit`, which is the expected,
+    // one-time consequence of that change (recomputed via `policyFingerprint({ designSystem: { kit:
+    // DEFAULT_KIT_VOCABULARY } })` against the post-m-15 code) — do not re-pin it again after this.
     expect(await policyFingerprint({ designSystem: { kit: DEFAULT_KIT_VOCABULARY } })).toBe(
-      "d515948ce457d0d6",
+      "910dd7582fefced5",
     );
   });
 
   it("designSystem.kit + enforceKitClasses: false is pinned to an exact fingerprint byte value (M-4 absolute pin)", async () => {
     // Same rationale as the kit-alone pin above, extended to cover enforceKitClasses's own byte
-    // contribution once it participates.
+    // contribution once it participates. Also re-pinned once for the same Task 8/m-15 `classesOrder`
+    // removal — see that test's comment.
     expect(
       await policyFingerprint({
         designSystem: { kit: DEFAULT_KIT_VOCABULARY, enforceKitClasses: false },
       }),
-    ).toBe("7e6c3acf65782fa7");
+    ).toBe("3f6becbd7d40d6e0");
   });
 
   it("effort with only l1 set is pinned to an exact fingerprint byte value (M-4 absolute pin)", async () => {

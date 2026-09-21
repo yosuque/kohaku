@@ -539,17 +539,19 @@ function fingerprintDesignSystem(policy: ComposePolicy): unknown {
     // policyFingerprint's own doc comment above for why the three keys above it get away
     // with `null` instead.
     //
-    // `kit.classes` is folded in as-is below, but canonicalStringify's sortDeep
-    // (packages/spec-core/src/canonical-json.ts) sorts object keys before hashing, so two
-    // vocabularies differing only in the insertion order of `classes` would hash identically
-    // even though designKitPromptFragment iterates Object.entries in that same insertion
-    // order and therefore emits different L2 prompt bytes for each. `classesOrder` carries
-    // that order explicitly (an array, which sortDeep does not reorder) so a reordering of
-    // the vocabulary always separates the cache key, matching its effect on the prompt.
-    kit:
-      designSystem.kit != null
-        ? { ...designSystem.kit, classesOrder: Object.keys(designSystem.kit.classes) }
-        : undefined,
+    // `kit.classes` is folded in as-is below. Until Task 8/m-15, `designKitPromptFragment`
+    // iterated `Object.entries(kit.classes)` in insertion order, so two vocabularies differing
+    // only in that insertion order emitted different L2 prompt bytes even though
+    // canonicalStringify's sortDeep (packages/spec-core/src/canonical-json.ts) sorts object
+    // keys before hashing and so would otherwise hash two such vocabularies identically — hence
+    // a `classesOrder` array (which sortDeep does not reorder) used to be carried here to force
+    // the cache key to separate on that difference too. Task 8/m-15 made
+    // `designKitPromptFragment` present classes **sorted by name** instead, so the prompt
+    // itself is now a pure function of `kit.classes`' *content*, not its insertion order —
+    // `classesOrder` no longer corresponds to anything the prompt bytes depend on, so it was
+    // removed (its own regression test, "two kits differing only in the insertion order of
+    // classes", now asserts the opposite: that reordering does NOT change the fingerprint).
+    kit: designSystem.kit != null ? { ...designSystem.kit } : undefined,
     enforceKitClasses: designSystem.enforceKitClasses === false ? false : undefined,
   };
 }

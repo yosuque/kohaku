@@ -317,7 +317,7 @@ import { DEFAULT_KIT_VOCABULARY, type DesignSystemGuide } from "@kohaku-ui/compo
 const designSystem: DesignSystemGuide = {
   // custom tokens added to the default token vocabulary (the full KnownThemeTokens), and description overrides (optional)
   tokens: { "brand.accent": "accent color (badges, highlights)" },
-  // the design kit vocabulary (component classes + utilities the model composes with); the built-in kit
+  // the design kit vocabulary (kit classes + utilities the model composes with); the built-in kit
   // shown here, or bring your own — see step 3
   kit: DEFAULT_KIT_VOCABULARY,
   // natural-language style rules (typography, spacing, tone, etc.) — never a concrete value (a color, a

@@ -260,13 +260,17 @@ class TestDesignKitFingerprint:
         )
         assert with_kit != without_kit
 
-    def test_two_kits_differing_only_in_classes_insertion_order_produce_different_fingerprints(
+    def test_two_kits_differing_only_in_classes_insertion_order_produce_the_same_fingerprint(
         self,
     ) -> None:
-        """kit.classes is a dict, and the canonical-json hash sorts dict keys, so without classesOrder
-        two vocabularies differing only in declaration order would hash identically even though
-        design_kit_prompt_fragment iterates classes.items() in that order and emits different prompt
-        bytes for each."""
+        """Task 8/m-15 (mirrors the TS sibling test, now inverted the same way there): before Task 8,
+        design_kit_prompt_fragment iterated classes.items() in insertion order, so this fingerprint
+        material used to carry an explicit `classesOrder` list (canonical-json sorts dict keys before
+        hashing, so `classes` alone would have hashed two such vocabularies identically even though they
+        emitted different L2 prompt bytes). Task 8/m-15 made design_kit_prompt_fragment present classes
+        sorted by name instead, so the prompt is now a pure function of `classes`' *content*, not its
+        insertion order — `classesOrder` was removed from `_kit_fingerprint_material` accordingly, and
+        insertion-order-only differences correctly stop separating the cache key too."""
         reordered = DesignKitVocabulary(
             id=DEFAULT_KIT_VOCABULARY.id,
             version=DEFAULT_KIT_VOCABULARY.version,
@@ -279,7 +283,7 @@ class TestDesignKitFingerprint:
             ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY))
         )
         fp_reordered = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=reordered)))
-        assert fp_reordered != fp_original
+        assert fp_reordered == fp_original
 
     def test_two_kits_differing_only_in_version_produce_different_fingerprints(self) -> None:
         kit_v2 = DesignKitVocabulary(
@@ -308,26 +312,33 @@ class TestDesignKitFingerprint:
     def test_kit_alone_pinned_to_exact_value(self) -> None:
         """Absolute pin (M-4), unlike the relative-difference tests above (which only assert "differs
         from X" and would stay green even if the kit material's byte layout was reshuffled). If this
-        goes red, the kit material's bytes changed — that silently invalidates the compose cache of
-        every caller using a design kit. Fix the code so it doesn't; never re-pin this value. (Not
-        cross-language-pinned — same enforceTokenColors-default divergence as
-        test_kit_less_design_system_fingerprint_is_unchanged below; the TS-side pin for the identical
-        shape is a different literal, "d515948ce457d0d6".)"""
+        goes red for a reason OTHER than the Task 8/m-15 `classesOrder` removal noted below, the kit
+        material's bytes changed — that silently invalidates the compose cache of every caller using a
+        design kit. Fix the code so it doesn't; never re-pin this value. (Not cross-language-pinned —
+        same enforceTokenColors-default divergence as test_kit_less_design_system_fingerprint_is_unchanged
+        below; the TS-side pin for the identical shape is a different literal, "910dd7582fefced5".)
+
+        Task 8/m-15: this value WAS re-pinned once, deliberately, when `classesOrder` was dropped from
+        `_kit_fingerprint_material` (context.py) for the same reason as the TS sibling pin — see that
+        test's comment in packages/composer/test/policy-fingerprint.test.ts. Recomputed via
+        `policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))`
+        against the post-m-15 code — do not re-pin it again after this."""
         assert (
             policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))
-            == "cdb241d966765782"
+            == "c101030ddefc2d38"
         )
 
     def test_kit_plus_enforce_kit_classes_false_pinned_to_exact_value(self) -> None:
         """Same rationale as test_kit_alone_pinned_to_exact_value, extended to cover
-        enforceKitClasses's own byte contribution once it participates."""
+        enforceKitClasses's own byte contribution once it participates. Also re-pinned once for the same
+        Task 8/m-15 `classesOrder` removal."""
         assert (
             policy_fingerprint(
                 ComposePolicy(
                     designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=False)
                 )
             )
-            == "5227fd6679be65b0"
+            == "2b1cc36e98021fa2"
         )
 
     def test_kit_less_design_system_fingerprint_is_unchanged(self) -> None:

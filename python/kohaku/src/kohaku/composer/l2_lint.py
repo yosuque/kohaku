@@ -157,7 +157,7 @@ def collect_l2_issues(
             issues.append(
                 "L2_UNKNOWN_CLASS: these class names look like design-kit classes but do not exist in the kit: "
                 + ", ".join(unknown)
-                + ". Use only the component classes and utilities listed in the Design kit section, or rename "
+                + ". Use only the kit classes and utilities listed in the Design kit section, or rename "
                 "them to your own classes and style those in <style> with var(--kohaku-*) tokens"
             )
     return issues
@@ -182,7 +182,7 @@ _STRING_LITERAL_RE = re.compile(r"([\"'`])([^\"'`]*)\1")
 
 def collect_unknown_kit_classes(html: str, kit: DesignKitVocabulary) -> list[str]:
     """Collects the sorted, unique class names in the HTML that fall inside the kit's namespaces but are not
-    defined by the vocabulary (component classes or utilities) — port of TS's collectUnknownKitClasses.
+    defined by the vocabulary (kit classes or utilities) — port of TS's collectUnknownKitClasses.
     Exported (via kohaku.composer's package init) for products/tests that want to pre-check a
     hand-written artifact — not for the Python sidecar, which reuses only collect_script_syntax_issues
     from the TS side (see this module's own docstring for why: no JS execution engine on this side).
