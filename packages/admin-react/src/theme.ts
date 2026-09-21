@@ -48,6 +48,15 @@ export const V = {
   disabledSurface: "var(--kohaku-color-disabled-surface, #c7d2fe)",
   /** Withdraw / unpublish button border (their text reuses `negativeText`, same hex as the sample's literal). */
   negativeBorder: "var(--kohaku-color-negative-border, #fca5a5)",
+  // --- Task 4 fix round 1: `--app-subtle` / `--app-track` had no matching V entry and were provisionally
+  // remapped to `muted`/`surface`, but the sample's own light-mode values (`app-theme.css`) differ enough from
+  // those (contrast on the promotion-lifecycle pill dropped from ~6.9:1 to ~4.6:1) that a characterization port
+  // needs its own tokens, same R7 treatment as above. Sample-web's `buildTheme(mode)` must supply
+  // `color.subtle`/`color.track` for dark-mode parity once it adopts this package (tracked for Task 8). --------
+  /** De-emphasized text distinct from `muted` (tier-color fallback in Lineage, promotion-lifecycle pill text). */
+  subtle: "var(--kohaku-color-subtle, #475569)",
+  /** Flat neutral track background (promotion-lifecycle pill background in Analytics). */
+  track: "var(--kohaku-color-track, #f1f5f9)",
 } as const;
 
 /** Inline style for the console root: the theme's tokens as `--kohaku-*` custom properties (empty when no theme). */

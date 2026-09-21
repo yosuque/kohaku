@@ -19,6 +19,25 @@ export const SUMMARY = {
   promotionPolicy: { fixationMinUses: 3, promotionMinUses: 2 },
 };
 
+// Distinct, non-overlapping counts/percentages per section so each assertion below can only be satisfied by
+// that section actually rendering (fix round 1, Finding 2: the brief's own test never independently exercised
+// the tier-distribution bars, the cache breakdown, the fallback breakdown or the promotion-lifecycle section).
+const FULL_SUMMARY = {
+  window: { limit: 150, truncated: true },
+  summary: {
+    events: 30,
+    composed: 8,
+    tiers: { L0: 1, L1: 2, L2: 7 }, // 10%, 20%, 70%
+    cache: { hit: 5, miss: 3, bypass: 2, fixated: 0, other: 10 }, // 25%, 15%, 10%, 0%, 50%
+    fallback: { total: 5, byKind: { generation: 4, negotiation: 1, unspecified: 0 }, rate: 0.42 }, // 80%, 20%, 0%
+    durationMs: { count: 10, p50: 100, p95: 333, p99: 380, max: 400 },
+    topIntents: [{ intentHash: "sha256:1111111111111111", canonical: "reporting.dash", count: 9 }],
+    promotions: { generated: 7, used: 2, nominated: 5, judged: 1, reviewed: 9, published: 0, withdrawn: 3 },
+    fixations: { fixated: 4, unfixated: 6 },
+  },
+  promotionPolicy: { fixationMinUses: 3, promotionMinUses: 2 },
+};
+
 describe("AnalyticsTab", () => {
   it("renders the stat cards, tier bars and top intents from the summary", async () => {
     renderInAdmin(<AnalyticsTab />, { handlers: { "GET /analytics/summary": () => jsonResponse(SUMMARY) } });
@@ -29,6 +48,34 @@ describe("AnalyticsTab", () => {
     // The short hash is `intentHash.replace("sha256:", "#").slice(0, 10)` (10 chars, matching the original
     // sample's AnalyticsTab.tsx exactly): "sha256:abcdef0123456789" -> "#abcdef012".
     expect(screen.getByText("#abcdef012")).toBeTruthy();
+  });
+
+  it("renders the tier-distribution bars, cache breakdown, fallback breakdown and promotion lifecycle", async () => {
+    const view = renderInAdmin(<AnalyticsTab />, {
+      handlers: { "GET /analytics/summary": () => jsonResponse(FULL_SUMMARY) },
+    });
+    await screen.findByText(defaultAdminMessages.analytics.description(150, true, 30));
+
+    expect(screen.getByText(defaultAdminMessages.analytics.tierDistribution)).toBeTruthy();
+    expect(screen.getByText(defaultAdminMessages.analytics.cacheBreakdown)).toBeTruthy();
+    expect(screen.getByText(defaultAdminMessages.analytics.fallbackBreakdown)).toBeTruthy();
+    expect(screen.getByText(defaultAdminMessages.analytics.promotionLifecycle)).toBeTruthy();
+
+    const text = view.container.textContent ?? "";
+    // Tier distribution (L0/L1/L2 = 1/2/7 of 10).
+    expect(text).toContain("1(10%)");
+    expect(text).toContain("2(20%)");
+    expect(text).toContain("7(70%)");
+    // Cache breakdown (hit/miss/bypass/other = 5/3/2/10 of 20).
+    expect(text).toContain("5(25%)");
+    expect(text).toContain("3(15%)");
+    expect(text).toContain("10(50%)");
+    // Fallback breakdown (generation/negotiation = 4/1 of 5).
+    expect(text).toContain("4(80%)");
+    expect(text).toContain("1(20%)");
+    // Promotion lifecycle pills ("<label> <strong>{n}</strong>").
+    expect(text).toContain("generated 7");
+    expect(text).toContain("reviewed 9");
   });
 
   it("notifies the denied message on 403 and stays on the loading card", async () => {

@@ -34,7 +34,7 @@ export function LineageTab(): ReactNode {
               <td
                 style={{
                   padding: "5px 8px",
-                  color: TIER_COLOR[String(e.payload["tier"])] ?? V.muted,
+                  color: TIER_COLOR[String(e.payload["tier"])] ?? V.subtle,
                   fontWeight: 700,
                 }}
               >

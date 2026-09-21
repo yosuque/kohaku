@@ -140,8 +140,8 @@ export function AnalyticsTab(): ReactNode {
             <span
               key={label}
               style={{
-                background: V.surface,
-                color: V.muted,
+                background: V.track,
+                color: V.subtle,
                 borderRadius: 6,
                 padding: "4px 10px",
                 fontSize: 12,
