@@ -17,6 +17,8 @@ export function buildSpec(partial: {
   refVersions?: Record<string, string>;
   intent?: typeof INTENT | typeof INTENT2;
   kohaku?: "0.1" | "0.2";
+  /** Merged over the default PROVENANCE (e.g. `{ kit: { id: "kohaku", version: "1" } }`). */
+  provenance?: Record<string, unknown>;
 }): UISpec {
   return parseSpec({
     kohaku: partial.kohaku ?? (partial.state != null ? "0.2" : "0.1"),
@@ -26,7 +28,7 @@ export function buildSpec(partial: {
     ...(partial.state != null ? { state: partial.state } : {}),
     components: partial.components,
     events: partial.events ?? [],
-    provenance: PROVENANCE,
+    provenance: { ...PROVENANCE, ...partial.provenance },
   });
 }
 

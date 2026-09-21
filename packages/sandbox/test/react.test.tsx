@@ -117,3 +117,78 @@ describe("SandboxFrame chrome (kitCss / badge threading)", () => {
     expect(container.textContent).toContain("L2 SANDBOXED");
   });
 });
+
+// Task 3 (M-2): the `kit` prop's resolver form, and the rollback use case it exists for — a host telling
+// an artifact composed under an old design kit apart from one composed under the current kit, on a per-node
+// basis, purely from spec.provenance (no side channel needed).
+describe("SandboxFrame kit (DesignKitStylesheet / resolver / rollback)", () => {
+  const V1_CSS = ".k-card{border:1px solid gray}";
+  const V2_CSS = ".k-card{border:2px solid black}";
+
+  function specWithKit(kit?: { id: string; version: string }): UISpec {
+    return {
+      events: [],
+      provenance: { tier: "L1", composedBy: "test", cache: "miss", ...(kit != null ? { kit } : {}) },
+    } as unknown as UISpec;
+  }
+
+  it("a DesignKitStylesheet object value is passed through to mountSandbox's kit as-is", () => {
+    renderFrame({ kit: { id: "kohaku", version: "2", css: V2_CSS } });
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kit).toEqual({ id: "kohaku", version: "2", css: V2_CSS });
+  });
+
+  it("a bare string value behaves like kitCss (passed through as kit, no version identity)", () => {
+    renderFrame({ kit: ".acme{}" });
+    expect(mountCalls[0]!.kit).toBe(".acme{}");
+  });
+
+  it("spec.provenance.kit is threaded through to mountSandbox's provenanceKit", () => {
+    renderFrame({ spec: specWithKit({ id: "kohaku", version: "1" }) });
+    expect(mountCalls[0]!.provenanceKit).toEqual({ id: "kohaku", version: "1" });
+  });
+
+  it("no provenanceKit is passed when the Spec carries no provenance.kit", () => {
+    renderFrame({ spec: specWithKit() });
+    expect(mountCalls[0]!.provenanceKit).toBeUndefined();
+  });
+
+  it("rollback: a resolver picks the kit matching each node's own provenance.kit, so an old artifact keeps its old styling after the surface-wide default moves on", () => {
+    const oldSpec = specWithKit({ id: "kohaku", version: "1" });
+    const newSpec = specWithKit({ id: "kohaku", version: "2" });
+    const resolver = (_n: ComponentNode, spec: UISpec): { id: string; version: string; css: string } =>
+      spec.provenance.kit?.version === "1"
+        ? { id: "kohaku", version: "1", css: V1_CSS }
+        : { id: "kohaku", version: "2", css: V2_CSS };
+
+    const { rerender } = render(
+      <SandboxFrame node={node("query://a")} spec={oldSpec} bridge={bridge} kit={resolver} />,
+    );
+    expect(mountCalls).toHaveLength(1);
+    expect(mountCalls[0]!.kit).toEqual({ id: "kohaku", version: "1", css: V1_CSS });
+    expect(mountCalls[0]!.provenanceKit).toEqual({ id: "kohaku", version: "1" });
+
+    // A second, independently-rendered old-provenance node still resolves to the old kit — the resolver is
+    // driven by each Spec's own provenance, not by "whatever the surface last rendered".
+    render(<SandboxFrame node={node("query://c")} spec={oldSpec} bridge={bridge} kit={resolver} />);
+    expect(mountCalls[1]!.kit).toEqual({ id: "kohaku", version: "1", css: V1_CSS });
+
+    // Re-rendering the first node with a Spec composed under the new kit re-mounts and resolves to v2 —
+    // the resolver reacts to a change in its own inputs (spec.provenance.kit), not to global surface state.
+    rerender(<SandboxFrame node={node("query://a")} spec={newSpec} bridge={bridge} kit={resolver} />);
+    expect(destroyed).toContain(0);
+    const last = mountCalls[mountCalls.length - 1]!;
+    expect(last.kit).toEqual({ id: "kohaku", version: "2", css: V2_CSS });
+    expect(last.provenanceKit).toEqual({ id: "kohaku", version: "2" });
+  });
+
+  it("a resolver returning undefined means 'use the default kit' (kit key omitted, same as an absent kit prop)", () => {
+    renderFrame({ kit: () => undefined });
+    expect(mountCalls[0]!.kit).toBeUndefined();
+  });
+
+  it("a resolver returning '' means 'inject none', threaded through as an explicit empty kit", () => {
+    renderFrame({ kit: () => "" });
+    expect(mountCalls[0]!.kit).toBe("");
+  });
+});

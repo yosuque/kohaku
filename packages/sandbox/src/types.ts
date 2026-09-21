@@ -21,7 +21,12 @@ export interface SandboxBridge {
 
 export interface SandboxTelemetryEvent {
   componentId: string;
-  kind: "ready" | "error" | "fetch" | "denied";
+  /**
+   * `kit-mismatch`: the resolved `kit`'s `{id, version}` (see `MountSandboxOptions.kit`) disagrees with
+   * `provenanceKit` (the `Spec.provenance.kit` the markup was actually written against). Fail-open —
+   * reported for observability only; rendering proceeds unchanged (SPEC-KIT-001, spec/SPEC.md §2.1).
+   */
+  kind: "ready" | "error" | "fetch" | "denied" | "kit-mismatch";
   detail?: string;
 }
 
@@ -99,6 +104,19 @@ export interface SandboxHandle {
   onStateChange(listener: (state: SandboxState, detail?: string) => void): void;
 }
 
+/**
+ * A design-kit stylesheet carrying version identity, letting the sandbox detect a mismatch against
+ * `Spec.provenance.kit` (see `MountSandboxOptions.kit` / `provenanceKit`) instead of only injecting CSS
+ * blind. `id`/`version` are presentational metadata only — they play no role in which selectors the CSS
+ * defines; the mismatch check compares them against `provenanceKit` purely to warn, never to alter what
+ * gets injected.
+ */
+export interface DesignKitStylesheet {
+  id: string;
+  version: string;
+  css: string;
+}
+
 export interface MountSandboxOptions {
   container: HTMLElement;
   componentId: string;
@@ -121,8 +139,24 @@ export interface MountSandboxOptions {
   /**
    * The design-kit stylesheet injected into the srcdoc after the theme variables and before the generated
    * CSS (so generated styles can override it). `undefined` injects renderer-core's `defaultDesignKit.css`;
-   * `""` injects nothing; any other string is the product's own kit (trusted CSS — it is escaped against
-   * `</style>` breakout but not otherwise sanitized). Pairs with composer's `DesignSystemGuide.kit`.
+   * `""` injects nothing; a bare string is the product's own kit with no version identity (trusted CSS —
+   * escaped against `</style>` breakout but not otherwise sanitized; never checked against
+   * `provenanceKit`, the same behavior as the deprecated `kitCss` below); a `DesignKitStylesheet`
+   * additionally carries `id`/`version`, compared against `provenanceKit` (a mismatch is reported via
+   * `bridge.onTelemetry({kind: "kit-mismatch"})` but never blocks rendering — fail-open, SPEC-KIT-001).
+   * Supersedes `kitCss` when both are given. Pairs with composer's `DesignSystemGuide.kit`.
+   */
+  kit?: DesignKitStylesheet | string;
+  /**
+   * The design kit identity the generated markup was actually written against (`Spec.provenance.kit`, when
+   * the composer recorded one — see `ProvenanceSchema.kit`). Used only to detect a version mismatch
+   * against `kit` above when `kit` is a `DesignKitStylesheet`; passing this without `kit` carrying its own
+   * `id`/`version` performs no comparison (there is nothing to compare against).
+   */
+  provenanceKit?: { id: string; version: string };
+  /**
+   * @deprecated Use `kit` instead (a bare string passed to `kit` is equivalent). Ignored whenever `kit` is
+   * set. Kept only for backward compatibility with callers that predate `kit`.
    */
   kitCss?: string;
 }

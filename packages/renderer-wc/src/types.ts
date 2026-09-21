@@ -8,7 +8,7 @@ import type {
   SpecStateStore,
   SurfaceEvent,
 } from "@kohaku-ui/renderer-core";
-import type { SandboxBridge, SandboxPolicy } from "@kohaku-ui/sandbox";
+import type { DesignKitStylesheet, SandboxBridge, SandboxPolicy } from "@kohaku-ui/sandbox";
 import type { ComponentNode, JsonObject, ThemeTokens, UISpec } from "@kohaku-ui/spec-core";
 
 export type { ActionPhase, SurfaceEvent } from "@kohaku-ui/renderer-core";
@@ -27,10 +27,27 @@ export interface SandboxSurfaceContext {
   /** Origin/permission policy forwarded to mountSandbox (see MountSandboxOptions.policy). */
   policy?: SandboxPolicy;
   /**
-   * The design-kit stylesheet forwarded to mountSandbox (see MountSandboxOptions.kitCss): `undefined`
-   * injects renderer-core's `defaultDesignKit.css`, `""` injects nothing, any other string is the
-   * product's own kit (trusted CSS — it is escaped against `</style>` breakout but not otherwise
-   * sanitized).
+   * The design-kit stylesheet forwarded to mountSandbox's `kit` (see MountSandboxOptions.kit):
+   * `undefined` injects renderer-core's `defaultDesignKit.css`, `""` injects nothing, a bare string is
+   * the product's own kit with no version identity (trusted CSS — it is escaped against `</style>`
+   * breakout but not otherwise sanitized, and never checked against a Spec's `provenance.kit`), and a
+   * `DesignKitStylesheet` additionally carries `id`/`version`, compared against each node's own
+   * `spec.provenance.kit` (a mismatch is reported via `bridge.onTelemetry({kind: "kit-mismatch"})` but
+   * never blocks rendering — fail-open, SPEC-KIT-001).
+   *
+   * Also accepts a **resolver** `(node, spec) => …`, called per L2 node with that node's own
+   * `ComponentNode`/`UISpec` (`mountSandboxNode` already has both) — the per-node rollback hook (M-2),
+   * mirroring `SandboxFrame`'s `kit` prop on the React side (`packages/sandbox/src/react.tsx`) so the two
+   * renderers offer the same host-side capability. A resolver returning `undefined` means "use the
+   * default kit" and `""` means "inject none", exactly like the non-function forms.
+   */
+  kit?:
+    | DesignKitStylesheet
+    | string
+    | ((node: ComponentNode, spec: UISpec) => DesignKitStylesheet | string | undefined);
+  /**
+   * @deprecated Use `kit` instead (a bare string passed to `kit` is equivalent). Ignored whenever `kit` is
+   * set. Kept only for backward compatibility with callers that predate `kit`.
    */
   kitCss?: string;
   /**

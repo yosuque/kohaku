@@ -60,6 +60,12 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
     .filter((e) => e.on.startsWith(`${node.id}.`))
     .map((e) => e.on.slice(node.id.length + 1));
 
+  // Resolve the M-2 rollback hook (mirrors SandboxFrame's `kit` prop on the React side): a function form
+  // is called with this node's own ComponentNode/UISpec. `<kohaku-surface>` rebuilds its whole RenderRuntime
+  // on every Spec swap (see RenderRuntime's own doc comment), so — unlike React — no re-mount-dependency
+  // tracking is needed here: a Spec change already produces a fresh mountSandboxNode call end to end.
+  const resolvedKit = typeof rt.sandbox.kit === "function" ? rt.sandbox.kit(node, rt.spec) : rt.sandbox.kit;
+
   const handle = mountSandbox({
     container,
     componentId: node.id,
@@ -69,7 +75,9 @@ export function mountSandboxNode(rt: RenderRuntime, parent: ParentNode, node: Co
     initialProps: node.props,
     bridge: rt.sandbox.bridge,
     ...(rt.sandbox.policy != null ? { policy: rt.sandbox.policy } : {}),
-    ...(rt.sandbox.kitCss != null ? { kitCss: rt.sandbox.kitCss } : {}),
+    ...(resolvedKit !== undefined ? { kit: resolvedKit } : {}),
+    ...(resolvedKit === undefined && rt.sandbox.kitCss != null ? { kitCss: rt.sandbox.kitCss } : {}),
+    ...(rt.spec.provenance?.kit != null ? { provenanceKit: rt.spec.provenance.kit } : {}),
     // Inject theme tokens into the srcdoc (the same handoff as SandboxFrame). A theme change rides on the surface's
     // full re-render (rt rebuild → teardown / mount), so no subscription is needed here.
     theme: rt.theme,

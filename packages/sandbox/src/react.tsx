@@ -16,7 +16,7 @@ import {
 import type { ComponentNode, ThemeTokens, UISpec } from "@kohaku-ui/spec-core";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { mountSandbox } from "./mount.js";
-import type { SandboxBridge, SandboxPolicy, SandboxState } from "./types.js";
+import type { DesignKitStylesheet, SandboxBridge, SandboxPolicy, SandboxState } from "./types.js";
 
 /**
  * The React wrapper for a sandbox.html node. Used by injecting it into renderer-react's renderSandbox.
@@ -35,9 +35,31 @@ export function SandboxFrame(props: {
   /**
    * The design-kit stylesheet injected into the srcdoc after the theme variables and before the generated
    * CSS (so generated styles can override it). `undefined` injects renderer-core's `defaultDesignKit.css`;
-   * `""` injects nothing; any other string is the product's own kit (trusted CSS — it is escaped against
-   * `</style>` breakout but not otherwise sanitized). A change in value re-mounts the iframe to rebuild the
-   * srcdoc, the same as `theme`.
+   * `""` injects nothing; a bare string is the product's own kit with no version identity (trusted CSS —
+   * escaped against `</style>` breakout but not otherwise sanitized, never checked against `spec.provenance.kit`,
+   * the same behavior as the deprecated `kitCss` below); a `DesignKitStylesheet` additionally carries
+   * `id`/`version`, compared against `spec.provenance.kit` (a mismatch is reported via
+   * `bridge.onTelemetry({kind: "kit-mismatch"})` but never blocks rendering — fail-open, SPEC-KIT-001).
+   *
+   * Also accepts a **resolver** `(node, spec) => …`, called with this frame's own `node`/`spec` — the
+   * per-node rollback hook (M-2): a host can read `spec.provenance.kit` / `spec.provenance.generatorVersion`
+   * and pick a different kit for an artifact composed under an old kit than for one composed under the
+   * current kit, so rolling the surface-wide kit back does not force every already-generated artifact
+   * (cached / fixated / promoted) to lose its styling in lockstep — see docs/user-guide.md's design-kit
+   * section for the full rollback walkthrough. The resolver is called on every render (its result, not its
+   * identity, drives re-mounting — see the `kitKey` dependency below), so keep it cheap and pure; a resolver
+   * returning `undefined` means "use the default kit" and `""` means "inject none", exactly like the
+   * non-function forms.
+   *
+   * A change in the resolved value re-mounts the iframe to rebuild the srcdoc, the same as `theme`.
+   */
+  kit?:
+    | DesignKitStylesheet
+    | string
+    | ((node: ComponentNode, spec: UISpec) => DesignKitStylesheet | string | undefined);
+  /**
+   * @deprecated Use `kit` instead (a bare string passed to `kit` is equivalent). Ignored whenever `kit` is
+   * set. Kept only for backward compatibility with callers that predate `kit`.
    */
   kitCss?: string;
   /**
@@ -79,6 +101,19 @@ export function SandboxFrame(props: {
   // rather than reference identity (so passing a fresh object every render from the parent does not misfire iframe rebuilds).
   const themeKey = props.theme != null ? JSON.stringify(props.theme) : "";
 
+  // Resolve the M-2 rollback hook: a function form of `kit` is called with this frame's own node/spec on
+  // every render (see the prop's own doc comment for why that must stay cheap and pure). `undefined` here
+  // means "props.kit itself is absent" (fall through to kitCss/the default), not "the resolver chose the
+  // default" — a resolver that returns undefined for that reason produces the exact same undefined, and the
+  // two are meant to behave identically (both mean "use the default kit").
+  const resolvedKit = typeof props.kit === "function" ? props.kit(props.node, props.spec) : props.kit;
+  const kitKey =
+    resolvedKit === undefined
+      ? ""
+      : typeof resolvedKit === "string"
+        ? resolvedKit
+        : JSON.stringify(resolvedKit);
+
   useEffect(() => {
     if (containerRef.current == null || artifact?.inline == null) return;
     const handle = mountSandbox({
@@ -91,7 +126,9 @@ export function SandboxFrame(props: {
       bridge: props.bridge,
       ...(props.policy != null ? { policy: props.policy } : {}),
       ...(props.theme != null ? { theme: props.theme } : {}),
-      ...(props.kitCss != null ? { kitCss: props.kitCss } : {}),
+      ...(resolvedKit !== undefined ? { kit: resolvedKit } : {}),
+      ...(resolvedKit === undefined && props.kitCss != null ? { kitCss: props.kitCss } : {}),
+      ...(props.spec.provenance?.kit != null ? { provenanceKit: props.spec.provenance.kit } : {}),
     });
     handle.onStateChange((next, d) => {
       setState(next);
@@ -109,9 +146,14 @@ export function SandboxFrame(props: {
     // Including node.id and $ref as dependencies ensures it is rebuilt whenever they are swapped out.
     // (allowedEvents is derived from node.id and spec.events, so it is sufficiently covered by these two dependencies.)
     // themeKey is the dependency for rebuilding the srcdoc on a change in theme content (light/dark switch).
-    // props.kitCss is included alongside it for the same reason (it too is baked into the srcdoc).
+    // props.kitCss is included alongside it for the same reason (it too is baked into the srcdoc) — kept
+    // even though resolvedKit takes precedence over it, because a caller that only ever sets kitCss (never
+    // kit) must still re-mount when its value changes (kitKey stays "" the whole time in that case, since
+    // it tracks only the resolved `kit` prop). kitKey is the analogous dependency for `kit` (including its
+    // resolver form): a serialized key rather than resolvedKit itself, since a resolver is commonly an
+    // inline function whose reference changes every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [artifact?.sha256, props.node.id, props.node.data?.$ref, themeKey, props.kitCss]);
+  }, [artifact?.sha256, props.node.id, props.node.data?.$ref, themeKey, kitKey, props.kitCss]);
 
   if (artifact?.inline == null) {
     return <Notice tone="error" text={sandboxArtifactMissingText(messages)} theme={theme} />;
