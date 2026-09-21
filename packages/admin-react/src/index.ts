@@ -11,6 +11,7 @@ export {
 export { useAnalyticsSummary, useFixations, useLineage, usePromotions } from "./hooks.js";
 export { type AdminMessages, defaultAdminMessages } from "./messages.js";
 export { AnalyticsTab } from "./tabs/AnalyticsTab.js";
+export { FixationsTab } from "./tabs/FixationsTab.js";
 export { LineageTab } from "./tabs/LineageTab.js";
 export { adminThemeStyle, V as adminVars } from "./theme.js";
 export {
