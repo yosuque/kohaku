@@ -10,6 +10,7 @@ value, and do not hand-copy it into another test — that is exactly the duplica
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from typing import Any
 
 from kohaku.composer import (
@@ -295,6 +296,28 @@ class TestUnknownClassLint:
         assert len(issues) == 1 and issues[0].startswith("L2_UNKNOWN_CLASS")
         assert "k-panel, k-tile, rounded-xl, text-gray-700" in issues[0]
         assert collect_l2_issues(_KIT_HTML, kit=DEFAULT_KIT_VOCABULARY) == []
+
+    def test_a_duck_typed_kit_without_id_or_version_is_accepted(self) -> None:
+        """m-16: collect_unknown_kit_classes/collect_l2_issues take `KitClassesVocabulary` (a Protocol of
+        just `classes`/`utilities`/`namespaces`), not the full `DesignKitVocabulary` dataclass, so a caller
+        that duck-types a kit object with no `id`/`version` — the same object TS's
+        `Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">` already accepted — both
+        type-checks under mypy (this file is part of `uv run mypy`) and works at runtime. Deliberately not
+        a `DesignKitVocabulary` instance."""
+
+        @dataclass(frozen=True)
+        class _BareKit:
+            classes: dict[str, str]
+            utilities: tuple[str, ...]
+            namespaces: tuple[str, ...]
+
+        bare = _BareKit(classes={"k-thing": "a thing"}, utilities=("gap-2",), namespaces=("k-",))
+        assert collect_unknown_kit_classes(_widget('<div class="k-thing k-ghost"></div>'), bare) == [
+            "k-ghost"
+        ]
+        assert collect_unknown_kit_classes(_widget('<div class="k-thing gap-2"></div>'), bare) == []
+        issues = collect_l2_issues(_widget('<div class="k-ghost"></div>'), kit=bare)
+        assert len(issues) == 1 and issues[0].startswith("L2_UNKNOWN_CLASS")
 
 
 class TestComposeWiring:
