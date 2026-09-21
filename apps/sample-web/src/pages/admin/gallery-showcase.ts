@@ -16,6 +16,14 @@ export const GALLERY_CANNED_REF = "query://gallery/canned";
  * through the real SandboxFrame (same iframe, CSP, theme and kit injection as production), so it is the
  * kit's living style guide and the visual regression material for the kit CSS. It must pass the L2 lint
  * with the kit and enforceTokenColors (see test/gallery-showcase.test.ts) — no raw colors, no unknown classes.
+ *
+ * The second `<svg class="k-chart hidden" style="display:none">` (below) exists purely to carry the
+ * axis/gridline/tick/series/bar/line chart classes that the visible chart's own markup never uses on
+ * their own elements (the real bar chart draws them dynamically at render time, in the `<script>` below) —
+ * without it, `test/gallery-showcase.test.ts`'s "every kit class appears somewhere in this artifact"
+ * coverage assertion could not see them statically. The inline `style="display:none"` (not only the
+ * `hidden` kit class) keeps it hidden even when the gallery's kit toggle sets `kitCss: ""` and the `.k-*`
+ * rules that would otherwise hide it are absent.
  */
 export const GALLERY_SHOWCASE_HTML = [
   "<!DOCTYPE html><html><head><title>Design kit showcase</title>",

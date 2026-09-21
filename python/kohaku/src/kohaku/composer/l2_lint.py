@@ -183,8 +183,9 @@ _STRING_LITERAL_RE = re.compile(r"([\"'`])([^\"'`]*)\1")
 def collect_unknown_kit_classes(html: str, kit: DesignKitVocabulary) -> list[str]:
     """Collects the sorted, unique class names in the HTML that fall inside the kit's namespaces but are not
     defined by the vocabulary (component classes or utilities) — port of TS's collectUnknownKitClasses.
-    Exported for the Python sidecar parity test and for products that want to pre-check a hand-written
-    artifact.
+    Exported (via kohaku.composer's package init) for products/tests that want to pre-check a
+    hand-written artifact — not for the Python sidecar, which reuses only collect_script_syntax_issues
+    from the TS side (see this module's own docstring for why: no JS execution engine on this side).
     """
     known = set(kit.classes) | set(kit.utilities)
     found: set[str] = set()

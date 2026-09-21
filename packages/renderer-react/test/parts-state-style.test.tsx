@@ -44,10 +44,10 @@ describe("RendererProvider injects the theme-neutral L1 state stylesheet once", 
     expect(countStateStyles()).toBe(1);
   });
 
-  // ADDENDUM (controller ruling, Task 5 review finding I-2): a nested action button passes whether or
-  // not the "own root" companion selectors (button[data-kohaku], [data-kohaku]:focus-visible) exist --
-  // only a Spec whose ROOT component is action.button proves they actually bite. jsdom cannot simulate
-  // :hover, so this is selector-matching (Element.matches), not an interaction test.
+  // (Task 5 review finding I-2): a nested action button passes whether or not the "own root" companion
+  // selectors (button[data-kohaku], [data-kohaku]:focus-visible) exist -- only a Spec whose ROOT
+  // component is action.button proves they actually bite. jsdom cannot simulate :hover, so this is
+  // selector-matching (Element.matches), not an interaction test.
   it("the state stylesheet's button and focus rules match a ROOT-level action button", () => {
     const { container } = render(
       <RendererProvider value={{ impls: createCoreRegistry(), theme: {} }}>

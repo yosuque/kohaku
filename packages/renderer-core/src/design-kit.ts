@@ -3,10 +3,12 @@
  *
  * `defaultDesignKit.css` is injected by the sandbox (mountSandbox's kitCss, default) into the srcdoc
  * AFTER the theme variables (sandboxThemeCss) and BEFORE the generated CSS, so generated styles can
- * override it. It holds no raw colour values — every colour is a `var(--kohaku-color-*)` reference or
- * `currentColor` (SPEC-ENV-003); dimensions are tokens except the deliberate literals: hairline 1px
- * borders, the 2px focus ring, the 480px grid breakpoint and the SVG chart geometry (stroke widths /
- * dash pattern).
+ * override it. It holds no raw colour values — every colour is a `var(--kohaku-color-*)` reference,
+ * `currentColor`, or the keyword `transparent` (SPEC-ENV-003 concerns concrete colour *values*, and
+ * `transparent` carries none); dimensions are tokens except the deliberate literals: hairline 1px
+ * borders, the 2px focus ring, the `.k-badge` 2px vertical padding, the `.k-grid` 160px `minmax` column
+ * floor, the 480px grid breakpoint, the `.k-btn:active` .5px press nudge, and the SVG chart geometry
+ * (stroke widths / dash pattern).
  *
  * The class vocabulary the composer presents to the model (composer's DEFAULT_KIT_VOCABULARY) is the
  * other wheel of this pair; `packages/sandbox/test/design-kit-contract.test.ts` pins that every class

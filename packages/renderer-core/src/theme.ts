@@ -22,7 +22,10 @@ type ThemeDefaults = Required<Omit<KnownThemeTokens, "color.danger" | "color.foc
  * Non-color token defaults shared verbatim by light and dark (only shadow.* differs per theme). The
  * values are CSS strings with units so both renderers inline the identical text (parity by construction).
  * The font sizes match the px values the L1 parts used before tokenization (13.5 body, 12.5 captions,
- * 28 KPI values), so adopting the tokens does not shift the existing look.
+ * 28 KPI values) — but adopting these tokens does deliberately shift the existing look in a few places
+ * that had no equivalent literal before: the metric (KPI) now renders as a card, tables gained a muted
+ * 1px header divider, and `shadow.md` (dialogs/toasts) was raised to a stronger elevation. See
+ * `.changeset/l1-parts-tokens.md` for the full list of visual changes this release carries.
  */
 const NON_COLOR_DEFAULTS = {
   "font.family.sans":
@@ -406,8 +409,10 @@ export function resolveSizing(theme: ThemeTokens): SizingTokens {
 
 /**
  * The resolved default-light sizing bag. Presenters take `sizing: SizingTokens = DEFAULT_SIZING` as
- * their last parameter, so every call site that predates sizing tokens (renderer-react / renderer-wc
- * call sites that do not yet pass a `sizing` argument) keeps resolving the exact same values it always
+ * their last parameter. Every renderer-react / renderer-wc call site now passes its own resolved
+ * `sizing` explicitly (there is no remaining call site that omits it) — the default exists for backward
+ * compatibility with **external** consumers: a product calling a presenter style function directly
+ * (outside the two renderers) without a `sizing` argument still resolves the exact same values it always
  * has, without needing to be touched.
  */
 export const DEFAULT_SIZING: SizingTokens = resolveSizing({});

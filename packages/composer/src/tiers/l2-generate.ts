@@ -132,8 +132,10 @@ const STRING_LITERAL_RE = /(["'`])([^"'`]*)\1/g;
 
 /**
  * Collects the sorted, unique class names in the HTML that fall inside the kit's namespaces but are not
- * defined by the vocabulary (component classes or utilities). Exported for the Python sidecar parity
- * test and for products that want to pre-check a hand-written artifact.
+ * defined by the vocabulary (component classes or utilities). Exported alongside collectL2Issues from
+ * the package barrel (index.ts) for products/tests that want to pre-check a hand-written artifact
+ * (e.g. apps/sample-web's gallery showcase test) — not for the Python sidecar, which reuses only
+ * collectScriptSyntaxIssues (no JS execution engine on that side to run this check against).
  */
 export function collectUnknownKitClasses(
   html: string,

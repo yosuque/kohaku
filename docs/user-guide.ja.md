@@ -307,7 +307,7 @@ composer の `policy.fixedSpecs` に固定 Spec テンプレート(`apps/sample-
 
 ### L2 にデザインシステムを適用する
 
-L2 自由生成(カスタムコンポーネント)にプロダクトのデザインシステムを効かせる 3 点セット(加えて、独自のデザインキットを持ち込む任意の 4 番目のステップ)。生成物は色を直書きせずトークン参照 `var(--kohaku-*)` で書かれ、値は描画時に注入されるため、ライト/ダーク切替・ブランド変更に**再生成なしで追従**します。
+L2 自由生成(カスタムコンポーネント)にプロダクトのデザインシステムを効かせる 4 ステップのセット(3 番目が任意: 独自のデザインキットを持ち込む)。生成物は色を直書きせずトークン参照 `var(--kohaku-*)` で書かれ、値は描画時に注入されるため、ライト/ダーク切替・ブランド変更に**再生成なしで追従**します。
 
 1. **デザインシステムを定義して compose policy に配線**(サンプル: `apps/sample-api/src/design-system.ts`):
 
@@ -346,13 +346,15 @@ const policy = {
 // WC: <kohaku-surface> の context.theme(または theme プロパティ)に設定するだけ
 ```
 
-3. **(任意)独自キットを持ち込む**: 語彙を `designSystem.kit`(`{ id, version, classes, utilities, namespaces }`)として、スタイルシートを `kitCss`(`SandboxFrame` の prop / `<kohaku-surface>` の `context.sandbox.kitCss`)として渡す。色はすべて `var(--kohaku-color-*)` 参照か `currentColor` で書き、色の直書きはしないこと。寸法もトークンで書くが、組み込みキット自身が使っているような意図的なリテラル(1px のヘアラインボーダー、2px のフォーカスリング、480px のグリッドブレークポイント、SVG チャートの寸法)は例外とする。`display:flex`・`color-mix()`・`filter` のようなレイアウトやエフェクトは制限されない(組み込みキットもこの 3 つを使っている)。ブランドの Web フォントは `@font-face` の data URI として埋め込める。`kitCss: ""` で組み込みキットを完全に無効化できる。クラスの意味を変更したら `version`(および `generatorVersion`)を bump する。
+3. **(任意)独自キットを持ち込む**: 語彙を `designSystem.kit`(`{ id, version, classes, utilities, namespaces }`)として、スタイルシートを `kitCss`(`SandboxFrame` の prop / `mountSandbox` のオプション / `<kohaku-surface>` の `context.sandbox.kitCss`)として渡す。`classes`/`utilities` に列挙したクラス名と、CSS が実際にセレクタを持つクラス名は**双方向で一致**させること。語彙にあって CSS に対応セレクタがないクラスは無地のまま描画され(モデルには存在すると伝えているのに何も描画されない)、逆に CSS にあって語彙に載っていないクラスは `L2_UNKNOWN_CLASS` lint では検出できない(この lint はモデルが書いたクラスを語彙と突き合わせるだけで、CSS 側は見ていない)。`namespaces` は lint が「キットのクラスらしい」とみなすプレフィックス(`"k-"`・`"gap-"` など)であり、そのいずれかで始まりながら `classes`/`utilities` に無いクラスは差し戻される。どの名前空間にも属さないクラスは、キットの有無に関わらず lint から常に無視される。`skeleton`(自分のクラスを使った本文フラグメント)も併せて渡すこと — 渡さないと、モデルが知らされていない `k-*` クラス名で書かれた組み込みキットのスケルトンが構成例として提示されてしまい、存在しないクラスをモデルに使わせる原因になる。自分の語彙/CSS ペアを固定する際のテンプレートとしては `packages/sandbox/test/design-kit-contract.test.ts` を参照。CSS は色をすべて `var(--kohaku-color-*)` 参照・`currentColor`・キーワード `transparent` のいずれかで書き、色の直書きはしないこと。寸法もトークンで書くが、組み込みキット自身が使っているような意図的なリテラル(1px のヘアラインボーダー、2px のフォーカスリング、480px のグリッドブレークポイント、SVG チャートの寸法)は例外とする。`display:flex`・`color-mix()`・`filter` のようなレイアウトやエフェクトは制限されない(組み込みキットもこの 3 つを使っている)。ブランドの Web フォントは `@font-face` の data URI として埋め込める。`kitCss: ""` で組み込みキットを完全に無効化できる。クラスの意味を変更したら `version`(および `generatorVersion`)を bump する。
 
 4. **確認**: L2 生成(例: チャットで自由形式の要求)→ 生成 HTML に `var(--kohaku-color-*)` が使われ、ヘッダのテーマ切替でカスタムコンポーネントの配色が追従すれば OK。色直書きが混ざると `L2_RAW_COLOR` として、語彙にないキット名前空間のクラス名が混ざると同様に `L2_UNKNOWN_CLASS` として自動で修復再試行されます。
 
 theme 未指定でも既定ライトテーマが sandbox に常時注入されるため、`var()` が未定義に落ちることはありません。Python 実装(`python/kohaku`)も同一機能(`ComposePolicy(designSystem=DesignSystemGuide(...))`)を持ちます(サンプル: `python/examples/sales-api/src/sales_api/design_system.py`)。
 
-モデルなしでキットを目視確認したいときは、サンプルアプリの Admin → Gallery タブ(`apps/sample-web/src/pages/admin/GalleryTab.tsx`)を使います。手書きのショーケースアーティファクト(`gallery-showcase.ts`)を実際の `SandboxFrame` で描画し、キットの全コンポーネントクラスを網羅しています。チェックボックスでキットの適用有無を切り替えられるため差分を並べて確認でき、その下のペーストボックスは任意の生成済み L2 アーティファクトを同じ方法でプレビューします。表示はアプリヘッダーのライト/ダーク設定に追従し、データは缶詰データなので、このタブは API もモデルも必要としません。
+**アップグレード時の注意**: 組み込みキットの CSS はすべての sandbox マウントに注入されます。これにはすでに compose キャッシュにあるもの・すでに fixation 済みのもの・すでにカタログへ昇格済みのアーティファクトも含まれます。この既存アーティファクトへの影響を避けたい場合は、`kitCss: ""`(`SandboxFrame` の prop / `mountSandbox` のオプション / `<kohaku-surface>` の `context.sandbox.kitCss`)がサーフェスごとのオプトアウトになります。
+
+モデルなしでキットを目視確認したいときは、サンプルアプリの Admin → Gallery タブ(`apps/sample-web/src/pages/admin/GalleryTab.tsx`)を使います。手書きのショーケースアーティファクト(`gallery-showcase.ts`)を実際の `SandboxFrame` で描画し、キットの全コンポーネントクラスを網羅しています。チェックボックスでキットの適用有無を切り替えるとプレビューが再マウントされ差分を確認でき、その下のペーストボックスは任意の生成済み L2 アーティファクトを同じ方法でプレビューします。表示はアプリヘッダーのライト/ダーク設定に追従し、データは缶詰データなので、このタブは API もモデルも必要としません。
 
 ### クライアントから叩く(型付きホストクライアント SDK)
 
@@ -562,4 +564,4 @@ export function buildTheme(mode: "light" | "dark"): ThemeTokens {
 }
 ```
 
-これを `RendererProvider` の `theme`(React)/ `surface.theme`(Web Components)に渡します。色トークン語彙は `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `chart.axis` / `chart.palette`、および非推奨 alias `color.danger`→negative・予約 `color.focus`→primary です。独自トークン(語彙外のキー)も自由に足せます(`ThemeTokens` は開いた型)。非色トークン(`font.family.*` / `font.size.*` / `space.*` / `radius.*` / `shadow.*` / `motion.*`)も語彙に含まれ、単位付きの CSS 文字列を取ります(角ばった印象のブランドなら `"radius.md": "4px"` のように指定)。両方の全一覧・既定値・dark の AA 方針は設計書 §7.2 を参照してください。非色トークンは組み込み部品にも反映されます(例: `"radius.md": "2px"` にするとすべてのボタンと入力欄が角ばります)。`L2 SANDBOXED` バッジは `SandboxFrame` の `badge="hidden"` / `context.sandbox.badge` で非表示にできます。
+これを `RendererProvider` の `theme`(React)/ `surface.theme`(Web Components)に渡します。色トークン語彙は `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `chart.axis` / `chart.palette`、および非推奨 alias `color.danger`→negative・予約 `color.focus`→primary です。独自トークン(語彙外のキー)も自由に足せます(`ThemeTokens` は開いた型)。非色トークン(`font.family.*` / `font.size.*` / `space.*` / `radius.*` / `shadow.*` / `motion.*`)も語彙に含まれ、単位付きの CSS 文字列を取ります(角ばった印象のブランドなら `"radius.md": "4px"` のように指定)。両方の全一覧・既定値・dark の AA 方針は設計書 §7.2 を参照してください。非色トークンは組み込み部品にも反映されます(例: `"radius.md": "2px"` にするとすべてのボタンと入力欄が角ばります)。`L2 SANDBOXED` バッジは `SandboxFrame` の `badge="hidden"` / `context.sandbox.badge` で非表示にできますが、他の方法でサンドボックス化を示せる画面でのみ非表示にしてください。またブランドテーマが `color.warning.surface` / `color.warning.text`(ピルの背景・文字色のペア)を上書きしている場合は、この組み合わせが現状バッジのみで使われている点を踏まえ、両者の可読性を保つようにしてください。

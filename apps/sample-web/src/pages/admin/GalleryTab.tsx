@@ -91,6 +91,8 @@ export function GalleryTab(): ReactNode {
   // value (same reasoning as pastedHash above).
   const pastedRef = useMemo(() => extractPastedRef(debouncedPasted, GALLERY_CANNED_REF), [debouncedPasted]);
 
+  // undefined = inject the default kit, "" = inject nothing; see galleryKitCss's own doc comment and
+  // MountSandboxOptions.kitCss (packages/sandbox/src/types.ts).
   const kitCss = galleryKitCss(kitOn);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

@@ -35,7 +35,10 @@ export interface SandboxSurfaceContext {
   kitCss?: string;
   /**
    * Whether the "L2 SANDBOXED" badge row (the pill + explanatory text above the iframe) is rendered.
-   * Defaults to `"visible"`; `"hidden"` omits the row entirely.
+   * Defaults to `"visible"`; set `"hidden"` only on a surface that signals sandboxing some other way (see
+   * `SandboxFrame`'s own `badge` doc comment, packages/sandbox/src/react.tsx, for the full caveat —
+   * including keeping the `color.warning.surface` / `color.warning.text` pair readable together if a
+   * brand theme overrides it, since the badge is the only consumer of that pairing today).
    */
   badge?: "visible" | "hidden";
 }

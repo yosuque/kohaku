@@ -42,8 +42,11 @@ export function SandboxFrame(props: {
   kitCss?: string;
   /**
    * Whether the "L2 SANDBOXED" badge row (the pill + explanatory text above the iframe) is rendered.
-   * Defaults to `"visible"`; `"hidden"` omits the row entirely (e.g. for a product surface that
-   * signals sandboxing some other way).
+   * Defaults to `"visible"`; set `"hidden"` only on a surface that signals sandboxing some other way —
+   * hiding it removes the one on-screen cue that the content is arbitrary/generated. If a brand theme
+   * overrides `color.warning.surface` / `color.warning.text` (the pair the pill and its text draw from),
+   * keep that pair readable together (the pill's background against its own text), since the badge is
+   * the only consumer of that pairing today.
    */
   badge?: "visible" | "hidden";
   /**
