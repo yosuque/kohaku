@@ -221,6 +221,12 @@ class TestUnknownClassLint:
         ]
         assert collect_unknown_kit_classes(_KIT_HTML, DEFAULT_KIT_VOCABULARY) == []
 
+    def test_is_up_and_a_misspelling_of_it_are_both_ignored(self) -> None:
+        """Neither is-up nor is-upp starts with a reserved namespace prefix, so both are ignored —
+        not because of any is-up/is-down special-casing (there is none)."""
+        html = _widget('<div class="k-kpi-delta is-up"></div><div class="is-upp"></div>')
+        assert collect_unknown_kit_classes(html, DEFAULT_KIT_VOCABULARY) == []
+
     def test_ignores_interpolated_and_concatenation_prefix_class_names(self) -> None:
         html = _widget(
             '<div class="k-bar k-series-${i}"></div><div class="k-series-"></div>',

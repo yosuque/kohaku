@@ -150,6 +150,10 @@ describe("L2 prompt integration", () => {
     const prompt = buildL2Prompt({ ...args, designSystem: { kit: DEFAULT_KIT_VOCABULARY } });
     const dsAt = prompt.indexOf("## Design system");
     const kitAt = prompt.indexOf("## Design kit");
+    // indexOf returns -1 (not found) rather than throwing, so a section that silently vanished from the
+    // prompt would still pass `kitAt > dsAt` if dsAt were also -1 — assert both are actually present first.
+    expect(dsAt).toBeGreaterThan(-1);
+    expect(kitAt).toBeGreaterThan(-1);
     expect(kitAt).toBeGreaterThan(dsAt);
     expect(kitAt).toBeLessThan(prompt.indexOf("## Output language"));
     expect(prompt).toContain(EXPECTED_KIT_FRAGMENT);

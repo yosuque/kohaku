@@ -108,7 +108,14 @@ export async function renderReact(
     );
   });
   await flushReact();
-  return { container, rootEl: container.firstElementChild as Element };
+  // Select the part carrying `data-kohaku` explicitly rather than assuming it is
+  // `container.firstElementChild` — that assumption only held because React 19 hoists
+  // RendererProvider's state `<style href="kohaku-parts-state" precedence>` (see
+  // packages/renderer-react/src/context.tsx) into `<head>`, leaving the part as the sole child of
+  // `container`. Querying by the attribute every part's root carries keeps this helper correct even if
+  // that hoisting behavior ever changes (a different React version, or a host opting the stylesheet out).
+  const rootEl = container.querySelector("[data-kohaku]") as Element;
+  return { container, rootEl };
 }
 
 /** Renders the WC surface and returns the root component node (the topmost under .kohaku-root). */

@@ -50,8 +50,13 @@ describe("collectUnknownKitClasses", () => {
     ]);
   });
 
-  it("ignores the model's own classes outside the kit namespaces and the is-up/is-down modifiers", () => {
+  it("ignores the model's own classes outside the kit namespaces", () => {
     expect(collectUnknownKitClasses(KIT_HTML, DEFAULT_KIT_VOCABULARY)).toEqual([]);
+  });
+
+  it("is-up and a misspelling of it (is-upp) are both ignored — neither starts with a reserved namespace", () => {
+    const html = widget('<div class="k-kpi-delta is-up"></div><div class="is-upp"></div>');
+    expect(collectUnknownKitClasses(html, DEFAULT_KIT_VOCABULARY)).toEqual([]);
   });
 
   it("ignores interpolated and concatenation-prefix class names", () => {
