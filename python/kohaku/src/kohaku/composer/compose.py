@@ -475,6 +475,7 @@ async def _try_fixed_spec(prepared: PreparedCompose, ctx: ComposeContext) -> Gen
         return None
 
     template = fixed(intent, refs.handles) if callable(fixed) else fixed
+    kit = policy.designSystem.kit if policy.designSystem is not None else None
     assembled = _assemble_spec(
         intent=intent,
         refs=refs,
@@ -482,6 +483,8 @@ async def _try_fixed_spec(prepared: PreparedCompose, ctx: ComposeContext) -> Gen
         events=[e.to_wire() for e in template.events],
         tier="L0",
         cache=prepared.cache_label,
+        generator_version=policy.generatorVersion,
+        kit={"id": kit.id, "version": kit.version} if kit is not None else None,
         # Carry the fixed template's state into the delivered Spec (preserve visibleWhen's initial state).
         state=template.state,
     )
@@ -501,8 +504,10 @@ def _build_spec_from_outcome(
     intent = prepared.intent
     refs = prepared.refs
     key = prepared.key
+    policy = prepared.policy
 
     if isinstance(outcome, _TierOutcomeOk):
+        kit = policy.designSystem.kit if policy.designSystem is not None else None
         assembled = _assemble_spec(
             intent=intent,
             refs=refs,
@@ -511,6 +516,8 @@ def _build_spec_from_outcome(
             tier=outcome.tier,
             cache=prepared.cache_label,
             model=outcome.model,
+            generator_version=policy.generatorVersion,
+            kit={"id": kit.id, "version": kit.version} if kit is not None else None,
         )
         return post_and_validate(assembled, refs, ctx)
 
@@ -1038,8 +1045,13 @@ def _assemble_spec(
     tier: Literal["L0", "L1", "L2"],
     cache: Literal["miss", "bypass"],
     model: str | None = None,
+    generator_version: str | None = None,
+    kit: dict[str, str] | None = None,
     state: dict[str, Any] | None = None,
 ) -> UISpec:
+    """Port of assemble.ts's assembleSpec. `generator_version`/`kit` mirror TS's stamping of
+    ComposePolicy.generatorVersion / designSystem.kit onto provenance whenever the caller passes them,
+    regardless of tier — see compose.ts's assembleSpec doc for why (Task 3, M-1/M-2)."""
     wire: dict[str, Any] = {
         "kohaku": SPEC_VERSION,
         "intent": intent.to_wire(),
@@ -1054,6 +1066,8 @@ def _assemble_spec(
             "composedBy": COMPOSER_ID,
             **({"model": model} if model is not None else {}),
             "cache": cache,
+            **({"generatorVersion": generator_version} if generator_version is not None else {}),
+            **({"kit": kit} if kit is not None else {}),
         },
     }
     return UISpec.model_validate(wire)

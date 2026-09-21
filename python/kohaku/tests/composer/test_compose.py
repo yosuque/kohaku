@@ -20,6 +20,8 @@ from kohaku.composer import (
     ComposeObserver,
     ComposeOptions,
     ComposePolicy,
+    DesignKitVocabulary,
+    DesignSystemGuide,
     IntentComposeInput,
     RecomposePatch,
     compose,
@@ -371,6 +373,91 @@ class TestBudget:
             result = await compose(_INTENT_INPUT, ctx)
             # fail-open: generation continues and a normal Spec is returned
             assert result.spec.provenance.fallback is None
+
+        asyncio.run(run())
+
+
+class TestProvenanceKitStamping:
+    """Port of the TS side's "compose: provenance.generatorVersion / kit stamping" describe block
+    (Task 3, M-1/M-2)."""
+
+    _KIT = DesignKitVocabulary(id="kohaku", version="1", classes={}, utilities=(), namespaces=())
+
+    def test_l1_stamps_both_fields_when_the_policy_sets_them(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            llm = FakeLlm(objects=[_l1_draft()])
+            policy = ComposePolicy(
+                generatorVersion="p1/gpt-5", designSystem=DesignSystemGuide(kit=self._KIT)
+            )
+            ctx = _ctx(llm, storage, policy=policy)
+
+            result = await compose(_INTENT_INPUT, ctx)
+            assert result.spec.provenance.tier == "L1"
+            assert result.spec.provenance.generatorVersion == "p1/gpt-5"
+            assert result.spec.provenance.kit is not None
+            assert result.spec.provenance.kit.to_wire() == {"id": "kohaku", "version": "1"}
+
+        asyncio.run(run())
+
+    def test_neither_field_present_when_unset(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            llm = FakeLlm(objects=[_l1_draft()])
+            result = await compose(_INTENT_INPUT, _ctx(llm, storage))
+            assert result.spec.provenance.generatorVersion is None
+            assert result.spec.provenance.kit is None
+
+        asyncio.run(run())
+
+    def test_l0_fixed_spec_path_stamps_too_regardless_of_tier(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            template = UISpec.model_validate(
+                {
+                    "kohaku": "0.2",
+                    "intent": {"canonical": "x.y", "params": {}, "hash": "sha256:" + "0" * 64},
+                    "dataVersion": "ignored",
+                    "components": [{"id": "root", "type": "presentMarkdown", "props": {"markdown": "x"}}],
+                    "provenance": {"tier": "L0", "composedBy": "t", "cache": "miss"},
+                }
+            )
+
+            class _Fixed:
+                async def lookup(self, intent: Intent) -> Any:
+                    return template
+
+            llm = FakeLlm()
+            policy = ComposePolicy(
+                fixedSpecs=_Fixed(),
+                generatorVersion="p1/gpt-5",
+                designSystem=DesignSystemGuide(kit=self._KIT),
+            )
+            result = await compose(_INTENT_INPUT, _ctx(llm, storage, policy=policy))
+            assert result.spec.provenance.tier == "L0"
+            assert result.spec.provenance.generatorVersion == "p1/gpt-5"
+            assert result.spec.provenance.kit is not None
+            assert result.spec.provenance.kit.to_wire() == {"id": "kohaku", "version": "1"}
+
+        asyncio.run(run())
+
+    def test_cache_hit_returns_the_composed_time_kit_unchanged(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            llm = FakeLlm(objects=[_l1_draft()])
+            policy = ComposePolicy(designSystem=DesignSystemGuide(kit=self._KIT))
+            ctx = _ctx(llm, storage, policy=policy)
+
+            first = await compose(_INTENT_INPUT, ctx)
+            assert first.spec.provenance.cache == "miss"
+            assert first.spec.provenance.kit is not None
+            assert first.spec.provenance.kit.to_wire() == {"id": "kohaku", "version": "1"}
+
+            second = await compose(_INTENT_INPUT, ctx)
+            assert second.spec.provenance.cache == "hit"
+            assert second.spec.provenance.kit is not None
+            assert second.spec.provenance.kit.to_wire() == {"id": "kohaku", "version": "1"}
+            assert len([c for c in llm.calls if c.kind == "object"]) == 1
 
         asyncio.run(run())
 

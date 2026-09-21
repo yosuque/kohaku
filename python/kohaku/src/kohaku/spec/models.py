@@ -355,6 +355,18 @@ class ProvenanceFallback(_WireModel):
         return out
 
 
+class ProvenanceKit(_WireModel):
+    """The design kit the generated markup was written against (port of TS's inline `{id, version}` object
+    on Provenance.kit). Lets a render-side surface compare its own kit identity against this and detect a
+    version mismatch instead of rendering unstyled markup silently (spec/SPEC.md §2.1, SPEC-KIT-001)."""
+
+    id: str
+    version: str
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"id": self.id, "version": self.version}
+
+
 class Provenance(_WireModel):
     """Provenance information directly tied to View Lineage. Records the tier, the composing agent, and cache hits."""
 
@@ -364,8 +376,18 @@ class Provenance(_WireModel):
     cache: Literal["hit", "miss", "bypass", "fixated"]
     fallback: ProvenanceFallback | None = None
     composedAt: Annotated[str, StringConstraints(pattern=ISO_DATETIME_PATTERN)] | None = None
+    generatorVersion: str | None = None
+    """The host's generator identity in effect at composition time (prompt revision / model / design-system generation)."""
+    kit: ProvenanceKit | None = None
+    """The design kit the generated markup was written against (component's DesignSystemGuide.kit, if set)."""
 
-    _NON_NULLABLE_OPTIONALS: ClassVar[tuple[str, ...]] = ("model", "fallback", "composedAt")
+    _NON_NULLABLE_OPTIONALS: ClassVar[tuple[str, ...]] = (
+        "model",
+        "fallback",
+        "composedAt",
+        "generatorVersion",
+        "kit",
+    )
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {"tier": self.tier, "composedBy": self.composedBy}
@@ -376,6 +398,10 @@ class Provenance(_WireModel):
             out["fallback"] = self.fallback.to_wire()
         if self.composedAt is not None:
             out["composedAt"] = self.composedAt
+        if self.generatorVersion is not None:
+            out["generatorVersion"] = self.generatorVersion
+        if self.kit is not None:
+            out["kit"] = self.kit.to_wire()
         return out
 
 
