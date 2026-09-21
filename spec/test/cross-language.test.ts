@@ -17,6 +17,15 @@ import {
   sha256Hex,
 } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
+// Relative (not "@kohaku-ui/composer") import: spec does not declare composer as a dependency, same
+// reasoning as generate-cross-language-fixtures.ts's own composer import (see that file's comment).
+import {
+  DEFAULT_KIT_VOCABULARY,
+  type DesignSystemGuide,
+  designKitPromptFragment,
+  designSystemPromptFragment,
+} from "../../packages/composer/src/design-system.js";
+import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
 
 /**
  * Cross-language golden (TS side). Pins that the TS implementation reproduces the fixture
@@ -36,6 +45,12 @@ interface Fixture {
   cacheKey: { parts: CacheKeyParts; key: string }[];
   sandboxDom: { tags: string[]; attrs: string[]; styleProps: string[] };
   distillation: { jsonl: string };
+  promptFragments: {
+    designKit: string;
+    designSystem: { guide: DesignSystemGuide; fragment: string };
+    designBrief: string[];
+    promptRevision: string;
+  };
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
@@ -96,5 +111,27 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     expect(exportDistillationDataset({ fixations: [record], golden: [spec] })).toBe(
       fixture.distillation.jsonl,
     );
+  });
+});
+
+describe("cross-language golden (prompt fragments)", () => {
+  it("designKitPromptFragment(DEFAULT_KIT_VOCABULARY) reproduces the fixture", () => {
+    expect(designKitPromptFragment(DEFAULT_KIT_VOCABULARY)).toBe(fixture.promptFragments.designKit);
+  });
+
+  it("designSystemPromptFragment reproduces the fixture (input+output both pinned, since the guide is not an exported constant)", () => {
+    expect(designSystemPromptFragment(fixture.promptFragments.designSystem.guide)).toBe(
+      fixture.promptFragments.designSystem.fragment,
+    );
+  });
+
+  it("the design brief inside L2_SYSTEM_PROMPT reproduces the fixture", () => {
+    const lines = L2_SYSTEM_PROMPT.split("\n");
+    const start = lines.indexOf("- Design brief (follow every point):");
+    expect(lines.slice(start)).toEqual(fixture.promptFragments.designBrief);
+  });
+
+  it("PROMPT_REVISION reproduces the fixture (catches an accidental, unbumped prompt change)", () => {
+    expect(PROMPT_REVISION).toBe(fixture.promptFragments.promptRevision);
   });
 });

@@ -27,6 +27,21 @@ import {
   parseSpec,
   sha256Hex,
 } from "@kohaku-ui/spec-core";
+// Relative rather than "@kohaku-ui/composer", same reasoning as the registry import below: spec does
+// not declare a dependency on composer either. design-system.ts is safe to reach this way because it
+// imports nothing but spec-core *types* (see that file's own header comment: no @kohaku-ui/llm import at
+// all). prompt.ts's own cross-package imports (registry / spec-core) are safe too, even though this
+// script does not declare either as its own dependency: Node resolves a bare specifier starting from the
+// *importing file's own directory* (packages/composer/src, whose node_modules holds composer's own
+// dependencies via pnpm's symlinks), not from this script's location, so they resolve exactly as they do
+// when composer's own tests import prompt.ts.
+import {
+  DEFAULT_KIT_VOCABULARY,
+  type DesignSystemGuide,
+  designKitPromptFragment,
+  designSystemPromptFragment,
+} from "../../packages/composer/src/design-system.js";
+import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
 // Relative (not "@kohaku-ui/registry") import: the spec package deliberately does not declare
 // @kohaku-ui/registry as a dependency (this generator is its only consumer of the catalog's
 // fallback.mapProps functions), so this reaches the source file directly rather than adding a
@@ -126,6 +141,15 @@ const INTENT_CASES: { canonical: string; params: Record<string, unknown> }[] = [
   { canonical: "a.b_c", params: { z: { y: [1, 2, 3], x: "☃" }, ratio: 1 / 3 } },
 ];
 
+// Same representative DesignSystemGuide as packages/composer/test/design-system.test.ts's GUIDE
+// (description override + a custom token + guidelines), so designSystemPromptFragment exercises every
+// branch (default vocabulary, override, custom-token appending, rules section) that a byte-compatibility
+// golden needs to catch a drift.
+const DESIGN_SYSTEM_GUIDE: DesignSystemGuide = {
+  tokens: { "color.primary": "brand color (override)", "brand.accent": "accent color" },
+  guidelines: ["Corner radius is 8px", "Spacing in multiples of 4px"],
+};
+
 // Pins spec-core's cacheKey() segment/placeholder format across languages (the policyFingerprint 7th
 // component). Every legacy shape (5 / 6 components) plus the new 7-component shapes (policyFingerprint
 // alone with its "-" generatorVersion placeholder, and both together) so a language port that gets the
@@ -181,6 +205,40 @@ async function main(): Promise<void> {
 
   const cacheKeyCases = CACHE_KEY_CASES.map((parts) => ({ parts, key: cacheKey(parts) }));
 
+  // Pins the prompt fragments that are hand-transcribed as goldens in both languages' composer tests
+  // (packages/composer/test/design-kit.test.ts + design-system.test.ts and their Python mirrors under
+  // python/kohaku/tests/composer/), replacing each side's own independent hand-written literal with a
+  // single, TS-generated source of truth. Before this, each language's test only checked its own
+  // constants against its own hand-copied string, so a matching pair of (constant, golden) edits on one
+  // language side alone passed CI while silently diverging from the other language.
+  // designKit needs no separate input in the fixture: both languages already own an identical exported
+  // DEFAULT_KIT_VOCABULARY constant (itself pinned by this same golden — a divergent constant changes
+  // the rendered fragment), so each side's test re-applies its own function to its own constant.
+  // designSystem's DESIGN_SYSTEM_GUIDE, by contrast, is not an exported constant on either side (it is a
+  // local test fixture), so its input is carried in the fixture itself for the other language to
+  // reconstruct exactly, rather than hand-duplicating the same object literal a third time.
+  const l2Lines = L2_SYSTEM_PROMPT.split("\n");
+  const designBriefMarker = "- Design brief (follow every point):";
+  const designBriefStart = l2Lines.indexOf(designBriefMarker);
+  if (designBriefStart === -1) {
+    throw new Error(
+      `L2_SYSTEM_PROMPT no longer contains the design-brief marker ${JSON.stringify(designBriefMarker)}`,
+    );
+  }
+  // The design brief is L2_SYSTEM_PROMPT's trailing block (its header line through the prompt's last
+  // line) -- pinned by content rather than a hardcoded line count so this keeps working if it grows.
+  const designBrief = l2Lines.slice(designBriefStart);
+
+  const promptFragments = {
+    designKit: designKitPromptFragment(DEFAULT_KIT_VOCABULARY),
+    designSystem: {
+      guide: DESIGN_SYSTEM_GUIDE,
+      fragment: designSystemPromptFragment(DESIGN_SYSTEM_GUIDE),
+    },
+    designBrief,
+    promptRevision: PROMPT_REVISION,
+  };
+
   // Pins byte compatibility of the distillation-dataset JSONL export (@kohaku-ui/evals's
   // exportDistillationDataset / kohaku.evals's export_distillation_dataset). Reuses the same example
   // Spec + its already-computed structureHash as a single human-approved FixationRecord, so a language
@@ -224,13 +282,14 @@ async function main(): Promise<void> {
         sandboxDom,
         distillation,
         fallback: fallbackCases,
+        promptFragments,
       },
       null,
       2,
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, fallback=${fallbackCases.length})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
   );
 }
 
