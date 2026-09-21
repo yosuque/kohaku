@@ -217,8 +217,9 @@ export interface FixationRecord {
  * **Concurrency contract**: StoragePort itself carries no locking or versioning. Serializing the
  * read-modify-write of a given (tenant, key) — so that two concurrent writers cannot each read the same base
  * state and lose one another's update — is the **host's** responsibility, not the implementation's; the
- * reference host-rest does this with an in-process keyed mutex (`@kohaku-ui/host-core`'s `createKeyedMutex`,
- * shared by the promotion lock and the fixation lock) and host-mcp-apps wires the same mutex (keyed by
+ * reference host-rest does this with an in-process keyed mutex (`createKeyedMutex` in this package,
+ * re-exported by `@kohaku-ui/host-core`, shared by the promotion lock and the fixation lock) and
+ * host-mcp-apps wires the same mutex (keyed by
  * `intentHash` alone, since the MCP profile never resolves a tenant) into its fixation self-heal path. That
  * mutex only orders calls **within one process** — running multiple instances/processes against the same
  * backing store concurrently (e.g. two hosts sharing one data directory) is not supported by this contract;
