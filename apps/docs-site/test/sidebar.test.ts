@@ -22,8 +22,12 @@ describe("sidebar", () => {
     expect(dangling).toEqual([]);
   });
 
+  it("every Japanese sidebar link lives under /ja/ (a plain English link here would silently defeat the parallelism check below)", () => {
+    for (const link of sidebarLinks(SIDEBAR_JA)) expect(link).toMatch(/^\/ja\//);
+  });
+
   it("keeps the EN and JA sidebars structurally parallel where a JA page exists", () => {
-    const ja = sidebarLinks(SIDEBAR_JA).map((l) => l.replace(/^\/ja/, ""));
+    const ja = sidebarLinks(SIDEBAR_JA).map((l) => l.replace(/^\/ja\//, "/"));
     for (const link of ja) expect(sidebarLinks(SIDEBAR_EN)).toContain(link);
   });
 });

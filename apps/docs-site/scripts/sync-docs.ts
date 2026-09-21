@@ -3,7 +3,7 @@
  * Runs before every `vitepress dev` / `vitepress build`. The output is gitignored; nothing here is
  * hand-edited, so the Markdown in docs/ stays the single source of truth.
  */
-import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { listMirrorSources, planMirror, rewriteLinks } from "../src/mirror.js";
@@ -32,11 +32,19 @@ for (const entry of planMirror(sources)) {
 }
 
 // The site's landing pages are site chrome, not documentation; they live next to this script.
+// They are copied last and must never silently clobber a mirrored page: if a future MIRROR_ROOTS
+// entry ever produced a root-level index.md, overwriting it here would ship a wrong site with a
+// green build, so we fail loudly instead.
 for (const [from, to] of [
   ["home/index.md", "index.md"],
   ["home/ja/index.md", "ja/index.md"],
 ] as const) {
   const dest = join(OUT_DIR, to);
+  if (existsSync(dest)) {
+    throw new Error(
+      `docs-site sync: refusing to overwrite ${to}: a mirrored page and the landing page both claim it`,
+    );
+  }
   mkdirSync(dirname(dest), { recursive: true });
   copyFileSync(join(SITE_DIR, from), dest);
 }

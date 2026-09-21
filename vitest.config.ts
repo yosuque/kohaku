@@ -21,11 +21,12 @@ export default defineConfig({
         "packages/sandbox/src/guest/worker-shim.ts",
         // docs-site's config, theme and sync CLI are build-time only: no test imports them, so v8
         // would report them at ~0% however correct they are, and functions coverage has essentially
-        // no headroom left (0.79pp) to absorb that. They are not unguarded, though: the snippets are
-        // typechecked by tsc and checked byte-identical to the Markdown they're extracted from by a
-        // dedicated test; the VitePress config, theme and sync CLI are exercised by the real
-        // `vitepress build` that the CI docs-site job runs. This excludes them from the coverage
-        // count, not from verification, and the thresholds below are unchanged.
+        // no headroom left (0.79pp) to absorb that. They are not unguarded, though: the VitePress
+        // config, theme and sync CLI are exercised by the real `vitepress build` that the CI
+        // docs-site job runs, and the snippets are typechecked by tsc. A dedicated test asserting the
+        // snippets byte-identical to the Markdown they're extracted from is Task 5 of the docs-site
+        // plan and does not exist yet at this point in the plan. This excludes these paths from the
+        // coverage count, not from verification, and the thresholds below are unchanged.
         "apps/docs-site/snippets/**",
         "apps/docs-site/.vitepress/**",
         "apps/docs-site/scripts/**",
