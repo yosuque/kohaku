@@ -13,6 +13,27 @@ import { buildTheme } from "../../theme/tokens.js";
 import { extractPastedRef } from "./gallery-ref.js";
 import { GALLERY_CANNED_REF, GALLERY_SHOWCASE_HTML } from "./gallery-showcase.js";
 
+/**
+ * The kit-toggle checkbox's mapping onto SandboxFrame/mountSandbox's `kitCss` prop: checked (the default)
+ * means "inject the built-in design kit" (`kitCss` left undefined, the option's own default), unchecked
+ * means "inject nothing" (`kitCss: ""`) so the toggle actually shows a visible difference. Extracted as a
+ * tiny pure function (rather than only inlined in GalleryTab's body) so it is unit-testable without
+ * mounting SandboxFrame's real iframe in jsdom — see gallery-tab-mapping.test.ts.
+ */
+export function galleryKitCss(kitOn: boolean): string | undefined {
+  return kitOn ? undefined : "";
+}
+
+/**
+ * The sandbox badge's visibility per preview: the showcase is the clean "what the kit looks like" shot,
+ * so its badge stays hidden; the paste box mounts arbitrary third-party HTML, so its badge stays visible
+ * as the one on-screen signal that it is sandboxed. Extracted for the same testability reason as
+ * galleryKitCss above.
+ */
+export function galleryBadge(previewId: string): "visible" | "hidden" {
+  return previewId === "pasted" ? "visible" : "hidden";
+}
+
 /** Canned tabular data returned for any ref (deterministic; the gallery never touches the API). */
 const CANNED_DATA = {
   columns: [
@@ -40,6 +61,12 @@ export function GalleryTab(): ReactNode {
   const theme = useMemo(() => buildTheme(mode), [mode]);
   const [kitOn, setKitOn] = useState(true);
   const [pasted, setPasted] = useState("");
+  // Debounced (~300ms) so re-hashing the whole artifact and re-mounting the SandboxFrame iframe happens
+  // once after the user stops typing/pasting, not on every keystroke — hashing and the ref/data-binding
+  // scrape below are cheap individually, but on a large pasted artifact they add up to visible per-keystroke
+  // jank, and a fresh iframe mount is the most expensive part by far. The textarea itself stays bound to
+  // the raw, undebounced `pasted` state so typing feels instant; only the derived hash/ref/preview lag.
+  const [debouncedPasted, setDebouncedPasted] = useState("");
   const [pastedHash, setPastedHash] = useState<string | null>(null);
   const [showcaseHash, setShowcaseHash] = useState<string | null>(null);
 
@@ -47,19 +74,24 @@ export function GalleryTab(): ReactNode {
     void sha256Hex(GALLERY_SHOWCASE_HTML).then(setShowcaseHash);
   }, []);
   useEffect(() => {
-    if (pasted.trim() === "") {
+    const id = setTimeout(() => setDebouncedPasted(pasted), 300);
+    return () => clearTimeout(id);
+  }, [pasted]);
+  useEffect(() => {
+    if (debouncedPasted.trim() === "") {
       setPastedHash(null);
       return;
     }
-    void sha256Hex(pasted).then(setPastedHash);
-  }, [pasted]);
+    void sha256Hex(debouncedPasted).then(setPastedHash);
+  }, [debouncedPasted]);
   // A pasted artifact was generated against its own $ref (unknown to us), not the gallery's canned one —
   // scrape it out of the source so the sandbox bridge's exact-match allowlist admits its fetchData call
   // instead of silently denying every fetch (see gallery-ref.ts's doc). Falls back to the canned ref for
-  // an artifact that never fetches (or whose call this heuristic cannot find).
-  const pastedRef = useMemo(() => extractPastedRef(pasted, GALLERY_CANNED_REF), [pasted]);
+  // an artifact that never fetches (or whose call this heuristic cannot find). Derived from the debounced
+  // value (same reasoning as pastedHash above).
+  const pastedRef = useMemo(() => extractPastedRef(debouncedPasted, GALLERY_CANNED_REF), [debouncedPasted]);
 
-  const kitCss = kitOn ? undefined : "";
+  const kitCss = galleryKitCss(kitOn);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ fontSize: 13, color: "var(--app-muted, #6b7280)" }}>{t.admin.gallery.description}</div>
@@ -86,7 +118,7 @@ export function GalleryTab(): ReactNode {
       {pastedHash != null && (
         <Preview
           id="pasted"
-          html={pasted}
+          html={debouncedPasted}
           sha256={pastedHash}
           dataRef={pastedRef}
           theme={theme}
@@ -130,9 +162,7 @@ function Preview(props: {
         node={node}
         spec={spec}
         theme={props.theme}
-        // The showcase is the clean "what the kit looks like" shot; the paste box mounts arbitrary
-        // third-party HTML, so its badge stays visible as the one on-screen signal that it is sandboxed.
-        badge={props.id === "pasted" ? "visible" : "hidden"}
+        badge={galleryBadge(props.id)}
         {...(props.kitCss != null ? { kitCss: props.kitCss } : {})}
         bridge={{
           resolveBinding: async () => CANNED_DATA as unknown as JsonValue,

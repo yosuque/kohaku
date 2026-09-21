@@ -82,6 +82,22 @@ export interface RendererContextValue {
     result?: unknown;
     message?: string;
   }) => void;
+  /**
+   * `nonce` passed through to the `<style href="kohaku-parts-state">` RendererProvider injects (see
+   * `PARTS_STATE_CSS`'s own doc comment). A host running a strict `style-src-elem` CSP with a per-request
+   * nonce has no other way to authorize this element (React 19 hoists it into `<head>`, so it cannot be
+   * wrapped or styled by the host's own CSP-exempt markup). Omitted by default — byte-identical to before
+   * this field existed.
+   */
+  stateStylesNonce?: string;
+  /**
+   * Set to `false` to skip injecting the `<style href="kohaku-parts-state">` element entirely (opt-out).
+   * Use this when the host cannot satisfy its CSP for the element even with a nonce, or already supplies
+   * an equivalent stylesheet of its own — the state styles are theme-neutral and taken from
+   * `PARTS_STATE_CSS`, which a host can inline itself. Default (omitted / any value other than `false`)
+   * keeps today's behavior: the element is always injected.
+   */
+  stateStyles?: false;
 }
 
 const RendererContext = createContext<RendererContextValue | null>(null);
@@ -96,10 +112,18 @@ export function RendererProvider(props: { value: RendererContextValue; children:
     <RendererContext.Provider value={props.value}>
       <DataInvalidationContext.Provider value={busRef.current}>
         {/* Theme-neutral hover/active/focus-visible rules for the parts. React 19 hoists a <style> with href +
-            precedence into <head> and de-duplicates it by href, so N providers yield one stylesheet. */}
-        <style href="kohaku-parts-state" precedence="default">
-          {PARTS_STATE_CSS}
-        </style>
+            precedence into <head> and de-duplicates it by href, so N providers yield one stylesheet.
+            stateStyles: false skips this entirely (opt-out); stateStylesNonce passes a CSP nonce through
+            (both RendererContextValue fields default to today's unconditional-injection behavior). */}
+        {props.value.stateStyles !== false && (
+          <style
+            href="kohaku-parts-state"
+            precedence="default"
+            {...(props.value.stateStylesNonce != null ? { nonce: props.value.stateStylesNonce } : {})}
+          >
+            {PARTS_STATE_CSS}
+          </style>
+        )}
         {props.children}
       </DataInvalidationContext.Provider>
     </RendererContext.Provider>
