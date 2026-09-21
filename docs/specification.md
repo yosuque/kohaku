@@ -425,7 +425,7 @@ always rejects — a denied element (`<iframe>`/`<object>`/`<embed>`/`<form>`/`<
 `hsl()` (`L2_RAW_COLOR` — **only when `ComposePolicy.designSystem` is wired**; sends back for replacement with
 token references `var(--kohaku-*)`) / a kit-namespaced class name absent from `DesignSystemGuide.kit`'s
 vocabulary (`L2_UNKNOWN_CLASS` — **only when `ComposePolicy.designSystem.kit` is wired**; sends back the list
-of offending class names for replacement with the kit's component classes/utilities or a model-invented class
+of offending class names for replacement with the kit's own classes/utilities or a model-invented class
 of its own outside the kit's namespaces).
 
 DOM-shape limits enforced by the trusted document's applier on ops relayed from the Worker:
