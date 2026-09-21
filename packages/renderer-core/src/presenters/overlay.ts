@@ -10,7 +10,7 @@
 // mode too).
 
 import type { KnownThemeTokens, ThemeTokens } from "@kohaku-ui/spec-core";
-import { DEFAULT_SIZING, resolveSizing, resolveToken, type SizingTokens } from "../theme.js";
+import { resolveSizing, resolveToken, type SizingTokens } from "../theme.js";
 
 type StyleRecord = Record<string, string | number>;
 
@@ -57,7 +57,7 @@ export const dialogHeaderStyle: StyleRecord = {
 };
 
 /** Title heading (pass a danger color for danger, the normal color for default). */
-export function dialogTitleStyle(color: string, sizing: SizingTokens = DEFAULT_SIZING): StyleRecord {
+export function dialogTitleStyle(color: string, sizing: SizingTokens): StyleRecord {
   return { margin: 0, fontSize: sizing.fontLg, fontWeight: 700, color };
 }
 
@@ -127,7 +127,7 @@ export function toastToneColors(theme: ThemeTokens, tone: string): ToastToneColo
 }
 
 /** The toast body style (floating at the bottom center). */
-export function toastStyle(colors: ToastToneColors, sizing: SizingTokens = DEFAULT_SIZING): StyleRecord {
+export function toastStyle(colors: ToastToneColors, sizing: SizingTokens): StyleRecord {
   return {
     position: "fixed",
     left: "50%",

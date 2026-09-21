@@ -53,8 +53,10 @@ call into this same presenter, which is the mechanism that guarantees React/WC p
 user-facing text goes in `packages/renderer-core/src/messages.ts`; new design tokens go in
 `packages/renderer-core/src/theme.ts`.
 
-A new part's style function takes `SizingTokens` as its **trailing argument** (default
-`= DEFAULT_SIZING`, `theme.ts`) and writes no px literals of its own — read `radius.*` / `space.*` /
+A new part's style function takes `SizingTokens` as its **required trailing argument** (`theme.ts`;
+every existing presenter style function does the same — a product calling one directly without going
+through the renderers can still pass `DEFAULT_SIZING` to get the old default-light values) and writes
+no px literals of its own — read `radius.*` / `space.*` /
 `font.size.*` / `shadow.*` from the bag (React reads it via `useSizing()`; WC reads `rt.sizing`), the
 same way every existing presenter style function does. Hover / active / focus-visible rules belong in
 `PARTS_STATE_CSS` (`packages/renderer-core/src/design-kit.ts`), the single theme-neutral stylesheet

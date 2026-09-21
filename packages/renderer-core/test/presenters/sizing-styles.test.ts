@@ -4,6 +4,7 @@ import {
   chartCaptionStyle,
   chartTableStyle,
   controlSelectStyle,
+  DEFAULT_SIZING,
   dataStateNoticeStyle,
   defaultLightTheme,
   dialogBoxStyle,
@@ -77,11 +78,12 @@ describe("presenter sizing (non-color tokens flow into every inline style)", () 
     expect(controlSelectStyle("#ccc", sizing).borderRadius).toBe("3px");
   });
 
-  it("omitting sizing keeps the default-light values (backward compatible call sites)", () => {
+  it("passing DEFAULT_SIZING explicitly reproduces the default-light values (external call sites migrating to required sizing)", () => {
     const btn = actionButtonStyle(
       "primary",
       { primary: "#000", border: "#ccc", danger: "#f00", text: "#111", onPrimary: "#fff" },
       { disabled: false },
+      DEFAULT_SIZING,
     );
     expect(btn.borderRadius).toBe("8px");
     expect(btn.fontSize).toBe("13.5px");

@@ -1,7 +1,7 @@
 import type { PresentFormField } from "@kohaku-ui/registry";
 import type { ComponentNode, JsonObject, JsonValue } from "@kohaku-ui/spec-core";
 import type { RendererMessages } from "../messages.js";
-import { DEFAULT_SIZING, type SizingTokens } from "../theme.js";
+import type { SizingTokens } from "../theme.js";
 
 /** The type is defined solely in registry (present-form.ts); here it is shared via a type-only import. */
 export type FieldDef = PresentFormField;
@@ -299,42 +299,18 @@ export function describeControl(field: FieldDef): ControlDescriptor {
 
 // --- Style constants/functions shared verbatim by both renderers (React's style prop and WC's setStyle consume the same shape). ---
 
-/**
- * The form root's layout.
- * @deprecated Use `formRootStyle`, which reads `gap` from `SizingTokens` (the space scale)
- * instead of a hard-coded literal.
- */
-export const FORM_ROOT_STYLE = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  maxWidth: 480,
-} as const;
-
-/**
- * One field row's layout.
- * @deprecated Use `fieldRowStyle`, which reads `gap` / `fontSize` from `SizingTokens`
- * instead of hard-coded literals.
- */
-export const FIELD_ROW_STYLE = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-  fontSize: 13,
-} as const;
-
 /** The form root's layout. */
-export function formRootStyle(sizing: SizingTokens = DEFAULT_SIZING) {
+export function formRootStyle(sizing: SizingTokens) {
   return { display: "flex", flexDirection: "column", gap: sizing.space3, maxWidth: 480 } as const;
 }
 
 /** One field row's layout. */
-export function fieldRowStyle(sizing: SizingTokens = DEFAULT_SIZING) {
+export function fieldRowStyle(sizing: SizingTokens) {
   return { display: "flex", flexDirection: "column", gap: sizing.space1, fontSize: sizing.fontSm } as const;
 }
 
 /** The base look of input/select/textarea controls. */
-export function formControlBaseStyle(border: string, sizing: SizingTokens = DEFAULT_SIZING) {
+export function formControlBaseStyle(border: string, sizing: SizingTokens) {
   return {
     border: `1px solid ${border}`,
     borderRadius: sizing.radiusMd,
@@ -348,7 +324,7 @@ export function formSubmitButtonStyle(
   accent: string,
   onPrimary: string,
   options: { busy: boolean },
-  sizing: SizingTokens = DEFAULT_SIZING,
+  sizing: SizingTokens,
 ) {
   const { busy } = options;
   return {

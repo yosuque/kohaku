@@ -1,15 +1,5 @@
 import type { SizingTokens } from "../theme.js";
 
-/**
- * Gap-token → pixel table shared by layout.stack and presentList in both renderers
- * (renderer-react's layout.tsx/present-list.tsx and renderer-wc's layout.ts/list.ts —
- * the framework-free source of truth).
- *
- * @deprecated Use `gapFor`, which reads the value from `SizingTokens` (the space scale)
- * instead of a hard-coded literal.
- */
-export const GAP: Record<string, number> = { none: 0, sm: 8, md: 16, lg: 24 };
-
 /** Layout gap keyword → the space scale (none=0, sm=space.2, md=space.4, lg=space.5; unknown/undefined = md). */
 export function gapFor(sizing: SizingTokens, size: string | undefined): string {
   switch (size) {

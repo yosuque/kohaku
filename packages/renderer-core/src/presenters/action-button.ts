@@ -1,4 +1,4 @@
-import { DEFAULT_SIZING, type SizingTokens } from "../theme.js";
+import type { SizingTokens } from "../theme.js";
 
 /** Token bag needed to resolve action.button's variant color scheme. */
 export interface ActionButtonTokens {
@@ -18,7 +18,7 @@ export function actionButtonStyle(
   variant: string,
   tokens: ActionButtonTokens,
   options: { disabled: boolean },
-  sizing: SizingTokens = DEFAULT_SIZING,
+  sizing: SizingTokens,
 ) {
   const { disabled } = options;
   const colors = actionButtonVariantColors(variant, tokens);

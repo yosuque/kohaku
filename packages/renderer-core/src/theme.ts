@@ -354,7 +354,7 @@ export function sandboxThemeCss(theme?: ThemeTokens): string {
  * resolveToken per size token (one resolution per render, identical for React and WC). Resolution goes
  * through resolveToken so the default-light net and theme overrides apply exactly as for colors.
  */
-export interface SizingTokens {
+export interface NonColorTokens {
   fontSans: string;
   fontMono: string;
   fontXs: string;
@@ -379,7 +379,15 @@ export interface SizingTokens {
   motionEasing: string;
 }
 
-export function resolveSizing(theme: ThemeTokens): SizingTokens {
+/**
+ * Kept as an alias: `resolveSizing` / `useSizing` / `RenderRuntime.sizing` still say "sizing" (unifying
+ * that naming is a separate scope), but the type itself is `NonColorTokens` — 6 of its 22 fields
+ * (`fontSans`/`fontMono`, `shadowSm`/`shadowMd`, `motionDuration`/`motionEasing`) are not sizes, and
+ * "non-color tokens" is already how the docs and this file's own comments describe the whole group.
+ */
+export type SizingTokens = NonColorTokens;
+
+export function resolveSizing(theme: ThemeTokens): NonColorTokens {
   const t = (name: keyof KnownThemeTokens): string => String(resolveToken(theme, name));
   return {
     fontSans: t("font.family.sans"),
@@ -408,11 +416,10 @@ export function resolveSizing(theme: ThemeTokens): SizingTokens {
 }
 
 /**
- * The resolved default-light sizing bag. Presenters take `sizing: SizingTokens = DEFAULT_SIZING` as
- * their last parameter. Every renderer-react / renderer-wc call site now passes its own resolved
- * `sizing` explicitly (there is no remaining call site that omits it) — the default exists for backward
- * compatibility with **external** consumers: a product calling a presenter style function directly
- * (outside the two renderers) without a `sizing` argument still resolves the exact same values it always
- * has, without needing to be touched.
+ * The resolved default-light sizing bag. Presenters take `sizing: SizingTokens` as a required last
+ * parameter (every renderer-react / renderer-wc call site already passes its own resolved `sizing`
+ * explicitly). Kept exported for **external** consumers: a product calling a presenter style function
+ * directly (outside the two renderers) can pass `DEFAULT_SIZING` to reproduce the exact values a call
+ * with no `sizing` argument used to resolve, before `sizing` became mandatory.
  */
-export const DEFAULT_SIZING: SizingTokens = resolveSizing({});
+export const DEFAULT_SIZING: NonColorTokens = resolveSizing({});

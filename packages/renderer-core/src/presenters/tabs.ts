@@ -1,5 +1,5 @@
 import type { ComponentNode } from "@kohaku-ui/spec-core";
-import { DEFAULT_SIZING, type SizingTokens } from "../theme.js";
+import type { SizingTokens } from "../theme.js";
 
 /** A single tab's resolved metadata (derived from its layout.tab child node). */
 export interface TabMeta {
@@ -58,11 +58,7 @@ export interface TabButtonTokens {
 }
 
 /** A tab button's look (the underline + color/weight swap between selected and unselected). */
-export function tabButtonStyle(
-  tokens: TabButtonTokens,
-  options: { active: boolean },
-  sizing: SizingTokens = DEFAULT_SIZING,
-) {
+export function tabButtonStyle(tokens: TabButtonTokens, options: { active: boolean }, sizing: SizingTokens) {
   const { active } = options;
   return {
     background: "none",

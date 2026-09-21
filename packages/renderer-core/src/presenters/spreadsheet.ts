@@ -1,6 +1,6 @@
 import type { ResolveOptions } from "@kohaku-ui/data-binding";
 import type { ComponentNode, JsonObject, JsonValue, TabularColumn } from "@kohaku-ui/spec-core";
-import { DEFAULT_SIZING, type SizingTokens } from "../theme.js";
+import type { SizingTokens } from "../theme.js";
 
 /** Local sort state (column + ascending/descending). */
 export interface SortState {
@@ -326,7 +326,7 @@ export function spreadsheetCellEditButtonStyle(options: { numeric: boolean }) {
 export function spreadsheetCellEditInputStyle(
   tokens: Pick<SpreadsheetTokens, "border">,
   options: { numeric: boolean },
-  sizing: SizingTokens = DEFAULT_SIZING,
+  sizing: SizingTokens,
 ) {
   const { numeric } = options;
   return {
@@ -403,7 +403,7 @@ export interface SpreadsheetTokens {
  */
 export function spreadsheetThStyle(
   tokens: Pick<SpreadsheetTokens, "headerBg" | "border" | "muted">,
-  sizing: SizingTokens = DEFAULT_SIZING,
+  sizing: SizingTokens,
 ) {
   return {
     background: tokens.headerBg,
@@ -421,10 +421,7 @@ export function spreadsheetThStyle(
  * expands the hit area to the full cell so it can also be activated by keyboard. Numeric columns right-align
  * the trigger content to match the column's own alignment.
  */
-export function spreadsheetSortButtonStyle(
-  options: { numeric: boolean },
-  sizing: SizingTokens = DEFAULT_SIZING,
-) {
+export function spreadsheetSortButtonStyle(options: { numeric: boolean }, sizing: SizingTokens) {
   const { numeric } = options;
   return {
     display: "flex",
@@ -443,7 +440,7 @@ export function spreadsheetSortButtonStyle(
 }
 
 /** A body cell's style (numeric columns right-align with tabular figures for column alignment). */
-export function spreadsheetTdStyle(options: { numeric: boolean }, sizing: SizingTokens = DEFAULT_SIZING) {
+export function spreadsheetTdStyle(options: { numeric: boolean }, sizing: SizingTokens) {
   const { numeric } = options;
   return {
     padding: `${sizing.space2} ${sizing.space3}`,
@@ -454,10 +451,7 @@ export function spreadsheetTdStyle(options: { numeric: boolean }, sizing: Sizing
 }
 
 /** The serverSide footer bar (total count + first/next pager buttons). */
-export function spreadsheetFooterBarStyle(
-  tokens: Pick<SpreadsheetTokens, "muted">,
-  sizing: SizingTokens = DEFAULT_SIZING,
-) {
+export function spreadsheetFooterBarStyle(tokens: Pick<SpreadsheetTokens, "muted">, sizing: SizingTokens) {
   return {
     display: "flex",
     alignItems: "center",
@@ -469,10 +463,7 @@ export function spreadsheetFooterBarStyle(
 }
 
 /** The local (non-serverSide) "N of total" notice shown below the table when rows were truncated. */
-export function spreadsheetFooterTotalStyle(
-  tokens: Pick<SpreadsheetTokens, "muted">,
-  sizing: SizingTokens = DEFAULT_SIZING,
-) {
+export function spreadsheetFooterTotalStyle(tokens: Pick<SpreadsheetTokens, "muted">, sizing: SizingTokens) {
   return {
     fontSize: sizing.fontSm,
     color: tokens.muted,
@@ -483,7 +474,7 @@ export function spreadsheetFooterTotalStyle(
 /** The serverSide pager buttons (first page / next page). */
 export function spreadsheetPagerButtonStyle(
   tokens: Pick<SpreadsheetTokens, "border" | "accent">,
-  sizing: SizingTokens = DEFAULT_SIZING,
+  sizing: SizingTokens,
 ) {
   return {
     background: "none",

@@ -51,12 +51,10 @@ export {
   describeControl,
   describedByOf,
   describeFieldRow,
-  FIELD_ROW_STYLE,
   type FieldDef,
   type FieldRowMeta,
   type FieldViolation,
   type FieldViolationRule,
-  FORM_ROOT_STYLE,
   type FormSubmitPlan,
   fieldRowStyle,
   focusFieldSelectors,
@@ -69,7 +67,7 @@ export {
   planFormSubmit,
   validateFormValues,
 } from "./presenters/form.js";
-export { GAP, gapFor, HARD_ROW_CAP } from "./presenters/layout.js";
+export { gapFor, HARD_ROW_CAP } from "./presenters/layout.js";
 export {
   type MarkdownBlock,
   type MarkdownInline,
@@ -210,6 +208,7 @@ export {
   defaultDarkTheme,
   defaultLightTheme,
   HOST_STYLE_VARIABLE_MAP,
+  type NonColorTokens,
   resolveSizing,
   resolveToken,
   type SizingTokens,
