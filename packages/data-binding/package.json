@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/data-binding",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pass-by-reference data binding for kohaku: query:// reference resolution, capability tokens and staleness detection.",
   "type": "module",
   "exports": {
