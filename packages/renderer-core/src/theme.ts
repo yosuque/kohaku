@@ -356,34 +356,45 @@ export function sandboxThemeCss(theme?: ThemeTokens): string {
 }
 
 /**
+ * The single dot-name -> camelCase mapping for the non-color tokens. Previously this table was
+ * hand-duplicated across `NonColorTokens` (the field list) and `resolveSizing` (the field ->
+ * `resolveToken` call list), so the two could drift silently if a field was added to one and not the
+ * other. Both now derive from this one object: `NonColorTokens` maps over its keys (below) and
+ * `resolveSizing` iterates its entries. Kept module-private (closed within theme.ts) — external code
+ * only ever sees the derived `NonColorTokens` type and the resolved bag `resolveSizing` returns.
+ */
+const SIZING_TOKEN_MAP = {
+  fontSans: "font.family.sans",
+  fontMono: "font.family.mono",
+  fontXs: "font.size.xs",
+  fontSm: "font.size.sm",
+  fontMd: "font.size.md",
+  fontLg: "font.size.lg",
+  fontXl: "font.size.xl",
+  font2xl: "font.size.2xl",
+  space1: "space.1",
+  space2: "space.2",
+  space3: "space.3",
+  space4: "space.4",
+  space5: "space.5",
+  space6: "space.6",
+  radiusSm: "radius.sm",
+  radiusMd: "radius.md",
+  radiusLg: "radius.lg",
+  radiusFull: "radius.full",
+  shadowSm: "shadow.sm",
+  shadowMd: "shadow.md",
+  motionDuration: "motion.duration",
+  motionEasing: "motion.easing",
+} satisfies Record<string, keyof KnownThemeTokens>;
+
+/**
  * The non-color tokens resolved into a flat, string-typed bag. Presenters take this instead of calling
  * resolveToken per size token (one resolution per render, identical for React and WC). Resolution goes
  * through resolveToken so the default-light net and theme overrides apply exactly as for colors.
+ * Derived from SIZING_TOKEN_MAP (one field per key); the field set and names are unchanged from before.
  */
-export interface NonColorTokens {
-  fontSans: string;
-  fontMono: string;
-  fontXs: string;
-  fontSm: string;
-  fontMd: string;
-  fontLg: string;
-  fontXl: string;
-  font2xl: string;
-  space1: string;
-  space2: string;
-  space3: string;
-  space4: string;
-  space5: string;
-  space6: string;
-  radiusSm: string;
-  radiusMd: string;
-  radiusLg: string;
-  radiusFull: string;
-  shadowSm: string;
-  shadowMd: string;
-  motionDuration: string;
-  motionEasing: string;
-}
+export type NonColorTokens = { [K in keyof typeof SIZING_TOKEN_MAP]: string };
 
 /**
  * Kept as an alias: `resolveSizing` / `useSizing` / `RenderRuntime.sizing` still say "sizing" (unifying
@@ -394,31 +405,11 @@ export interface NonColorTokens {
 export type SizingTokens = NonColorTokens;
 
 export function resolveSizing(theme: ThemeTokens): NonColorTokens {
-  const t = (name: keyof KnownThemeTokens): string => String(resolveToken(theme, name));
-  return {
-    fontSans: t("font.family.sans"),
-    fontMono: t("font.family.mono"),
-    fontXs: t("font.size.xs"),
-    fontSm: t("font.size.sm"),
-    fontMd: t("font.size.md"),
-    fontLg: t("font.size.lg"),
-    fontXl: t("font.size.xl"),
-    font2xl: t("font.size.2xl"),
-    space1: t("space.1"),
-    space2: t("space.2"),
-    space3: t("space.3"),
-    space4: t("space.4"),
-    space5: t("space.5"),
-    space6: t("space.6"),
-    radiusSm: t("radius.sm"),
-    radiusMd: t("radius.md"),
-    radiusLg: t("radius.lg"),
-    radiusFull: t("radius.full"),
-    shadowSm: t("shadow.sm"),
-    shadowMd: t("shadow.md"),
-    motionDuration: t("motion.duration"),
-    motionEasing: t("motion.easing"),
-  };
+  const result = {} as Record<keyof NonColorTokens, string>;
+  for (const key of Object.keys(SIZING_TOKEN_MAP) as (keyof typeof SIZING_TOKEN_MAP)[]) {
+    result[key] = String(resolveToken(theme, SIZING_TOKEN_MAP[key]));
+  }
+  return result;
 }
 
 /**
