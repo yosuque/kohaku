@@ -45,15 +45,22 @@ function readManifest(dir: string): Manifest {
 }
 
 /**
- * Must stay in step with PUBLISHED_DIRS in scripts/sync-package-meta.ts: every workspace package
- * directory, minus any that is explicitly `private` (e.g. @kohaku-ui/port-contracts, a test-only
- * suite package never meant to ship). Derived rather than hand-listed a second time, so a new
- * private package under packages/ does not have to be excluded here by hand.
+ * Workspace package directories that are deliberately excluded from PUBLISHED_DIRS below because they
+ * are private and never published. Adding a new private package under packages/ (e.g. a test-only
+ * suite package like @kohaku-ui/port-contracts) means adding it here BY HAND -- this list is not
+ * derived from each manifest's `private` flag, so a package that quietly gains `private: true` by
+ * mistake does not silently vanish from the manifest-correctness checks below; instead it stays in
+ * PUBLISHED_DIRS and fails "every published package carries the publishing metadata" loudly. The test
+ * "every excluded directory really is private" (below) closes the other direction: it fails if this
+ * list ever names a directory whose manifest is not actually private, so the two cannot drift apart.
  */
+const PRIVATE_PACKAGE_DIRS = ["packages/port-contracts"];
+
+/** Must stay in step with PUBLISHED_DIRS in scripts/sync-package-meta.ts. */
 const PUBLISHED_DIRS = [
   ...readdirSync(join(REPO_ROOT, "packages"))
     .map((name) => `packages/${name}`)
-    .filter((dir) => readManifest(dir).private !== true),
+    .filter((dir) => !PRIVATE_PACKAGE_DIRS.includes(dir)),
   "cli",
   "spec",
 ];
@@ -130,6 +137,13 @@ describe("publishable package manifests", () => {
     for (const name of readdirSync(join(REPO_ROOT, "apps"))) {
       const manifest = readManifest(`apps/${name}`);
       expect(manifest.private, `apps/${name} must stay private`).toBe(true);
+    }
+  });
+
+  it("every directory in PRIVATE_PACKAGE_DIRS really is private", () => {
+    for (const dir of PRIVATE_PACKAGE_DIRS) {
+      const manifest = readManifest(dir);
+      expect(manifest.private, `${dir} is listed in PRIVATE_PACKAGE_DIRS but is not private`).toBe(true);
     }
   });
 });
