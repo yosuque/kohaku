@@ -7,5 +7,5 @@
   "updateInternalDependencies": "patch",
   "fixed": [["@kohaku-ui/*"]],
   "linked": [],
-  "ignore": ["@kohaku-ui-sample/api", "@kohaku-ui-sample/web", "@kohaku-ui-sample/wc", "@kohaku-ui-sample/mcp"]
+  "ignore": ["@kohaku-ui-sample/api", "@kohaku-ui-sample/web", "@kohaku-ui-sample/wc", "@kohaku-ui-sample/mcp", "@kohaku-ui-docs/site"]
 }

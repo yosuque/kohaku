@@ -25,6 +25,8 @@
     "release:notes": "node scripts/release-notes.mjs",
     "intents:emit": "pnpm --filter @kohaku-ui-sample/api run intents:emit",
     "dev": "pnpm -r --parallel --filter @kohaku-ui-sample/api --filter @kohaku-ui-sample/web run dev",
+    "docs:dev": "pnpm --filter @kohaku-ui-docs/site dev",
+    "docs:build": "pnpm --filter @kohaku-ui-docs/site build",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",

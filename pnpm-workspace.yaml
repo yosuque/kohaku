@@ -44,6 +44,8 @@ catalog:
   ulid: ^3.0.2
   vite-plugin-singlefile: ^2.3.3
   axe-core: ^4.13.0
+  vitepress: 1.6.4
+  mermaid: ^11.17.2
 
 # Each entry below bypasses the release-age supply-chain gate for one AI SDK package because it was pinned
 # in the catalog (or pulled in transitively by a catalog entry) shortly after its own release, so the gate's

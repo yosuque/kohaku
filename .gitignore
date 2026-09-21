@@ -10,6 +10,10 @@ coverage/
 .DS_Store
 *.log
 
+# docs site: generated mirror of docs/ and VitePress cache (dist/ is already ignored globally)
+apps/docs-site/.generated/
+apps/docs-site/.vitepress/cache/
+
 # python
 __pycache__/
 *.pyc
