@@ -274,7 +274,7 @@ L2_SYSTEM_PROMPT = "\n".join(
         "- fetch / XMLHttpRequest / WebSocket / import are forbidden",
         "- Design brief (follow every point):",
         "  - one clear heading; secondary text in the muted color",
-        "  - consistent spacing from the design tokens (or the kit utilities when a design kit is provided)",
+        "  - one consistent spacing scale throughout; use the design tokens or kit utilities when the prompt supplies them",
         "  - use the primary color for one emphasis at most; tone colors only when they carry meaning",
         "  - right-align numeric columns with tabular figures",
         "  - show empty / error / loading states as a notice, never a blank area",
