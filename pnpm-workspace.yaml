@@ -44,6 +44,13 @@ catalog:
   ulid: ^3.0.2
   vite-plugin-singlefile: ^2.3.3
   axe-core: ^4.13.0
+  ioredis: ^5.11.1
+  pg: ^8.23.0
+  "@types/pg": ^8.23.1
+  jose: ^6.2.12
+  testcontainers: ^12.1.0
+  "@testcontainers/redis": ^12.1.0
+  "@testcontainers/postgresql": ^12.1.0
 
 # Each entry below bypasses the release-age supply-chain gate for one AI SDK package because it was pinned
 # in the catalog (or pulled in transitively by a catalog entry) shortly after its own release, so the gate's
