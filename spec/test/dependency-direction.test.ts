@@ -28,7 +28,7 @@ const LAYERS: string[][] = [
   ["spec-core", "llm"],
   ["registry", "data-binding", "host-a2ui", "storage-memory", "authz-hmac", "port-contracts"],
   ["intents"],
-  ["composer", "renderer-core"],
+  ["composer", "renderer-core", "semantic-llm"],
   ["host-core"],
   ["sandbox", "lineage", "evals", "host-rest", "host-mcp-apps", "client", "otel"],
   ["renderer-react", "renderer-wc"],

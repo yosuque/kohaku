@@ -47,6 +47,7 @@ const PUBLISHED_DIRS = [
     "renderer-react",
     "renderer-wc",
     "sandbox",
+    "semantic-llm",
     "spec-core",
     "storage-memory",
   ].map((name) => `packages/${name}`),
