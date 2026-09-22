@@ -15,7 +15,7 @@ node node_modules/@kohaku-ui/cli/dist/index.js scaffold ports --out ./kohaku
 
 ```ts
 import { serve } from "@hono/node-server";
-import { createKohakuRoutes } from "@kohaku-ui/host-rest";
+import { createGovernancePolicy, createKohakuRoutes } from "@kohaku-ui/host-rest";
 import { createFixations, createLineage, createPromotions, createViewRecorder } from "@kohaku-ui/lineage";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
@@ -35,7 +35,8 @@ const app = new Hono().route(
     domain,
     authz,
     querySource: "my-product",
-    auth: async () => ({ id: "demo-admin", roles: ["admin"] }), // resolve from your JWT/OIDC in production
+    auth: async (c) => ({ id: "demo-admin", roles: [c.req.header("x-kohaku-role") ?? "admin"] }),
+    authorizeGovernance: createGovernancePolicy({ roles: { admin: ["*"], viewer: ["lineage.read"] } }),
     recorder: createViewRecorder(lineage),
     promotions,
     fixations,
@@ -45,13 +46,15 @@ const app = new Hono().route(
 serve({ fetch: app.fetch, port: 8787 });
 ```
 
+`auth`'s `x-kohaku-role` header is a demo shortcut, the same one the bundled sample uses (`apps/sample-api/src/app/host-deps.ts`) — a real deployment resolves the principal and its roles from its own identity provider (JWT/OIDC, etc.), not a client-supplied header.
+
 Point [Path (b)](react-dashboard.md)'s second snippet at it and the dashboard renders. Then `POST /compose` with `{ "input": { "kind": "nl", "text": "revenue by region as a bar chart" } }`: your `SemanticPort.normalize` maps the sentence to an Intent (the sample's LLM-backed implementation is `apps/sample-api/src/ports/semantic-port.ts`), and the composer either serves the fixed L0 Spec, composes an L1 Spec from the catalog, or — for a catch-all Intent your own SemanticPort routes to L2 (the sample's is `sales.custom`) — generates an L2 artifact that runs in the sandbox.
 
 ## The three tiers, in one host
 
 | Tier | What decides | Where it is wired above |
 |---|---|---|
-| **L0 fixed** | `policy.fixedSpecs.lookup(intent)` returns a builder → no model call, `cache: "fixated"` / `"hit"` | `fixedSpecs` |
+| **L0 fixed** | `policy.fixedSpecs.lookup(intent)` returns a builder → no model call, `cache: "miss"` on the first compose, `"hit"` on an identical one | `fixedSpecs` |
 | **L1 declarative** | The model picks parts from `catalog` and fills props; deterministic post-processing and a repair loop validate it against the catalog | `catalog`, `llm` |
 | **L2 free** | `policy.allowL2` + an Intent routed to L2 (`routeTier`) → HTML/JS artifact, lint against the bridge contract, sandboxed render | `allowL2: true` |
 
@@ -60,8 +63,8 @@ Point [Path (b)](react-dashboard.md)'s second snippet at it and the dashboard re
 - Every compose is recorded by `recorder` into **lineage** (`view.composed`, `component.used`, …). `GET /lineage` and `GET /analytics/summary` read it back.
 - An L2 artifact used often enough becomes a **promotion candidate** (`GET /promotions`, `POST /promotions/evaluate`). A reviewer previews the recorded artifact itself (`POST /promotions/:id/preview` — identical by sha256 to what users saw), fixes the schema (`componentType` / `intentName` / `description`) and approves (`POST /promotions/:id/approve`). Pass `judge` to `createPromotions` to have an LLM-as-Judge score candidates against a versioned rubric before a human sees them (`createJudge` from `@kohaku-ui/evals`; the sample's adapter is `apps/sample-api/src/app/promotions.ts`); the human approval step itself is never skipped.
 - On publish, **your** `onPublish` (an option of `createPromotions`) adds the part to the catalog and the Intent to `SemanticPort` — the reference implementation is `apps/sample-api/src/intents/promoted-registry.ts`.
-- Frequently used L1 Intents become **fixation proposals** (`GET /fixations/proposals`); `POST /fixations/approve` pins the Spec to L0 and the model is out of the loop for that screen. `fixationLookup` is what makes the host serve the pinned Spec.
-- `auth` + `authorizeGovernance` (`createGovernancePolicy`, a role → operation matrix) put RBAC on the governance routes: a `viewer` gets 403 on approve, reject and preview.
+- Frequently used L1 Intents become **fixation proposals** (`GET /fixations/proposals`); `POST /fixations/approve` pins the Spec to L0 and the model is out of the loop for that screen. `fixationLookup` is what makes the host serve the pinned Spec, stamped `provenance.cache: "fixated"` — the one place that value comes from.
+- `auth` + `authorizeGovernance` (`createGovernancePolicy`, a role → operation matrix) put RBAC on the governance routes: the snippet's `viewer: ["lineage.read"]` denies everything else, including `promotion.approve`, `promotion.reject` and `promotion.preview` — a `viewer` gets 403 on those. Without `authorizeGovernance` wired at all, every governance route is open to any caller (the host prints a startup warning saying so).
 
 ## Admin
 

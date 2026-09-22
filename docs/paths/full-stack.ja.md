@@ -15,7 +15,7 @@ node node_modules/@kohaku-ui/cli/dist/index.js scaffold ports --out ./kohaku
 
 ```ts
 import { serve } from "@hono/node-server";
-import { createKohakuRoutes } from "@kohaku-ui/host-rest";
+import { createGovernancePolicy, createKohakuRoutes } from "@kohaku-ui/host-rest";
 import { createFixations, createLineage, createPromotions, createViewRecorder } from "@kohaku-ui/lineage";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
@@ -35,7 +35,8 @@ const app = new Hono().route(
     domain,
     authz,
     querySource: "my-product",
-    auth: async () => ({ id: "demo-admin", roles: ["admin"] }), // resolve from your JWT/OIDC in production
+    auth: async (c) => ({ id: "demo-admin", roles: [c.req.header("x-kohaku-role") ?? "admin"] }),
+    authorizeGovernance: createGovernancePolicy({ roles: { admin: ["*"], viewer: ["lineage.read"] } }),
     recorder: createViewRecorder(lineage),
     promotions,
     fixations,
@@ -45,13 +46,15 @@ const app = new Hono().route(
 serve({ fetch: app.fetch, port: 8787 });
 ```
 
+`auth` の `x-kohaku-role` ヘッダーはデモ用の簡易実装で、同梱サンプル(`apps/sample-api/src/app/host-deps.ts`)と同じ手法です — 実運用では principal とそのロールをクライアント任せのヘッダーではなく、自前の認証基盤(JWT/OIDC など)から解決してください。
+
 [パス (b)](react-dashboard.ja.md) の 2 つ目のスニペットをこのホストに向ければダッシュボードが描画されます。次に `POST /compose` に `{ "input": { "kind": "nl", "text": "revenue by region as a bar chart" } }` を送ると、あなたの `SemanticPort.normalize` が文を Intent に写像し(サンプルの LLM 実装は `apps/sample-api/src/ports/semantic-port.ts`)、composer は固定 L0 Spec を返すか、カタログから L1 Spec を合成するか、あなたの SemanticPort が L2 に振る受け皿 Intent(サンプルでは `sales.custom`)ならサンドボックスで動く L2 アーティファクトを生成します。
 
 ## 3 つの階層をひとつのホストで
 
 | 階層 | 何が決めるか | 上のコードのどこか |
 |---|---|---|
-| **L0 固定** | `policy.fixedSpecs.lookup(intent)` がビルダーを返す → モデル呼び出しなし、`cache: "fixated"` / `"hit"` | `fixedSpecs` |
+| **L0 固定** | `policy.fixedSpecs.lookup(intent)` がビルダーを返す → モデル呼び出しなし、最初の compose は `cache: "miss"`、同一の要求なら `"hit"` | `fixedSpecs` |
 | **L1 宣言的合成** | モデルが `catalog` から部品を選び props を埋める。決定的後処理と修復ループがカタログに対して検証する | `catalog`, `llm` |
 | **L2 自由生成** | `policy.allowL2` + L2 に振られた Intent(`routeTier`)→ HTML/JS アーティファクト、ブリッジ契約の lint、サンドボックス描画 | `allowL2: true` |
 
@@ -60,8 +63,8 @@ serve({ fetch: app.fetch, port: 8787 });
 - すべての compose は `recorder` によって **lineage** に記録されます(`view.composed`、`component.used` …)。`GET /lineage` と `GET /analytics/summary` がそれを読み返します。
 - 十分に使われた L2 アーティファクトは**昇格候補**になります(`GET /promotions`、`POST /promotions/evaluate`)。レビュアーは記録されたアーティファクトそのものをプレビューし(`POST /promotions/:id/preview` — ユーザーが見たものと sha256 で同一)、スキーマ(`componentType` / `intentName` / `description`)を確定して承認します(`POST /promotions/:id/approve`)。`createPromotions` に `judge` を渡すと、人が見る前に LLM-as-Judge がバージョン付きルーブリックで候補を採点します(`@kohaku-ui/evals` の `createJudge`。サンプルのアダプタは `apps/sample-api/src/app/promotions.ts`)。人間による承認そのものは省略されません。
 - publish 時に**あなたの** `onPublish`(`createPromotions` のオプション)が部品をカタログへ、Intent を `SemanticPort` へ追加します — 参照実装は `apps/sample-api/src/intents/promoted-registry.ts`。
-- よく使われる L1 Intent は**固定化提案**になります(`GET /fixations/proposals`)。`POST /fixations/approve` が Spec を L0 に固定し、その画面についてモデルはループから外れます。`fixationLookup` が、固定された Spec をホストに配信させる仕組みです。
-- `auth` + `authorizeGovernance`(`createGovernancePolicy`、ロール → 操作の行列)が統制ルートに RBAC を載せます。`viewer` は approve / reject / preview で 403 になります。
+- よく使われる L1 Intent は**固定化提案**になります(`GET /fixations/proposals`)。`POST /fixations/approve` が Spec を L0 に固定し、その画面についてモデルはループから外れます。`fixationLookup` が、固定された Spec をホストに配信させる仕組みで、その配信には `provenance.cache: "fixated"` が付きます — この値が生まれるのはここだけです。
+- `auth` + `authorizeGovernance`(`createGovernancePolicy`、ロール → 操作の行列)が統制ルートに RBAC を載せます。スニペットの `viewer: ["lineage.read"]` はそれ以外すべてを拒否し、`promotion.approve` / `promotion.reject` / `promotion.preview` も含まれます — `viewer` はこれらで 403 になります。`authorizeGovernance` を配線しないままだと統制ルートは誰にでも開いたままになり、ホストは起動時にその旨を警告します。
 
 ## Admin
 

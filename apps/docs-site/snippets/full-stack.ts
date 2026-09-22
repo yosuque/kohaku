@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { createKohakuRoutes } from "@kohaku-ui/host-rest";
+import { createGovernancePolicy, createKohakuRoutes } from "@kohaku-ui/host-rest";
 import { createFixations, createLineage, createPromotions, createViewRecorder } from "@kohaku-ui/lineage";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
@@ -19,7 +19,8 @@ const app = new Hono().route(
     domain,
     authz,
     querySource: "my-product",
-    auth: async () => ({ id: "demo-admin", roles: ["admin"] }), // resolve from your JWT/OIDC in production
+    auth: async (c) => ({ id: "demo-admin", roles: [c.req.header("x-kohaku-role") ?? "admin"] }),
+    authorizeGovernance: createGovernancePolicy({ roles: { admin: ["*"], viewer: ["lineage.read"] } }),
     recorder: createViewRecorder(lineage),
     promotions,
     fixations,
