@@ -21,13 +21,37 @@ const SNIPPETS: { page: string; snippet: string; maxLines: number; nth?: number 
   },
 ];
 
+/** Every fenced ```ts / ```tsx block of a Markdown string, in order. A ```bash (or any other) fence never matches. */
+function codeBlocks(markdown: string): string[] {
+  return [...markdown.matchAll(/```tsx?\n([\s\S]*?)```/g)].map((m) => m[1] ?? "");
+}
+
 /** The nth (0-based) fenced ```ts / ```tsx block of a Markdown file. */
 function codeBlock(markdown: string, nth: number): string {
-  const blocks = [...markdown.matchAll(/```tsx?\n([\s\S]*?)```/g)].map((m) => m[1] ?? "");
+  const blocks = codeBlocks(markdown);
   const block = blocks[nth];
   if (block == null) throw new Error(`code block #${nth} not found (found ${blocks.length})`);
   return block;
 }
+
+// `nth` makes the SNIPPETS ⇄ fence mapping positional: row N of a page expects to be its Nth ts/tsx fence.
+// Nothing else enforces that a page's fence count actually matches its row count, so an edit that inserts
+// (or removes) a ts/tsx fence on a page could silently make a later row compare against the wrong block.
+// Guard it here, deriving the expected count from SNIPPETS itself rather than hard-coding it.
+const PAGES = [...new Set(SNIPPETS.map((s) => s.page))];
+
+describe.each(PAGES)("%s has one ts/tsx fence per SNIPPETS row", (page) => {
+  const expectedCount = SNIPPETS.filter((s) => s.page === page).length;
+
+  it(`EN page has exactly ${expectedCount} ts/tsx fenced block(s)`, () => {
+    expect(codeBlocks(readFileSync(join(REPO_ROOT, page), "utf8")).length).toBe(expectedCount);
+  });
+
+  it(`JA page has exactly ${expectedCount} ts/tsx fenced block(s)`, () => {
+    const jaPage = page.replace(/\.md$/, ".ja.md");
+    expect(codeBlocks(readFileSync(join(REPO_ROOT, jaPage), "utf8")).length).toBe(expectedCount);
+  });
+});
 
 describe.each(SNIPPETS)("$page ⇄ $snippet", ({ page, snippet, maxLines, nth }) => {
   const source = readFileSync(join(SITE_DIR, snippet), "utf8").trimEnd();

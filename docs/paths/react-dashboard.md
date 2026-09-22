@@ -81,7 +81,7 @@ export function Dashboard() {
 }
 ```
 
-Open the network tab: `POST /compose` returns `{spec, capability}` with **zero numbers in the Spec**; the chart's `GET /binding/resolve` carries the capability as a Bearer token and returns the rows. Send the same request twice and the second response is `provenance.cache: "hit"` — that is the identical-display guarantee at work.
+Open the network tab: `POST /compose` returns `{spec, capability}` with **no data values in the Spec**; the chart's `GET /binding/resolve` carries the capability as a Bearer token and returns the rows. Send the same request twice and the second response is `provenance.cache: "hit"` — that is the identical-display guarantee at work.
 
 ## Where this leads
 

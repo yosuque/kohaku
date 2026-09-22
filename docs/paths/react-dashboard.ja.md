@@ -81,7 +81,7 @@ export function Dashboard() {
 }
 ```
 
-ネットワークタブを開くと、`POST /compose` は `{spec, capability}` を返し **Spec の中に数値はひとつもありません**。チャートの `GET /binding/resolve` は capability を Bearer トークンとして運び、行データを返します。同じ要求を 2 回送ると 2 回目は `provenance.cache: "hit"` になります — これが同一表示保証の実体です。
+ネットワークタブを開くと、`POST /compose` は `{spec, capability}` を返し **Spec の中にデータの値はひとつもありません**。チャートの `GET /binding/resolve` は capability を Bearer トークンとして運び、行データを返します。同じ要求を 2 回送ると 2 回目は `provenance.cache: "hit"` になります — これが同一表示保証の実体です。
 
 ## この先
 
