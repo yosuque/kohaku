@@ -27,6 +27,7 @@ export const SIDEBAR_EN: SidebarGroup[] = [
       { text: "Why kohaku", link: "/docs/why-kohaku" },
       { text: "Path (a): MCP Apps only", link: "/docs/paths/mcp-apps" },
       { text: "Path (b): React dashboard only", link: "/docs/paths/react-dashboard" },
+      { text: "Path (c): Full stack", link: "/docs/paths/full-stack" },
     ],
   },
   {
@@ -60,6 +61,7 @@ export const SIDEBAR_JA: SidebarGroup[] = [
       { text: "なぜ kohaku か", link: "/ja/docs/why-kohaku" },
       { text: "パス (a): MCP Apps だけ", link: "/ja/docs/paths/mcp-apps" },
       { text: "パス (b): React ダッシュボードだけ", link: "/ja/docs/paths/react-dashboard" },
+      { text: "パス (c): フル構成", link: "/ja/docs/paths/full-stack" },
     ],
   },
   {

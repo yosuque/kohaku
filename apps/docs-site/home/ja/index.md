@@ -22,3 +22,11 @@ features:
   - title: 統制された生成
     details: L0 固定 ⇄ L1 宣言的合成 ⇄ L2 自由生成。うまくいったものを昇格パイプラインで正式部品に固める。
 ---
+
+## パスを選ぶ
+
+| あなたは… | ここから | 最初のコード |
+|---|---|---|
+| MCP サーバー作者 | [パス (a): MCP Apps だけ](/ja/docs/paths/mcp-apps) | `attachKohakuToMcpServer` 1 回 |
+| Server-Driven UI を今すぐ、LLM は後で、というプロダクトチーム | [パス (b): React ダッシュボードだけ](/ja/docs/paths/react-dashboard) | 手書きの Spec + `<SpecView>` |
+| モデルが合成した UI を本番に載せるチーム | [パス (c): フル構成](/ja/docs/paths/full-stack) | 30 行の統制付き REST ホスト |

@@ -20,6 +20,7 @@ const SNIPPETS: { page: string; snippet: string; maxLines: number; nth?: number 
     nth: 1,
   },
   { page: "docs/paths/mcp-apps.md", snippet: "snippets/mcp-apps.ts", maxLines: 30 },
+  { page: "docs/paths/full-stack.md", snippet: "snippets/full-stack.ts", maxLines: 30 },
 ];
 
 /** Every fenced ```ts / ```tsx block of a Markdown string, in order. A ```bash (or any other) fence never matches. */

@@ -22,3 +22,11 @@ features:
   - title: Governed generation
     details: L0 fixed ⇄ L1 declarative ⇄ L2 free-form, with a promotion pipeline that solidifies what works into official parts.
 ---
+
+## Choose your path
+
+| You are… | Start with | First code |
+|---|---|---|
+| An MCP server author | [Path (a): MCP Apps only](/docs/paths/mcp-apps) | one `attachKohakuToMcpServer` call |
+| A product team that wants Server-Driven UI now, LLM later | [Path (b): React dashboard only](/docs/paths/react-dashboard) | a hand-written Spec + `<SpecView>` |
+| A team putting model-composed UI into production | [Path (c): Full stack](/docs/paths/full-stack) | a governed REST host in 30 lines |
