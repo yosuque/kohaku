@@ -45,17 +45,25 @@ vulnerability reports. In particular:
   `packages/*` package, this is a known, intentional limitation of a
   reference implementation meant to be replaced with a product's own
   `StoragePort` before production, not a vulnerability.
+- `@kohaku-ui/authz-hmac`'s reference `AuthzPort` implementation
+  (`createHmacAuthzPort` in `packages/authz-hmac/src/hmac-authz-port.ts`,
+  which the sample uses) is a single-host capability signer by design — one
+  shared HMAC secret and a transparent, unencrypted token payload, documented
+  as such in its own README and code comments. Despite living in a
+  `packages/*` package, this is a known, intentional limitation of a
+  reference implementation meant to be replaced with a product's own
+  `AuthzPort` before production, not a vulnerability.
 
 These are all deliberate, documented design choices: a product built on
 kohaku is expected to supply its own `AuthzPort` / `StoragePort`
 implementations (or a hardened deployment of the reference ones above), its
 own signing secret, and its own network exposure and authentication in front
 of any host endpoint. Findings that rely on the sample's demo defaults, or on
-the documented single-process design of `storage-memory`'s reference
-`StoragePort` implementations, rather than on an actual flaw in `packages/*`,
-`cli/`, `spec/`, or `python/kohaku` themselves, are not actionable as
-security reports, but you're welcome to raise them as regular issues if you
-think the demo's
+the documented design of `authz-hmac`'s reference `AuthzPort` implementation
+or `storage-memory`'s reference `StoragePort` implementations, rather than on
+an actual flaw in `packages/*`, `cli/`, `spec/`, or `python/kohaku`
+themselves, are not actionable as security reports, but you're welcome to
+raise them as regular issues if you think the demo's
 defaults should be hardened further.
 
 ## The sandbox boundary
