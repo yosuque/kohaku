@@ -23,7 +23,10 @@ export const NAV_JA: SidebarItem[] = [
 export const SIDEBAR_EN: SidebarGroup[] = [
   {
     text: "Start here",
-    items: [{ text: "Why kohaku", link: "/docs/why-kohaku" }],
+    items: [
+      { text: "Why kohaku", link: "/docs/why-kohaku" },
+      { text: "Path (b): React dashboard only", link: "/docs/paths/react-dashboard" },
+    ],
   },
   {
     text: "Guides",
@@ -52,7 +55,10 @@ export const SIDEBAR_EN: SidebarGroup[] = [
 export const SIDEBAR_JA: SidebarGroup[] = [
   {
     text: "まずここから",
-    items: [{ text: "なぜ kohaku か", link: "/ja/docs/why-kohaku" }],
+    items: [
+      { text: "なぜ kohaku か", link: "/ja/docs/why-kohaku" },
+      { text: "パス (b): React ダッシュボードだけ", link: "/ja/docs/paths/react-dashboard" },
+    ],
   },
   {
     text: "ガイド",
