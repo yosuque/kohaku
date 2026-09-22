@@ -70,6 +70,27 @@ describe("FixationsTab", () => {
     expect(approveBody).toEqual({ intent: { canonical: "sales.trend", params: { fy: 2026 } } });
   });
 
+  it("shows the role explanation when approve is denied", async () => {
+    // Mirrors the remove-denied test below, but for the fixate/approve path: the coverage bar requires each
+    // action (fixate, remove) to have both a success test and a distinct denied-path test. opApprove's message
+    // text differs from opRemove's, so this cannot be satisfied by the remove-denied test's assertion.
+    const view = renderInAdmin(<FixationsTab />, {
+      handlers: {
+        "GET /fixations/proposals": () => jsonResponse({ proposals: [proposal] }),
+        "GET /fixations": () => jsonResponse({ fixations: [] }),
+        "POST /fixations/approve": () =>
+          jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "no" } }, 403),
+      },
+    });
+    await screen.findByText("sales.trend");
+    fireEvent.click(screen.getByText(m.fixations.fixateButton));
+    await waitFor(() => expect(view.notices).toHaveLength(1));
+    expect(view.notices[0]).toEqual({
+      text: m.deniedMessage("CAPABILITY_DENIED", m.fixations.opApprove),
+      kind: "error",
+    });
+  });
+
   it("removes a fixation via the unfixate wire call and reloads without a success notice", async () => {
     let fixationsCallCount = 0;
     const view = renderInAdmin(<FixationsTab />, {

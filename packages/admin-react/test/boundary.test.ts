@@ -43,4 +43,18 @@ describe("dependency boundary", () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  // FixationsClient.remove() is `@deprecated` in packages/client/src/client.ts (an alias that just forwards to
+  // unfixate()), but a JSDoc tag does not fail a build, and the two methods hit the identical wire call, so no
+  // behavioral test can catch a regression back to the deprecated name. This is the only guard against it.
+  it("never calls the deprecated FixationsClient.remove() alias", () => {
+    const offenders: string[] = [];
+    for (const file of walk(join(PKG_ROOT, "src"))) {
+      const src = readFileSync(file, "utf8");
+      if (/\bfixations\s*\.\s*remove\s*\(/.test(src)) offenders.push(file);
+    }
+    expect(offenders, "use client.fixations.unfixate(...) instead of the deprecated remove() alias").toEqual(
+      [],
+    );
+  });
 });
