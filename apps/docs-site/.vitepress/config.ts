@@ -1,4 +1,5 @@
 import { defineConfig } from "vitepress";
+import { githubHeadingSlug } from "../src/github-slug.js";
 import { mermaidFence } from "../src/mermaid-fence.js";
 import { NAV_EN, NAV_JA, SIDEBAR_EN, SIDEBAR_JA } from "../src/sidebar.js";
 
@@ -23,6 +24,10 @@ export default defineConfig({
   lastUpdated: false,
   markdown: {
     config: (md) => mermaidFence(md),
+    // Every in-repo anchor link (README.md, apps/sample-mcp/README.md, and the pages this plan added)
+    // is written against GitHub's own heading-slug rule, because the Markdown is read on GitHub too.
+    // Overriding only `slugify` here keeps markdown-it-anchor's own duplicate-id disambiguation intact.
+    anchor: { slugify: githubHeadingSlug },
   },
   locales: {
     root: {
