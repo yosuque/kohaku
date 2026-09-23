@@ -80,12 +80,13 @@ export interface LineageSummary {
   /**
    * Human review turnaround: the time from a candidate's `component.nominated` to the next `component.reviewed`
    * whose decision is approve or reject, paired per (tenant, artifactId). A requestChanges decision does not
-   * complete a review (the candidate is re-nominated later and measured again from that nomination). Only a
-   * policy-driven nomination (`payload.by === "policy"`) opens a turnaround window; a reviewer-initiated
-   * re-nomination (the "re-submit and approve" flow's fresh `component.nominated` milliseconds before its own
-   * `component.reviewed`) does not, so a re-submitted candidate still measures the whole round-trip from its
-   * original nomination rather than a near-zero duration from the resubmission. A reviewed event with no
-   * preceding open nomination in the window is ignored.
+   * complete a review: the candidate is re-nominated later, but a re-nomination for a candidate whose window is
+   * already open does not restart the measurement (the original nomination's window stays open until a
+   * closing review consumes it) -- so a re-submitted candidate ("re-submit and approve", whose fresh
+   * `component.nominated` can land milliseconds before its own `component.reviewed`) is measured from its
+   * *original* nomination, including the time spent making the requested changes, rather than a near-zero
+   * duration from the resubmission. A reviewed event with no preceding open nomination in the window is
+   * ignored.
    *
    * **Order-dependent**: this is the only aggregation in this function that is sensitive to the order of
    * `events` -- the pairing scans in array order and treats each `component.nominated` as opening the window
@@ -202,18 +203,22 @@ export function summarizeLineage(
       case "component.used":
         promotions.used++;
         break;
-      case "component.nominated":
+      case "component.nominated": {
         promotions.nominated++;
-        // Only a policy-driven nomination (payload.by === "policy", nomination.ts's auto-nominate) opens a fresh
-        // turnaround window: it is the first time the candidate is shown to a reviewer. A reviewer-initiated
-        // re-nomination (payload.by is the reviewer's own Principal id -- the "re-submit and approve" flow
-        // routes a changes_requested candidate back through `act(..., { kind: "nominate", by: reviewer }, ...)`,
-        // service.ts) is a re-submission after changes_requested, not a new candidate awaiting first review.
-        // Treating it as a fresh window would record a duration of milliseconds and discard the reviewer's real
-        // wait since their original review request went out; leaving the original window open instead measures
-        // the whole round-trip, including the time spent making the requested changes.
-        if (e.payload["by"] === "policy") openNominations.set(reviewKey(e), e.ts);
+        // Only open a *fresh* window when none is already open for this (tenant, artifactId): a re-nomination
+        // for a candidate whose window is already open (the "re-submit and approve" flow routes a
+        // changes_requested candidate back through `act(..., { kind: "nominate", by: reviewer }, ...)`,
+        // service.ts, recording a fresh component.nominated milliseconds before its own component.reviewed)
+        // does not restart the measurement -- the original nomination's window stays open, so a re-submitted
+        // candidate is still measured from its original nomination, including the time spent making the
+        // requested changes. This does not key off payload.by (a field docs/specification.md's
+        // component.nominated row does not promise as part of the wire contract): any nomination path can open
+        // the *first* window for a given candidate, including one driven purely through the generic actions
+        // route with no `by: "policy"` sentinel ever recorded.
+        const key = reviewKey(e);
+        if (!openNominations.has(key)) openNominations.set(key, e.ts);
         break;
+      }
       case "component.schemaSuggested":
         promotions.schemaSuggested++;
         break;
