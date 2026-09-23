@@ -14,6 +14,7 @@ import {
   scaffoldPorts,
   validateComponentFile,
 } from "./commands.js";
+import { CLI_VERSION } from "./version.js";
 
 /** Reads stdin to completion and returns it as a string (the smoke-l2 sidecar's one-request-one-process contract). */
 async function readStdin(): Promise<string> {
@@ -26,7 +27,7 @@ async function readStdin(): Promise<string> {
 
 const program = new Command("kohaku")
   .description("CLI for running Kohaku Protocol conformance checks and generating scaffolds")
-  .version("0.1.0");
+  .version(CLI_VERSION);
 
 program
   .command("conformance")
