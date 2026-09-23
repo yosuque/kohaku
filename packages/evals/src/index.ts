@@ -28,7 +28,7 @@ export {
   l2PromotionRubricV0_3,
   type Rubric,
 } from "./judge.js";
-export { fencedBlock, untrustedBlock } from "./prompt-guard.js";
+export { untrustedBlock } from "./prompt-guard.js";
 export {
   type QualityCase,
   type QualityCaseResult,

@@ -98,6 +98,18 @@ export function PromotionsTab(props: { defaults?: PromotionDefaults } = {}): Rea
     preferSuggestion && candidate.suggestion != null
       ? draftFormFromSuggestion(candidate.suggestion)
       : initialDraftFor(candidate);
+  /**
+   * The product's own `queryPaths` first, with a suggested `queryTemplate.path` appended when it is not already
+   * in that list. Without this, a suggested path outside the product's list would be submitted on approve (the
+   * form is prefilled with it) while the <select> shows nothing selected and the diff panel calls it "unchanged" —
+   * a reviewer approving a value the UI never displayed.
+   */
+  const queryPathsFor = (candidate: PromotionCandidateView): readonly string[] => {
+    const suggestedPath = candidate.suggestion?.draft.queryTemplate?.path;
+    return suggestedPath != null && !queryPaths.includes(suggestedPath)
+      ? [...queryPaths, suggestedPath]
+      : queryPaths;
+  };
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [busy, setBusy] = useState(false);
   const { candidates, promotionMinUses, reload } = usePromotions(statusFilter);
@@ -128,11 +140,15 @@ export function PromotionsTab(props: { defaults?: PromotionDefaults } = {}): Rea
       )}
       {candidates.map((candidate) => (
         <PromotionCard
-          key={candidate.artifactId}
+          // Keyed on the suggestion's own identity too, not just artifactId: a candidate can be listed without a
+          // suggestion and later gain one (e.g. after a reload while a re-scan attaches an extraction). Without
+          // this, the card would not remount, the useState-initialized form would keep its stale prefill, and the
+          // acknowledgement checkbox would not reset even though a brand-new proposal just appeared.
+          key={`${candidate.artifactId}:${candidate.suggestion?.suggestedAt ?? ""}`}
           candidate={candidate}
           busy={busy}
           initialDraft={initialDraftOf(candidate)}
-          queryPaths={queryPaths}
+          queryPaths={queryPathsFor(candidate)}
           onAction={async (kind, draft) => {
             setBusy(true);
             try {

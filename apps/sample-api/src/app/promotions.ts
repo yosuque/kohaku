@@ -153,23 +153,29 @@ export function createPromotionPipeline(args: {
     // LLM auto-extraction of the promotion schema at auto-nomination (advisory; fail-open inside lineage).
     ...(schemaExtractor != null
       ? {
-          suggestSchema: async (candidate: PromotionCandidate, context?: TenantScope) =>
-            schemaExtractor.extract({
-              html: candidate.html ?? "",
+          suggestSchema: async (candidate: PromotionCandidate, context?: TenantScope) => {
+            // No body to extract from: `null` is the hook's own "no proposal" contract, matching the outcome a
+            // real extraction would eventually reach anyway, but without spending an LLM call deriving a
+            // proposal from an empty document (which would then get prefilled into the approval form).
+            if (candidate.html == null) return null;
+            return schemaExtractor.extract({
+              html: candidate.html,
               request: candidate.request ?? "",
               namespace: "sales",
               queryPaths: QUERY_PATHS,
               catalogSummary: catalogSummaryFor(registry, context?.tenant),
-            }),
+            });
+          },
         }
       : {}),
-    // Observability of the (fail-open) component.published audit-record path (the demo is console-based, same
-    // convention as compose-context.ts's observer.onError / host-deps.ts's onError). Fires when the audit
-    // record fails either at publish time or during a reconcile backfill attempt; the projection itself is
-    // never blocked by this (see createPromotions' handlePublish / reconcile docs).
+    // Observability hook for every failure/skip the promotion pipeline reports (see PromotionErrorEndpoint):
+    // audit-record fail-open (publish/unpublish/nominate/suggest/approve), a failing/slow schema-extraction call,
+    // and the tenant-mismatch nomination skip. The demo just logs; a real deployment would feed this to its own
+    // observability stack (same convention as compose-context.ts's observer.onError / host-deps.ts's onError).
+    // The pipeline's own transition/projection is never blocked by any of these (fail-open by design).
     onError: ({ endpoint, artifactId, tenant }, error) => {
       console.error(
-        `[promotions] failed to record the ${endpoint} audit event for ${artifactId}${tenant != null ? ` (tenant=${tenant})` : ""}:`,
+        `[promotions] ${endpoint} failed for ${artifactId}${tenant != null ? ` (tenant=${tenant})` : ""}:`,
         error,
       );
     },

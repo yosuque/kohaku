@@ -44,7 +44,6 @@ export { SuggestionPanel } from "./tabs/promotions/SuggestionPanel.js";
 export {
   diffAgainstSuggestion,
   draftFormFromSuggestion,
-  hasEdits,
   type SuggestionField,
   type SuggestionFieldDiff,
 } from "./tabs/promotions/suggestion.js";

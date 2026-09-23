@@ -119,16 +119,25 @@ export function createNomination(opts: {
           continue;
         }
         candidate.status = transition(candidate.status, { kind: "nominate", by: "policy" }, policy);
-        // Advisory schema extraction (fail-open). Runs before persistMany so the proposal lands in the same
-        // snapshot write as the status transition, and never for an already-nominated candidate (this branch
-        // is only entered for a fresh in_use -> candidate transition).
-        if (suggestSchema != null) {
-          const suggestion = await suggestFailOpen(candidate, tenant);
-          if (suggestion != null) candidate.suggestion = suggestion;
-        }
         toPersist.push({ candidate, tenant });
         nominatedIds.add(usageIndexKey(recordTenant, candidate.artifactId));
       }
+    }
+    // Advisory schema extraction (fail-open), run concurrently across every freshly nominated candidate in this
+    // scan rather than sequentially: this whole call runs inside the tenant's promotion governance mutex
+    // (host-rest's withPromotionLock), so N sequential LLM calls would hold that lock for N x the extractor's
+    // own latency, queuing every other promotion transition for the tenant behind it. Still runs before
+    // persistMany so every suggestion lands in the same snapshot write as its candidate's status transition
+    // (each promise mutates its own `candidate` object in place; toPersist already holds those references).
+    // A throw from one candidate's extraction is caught by suggestFailOpen and does not affect the others
+    // (Promise.all over promises that each individually never reject).
+    if (suggestSchema != null) {
+      await Promise.all(
+        toPersist.map(async ({ candidate }) => {
+          const suggestion = await suggestFailOpen(candidate, tenant);
+          if (suggestion != null) candidate.suggestion = suggestion;
+        }),
+      );
     }
     await persistMany(toPersist);
     // Stamp each nominate event with tenant too (so re-evaluation in the tenant scope finds the same

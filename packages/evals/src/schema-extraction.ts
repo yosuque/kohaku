@@ -118,12 +118,17 @@ export function createSchemaExtractor(opts: { llm: LlmPort; now?: () => Date }):
     return [
       `## Original request\n${untrustedBlock("REQUEST", input.request)}`,
       `## Namespace\n${input.namespace}`,
-      `## Data references the component fetches (from the HTML)\n${refs.length > 0 ? refs.map((r) => `- ${r}`).join("\n") : "(none)"}`,
+      // Both derived from the untrusted HTML (a regex match over it, and a lint pass over it): wrapped in the
+      // same untrustedBlock guard as the HTML itself, so the system prompt's "the portion enclosed by the
+      // <<<BEGIN …>>>/<<<END …>>> delimiters" sentence is true of every section built from untrusted input, not
+      // just the HTML block below. The lint side matters more than it looks: L2_SCRIPT_SYNTAX interpolates a raw
+      // V8 SyntaxError string, which can echo attacker-influenced source text verbatim.
+      `## Data references the component fetches (from the HTML)\n${untrustedBlock("DATA_REFS", refs.length > 0 ? refs.map((r) => `- ${r}`).join("\n") : "(none)")}`,
       ...(input.queryPaths != null && input.queryPaths.length > 0
         ? [`## Supported query paths (queryTemplate.path candidates)\n${input.queryPaths.join(", ")}`]
         : []),
       `## Bridge API allowlist\n${[...KOHAKU_API_ALLOWLIST].map((name) => `window.kohaku.${name}`).join(", ")}`,
-      `## Bridge-contract lint issues\n${issues.length > 0 ? issues.map((i) => `- ${i}`).join("\n") : "(none)"}`,
+      `## Bridge-contract lint issues\n${untrustedBlock("LINT_ISSUES", issues.length > 0 ? issues.map((i) => `- ${i}`).join("\n") : "(none)")}`,
       ...(input.catalogSummary != null
         ? [`## Existing catalog (avoid these names)\n${input.catalogSummary}`]
         : []),

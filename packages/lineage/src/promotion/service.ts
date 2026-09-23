@@ -707,23 +707,36 @@ export function createPromotions(opts: {
       // nomination) and the final draft (this approve's argument) are known. Fail-open like the other audit
       // records on this path: a storage hiccup must not stop the publish below.
       if (candidate.suggestion != null) {
-        const diff = diffDraft(candidate.suggestion.draft, draft);
-        await recordFailOpen(
-          opts.lineage,
-          opts.onError,
-          "promotion.approve.audit",
-          "component.schemaEdited",
-          {
-            artifactId,
-            reviewer: reviewer.id,
-            extractorId: candidate.suggestion.extractorId,
-            extractorVersion: candidate.suggestion.extractorVersion,
-            changed: diff.changed,
-            unchanged: diff.unchanged,
-          },
-          { kind: "user", id: reviewer.id },
-          { tenant, artifactId },
-        );
+        // diffDraft itself is pure but not defensive: candidate-store casts the persisted `data.suggestion` to
+        // SchemaSuggestion without validating it, so a suggestion that exists but is missing/malformed `draft`
+        // (a truncated write, a hand-edited promotions.json, a future field rename) would otherwise throw here
+        // and propagate out of approve() -- blocking the one thing this whole feature must never block, the
+        // publish. Fail-open like the audit record it feeds: report and skip the diff instead of throwing.
+        try {
+          const diff = diffDraft(candidate.suggestion.draft, draft);
+          await recordFailOpen(
+            opts.lineage,
+            opts.onError,
+            "promotion.approve.audit",
+            "component.schemaEdited",
+            {
+              artifactId,
+              reviewer: reviewer.id,
+              extractorId: candidate.suggestion.extractorId,
+              extractorVersion: candidate.suggestion.extractorVersion,
+              changed: diff.changed,
+              unchanged: diff.unchanged,
+            },
+            { kind: "user", id: reviewer.id },
+            { tenant, artifactId },
+          );
+        } catch (e) {
+          notifyPromotionError(
+            opts.onError,
+            { endpoint: "promotion.approve.audit", artifactId, ...tenantField(tenant) },
+            e,
+          );
+        }
       }
     }
     if (candidate.status === "schema_proposed") {

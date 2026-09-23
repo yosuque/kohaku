@@ -206,17 +206,21 @@ describe("summarizeLineage (pure aggregation of usage analytics)", () => {
 describe("summarizeLineage: review turnaround and suggestion acceptance", () => {
   it("pairs component.nominated with the next component.reviewed(approve|reject) per (tenant, artifactId)", () => {
     const events = [
-      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T00:00:00.000Z" }),
-      ev("component.nominated", { artifactId: "a2" }, { ts: "2026-07-01T00:00:00.000Z", tenant: "t1" }),
+      ev("component.nominated", { artifactId: "a1", by: "policy" }, { ts: "2026-07-01T00:00:00.000Z" }),
+      ev(
+        "component.nominated",
+        { artifactId: "a2", by: "policy" },
+        { ts: "2026-07-01T00:00:00.000Z", tenant: "t1" },
+      ),
       ev("component.reviewed", { artifactId: "a1", decision: "approve" }, { ts: "2026-07-01T00:01:00.000Z" }),
       // requestChanges is not a completion: a1 is re-nominated and reviewed again later
-      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T01:00:00.000Z" }),
+      ev("component.nominated", { artifactId: "a1", by: "policy" }, { ts: "2026-07-01T01:00:00.000Z" }),
       ev(
         "component.reviewed",
         { artifactId: "a1", decision: "requestChanges" },
         { ts: "2026-07-01T01:00:30.000Z" },
       ),
-      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T02:00:00.000Z" }),
+      ev("component.nominated", { artifactId: "a1", by: "policy" }, { ts: "2026-07-01T02:00:00.000Z" }),
       ev("component.reviewed", { artifactId: "a1", decision: "reject" }, { ts: "2026-07-01T02:03:00.000Z" }),
       // a2 (tenant t1) is reviewed 5 minutes after its nomination
       ev(
@@ -233,14 +237,45 @@ describe("summarizeLineage: review turnaround and suggestion acceptance", () => 
     expect(s.review.durationMs).toEqual({ p50: 180_000, p95: 300_000, max: 300_000 });
   });
 
+  it("a reviewer-initiated re-nomination (re-submit and approve) does not reopen the turnaround window", () => {
+    // service.ts's "re-submit and approve" path routes a changes_requested candidate back through
+    // act(..., { kind: "nominate", by: reviewer }, ...), which records a fresh component.nominated whose `by`
+    // is the reviewer's own Principal id, milliseconds before the resulting component.reviewed(approve). Only
+    // a policy-driven nomination (`by: "policy"`) should open a turnaround window, so the pairing here must
+    // still measure from the *original* policy nomination, not the near-instant re-nomination.
+    const events = [
+      ev("component.nominated", { artifactId: "a1", by: "policy" }, { ts: "2026-07-01T00:00:00.000Z" }),
+      ev(
+        "component.reviewed",
+        { artifactId: "a1", decision: "requestChanges" },
+        { ts: "2026-07-01T00:30:00.000Z" },
+      ),
+      // Reviewer-initiated re-nomination, immediately followed by approve in the same request.
+      ev("component.nominated", { artifactId: "a1", by: "alice" }, { ts: "2026-07-01T01:00:00.000Z" }),
+      ev("component.reviewed", { artifactId: "a1", decision: "approve" }, { ts: "2026-07-01T01:00:00.050Z" }),
+    ];
+    const s = summarizeLineage(events);
+    expect(s.review.count).toBe(1);
+    // ~1 hour (the full round-trip from the original policy nomination), not the ~50ms since the re-nomination.
+    expect(s.review.durationMs.p50).toBe(60 * 60 * 1000 + 50);
+  });
+
   it("keys the pairing by (tenant, artifactId), not artifactId alone: the same artifactId under two tenants is measured independently", () => {
     const events = [
       // Both tenants nominate the SAME artifactId a1 at the same t0, BEFORE either is reviewed. If the pairing
       // key dropped tenant, tenantB's nomination would overwrite tenantA's open-nomination entry (both keyed
       // "a1"), and tenantA's review would then consume tenantB's later review's entry — since it is deleted on
       // first use, tenantB's own review would find no open nomination and be silently dropped.
-      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T00:00:00.000Z", tenant: "tenantA" }),
-      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T00:00:00.000Z", tenant: "tenantB" }),
+      ev(
+        "component.nominated",
+        { artifactId: "a1", by: "policy" },
+        { ts: "2026-07-01T00:00:00.000Z", tenant: "tenantA" },
+      ),
+      ev(
+        "component.nominated",
+        { artifactId: "a1", by: "policy" },
+        { ts: "2026-07-01T00:00:00.000Z", tenant: "tenantB" },
+      ),
       // Tenant A reviews 1 minute after its nomination.
       ev(
         "component.reviewed",

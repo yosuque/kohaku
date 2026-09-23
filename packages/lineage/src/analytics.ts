@@ -186,7 +186,15 @@ export function summarizeLineage(
         break;
       case "component.nominated":
         promotions.nominated++;
-        openNominations.set(reviewKey(e), e.ts);
+        // Only a policy-driven nomination (payload.by === "policy", nomination.ts's auto-nominate) opens a fresh
+        // turnaround window: it is the first time the candidate is shown to a reviewer. A reviewer-initiated
+        // re-nomination (payload.by is the reviewer's own Principal id -- the "re-submit and approve" flow
+        // routes a changes_requested candidate back through `act(..., { kind: "nominate", by: reviewer }, ...)`,
+        // service.ts) is a re-submission after changes_requested, not a new candidate awaiting first review.
+        // Treating it as a fresh window would record a duration of milliseconds and discard the reviewer's real
+        // wait since their original review request went out; leaving the original window open instead measures
+        // the whole round-trip, including the time spent making the requested changes.
+        if (e.payload["by"] === "policy") openNominations.set(reviewKey(e), e.ts);
         break;
       case "component.schemaSuggested":
         promotions.schemaSuggested++;

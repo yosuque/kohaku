@@ -141,4 +141,57 @@ describe("PromotionsTab with a schema suggestion", () => {
     expect((screen.getByLabelText("componentType") as HTMLInputElement).value).toBe("sales.customViz1");
     expect(screen.queryByText(m.suggestionTitle)).toBeNull();
   });
+
+  it("renders a suggested queryTemplate.path outside the product's queryPaths as a selectable, visible option (I-2)", async () => {
+    const suggestionWithOutsidePath = {
+      ...SUGGESTION,
+      draft: {
+        ...SUGGESTION.draft,
+        queryTemplate: { ...SUGGESTION.draft.queryTemplate, path: "custom_path" },
+      },
+    };
+    renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
+      handlers: {
+        "POST /promotions/evaluate": () =>
+          jsonResponse({ candidates: [candidate({ suggestion: suggestionWithOutsidePath })] }),
+      },
+    });
+    await screen.findByText(m.suggestionBadge("fake-model", 90));
+    const select = screen.getByLabelText(m.queryPathLabel) as HTMLSelectElement;
+    // The suggested path is both selected and present in the options list, not silently dropped like the
+    // product's own queryPaths (["", "trend", "summary"]), which does not contain "custom_path".
+    expect(select.value).toBe("custom_path");
+    expect(Array.from(select.options).map((o) => o.value)).toContain("custom_path");
+  });
+
+  it("re-prefills an already-mounted card when a candidate gains a suggestion on reload (I-3)", async () => {
+    const base = candidate();
+    let evaluateCalls = 0;
+    renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
+      handlers: {
+        "POST /promotions/evaluate": () => {
+          evaluateCalls++;
+          return jsonResponse({
+            candidates: [
+              evaluateCalls === 1 ? base : { ...base, status: "changes_requested", suggestion: SUGGESTION },
+            ],
+          });
+        },
+        "POST /promotions/art-1/actions": () =>
+          jsonResponse({ candidate: { ...base, status: "changes_requested" } }),
+      },
+    });
+    await screen.findByText(base.artifactId as string);
+    // Mounted first with no suggestion: the product's generic prefill applies.
+    expect((screen.getByLabelText("componentType") as HTMLInputElement).value).toBe("sales.customViz1");
+    fireEvent.click(screen.getByText(m.requestChangesButton));
+    await waitFor(() => expect(evaluateCalls).toBeGreaterThan(1));
+    // The reload attaches a suggestion to the same artifactId; the card must remount and re-prefill from it,
+    // rather than keeping the stale useState from its first mount.
+    await waitFor(() =>
+      expect((screen.getByLabelText("componentType") as HTMLInputElement).value).toBe(
+        "sales.calendarHeatmap",
+      ),
+    );
+  });
 });

@@ -1,6 +1,7 @@
 import type { SchemaSuggestionView } from "@kohaku-ui/client";
 import { describe, expect, it } from "vitest";
-import { diffAgainstSuggestion, draftFormFromSuggestion, hasEdits } from "../src/index.js";
+import { diffAgainstSuggestion, draftFormFromSuggestion } from "../src/index.js";
+import { hasEdits } from "../src/tabs/promotions/suggestion.js";
 
 const SUGGESTION: SchemaSuggestionView = {
   draft: {
@@ -64,6 +65,16 @@ describe("diffAgainstSuggestion", () => {
   it("ignores whitespace and key order in JSON text fields", () => {
     const form = draftFormFromSuggestion(SUGGESTION);
     form.fixedParams = '{"granularity":"month",   "metric":"revenue"}';
+    expect(hasEdits(diffAgainstSuggestion(form, SUGGESTION))).toBe(false);
+  });
+  it("ignores key order nested inside an object field, not just at the top level (recursive sortKeys)", () => {
+    const form = draftFormFromSuggestion(SUGGESTION);
+    // Reorders both paramsJsonSchema's own top-level keys and the keys of the nested properties.fiscalYear
+    // object. A sortKeys that only sorted the top level would still call this "changed".
+    form.paramsJsonSchema = JSON.stringify({
+      properties: { fiscalYear: { default: 2026, type: "integer" } },
+      type: "object",
+    });
     expect(hasEdits(diffAgainstSuggestion(form, SUGGESTION))).toBe(false);
   });
   it("flags an edited field with the suggested text alongside", () => {

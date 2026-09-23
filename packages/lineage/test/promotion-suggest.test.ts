@@ -157,6 +157,30 @@ describe("schema suggestion at nomination (advisory, fail-open)", () => {
     expect(errors[0]!.ctx).toEqual({ endpoint: "promotion.suggest.schema", artifactId: "a1" });
   });
 
+  it("runs extractions concurrently across a scan: one throwing candidate does not affect the other", async () => {
+    const storage = memoryStorage();
+    seedUsage(storage, "a1", 2);
+    seedUsage(storage, "a2", 2);
+    const suggest = vi.fn(async (candidate: PromotionCandidate) => {
+      if (candidate.artifactId === "a1") throw new Error("llm down");
+      return SUGGESTION;
+    });
+    const { promotions, errors } = pipeline(storage, suggest);
+
+    const listed = await promotions.evaluateAndList();
+    expect(listed).toHaveLength(2);
+    expect(listed.every((c) => c.status === "candidate")).toBe(true);
+    const a1 = listed.find((c) => c.artifactId === "a1")!;
+    const a2 = listed.find((c) => c.artifactId === "a2")!;
+    expect(a1.suggestion).toBeUndefined();
+    expect(a2.suggestion).toEqual(SUGGESTION);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.ctx).toEqual({ endpoint: "promotion.suggest.schema", artifactId: "a1" });
+    const types = storage.events.map((e) => e.type);
+    expect(types.filter((t) => t === "component.nominated")).toHaveLength(2);
+    expect(types.filter((t) => t === "component.schemaSuggested")).toHaveLength(1);
+  });
+
   it("a null suggestion is 'no suggestion' (nothing persisted, nothing audited, no error)", async () => {
     const storage = memoryStorage();
     seedUsage(storage, "a1", 2);
@@ -218,6 +242,21 @@ describe("component.schemaEdited on approve", () => {
     expect(edited.payload["changed"]).toEqual([
       { field: "description", suggested: DRAFT.description, final: "Monthly sales heatmap" },
     ]);
+  });
+
+  it("does not block approve/publish when a persisted suggestion is malformed (missing draft)", async () => {
+    const storage = memoryStorage();
+    seedUsage(storage, "a1", 2);
+    const { promotions, errors } = pipeline(storage, async () => SUGGESTION);
+    await promotions.evaluateAndList();
+    // Simulate a truncated write / hand-edited promotions.json: `data.suggestion` exists but lacks `draft`.
+    // candidate-store casts this straight to SchemaSuggestion with no validation.
+    const state = storage.states.get("::a1")!;
+    storage.states.set("::a1", { ...state, data: { ...state.data, suggestion: { extractorId: "x" } } });
+    const published = await promotions.approve("a1", { ...DRAFT }, { id: "alice" });
+    expect(published.status).toBe("published");
+    expect(storage.events.map((e) => e.type)).not.toContain("component.schemaEdited");
+    expect(errors.some((e) => e.ctx.endpoint === "promotion.approve.audit")).toBe(true);
   });
 
   it("records nothing when the candidate has no suggestion", async () => {
