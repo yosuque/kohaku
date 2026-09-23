@@ -23,7 +23,7 @@ await storage.close();
 | `kohaku_promotion_state` | `(tenant, artifact_id)` (PK) | `tenant` defaults to `''` (tenant-neutral; a NULL cannot take part in a primary key). |
 | `kohaku_fixation` | `(tenant, intent_hash)` (PK) | Same tenant-neutral convention as promotion state. |
 
-Index names are unquoted identifiers and are prefixed with the (sanitized) schema name (`${schema}_kohaku_lineage_type_idx`) so two schemas sharing one database never collide on an index name.
+Index names are unquoted identifiers and are prefixed with the (sanitized) schema name (`${schema}_kohaku_lineage_type_idx`). PostgreSQL namespaces index names per schema just as it does table names, so this prefix isn't needed to avoid a collision; it exists to keep index names readable and unambiguous (e.g. in `pg_indexes` or slow-query logs) when several schemas coexist in one database.
 
 This package (Task 5 of the production-adapters plan) implements the Spec-cache half of `StoragePort` (`getSpecCache` / `putSpecCache` / `sweepExpiredSpecCache` / `close`) plus `ready()`/migration; lineage (Task 6), promotion and fixation (Task 7) are implemented in later work and currently throw `Error("not implemented")`.
 

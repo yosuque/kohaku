@@ -1,9 +1,13 @@
 export const DEFAULT_SCHEMA = "public";
 
+/** Double-quotes a single SQL identifier, doubling any embedded double quotes. */
+export function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
 /** `"schema"."table"` with embedded double quotes doubled (SQL identifier quoting). */
 export function qualifiedTable(schema: string, table: string): string {
-  const q = (s: string) => `"${s.replaceAll('"', '""')}"`;
-  return `${q(schema)}.${q(table)}`;
+  return `${quoteIdentifier(schema)}.${quoteIdentifier(table)}`;
 }
 
 /** Index names are unquoted identifiers; keep them to [a-z0-9_] by replacing anything else. */

@@ -7,7 +7,7 @@ import type {
   UISpec,
 } from "@kohaku-ui/spec-core";
 import { Pool } from "pg";
-import { DEFAULT_SCHEMA, postgresSchemaSql, qualifiedTable } from "./schema.js";
+import { DEFAULT_SCHEMA, postgresSchemaSql, qualifiedTable, quoteIdentifier } from "./schema.js";
 
 export interface PostgresStoragePortOptions {
   /** A `pg` connection string. Mutually exclusive with `pool`. */
@@ -59,9 +59,16 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
         options.migrate === false
           ? Promise.resolve()
           : (async () => {
-              await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema.replaceAll('"', '""')}"`);
+              await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schema)}`);
               await pool.query(postgresSchemaSql(schema));
-            })();
+            })().catch((error: unknown) => {
+              // Don't memoize a failed migration: a transient error (a network blip, a concurrent-DDL
+              // race between two instances migrating a fresh database) would otherwise permanently
+              // strand this port instance with no retry path. Clear the memo so the next `ready()`
+              // call retries the migration from scratch.
+              readyPromise = undefined;
+              throw error;
+            });
     }
     return readyPromise;
   };

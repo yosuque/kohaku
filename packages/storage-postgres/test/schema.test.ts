@@ -21,7 +21,7 @@ describe("postgresSchemaSql", () => {
     }
     expect(sql).not.toMatch(/CREATE TABLE (?!IF NOT EXISTS)/);
   });
-  it("prefixes index names with the schema so two schemas in one database do not collide", () => {
+  it("prefixes index names with the schema so index names stay unambiguous when several schemas coexist", () => {
     expect(postgresSchemaSql("tenant_a")).toContain(
       "CREATE INDEX IF NOT EXISTS tenant_a_kohaku_lineage_type_idx",
     );
