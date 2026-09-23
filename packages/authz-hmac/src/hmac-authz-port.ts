@@ -1,13 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { AuthzPort, Principal, Scope } from "@kohaku-ui/spec-core";
+import { DEFAULT_CAPABILITY_TTL_SECONDS } from "@kohaku-ui/spec-core";
 
 export interface HmacAuthzOptions {
   /** Default capability lifetime (seconds) when issueCapability's own opts.ttlSeconds is omitted. Defaults to 600. */
   ttlSeconds?: number;
 }
 
-/** Default capability TTL (seconds); matches host-core's default issuance TTL. */
-export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
+/** Default capability TTL (seconds); the shared spec-core default. Re-exported here for backward compatibility. */
+export { DEFAULT_CAPABILITY_TTL_SECONDS };
 
 /**
  * A homegrown HMAC-SHA256 capability token (on-behalf-of: the host acts under the user's delegated authority).

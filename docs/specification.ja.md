@@ -139,7 +139,7 @@ interface AuthzPort {
   verify(token, req: {kind, ref}): Promise<{ ok, principal?, reason? }>;
 }
 ```
-ホストは compose 後に Spec 内の全 `$ref` を read スコープで発行し、`/binding/resolve` で検証する。
+ホストは compose 後に Spec 内の全 `$ref` を read スコープで発行し、`/binding/resolve` で検証する。発行者に明示的な `ttlSeconds` が渡されないときの既定 TTL(600 秒)は `DEFAULT_CAPABILITY_TTL_SECONDS` であり、`@kohaku-ui/spec-core` で一度だけ定義され、`@kohaku-ui/host-core` と `@kohaku-ui/authz-hmac` は後方互換のため再 export している。
 
 ### 4.4 StoragePort — 永続化
 

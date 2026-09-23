@@ -139,7 +139,7 @@ interface AuthzPort {
   verify(token, req: {kind, ref}): Promise<{ ok, principal?, reason? }>;
 }
 ```
-After a compose, the host issues read scopes for all `$ref` within the Spec, and verifies them at `/binding/resolve`.
+After a compose, the host issues read scopes for all `$ref` within the Spec, and verifies them at `/binding/resolve`. The default TTL (600s) when an issuer is given no explicit `ttlSeconds` is `DEFAULT_CAPABILITY_TTL_SECONDS`, defined once in `@kohaku-ui/spec-core` and re-exported by `@kohaku-ui/host-core` and `@kohaku-ui/authz-hmac` for backward compatibility.
 
 ### 4.4 StoragePort — persistence
 

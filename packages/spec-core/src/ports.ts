@@ -120,6 +120,12 @@ export interface VerifyResult {
   reason?: string;
 }
 
+/**
+ * Default lifetime (seconds) of a capability token when the issuer is given no explicit TTL.
+ * Shared by every AuthzPort implementation and by host-core's issuance helpers.
+ */
+export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
+
 export interface AuthzPort {
   issueCapability(principal: Principal, scopes: Scope[], opts?: { ttlSeconds?: number }): Promise<string>;
   verify(token: string, req: VerifyRequest): Promise<VerifyResult>;

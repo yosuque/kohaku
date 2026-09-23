@@ -32,7 +32,6 @@ export {
   safeParsePatch,
   safeParseSpec,
 } from "./parse.js";
-// Ports
 export type {
   AuthzPort,
   CatalogContribution,
@@ -58,6 +57,8 @@ export type {
   VerifyRequest,
   VerifyResult,
 } from "./ports.js";
+// Ports
+export { DEFAULT_CAPABILITY_TTL_SECONDS } from "./ports.js";
 export { collectStateRefs, evaluateVisibleWhen } from "./predicate.js";
 export {
   formatQueryRef,
