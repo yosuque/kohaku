@@ -58,6 +58,28 @@ describe("createJwtIdentityResolver (HS256 shared secret)", () => {
     await expect(other.resolve("not-a-jwt")).rejects.toBeInstanceOf(JwtIdentityError);
   });
 
+  it("drops non-string entries from an array roles claim rather than coercing them", async () => {
+    const token = await hs256(
+      { sub: "u5", roles: ["admin", 123, null, "viewer"] },
+      { iss: "https://issuer.test", aud: "kohaku" },
+    );
+    expect(await resolver.resolve(token)).toEqual({ principal: { id: "u5", roles: ["admin", "viewer"] } });
+  });
+
+  it("a caller-supplied algorithms list controls acceptance directly: excluding the signing algorithm rejects, including it verifies", async () => {
+    const secretKey = new TextEncoder().encode(SECRET);
+    const token = await new SignJWT({ sub: "hs384" })
+      .setProtectedHeader({ alg: "HS384" })
+      .setExpirationTime("5m")
+      .sign(secretKey);
+
+    const excluding = createJwtIdentityResolver({ key: { secret: SECRET }, algorithms: ["HS256"] });
+    await expect(excluding.resolve(token)).rejects.toMatchObject({ code: "INVALID_TOKEN" });
+
+    const including = createJwtIdentityResolver({ key: { secret: SECRET }, algorithms: ["HS384"] });
+    expect((await including.resolve(token)).principal.id).toBe("hs384");
+  });
+
   it("rejects a token without a subject as MISSING_SUBJECT", async () => {
     const token = await hs256({ roles: ["admin"] }, { iss: "https://issuer.test", aud: "kohaku" });
     await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "MISSING_SUBJECT" });
@@ -109,6 +131,17 @@ describe("createJwtIdentityResolver (JWKS)", () => {
     const { publicKey } = await generateKeyPair("RS256");
     const resolver = createJwtIdentityResolver({ key: { jwks: { keys: [await exportJWK(publicKey)] } } });
     const token = await hs256({ sub: "u" });
+    await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "INVALID_TOKEN" });
+  });
+
+  it("honours a caller-supplied algorithms list that narrows the JWKS default (rejects an otherwise-valid RS256 token)", async () => {
+    const { publicKey, privateKey } = await generateKeyPair("RS256");
+    const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "RS256", use: "sig" };
+    const resolver = createJwtIdentityResolver({ key: { jwks: { keys: [jwk] } }, algorithms: ["ES256"] });
+    const token = await new SignJWT({ sub: "rs" })
+      .setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setExpirationTime("5m")
+      .sign(privateKey);
     await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "INVALID_TOKEN" });
   });
 });
