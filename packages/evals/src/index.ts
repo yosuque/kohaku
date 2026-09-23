@@ -27,9 +27,21 @@ export {
   l2PromotionRubricV0_2,
   type Rubric,
 } from "./judge.js";
+export { fencedBlock, untrustedBlock } from "./prompt-guard.js";
 export {
   type QualityCase,
   type QualityCaseResult,
   type QualityReport,
   runQuality,
 } from "./quality.js";
+export {
+  createSchemaExtractor,
+  extractDataRefs,
+  SCHEMA_EXTRACTOR_ID,
+  SCHEMA_EXTRACTOR_VERSION,
+  type SchemaExtractionInput,
+  type SchemaExtractionResult,
+  type SchemaExtractor,
+  SchemaSuggestionOutputSchema,
+  type SuggestedDraft,
+} from "./schema-extraction.js";
