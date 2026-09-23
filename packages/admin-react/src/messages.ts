@@ -33,6 +33,10 @@ export interface AdminMessages {
     topIntents: string;
     noComposeRecords: string;
     promotionLifecycle: string;
+    reviewTurnaround: string;
+    reviewTurnaroundSub: (p95: string, count: number) => string;
+    acceptedAsIs: string;
+    acceptedAsIsSub: (suggested: number) => string;
   };
   fixations: {
     description: string;
@@ -92,6 +96,13 @@ export interface AdminMessages {
     previewNoRefWarning: string;
     previewFetchFailed: (message: string) => string;
     previewMalformed: string;
+    suggestionBadge: (model: string, confidencePct: number) => string;
+    suggestionTitle: string;
+    suggestionUnchanged: string;
+    suggestionChangedFrom: (suggested: string) => string;
+    suggestionAcknowledge: string;
+    suggestionAcknowledgeRequired: string;
+    suggestionEvents: (names: string) => string;
   };
 }
 
@@ -130,6 +141,10 @@ export const defaultAdminMessages: AdminMessages = {
     topIntents: "Top intents",
     noComposeRecords: "No compose records yet",
     promotionLifecycle: "Promotion lifecycle (event counts)",
+    reviewTurnaround: "Review turnaround p50",
+    reviewTurnaroundSub: (p95, count) => `p95 ${p95} · ${count} reviews`,
+    acceptedAsIs: "Suggestions accepted as-is",
+    acceptedAsIsSub: (suggested) => `of ${suggested} suggested`,
   },
   fixations: {
     description:
@@ -198,5 +213,12 @@ export const defaultAdminMessages: AdminMessages = {
       "This candidate has no recorded data reference, so data fetching shows an error (only the visual skeleton can be checked).",
     previewFetchFailed: (message) => `Could not fetch the preview: ${message}`,
     previewMalformed: "The preview response is malformed",
+    suggestionBadge: (model, confidencePct) => `Proposed by ${model} (confidence ${confidencePct}%)`,
+    suggestionTitle: "Proposed schema (machine-extracted — review before approving)",
+    suggestionUnchanged: "unchanged",
+    suggestionChangedFrom: (suggested) => `was: ${suggested}`,
+    suggestionAcknowledge: "I have reviewed the proposed schema against the preview",
+    suggestionAcknowledgeRequired: "Confirm you reviewed the proposed schema before approving.",
+    suggestionEvents: (names) => `Proposed events: ${names}`,
   },
 };

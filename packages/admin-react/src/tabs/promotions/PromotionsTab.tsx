@@ -11,8 +11,9 @@ import { usePromotions } from "../../hooks.js";
 import type { AdminMessages } from "../../messages.js";
 import { V } from "../../theme.js";
 import { card, deniedMessage, selectStyle } from "../../ui.js";
-import { DEFAULT_QUERY_PATHS, genericInitialDraft, type PromotionDefaults } from "./draft.js";
+import { DEFAULT_QUERY_PATHS, type DraftForm, genericInitialDraft, type PromotionDefaults } from "./draft.js";
 import { type PromotionActionKind, PromotionCard } from "./PromotionCard.js";
+import { draftFormFromSuggestion } from "./suggestion.js";
 
 /** Status filter choices. "all" = evaluate (automatic nomination); the rest are read-only GET ?status=. */
 export const PROMOTION_STATUS_FILTERS = [
@@ -91,6 +92,12 @@ export function PromotionsTab(props: { defaults?: PromotionDefaults } = {}): Rea
   const { client, messages: t, notify, getMessages } = useAdmin();
   const queryPaths = props.defaults?.queryPaths ?? DEFAULT_QUERY_PATHS;
   const initialDraftFor = props.defaults?.initialDraftFor ?? genericInitialDraft;
+  const preferSuggestion = props.defaults?.preferSuggestion ?? true;
+  /** Suggestion first (it was extracted from this candidate's HTML), the product's generic prefill otherwise. */
+  const initialDraftOf = (candidate: PromotionCandidateView): DraftForm =>
+    preferSuggestion && candidate.suggestion != null
+      ? draftFormFromSuggestion(candidate.suggestion)
+      : initialDraftFor(candidate);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [busy, setBusy] = useState(false);
   const { candidates, promotionMinUses, reload } = usePromotions(statusFilter);
@@ -124,7 +131,7 @@ export function PromotionsTab(props: { defaults?: PromotionDefaults } = {}): Rea
           key={candidate.artifactId}
           candidate={candidate}
           busy={busy}
-          initialDraft={initialDraftFor(candidate)}
+          initialDraft={initialDraftOf(candidate)}
           queryPaths={queryPaths}
           onAction={async (kind, draft) => {
             setBusy(true);

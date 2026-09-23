@@ -40,6 +40,7 @@ export {
 } from "./tabs/promotions/PromotionDraftEditor.js";
 export { PromotionPreview } from "./tabs/promotions/PromotionPreview.js";
 export { PROMOTION_STATUS_FILTERS, PromotionsTab } from "./tabs/promotions/PromotionsTab.js";
+export { SuggestionPanel } from "./tabs/promotions/SuggestionPanel.js";
 export {
   diffAgainstSuggestion,
   draftFormFromSuggestion,

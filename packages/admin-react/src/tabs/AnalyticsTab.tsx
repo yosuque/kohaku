@@ -4,6 +4,13 @@ import { useAnalyticsSummary } from "../hooks.js";
 import { V } from "../theme.js";
 import { BarRow, card, Empty, StatCard, sectionTitle, smallButton, TIER_COLOR } from "../ui.js";
 
+/** "—" for null; seconds under a minute, else minutes with one decimal (review turnaround is human-scale). */
+function formatDuration(ms: number | null): string {
+  if (ms == null) return "—";
+  if (ms < 60_000) return `${Math.round(ms / 1000)} s`;
+  return `${(ms / 60_000).toFixed(1)} min`;
+}
+
 /**
  * GET /analytics/summary as stat cards + inline bars. The aggregation window (default 200 events) is stated
  * on screen; when storage returned exactly the window limit (window.truncated) it says older events are excluded.
@@ -50,6 +57,21 @@ export function AnalyticsTab(): ReactNode {
           label={t.analytics.fixationsLabel}
           value={summary.fixations.fixated}
           sub={t.analytics.unfixatedSub(summary.fixations.unfixated)}
+        />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        <StatCard
+          label={t.analytics.reviewTurnaround}
+          value={formatDuration(summary.review.durationMs.p50)}
+          sub={t.analytics.reviewTurnaroundSub(
+            formatDuration(summary.review.durationMs.p95),
+            summary.review.count,
+          )}
+        />
+        <StatCard
+          label={t.analytics.acceptedAsIs}
+          value={summary.review.acceptedAsIs}
+          sub={t.analytics.acceptedAsIsSub(summary.promotions.schemaSuggested)}
         />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
