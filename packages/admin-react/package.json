@@ -4,7 +4,8 @@
   "description": "Governance console for kohaku hosts (lineage, analytics, promotion review, fixation) as embeddable React components on top of @kohaku-ui/client.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./ui": "./src/ui.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -62,6 +63,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
+      },
+      "./ui": {
+        "types": "./dist/ui.d.ts",
+        "default": "./dist/ui.js"
       },
       "./package.json": "./package.json"
     }

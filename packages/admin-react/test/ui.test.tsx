@@ -1,13 +1,8 @@
 import { KohakuHostError } from "@kohaku-ui/client";
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import {
-  adminThemeStyle,
-  defaultAdminMessages,
-  deniedMessage,
-  ErrorBanner,
-  StatusBadge,
-} from "../src/index.js";
+import { adminThemeStyle, defaultAdminMessages } from "../src/index.js";
+import { deniedMessage, ErrorBanner, StatusBadge } from "../src/ui.js";
 
 describe("ui primitives", () => {
   it("ErrorBanner renders an alert role when asked", () => {

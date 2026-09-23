@@ -1,4 +1,4 @@
-import { ErrorBanner } from "@kohaku-ui/admin-react";
+import { ErrorBanner } from "@kohaku-ui/admin-react/ui";
 import { type SurfaceEvent, useSpecStream } from "@kohaku-ui/renderer-react";
 import type { CanonicalIntent } from "@kohaku-ui/spec-core";
 import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
