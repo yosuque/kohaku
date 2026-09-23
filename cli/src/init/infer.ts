@@ -22,11 +22,28 @@ export interface DatasetProfile {
   measures: ColumnProfile[];
   time: ColumnProfile | null;
   rowCount: number;
+  /**
+   * Present only when `time` is null. Names the string column(s) whose sampled values are
+   * overwhelmingly date-like in a shape `inferProfile` deliberately does not guess at (see
+   * AMBIGUOUS_DATE below) — most commonly a US `MM/DD/YYYY` or European `DD/MM/YYYY` column. Those
+   * two shapes are indistinguishable from each other for any day-of-month <= 12, so guessing
+   * between them would silently mis-date a large fraction of rows, which is worse than producing no
+   * chart at all. This field exists so the CLI can tell the user *why* there is no time column
+   * (format, not absence) and what to do about it, instead of just reporting "(none)".
+   */
+  unrecognizedDateColumns?: string[];
 }
 
 export const MAX_VOCABULARY_VALUES = 24;
 const SAMPLE_ROWS = 5000;
-const DATE = /^\d{4}[-/]\d{2}([-/]\d{2})?/;
+// Year-first, unambiguous: YYYY-M[-D] / YYYY/M[/D], zero-padded or not ("2026-04-01", "2026-4-1").
+// The year always comes first and is always 4 digits, so widening month/day to 1-2 digits here
+// introduces no new ambiguity (unlike a day-first or month-first shape, see AMBIGUOUS_DATE).
+const DATE = /^\d{4}[-/]\d{1,2}([-/]\d{1,2})?/;
+// Day/month-first with a 4-digit year, e.g. "04/01/2026" (US MM/DD/YYYY) or "01/04/2026" (European
+// DD/MM/YYYY). Deliberately NOT treated as a recognized date shape (see DATE above and
+// `inferProfile`'s unrecognizedDateColumns) — only used to warn the user, never to guess.
+const AMBIGUOUS_DATE = /^\d{1,2}[-/]\d{1,2}[-/]\d{4}/;
 
 /**
  * Turns an arbitrary column header into a safe snake_case identifier.
@@ -211,23 +228,74 @@ export function inferProfile(source: string, dataset: Dataset): DatasetProfile {
     );
   }
 
+  const time = columns.find((c) => c.kind === "time") ?? null;
+  // Only worth looking for an unrecognized date shape when there's no time column at all: if one
+  // was found, the user already has a Trend view, and a second, unrelated column that merely looks
+  // date-like (e.g. a second real date column, demoted to text above) isn't worth warning about.
+  const unrecognizedDateColumns = time == null ? findUnrecognizedDateColumns(columns, sample) : undefined;
+
   return {
     source: slugify(source),
     columns,
     dimensions,
     measures: columns.filter((c) => c.kind === "measure"),
-    time: columns.find((c) => c.kind === "time") ?? null,
+    time,
     rowCount: dataset.rows.length,
+    ...(unrecognizedDateColumns != null && unrecognizedDateColumns.length > 0
+      ? { unrecognizedDateColumns }
+      : {}),
   };
 }
 
-/** Rewrites rows to slug keys; date cells become ISO-ish strings ("2026/04/01" -> "2026-04-01"). */
+/**
+ * Scans every already-classified string column's sampled cells for the ambiguous day/month-first
+ * date shape (see AMBIGUOUS_DATE) using the same 95%-of-non-null-values threshold as `classify`'s
+ * own date detection. Only called when no time column was found (see `inferProfile`). Returns the
+ * matching column names in column order, or an empty array when none qualify.
+ */
+function findUnrecognizedDateColumns(columns: ColumnProfile[], sample: Row[]): string[] {
+  const found: string[] = [];
+  for (const col of columns) {
+    if (col.type !== "string") continue;
+    const strings = sample
+      .map((row) => row[col.sourceName] ?? null)
+      .filter((c): c is string => typeof c === "string");
+    if (strings.length === 0) continue;
+    const hits = strings.filter((s) => AMBIGUOUS_DATE.test(s)).length;
+    if (hits / strings.length >= 0.95) found.push(col.name);
+  }
+  return found;
+}
+
+// Matches the (already slash-normalized) prefix of a date value so it can be re-padded to a fixed
+// width: group 1 = year, group 2 = month, group 3 = optional day. Anything after the matched
+// prefix (e.g. a time-of-day suffix on a full timestamp) is preserved verbatim, unpadded.
+const DATE_PARTS = /^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?/;
+
+/**
+ * Normalizes a date cell to a consistent, zero-padded shape: "2026/4/1" and "2026-4-1" both become
+ * "2026-04-01"; "2026-4" becomes "2026-04". This matters because the same value is written into
+ * three places that must agree byte-for-byte: the generated project's data file, its fixed Spec /
+ * query parameters, and its golden fixture — without padding, "2026-4-1" and "2026-04-01" would be
+ * different strings to all three even though they mean the same day.
+ */
+function normalizeDateValue(v: string): string {
+  const slashed = v.replace(/\//g, "-");
+  const m = DATE_PARTS.exec(slashed);
+  if (!m) return slashed;
+  const [whole, year, month, day] = m;
+  const pad = (s: string) => s.padStart(2, "0");
+  const normalized = day != null ? `${year}-${pad(month!)}-${pad(day)}` : `${year}-${pad(month!)}`;
+  return normalized + slashed.slice(whole!.length);
+}
+
+/** Rewrites rows to slug keys; date cells become zero-padded ISO-ish strings ("2026/4/1" -> "2026-04-01"). */
 export function normalizeRows(dataset: Dataset, profile: DatasetProfile): Row[] {
   return dataset.rows.map((row) => {
     const out: Row = {};
     for (const col of profile.columns) {
       const v = row[col.sourceName] ?? null;
-      out[col.name] = col.type === "date" && typeof v === "string" ? v.replace(/\//g, "-") : v;
+      out[col.name] = col.type === "date" && typeof v === "string" ? normalizeDateValue(v) : v;
     }
     return out;
   });

@@ -130,6 +130,13 @@ program
       console.log(`  dimensions: ${p.dimensions.map((c) => c.name).join(", ")}`);
       console.log(`  measures: ${p.measures.map((c) => c.name).join(", ") || "(none; row counts only)"}`);
       console.log(`  time: ${p.time?.name ?? "(none; no trend view)"}`);
+      if (p.unrecognizedDateColumns != null && p.unrecognizedDateColumns.length > 0) {
+        console.log(
+          `  warning: column(s) ${p.unrecognizedDateColumns.join(", ")} look like dates but the format ` +
+            "is ambiguous (e.g. MM/DD/YYYY vs DD/MM/YYYY), so no time axis was created; convert the column " +
+            "to YYYY-MM-DD, the one unambiguous shape kohaku init recognizes, and run it again.",
+        );
+      }
       console.log(
         `\nNext steps: ${result.installed ? "" : "npm install && "}npm run dev  →  http://localhost:5173`,
       );

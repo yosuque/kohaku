@@ -134,6 +134,66 @@ describe("inferProfile", () => {
     expect(second?.type).toBe("string");
   });
 
+  it("detects a non-zero-padded year-first date column as time and normalizes it to a padded form", () => {
+    const ds = dataset([
+      { d: "2026-4-1", cat: "a", v: 1 },
+      { d: "2026-4-2", cat: "b", v: 2 },
+      { d: "2026-5-1", cat: "a", v: 3 },
+    ]);
+    const profile = inferProfile("x", ds);
+    expect(profile.time?.name).toBe("d");
+    expect(profile.unrecognizedDateColumns).toBeUndefined();
+    expect(normalizeRows(ds, profile)).toEqual([
+      { d: "2026-04-01", cat: "a", v: 1 },
+      { d: "2026-04-02", cat: "b", v: 2 },
+      { d: "2026-05-01", cat: "a", v: 3 },
+    ]);
+  });
+
+  it("does not guess MM/DD/YYYY as time, and records it as an unrecognized date column instead", () => {
+    const ds = dataset([
+      { d: "04/01/2026", cat: "a", v: 1 },
+      { d: "04/02/2026", cat: "b", v: 2 },
+      { d: "05/01/2026", cat: "a", v: 3 },
+    ]);
+    const profile = inferProfile("x", ds);
+    expect(profile.time).toBeNull();
+    expect(profile.unrecognizedDateColumns).toEqual(["d"]);
+  });
+
+  it("does not warn about an ambiguous-looking column when a real time column already exists", () => {
+    const ds = dataset([
+      { month: "2026-04", other: "04/01/2026", cat: "a", v: 1 },
+      { month: "2026-05", other: "04/02/2026", cat: "b", v: 2 },
+      { month: "2026-06", other: "05/01/2026", cat: "a", v: 3 },
+    ]);
+    const profile = inferProfile("x", ds);
+    expect(profile.time?.name).toBe("month");
+    expect(profile.unrecognizedDateColumns).toBeUndefined();
+  });
+
+  it("warns at exactly a 95% ambiguous-date ratio (boundary)", () => {
+    const rows = Array.from({ length: 100 }, (_, i) => ({
+      d: i < 95 ? `${(i % 9) + 1}/${(i % 8) + 1}/2026` : "n/a",
+      cat: i % 2 === 0 ? "a" : "b",
+      v: i,
+    }));
+    const profile = inferProfile("x", dataset(rows));
+    expect(profile.time).toBeNull();
+    expect(profile.unrecognizedDateColumns).toEqual(["d"]);
+  });
+
+  it("does not warn below a 95% ambiguous-date ratio (boundary)", () => {
+    const rows = Array.from({ length: 100 }, (_, i) => ({
+      d: i < 94 ? `${(i % 9) + 1}/${(i % 8) + 1}/2026` : "n/a",
+      cat: i % 2 === 0 ? "a" : "b",
+      v: i,
+    }));
+    const profile = inferProfile("x", dataset(rows));
+    expect(profile.time).toBeNull();
+    expect(profile.unrecognizedDateColumns).toBeUndefined();
+  });
+
   it("treats an entirely-null column as text", () => {
     const profile = inferProfile(
       "x",
