@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/admin-react",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Governance console for kohaku hosts (lineage, analytics, promotion review, fixation) as embeddable React components on top of @kohaku-ui/client.",
   "type": "module",
   "exports": {
