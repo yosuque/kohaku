@@ -536,6 +536,9 @@ function checkInit(packages, tmpRoot, consumerDir) {
   const manifestPath = join(appDir, "package.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const byName = new Map(packages.map((p) => [p.packedName, p.tarball]));
+  // `overrides` (below) already forces every @kohaku-ui/* resolution onto the packed tarball, even at the
+  // top level, so this rewrite is largely redundant -- but its fail() guard for an unrecognized direct
+  // dependency is still valuable, so the loop stays.
   for (const section of ["dependencies", "devDependencies"]) {
     for (const name of Object.keys(manifest[section] ?? {})) {
       if (byName.has(name)) manifest[section][name] = `file:${byName.get(name)}`;
@@ -553,9 +556,12 @@ function checkInit(packages, tmpRoot, consumerDir) {
   // dist. `overrides` forces every @kohaku-ui/* package, wherever it appears in the dependency tree,
   // onto the tarball this run just packed, so this step actually exercises the packed artifacts
   // end-to-end rather than a mix of packed-and-published code.
+  // Packed-tarball entries are spread last so they always win over any pre-existing project-level
+  // override on a key collision -- the whole point of this block is that the packed tarball must be
+  // the one that resolves, even if a future template ever adds its own `overrides` entry.
   manifest.overrides = {
-    ...Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`])),
     ...(manifest.overrides ?? {}),
+    ...Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`])),
   };
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
@@ -568,7 +574,11 @@ function checkInit(packages, tmpRoot, consumerDir) {
   runOrFail("npx", ["vitest", "run"], { cwd: appDir, env: updateEnv });
   const fixturePath = join(appDir, "test", "golden", "summary.json");
   if (JSON.parse(readFileSync(fixturePath, "utf8")).expected == null) fail("init smoke: KOHAKU_GOLDEN_UPDATE=1 did not write the golden's expected");
-  runOrFail("npx", ["vitest", "run"], { cwd: appDir });
+  // Assert run: explicitly unset KOHAKU_GOLDEN_UPDATE so an ambient copy of it can't silently re-enter
+  // update mode here too, which would rewrite the fixture and exit 0 without ever comparing.
+  const assertEnv = { ...process.env };
+  delete assertEnv.KOHAKU_GOLDEN_UPDATE;
+  runOrFail("npx", ["vitest", "run"], { cwd: appDir, env: assertEnv });
   log("  golden regression: expected generated with KOHAKU_GOLDEN_UPDATE=1, then asserted");
 
   const script = join(appDir, "check-l0.generated.mjs");
@@ -579,7 +589,10 @@ import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { createApp } from "./server/app.js";
 const { app } = createApp({ llm: new FakeLlm() });
 const catalog = await app.request("/api/kohaku/catalog");
-if (catalog.status !== 200) throw new Error("catalog: " + catalog.status);
+const catalogBody = await catalog.json();
+if (catalog.status !== 200 || !Array.isArray(catalogBody.components) || catalogBody.components.length === 0) {
+  throw new Error("catalog: " + catalog.status + " " + JSON.stringify(catalogBody).slice(0, 300));
+}
 const res = await app.request("/api/kohaku/compose", {
   method: "POST",
   headers: { "content-type": "application/json" },
