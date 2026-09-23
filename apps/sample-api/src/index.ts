@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
+import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { createApp } from "./app.js";
 import { createHmacAuthzPort } from "./ports/authz-port.js";
@@ -26,7 +27,14 @@ const storage = createFileStoragePort(DATA_DIR);
 const authz = createHmacAuthzPort(process.env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me");
 
 // createApp is async because it performs startup reconcile (snapshot authority -> projection).
-const { app, repo, setShuttingDown } = await createApp({ llm, storage, authz });
+const { app, repo, setShuttingDown } = await createApp({
+  llm,
+  storage,
+  authz,
+  // LLM auto-extraction of the promotion schema (advisory prefill in Admin › Promotions). Opt-in at the
+  // entry point so the FakeLlm-scripted tests keep their exact response order.
+  schemaExtractor: createSchemaExtractor({ llm }),
+});
 
 const port = Number(process.env["PORT"] ?? 8787);
 const server = serve({ fetch: app.fetch, port }, (info) => {

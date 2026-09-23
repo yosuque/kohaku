@@ -1,5 +1,5 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
-import { createJudge } from "@kohaku-ui/evals";
+import { createJudge, type SchemaExtractor } from "@kohaku-ui/evals";
 import { createKohakuRoutes, errorBody } from "@kohaku-ui/host-rest";
 import { createFixations, createLineage, type Fixations, type Lineage } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
@@ -47,6 +47,13 @@ export interface AppDeps {
   storage: StoragePort;
   authz: AuthzPort;
   repo?: SalesRepo;
+  /**
+   * Optional LLM auto-extraction of the promotion schema (advisory prefill for the approval form). Unset =
+   * candidates carry no suggestion (the pre-existing behaviour) — every FakeLlm-scripted e2e test relies on
+   * this default so its scripted response order is unaffected by an extraction call it did not script.
+   * index.ts is the only caller that wires a real one (createSchemaExtractor), at the process entry point.
+   */
+  schemaExtractor?: SchemaExtractor;
 }
 
 export interface SampleApp {
@@ -125,6 +132,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     storage: deps.storage,
     registry,
     judge,
+    ...(deps.schemaExtractor != null ? { schemaExtractor: deps.schemaExtractor } : {}),
   });
 
   // Snapshot authority -> projection startup reconciliation. Rebuilds the per-tenant catalogs from the published
