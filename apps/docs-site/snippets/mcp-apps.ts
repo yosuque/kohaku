@@ -5,7 +5,12 @@ import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { intents } from "./kohaku/intents.js"; // your Intent catalog (defineIntent)
-import { authz, domain, semantic, storage } from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
+import {
+  authzPort as authz,
+  domainPort as domain,
+  semanticPort as semantic,
+  storagePort as storage,
+} from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
 
 // The same Composition Service a REST host would use: one Spec per Intent, cached, whoever asks.
 const compose = { catalog: resolveCatalog(coreCatalog), semantic, storage, llm: createLlmFromEnv() };

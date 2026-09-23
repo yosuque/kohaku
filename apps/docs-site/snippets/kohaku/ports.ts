@@ -21,7 +21,7 @@ const ROWS = [
   { region: "north_america", revenue: 95 },
 ];
 
-export const domain: DomainPort = {
+export const domainPort: DomainPort = {
   async listOperations() {
     return [{ name: "sales_summary", description: "Revenue by region" }];
   },
@@ -37,7 +37,7 @@ export const domain: DomainPort = {
   },
 };
 
-export const semantic: SemanticPort = {
+export const semanticPort: SemanticPort = {
   async normalize(input): Promise<IntentInput> {
     if (input.kind === "gui") return { canonical: input.action, params: input.params };
     return { canonical: "sales.summary", params: {} };
@@ -50,7 +50,7 @@ export const semantic: SemanticPort = {
   },
 };
 
-export const authz: AuthzPort = {
+export const authzPort: AuthzPort = {
   async issueCapability(principal, scopes) {
     return Buffer.from(JSON.stringify({ sub: principal.id, scopes })).toString("base64url");
   },
@@ -75,7 +75,7 @@ const events: LineageEventRecord[] = [];
 const promotions = new Map<string, PromotionState>();
 const fixations = new Map<string, FixationRecord>();
 
-export const storage: StoragePort = {
+export const storagePort: StoragePort = {
   async getSpecCache(key) {
     return specs.get(key) ?? null;
   },

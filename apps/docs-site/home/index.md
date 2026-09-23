@@ -18,7 +18,7 @@ features:
   - title: Identical display, structurally
     details: Chat and GUI converge on one canonical Intent and one cached UI Spec. Temperature 0 is an aid, not the guarantee.
   - title: Pass-by-reference data
-    details: The Spec carries query:// references, never numbers. The LLM builds the plumbing; the water never flows through it.
+    details: The Spec carries query:// references, never your data. The LLM builds the plumbing; the water never flows through it.
   - title: Governed generation
     details: L0 fixed ⇄ L1 declarative ⇄ L2 free-form, with a promotion pipeline that solidifies what works into official parts.
 ---

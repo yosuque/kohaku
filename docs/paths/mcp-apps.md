@@ -10,7 +10,7 @@ English | [日本語](mcp-apps.ja.md)
 
 ```bash
 npm install @kohaku-ui/host-mcp-apps @kohaku-ui/registry @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/spec-core @modelcontextprotocol/server zod
-node node_modules/@kohaku-ui/cli/dist/index.js scaffold ports --out ./kohaku   # the four Ports, as a file to fill in
+npx @kohaku-ui/cli scaffold ports --out ./kohaku   # the four Ports, as a file to fill in
 ```
 
 ```ts
@@ -21,7 +21,12 @@ import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { intents } from "./kohaku/intents.js"; // your Intent catalog (defineIntent)
-import { authz, domain, semantic, storage } from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
+import {
+  authzPort as authz,
+  domainPort as domain,
+  semanticPort as semantic,
+  storagePort as storage,
+} from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
 
 // The same Composition Service a REST host would use: one Spec per Intent, cached, whoever asks.
 const compose = { catalog: resolveCatalog(coreCatalog), semantic, storage, llm: createLlmFromEnv() };
@@ -41,7 +46,7 @@ await server.connect(new StdioServerTransport());
 
 Register it with a host — `claude mcp add my-product -- node ./server.js` for Claude Code / Claude Desktop — and call `sales_summary`. The host receives a UI Spec plus a text summary; an MCP Apps-capable host (Claude Desktop, claude.ai, ChatGPT) renders the Spec in an iframe with the bundled renderer, a terminal host that cannot draw an iframe (Claude Code, Codex CLI) gets the text fallback plus `kohaku_render_snapshot` for a self-contained HTML file.
 
-What the three imports from `./kohaku/…` are:
+What these three pieces are:
 
 - **`ports.ts`** — the four Ports: `domain` (your data API: `listOperations` / `invoke`), `semantic` (Intent → `query://` handle, plus `dataVersion`), `authz` (capability tokens; the sample's ~50-line HMAC implementation is in `apps/sample-api/src/ports/authz-port.ts`), `storage` (an in-memory Map is enough to start). `kohaku scaffold ports` writes the file with a TODO per method. The [User guide §6, Step 0](../user-guide.md#step-0--server-driven-ui-without-an-llm) walks through each one.
 - **`intents.ts`** — `defineIntent` once per Intent: canonical name, a Zod `params` schema, NL `examples`, and `queries`. The MCP tool, its input schema, and the SemanticPort definition all derive from that single definition.

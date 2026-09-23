@@ -10,7 +10,7 @@
 
 ```bash
 npm install @kohaku-ui/host-mcp-apps @kohaku-ui/registry @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/spec-core @modelcontextprotocol/server zod
-node node_modules/@kohaku-ui/cli/dist/index.js scaffold ports --out ./kohaku   # 4 つの Port を埋めるためのファイル
+npx @kohaku-ui/cli scaffold ports --out ./kohaku   # 4 つの Port を埋めるためのファイル
 ```
 
 ```ts
@@ -21,7 +21,12 @@ import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { intents } from "./kohaku/intents.js"; // your Intent catalog (defineIntent)
-import { authz, domain, semantic, storage } from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
+import {
+  authzPort as authz,
+  domainPort as domain,
+  semanticPort as semantic,
+  storagePort as storage,
+} from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
 
 // The same Composition Service a REST host would use: one Spec per Intent, cached, whoever asks.
 const compose = { catalog: resolveCatalog(coreCatalog), semantic, storage, llm: createLlmFromEnv() };
@@ -41,7 +46,7 @@ await server.connect(new StdioServerTransport());
 
 ホストに登録し(Claude Code / Claude Desktop なら `claude mcp add my-product -- node ./server.js`)、`sales_summary` を呼びます。ホストは UI Spec とテキスト要約を受け取り、MCP Apps 対応ホスト(Claude Desktop / claude.ai / ChatGPT)は同梱レンダラーで Spec を iframe に描画し、iframe を描画できないターミナルホスト(Claude Code / Codex CLI)はテキストのフォールバックと、自己完結 HTML が要るなら `kohaku_render_snapshot` を受け取ります。
 
-`./kohaku/…` からの 3 つの import の正体:
+この 3 つの正体:
 
 - **`ports.ts`** — 4 つの Port: `domain`(あなたのデータ API: `listOperations` / `invoke`)、`semantic`(Intent → `query://` ハンドルと `dataVersion`)、`authz`(capability トークン。サンプルの約 50 行の HMAC 実装は `apps/sample-api/src/ports/authz-port.ts`)、`storage`(最初はインメモリの Map で十分)。`kohaku scaffold ports` がメソッドごとに TODO 付きのファイルを書き出します。各 Port の歩き方は[ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
 - **`intents.ts`** — Intent ごとに `defineIntent` を 1 回: 正規名、Zod の `params`、NL の `examples`、`queries`。MCP ツール・その入力スキーマ・SemanticPort 定義はすべてこの単一定義から導出されます。

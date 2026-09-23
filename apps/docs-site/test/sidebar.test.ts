@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listMirrorSources, planMirror, routeOf } from "../src/mirror.js";
-import { SIDEBAR_EN, SIDEBAR_JA, sidebarLinks } from "../src/sidebar.js";
+import { NAV_EN, NAV_JA, SIDEBAR_EN, SIDEBAR_JA, sidebarLinks } from "../src/sidebar.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -18,7 +18,10 @@ describe("sidebar", () => {
   });
 
   it("only links to pages that exist", () => {
-    const dangling = [...sidebarLinks(SIDEBAR_EN), ...sidebarLinks(SIDEBAR_JA)].filter((l) => !routes.has(l));
+    const navLinks = [...NAV_EN, ...NAV_JA].map((i) => i.link);
+    const dangling = [...sidebarLinks(SIDEBAR_EN), ...sidebarLinks(SIDEBAR_JA), ...navLinks].filter(
+      (l) => !routes.has(l),
+    );
     expect(dangling).toEqual([]);
   });
 

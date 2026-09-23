@@ -14,11 +14,11 @@ Chat questions and GUI operations are both normalized into one **canonical Inten
 
 ### 2. The model builds the plumbing; the water never flows through it
 
-A Spec carries only `query://` **references**. Components fetch bulk data themselves, directly from your API, with a short-lived capability token the host issued for exactly those references. No numbers pass through the model, so there is nothing to transcribe wrongly, nothing to leak into a prompt, and no row of your data in a model provider's logs. Your DomainPort remains the single place where authorization and invariants live.
+A Spec carries only `query://` **references**. Components fetch bulk data themselves, directly from your API, with a short-lived capability token the host issued for exactly those references. No data values pass through the model, so there is nothing to transcribe wrongly, nothing to leak into a prompt, and no row of your data in a model provider's logs. Your DomainPort remains the single place where authorization and invariants live.
 
 ### 3. Freedom is allowed, then governed
 
-Requests outside the catalog are generated freely (**L2**) inside a sandbox (opaque iframe, CSP, an allow-listed bridge). What the model produced is recorded in lineage; when it is used enough and judged well, it becomes a **promotion candidate**. A human reviews it — sees the rendered artifact itself, identical by sha256 to what users saw — and approves a schema. From then on it is an official **L1** part with a typed contract, and the model selects it instead of re-inventing it. Governance is the product, not an afterthought.
+Requests outside the catalog are generated freely (**L2**) inside a sandbox (opaque iframe, CSP, an allow-listed bridge). What the model produced is recorded in lineage; when it is used enough, it becomes a **promotion candidate**, and an optional LLM judge scores candidates before a human sees them. A human reviews it — sees the rendered artifact itself, identical by sha256 to what users saw — and approves a schema. From then on it is an official **L1** part with a typed contract, and the model selects it instead of re-inventing it. Governance is the product, not an afterthought.
 
 ## Where kohaku sits
 
