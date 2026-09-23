@@ -36,7 +36,7 @@ const LAYERS: string[][] = [
     "authz-hmac",
     "port-contracts",
   ],
-  ["intents"],
+  ["intents", "authz-jwt"],
   ["composer", "renderer-core"],
   ["host-core"],
   ["sandbox", "lineage", "evals", "host-rest", "host-mcp-apps", "client", "otel"],

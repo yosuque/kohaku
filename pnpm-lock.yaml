@@ -239,6 +239,9 @@ catalogs:
     ioredis:
       specifier: ^5.11.1
       version: 5.11.1
+    jose:
+      specifier: ^6.2.12
+      version: 6.2.12
     jsdom:
       specifier: ^30.0.1
       version: 30.0.1
@@ -643,6 +646,31 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.6.5
+
+  packages/authz-jwt:
+    dependencies:
+      '@kohaku-ui/authz-hmac':
+        specifier: workspace:^
+        version: link:../authz-hmac
+      '@kohaku-ui/spec-core':
+        specifier: workspace:^
+        version: link:../spec-core
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.12
+    devDependencies:
+      '@kohaku-ui/port-contracts':
+        specifier: workspace:^
+        version: link:../port-contracts
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.5.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@26.5.1)(@vitest/coverage-v8@5.0.1)(jsdom@30.0.1)(vite@8.3.0(@types/node@26.5.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.1))
 
   packages/client:
     dependencies:

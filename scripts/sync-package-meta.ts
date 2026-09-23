@@ -30,6 +30,7 @@ const HOMEPAGE = "https://github.com/yosuque/kohaku";
 const PUBLISHED_DIRS = [
   ...[
     "authz-hmac",
+    "authz-jwt",
     "client",
     "composer",
     "data-binding",
