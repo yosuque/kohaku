@@ -7,6 +7,8 @@ export {
 export {
   COMPONENT_EVENT_TYPES,
   type ComponentGeneratedPayload,
+  type ComponentSchemaEditedPayload,
+  type ComponentSchemaSuggestedPayload,
   type ComponentUsedPayload,
   FIXATION_EVENT_TYPES,
   type LineageEventType,
@@ -45,6 +47,8 @@ export {
   DEFAULT_PROMOTION_POLICY,
   type PromotionCandidate,
   PromotionChainError,
+  type PromotionErrorContext,
+  type PromotionErrorEndpoint,
   type PromotionJudge,
   PromotionNotPublishedError,
   PromotionNotRejectedError,

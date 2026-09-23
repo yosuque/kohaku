@@ -15,6 +15,7 @@ import {
   transition,
 } from "./machine.js";
 import { createNomination } from "./nomination.js";
+import { diffDraft, type SchemaSuggestion } from "./suggestion.js";
 import { createUsageIndex, indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
 
 export interface PromotionPolicy extends MachinePolicy {
@@ -96,6 +97,10 @@ export const DEFAULT_PROMOTION_POLICY: PromotionPolicy = {
  *   transition to `candidate` is already persisted) failed for one nominated candidate (promotion/nomination.ts).
  *   Unlike publish/unpublish's audit, there is currently no reconcile-style backfill for a missed
  *   `component.nominated` event, so the audit trail stays incomplete for that artifact until a manual fix.
+ * - `promotion.suggest.schema`: the optional `suggestSchema` hook (schema extraction) threw or rejected for one
+ *   newly nominated candidate; the candidate is nominated without a suggestion (promotion/nomination.ts).
+ * - `promotion.suggest.audit`: the fail-open `component.schemaSuggested` audit record failed (nomination.ts).
+ * - `promotion.approve.audit`: the fail-open `component.schemaEdited` audit record on the approve path failed.
  * - `storage.record.invalid`: a promotion-state record read back from `StoragePort.getPromotionState`
  *   (candidate-store.ts's `loadCandidate`) failed `@kohaku-ui/spec-core`'s `PromotionStateSchema` (a
  *   corrupted or hand-edited `promotions.json` entry). The reader treats it exactly
@@ -110,6 +115,9 @@ export type PromotionErrorEndpoint =
   | "promotion.reconcile.projection"
   | "promotion.nominate.tenant"
   | "promotion.nominate.audit"
+  | "promotion.suggest.schema"
+  | "promotion.suggest.audit"
+  | "promotion.approve.audit"
   | "storage.record.invalid";
 
 /** Context passed to `createPromotions`' `onError` hook alongside the causing error. */
@@ -224,6 +232,8 @@ export interface PromotionCandidate {
   sessions: number;
   verdict?: unknown;
   draft?: ComponentDraft;
+  /** Machine-extracted registration proposal (advisory; persisted on the snapshot as data.suggestion). */
+  suggestion?: SchemaSuggestion;
   updatedAt: string;
 }
 
@@ -395,6 +405,15 @@ export function createPromotions(opts: {
   /** Promotion review called from the candidate state on the approve path. If unset, the review is skipped (straight to human review with no advice). */
   judge?: PromotionJudge;
   /**
+   * Optional schema extraction hook (product responsibility, e.g. `@kohaku-ui/evals`' createSchemaExtractor).
+   * Called once per candidate at auto-nomination time (`evaluateAndList`), never on the approve path. Advisory:
+   * the returned proposal is persisted on the candidate and surfaced to the approval UI as a prefill, but the
+   * transition to published still requires a human `approve` carrying the final draft. Fail-open: a throw /
+   * rejection is reported via `onError({ endpoint: "promotion.suggest.schema" })` and the candidate is
+   * nominated without a suggestion; `null` means "no proposal" silently.
+   */
+  suggestSchema?: (candidate: PromotionCandidate, context?: TenantScope) => Promise<SchemaSuggestion | null>;
+  /**
    * Fail-open observability hook (product responsibility, optional): notified on every failure/skip listed on
    * `PromotionErrorEndpoint`'s doc (publish/unpublish audit fail-open, reconcile's audit backfill and projection
    * skip, and evaluateAndList's tenant-mismatch skip). Fired fire-and-forget (a throw / rejection from the hook
@@ -411,6 +430,7 @@ export function createPromotions(opts: {
     policy,
     persistMany: store.persistMany,
     onError: opts.onError,
+    suggestSchema: opts.suggestSchema,
   });
 
   /** Read-only candidate list (does neither auto-nominate nor persist). */
@@ -682,6 +702,29 @@ export function createPromotions(opts: {
     }
     if (candidate.status === "approved") {
       candidate = await act(artifactId, { kind: "schema.propose", draft }, reviewer, scope);
+      // Reviewer edits against the machine suggestion (advisory prefill). Recorded here, next to
+      // component.schemaProposed, because this is the first point where both the suggestion (persisted at
+      // nomination) and the final draft (this approve's argument) are known. Fail-open like the other audit
+      // records on this path: a storage hiccup must not stop the publish below.
+      if (candidate.suggestion != null) {
+        const diff = diffDraft(candidate.suggestion.draft, draft);
+        await recordFailOpen(
+          opts.lineage,
+          opts.onError,
+          "promotion.approve.audit",
+          "component.schemaEdited",
+          {
+            artifactId,
+            reviewer: reviewer.id,
+            extractorId: candidate.suggestion.extractorId,
+            extractorVersion: candidate.suggestion.extractorVersion,
+            changed: diff.changed,
+            unchanged: diff.unchanged,
+          },
+          { kind: "user", id: reviewer.id },
+          { tenant, artifactId },
+        );
+      }
     }
     if (candidate.status === "schema_proposed") {
       candidate = await act(artifactId, { kind: "publish", version: draft.version }, reviewer, scope);
