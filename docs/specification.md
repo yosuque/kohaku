@@ -147,6 +147,8 @@ Spec cache (get/put), Lineage (append/list), promotion state (get/put/list), fix
 
 **Tenant arguments**: `getFixation(intentHash, tenant?)` / `listFixations(tenant?)` / `deleteFixation?(intentHash, tenant?)` take an optional second argument `tenant`, and `putFixation` looks at `record.tenant` to key-separate fixations by `(tenant, intentHash)` (the signature is unchanged). `listLineage`'s `LineageFilter.tenant` returns only matching events (unspecified = all, the traditional behavior; old events with no recorded `tenant` appear only under the unspecified filter). **Tenant-unaware storage may ignore the second argument, in which case fixations are shared across tenants (fail-open)** — full tenant isolation (RLS, etc.) is the product's responsibility. The sample's `createFileStoragePort` separates by a composite key (no `tenant` = the `intentHash` itself), so an old `fixations.json` (no `tenant`) loads with backward compatibility without conversion.
 
+**Reference adapters**: `@kohaku-ui/storage-memory` (in-memory / file), `@kohaku-ui/storage-redis` and `@kohaku-ui/storage-postgres` implement this interface in full, including the optional `putPromotionStates` / `deleteFixation` and `putFixation`'s `ifPresent`. They add nothing to the contract; a product may implement `StoragePort` directly instead. The concurrency contract above is unchanged by them.
+
 ### 4.5 LlmPort (framework-internal Port)
 
 ```ts
@@ -461,6 +463,15 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 | `KOHAKU_LLM_RETRY_MAX` / `KOHAKU_LLM_RETRY_INITIAL_MS` | 2 / 250 | Jittered exponential-backoff retry for PROVIDER failures (429/5xx). `0` disables. Does not exceed `KOHAKU_LLM_TIMEOUT_MS` overall |
 | `KOHAKU_LLM_PROMPT_CACHE` | `0` (off) | `1` opts into Anthropic prompt caching (`cache_control`) for the `claude` provider only (no-op for every other provider, and a no-op whenever the caller passes no `GenerateObjectRequest`/`GenerateTextRequest.promptParts`) — see [design.md#prompt-caching](design.md#prompt-caching) and `ComposePolicy.refConstraint` below |
 | `KOHAKU_CAPABILITY_SECRET` | `dev-secret-change-me` | The sample's HMAC capability signing key |
+| `KOHAKU_STORAGE` | `file` | `file` / `memory` / `redis` / `postgres` — the StoragePort implementation the TS samples build (`apps/sample-api/src/ports/from-env.ts`) |
+| `KOHAKU_REDIS_URL` | — | Required for `KOHAKU_STORAGE=redis` (ioredis URL) |
+| `KOHAKU_STORAGE_KEY_PREFIX` | `kohaku` | Redis key prefix |
+| `KOHAKU_POSTGRES_URL` | — | Required for `KOHAKU_STORAGE=postgres` (pg connection string) |
+| `KOHAKU_POSTGRES_SCHEMA` | `public` | Schema the kohaku tables live in (created if missing) |
+| `KOHAKU_AUTHZ` | `hmac` | `hmac` / `jwt` — the AuthzPort and request-identity scheme. `jwt` replaces the demo's `x-kohaku-role` / `x-kohaku-tenant` headers with the token's claims and answers 401 without a valid bearer token |
+| `KOHAKU_JWT_SECRET` / `KOHAKU_JWT_JWKS_URL` | — | One of the two is required for `KOHAKU_AUTHZ=jwt` (HS256 shared secret, or an OIDC JWKS endpoint) |
+| `KOHAKU_JWT_ISSUER` / `KOHAKU_JWT_AUDIENCE` | — | Optional `iss` / `aud` checks |
+| `KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL` / `KOHAKU_ADAPTER_TESTS` | — | Test-only: backend for the adapter suites (otherwise Docker via testcontainers, otherwise skip); `require` forbids the skip |
 | `KOHAKU_OTEL` | `0` (off) | **sample-api (TS) only.** `1` combines `@kohaku-ui/otel`'s `createOtelComposeObserver()` with the demo's console observer via `@kohaku-ui/composer`'s `composeObservers` (`apps/sample-api/src/app/compose-context.ts`). Unset/any other value returns the exact same observer object as before this option existed (behavior provably unchanged). Ships no exporter/SDK initialization — see [user-guide.md](user-guide.md)'s "Trace context / OTel" section for that setup. With no `TracerProvider` registered, spans are simply discarded (safe no-op) |
 | `KOHAKU_COMPOSE_DEADLINE_MS` | 240000 | The sample's compose-wide deadline (ms) fed into `ComposePolicy.budget.deadlineMs` (`apps/sample-api/src/app/compose-context.ts`'s `composeDeadlineMs`). Bounds one whole `compose`/`composeStream` call (L1 generation through repair re-attempts through L2), aborting an in-flight LLM call at expiry and downgrading to the deterministic fallback exactly like a `perCompose` token-budget overage — see [user-guide.md](user-guide.md) §7's "Compose-wide deadline" bullet. The default (240s) covers one straight-to-L2 run (`sales.custom`'s ~180s L2 timeout under the default 3× `outputBudgetFactor` widening of `KOHAKU_LLM_TIMEOUT_MS`) plus headroom for a repair retry. Non-numeric / `<= 0` falls back to the default. The Python sample mirrors this via `ComposePolicy(budget=ComposeBudget(deadline_ms=...))` in `python/examples/sales-api/src/sales_api/app.py` |
 | `PORT` | 8787 | sample-api (the Python sample is 8790) |

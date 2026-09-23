@@ -147,6 +147,8 @@ Spec キャッシュ(get/put)、Lineage(append/list)、昇格状態(get/put/list
 
 **テナント引数**: `getFixation(intentHash, tenant?)` / `listFixations(tenant?)` / `deleteFixation?(intentHash, tenant?)` は optional 第 2 引数で `tenant` を受け、`putFixation` は `record.tenant` を見て固定化を `(tenant, intentHash)` にキー分離する(シグネチャ不変)。`listLineage` の `LineageFilter.tenant` は一致イベントのみを返す(未指定は全件 = 従来挙動。`tenant` 未記録の旧イベントは無指定フィルタでのみ現れる)。**tenant 非対応のストレージは第 2 引数を無視してよく、その場合テナント間で固定化が共有される(fail-open)** — 本格的なテナント分離は RLS 等プロダクト側の責務。サンプルの `createFileStoragePort` は合成キー(`tenant` なしは `intentHash` そのもの)で分離するため、旧 `fixations.json`(`tenant` なし)は変換なしで互換ロードできる。
 
+**参考実装**: `@kohaku-ui/storage-memory`(インメモリ / ファイル)、`@kohaku-ui/storage-redis`、`@kohaku-ui/storage-postgres` はいずれもこのインタフェースを、オプショナルな `putPromotionStates` / `deleteFixation` と `putFixation` の `ifPresent` も含めて完全実装している。これらは契約に何も追加しない — プロダクトが `StoragePort` を直接実装してもよい。上記の並行性契約はこれらによって変わらない。
+
 ### 4.5 LlmPort(フレームワーク内部 Port)
 
 ```ts
@@ -416,6 +418,15 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `KOHAKU_LLM_RETRY_MAX` / `KOHAKU_LLM_RETRY_INITIAL_MS` | 2 / 250 | PROVIDER 障害(429/5xx)のジッター付き指数バックオフ再試行。`0` で無効。全体で `KOHAKU_LLM_TIMEOUT_MS` を超えない |
 | `KOHAKU_LLM_PROMPT_CACHE` | `0`(off) | `1` で `claude` プロバイダのみ Anthropic プロンプトキャッシュ(`cache_control`)に opt-in する(他プロバイダは no-op。呼び出し側が `GenerateObjectRequest`/`GenerateTextRequest.promptParts` を渡さない場合も no-op)。[design.ja.md#prompt-caching](design.ja.md#prompt-caching) と下記の `ComposePolicy.refConstraint` を参照 |
 | `KOHAKU_CAPABILITY_SECRET` | `dev-secret-change-me` | サンプルの HMAC capability 署名鍵 |
+| `KOHAKU_STORAGE` | `file` | `file` / `memory` / `redis` / `postgres` — TS サンプルが組み立てる StoragePort 実装(`apps/sample-api/src/ports/from-env.ts`) |
+| `KOHAKU_REDIS_URL` | — | `KOHAKU_STORAGE=redis` で必須(ioredis の URL) |
+| `KOHAKU_STORAGE_KEY_PREFIX` | `kohaku` | Redis のキープレフィックス |
+| `KOHAKU_POSTGRES_URL` | — | `KOHAKU_STORAGE=postgres` で必須(pg の接続文字列) |
+| `KOHAKU_POSTGRES_SCHEMA` | `public` | kohaku のテーブルを置くスキーマ(なければ作成) |
+| `KOHAKU_AUTHZ` | `hmac` | `hmac` / `jwt` — AuthzPort とリクエスト identity の方式。`jwt` はデモの `x-kohaku-role` / `x-kohaku-tenant` ヘッダをトークンのクレームに置き換え、有効な bearer トークンがなければ 401 を返す |
+| `KOHAKU_JWT_SECRET` / `KOHAKU_JWT_JWKS_URL` | — | `KOHAKU_AUTHZ=jwt` ではどちらか一方が必須(HS256 共有鍵、または OIDC JWKS エンドポイント) |
+| `KOHAKU_JWT_ISSUER` / `KOHAKU_JWT_AUDIENCE` | — | 任意の `iss` / `aud` 検証 |
+| `KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL` / `KOHAKU_ADAPTER_TESTS` | — | テスト専用: アダプタ系スイートが使うバックエンド(未指定なら testcontainers 経由の Docker、それも無ければスキップ)。`require` はスキップを禁止する |
 | `KOHAKU_OTEL` | `0`(off) | **sample-api(TS)のみ。** `1` にすると `@kohaku-ui/otel` の `createOtelComposeObserver()` を `@kohaku-ui/composer` の `composeObservers` でデモのコンソール observer と束ねる(`apps/sample-api/src/app/compose-context.ts`)。未設定・それ以外の値のときはこのオプション導入前と全く同じ observer オブジェクトを返す(挙動が不変であることを保証)。exporter/SDK の初期化は一切行わない — その手順は [user-guide.md](user-guide.ja.md) の「Trace context / OTel」節を参照。`TracerProvider` が未登録でもスパンは単に捨てられるだけ(安全な no-op) |
 | `KOHAKU_COMPOSE_DEADLINE_MS` | 240000 | サンプルの compose 全体デッドライン(ms)。`ComposePolicy.budget.deadlineMs` に渡す(`apps/sample-api/src/app/compose-context.ts` の `composeDeadlineMs`)。ひとつの `compose`/`composeStream` 呼び出し全体(L1 生成〜repair 再試行〜L2)を束縛し、期限超過時は実行中の LLM 呼び出しを中断して `perCompose` のトークン予算超過と同じ決定的フォールバックへ降格する([user-guide.md](user-guide.ja.md) §7 の「compose 全体のデッドライン」参照)。既定値(240 秒)は L2 直行 1 回分(`sales.custom` の `KOHAKU_LLM_TIMEOUT_MS` で 3 倍された ~180 秒の L2 タイムアウト)+ repair 再試行分の余白を見込んだもの。数値化できない値・`0` 以下は既定値にフォールバックする。Python サンプルは `python/examples/sales-api/src/sales_api/app.py` の `ComposePolicy(budget=ComposeBudget(deadline_ms=...))` で同様にミラーする |
 | `PORT` | 8787 | sample-api(Python サンプルは 8790) |
