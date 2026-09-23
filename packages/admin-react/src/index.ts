@@ -40,6 +40,13 @@ export {
 } from "./tabs/promotions/PromotionDraftEditor.js";
 export { PromotionPreview } from "./tabs/promotions/PromotionPreview.js";
 export { PROMOTION_STATUS_FILTERS, PromotionsTab } from "./tabs/promotions/PromotionsTab.js";
+export {
+  diffAgainstSuggestion,
+  draftFormFromSuggestion,
+  hasEdits,
+  type SuggestionField,
+  type SuggestionFieldDiff,
+} from "./tabs/promotions/suggestion.js";
 export { adminThemeStyle, V as adminVars } from "./theme.js";
 export {
   BarRow,
