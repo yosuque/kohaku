@@ -2,26 +2,39 @@ import type { AuthzPort } from "@kohaku-ui/spec-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContractFixture } from "./storage.js";
 
+/** A concrete port that also exposes pre-expiry revocation (e.g. HmacAuthzPort / JwtAuthzPort). */
+export type RevocableAuthzPort = AuthzPort & {
+  revokeCapability(token: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+};
+
 export interface AuthzContractOptions {
   /** "fake" (default) drives expiry with vi.setSystemTime; "real" waits ~1.1s of wall clock instead. */
   clock?: "fake" | "real";
+  /**
+   * Opts into the revocation case. Explicit rather than feature-detected (`"revokeCapability" in port`):
+   * a guard like that would silently produce a zero-assertion passing test for any port that omits the
+   * method, which is exactly the mistake this repository's port-contracts suites have made once before.
+   * When true, the factory must actually return a `RevocableAuthzPort` (a port missing the method fails
+   * the test at call time rather than being silently skipped).
+   */
+  revocation?: boolean;
 }
 
 /**
  * The AuthzPort contract (spec-core ports.ts): exact-match scopes, tamper detection, expiry.
  * Registers one `describe` block; call it at the top level of a vitest file.
  */
-export function describeAuthzPortContract(
+export function describeAuthzPortContract<P extends AuthzPort = AuthzPort>(
   name: string,
-  factory: () => Promise<ContractFixture<AuthzPort>> | ContractFixture<AuthzPort>,
+  factory: () => Promise<ContractFixture<P>> | ContractFixture<P>,
   options: AuthzContractOptions = {},
 ): void {
   const clock = options.clock ?? "fake";
   const principal = { id: "contract-user", roles: ["user"] };
 
   describe(`AuthzPort contract: ${name}`, () => {
-    let fixture: ContractFixture<AuthzPort>;
-    let authz: AuthzPort;
+    let fixture: ContractFixture<P>;
+    let authz: P;
 
     beforeEach(async () => {
       if (clock === "fake") {
@@ -76,5 +89,18 @@ export function describeAuthzPortContract(
       else await new Promise((resolve) => setTimeout(resolve, 1100));
       expect((await authz.verify(cap, { kind: "read", ref: "query://s/x" })).ok).toBe(false);
     });
+
+    if (options.revocation) {
+      it("reports ok:false once a verified capability has been revoked", async () => {
+        const revocable = authz as unknown as RevocableAuthzPort;
+        const cap = await revocable.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }]);
+        expect((await revocable.verify(cap, { kind: "read", ref: "query://s/x" })).ok).toBe(true);
+
+        const revokeResult = await revocable.revokeCapability(cap);
+        expect(revokeResult.ok).toBe(true);
+
+        expect((await revocable.verify(cap, { kind: "read", ref: "query://s/x" })).ok).toBe(false);
+      });
+    }
   });
 }

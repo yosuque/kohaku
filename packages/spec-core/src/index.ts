@@ -34,6 +34,7 @@ export {
 } from "./parse.js";
 export type {
   AuthzPort,
+  CapabilityRevocationStore,
   CatalogContribution,
   DomainPort,
   FixationRecord,
