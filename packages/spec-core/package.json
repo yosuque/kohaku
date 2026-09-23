@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/spec-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Kohaku Protocol core: UI Spec schema, Intent canonicalization, diff/patch, cache keys and the Port types that form the framework boundary.",
   "type": "module",
   "exports": {
