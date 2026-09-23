@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/semantic-llm",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A default SemanticPort for kohaku: deterministic GUI normalization, LLM-backed natural-language normalization against an Intent catalog (structured output, optional catch-all fallback), and query resolution from @kohaku-ui/intents definitions.",
   "type": "module",
   "exports": {
