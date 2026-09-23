@@ -89,32 +89,98 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       }
       return tailLimit(events, filter.limit);
     },
-    async getPromotionState(_artifactId: string, _tenant?: string) {
-      throw new Error("not implemented");
+    async getPromotionState(artifactId, tenant) {
+      const raw = await redis.get(keys.promotion(tenant, artifactId));
+      return raw == null ? null : (JSON.parse(raw) as PromotionState);
     },
-    async putPromotionState(_state: PromotionState) {
-      throw new Error("not implemented");
+    async putPromotionState(state) {
+      await putIndexed(
+        redis,
+        keys.promotionSeq,
+        keys.promotion(state.tenant, state.artifactId),
+        state.tenant,
+        keys.promotionIndex,
+        state,
+      );
     },
-    async putPromotionStates(_states: PromotionState[]) {
-      throw new Error("not implemented");
+    async putPromotionStates(states) {
+      if (states.length === 0) return;
+      const seqs = await nextSeqs(redis, keys.promotionSeq, states.length);
+      const multi = redis.multi();
+      states.forEach((state, i) => {
+        const key = keys.promotion(state.tenant, state.artifactId);
+        multi.set(key, JSON.stringify(state));
+        multi.zadd(keys.promotionIndex(undefined), "NX", seqs[i]!, key);
+        if (state.tenant != null && state.tenant !== "")
+          multi.zadd(keys.promotionIndex(state.tenant), "NX", seqs[i]!, key);
+      });
+      await multi.exec();
     },
-    async listPromotionStates(_tenant?: string) {
-      throw new Error("not implemented");
+    async listPromotionStates(tenant) {
+      return listIndexed<PromotionState>(redis, keys.promotionIndex(tenant));
     },
-    async getFixation(_intentHash: string, _tenant?: string) {
-      throw new Error("not implemented");
+    async getFixation(intentHash, tenant) {
+      const raw = await redis.get(keys.fixation(tenant, intentHash));
+      return raw == null ? null : (JSON.parse(raw) as FixationRecord);
     },
-    async putFixation(_record: FixationRecord, _options?: { ifPresent?: boolean }) {
-      throw new Error("not implemented");
+    async putFixation(record, options) {
+      const key = keys.fixation(record.tenant, record.intentHash);
+      if (options?.ifPresent === true) {
+        // XX: only overwrite an existing key. The indexes already contain it, so nothing else to do.
+        await redis.set(key, JSON.stringify(record), "XX");
+        return;
+      }
+      await putIndexed(redis, keys.fixationSeq, key, record.tenant, keys.fixationIndex, record);
     },
-    async listFixations(_tenant?: string) {
-      throw new Error("not implemented");
+    async listFixations(tenant) {
+      return listIndexed<FixationRecord>(redis, keys.fixationIndex(tenant));
     },
-    async deleteFixation(_intentHash: string, _tenant?: string) {
-      throw new Error("not implemented");
+    async deleteFixation(intentHash, tenant) {
+      const key = keys.fixation(tenant, intentHash);
+      const multi = redis.multi();
+      multi.del(key);
+      multi.zrem(keys.fixationIndex(undefined), key);
+      if (tenant != null && tenant !== "") multi.zrem(keys.fixationIndex(tenant), key);
+      await multi.exec();
     },
     async close() {
       if (owned) await redis.quit();
     },
   };
+}
+
+/** Reserves `count` consecutive sequence numbers (a single INCRBY). */
+async function nextSeqs(redis: Redis, seqKey: string, count: number): Promise<number[]> {
+  const last = await redis.incrby(seqKey, count);
+  return Array.from({ length: count }, (_, i) => last - count + 1 + i);
+}
+
+/**
+ * Writes one record and registers its key in the all-tenants index and (when tenant-scoped) the per-tenant
+ * index. `ZADD NX` keeps the first-insertion position on overwrite, mirroring the file port's Map order.
+ */
+async function putIndexed(
+  redis: Redis,
+  seqKey: string,
+  key: string,
+  tenant: string | undefined,
+  indexKey: (tenant: string | undefined) => string,
+  value: unknown,
+): Promise<void> {
+  const seq = await redis.incr(seqKey);
+  const multi = redis.multi();
+  multi.set(key, JSON.stringify(value));
+  multi.zadd(indexKey(undefined), "NX", seq, key);
+  if (tenant != null && tenant !== "") multi.zadd(indexKey(tenant), "NX", seq, key);
+  await multi.exec();
+}
+
+/** Reads every record an index points at, in index (first-insertion) order. */
+async function listIndexed<T>(redis: Redis, indexKey: string): Promise<T[]> {
+  const memberKeys = await redis.zrange(indexKey, 0, -1);
+  if (memberKeys.length === 0) return [];
+  const raws = await redis.mget(...memberKeys);
+  const out: T[] = [];
+  for (const raw of raws) if (raw != null) out.push(JSON.parse(raw) as T);
+  return out;
 }
