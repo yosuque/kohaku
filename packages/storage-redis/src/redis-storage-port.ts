@@ -1,13 +1,13 @@
 import type {
   FixationRecord,
   LineageEventRecord,
-  LineageFilter,
   PromotionState,
   StoragePort,
   UISpec,
 } from "@kohaku-ui/spec-core";
 import { Redis } from "ioredis";
 import { DEFAULT_KEY_PREFIX, type RedisKeys, redisKeys } from "./keys.js";
+import { chooseCandidateIndex, indexValues, matchesFilter, tailLimit } from "./lineage.js";
 
 export interface RedisStoragePortOptions {
   /** ioredis connection URL (`redis://…` / `rediss://…`). Mutually exclusive with `client`. */
@@ -53,11 +53,41 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
         await redis.set(keys.spec(key), value, "EX", Math.ceil(ttlSeconds));
       else await redis.set(keys.spec(key), value);
     },
-    async appendLineage(_event: LineageEventRecord) {
-      throw new Error("not implemented");
+    async appendLineage(event) {
+      const seq = await redis.incr(keys.lineage.seq);
+      const multi = redis.multi();
+      multi.hset(keys.lineage.events, event.id, JSON.stringify(event));
+      multi.zadd(keys.lineage.bySeq, seq, event.id);
+      for (const { field, value } of indexValues(event)) {
+        multi.zadd(keys.lineage.index(field, value), seq, event.id);
+      }
+      await multi.exec();
     },
-    async listLineage(_filter?: LineageFilter) {
-      throw new Error("not implemented");
+    async listLineage(filter = {}) {
+      const candidate = chooseCandidateIndex(filter);
+      let ids: string[];
+      if (candidate == null) {
+        ids = await redis.zrange(keys.lineage.bySeq, 0, -1);
+      } else if (candidate.values.length === 1) {
+        ids = await redis.zrange(keys.lineage.index(candidate.field, candidate.values[0]!), 0, -1);
+      } else {
+        // Union of several index sets, re-sorted by seq (WITHSCORES) so append order is kept.
+        const scored = new Map<string, number>();
+        for (const value of candidate.values) {
+          const pairs = await redis.zrange(keys.lineage.index(candidate.field, value), 0, -1, "WITHSCORES");
+          for (let i = 0; i < pairs.length; i += 2) scored.set(pairs[i]!, Number(pairs[i + 1]));
+        }
+        ids = [...scored.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+      }
+      if (ids.length === 0) return [];
+      const raws = await redis.hmget(keys.lineage.events, ...ids);
+      const events: LineageEventRecord[] = [];
+      for (const raw of raws) {
+        if (raw == null) continue; // an index entry whose body is gone (should not happen under MULTI; skip defensively)
+        const event = JSON.parse(raw) as LineageEventRecord;
+        if (matchesFilter(event, filter)) events.push(event);
+      }
+      return tailLimit(events, filter.limit);
     },
     async getPromotionState(_artifactId: string, _tenant?: string) {
       throw new Error("not implemented");
