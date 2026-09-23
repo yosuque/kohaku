@@ -76,17 +76,19 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
     ready,
     async getSpecCache(key) {
       await ready();
-      const { rows } = await pool.query<{ spec: UISpec }>(
+      // `spec` is stored as text (see schema.ts), so this is the exact JSON that was written -- no
+      // jsonb key-reordering between put and get.
+      const { rows } = await pool.query<{ spec: string }>(
         `SELECT spec FROM ${T.spec} WHERE key = $1 AND (expires_at IS NULL OR expires_at > now())`,
         [key],
       );
-      return rows[0]?.spec ?? null;
+      return rows[0] != null ? (JSON.parse(rows[0].spec) as UISpec) : null;
     },
     async putSpecCache(key, spec, ttlSeconds) {
       await ready();
       await pool.query(
         `INSERT INTO ${T.spec} (key, spec, expires_at)
-         VALUES ($1, $2::jsonb, CASE WHEN $3::double precision IS NULL THEN NULL ELSE now() + ($3::double precision * interval '1 second') END)
+         VALUES ($1, $2, CASE WHEN $3::double precision IS NULL THEN NULL ELSE now() + ($3::double precision * interval '1 second') END)
          ON CONFLICT (key) DO UPDATE SET spec = EXCLUDED.spec, expires_at = EXCLUDED.expires_at`,
         [key, JSON.stringify(spec), ttlSeconds != null && ttlSeconds > 0 ? ttlSeconds : null],
       );

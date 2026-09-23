@@ -25,7 +25,13 @@ export function postgresSchemaSql(schema: string = DEFAULT_SCHEMA): string {
   return `
 CREATE TABLE IF NOT EXISTS ${t("kohaku_spec_cache")} (
   key text PRIMARY KEY,
-  spec jsonb NOT NULL,
+  -- text, not jsonb: jsonb re-serializes object keys in its own internal (length, then lexicographic)
+  -- order, so a Spec written then read back would come back with reordered keys -- byte-inequal but
+  -- semantically identical to what was cached. The determinism guarantee this cache exists to serve
+  -- (composeWithFixation / REST-CMP-002's exact-JSON-equality check) needs the exact bytes preserved,
+  -- and nothing here ever queries into the JSON (always fetched whole by its key), so jsonb's indexing
+  -- benefits are not in use anyway.
+  spec text NOT NULL,
   expires_at timestamptz NULL
 );
 CREATE TABLE IF NOT EXISTS ${t("kohaku_lineage")} (
