@@ -1,16 +1,17 @@
-import { screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import axe from "axe-core";
 import { describe, expect, it } from "vitest";
 import {
   AnalyticsTab,
   FixationsTab,
+  KohakuAdmin,
   LineageTab,
   defaultAdminMessages as m,
   PromotionsTab,
 } from "../src/index.js";
 import { SUMMARY } from "./analytics-tab.test.js";
 import { AXE_OPTIONS } from "./axe-config.js";
-import { jsonResponse, renderInAdmin } from "./helpers.js";
+import { jsonResponse, renderInAdmin, stubClient } from "./helpers.js";
 
 const candidate = {
   artifactId: "sales.customViz1@1",
@@ -100,5 +101,38 @@ describe("a11y (axe structural rules) per tab", () => {
       document.body.style.removeProperty("--kohaku-color-subtle");
       document.body.style.removeProperty("--kohaku-color-track");
     }
+  });
+});
+
+// Fix round 1, Finding 1: the four per-tab checks above render each tab directly through `renderInAdmin`
+// (AdminProvider only), so none of them ever exercises KohakuAdmin's OWN markup — the tab bar (its primary
+// navigation), the toolbar slot, or the notice banner. This covers all three in one rendered <KohakuAdmin>
+// tree: the tab bar shows all four built-in tabs plus one product-injected extra tab, the toolbar slot is
+// occupied, and an error notice (role="alert") is visible.
+describe("a11y (axe structural rules) over KohakuAdmin's own markup", () => {
+  it("tab bar (built-ins + an extra tab), toolbar slot, and a visible error notice", async () => {
+    const { client } = stubClient({
+      "GET /analytics/summary": () =>
+        jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "no" } }, 403),
+    });
+    const extraTabs = [{ key: "gallery", label: "Gallery", render: () => <div>gallery body</div> }];
+    const { container } = render(
+      <KohakuAdmin
+        client={client}
+        initialTab="analytics"
+        extraTabs={extraTabs}
+        toolbar={
+          <button type="button" onClick={() => {}}>
+            Bump
+          </button>
+        }
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    // Sanity: all three surfaces this test is meant to cover are actually present before axe runs over them.
+    expect(screen.getByText(m.tabLineage)).toBeTruthy();
+    expect(screen.getByText("Gallery")).toBeTruthy();
+    expect(screen.getByText("Bump")).toBeTruthy();
+    expect((await axe.run(container, AXE_OPTIONS)).violations).toEqual([]);
   });
 });

@@ -33,7 +33,10 @@ export interface KohakuAdminProps {
   tenant?: string;
   theme?: ThemeTokens;
   messages?: AdminMessages;
-  initialTab?: AdminTabKey | string;
+  // `AdminTabKey | (string & {})` (not a bare `AdminTabKey | string`, which TS widens away to plain
+  // `string`) keeps the four built-in keys autocompleting in an editor while still accepting any
+  // product-supplied extra tab's key.
+  initialTab?: AdminTabKey | (string & {});
   /** Product controls rendered at the right of the tab bar (may call useAdminNotice). */
   toolbar?: ReactNode;
   extraTabs?: AdminExtraTab[];
