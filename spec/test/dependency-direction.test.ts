@@ -6,12 +6,17 @@ import { describe, expect, it } from "vitest";
 /**
  * Guards the package dependency direction documented in the repository's AGENTS.md ("Layout essentials"):
  *
- *   spec-core -> {registry, data-binding} -> intents -> {composer, renderer-core} -> host-core
+ *   spec-core -> {registry, data-binding, storage-memory, authz-hmac, port-contracts} -> intents
+ *     -> {composer, renderer-core, semantic-llm} -> host-core
  *     -> {renderer-react, renderer-wc, sandbox, lineage, evals, host-rest, host-mcp-apps, client, otel} -> apps
  *
  * with `llm` and `host-a2ui` documented as independent leaves (llm depends on nothing in the workspace;
- * host-a2ui only on spec-core). `otel` sits in the same layer as host-rest/host-mcp-apps/etc but (unlike
- * them) depends only on composer, not host-core.
+ * host-a2ui only on spec-core), and `storage-memory` / `authz-hmac` (reference StoragePort / AuthzPort
+ * implementations) / `port-contracts` (private, test-only) as further leaves alongside registry and
+ * data-binding, depending only on spec-core. `semantic-llm` (the default SemanticPort) sits alongside
+ * composer and renderer-core: it depends on spec-core + data-binding + intents + llm, the same shape as
+ * composer's spec-core + registry + llm. `otel` sits in the same layer as host-rest/host-mcp-apps/etc but
+ * (unlike them) depends only on composer, not host-core.
  *
  * The top-level bullet groups sandbox and renderer-wc into the same final layer, but AGENTS.md's own more
  * detailed text says renderer-wc "reuses sandbox (mountSandbox) by importing it directly" -- i.e. sandbox

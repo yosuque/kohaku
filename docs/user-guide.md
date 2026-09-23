@@ -277,6 +277,18 @@ You can adopt it in stages along the adoption ladder (design doc §12 "Design of
 
 **Dependency method**: `@kohaku-ui/*` packages are published to npm. In a standalone app, `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm @ai-sdk/anthropic zod` (`@ai-sdk/anthropic` is the provider SDK for Claude — an optional peer dependency of `@kohaku-ui/llm`; swap it for `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` depending on the provider you configure) (add `@kohaku-ui/composer`, `@kohaku-ui/renderer-react react react-dom`, etc. as you reach the later steps below) and import them normally — each package's `publishConfig` points `exports` at its `dist` build, so this works outside the monorepo with no extra setup. If you are instead building your app **inside this monorepo** (e.g. to contribute back, or to iterate against `src` without a publish step), add it under `apps/<your-app>`, reference the packages as `workspace:*` in its `package.json`, and run it with `tsx` (packages export `.ts` directly in that case — there is no `dist` build to consume from outside the workspace). The generated `server.ts` below assumes the npm-install path; swap the comment's dependency line for `workspace:*` if you took the monorepo path instead.
 
+### Zero-Port quickstart (from your own data, no Port code)
+
+```bash
+mkdir my-app && cd my-app
+npx @kohaku-ui/cli init --from ../sales.csv     # or a .json array / a .sqlite file (Node >= 22.13 for SQLite)
+npm run dev                                      # API :8787 + web :5173
+```
+
+`init` reads the file, infers which columns are categories (→ vocabularies), measures (→ metrics) and time (→ granularity), and generates a project that only depends on the published `@kohaku-ui/*` packages: a DomainPort over the data (sum / avg / count × group by × time window; `describeShape` exposes column metadata only — rows never enter the model), an Intent catalog (`defineVocabulary` / `defineIntent`), an L0 fixed Spec for `<source>.summary`, `@kohaku-ui/semantic-llm`'s default SemanticPort, `@kohaku-ui/storage-memory` and `@kohaku-ui/authz-hmac`, a Dashboard + Chat web app and a golden regression test. The **Summary** view renders with no LLM configured; set a provider in `.env` for Chat and the L1 views. Everything generated is a starting point — the four Ports remain your product's responsibility (design doc §2), and each file says what to replace.
+
+**Measuring "time to first compose"** (the quickstart's KPI, target ≤ 15 minutes): start a stopwatch before `npx @kohaku-ui/cli init`, stop it when the Dashboard shows the Summary view (L0) and, with a key configured, when the first Chat answer renders (L1). Record both on a clean machine with a warm npm cache; the CI `pack-smoke` job runs the same generation end to end (`scripts/pack-smoke.mjs`, step 7b).
+
 ### Step 0 — Server-Driven UI without an LLM
 
 ```bash
@@ -295,7 +307,7 @@ If you register fixed Spec templates (the sample is `apps/sample-api/src/intents
 ### Step 1 — L1 declarative synthesis and chat
 
 - **Define the Intent catalog in a single place (`@kohaku-ui/intents`)**: with `defineIntent`, make it 1 Intent = 1 definition (sample: `apps/sample-api/src/intents/catalog.ts`). Unify value sets into a single source with `defineVocabulary("region", { japan: "Japan", north_america: "North America", ... })`, and when you declare `params` (Zod) / `examples` (NL example sentences) / `facets` (params to expose to the GUI) / `queries` (a template or callback), the same definition derives `.toIntentDef()` (for SemanticPort), `.toFacetView()` (GUI facet), `.toToolSource()` (MCP tool), and `.parseParams()` (coerce + default). The facets to expose to the GUI are written out to `facet-views.json` by codegen (`pnpm intents:emit`), and the web imports it as data (the web stays independent of server code).
-- Implement the NL side of `SemanticPort.normalize` with `@kohaku-ui/llm` (sample: `apps/sample-api/src/ports/semantic-port.ts` — transcribes the Intent catalog into the prompt and maps it with structured output; failure falls back to `*.custom`)
+- `@kohaku-ui/semantic-llm`'s `createLlmSemanticPort` is the default (the sample wires its sales rules through `rules` / `fallbackIntent`; `apps/sample-api/src/ports/semantic-port.ts`)
 - Implementing `describeShape` makes the deterministic post-processing of chart-type rules and default sorting take effect
 - Contribute domain parts with `CatalogContribution` (`defineComponent` + the renderer implementation's `registry.register`)
 
