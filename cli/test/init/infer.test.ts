@@ -160,6 +160,49 @@ describe("inferProfile", () => {
     expect(() => inferProfile("x", dataset(rows))).toThrow(/No categorical column/);
   });
 
+  it("collects a dimension value that first appears only after SAMPLE_ROWS via a full-column scan", () => {
+    // First 5000 rows only ever use "japan"/"europe" for `region`, so classification (which only
+    // looks at the sample) sees a 2-value dimension. Rows after index 5000 introduce a third
+    // value, "asia", for the first time. A full scan over every row must still pick it up: it is
+    // a real value in the dataset, and `values` becomes a closed vocabulary downstream.
+    const rows = Array.from({ length: 5500 }, (_, i) => {
+      const region =
+        i < 5000
+          ? i % 2 === 0
+            ? "japan"
+            : "europe"
+          : i % 3 === 0
+            ? "asia"
+            : i % 3 === 1
+              ? "japan"
+              : "europe";
+      return { region, v: i };
+    });
+    const profile = inferProfile("x", dataset(rows));
+    const region = profile.columns.find((c) => c.name === "region");
+    expect(region?.kind).toBe("dimension");
+    expect(region?.values).toEqual(["japan", "europe", "asia"]);
+  });
+
+  it("demotes a dimension to text when the full scan finds more than MAX_VOCABULARY_VALUES distinct values", () => {
+    // The first 5000 rows only ever use 10 distinct `cat` values, so classification (sample-only)
+    // sees a well-behaved 10-value dimension. Rows after index 5000 each introduce a brand-new,
+    // never-repeated value — the full scan must catch that the true vocabulary is unbounded and
+    // demote the column to text, consistent with what the cap already means for the sampled path.
+    const rows = Array.from({ length: 5500 }, (_, i) => {
+      const cat = i < 5000 ? `cat${i % 10}` : `extra${i}`;
+      const region = i % 2 === 0 ? "japan" : "europe";
+      return { cat, region, v: i };
+    });
+    const profile = inferProfile("x", dataset(rows));
+    const cat = profile.columns.find((c) => c.name === "cat");
+    expect(cat?.kind).toBe("text");
+    expect(cat?.values).toBeUndefined();
+    // A genuinely small dimension elsewhere in the dataset means inferProfile does not throw even
+    // though "cat" is demoted after initially looking like a dimension in the sample.
+    expect(profile.columns.find((c) => c.name === "region")?.kind).toBe("dimension");
+  });
+
   it("disambiguates headers that collide after slugifying, keeping both columns", () => {
     const ds: Dataset = {
       columns: ["Sales Region", "sales region", "a-b", "a_b"],
@@ -175,6 +218,27 @@ describe("inferProfile", () => {
     // (first occurrence keeps the plain slug, later collisions get a numeric suffix).
     expect(names).toEqual(["sales_region", "sales_region_2", "a_b", "a_b_2"]);
     expect(new Set(names).size).toBe(4);
+  });
+
+  it("does not let a generated collision suffix steal another column's own natural name", () => {
+    // Header list has a genuine duplicate ("a" twice) plus a third, unrelated header that happens
+    // to literally be "a_2" — the exact shape the numbered scheme would otherwise generate for
+    // the second "a". (Two columns can't literally both be named "a" in a JS row object, so both
+    // read the same underlying "a" cell here — irrelevant to this test, which only checks naming.)
+    // The second "a" must skip past "a_2" (reserved for the third column's own natural slug) and
+    // land on "a_3"; the third column keeps the plain name it would have had on its own.
+    const ds: Dataset = {
+      columns: ["a", "a", "a_2"],
+      rows: [
+        { a: "x", a_2: "p" },
+        { a: "x", a_2: "q" },
+        { a: "y", a_2: "r" },
+      ],
+    };
+    const profile = inferProfile("x", ds);
+    const names = profile.columns.map((c) => c.name);
+    expect(names).toEqual(["a", "a_3", "a_2"]);
+    expect(new Set(names).size).toBe(3);
   });
 
   it("assigns column_<i> for a blank header, distinct from the non-ASCII hash fallback", () => {

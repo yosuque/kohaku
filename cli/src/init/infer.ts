@@ -63,11 +63,19 @@ export function humanize(value: string): string {
  * and "sales region" both slugify to "sales_region") gets the next free numbered variant. This
  * keeps names deterministic (source column order decides who gets the plain name) and readable
  * in generated code, unlike an underscore-accumulating scheme ("sales_region_", "sales_region__").
+ *
+ * `naturalSlugs` is every column's own natural slug (computed up front, in `inferProfile`'s first
+ * pass), not just the names assigned so far. A generated candidate suffix is skipped when it
+ * matches another column's natural slug, so a numbered suffix can never steal the plain name a
+ * later, unrelated column would otherwise have earned on its own merits (e.g. a real header
+ * "Region 2" naturally slugifies to "region_2" — exactly the shape this scheme generates for a
+ * collision — so "region_2" must stay reserved for that column even while disambiguating a
+ * different "region" collision).
  */
-function uniqueName(base: string, used: Set<string>): string {
+function uniqueName(base: string, used: Set<string>, naturalSlugs: Set<string>): string {
   if (!used.has(base)) return base;
   let n = 2;
-  while (used.has(`${base}_${n}`)) n++;
+  while (used.has(`${base}_${n}`) || naturalSlugs.has(`${base}_${n}`)) n++;
   return `${base}_${n}`;
 }
 
@@ -115,29 +123,82 @@ function classify(sourceName: string, name: string, cells: Cell[], timeTaken: bo
 }
 
 /**
+ * Scans every row (not just the classification sample) to build a dimension column's true value
+ * vocabulary, stopping as soon as the distinct count exceeds MAX_VOCABULARY_VALUES so this never
+ * builds a huge set for a column that turns out not to be a real dimension. Returns null when the
+ * cap is exceeded (the caller demotes the column to text), otherwise the distinct values in
+ * first-appearance order across the full dataset.
+ *
+ * This exists because classification's 95%/cap heuristics only look at the first SAMPLE_ROWS rows
+ * (a sample is exactly right for deciding "is this numeric / date-like / boolean" — that's a
+ * statistical judgment about the column's shape). But `values` becomes a *closed* vocabulary
+ * downstream (a Zod enum, an Intent catalog, a fixed L0 Spec), so it must reflect every row: a
+ * value that only first appears after row SAMPLE_ROWS is still a real value a generated project
+ * must accept, not something the sample gets to silently omit.
+ */
+function collectFullVocabulary(sourceName: string, rows: Row[]): string[] | null {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const row of rows) {
+    const c = row[sourceName] ?? null;
+    if (c == null) continue;
+    const s = String(c);
+    if (seen.has(s)) continue;
+    seen.add(s);
+    values.push(s);
+    if (values.length > MAX_VOCABULARY_VALUES) return null;
+  }
+  return values;
+}
+
+/**
  * Turns a raw Dataset into a DatasetProfile: which columns are dimensions (with their value
- * vocabularies), which are measures, and which one (if any) is the time axis. Only the first
- * SAMPLE_ROWS rows are inspected; null cells are excluded from every ratio/uniqueness check.
- * Throws when no dimension column is found — a project can't be generated without at least one
- * categorical column to build the Intent vocabulary from.
+ * vocabularies), which are measures, and which one (if any) is the time axis. Type detection
+ * (numeric / date-like / boolean / cardinality shape) is decided from the first SAMPLE_ROWS rows
+ * only — a sample is exactly right for that statistical judgment. A confirmed dimension's actual
+ * value vocabulary, however, is collected with a full scan over every row (see
+ * collectFullVocabulary): `values` becomes a closed vocabulary downstream, so it must include a
+ * value that only first appears after SAMPLE_ROWS, and a column that looks small in the sample
+ * but is unbounded overall is demoted to text rather than shipped as a fake-closed vocabulary.
+ * Null cells are excluded from every ratio/uniqueness check. Throws when no dimension column is
+ * found — a project can't be generated without at least one categorical column to build the
+ * Intent vocabulary from (demoting an over-cap dimension to text can itself trigger this, which is
+ * the correct outcome: a column that isn't a real dimension shouldn't count as one).
  */
 export function inferProfile(source: string, dataset: Dataset): DatasetProfile {
   const sample = dataset.rows.slice(0, SAMPLE_ROWS);
+  // First pass: every column's natural slug, computed up front so the second pass can tell a
+  // "generated disambiguation suffix" apart from "another column's own honest name" (see
+  // uniqueName). A blank header has nothing meaningful to slugify, so it gets a plain positional
+  // name instead of being routed through slugify's non-ASCII hash fallback (which would produce an
+  // equally opaque but needlessly hash-looking name for what is really just "no header").
+  const naturalSlugs = dataset.columns.map((sourceName, i) =>
+    sourceName.trim() === "" ? `column_${i}` : slugify(sourceName),
+  );
+  const naturalSlugSet = new Set(naturalSlugs);
+
   const used = new Set<string>();
   const columns: ColumnProfile[] = [];
   let timeTaken = false;
 
+  // Second pass: assign the actual (possibly disambiguated) name and classify each column.
   for (let i = 0; i < dataset.columns.length; i++) {
     const sourceName = dataset.columns[i]!;
-    // A blank header has nothing meaningful to slugify, so it gets a plain positional name
-    // instead of being routed through slugify's non-ASCII hash fallback (which would produce an
-    // equally opaque but needlessly hash-looking name for what is really just "no header").
-    const base = sourceName.trim() === "" ? `column_${i}` : slugify(sourceName);
-    const name = uniqueName(base, used);
+    const base = naturalSlugs[i]!;
+    const name = uniqueName(base, used, naturalSlugSet);
     used.add(name);
 
     const cells = sample.map((row) => row[sourceName] ?? null);
-    const profile = classify(sourceName, name, cells, timeTaken);
+    let profile = classify(sourceName, name, cells, timeTaken);
+    if (profile.kind === "dimension" && profile.type === "string") {
+      // Booleans are excluded (type !== "string"): their vocabulary is always the fixed
+      // ["true", "false"] regardless of row count, so there is nothing to rescan.
+      const vocabulary = collectFullVocabulary(sourceName, dataset.rows);
+      profile =
+        vocabulary === null
+          ? { name, sourceName, type: "string", kind: "text" }
+          : { ...profile, values: vocabulary };
+    }
     if (profile.kind === "time") timeTaken = true;
     columns.push(profile);
   }
