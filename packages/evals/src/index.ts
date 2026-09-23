@@ -25,6 +25,7 @@ export {
   l2PromotionRubric,
   l2PromotionRubricV0_1,
   l2PromotionRubricV0_2,
+  l2PromotionRubricV0_3,
   type Rubric,
 } from "./judge.js";
 export { fencedBlock, untrustedBlock } from "./prompt-guard.js";

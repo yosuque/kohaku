@@ -32,8 +32,8 @@ export interface Rubric {
      * `l2PromotionRubric`'s `safety` criterion for the rationale behind its floor value. Which
      * criteria vetoed a verdict (if any) is reported on `JudgeVerdict.vetoedBy`. Unset (the default —
      * every criterion on `l2PromotionRubricV0_1`/`l2PromotionRubricV0_2` and every criterion but
-     * `safety` on the current rubric) behaves exactly as before this field existed: `pass` is the
-     * classic `score >= passScore`.
+     * `safety` on `l2PromotionRubricV0_3` and the current rubric) behaves exactly as before this field
+     * existed: `pass` is the classic `score >= passScore`.
      */
     floor?: number;
   }[];
@@ -41,7 +41,7 @@ export interface Rubric {
 
 export const l2PromotionRubric: Rubric = {
   id: "l2-promotion",
-  version: "0.3",
+  version: "0.4",
   criteria: [
     {
       id: "safety",
@@ -60,6 +60,64 @@ export const l2PromotionRubric: Rubric = {
        * the artifact safe (a minor, arguable style nit should not veto a promotion); strictly below it,
        * the judge is on balance calling it unsafe, and no amount of visual polish should let that through.
        */
+      floor: 0.5,
+    },
+    {
+      id: "determinism",
+      description:
+        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      weight: 0.2,
+    },
+    {
+      id: "a11y",
+      description:
+        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      weight: 0.15,
+    },
+    {
+      id: "schema_inferability",
+      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      weight: 0.05,
+    },
+    {
+      id: "generality",
+      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      weight: 0.05,
+    },
+    {
+      id: "visual_quality",
+      description:
+        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, use the primary color for one emphasis at most; tone colors only when they carry meaning, numeric columns right-aligned with tabular figures, empty/error/loading states shown as notices, never use fixed pixel widths — fill the container width, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      weight: 0.2,
+    },
+    {
+      id: "suggestion_fidelity",
+      description:
+        "When a proposed schema is supplied, its props, query parameters and events are exactly the ones the HTML actually reads and emits (nothing invented, nothing missing). When no proposal is supplied, score 1",
+      weight: 0.1,
+    },
+  ],
+};
+
+/**
+ * The L2 promotion rubric exactly as it was before Task 5 (B2) added `suggestion_fidelity` (version
+ * "0.3"): the same 6 criteria (safety / determinism / a11y / schema_inferability / generality /
+ * visual_quality), with the pre-Task-5 weights (schema_inferability 0.15 — see the B2 Task 5 changeset
+ * for the rebalance that produced today's `l2PromotionRubric`, version "0.4") and the same `safety`
+ * floor. Exported so a consumer who is not ready for the score shift the rebalance causes can pin the
+ * exact pre-Task-5 promotion behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_3 })`.
+ * Sibling of `l2PromotionRubricV0_1`/`l2PromotionRubricV0_2` below (the same pinning strategy, one
+ * version further along).
+ */
+export const l2PromotionRubricV0_3: Rubric = {
+  id: "l2-promotion",
+  version: "0.3",
+  criteria: [
+    {
+      id: "safety",
+      description:
+        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      weight: 0.25,
       floor: 0.5,
     },
     {
@@ -97,7 +155,7 @@ export const l2PromotionRubric: Rubric = {
  * The L2 promotion rubric exactly as it was before the Task 8 rebalance (version "0.2"): the same 6
  * criteria (safety / determinism / a11y / schema_inferability / generality / visual_quality), with the
  * pre-rebalance weights (generality 0.15, visual_quality 0.1 — see the Task-8 changeset for the rebalance
- * that produced today's `l2PromotionRubric`, version "0.3") and no per-criterion `floor`. Exported so a
+ * that produced version "0.3" of `l2PromotionRubric`) and no per-criterion `floor`. Exported so a
  * consumer who is not ready for the score shift the rebalance (and the new `safety` veto) causes can pin
  * the exact pre-Task-8 promotion behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_2 })`.
  * Mirrored in Python as `kohaku.evals.judge.l2_promotion_rubric_v0_2`. Sibling of `l2PromotionRubricV0_1`
@@ -278,6 +336,18 @@ export interface JudgeInput {
    * - errorCount: of those, the number that were render errors (outcome:"error")
    */
   telemetry?: { renderedCount: number; errorCount: number };
+  /**
+   * The machine-extracted registration proposal attached to the candidate at nomination (advisory). Copied into
+   * the prompt as untrusted evidence for the `suggestion_fidelity` criterion; the judge verifies it against the
+   * HTML instead of trusting it.
+   */
+  suggestion?: {
+    componentType: string;
+    intentName: string;
+    description: string;
+    paramsJsonSchema?: unknown;
+    events: { name: string; description: string }[];
+  };
 }
 
 /** Input for L1 Spec quality scoring. Passes UISpec + intent + column metadata to judgeSpec. */
@@ -423,6 +493,11 @@ export function createJudge(opts: {
           : []),
         ...(input.catalogSummary != null
           ? [`## Existing catalog (for duplicate checking)\n${input.catalogSummary}`]
+          : []),
+        ...(input.suggestion != null
+          ? [
+              `## Proposed schema (machine-extracted; verify it against the HTML)\n${untrustedBlock("SUGGESTION", JSON.stringify(input.suggestion, null, 2), "json")}`,
+            ]
           : []),
         `## HTML under review\n${untrustedBlock("HTML", input.html.slice(0, 12_000), "html")}`,
       ].join("\n\n");
