@@ -521,12 +521,12 @@ approve 経路では `schema.propose` の直後に、lineage が提案された 
 
 `packages/evals` の judge は**重み付き観点ルーブリック**を multi-sample の self-consistency 平均で採点する(重み合計≠1.0 のカスタム rubric も正規化して score を [0,1] に収める)。2 系統:
 
-- **L2 昇格審査**(`judge()` / `l2PromotionRubric`): safety / determinism / a11y / schema_inferability / generality / visual_quality。入力は HTML + 利用実績 + **実行時テレメトリ**(telemetry 経由 `component.used` の `renderedCount` / `errorCount`。昇格集計 uses とは別軸の「実描画の信頼性」観測をプロンプトに転写する。判定自体は従来どおり `judgeBlocking` に従う)。
+- **L2 昇格審査**(`judge()` / `l2PromotionRubric`): safety / determinism / a11y / schema_inferability / generality / visual_quality / suggestion_fidelity。入力は HTML + 利用実績 + **実行時テレメトリ**(telemetry 経由 `component.used` の `renderedCount` / `errorCount`。昇格集計 uses とは別軸の「実描画の信頼性」観測をプロンプトに転写する。判定自体は従来どおり `judgeBlocking` に従う)。
 - **L1 品質採点**(`judgeSpec()` / `l1QualityRubric`): chart_fit / clarity / information_density / data_reference。入力は UISpec(採点用に部品・props・`data.$ref`・events へ要約)+ 意図 + 列メタ。`runQuality()` が golden 回帰と併走する**品質回帰ハーネス**(FakeLlm/FixtureLlm で決定的)を提供する。
 
 **rubric バージョニング**: `Rubric` は `id` + `version` を持ち、`JudgeVerdict` と `component.judged` の `verdict`(`rubricId` / `rubricVersion`。additive)に刻む。どの版で判定したかが監査で再現できる。**人間オーバーライド**は新イベント型を足さず、`component.judged`(judge verdict)と `component.reviewed`(human decision)を artifactId で突合して検出する(例: judge 不合格を人間が approve で覆した)。
 
-`l2PromotionRubric` 自身の改版履歴: **0.1 → 0.2** で `visual_quality` 基準を追加。**0.2 → 0.3**(Task 8)で重みを再配分(`visual_quality` 0.10→0.20 / `generality` 0.15→0.05)し、`safety` の下限(veto)を導入した(根拠は `judge.ts` の `floor` doc コメントを参照)。旧版はそれぞれ `l2PromotionRubricV0_1` / `l2PromotionRubricV0_2`(両言語でエクスポート・ピン留め)として残り、スコアの変動に備えられない呼び出し側は `judge()` に明示的に渡せる。`rubricVersion: "0.1"` で記録された判定は `visual_quality` で全く採点されておらず(`"0.1"`/`"0.2"` で記録された判定も現行の重み・`safety` 下限では採点されていない)、過去の判定を事後的に現行ルーブリックへ突合する仕組みは無いため、既存カタログ全体を現行ルーブリックで評価し直したい運用者は該当候補を**withdraw のうえ再承認**する必要がある。
+`l2PromotionRubric` 自身の改版履歴: **0.1 → 0.2** で `visual_quality` 基準を追加。**0.2 → 0.3**(Task 8)で重みを再配分(`visual_quality` 0.10→0.20 / `generality` 0.15→0.05)し、`safety` の下限(veto)を導入した(根拠は `judge.ts` の `floor` doc コメントを参照)。**0.3 → 0.4**(B2 Task 5、上記のスキーマ提案と同時)で `suggestion_fidelity` 基準(重み 0.1)を追加し、その分の重みを確保するため `schema_inferability` を 0.15 から 0.05 へ再配分した。旧版はそれぞれ `l2PromotionRubricV0_1` / `l2PromotionRubricV0_2`(両言語でエクスポート・ピン留め)、`l2PromotionRubricV0_3`(TypeScript のみ — B2 は Python ミラーに手を入れていないため、Python 側のピン留め済み rubric 定数は `l2_promotion_rubric_v0_2` までしか無い)として残り、スコアの変動に備えられない呼び出し側は `judge()` に明示的に渡せる。`rubricVersion: "0.1"` で記録された判定は `visual_quality` で全く採点されておらず(`"0.1"`/`"0.2"` で記録された判定も現行の重み再配分・`safety` 下限では採点されておらず、`"0.1"`/`"0.2"`/`"0.3"` で記録された判定も `suggestion_fidelity` では採点されていない)、過去の判定を事後的に現行ルーブリックへ突合する仕組みは無いため、既存カタログ全体を現行ルーブリックで評価し直したい運用者は該当候補を**withdraw のうえ再承認**する必要がある。
 
 ### 9.3 固定化(L1→L0)
 
