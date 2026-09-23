@@ -355,6 +355,9 @@ importers:
       '@kohaku-ui/sandbox':
         specifier: workspace:^
         version: link:../../packages/sandbox
+      '@kohaku-ui/semantic-llm':
+        specifier: workspace:^
+        version: link:../../packages/semantic-llm
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../../packages/spec-core
