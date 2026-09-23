@@ -26,9 +26,9 @@ Every key starts with a configurable prefix (default `kohaku`, see `keyPrefix`) 
 | Fixation | `{p}:{tseg}:fixation:{intentHash}` | JSON(FixationRecord) | `ifPresent` uses `SET … XX` |
 | Fixation index | `{p}:{tseg}:fixation:index` and `{p}:fixation:index` | same as above | delete is `DEL` plus `ZREM` from both indexes |
 
-This package (Task 2 of the production-adapters plan) implements the Spec-cache half of `StoragePort` (`getSpecCache` / `putSpecCache` / `close`); promotion and fixation are implemented in later work and currently throw `Error("not implemented")`.
+This package implements the whole of `StoragePort`: the Spec cache (`getSpecCache` / `putSpecCache`, with an optional TTL), lineage (`appendLineage` / `listLineage`), promotion state (`getPromotionState` / `putPromotionState` / `putPromotionStates` / `listPromotionStates`), and fixation (`getFixation` / `putFixation`, including `ifPresent` / `listFixations` / `deleteFixation`) — all tenant-scoped as described above — plus `close()`.
 
-Lineage (Task 3) is implemented, with a known limitation: `listLineage` narrows the candidate set with a single sorted-set index and applies the remaining predicates client-side, deliberately not using `ZINTER` — a filter whose most selective index is still large (e.g. `type: ["view.composed"]` on a busy host) therefore reads every candidate, and there is no cap or rotation on the event log, the same limitation the reference file port has.
+**Known limitation**: `listLineage` narrows the candidate set with a single sorted-set index and applies the remaining predicates client-side, deliberately not using `ZINTER` — a filter whose most selective index is still large (e.g. `type: ["view.composed"]` on a busy host) therefore reads every candidate, and there is no cap or rotation on the event log, the same limitation the reference file port has.
 
 Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation of the
 [Kohaku Protocol](https://github.com/yosuque/kohaku/blob/main/spec/SPEC.md).
