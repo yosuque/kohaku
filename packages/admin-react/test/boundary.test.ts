@@ -2,6 +2,26 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import * as adminReactRoot from "../src/index.js";
+
+// The 13 generic UI primitives that moved from the package root to the `@kohaku-ui/admin-react/ui` subpath
+// (kohaku-biz followup item 2). `NoticeKind` / `NotifyFn` stay on the root (they type AdminProvider's
+// `onNotice` prop) and are deliberately excluded from this list.
+const RELOCATED_UI_PRIMITIVES = [
+  "card",
+  "Field",
+  "Empty",
+  "smallButton",
+  "StatCard",
+  "StatusBadge",
+  "BarRow",
+  "sectionTitle",
+  "selectStyle",
+  "TextAreaField",
+  "ErrorBanner",
+  "TIER_COLOR",
+  "deniedMessage",
+] as const;
 
 // The ticket's dependency contract: client + renderer-core (+ sandbox for the promotion preview, spec-core for
 // the shared types) → admin-react. Never renderer-react (the console is not a Spec renderer) and never
@@ -56,5 +76,21 @@ describe("dependency boundary", () => {
     expect(offenders, "use client.fixations.unfixate(...) instead of the deprecated remove() alias").toEqual(
       [],
     );
+  });
+
+  // kohaku-biz followup item 2: the root keeps the domain API only; the 13 generic UI primitives are reachable
+  // solely through the `@kohaku-ui/admin-react/ui` subpath. This asserts against the actual exported bindings
+  // (not a hardcoded snapshot of "what index.ts currently looks like"), so it fails the moment any of the 13
+  // names comes back onto the root, whatever mechanism reintroduces it (a re-export, a new declaration, etc).
+  it("does not export the relocated UI primitives from the root", () => {
+    const rootExportNames = new Set(Object.keys(adminReactRoot));
+    const leaked = RELOCATED_UI_PRIMITIVES.filter((name) => rootExportNames.has(name));
+    expect(leaked).toEqual([]);
+  });
+
+  it("exposes all relocated UI primitives from the @kohaku-ui/admin-react/ui subpath", async () => {
+    const ui: Record<string, unknown> = await import("@kohaku-ui/admin-react/ui");
+    const missing = RELOCATED_UI_PRIMITIVES.filter((name) => !(name in ui));
+    expect(missing).toEqual([]);
   });
 });

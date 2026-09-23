@@ -1,4 +1,4 @@
-import { ErrorBanner } from "@kohaku-ui/admin-react";
+import { ErrorBanner } from "@kohaku-ui/admin-react/ui";
 import type { SurfaceEvent } from "@kohaku-ui/renderer-react";
 import type { JsonObject } from "@kohaku-ui/spec-core";
 import { type ReactNode, startTransition, useCallback, useEffect, useState } from "react";

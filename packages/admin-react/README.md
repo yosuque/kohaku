@@ -33,3 +33,10 @@ export function AdminPage() {
 
 RBAC: a 403 `CAPABILITY_DENIED` from any governance route is shown as a red banner explaining the operation the
 current role is not allowed to perform; the policy itself lives on the host (`createGovernancePolicy`).
+
+The package root exports only the domain API (`KohakuAdmin`, the hooks, the tabs, `AdminMessages`, and the
+`NoticeKind` / `NotifyFn` types used by `AdminProvider`'s `onNotice`). The generic, common-word UI primitives the
+console's tabs are built from — `card`, `Field`, `Empty`, `StatCard`, `StatusBadge`, `BarRow`, `ErrorBanner`, and
+the rest — live on a separate `@kohaku-ui/admin-react/ui` subpath, so a consuming app that already has its own
+`Field` or `card` never has to alias an import. Reach for `/ui` only if you're extending the console with your
+own tabs and want the same primitives; ordinary `KohakuAdmin` usage never needs it.

@@ -457,6 +457,13 @@ export function GovernancePage() {
 `renderer-react` や `host-rest` には依存しません(`packages/admin-react/test/boundary.test.ts` が manifest と
 `src` の import 双方をこの一覧に対して固定しています)。
 
+パッケージのルートが export するのはこのドメイン API のみです(`KohakuAdmin`・各タブ・各フック・`AdminMessages`、
+および `onNotice` の型である `NoticeKind` / `NotifyFn`)。タブの実装で使っている汎用 UI プリミティブ — `card` /
+`Field` / `Empty` / `StatCard` / `StatusBadge` / `BarRow` / `ErrorBanner` など — は別の `@kohaku-ui/admin-react/ui`
+サブパスに置かれており、すでに自前の `Field` や `card` を持つアプリに `KohakuAdmin` を組み込んでも import の
+エイリアスが必要になりません。`/ui` が要るのは `AdminProvider` の上に自前のシェルを組んで同じプリミティブを
+使い回したい場合だけです。
+
 コンソールの配色はすべて `ThemeTokens` 由来で、レンダラーが `themeTokensToCssVars` で解決するのと同じ経路を
 `adminThemeStyle` が辿ります: `theme` prop に `ThemeTokens` を渡せば、コンソールが読む `--kohaku-color-*` 変数は
 すべてそれに追従し、トークンを省略した項目は renderer-core の明るいテーマの既定値にフォールバックします。この

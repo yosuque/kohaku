@@ -459,6 +459,13 @@ their own shell around `AdminProvider`. The package depends on `client`, `render
 only — never on `renderer-react` or `host-rest` (`packages/admin-react/test/boundary.test.ts` pins the manifest and
 every `src` import against that list).
 
+The package root carries only this domain API (`KohakuAdmin`, the tabs, the hooks, `AdminMessages`, and the
+`NoticeKind` / `NotifyFn` types used by `onNotice`). The generic UI primitives the tabs are built from — `card`,
+`Field`, `Empty`, `StatCard`, `StatusBadge`, `BarRow`, `ErrorBanner`, and the rest — live on a separate
+`@kohaku-ui/admin-react/ui` subpath instead, so embedding `KohakuAdmin` in an app that already has its own `Field`
+or `card` never forces an aliased import; reach for `/ui` only when composing your own shell around `AdminProvider`
+and wanting the same primitives.
+
 The console's colors come entirely from `ThemeTokens`, resolved through `adminThemeStyle` the same way
 `themeTokensToCssVars` resolves them for a renderer: pass your `ThemeTokens` as the `theme` prop and every
 `--kohaku-color-*` variable the console reads follows it, with renderer-core's default light values as the

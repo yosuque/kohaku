@@ -1,8 +1,8 @@
 // Governance console (lineage / analytics / promotion review / fixation) for kohaku hosts.
 // Public entry point: the AdminProvider/useAdmin context, the data-fetching hooks, the
-// KohakuAdmin shell and its per-domain tabs, the default English UI copy, the design
-// tokens, and the shared UI primitives the tabs are built from. See the package README
-// for usage patterns.
+// KohakuAdmin shell and its per-domain tabs, the default English UI copy, and the design
+// tokens — the domain API only. The generic UI primitives the tabs are built from live on
+// the separate `@kohaku-ui/admin-react/ui` subpath. See the package README for usage patterns.
 
 export {
   type AdminContextValue,
@@ -41,20 +41,7 @@ export {
 export { PromotionPreview } from "./tabs/promotions/PromotionPreview.js";
 export { PROMOTION_STATUS_FILTERS, PromotionsTab } from "./tabs/promotions/PromotionsTab.js";
 export { adminThemeStyle, V as adminVars } from "./theme.js";
-export {
-  BarRow,
-  card,
-  deniedMessage,
-  Empty,
-  ErrorBanner,
-  Field,
-  type NoticeKind,
-  type NotifyFn,
-  StatCard,
-  StatusBadge,
-  sectionTitle,
-  selectStyle,
-  smallButton,
-  TextAreaField,
-  TIER_COLOR,
-} from "./ui.js";
+// The generic UI primitives (card, Field, Empty, etc.) live on the `@kohaku-ui/admin-react/ui` subpath, not
+// here — the root carries only the domain API. `NoticeKind` / `NotifyFn` are the exception: they type
+// AdminProvider's `onNotice` prop, so they stay re-exported from the root even though they're defined in ui.tsx.
+export type { NoticeKind, NotifyFn } from "./ui.js";
