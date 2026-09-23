@@ -1,3 +1,4 @@
+import { ErrorBanner } from "@kohaku-ui/admin-react";
 import { type SurfaceEvent, useSpecStream } from "@kohaku-ui/renderer-react";
 import type { CanonicalIntent } from "@kohaku-ui/spec-core";
 import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -8,7 +9,6 @@ import { ProvenanceBadge } from "../kohaku/ProvenanceBadge.js";
 import { SpecJsonDrawer } from "../kohaku/SpecJsonDrawer.js";
 import { SpecSurface } from "../kohaku/SpecSurface.js";
 import { useLatestRequest } from "../kohaku/useLatestRequest.js";
-import { ErrorBanner } from "./admin/ui.js";
 
 interface UserItem {
   id: number;

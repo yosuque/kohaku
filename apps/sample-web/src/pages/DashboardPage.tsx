@@ -1,3 +1,4 @@
+import { ErrorBanner } from "@kohaku-ui/admin-react";
 import type { SurfaceEvent } from "@kohaku-ui/renderer-react";
 import type { JsonObject } from "@kohaku-ui/spec-core";
 import { type ReactNode, startTransition, useCallback, useEffect, useState } from "react";
@@ -8,7 +9,6 @@ import { ProvenanceBadge } from "../kohaku/ProvenanceBadge.js";
 import { SpecJsonDrawer } from "../kohaku/SpecJsonDrawer.js";
 import { SpecSurface } from "../kohaku/SpecSurface.js";
 import { useLatestRequest } from "../kohaku/useLatestRequest.js";
-import { ErrorBanner } from "./admin/ui.js";
 import { FacetPanel } from "./FacetPanel.js";
 import { DEFAULT_VIEW, parseFacetParams } from "./facet-views.js";
 
