@@ -11,6 +11,19 @@ const cached = await storage.getSpecCache("some-cache-key");
 await storage.close();
 ```
 
+## Fail-fast, not hang
+
+A `url`-constructed client is built with `lazyConnect: true` and `enableOfflineQueue: false`. Without those, a command issued while Redis is unreachable would queue silently (ioredis's default offline queue) and the caller would hang until some timeout elsewhere fires — this stack has no request-level timeout of its own. Every method on this port therefore awaits `ready()` first, which turns "unreachable" into a bounded rejection:
+
+```ts
+const storage = createRedisStoragePort({ url: "redis://localhost:6379", connectTimeoutMs: 2000 });
+await storage.ready(); // rejects within connectTimeoutMs (default 5000ms) instead of hanging
+```
+
+`ready()` is memoized, but a failed attempt clears the memo (mirroring `@kohaku-ui/storage-postgres`'s `ready()`) so a transient outage doesn't permanently strand the port — the next call retries from scratch. `RedisStoragePortOptions.connectTimeoutMs` (default 5000) and `.maxRetriesPerRequest` (default 3) tune this for a `url`-constructed client.
+
+**Injected `client`**: this port never overrides the options of a `client` you pass in — that client's lifecycle is yours. For the same fail-fast behavior, construct it yourself with `enableOfflineQueue: false` (and typically `lazyConnect: true`); otherwise a command issued before it connects will queue and hang exactly as described above. With an injected client, `ready()` resolves immediately if `client.status === "ready"`, otherwise it waits for that client's own `ready` / `error` event, bounded by `connectTimeoutMs`.
+
 ## Key layout
 
 Every key starts with a configurable prefix (default `kohaku`, see `keyPrefix`) so several kohaku hosts can share one Redis database. Tenant-scoped kinds key by `tenantSegment(tenant)`, which is `%` for a missing/empty tenant (a real tenant can never collide with it: `tenantSegment("%")` is percent-encoded to `%25`).
@@ -26,7 +39,7 @@ Every key starts with a configurable prefix (default `kohaku`, see `keyPrefix`) 
 | Fixation | `{p}:{tseg}:fixation:{intentHash}` | JSON(FixationRecord) | `ifPresent` uses `SET … XX` |
 | Fixation index | `{p}:{tseg}:fixation:index` and `{p}:fixation:index` | same as above | delete is `DEL` plus `ZREM` from both indexes |
 
-This package implements the whole of `StoragePort`: the Spec cache (`getSpecCache` / `putSpecCache`, with an optional TTL), lineage (`appendLineage` / `listLineage`), promotion state (`getPromotionState` / `putPromotionState` / `putPromotionStates` / `listPromotionStates`), and fixation (`getFixation` / `putFixation`, including `ifPresent` / `listFixations` / `deleteFixation`) — all tenant-scoped as described above — plus `close()`.
+This package implements the whole of `StoragePort`: the Spec cache (`getSpecCache` / `putSpecCache`, with an optional TTL), lineage (`appendLineage` / `listLineage`), promotion state (`getPromotionState` / `putPromotionState` / `putPromotionStates` / `listPromotionStates`), and fixation (`getFixation` / `putFixation`, including `ifPresent` / `listFixations` / `deleteFixation`) — all tenant-scoped as described above — plus `ready()` and `close()` (see "Fail-fast, not hang" below). `close()` on an owned client tries a graceful `quit()` first and falls back to `disconnect()` if that rejects (e.g. the client never connected — `enableOfflineQueue: false` means `quit()` itself rejects rather than queuing), so a port that failed to connect can still be closed cleanly.
 
 **Known limitation**: `listLineage` narrows the candidate set with a single sorted-set index and applies the remaining predicates client-side, deliberately not using `ZINTER` — a filter whose most selective index is still large (e.g. `type: ["view.composed"]` on a busy host) therefore reads every candidate, and there is no cap or rotation on the event log, the same limitation the reference file port has.
 

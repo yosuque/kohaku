@@ -21,6 +21,13 @@ export type StorageKind = "file" | "memory" | "redis" | "postgres";
 export interface StorageFromEnv {
   kind: StorageKind;
   storage: StoragePort;
+  /**
+   * Resolves once `storage` is ready to accept calls (a no-op for file/memory). The redis/postgres branches
+   * delegate to their concrete port's own `ready()` (not part of the `StoragePort` contract itself --
+   * `ports.ts` is deliberately not widened for this) so a caller can fail fast at startup instead of
+   * discovering an unreachable backend on the first request.
+   */
+  ready(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -39,22 +46,27 @@ export function createStorageFromEnv(env: NodeJS.ProcessEnv, defaults: { dataDir
   }
   switch (kind) {
     case "file":
-      return { kind, storage: createFileStoragePort(defaults.dataDir), close: async () => {} };
+      return {
+        kind,
+        storage: createFileStoragePort(defaults.dataDir),
+        ready: async () => {},
+        close: async () => {},
+      };
     case "memory":
-      return { kind, storage: createMemoryStoragePort(), close: async () => {} };
+      return { kind, storage: createMemoryStoragePort(), ready: async () => {}, close: async () => {} };
     case "redis": {
       const port = createRedisStoragePort({
         url: required(env, "KOHAKU_REDIS_URL", kind),
         ...(env["KOHAKU_STORAGE_KEY_PREFIX"] ? { keyPrefix: env["KOHAKU_STORAGE_KEY_PREFIX"] } : {}),
       });
-      return { kind, storage: port, close: () => port.close() };
+      return { kind, storage: port, ready: () => port.ready(), close: () => port.close() };
     }
     case "postgres": {
       const port = createPostgresStoragePort({
         connectionString: required(env, "KOHAKU_POSTGRES_URL", kind),
         ...(env["KOHAKU_POSTGRES_SCHEMA"] ? { schema: env["KOHAKU_POSTGRES_SCHEMA"] } : {}),
       });
-      return { kind, storage: port, close: () => port.close() };
+      return { kind, storage: port, ready: () => port.ready(), close: () => port.close() };
     }
   }
 }

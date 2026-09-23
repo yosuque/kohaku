@@ -145,6 +145,13 @@ export interface KohakuMcpSetup {
   readonly snapshotDir: string;
   /** Present only when storage/authz were resolved from KOHAKU_AUTHZ=jwt (not overridden by `options.authz`): the identity resolver a caller (http.ts) uses to build `resolvePrincipal`. */
   readonly identity?: JwtIdentityResolver;
+  /**
+   * Resolves once the storage port this setup created from env is ready (a no-op when `options.storage`
+   * was supplied, or for a file/memory backend -- see `StorageFromEnv.ready`'s doc comment). http.ts awaits
+   * this before listening so an unreachable redis/postgres backend fails startup clearly instead of only
+   * surfacing on the first tool call.
+   */
+  ready(): Promise<void>;
   /** Closes the storage port this setup created from env (a no-op when `options.storage` was supplied). */
   close(): Promise<void>;
 }
@@ -318,6 +325,9 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
     dataDir,
     snapshotDir: SNAPSHOT_DIR,
     identity: authzFromEnv?.identity,
+    ready: async () => {
+      await storageFromEnv?.ready();
+    },
     close: async () => {
       await storageFromEnv?.close();
     },

@@ -16,9 +16,41 @@ export interface RedisStoragePortOptions {
   client?: Redis;
   /** Key prefix, default "kohaku". See keys.ts for the layout. */
   keyPrefix?: string;
+  /**
+   * Bounds how long `ready()` waits for the connection. For a `url`-constructed client this is passed to
+   * ioredis as `connectTimeout` (bounding the initial connection attempt); for an injected `client` it
+   * bounds this port's own wait for the `ready` / `error` event (the injected client's own options are
+   * never overridden -- see `ready()`'s doc comment). Default 5000ms.
+   */
+  connectTimeoutMs?: number;
+  /**
+   * For a `url`-constructed client only: ioredis's own `maxRetriesPerRequest` (how many times a command
+   * queued while disconnected is retried across reconnects before giving up). Default 3. Ignored for an
+   * injected `client` (its own options are never overridden).
+   */
+  maxRetriesPerRequest?: number;
 }
 
 export interface RedisStoragePort extends StoragePort {
+  /**
+   * Resolves once the client is connected and ready to accept commands; rejects if it can't connect
+   * within `connectTimeoutMs`. Memoized, but a failed attempt clears the memo -- mirrors
+   * storage-postgres's `ready()`: a transient error (Redis briefly unreachable, a restart mid-deploy)
+   * would otherwise permanently strand this port instance with no retry path, so the next `ready()` call
+   * (from the next method call) retries from scratch rather than replaying a cached rejection forever.
+   *
+   * For a `url`-constructed client (`lazyConnect: true`), this calls ioredis's own `connect()`, which is
+   * bounded by the `connectTimeout` passed at construction. For an injected `client`, this port never
+   * calls `connect()` itself (the caller owns that client's lifecycle): it resolves immediately when
+   * `client.status === "ready"`, otherwise it waits for the client's `ready` or `error` event, bounded by
+   * `connectTimeoutMs` -- and removes its listeners on whichever path settles first, so repeated calls
+   * (e.g. via the retry-on-failure memo above) cannot leak them.
+   *
+   * Every method on this port awaits `ready()` first: with the offline queue disabled (see
+   * `createRedisStoragePort`'s doc comment), a command issued before the connection is up would otherwise
+   * reject outright ("Stream isn't writeable...") instead of failing fast with a clear "not ready" story.
+   */
+  ready(): Promise<void>;
   /** Disconnects the client this port created (a no-op for an injected client). */
   close(): Promise<void>;
 }
@@ -30,6 +62,15 @@ export interface RedisStoragePort extends StoragePort {
  * cannot leave an index pointing at a missing record. The cross-process concurrency contract of ports.ts
  * still applies: this port serializes nothing beyond single commands / MULTI blocks; the host keys its own
  * mutex per (tenant, key).
+ *
+ * Fail-fast: a `url`-constructed client is built with `lazyConnect: true` and `enableOfflineQueue: false`.
+ * Without those, a command issued while Redis is unreachable would otherwise queue silently (ioredis's
+ * default offline queue) and hang the caller until some timeout elsewhere fires -- this stack has no
+ * request-level timeout of its own. `ready()` (see the `RedisStoragePort` interface, awaited by every
+ * method below) is what turns "unreachable" into a bounded rejection instead. This is not applied to an
+ * injected `client`: overriding options the caller chose for their own shared client is not this port's
+ * call -- see `ready()`'s doc comment for the injected-client path, and the README for why
+ * `enableOfflineQueue: false` is recommended there too.
  */
 export function createRedisStoragePort(options: RedisStoragePortOptions): RedisStoragePort {
   if (options.client != null && options.url != null) {
@@ -39,21 +80,49 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
     throw new Error("createRedisStoragePort: one of `url` or `client` is required");
   }
   const owned = options.client == null;
-  const redis = options.client ?? new Redis(options.url!, { lazyConnect: false });
+  const connectTimeoutMs = options.connectTimeoutMs ?? 5000;
+  const redis =
+    options.client ??
+    new Redis(options.url!, {
+      lazyConnect: true,
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: options.maxRetriesPerRequest ?? 3,
+      connectTimeout: connectTimeoutMs,
+    });
   const keys: RedisKeys = redisKeys(options.keyPrefix ?? DEFAULT_KEY_PREFIX);
 
+  let readyPromise: Promise<void> | undefined;
+  const ready = (): Promise<void> => {
+    if (readyPromise == null) {
+      const attempt = owned ? connectOwned(redis) : waitUntilReady(redis, connectTimeoutMs);
+      readyPromise = attempt.catch((error: unknown) => {
+        // Don't memoize a failed connection attempt: see the `RedisStoragePort.ready()` doc comment for
+        // why (mirrors storage-postgres's `ready()`).
+        readyPromise = undefined;
+        throw error instanceof Error
+          ? new Error(`redis storage port is not ready: ${error.message}`, { cause: error })
+          : error;
+      });
+    }
+    return readyPromise;
+  };
+
   return {
+    ready,
     async getSpecCache(key) {
+      await ready();
       const raw = await redis.get(keys.spec(key));
       return raw == null ? null : (JSON.parse(raw) as UISpec);
     },
     async putSpecCache(key, spec, ttlSeconds) {
+      await ready();
       const value = JSON.stringify(spec);
       if (ttlSeconds != null && ttlSeconds > 0)
         await redis.set(keys.spec(key), value, "EX", Math.ceil(ttlSeconds));
       else await redis.set(keys.spec(key), value);
     },
     async appendLineage(event) {
+      await ready();
       const seq = await redis.incr(keys.lineage.seq);
       const multi = redis.multi();
       multi.hset(keys.lineage.events, event.id, JSON.stringify(event));
@@ -64,6 +133,7 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       await multi.exec();
     },
     async listLineage(filter = {}) {
+      await ready();
       const candidate = chooseCandidateIndex(filter);
       let ids: string[];
       if (candidate == null) {
@@ -90,10 +160,12 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       return tailLimit(events, filter.limit);
     },
     async getPromotionState(artifactId, tenant) {
+      await ready();
       const raw = await redis.get(keys.promotion(tenant, artifactId));
       return raw == null ? null : (JSON.parse(raw) as PromotionState);
     },
     async putPromotionState(state) {
+      await ready();
       await putIndexed(
         redis,
         keys.promotionSeq,
@@ -105,6 +177,7 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
     },
     async putPromotionStates(states) {
       if (states.length === 0) return;
+      await ready();
       const seqs = await nextSeqs(redis, keys.promotionSeq, states.length);
       const multi = redis.multi();
       states.forEach((state, i) => {
@@ -117,13 +190,16 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       await multi.exec();
     },
     async listPromotionStates(tenant) {
+      await ready();
       return listIndexed<PromotionState>(redis, keys.promotionIndex(tenant));
     },
     async getFixation(intentHash, tenant) {
+      await ready();
       const raw = await redis.get(keys.fixation(tenant, intentHash));
       return raw == null ? null : (JSON.parse(raw) as FixationRecord);
     },
     async putFixation(record, options) {
+      await ready();
       const key = keys.fixation(record.tenant, record.intentHash);
       if (options?.ifPresent === true) {
         // XX: only overwrite an existing key. The indexes already contain it, so nothing else to do.
@@ -133,9 +209,11 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       await putIndexed(redis, keys.fixationSeq, key, record.tenant, keys.fixationIndex, record);
     },
     async listFixations(tenant) {
+      await ready();
       return listIndexed<FixationRecord>(redis, keys.fixationIndex(tenant));
     },
     async deleteFixation(intentHash, tenant) {
+      await ready();
       const key = keys.fixation(tenant, intentHash);
       const multi = redis.multi();
       multi.del(key);
@@ -144,9 +222,60 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       await multi.exec();
     },
     async close() {
-      if (owned) await redis.quit();
+      if (!owned) return;
+      try {
+        await redis.quit();
+      } catch {
+        // `enableOfflineQueue: false` means `quit()` rejects outright (rather than queuing) whenever the
+        // client isn't currently writable -- e.g. it never connected, or is mid-backoff after a failed
+        // `ready()` attempt. Fall back to the non-command `disconnect()`, which works from any client
+        // status and also cancels ioredis's own pending reconnect timer, so a port that failed to connect
+        // can still be closed cleanly instead of leaving a background reconnect loop running.
+        redis.disconnect();
+      }
     },
   };
+}
+
+/**
+ * `ready()`'s path for a `url`-constructed (owned, `lazyConnect: true`) client: kick off the connection
+ * ioredis otherwise wouldn't start on its own. The returned promise is bounded by the `connectTimeout`
+ * already passed to the `Redis` constructor.
+ */
+function connectOwned(redis: Redis): Promise<void> {
+  if (redis.status === "ready") return Promise.resolve();
+  return redis.connect();
+}
+
+/**
+ * `ready()`'s path for an injected client: resolve immediately if already `"ready"`, otherwise wait for the
+ * `ready` or `error` event, bounded by `timeoutMs`. Listeners are always removed on whichever path settles
+ * first (resolve, reject, or timeout) so repeated calls -- e.g. from `ready()`'s retry-on-failure memo --
+ * cannot leak them.
+ */
+function waitUntilReady(client: Redis, timeoutMs: number): Promise<void> {
+  if (client.status === "ready") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      client.off("ready", onReady);
+      client.off("error", onError);
+    };
+    const onReady = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: unknown): void => {
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Redis connection did not become ready within ${timeoutMs}ms`));
+    }, timeoutMs);
+    client.once("ready", onReady);
+    client.once("error", onError);
+  });
 }
 
 /** Reserves `count` consecutive sequence numbers (a single INCRBY). */

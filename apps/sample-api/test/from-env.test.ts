@@ -19,11 +19,14 @@ describe("createStorageFromEnv", () => {
   it("defaults to the file port", async () => {
     const s = createStorageFromEnv({}, { dataDir: dataDir() });
     expect(s.kind).toBe("file");
+    // file/memory's ready() is a no-op (see StorageFromEnv.ready's doc comment) -- it must still resolve.
+    await expect(s.ready()).resolves.toBeUndefined();
     await s.close();
   });
   it("memory", async () => {
     const s = createStorageFromEnv({ KOHAKU_STORAGE: "memory" }, { dataDir: dataDir() });
     expect(s.kind).toBe("memory");
+    await expect(s.ready()).resolves.toBeUndefined();
     await s.storage.putSpecCache("k", { key: "k" } as never);
     expect(await s.storage.getSpecCache("k")).toEqual({ key: "k" });
     await s.close();
@@ -41,6 +44,7 @@ describe("createStorageFromEnv", () => {
       { dataDir: dataDir() },
     );
     expect(pg.kind).toBe("postgres");
+    expect(typeof pg.ready).toBe("function");
     await pg.close();
   });
   it("rejects an unknown kind", () => {

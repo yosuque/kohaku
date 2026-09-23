@@ -22,6 +22,17 @@ for (const envPath of [join(REPO_ROOT, ".env"), join(APP_DIR, "../.env")]) {
 const DATA_DIR = process.env["KOHAKU_DATA_DIR"] ?? join(APP_DIR, "../.data");
 const llm = createLlmFromEnv();
 const storageFromEnv = createStorageFromEnv(process.env, { dataDir: DATA_DIR });
+// Fail fast: with a redis/postgres backend, an unreachable server otherwise surfaces only on the first
+// request (or, before storage-redis's fail-fast fix, hangs the caller indefinitely). Exit clearly at
+// startup instead (a no-op for file/memory -- see StorageFromEnv.ready's doc comment).
+try {
+  await storageFromEnv.ready();
+} catch (error) {
+  console.error(
+    `kohaku sample-api: storage backend (${storageFromEnv.kind}) is not ready: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
 const authzFromEnv = createAuthzFromEnv(process.env);
 
 // createApp is async because it performs startup reconcile (snapshot authority -> projection).

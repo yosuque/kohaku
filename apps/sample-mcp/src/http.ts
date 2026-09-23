@@ -372,6 +372,17 @@ async function main(): Promise<void> {
         }
       : {}),
   });
+  // Fail fast: with a redis/postgres backend, an unreachable server otherwise surfaces only on the first
+  // tool call (or, before storage-redis's fail-fast fix, hangs the caller indefinitely). Exit clearly here
+  // instead (a no-op for file/memory -- see StorageFromEnv.ready's doc comment).
+  try {
+    await setup.ready();
+  } catch (error) {
+    console.error(
+      `kohaku-sales-sample MCP server: storage backend is not ready: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
   const allowedHosts = parseAllowedHosts(process.env["KOHAKU_MCP_HTTP_ALLOWED_HOSTS"]);
   const httpServer = createMcpHttpServer({
     createServer: setup.createServer,
