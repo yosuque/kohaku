@@ -17,6 +17,7 @@ pnpm meta:sync               # regenerate the publishing metadata / publishConfi
 pnpm changeset               # record a version bump for a change (a version PR is opened from main; publishing is a separate, tag-driven step — docs/runbooks/release.md)
 pnpm seed                    # regenerate the sales seed (deterministic — regeneration produces no git diff)
 pnpm dev                     # sample-api (:8787) + sample-web (:5173) together
+pnpm docs:build              # documentation site generated from docs/ (apps/docs-site; nothing there is content — edit docs/*.md)
 node cli/bin/kohaku.js conformance --self                                    # spec self-check
 node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku  # REST black-box check
 pnpm --filter @kohaku-ui-sample/mcp build:renderer   # single-file build of the shared renderer for MCP
@@ -75,6 +76,8 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog           # re-export 
 
 | File | Contents |
 |---|---|
+| [docs/why-kohaku.md](docs/why-kohaku.md) | Positioning one-pager (the three guarantees, where kohaku sits). Japanese: [docs/why-kohaku.ja.md](docs/why-kohaku.ja.md) |
+| [docs/paths/](docs/paths/mcp-apps.md) | Three persona starts: `mcp-apps.md` / `react-dashboard.md` / `full-stack.md` (+ `.ja.md`). **The first code block of each is a real file under `apps/docs-site/snippets/` — edit the snippet, then paste it into both language pages; `apps/docs-site/test/snippets.test.ts` fails on any mismatch or if it exceeds 30 lines** |
 | [docs/design.md](docs/design.md) | Implementation design (the implemented shape, design decision record). Japanese: [docs/design.ja.md](docs/design.ja.md) |
 | [docs/specification.md](docs/specification.md) | Specification (REST API / schema / Port reference). Japanese: [docs/specification.ja.md](docs/specification.ja.md) |
 | [docs/user-guide.md](docs/user-guide.md) | User guide (setup, demos, embedding, operations). Japanese: [docs/user-guide.ja.md](docs/user-guide.ja.md) |
@@ -83,3 +86,5 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog           # re-export 
 | [docs/runbooks/release.md](docs/runbooks/release.md) | The two-step release procedure (version PR, draft release, pre-publish checklist, npm/PyPI trusted publishing). Japanese: [docs/runbooks/release.ja.md](docs/runbooks/release.ja.md) |
 
 Both languages of a document must be kept in sync: English (unsuffixed) is canonical; update the `.ja.md` counterpart in the same change.
+
+The documentation site (`apps/docs-site`, VitePress) is generated from `docs/`, `spec/SPEC*.md` and `python/README*.md` at build time into a gitignored `.generated/` directory; never commit anything under it and never edit generated files. Adding a page under `docs/` requires a sidebar entry in `apps/docs-site/src/sidebar.ts` (`test/sidebar.test.ts` fails otherwise). Relative links between documents keep working on GitHub and on the site as long as they point at files under those roots; a link to any other repository file is rewritten to its GitHub URL. Heading anchors follow GitHub's own slug rules (`apps/docs-site/src/github-slug.ts` makes VitePress produce the same ids), and `test/github-slug.test.ts` walks every mirrored page and fails if an anchored link does not resolve — so an in-repo `#anchor` link is checked, not just trusted.

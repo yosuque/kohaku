@@ -63,7 +63,7 @@ pnpm seed
 
 ## 6. バイリンガルドキュメント
 
-英語(無印)がすべての文書の正本であり、`.ja.md` の対訳は同じ変更で更新してください。対象は `README.md`、`docs/design.md`、`docs/specification.md`、`docs/user-guide.md`、`spec/SPEC.md`、`python/README.md`、そして `CONTRIBUTING.md` 自身です。
+英語(無印)がすべての文書の正本であり、`.ja.md` の対訳は同じ変更で更新してください。対象は `README.md`、`docs/design.md`、`docs/specification.md`、`docs/user-guide.md`、`docs/why-kohaku.md`、`docs/paths/*.md`、`spec/SPEC.md`、`python/README.md`、そして `CONTRIBUTING.md` 自身です。
 
 ## 7. テストのルール
 

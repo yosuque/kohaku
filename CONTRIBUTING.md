@@ -63,7 +63,7 @@ pnpm seed
 
 ## 6. Bilingual documentation
 
-English (unsuffixed) is the canonical source for every document; the `.ja.md` counterpart must be updated in the same change. This applies to: `README.md`, `docs/design.md`, `docs/specification.md`, `docs/user-guide.md`, `spec/SPEC.md`, `python/README.md`, and `CONTRIBUTING.md` itself.
+English (unsuffixed) is the canonical source for every document; the `.ja.md` counterpart must be updated in the same change. This applies to: `README.md`, `docs/design.md`, `docs/specification.md`, `docs/user-guide.md`, `docs/why-kohaku.md`, `docs/paths/*.md`, `spec/SPEC.md`, `python/README.md`, and `CONTRIBUTING.md` itself.
 
 ## 7. Testing rules
 

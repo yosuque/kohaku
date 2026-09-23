@@ -25,6 +25,8 @@ GUI operations (Web)     ─┼→ canonical Intent → Composition ──┼─
 
 | Document | Contents | Audience |
 |---|---|---|
+| [docs/why-kohaku.md](docs/why-kohaku.md) | **Why kohaku** — the three guarantees (identical display / pass-by-reference / promotion pipeline) and where kohaku sits next to prompt-to-UI tools and agent-UI protocols | Deciding whether it fits |
+| [docs/paths/](docs/paths/mcp-apps.md) | **Three one-page starts** — (a) [MCP Apps only](docs/paths/mcp-apps.md), (b) [React dashboard only](docs/paths/react-dashboard.md), (c) [full stack](docs/paths/full-stack.md); each with its first code in 30 lines | Pick the one that matches you |
 | [docs/user-guide.md](docs/user-guide.md) | **User guide** — setup, a tour of the screens, 8 demo walkthroughs, embedding into your product, operations, FAQ | Try it first / embed it |
 | [docs/design.md](docs/design.md) | **Implementation design** — architecture, composition pipeline, sandbox, promotion, design decision record | Developers extending / maintaining it |
 | [docs/specification.md](docs/specification.md) | **Specification** — reference for UI Spec / REST API / Ports / component catalog / bridge protocol / environment variables | Developers writing against the implementation |
@@ -33,6 +35,8 @@ GUI operations (Web)     ─┼→ canonical Intent → Composition ──┼─
 | [AGENTS.md](AGENTS.md) | Development guide for AI coding agents (commands, conventions, pitfalls). `CLAUDE.md` is a pointer that imports it | AI coding agents |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to set up, verify, and submit changes (also [日本語](CONTRIBUTING.ja.md)) | Contributors |
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability, and what is in scope (the `apps/sample-*` demos are not) | Security researchers |
+
+The same documents are published as a site generated from `docs/` (`pnpm docs:build`; source under `apps/docs-site`, which holds no content of its own).
 
 ## Install
 
