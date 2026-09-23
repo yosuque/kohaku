@@ -4,11 +4,23 @@
 
 | 項目 | 内容 |
 |---|---|
-| 最終更新 | 2026-09-11 |
+| 最終更新 | 2026-09-23 |
 | 対象 | ① サンプルアプリを動かして概念を体験したい人 ② 自分のプロダクトに kohaku を組み込みたい人 |
 | 関連 | 仕組みの解説は [design.ja.md](design.ja.md)、API の詳細は [specification.ja.md](specification.ja.md) |
 
 ---
+
+## パスを選ぶ
+
+kohaku の読者は 3 種類で、それぞれに最初のコードが 30 行以内で収まる 1 ページの入口があります。導入を検討中なら先に[なぜ kohaku か](why-kohaku.ja.md)を読んでください。
+
+| あなたは… | ここから | 得られるもの | その後 |
+|---|---|---|---|
+| ツールに画面で答えさせたい **MCP サーバー作者** | [パス (a): MCP Apps だけ](paths/mcp-apps.ja.md) | Intent カタログから導出される型付き MCP ツール、Claude Desktop / claude.ai / ChatGPT で同じに描画されるウィジェット | [§5](#5-外部チャットmcpから使う) |
+| Server-Driven UI を今すぐ、LLM 合成は後で(あるいは使わない)**プロダクトチーム** | [パス (b): React ダッシュボードだけ](paths/react-dashboard.ja.md) | `@kohaku-ui/renderer-react` で描画する L0 固定 Spec、参照渡しのデータ、モデルなし | [§6 Step 0](#step-0--llm-なしの-server-driven-ui) |
+| モデルが合成した UI を**本番に載せるチーム** | [パス (c): フル構成](paths/full-stack.ja.md) | L1 / L2 合成、昇格パイプライン、固定化、Admin 統制面 | [§6 Step 1–2](#step-1--l1-宣言的合成とチャット)、[§7](#7-運用の勘どころ) |
+
+このガイドの残りは長編です: 同梱サンプルのセットアップ(§2)、画面の歩き方(§3)、デモ 8 本(§4)、MCP ホスト(§5)、組み込み(§6)、運用(§7)、トラブルシューティング(§8)、FAQ(§9)。
 
 ## 1. これは何か
 
@@ -272,6 +284,8 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 - **ただしカスタム部品の表示には非対称があります**: 共有レンダラー(`apps/sample-mcp/renderer/main.tsx`)はコア部品の実装だけを登録し、sandbox レンダラー(`renderSandbox`)も注入していません。そのため MCP 面では L2 生成部品は「sandbox レンダラーの注入が必要」という通知に、寄与部品・昇格部品(`sales.kpiCard` / `sales.calendarHeatmap`)は「未実装の部品タイプ」という通知になります(sample-mcp は `SurfaceCapabilities` を宣言していないため、fallback へのサーバー側降格〈negotiate〉も走りません)。カスタム部品の完全な表示(sandbox iframe・ネイティブ実装)は Web サーフェスで確認してください。
 
 ## 6. 自分のプロダクトに組み込む
+
+まだなら、[「パスを選ぶ」](#パスを選ぶ)の 3 本の 1 ページ入口のどれかから始めてください — 以下のステップの短縮版で、それぞれコンパイルできる最初のスニペットが付いています。この節はその長編で、導入ラダーの順に並んでいます。
 
 導入ラダー(設計書 §12「サンプル実装の設計」)に沿って段階導入できます。
 

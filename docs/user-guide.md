@@ -4,11 +4,23 @@ English | [日本語](user-guide.ja.md)
 
 | Item | Details |
 |---|---|
-| Last updated | 2026-09-11 |
+| Last updated | 2026-09-23 |
 | Audience | ① People who want to run the sample app and experience the concepts; ② People who want to embed kohaku into their own product |
 | Related | For how it works, see [design.md](design.md); for API details, see [specification.md](specification.md) |
 
 ---
+
+## Choose your path
+
+kohaku serves three kinds of readers, and each has a one-page start with its first code in 30 lines or fewer. Read [Why kohaku](why-kohaku.md) first if you are deciding whether it fits.
+
+| You are… | Start with | What you get | Then |
+|---|---|---|---|
+| **An MCP server author** who wants tools to answer with a screen | [Path (a): MCP Apps only](paths/mcp-apps.md) | Typed MCP tools from your Intent catalog, a widget that renders the same in Claude Desktop / claude.ai / ChatGPT | [§5](#5-using-it-from-an-external-chat-mcp) |
+| **A product team** that wants Server-Driven UI now and LLM composition later (or never) | [Path (b): React dashboard only](paths/react-dashboard.md) | L0 fixed Specs rendered by `@kohaku-ui/renderer-react`, data by reference, no model | [§6 Step 0](#step-0--server-driven-ui-without-an-llm) |
+| **A team putting model-composed UI into production** | [Path (c): Full stack](paths/full-stack.md) | L1 / L2 composition, the promotion pipeline, fixation, the Admin governance plane | [§6 Steps 1–2](#step-1--l1-declarative-synthesis-and-chat), [§7](#7-operational-tips) |
+
+The rest of this guide is the long form: setting up the bundled sample (§2), a tour of its screens (§3), eight demos (§4), MCP hosts (§5), embedding (§6), operations (§7), troubleshooting (§8) and FAQ (§9).
 
 ## 1. What is this
 
@@ -272,6 +284,8 @@ The server's protocol conformance (resource MIME / `_meta`'s modern+legacy / tex
 - **However, there is an asymmetry in displaying custom parts**: the shared renderer (`apps/sample-mcp/renderer/main.tsx`) registers only the core-part implementations and does not inject the sandbox renderer (`renderSandbox`) either. Therefore, on the MCP side, an L2-generated part becomes a "the sandbox renderer needs to be injected" notice, and contribution/promotion parts (`sales.kpiCard` / `sales.calendarHeatmap`) become an "unimplemented part type" notice (since sample-mcp does not declare `SurfaceCapabilities`, the server-side degradation to fallback〈negotiate〉 does not run either). For the full display of custom parts (sandbox iframe, native implementation), check on the Web surface.
 
 ## 6. Embedding it into your own product
+
+If you have not yet, pick one of the three one-page starts in ["Choose your path"](#choose-your-path) — they are the short form of the steps below, each with a compilable first snippet. This section is the long form, in the order of the adoption ladder.
 
 You can adopt it in stages along the adoption ladder (design doc §12 "Design of the sample implementation").
 
