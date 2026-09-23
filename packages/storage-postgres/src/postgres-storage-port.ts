@@ -106,7 +106,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
         typeof event.payload[key] === "string" ? (event.payload[key] as string) : null;
       await pool.query(
         `INSERT INTO ${T.lineage} (id, ts, tenant, type, intent_hash, artifact_id, spec_hash, record)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           event.id,
           event.ts,
@@ -138,22 +138,24 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       if (filter.until != null) add("ts <= ?", filter.until);
       params.push(limit);
       const sql = `SELECT record FROM ${T.lineage}${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY seq DESC LIMIT $${params.length}`;
-      const { rows } = await pool.query<{ record: LineageEventRecord }>(sql, params);
+      // `record` is stored as text (see schema.ts) -- no jsonb key-reordering between put and get.
+      const { rows } = await pool.query<{ record: string }>(sql, params);
       // Newest-first from the query; the contract returns append order, so reverse.
-      return rows.map((r) => r.record).reverse();
+      return rows.map((r) => JSON.parse(r.record) as LineageEventRecord).reverse();
     },
     async getPromotionState(artifactId, tenant) {
       await ready();
-      const { rows } = await pool.query<{ state: PromotionState }>(
+      // `state` is stored as text (see schema.ts) -- no jsonb key-reordering between put and get.
+      const { rows } = await pool.query<{ state: string }>(
         `SELECT state FROM ${T.promotion} WHERE tenant = $1 AND artifact_id = $2`,
         [tenant ?? "", artifactId],
       );
-      return rows[0]?.state ?? null;
+      return rows[0] != null ? (JSON.parse(rows[0].state) as PromotionState) : null;
     },
     async putPromotionState(state) {
       await ready();
       await pool.query(
-        `INSERT INTO ${T.promotion} (tenant, artifact_id, state) VALUES ($1, $2, $3::jsonb)
+        `INSERT INTO ${T.promotion} (tenant, artifact_id, state) VALUES ($1, $2, $3)
          ON CONFLICT (tenant, artifact_id) DO UPDATE SET state = EXCLUDED.state`,
         [state.tenant ?? "", state.artifactId, JSON.stringify(state)],
       );
@@ -166,7 +168,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
         await client.query("BEGIN");
         for (const state of states) {
           await client.query(
-            `INSERT INTO ${T.promotion} (tenant, artifact_id, state) VALUES ($1, $2, $3::jsonb)
+            `INSERT INTO ${T.promotion} (tenant, artifact_id, state) VALUES ($1, $2, $3)
              ON CONFLICT (tenant, artifact_id) DO UPDATE SET state = EXCLUDED.state`,
             [state.tenant ?? "", state.artifactId, JSON.stringify(state)],
           );
@@ -183,33 +185,34 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       await ready();
       const { rows } =
         tenant == null
-          ? await pool.query<{ state: PromotionState }>(`SELECT state FROM ${T.promotion} ORDER BY seq`)
-          : await pool.query<{ state: PromotionState }>(
+          ? await pool.query<{ state: string }>(`SELECT state FROM ${T.promotion} ORDER BY seq`)
+          : await pool.query<{ state: string }>(
               `SELECT state FROM ${T.promotion} WHERE tenant = $1 ORDER BY seq`,
               [tenant],
             );
-      return rows.map((r) => r.state);
+      return rows.map((r) => JSON.parse(r.state) as PromotionState);
     },
     async getFixation(intentHash, tenant) {
       await ready();
-      const { rows } = await pool.query<{ record: FixationRecord }>(
+      // `record` is stored as text (see schema.ts) -- no jsonb key-reordering between put and get.
+      const { rows } = await pool.query<{ record: string }>(
         `SELECT record FROM ${T.fixation} WHERE tenant = $1 AND intent_hash = $2`,
         [tenant ?? "", intentHash],
       );
-      return rows[0]?.record ?? null;
+      return rows[0] != null ? (JSON.parse(rows[0].record) as FixationRecord) : null;
     },
     async putFixation(record, options) {
       await ready();
       const params = [record.tenant ?? "", record.intentHash, JSON.stringify(record)];
       if (options?.ifPresent === true) {
         await pool.query(
-          `UPDATE ${T.fixation} SET record = $3::jsonb WHERE tenant = $1 AND intent_hash = $2`,
+          `UPDATE ${T.fixation} SET record = $3 WHERE tenant = $1 AND intent_hash = $2`,
           params,
         );
         return;
       }
       await pool.query(
-        `INSERT INTO ${T.fixation} (tenant, intent_hash, record) VALUES ($1, $2, $3::jsonb)
+        `INSERT INTO ${T.fixation} (tenant, intent_hash, record) VALUES ($1, $2, $3)
          ON CONFLICT (tenant, intent_hash) DO UPDATE SET record = EXCLUDED.record`,
         params,
       );
@@ -218,12 +221,12 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       await ready();
       const { rows } =
         tenant == null
-          ? await pool.query<{ record: FixationRecord }>(`SELECT record FROM ${T.fixation} ORDER BY seq`)
-          : await pool.query<{ record: FixationRecord }>(
+          ? await pool.query<{ record: string }>(`SELECT record FROM ${T.fixation} ORDER BY seq`)
+          : await pool.query<{ record: string }>(
               `SELECT record FROM ${T.fixation} WHERE tenant = $1 ORDER BY seq`,
               [tenant],
             );
-      return rows.map((r) => r.record);
+      return rows.map((r) => JSON.parse(r.record) as FixationRecord);
     },
     async deleteFixation(intentHash, tenant) {
       await ready();

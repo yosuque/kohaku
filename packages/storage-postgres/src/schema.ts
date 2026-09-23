@@ -23,14 +23,20 @@ export function postgresSchemaSql(schema: string = DEFAULT_SCHEMA): string {
   const t = (name: string) => qualifiedTable(schema, name);
   const ix = indexPrefix(schema);
   return `
+-- Every JSON payload column below (spec / record / state) is text, not jsonb: jsonb re-serializes
+-- object keys in its own internal (length, then lexicographic) order on write, so a value written
+-- then read back comes back with reordered keys at every nesting depth -- byte-inequal but
+-- semantically identical to what was stored. That silently breaks byte-exact determinism guarantees
+-- built on these columns (the Spec cache's composeWithFixation / REST-CMP-002 exact-JSON-equality
+-- check; a fixation's pinnedSpec, which every subsequent compose re-reads with no in-memory cache in
+-- that path -- the "same Spec, byte for byte, forever" guarantee this adapter exists to serve). None
+-- of the four columns is ever queried into (always fetched/filtered by the plain text columns
+-- alongside them, never a jsonb operator or index), so storing them as text costs nothing and keeps
+-- one convention across the whole schema instead of three columns doing it right and a fourth
+-- inviting a "tidy this up to match" mistake later. This also matches storage-redis, which stores
+-- JSON as plain strings throughout.
 CREATE TABLE IF NOT EXISTS ${t("kohaku_spec_cache")} (
   key text PRIMARY KEY,
-  -- text, not jsonb: jsonb re-serializes object keys in its own internal (length, then lexicographic)
-  -- order, so a Spec written then read back would come back with reordered keys -- byte-inequal but
-  -- semantically identical to what was cached. The determinism guarantee this cache exists to serve
-  -- (composeWithFixation / REST-CMP-002's exact-JSON-equality check) needs the exact bytes preserved,
-  -- and nothing here ever queries into the JSON (always fetched whole by its key), so jsonb's indexing
-  -- benefits are not in use anyway.
   spec text NOT NULL,
   expires_at timestamptz NULL
 );
@@ -43,7 +49,7 @@ CREATE TABLE IF NOT EXISTS ${t("kohaku_lineage")} (
   intent_hash text NULL,
   artifact_id text NULL,
   spec_hash text NULL,
-  record jsonb NOT NULL
+  record text NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_type_idx ON ${t("kohaku_lineage")} (type, seq);
 CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_tenant_idx ON ${t("kohaku_lineage")} (tenant, seq);
@@ -55,14 +61,14 @@ CREATE TABLE IF NOT EXISTS ${t("kohaku_promotion_state")} (
   tenant text NOT NULL DEFAULT '',
   artifact_id text NOT NULL,
   seq bigserial NOT NULL,
-  state jsonb NOT NULL,
+  state text NOT NULL,
   PRIMARY KEY (tenant, artifact_id)
 );
 CREATE TABLE IF NOT EXISTS ${t("kohaku_fixation")} (
   tenant text NOT NULL DEFAULT '',
   intent_hash text NOT NULL,
   seq bigserial NOT NULL,
-  record jsonb NOT NULL,
+  record text NOT NULL,
   PRIMARY KEY (tenant, intent_hash)
 );
 `;

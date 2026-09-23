@@ -104,4 +104,16 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: spec cache"
     expect((await pool.query("SELECT 1 AS one")).rows[0].one).toBe(1);
     await pool.end();
   });
+
+  // Regression test for the `jsonb` key-reordering bug (see schema.ts's comment on why `spec` is
+  // `text`): the object's keys are deliberately out of Postgres jsonb's internal storage order
+  // (shortest-length-first, then lexicographic within a length) at both the top level and one level
+  // of nesting, so a `jsonb` column would silently reorder them on write and fail this assertion --
+  // `toEqual` (used elsewhere in this file) would not notice, since it ignores key order entirely.
+  it("preserves the exact key order of a round trip (a jsonb column would silently reorder it)", async () => {
+    const nonCanonical = { zzz: 1, a: { deep2: true, d: 1 }, bb: "x" } as unknown as UISpec;
+    await port.putSpecCache("order-check", nonCanonical);
+    const readBack = await port.getSpecCache("order-check");
+    expect(JSON.stringify(readBack)).toBe(JSON.stringify(nonCanonical));
+  });
 });

@@ -93,4 +93,29 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: promotion s
     expect(typeof port.putPromotionStates).toBe("function");
     expect(typeof port.deleteFixation).toBe("function");
   });
+
+  // Regression tests for the `jsonb` key-reordering bug (see schema.ts's comment on why `state` /
+  // `record` are `text`): each payload's keys are deliberately out of Postgres jsonb's internal
+  // storage order (shortest-length-first, then lexicographic within a length) at both the top level
+  // and one level of nesting, so a `jsonb` column would silently reorder them on write and fail these
+  // assertions -- `toEqual` (used elsewhere in this file) would not notice, since it ignores key
+  // order entirely. `pinnedSpec` is the field that actually broke REST-CMP-002-style determinism:
+  // fixate() returns the freshly-composed in-process record, and every subsequent compose re-reads it
+  // via getFixation with no in-memory cache in that path, so a reordering here is not just
+  // theoretical -- it is delivered to the next caller.
+  it("preserves the exact key order of a promotion state round trip", async () => {
+    const nonCanonical = state("order-check", "acme");
+    (nonCanonical as { data: unknown }).data = { zzz: 1, a: { deep2: true, d: 1 }, bb: "x" };
+    await port.putPromotionState(nonCanonical);
+    const readBack = await port.getPromotionState("order-check", "acme");
+    expect(JSON.stringify(readBack)).toBe(JSON.stringify(nonCanonical));
+  });
+
+  it("preserves the exact key order of a fixation round trip (pinnedSpec included)", async () => {
+    const nonCanonical = fixation("order-check", "acme");
+    (nonCanonical as { pinnedSpec: unknown }).pinnedSpec = { zzz: 1, a: { deep2: true, d: 1 }, bb: "x" };
+    await port.putFixation(nonCanonical);
+    const readBack = await port.getFixation("order-check", "acme");
+    expect(JSON.stringify(readBack)).toBe(JSON.stringify(nonCanonical));
+  });
 });

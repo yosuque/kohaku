@@ -75,4 +75,16 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: lineage", (
   it("returns no rows for an empty type filter (matches the file port's `[].includes` semantics)", async () => {
     expect(await port.listLineage({ type: [] })).toEqual([]);
   });
+
+  // Regression test for the `jsonb` key-reordering bug (see schema.ts's comment on why `record` is
+  // `text`): the payload's keys are deliberately out of Postgres jsonb's internal storage order
+  // (shortest-length-first, then lexicographic within a length) at both the top level and one level
+  // of nesting, so a `jsonb` column would silently reorder them on write and fail this assertion --
+  // `toEqual` (used elsewhere in this file) would not notice, since it ignores key order entirely.
+  it("preserves the exact key order of a round trip (a jsonb column would silently reorder payload)", async () => {
+    const nonCanonical = ev("99", { payload: { zzz: 1, a: { deep2: true, d: 1 }, bb: "x" } });
+    await port.appendLineage(nonCanonical);
+    const [readBack] = await port.listLineage({ limit: 1 });
+    expect(JSON.stringify(readBack)).toBe(JSON.stringify(nonCanonical));
+  });
 });
