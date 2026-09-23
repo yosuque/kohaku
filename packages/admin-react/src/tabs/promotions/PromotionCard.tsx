@@ -25,6 +25,9 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
   const { messages: t } = useAdmin();
   const [draft, setDraft] = useState<DraftForm>(props.initialDraft);
   const suggestion = candidate.suggestion ?? null;
+  // Lineage attaches a suggestion exactly once, at the in_use → candidate transition, and never replaces it
+  // afterwards, so a bare per-mount checkbox is safe here. If that backend invariant ever changes (a candidate's
+  // suggestion mutating after mount), this state would need to reset alongside it.
   const [acknowledged, setAcknowledged] = useState(false);
   const diff = useMemo(
     () => (suggestion != null ? diffAgainstSuggestion(draft, suggestion) : []),
@@ -113,7 +116,7 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
             <button
               type="button"
               disabled={props.busy || !canApprove}
-              onClick={() => built.ok && void props.onAction("approve", built.payload)}
+              onClick={() => canApprove && void props.onAction("approve", built.payload)}
               style={{
                 ...smallButton,
                 background: canApprove ? V.primary : V.disabledSurface,

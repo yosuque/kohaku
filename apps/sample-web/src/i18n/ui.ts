@@ -338,6 +338,7 @@ const JA: UIStrings = {
       suggestionTitle: "提案されたスキーマ(機械抽出 — 承認前に確認してください)",
       suggestionUnchanged: "変更なし",
       suggestionChangedFrom: (suggested) => `提案値: ${suggested}`,
+      suggestionEmptyValue: "(空)",
       suggestionAcknowledge: "提案されたスキーマをプレビューと照らして確認しました",
       suggestionAcknowledgeRequired: "承認する前に、提案されたスキーマを確認したことをチェックしてください。",
       suggestionEvents: (names) => `提案されたイベント: ${names}`,

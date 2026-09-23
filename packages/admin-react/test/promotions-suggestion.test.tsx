@@ -71,7 +71,7 @@ describe("PromotionsTab with a schema suggestion", () => {
   });
 
   it("keeps Approve disabled until the reviewer acknowledges, then sends the suggested draft verbatim", async () => {
-    const view = renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
+    const { container, ...view } = renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
       handlers: {
         "POST /promotions/evaluate": () =>
           jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
@@ -82,6 +82,9 @@ describe("PromotionsTab with a schema suggestion", () => {
     const approve = (await screen.findByText(m.approveButton)) as HTMLButtonElement;
     expect(approve.disabled).toBe(true);
     expect(screen.getByText(m.suggestionAcknowledgeRequired)).toBeTruthy();
+    // The richest a11y surface of this whole change: the checkbox, the disabled button, and the role="status"
+    // message, all present at once — checked before the checkbox is ticked (unlike the first test's pass).
+    expect((await axe.run(container, AXE_OPTIONS)).violations).toEqual([]);
     fireEvent.click(screen.getByLabelText(m.suggestionAcknowledge));
     expect(approve.disabled).toBe(false);
     fireEvent.click(approve);

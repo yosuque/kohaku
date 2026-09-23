@@ -50,7 +50,9 @@ export function SuggestionPanel(props: {
           >
             <code>{d.field}</code>:{" "}
             {d.changed
-              ? t.promotions.suggestionChangedFrom(d.suggested === "" ? "(empty)" : d.suggested)
+              ? t.promotions.suggestionChangedFrom(
+                  d.suggested === "" ? t.promotions.suggestionEmptyValue : d.suggested,
+                )
               : t.promotions.suggestionUnchanged}
           </li>
         ))}

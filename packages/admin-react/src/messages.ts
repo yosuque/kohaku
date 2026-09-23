@@ -100,6 +100,7 @@ export interface AdminMessages {
     suggestionTitle: string;
     suggestionUnchanged: string;
     suggestionChangedFrom: (suggested: string) => string;
+    suggestionEmptyValue: string;
     suggestionAcknowledge: string;
     suggestionAcknowledgeRequired: string;
     suggestionEvents: (names: string) => string;
@@ -217,6 +218,7 @@ export const defaultAdminMessages: AdminMessages = {
     suggestionTitle: "Proposed schema (machine-extracted — review before approving)",
     suggestionUnchanged: "unchanged",
     suggestionChangedFrom: (suggested) => `was: ${suggested}`,
+    suggestionEmptyValue: "(empty)",
     suggestionAcknowledge: "I have reviewed the proposed schema against the preview",
     suggestionAcknowledgeRequired: "Confirm you reviewed the proposed schema before approving.",
     suggestionEvents: (names) => `Proposed events: ${names}`,
