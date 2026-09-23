@@ -52,5 +52,13 @@ export {
   type Promotions,
   type WithdrawOptions,
 } from "./promotion/service.js";
+export {
+  type DraftDiff,
+  type DraftDiffField,
+  type DraftFieldChange,
+  diffDraft,
+  type SchemaSuggestion,
+  type SuggestedEvent,
+} from "./promotion/suggestion.js";
 export { createViewRecorder, type RestViewRecorder } from "./recorder.js";
 export type { TenantScope } from "./tenant-scope.js";
