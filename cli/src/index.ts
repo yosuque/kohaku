@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { basename } from "node:path";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
 import { Command } from "commander";
 import {
@@ -120,6 +121,11 @@ program
       }
       const p = result.profile;
       console.log(`Generated ${result.written.length} files in ${result.outDir}`);
+      if (opts.name == null && result.name !== basename(result.outDir)) {
+        console.log(
+          `  name: ${result.name} (derived from directory "${basename(result.outDir)}"; pass --name to override)`,
+        );
+      }
       console.log(`  source: ${p.source} (${p.rowCount} rows)`);
       console.log(`  dimensions: ${p.dimensions.map((c) => c.name).join(", ")}`);
       console.log(`  measures: ${p.measures.map((c) => c.name).join(", ") || "(none; row counts only)"}`);

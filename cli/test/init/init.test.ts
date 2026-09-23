@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initProject } from "../../src/init/index.js";
+import { deriveDefaultName, initProject } from "../../src/init/index.js";
 
 const FIXTURE = join(import.meta.dirname, "fixtures", "sales.csv");
 const noRun = { run: async () => 0 };
@@ -122,12 +122,22 @@ describe("initProject", () => {
     expect(existsSync(out)).toBe(false);
   });
 
-  it("rejects an invalid name derived from the output directory's own basename", async () => {
+  it('normalizes a derived default name instead of rejecting it (e.g. a directory called "My App")', async () => {
     const out = join(tmp(), "My App");
-    await expect(initProject({ from: FIXTURE, out, install: false }, noRun)).rejects.toThrow(
-      /not a valid npm package name/,
-    );
-    expect(existsSync(out)).toBe(false);
+    const result = await initProject({ from: FIXTURE, out, install: false }, noRun);
+    expect(result.name).toBe("my_app");
+    const pkg = JSON.parse(readFileSync(join(out, "package.json"), "utf8"));
+    expect(pkg.name).toBe("my_app");
+  });
+
+  it("falls back to a fixed default name when the output directory's basename carries no name at all", () => {
+    // basename("/") === "" (the filesystem root); "." / ".." are handled the same way, defensively,
+    // even though `initProject` always resolves `outDir` first so they shouldn't reach here in
+    // practice. Unlike slugify's own hash fallback (a real, if opaque, derived name), there is no
+    // name to derive here at all, so a fixed, readable default is used instead.
+    expect(deriveDefaultName("/")).toBe("kohaku-app");
+    expect(deriveDefaultName(".")).toBe("kohaku-app");
+    expect(deriveDefaultName("..")).toBe("kohaku-app");
   });
 
   it("fails with a single-line Node-version message for SQLite input on old Node, driven by a version string", async () => {
