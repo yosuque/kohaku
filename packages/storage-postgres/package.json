@@ -13,7 +13,8 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
-    "@kohaku-ui/spec-core": "workspace:^"
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@types/pg": "catalog:"
   },
   "peerDependencies": {
     "pg": "catalog:"
@@ -22,7 +23,6 @@
     "@kohaku-ui/port-contracts": "workspace:^",
     "@testcontainers/postgresql": "catalog:",
     "@types/node": "catalog:",
-    "@types/pg": "catalog:",
     "pg": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

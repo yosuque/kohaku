@@ -109,7 +109,7 @@ pnpm changeset
 
 Once a changeset-carrying pull request merges to `main`, the Version workflow opens or updates a
 `chore(release): version packages` pull request. Review that pull request's diff before merging it: it
-touches all twenty-two package manifests, the twenty-two `CHANGELOG.md` files, `python/kohaku/pyproject.toml`,
+touches all twenty-five package manifests, the twenty-five `CHANGELOG.md` files, `python/kohaku/pyproject.toml`,
 `python/kohaku/src/kohaku/__init__.py`, and the lockfile. Merging it does **not** publish — it makes a
 draft GitHub Release `vX.Y.Z` appear, with a body generated from the CHANGELOGs. Publishing is a
 separate, deliberate step: run the Release workflow with `dry_run=true` from `main` first, then publish
@@ -117,7 +117,7 @@ the draft (which creates the tag), then watch the Release workflow publish to np
 [docs/runbooks/release.md](docs/runbooks/release.md) for the full procedure and the pre-publish
 checklist.
 
-All twenty-two `@kohaku-ui/*` packages share one version — they are one implementation of one wire protocol,
+All twenty-five `@kohaku-ui/*` packages share one version — they are one implementation of one wire protocol,
 and a version split would let a consumer end up with two incompatible `spec-core` copies. See
 [.changeset/README.md](.changeset/README.md). Nothing is published from a developer's machine.
 
