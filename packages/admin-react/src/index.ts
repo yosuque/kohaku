@@ -13,6 +13,24 @@ export { type AdminMessages, defaultAdminMessages } from "./messages.js";
 export { AnalyticsTab } from "./tabs/AnalyticsTab.js";
 export { FixationsTab } from "./tabs/FixationsTab.js";
 export { LineageTab } from "./tabs/LineageTab.js";
+export {
+  buildDraftPayload,
+  DEFAULT_QUERY_PATHS,
+  type DraftForm,
+  genericInitialDraft,
+  type PromotionDefaults,
+} from "./tabs/promotions/draft.js";
+export {
+  type PromotionActionKind,
+  PromotionCard,
+  type PromotionCardProps,
+} from "./tabs/promotions/PromotionCard.js";
+export {
+  PromotionDraftEditor,
+  type PromotionDraftEditorProps,
+} from "./tabs/promotions/PromotionDraftEditor.js";
+export { PromotionPreview } from "./tabs/promotions/PromotionPreview.js";
+export { PROMOTION_STATUS_FILTERS, PromotionsTab } from "./tabs/promotions/PromotionsTab.js";
 export { adminThemeStyle, V as adminVars } from "./theme.js";
 export {
   BarRow,
