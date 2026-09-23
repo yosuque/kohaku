@@ -80,10 +80,28 @@ export interface LineageSummary {
   /**
    * Human review turnaround: the time from a candidate's `component.nominated` to the next `component.reviewed`
    * whose decision is approve or reject, paired per (tenant, artifactId). A requestChanges decision does not
-   * complete a review (the candidate is re-nominated later and measured again from that nomination). A
-   * reviewed event with no preceding nomination in the window is ignored. Quantiles are nearest-rank like
-   * durationMs. `acceptedAsIs` counts component.schemaEdited records whose `changed` is empty (the machine
-   * suggestion was approved without any edit) — the ticket's "zero-edit approval" KPI.
+   * complete a review (the candidate is re-nominated later and measured again from that nomination). Only a
+   * policy-driven nomination (`payload.by === "policy"`) opens a turnaround window; a reviewer-initiated
+   * re-nomination (the "re-submit and approve" flow's fresh `component.nominated` milliseconds before its own
+   * `component.reviewed`) does not, so a re-submitted candidate still measures the whole round-trip from its
+   * original nomination rather than a near-zero duration from the resubmission. A reviewed event with no
+   * preceding open nomination in the window is ignored.
+   *
+   * **Order-dependent**: this is the only aggregation in this function that is sensitive to the order of
+   * `events` -- the pairing scans in array order and treats each `component.nominated` as opening the window
+   * that the next matching `component.reviewed` closes. It assumes `events` is in ascending `ts` order (what
+   * every call site in this repo passes), which `StoragePort.listLineage` does not itself guarantee. If a caller
+   * passes events out of `ts` order, a review can be paired with the wrong nomination (or fail to pair at all if
+   * its nomination appears after it in the array), silently skewing `durationMs` and lowering `count` with no
+   * error.
+   *
+   * `count` is the number of *paired* durations that made it into `durationMs`, not the number of
+   * approve/reject `component.reviewed` events -- a pair whose computed delta fails the finite/non-negative
+   * guard (out-of-order or malformed timestamps) is silently dropped from both `count` and the quantiles.
+   *
+   * Quantiles are nearest-rank like durationMs. `acceptedAsIs` counts component.schemaEdited records whose
+   * `changed` is empty (the machine suggestion was approved without any edit) — the ticket's "zero-edit
+   * approval" KPI.
    */
   review: {
     count: number;

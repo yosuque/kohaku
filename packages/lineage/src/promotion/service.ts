@@ -411,6 +411,13 @@ export function createPromotions(opts: {
    * transition to published still requires a human `approve` carrying the final draft. Fail-open: a throw /
    * rejection is reported via `onError({ endpoint: "promotion.suggest.schema" })` and the candidate is
    * nominated without a suggestion; `null` means "no proposal" silently.
+   *
+   * Latency cost: `evaluateAndList` runs inside host-rest's per-tenant promotion governance mutex (the same lock
+   * approve/reject/withdraw/actions serialize on), and every freshly nominated candidate's extraction runs
+   * concurrently (not sequentially) before the batch persists -- but the call still does not return, and the
+   * lock is not released, until the slowest of those concurrent extractions settles. The fail-open contract
+   * above covers a throw; it does not cover a slow or hanging extractor, which delays every other promotion
+   * transition for that tenant for as long as this hook takes to resolve.
    */
   suggestSchema?: (candidate: PromotionCandidate, context?: TenantScope) => Promise<SchemaSuggestion | null>;
   /**

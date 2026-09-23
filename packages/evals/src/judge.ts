@@ -206,7 +206,8 @@ export const l2PromotionRubricV0_2: Rubric = {
  * The L2 promotion rubric exactly as it was before `visual_quality` joined it (version "0.1"): the same
  * 5 criteria (safety / determinism / a11y / schema_inferability / generality), with the pre-rebalance
  * weights (safety 0.3, schema_inferability 0.2 — see .changeset/evals-visual-quality-criterion.md for the
- * rebalance that produced today's `l2PromotionRubric`, version "0.2"). Exported so a consumer who is not
+ * rebalance that produced `l2PromotionRubricV0_2`, version "0.2"; the live `l2PromotionRubric` has since
+ * moved on to version "0.4"). Exported so a consumer who is not
  * ready for the up-to-0.10 score shift that adding a sixth criterion causes can pin the old promotion
  * behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_1 })`. Mirrored in Python as
  * `kohaku.evals.judge.l2_promotion_rubric_v0_1`.
