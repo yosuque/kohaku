@@ -42,8 +42,9 @@ import {
 } from "node:http";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createAuthzFromEnv } from "@kohaku-ui-sample/api/ports/from-env";
 import { toNodeHandler } from "@modelcontextprotocol/node";
-import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler, type McpServer, type ServerContext } from "@modelcontextprotocol/server";
 import { createKohakuMcpSetup } from "./setup.js";
 
 /** Path of the MCP endpoint (default). */
@@ -352,7 +353,25 @@ async function main(): Promise<void> {
   // Base URL for publishing snapshots. When using a public tunnel, set it to the tunnel's URL.
   // If unset, falls back to localhost (local viewing only). The trailing slash is stripped.
   const publicUrl = process.env["KOHAKU_MCP_PUBLIC_URL"]?.replace(/\/+$/, "") ?? `http://localhost:${port}`;
-  const setup = await createKohakuMcpSetup({ snapshotBaseUrl: publicUrl });
+  // Resolve storage/authz from env here (rather than leaving it to createKohakuMcpSetup) only so that, under
+  // KOHAKU_AUTHZ=jwt, the identity resolver is in hand to build resolvePrincipal below — passing `authz`
+  // through means setup.ts does not construct a second, redundant AuthzPort from the same env.
+  const authzFromEnv = createAuthzFromEnv(process.env);
+  const identity = authzFromEnv.identity;
+  const setup = await createKohakuMcpSetup({
+    snapshotBaseUrl: publicUrl,
+    authz: authzFromEnv.authz,
+    // With KOHAKU_AUTHZ=jwt, resolve the caller per tool call from the HTTP request's own bearer token
+    // (ServerContext.http.req is the fetch Request of the Streamable HTTP POST). A throw here (missing/invalid
+    // token) is fail-closed: host-mcp-apps turns it into a structured tool error (isError), never a silent
+    // anonymous fallback — see McpHostDeps.resolvePrincipal's doc comment.
+    ...(identity != null
+      ? {
+          resolvePrincipal: async (extra: ServerContext) =>
+            (await identity.fromAuthorizationHeader(extra.http?.req?.headers.get("authorization"))).principal,
+        }
+      : {}),
+  });
   const allowedHosts = parseAllowedHosts(process.env["KOHAKU_MCP_HTTP_ALLOWED_HOSTS"]);
   const httpServer = createMcpHttpServer({
     createServer: setup.createServer,

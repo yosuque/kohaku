@@ -340,6 +340,9 @@ importers:
       '@kohaku-ui/authz-hmac':
         specifier: workspace:^
         version: link:../../packages/authz-hmac
+      '@kohaku-ui/authz-jwt':
+        specifier: workspace:^
+        version: link:../../packages/authz-jwt
       '@kohaku-ui/composer':
         specifier: workspace:^
         version: link:../../packages/composer
@@ -379,6 +382,12 @@ importers:
       '@kohaku-ui/storage-memory':
         specifier: workspace:^
         version: link:../../packages/storage-memory
+      '@kohaku-ui/storage-postgres':
+        specifier: workspace:^
+        version: link:../../packages/storage-postgres
+      '@kohaku-ui/storage-redis':
+        specifier: workspace:^
+        version: link:../../packages/storage-redis
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.1
@@ -395,6 +404,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1
+      jose:
+        specifier: 'catalog:'
+        version: 6.2.12
       tsx:
         specifier: 'catalog:'
         version: 4.23.13
@@ -428,6 +440,9 @@ importers:
       '@kohaku-ui/authz-hmac':
         specifier: workspace:^
         version: link:../../packages/authz-hmac
+      '@kohaku-ui/authz-jwt':
+        specifier: workspace:^
+        version: link:../../packages/authz-jwt
       '@kohaku-ui/data-binding':
         specifier: workspace:^
         version: link:../../packages/data-binding

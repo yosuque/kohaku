@@ -14,19 +14,23 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
+import type { JwtIdentityResolver } from "@kohaku-ui/authz-jwt";
 import {
   attachKohakuToMcpServer,
   defaultMcpListCacheHints,
   intentToolsFromCatalog,
+  type McpHostDeps,
 } from "@kohaku-ui/host-mcp-apps";
 import { createViewRecorder } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import { createFileStoragePort } from "@kohaku-ui/storage-memory";
+import type { AuthzPort, StoragePort } from "@kohaku-ui/spec-core";
 import { admitFixationForLocale, createApp } from "@kohaku-ui-sample/api";
 // Reuse sample-api's side-effect declarations (via the package's exports subpath)
 import { salesActionEffects } from "@kohaku-ui-sample/api/action-effects";
+// Reuse sample-api's env-driven adapter selection (via the package's exports subpath) so the MCP profile
+// picks the same KOHAKU_STORAGE / KOHAKU_AUTHZ adapters as the REST profile when neither is overridden.
+import { createAuthzFromEnv, createStorageFromEnv } from "@kohaku-ui-sample/api/ports/from-env";
 import { McpServer } from "@modelcontextprotocol/server";
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
@@ -114,6 +118,17 @@ export interface KohakuMcpSetupOptions {
    * When unspecified (stdio path), it returns a local path (behavior unchanged).
    */
   snapshotBaseUrl?: string;
+  /** Override the StoragePort (tests / a caller that already built one). Built from env (KOHAKU_STORAGE) when omitted. */
+  storage?: StoragePort;
+  /** Override the AuthzPort (tests / a caller that already built one). Built from env (KOHAKU_AUTHZ) when omitted. */
+  authz?: AuthzPort;
+  /**
+   * Per-tool-call principal resolution (e.g. from the HTTP request's own bearer token under KOHAKU_AUTHZ=jwt).
+   * Forwarded verbatim to `attachKohakuToMcpServer`'s `McpHostDeps.resolvePrincipal` — see its doc comment for
+   * the fallback order (resolvePrincipal → deps.principal → anonymous) and the fail-closed contract (a throw
+   * becomes a structured tool error). Left unwired for stdio (one process, one user).
+   */
+  resolvePrincipal?: McpHostDeps["resolvePrincipal"];
 }
 
 export interface KohakuMcpSetup {
@@ -128,6 +143,10 @@ export interface KohakuMcpSetup {
   readonly dataDir: string;
   /** Directory where snapshot HTML is stored (single source of truth). http.ts uses this as the source for /snapshots static serving. */
   readonly snapshotDir: string;
+  /** Present only when storage/authz were resolved from KOHAKU_AUTHZ=jwt (not overridden by `options.authz`): the identity resolver a caller (http.ts) uses to build `resolvePrincipal`. */
+  readonly identity?: JwtIdentityResolver;
+  /** Closes the storage port this setup created from env (a no-op when `options.storage` was supplied). */
+  close(): Promise<void>;
 }
 
 /**
@@ -185,8 +204,10 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
   }
   const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
 
-  const storage = createFileStoragePort(dataDir);
-  const authz = createHmacAuthzPort(process.env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me");
+  const storageFromEnv = options.storage != null ? null : createStorageFromEnv(process.env, { dataDir });
+  const storage = options.storage ?? storageFromEnv!.storage;
+  const authzFromEnv = options.authz != null ? null : createAuthzFromEnv(process.env);
+  const authz = options.authz ?? authzFromEnv!.authz;
 
   const { composeCtx, domain, lineage, fixations, intentCatalog } = await createApp({
     llm,
@@ -254,6 +275,10 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
         // Side-effect declarations for writes (kohaku_action). Shares the same salesActionEffects as the REST side (app.ts),
         // making "annotate's data-version progression → invalidation of currently-displayed references" work symmetrically on the MCP side too.
         actionEffects: salesActionEffects,
+        // Per-tool-call principal resolution (e.g. under KOHAKU_AUTHZ=jwt, http.ts derives it from the request's
+        // own bearer token). Left unwired by default (every call runs as the anonymous principal — see
+        // McpHostDeps.resolvePrincipal's doc comment for the fallback order).
+        ...(options.resolvePrincipal != null ? { resolvePrincipal: options.resolvePrincipal } : {}),
       },
       {
         // Use the loader that memoizes only successful reads (on absence, does not cache the FALLBACK each time).
@@ -287,7 +312,16 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
     return server;
   }
 
-  return { createServer, llm, dataDir, snapshotDir: SNAPSHOT_DIR };
+  return {
+    createServer,
+    llm,
+    dataDir,
+    snapshotDir: SNAPSHOT_DIR,
+    identity: authzFromEnv?.identity,
+    close: async () => {
+      await storageFromEnv?.close();
+    },
+  };
 }
 
 /** Read the repository-root .env (env vars only if absent). Called only at real stdio / HTTP startup. */

@@ -2,10 +2,9 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
-import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { createApp } from "./app.js";
+import { createAuthzFromEnv, createJwtRequestIdentity, createStorageFromEnv } from "./ports/from-env.js";
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(APP_DIR, "../../..");
@@ -22,17 +21,23 @@ for (const envPath of [join(REPO_ROOT, ".env"), join(APP_DIR, "../.env")]) {
 // they never touch the checked-out repo's local demo state; mirrors python/examples/sales-api's KOHAKU_DATA_DIR).
 const DATA_DIR = process.env["KOHAKU_DATA_DIR"] ?? join(APP_DIR, "../.data");
 const llm = createLlmFromEnv();
-const storage = createFileStoragePort(DATA_DIR);
-const authz = createHmacAuthzPort(process.env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me");
+const storageFromEnv = createStorageFromEnv(process.env, { dataDir: DATA_DIR });
+const authzFromEnv = createAuthzFromEnv(process.env);
 
 // createApp is async because it performs startup reconcile (snapshot authority -> projection).
-const { app, repo, setShuttingDown } = await createApp({ llm, storage, authz });
+const { app, repo, setShuttingDown } = await createApp({
+  llm,
+  storage: storageFromEnv.storage,
+  authz: authzFromEnv.authz,
+  ...(authzFromEnv.identity != null ? { identity: createJwtRequestIdentity(authzFromEnv.identity) } : {}),
+});
 
 const port = Number(process.env["PORT"] ?? 8787);
 const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`kohaku sample-api: http://localhost:${info.port}`);
   console.log(`  LLM: ${llm.provider} / ${llm.modelId}`);
   console.log(`  seed: ${repo.records.length} records (${repo.dataVersion()})`);
+  console.log(`  storage: ${storageFromEnv.kind} / authz: ${authzFromEnv.kind}`);
 });
 
 /** Default drain window (ms) for graceful shutdown, overridable via KOHAKU_SHUTDOWN_GRACE_MS. */
@@ -84,6 +89,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       // serves plain HTTP/1.1, so the `in` check is always true at runtime, but narrows the type safely
       // for the union.
       if ("closeIdleConnections" in server) server.closeIdleConnections();
+      void storageFromEnv.close().catch(() => {});
       server.close(() => process.exit(0));
       setTimeout(() => {
         server.getConnections((err, count) => {

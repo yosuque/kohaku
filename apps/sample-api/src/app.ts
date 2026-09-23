@@ -20,6 +20,7 @@ import { SalesRepo } from "./domain/repo.js";
 import { IntentCatalog } from "./intents/catalog.js";
 import { type PromotedEntry, promotedComponent } from "./intents/promoted.js";
 import { PromotedRegistry } from "./intents/promoted-registry.js";
+import { createHeaderIdentity, type RequestIdentity } from "./ports/from-env.js";
 import { createSemanticPort } from "./ports/semantic-port.js";
 
 /**
@@ -47,6 +48,8 @@ export interface AppDeps {
   storage: StoragePort;
   authz: AuthzPort;
   repo?: SalesRepo;
+  /** Request → principal/tenant resolution. Default: the demo's x-kohaku-role / x-kohaku-tenant headers. */
+  identity?: RequestIdentity;
 }
 
 export interface SampleApp {
@@ -148,6 +151,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     },
   });
 
+  const identity = deps.identity ?? createHeaderIdentity();
   const hostDeps = createHostDeps({
     composeCtx,
     domain,
@@ -156,6 +160,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     lineage,
     promotions,
     fixations,
+    identity,
   });
 
   const app = new Hono();
@@ -164,6 +169,10 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
   // wires a 1 MiB cap here so an oversized POST (e.g. to /compose) is rejected before JSON parsing rather than
   // consuming memory/CPU unbounded. Registered ahead of the route mount so it runs for every /api/kohaku/* request.
   app.use("/api/kohaku/*", bodyLimit({ maxSize: MAX_REQUEST_BODY_BYTES, onError: bodyTooLargeResponse }));
+  // When identity requires JWT verification, authenticate the request before it reaches the routes (401
+  // CAPABILITY_DENIED on a missing/invalid token — see createJwtRequestIdentity's doc comment). Absent for the
+  // default header-based identity (behavior unchanged).
+  if (identity.middleware != null) app.use("/api/kohaku/*", identity.middleware);
   // Bundle the nomination thresholds into GET /analytics/summary's response: sample-web's i18n copy
   // ("N or more times") reads the number from here instead of duplicating FIXATION_MIN_USES / PROMOTION_MIN_USES
   // as string literals. host-rest's route itself carries no notion of these product-specific policies, so this
