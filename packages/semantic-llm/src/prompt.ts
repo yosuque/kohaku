@@ -1,16 +1,27 @@
 import { z } from "zod";
 import type { IntentCatalogLike } from "./catalog.js";
 
-const catalogDocCache = new WeakMap<IntentCatalogLike, string>();
+interface CatalogDocCacheEntry {
+  /** The catalog's `revision` at the time `doc` was computed (undefined for a revision-less catalog). */
+  revision: number | undefined;
+  doc: string;
+}
+
+const catalogDocCache = new WeakMap<IntentCatalogLike, CatalogDocCacheEntry>();
 
 /**
  * Memoized rendering of the Intent catalog's prompt section (the `### name` blocks with each Intent's JSON Schema
- * and examples), keyed by the catalog object. A per-tenant resolver that returns the same object until a promotion
- * invalidates it never serves stale content while skipping the per-Intent z.toJSONSchema on every NL call.
+ * and examples), keyed by the catalog object and, when the catalog exposes one, its `revision`. A per-tenant
+ * resolver that returns the same object until a promotion invalidates it never serves stale content while
+ * skipping the per-Intent z.toJSONSchema on every NL call; a catalog mutated in place via `add`/`remove` (which
+ * bumps `revision` without changing object identity) is recomputed on the next call instead of serving the doc
+ * from before the mutation. A catalog whose `revision` is always `undefined` (immutable, or an
+ * `IntentCatalogLike` implementation that does not track one) is still cached purely on object identity, exactly
+ * as before this cache became revision-aware.
  */
 export function renderCatalogDoc(catalog: IntentCatalogLike): string {
   const cached = catalogDocCache.get(catalog);
-  if (cached != null) return cached;
+  if (cached != null && cached.revision === catalog.revision) return cached.doc;
   const computed = catalog
     .list()
     .map((def) => {
@@ -18,7 +29,7 @@ export function renderCatalogDoc(catalog: IntentCatalogLike): string {
       return `### ${def.name}\n${def.description}\nparams schema: ${JSON.stringify(schema)}\nExamples: ${def.examples.join(" / ")}`;
     })
     .join("\n\n");
-  catalogDocCache.set(catalog, computed);
+  catalogDocCache.set(catalog, { revision: catalog.revision, doc: computed });
   return computed;
 }
 

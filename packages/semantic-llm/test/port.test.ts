@@ -59,4 +59,17 @@ describe("createLlmSemanticPort", () => {
     expect(out).toEqual({ canonical: "sales.summary", params: { groupBy: "region" } });
     expect(llm.calls).toHaveLength(0);
   });
+
+  it("threads the rules callback and the normalize() session context through to the system prompt", async () => {
+    const llm = new FakeLlm({ objects: [{ intent: "sales.summary", params: { groupBy: "product" } }] });
+    const p = createLlmSemanticPort({
+      llm,
+      catalog,
+      dataVersion: () => "v",
+      rules: (ctx) => [`- the requesting tenant is ${ctx.tenant ?? "none"}`],
+    });
+    await p.normalize({ kind: "nl", text: "top products" }, { surface: "chat", tenant: "acme" });
+    expect(llm.calls).toHaveLength(1);
+    expect(llm.calls[0]!.system).toContain("- the requesting tenant is acme");
+  });
 });

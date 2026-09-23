@@ -33,4 +33,15 @@ describe("createIntentCatalog", () => {
     catalog.remove("sales.promoted");
     expect(catalog.names()).toEqual(["sales.summary"]);
   });
+
+  it("revision moves only on an actual mutation (consumers cache on it)", () => {
+    const catalog = createIntentCatalog([summary]);
+    const initial = catalog.revision;
+    catalog.add({ ...summary, name: "sales.promoted" });
+    expect(catalog.revision).toBe(initial + 1);
+    catalog.remove("does-not-exist");
+    expect(catalog.revision).toBe(initial + 1);
+    catalog.remove("sales.promoted");
+    expect(catalog.revision).toBe(initial + 2);
+  });
 });
