@@ -20,7 +20,7 @@ const storage = createRedisStoragePort({ url: "redis://localhost:6379", connectT
 await storage.ready(); // rejects within connectTimeoutMs (default 5000ms) instead of hanging
 ```
 
-`ready()` is memoized, but a failed attempt clears the memo (mirroring `@kohaku-ui/storage-postgres`'s `ready()`) so a transient outage doesn't permanently strand the port — the next call retries from scratch. `RedisStoragePortOptions.connectTimeoutMs` (default 5000) and `.maxRetriesPerRequest` (default 3) tune this for a `url`-constructed client.
+`ready()` is memoized, but a failed attempt clears the memo (mirroring `@kohaku-ui/storage-postgres`'s `ready()`) so a transient outage doesn't permanently strand the port — the next call retries from scratch. `RedisStoragePortOptions.connectTimeoutMs` (default 5000) and `.maxRetriesPerRequest` (default 3) tune this for a `url`-constructed client. If you construct a port, see `ready()` reject, and are not going to retry, call `close()` anyway: for a `url`-constructed client, ioredis keeps retrying to connect in the background on its own schedule even after `ready()` has given up, and `close()` is what stops that background reconnect loop.
 
 **Injected `client`**: this port never overrides the options of a `client` you pass in — that client's lifecycle is yours. For the same fail-fast behavior, construct it yourself with `enableOfflineQueue: false` (and typically `lazyConnect: true`); otherwise a command issued before it connects will queue and hang exactly as described above. With an injected client, `ready()` resolves immediately if `client.status === "ready"`, otherwise it waits for that client's own `ready` / `error` event, bounded by `connectTimeoutMs`.
 
