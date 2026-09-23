@@ -1,13 +1,31 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setLang } from "../src/i18n/lang.js";
-import { UI } from "../src/i18n/ui.js";
+import { t as dict, UI } from "../src/i18n/ui.js";
 import { AdminPage } from "../src/pages/AdminPage.js";
-import { salesPromotionDefaults } from "../src/pages/admin/promotion-defaults.js";
 import { ThemeModeProvider } from "../src/theme/mode.js";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+/**
+ * A fetch stub matching on method + a URL substring (not `endsWith`, since GET /lineage carries a
+ * `?limit=` querystring appended by useLineage's default query). Every call not covered by `handlers`
+ * throws, so an unexpected request fails the test loudly instead of hanging.
+ */
+function stubFetch(handlers: Record<string, () => Response>): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      const key = Object.keys(handlers).find(
+        (k) => k.startsWith(`${method} `) && url.includes(k.slice(method.length + 1)),
+      );
+      if (key == null) throw new Error(`unhandled fetch: ${method} ${url}`);
+      return handlers[key]!();
+    }),
+  );
 }
 
 describe("AdminPage (thin wrapper over @kohaku-ui/admin-react)", () => {
@@ -35,10 +53,7 @@ describe("AdminPage (thin wrapper over @kohaku-ui/admin-react)", () => {
   });
 
   it("passes the JA dictionary and the bump toolbar", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse({ events: [] })),
-    );
+    stubFetch({ "GET /lineage": () => jsonResponse({ events: [] }) });
     setLang("ja");
     render(
       <ThemeModeProvider>
@@ -50,18 +65,39 @@ describe("AdminPage (thin wrapper over @kohaku-ui/admin-react)", () => {
     expect(screen.getByText(UI.ja.admin.tabPromotions)).toBeTruthy();
   });
 
-  it("sales promotion defaults prefill the heatmap draft", () => {
-    const d = salesPromotionDefaults.initialDraftFor!({
-      artifactId: "a@1",
+  /**
+   * Proves the wiring, not just promotion-defaults.ts in isolation: renders the real AdminPage, switches to
+   * the real Promotions tab, and asserts on a value only `salesPromotionDefaults` can produce for this
+   * candidate — `genericInitialDraft` always leaves `componentType` empty, so a passing assertion here is
+   * proof that `promotionDefaults={salesPromotionDefaults}` actually reached KohakuAdmin/PromotionsTab.
+   * (A prior version of this test called `salesPromotionDefaults.initialDraftFor` directly without rendering
+   * AdminPage at all, so it kept passing even with `promotionDefaults` deleted from AdminPage.tsx — see
+   * task-8-report.md's "Fix round 1" for the mutation that caught this.)
+   */
+  it("wires the sales promotion defaults through to the rendered Promotions tab", async () => {
+    const candidate = {
+      artifactId: "sales.calendarHeatmap@1",
       status: "candidate",
       request: "Show sales as a calendar heatmap",
-      uses: 1,
-      sessions: 1,
-      updatedAt: "",
+      uses: 5,
+      sessions: 4,
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    stubFetch({
+      "GET /lineage": () => jsonResponse({ events: [] }),
+      "GET /analytics/summary": () =>
+        jsonResponse({ promotionPolicy: { promotionMinUses: 2, fixationMinUses: 3 } }),
+      "POST /promotions/evaluate": () => jsonResponse({ candidates: [candidate] }),
     });
-    expect(d.componentType).toBe("sales.calendarHeatmap");
-    expect(d.intentName).toBe("sales.calendar_heatmap");
-    expect(d.queryPath).toBe("trend");
-    expect(salesPromotionDefaults.queryPaths).toEqual(["", "trend", "summary", "records", "kpi", "targets"]);
+    render(
+      <ThemeModeProvider>
+        <AdminPage />
+      </ThemeModeProvider>,
+    );
+    fireEvent.click(screen.getByText(dict().admin.tabPromotions));
+    await screen.findByText(candidate.artifactId);
+
+    const componentTypeInput = screen.getByLabelText("componentType") as HTMLInputElement;
+    expect(componentTypeInput.value).toBe("sales.calendarHeatmap");
   });
 });
