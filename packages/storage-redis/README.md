@@ -43,6 +43,26 @@ This package implements the whole of `StoragePort`: the Spec cache (`getSpecCach
 
 **Known limitation**: `listLineage` narrows the candidate set with a single sorted-set index and applies the remaining predicates client-side, deliberately not using `ZINTER` — a filter whose most selective index is still large (e.g. `type: ["view.composed"]` on a busy host) therefore reads every candidate, and there is no cap or rotation on the event log, the same limitation the reference file port has.
 
+## Capability revocation
+
+`createRedisRevocationStore({ url | client, keyPrefix, connectTimeoutMs, maxRetriesPerRequest })` is a Redis-backed `CapabilityRevocationStore` (`@kohaku-ui/spec-core`'s `ports.ts`) — pass it as `revocations` to `@kohaku-ui/authz-hmac`'s `createHmacAuthzPort` or `@kohaku-ui/authz-jwt`'s `createJwtAuthzPort` so revocation is shared across every instance behind a load balancer, instead of the default in-memory store's per-process deny list.
+
+```ts
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
+import { createRedisRevocationStore } from "@kohaku-ui/storage-redis";
+
+const revocations = createRedisRevocationStore({ url: "redis://localhost:6379" });
+const authz = createHmacAuthzPort(secret, { revocations });
+
+const token = await authz.issueCapability(principal, scopes);
+await authz.revokeCapability(token); // signature verified first; a tampered or foreign token is rejected
+await authz.verify(token, req); // { ok: false, reason: "capability revoked" }
+```
+
+A revoked `jti` is stored as `{prefix}:revoked:{jti}` with `SET … EX` set to the token's own remaining lifetime (`exp - now`), so Redis drops the key itself once the token would have expired anyway — no separate sweep needed. `revoke()` is a no-op when that remaining lifetime is already zero or negative (the token can no longer verify regardless). `isRevoked` is a plain `EXISTS` check. Same fail-fast construction and memoized-and-discarded-on-failure `ready()` as `createRedisStoragePort` above (every method awaits it first) — see "Fail-fast, not hang".
+
+Note that `createRedisRevocationStore` opens its own client, separate from any `createRedisStoragePort` client pointed at the same Redis — the two are never implicitly shared, so pointing both at one deployment means sizing for two connections, not one (pass the same `client` to both if you want a single shared connection instead).
+
 Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation of the
 [Kohaku Protocol](https://github.com/yosuque/kohaku/blob/main/spec/SPEC.md).
 

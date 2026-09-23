@@ -6,6 +6,7 @@ import type {
   UISpec,
 } from "@kohaku-ui/spec-core";
 import { Redis } from "ioredis";
+import { connectOwned, waitUntilReady } from "./connection.js";
 import { DEFAULT_KEY_PREFIX, type RedisKeys, redisKeys } from "./keys.js";
 import { chooseCandidateIndex, indexValues, matchesFilter, tailLimit } from "./lineage.js";
 
@@ -235,47 +236,6 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
       }
     },
   };
-}
-
-/**
- * `ready()`'s path for a `url`-constructed (owned, `lazyConnect: true`) client: kick off the connection
- * ioredis otherwise wouldn't start on its own. The returned promise is bounded by the `connectTimeout`
- * already passed to the `Redis` constructor.
- */
-function connectOwned(redis: Redis): Promise<void> {
-  if (redis.status === "ready") return Promise.resolve();
-  return redis.connect();
-}
-
-/**
- * `ready()`'s path for an injected client: resolve immediately if already `"ready"`, otherwise wait for the
- * `ready` or `error` event, bounded by `timeoutMs`. Listeners are always removed on whichever path settles
- * first (resolve, reject, or timeout) so repeated calls -- e.g. from `ready()`'s retry-on-failure memo --
- * cannot leak them.
- */
-function waitUntilReady(client: Redis, timeoutMs: number): Promise<void> {
-  if (client.status === "ready") return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const cleanup = (): void => {
-      clearTimeout(timer);
-      client.off("ready", onReady);
-      client.off("error", onError);
-    };
-    const onReady = (): void => {
-      cleanup();
-      resolve();
-    };
-    const onError = (error: unknown): void => {
-      cleanup();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(`Redis connection did not become ready within ${timeoutMs}ms`));
-    }, timeoutMs);
-    client.once("ready", onReady);
-    client.once("error", onError);
-  });
 }
 
 /** Reserves `count` consecutive sequence numbers (a single INCRBY). */

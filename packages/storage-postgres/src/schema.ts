@@ -71,5 +71,12 @@ CREATE TABLE IF NOT EXISTS ${t("kohaku_fixation")} (
   record text NOT NULL,
   PRIMARY KEY (tenant, intent_hash)
 );
+-- Unlike the four tables above, this one carries no JSON payload column -- just a jti and its own
+-- expiry -- so the text-not-jsonb decision documented above does not apply to it.
+CREATE TABLE IF NOT EXISTS ${t("kohaku_capability_revocation")} (
+  jti text PRIMARY KEY,
+  expires_at timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ${ix}_kohaku_capability_revocation_expires_at_idx ON ${t("kohaku_capability_revocation")} (expires_at);
 `;
 }

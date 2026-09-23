@@ -374,9 +374,12 @@ async function main(): Promise<void> {
   });
   // Fail fast: with a redis/postgres backend, an unreachable server otherwise surfaces only on the first
   // tool call (or, before storage-redis's fail-fast fix, hangs the caller indefinitely). Exit clearly here
-  // instead (a no-op for file/memory -- see StorageFromEnv.ready's doc comment).
+  // instead (a no-op for file/memory -- see StorageFromEnv.ready's doc comment). `authzFromEnv` is
+  // resolved separately from `setup` (see the comment above), so its own revocation-store readiness is
+  // checked here too, not folded into `setup.ready()`.
   try {
     await setup.ready();
+    await authzFromEnv.ready();
   } catch (error) {
     console.error(
       `kohaku-sales-sample MCP server: storage backend is not ready: ${error instanceof Error ? error.message : String(error)}`,
@@ -439,9 +442,11 @@ async function main(): Promise<void> {
       // (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
       // connection would otherwise stall the drain for no reason.
       httpServer.closeIdleConnections();
-      // Close the storage port this setup created from env (a no-op unless KOHAKU_STORAGE is redis/postgres).
+      // Close the storage port this setup created from env (a no-op unless KOHAKU_STORAGE is redis/postgres),
+      // and the revocation store's own backend connection (a no-op unless KOHAKU_STORAGE is redis/postgres).
       // Swallow a failing close (matching sample-api's index.ts) so it can never block process exit.
       void setup.close().catch(() => {});
+      void authzFromEnv.close().catch(() => {});
       httpServer.close(() => process.exit(0));
       setTimeout(() => {
         httpServer.getConnections((err, count) => {

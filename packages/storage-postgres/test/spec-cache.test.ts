@@ -55,6 +55,7 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: spec cache"
         [schema],
       );
       expect(rows.map((r) => r.table_name)).toEqual([
+        "kohaku_capability_revocation",
         "kohaku_fixation",
         "kohaku_lineage",
         "kohaku_promotion_state",

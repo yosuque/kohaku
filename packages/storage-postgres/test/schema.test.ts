@@ -16,6 +16,7 @@ describe("postgresSchemaSql", () => {
       "kohaku_lineage",
       "kohaku_promotion_state",
       "kohaku_fixation",
+      "kohaku_capability_revocation",
     ]) {
       expect(sql).toContain(`CREATE TABLE IF NOT EXISTS "public"."${table}"`);
     }

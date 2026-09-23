@@ -34,6 +34,16 @@ try {
   process.exit(1);
 }
 const authzFromEnv = createAuthzFromEnv(process.env);
+// Fail fast for the revocation store too (a no-op unless KOHAKU_STORAGE is redis/postgres -- see
+// createAuthzFromEnv's doc comment: the revocation store follows the storage selection).
+try {
+  await authzFromEnv.ready();
+} catch (error) {
+  console.error(
+    `kohaku sample-api: revocation store is not ready: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
 
 // createApp is async because it performs startup reconcile (snapshot authority -> projection).
 const { app, repo, setShuttingDown } = await createApp({
@@ -101,6 +111,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       // for the union.
       if ("closeIdleConnections" in server) server.closeIdleConnections();
       void storageFromEnv.close().catch(() => {});
+      void authzFromEnv.close().catch(() => {});
       server.close(() => process.exit(0));
       setTimeout(() => {
         server.getConnections((err, count) => {

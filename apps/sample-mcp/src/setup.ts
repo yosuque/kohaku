@@ -327,9 +327,11 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
     identity: authzFromEnv?.identity,
     ready: async () => {
       await storageFromEnv?.ready();
+      await authzFromEnv?.ready();
     },
     close: async () => {
       await storageFromEnv?.close();
+      await authzFromEnv?.close();
     },
   };
 }

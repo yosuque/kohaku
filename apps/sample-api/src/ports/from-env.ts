@@ -1,4 +1,4 @@
-import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
+import { createHmacAuthzPort, createMemoryRevocationStore } from "@kohaku-ui/authz-hmac";
 import {
   createJwtAuthzPort,
   JwtIdentityError,
@@ -6,10 +6,10 @@ import {
   type ResolvedIdentity,
 } from "@kohaku-ui/authz-jwt";
 import { errorBody, type KohakuHostDeps } from "@kohaku-ui/host-rest";
-import type { AuthzPort, StoragePort } from "@kohaku-ui/spec-core";
+import type { AuthzPort, CapabilityRevocationStore, StoragePort } from "@kohaku-ui/spec-core";
 import { createFileStoragePort, createMemoryStoragePort } from "@kohaku-ui/storage-memory";
-import { createPostgresStoragePort } from "@kohaku-ui/storage-postgres";
-import { createRedisStoragePort } from "@kohaku-ui/storage-redis";
+import { createPostgresRevocationStore, createPostgresStoragePort } from "@kohaku-ui/storage-postgres";
+import { createRedisRevocationStore, createRedisStoragePort } from "@kohaku-ui/storage-redis";
 import type { Context, MiddlewareHandler } from "hono";
 
 /**
@@ -78,12 +78,64 @@ export interface AuthzFromEnv {
   authz: AuthzPort;
   /** Present only for `jwt`: the resolver the request-identity hooks use. */
   identity?: JwtIdentityResolver;
+  /**
+   * Resolves once the revocation store backing `authz` is ready to accept calls (a no-op for the
+   * in-memory store; the redis/postgres branches delegate to their concrete store's own `ready()` --
+   * same fail-fast reasoning as `StorageFromEnv.ready`).
+   */
+  ready(): Promise<void>;
+  /** Closes the revocation store's backend connection, if any (a no-op for the in-memory store). */
+  close(): Promise<void>;
+}
+
+interface RevocationsFromEnv {
+  revocations: CapabilityRevocationStore;
+  ready(): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * The revocation store follows the storage selection (`KOHAKU_STORAGE`), not `KOHAKU_AUTHZ`: a
+ * multi-instance deployment needs a shared store regardless of which capability scheme issues the
+ * tokens, and it needs to survive a restart the same way the Spec cache does. `memory` and `file` (which
+ * has no natural place to persist revocations) both get the in-memory store -- fine for a single
+ * instance; a multi-instance deployment should run `KOHAKU_STORAGE=redis|postgres`.
+ */
+function createRevocationsFromEnv(env: NodeJS.ProcessEnv): RevocationsFromEnv {
+  const kind = (env["KOHAKU_STORAGE"] ?? "file") as StorageKind;
+  switch (kind) {
+    case "redis": {
+      const store = createRedisRevocationStore({
+        url: required(env, "KOHAKU_REDIS_URL", kind),
+        ...(env["KOHAKU_STORAGE_KEY_PREFIX"] ? { keyPrefix: env["KOHAKU_STORAGE_KEY_PREFIX"] } : {}),
+      });
+      return { revocations: store, ready: () => store.ready(), close: () => store.close() };
+    }
+    case "postgres": {
+      const store = createPostgresRevocationStore({
+        connectionString: required(env, "KOHAKU_POSTGRES_URL", kind),
+        ...(env["KOHAKU_POSTGRES_SCHEMA"] ? { schema: env["KOHAKU_POSTGRES_SCHEMA"] } : {}),
+      });
+      return { revocations: store, ready: () => store.ready(), close: () => store.close() };
+    }
+    case "memory":
+    case "file":
+      return { revocations: createMemoryRevocationStore(), ready: async () => {}, close: async () => {} };
+  }
 }
 
 export function createAuthzFromEnv(env: NodeJS.ProcessEnv): AuthzFromEnv {
   const capabilitySecret = env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me";
   const kind = (env["KOHAKU_AUTHZ"] ?? "hmac") as AuthzKind;
-  if (kind === "hmac") return { kind, authz: createHmacAuthzPort(capabilitySecret) };
+  const revocationsFromEnv = createRevocationsFromEnv(env);
+  if (kind === "hmac") {
+    return {
+      kind,
+      authz: createHmacAuthzPort(capabilitySecret, { revocations: revocationsFromEnv.revocations }),
+      ready: revocationsFromEnv.ready,
+      close: revocationsFromEnv.close,
+    };
+  }
   if (kind !== "jwt") throw new Error(`KOHAKU_AUTHZ must be hmac or jwt, got "${kind}"`);
   const secret = env["KOHAKU_JWT_SECRET"];
   const jwksUrl = env["KOHAKU_JWT_JWKS_URL"];
@@ -95,8 +147,15 @@ export function createAuthzFromEnv(env: NodeJS.ProcessEnv): AuthzFromEnv {
     ...(env["KOHAKU_JWT_ISSUER"] ? { issuer: env["KOHAKU_JWT_ISSUER"] } : {}),
     ...(env["KOHAKU_JWT_AUDIENCE"] ? { audience: env["KOHAKU_JWT_AUDIENCE"] } : {}),
     capabilitySecret,
+    revocations: revocationsFromEnv.revocations,
   });
-  return { kind, authz: port, identity: port.identity };
+  return {
+    kind,
+    authz: port,
+    identity: port.identity,
+    ready: revocationsFromEnv.ready,
+    close: revocationsFromEnv.close,
+  };
 }
 
 /** How the REST host turns a request into a principal and a tenant. */

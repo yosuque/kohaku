@@ -28,9 +28,21 @@ The key source (`{ secret }`, `{ jwks }`, or `{ jwksUrl }`) also fixes the defau
 
 Failures throw `JwtIdentityError` with a `code` (`MISSING_TOKEN` / `INVALID_TOKEN` / `MISSING_SUBJECT`) and the underlying `jose` error as `cause`, so a host can log the real reason while returning an opaque message to the caller.
 
-## Capability tokens are unchanged, and cannot be revoked
+## Capability tokens are unchanged, including revocation
 
-`createJwtAuthzPort` delegates `issueCapability` / `verify` to `@kohaku-ui/authz-hmac` untouched — a JWT is never a capability and a capability is never a JWT. This means an issued capability cannot be revoked before its `exp`: a deployment that needs revocation should issue short TTLs and re-issue rather than relying on withdrawal. This is a property of the reference implementation (`@kohaku-ui/authz-hmac` has no deny list or key rotation), not of the `AuthzPort` contract itself.
+`createJwtAuthzPort` delegates `issueCapability` / `verify` to `@kohaku-ui/authz-hmac` untouched — a JWT is never a capability and a capability is never a JWT. This means capability revocation is also the unchanged `@kohaku-ui/authz-hmac` scheme: pass `revocations` (a `CapabilityRevocationStore`, e.g. from `@kohaku-ui/storage-redis` or `@kohaku-ui/storage-postgres`) and the returned port's `revokeCapability(token)` delegates straight through.
+
+```ts
+const authz = createJwtAuthzPort({
+  key: { jwksUrl: "https://issuer.example.com/.well-known/jwks.json" },
+  capabilitySecret: process.env.KOHAKU_CAPABILITY_SECRET!,
+  revocations: createRedisRevocationStore({ url: process.env.KOHAKU_REDIS_URL! }),
+});
+
+await authz.revokeCapability(token); // signature verified first; a tampered or foreign token is rejected
+```
+
+**A token minted before this change carries no `jti` and therefore still cannot be revoked**: it verifies exactly as before and is left to expire on its own. This is the one thing worth watching operationally, because it is silent — nothing logs a jti-less token being accepted, so the only signal an operator has is knowing when a fleet finished rolling onto a `jti`-issuing version.
 
 Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation of the
 [Kohaku Protocol](https://github.com/yosuque/kohaku/blob/main/spec/SPEC.md).

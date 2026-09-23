@@ -2,6 +2,10 @@ import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { HmacAuthzPort } from "@kohaku-ui/authz-hmac";
+import { dockerAvailable, resolveAdapterBackend } from "@kohaku-ui/port-contracts";
+import { PostgreSqlContainer } from "@testcontainers/postgresql";
+import { RedisContainer } from "@testcontainers/redis";
 import { afterAll, describe, expect, it } from "vitest";
 import { createAuthzFromEnv, createStorageFromEnv } from "../src/ports/from-env.js";
 
@@ -71,4 +75,64 @@ describe("createAuthzFromEnv", () => {
     expect(a.kind).toBe("jwt");
     expect(a.identity).toBeDefined();
   });
+  it("defaults to an in-memory revocation store (memory/file storage), with a no-op ready/close", async () => {
+    const a = createAuthzFromEnv({});
+    await expect(a.ready()).resolves.toBeUndefined();
+    await expect(a.close()).resolves.toBeUndefined();
+  });
 });
+
+// The revocation store follows KOHAKU_STORAGE, not KOHAKU_AUTHZ (see createAuthzFromEnv's doc comment):
+// with a real redis/postgres backend, revokeCapability on the resulting port must actually revoke,
+// proving the store is wired in, not merely type-compatible. Skipped without a backend (see backend.ts's
+// sibling resolveAdapterBackend usage in storage-backends.e2e.test.ts).
+const principal = { id: "u", roles: ["user"] };
+const scope = { kind: "read" as const, ref: "query://s/x" };
+
+const redis = resolveAdapterBackend("redis", process.env, dockerAvailable);
+describe.skipIf(redis.mode === "skip")(
+  "createAuthzFromEnv: KOHAKU_STORAGE=redis wires a shared revocation store",
+  () => {
+    it("revokeCapability against a redis-backed store actually revokes verify", async () => {
+      const container =
+        redis.mode === "container" ? await new RedisContainer("redis:7-alpine").start() : null;
+      const url = container?.getConnectionUrl() ?? (redis as { url: string }).url;
+      const a = createAuthzFromEnv({ KOHAKU_STORAGE: "redis", KOHAKU_REDIS_URL: url });
+      try {
+        await a.ready();
+        const authz = a.authz as HmacAuthzPort;
+        const cap = await authz.issueCapability(principal, [scope]);
+        expect((await authz.verify(cap, scope)).ok).toBe(true);
+        expect(await authz.revokeCapability(cap)).toEqual({ ok: true });
+        expect(await authz.verify(cap, scope)).toEqual({ ok: false, reason: "capability revoked" });
+      } finally {
+        await a.close();
+        await container?.stop();
+      }
+    }, 120_000);
+  },
+);
+
+const postgres = resolveAdapterBackend("postgres", process.env, dockerAvailable);
+describe.skipIf(postgres.mode === "skip")(
+  "createAuthzFromEnv: KOHAKU_STORAGE=postgres wires a shared revocation store",
+  () => {
+    it("revokeCapability against a postgres-backed store actually revokes verify", async () => {
+      const container =
+        postgres.mode === "container" ? await new PostgreSqlContainer("postgres:16-alpine").start() : null;
+      const connectionString = container?.getConnectionUri() ?? (postgres as { url: string }).url;
+      const a = createAuthzFromEnv({ KOHAKU_STORAGE: "postgres", KOHAKU_POSTGRES_URL: connectionString });
+      try {
+        await a.ready();
+        const authz = a.authz as HmacAuthzPort;
+        const cap = await authz.issueCapability(principal, [scope]);
+        expect((await authz.verify(cap, scope)).ok).toBe(true);
+        expect(await authz.revokeCapability(cap)).toEqual({ ok: true });
+        expect(await authz.verify(cap, scope)).toEqual({ ok: false, reason: "capability revoked" });
+      } finally {
+        await a.close();
+        await container?.stop();
+      }
+    }, 120_000);
+  },
+);

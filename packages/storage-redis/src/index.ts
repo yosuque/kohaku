@@ -5,3 +5,8 @@ export {
   type RedisStoragePort,
   type RedisStoragePortOptions,
 } from "./redis-storage-port.js";
+export {
+  createRedisRevocationStore,
+  type RedisRevocationStore,
+  type RedisRevocationStoreOptions,
+} from "./revocation.js";
