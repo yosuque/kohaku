@@ -44,10 +44,26 @@ function q(s: string): string {
   return JSON.stringify(s);
 }
 
+// Every top-level identifier `renderIntents` itself introduces into the generated `server/intents.ts`:
+// the six facet-vocabulary bindings, plus the module's own imports and other exported consts. A
+// dimension column whose slug collides with one of these would otherwise produce a duplicate-identifier
+// compile error in the generated project (e.g. a column literally named "z" clashing with the zod import).
+const RESERVED_BINDINGS = [
+  "metric",
+  "agg",
+  "groupBy",
+  "granularity",
+  "filters",
+  "period",
+  "z",
+  "SOURCE",
+  "INTENT_DEFINITIONS",
+  "defineIntent",
+  "defineVocabulary",
+];
+
 function vocabName(column: string): string {
-  return ["metric", "agg", "groupBy", "granularity", "filters", "period"].includes(column)
-    ? `${column}Vocab`
-    : column;
+  return RESERVED_BINDINGS.includes(column) ? `${column}Vocab` : column;
 }
 
 export function renderIntents(profile: DatasetProfile): string {

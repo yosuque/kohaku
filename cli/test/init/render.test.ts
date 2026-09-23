@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { inferProfile, normalizeRows } from "../../src/init/infer.js";
 import { readDataFile } from "../../src/init/readers.js";
 import {
+  renderDataset,
   renderFixedSpecs,
   renderGoldenFixture,
   renderIntents,
@@ -47,6 +48,59 @@ describe("renderIntents", () => {
     const src = renderIntents(inferProfile("sales", noTime));
     expect(src).not.toContain("sales.trend");
     expect(src).not.toContain("granularity");
+  });
+
+  it("renames a dimension column whose slug collides with a top-level binding the file itself introduces", async () => {
+    const { dataset } = await profileOf();
+    // "z" slugifies to itself and would otherwise collide with `import { z } from "zod"`.
+    const zValues = ["alpha", "beta", "alpha", "beta", "alpha", "beta"];
+    const withZ = {
+      columns: [...dataset.columns, "z"],
+      rows: dataset.rows.map((row, i) => ({ ...row, z: zValues[i] })),
+    };
+    const src = renderIntents(inferProfile("sales", withZ));
+    // The zod import is untouched...
+    expect(src).toContain('import { z } from "zod";');
+    // ...and no top-level binding named plain `z` is declared (only `zVocab`).
+    expect(src).not.toMatch(/^export const z =/m);
+    expect(src).toContain(
+      'export const zVocab = defineVocabulary("z", {\n  alpha: "Alpha",\n  beta: "Beta",\n});',
+    );
+    // The column is still wired to its (renamed) vocabulary everywhere it's used.
+    expect(src).toContain("z: zVocab.enum().optional()");
+    expect(src).toContain('{ param: "z", label: "Z", options: zVocab, emptyLabel: "All" }');
+  });
+});
+
+describe("renderDataset", () => {
+  it("declares every export the other server templates import from it, with COLUMNS reflecting the profile", async () => {
+    const { profile } = await profileOf();
+    const src = renderDataset(profile);
+    // Every name DOMAIN_PORT_TEMPLATE / FIXED_SPECS_TEMPLATE / APP_TEMPLATE import from "./dataset.js".
+    expect(src).toContain("export type Cell = string | number | boolean | null;");
+    expect(src).toContain("export type Row = Record<string, Cell>;");
+    expect(src).toContain("export const COLUMNS: Columns = {");
+    expect(src).toContain("export const ROWS: Row[] = JSON.parse(raw) as Row[];");
+    // Split around the interpolation so this string literal never itself contains a `${...}`
+    // (Biome's noTemplateCurlyInString rule flags a plain string that looks like a forgotten
+    // template literal; here it genuinely is the literal generated source text).
+    expect(src).toContain("export const DATA_VERSION = `sales@");
+    expect(src).toContain('createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;');
+    // COLUMNS reflects this profile's actual dimension / measure / time columns.
+    expect(src).toContain('  source: "sales",');
+    expect(src).toContain('  dimensions: ["region", "channel", "product"],');
+    expect(src).toContain('  measures: ["units", "revenue"],');
+    expect(src).toContain('  time: "month",');
+  });
+
+  it("emits a null time field when there is no time column", async () => {
+    const { dataset } = await profileOf();
+    const noTime = {
+      columns: dataset.columns.filter((c) => c !== "month"),
+      rows: dataset.rows.map(({ month: _m, ...rest }) => rest),
+    };
+    const src = renderDataset(inferProfile("sales", noTime));
+    expect(src).toContain("  time: null,");
   });
 });
 
