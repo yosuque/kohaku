@@ -1,0 +1,13 @@
+# @kohaku-ui/lineage
+
+## 0.2.0
+
+### Patch Changes
+
+- [#18](https://github.com/yosuque/kohaku/pull/18) [`a199407`](https://github.com/yosuque/kohaku/commit/a199407b335921541bc2f1878aac1a5606f2956a) Thanks [@yosuque](https://github.com/yosuque)! - `promotions.approve()` now resumes a candidate that was persisted at `judging` (for example after a crash between `judge.start` and `judge.result`) by running the judge and continuing the chain, instead of failing with `PromotionNotPublishedError`. The Python port gains the same behaviour.
+
+- [#9](https://github.com/yosuque/kohaku/pull/9) [`c283023`](https://github.com/yosuque/kohaku/commit/c283023c84f9544ead776d891c0ac1a790d8baa1) Thanks [@yosuque](https://github.com/yosuque)! - Fix `Promotions.reconcile()` to re-check each candidate's freshest status right after loading it, so a promotion transition that races the scan (e.g. a tenant-scoped withdraw or re-publish landing between the scan and the load) can no longer make reconcile re-publish a withdrawn candidate or unpublish a re-published one. Also skip non-projection statuses (everything but `published`/`withdrawn`) before loading them, inject the usage and generated-event indexes into `reconcile`/`listByStatus` to avoid an N+1 storage scan, and key nominate's idempotency guard by tenant while making its audit record fail-open like publish/unpublish already are.
+
+- [#18](https://github.com/yosuque/kohaku/pull/18) [`ecb31d8`](https://github.com/yosuque/kohaku/commit/ecb31d8806df286f4c20babee48baa3c808f1f45) Thanks [@yosuque](https://github.com/yosuque)! - Harden the in-memory `(tenant, artifactId)` usage-index key: it previously joined the two values with a single delimiter character (a NUL byte in TypeScript), which is not collision-free by construction for a tenant or artifact id that could itself contain that character. It now uses a JSON array encoding, which is collision-free for any input. The key is never persisted, so nothing on disk changes. The three copies of the "latest `component.generated` per artifact" index now share one helper. Two observable consequences: a tenant of `undefined` and a tenant of `""` now produce different keys (they previously collided), and the shared `indexLatestGenerated` helper now skips an event whose `artifactId` is not a string, where one of the three former copies cast it unchecked.
+- Updated dependencies [[`ffff046`](https://github.com/yosuque/kohaku/commit/ffff046628f1779bbc9b1a1a4c9d4256f82a9cd3), [`cec01e1`](https://github.com/yosuque/kohaku/commit/cec01e166d2947fe8b4bbbfbe5c306c33aaccf99), [`a318995`](https://github.com/yosuque/kohaku/commit/a318995245309f7b492b52a44fbae1a8c891a353)]:
+  - @kohaku-ui/spec-core@0.2.0
