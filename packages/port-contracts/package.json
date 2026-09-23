@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/port-contracts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Vitest contract suites for kohaku's StoragePort and AuthzPort. Test-only, never published: every adapter (memory / file / redis / postgres / hmac / jwt) runs the same suite.",
   "type": "module",
