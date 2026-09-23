@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/storage-postgres",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "PostgreSQL-backed StoragePort for kohaku (Spec cache, lineage, promotion state, fixation) — a reference adapter with an idempotent schema; the contract stays @kohaku-ui/spec-core's ports.ts.",
   "type": "module",
   "license": "Apache-2.0",
