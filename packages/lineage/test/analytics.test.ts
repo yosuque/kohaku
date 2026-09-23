@@ -146,8 +146,10 @@ describe("summarizeLineage (pure aggregation of usage analytics)", () => {
       generated: 1,
       used: 2,
       nominated: 1,
+      schemaSuggested: 0,
       judged: 1,
       reviewed: 1,
+      schemaEdited: 0,
       published: 1,
       withdrawn: 1,
     });
@@ -198,5 +200,58 @@ describe("summarizeLineage (pure aggregation of usage analytics)", () => {
     expect(s.fallback.total).toBe(0);
     expect(s.fallback.rate).toBe(0);
     expect(s.topIntents).toEqual([]);
+  });
+});
+
+describe("summarizeLineage: review turnaround and suggestion acceptance", () => {
+  it("pairs component.nominated with the next component.reviewed(approve|reject) per (tenant, artifactId)", () => {
+    const events = [
+      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T00:00:00.000Z" }),
+      ev("component.nominated", { artifactId: "a2" }, { ts: "2026-07-01T00:00:00.000Z", tenant: "t1" }),
+      ev("component.reviewed", { artifactId: "a1", decision: "approve" }, { ts: "2026-07-01T00:01:00.000Z" }),
+      // requestChanges is not a completion: a1 is re-nominated and reviewed again later
+      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T01:00:00.000Z" }),
+      ev(
+        "component.reviewed",
+        { artifactId: "a1", decision: "requestChanges" },
+        { ts: "2026-07-01T01:00:30.000Z" },
+      ),
+      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T02:00:00.000Z" }),
+      ev("component.reviewed", { artifactId: "a1", decision: "reject" }, { ts: "2026-07-01T02:03:00.000Z" }),
+      // a2 (tenant t1) is reviewed 5 minutes after its nomination
+      ev(
+        "component.reviewed",
+        { artifactId: "a2", decision: "approve" },
+        { ts: "2026-07-01T00:05:00.000Z", tenant: "t1" },
+      ),
+      // a reviewed without any preceding nominated is ignored
+      ev("component.reviewed", { artifactId: "a3", decision: "approve" }, { ts: "2026-07-01T00:05:00.000Z" }),
+    ];
+    const s = summarizeLineage(events);
+    // durations: a1 60_000, a1 180_000, a2 300_000
+    expect(s.review.count).toBe(3);
+    expect(s.review.durationMs).toEqual({ p50: 180_000, p95: 300_000, max: 300_000 });
+  });
+
+  it("review is empty when nothing was reviewed", () => {
+    const s = summarizeLineage([ev("component.nominated", { artifactId: "a1" })]);
+    expect(s.review).toEqual({ count: 0, durationMs: { p50: null, p95: null, max: null }, acceptedAsIs: 0 });
+  });
+
+  it("counts schemaSuggested / schemaEdited and the zero-edit acceptances", () => {
+    const events = [
+      ev("component.schemaSuggested", { artifactId: "a1", suggestion: {} }),
+      ev("component.schemaSuggested", { artifactId: "a2", suggestion: {} }),
+      ev("component.schemaEdited", { artifactId: "a1", changed: [], unchanged: ["componentType"] }),
+      ev("component.schemaEdited", {
+        artifactId: "a2",
+        changed: [{ field: "description", suggested: "a", final: "b" }],
+        unchanged: [],
+      }),
+    ];
+    const s = summarizeLineage(events);
+    expect(s.promotions.schemaSuggested).toBe(2);
+    expect(s.promotions.schemaEdited).toBe(2);
+    expect(s.review.acceptedAsIs).toBe(1);
   });
 });

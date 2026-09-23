@@ -68,10 +68,27 @@ export interface LineageSummary {
     generated: number;
     used: number;
     nominated: number;
+    /** component.schemaSuggested (a machine proposal was attached at nomination). */
+    schemaSuggested: number;
     judged: number;
     reviewed: number;
+    /** component.schemaEdited (a reviewer approved a candidate that carried a suggestion; changed may be empty). */
+    schemaEdited: number;
     published: number;
     withdrawn: number;
+  };
+  /**
+   * Human review turnaround: the time from a candidate's `component.nominated` to the next `component.reviewed`
+   * whose decision is approve or reject, paired per (tenant, artifactId). A requestChanges decision does not
+   * complete a review (the candidate is re-nominated later and measured again from that nomination). A
+   * reviewed event with no preceding nomination in the window is ignored. Quantiles are nearest-rank like
+   * durationMs. `acceptedAsIs` counts component.schemaEdited records whose `changed` is empty (the machine
+   * suggestion was approved without any edit) — the ticket's "zero-edit approval" KPI.
+   */
+  review: {
+    count: number;
+    durationMs: { p50: number | null; p95: number | null; max: number | null };
+    acceptedAsIs: number;
   };
   /** Fixation event counts (intent.fixated / intent.unfixated). */
   fixations: { fixated: number; unfixated: number };
@@ -111,8 +128,10 @@ export function summarizeLineage(
     generated: 0,
     used: 0,
     nominated: 0,
+    schemaSuggested: 0,
     judged: 0,
     reviewed: 0,
+    schemaEdited: 0,
     published: 0,
     withdrawn: 0,
   };
@@ -123,6 +142,12 @@ export function summarizeLineage(
 
   let composed = 0;
   let fallbackTotal = 0;
+  // (tenant, artifactId) -> ts of the latest nomination not yet closed by an approve/reject review.
+  const openNominations = new Map<string, string>();
+  const reviewDurations: number[] = [];
+  let acceptedAsIs = 0;
+  const reviewKey = (e: LineageEventRecord): string =>
+    `${e.tenant ?? ""}\u0000${String(e.payload["artifactId"] ?? "")}`;
 
   for (const e of scoped) {
     switch (e.type) {
@@ -161,13 +186,34 @@ export function summarizeLineage(
         break;
       case "component.nominated":
         promotions.nominated++;
+        openNominations.set(reviewKey(e), e.ts);
+        break;
+      case "component.schemaSuggested":
+        promotions.schemaSuggested++;
         break;
       case "component.judged":
         promotions.judged++;
         break;
-      case "component.reviewed":
+      case "component.reviewed": {
         promotions.reviewed++;
+        const decision = e.payload["decision"];
+        if (decision === "approve" || decision === "reject") {
+          const key = reviewKey(e);
+          const nominatedAt = openNominations.get(key);
+          if (nominatedAt != null) {
+            const delta = Date.parse(e.ts) - Date.parse(nominatedAt);
+            if (Number.isFinite(delta) && delta >= 0) reviewDurations.push(delta);
+            openNominations.delete(key);
+          }
+        }
         break;
+      }
+      case "component.schemaEdited": {
+        promotions.schemaEdited++;
+        const changed = e.payload["changed"];
+        if (Array.isArray(changed) && changed.length === 0) acceptedAsIs++;
+        break;
+      }
       case "component.published":
         // Counts a promotion/reconcile audit backfill (payload.reconciled:true) the same as the original
         // synchronous record — the projection was published exactly once either way, so double-counting the
@@ -218,6 +264,18 @@ export function summarizeLineage(
     },
     topIntents,
     promotions,
+    review: {
+      count: reviewDurations.length,
+      durationMs: (() => {
+        reviewDurations.sort((a, b) => a - b);
+        return {
+          p50: quantile(reviewDurations, 50),
+          p95: quantile(reviewDurations, 95),
+          max: reviewDurations.length > 0 ? reviewDurations[reviewDurations.length - 1]! : null,
+        };
+      })(),
+      acceptedAsIs,
+    },
     fixations,
   };
 }
