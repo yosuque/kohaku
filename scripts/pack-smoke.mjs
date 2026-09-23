@@ -518,6 +518,84 @@ function checkCli(consumerDir) {
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Step 7b: init smoke -- `kohaku init` must produce a project that installs from the packed tarballs,
+// type-checks, passes its golden test twice (generate, then assert) and serves the L0 view without an LLM.
+// ---------------------------------------------------------------------------------------------------------
+
+function checkInit(packages, tmpRoot, consumerDir) {
+  const bin = join(consumerDir, "node_modules", ".bin", "kohaku");
+  if (!existsSync(bin)) {
+    log("  @kohaku-ui/cli is not part of this smoke run's package set -- skipping the init check");
+    return false;
+  }
+  const appDir = join(tmpRoot, "init-app");
+  const fixture = join(REPO_ROOT, "scripts", "fixtures", "init-smoke.csv");
+  runOrFail(bin, ["init", "--from", fixture, "--out", appDir, "--no-install"], { cwd: tmpRoot });
+
+  // Point every @kohaku-ui/* dependency at the freshly packed tarball instead of the registry.
+  const manifestPath = join(appDir, "package.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const byName = new Map(packages.map((p) => [p.packedName, p.tarball]));
+  for (const section of ["dependencies", "devDependencies"]) {
+    for (const name of Object.keys(manifest[section] ?? {})) {
+      if (byName.has(name)) manifest[section][name] = `file:${byName.get(name)}`;
+      else if (name.startsWith("@kohaku-ui/")) fail(`init smoke: generated project depends on ${name}, which is not in the packed set`);
+    }
+  }
+  // A generated project's own package.json only lists the runtime packages it imports directly (e.g.
+  // @kohaku-ui/host-rest) -- but that package's OWN dependencies (e.g. host-rest -> host-core) are not
+  // rewritten by the loop above at all, so npm would otherwise resolve them against the real npm
+  // registry instead of the tarball this run just packed. That is exactly the gap this step exists to
+  // close (see the module header): a bug surfaced here on the first real run --
+  // host-rest's packed manifest depends on host-core as "^0.1.0" (its current unreleased workspace
+  // version), and npm silently resolved that against the registry's already-published 0.1.0 -- an
+  // older release that predates `errorMessage`/`notifyHook` -- instead of the freshly built local
+  // dist. `overrides` forces every @kohaku-ui/* package, wherever it appears in the dependency tree,
+  // onto the tarball this run just packed, so this step actually exercises the packed artifacts
+  // end-to-end rather than a mix of packed-and-published code.
+  manifest.overrides = {
+    ...Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`])),
+    ...(manifest.overrides ?? {}),
+  };
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+  runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: appDir });
+  runOrFail("npx", ["tsc", "--noEmit"], { cwd: appDir });
+  log("  generated project type-checks");
+  // Generate the golden's `expected` the way a user would (update mode refuses to run under CI, so unset it for this pass only).
+  const updateEnv = { ...process.env, KOHAKU_GOLDEN_UPDATE: "1" };
+  delete updateEnv.CI;
+  runOrFail("npx", ["vitest", "run"], { cwd: appDir, env: updateEnv });
+  const fixturePath = join(appDir, "test", "golden", "summary.json");
+  if (JSON.parse(readFileSync(fixturePath, "utf8")).expected == null) fail("init smoke: KOHAKU_GOLDEN_UPDATE=1 did not write the golden's expected");
+  runOrFail("npx", ["vitest", "run"], { cwd: appDir });
+  log("  golden regression: expected generated with KOHAKU_GOLDEN_UPDATE=1, then asserted");
+
+  const script = join(appDir, "check-l0.generated.mjs");
+  writeFileSync(
+    script,
+    `
+import { FakeLlm } from "@kohaku-ui/llm/fake";
+import { createApp } from "./server/app.js";
+const { app } = createApp({ llm: new FakeLlm() });
+const catalog = await app.request("/api/kohaku/catalog");
+if (catalog.status !== 200) throw new Error("catalog: " + catalog.status);
+const res = await app.request("/api/kohaku/compose", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ intent: { canonical: "init_smoke.summary", params: {} }, session: { surface: "web" } }),
+});
+const body = await res.json();
+if (res.status !== 200 || body.spec?.provenance?.tier !== "L0") throw new Error("compose: " + res.status + " " + JSON.stringify(body).slice(0, 300));
+console.log("L0 summary composed without an LLM: " + body.spec.components.length + " components");
+`,
+  );
+  runOrFail("npx", ["tsx", script], { cwd: appDir });
+  log("  L0 summary view composes with a FakeLlm (no provider configured)");
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Step 8: sandbox guest contract check
 // ---------------------------------------------------------------------------------------------------------
 
@@ -724,6 +802,9 @@ function main() {
   step(7, "run the installed kohaku CLI (conformance --self)");
   const cliChecked = checkCli(consumerDir);
 
+  step("7b", "init smoke (kohaku init --from csv → npm install from tarballs → tsc → golden → L0 compose)");
+  const initChecked = checkInit(packages, tmpRoot, consumerDir);
+
   step(8, "sandbox guest contract check (buildWorkerShimJs evaluated in node:vm)");
   const sandboxChecked = checkSandboxGuestContract(packages, consumerDir);
 
@@ -739,6 +820,7 @@ function main() {
   console.log(`[pack-smoke]   export entries checked: ${entries.length}`);
   console.log(`[pack-smoke]   type-checked with: ${tscUsed === "tsc7" ? "TypeScript 7 (node_modules/.bin/tsc)" : "TypeScript 6 (node_modules/.bin/tsc6, tsc7 fallback)"}`);
   console.log(`[pack-smoke]   CLI check: ${cliChecked ? "ran" : "skipped (cli not in this package set)"}`);
+  console.log(`[pack-smoke]   init smoke: ${initChecked ? "ran" : "skipped"}`);
   console.log(`[pack-smoke]   sandbox guest contract check: ${sandboxChecked ? "ran" : "skipped (sandbox not in this package set)"}`);
   console.log(`[pack-smoke]   publint/attw: ${anySkipped ? "ran, with some tools skipped (no network access to fetch them)" : "ran fully"}`);
 }
