@@ -49,6 +49,7 @@ const PUBLISHED_DIRS = [
     "sandbox",
     "spec-core",
     "storage-memory",
+    "storage-postgres",
     "storage-redis",
   ].map((name) => `packages/${name}`),
   "cli",

@@ -31,6 +31,7 @@ const LAYERS: string[][] = [
     "data-binding",
     "host-a2ui",
     "storage-memory",
+    "storage-postgres",
     "storage-redis",
     "authz-hmac",
     "port-contracts",
