@@ -1,4 +1,5 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { sha256Hex } from "@kohaku-ui/spec-core";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { defaultAdminMessages as m, type PromotionDefaults, PromotionsTab } from "../src/index.js";
 import { jsonResponse, renderInAdmin } from "./helpers.js";
@@ -296,13 +297,12 @@ describe("PromotionsTab", () => {
     expect(view.notices[0]).toEqual({ text: m.promotions.rejectedNotice, kind: "info" });
   });
 
-  it("mounts the preview via SandboxFrame using the recorded artifact and its matching sha256", async () => {
-    // The sha256 of "<div>hello</div>" (computed independently — not copied from implementation code) so
-    // the sandbox's own hash check passes, proving the mounted artifact is byte-identical to what was recorded
-    // rather than a re-derivation: a wrong hash here would surface as an "artifact hash mismatch" render error
-    // instead of the preview's content.
+  it("mounts the preview via SandboxFrame and passes its hash verification for a correctly-recorded artifact", async () => {
+    // sha256Hex is the same hash function SandboxFrame's own verifyArtifact (packages/sandbox/src/srcdoc.ts)
+    // uses to check the artifact it is handed against its recorded sha256, computed here independently of
+    // PromotionPreview's implementation so this is a genuine check, not a copied value.
     const html = "<div>hello</div>";
-    const sha256 = "4745336f4a90d58df31a552e24034fbc734b9525aae435b161fb568b5215dce8";
+    const sha256 = await sha256Hex(html);
     const cand = candidate({ html });
     let previewCalled = false;
     renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
@@ -318,5 +318,42 @@ describe("PromotionsTab", () => {
     fireEvent.click(screen.getByText(m.promotions.previewButton));
     await waitFor(() => expect(screen.getByText(m.promotions.closePreview)).toBeTruthy());
     expect(previewCalled).toBe(true);
+
+    // Give SandboxFrame's async verifyArtifact (an awaited crypto digest, run before the iframe is even
+    // created — see mount.ts) real time to settle, the same wait pattern packages/sandbox/test/mount.test.ts
+    // uses for this exact async gap. jsdom cannot run the real postMessage handshake, so SandboxFrame's state
+    // stays "loading" rather than ever reaching "ready" (a known limitation the sandbox package's own tests
+    // document) — but the hash check happens strictly before that handshake, so it settles regardless, and a
+    // failure there renders an "error" state / hash-mismatch notice independently of the handshake.
+    await act(async () => {
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+    });
+    // The positive assertion this test exists for: no hash-mismatch error notice appeared. Before this fix,
+    // this test only checked for the close button and previewCalled, both of which are satisfied whatever the
+    // sandbox concludes about the hash internally — this assertion is the one that actually depends on the
+    // artifact's sha256 matching, and fails if PromotionPreview ever stops forwarding the recorded sha256
+    // as-is (verified below by mutating the implementation and re-running).
+    expect(screen.queryByText(/hash mismatch/i)).toBeNull();
+    expect(screen.getByText("Starting the sandbox…")).toBeTruthy();
+  });
+
+  it("shows the sandbox's own hash-mismatch error when the artifact does not match its recorded sha256", async () => {
+    // The mirror-image case: an intentionally wrong sha256, proving SandboxFrame's verification actually runs
+    // and surfaces as a visible error rather than being silently accepted. This is what makes the test above a
+    // real guard rather than a tautology — without this case, "no error" could also mean "verification never
+    // ran".
+    const html = "<div>hello</div>";
+    const cand = candidate({ html });
+    renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
+      handlers: {
+        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "POST /promotions/sales.customViz1%401/preview": () =>
+          jsonResponse({ preview: { html, sha256: "0".repeat(64) } }),
+      },
+    });
+    await screen.findByText(cand.artifactId as string);
+    fireEvent.click(screen.getByText(m.promotions.previewButton));
+    await waitFor(() => expect(screen.getByText(m.promotions.closePreview)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/hash mismatch/i)).toBeTruthy());
   });
 });
