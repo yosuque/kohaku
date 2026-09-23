@@ -53,6 +53,25 @@ describe("createJwtAuthzPort (default capability TTL)", () => {
   });
 });
 
-describeAuthzPortContract("jwt (capabilities via authz-hmac)", async () => ({
-  port: createJwtAuthzPort({ key: { secret: SECRET }, capabilitySecret: "cap-secret" }),
-}));
+describe("createJwtAuthzPort capability revocation (delegated to authz-hmac)", () => {
+  it("verifies ok, then reports revoked once revokeCapability has been called through the JWT port", async () => {
+    const port = createJwtAuthzPort({ key: { secret: SECRET }, capabilitySecret: "cap-secret" });
+    const cap = await port.issueCapability({ id: "u1" }, [{ kind: "read", ref: "query://sales/x" }]);
+
+    expect((await port.verify(cap, { kind: "read", ref: "query://sales/x" })).ok).toBe(true);
+
+    const revoked = await port.revokeCapability(cap);
+    expect(revoked).toEqual({ ok: true });
+
+    const result = await port.verify(cap, { kind: "read", ref: "query://sales/x" });
+    expect(result).toEqual({ ok: false, reason: "capability revoked" });
+  });
+});
+
+describeAuthzPortContract(
+  "jwt (capabilities via authz-hmac)",
+  async () => ({
+    port: createJwtAuthzPort({ key: { secret: SECRET }, capabilitySecret: "cap-secret" }),
+  }),
+  { revocation: true },
+);

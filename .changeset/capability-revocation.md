@@ -1,6 +1,7 @@
 ---
 "@kohaku-ui/spec-core": minor
 "@kohaku-ui/authz-hmac": minor
+"@kohaku-ui/authz-jwt": minor
 ---
 
 Capability tokens can now be revoked before they expire. `@kohaku-ui/spec-core` adds the
@@ -10,4 +11,6 @@ Capability tokens can now be revoked before they expire. `@kohaku-ui/spec-core` 
 verified first, so a caller cannot revoke a `jti` it merely guessed) alongside the reference
 `createMemoryRevocationStore`. A token minted before this change carries no `jti` and verifies as
 before; it simply cannot be revoked and is left to expire on its own, so a rolling deploy does not break
-an older instance's already-issued tokens.
+an older instance's already-issued tokens. `@kohaku-ui/authz-jwt`'s `createJwtAuthzPort` passes
+`revocations` through to the underlying `@kohaku-ui/authz-hmac` port and exposes the same
+`revokeCapability(token)`, delegating entirely; the JWT identity path is unaffected.
