@@ -110,7 +110,7 @@ export { formatReport };
  * check every file's existence first (check-all) and only then write (then-write). We create each
  * parent directory on demand so that placement in subdirectories is also allowed.
  */
-function writeScaffold(files: readonly (readonly [string, string])[]): string[] {
+export function writeScaffold(files: readonly (readonly [string, string])[]): string[] {
   for (const [path] of files) {
     if (existsSync(path)) {
       throw new Error(`${path} already exists (will not overwrite)`);

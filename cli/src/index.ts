@@ -14,6 +14,7 @@ import {
   scaffoldPorts,
   validateComponentFile,
 } from "./commands.js";
+import { type InitResult, initProject } from "./init/index.js";
 import { CLI_VERSION } from "./version.js";
 
 /** Reads stdin to completion and returns it as a string (the smoke-l2 sidecar's one-request-one-process contract). */
@@ -89,6 +90,46 @@ program
     for (const path of written) console.log(`  ${path}`);
     console.log(`\nNext steps: ${target!.next}`);
   });
+
+program
+  .command("init")
+  .description(
+    "Generate a runnable kohaku app (server + dashboard + chat) from a data file, then npm install",
+  )
+  .requiredOption("--from <file>", "Data file: .csv, .json (array of objects) or .sqlite / .db")
+  .option("--out <dir>", "Output directory (default: the current directory)")
+  .option("--source <name>", "Intent catalog prefix / query source (default: the data file's basename)")
+  .option("--name <name>", "package.json name (default: the output directory's basename)")
+  .option("--table <name>", "SQLite table to read (default: the first user table)")
+  .option("--no-install", "Skip npm install")
+  .action(
+    async (opts: {
+      from: string;
+      out?: string;
+      source?: string;
+      name?: string;
+      table?: string;
+      install: boolean;
+    }) => {
+      let result: InitResult;
+      try {
+        result = await initProject(opts);
+      } catch (e) {
+        program.error(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      const p = result.profile;
+      console.log(`Generated ${result.written.length} files in ${result.outDir}`);
+      console.log(`  source: ${p.source} (${p.rowCount} rows)`);
+      console.log(`  dimensions: ${p.dimensions.map((c) => c.name).join(", ")}`);
+      console.log(`  measures: ${p.measures.map((c) => c.name).join(", ") || "(none; row counts only)"}`);
+      console.log(`  time: ${p.time?.name ?? "(none; no trend view)"}`);
+      console.log(
+        `\nNext steps: ${result.installed ? "" : "npm install && "}npm run dev  →  http://localhost:5173`,
+      );
+      console.log("For chat and the LLM-composed views, copy .env.example to .env and set a provider key.");
+    },
+  );
 
 program
   .command("smoke-l2")
