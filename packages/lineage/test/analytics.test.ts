@@ -233,6 +233,35 @@ describe("summarizeLineage: review turnaround and suggestion acceptance", () => 
     expect(s.review.durationMs).toEqual({ p50: 180_000, p95: 300_000, max: 300_000 });
   });
 
+  it("keys the pairing by (tenant, artifactId), not artifactId alone: the same artifactId under two tenants is measured independently", () => {
+    const events = [
+      // Both tenants nominate the SAME artifactId a1 at the same t0, BEFORE either is reviewed. If the pairing
+      // key dropped tenant, tenantB's nomination would overwrite tenantA's open-nomination entry (both keyed
+      // "a1"), and tenantA's review would then consume tenantB's later review's entry — since it is deleted on
+      // first use, tenantB's own review would find no open nomination and be silently dropped.
+      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T00:00:00.000Z", tenant: "tenantA" }),
+      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T00:00:00.000Z", tenant: "tenantB" }),
+      // Tenant A reviews 1 minute after its nomination.
+      ev(
+        "component.reviewed",
+        { artifactId: "a1", decision: "approve" },
+        { ts: "2026-07-01T00:01:00.000Z", tenant: "tenantA" },
+      ),
+      // Tenant B reviews 10 minutes after its nomination.
+      ev(
+        "component.reviewed",
+        { artifactId: "a1", decision: "approve" },
+        { ts: "2026-07-01T00:10:00.000Z", tenant: "tenantB" },
+      ),
+    ];
+    const s = summarizeLineage(events);
+    // Keying by (tenant, artifactId) keeps the two tenants' pairings independent: durations 60_000 (tenantA) and
+    // 600_000 (tenantB). Dropping tenant from the key would collapse this to count=1, durations=[60_000] only
+    // (tenantB's review would find its nomination already consumed by tenantA's review and be ignored).
+    expect(s.review.count).toBe(2);
+    expect(s.review.durationMs).toEqual({ p50: 60_000, p95: 600_000, max: 600_000 });
+  });
+
   it("review is empty when nothing was reviewed", () => {
     const s = summarizeLineage([ev("component.nominated", { artifactId: "a1" })]);
     expect(s.review).toEqual({ count: 0, durationMs: { p50: null, p95: null, max: null }, acceptedAsIs: 0 });

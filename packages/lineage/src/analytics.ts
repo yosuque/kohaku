@@ -235,6 +235,7 @@ export function summarizeLineage(
   }
 
   durations.sort((a, b) => a - b);
+  reviewDurations.sort((a, b) => a - b);
   const denom = composed + fallbackTotal;
   const topN = Math.min(
     Math.max(Math.floor(opts.topIntentsLimit ?? TOP_INTENTS_DEFAULT), 1),
@@ -266,14 +267,11 @@ export function summarizeLineage(
     promotions,
     review: {
       count: reviewDurations.length,
-      durationMs: (() => {
-        reviewDurations.sort((a, b) => a - b);
-        return {
-          p50: quantile(reviewDurations, 50),
-          p95: quantile(reviewDurations, 95),
-          max: reviewDurations.length > 0 ? reviewDurations[reviewDurations.length - 1]! : null,
-        };
-      })(),
+      durationMs: {
+        p50: quantile(reviewDurations, 50),
+        p95: quantile(reviewDurations, 95),
+        max: reviewDurations.length > 0 ? reviewDurations[reviewDurations.length - 1]! : null,
+      },
       acceptedAsIs,
     },
     fixations,
