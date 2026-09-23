@@ -1,5 +1,8 @@
 // Governance console (lineage / analytics / promotion review / fixation) for kohaku hosts.
-// Exports are added task by task; see the package README for the public surface.
+// Public entry point: the AdminProvider/useAdmin context, the data-fetching hooks, the
+// KohakuAdmin shell and its per-domain tabs, the default English UI copy, the design
+// tokens, and the shared UI primitives the tabs are built from. See the package README
+// for usage patterns.
 
 export {
   type AdminContextValue,
