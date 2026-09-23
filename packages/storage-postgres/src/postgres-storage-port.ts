@@ -140,29 +140,95 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       // Newest-first from the query; the contract returns append order, so reverse.
       return rows.map((r) => r.record).reverse();
     },
-    async getPromotionState(_artifactId: string, _tenant?: string) {
-      throw new Error("not implemented");
+    async getPromotionState(artifactId, tenant) {
+      await ready();
+      const { rows } = await pool.query<{ state: PromotionState }>(
+        `SELECT state FROM ${T.promotion} WHERE tenant = $1 AND artifact_id = $2`,
+        [tenant ?? "", artifactId],
+      );
+      return rows[0]?.state ?? null;
     },
-    async putPromotionState(_state: PromotionState) {
-      throw new Error("not implemented");
+    async putPromotionState(state) {
+      await ready();
+      await pool.query(
+        `INSERT INTO ${T.promotion} (tenant, artifact_id, state) VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (tenant, artifact_id) DO UPDATE SET state = EXCLUDED.state`,
+        [state.tenant ?? "", state.artifactId, JSON.stringify(state)],
+      );
     },
-    async putPromotionStates(_states: PromotionState[]) {
-      throw new Error("not implemented");
+    async putPromotionStates(states) {
+      if (states.length === 0) return;
+      await ready();
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        for (const state of states) {
+          await client.query(
+            `INSERT INTO ${T.promotion} (tenant, artifact_id, state) VALUES ($1, $2, $3::jsonb)
+             ON CONFLICT (tenant, artifact_id) DO UPDATE SET state = EXCLUDED.state`,
+            [state.tenant ?? "", state.artifactId, JSON.stringify(state)],
+          );
+        }
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK").catch(() => {});
+        throw e;
+      } finally {
+        client.release();
+      }
     },
-    async listPromotionStates(_tenant?: string) {
-      throw new Error("not implemented");
+    async listPromotionStates(tenant) {
+      await ready();
+      const { rows } =
+        tenant == null
+          ? await pool.query<{ state: PromotionState }>(`SELECT state FROM ${T.promotion} ORDER BY seq`)
+          : await pool.query<{ state: PromotionState }>(
+              `SELECT state FROM ${T.promotion} WHERE tenant = $1 ORDER BY seq`,
+              [tenant],
+            );
+      return rows.map((r) => r.state);
     },
-    async getFixation(_intentHash: string, _tenant?: string) {
-      throw new Error("not implemented");
+    async getFixation(intentHash, tenant) {
+      await ready();
+      const { rows } = await pool.query<{ record: FixationRecord }>(
+        `SELECT record FROM ${T.fixation} WHERE tenant = $1 AND intent_hash = $2`,
+        [tenant ?? "", intentHash],
+      );
+      return rows[0]?.record ?? null;
     },
-    async putFixation(_record: FixationRecord, _options?: { ifPresent?: boolean }) {
-      throw new Error("not implemented");
+    async putFixation(record, options) {
+      await ready();
+      const params = [record.tenant ?? "", record.intentHash, JSON.stringify(record)];
+      if (options?.ifPresent === true) {
+        await pool.query(
+          `UPDATE ${T.fixation} SET record = $3::jsonb WHERE tenant = $1 AND intent_hash = $2`,
+          params,
+        );
+        return;
+      }
+      await pool.query(
+        `INSERT INTO ${T.fixation} (tenant, intent_hash, record) VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (tenant, intent_hash) DO UPDATE SET record = EXCLUDED.record`,
+        params,
+      );
     },
-    async listFixations(_tenant?: string) {
-      throw new Error("not implemented");
+    async listFixations(tenant) {
+      await ready();
+      const { rows } =
+        tenant == null
+          ? await pool.query<{ record: FixationRecord }>(`SELECT record FROM ${T.fixation} ORDER BY seq`)
+          : await pool.query<{ record: FixationRecord }>(
+              `SELECT record FROM ${T.fixation} WHERE tenant = $1 ORDER BY seq`,
+              [tenant],
+            );
+      return rows.map((r) => r.record);
     },
-    async deleteFixation(_intentHash: string, _tenant?: string) {
-      throw new Error("not implemented");
+    async deleteFixation(intentHash, tenant) {
+      await ready();
+      await pool.query(`DELETE FROM ${T.fixation} WHERE tenant = $1 AND intent_hash = $2`, [
+        tenant ?? "",
+        intentHash,
+      ]);
     },
     async close() {
       if (owned) await pool.end();
