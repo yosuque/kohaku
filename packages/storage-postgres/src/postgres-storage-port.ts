@@ -1,7 +1,6 @@
 import type {
   FixationRecord,
   LineageEventRecord,
-  LineageFilter,
   PromotionState,
   StoragePort,
   UISpec,
@@ -99,11 +98,47 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       );
       return result.rowCount ?? 0;
     },
-    async appendLineage(_event: LineageEventRecord) {
-      throw new Error("not implemented");
+    async appendLineage(event) {
+      await ready();
+      const str = (key: string): string | null =>
+        typeof event.payload[key] === "string" ? (event.payload[key] as string) : null;
+      await pool.query(
+        `INSERT INTO ${T.lineage} (id, ts, tenant, type, intent_hash, artifact_id, spec_hash, record)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+        [
+          event.id,
+          event.ts,
+          event.tenant != null && event.tenant !== "" ? event.tenant : null,
+          event.type,
+          str("intentHash"),
+          str("artifactId"),
+          str("specHash"),
+          JSON.stringify(event),
+        ],
+      );
     },
-    async listLineage(_filter?: LineageFilter) {
-      throw new Error("not implemented");
+    async listLineage(filter = {}) {
+      await ready();
+      const limit = filter.limit ?? 200;
+      if (limit <= 0) return [];
+      const where: string[] = [];
+      const params: unknown[] = [];
+      const add = (clause: string, value: unknown) => {
+        params.push(value);
+        where.push(clause.replace("?", `$${params.length}`));
+      };
+      if (filter.type != null) add("type = ANY(?::text[])", filter.type);
+      if (filter.tenant != null) add("tenant = ?", filter.tenant);
+      if (filter.intentHash != null) add("intent_hash = ?", filter.intentHash);
+      if (filter.artifactId != null) add("artifact_id = ?", filter.artifactId);
+      if (filter.specHash != null) add("spec_hash = ?", filter.specHash);
+      if (filter.since != null) add("ts >= ?", filter.since);
+      if (filter.until != null) add("ts <= ?", filter.until);
+      params.push(limit);
+      const sql = `SELECT record FROM ${T.lineage}${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY seq DESC LIMIT $${params.length}`;
+      const { rows } = await pool.query<{ record: LineageEventRecord }>(sql, params);
+      // Newest-first from the query; the contract returns append order, so reverse.
+      return rows.map((r) => r.record).reverse();
     },
     async getPromotionState(_artifactId: string, _tenant?: string) {
       throw new Error("not implemented");
