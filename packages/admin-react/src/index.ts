@@ -9,6 +9,12 @@ export {
   useAdminNotice,
 } from "./context.js";
 export { useAnalyticsSummary, useFixations, useLineage, usePromotions } from "./hooks.js";
+export {
+  type AdminExtraTab,
+  type AdminTabKey,
+  KohakuAdmin,
+  type KohakuAdminProps,
+} from "./KohakuAdmin.js";
 export { type AdminMessages, defaultAdminMessages } from "./messages.js";
 export { AnalyticsTab } from "./tabs/AnalyticsTab.js";
 export { FixationsTab } from "./tabs/FixationsTab.js";
