@@ -428,6 +428,9 @@ async function main(): Promise<void> {
       // (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
       // connection would otherwise stall the drain for no reason.
       httpServer.closeIdleConnections();
+      // Close the storage port this setup created from env (a no-op unless KOHAKU_STORAGE is redis/postgres).
+      // Swallow a failing close (matching sample-api's index.ts) so it can never block process exit.
+      void setup.close().catch(() => {});
       httpServer.close(() => process.exit(0));
       setTimeout(() => {
         httpServer.getConnections((err, count) => {

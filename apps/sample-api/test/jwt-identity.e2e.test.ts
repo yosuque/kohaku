@@ -72,4 +72,21 @@ describe("sample-api with KOHAKU_AUTHZ=jwt wiring", () => {
     const composed = await storage.listLineage({ type: ["view.composed"] });
     expect(composed[0]!.tenant).toBe("acme");
   });
+
+  it("has no tenant when the token carries none, even with x-kohaku-tenant present (headers are never trusted)", async () => {
+    const { app, storage } = await makeApp();
+    const token = await jwt({ sub: "u", roles: ["admin"] });
+    const res = await app.request("/api/kohaku/compose", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+        "x-kohaku-tenant": "spoofed",
+      },
+      body: JSON.stringify(QUARTERLY_GUI),
+    });
+    expect(res.status).toBe(200);
+    const composed = await storage.listLineage({ type: ["view.composed"] });
+    expect(composed[0]!.tenant).toBeUndefined();
+  });
 });

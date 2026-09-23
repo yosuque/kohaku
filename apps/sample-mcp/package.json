@@ -13,7 +13,6 @@
     "@kohaku-ui-sample/api": "workspace:^",
     "@kohaku-ui-sample/web": "workspace:^",
     "@kohaku-ui/authz-hmac": "workspace:^",
-    "@kohaku-ui/authz-jwt": "workspace:^",
     "@kohaku-ui/data-binding": "workspace:^",
     "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@kohaku-ui/lineage": "workspace:^",
@@ -35,6 +34,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@kohaku-ui/authz-jwt": "workspace:^",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",

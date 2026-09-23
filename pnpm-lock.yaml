@@ -440,9 +440,6 @@ importers:
       '@kohaku-ui/authz-hmac':
         specifier: workspace:^
         version: link:../../packages/authz-hmac
-      '@kohaku-ui/authz-jwt':
-        specifier: workspace:^
-        version: link:../../packages/authz-jwt
       '@kohaku-ui/data-binding':
         specifier: workspace:^
         version: link:../../packages/data-binding
@@ -489,6 +486,9 @@ importers:
         specifier: 'catalog:'
         version: 4.6.5
     devDependencies:
+      '@kohaku-ui/authz-jwt':
+        specifier: workspace:^
+        version: link:../../packages/authz-jwt
       '@types/node':
         specifier: 'catalog:'
         version: 26.5.1
