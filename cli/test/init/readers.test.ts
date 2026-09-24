@@ -85,8 +85,7 @@ describe("readDataFile", () => {
     expect((await readDataFile(join(dir, "b.json"))).columns).toEqual(["x"]);
   });
 
-  it("reads the first user table of a SQLite file (or --table)", async () => {
-    if (!sqliteSupported()) return;
+  it.skipIf(!sqliteSupported())("reads the first user table of a SQLite file (or --table)", async () => {
     const { DatabaseSync } = await import("node:sqlite");
     const dir = mkdtempSync(join(tmpdir(), "kohaku-init-"));
     const db = new DatabaseSync(join(dir, "s.sqlite"));

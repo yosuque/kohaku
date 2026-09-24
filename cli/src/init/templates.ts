@@ -210,7 +210,8 @@ function summaryView(intent: CanonicalIntent, refs: QueryHandle[]): UISpec {
 }
 `;
 
-export const APP_TEMPLATE = `import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
+export const APP_TEMPLATE = `import { existsSync } from "node:fs";
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { type ComposeContext, defaultGeneratorVersion } from "@kohaku-ui/composer";
 import { createKohakuRoutes } from "@kohaku-ui/host-rest";
 import type { LlmPort } from "@kohaku-ui/llm";
@@ -236,8 +237,17 @@ export interface AppDeps {
  * (the contract is @kohaku-ui/spec-core's ports.ts).
  */
 export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContext } {
+  // Load .env here too (not just in server/main.ts): this function is also called directly by
+  // test/golden.test.ts and by anyone scripting against the generated project without going through
+  // main.ts, and it must see the same KOHAKU_CAPABILITY_SECRET either way. process.loadEnvFile never
+  // overrides a variable already present in the environment, so calling it more than once is harmless.
+  if (existsSync(".env")) process.loadEnvFile(".env");
   const storage = deps.storage ?? createMemoryStoragePort();
-  const authz = deps.authz ?? createHmacAuthzPort(process.env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me");
+  const secret = process.env["KOHAKU_CAPABILITY_SECRET"]?.trim();
+  if (!secret) {
+    throw new Error("KOHAKU_CAPABILITY_SECRET is required (see .env.example)");
+  }
+  const authz = deps.authz ?? createHmacAuthzPort(secret);
   const intentCatalog = createIntentCatalog(INTENT_DEFINITIONS.map((d) => d.toIntentDef()));
   const semantic = createLlmSemanticPort({
     llm: deps.llm,
@@ -558,9 +568,13 @@ describe("golden regression", () => {
 
 export const ENV_EXAMPLE_TEMPLATE = `# Pick one provider. Without a key the summary dashboard (L0) still works; chat and the other views need the LLM.
 KOHAKU_LLM_PROVIDER=claude
-KOHAKU_LLM_API_KEY=
+# KOHAKU_LLM_API_KEY=   # or export ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY instead
 # Local, no key: KOHAKU_LLM_PROVIDER=ollama KOHAKU_LLM_MODEL=gemma4:e4b
-KOHAKU_CAPABILITY_SECRET=change-me
+
+# HMAC signing secret for capability tokens. \`kohaku init\` already generated a random one into .env
+# (git-ignored, not this file); set this only if you need a fixed value of your own. The server refuses
+# to start without one (see server/app.ts).
+KOHAKU_CAPABILITY_SECRET=
 PORT=8787
 `;
 

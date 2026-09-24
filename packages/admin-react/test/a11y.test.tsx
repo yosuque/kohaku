@@ -42,7 +42,7 @@ const handlers = {
       ],
     }),
   "GET /analytics/summary": () => jsonResponse(SUMMARY),
-  "POST /promotions/evaluate": () => jsonResponse({ candidates: [candidate] }),
+  "GET /promotions": () => jsonResponse({ candidates: [candidate] }),
   "GET /fixations/proposals": () =>
     jsonResponse({
       proposals: [{ intentHash: "sha256:aa", canonical: "sales.trend", params: {}, uses: 5, stability: 0.9 }],

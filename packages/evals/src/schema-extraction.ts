@@ -1,7 +1,7 @@
 import { collectL2Issues } from "@kohaku-ui/composer";
 import { KOHAKU_API_ALLOWLIST } from "@kohaku-ui/composer/l2-api";
 import type { LlmPort } from "@kohaku-ui/llm";
-import { CanonicalNameSchema } from "@kohaku-ui/spec-core";
+import { CanonicalNameSchema, type SchemaSuggestion, type SuggestedDraft } from "@kohaku-ui/spec-core";
 import { z } from "zod";
 import { untrustedBlock } from "./prompt-guard.js";
 
@@ -23,6 +23,17 @@ export const SCHEMA_EXTRACTOR_VERSION = "0.1";
 const SUGGESTED_DRAFT_VERSION = "1.0.0";
 /** Prompt budget for the HTML (characters). Matches the judge's own cap so both see the same head of the document. */
 const HTML_PROMPT_BUDGET = 12_000;
+
+/**
+ * Default extraction budget (milliseconds). `evaluateAndList` runs every freshly nominated candidate's
+ * extraction inside host-rest's per-tenant promotion governance mutex (see `createPromotions`' own doc), and a
+ * hung or pathologically slow LLM call would otherwise hold that lock open indefinitely (the fail-open contract
+ * around a throw does not cover a call that simply never settles). `createSchemaExtractor`'s `timeoutMs`
+ * (default this constant) bounds each extraction with an `AbortSignal.timeout`, so the worst case is "this one
+ * candidate's extraction times out and is reported via `promotion.suggest.schema`," not "the tenant's promotion
+ * lock never releases."
+ */
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 20_000;
 
 const QueryTemplateSchema = z.object({
   path: z.string().min(1),
@@ -52,15 +63,7 @@ export const SchemaSuggestionOutputSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
-/** Structurally identical to @kohaku-ui/lineage's ComponentDraft (not imported: evals and lineage are siblings). */
-export interface SuggestedDraft {
-  componentType: string;
-  version: string;
-  intentName: string;
-  description: string;
-  paramsJsonSchema?: unknown;
-  queryTemplate?: { path: string; fixedParams?: Record<string, string>; paramMap?: Record<string, string> };
-}
+export type { SuggestedDraft };
 
 export interface SchemaExtractionInput {
   html: string;
@@ -74,16 +77,8 @@ export interface SchemaExtractionInput {
   catalogSummary?: string;
 }
 
-/** Structurally identical to @kohaku-ui/lineage's SchemaSuggestion. */
-export interface SchemaExtractionResult {
-  draft: SuggestedDraft;
-  events: { name: string; description: string }[];
-  confidence: number;
-  model: string;
-  extractorId: string;
-  extractorVersion: string;
-  suggestedAt: string;
-}
+/** The single spec-core definition also used by @kohaku-ui/lineage's SchemaSuggestion. */
+export type SchemaExtractionResult = SchemaSuggestion;
 
 export interface SchemaExtractor {
   extract(input: SchemaExtractionInput): Promise<SchemaExtractionResult>;
@@ -108,8 +103,14 @@ const SYSTEM_PROMPT = [
   "Output only schema-conformant JSON.",
 ].join("\n");
 
-export function createSchemaExtractor(opts: { llm: LlmPort; now?: () => Date }): SchemaExtractor {
+export function createSchemaExtractor(opts: {
+  llm: LlmPort;
+  now?: () => Date;
+  /** Per-call extraction budget in milliseconds (default `DEFAULT_EXTRACTION_TIMEOUT_MS`, 20s). See its own doc. */
+  timeoutMs?: number;
+}): SchemaExtractor {
   const now = (): Date => opts.now?.() ?? new Date();
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS;
 
   function buildPrompt(input: SchemaExtractionInput): string {
     const html = input.html.slice(0, HTML_PROMPT_BUDGET);
@@ -144,6 +145,7 @@ export function createSchemaExtractor(opts: { llm: LlmPort; now?: () => Date }):
         system: SYSTEM_PROMPT,
         prompt: buildPrompt(input),
         temperature: 0,
+        abort: AbortSignal.timeout(timeoutMs),
       });
       const out = result.object;
       return {

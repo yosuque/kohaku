@@ -1,6 +1,6 @@
 import type { UISpec } from "@kohaku-ui/spec-core";
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresStoragePort, type PostgresStoragePort } from "../src/index.js";
 import { backend, startPostgres, uniqueSchema } from "./backend.js";
 
@@ -8,26 +8,10 @@ function fakeSpec(id: string): UISpec {
   return { key: id } as unknown as UISpec;
 }
 
-// No backend gate: this exercises the migration retry path against a mocked `pg.Pool`, not a real
-// database, so it always runs (even without Docker) and needs no network timing to an unreachable host.
-describe("createPostgresStoragePort: ready() after a failed migration", () => {
-  it("does not cache a rejected migration — the next call retries the DDL from scratch", async () => {
-    const query = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("transient migration failure"))
-      .mockResolvedValue({ rows: [], rowCount: 0 });
-    const fakePool = { query } as unknown as Pool;
-    const port = createPostgresStoragePort({ pool: fakePool, schema: "retry_test" });
-
-    await expect(port.ready()).rejects.toThrow("transient migration failure");
-    expect(query).toHaveBeenCalledTimes(1);
-
-    // A second call must not replay the cached rejection: it re-runs both migration statements
-    // (CREATE SCHEMA, then the schema script) and succeeds this time.
-    await expect(port.ready()).resolves.toBeUndefined();
-    expect(query).toHaveBeenCalledTimes(3);
-  });
-});
+// The ready()-after-a-failed-migration retry path, the advisory lock, and schema versioning are all
+// owned by connection.ts now (shared with createPostgresRevocationStore) and are unit-tested once,
+// against a fake `pg.Pool`, in test/connection.test.ts. Version mismatch / concurrent-ready() backend
+// behavior is covered in test/schema-version.test.ts.
 
 describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: spec cache", () => {
   let stop: () => Promise<void>;
@@ -59,6 +43,7 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: spec cache"
         "kohaku_fixation",
         "kohaku_lineage",
         "kohaku_promotion_state",
+        "kohaku_schema_meta",
         "kohaku_spec_cache",
       ]);
     } finally {

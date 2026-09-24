@@ -85,6 +85,7 @@ export function KohakuAdmin(props: KohakuAdminProps): ReactNode {
       client={props.client}
       messages={t}
       onNotice={notify}
+      {...(props.tenant != null ? { tenant: props.tenant } : {})}
       {...(props.theme != null ? { theme: props.theme } : {})}
     >
       <div

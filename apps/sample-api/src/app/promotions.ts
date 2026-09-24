@@ -6,8 +6,11 @@ import {
   type Promotions,
   type TenantScope,
 } from "@kohaku-ui/lineage";
+import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import type { StoragePort } from "@kohaku-ui/spec-core";
+import { salesContribution } from "../catalog/contribution.js";
 import { OPERATIONS } from "../domain/queries.js";
+import { INTENT_DEFS } from "../intents/catalog.js";
 import { type PromotedRegistry, toPromotedEntry } from "../intents/promoted-registry.js";
 
 /**
@@ -28,16 +31,33 @@ export const PROMOTION_MIN_USES = 2;
 export const QUERY_PATHS = Object.keys(OPERATIONS) as (keyof typeof OPERATIONS)[];
 
 /**
- * Builds the `"- <componentType> (<intentName>)"` catalog summary the schema extractor's `catalogSummary`
- * input expects, from the registry's existing per-tenant promotion entries. Returns undefined when nothing is
- * published yet (so the prompt section is omitted rather than sent empty). Deliberately not a registry method
+ * Core (non-promoted) component types and Intent names, computed once: the "avoid these names" baseline
+ * the schema extractor's uniqueness instruction needs even before anything has ever been promoted (#4.9 --
+ * previously catalogSummaryFor returned undefined until the first promotion, so the very first extraction
+ * had no name collisions to check against at all). `resolveCatalog(coreCatalog, salesContribution)` mirrors
+ * app.ts's own `buildCatalog([])` (core + this product's contribution, no promoted entries).
+ */
+const CORE_COMPONENT_TYPES = resolveCatalog(coreCatalog, salesContribution)
+  .list()
+  .map((d) => d.type);
+const CORE_INTENT_NAMES = INTENT_DEFS.map((d) => d.name);
+
+/**
+ * Builds the catalog summary the schema extractor's `catalogSummary` input expects (one "- <name>" line per
+ * entry): the core component types, the core Intent names, and the registry's existing per-tenant promoted
+ * entries (as `"- <componentType> (<intentName>)"`, unchanged format). Always non-empty (the core lists are
+ * never empty), so the prompt section is always sent -- see this constant's own doc comment for why the
+ * empty-until-first-promotion behavior this replaced was a gap. Deliberately not a registry method
  * (PromotedRegistry's read API already exposes entriesFor(tenant), which carries both draft.componentType and
  * draft.intentName; no need to widen the registry for this).
  */
-function catalogSummaryFor(registry: PromotedRegistry, tenant?: string): string | undefined {
-  const entries = registry.entriesFor(tenant);
-  if (entries.length === 0) return undefined;
-  return entries.map((e) => `- ${e.draft.componentType} (${e.draft.intentName})`).join("\n");
+function catalogSummaryFor(registry: PromotedRegistry, tenant?: string): string {
+  const lines = [
+    ...CORE_COMPONENT_TYPES.map((type) => `- ${type} (core component)`),
+    ...CORE_INTENT_NAMES.map((name) => `- ${name} (core intent)`),
+    ...registry.entriesFor(tenant).map((e) => `- ${e.draft.componentType} (${e.draft.intentName})`),
+  ];
+  return lines.join("\n");
 }
 
 /**
@@ -97,8 +117,23 @@ export function createPromotionPipeline(args: {
         usage: { uses: candidate.uses, sessions: candidate.sessions },
         // Transcribe only when there is a real-render observation (with 0 observations, do not put it in the prompt).
         ...(telemetry.renderedCount > 0 ? { telemetry } : {}),
-        // The advisory proposal attached at nomination, handed to the judge as untrusted evidence for the
-        // suggestion_fidelity criterion (rubric 0.4).
+        // The schema actually being registered (approve()'s own draft, forwarded via context.draft; #1) is
+        // the source of truth for the "schema fidelity" criterion. ComponentDraft itself carries no events
+        // field, so this block never claims events for it -- a candidate's machine-extracted suggestion may
+        // have proposed some, but those are unverified proposal data, not part of what is actually being
+        // registered, and are surfaced below as `suggestion` context only (never mixed into `draft`).
+        ...(context?.draft != null
+          ? {
+              draft: {
+                componentType: context.draft.componentType,
+                intentName: context.draft.intentName,
+                paramsJsonSchema: context.draft.paramsJsonSchema,
+              },
+            }
+          : {}),
+        // The advisory proposal attached at nomination, handed to the judge as context (rubric 0.4's
+        // "schema fidelity" criterion verifies `draft` above when present; `suggestion` alone is verified
+        // directly when `draft` is unknown, preserving prior behavior).
         ...(candidate.suggestion != null
           ? {
               suggestion: {

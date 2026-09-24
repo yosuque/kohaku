@@ -23,6 +23,13 @@ export {
 } from "./intent.js";
 // In-process keyed mutex (a shared primitive: host locks and the reference StoragePort's per-file serialization)
 export { createKeyedMutex, type KeyedMutex } from "./keyed-mutex.js";
+// Lineage filter/limit primitives shared by every StoragePort implementation and port-contracts
+export {
+  applyLineageLimit,
+  DEFAULT_LINEAGE_LIMIT,
+  LINEAGE_PAYLOAD_INDEX_FIELDS,
+  matchesLineageFilter,
+} from "./lineage-filter.js";
 // Parsing / validation
 export {
   parsePatch,
@@ -48,18 +55,22 @@ export type {
   Principal,
   PromotionState,
   QueryHandle,
+  RevokeCapabilityResult,
+  SchemaSuggestion,
   Scope,
   SemanticInput,
   SemanticPort,
   SessionContext,
   StoragePort,
+  SuggestedDraft,
+  SuggestedEvent,
   Surface,
   ThemeTokens,
   VerifyRequest,
   VerifyResult,
 } from "./ports.js";
 // Ports
-export { DEFAULT_CAPABILITY_TTL_SECONDS } from "./ports.js";
+export { DEFAULT_CAPABILITY_TTL_SECONDS, normalizeTenant } from "./ports.js";
 export { collectStateRefs, evaluateVisibleWhen } from "./predicate.js";
 export {
   formatQueryRef,

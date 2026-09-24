@@ -291,25 +291,68 @@ describe("summarizeLineage: review turnaround and suggestion acceptance", () => 
     expect(s.review.durationMs).toEqual({ p50: 60_000, p95: 600_000, max: 600_000 });
   });
 
+  it("pairs correctly even when component.reviewed appears before its component.nominated in array order (stable sort by ts, #4.2)", () => {
+    const events = [
+      // The reviewed record sits FIRST in the input array, but its ts is later than the nomination's — the
+      // pairing must sort by ts before scanning, not trust array order.
+      ev("component.reviewed", { artifactId: "a1", decision: "approve" }, { ts: "2026-07-01T00:05:00.000Z" }),
+      ev("component.nominated", { artifactId: "a1" }, { ts: "2026-07-01T00:00:00.000Z" }),
+    ];
+    const s = summarizeLineage(events);
+    expect(s.review.count).toBe(1);
+    expect(s.review.durationMs.p50).toBe(5 * 60 * 1000);
+  });
+
   it("review is empty when nothing was reviewed", () => {
     const s = summarizeLineage([ev("component.nominated", { artifactId: "a1" })]);
     expect(s.review).toEqual({ count: 0, durationMs: { p50: null, p95: null, max: null }, acceptedAsIs: 0 });
   });
 
-  it("counts schemaSuggested / schemaEdited and the zero-edit acceptances", () => {
+  it("counts schemaSuggested / schemaEdited and the zero-edit + acknowledged acceptances", () => {
     const events = [
       ev("component.schemaSuggested", { artifactId: "a1", suggestion: {} }),
       ev("component.schemaSuggested", { artifactId: "a2", suggestion: {} }),
-      ev("component.schemaEdited", { artifactId: "a1", changed: [], unchanged: ["componentType"] }),
+      ev("component.schemaEdited", {
+        artifactId: "a1",
+        changed: [],
+        unchanged: ["componentType"],
+        acknowledged: true,
+      }),
       ev("component.schemaEdited", {
         artifactId: "a2",
         changed: [{ field: "description", suggested: "a", final: "b" }],
         unchanged: [],
+        acknowledged: true,
       }),
     ];
     const s = summarizeLineage(events);
     expect(s.promotions.schemaSuggested).toBe(2);
     expect(s.promotions.schemaEdited).toBe(2);
+    // Only a1 has both changed: [] and acknowledged: true; a2 was edited so it never qualifies regardless.
+    expect(s.review.acceptedAsIs).toBe(1);
+  });
+
+  it("acceptedAsIs requires acknowledged === true even with an empty changed (#9)", () => {
+    const events = [
+      // No edits, but no acknowledgment recorded (a missing field, same as false): does not count.
+      ev("component.schemaEdited", { artifactId: "a1", changed: [], unchanged: ["componentType"] }),
+      // No edits, explicit acknowledged: false: does not count.
+      ev("component.schemaEdited", {
+        artifactId: "a2",
+        changed: [],
+        unchanged: ["componentType"],
+        acknowledged: false,
+      }),
+      // No edits and acknowledged: true: counts.
+      ev("component.schemaEdited", {
+        artifactId: "a3",
+        changed: [],
+        unchanged: ["componentType"],
+        acknowledged: true,
+      }),
+    ];
+    const s = summarizeLineage(events);
+    expect(s.promotions.schemaEdited).toBe(3);
     expect(s.review.acceptedAsIs).toBe(1);
   });
 });

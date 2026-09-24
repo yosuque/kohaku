@@ -40,6 +40,7 @@ describe("createHmacAuthzPort capability revocation", () => {
 
     const result = await authz.revokeCapability(tampered);
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ code: "INVALID_SIGNATURE" });
 
     // A forged token signed with a different secret must also be rejected, not merely "not found".
     const foreign = await createHmacAuthzPort("other-secret").issueCapability(principal, [
@@ -47,6 +48,13 @@ describe("createHmacAuthzPort capability revocation", () => {
     ]);
     const foreignResult = await authz.revokeCapability(foreign);
     expect(foreignResult.ok).toBe(false);
+    expect(foreignResult).toMatchObject({ code: "INVALID_SIGNATURE" });
+  });
+
+  it("rejects revocation of a malformed token (no signature separator)", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const result = await authz.revokeCapability("not-a-token");
+    expect(result).toEqual({ ok: false, code: "MALFORMED", reason: "malformed token" });
   });
 
   it("verifies a jti-less (pre-upgrade) token ok, but cannot revoke it", async () => {
@@ -59,23 +67,66 @@ describe("createHmacAuthzPort capability revocation", () => {
     expect((await authz.verify(legacyToken, { kind: "read", ref: "query://s/x" })).ok).toBe(true);
 
     const result = await authz.revokeCapability(legacyToken);
-    expect(result).toEqual({ ok: false, reason: "token predates revocation support" });
+    expect(result).toEqual({ ok: false, code: "NO_JTI", reason: "token predates revocation support" });
 
     // And it must still verify fine afterwards -- the failed revoke must not have broken anything.
     expect((await authz.verify(legacyToken, { kind: "read", ref: "query://s/x" })).ok).toBe(true);
   });
 
-  it("reports an already-expired token's revocation as a no-op rather than writing to the store", async () => {
+  it("reports an already-expired token's revocation as an idempotent success (alreadyExpired), without writing to the store", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const authz = createHmacAuthzPort("test-secret");
+    const calls: string[] = [];
+    const revocations: CapabilityRevocationStore = {
+      async revoke(jti) {
+        calls.push(`revoke:${jti}`);
+      },
+      async isRevoked() {
+        return false;
+      },
+    };
+    const authz = createHmacAuthzPort("test-secret", { revocations });
     const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }], {
       ttlSeconds: 1,
     });
     vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
 
     const result = await authz.revokeCapability(cap);
-    expect(result).toEqual({ ok: false, reason: "capability expired" });
+    expect(result).toEqual({ ok: true, alreadyExpired: true });
+    expect(calls).toEqual([]);
+  });
+
+  it("reports an already-expired token's revocation as alreadyExpired exactly at its expiry instant (exp <= now)", async () => {
+    vi.useFakeTimers();
+    const issuedAt = new Date("2026-01-01T00:00:00.000Z");
+    vi.setSystemTime(issuedAt);
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }], {
+      ttlSeconds: 1,
+    });
+    const expSeconds = Math.floor(issuedAt.getTime() / 1000) + 1;
+    vi.setSystemTime(new Date(expSeconds * 1000));
+
+    const result = await authz.revokeCapability(cap);
+    expect(result).toEqual({ ok: true, alreadyExpired: true });
+  });
+
+  it("maps a revocation-store throw to a coded STORE_ERROR failure (does not throw)", async () => {
+    const revocations: CapabilityRevocationStore = {
+      async revoke() {
+        throw new Error("store unavailable (test)");
+      },
+      async isRevoked() {
+        return false;
+      },
+    };
+    const authz = createHmacAuthzPort("test-secret", { revocations });
+    const cap = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }]);
+
+    const result = await authz.revokeCapability(cap);
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ code: "STORE_ERROR" });
+    expect((result as { reason: string }).reason).toContain("store unavailable (test)");
   });
 
   it("actually consults an injected revocation store", async () => {

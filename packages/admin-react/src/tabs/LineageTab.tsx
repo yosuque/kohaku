@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { useAdmin } from "../context.js";
 import { useLineage } from "../hooks.js";
 import { V } from "../theme.js";
-import { card, smallButton, TIER_COLOR } from "../ui.js";
+import { TIER_COLOR } from "../tiers.js";
+import { card, smallButton } from "../ui.js";
 
 /** The audit timeline (GET /lineage, newest first): type / tier / cache / canonical / short intent hash / surface. */
 export function LineageTab(): ReactNode {

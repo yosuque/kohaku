@@ -4,8 +4,10 @@ import {
   type ComponentDraft,
   createLineage,
   createPromotions,
+  type JudgeVerdict,
   type PromotionCandidate,
   type PromotionErrorContext,
+  type PromotionJudgeContext,
   type SchemaSuggestion,
   type TenantScope,
 } from "../src/index.js";
@@ -225,6 +227,9 @@ describe("component.schemaEdited on approve", () => {
         "paramsJsonSchema",
         "queryTemplate",
       ],
+      // acknowledgedSuggestion was not passed to approve() in this test, so it defaults to false (recorded,
+      // not enforced -- the approval still published above).
+      acknowledged: false,
     });
     const types = storage.events.map((e) => e.type);
     // The edit record sits between the human approve (component.reviewed) and publish, next to schemaProposed
@@ -266,5 +271,187 @@ describe("component.schemaEdited on approve", () => {
     await promotions.evaluateAndList();
     await promotions.approve("a1", DRAFT, { id: "alice" });
     expect(storage.events.map((e) => e.type)).not.toContain("component.schemaEdited");
+  });
+});
+
+describe("acknowledgedSuggestion on approve (#9: recorded, not enforced)", () => {
+  it("records acknowledged: true on component.schemaEdited when the reviewer ticks the acknowledgement", async () => {
+    const storage = memoryStorage();
+    seedUsage(storage, "a1", 2);
+    const { promotions } = pipeline(storage, async () => SUGGESTION);
+    await promotions.evaluateAndList();
+    const published = await promotions.approve(
+      "a1",
+      { ...DRAFT },
+      { id: "alice" },
+      {
+        acknowledgedSuggestion: true,
+      },
+    );
+    expect(published.status).toBe("published");
+    const edited = storage.events.find((e) => e.type === "component.schemaEdited")!;
+    expect(edited.payload["acknowledged"]).toBe(true);
+  });
+
+  it("does not block approve/publish when acknowledgedSuggestion is omitted or false (recorded, never enforced)", async () => {
+    const storage = memoryStorage();
+    seedUsage(storage, "a1", 2);
+    const { promotions } = pipeline(storage, async () => SUGGESTION);
+    await promotions.evaluateAndList();
+    const published = await promotions.approve(
+      "a1",
+      { ...DRAFT },
+      { id: "alice" },
+      {
+        acknowledgedSuggestion: false,
+      },
+    );
+    expect(published.status).toBe("published");
+    const edited = storage.events.find((e) => e.type === "component.schemaEdited")!;
+    expect(edited.payload["acknowledged"]).toBe(false);
+  });
+});
+
+describe("the judge receives the draft actually being registered (#1)", () => {
+  it("passes approve()'s draft argument as context.draft, alongside the tenant", async () => {
+    const storage = memoryStorage();
+    // Tenant-tagged seed (seedUsage's own helper does not tag a tenant), so evaluateAndList/approve can be
+    // scoped to "acme" throughout without the tenant-mismatch guard treating the candidate as nonexistent.
+    storage.events.push(
+      {
+        id: "g-a1",
+        ts: "2026-07-01T00:00:00.000Z",
+        actor: { kind: "model" },
+        type: "component.generated",
+        payload: { artifactId: "a1", html: "<html></html>", request: "r" },
+        tenant: "acme",
+      },
+      ...Array.from({ length: 2 }, (_, i) => ({
+        id: `u-a1-${i}`,
+        ts: `2026-07-01T00:0${i}:00.000Z`,
+        actor: { kind: "system" as const },
+        type: "component.used" as const,
+        payload: { artifactId: "a1", surface: "chat", sessionId: `s${i}`, outcome: "ok" },
+        tenant: "acme",
+      })),
+    );
+    const seenContexts: (PromotionJudgeContext | undefined)[] = [];
+    const promotions = createPromotions({
+      lineage: createLineage({ storage }),
+      storage,
+      policy: { minUses: 2, minDistinctSessions: 1, judgeBlocking: false },
+      judge: async (_candidate, context): Promise<JudgeVerdict> => {
+        seenContexts.push(context);
+        return { pass: true, score: 1 };
+      },
+    });
+    await promotions.evaluateAndList({ tenant: "acme" });
+    const finalDraft: ComponentDraft = { ...DRAFT, description: "Final reviewer draft" };
+    await promotions.approve("a1", finalDraft, { id: "alice" }, { tenant: "acme" });
+    expect(seenContexts).toHaveLength(1);
+    expect(seenContexts[0]?.draft).toEqual(finalDraft);
+    expect(seenContexts[0]?.tenant).toBe("acme");
+  });
+
+  it("passes context.draft even when the candidate has no machine suggestion", async () => {
+    const storage = memoryStorage();
+    seedUsage(storage, "a1", 2);
+    const seenContexts: (PromotionJudgeContext | undefined)[] = [];
+    const promotions = createPromotions({
+      lineage: createLineage({ storage }),
+      storage,
+      policy: { minUses: 2, minDistinctSessions: 1, judgeBlocking: false },
+      judge: async (_candidate, context): Promise<JudgeVerdict> => {
+        seenContexts.push(context);
+        return { pass: true, score: 1 };
+      },
+    });
+    await promotions.evaluateAndList();
+    await promotions.approve("a1", DRAFT, { id: "alice" });
+    expect(seenContexts[0]?.draft).toEqual(DRAFT);
+  });
+});
+
+describe("suggestConcurrency (#15): bounds how many suggestSchema calls run at once", () => {
+  /** A manually-releasable gate: fn suspends on it until the test calls its resolver. */
+  function gate(): { promise: Promise<void>; release: () => void } {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { promise, release };
+  }
+
+  // No `setTimeout` here: this package's tsconfig declares no DOM/Node ambient types, so a real macrotask
+  // wait is unavailable. Draining a generous number of microtask ticks instead is enough to let
+  // `evaluateAndList`'s own internal `await`s (storage reads, etc.) settle before the assertions below.
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+  };
+
+  it("suggestConcurrency: 1 runs extractions strictly one at a time", async () => {
+    const storage = memoryStorage();
+    for (const id of ["a1", "a2", "a3"]) seedUsage(storage, id, 2);
+    let active = 0;
+    let maxActive = 0;
+    const gates = { a1: gate(), a2: gate(), a3: gate() } as const;
+    const promotions = createPromotions({
+      lineage: createLineage({ storage }),
+      storage,
+      policy: { minUses: 2, minDistinctSessions: 1, judgeBlocking: false },
+      suggestSchema: async (candidate: PromotionCandidate) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await gates[candidate.artifactId as keyof typeof gates].promise;
+        active--;
+        return SUGGESTION;
+      },
+      suggestConcurrency: 1,
+    });
+
+    const evaluated = promotions.evaluateAndList();
+    await flush();
+    expect(active).toBe(1); // only one in flight at a time
+    gates.a1.release();
+    await flush();
+    gates.a2.release();
+    await flush();
+    gates.a3.release();
+
+    const listed = await evaluated;
+    expect(listed.every((c) => c.suggestion != null)).toBe(true);
+    expect(maxActive).toBe(1);
+  });
+
+  it("defaults to DEFAULT_SUGGEST_CONCURRENCY (4) when unset", async () => {
+    const storage = memoryStorage();
+    for (const id of ["a1", "a2", "a3", "a4", "a5"]) seedUsage(storage, id, 2);
+    let active = 0;
+    let maxActive = 0;
+    const gates: Record<string, { promise: Promise<void>; release: () => void }> = {};
+    for (const id of ["a1", "a2", "a3", "a4", "a5"]) gates[id] = gate();
+    const promotions = createPromotions({
+      lineage: createLineage({ storage }),
+      storage,
+      policy: { minUses: 2, minDistinctSessions: 1, judgeBlocking: false },
+      suggestSchema: async (candidate: PromotionCandidate) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await gates[candidate.artifactId]!.promise;
+        active--;
+        return SUGGESTION;
+      },
+      // suggestConcurrency intentionally omitted.
+    });
+
+    const evaluated = promotions.evaluateAndList();
+    await flush();
+    expect(active).toBe(4); // 5 candidates, default cap of 4
+    for (const id of Object.keys(gates)) {
+      gates[id]!.release();
+      await flush();
+    }
+    await evaluated;
+    expect(maxActive).toBe(4);
   });
 });

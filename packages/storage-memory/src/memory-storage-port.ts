@@ -14,6 +14,9 @@ import { createSpecCache } from "./spec-cache.js";
 export function createMemoryStoragePort(): StoragePort {
   const specCache = createSpecCache();
   const lineage: LineageEventRecord[] = [];
+  // Tracks ids already appended so a duplicate-id append is a no-op (StoragePort contract: appendLineage
+  // is idempotent by id) without an O(n) scan of `lineage` on every append.
+  const lineageIds = new Set<string>();
   const promotions = new Map<string, PromotionState>();
   const fixations = new Map<string, FixationRecord>();
 
@@ -25,6 +28,10 @@ export function createMemoryStoragePort(): StoragePort {
       specCache.put(key, spec, ttlSeconds);
     },
     async appendLineage(event) {
+      // Idempotent by id: appending an event whose id already exists is a no-op (the second attempt of a
+      // retried write must not duplicate the entry or move its position).
+      if (lineageIds.has(event.id)) return;
+      lineageIds.add(event.id);
       lineage.push(event);
     },
     async listLineage(filter) {

@@ -50,6 +50,10 @@ describe.skipIf(backend.mode === "skip")("createRedisStoragePort: lineage", () =
     ).toEqual(["01", "02", "03", "04"]);
   });
 
+  it("returns no rows for an empty type filter (matches the file/postgres ports' `[].includes` semantics)", async () => {
+    expect(await port.listLineage({ type: [] })).toEqual([]);
+  });
+
   it("ANDs an indexed predicate with the remaining ones", async () => {
     expect(await port.listLineage({ intentHash: "h1", tenant: "globex" })).toEqual([]);
     expect(

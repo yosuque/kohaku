@@ -119,17 +119,21 @@ describe("createJwtIdentityResolver (JWKS)", () => {
   it("verifies an RS256 token against a local JWK set", async () => {
     const { publicKey, privateKey } = await generateKeyPair("RS256");
     const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "RS256", use: "sig" };
-    const resolver = createJwtIdentityResolver({ key: { jwks: { keys: [jwk] } } });
+    const resolver = createJwtIdentityResolver({ key: { jwks: { keys: [jwk] } }, audience: "kohaku" });
     const token = await new SignJWT({ sub: "rs", roles: ["admin"] })
       .setProtectedHeader({ alg: "RS256", kid: "k1" })
       .setExpirationTime("5m")
+      .setAudience("kohaku")
       .sign(privateKey);
     expect((await resolver.resolve(token)).principal).toEqual({ id: "rs", roles: ["admin"] });
   });
 
   it("rejects an HS256 token when the key source is a JWK set (algorithm allow-list)", async () => {
     const { publicKey } = await generateKeyPair("RS256");
-    const resolver = createJwtIdentityResolver({ key: { jwks: { keys: [await exportJWK(publicKey)] } } });
+    const resolver = createJwtIdentityResolver({
+      key: { jwks: { keys: [await exportJWK(publicKey)] } },
+      audience: "kohaku",
+    });
     const token = await hs256({ sub: "u" });
     await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "INVALID_TOKEN" });
   });
@@ -137,11 +141,109 @@ describe("createJwtIdentityResolver (JWKS)", () => {
   it("honours a caller-supplied algorithms list that narrows the JWKS default (rejects an otherwise-valid RS256 token)", async () => {
     const { publicKey, privateKey } = await generateKeyPair("RS256");
     const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "RS256", use: "sig" };
-    const resolver = createJwtIdentityResolver({ key: { jwks: { keys: [jwk] } }, algorithms: ["ES256"] });
+    const resolver = createJwtIdentityResolver({
+      key: { jwks: { keys: [jwk] } },
+      algorithms: ["ES256"],
+      audience: "kohaku",
+    });
     const token = await new SignJWT({ sub: "rs" })
       .setProtectedHeader({ alg: "RS256", kid: "k1" })
       .setExpirationTime("5m")
+      .setAudience("kohaku")
       .sign(privateKey);
     await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "INVALID_TOKEN" });
+  });
+
+  it("rejects a token whose aud does not match the configured audience (mandatory in jwks mode)", async () => {
+    const { publicKey, privateKey } = await generateKeyPair("RS256");
+    const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "RS256", use: "sig" };
+    const resolver = createJwtIdentityResolver({ key: { jwks: { keys: [jwk] } }, audience: "kohaku" });
+    const token = await new SignJWT({ sub: "rs" })
+      .setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setExpirationTime("5m")
+      .setAudience("someone-else")
+      .sign(privateKey);
+    await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "INVALID_TOKEN" });
+  });
+});
+
+describe("createJwtIdentityResolver construction-time validation", () => {
+  it("throws when key is jwks and audience is omitted", async () => {
+    const { publicKey } = await generateKeyPair("RS256");
+    const jwk = await exportJWK(publicKey);
+    expect(() => createJwtIdentityResolver({ key: { jwks: { keys: [jwk] } } })).toThrow(/audience/);
+  });
+
+  it("throws when key is jwksUrl and audience is omitted", () => {
+    expect(() =>
+      createJwtIdentityResolver({ key: { jwksUrl: "https://issuer.example.com/.well-known/jwks.json" } }),
+    ).toThrow(/audience/);
+  });
+
+  it("does not throw when key is secret and audience is omitted", () => {
+    expect(() => createJwtIdentityResolver({ key: { secret: SECRET } })).not.toThrow();
+  });
+
+  it("throws when the HS256 secret is shorter than 32 bytes", () => {
+    expect(() => createJwtIdentityResolver({ key: { secret: "too-short" } })).toThrow(/32 bytes/);
+  });
+
+  it("accepts an HS256 secret of exactly 32 bytes", () => {
+    expect(() => createJwtIdentityResolver({ key: { secret: "a".repeat(32) } })).not.toThrow();
+  });
+
+  it("rejects an http: jwksUrl to a non-local host", () => {
+    expect(() =>
+      createJwtIdentityResolver({
+        key: { jwksUrl: "http://issuer.example.com/jwks.json" },
+        audience: "kohaku",
+      }),
+    ).toThrow(/https:/);
+  });
+
+  it("allows an http: jwksUrl to localhost / 127.0.0.1 / [::1]", () => {
+    for (const host of ["localhost", "127.0.0.1", "[::1]"]) {
+      expect(() =>
+        createJwtIdentityResolver({
+          key: { jwksUrl: `http://${host}:8080/jwks.json` },
+          audience: "kohaku",
+        }),
+      ).not.toThrow();
+    }
+  });
+
+  it("allows an https: jwksUrl to any host", () => {
+    expect(() =>
+      createJwtIdentityResolver({
+        key: { jwksUrl: "https://issuer.example.com/jwks.json" },
+        audience: "kohaku",
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("createJwtIdentityResolver requireTenant", () => {
+  it("default (false): a token without a tenant claim resolves with no tenant", async () => {
+    const resolver = createJwtIdentityResolver({ key: { secret: SECRET } });
+    const token = await hs256({ sub: "u" });
+    expect(await resolver.resolve(token)).toEqual({ principal: { id: "u" } });
+  });
+
+  it("true: a token without a tenant claim rejects with MISSING_TENANT", async () => {
+    const resolver = createJwtIdentityResolver({ key: { secret: SECRET }, requireTenant: true });
+    const token = await hs256({ sub: "u" });
+    await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "MISSING_TENANT" });
+  });
+
+  it("true: a token with an empty-string tenant claim also rejects with MISSING_TENANT", async () => {
+    const resolver = createJwtIdentityResolver({ key: { secret: SECRET }, requireTenant: true });
+    const token = await hs256({ sub: "u", tenant: "" });
+    await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "MISSING_TENANT" });
+  });
+
+  it("true: a token that does carry a tenant claim resolves normally", async () => {
+    const resolver = createJwtIdentityResolver({ key: { secret: SECRET }, requireTenant: true });
+    const token = await hs256({ sub: "u", tenant: "acme" });
+    expect(await resolver.resolve(token)).toEqual({ principal: { id: "u" }, tenant: "acme" });
   });
 });

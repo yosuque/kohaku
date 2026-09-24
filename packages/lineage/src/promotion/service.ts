@@ -84,6 +84,9 @@ export const DEFAULT_PROMOTION_POLICY: PromotionPolicy = {
   judgeBlocking: true,
 };
 
+/** Default for `createPromotions`' `suggestConcurrency` opt (#15). See that opt's own doc. */
+export const DEFAULT_SUGGEST_CONCURRENCY = 4;
+
 /**
  * The call sites `createPromotions`' `onError` hook may fire from, named for the observability hook:
  * - `promotion.publish.audit` / `promotion.unpublish.audit`: the fail-open `component.published` /
@@ -266,13 +269,45 @@ export function publishArgs(
  * content sha256), this lets the judge narrow its aggregation scope so its evidence does not get mixed across
  * tenants. rubricId / rubricVersion are additive optional: if returned, they are transcribed into the
  * component.judged verdict so which rubric version judged remains in the audit. reason explains a
- * cannot-decide / supplementary note.
+ * cannot-decide / supplementary note. context.draft (additive; see PromotionJudgeContext) is the schema
+ * actually being registered, when known — a judge should score fidelity against it rather than only the
+ * candidate's own machine suggestion (#1).
  */
-export type PromotionJudge = (candidate: PromotionCandidate, context?: TenantScope) => Promise<JudgeVerdict>;
+export type PromotionJudge = (
+  candidate: PromotionCandidate,
+  context?: PromotionJudgeContext,
+) => Promise<JudgeVerdict>;
 
 /** Options for Promotions.withdraw: reason is the optional human-facing note, scope narrows the owning tenant. */
 export interface WithdrawOptions extends TenantScope {
   reason?: string;
+}
+
+/**
+ * Options for Promotions.approve: scope narrows the owning tenant (as elsewhere), and `acknowledgedSuggestion`
+ * carries the reviewer's "I reviewed the machine suggestion" checkbox state (host-rest's approve body field of
+ * the same name) through to the `component.schemaEdited` audit record's `acknowledged` field. It is recorded,
+ * not enforced: a missing/false value never blocks approve/publish (LIN-PRM-001's own gate — a human
+ * `review.approve` — is unaffected either way). See `Promotions.approve`'s own doc for how `acknowledged` is
+ * used downstream (`summarizeLineage`'s `review.acceptedAsIs`).
+ */
+export interface ApproveOptions extends TenantScope {
+  acknowledgedSuggestion?: boolean;
+}
+
+/**
+ * Additive context passed to a `PromotionJudge` alongside `TenantScope`'s existing `tenant`: `draft` is the
+ * schema actually being registered (approve()'s own draft argument), when known at judge time (which, on the
+ * approve() call chain, is always — `approve` requires a draft as its own positional argument). Exists so a
+ * judge implementation that scores the schema against the HTML (evals' `suggestion_fidelity` / "schema
+ * fidelity" criterion) verifies what is actually about to be published rather than only the candidate's
+ * machine-generated suggestion (#1). Additive: an existing `PromotionJudge` typed as
+ * `(candidate, context?: TenantScope) => ...` remains assignable to the `PromotionJudge` type below (a function
+ * that accepts the wider `TenantScope` also accepts the narrower `PromotionJudgeContext`), so no existing judge
+ * implementation needs to change to keep compiling.
+ */
+export interface PromotionJudgeContext extends TenantScope {
+  draft?: ComponentDraft;
 }
 
 export interface Promotions {
@@ -304,13 +339,16 @@ export interface Promotions {
    * "Approve and register": batch-executes the fixed transitions nominate -> judge -> review.approve ->
    * schema.propose -> publish. The transition order is confined inside this, so the caller (HTTP, etc.) only
    * expresses intent. When scope.tenant is given, it verifies the owning tenant and stamps each intermediate
-   * transition's lineage record with it too.
+   * transition's lineage record with it too. `draft` is also forwarded to the configured judge (context.draft;
+   * #1) so it scores the schema actually being registered. scope.acknowledgedSuggestion (additive; recorded,
+   * not enforced) is threaded into `component.schemaEdited`'s `acknowledged` field when the candidate carries a
+   * suggestion — see `ApproveOptions`'s own doc.
    */
   approve(
     artifactId: string,
     draft: ComponentDraft,
     reviewer: Principal,
-    scope?: TenantScope,
+    scope?: ApproveOptions,
   ): Promise<PromotionCandidate>;
   /** "Reject": batch-executes the fixed transitions nominate -> review.start -> review.reject. When scope.tenant is given, it verifies the owning tenant. */
   reject(artifactId: string, reviewer: Principal, scope?: TenantScope): Promise<PromotionCandidate>;
@@ -414,12 +452,22 @@ export function createPromotions(opts: {
    *
    * Latency cost: `evaluateAndList` runs inside host-rest's per-tenant promotion governance mutex (the same lock
    * approve/reject/withdraw/actions serialize on), and every freshly nominated candidate's extraction runs
-   * concurrently (not sequentially) before the batch persists -- but the call still does not return, and the
-   * lock is not released, until the slowest of those concurrent extractions settles. The fail-open contract
-   * above covers a throw; it does not cover a slow or hanging extractor, which delays every other promotion
-   * transition for that tenant for as long as this hook takes to resolve.
+   * with up to `suggestConcurrency` in flight at once (not fully sequentially, and — as of #15 — not fully
+   * unbounded either) before the batch persists -- but the call still does not return, and the lock is not
+   * released, until the slowest in-flight extraction settles. The fail-open contract above covers a throw; it
+   * does not cover a slow or hanging extractor, which delays every other promotion transition for that tenant
+   * for as long as this hook takes to resolve. `suggestConcurrency` bounds how many candidates' extractions can
+   * be in flight at once (and therefore how much of the LLM provider's own rate limit a single burst of newly
+   * nominated candidates can consume); it does not bound *how slow* a single call may be.
    */
   suggestSchema?: (candidate: PromotionCandidate, context?: TenantScope) => Promise<SchemaSuggestion | null>;
+  /**
+   * Extraction concurrency budget for `suggestSchema` (#15; default 4). At most this many extractions run in
+   * flight at once across a single `evaluateAndList` scan's freshly nominated candidates (a worker pool via
+   * `mapWithConcurrency`, not unbounded `Promise.all`) — see `suggestSchema`'s own doc for why this matters
+   * while the lock is held. Ignored when `suggestSchema` is unset.
+   */
+  suggestConcurrency?: number;
   /**
    * Fail-open observability hook (product responsibility, optional): notified on every failure/skip listed on
    * `PromotionErrorEndpoint`'s doc (publish/unpublish audit fail-open, reconcile's audit backfill and projection
@@ -438,6 +486,7 @@ export function createPromotions(opts: {
     persistMany: store.persistMany,
     onError: opts.onError,
     suggestSchema: opts.suggestSchema,
+    suggestConcurrency: opts.suggestConcurrency ?? DEFAULT_SUGGEST_CONCURRENCY,
   });
 
   /** Read-only candidate list (does neither auto-nominate nor persist). */
@@ -612,15 +661,22 @@ export function createPromotions(opts: {
    * across callers). Whether that fail translates
    * into a hard stop (judge_failed) or an advisory pass-through is decided later, exclusively by the machine's
    * judgeBlocking policy at the judge.result transition — this function only resolves the verdict value.
+   * `draft` (approve()'s own draft argument, always known by the time this runs) is forwarded to the judge as
+   * context.draft (#1) so it can score the schema actually being registered rather than only the candidate's
+   * own machine suggestion.
    */
-  async function runJudge(candidate: PromotionCandidate, tenant?: string): Promise<JudgeVerdict> {
+  async function runJudge(
+    candidate: PromotionCandidate,
+    tenant: string | undefined,
+    draft: ComponentDraft,
+  ): Promise<JudgeVerdict> {
     // judge unset (no review hook) is treated as a pass with no advice -> straight to human review.
     // rubricId / rubricVersion are transcribed into the component.judged verdict if the judge returns them (additive; older judges that omit them are unaffected).
     if (opts.judge == null) return { pass: true, score: 0 };
     try {
       // Propagate the tenant passed to approve into the judge. With this the judge can narrow its
       // aggregation of telemetry etc. to that tenant (other tenants' observations do not contaminate the verdict input).
-      return await opts.judge(candidate, tenantField(tenant));
+      return await opts.judge(candidate, { ...tenantField(tenant), draft });
     } catch (e) {
       // A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail."
       // Whether promotion is allowed is delegated to the machine's judgeBlocking policy: with judgeBlocking:true
@@ -664,9 +720,12 @@ export function createPromotions(opts: {
     artifactId: string,
     draft: ComponentDraft,
     reviewer: Principal,
-    scope?: TenantScope,
+    scope?: ApproveOptions,
   ): Promise<PromotionCandidate> {
     const tenant = scope?.tenant;
+    // Recorded, not enforced (see ApproveOptions' own doc): a missing/false value is indistinguishable from an
+    // explicit false, and neither ever blocks this function's own transitions.
+    const acknowledgedSuggestion = scope?.acknowledgedSuggestion === true;
     let candidate = await store.require(artifactId, tenant);
     if (candidate.status === "published") {
       await opts.onPublish?.(publishArgs(candidate, tenant));
@@ -686,7 +745,7 @@ export function createPromotions(opts: {
     }
     if (candidate.status === "candidate") {
       candidate = await act(artifactId, { kind: "judge.start" }, reviewer, scope);
-      const verdict = await runJudge(candidate, tenant);
+      const verdict = await runJudge(candidate, tenant, draft);
       candidate = await act(artifactId, { kind: "judge.result", verdict }, reviewer, scope);
     }
     // Resumes a candidate persisted at "judging" (e.g. the process died between judge.start and judge.result):
@@ -696,7 +755,7 @@ export function createPromotions(opts: {
     // block above is unaffected here: judge.result already advanced it to in_review/judge_failed by the time
     // this runs, so this if's own condition is false for that path (no double-judge).
     if (candidate.status === "judging") {
-      const verdict = await runJudge(candidate, tenant);
+      const verdict = await runJudge(candidate, tenant, draft);
       candidate = await act(artifactId, { kind: "judge.result", verdict }, reviewer, scope);
     }
     if (candidate.status === "in_review") {
@@ -733,6 +792,11 @@ export function createPromotions(opts: {
               extractorVersion: candidate.suggestion.extractorVersion,
               changed: diff.changed,
               unchanged: diff.unchanged,
+              // Recorded, not enforced (ApproveOptions' own doc): whether the reviewer ticked the
+              // acknowledgement checkbox for *this* suggestion. Only present when the candidate actually
+              // carried a suggestion to acknowledge (this whole block is gated on that); a missing
+              // acknowledgedSuggestion in the approve request is recorded as false, not omitted.
+              acknowledged: acknowledgedSuggestion,
             },
             { kind: "user", id: reviewer.id },
             { tenant, artifactId },

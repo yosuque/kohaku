@@ -82,6 +82,16 @@ const STANDARD_KEY_ENV: Partial<Record<LlmProvider, string>> = {
   gemini: "GOOGLE_GENERATIVE_AI_API_KEY",
 };
 
+/**
+ * An env var set to "" (or whitespace only) is treated as unset, not as a configured empty key. This
+ * matters for `kohaku init`'s generated `.env.example`, which ships `KOHAKU_LLM_API_KEY=` uncommented as
+ * a fill-in-the-blank placeholder: after `process.loadEnvFile`, that line sets `KOHAKU_LLM_API_KEY` to the
+ * empty string, which would otherwise defeat the fallback to the provider's standard env var below.
+ */
+function presentEnv(v: string | undefined): string | undefined {
+  return v != null && v.trim() !== "" ? v : undefined;
+}
+
 export function resolveLlmEnv(env: Record<string, string | undefined> = process.env): LlmConfig {
   const provider = (env["KOHAKU_LLM_PROVIDER"] ?? "claude") as LlmProvider;
   if (!PROVIDERS.includes(provider)) {
@@ -97,11 +107,13 @@ export function resolveLlmEnv(env: Record<string, string | undefined> = process.
   }
 
   const standardKeyEnv = STANDARD_KEY_ENV[provider];
-  const apiKey = env["KOHAKU_LLM_API_KEY"] ?? (standardKeyEnv != null ? env[standardKeyEnv] : undefined);
+  const apiKey =
+    presentEnv(env["KOHAKU_LLM_API_KEY"]) ??
+    (standardKeyEnv != null ? presentEnv(env[standardKeyEnv]) : undefined);
   // Warn if a key-required provider (claude/openai/gemini = those defined in STANDARD_KEY_ENV) has no key set
   // (onboarding aid; not a hard fail: the L0 deterministic path is designed to work without a key). console.warn
   // goes to stderr on Node, so it does not pollute the MCP stdio (stdout).
-  if (standardKeyEnv != null && (apiKey == null || apiKey === "")) {
+  if (standardKeyEnv != null && apiKey == null) {
     console.warn(
       `[kohaku] No API key configured for LLM provider "${provider}" (set KOHAKU_LLM_API_KEY or ${standardKeyEnv}). ` +
         "The L0 deterministic path works, but L1/L2 generation requires a key.",

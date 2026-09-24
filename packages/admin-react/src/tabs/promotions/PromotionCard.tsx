@@ -1,5 +1,5 @@
 import type { ComponentDraft, PromotionCandidateView } from "@kohaku-ui/client";
-import { type ReactNode, useMemo, useState } from "react";
+import { memo, type ReactNode, useMemo, useState } from "react";
 import { useAdmin } from "../../context.js";
 import { V } from "../../theme.js";
 import { card, ErrorBanner, StatusBadge, smallButton } from "../../ui.js";
@@ -9,18 +9,34 @@ import { PromotionPreview } from "./PromotionPreview.js";
 import { SuggestionPanel } from "./SuggestionPanel.js";
 import { diffAgainstSuggestion } from "./suggestion.js";
 
-export type PromotionActionKind = "approve" | "reject" | "withdraw" | "requestChanges";
+export type PromotionActionKind = "approve" | "reject" | "withdraw" | "unpublish" | "requestChanges";
+
+export interface PromotionActionOptions {
+  /** Whether the reviewer ticked the "I reviewed the suggestion" acknowledgement (approve only). */
+  acknowledgedSuggestion?: boolean;
+}
 
 export interface PromotionCardProps {
   candidate: PromotionCandidateView;
   busy: boolean;
-  onAction: (kind: PromotionActionKind, draft?: ComponentDraft) => Promise<void>;
-  /** The form's initial state (from PromotionDefaults.initialDraftFor). Read once on mount. */
+  /**
+   * `candidate` is passed back (rather than the card closing over it) so a single `useCallback`-memoized
+   * handler in PromotionsTab can be shared by every card unchanged across renders — required for `memo` below
+   * to actually skip re-rendering cards unaffected by another card's in-flight action.
+   */
+  onAction: (
+    candidate: PromotionCandidateView,
+    kind: PromotionActionKind,
+    draft?: ComponentDraft,
+    opts?: PromotionActionOptions,
+  ) => void;
+  /** The form's initial state (from PromotionDefaults.initialDraftFor, or the suggestion). Read once on mount. */
   initialDraft: DraftForm;
+  /** The product's own queryTemplate.path choices; a suggested path outside this list is appended internally. */
   queryPaths: readonly string[];
 }
 
-export function PromotionCard(props: PromotionCardProps): ReactNode {
+function PromotionCardImpl(props: PromotionCardProps): ReactNode {
   const { candidate } = props;
   const { messages: t } = useAdmin();
   const [draft, setDraft] = useState<DraftForm>(props.initialDraft);
@@ -33,6 +49,14 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
     () => (suggestion != null ? diffAgainstSuggestion(draft, suggestion) : []),
     [draft, suggestion],
   );
+  // A suggested queryTemplate.path outside the product's own list must still be selectable (and visible) in
+  // the <select>, not silently dropped — without this, approving would submit a value the UI never displayed.
+  const queryPaths = useMemo(() => {
+    const suggestedPath = suggestion?.draft.queryTemplate?.path;
+    return suggestedPath != null && !props.queryPaths.includes(suggestedPath)
+      ? [...props.queryPaths, suggestedPath]
+      : props.queryPaths;
+  }, [props.queryPaths, suggestion]);
   // The approve button stays disabled until the reviewer confirms they compared the proposal with the preview.
   const needsAcknowledgement = suggestion != null && !acknowledged;
   const terminal = ["published", "rejected", "withdrawn"].includes(candidate.status);
@@ -102,7 +126,7 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
       {candidate.html != null && <PromotionPreview artifactId={candidate.artifactId} />}
       {!terminal && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
-          <PromotionDraftEditor draft={draft} setDraft={setDraft} queryPaths={props.queryPaths} />
+          <PromotionDraftEditor draft={draft} setDraft={setDraft} queryPaths={queryPaths} />
           {suggestion != null && (
             <SuggestionPanel
               suggestion={suggestion}
@@ -116,7 +140,15 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
             <button
               type="button"
               disabled={props.busy || !canApprove}
-              onClick={() => canApprove && void props.onAction("approve", built.payload)}
+              onClick={() =>
+                canApprove &&
+                props.onAction(
+                  candidate,
+                  "approve",
+                  built.payload,
+                  suggestion != null ? { acknowledgedSuggestion: acknowledged } : undefined,
+                )
+              }
               style={{
                 ...smallButton,
                 background: canApprove ? V.primary : V.disabledSurface,
@@ -132,7 +164,7 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
               <button
                 type="button"
                 disabled={props.busy}
-                onClick={() => void props.onAction("requestChanges")}
+                onClick={() => props.onAction(candidate, "requestChanges")}
                 style={{
                   ...smallButton,
                   borderColor: V.changesRequestedBorder,
@@ -146,7 +178,7 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
               <button
                 type="button"
                 disabled={props.busy}
-                onClick={() => void props.onAction("withdraw")}
+                onClick={() => props.onAction(candidate, "withdraw")}
                 style={{ ...smallButton, borderColor: V.negativeBorder, color: V.negativeText }}
               >
                 {t.promotions.withdrawButton}
@@ -156,7 +188,7 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
                 <button
                   type="button"
                   disabled={props.busy}
-                  onClick={() => void props.onAction("reject")}
+                  onClick={() => props.onAction(candidate, "reject")}
                   style={smallButton}
                 >
                   {t.promotions.rejectButton}
@@ -171,7 +203,7 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
           <button
             type="button"
             disabled={props.busy}
-            onClick={() => void props.onAction("withdraw")}
+            onClick={() => props.onAction(candidate, "unpublish")}
             style={{ ...smallButton, borderColor: V.negativeBorder, color: V.negativeText }}
           >
             {t.promotions.unpublishButton}
@@ -181,3 +213,5 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
     </div>
   );
 }
+
+export const PromotionCard = memo(PromotionCardImpl);

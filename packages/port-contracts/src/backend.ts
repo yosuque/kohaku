@@ -7,7 +7,11 @@ import { spawnSync } from "node:child_process";
  *   2. a Docker daemon — the suite starts a throwaway container via testcontainers;
  *   3. neither — the suite is skipped, so a plain `pnpm test` on a laptop without Docker stays green.
  * `KOHAKU_ADAPTER_TESTS=require` turns tier 3 into a failure, so a CI job that is supposed to exercise the
- * adapters can never pass by silently skipping them.
+ * adapters can never pass by silently skipping them. `KOHAKU_ADAPTER_TESTS=skip` is the opposite override:
+ * it short-circuits to `{ mode: "skip" }` before either tier 1 or tier 2 is even consulted, so a caller who
+ * knows Docker isn't available (or doesn't want the `docker info` probe / container startup cost) never pays
+ * for it — this is what lets a globalSetup share one probe across every test file in a project instead of
+ * each file probing Docker on its own.
  */
 export type AdapterBackendKind = "redis" | "postgres";
 
@@ -26,6 +30,9 @@ export function resolveAdapterBackend(
   env: Record<string, string | undefined>,
   dockerProbe: () => boolean,
 ): AdapterBackend {
+  if (env["KOHAKU_ADAPTER_TESTS"] === "skip") {
+    return { mode: "skip", reason: "KOHAKU_ADAPTER_TESTS=skip" };
+  }
   const url = env[URL_ENV[kind]];
   if (url != null && url !== "") return { mode: "url", url };
   if (dockerProbe()) return { mode: "container" };

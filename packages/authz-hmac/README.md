@@ -8,11 +8,12 @@ This is a reference implementation: the contract is `AuthzPort` in `@kohaku-ui/s
 
 ## Capability revocation
 
-Every token `issueCapability` mints now carries a `jti`, and `verify` consults an injectable `revocations` store (a `CapabilityRevocationStore`, defined in `@kohaku-ui/spec-core`) on every call. The returned port exposes `revokeCapability`:
+Every token `issueCapability` mints now carries a `jti`, and `verify` consults an injectable `revocations` store (a `CapabilityRevocationStore`, defined in `@kohaku-ui/spec-core`) on every call, but only *after* the requested scope is granted — an out-of-scope request never pays for a store round trip, and a store outage only affects requests that would otherwise have succeeded. The returned port exposes `revokeCapability`:
 
 ```ts
 import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { createRedisRevocationStore } from "@kohaku-ui/storage-redis";
+// storage-redis's ioredis peer dependency must be installed alongside it.
 
 const authz = createHmacAuthzPort(secret, {
   revocations: createRedisRevocationStore({ url: process.env.KOHAKU_REDIS_URL! }),
@@ -23,7 +24,11 @@ await authz.revokeCapability(token); // { ok: true }
 await authz.verify(token, req); //     { ok: false, reason: "capability revoked" }
 ```
 
-`revokeCapability` takes the whole token, not a bare `jti`: it verifies the signature first, so a caller can never revoke an identifier it merely guessed. It fails closed with a `reason` instead of throwing — `"malformed token"` / `"invalid signature"` / `"malformed payload"` for a tampered or foreign token, `"capability expired"` for one already past its `exp` (revoking it would just grow the store for nothing), and `"token predates revocation support"` for one minted before this feature existed (see below).
+`revokeCapability` returns a coded `RevokeCapabilityResult` (`@kohaku-ui/spec-core`) instead of throwing — it fails closed with a `code` and a human-readable `reason`: `"MALFORMED"` / `"INVALID_SIGNATURE"` for a tampered, foreign, or unparseable token, `"NO_JTI"` for one minted before this feature existed (see below), and `"STORE_ERROR"` when the revocation store itself throws (the store failure is caught here and reported as a coded result, unlike `verify` — see "Revocation-store failures" below). Revoking a token already past its `exp` is `{ ok: true, alreadyExpired: true }`, an idempotent success rather than a failure: the token can no longer verify regardless, so writing a revocation record for it would just grow the store for nothing. "Expired" uses the same `exp <= now` boundary everywhere (`verify`, `revokeCapability`, and the memory store's own sweep).
+
+**`requireJti`**: `options.requireJti` (default `false`) makes `verify` reject a jti-less token outright (reason `"capability lacks jti"`) instead of the default backward-compatible acceptance. Roll this out only after a fleet has fully switched to a `jti`-issuing version and no pre-upgrade token can still be in circulation (past its TTL from the rollout instant) — turning it on earlier would fail `verify` for a still-valid pre-upgrade token.
+
+**Revocation-store failures**: `verify`'s revocation check is *not* caught — a store rejection (timeout, connection failure, etc.) propagates as a thrown error, which is fail-closed by contract (see `AuthzPort.verify`'s doc comment in `@kohaku-ui/spec-core`'s `ports.ts`): a caller MUST treat a thrown `verify` as a denial, and a host serving requests over this port MUST map it to a 5xx response. `revokeCapability`, by contrast, has no non-throwing "deny" outcome to fall back on for an infra failure, so it catches a store throw itself and returns the coded `"STORE_ERROR"` result described above instead.
 
 **Pre-upgrade tokens**: a token issued before `revokeCapability` existed carries no `jti`. It still verifies exactly as before and simply runs to its `exp` — it cannot be made revocable retroactively. This is deliberate (a rolling deploy should not invalidate an older instance's already-issued tokens), but it is silent: nothing logs a jti-less token being accepted, so the only way to know a fleet is safe to rely on revocation for is to know it has fully rolled onto a `jti`-issuing version.
 

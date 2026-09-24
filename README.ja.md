@@ -61,7 +61,7 @@ npx @kohaku-ui/cli init --from ../sales.csv   # .json 配列 / .sqlite ファイ
 npm run dev
 ```
 
-自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。このセクションの残りはモノレポ自体の開発セットアップです。
+自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。あわせて、生成し立ての capability secret を書いた `.env` も作られるので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv) を試してください。このセクションの残りはモノレポ自体の開発セットアップです。
 
 前提: Node >= 22、pnpm 12(下限は `package.json` の `engines`。CI は宣言下限の Node 22 と Node 24 の両方で検証、`.node-version` はローカル開発用に 25.7.0 を指定)。
 

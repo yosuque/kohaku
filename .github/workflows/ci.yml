@@ -283,6 +283,10 @@ jobs:
           KOHAKU_STORAGE: ${{ matrix.storage }}
           KOHAKU_REDIS_URL: redis://localhost:6379
           KOHAKU_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+          # A redis/postgres backend requires a real capability secret (sample-api's from-env refuses to
+          # start on the fixed demo default once storage leaves the single-process file/hmac shape) — this
+          # is a CI-only value, never used outside this ephemeral job.
+          KOHAKU_CAPABILITY_SECRET: ci-conformance-adapters-test-secret-not-for-production-use
         run: |
           LOG=$(mktemp)
           (KOHAKU_DATA_DIR=$(mktemp -d) PORT=8787 pnpm --filter @kohaku-ui-sample/api start) >"$LOG" 2>&1 &

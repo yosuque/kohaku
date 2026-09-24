@@ -1,3 +1,4 @@
+import type { GenerateObjectRequest } from "@kohaku-ui/llm";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { describe, expect, it } from "vitest";
 import {
@@ -5,6 +6,7 @@ import {
   extractDataRefs,
   SCHEMA_EXTRACTOR_ID,
   SCHEMA_EXTRACTOR_VERSION,
+  SchemaSuggestionOutputSchema,
 } from "../src/index.js";
 
 const HTML =
@@ -132,5 +134,64 @@ describe("createSchemaExtractor", () => {
     const extractor = createSchemaExtractor({ llm });
     await extractor.extract({ html: `<html>${"x".repeat(50_000)}</html>`, request: "r", namespace: "sales" });
     expect(llm.calls[0]!.prompt.length).toBeLessThan(20_000);
+  });
+
+  it("passes an AbortSignal.timeout budget to generateObject (default 20s)", async () => {
+    let seenAbort: AbortSignal | undefined;
+    const llm = new FakeLlm({
+      objects: (req: GenerateObjectRequest<unknown>) => {
+        seenAbort = req.abort;
+        return OUTPUT;
+      },
+    });
+    const extractor = createSchemaExtractor({ llm });
+    await extractor.extract({ html: HTML, request: "r", namespace: "sales" });
+    expect(seenAbort).toBeInstanceOf(AbortSignal);
+    expect(seenAbort?.aborted).toBe(false);
+  });
+
+  it("honors a custom timeoutMs for the extraction budget", async () => {
+    let seenAbort: AbortSignal | undefined;
+    const llm = new FakeLlm({
+      objects: (req: GenerateObjectRequest<unknown>) => {
+        seenAbort = req.abort;
+        return OUTPUT;
+      },
+    });
+    const extractor = createSchemaExtractor({ llm, timeoutMs: 5 });
+    await extractor.extract({ html: HTML, request: "r", namespace: "sales" });
+    // Give the timeout a moment to fire (5ms budget) and confirm it is wired to a real timer, not ignored.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(seenAbort?.aborted).toBe(true);
+  });
+});
+
+describe("SchemaSuggestionOutputSchema (negative cases)", () => {
+  const VALID = {
+    componentType: "sales.calendarHeatmap",
+    intentName: "sales.calendar_heatmap",
+    description: "Display sales as a monthly calendar heatmap",
+    paramsJsonSchema: { type: "object", properties: {} },
+    events: [],
+    confidence: 0.5,
+  };
+
+  it.each([
+    ["componentType with a single segment (no namespace dot)", { componentType: "calendarHeatmap" }],
+    ["componentType with a leading uppercase namespace", { componentType: "Sales.calendarHeatmap" }],
+    ["componentType longer than 80 chars", { componentType: `sales.${"x".repeat(80)}` }],
+    ["confidence above 1", { confidence: 1.5 }],
+    [
+      "more than 20 events",
+      { events: Array.from({ length: 21 }, (_, i) => ({ name: `e${i}`, description: "" })) },
+    ],
+    ['paramsJsonSchema.type other than "object"', { paramsJsonSchema: { type: "array", properties: {} } }],
+  ])("rejects %s", (_label, override) => {
+    const result = SchemaSuggestionOutputSchema.safeParse({ ...VALID, ...override });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts the valid baseline (sanity check for the negative cases above)", () => {
+    expect(SchemaSuggestionOutputSchema.safeParse(VALID).success).toBe(true);
   });
 });

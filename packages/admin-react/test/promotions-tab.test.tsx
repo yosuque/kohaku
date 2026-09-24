@@ -66,7 +66,7 @@ describe("PromotionsTab", () => {
     const cand = candidate();
     const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.customViz1%401/approve": () =>
           jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "viewer cannot approve" } }, 403),
       },
@@ -84,7 +84,7 @@ describe("PromotionsTab", () => {
     const cand = candidate();
     const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.customViz1%401/approve": () =>
           jsonResponse({ error: { code: "PROMOTION_INVALID", message: "component already published" } }, 422),
       },
@@ -103,7 +103,7 @@ describe("PromotionsTab", () => {
     let approveCall: { url: string; init?: RequestInit } | null = null;
     const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.customViz1%401/approve": (call) => {
           approveCall = call;
           return jsonResponse({ candidate: { ...cand, status: "published" } });
@@ -163,7 +163,7 @@ describe("PromotionsTab", () => {
       const cand = candidate({ status });
       const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
         handlers: {
-          "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+          "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         },
       });
       await screen.findByText(cand.artifactId as string);
@@ -182,7 +182,7 @@ describe("PromotionsTab", () => {
   it("lists every status filter option, in machine order", async () => {
     renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [] }),
+        "GET /promotions": () => jsonResponse({ candidates: [] }),
       },
     });
     const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
@@ -206,7 +206,7 @@ describe("PromotionsTab", () => {
   it("shows the sales empty-all copy keyed off promotionMinUses when there are no candidates", async () => {
     renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [] }),
+        "GET /promotions": () => jsonResponse({ candidates: [] }),
         "GET /analytics/summary": () => jsonResponse({ promotionPolicy: { promotionMinUses: 4 } }),
       },
     });
@@ -218,7 +218,7 @@ describe("PromotionsTab", () => {
     let approveCall: { url: string; init?: RequestInit } | null = null;
     const view = renderInAdmin(<PromotionsTab />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.custom%409/approve": (call) => {
           approveCall = call;
           return jsonResponse({ candidate: { ...cand, status: "published" } });
@@ -244,7 +244,7 @@ describe("PromotionsTab", () => {
     const actionKinds: string[] = [];
     const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.customViz1%401/actions": (call) => {
           const body = JSON.parse(call.init!.body as string) as { action: { kind: string } };
           actionKinds.push(body.action.kind);
@@ -259,12 +259,12 @@ describe("PromotionsTab", () => {
     expect(actionKinds).toEqual(["review.start", "review.requestChanges"]);
   });
 
-  it("withdraws a published candidate via the unpublish button and shows the withdrawn notice", async () => {
+  it("unpublishes a published candidate via the unpublish button, hits the withdraw route, and shows the unpublished notice", async () => {
     const cand = candidate({ status: "published" });
     let withdrawCalled = false;
     const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.customViz1%401/withdraw": () => {
           withdrawCalled = true;
           return jsonResponse({ candidate: { ...cand, status: "withdrawn" } });
@@ -275,7 +275,108 @@ describe("PromotionsTab", () => {
     fireEvent.click(screen.getByText(m.promotions.unpublishButton));
     await waitFor(() => expect(view.notices.length).toBeGreaterThan(0));
     expect(withdrawCalled).toBe(true);
+    // Distinct from withdrawnNotice below — unpublish and withdraw are no longer conflated.
+    expect(view.notices[0]).toEqual({ text: m.promotions.unpublishedNotice, kind: "info" });
+  });
+
+  it("shows the role explanation for opUnpublish (not opWithdraw) when unpublishing a published candidate is denied", async () => {
+    const cand = candidate({ status: "published" });
+    const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
+      handlers: {
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
+        "POST /promotions/sales.customViz1%401/withdraw": () =>
+          jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "viewer cannot unpublish" } }, 403),
+      },
+    });
+    await screen.findByText(cand.artifactId as string);
+    fireEvent.click(screen.getByText(m.promotions.unpublishButton));
+    await waitFor(() => expect(view.notices.length).toBeGreaterThan(0));
+    expect(view.notices[0]).toEqual({
+      text: m.deniedMessage("CAPABILITY_DENIED", m.promotions.opUnpublish),
+      kind: "error",
+    });
+  });
+
+  it("withdraws a changes_requested candidate via the withdraw button, hits the withdraw route, and shows the withdrawn notice", async () => {
+    const cand = candidate({ status: "changes_requested" });
+    let withdrawCalled = false;
+    const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
+      handlers: {
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
+        "POST /promotions/sales.customViz1%401/withdraw": () => {
+          withdrawCalled = true;
+          return jsonResponse({ candidate: { ...cand, status: "withdrawn" } });
+        },
+      },
+    });
+    await screen.findByText(cand.artifactId as string);
+    fireEvent.click(screen.getByText(m.promotions.withdrawButton));
+    await waitFor(() => expect(view.notices.length).toBeGreaterThan(0));
+    expect(withdrawCalled).toBe(true);
+    // Distinct from unpublishedNotice above — withdraw is "the candidate leaves the review queue", not
+    // "removed from the catalog and Intent" (that only applies to an already-published entry).
     expect(view.notices[0]).toEqual({ text: m.promotions.withdrawnNotice, kind: "info" });
+  });
+
+  it("extracts candidates via the toolbar button (POST /promotions/evaluate) then reloads the list", async () => {
+    const before = candidate({ artifactId: "before@1" });
+    const after = candidate({ artifactId: "after@1" });
+    let evaluateCalled = false;
+    let listCalls = 0;
+    renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
+      handlers: {
+        "GET /promotions": () => {
+          listCalls += 1;
+          return jsonResponse({ candidates: [listCalls === 1 ? before : after] });
+        },
+        "POST /promotions/evaluate": () => {
+          evaluateCalled = true;
+          return jsonResponse({ candidates: [] });
+        },
+      },
+    });
+    await screen.findByText("before@1");
+    fireEvent.click(screen.getByText(m.promotions.evaluateButton));
+    await waitFor(() => expect(evaluateCalled).toBe(true));
+    await screen.findByText("after@1");
+    expect(listCalls).toBe(2);
+  });
+
+  it("shows the role explanation for opEvaluate when extracting candidates is denied", async () => {
+    const cand = candidate();
+    const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
+      handlers: {
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
+        "POST /promotions/evaluate": () =>
+          jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "viewer cannot evaluate" } }, 403),
+      },
+    });
+    await screen.findByText(cand.artifactId as string);
+    fireEvent.click(screen.getByText(m.promotions.evaluateButton));
+    await waitFor(() => expect(view.notices.length).toBeGreaterThan(0));
+    expect(view.notices[0]).toEqual({
+      text: m.deniedMessage("CAPABILITY_DENIED", m.promotions.opEvaluate),
+      kind: "error",
+    });
+  });
+
+  it("sends no acknowledgedSuggestion field on approve when the candidate carries no suggestion", async () => {
+    const cand = candidate();
+    let approveCall: { url: string; init?: RequestInit } | null = null;
+    const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
+      handlers: {
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
+        "POST /promotions/sales.customViz1%401/approve": (call) => {
+          approveCall = call;
+          return jsonResponse({ candidate: { ...cand, status: "published" } });
+        },
+      },
+    });
+    await screen.findByText(cand.artifactId as string);
+    fireEvent.click(screen.getByText(m.promotions.approveButton));
+    await waitFor(() => expect(view.notices.length).toBeGreaterThan(0));
+    const body = JSON.parse(approveCall!.init!.body as string) as Record<string, unknown>;
+    expect(body["acknowledgedSuggestion"]).toBeUndefined();
   });
 
   it("rejects a candidate via the reject button and shows the rejected notice", async () => {
@@ -283,7 +384,7 @@ describe("PromotionsTab", () => {
     let rejectCalled = false;
     const view = renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.customViz1%401/reject": () => {
           rejectCalled = true;
           return jsonResponse({ candidate: { ...cand, status: "rejected" } });
@@ -307,7 +408,7 @@ describe("PromotionsTab", () => {
     let previewCalled = false;
     renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.customViz1%401/preview": () => {
           previewCalled = true;
           return jsonResponse({ preview: { html, sha256 } });
@@ -346,7 +447,7 @@ describe("PromotionsTab", () => {
     const cand = candidate({ html });
     renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
+        "GET /promotions": () => jsonResponse({ candidates: [cand] }),
         "POST /promotions/sales.customViz1%401/preview": () =>
           jsonResponse({ preview: { html, sha256: "0".repeat(64) } }),
       },

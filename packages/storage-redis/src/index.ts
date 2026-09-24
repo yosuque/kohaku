@@ -1,3 +1,8 @@
+export {
+  type CreateRedisConnectionOptions,
+  createRedisConnection,
+  type RedisConnectionHandle,
+} from "./connection.js";
 export { DEFAULT_KEY_PREFIX, type RedisKeys, redisKeys, tenantSegment } from "./keys.js";
 export { LINEAGE_INDEX_FIELDS } from "./lineage.js";
 export {

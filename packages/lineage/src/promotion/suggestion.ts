@@ -1,32 +1,17 @@
 import { canonicalStringify } from "@kohaku-ui/spec-core";
 import type { ComponentDraft } from "./machine.js";
 
-/** One event the extractor believes the component emits through window.kohaku.emit. */
-export interface SuggestedEvent {
-  name: string;
-  description: string;
-}
-
 /**
  * A machine-extracted registration proposal for a promotion candidate (advisory only). Produced by a
  * `suggestSchema` hook (the product wires `@kohaku-ui/evals`' extractor there), persisted on the promotion
  * snapshot (`data.suggestion`) so the approval UI can prefill its form, and never applied without a human
  * `approve` carrying the final draft (LIN-PRM-001 is untouched: the suggestion is not a transition).
- * The type lives here, not in evals, because lineage owns `PromotionCandidate` and must not depend on the LLM
- * layer — evals returns a structurally identical object (the same idiom as host-rest's `ComponentDraftSchema`).
+ * Re-exported from spec-core (not defined here): it is a wire-contract type shared by `evals` (which
+ * produces it) and `client` (which mirrors it as a REST view), and those packages are lineage's siblings
+ * (no back-flow allowed), so the single definition lives one layer down instead of being hand-duplicated
+ * three times.
  */
-export interface SchemaSuggestion {
-  draft: ComponentDraft;
-  events: SuggestedEvent[];
-  /** The extractor's own 0..1 estimate of how faithfully the proposal reflects the HTML. */
-  confidence: number;
-  /** The model that produced the proposal (LlmPort.modelId), for the audit trail. */
-  model: string;
-  /** Extractor identity + version, stamped like a rubric so a later prompt change is visible in lineage. */
-  extractorId: string;
-  extractorVersion: string;
-  suggestedAt: string;
-}
+export type { SchemaSuggestion, SuggestedEvent } from "@kohaku-ui/spec-core";
 
 export type DraftDiffField =
   | "componentType"

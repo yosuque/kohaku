@@ -5,11 +5,13 @@ import { inferProfile, normalizeRows } from "../../src/init/infer.js";
 import { readDataFile } from "../../src/init/readers.js";
 import {
   renderDataset,
+  renderEnvFile,
   renderFixedSpecs,
   renderGoldenFixture,
   renderIntents,
   renderPackageJson,
   renderProjectFiles,
+  renderReadme,
 } from "../../src/init/render.js";
 import { EXTERNAL_VERSIONS } from "../../src/init/versions.js";
 import { CLI_VERSION } from "../../src/version.js";
@@ -152,6 +154,42 @@ describe("EXTERNAL_VERSIONS", () => {
     for (const [name, version] of Object.entries(EXTERNAL_VERSIONS)) {
       expect(catalog.get(name), `${name} is not in the catalog`).toBe(version);
     }
+  });
+});
+
+describe("renderReadme", () => {
+  it("explains that Chat is scoped to the generated Intent catalog (NO_MATCH otherwise)", async () => {
+    const { profile } = await profileOf();
+    const readme = renderReadme(profile);
+    expect(readme).toContain(
+      "Chat answers only within the generated Intent catalog; a question outside it returns `NO_MATCH`.",
+    );
+    expect(readme).toContain("fallbackIntent");
+  });
+
+  it("tells the reader to edit the generated .env, never to copy .env.example over it", async () => {
+    // Overwriting .env with .env.example's empty KOHAKU_CAPABILITY_SECRET would make the generated
+    // server throw at startup (see server/app.ts) -- the wording must not suggest that.
+    const { profile } = await profileOf();
+    const readme = renderReadme(profile);
+    expect(readme).not.toMatch(/copy `?\.env\.example`? to `?\.env`?/);
+    expect(readme).toContain("edit `.env` (created for you with a capability secret)");
+    expect(readme).toContain(".env.example` documents every variable");
+  });
+});
+
+describe("renderEnvFile", () => {
+  it("writes the given secret as KOHAKU_CAPABILITY_SECRET", () => {
+    const env = renderEnvFile("shh-its-a-secret");
+    expect(env).toContain("KOHAKU_CAPABILITY_SECRET=shh-its-a-secret");
+  });
+
+  it("also carries a commented provider-key block, so .env is self-sufficient to edit in place", () => {
+    const env = renderEnvFile("shh-its-a-secret");
+    expect(env).toMatch(/^# KOHAKU_LLM_PROVIDER=claude/m);
+    expect(env).toMatch(/^# KOHAKU_LLM_API_KEY=/m);
+    expect(env).toContain("or export ANTHROPIC_API_KEY / OPENAI_API_KEY");
+    expect(env).toContain("KOHAKU_LLM_PROVIDER=ollama KOHAKU_LLM_MODEL=gemma4:e4b");
   });
 });
 

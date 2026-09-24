@@ -49,11 +49,16 @@ export interface PromotionsApi {
     actor: Principal,
     scope?: { tenant?: string },
   ): Promise<unknown>;
+  /**
+   * scope.acknowledgedSuggestion (additive, optional) carries the request body's own `acknowledgedSuggestion`
+   * through to the promotion service (recorded on `component.schemaEdited` as `acknowledged`, not enforced —
+   * see `@kohaku-ui/lineage`'s `ApproveOptions`).
+   */
   approve(
     artifactId: string,
     draft: ComponentDraftInput,
     reviewer: Principal,
-    scope?: { tenant?: string },
+    scope?: { tenant?: string; acknowledgedSuggestion?: boolean },
   ): Promise<unknown>;
   reject(artifactId: string, reviewer: Principal, scope?: { tenant?: string }): Promise<unknown>;
   withdraw(

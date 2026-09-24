@@ -1,5 +1,11 @@
-import { applyActionEffects, type ParsedInvokableRef, parseInvokableRef } from "@kohaku-ui/host-core";
-import type { Principal, VerifyResult } from "@kohaku-ui/spec-core";
+import {
+  applyActionEffects,
+  CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
+  type ParsedInvokableRef,
+  parseInvokableRef,
+  verifyCapabilitySafely,
+} from "@kohaku-ui/host-core";
+import type { Principal, VerifyRequest, VerifyResult } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { KohakuHostDeps } from "../types.js";
@@ -13,6 +19,29 @@ import { ANONYMOUS, message, parseBody, type RouteContext, reportHostError, requ
  * fixed message; the original error still reaches the observability hook (onError) via reportHostError.
  */
 const REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable";
+
+/**
+ * Calls `authz.verify` via host-core's `verifyCapabilitySafely` (shared with the MCP profile), and maps its
+ * `"unavailable"` outcome to a 503 `INTERNAL` response rather than letting a thrown `verify` propagate as an
+ * unhandled rejection / raw 500. The original error still reaches the observability hook via reportHostError,
+ * symmetric with every other failure-path response in this file.
+ */
+async function verifyCapability(
+  deps: KohakuHostDeps,
+  c: Context,
+  endpoint: string,
+  token: string,
+  req: VerifyRequest,
+): Promise<VerifyResult | Response> {
+  const requestId = requestIdOf(c, deps);
+  const result = await verifyCapabilitySafely(deps.authz, token, req, (e) =>
+    reportHostError(deps, endpoint, requestId, e),
+  );
+  if (result.kind === "unavailable") {
+    return c.json(errorBody("INTERNAL", CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE, requestId), 503);
+  }
+  return result.verdict;
+}
 
 /**
  * Resolves the principal to act as for a verified capability. When `deps.auth` is wired (the host performs
@@ -60,7 +89,11 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     }
     const { base, params } = parsed.ref;
 
-    const verdict = await deps.authz.verify(token, { kind: "read", ref: base.raw });
+    const verdict = await verifyCapability(deps, c, "binding/resolve", token, {
+      kind: "read",
+      ref: base.raw,
+    });
+    if (verdict instanceof Response) return verdict;
     if (!verdict.ok) {
       return c.json(errorBody("CAPABILITY_DENIED", verdict.reason ?? "capability denied"), 403);
     }
@@ -93,7 +126,11 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     if (token == null) {
       return c.json(errorBody("CAPABILITY_REQUIRED", "Authorization: Bearer <capability> is required"), 401);
     }
-    const verdict = await deps.authz.verify(token, { kind: "write", ref: body.action });
+    const verdict = await verifyCapability(deps, c, "binding/action", token, {
+      kind: "write",
+      ref: body.action,
+    });
+    if (verdict instanceof Response) return verdict;
     if (!verdict.ok) {
       return c.json(errorBody("CAPABILITY_DENIED", verdict.reason ?? "capability denied"), 403);
     }

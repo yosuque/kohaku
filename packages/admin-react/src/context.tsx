@@ -1,6 +1,15 @@
 import type { KohakuClient } from "@kohaku-ui/client";
 import type { ThemeTokens } from "@kohaku-ui/spec-core";
-import { createContext, type ReactNode, useCallback, useContext, useMemo, useRef } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { type AdminMessages, defaultAdminMessages } from "./messages.js";
 import type { NotifyFn } from "./ui.js";
 
@@ -12,6 +21,14 @@ export interface AdminContextValue {
   notify: NotifyFn;
   /** The dictionary at call time (for async callbacks, so a language switch mid-request is honoured). */
   getMessages: () => AdminMessages;
+  /**
+   * The promotion / fixation nomination thresholds (GET /analytics/summary's `promotionPolicy`), fetched once
+   * per `(client, tenant)` here rather than by every tab that needs one — `usePromotions` / `useFixations` read
+   * these instead of each issuing their own `analytics.summary()` call on every reload. `null` until the fetch
+   * resolves, and `null` again if it fails (the empty-state copy falls back to `emptyDefault` in that case).
+   */
+  promotionMinUses: number | null;
+  fixationMinUses: number | null;
 }
 
 const AdminContext = createContext<AdminContextValue | null>(null);
@@ -25,6 +42,12 @@ export interface AdminProviderProps {
   theme?: ThemeTokens;
   /** Receives every notification the console emits (KohakuAdmin also renders them as a banner). */
   onNotice?: NotifyFn;
+  /**
+   * Scopes the once-per-`(client, tenant)` threshold fetch (see `AdminContextValue.promotionMinUses`). The
+   * tenant header itself still rides on `client` (the product's own `headers()` hook) — this is only the
+   * dependency that tells this provider a tenant switch happened and the thresholds should be re-fetched.
+   */
+  tenant?: string;
   children: ReactNode;
 }
 
@@ -36,9 +59,42 @@ export function AdminProvider(props: AdminProviderProps): ReactNode {
   onNoticeRef.current = props.onNotice;
   const notify = useCallback<NotifyFn>((text, kind = "info") => onNoticeRef.current?.(text, kind), []);
   const getMessages = useCallback(() => messagesRef.current, []);
+
+  const { client, tenant } = props;
+  const [promotionMinUses, setPromotionMinUses] = useState<number | null>(null);
+  const [fixationMinUses, setFixationMinUses] = useState<number | null>(null);
+  useEffect(() => {
+    let current = true;
+    setPromotionMinUses(null);
+    setFixationMinUses(null);
+    void client.analytics
+      .summary()
+      .then((s) => {
+        if (!current) return;
+        setPromotionMinUses(s.promotionPolicy?.promotionMinUses ?? null);
+        setFixationMinUses(s.promotionPolicy?.fixationMinUses ?? null);
+      })
+      .catch(() => {
+        if (!current) return;
+        setPromotionMinUses(null);
+        setFixationMinUses(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, tenant]);
+
   const value = useMemo<AdminContextValue>(
-    () => ({ client: props.client, messages, theme: props.theme, notify, getMessages }),
-    [props.client, messages, props.theme, notify, getMessages],
+    () => ({
+      client: props.client,
+      messages,
+      theme: props.theme,
+      notify,
+      getMessages,
+      promotionMinUses,
+      fixationMinUses,
+    }),
+    [props.client, messages, props.theme, notify, getMessages, promotionMinUses, fixationMinUses],
   );
   return <AdminContext.Provider value={value}>{props.children}</AdminContext.Provider>;
 }

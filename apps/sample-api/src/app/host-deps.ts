@@ -9,8 +9,8 @@ import {
 } from "@kohaku-ui/lineage";
 import type { AuthzPort, DomainPort, StoragePort } from "@kohaku-ui/spec-core";
 import { salesActionEffects } from "../action-effects.js";
-import type { RequestIdentity } from "../ports/from-env.js";
 import { admitFixationForLocale } from "./compose-context.js";
+import type { RequestIdentity } from "./request-identity.js";
 
 /**
  * Assembles the KohakuHostDeps for host-rest.
@@ -33,9 +33,9 @@ export function createHostDeps(args: {
     domain,
     authz,
     querySource: "sales",
-    // Principal / tenant resolution (product responsibility) is delegated to `identity` (from-env.ts):
+    // Principal / tenant resolution (product responsibility) is delegated to `identity` (request-identity.ts):
     // either the demo's header scheme (createHeaderIdentity) or verified JWT claims (createJwtRequestIdentity).
-    // See from-env.ts's doc comments for the rationale of each.
+    // See request-identity.ts's doc comments for the rationale of each.
     auth: identity.auth,
     // Declarative RBAC for the governance plane (SPEC §6.1 governance-plane authorization [Draft]). A role -> allowed-operation
     // matrix: admin=all allowed / reviewer=promotion review + lineage viewing / viewer=read-only. Switching to viewer

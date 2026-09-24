@@ -317,6 +317,15 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
   `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と
   intent ツール群がタスク対応になる。`host_mcp` は compose ファミリを常に同期実行し、
   リクエストの `_meta` が何を求めていてもこの拡張を宣言しない。
+- **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
+  `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
+  フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
+  `schemaSuggested` / `schemaEdited` カウンタ、TS 側の rubric 0.4(Python の
+  `kohaku.evals.judge.l2_promotion_rubric` はまだバージョン "0.3" で `suggestion_fidelity`
+  を欠く)、`CapabilityRevocationStore` と jti ベースの capability 失効、
+  `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`semantic-llm`、
+  `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
+  スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch

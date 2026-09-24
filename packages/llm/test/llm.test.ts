@@ -22,6 +22,21 @@ describe("resolveLlmEnv", () => {
     expect(config.apiKey).toBe("kohaku-key");
   });
 
+  it("treats an empty-string (or whitespace-only) KOHAKU_LLM_API_KEY as unset, falling back to the provider standard key", () => {
+    // `kohaku init`'s generated .env.example ships `KOHAKU_LLM_API_KEY=` uncommented as a placeholder;
+    // after process.loadEnvFile that sets the var to "", which must not shadow ANTHROPIC_API_KEY.
+    expect(resolveLlmEnv({ KOHAKU_LLM_API_KEY: "", ANTHROPIC_API_KEY: "anthropic-key" }).apiKey).toBe(
+      "anthropic-key",
+    );
+    expect(resolveLlmEnv({ KOHAKU_LLM_API_KEY: "   ", ANTHROPIC_API_KEY: "anthropic-key" }).apiKey).toBe(
+      "anthropic-key",
+    );
+  });
+
+  it("treats an empty-string provider standard key as unset (no key configured)", () => {
+    expect(resolveLlmEnv({ ANTHROPIC_API_KEY: "" }).apiKey).toBeUndefined();
+  });
+
   it("ollama has a default baseUrl", () => {
     const config = resolveLlmEnv({ KOHAKU_LLM_PROVIDER: "ollama" });
     expect(config.baseUrl).toBe("http://localhost:11434/v1");
@@ -67,6 +82,11 @@ describe("resolveLlmEnv", () => {
       warn.mockClear();
       resolveLlmEnv({ KOHAKU_LLM_PROVIDER: "ollama" });
       expect(warn).not.toHaveBeenCalled();
+
+      // An empty-string key is treated as unset, so it still warns.
+      warn.mockClear();
+      resolveLlmEnv({ ANTHROPIC_API_KEY: "" });
+      expect(warn).toHaveBeenCalledTimes(1);
     } finally {
       warn.mockRestore();
     }

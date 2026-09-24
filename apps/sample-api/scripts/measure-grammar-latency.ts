@@ -51,7 +51,7 @@ import type { JsonObject } from "@kohaku-ui/spec-core";
 import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { salesContribution } from "../src/catalog/contribution.js";
 import { SalesRepo } from "../src/domain/repo.js";
-import { IntentCatalog } from "../src/intents/catalog.js";
+import { createSalesIntentCatalog } from "../src/intents/catalog.js";
 import { createSemanticPort } from "../src/ports/semantic-port.js";
 
 /**
@@ -90,7 +90,7 @@ async function main(): Promise<void> {
   console.log(`Provider: ${llm.provider} / model: ${llm.modelId}\n`);
 
   const repo = new SalesRepo();
-  const intentCatalog = new IntentCatalog();
+  const intentCatalog = createSalesIntentCatalog();
   const catalog = resolveCatalog(coreCatalog, salesContribution);
   const semantic = createSemanticPort({ repo, catalogFor: () => intentCatalog, llm });
 

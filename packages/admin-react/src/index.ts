@@ -19,6 +19,7 @@ export {
   type KohakuAdminProps,
 } from "./KohakuAdmin.js";
 export { type AdminMessages, defaultAdminMessages } from "./messages.js";
+export { describeDeniedOperation } from "./rbac.js";
 export { AnalyticsTab } from "./tabs/AnalyticsTab.js";
 export { FixationsTab } from "./tabs/FixationsTab.js";
 export { LineageTab } from "./tabs/LineageTab.js";
@@ -31,6 +32,7 @@ export {
 } from "./tabs/promotions/draft.js";
 export {
   type PromotionActionKind,
+  type PromotionActionOptions,
   PromotionCard,
   type PromotionCardProps,
 } from "./tabs/promotions/PromotionCard.js";
@@ -48,6 +50,7 @@ export {
   type SuggestionFieldDiff,
 } from "./tabs/promotions/suggestion.js";
 export { adminThemeStyle, V as adminVars } from "./theme.js";
+export { TIER_COLOR } from "./tiers.js";
 // The generic UI primitives (card, Field, Empty, etc.) live on the `@kohaku-ui/admin-react/ui` subpath, not
 // here — the root carries only the domain API. `NoticeKind` / `NotifyFn` are the exception: they type
 // AdminProvider's `onNotice` prop, so they stay re-exported from the root even though they're defined in ui.tsx.

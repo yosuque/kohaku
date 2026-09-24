@@ -10,4 +10,4 @@ export {
   type HmacAuthzPort,
   type RevokeCapabilityResult,
 } from "./hmac-authz-port.js";
-export { createMemoryRevocationStore } from "./revocation.js";
+export { createMemoryRevocationStore, type MemoryRevocationStoreTestHooks } from "./revocation.js";

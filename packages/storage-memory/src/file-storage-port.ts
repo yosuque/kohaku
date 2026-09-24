@@ -50,6 +50,9 @@ export function createFileStoragePort(dataDir: string): StoragePort {
   const specCache = createSpecCache();
   // Grows without a cap (no rotation/compaction). A known constraint. See the doc at the top for details.
   const lineage: LineageEventRecord[] = loadJsonl(lineagePath);
+  // Tracks ids already appended (seeded from what was loaded from disk) so a duplicate-id append is a
+  // no-op (StoragePort contract: appendLineage is idempotent by id) without an O(n) scan on every append.
+  const lineageIds = new Set(lineage.map((e) => e.id));
   // One in-process mutex, keyed by snapshot file path, so promotions.json and fixations.json serialize
   // independently of each other while each file's own put/delete calls run strictly one at a time (see the doc at the top).
   const fileLock = createKeyedMutex();
@@ -64,12 +67,16 @@ export function createFileStoragePort(dataDir: string): StoragePort {
       specCache.put(key, spec, ttlSeconds);
     },
     async appendLineage(event) {
+      // Idempotent by id: appending an event whose id already exists (in memory or loaded from disk) is a
+      // no-op, so a retried write does not duplicate the JSONL line or move the entry's position.
+      if (lineageIds.has(event.id)) return;
       // Append with async I/O so the compose response is not blocked by the disk write (concurrent composes do not
       // serialize). Reflect to memory only after the append succeeds (so memory and disk do not diverge on append
       // failure); the on-exception behavior is the same as the synchronous version. Under concurrent appends the
       // completion order (= the in-memory array order and the JSONL line order) is not guaranteed to follow ts
       // order — a known limit of this file port; order-sensitive consumers pick by ts comparison, not by position.
       await appendFile(lineagePath, JSON.stringify(event) + "\n");
+      lineageIds.add(event.id);
       lineage.push(event);
     },
     async listLineage(filter) {

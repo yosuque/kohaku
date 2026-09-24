@@ -172,6 +172,17 @@ export function describeStoragePortContract(
         expect(await port.listLineage({ limit: 0 })).toEqual([]);
         expect(await port.listLineage({ limit: -1 })).toEqual([]);
       });
+
+      it("treats an empty-string tenant filter as unspecified (matches every event)", async () => {
+        expect((await port.listLineage({ tenant: "" })).map((e) => e.id)).toEqual([e1.id, e2.id, e3.id]);
+      });
+
+      it("appending an event with an id that already exists is idempotent", async () => {
+        await port.appendLineage({ ...e1, payload: { ...e1.payload, specHash: "mutated" } });
+        const all = await port.listLineage();
+        expect(all.map((e) => e.id)).toEqual([e1.id, e2.id, e3.id]);
+        expect(all.find((e) => e.id === e1.id)?.payload["specHash"]).toBe("s1");
+      });
     });
 
     describe("promotion states", () => {
@@ -196,6 +207,15 @@ export function describeStoragePortContract(
         if (port.putPromotionStates == null) return; // optional extension not implemented
         await port.putPromotionStates([promotion("x", "a"), promotion("y", "a")]);
         expect((await port.listPromotionStates("a")).map((s) => s.artifactId).sort()).toEqual(["x", "y"]);
+      });
+
+      it("treats an empty-string tenant as equivalent to unspecified for get/put/list", async () => {
+        await port.putPromotionState(promotion("x", ""));
+        expect(await port.getPromotionState("x")).toEqual(promotion("x", ""));
+        expect(await port.getPromotionState("x", "")).toEqual(promotion("x", ""));
+        expect((await port.listPromotionStates("")).map((s) => s.artifactId)).toEqual(
+          (await port.listPromotionStates()).map((s) => s.artifactId),
+        );
       });
     });
 
@@ -225,6 +245,15 @@ export function describeStoragePortContract(
         await port.deleteFixation("h", "a");
         expect(await port.getFixation("h", "a")).toBeNull();
         expect(await port.getFixation("h", "b")).not.toBeNull();
+      });
+
+      it("treats an empty-string tenant as equivalent to unspecified for get/put/list", async () => {
+        await port.putFixation(fixation("h", ""));
+        expect(await port.getFixation("h")).toEqual(fixation("h", ""));
+        expect(await port.getFixation("h", "")).toEqual(fixation("h", ""));
+        expect((await port.listFixations("")).map((f) => f.intentHash)).toEqual(
+          (await port.listFixations()).map((f) => f.intentHash),
+        );
       });
     });
   });

@@ -3,8 +3,9 @@ import { SandboxFrame } from "@kohaku-ui/sandbox/react";
 import { type ComponentNode, type JsonValue, SANDBOX_HTML_TYPE, type UISpec } from "@kohaku-ui/spec-core";
 import { type ReactNode, useMemo, useState } from "react";
 import { useAdmin } from "../../context.js";
+import { describeDeniedOperation } from "../../rbac.js";
 import { V } from "../../theme.js";
-import { deniedMessage, ErrorBanner, smallButton } from "../../ui.js";
+import { ErrorBanner, smallButton } from "../../ui.js";
 
 /**
  * Mounts the recorded artifact (the very thing under review) directly in the same SandboxFrame (isolated
@@ -35,7 +36,7 @@ export function PromotionPreview({ artifactId }: { artifactId: string }): ReactN
       setMaterial(preview);
     } catch (e) {
       const m = getMessages();
-      const denied = isKohakuHostError(e) ? deniedMessage(e, m.promotions.opPreview, m) : null;
+      const denied = isKohakuHostError(e) ? describeDeniedOperation(e, m.promotions.opPreview, m) : null;
       setError(denied ?? m.promotions.previewFetchFailed(e instanceof Error ? e.message : String(e)));
     } finally {
       setLoading(false);

@@ -351,6 +351,15 @@ surface (`AbortSignal.timeout` / `AbortSignal.any`, used throughout `adapters/_b
   is also turned on (default off). `host_mcp` always serves the compose family
   synchronously and never declares the extension, regardless of what a request's
   `_meta` asks for.
+- **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
+  the lineage events `component.schemaSuggested` / `component.schemaEdited` (including the
+  `acknowledged` payload field) and their rubric variants; the analytics `review` block and
+  the `schemaSuggested` / `schemaEdited` counters; rubric 0.4 on the TS side (Python's
+  `kohaku.evals.judge.l2_promotion_rubric` is still at version "0.3", missing
+  `suggestion_fidelity`); `CapabilityRevocationStore` and jti-based capability revocation;
+  the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters; `semantic-llm`;
+  `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised
+  by the conformance suite yet, so the CONFORMANT status above does not cover them.
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant
 > reconcile for promotion → fully ported PromotedRegistry / projection / startup reconcile

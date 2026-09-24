@@ -1,6 +1,6 @@
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { chooseCandidateIndex, indexValues, matchesFilter, tailLimit } from "../src/lineage.js";
+import { chooseCandidateIndex, indexValues, isIndexExhaustive } from "../src/lineage.js";
 
 function ev(
   partial: Partial<LineageEventRecord> & { payload?: Record<string, unknown> },
@@ -32,54 +32,61 @@ describe("indexValues", () => {
       { field: "type", value: "view.composed" },
     ]);
   });
+  it("treats an empty-string tenant like an absent one (normalizeTenant)", () => {
+    expect(indexValues(ev({ tenant: "" }))).toEqual([{ field: "type", value: "view.composed" }]);
+  });
 });
 
 describe("chooseCandidateIndex", () => {
-  it("prefers the most selective index", () => {
+  it("prefers the payload hash fields over type/tenant", () => {
     expect(chooseCandidateIndex({ type: ["a"], tenant: "t", intentHash: "h" })).toEqual({
       field: "intentHash",
       values: ["h"],
     });
-    expect(chooseCandidateIndex({ type: ["a"], tenant: "t" })).toEqual({ field: "tenant", values: ["t"] });
-    expect(chooseCandidateIndex({ type: ["a", "b"] })).toEqual({ field: "type", values: ["a", "b"] });
+    expect(chooseCandidateIndex({ artifactId: "a1", specHash: "s1" })).toEqual({
+      field: "artifactId",
+      values: ["a1"],
+    });
   });
-  it("returns null when only since/until/limit are given (scan by-seq)", () => {
+  it("prefers a single type over tenant", () => {
+    expect(chooseCandidateIndex({ type: ["a"], tenant: "t" })).toEqual({ field: "type", values: ["a"] });
+    expect(chooseCandidateIndex({ type: ["a", "b"], tenant: "t" })).toEqual({
+      field: "type",
+      values: ["a", "b"],
+    });
+  });
+  it("falls back to tenant when there is no type filter", () => {
+    expect(chooseCandidateIndex({ tenant: "t" })).toEqual({ field: "tenant", values: ["t"] });
+  });
+  it("treats an empty-string tenant filter as unspecified (no candidate from it)", () => {
+    expect(chooseCandidateIndex({ tenant: "" })).toBeNull();
+  });
+  it("returns null when only since/until/limit are given, or type is an empty array (scan by-seq)", () => {
     expect(chooseCandidateIndex({ since: "2026", limit: 5 })).toBeNull();
     expect(chooseCandidateIndex({ type: [] })).toBeNull();
   });
 });
 
-describe("matchesFilter", () => {
-  const e = ev({
-    ts: "2026-05-01T00:00:00.000Z",
-    tenant: "acme",
-    payload: { intentHash: "h1", artifactId: "a1" },
+describe("isIndexExhaustive", () => {
+  it("is true when the filter has no predicate beyond the chosen candidate", () => {
+    expect(isIndexExhaustive({ tenant: "t" }, { field: "tenant", values: ["t"] })).toBe(true);
+    expect(isIndexExhaustive({ type: ["a", "b"] }, { field: "type", values: ["a", "b"] })).toBe(true);
   });
-  it("ANDs every predicate", () => {
-    expect(matchesFilter(e, {})).toBe(true);
-    expect(
-      matchesFilter(e, { type: ["view.composed"], tenant: "acme", intentHash: "h1", artifactId: "a1" }),
-    ).toBe(true);
-    expect(matchesFilter(e, { tenant: "globex" })).toBe(false);
-    expect(matchesFilter(e, { specHash: "x" })).toBe(false);
-    expect(matchesFilter(e, { since: "2026-05-01T00:00:00.000Z", until: "2026-05-01T00:00:00.000Z" })).toBe(
-      true,
+  it("is false when since/until is also set", () => {
+    expect(isIndexExhaustive({ tenant: "t", since: "2026-01-01" }, { field: "tenant", values: ["t"] })).toBe(
+      false,
     );
-    expect(matchesFilter(e, { since: "2026-05-02T00:00:00.000Z" })).toBe(false);
-    expect(matchesFilter(e, { until: "2026-04-30T00:00:00.000Z" })).toBe(false);
+    expect(isIndexExhaustive({ tenant: "t", until: "2026-01-01" }, { field: "tenant", values: ["t"] })).toBe(
+      false,
+    );
   });
-  it("a tenant filter excludes tenant-less events", () => {
-    expect(matchesFilter(ev({}), { tenant: "acme" })).toBe(false);
+  it("is false when another field is also set", () => {
+    expect(isIndexExhaustive({ type: ["a"], tenant: "t" }, { field: "type", values: ["a"] })).toBe(false);
+    expect(
+      isIndexExhaustive({ intentHash: "h", artifactId: "a" }, { field: "intentHash", values: ["h"] }),
+    ).toBe(false);
   });
-});
-
-describe("tailLimit", () => {
-  it("returns the last `limit` items, default 200, empty for limit <= 0", () => {
-    const items = Array.from({ length: 250 }, (_, i) => i);
-    expect(tailLimit(items, 3)).toEqual([247, 248, 249]);
-    expect(tailLimit(items, undefined)).toHaveLength(200);
-    expect(tailLimit(items, undefined)[0]).toBe(50);
-    expect(tailLimit(items, 0)).toEqual([]);
-    expect(tailLimit(items, -1)).toEqual([]);
+  it("limit alone does not affect exhaustiveness", () => {
+    expect(isIndexExhaustive({ tenant: "t", limit: 5 }, { field: "tenant", values: ["t"] })).toBe(true);
   });
 });

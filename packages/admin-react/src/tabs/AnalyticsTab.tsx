@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { useAdmin } from "../context.js";
 import { useAnalyticsSummary } from "../hooks.js";
 import { V } from "../theme.js";
-import { BarRow, card, Empty, StatCard, sectionTitle, smallButton, TIER_COLOR } from "../ui.js";
+import { TIER_COLOR } from "../tiers.js";
+import { BarRow, card, Empty, StatCard, sectionTitle, smallButton } from "../ui.js";
 
 /** "—" for null; seconds under a minute, else minutes with one decimal (review turnaround is human-scale). */
 function formatDuration(ms: number | null): string {

@@ -28,7 +28,9 @@ async function readStdin(): Promise<string> {
 }
 
 const program = new Command("kohaku")
-  .description("CLI for running Kohaku Protocol conformance checks and generating scaffolds")
+  .description(
+    "CLI for kohaku: protocol conformance checks, scaffolding, project generation and component validation",
+  )
   .version(CLI_VERSION);
 
 program
@@ -140,7 +142,11 @@ program
       console.log(
         `\nNext steps: ${result.installed ? "" : "npm install && "}npm run dev  →  http://localhost:5173`,
       );
-      console.log("For chat and the LLM-composed views, copy .env.example to .env and set a provider key.");
+      console.log(
+        "For chat and the LLM-composed views, edit .env (created for you with a capability secret) " +
+          "and set a provider key; .env.example documents every variable.",
+      );
+      console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once, then npm test");
     },
   );
 

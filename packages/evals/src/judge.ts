@@ -93,19 +93,32 @@ export const l2PromotionRubric: Rubric = {
     {
       id: "suggestion_fidelity",
       description:
-        "When a proposed schema is supplied, its props, query parameters and events are exactly the ones the HTML actually reads and emits (nothing invented, nothing missing). When no proposal is supplied, score 1",
+        "Schema fidelity: the schema under judgement — the DRAFT block when one is supplied, otherwise the SUGGESTION block — its props, query parameters and events — is exactly what the HTML reads and emits (nothing invented, nothing missing); verify it against the HTML in both cases. When a SUGGESTION is shown alongside a DRAFT, the SUGGESTION is context only — score the DRAFT, not the proposal. When neither a draft nor a suggestion is supplied, this criterion is dropped from the rubric entirely rather than scored (see JudgeVerdict.rubricVariant)",
       weight: 0.1,
     },
   ],
 };
 
 /**
- * The L2 promotion rubric exactly as it was before Task 5 (B2) added `suggestion_fidelity` (version
- * "0.3"): the same 6 criteria (safety / determinism / a11y / schema_inferability / generality /
- * visual_quality), with the pre-Task-5 weights (schema_inferability 0.15 — see the B2 Task 5 changeset
- * for the rebalance that produced today's `l2PromotionRubric`, version "0.4") and the same `safety`
- * floor. Exported so a consumer who is not ready for the score shift the rebalance causes can pin the
- * exact pre-Task-5 promotion behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_3 })`.
+ * The L2 promotion rubric exactly as it was before `suggestion_fidelity` was added (version "0.3"): the
+ * same 6 criteria (safety / determinism / a11y / schema_inferability / generality / visual_quality), with
+ * the pre-rebalance weights (schema_inferability 0.15) and the same `safety` floor. Exported so a
+ * consumer who is not ready for the score shift the rebalance causes can pin the exact pre-rebalance
+ * promotion behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_3 })`.
+ *
+ * This is also, internally, the **"no-schema" rubric variant** `judge()` falls back to when its input
+ * carries neither `draft` nor `suggestion` (see `l2PromotionRubric`'s `suggestion_fidelity` criterion and
+ * `JudgeVerdict.rubricVariant`): dropping `suggestion_fidelity` from the current rubric and renormalizing
+ * the remaining 6 weights to sum to 1 reproduces exactly these weights, since the 0.3 → 0.4 rebalance moved
+ * the whole of `suggestion_fidelity`'s 0.1 weight out of (and, symmetrically, back into) `schema_inferability`
+ * alone, leaving every other criterion's weight unchanged between the two versions.
+ *
+ * **Cross-language note:** this is currently also the Python port's live default rubric. The Python mirror
+ * (`kohaku.evals.judge.l2_promotion_rubric`) is still at version "0.3" and has not been updated to match this
+ * file's "0.4" rebalance (`suggestion_fidelity` does not exist on the Python side at all yet) — the two
+ * languages' "current" promotion rubrics currently disagree, an open cross-language gap this note exists to
+ * make visible rather than silently drift further.
+ *
  * Sibling of `l2PromotionRubricV0_1`/`l2PromotionRubricV0_2` below (the same pinning strategy, one
  * version further along).
  */
@@ -313,6 +326,15 @@ export interface JudgeVerdict {
   rubricId: string;
   /** version of the rubric used for scoring (audit stamp; makes it reproducible which version judged). */
   rubricVersion: string;
+  /**
+   * Which variant of the rubric actually scored this verdict, when the rubric carries a `suggestion_fidelity`
+   * criterion: `"full"` when it was scored (the input carried a `draft` and/or a `suggestion`), `"no-schema"`
+   * when it was dropped and the remaining weights renormalized to sum to 1 (neither was present — see
+   * `l2PromotionRubricV0_3`'s doc for why dropping it reproduces that exact rubric). Additive; omitted by
+   * `judgeSpec()` and by any rubric with no `suggestion_fidelity` criterion at all, for which the distinction
+   * does not apply.
+   */
+  rubricVariant?: "full" | "no-schema";
 }
 
 /** Data column metadata (used by judgeSpec's data-reference review; expected to originate from the domain's resultShape but kept loosely coupled). */
@@ -338,9 +360,24 @@ export interface JudgeInput {
    */
   telemetry?: { renderedCount: number; errorCount: number };
   /**
+   * The schema actually being registered (approve()'s own draft argument), when known to the caller. This is
+   * the source of truth for the `suggestion_fidelity` criterion ("schema fidelity"): the judge scores *this*
+   * against the HTML, not the machine suggestion. Copied into the prompt as untrusted evidence (it originates
+   * from a human-editable form, but the HTML it is checked against is the actual authority).
+   */
+  draft?: {
+    componentType: string;
+    intentName: string;
+    paramsJsonSchema?: unknown;
+    events?: { name: string; description: string }[];
+  };
+  /**
    * The machine-extracted registration proposal attached to the candidate at nomination (advisory). Copied into
-   * the prompt as untrusted evidence for the `suggestion_fidelity` criterion; the judge verifies it against the
-   * HTML instead of trusting it.
+   * the prompt as untrusted context only: when `draft` is also present, `draft` is what is actually being
+   * registered and is what `suggestion_fidelity` verifies; `suggestion` alone (no `draft`) is verified directly
+   * against the HTML instead, preserving pre-existing behavior for a caller that has not been updated to pass
+   * `draft`. When neither is present, `suggestion_fidelity` is dropped from the rubric entirely rather than
+   * auto-scored — see `JudgeVerdict.rubricVariant`.
    */
   suggestion?: {
     componentType: string;
@@ -366,6 +403,54 @@ export interface Judge {
   judge(input: JudgeInput): Promise<JudgeVerdict>;
   /** Quality scoring of declarative L1 Specs (l1QualityRubric). */
   judgeSpec(input: JudgeSpecInput): Promise<JudgeVerdict>;
+}
+
+/**
+ * Builds the "no-schema" rubric variant `judge()` scores against when its input carries neither `draft` nor
+ * `suggestion` (see `l2PromotionRubric`'s `suggestion_fidelity` criterion and `JudgeVerdict.rubricVariant`):
+ * drops that criterion and renormalizes the remaining weights to sum to 1.
+ *
+ * The returned rubric's `version` is always the CONFIGURED rubric's version, unchanged — the dropped-criterion
+ * case is expressed only by `JudgeVerdict.rubricVariant: "no-schema"`, never by rewriting the version stamp
+ * (a verdict scored under the configured rubric must not appear, to a `component.judged` consumer grouping by
+ * `rubricVersion`, as if a different rubric version had been configured). For the built-in default rubric,
+ * the criteria/weights this produces are identical to `l2PromotionRubricV0_3`'s, criterion-for-criterion — see
+ * that constant's own doc for why dropping `suggestion_fidelity` from `l2PromotionRubric` and moving its whole
+ * weight back into `schema_inferability` alone (not a generic proportional split) reproduces its exact
+ * pre-rebalance weights; only the `version` field differs ("0.4", not "0.3"). A caller-supplied custom rubric
+ * that happens to define its own `suggestion_fidelity` criterion instead falls back to a generic proportional
+ * renormalization of its remaining weights (sum to 1). Returns `rubric` unchanged if it has no
+ * `suggestion_fidelity` criterion at all (the caller only invokes this after confirming one exists).
+ */
+/**
+ * Rounds a computed weight to 4 decimal places. Floating-point arithmetic on the tenths/hundredths that
+ * rubric weights are always written in (e.g. `0.05 + 0.1`) does not land on an exact binary value (it
+ * comes out `0.15000000000000002`), and that raw value would otherwise be interpolated verbatim into the
+ * criterion list `rubricSystem` sends the model (`weight ${c.weight}`) -- a cosmetic defect there, but one
+ * that also risks reading to the model as a deliberately, suspiciously precise number. Four decimal places
+ * is more precision than any rubric weight in this file is ever written with.
+ */
+function roundWeight(weight: number): number {
+  return Math.round(weight * 10_000) / 10_000;
+}
+
+function noSchemaRubricVariant(rubric: Rubric): Rubric {
+  const remaining = rubric.criteria.filter((c) => c.id !== "suggestion_fidelity");
+  if (remaining.length === rubric.criteria.length) return rubric;
+  const droppedWeight = rubric.criteria.find((c) => c.id === "suggestion_fidelity")!.weight;
+  const criteria =
+    rubric === l2PromotionRubric
+      ? remaining.map((c) =>
+          c.id === "schema_inferability" ? { ...c, weight: roundWeight(c.weight + droppedWeight) } : c,
+        )
+      : (() => {
+          const remainingSum = remaining.reduce((sum, c) => sum + c.weight, 0);
+          return remaining.map((c) => ({
+            ...c,
+            weight: remainingSum > 0 ? roundWeight(c.weight / remainingSum) : c.weight,
+          }));
+        })();
+  return { id: rubric.id, version: rubric.version, criteria };
 }
 
 export function createJudge(opts: {
@@ -479,8 +564,17 @@ export function createJudge(opts: {
 
   return {
     async judge(input) {
+      // Rubric variant selection (#14): a rubric that carries `suggestion_fidelity` but whose input has
+      // neither `draft` nor `suggestion` would otherwise have that criterion auto-scored 1 by the model
+      // (nothing to verify), inflating the weighted average for a reason unrelated to the candidate's actual
+      // quality. Dropping the criterion and renormalizing instead keeps the default gate exactly as strict as
+      // it would be without the criterion at all — see JudgeVerdict.rubricVariant.
+      const hasFidelityCriterion = rubric.criteria.some((c) => c.id === "suggestion_fidelity");
+      const hasSchema = input.draft != null || input.suggestion != null;
+      const rubricVariant: "full" | "no-schema" = hasFidelityCriterion && !hasSchema ? "no-schema" : "full";
+      const activeRubric = rubricVariant === "no-schema" ? noSchemaRubricVariant(rubric) : rubric;
       const system = rubricSystem(
-        rubric,
+        activeRubric,
         "You are the promotion reviewer for generated UI components. Score the sandbox HTML component on the following criteria with a score from 0 to 1.",
       );
       const prompt = [
@@ -495,14 +589,22 @@ export function createJudge(opts: {
         ...(input.catalogSummary != null
           ? [`## Existing catalog (for duplicate checking)\n${input.catalogSummary}`]
           : []),
+        // The schema actually being registered (when known) is the source of truth for suggestion_fidelity;
+        // the machine suggestion, when also present, is shown as context only (it is not what gets published).
+        ...(input.draft != null
+          ? [
+              `## Schema being registered (verify this against the HTML for schema fidelity)\n${untrustedBlock("DRAFT", JSON.stringify(input.draft, null, 2), "json")}`,
+            ]
+          : []),
         ...(input.suggestion != null
           ? [
-              `## Proposed schema (machine-extracted; verify it against the HTML)\n${untrustedBlock("SUGGESTION", JSON.stringify(input.suggestion, null, 2), "json")}`,
+              `## Proposed schema (machine-extracted${input.draft != null ? "; context only — the schema being registered above is the one actually published" : "; verify it against the HTML"})\n${untrustedBlock("SUGGESTION", JSON.stringify(input.suggestion, null, 2), "json")}`,
             ]
           : []),
         `## HTML under review\n${untrustedBlock("HTML", input.html.slice(0, 12_000), "html")}`,
       ].join("\n\n");
-      return scoreWithRubric(rubric, system, prompt);
+      const verdict = await scoreWithRubric(activeRubric, system, prompt);
+      return hasFidelityCriterion ? { ...verdict, rubricVariant } : verdict;
     },
 
     async judgeSpec(input) {

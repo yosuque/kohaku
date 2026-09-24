@@ -70,7 +70,7 @@ describe("KohakuAdmin", () => {
   // client's headers() hook returns right now." Both are exercised directly below.
   it("does not remount (and does not re-fetch) on a re-render that changes nothing but external, non-prop state such as role", async () => {
     let role = "admin";
-    let evaluateCalls = 0;
+    let listCalls = 0;
     const seenRoles: string[] = [];
     const candidate = {
       artifactId: "sales.customViz1@1",
@@ -84,8 +84,8 @@ describe("KohakuAdmin", () => {
       headers: () => ({ "x-kohaku-role": role }),
       transport: async (url, init) => {
         seenRoles.push((init?.headers as Record<string, string> | undefined)?.["x-kohaku-role"] ?? "");
-        if (url.endsWith("/promotions/evaluate")) {
-          evaluateCalls += 1;
+        if (url.endsWith("/promotions")) {
+          listCalls += 1;
           return jsonResponse({ candidates: [candidate] });
         }
         if (url.endsWith("/analytics/summary")) {
@@ -96,21 +96,21 @@ describe("KohakuAdmin", () => {
     });
     const view = render(<KohakuAdmin client={client} tenant="a" initialTab="promotions" />);
     await screen.findByText(candidate.artifactId);
-    expect(evaluateCalls).toBe(1);
+    expect(listCalls).toBe(1);
     expect(seenRoles.at(-1)).toBe("admin");
 
     // A role switch elsewhere in the host app (module-level state, not a KohakuAdminProps field) followed by a
     // re-render with the SAME tenant: since only tenant (plus the active tab) is a remount key, this must not
-    // unmount PromotionsTab, so its already-fetched candidate list is retained without any new evaluate() call.
+    // unmount PromotionsTab, so its already-fetched candidate list is retained without any new list() call.
     role = "viewer";
     view.rerender(<KohakuAdmin client={client} tenant="a" initialTab="promotions" />);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(evaluateCalls).toBe(1);
+    expect(listCalls).toBe(1);
     expect(screen.getByText(candidate.artifactId)).toBeTruthy();
 
     // The "re-request" half: the console never caches the role itself, so the very next call made through the
     // same client naturally carries the CURRENT role, with no special handling anywhere in this package.
-    await client.promotions.evaluate();
+    await client.promotions.list();
     expect(seenRoles.at(-1)).toBe("viewer");
   });
 });

@@ -1,15 +1,22 @@
 import { LlmError, type LlmPort } from "@kohaku-ui/llm";
-import type { JsonObject, NLQuery, SessionContext } from "@kohaku-ui/spec-core";
+import type { JsonObject, NLQuery } from "@kohaku-ui/spec-core";
 import { z } from "zod";
 import type { IntentCatalogLike } from "./catalog.js";
 import { buildNormalizeSystemPrompt, buildNormalizeUserPrompt, renderCatalogDoc } from "./prompt.js";
 
-/** Thrown when the model's answer fits no Intent and no fallbackIntent was configured. */
+/** The default maxQuestionChars, applied when NormalizeNlArgs.maxQuestionChars is omitted. */
+export const DEFAULT_MAX_QUESTION_CHARS = 2000;
+
+/**
+ * Thrown when normalization cannot produce a canonical Intent: the catalog is empty, the model's answer
+ * fits no Intent and no fallbackIntent was configured, the configured fallbackIntent is itself not usable,
+ * or the question exceeds maxQuestionChars.
+ */
 export class SemanticNormalizeError extends Error {
   readonly code = "NO_MATCH" as const;
   readonly text: string;
-  constructor(text: string) {
-    super("The question does not match any Intent in the catalog");
+  constructor(text: string, message = "the question does not match any intent in the catalog") {
+    super(message);
     this.name = "SemanticNormalizeError";
     this.text = text;
   }
@@ -17,12 +24,13 @@ export class SemanticNormalizeError extends Error {
 
 export interface NormalizeNlArgs {
   input: NLQuery;
-  ctx: SessionContext;
   catalog: IntentCatalogLike;
   llm: LlmPort;
   rules: readonly string[];
   locale: string;
   fallbackIntent?: string;
+  /** Rejects a question longer than this many characters before any LLM call. Default: DEFAULT_MAX_QUESTION_CHARS (2000). */
+  maxQuestionChars?: number;
 }
 
 /**
@@ -33,8 +41,15 @@ export interface NormalizeNlArgs {
  */
 export async function normalizeNlQuery(
   args: NormalizeNlArgs,
-): Promise<{ canonical: string; params: JsonObject }> {
+): Promise<{ canonical: string; params: JsonObject; fallback: boolean }> {
   const { input, catalog, llm, rules, locale, fallbackIntent } = args;
+  const maxQuestionChars = args.maxQuestionChars ?? DEFAULT_MAX_QUESTION_CHARS;
+  if (input.text.length > maxQuestionChars) {
+    throw new SemanticNormalizeError(
+      input.text,
+      `the question is too long (max ${maxQuestionChars} characters)`,
+    );
+  }
   const names = catalog.names();
   if (names.length === 0) throw new SemanticNormalizeError(input.text);
   const outputSchema = z.object({
@@ -51,11 +66,23 @@ export async function normalizeNlQuery(
       temperature: 0,
     });
     const params = catalog.normalizeParams(result.object.intent, result.object.params as JsonObject);
-    if (params != null) return { canonical: result.object.intent, params };
+    if (params != null) return { canonical: result.object.intent, params, fallback: false };
   } catch (e) {
     if (!(e instanceof LlmError) || e.code !== "INVALID_OUTPUT") throw e;
   }
   if (fallbackIntent == null) throw new SemanticNormalizeError(input.text);
-  const fallback = catalog.normalizeParams(fallbackIntent, { request: input.text });
-  return { canonical: fallbackIntent, params: fallback ?? { request: input.text } };
+  if (catalog.get(fallbackIntent) == null) {
+    throw new SemanticNormalizeError(
+      input.text,
+      `the fallback intent "${fallbackIntent}" is not in the catalog`,
+    );
+  }
+  const fallbackParams = catalog.normalizeParams(fallbackIntent, { request: input.text });
+  if (fallbackParams == null) {
+    throw new SemanticNormalizeError(
+      input.text,
+      `the fallback intent "${fallbackIntent}" rejected the fallback params { request }`,
+    );
+  }
+  return { canonical: fallbackIntent, params: fallbackParams, fallback: true };
 }
