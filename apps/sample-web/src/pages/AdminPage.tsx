@@ -1,5 +1,9 @@
-import { type AdminExtraTab, KohakuAdmin, useAdminNotice } from "@kohaku-ui/admin-react";
-import { deniedMessage } from "@kohaku-ui/admin-react/ui";
+import {
+  type AdminExtraTab,
+  describeDeniedOperation,
+  KohakuAdmin,
+  useAdminNotice,
+} from "@kohaku-ui/admin-react";
 import { isKohakuHostError } from "@kohaku-ui/client";
 import { lazy, type ReactNode, Suspense, useMemo } from "react";
 import { t as dict, useT } from "../i18n/ui.js";
@@ -90,7 +94,9 @@ function BumpButton(): ReactNode {
           .then((v) => notify(dict().admin.bumpNotice(v)))
           .catch((e: unknown) => {
             const messages = dict().admin;
-            const denied = isKohakuHostError(e) ? deniedMessage(e, messages.opBump, messages) : null;
+            const denied = isKohakuHostError(e)
+              ? describeDeniedOperation(e, messages.opBump, messages)
+              : null;
             notify(denied ?? messages.bumpFailed, "error");
           });
       }}

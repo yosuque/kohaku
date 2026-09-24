@@ -2,8 +2,9 @@ import { isKohakuHostError } from "@kohaku-ui/client";
 import type { ReactNode } from "react";
 import { useAdmin } from "../context.js";
 import { useFixations } from "../hooks.js";
+import { describeDeniedOperation } from "../rbac.js";
 import { V } from "../theme.js";
-import { card, deniedMessage, smallButton } from "../ui.js";
+import { card, smallButton } from "../ui.js";
 
 /**
  * Fixation (L1→L0): proposals from frequent, structurally stable L1 intents, and the fixated records.
@@ -44,7 +45,9 @@ export function FixationsTab(): ReactNode {
                   })
                   .catch((e: unknown) => {
                     const m = getMessages();
-                    const denied = isKohakuHostError(e) ? deniedMessage(e, m.fixations.opApprove, m) : null;
+                    const denied = isKohakuHostError(e)
+                      ? describeDeniedOperation(e, m.fixations.opApprove, m)
+                      : null;
                     notify(denied ?? m.fixations.fixateFailed, "error");
                   });
               }}
@@ -73,7 +76,9 @@ export function FixationsTab(): ReactNode {
                   .then(() => reload())
                   .catch((e: unknown) => {
                     const m = getMessages();
-                    const denied = isKohakuHostError(e) ? deniedMessage(e, m.fixations.opRemove, m) : null;
+                    const denied = isKohakuHostError(e)
+                      ? describeDeniedOperation(e, m.fixations.opRemove, m)
+                      : null;
                     notify(denied ?? m.fixations.removeFailed, "error");
                   });
               }}

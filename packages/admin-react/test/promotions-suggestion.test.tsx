@@ -59,8 +59,7 @@ describe("PromotionsTab with a schema suggestion", () => {
   it("prefills the form from the suggestion (over the product defaults) and shows the badge + events", async () => {
     const { container } = renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () =>
-          jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
+        "GET /promotions": () => jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
       },
     });
     await screen.findByText(m.suggestionBadge("fake-model", 90));
@@ -73,8 +72,7 @@ describe("PromotionsTab with a schema suggestion", () => {
   it("keeps Approve disabled until the reviewer acknowledges, then sends the suggested draft verbatim", async () => {
     const { container, ...view } = renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () =>
-          jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
+        "GET /promotions": () => jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
         "POST /promotions/art-1/approve": () =>
           jsonResponse({ candidate: candidate({ status: "published" }) }),
       },
@@ -92,8 +90,14 @@ describe("PromotionsTab with a schema suggestion", () => {
       expect(view.calls.some((c) => c.url.endsWith("/promotions/art-1/approve"))).toBe(true),
     );
     const approveCall = view.calls.find((c) => c.url.endsWith("/approve"))!;
-    expect(JSON.parse(String(approveCall.init!.body)) as { draft: unknown }).toEqual({
+    // The carried MUST from the Task 5 review: ticking the acknowledgement for a suggestion-bearing candidate
+    // must reach the wire as `acknowledgedSuggestion: true` (otherwise the server records `acknowledged: false`
+    // and the "accepted as-is" analytics tile stays at 0 no matter what the reviewer actually did).
+    expect(
+      JSON.parse(String(approveCall.init!.body)) as { draft: unknown; acknowledgedSuggestion: boolean },
+    ).toEqual({
       draft: SUGGESTION.draft,
+      acknowledgedSuggestion: true,
     });
     expect(view.notices.at(-1)?.text).toBe(
       m.promotedNotice("sales.calendarHeatmap", "1.0.0", "sales.calendar_heatmap"),
@@ -103,8 +107,7 @@ describe("PromotionsTab with a schema suggestion", () => {
   it("marks an edited field in the diff with the suggested value", async () => {
     renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () =>
-          jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
+        "GET /promotions": () => jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
       },
     });
     const description = (await screen.findByLabelText(m.descriptionFieldLabel)) as HTMLInputElement;
@@ -118,8 +121,7 @@ describe("PromotionsTab with a schema suggestion", () => {
   it("preferSuggestion: false keeps the product prefill but still shows the panel and requires acknowledgement", async () => {
     renderInAdmin(<PromotionsTab defaults={{ ...PRODUCT_DEFAULTS, preferSuggestion: false }} />, {
       handlers: {
-        "POST /promotions/evaluate": () =>
-          jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
+        "GET /promotions": () => jsonResponse({ candidates: [candidate({ suggestion: SUGGESTION })] }),
       },
     });
     const approve = (await screen.findByText(m.approveButton)) as HTMLButtonElement;
@@ -134,7 +136,7 @@ describe("PromotionsTab with a schema suggestion", () => {
 
   it("without a suggestion the product prefill applies, no panel is shown and Approve is enabled at once", async () => {
     renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
-      handlers: { "POST /promotions/evaluate": () => jsonResponse({ candidates: [candidate()] }) },
+      handlers: { "GET /promotions": () => jsonResponse({ candidates: [candidate()] }) },
     });
     const approve = (await screen.findByText(m.approveButton)) as HTMLButtonElement;
     expect(approve.disabled).toBe(false);
@@ -152,7 +154,7 @@ describe("PromotionsTab with a schema suggestion", () => {
     };
     renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () =>
+        "GET /promotions": () =>
           jsonResponse({ candidates: [candidate({ suggestion: suggestionWithOutsidePath })] }),
       },
     });
@@ -166,14 +168,14 @@ describe("PromotionsTab with a schema suggestion", () => {
 
   it("re-prefills an already-mounted card when a candidate gains a suggestion on reload (I-3)", async () => {
     const base = candidate();
-    let evaluateCalls = 0;
+    let listCalls = 0;
     renderInAdmin(<PromotionsTab defaults={PRODUCT_DEFAULTS} />, {
       handlers: {
-        "POST /promotions/evaluate": () => {
-          evaluateCalls++;
+        "GET /promotions": () => {
+          listCalls++;
           return jsonResponse({
             candidates: [
-              evaluateCalls === 1 ? base : { ...base, status: "changes_requested", suggestion: SUGGESTION },
+              listCalls === 1 ? base : { ...base, status: "changes_requested", suggestion: SUGGESTION },
             ],
           });
         },
@@ -185,7 +187,7 @@ describe("PromotionsTab with a schema suggestion", () => {
     // Mounted first with no suggestion: the product's generic prefill applies.
     expect((screen.getByLabelText("componentType") as HTMLInputElement).value).toBe("sales.customViz1");
     fireEvent.click(screen.getByText(m.requestChangesButton));
-    await waitFor(() => expect(evaluateCalls).toBeGreaterThan(1));
+    await waitFor(() => expect(listCalls).toBeGreaterThan(1));
     // The reload attaches a suggestion to the same artifactId; the card must remount and re-prefill from it,
     // rather than keeping the stale useState from its first mount.
     await waitFor(() =>

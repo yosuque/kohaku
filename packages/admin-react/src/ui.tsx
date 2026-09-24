@@ -1,27 +1,8 @@
-import type { KohakuHostError } from "@kohaku-ui/client";
 import type { CSSProperties, ReactNode } from "react";
-import type { AdminMessages } from "./messages.js";
 import { V } from "./theme.js";
 
 export type NoticeKind = "info" | "error";
 export type NotifyFn = (text: string, kind?: NoticeKind) => void;
-
-/**
- * If a governance call's thrown error is 403 CAPABILITY_DENIED (declarative RBAC), returns an explanation for
- * the role; otherwise null. The SDK client throws KohakuHostError on any !ok response, so callers pass the
- * caught exception straight through. `messages` is injected (R10) — this package never reads a module-level
- * i18n singleton.
- */
-export function deniedMessage(
-  err: KohakuHostError,
-  operation: string,
-  messages: AdminMessages,
-): string | null {
-  return err.code === "CAPABILITY_DENIED" ? messages.deniedMessage(err.code, operation) : null;
-}
-
-/** Tier accents (L0 fixed / L1 declarative / L2 free): kept as literals because they are semantic, not themed. */
-export const TIER_COLOR: Record<string, string> = { L0: "#1e40af", L1: "#166534", L2: "#c2410c" };
 
 export function ErrorBanner(props: {
   text: string;

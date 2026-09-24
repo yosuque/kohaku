@@ -246,11 +246,15 @@ const JA: UIStrings = {
     refresh: "更新",
     deniedMessage: (code, operation) =>
       `権限がありません(${code}): 現在のロールでは「${operation}」を実行できません。ヘッダー右上のロールを admin / reviewer に切り替えてください。`,
+    authRequiredMessage: (code, operation) =>
+      `サインインが必要です、またはセッションが期限切れです(${code}): 「${operation}」がホストに拒否されました。再度サインインしてください。`,
     emptyDefault: "データなし",
     lineage: {
       description:
         "UI Spec のイベントソーシング — web / chat サーフェス間で同じ intentHash が並ぶ行が「同じ要求 → 同じ描画」の監査証跡です",
       empty: "イベントはありません(ダッシュボード / チャットを使うと記録されます)",
+      opRead: "lineage イベントの閲覧 (lineage.read)",
+      fetchFailed: "lineage イベントの取得に失敗しました",
     },
     analytics: {
       description: (limit, truncated, events) =>
@@ -293,19 +297,23 @@ const JA: UIStrings = {
       removeButton: "解除",
       removeFailed: "固定化の解除に失敗しました",
       opRemove: "固定化の解除 (fixation.remove)",
+      opRead: "固定化候補・レコードの閲覧 (fixation.read)",
+      fetchFailed: "固定化データの取得に失敗しました",
     },
     promotions: {
       description:
         "L2(自由生成)パーツの利用ログから昇格候補を抽出します。承認すると Registry と Intent カタログに登録され、以後同じ要求は L1(宣言的構成)で配信されます。",
       statusLabel: "status",
-      statusAllOption: "all(候補を抽出)",
+      statusAllOption: "all",
       emptyAll: (minUses) =>
         `候補はありません。チャットで「売上をカレンダーヒートマップで」を ${minUses} 回以上尋ねると候補が現れます。`,
       emptyStatus: (status) => `ステータス「${status}」の昇格はありません。`,
+      evaluateButton: "候補を抽出",
       opEvaluate: "昇格候補の抽出 (promotion.evaluate)",
       opList: "昇格一覧の閲覧 (promotion.list)",
       opApprove: "昇格の承認",
-      opWithdraw: "公開の取り下げ",
+      opWithdraw: "候補の取り下げ",
+      opUnpublish: "公開エントリの取り下げ",
       opReject: "候補の却下",
       opPreview: "昇格候補のプレビュー (promotion.preview)",
       requestChangesNotice:
@@ -314,8 +322,9 @@ const JA: UIStrings = {
         `再承認して昇格しました: ${componentType}@${version} を Registry に登録しました。`,
       promotedNotice: (componentType, version, intentName) =>
         `昇格が完了しました: ${componentType}@${version} を Registry に登録し、Intent「${intentName}」を追加しました。チャットで同じ質問をすると L1 になります。`,
-      withdrawnNotice:
-        "取り下げました。公開エントリはカタログと Intent から削除され、次の compose は L1 / フォールバックに戻ります。",
+      withdrawnNotice: "取り下げました。候補はレビューキューから削除されます。",
+      unpublishedNotice:
+        "公開を取り下げました。公開エントリはカタログと Intent から削除され、次の compose は L1 / フォールバックに戻ります。",
       rejectedNotice: "候補を却下しました",
       failedNotice: (message) => `失敗しました: ${message}`,
       usesSessions: (uses, sessions) => `${uses} 回使用 / ${sessions} セッション`,

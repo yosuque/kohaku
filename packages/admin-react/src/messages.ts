@@ -14,8 +14,16 @@ export interface AdminMessages {
   tabFixations: string;
   refresh: string;
   deniedMessage: (code: string, operation: string) => string;
+  /** 401 (missing/expired session) — distinct from `deniedMessage`'s 403 role explanation. */
+  authRequiredMessage: (code: string, operation: string) => string;
   emptyDefault: string;
-  lineage: { description: string; empty: string };
+  lineage: {
+    description: string;
+    empty: string;
+    /** Operation label for the GET /lineage denied/failed explanation. */
+    opRead: string;
+    fetchFailed: string;
+  };
   analytics: {
     description: (limit: number, truncated: boolean, events: number) => string;
     loading: string;
@@ -53,6 +61,9 @@ export interface AdminMessages {
     removeButton: string;
     removeFailed: string;
     opRemove: string;
+    /** Operation label for the GET /fixations + GET /fixations/proposals denied/failed explanation. */
+    opRead: string;
+    fetchFailed: string;
   };
   promotions: {
     description: string;
@@ -61,16 +72,24 @@ export interface AdminMessages {
     /** minUses is the promotion-nomination threshold, sourced from GET /analytics/summary's promotionPolicy. */
     emptyAll: (minUses: number) => string;
     emptyStatus: (status: string) => string;
+    /** Toolbar button that extracts candidates via POST /promotions/evaluate (side-effecting; the status filter itself is read-only). */
+    evaluateButton: string;
     opEvaluate: string;
     opList: string;
     opApprove: string;
+    /** Withdrawing a non-published candidate (e.g. from changes_requested) back out of the review queue. */
     opWithdraw: string;
+    /** Unpublishing an already-published entry (removes it from the catalog and Intent). */
+    opUnpublish: string;
     opReject: string;
     opPreview: string;
     requestChangesNotice: string;
     reApprovedNotice: (componentType: string, version: string) => string;
     promotedNotice: (componentType: string, version: string, intentName: string) => string;
+    /** Shown after withdrawing a non-published candidate. Distinct from `unpublishedNotice`. */
     withdrawnNotice: string;
+    /** Shown after unpublishing an already-published entry. Distinct from `withdrawnNotice`. */
+    unpublishedNotice: string;
     rejectedNotice: string;
     failedNotice: (message: string) => string;
     usesSessions: (uses: number, sessions: number) => string;
@@ -116,11 +135,15 @@ export const defaultAdminMessages: AdminMessages = {
   refresh: "Refresh",
   deniedMessage: (code, operation) =>
     `Permission denied (${code}): the current role is not allowed to "${operation}". Switch the role at the top-right of the header to admin / reviewer.`,
+  authRequiredMessage: (code, operation) =>
+    `Sign-in required or session expired (${code}): the host rejected "${operation}". Sign in again.`,
   emptyDefault: "No data",
   lineage: {
     description:
       'Event Sourcing of the UI Spec — rows where the same intentHash lines up across the web / chat surfaces are the audit trail of "same request → same rendering"',
     empty: "No events (they are recorded as you use the Dashboard / Chat)",
+    opRead: "viewing lineage events (lineage.read)",
+    fetchFailed: "Failed to fetch lineage events",
   },
   analytics: {
     description: (limit, truncated, events) =>
@@ -163,19 +186,23 @@ export const defaultAdminMessages: AdminMessages = {
     removeButton: "Remove",
     removeFailed: "Failed to remove the fixation",
     opRemove: "removing a fixation (fixation.remove)",
+    opRead: "viewing fixation candidates and records (fixation.read)",
+    fetchFailed: "Failed to fetch fixation data",
   },
   promotions: {
     description:
       "Extract promotion candidates from the usage log of L2 (freely generated) parts. Once approved, they are registered into the Registry and the Intent catalog, and from then on the same request is served via L1 (declarative composition).",
     statusLabel: "status",
-    statusAllOption: "all (extract candidates)",
+    statusAllOption: "all",
     emptyAll: (minUses) =>
       `No candidates. Ask "Show sales as a calendar heatmap" in Chat ${minUses} or more times and a candidate appears.`,
     emptyStatus: (status) => `No promotions with status "${status}".`,
+    evaluateButton: "Extract candidates",
     opEvaluate: "extracting promotion candidates (promotion.evaluate)",
     opList: "viewing the promotion list (promotion.list)",
     opApprove: "approving a promotion",
-    opWithdraw: "withdrawing a publication",
+    opWithdraw: "withdrawing a candidate from review",
+    opUnpublish: "unpublishing a published entry",
     opReject: "rejecting a candidate",
     opPreview: "previewing a promotion candidate (promotion.preview)",
     requestChangesNotice:
@@ -184,8 +211,9 @@ export const defaultAdminMessages: AdminMessages = {
       `Re-approved and promoted: registered ${componentType}@${version} into the Registry.`,
     promotedNotice: (componentType, version, intentName) =>
       `Promotion complete: registered ${componentType}@${version} into the Registry and added the Intent "${intentName}". Ask the same question in Chat and it becomes L1.`,
-    withdrawnNotice:
-      "Withdrawn. The published entry is removed from the catalog and Intent, and the next compose returns to L1 / fallback.",
+    withdrawnNotice: "Withdrawn. The candidate leaves the review queue.",
+    unpublishedNotice:
+      "Unpublished. The published entry is removed from the catalog and Intent; the next compose returns to L1 / fallback.",
     rejectedNotice: "Rejected the candidate",
     failedNotice: (message) => `Failed: ${message}`,
     usesSessions: (uses, sessions) => `${uses} uses / ${sessions} sessions`,

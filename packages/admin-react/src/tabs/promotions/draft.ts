@@ -16,14 +16,17 @@ export interface DraftForm {
 /**
  * Product-specific knowledge for the approval form: which `queryTemplate.path` values the product's query
  * source supports, and how to prefill a draft from a candidate. Both default to something neutral; the kohaku
- * sample passes its sales-catalogue values from the app side (B2 will feed LLM-suggested drafts through the
- * same `initialDraftFor` seam).
+ * sample passes its sales-catalogue values from the app side.
+ *
+ * The prefill precedence PromotionsTab applies is: a machine-extracted `suggestion` (when present and
+ * `preferSuggestion` is not `false`) first, then this product's own `initialDraftFor`, then — only when the
+ * product supplies no `initialDraftFor` at all — the built-in `genericInitialDraft` below.
  */
 export interface PromotionDefaults {
   queryPaths?: readonly string[];
   initialDraftFor?: (candidate: PromotionCandidateView) => DraftForm;
   /**
-   * When a candidate carries a machine-extracted `suggestion` (B2), prefill the form from it instead of
+   * When a candidate carries a machine-extracted `suggestion`, prefill the form from it instead of
    * `initialDraftFor` (default true). `false` forces the product's own prefill; the suggestion panel and its
    * acknowledgement are still shown so the reviewer can compare.
    */

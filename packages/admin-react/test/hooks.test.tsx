@@ -1,4 +1,4 @@
-import { createKohakuClient, KohakuHostError } from "@kohaku-ui/client";
+import { createKohakuClient } from "@kohaku-ui/client";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import {
   AdminProvider,
   defaultAdminMessages,
   useAnalyticsSummary,
+  useFixations,
   useLineage,
   usePromotions,
 } from "../src/index.js";
@@ -44,6 +45,41 @@ describe("data hooks", () => {
     expect(calls[0]!.url).toBe("/api/kohaku/lineage?limit=120");
   });
 
+  it("useLineage notifies the denied message on 403 and clears events (not left as an unhandled rejection)", async () => {
+    const notices: Notice[] = [];
+    const { wrapper } = wrapperFor(
+      { "GET /lineage": () => jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "no" } }, 403) },
+      notices,
+    );
+    const { result } = renderHook(() => useLineage({ limit: 120 }), { wrapper });
+    await waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices[0]).toEqual({
+      text: defaultAdminMessages.deniedMessage("CAPABILITY_DENIED", defaultAdminMessages.lineage.opRead),
+      kind: "error",
+    });
+    expect(result.current.events).toEqual([]);
+  });
+
+  it("useLineage notifies the generic fetchFailed text on a network error", async () => {
+    const notices: Notice[] = [];
+    const client = createKohakuClient({
+      baseUrl: "/api/kohaku",
+      transport: async (url) => {
+        if (url.includes("/lineage")) throw new Error("network down");
+        if (url.includes("/analytics/summary")) return jsonResponse({ promotionPolicy: {} });
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AdminProvider client={client} onNotice={(text, kind) => notices.push({ text, kind })}>
+        {children}
+      </AdminProvider>
+    );
+    renderHook(() => useLineage({ limit: 120 }), { wrapper });
+    await waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices[0]).toEqual({ text: defaultAdminMessages.lineage.fetchFailed, kind: "error" });
+  });
+
   it("useAnalyticsSummary notifies the denied message on 403 and keeps data null", async () => {
     const notices: Notice[] = [];
     const { wrapper } = wrapperFor(
@@ -62,7 +98,7 @@ describe("data hooks", () => {
     expect(result.current.data).toBeNull();
   });
 
-  it("usePromotions evaluates for 'all' and lists for a specific status", async () => {
+  it("usePromotions lists for 'all' (no status query) and for a specific status, both read-only", async () => {
     const notices: Notice[] = [];
     const cand = {
       artifactId: "a@1",
@@ -73,8 +109,8 @@ describe("data hooks", () => {
     };
     const { wrapper, calls } = wrapperFor(
       {
-        "POST /promotions/evaluate": () => jsonResponse({ candidates: [cand] }),
-        "GET /promotions": () => jsonResponse({ candidates: [] }),
+        "GET /promotions": (call) =>
+          jsonResponse({ candidates: call.url.includes("status=published") ? [] : [cand] }),
       },
       notices,
     );
@@ -83,13 +119,105 @@ describe("data hooks", () => {
       initialProps: { status: "all" },
     });
     await waitFor(() => expect(result.current.candidates).toHaveLength(1));
+    // "all" issues no query string at all — it must never fire the side-effecting POST /promotions/evaluate.
+    expect(calls.some((c) => c.url === "/api/kohaku/promotions")).toBe(true);
+    expect(calls.some((c) => c.url.includes("/promotions/evaluate"))).toBe(false);
+    // The threshold comes from AdminProvider's own (client, tenant) fetch, not from usePromotions itself.
     expect(result.current.promotionMinUses).toBe(2);
     rerender({ status: "published" });
     await waitFor(() =>
       expect(calls.some((c) => c.url.startsWith("/api/kohaku/promotions?status=published"))).toBe(true),
     );
     await waitFor(() => expect(result.current.candidates).toHaveLength(0));
-    void KohakuHostError;
+  });
+
+  it("usePromotions notifies the denied message on 403 and clears candidates", async () => {
+    const notices: Notice[] = [];
+    const { wrapper } = wrapperFor(
+      { "GET /promotions": () => jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "no" } }, 403) },
+      notices,
+    );
+    const { result } = renderHook(() => usePromotions("all"), { wrapper });
+    await waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices[0]).toEqual({
+      text: defaultAdminMessages.deniedMessage("CAPABILITY_DENIED", defaultAdminMessages.promotions.opList),
+      kind: "error",
+    });
+    expect(result.current.candidates).toEqual([]);
+  });
+
+  it("useFixations notifies the denied message on 403 from GET /fixations and clears records", async () => {
+    const notices: Notice[] = [];
+    const { wrapper } = wrapperFor(
+      {
+        "GET /fixations/proposals": () => jsonResponse({ proposals: [] }),
+        "GET /fixations": () => jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "no" } }, 403),
+      },
+      notices,
+    );
+    const { result } = renderHook(() => useFixations(), { wrapper });
+    await waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices[0]).toEqual({
+      text: defaultAdminMessages.deniedMessage("CAPABILITY_DENIED", defaultAdminMessages.fixations.opRead),
+      kind: "error",
+    });
+    expect(result.current.records).toEqual([]);
+  });
+
+  it("useFixations notifies the generic fetchFailed text on a network error from GET /fixations/proposals", async () => {
+    const notices: Notice[] = [];
+    const client = createKohakuClient({
+      baseUrl: "/api/kohaku",
+      transport: async (url) => {
+        if (url.includes("/fixations/proposals")) throw new Error("network down");
+        if (url.endsWith("/fixations")) return jsonResponse({ fixations: [] });
+        if (url.includes("/analytics/summary")) return jsonResponse({ promotionPolicy: {} });
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AdminProvider client={client} onNotice={(text, kind) => notices.push({ text, kind })}>
+        {children}
+      </AdminProvider>
+    );
+    const { result } = renderHook(() => useFixations(), { wrapper });
+    await waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices[0]).toEqual({ text: defaultAdminMessages.fixations.fetchFailed, kind: "error" });
+    expect(result.current.proposals).toEqual([]);
+  });
+
+  it("does not refetch GET /analytics/summary on every usePromotions/useFixations reload (thresholds are a one-time context fetch)", async () => {
+    const cand = {
+      artifactId: "a@1",
+      status: "candidate",
+      uses: 3,
+      sessions: 2,
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const { client, calls } = stubClient({
+      "GET /promotions": () => jsonResponse({ candidates: [cand] }),
+      "GET /fixations/proposals": () => jsonResponse({ proposals: [] }),
+      "GET /fixations": () => jsonResponse({ fixations: [] }),
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <AdminProvider client={client}>{children}</AdminProvider>
+    );
+    // Both hooks must share the SAME AdminProvider instance (and therefore its single threshold fetch) — two
+    // separate renderHook calls would each mount their own provider tree, defeating the point of this test.
+    const { result } = renderHook(() => ({ promotions: usePromotions("all"), fixations: useFixations() }), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.promotions.candidates).toHaveLength(1));
+    await waitFor(() => expect(result.current.fixations.fixationMinUses).toBe(3));
+    const summaryCallsAfterMount = calls.filter((c) => c.url.includes("/analytics/summary")).length;
+    expect(summaryCallsAfterMount).toBe(1);
+
+    act(() => {
+      result.current.promotions.reload();
+      result.current.fixations.reload();
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls.filter((c) => c.url.includes("/analytics/summary")).length).toBe(summaryCallsAfterMount);
   });
 });
 

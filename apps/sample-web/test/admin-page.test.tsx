@@ -87,7 +87,7 @@ describe("AdminPage (thin wrapper over @kohaku-ui/admin-react)", () => {
       "GET /lineage": () => jsonResponse({ events: [] }),
       "GET /analytics/summary": () =>
         jsonResponse({ promotionPolicy: { promotionMinUses: 2, fixationMinUses: 3 } }),
-      "POST /promotions/evaluate": () => jsonResponse({ candidates: [candidate] }),
+      "GET /promotions": () => jsonResponse({ candidates: [candidate] }),
     });
     render(
       <ThemeModeProvider>

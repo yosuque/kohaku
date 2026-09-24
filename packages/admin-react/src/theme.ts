@@ -10,9 +10,9 @@ import type { CSSProperties } from "react";
  *
  * The `changesRequested*` / `codeBackground` / `codeText` / `disabledSurface` / `negativeBorder` entries are
  * NOT theme tokens `themeTokensToCssVars` emits — they replace hex literals that had no CSS variable at all in
- * the sample's Promotion Review tab (see AGENTS.md's R7 ruling). Each still follows the `--kohaku-color-*`
- * naming convention so a product can override them the same way, with the sample's current hex as the fallback
- * (byte-identical light-mode output today).
+ * the sample's Promotion Review tab. Each still follows the `--kohaku-color-*` naming convention so a product
+ * can override them the same way, with the sample's current hex as the fallback (byte-identical light-mode
+ * output today).
  */
 export const V = {
   background: "var(--kohaku-color-background, #ffffff)",
@@ -33,7 +33,7 @@ export const V = {
   infoSurface: "var(--kohaku-color-info-surface, #eff6ff)",
   infoText: "var(--kohaku-color-info-text, #1e40af)",
   infoBorder: "var(--kohaku-color-info-border, #bfdbfe)",
-  // --- R7: formerly bare hex literals with no CSS variable at all (packages/admin-react uses in Task 6) -----
+  // --- Formerly bare hex literals with no CSS variable at all ------------------------------------------------
   /** Changes-requested banner background (Promotion Review). */
   changesRequestedSurface: "var(--kohaku-color-changes-requested-surface, #fef3c7)",
   /** Changes-requested banner text, and the "request changes" button's own text (same amber tone). */
@@ -48,11 +48,11 @@ export const V = {
   disabledSurface: "var(--kohaku-color-disabled-surface, #c7d2fe)",
   /** Withdraw / unpublish button border (their text reuses `negativeText`, same hex as the sample's literal). */
   negativeBorder: "var(--kohaku-color-negative-border, #fca5a5)",
-  // --- Task 4 fix round 1: `--app-subtle` / `--app-track` had no matching V entry and were provisionally
-  // remapped to `muted`/`surface`, but the sample's own light-mode values (`app-theme.css`) differ enough from
-  // those (contrast on the promotion-lifecycle pill dropped from ~6.9:1 to ~4.6:1) that a characterization port
-  // needs its own tokens, same R7 treatment as above. Sample-web's `buildTheme(mode)` must supply
-  // `color.subtle`/`color.track` for dark-mode parity once it adopts this package (tracked for Task 8). --------
+  // --- `--app-subtle` / `--app-track` had no matching V entry and were provisionally remapped to
+  // `muted`/`surface`, but the sample's own light-mode values (`app-theme.css`) differ enough from those
+  // (contrast on the promotion-lifecycle pill dropped from ~6.9:1 to ~4.6:1) that a characterization port needs
+  // its own tokens, same treatment as the block above. Sample-web's `buildTheme(mode)` supplies
+  // `color.subtle`/`color.track` for dark-mode parity (see apps/sample-web/src/theme/tokens.ts). -----------------
   /** De-emphasized text distinct from `muted` (tier-color fallback in Lineage, promotion-lifecycle pill text). */
   subtle: "var(--kohaku-color-subtle, #475569)",
   /** Flat neutral track background (promotion-lifecycle pill background in Analytics). */

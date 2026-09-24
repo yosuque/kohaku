@@ -119,8 +119,8 @@ export async function fetchHealth(): Promise<HealthResponse> {
  * deployment, disabled unless the server opts in (AppDeps.demoAdminRoutes / KOHAKU_DEMO_ADMIN_ROUTES=1), so a
  * denial (403) or absence (404) is an expected outcome, not a bug. /api/kohaku/* is outside the SDK's typed
  * surface, so — like fetchHealth — this is the escape hatch (apiFetch), and unlike fetchHealth it throws the
- * SDK's typed KohakuHostError on !ok so callers can branch with isKohakuHostError/deniedMessage the same way
- * they do for every other governance call (see admin/ui.tsx's deniedMessage).
+ * SDK's typed KohakuHostError on !ok so callers can branch with isKohakuHostError/describeDeniedOperation the
+ * same way they do for every other governance call (see AdminPage.tsx's BumpButton).
  */
 export async function bumpDataVersion(): Promise<string> {
   const res = await apiFetch("/api/kohaku/admin/bump-data-version", { method: "POST" });
