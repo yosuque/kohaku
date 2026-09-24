@@ -63,7 +63,7 @@ npx @kohaku-ui/cli init --from ../sales.csv   # or a .json array / a .sqlite fil
 npm run dev
 ```
 
-Generates a runnable Dashboard + Chat app (DomainPort, Intent catalog, L0 fixed Spec) from your own CSV/JSON/SQLite — see the [Zero-Port quickstart](docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code) for what it produces and how to add L1/L2. No data at hand? Try [`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv). The rest of this section is the monorepo's own dev setup.
+Generates a runnable Dashboard + Chat app (DomainPort, Intent catalog, L0 fixed Spec) from your own CSV/JSON/SQLite, plus a `.env` with a freshly generated capability secret (add only a provider key to it — never copy `.env.example` over it) — see the [Zero-Port quickstart](docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code) for what it produces and how to add L1/L2. No data at hand? Try [`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv). The rest of this section is the monorepo's own dev setup.
 
 Prerequisites: Node >= 22, pnpm 12 (the floor is `package.json`'s `engines`; CI verifies on both Node 22 (the declared floor) and Node 24, and `.node-version` pins 25.7.0 for local development).
 

@@ -141,11 +141,13 @@ interface AuthzPort {
 ```
 ホストは compose 後に Spec 内の全 `$ref` を read スコープで発行し、`/binding/resolve` で検証する。発行者に明示的な `ttlSeconds` が渡されないときの既定 TTL(600 秒)は `DEFAULT_CAPABILITY_TTL_SECONDS` であり、`@kohaku-ui/spec-core` で一度だけ定義され、`@kohaku-ui/host-core` と `@kohaku-ui/authz-hmac` は後方互換のため再 export している。
 
+`verify` は通常の拒否を `{ ok: false, reason }` で返し、自身では allow/deny に分類できないインフラ障害(リビケーションストアの停止等)の場合に**限り**例外を投げてよい。ホストはこの throw を fail-closed として扱わねばならず(REST: 503 `INTERNAL`、§5 参照。MCP Apps: 構造化ツールエラー)、2xx や `{ ok: false }` の拒否と同じ形にしてはならない。有効期限前のケーパビリティ失効は `AuthzPort` 本体の契約外の拡張として提供される(`@kohaku-ui/spec-core` の `ports.ts` にある `CapabilityRevocationStore`。`RevokeCapabilityResult` のコードは `MALFORMED` / `INVALID_SIGNATURE` / `NO_JTI` / `STORE_ERROR`、期限切れ済みトークンの失効は `{ ok: true, alreadyExpired: true }` になる)。実装は `@kohaku-ui/authz-hmac` — `revokeCapability` の使い方はその README を参照。
+
 ### 4.4 StoragePort — 永続化
 
 Spec キャッシュ(get/put)、Lineage(append/list)、昇格状態(get/put/list)、固定化(get/put/list)。参考実装: `@kohaku-ui/storage-memory`(`createMemoryStoragePort` / `createFileStoragePort`)。オプショナル拡張 `deleteFixation`(未実装なら `unfixate` は fail-fast で失敗し、監査イベント `intent.unfixated` も記録されない)。
 
-**テナント引数**: `getFixation(intentHash, tenant?)` / `listFixations(tenant?)` / `deleteFixation?(intentHash, tenant?)` は optional 第 2 引数で `tenant` を受け、`putFixation` は `record.tenant` を見て固定化を `(tenant, intentHash)` にキー分離する(シグネチャ不変)。`listLineage` の `LineageFilter.tenant` は一致イベントのみを返す(未指定は全件 = 従来挙動。`tenant` 未記録の旧イベントは無指定フィルタでのみ現れる)。**tenant 非対応のストレージは第 2 引数を無視してよく、その場合テナント間で固定化が共有される(fail-open)** — 本格的なテナント分離は RLS 等プロダクト側の責務。サンプルの `createFileStoragePort` は合成キー(`tenant` なしは `intentHash` そのもの)で分離するため、旧 `fixations.json`(`tenant` なし)は変換なしで互換ロードできる。
+**テナント引数**: `getFixation(intentHash, tenant?)` / `listFixations(tenant?)` / `deleteFixation?(intentHash, tenant?)` は optional 第 2 引数で `tenant` を受け、`putFixation` は `record.tenant` を見て固定化を `(tenant, intentHash)` にキー分離する(シグネチャ不変)。`listLineage` の `LineageFilter.tenant` は一致イベントのみを返す(未指定は全件 = 従来挙動。`tenant` 未記録の旧イベントは無指定フィルタでのみ現れる)。tenant 引数はすべて `normalizeTenant`(`@kohaku-ui/spec-core`)で正規化され、空文字列は未指定と同義に扱われる。**tenant 非対応のストレージは第 2 引数を無視してよく、その場合テナント間で固定化が共有される(fail-open)** — 本格的なテナント分離は RLS 等プロダクト側の責務。サンプルの `createFileStoragePort` は合成キー(`tenant` なしは `intentHash` そのもの)で分離するため、旧 `fixations.json`(`tenant` なし)は変換なしで互換ロードできる。`appendLineage` は `id` で冪等であり、既に存在する `id` の再送は重複追加ではなく no-op になる。
 
 **参考実装**: `@kohaku-ui/storage-memory`(インメモリ / ファイル)、`@kohaku-ui/storage-redis`、`@kohaku-ui/storage-postgres` はいずれもこのインタフェースを、オプショナルな `putPromotionStates` / `deleteFixation` と `putFixation` の `ifPresent` も含めて完全実装している。これらは契約に何も追加しない — プロダクトが `StoragePort` を直接実装してもよい。上記の並行性契約はこれらによって変わらない。
 
@@ -180,7 +182,7 @@ Spec エンベロープは**テーマを持たない**(SPEC-ENV-003 — UI Spec 
 { "error": { "code": "CAPABILITY_DENIED", "message": "…" } }
 ```
 
-コード: `BAD_REQUEST`(400)/ `INTENT_INVALID`(422)/ `CAPABILITY_REQUIRED`(401)/ `CAPABILITY_DENIED`(403)/ `REF_NOT_FOUND`(404)/ `SOURCE_MISMATCH`(404)/ `NOT_FOUND`(404)/ `PROMOTION_INVALID`(422)/ `PROMOTION_NOT_PUBLISHED`(409)/ `COMPOSE_FAILED`(500)/ `INTERNAL`(500)/ `NOT_IMPLEMENTED`(501)。`NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` は統制系(promotions)の named ルート用(§5.4)。
+コード: `BAD_REQUEST`(400)/ `INTENT_INVALID`(422)/ `CAPABILITY_REQUIRED`(401)/ `CAPABILITY_DENIED`(403)/ `REF_NOT_FOUND`(404)/ `SOURCE_MISMATCH`(404)/ `NOT_FOUND`(404)/ `PROMOTION_INVALID`(422)/ `PROMOTION_NOT_PUBLISHED`(409)/ `COMPOSE_FAILED`(500)/ `INTERNAL`(500。ただし `authz.verify` がインフラ障害で拒否したときは 503 — メッセージは `capability verification unavailable`、§4.3 参照)/ `NOT_IMPLEMENTED`(501)。`NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` は統制系(promotions)の named ルート用(§5.4)。
 
 コード集合はワイヤ契約なので、型 `HostErrorCode` / `ErrorEnvelope` は **`@kohaku-ui/spec-core` が定義元**(host-rest はサーバー側生成ヘルパ `errorBody` を残しつつ後方互換で再エクスポート)。クライアント側はこれらを型付きで扱う **`@kohaku-ui/client`**(型付きホストクライアント SDK)を使うと、`{spec, capability}` 等の応答と `{error:{code,message}}` を判別可能例外 `KohakuHostError`(`code: HostErrorCode` / `status` / `requestId`)として受け取れる(手書き fetch でコードが文字列に潰れるのを避ける)。SDK の使い方はユーザーガイド §6「クライアントから叩く」を参照。
 
@@ -244,7 +246,7 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 | ルート | 認可 | 内容 |
 |---|---|---|
 | `GET /catalog` | —(公開読み取り) | `{ components: [{type, version, description, capabilities, implementation, propsSchema(JSON Schema)}], catalogVersion }` |
-| `GET /lineage?type=&intentHash=&artifactId=&specHash=&since=&until=&limit=` | `authorizeGovernance`(配線時) | `{ events: LineageEventRecord[] }`。`since` / `until` は ISO8601(`/analytics/summary` と同一の正規化・境界解釈)、`limit` は上限 1000 |
+| `GET /lineage?type=&intentHash=&artifactId=&specHash=&since=&until=&limit=` | `authorizeGovernance`(配線時) | `{ events: LineageEventRecord[] }`。`since` / `until` は ISO8601(`/analytics/summary` と同一の正規化・境界解釈)、`limit` は既定 200(`DEFAULT_LINEAGE_LIMIT`)、上限 1000 |
 | `GET /analytics/summary?since=&until=&limit=` | `authorizeGovernance`(配線時。`analytics.read`) | `{ window, summary }`。lineage の生イベント列を集計した俯瞰サマリ(下記)。**参照実装レベルの拡張**(本書 §11 の必須集合外) |
 | `POST /telemetry` | `authorizeGovernance`(配線時) | `{ events: [{kind:"rendered", specHash,…} \| {kind:"componentUsed", artifactId, outcome}] }` → `{ok}` |
 

@@ -27,12 +27,17 @@ const semantic = createLlmSemanticPort({
   `facet.change`, and component events with drilldown), never going through the LLM.
 - `LlmSemanticPortOptions.fallbackIntent` — the Intent to fall back to (with `params.request` set to the
   raw question) when the model's answer fits no Intent in the catalog; without it, an unmatched question
-  throws `SemanticNormalizeError`.
+  throws `SemanticNormalizeError`. A `fallbackIntent` that is itself not in the catalog also throws.
 - `LlmSemanticPortOptions.rules` — extra, product-specific system-prompt lines (e.g. fiscal-calendar or
   vocabulary rules) rendered between the generic normalization rules.
+- `LlmSemanticPortOptions.maxQuestionChars` — rejects a question longer than this many characters with
+  `SemanticNormalizeError` before any LLM call (default 2000).
 - `LlmSemanticPortOptions.onNormalized` — an observation hook called after every natural-language
   normalization (matched or fallback) with `{ text, canonical, fallback, tenant? }`; it never fires before a
   throw, and a throwing hook is caught and ignored (fail-open), so it is safe to use for metrics/logging.
+
+`buildNormalizeSystemPrompt` / `buildNormalizeUserPrompt` are exported from the package but marked `@internal`:
+they exist so tests can assert the exact rendered prompt and are not a stable public contract.
 
 Default SemanticPort: the Intent layer stays a product responsibility
 ([docs/design.md §2](https://github.com/yosuque/kohaku/blob/main/docs/design.md#2-overall-architecture)) —

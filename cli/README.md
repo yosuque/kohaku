@@ -15,7 +15,9 @@ npx @kohaku-ui/cli init --from sales.csv
 `init` reads a `.csv` / `.json` (array of objects) / `.sqlite` file (SQLite needs Node >= 22.13),
 infers which columns are categories, measures and a time axis, and generates a runnable project
 (DomainPort, Intent catalog, an L0 fixed Spec, a Dashboard + Chat web app, a golden regression
-test) that depends only on the published `@kohaku-ui/*` packages, then runs `npm install`. See
+test) that depends only on the published `@kohaku-ui/*` packages, then runs `npm install`. It
+also writes a `.env` with a freshly generated capability secret, so add only a provider key to it
+— never copy `.env.example` over it. See
 `--out`, `--source`, `--name`, `--table` and `--no-install` in `--help`, and the
 [Zero-Port quickstart](https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code)
 in the user guide for what it produces.

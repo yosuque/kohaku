@@ -37,6 +37,10 @@ export function AdminPage() {
 - `theme` — renderer-core `ThemeTokens`; the console follows `--kohaku-color-*` (light fallbacks when omitted).
 - `toolbar` / `extraTabs` — product-specific controls and tabs rendered inside the same provider.
 - `promotionDefaults` — prefill / `queryTemplate.path` choices for the promotion approval form.
+- The published promotion card has an **Unpublish** action (`PromotionActionKind: "unpublish"`; copy in
+  `messages.promotions.opUnpublish` / `unpublishedNotice`) alongside approve/reject/withdraw/request-changes.
+- Empty-state copy for the Promotions / Fixations tabs shows the usage thresholds (`promotionMinUses` /
+  `fixationMinUses`) exposed by `useAdmin()`, fetched once per `(client, tenant)` from `GET /analytics/summary`.
 
 RBAC: `describeDeniedOperation` (exported from the root) turns a caught `KohakuHostError` into reviewer copy —
 a 401 becomes `authRequiredMessage` ("sign in again"), a 403 `CAPABILITY_DENIED` becomes `deniedMessage`
