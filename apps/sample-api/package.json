@@ -30,6 +30,7 @@
     "@kohaku-ui/otel": "workspace:^",
     "@kohaku-ui/registry": "workspace:^",
     "@kohaku-ui/sandbox": "workspace:^",
+    "@kohaku-ui/semantic-llm": "workspace:^",
     "@kohaku-ui/spec-core": "workspace:^",
     "@kohaku-ui/storage-memory": "workspace:^",
     "@kohaku-ui/storage-postgres": "workspace:^",
