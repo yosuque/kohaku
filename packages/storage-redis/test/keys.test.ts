@@ -30,4 +30,14 @@ describe("redisKeys", () => {
   it("honours a custom prefix", () => {
     expect(redisKeys("app1").spec("k")).toBe("app1:spec:k");
   });
+  it("keys a capability revocation record by jti", () => {
+    expect(keys.revoked("jti-1")).toBe("kohaku:revoked:jti-1");
+    expect(redisKeys("app1").revoked("jti-1")).toBe("app1:revoked:jti-1");
+  });
+  it("treats an empty-string tenant exactly like an omitted one everywhere", () => {
+    expect(keys.promotion("", "a1")).toBe(keys.promotion(undefined, "a1"));
+    expect(keys.promotionIndex("")).toBe(keys.promotionIndex(undefined));
+    expect(keys.fixation("", "sha256:ab")).toBe(keys.fixation(undefined, "sha256:ab"));
+    expect(keys.fixationIndex("")).toBe(keys.fixationIndex(undefined));
+  });
 });

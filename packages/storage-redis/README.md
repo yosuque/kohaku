@@ -2,6 +2,10 @@
 
 A Redis-backed `StoragePort` for kohaku (Spec cache, lineage, promotion state, fixation) — a reference production adapter; the contract stays `@kohaku-ui/spec-core`'s `ports.ts`.
 
+```sh
+npm install @kohaku-ui/storage-redis ioredis
+```
+
 ```ts
 import { createRedisStoragePort } from "@kohaku-ui/storage-redis";
 
@@ -24,6 +28,17 @@ await storage.ready(); // rejects within connectTimeoutMs (default 5000ms) inste
 
 **Injected `client`**: this port never overrides the options of a `client` you pass in — that client's lifecycle is yours. For the same fail-fast behavior, construct it yourself with `enableOfflineQueue: false` (and typically `lazyConnect: true`); otherwise a command issued before it connects will queue and hang exactly as described above. With an injected client, `ready()` resolves immediately if `client.status === "ready"`, otherwise it waits for that client's own `ready` / `error` event, bounded by `connectTimeoutMs`.
 
+## Production
+
+`createRedisStoragePort` / `createRedisRevocationStore` share a connection lifecycle (`connection.ts`'s `createRedisConnection`):
+
+- **Timeouts**: a `url`-constructed client sets `connectTimeoutMs` (default 5000, ioredis's `connectTimeout`) and `commandTimeoutMs` (default 5000, ioredis's `commandTimeout`) so a network partition and a half-open socket (the connection looks alive but the peer never responds) both fail fast instead of hanging a command forever. `maxRetriesPerRequest` (default 3) tunes how many reconnect-and-retry cycles a queued command gets before giving up. All three are ignored for an injected `client` (its own options are never overridden).
+- **Error listener**: a `url`-constructed client always gets an `error` listener (an unhandled `error` event on an ioredis client is a process crash by Node's own EventEmitter contract) — pass `onError` to receive it yourself, or rely on the default `console.error`. An injected `client` never gets a listener attached, and is never disconnected by `close()` — attach your own listener to it and manage its lifecycle yourself.
+- **TLS / least privilege**: use a `rediss://` URL for TLS in transit, and an ACL user scoped to only the commands and key patterns this package actually needs (`GET`/`SET`/`DEL`/`EXISTS`/`INCR`/`INCRBY`/`HSETNX`/`HMGET`/`HSET`/`ZADD`/`ZREM`/`ZRANGE`/`ZREVRANGE`/`MULTI`/`EXEC`/`PIPELINE` against `{prefix}:*`) rather than a full-access default user.
+- **Multi-instance**: the Spec cache, lineage, and capability revocation are safe to share across as many instances as you like (every write is a single command or one `MULTI`/pipeline round trip against shared keys). Promotion state and fixation writes are only serialized *within one process* — `@kohaku-ui/spec-core`'s `ports.ts` documents this as the host's responsibility (a self-heal read-modify-write over a `(tenant, key)`). Running more than one writer process against the same promotion/fixation data needs either a single designated writer or a cross-process replacement for that serialization.
+- **Not supported**: Redis Cluster (keys are not hash-tagged; MULTI spans several keys) — standalone / Sentinel only.
+- **Retention**: the lineage log is append-only with no cap; plan a retention job (delete old events from `<prefix>:lineage:*`) or keep lineage in Postgres for long-lived deployments.
+
 ## Key layout
 
 Every key starts with a configurable prefix (default `kohaku`, see `keyPrefix`) so several kohaku hosts can share one Redis database. Tenant-scoped kinds key by `tenantSegment(tenant)`, which is `%` for a missing/empty tenant (a real tenant can never collide with it: `tenantSegment("%")` is percent-encoded to `%25`).
@@ -39,13 +54,13 @@ Every key starts with a configurable prefix (default `kohaku`, see `keyPrefix`) 
 | Fixation | `{p}:{tseg}:fixation:{intentHash}` | JSON(FixationRecord) | `ifPresent` uses `SET … XX` |
 | Fixation index | `{p}:{tseg}:fixation:index` and `{p}:fixation:index` | same as above | delete is `DEL` plus `ZREM` from both indexes |
 
-This package implements the whole of `StoragePort`: the Spec cache (`getSpecCache` / `putSpecCache`, with an optional TTL), lineage (`appendLineage` / `listLineage`), promotion state (`getPromotionState` / `putPromotionState` / `putPromotionStates` / `listPromotionStates`), and fixation (`getFixation` / `putFixation`, including `ifPresent` / `listFixations` / `deleteFixation`) — all tenant-scoped as described above — plus `ready()` and `close()` (see "Fail-fast, not hang" below). `close()` on an owned client tries a graceful `quit()` first and falls back to `disconnect()` if that rejects (e.g. the client never connected — `enableOfflineQueue: false` means `quit()` itself rejects rather than queuing), so a port that failed to connect can still be closed cleanly.
+This package implements the whole of `StoragePort`: the Spec cache (`getSpecCache` / `putSpecCache`, with an optional TTL), lineage (`appendLineage` / `listLineage`), promotion state (`getPromotionState` / `putPromotionState` / `putPromotionStates` / `listPromotionStates`), and fixation (`getFixation` / `putFixation`, including `ifPresent` / `listFixations` / `deleteFixation`) — all tenant-scoped as described above — plus `ready()` and `close()` (see "Fail-fast, not hang" above). `close()` on an owned client tries a graceful `quit()` first and falls back to `disconnect()` if that rejects (e.g. the client never connected — `enableOfflineQueue: false` means `quit()` itself rejects rather than queuing), so a port that failed to connect can still be closed cleanly. `appendLineage` is idempotent: re-appending an id that already exists (`HSETNX` on the events hash) is a no-op that neither moves the event nor duplicates its index entries.
 
-**Known limitation**: `listLineage` narrows the candidate set with a single sorted-set index and applies the remaining predicates client-side, deliberately not using `ZINTER` — a filter whose most selective index is still large (e.g. `type: ["view.composed"]` on a busy host) therefore reads every candidate, and there is no cap or rotation on the event log, the same limitation the reference file port has.
+**`listLineage`'s read strategy**: `chooseCandidateIndex` (`lineage.ts`) picks the most selective index (the three payload hash fields, then `type`, then `tenant`, in that order — a single-value `type` filter is preferred over `tenant`). When the chosen index alone already satisfies the whole filter (no other predicate, no `since`/`until`), `listLineage` reads only the newest `limit` ids off that index (`ZREVRANGE idx 0 limit-1`) instead of the whole set. Otherwise it scans the index from the newest side in chunks of `LINEAGE_SCAN_CHUNK_SIZE` (500), filtering client-side and stopping as soon as `limit` matches are found — so a filter whose candidate index is large but only partly selective never has to read the whole thing, let alone the whole event log. A multi-value `type` filter unions its indexes in one `pipeline()` round trip rather than one sequential `ZREVRANGE` per value. There is still no cap or rotation on the event log itself — see "Retention" above.
 
 ## Capability revocation
 
-`createRedisRevocationStore({ url | client, keyPrefix, connectTimeoutMs, maxRetriesPerRequest })` is a Redis-backed `CapabilityRevocationStore` (`@kohaku-ui/spec-core`'s `ports.ts`) — pass it as `revocations` to `@kohaku-ui/authz-hmac`'s `createHmacAuthzPort` or `@kohaku-ui/authz-jwt`'s `createJwtAuthzPort` so revocation is shared across every instance behind a load balancer, instead of the default in-memory store's per-process deny list.
+`createRedisRevocationStore({ url | client, keyPrefix, connectTimeoutMs, commandTimeoutMs, maxRetriesPerRequest, onError })` is a Redis-backed `CapabilityRevocationStore` (`@kohaku-ui/spec-core`'s `ports.ts`) — pass it as `revocations` to `@kohaku-ui/authz-hmac`'s `createHmacAuthzPort` or `@kohaku-ui/authz-jwt`'s `createJwtAuthzPort` so revocation is shared across every instance behind a load balancer, instead of the default in-memory store's per-process deny list.
 
 ```ts
 import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
