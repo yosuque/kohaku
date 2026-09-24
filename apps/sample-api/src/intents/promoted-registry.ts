@@ -1,6 +1,6 @@
 import type { ComponentDraft } from "@kohaku-ui/lineage";
 import type { ResolvedCatalog } from "@kohaku-ui/registry";
-import { IntentCatalog } from "./catalog.js";
+import { createSalesIntentCatalog, type IntentCatalog } from "./catalog.js";
 import { type PromotedEntry, promotedIntent } from "./promoted.js";
 
 /**
@@ -83,7 +83,7 @@ export class PromotedRegistry {
     const k = keyOf(tenant);
     let catalog = this.intentCatalogs.get(k);
     if (catalog == null) {
-      catalog = new IntentCatalog(); // already initialized with core INTENT_DEFS
+      catalog = createSalesIntentCatalog(); // already initialized with core INTENT_DEFS
       for (const entry of this.entriesFor(tenant)) catalog.add(promotedIntent(entry));
       this.intentCatalogs.set(k, catalog);
     }

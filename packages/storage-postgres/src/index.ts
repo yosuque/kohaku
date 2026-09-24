@@ -1,4 +1,9 @@
 export {
+  type CreatePostgresPoolOptions,
+  createPostgresPool,
+  type PostgresPoolHandle,
+} from "./connection.js";
+export {
   createPostgresStoragePort,
   type PostgresStoragePort,
   type PostgresStoragePortOptions,

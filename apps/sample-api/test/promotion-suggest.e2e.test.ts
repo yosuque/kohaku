@@ -119,6 +119,12 @@ describe("promotion schema suggestion E2E (the calendar heatmap is approvable wi
     const extraction = llm.calls.find((c) => c.schemaName === "schema_suggestion")!;
     expect(extraction.prompt).toContain("query://sales/trend?fy=2026&granularity=month&metric=revenue");
     expect(extraction.prompt).toContain("summary, trend, records, kpi, targets");
+    // #4.9: the catalog summary carries the core Intent/component vocabulary even on the very first
+    // suggestion (before anything has ever been promoted), so the "must be unique" instruction has
+    // something to check against from the start rather than only after the first promotion.
+    expect(extraction.prompt).toContain("## Existing catalog (avoid these names)");
+    expect(extraction.prompt).toContain("- sales.quarterly_summary (core intent)");
+    expect(extraction.prompt).toContain("(core component)");
 
     // Approve with the suggested draft verbatim (what the UI sends when the reviewer edits nothing) and
     // acknowledges the suggestion (acceptedAsIs, below, requires both an empty diff and acknowledgement).

@@ -14,13 +14,13 @@ export { admitFixationForLocale, languageOf, type OutputLang } from "./app/compo
 
 import { createHostDeps } from "./app/host-deps.js";
 import { createPromotionPipeline, PROMOTION_MIN_USES } from "./app/promotions.js";
+import { createHeaderIdentity, type RequestIdentity } from "./app/request-identity.js";
 import { salesContribution } from "./catalog/contribution.js";
 import { createSalesDomainPort } from "./domain/port.js";
 import { SalesRepo } from "./domain/repo.js";
-import { IntentCatalog } from "./intents/catalog.js";
+import { createSalesIntentCatalog, type IntentCatalog } from "./intents/catalog.js";
 import { type PromotedEntry, promotedComponent } from "./intents/promoted.js";
 import { PromotedRegistry } from "./intents/promoted-registry.js";
-import { createHeaderIdentity, type RequestIdentity } from "./ports/from-env.js";
 import { createSemanticPort } from "./ports/semantic-port.js";
 
 /**
@@ -108,7 +108,7 @@ export interface SampleApp {
 export async function createApp(deps: AppDeps): Promise<SampleApp> {
   const repo = deps.repo ?? new SalesRepo();
   // Capture the core Intent names (INTENT_DEFS) as reserved words (used to reject name collisions of promoted Intents).
-  const coreIntentNames = new Set(new IntentCatalog().names());
+  const coreIntentNames = new Set(createSalesIntentCatalog().names());
 
   // --- Per-tenant mutable catalog: promotion (publish) adds components, and the fingerprint changes per tenant ---
   function buildCatalog(entries: PromotedEntry[]): ResolvedCatalog {

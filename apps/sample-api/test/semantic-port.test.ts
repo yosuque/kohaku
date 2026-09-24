@@ -4,7 +4,7 @@ import { buildNormalizeSystemPrompt } from "@kohaku-ui/semantic-llm";
 import type { SessionContext } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { SalesRepo } from "../src/domain/repo.js";
-import { IntentCatalog } from "../src/intents/catalog.js";
+import { createSalesIntentCatalog } from "../src/intents/catalog.js";
 import { createSemanticPort, fiscalPeriodOf } from "../src/ports/semantic-port.js";
 
 // Provider-error vs fallback-mismatch classification for normalizeNl (thrown vs. degraded to sales.custom) now
@@ -57,7 +57,7 @@ function capturingLlm(captured: { system?: string }): LlmPort {
 describe("the fiscal period in the NL normalization prompt (determinized via clock injection)", () => {
   async function systemPromptAt(now: Date): Promise<string> {
     const captured: { system?: string } = {};
-    const catalog = new IntentCatalog();
+    const catalog = createSalesIntentCatalog();
     const port = createSemanticPort({
       repo: new SalesRepo(),
       catalogFor: () => catalog,
@@ -110,7 +110,7 @@ describe("the fiscal period in the NL normalization prompt (determinized via clo
 describe("sales rules in the normalization prompt", () => {
   it("renders the fiscal-year / region / custom rules from the injected clock, in the historical order", async () => {
     const llm = new FakeLlm({ objects: [{ intent: "sales.trend", params: {} }] });
-    const catalog = new IntentCatalog();
+    const catalog = createSalesIntentCatalog();
     const port = createSemanticPort({
       repo: new SalesRepo(),
       catalogFor: () => catalog,

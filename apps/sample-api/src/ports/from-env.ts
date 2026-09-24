@@ -1,20 +1,25 @@
 import { createHmacAuthzPort, createMemoryRevocationStore } from "@kohaku-ui/authz-hmac";
-import {
-  createJwtAuthzPort,
-  JwtIdentityError,
-  type JwtIdentityResolver,
-  type ResolvedIdentity,
-} from "@kohaku-ui/authz-jwt";
-import { errorBody, type KohakuHostDeps } from "@kohaku-ui/host-rest";
+import { createJwtAuthzPort, type JwtIdentityResolver } from "@kohaku-ui/authz-jwt";
 import type { AuthzPort, CapabilityRevocationStore, StoragePort } from "@kohaku-ui/spec-core";
 import { createFileStoragePort, createMemoryStoragePort } from "@kohaku-ui/storage-memory";
-import { createPostgresRevocationStore, createPostgresStoragePort } from "@kohaku-ui/storage-postgres";
-import { createRedisRevocationStore, createRedisStoragePort } from "@kohaku-ui/storage-redis";
-import type { Context, MiddlewareHandler } from "hono";
+import {
+  createPostgresPool,
+  createPostgresRevocationStore,
+  createPostgresStoragePort,
+} from "@kohaku-ui/storage-postgres";
+import {
+  createRedisConnection,
+  createRedisRevocationStore,
+  createRedisStoragePort,
+} from "@kohaku-ui/storage-redis";
 
 /**
  * Environment-driven selection of the sample's StoragePort / AuthzPort implementations
  * (docs/specification.md §9). Everything here is sample wiring: a product picks its adapters in code.
+ *
+ * Deliberately framework-free: no hono / host-rest import here (that would force sample-mcp, which imports
+ * this module's adapter-selection exports via `@kohaku-ui-sample/api/ports/from-env`, to pull in the REST
+ * framework too). The REST-only request → principal/tenant resolution lives in `../app/request-identity.ts`.
  */
 export type StorageKind = "file" | "memory" | "redis" | "postgres";
 
@@ -39,11 +44,36 @@ function required(env: NodeJS.ProcessEnv, name: string, forKind: string): string
   return value;
 }
 
-export function createStorageFromEnv(env: NodeJS.ProcessEnv, defaults: { dataDir: string }): StorageFromEnv {
+/** Validates and returns `KOHAKU_STORAGE` (default "file"). The single place this env var is parsed. */
+function storageKindFromEnv(env: NodeJS.ProcessEnv): StorageKind {
   const kind = (env["KOHAKU_STORAGE"] ?? "file") as StorageKind;
   if (!STORAGE_KINDS.includes(kind)) {
     throw new Error(`KOHAKU_STORAGE must be one of ${STORAGE_KINDS.join(" / ")}, got "${kind}"`);
   }
+  return kind;
+}
+
+/** Redis connection options shared by the storage port and the revocation store (same `KOHAKU_STORAGE=redis` env). */
+function redisOptionsFromEnv(env: NodeJS.ProcessEnv, forKind: string): { url: string; keyPrefix?: string } {
+  return {
+    url: required(env, "KOHAKU_REDIS_URL", forKind),
+    ...(env["KOHAKU_STORAGE_KEY_PREFIX"] ? { keyPrefix: env["KOHAKU_STORAGE_KEY_PREFIX"] } : {}),
+  };
+}
+
+/** Postgres connection options shared by the storage port and the revocation store (same `KOHAKU_STORAGE=postgres` env). */
+function postgresOptionsFromEnv(
+  env: NodeJS.ProcessEnv,
+  forKind: string,
+): { connectionString: string; schema?: string } {
+  return {
+    connectionString: required(env, "KOHAKU_POSTGRES_URL", forKind),
+    ...(env["KOHAKU_POSTGRES_SCHEMA"] ? { schema: env["KOHAKU_POSTGRES_SCHEMA"] } : {}),
+  };
+}
+
+export function createStorageFromEnv(env: NodeJS.ProcessEnv, defaults: { dataDir: string }): StorageFromEnv {
+  const kind = storageKindFromEnv(env);
   switch (kind) {
     case "file":
       return {
@@ -55,17 +85,11 @@ export function createStorageFromEnv(env: NodeJS.ProcessEnv, defaults: { dataDir
     case "memory":
       return { kind, storage: createMemoryStoragePort(), ready: async () => {}, close: async () => {} };
     case "redis": {
-      const port = createRedisStoragePort({
-        url: required(env, "KOHAKU_REDIS_URL", kind),
-        ...(env["KOHAKU_STORAGE_KEY_PREFIX"] ? { keyPrefix: env["KOHAKU_STORAGE_KEY_PREFIX"] } : {}),
-      });
+      const port = createRedisStoragePort(redisOptionsFromEnv(env, kind));
       return { kind, storage: port, ready: () => port.ready(), close: () => port.close() };
     }
     case "postgres": {
-      const port = createPostgresStoragePort({
-        connectionString: required(env, "KOHAKU_POSTGRES_URL", kind),
-        ...(env["KOHAKU_POSTGRES_SCHEMA"] ? { schema: env["KOHAKU_POSTGRES_SCHEMA"] } : {}),
-      });
+      const port = createPostgresStoragePort(postgresOptionsFromEnv(env, kind));
       return { kind, storage: port, ready: () => port.ready(), close: () => port.close() };
     }
   }
@@ -102,20 +126,14 @@ interface RevocationsFromEnv {
  * instance; a multi-instance deployment should run `KOHAKU_STORAGE=redis|postgres`.
  */
 function createRevocationsFromEnv(env: NodeJS.ProcessEnv): RevocationsFromEnv {
-  const kind = (env["KOHAKU_STORAGE"] ?? "file") as StorageKind;
+  const kind = storageKindFromEnv(env);
   switch (kind) {
     case "redis": {
-      const store = createRedisRevocationStore({
-        url: required(env, "KOHAKU_REDIS_URL", kind),
-        ...(env["KOHAKU_STORAGE_KEY_PREFIX"] ? { keyPrefix: env["KOHAKU_STORAGE_KEY_PREFIX"] } : {}),
-      });
+      const store = createRedisRevocationStore(redisOptionsFromEnv(env, kind));
       return { revocations: store, ready: () => store.ready(), close: () => store.close() };
     }
     case "postgres": {
-      const store = createPostgresRevocationStore({
-        connectionString: required(env, "KOHAKU_POSTGRES_URL", kind),
-        ...(env["KOHAKU_POSTGRES_SCHEMA"] ? { schema: env["KOHAKU_POSTGRES_SCHEMA"] } : {}),
-      });
+      const store = createPostgresRevocationStore(postgresOptionsFromEnv(env, kind));
       return { revocations: store, ready: () => store.ready(), close: () => store.close() };
     }
     case "memory":
@@ -124,17 +142,20 @@ function createRevocationsFromEnv(env: NodeJS.ProcessEnv): RevocationsFromEnv {
   }
 }
 
-export function createAuthzFromEnv(env: NodeJS.ProcessEnv): AuthzFromEnv {
+/**
+ * Builds the AuthzPort itself (hmac / jwt) against an already-built revocation store. Shared by
+ * `createAuthzFromEnv` (its own, independently-connected revocation store) and `createPortsFromEnv` (a
+ * revocation store sharing one connection with the StoragePort) so the hmac/jwt selection logic -- and the
+ * env-validation error messages -- exist exactly once.
+ */
+function buildAuthzFromEnv(
+  env: NodeJS.ProcessEnv,
+  revocations: CapabilityRevocationStore,
+): { kind: AuthzKind; authz: AuthzPort; identity?: JwtIdentityResolver } {
   const capabilitySecret = env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me";
   const kind = (env["KOHAKU_AUTHZ"] ?? "hmac") as AuthzKind;
-  const revocationsFromEnv = createRevocationsFromEnv(env);
   if (kind === "hmac") {
-    return {
-      kind,
-      authz: createHmacAuthzPort(capabilitySecret, { revocations: revocationsFromEnv.revocations }),
-      ready: revocationsFromEnv.ready,
-      close: revocationsFromEnv.close,
-    };
+    return { kind, authz: createHmacAuthzPort(capabilitySecret, { revocations }) };
   }
   if (kind !== "jwt") throw new Error(`KOHAKU_AUTHZ must be hmac or jwt, got "${kind}"`);
   const secret = env["KOHAKU_JWT_SECRET"];
@@ -142,70 +163,132 @@ export function createAuthzFromEnv(env: NodeJS.ProcessEnv): AuthzFromEnv {
   if ((secret == null || secret === "") && (jwksUrl == null || jwksUrl === "")) {
     throw new Error("KOHAKU_AUTHZ=jwt requires KOHAKU_JWT_SECRET or KOHAKU_JWT_JWKS_URL");
   }
+  const audience = env["KOHAKU_JWT_AUDIENCE"];
+  const usingJwks = secret == null || secret === "";
+  if (usingJwks && (audience == null || audience === "")) {
+    // Named env-shaped error ahead of @kohaku-ui/authz-jwt's own generic "audience is required when key is
+    // jwksUrl or jwks" construction error, so a misconfiguration points at the right env var immediately
+    // (same style as the KOHAKU_JWT_SECRET / KOHAKU_JWT_JWKS_URL check above).
+    throw new Error("KOHAKU_AUTHZ=jwt with KOHAKU_JWT_JWKS_URL requires KOHAKU_JWT_AUDIENCE");
+  }
+  // Default true (a token with no tenant claim is rejected) whenever JWT is in play: the promotion /
+  // fixation / lineage governance plane is separated per tenant, so silently falling back to "no tenant"
+  // is far more likely to be a misconfigured issuer than an intentional single-tenant deployment. Set
+  // KOHAKU_JWT_REQUIRE_TENANT=0 to opt out (e.g. a genuinely single-tenant deployment).
+  const requireTenant = env["KOHAKU_JWT_REQUIRE_TENANT"] !== "0";
   const port = createJwtAuthzPort({
-    key: secret != null && secret !== "" ? { secret } : { jwksUrl: jwksUrl! },
+    key: !usingJwks ? { secret: secret! } : { jwksUrl: jwksUrl! },
     ...(env["KOHAKU_JWT_ISSUER"] ? { issuer: env["KOHAKU_JWT_ISSUER"] } : {}),
-    ...(env["KOHAKU_JWT_AUDIENCE"] ? { audience: env["KOHAKU_JWT_AUDIENCE"] } : {}),
+    ...(audience ? { audience } : {}),
+    requireTenant,
     capabilitySecret,
-    revocations: revocationsFromEnv.revocations,
+    revocations,
   });
+  return { kind, authz: port, identity: port.identity };
+}
+
+export function createAuthzFromEnv(env: NodeJS.ProcessEnv): AuthzFromEnv {
+  const revocationsFromEnv = createRevocationsFromEnv(env);
+  const { kind, authz, identity } = buildAuthzFromEnv(env, revocationsFromEnv.revocations);
   return {
     kind,
-    authz: port,
-    identity: port.identity,
+    authz,
+    ...(identity != null ? { identity } : {}),
     ready: revocationsFromEnv.ready,
     close: revocationsFromEnv.close,
   };
 }
 
-/** How the REST host turns a request into a principal and a tenant. */
-export interface RequestIdentity {
-  /** Registered on `/api/kohaku/*` ahead of the routes when present (JWT verification + 401). */
-  middleware?: MiddlewareHandler;
-  auth: NonNullable<KohakuHostDeps["auth"]>;
-  tenant: NonNullable<KohakuHostDeps["tenant"]>;
+export interface PortsFromEnv {
+  storage: StoragePort;
+  authz: AuthzPort;
+  revocations: CapabilityRevocationStore;
+  /** Present only for `KOHAKU_AUTHZ=jwt`: the resolver the request-identity hooks use. */
+  identity?: JwtIdentityResolver;
+  /** Resolves once the shared connection (redis/postgres) is ready, or immediately for file/memory. */
+  ready(): Promise<void>;
+  /** Closes the shared connection once (a no-op for file/memory). */
+  close(): Promise<void>;
+  kinds: { storage: StorageKind; authz: AuthzKind };
 }
-
-/** The demo's header scheme (unchanged): x-kohaku-role (no header = admin) and x-kohaku-tenant. */
-export function createHeaderIdentity(): RequestIdentity {
-  return {
-    // Principal resolution (product responsibility): in real operation, resolve the principal and roles from an auth
-    // platform (JWT/OIDC, etc.). The demo substitutes the x-kohaku-role header and treats **no header (default) as admin**
-    // (so as not to break the unauthorized behavior of the existing demo and tests; it reproduces, via the admin role,
-    // the legacy behavior where the governance plane lets anyone through).
-    auth: async (c) => {
-      const role = c.req.header("x-kohaku-role") || "admin";
-      return { id: `demo-${role}`, roles: [role] };
-    },
-    // Tenant resolution: the demo looks at the x-kohaku-tenant header. The governance plane (lineage / promotion /
-    // fixation) is separated per tenant. query:// is tenant-neutral and does not mix tenant into the cache key (an invariant).
-    // Full-fledged tenant isolation (RLS, etc.) is a product responsibility (specification.md §4.4 / §7).
-    tenant: (c) => c.req.header("x-kohaku-tenant") || undefined,
-  };
-}
-
-const IDENTITY_VAR = "kohakuIdentity";
 
 /**
- * JWT scheme: the middleware verifies the bearer token once per request and stores the identity on the
- * context; the hooks read it back. A missing or invalid token is a 401 with the standard error envelope
- * (CAPABILITY_DENIED — the SPEC §6.1 code set has no separate "unauthenticated" code, and the envelope is
- * what clients already parse). Principal / roles / tenant then all come from the token, never from headers.
+ * The single entry point a process should use to build every env-selected Port at once (`index.ts` /
+ * sample-mcp's `setup.ts`): unlike calling `createStorageFromEnv` + `createAuthzFromEnv` separately (which
+ * each open their own redis client / pg Pool -- two connections to the same backend for one process), this
+ * opens exactly ONE connection when `KOHAKU_STORAGE` is `redis` or `postgres` and injects it into both the
+ * StoragePort and the revocation store backing `authz` (via their `client` / `pool` options), because the
+ * revocation store always follows the storage selection regardless of `KOHAKU_AUTHZ` (see
+ * `createRevocationsFromEnv`'s doc comment). `ready()` / `close()` then govern that one connection.
+ * For `file` / `memory`, there is nothing to share (the revocation store is already in-memory), so this
+ * simply delegates to `createStorageFromEnv`.
  */
-export function createJwtRequestIdentity(identity: JwtIdentityResolver): RequestIdentity {
-  const read = (c: Context): ResolvedIdentity | undefined =>
-    c.get(IDENTITY_VAR) as ResolvedIdentity | undefined;
+export function createPortsFromEnv(env: NodeJS.ProcessEnv, defaults: { dataDir: string }): PortsFromEnv {
+  const kind = storageKindFromEnv(env);
+  if (kind === "file" || kind === "memory") {
+    const storageFromEnv = createStorageFromEnv(env, defaults);
+    const revocations = createMemoryRevocationStore();
+    const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations);
+    return {
+      storage: storageFromEnv.storage,
+      authz,
+      revocations,
+      ...(identity != null ? { identity } : {}),
+      ready: storageFromEnv.ready,
+      close: storageFromEnv.close,
+      kinds: { storage: kind, authz: authzKind },
+    };
+  }
+  if (kind === "redis") {
+    // Owned (url-constructed): this handle's ready()/close() govern the one underlying client. Injecting
+    // `client` into the storage port / revocation store below makes each of them wrap the same client
+    // (owned:false for them -- their own ready()/close() become no-ops / instant, see storage-redis's
+    // connection.ts), so there is exactly one TCP connection for the whole process.
+    const connection = createRedisConnection(redisOptionsFromEnv(env, kind), "sample-api ports");
+    const keyPrefix = env["KOHAKU_STORAGE_KEY_PREFIX"];
+    const storage = createRedisStoragePort({
+      client: connection.redis,
+      ...(keyPrefix ? { keyPrefix } : {}),
+    });
+    const revocations = createRedisRevocationStore({
+      client: connection.redis,
+      ...(keyPrefix ? { keyPrefix } : {}),
+    });
+    const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations);
+    return {
+      storage,
+      authz,
+      revocations,
+      ...(identity != null ? { identity } : {}),
+      ready: connection.ready,
+      close: connection.close,
+      kinds: { storage: kind, authz: authzKind },
+    };
+  }
+  // postgres: same "one owned pool, inject into both" shape. `migrate: false` on the injected uses --
+  // the owned `connection.ready()` below already runs (and memoizes) the real migration once; without
+  // this, each of `createPostgresStoragePort` / `createPostgresRevocationStore` would otherwise re-run
+  // the (idempotent, but redundant) migration transaction the first time its own `ready()` is awaited.
+  const connection = createPostgresPool(postgresOptionsFromEnv(env, kind));
+  const schema = env["KOHAKU_POSTGRES_SCHEMA"];
+  const storage = createPostgresStoragePort({
+    pool: connection.pool,
+    migrate: false,
+    ...(schema ? { schema } : {}),
+  });
+  const revocations = createPostgresRevocationStore({
+    pool: connection.pool,
+    migrate: false,
+    ...(schema ? { schema } : {}),
+  });
+  const { kind: authzKind, authz, identity } = buildAuthzFromEnv(env, revocations);
   return {
-    middleware: async (c, next) => {
-      try {
-        c.set(IDENTITY_VAR, await identity.fromAuthorizationHeader(c.req.header("authorization")));
-      } catch (e) {
-        const reason = e instanceof JwtIdentityError ? e.code : "INVALID_TOKEN";
-        return c.json(errorBody("CAPABILITY_DENIED", `authentication required (${reason})`), 401);
-      }
-      await next();
-    },
-    auth: async (c) => read(c)?.principal ?? null,
-    tenant: (c) => read(c)?.tenant,
+    storage,
+    authz,
+    revocations,
+    ...(identity != null ? { identity } : {}),
+    ready: connection.ready,
+    close: connection.close,
+    kinds: { storage: kind, authz: authzKind },
   };
 }

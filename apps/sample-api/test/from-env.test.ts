@@ -80,6 +80,42 @@ describe("createAuthzFromEnv", () => {
     await expect(a.ready()).resolves.toBeUndefined();
     await expect(a.close()).resolves.toBeUndefined();
   });
+
+  const SECRET = "test-secret-at-least-32-bytes-long-000";
+
+  it("jwt with a jwks URL requires KOHAKU_JWT_AUDIENCE, with a named env error ahead of authz-jwt's own construction error", () => {
+    expect(() =>
+      createAuthzFromEnv({
+        KOHAKU_AUTHZ: "jwt",
+        KOHAKU_JWT_JWKS_URL: "https://issuer.example/.well-known/jwks.json",
+      }),
+    ).toThrow(/KOHAKU_JWT_AUDIENCE/);
+    // A secret-mode config with no audience is unaffected (audience is optional in that mode).
+    expect(() => createAuthzFromEnv({ KOHAKU_AUTHZ: "jwt", KOHAKU_JWT_SECRET: SECRET })).not.toThrow();
+  });
+
+  it("KOHAKU_JWT_REQUIRE_TENANT defaults to required (1) and can be opted out with 0", async () => {
+    const { SignJWT } = await import("jose");
+    const jwt = (claims: Record<string, unknown>) =>
+      new SignJWT(claims)
+        .setProtectedHeader({ alg: "HS256" })
+        .setExpirationTime("5m")
+        .sign(new TextEncoder().encode(SECRET));
+
+    const required = createAuthzFromEnv({ KOHAKU_AUTHZ: "jwt", KOHAKU_JWT_SECRET: SECRET });
+    await expect(
+      required.identity!.fromAuthorizationHeader(`Bearer ${await jwt({ sub: "u" })}`),
+    ).rejects.toMatchObject({ code: "MISSING_TENANT" });
+
+    const optedOut = createAuthzFromEnv({
+      KOHAKU_AUTHZ: "jwt",
+      KOHAKU_JWT_SECRET: SECRET,
+      KOHAKU_JWT_REQUIRE_TENANT: "0",
+    });
+    await expect(
+      optedOut.identity!.fromAuthorizationHeader(`Bearer ${await jwt({ sub: "u" })}`),
+    ).resolves.toMatchObject({ principal: { id: "u" } });
+  });
 });
 
 // The revocation store follows KOHAKU_STORAGE, not KOHAKU_AUTHZ (see createAuthzFromEnv's doc comment):

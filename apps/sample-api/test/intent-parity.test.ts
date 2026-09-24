@@ -1,6 +1,6 @@
 import type { JsonObject } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { INTENT_DEFS, IntentCatalog } from "../src/intents/catalog.js";
+import { createSalesIntentCatalog, INTENT_DEFS } from "../src/intents/catalog.js";
 
 /**
  * Parity diff test for the migration to the Intent DSL (@kohaku-ui/intents).
@@ -9,7 +9,7 @@ import { INTENT_DEFS, IntentCatalog } from "../src/intents/catalog.js";
  * a single byte across the migration, over representative inputs (NL-derived params, GUI-derived strings, drilldown,
  * boundary values, default filling).
  */
-const catalog = new IntentCatalog();
+const catalog = createSalesIntentCatalog();
 function defOf(name: string) {
   const def = INTENT_DEFS.find((d) => d.name === name);
   if (def == null) throw new Error(`intent not found: ${name}`);

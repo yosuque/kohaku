@@ -42,9 +42,8 @@ import {
 } from "node:http";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createAuthzFromEnv } from "@kohaku-ui-sample/api/ports/from-env";
 import { toNodeHandler } from "@modelcontextprotocol/node";
-import { createMcpHandler, type McpServer, type ServerContext } from "@modelcontextprotocol/server";
+import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
 import { createKohakuMcpSetup } from "./setup.js";
 
 /** Path of the MCP endpoint (default). */
@@ -120,9 +119,11 @@ export function createMcpHttpServer(options: McpHttpServerOptions): Server {
   // fresh per-request McpServer instance from options.createServer). onerror observes failures the
   // fetch-level handler itself reports (routing/dispatch failures); toNodeHandler's own onerror below
   // observes the narrower node<->fetch adapter failures (request conversion, handler.fetch throwing).
-  // Production hook: this demo's setup.createServer leaves McpHostDeps.resolvePrincipal unwired (every
-  // call runs as the anonymous principal) — this per-request createServer() call is exactly where a real
-  // deployment would derive the caller's identity (e.g. from this request's own auth) and wire it in.
+  // Production hook: `options.createServer` (setup.createServer, built by createKohakuMcpSetup) already
+  // wires McpHostDeps.resolvePrincipal to derive the caller from this request's own bearer token under
+  // KOHAKU_AUTHZ=jwt (or runs every call as the anonymous principal under the default hmac scheme) — see
+  // setup.ts's own doc comment. A real deployment overrides this via `KohakuMcpSetupOptions.resolvePrincipal`
+  // if its identity resolution needs to differ from that default.
   const mcpHandler = createMcpHandler(() => options.createServer(), {
     onerror: (err) => console.error("[kohaku-mcp-http] MCP handler error:", err),
   });
@@ -353,33 +354,16 @@ async function main(): Promise<void> {
   // Base URL for publishing snapshots. When using a public tunnel, set it to the tunnel's URL.
   // If unset, falls back to localhost (local viewing only). The trailing slash is stripped.
   const publicUrl = process.env["KOHAKU_MCP_PUBLIC_URL"]?.replace(/\/+$/, "") ?? `http://localhost:${port}`;
-  // Resolve storage/authz from env here (rather than leaving it to createKohakuMcpSetup) only so that, under
-  // KOHAKU_AUTHZ=jwt, the identity resolver is in hand to build resolvePrincipal below — passing `authz`
-  // through means setup.ts does not construct a second, redundant AuthzPort from the same env.
-  const authzFromEnv = createAuthzFromEnv(process.env);
-  const identity = authzFromEnv.identity;
-  const setup = await createKohakuMcpSetup({
-    snapshotBaseUrl: publicUrl,
-    authz: authzFromEnv.authz,
-    // With KOHAKU_AUTHZ=jwt, resolve the caller per tool call from the HTTP request's own bearer token
-    // (ServerContext.http.req is the fetch Request of the Streamable HTTP POST). A throw here (missing/invalid
-    // token) is fail-closed: host-mcp-apps turns it into a structured tool error (isError), never a silent
-    // anonymous fallback — see McpHostDeps.resolvePrincipal's doc comment.
-    ...(identity != null
-      ? {
-          resolvePrincipal: async (extra: ServerContext) =>
-            (await identity.fromAuthorizationHeader(extra.http?.req?.headers.get("authorization"))).principal,
-        }
-      : {}),
-  });
+  // Storage/authz (and, under KOHAKU_AUTHZ=jwt, the per-tool-call resolvePrincipal built from the request's
+  // own bearer token) are entirely setup.ts's responsibility now — this entry point no longer resolves authz
+  // on its own, so there is exactly one AuthzPort (and, when applicable, one shared storage/revocation
+  // connection) for the whole process, not a second one redundantly built here.
+  const setup = await createKohakuMcpSetup({ snapshotBaseUrl: publicUrl });
   // Fail fast: with a redis/postgres backend, an unreachable server otherwise surfaces only on the first
   // tool call (or, before storage-redis's fail-fast fix, hangs the caller indefinitely). Exit clearly here
-  // instead (a no-op for file/memory -- see StorageFromEnv.ready's doc comment). `authzFromEnv` is
-  // resolved separately from `setup` (see the comment above), so its own revocation-store readiness is
-  // checked here too, not folded into `setup.ready()`.
+  // instead (a no-op for file/memory -- see PortsFromEnv.ready's doc comment).
   try {
     await setup.ready();
-    await authzFromEnv.ready();
   } catch (error) {
     console.error(
       `kohaku-sales-sample MCP server: storage backend is not ready: ${error instanceof Error ? error.message : String(error)}`,
@@ -431,33 +415,13 @@ async function main(): Promise<void> {
   // server has no dedicated health endpoint today (unlike sample-api's GET /api/health), so there is no
   // readiness flag to flip here — a load balancer in front of this demo server would need to probe the
   // MCP endpoint itself or be told out-of-band.
+  const handleShutdown = createShutdownHandler({
+    server: httpServer,
+    closePorts: () => setup.close(),
+    graceMs: shutdownGraceMs(),
+  });
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      const graceMs = shutdownGraceMs();
-      console.error(
-        `kohaku-sales-sample MCP server: received ${signal}, draining connections (grace ${graceMs}ms)`,
-      );
-      // Close idle keep-alive sockets immediately rather than waiting for their keep-alive timeout to
-      // elapse: close() alone only stops accepting *new* connections and waits for every existing one
-      // (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
-      // connection would otherwise stall the drain for no reason.
-      httpServer.closeIdleConnections();
-      // Close the storage port this setup created from env (a no-op unless KOHAKU_STORAGE is redis/postgres),
-      // and the revocation store's own backend connection (a no-op unless KOHAKU_STORAGE is redis/postgres).
-      // Swallow a failing close (matching sample-api's index.ts) so it can never block process exit.
-      void setup.close().catch(() => {});
-      void authzFromEnv.close().catch(() => {});
-      httpServer.close(() => process.exit(0));
-      setTimeout(() => {
-        httpServer.getConnections((err, count) => {
-          console.error(
-            `kohaku-sales-sample MCP server: shutdown grace period (${graceMs}ms) elapsed with ` +
-              `${err != null ? "an unknown number of" : count} connection(s) still open; forcing exit`,
-          );
-          process.exit(1);
-        });
-      }, graceMs).unref();
-    });
+    process.once(signal, () => handleShutdown(signal));
   }
 }
 
@@ -465,10 +429,87 @@ async function main(): Promise<void> {
 const DEFAULT_SHUTDOWN_GRACE_MS = 30_000;
 
 /** Parses KOHAKU_SHUTDOWN_GRACE_MS as a positive integer; any other value (unset, non-numeric, <= 0) falls back to the default. */
-function shutdownGraceMs(): number {
-  const raw = process.env["KOHAKU_SHUTDOWN_GRACE_MS"];
+export function shutdownGraceMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["KOHAKU_SHUTDOWN_GRACE_MS"];
   const parsed = raw != null ? Number.parseInt(raw, 10) : NaN;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SHUTDOWN_GRACE_MS;
+}
+
+/** Upper bound (ms) on the forced-exit path's own best-effort attempt to close the backends, so a hung close
+ * can never delay the forced exit itself (which is already the point of that path). */
+const FORCE_CLOSE_BOUND_MS = 2000;
+
+/** The minimal server shape `createShutdownHandler` needs (a subset of `node:http`'s `Server`, for testability with a fake). */
+export interface ShutdownServerLike {
+  closeIdleConnections?: () => void;
+  close: (callback: () => void) => void;
+  getConnections: (callback: (err: Error | null, count: number) => void) => void;
+}
+
+export interface ShutdownHandlerDeps {
+  server: ShutdownServerLike;
+  /** Closes the storage/authz backends this setup created from env (a no-op unless KOHAKU_STORAGE is redis/postgres). */
+  closePorts: () => Promise<void>;
+  graceMs: number;
+  log?: (message: string) => void;
+  exit?: (code: number) => void;
+}
+
+/** Races `p` against a `ms`-bounded timer, so a slow-but-eventually-successful close can never hang the caller. */
+function withTimeout(p: Promise<void>, ms: number): Promise<void> {
+  return Promise.race([
+    p,
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    }),
+  ]);
+}
+
+/**
+ * Builds the SIGINT/SIGTERM handler for graceful shutdown (ops): drains connections, and only THEN closes
+ * the storage/authz backends `setup.close()` owns — inside `server.close()`'s own callback, once draining
+ * has actually finished (finding #2: closing them earlier let an in-flight tool call's storage call race the
+ * connection close). The forced-exit path (the drain window elapsing first) also makes a best-effort,
+ * time-bounded (`FORCE_CLOSE_BOUND_MS`) attempt to close them before exiting, rather than abandoning the
+ * close entirely. Exported as a plain function of its dependencies (mirrors sample-api's own index.ts) so a
+ * test can invoke it directly against a fake server / fake `closePorts` without sending a real OS signal or
+ * the process actually exiting.
+ */
+export function createShutdownHandler(deps: ShutdownHandlerDeps): (signal: string) => void {
+  const { server, closePorts, graceMs } = deps;
+  const log = deps.log ?? ((message: string) => console.error(message));
+  const exit = deps.exit ?? process.exit.bind(process);
+  return (signal: string) => {
+    log(`kohaku-sales-sample MCP server: received ${signal}, draining connections (grace ${graceMs}ms)`);
+    // Close idle keep-alive sockets immediately rather than waiting for their keep-alive timeout to
+    // elapse: close() alone only stops accepting *new* connections and waits for every existing one
+    // (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
+    // connection would otherwise stall the drain for no reason.
+    server.closeIdleConnections?.();
+    server.close(() => {
+      // The drain has actually completed at this point (no in-flight tool call can still be running):
+      // only now is it safe to close the storage/authz backends those calls might have been using.
+      void closePorts()
+        .catch(() => {})
+        .then(() => exit(0));
+    });
+    const graceTimer = setTimeout(() => {
+      server.getConnections((err, count) => {
+        console.error(
+          `kohaku-sales-sample MCP server: shutdown grace period (${graceMs}ms) elapsed with ` +
+            `${err != null ? "an unknown number of" : count} connection(s) still open; forcing exit`,
+        );
+        // Best-effort, bounded: we are exiting regardless, but a close that succeeds quickly is still
+        // better than abandoning it outright.
+        void withTimeout(
+          closePorts().catch(() => {}),
+          FORCE_CLOSE_BOUND_MS,
+        ).then(() => exit(1));
+      });
+    }, graceMs);
+    graceTimer.unref?.();
+  };
 }
 
 // Start listening only when this file is launched directly (tsx src/http.ts).
