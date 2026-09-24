@@ -88,21 +88,20 @@ export interface LineageSummary {
    * duration from the resubmission. A reviewed event with no preceding open nomination in the window is
    * ignored.
    *
-   * **Order-dependent**: this is the only aggregation in this function that is sensitive to the order of
-   * `events` -- the pairing scans in array order and treats each `component.nominated` as opening the window
-   * that the next matching `component.reviewed` closes. It assumes `events` is in ascending `ts` order (what
-   * every call site in this repo passes), which `StoragePort.listLineage` does not itself guarantee. If a caller
-   * passes events out of `ts` order, a review can be paired with the wrong nomination (or fail to pair at all if
-   * its nomination appears after it in the array), silently skewing `durationMs` and lowering `count` with no
-   * error.
+   * The pairing scans a **stably sorted-by-`ts` copy** of `events` (ties broken by original array position) and
+   * treats each `component.nominated` as opening the window that the next matching `component.reviewed`
+   * closes, so a caller does not need to guarantee `events` is already in ascending `ts` order itself (e.g. a
+   * reviewed record that happens to sit before its own nomination in the input array still pairs correctly, as
+   * long as its timestamp is later).
    *
    * `count` is the number of *paired* durations that made it into `durationMs`, not the number of
    * approve/reject `component.reviewed` events -- a pair whose computed delta fails the finite/non-negative
    * guard (out-of-order or malformed timestamps) is silently dropped from both `count` and the quantiles.
    *
-   * Quantiles are nearest-rank like durationMs. `acceptedAsIs` counts component.schemaEdited records whose
-   * `changed` is empty (the machine suggestion was approved without any edit) — the ticket's "zero-edit
-   * approval" KPI.
+   * Quantiles are nearest-rank like durationMs. `acceptedAsIs` counts `component.schemaEdited` records whose
+   * `changed` is empty **and** whose `acknowledged` is `true` (the reviewer both made no edits and ticked the
+   * acknowledgement checkbox) — the ticket's "zero-edit approval" KPI. A record with no `acknowledged` field at
+   * all (written before that field existed) does not count, the same as one with `acknowledged: false`.
    */
   review: {
     count: number;
@@ -168,7 +167,16 @@ export function summarizeLineage(
   const reviewKey = (e: LineageEventRecord): string =>
     `${e.tenant ?? ""}\u0000${String(e.payload["artifactId"] ?? "")}`;
 
-  for (const e of scoped) {
+  // Stable-sort by ts (ties broken by original array position) before the main pass. Every aggregation below
+  // other than `review`'s nominated/reviewed pairing is order-independent (plain counts / sums / "first seen"
+  // maps), so this only changes `review`'s behavior in practice, but sorting once up front is simpler than
+  // special-casing just that one pairing loop.
+  const ordered = scoped
+    .map((e, index) => ({ e, index }))
+    .sort((a, b) => (a.e.ts < b.e.ts ? -1 : a.e.ts > b.e.ts ? 1 : a.index - b.index))
+    .map(({ e }) => e);
+
+  for (const e of ordered) {
     switch (e.type) {
       case "view.composed": {
         composed++;
@@ -242,7 +250,12 @@ export function summarizeLineage(
       case "component.schemaEdited": {
         promotions.schemaEdited++;
         const changed = e.payload["changed"];
-        if (Array.isArray(changed) && changed.length === 0) acceptedAsIs++;
+        // acceptedAsIs requires BOTH no edits AND an explicit acknowledgement (payload.acknowledged === true).
+        // A record with no acknowledged field at all (written before that field existed) reads as
+        // undefined !== true, the same as an explicit false — neither counts.
+        if (Array.isArray(changed) && changed.length === 0 && e.payload["acknowledged"] === true) {
+          acceptedAsIs++;
+        }
         break;
       }
       case "component.published":

@@ -3,6 +3,7 @@ import { NOMINATED_SCAN_WINDOW } from "../constants.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { recordFailOpen } from "./audit.js";
+import { mapWithConcurrency } from "./concurrency.js";
 import { transition } from "./machine.js";
 import {
   notifyPromotionError,
@@ -33,6 +34,14 @@ export function createNomination(opts: {
    * contract). Forwarded verbatim from createPromotions' opts.
    */
   suggestSchema?: (candidate: PromotionCandidate, context?: TenantScope) => Promise<SchemaSuggestion | null>;
+  /**
+   * Extraction concurrency budget (#15): at most this many `suggestSchema` calls run in flight at once across a
+   * single scan's freshly nominated candidates (a worker pool via `mapWithConcurrency`, not unbounded
+   * `Promise.all`). Resolved from `createPromotions`' own `suggestConcurrency` opt (default 4) and always a
+   * concrete number by the time it reaches here — see createPromotions' own doc for the latency-cost rationale
+   * this bounds (the tenant's promotion lock is held for as long as the slowest in-flight batch takes).
+   */
+  suggestConcurrency: number;
 }): {
   /**
    * `candidates` pairs each candidate with its own owning tenant (candidate-store's `scanWithTenant`), needed by
@@ -43,7 +52,7 @@ export function createNomination(opts: {
     tenant?: string,
   ): Promise<PromotionCandidate[]>;
 } {
-  const { storage, lineage, policy, persistMany, onError, suggestSchema } = opts;
+  const { storage, lineage, policy, persistMany, onError, suggestSchema, suggestConcurrency } = opts;
 
   /**
    * Side-effecting nominate step: for candidates still in_use that satisfy the policy thresholds and are not
@@ -123,21 +132,23 @@ export function createNomination(opts: {
         nominatedIds.add(usageIndexKey(recordTenant, candidate.artifactId));
       }
     }
-    // Advisory schema extraction (fail-open), run concurrently across every freshly nominated candidate in this
-    // scan rather than sequentially: this whole call runs inside the tenant's promotion governance mutex
-    // (host-rest's withPromotionLock), so N sequential LLM calls would hold that lock for N x the extractor's
-    // own latency, queuing every other promotion transition for the tenant behind it. Still runs before
-    // persistMany so every suggestion lands in the same snapshot write as its candidate's status transition
-    // (each promise mutates its own `candidate` object in place; toPersist already holds those references).
-    // A throw from one candidate's extraction is caught by suggestFailOpen and does not affect the others
-    // (Promise.all over promises that each individually never reject).
+    // Advisory schema extraction (fail-open), run with up to `suggestConcurrency` in flight at once across
+    // this scan's freshly nominated candidates rather than fully sequentially: this whole call runs inside the
+    // tenant's promotion governance mutex (host-rest's withPromotionLock), so N sequential LLM calls would hold
+    // that lock for N x the extractor's own latency, queuing every other promotion transition for the tenant
+    // behind it. Bounded rather than fully unbounded (#15): an unbounded Promise.all across a whole burst of
+    // newly nominated candidates would fire all of them as simultaneous LLM calls at once, amplifying both the
+    // provider's own rate limits and how long this lock stays held by whichever call is slowest in an
+    // arbitrarily large batch; mapWithConcurrency caps how many ever run at once. Still runs before persistMany
+    // so every suggestion lands in the same snapshot write as its candidate's status transition (each call
+    // mutates its own `candidate` object in place; toPersist already holds those references). A throw from one
+    // candidate's extraction is caught by suggestFailOpen and does not affect the others (suggestFailOpen never
+    // rejects, so one slow/failing candidate cannot stall the worker pool from picking up the next item).
     if (suggestSchema != null) {
-      await Promise.all(
-        toPersist.map(async ({ candidate }) => {
-          const suggestion = await suggestFailOpen(candidate, tenant);
-          if (suggestion != null) candidate.suggestion = suggestion;
-        }),
-      );
+      await mapWithConcurrency(toPersist, suggestConcurrency, async ({ candidate }) => {
+        const suggestion = await suggestFailOpen(candidate, tenant);
+        if (suggestion != null) candidate.suggestion = suggestion;
+      });
     }
     await persistMany(toPersist);
     // Stamp each nominate event with tenant too (so re-evaluation in the tenant scope finds the same

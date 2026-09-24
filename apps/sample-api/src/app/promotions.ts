@@ -97,8 +97,23 @@ export function createPromotionPipeline(args: {
         usage: { uses: candidate.uses, sessions: candidate.sessions },
         // Transcribe only when there is a real-render observation (with 0 observations, do not put it in the prompt).
         ...(telemetry.renderedCount > 0 ? { telemetry } : {}),
-        // The advisory proposal attached at nomination, handed to the judge as untrusted evidence for the
-        // suggestion_fidelity criterion (rubric 0.4).
+        // The schema actually being registered (approve()'s own draft, forwarded via context.draft; #1) is
+        // the source of truth for the "schema fidelity" criterion. Events aren't part of ComponentDraft itself,
+        // so they're sourced from the candidate's own suggestion when one exists (the closest known event list;
+        // omitted otherwise).
+        ...(context?.draft != null
+          ? {
+              draft: {
+                componentType: context.draft.componentType,
+                intentName: context.draft.intentName,
+                paramsJsonSchema: context.draft.paramsJsonSchema,
+                ...(candidate.suggestion != null ? { events: candidate.suggestion.events } : {}),
+              },
+            }
+          : {}),
+        // The advisory proposal attached at nomination, handed to the judge as context (rubric 0.4's
+        // "schema fidelity" criterion verifies `draft` above when present; `suggestion` alone is verified
+        // directly when `draft` is unknown, preserving prior behavior).
         ...(candidate.suggestion != null
           ? {
               suggestion: {

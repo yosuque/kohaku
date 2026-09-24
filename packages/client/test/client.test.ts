@@ -280,6 +280,44 @@ describe("@kohaku-ui/client happy path", () => {
     expect((err as KohakuHostError).code).toBe("NOT_FOUND");
   });
 
+  it("promotions.approve forwards acknowledgedSuggestion through to the host (additive, absent when unspecified)", async () => {
+    const seen: { scope?: { acknowledgedSuggestion?: boolean } }[] = [];
+    const promotions: PromotionsApi = {
+      async evaluateAndList() {
+        return [];
+      },
+      async get(id) {
+        return id === "art-1" ? { artifactId: id, status: "candidate" } : null;
+      },
+      async act() {
+        return {};
+      },
+      async approve(_id, draft, _reviewer, scope) {
+        seen.push({ ...(scope != null ? { scope } : {}) });
+        return { artifactId: "art-1", status: "published", draft };
+      },
+      async reject() {
+        return {};
+      },
+      async withdraw() {
+        return {};
+      },
+    };
+    const client = makeClient({ promotions });
+    const draft = {
+      componentType: "sales.calendarHeatmap",
+      version: "1.0.0",
+      intentName: "sales.calendar_heatmap",
+      description: "d",
+    };
+
+    await client.promotions.approve("art-1", draft, { acknowledgedSuggestion: true });
+    expect(seen[0]!.scope?.acknowledgedSuggestion).toBe(true);
+
+    await client.promotions.approve("art-1", draft);
+    expect(seen[1]!.scope?.acknowledgedSuggestion).toBeUndefined();
+  });
+
   it("catalog returns the components list and catalogVersion", async () => {
     const client = makeClient();
     const res = await client.catalog();

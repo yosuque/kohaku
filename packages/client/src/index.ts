@@ -20,6 +20,7 @@ export {
   type KohakuClient,
   type KohakuClientConfig,
   type LineageQuery,
+  type PromotionApproveOptions,
   type PromotionsClient,
   type RequestOptions,
   type TelemetryEvent,

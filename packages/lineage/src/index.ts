@@ -43,13 +43,16 @@ export {
   transition,
 } from "./promotion/machine.js";
 export {
+  type ApproveOptions,
   createPromotions,
   DEFAULT_PROMOTION_POLICY,
+  DEFAULT_SUGGEST_CONCURRENCY,
   type PromotionCandidate,
   PromotionChainError,
   type PromotionErrorContext,
   type PromotionErrorEndpoint,
   type PromotionJudge,
+  type PromotionJudgeContext,
   PromotionNotPublishedError,
   PromotionNotRejectedError,
   type PromotionPolicy,

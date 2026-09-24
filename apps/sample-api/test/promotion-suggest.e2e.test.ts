@@ -120,11 +120,12 @@ describe("promotion schema suggestion E2E (the calendar heatmap is approvable wi
     expect(extraction.prompt).toContain("query://sales/trend?fy=2026&granularity=month&metric=revenue");
     expect(extraction.prompt).toContain("summary, trend, records, kpi, targets");
 
-    // Approve with the suggested draft verbatim (what the UI sends when the reviewer edits nothing)
+    // Approve with the suggested draft verbatim (what the UI sends when the reviewer edits nothing) and
+    // acknowledges the suggestion (acceptedAsIs, below, requires both an empty diff and acknowledgement).
     const approveRes = await app.request(`/api/kohaku/promotions/${candidate.artifactId}/approve`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ draft: candidate.suggestion!.draft }),
+      body: JSON.stringify({ draft: candidate.suggestion!.draft, acknowledgedSuggestion: true }),
     });
     expect(approveRes.status).toBe(200);
     expect(((await approveRes.json()) as { candidate: { status: string } }).candidate.status).toBe(

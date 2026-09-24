@@ -267,13 +267,21 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
   // "Approve and register": the bundle of judge -> human approval -> schema finalization -> publish (the reviewer is the server-side principal).
   app.post("/promotions/:artifactId/approve", (c) =>
     promotionTransition(c, "promotion.approve", async ({ promotions, artifactId, principal, scope }) => {
+      // acknowledgedSuggestion is additive/optional and recorded, not enforced (see PromotionsApi.approve's own
+      // doc): a missing value flows through as undefined -> lineage's ApproveOptions defaults it to false.
       const body = await parseBody(
         c,
-        z.object({ draft: ComponentDraftSchema }),
+        z.object({ draft: ComponentDraftSchema, acknowledgedSuggestion: z.boolean().optional() }),
         "draft (componentType / version / intentName / description) is required",
       );
       if (body instanceof Response) return body;
-      return () => promotions.approve(artifactId, body.draft, principal, scope);
+      return () =>
+        promotions.approve(artifactId, body.draft, principal, {
+          ...scope,
+          ...(body.acknowledgedSuggestion != null
+            ? { acknowledgedSuggestion: body.acknowledgedSuggestion }
+            : {}),
+        });
     }),
   );
 

@@ -24,6 +24,17 @@ const SUGGESTED_DRAFT_VERSION = "1.0.0";
 /** Prompt budget for the HTML (characters). Matches the judge's own cap so both see the same head of the document. */
 const HTML_PROMPT_BUDGET = 12_000;
 
+/**
+ * Default extraction budget (milliseconds). `evaluateAndList` runs every freshly nominated candidate's
+ * extraction inside host-rest's per-tenant promotion governance mutex (see `createPromotions`' own doc), and a
+ * hung or pathologically slow LLM call would otherwise hold that lock open indefinitely (the fail-open contract
+ * around a throw does not cover a call that simply never settles). `createSchemaExtractor`'s `timeoutMs`
+ * (default this constant) bounds each extraction with an `AbortSignal.timeout`, so the worst case is "this one
+ * candidate's extraction times out and is reported via `promotion.suggest.schema`," not "the tenant's promotion
+ * lock never releases."
+ */
+const DEFAULT_EXTRACTION_TIMEOUT_MS = 20_000;
+
 const QueryTemplateSchema = z.object({
   path: z.string().min(1),
   fixedParams: z.record(z.string(), z.string()).optional(),
@@ -92,8 +103,14 @@ const SYSTEM_PROMPT = [
   "Output only schema-conformant JSON.",
 ].join("\n");
 
-export function createSchemaExtractor(opts: { llm: LlmPort; now?: () => Date }): SchemaExtractor {
+export function createSchemaExtractor(opts: {
+  llm: LlmPort;
+  now?: () => Date;
+  /** Per-call extraction budget in milliseconds (default `DEFAULT_EXTRACTION_TIMEOUT_MS`, 20s). See its own doc. */
+  timeoutMs?: number;
+}): SchemaExtractor {
   const now = (): Date => opts.now?.() ?? new Date();
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS;
 
   function buildPrompt(input: SchemaExtractionInput): string {
     const html = input.html.slice(0, HTML_PROMPT_BUDGET);
@@ -128,6 +145,7 @@ export function createSchemaExtractor(opts: { llm: LlmPort; now?: () => Date }):
         system: SYSTEM_PROMPT,
         prompt: buildPrompt(input),
         temperature: 0,
+        abort: AbortSignal.timeout(timeoutMs),
       });
       const out = result.object;
       return {
