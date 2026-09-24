@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * Guards the package dependency direction documented in the repository's AGENTS.md ("Layout essentials"):
  *
  *   spec-core -> {registry, data-binding} -> intents -> {composer, renderer-core} -> host-core
- *     -> {renderer-react, renderer-wc, sandbox, lineage, evals, host-rest, host-mcp-apps, client, otel} -> apps
+ *     -> {renderer-react, renderer-wc, sandbox, lineage, evals, host-rest, host-mcp-apps, client, otel, admin-react} -> apps
  *
  * with `llm` and `host-a2ui` documented as independent leaves (llm depends on nothing in the workspace;
  * host-a2ui only on spec-core). `otel` sits in the same layer as host-rest/host-mcp-apps/etc but (unlike
@@ -31,7 +31,7 @@ const LAYERS: string[][] = [
   ["composer", "renderer-core"],
   ["host-core"],
   ["sandbox", "lineage", "evals", "host-rest", "host-mcp-apps", "client", "otel"],
-  ["renderer-react", "renderer-wc"],
+  ["renderer-react", "renderer-wc", "admin-react"],
 ];
 
 const SCOPE = "@kohaku-ui/";
