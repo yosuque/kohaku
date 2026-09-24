@@ -94,6 +94,7 @@ flowchart LR
 | renderer-react | React レンダラー。SpecView(フラットリスト解決)・ImplRegistry・useBoundData・per-node ErrorBoundary。純ロジックは renderer-core を import(単一の正)| `src/SpecView.tsx` `src/context.tsx` |
 | renderer-wc | 非 React レンダラー。単一 `<kohaku-surface>`(Custom Elements + Shadow DOM)がツリー全体を構築。chart は inline SVG、L2 は sandbox を直接再利用。renderer-react との parity を担保 | `src/kohaku-surface.ts` `src/tree.ts` `test/parity/` |
 | client | 型付きホストクライアント(REST プロファイル §6.1 の全ルート)・SSE ストリーム・binding 合成の再エクスポート | `src/client.ts` |
+| admin-react | 統制コンソール(4 つのレビュー面)を React コンポーネントとして提供。データは `client` 経由のみ・テーマは renderer-core トークン経由・昇格プレビューは sandbox 直接マウント(sha256 同一性)。プロダクト固有の知識(ヘッダ・ドラフト既定値・追加タブ・辞書)は props で注入 | `src/KohakuAdmin.tsx` `src/tabs/` |
 | sandbox | L2 隔離実行(3 重防御)・postMessage ブリッジ・SandboxFrame・`./smoke`(配信前スモーク検証ランナー。jsdom は optional peer) | `src/mount.ts` `src/host-bridge.ts` `src/smoke/` |
 | lineage | イベント記録・**昇格状態機械**・固定化・REST 用 Recorder | `src/promotion/machine.ts` `src/lineage.ts` |
 | evals | Golden Spec 回帰(揺らぎ正規化)・LLM-as-Judge(L2 昇格審査 + L1 品質採点)・品質回帰ハーネス・FixtureLlm | `src/golden.ts` `src/judge.ts` `src/quality.ts` |

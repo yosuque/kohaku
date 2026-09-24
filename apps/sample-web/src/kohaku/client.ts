@@ -19,19 +19,12 @@ export type { ComposeView, NormalizeResult };
  * `session.locale` on every compose/normalize/events body (the server varies NL hints and generation output language,
  * cache-separated per language). Below are thin wrappers that adapt to sample-specific call shapes.
  */
-const client = createKohakuClient({
+// Exported for AdminPage, which hands it to @kohaku-ui/admin-react's KohakuAdmin (the package's tabs call
+// client.promotions / client.fixations / client.analytics directly; it never reads a module-level singleton).
+export const client = createKohakuClient({
   baseUrl: "/api/kohaku",
   headers: () => ({ ...tenantHeader(), ...roleHeader() }),
 });
-
-/**
- * Typed governance-plane surfaces (promotions L2→L1, fixations L1→L0, and the read-only analytics summary).
- * Admin's tabs (PromotionsTab / FixationsTab / AnalyticsTab) call these instead of hand-written apiFetch +
- * res.json() + status checks; failures surface as the SDK's KohakuHostError (see admin/ui.tsx's deniedMessage).
- */
-export const promotions = client.promotions;
-export const fixations = client.fixations;
-export const analytics = client.analytics;
 
 /**
  * Low-level fetch for routes outside SPEC (sample-specific /api/health, /api/kohaku/admin/bump-data-version).

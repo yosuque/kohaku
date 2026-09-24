@@ -108,6 +108,7 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/otel` | 薄い opt-in OpenTelemetry 層(`createOtelComposeObserver`。composer の `composeObservers` で束ねて使う)。依存は composer のみ(peer: `@opentelemetry/api`)、exporter/SDK 配線は無い |
 | `packages/host-a2ui` | A2UI 互換プロファイル骨子(UISpec/SpecPatch → A2UI メッセージ。spec-core のみの独立リーフ)[Draft] |
 | `packages/client` | 型付きホストクライアント SDK(spec-core + data-binding のみに依存。host-rest 非依存) |
+| `packages/admin-react` | 統制コンソール(Lineage / Analytics / 昇格レビュー / 固定化)を `client` の上に組み込み可能な React コンポーネントとして提供(sample の Admin 画面は薄いラッパ) |
 | `packages/storage-redis` | Redis バックエンドの StoragePort 参考アダプタ(Spec cache・lineage・promotion state・fixation・テナントスコープ)。`ioredis` は peer dependency |
 | `packages/storage-postgres` | PostgreSQL バックエンドの StoragePort 参考アダプタ(storage-redis と同等のカバレッジ、idempotent なスキーマ)。`pg` は peer dependency |
 | `packages/authz-jwt` | JWT / OIDC の AuthzPort 参考アダプタ(claim から principal / roles / tenant を解決。共有シークレットまたは JWKS)。capability token は `authz-hmac` に委譲し、`jose` に依存 |
