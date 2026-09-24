@@ -113,6 +113,8 @@ On slow-generating paths (such as the first time for L1), a loading skeleton app
 
 ### Admin (governance plane)
 
+The four tabs below are the published **`@kohaku-ui/admin-react`** console; `apps/sample-web/src/pages/AdminPage.tsx` is a thin wrapper that injects the sample's client (tenant / role headers), theme, dictionary and sales-catalogue draft defaults. See §6 "Embedding the governance console" to drop the same console into your own product.
+
 - **View Lineage**: Event Sourcing of the UI Spec. Every compose / operation / promotion / fixation is visible as an event sequence.
 - **Analytics**: An overview aggregated from the raw event sequence (`GET /api/kohaku/analytics/summary`). It displays the fallback rate, tier distribution (L0/L1/L2), cache breakdown (hit/miss/bypass/fixated), latency quantiles (p50/p95/p99), top frequent intents, and the number of promotion/fixation events as a table with inline bars. It states clearly at the top of the screen that **the aggregation is based on a window of the most recent 200 events (default)**, and if the window cap is reached, that note appears too (not a silent cap). Authorization is a read operation (`analytics.read`), so admin/reviewer/viewer can all view it.
 - **Promotion review (L2→L1)**: A candidate list of freely generated parts. Check the HTML source + **"▶ Preview" renders the actual review target itself** (mounting the recorded artifact directly into the same isolated iframe as the chat surface — the identity between the approval target and what is displayed is guaranteed by sha256) → finalize the schema (componentType / intentName / description) → "Approve and register". **The `status` selector at the top lets you filter by state** ("All" digs up candidates via `POST /promotions/evaluate`; a specific state is read-only via `GET /promotions?status=`). On a candidate card, **"Request changes (send back)" drops it to `changes_requested`**, and after fixing it, **"Re-submit and approve" returns it to candidate and restores it up through publish** (the recovery path from a send-back). In `changes_requested`, no rejection is offered, and abandonment is unified into "withdraw".
@@ -428,6 +430,64 @@ for await (const ev of client.composeStream({ intent: { canonical: "sales.trend"
 - **The fetch thunk to pass to renderer-react's `useSpecStream`** is obtained via `client.composeStreamRequest(req)`.
 - **Routes outside the SPEC** (your own `/health`, etc.) are called via the escape hatch `client.request(path, init?)` (the headers hook works, but JSON parsing and error conversion do not).
 - The sample's wiring is `apps/sample-web/src/kohaku/client.ts` (a thin wrapper around the SDK to match the sample-specific call shapes).
+
+### Embedding the governance console (`@kohaku-ui/admin-react`)
+
+The Admin page's four tabs ship as React components. They need nothing but a `KohakuClient`; RBAC, tenant scoping and
+approval stay on the host (`createGovernancePolicy`, the governance routes), so embedding the console does not change
+who may approve what — a 403 `CAPABILITY_DENIED` is rendered as a red banner naming the operation.
+
+```tsx
+import { KohakuAdmin, useAdminNotice } from "@kohaku-ui/admin-react";
+import { createKohakuClient } from "@kohaku-ui/client";
+
+const client = createKohakuClient({
+  baseUrl: "/api/kohaku",
+  // Tenant AND role both ride on this client's own headers hook — the console never sets either itself.
+  // Resolve both from your auth layer in production.
+  headers: () => ({ "x-kohaku-tenant": currentTenant(), "x-kohaku-role": currentRole() }),
+});
+
+export function GovernancePage() {
+  return (
+    <KohakuAdmin
+      client={client}
+      tenant={currentTenant()}        // remount key: switching tenant re-fetches every tab. Role is NOT a
+                                       // remount key — changing role only changes what the next request is
+                                       // allowed to do, so an already-loaded list survives a role switch.
+      theme={myThemeTokens}           // renderer-core ThemeTokens → --kohaku-color-* (light fallbacks when omitted)
+      messages={myAdminMessages}      // AdminMessages; defaultAdminMessages is English
+      promotionDefaults={{            // your query source's queryTemplate.path choices and draft prefill
+        queryPaths: ["", "trend"],
+        initialDraftFor: (candidate) => ({ /* DraftForm */ }),
+      }}
+      toolbar={<MyControls />}        // rendered in the tab bar; may call useAdminNotice()
+    />
+  );
+}
+```
+
+Each tab (`LineageTab` / `AnalyticsTab` / `PromotionsTab` / `FixationsTab`) and the hooks behind them
+(`useLineage` / `useAnalyticsSummary` / `usePromotions` / `useFixations`) are exported too, for products that compose
+their own shell around `AdminProvider`. The package depends on `client`, `renderer-core`, `sandbox` and `spec-core`
+only — never on `renderer-react` or `host-rest` (`packages/admin-react/test/boundary.test.ts` pins the manifest and
+every `src` import against that list).
+
+The package root carries only this domain API (`KohakuAdmin`, the tabs, the hooks, `AdminMessages`, and the
+`NoticeKind` / `NotifyFn` types used by `onNotice`). The generic UI primitives the tabs are built from — `card`,
+`Field`, `Empty`, `StatCard`, `StatusBadge`, `BarRow`, `ErrorBanner`, and the rest — live on a separate
+`@kohaku-ui/admin-react/ui` subpath instead, so embedding `KohakuAdmin` in an app that already has its own `Field`
+or `card` never forces an aliased import; reach for `/ui` only when composing your own shell around `AdminProvider`
+and wanting the same primitives.
+
+The console's colors come entirely from `ThemeTokens`, resolved through `adminThemeStyle` the same way
+`themeTokensToCssVars` resolves them for a renderer: pass your `ThemeTokens` as the `theme` prop and every
+`--kohaku-color-*` variable the console reads follows it, with renderer-core's default light values as the
+fallback when a token is omitted. Two of those variables are not part of `KnownThemeTokens` itself —
+`color.subtle` (de-emphasized text, distinct from `color.muted`) and `color.track` (a flat neutral track
+background) — and a product that supplies both gets the console's full color palette in both light and dark mode
+(the sample does this in `apps/sample-web/src/theme/tokens.ts`'s `buildTheme(mode)`); omit them and those two
+spots fall back to the package's own light-mode default regardless of theme.
 
 ### Adding a part
 

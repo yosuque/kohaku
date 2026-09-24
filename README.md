@@ -121,6 +121,7 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `packages/otel` | Thin, opt-in OpenTelemetry layer (`createOtelComposeObserver`, combined via composer's `composeObservers`). Depends only on composer (peer: `@opentelemetry/api`); ships no exporter/SDK setup |
 | `packages/host-a2ui` | A2UI-compatible profile skeleton (UISpec/SpecPatch → A2UI messages; an independent leaf on spec-core only) [Draft] |
 | `packages/client` | Typed host client SDK (depends only on spec-core + data-binding; independent of host-rest) |
+| `packages/admin-react` | Governance console (Lineage / Analytics / Promotion review / Fixation) as embeddable React components on top of `client` (the sample's Admin page is a thin wrapper) |
 | `apps/sample-api` | Sample: sales-analysis API (**a model implementation of the 4 Ports**) |
 | `apps/sample-web` | Sample: Dashboard (GUI) / Chat (NLUI) / Admin (governance) |
 | `apps/sample-wc` | Sample: rendering the same Spec with the React-free `<kohaku-surface>` (proof of renderer independence) |

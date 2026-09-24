@@ -113,6 +113,8 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
 ### Admin(統制面)
 
+以下の 4 タブは公開パッケージ **`@kohaku-ui/admin-react`** のコンソールです。`apps/sample-web/src/pages/AdminPage.tsx` は sample のクライアント(テナント / ロールヘッダ)・テーマ・辞書・売上カタログのドラフト既定値を注入するだけの薄いラッパです。自分のプロダクトに同じコンソールを組み込む手順は §6「統制コンソールを組み込む」を参照してください。
+
 - **View Lineage**: UI Spec の Event Sourcing。全 compose / 操作 / 昇格 / 固定化がイベント列で見えます。
 - **分析**: 生イベント列を集計した俯瞰(`GET /api/kohaku/analytics/summary`)。fallback 率・tier 分布(L0/L1/L2)・cache 内訳(hit/miss/bypass/fixated)・レイテンシ分位(p50/p95/p99)・頻出 intent 上位・昇格/固定化イベント数を、表 + インラインバーで表示します。**集計は直近 200 件(既定)の窓に基づく**旨を画面上部に明記し、窓上限に到達した場合はその注記も出ます(silent cap にしない)。認可は read 系(`analytics.read`)なので admin/reviewer/viewer とも閲覧できます。
 - **昇格レビュー(L2→L1)**: 自由生成部品の候補一覧。HTML ソース確認 + **「▶ プレビュー」でレビュー対象そのものを実描画**(チャット面と同じ隔離 iframe に記録済み artifact を直接マウント — 承認対象と表示物の同一性は sha256 で保証)→ スキーマ(componentType / intentName / description)を確定 → 「承認して登録」。**上部の `status` セレクタで状態別に絞れます**(「すべて」は候補を掘り起こす `POST /promotions/evaluate`、特定の状態は読み取り専用の `GET /promotions?status=`)。候補カードの**「変更を要求(差し戻し)」で `changes_requested` に落とし**、修正のうえ**「再申請して承認」で candidate に戻して publish まで復帰**できます(差し戻しからの復帰導線)。`changes_requested` では却下は出さず、放棄は「取り下げる(withdraw)」に一本化しています。
@@ -428,6 +430,61 @@ for await (const ev of client.composeStream({ intent: { canonical: "sales.trend"
 - **renderer-react の `useSpecStream`** に渡す fetch サンクは `client.composeStreamRequest(req)` で得られる。
 - **SPEC 対象外のルート**(独自の `/health` 等)はエスケープハッチ `client.request(path, init?)`(headers フックは効くが JSON パース・エラー変換はしない)で叩く。
 - サンプルの配線は `apps/sample-web/src/kohaku/client.ts`(SDK を薄く包んで sample 固有の呼び出し形に合わせている)。
+
+### 統制コンソールを組み込む(`@kohaku-ui/admin-react`)
+
+Admin 画面の 4 タブは React コンポーネントとして配布されています。必要なのは `KohakuClient` だけです。RBAC・テナントスコープ・承認はホスト側(`createGovernancePolicy`、統制系ルート)に残るため、コンソールを組み込んでも「誰が何を承認できるか」は変わりません — 403 `CAPABILITY_DENIED` は操作名を含む赤いバナーとして描画されます。
+
+```tsx
+import { KohakuAdmin, useAdminNotice } from "@kohaku-ui/admin-react";
+import { createKohakuClient } from "@kohaku-ui/client";
+
+const client = createKohakuClient({
+  baseUrl: "/api/kohaku",
+  // テナントとロールはどちらもこのクライアント自身の headers フックに載せる — コンソール自身はどちらも設定しない。
+  // 本番では両方とも認証層から解決すること。
+  headers: () => ({ "x-kohaku-tenant": currentTenant(), "x-kohaku-role": currentRole() }),
+});
+
+export function GovernancePage() {
+  return (
+    <KohakuAdmin
+      client={client}
+      tenant={currentTenant()}        // remount key: テナントを切り替えると全タブを再取得する。ロールは
+                                       // remount key ではない — ロールを切り替えても「次のリクエストが何を
+                                       // 許可されるか」が変わるだけなので、読み込み済みの一覧はロール切替後も残る。
+      theme={myThemeTokens}           // renderer-core の ThemeTokens → --kohaku-color-*(省略時は明るいテーマの既定値)
+      messages={myAdminMessages}      // AdminMessages。defaultAdminMessages は英語
+      promotionDefaults={{            // クエリソース側の queryTemplate.path 選択肢とドラフト初期値
+        queryPaths: ["", "trend"],
+        initialDraftFor: (candidate) => ({ /* DraftForm */ }),
+      }}
+      toolbar={<MyControls />}        // タブバーに描画される。useAdminNotice() を呼んでよい
+    />
+  );
+}
+```
+
+各タブ(`LineageTab` / `AnalyticsTab` / `PromotionsTab` / `FixationsTab`)とその裏側のフック(`useLineage` /
+`useAnalyticsSummary` / `usePromotions` / `useFixations`)も export されており、`AdminProvider` の上に自前のシェルを
+組みたいプロダクトはそちらを使えます。パッケージの依存は `client` / `renderer-core` / `sandbox` / `spec-core` のみ —
+`renderer-react` や `host-rest` には依存しません(`packages/admin-react/test/boundary.test.ts` が manifest と
+`src` の import 双方をこの一覧に対して固定しています)。
+
+パッケージのルートが export するのはこのドメイン API のみです(`KohakuAdmin`・各タブ・各フック・`AdminMessages`、
+および `onNotice` の型である `NoticeKind` / `NotifyFn`)。タブの実装で使っている汎用 UI プリミティブ — `card` /
+`Field` / `Empty` / `StatCard` / `StatusBadge` / `BarRow` / `ErrorBanner` など — は別の `@kohaku-ui/admin-react/ui`
+サブパスに置かれており、すでに自前の `Field` や `card` を持つアプリに `KohakuAdmin` を組み込んでも import の
+エイリアスが必要になりません。`/ui` が要るのは `AdminProvider` の上に自前のシェルを組んで同じプリミティブを
+使い回したい場合だけです。
+
+コンソールの配色はすべて `ThemeTokens` 由来で、レンダラーが `themeTokensToCssVars` で解決するのと同じ経路を
+`adminThemeStyle` が辿ります: `theme` prop に `ThemeTokens` を渡せば、コンソールが読む `--kohaku-color-*` 変数は
+すべてそれに追従し、トークンを省略した項目は renderer-core の明るいテーマの既定値にフォールバックします。この
+うち 2 つは `KnownThemeTokens` 自体には無いトークンです — `color.subtle`(`color.muted` とは別の控えめなテキスト)
+と `color.track`(フラットな中立トラック背景)— で、両方を供給したプロダクトはライト・ダーク両テーマでコンソールの
+配色を完全に得られます(sample は `apps/sample-web/src/theme/tokens.ts` の `buildTheme(mode)` でこれを行って
+います)。省略するとこの 2 箇所だけはテーマに関わらずパッケージ自身の明るいテーマの既定値のままになります。
 
 ### 部品を追加する
 

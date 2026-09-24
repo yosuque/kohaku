@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  *
  *   spec-core -> {registry, data-binding, storage-memory, authz-hmac, port-contracts} -> intents
  *     -> {composer, renderer-core, semantic-llm} -> host-core
- *     -> {renderer-react, renderer-wc, sandbox, lineage, evals, host-rest, host-mcp-apps, client, otel} -> apps
+ *     -> {renderer-react, renderer-wc, sandbox, lineage, evals, host-rest, host-mcp-apps, client, otel, admin-react} -> apps
  *
  * with `llm` and `host-a2ui` documented as independent leaves (llm depends on nothing in the workspace;
  * host-a2ui only on spec-core), and `storage-memory` / `authz-hmac` (reference StoragePort / AuthzPort
@@ -21,7 +21,7 @@ import { describe, expect, it } from "vitest";
  * The top-level bullet groups sandbox and renderer-wc into the same final layer, but AGENTS.md's own more
  * detailed text says renderer-wc "reuses sandbox (mountSandbox) by importing it directly" -- i.e. sandbox
  * must sit strictly below renderer-wc, not beside it. This test resolves that by splitting the final group
- * into two sub-layers (sandbox/lineage/evals/host-rest/host-mcp-apps/client, then renderer-react/renderer-wc),
+ * into two sub-layers (sandbox/lineage/evals/host-rest/host-mcp-apps/client, then renderer-react/renderer-wc/admin-react),
  * which matches every dependency actually declared in packages/*\/package.json. If a future change to the
  * package graph contradicts this ordering, the failure message below names the offending edge and the
  * expected layer so it can be triaged (either the code or the documented order is wrong).
@@ -36,7 +36,7 @@ const LAYERS: string[][] = [
   ["composer", "renderer-core", "semantic-llm"],
   ["host-core"],
   ["sandbox", "lineage", "evals", "host-rest", "host-mcp-apps", "client", "otel"],
-  ["renderer-react", "renderer-wc"],
+  ["renderer-react", "renderer-wc", "admin-react"],
 ];
 
 const SCOPE = "@kohaku-ui/";

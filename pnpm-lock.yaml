@@ -511,6 +511,9 @@ importers:
 
   apps/sample-web:
     dependencies:
+      '@kohaku-ui/admin-react':
+        specifier: workspace:^
+        version: link:../../packages/admin-react
       '@kohaku-ui/client':
         specifier: workspace:^
         version: link:../../packages/client
@@ -609,6 +612,55 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@26.5.1)(@vitest/coverage-v8@5.0.1)(jsdom@30.0.1)(vite@8.3.0(@types/node@26.5.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.1))
+
+  packages/admin-react:
+    dependencies:
+      '@kohaku-ui/client':
+        specifier: workspace:^
+        version: link:../client
+      '@kohaku-ui/renderer-core':
+        specifier: workspace:^
+        version: link:../renderer-core
+      '@kohaku-ui/sandbox':
+        specifier: workspace:^
+        version: link:../sandbox
+      '@kohaku-ui/spec-core':
+        specifier: workspace:^
+        version: link:../spec-core
+    devDependencies:
+      '@testing-library/react':
+        specifier: 'catalog:'
+        version: 16.3.3(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.5.1
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: 'catalog:'
+        version: 19.3.0(@types/react@19.3.0)
+      axe-core:
+        specifier: 'catalog:'
+        version: 4.13.0
+      jsdom:
+        specifier: 'catalog:'
+        version: 30.0.1
+      react:
+        specifier: 'catalog:'
+        version: 19.3.0
+      react-dom:
+        specifier: 'catalog:'
+        version: 19.3.0(react@19.3.0)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@26.5.1)(@vitest/coverage-v8@5.0.1)(jsdom@30.0.1)(vite@8.3.0(@types/node@26.5.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.1))
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
 
   packages/authz-hmac:
     dependencies:
