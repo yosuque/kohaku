@@ -1,12 +1,21 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { AuthzPort, Principal, Scope } from "@kohaku-ui/spec-core";
 
+export interface HmacAuthzOptions {
+  /** Default capability lifetime (seconds) when issueCapability's own opts.ttlSeconds is omitted. Defaults to 600. */
+  ttlSeconds?: number;
+}
+
+/** Default capability TTL (seconds); matches host-core's default issuance TTL. */
+export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
+
 /**
  * A homegrown HMAC-SHA256 capability token (on-behalf-of: the host acts under the user's delegated authority).
  * A structure whose contents are transparent, prioritizing didactic value: base64url(payload).base64url(hmac)
  * payload = { sub, scopes: [{kind, ref}], exp }
  */
-export function createHmacAuthzPort(secret: string): AuthzPort {
+export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = {}): AuthzPort {
+  const defaultTtl = options.ttlSeconds ?? DEFAULT_CAPABILITY_TTL_SECONDS;
   const sign = (payload: string): string => createHmac("sha256", secret).update(payload).digest("base64url");
 
   return {
@@ -15,7 +24,7 @@ export function createHmacAuthzPort(secret: string): AuthzPort {
         JSON.stringify({
           sub: principal.id,
           scopes,
-          exp: Math.floor(Date.now() / 1000) + (opts.ttlSeconds ?? 600),
+          exp: Math.floor(Date.now() / 1000) + (opts.ttlSeconds ?? defaultTtl),
         }),
       ).toString("base64url");
       return `${payload}.${sign(payload)}`;

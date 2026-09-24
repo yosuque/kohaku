@@ -21,6 +21,8 @@ export {
   type IntentInput,
   normalizeIntent,
 } from "./intent.js";
+// In-process keyed mutex (a shared primitive: host locks and the reference StoragePort's per-file serialization)
+export { createKeyedMutex, type KeyedMutex } from "./keyed-mutex.js";
 // Parsing / validation
 export {
   parsePatch,
@@ -135,7 +137,6 @@ export {
   type VisibleWhen,
   VisibleWhenSchema,
 } from "./schema/state.js";
-
 // Text summary (fallback for hosts without UI support / the feed-back text for ui/update-model-context)
 export { specToText } from "./spec-text.js";
 

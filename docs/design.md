@@ -86,6 +86,9 @@ Key dependency point: **`renderer-core` is the single source of truth for enviro
 | llm | LlmPort (provider-independent contract), env resolution, structured-output fallback, `streamObject` (optional extension for cumulative partial notifications — the source for incremental streaming) | `src/adapters/ai-sdk.ts` (SDK isolation point) |
 | composer | compose/recompose, L0/L1/L2, repair loop, deterministic post-processing, cache | `src/compose.ts` (entry) `src/tier-ladder.ts` (L1→L2 ladder) `src/single-flight.ts` `src/assemble.ts` `src/post/rules.ts` |
 | data-binding | `query://` canonical form, BindingClient (Bearer capability, STALE detection) | `src/client.ts` |
+| storage-memory | Reference StoragePort implementations: `createMemoryStoragePort()` (pure in-process, the Zero-Port default and test double) and `createFileStoragePort(dataDir)` (the former sample-api port: Spec cache in memory, lineage / promotions / fixations under `dataDir`) | `src/memory-storage-port.ts` `src/file-storage-port.ts` |
+| authz-hmac | Reference AuthzPort implementation: `createHmacAuthzPort(secret)`, the HMAC-SHA256 capability token | `src/hmac-authz-port.ts` |
+| port-contracts | **Private, test-only.** Shared StoragePort / AuthzPort contract suites (`describeStoragePortContract` / `describeAuthzPortContract`) that every adapter — reference or production — must pass | `src/storage.ts` `src/authz.ts` |
 | intents | Intent DSL (environment-neutral). From `defineVocabulary` (single source for value set + labels) and `defineIntent` (single definition), derives IntentDef (SemanticPort), FacetView (GUI facets), MCP tool input, and coerce | `src/vocabulary.ts` `src/intent.ts` `src/facet-view.ts` |
 | renderer-core | Framework-free / DOM-free shared core. Aggregates event governance (`resolveEmit`), write-target decision (`resolveInvokeTarget`), state store, BoundDataController (freshness reconciliation / last-write-wins / invalidation), per-part presenters, messages, and theme resolution | `src/control/emit.ts` `src/stores/bound-data-controller.ts` `src/presenters/` |
 | renderer-react | React renderer. SpecView (flat-list resolution), ImplRegistry, useBoundData, per-node ErrorBoundary. Pure logic is imported from renderer-core (single source of truth) | `src/SpecView.tsx` `src/context.tsx` |
@@ -120,7 +123,7 @@ A **full Python port** of the same protocol (Kohaku Protocol v0.1) is co-located
 | `composer/` | composer (L0/L1/L2, repair loop) |
 | `lineage/` | lineage (recording, promotion, fixation) |
 | `evals/` | evals (judge / golden / FixtureLlm) |
-| `storage/` | equivalent of sample-api's storage-port.ts (FileStoragePort) |
+| `storage/` | equivalent of `@kohaku-ui/storage-memory`'s `createFileStoragePort` |
 | `host_core/` | Full mirror of host-core: every TS module now has a Python counterpart, consumed by `host_rest` / `host_mcp` as thin adapters (per-module detail: [../python/README.md](../python/README.md)). One behavioral difference persists: the shared keyed mutex (`keyed_mutex.py`) that both profiles serialize fixation self-heal through differs in key granularity — REST keys it by `(tenant, intentHash)`, MCP by `intentHash` alone |
 | `host_rest/` | host-rest (FastAPI) |
 | `host_mcp/` | host-mcp-apps (MCP Apps profile) |
@@ -558,8 +561,9 @@ host-mcp-apps consume it as thin adapters (mirroring how `renderer-core` is the 
 object (the fixation lookup, the self-heal API, an optional per-`(tenant, intentHash)` serializer, and an
 `onSelfHealError` callback) and host-core's `composeWithFixation` / `resolveFixatedResult` / `settleFixation`
 drive the fixation shortcut → staleness check → self-heal (fire-and-forget) → normal-compose-fallback sequence
-identically for both profiles. Both profiles wire `serialize` to the same `createKeyedMutex` (also in
-host-core, and the same mechanism host-rest's promotion lock and the sample storage port's per-file lock use):
+identically for both profiles. Both profiles wire `serialize` to the same `createKeyedMutex` (defined in
+`@kohaku-ui/spec-core` and re-exported by host-core for backward compatibility; the same mechanism host-rest's
+promotion lock and `@kohaku-ui/storage-memory`'s file-backed StoragePort per-file lock use):
 the REST profile's `withFixationLock` keys it by `(tenant, intentHash)` and resolves tenant, while the MCP
 profile keys it by `intentHash` alone and never resolves a tenant (so self-healing calls always carry
 `tenant: undefined`) — it still guards against the same fixate/unfixate/self-heal interleaving within its own

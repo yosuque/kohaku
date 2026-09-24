@@ -91,6 +91,9 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/spec-core` | UI Spec スキーマ・Intent 正規化・diff/patch・cacheKey・**Port 型**(フレームワーク境界) |
 | `packages/registry` | 部品カタログ(コア 15 部品 + ランタイム専用 `ui.loading`)・federated 解決・capability 交渉・LLM 生成スキーマ変換 |
 | `packages/data-binding` | `query://` 参照解決・capability token・STALE 検出 |
+| `packages/storage-memory` | StoragePort の参考実装: `createMemoryStoragePort()`(純インメモリ)と `createFileStoragePort(dataDir)`(lineage / 昇格 / 固定化をファイル永続化) |
+| `packages/authz-hmac` | AuthzPort の参考実装: `createHmacAuthzPort(secret)`(HMAC-SHA256 capability token) |
+| `packages/port-contracts` | **private・test-only。** 全アダプタが通す StoragePort / AuthzPort の共有契約スイート |
 | `packages/intents` | Intent DSL(`defineVocabulary` / `defineIntent`)— 値集合とラベルの単一源から SemanticPort 用定義・GUI ファセット・MCP ツール入力を導出(spec-core + data-binding のみの環境中立リーフ) |
 | `packages/llm` | LLM プロバイダ抽象(5 種切替・構造化出力の自動フォールバック) |
 | `packages/composer` | UI Composition Service(L0/L1/L2・修復ループ・決定的後処理・Spec キャッシュ) |

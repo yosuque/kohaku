@@ -1,10 +1,10 @@
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { FixationRecord, UISpec } from "@kohaku-ui/spec-core";
 import type { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { languageOf } from "../src/app/compose-context.js";
 import { createApp } from "../src/app.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 // End-to-end output language (EN/JA): session.locale on the wire selects the compose-context policy
 // pair — JA gets JA L0 fixed specs and a "Japanese" Output-language section on the L1/L2 prompts,

@@ -1,9 +1,9 @@
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { UISpec } from "@kohaku-ui/spec-core";
 import type { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 // e2e for the sample-api wiring of the governance plane's declarative RBAC:
 // the role derived from the x-kohaku-role header (admin / reviewer / viewer) branches authorization on governance routes.

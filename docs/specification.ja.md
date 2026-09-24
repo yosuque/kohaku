@@ -143,7 +143,7 @@ interface AuthzPort {
 
 ### 4.4 StoragePort — 永続化
 
-Spec キャッシュ(get/put)、Lineage(append/list)、昇格状態(get/put/list)、固定化(get/put/list)。サンプル実装はインメモリ + `.data/` ファイル(`createFileStoragePort`)。オプショナル拡張 `deleteFixation`(未実装なら `unfixate` は fail-fast で失敗し、監査イベント `intent.unfixated` も記録されない)。
+Spec キャッシュ(get/put)、Lineage(append/list)、昇格状態(get/put/list)、固定化(get/put/list)。参考実装: `@kohaku-ui/storage-memory`(`createMemoryStoragePort` / `createFileStoragePort`)。オプショナル拡張 `deleteFixation`(未実装なら `unfixate` は fail-fast で失敗し、監査イベント `intent.unfixated` も記録されない)。
 
 **テナント引数**: `getFixation(intentHash, tenant?)` / `listFixations(tenant?)` / `deleteFixation?(intentHash, tenant?)` は optional 第 2 引数で `tenant` を受け、`putFixation` は `record.tenant` を見て固定化を `(tenant, intentHash)` にキー分離する(シグネチャ不変)。`listLineage` の `LineageFilter.tenant` は一致イベントのみを返す(未指定は全件 = 従来挙動。`tenant` 未記録の旧イベントは無指定フィルタでのみ現れる)。**tenant 非対応のストレージは第 2 引数を無視してよく、その場合テナント間で固定化が共有される(fail-open)** — 本格的なテナント分離は RLS 等プロダクト側の責務。サンプルの `createFileStoragePort` は合成キー(`tenant` なしは `intentHash` そのもの)で分離するため、旧 `fixations.json`(`tenant` なし)は変換なしで互換ロードできる。
 

@@ -143,7 +143,7 @@ After a compose, the host issues read scopes for all `$ref` within the Spec, and
 
 ### 4.4 StoragePort — persistence
 
-Spec cache (get/put), Lineage (append/list), promotion state (get/put/list), fixation (get/put/list). The sample implementation is in-memory + `.data/` files (`createFileStoragePort`). Optional extension `deleteFixation` (if unimplemented, `unfixate` fails fast, and the audit event `intent.unfixated` is not recorded either).
+Spec cache (get/put), Lineage (append/list), promotion state (get/put/list), fixation (get/put/list). Reference implementations: `@kohaku-ui/storage-memory` (`createMemoryStoragePort` / `createFileStoragePort`). Optional extension `deleteFixation` (if unimplemented, `unfixate` fails fast, and the audit event `intent.unfixated` is not recorded either).
 
 **Tenant arguments**: `getFixation(intentHash, tenant?)` / `listFixations(tenant?)` / `deleteFixation?(intentHash, tenant?)` take an optional second argument `tenant`, and `putFixation` looks at `record.tenant` to key-separate fixations by `(tenant, intentHash)` (the signature is unchanged). `listLineage`'s `LineageFilter.tenant` returns only matching events (unspecified = all, the traditional behavior; old events with no recorded `tenant` appear only under the unspecified filter). **Tenant-unaware storage may ignore the second argument, in which case fixations are shared across tenants (fail-open)** — full tenant isolation (RLS, etc.) is the product's responsibility. The sample's `createFileStoragePort` separates by a composite key (no `tenant` = the `intentHash` itself), so an old `fixations.json` (no `tenant`) loads with backward compatibility without conversion.
 
