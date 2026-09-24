@@ -105,17 +105,33 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
     },
     async appendLineage(event) {
       await ready();
-      // Idempotent re-append of an already-recorded id: HSETNX only sets the body when the field is
-      // absent (returns 0 when it already exists), so a duplicate append is a no-op that neither
-      // consumes a fresh position in `by-seq` nor moves the event -- mirrors storage-postgres's
-      // `ON CONFLICT (id) DO NOTHING`.
-      const created = await redis.hsetnx(keys.lineage.events, event.id, JSON.stringify(event));
-      if (created === 0) return;
+      // Idempotent, and atomic, re-append of an already-recorded id: `HSETNX` (the body) and `ZADD NX`
+      // (`by-seq` and every index) all go in the SAME `MULTI`/`EXEC` block, so a crash between them is
+      // impossible -- either every one of these commands applies, or none does. `NX` on every one of
+      // them means a duplicate id's write is a no-op across the board (each command finds its target
+      // already present and does nothing), so the same block serves both the fresh-append and the
+      // duplicate-append case without a separate check-then-act round trip (which -- see the earlier,
+      // now-superseded HSETNX-then-conditionally-index version -- could leave the body recorded but
+      // never indexed if the process crashed in between).
+      //
+      // The `seq` value is reserved up front, unconditionally, because whether this append is a
+      // duplicate is only known once the MULTI is queued: a duplicate append therefore consumes (and
+      // wastes) one seq value. `seq` is only ever used as a sort key (append order), never as a
+      // contiguous counter, so a gap here is harmless -- see the README.
+      //
+      // Known, accepted limitation: `indexValues` is computed from THIS call's `event`, not from
+      // whatever body ends up stored. A duplicate append with the SAME payload (the only realistic
+      // duplicate: a retried call after an ambiguous prior outcome) is a true no-op everywhere, since
+      // every `ZADD NX` targets the same (index, member, score) it already holds. A duplicate id
+      // re-appended with a genuinely DIFFERENT payload -- not a real retry, but a caller violating the
+      // "id determines content" invariant the id space assumes -- can still add a spurious index entry
+      // for the new payload's field values (pointing at a body whose actual fields don't match it),
+      // even though `HSETNX` correctly leaves the stored body itself untouched. Closing that would need
+      // either a Lua script (ruled out) or a read-before-write, which reintroduces the very
+      // crash-between-steps window this MULTI exists to remove.
       const seq = await redis.incr(keys.lineage.seq);
       const multi = redis.multi();
-      // NX on every index write too: belt-and-suspenders against a race between two concurrent appends
-      // of the same id (the HSETNX above already prevents the common case, but NX means a repeated ZADD
-      // can never move a member that another writer already indexed).
+      multi.hsetnx(keys.lineage.events, event.id, JSON.stringify(event));
       multi.zadd(keys.lineage.bySeq, "NX", seq, event.id);
       for (const { field, value } of indexValues(event)) {
         multi.zadd(keys.lineage.index(field, value), "NX", seq, event.id);

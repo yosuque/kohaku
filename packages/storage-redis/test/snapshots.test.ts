@@ -51,6 +51,15 @@ describe.skipIf(backend.mode === "skip")("createRedisStoragePort: promotion stat
     expect((await port.listPromotionStates("acme")).map((s) => s.status)).toEqual(["published"]);
   });
 
+  it('treats "" the same as undefined for promotion state get/put/list (package-level, beyond the shared contract)', async () => {
+    await port.putPromotionState(state("empty-tenant", ""));
+    expect(await port.getPromotionState("empty-tenant")).toEqual(state("empty-tenant", ""));
+    expect(await port.getPromotionState("empty-tenant", "")).toEqual(state("empty-tenant", ""));
+    expect((await port.listPromotionStates("")).map((s) => s.artifactId)).toEqual(
+      (await port.listPromotionStates()).map((s) => s.artifactId),
+    );
+  });
+
   it("keeps first-insertion order in lists when a state is overwritten", async () => {
     await port.putPromotionState(state("a2", "acme"));
     await port.putPromotionState(state("a1", "acme", "withdrawn"));

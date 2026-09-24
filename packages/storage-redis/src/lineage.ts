@@ -157,39 +157,132 @@ async function scanForMatches(
 }
 
 /**
- * Reads every value's index for a multi-value candidate (only ever `type`, the one field
- * `chooseCandidateIndex` can return several values for) in a single `pipeline()` round trip -- rather
- * than one sequential `ZREVRANGE` per value -- merges the results by score (append seq) so the union
- * comes back in the same newest-to-oldest order a single index would produce, and dedupes by id
- * (defensive: an event's `type` is single-valued, so the same id should never appear under two different
- * `type` values in practice).
+ * Exhaustive multi-value (`type`) union: reads at most `limit` entries per value (`ZREVRANGE idx 0
+ * limit-1 WITHSCORES`, one per value, in a single `pipeline()` round trip -- never the whole index),
+ * merges by score, and takes the newest `limit` overall. This is complete: any event among the true
+ * global top `limit` is necessarily also among its own type's top `limit` (restricting to one type only
+ * ever removes competitors), so `limit` entries per type can never miss a result. No dedup is needed --
+ * an event's `type` is single-valued, so the same id can never appear under two different values here.
  */
-async function unionIndexNewestFirst(
+async function readUnionPushdown(
   redis: Redis,
   keys: RedisKeys,
   field: LineageIndexField,
   values: string[],
-): Promise<string[]> {
+  limit: number,
+): Promise<LineageEventRecord[]> {
   const pipeline = redis.pipeline();
-  for (const value of values) pipeline.zrevrange(keys.lineage.index(field, value), 0, -1, "WITHSCORES");
+  for (const value of values)
+    pipeline.zrevrange(keys.lineage.index(field, value), 0, limit - 1, "WITHSCORES");
   const results = (await pipeline.exec()) ?? [];
-  const bestScore = new Map<string, number>();
+  const merged: { id: string; score: number }[] = [];
   for (const [error, pairs] of results as [Error | null, string[]][]) {
     if (error) throw error;
-    for (let i = 0; i < pairs.length; i += 2) {
-      const id = pairs[i]!;
-      const score = Number(pairs[i + 1]);
-      const existing = bestScore.get(id);
-      if (existing == null || score > existing) bestScore.set(id, score);
-    }
+    for (let i = 0; i < pairs.length; i += 2) merged.push({ id: pairs[i]!, score: Number(pairs[i + 1]) });
   }
-  return [...bestScore.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  merged.sort((a, b) => b.score - a.score);
+  const ids = merged.slice(0, limit).map((m) => m.id);
+  return (await hydrate(redis, keys, ids)).reverse();
 }
 
-/** The multi-value (`type`) union path: reads the merged, newest-first id list via
- * `unionIndexNewestFirst`, then either takes its newest `limit` ids directly (`exhaustive`) or scans it
- * in `LINEAGE_SCAN_CHUNK_SIZE` chunks applying `matchesLineageFilter`, exactly like `scanForMatches` but
- * over an already-known id list instead of issuing further `ZREVRANGE` calls. */
+interface UnionStream {
+  value: string;
+  cursor: number;
+  buffer: { id: string; score: number }[];
+  exhausted: boolean;
+}
+
+/** Refills every stream in `streams` whose buffer is currently empty and not yet exhausted, in a single
+ * `pipeline()` round trip (a no-op call, no pipeline issued, when nothing needs refilling). Each fetch is
+ * `ZREVRANGE idx cursor cursor+LINEAGE_SCAN_CHUNK_SIZE-1` -- never an unbounded `0 -1` -- and a chunk
+ * shorter than `LINEAGE_SCAN_CHUNK_SIZE` marks that stream exhausted. */
+async function refillEmptyStreams(
+  redis: Redis,
+  keys: RedisKeys,
+  field: LineageIndexField,
+  streams: UnionStream[],
+): Promise<void> {
+  const toFill = streams.filter((s) => !s.exhausted && s.buffer.length === 0);
+  if (toFill.length === 0) return;
+  const pipeline = redis.pipeline();
+  for (const s of toFill) {
+    pipeline.zrevrange(
+      keys.lineage.index(field, s.value),
+      s.cursor,
+      s.cursor + LINEAGE_SCAN_CHUNK_SIZE - 1,
+      "WITHSCORES",
+    );
+  }
+  const results = (await pipeline.exec()) ?? [];
+  toFill.forEach((s, i) => {
+    const [error, pairs] = results[i] as [Error | null, string[]];
+    if (error) throw error;
+    const items: { id: string; score: number }[] = [];
+    for (let j = 0; j < pairs.length; j += 2) items.push({ id: pairs[j]!, score: Number(pairs[j + 1]) });
+    s.buffer = items;
+    s.cursor += LINEAGE_SCAN_CHUNK_SIZE;
+    if (items.length < LINEAGE_SCAN_CHUNK_SIZE) s.exhausted = true;
+  });
+}
+
+/**
+ * Non-exhaustive multi-value (`type`) union: a k-way merge across one bounded, chunked `ZREVRANGE` stream
+ * per value (`refillEmptyStreams`), always popping the globally-next id (the largest-scored buffered
+ * head across every stream) so ids come out in true newest-to-oldest order without ever reading an
+ * index's whole range. A stream's buffer is refilled -- lazily, right before the next pop decision --
+ * the moment it runs dry and isn't yet exhausted, because a not-yet-fetched item from that stream could
+ * still outscore everything currently buffered elsewhere; only once every stream is either buffered or
+ * exhausted can the next pop be trusted. Popped ids are hydrated and filtered in
+ * `LINEAGE_SCAN_CHUNK_SIZE`-sized batches (not one at a time) purely as an I/O-batching optimization --
+ * it does not affect the pop order above, which is what correctness depends on. Stops as soon as `limit`
+ * matches are collected or every stream is exhausted.
+ */
+async function readUnionScan(
+  redis: Redis,
+  keys: RedisKeys,
+  field: LineageIndexField,
+  values: string[],
+  filter: LineageFilter,
+  limit: number,
+): Promise<LineageEventRecord[]> {
+  const streams: UnionStream[] = values.map((value) => ({ value, cursor: 0, buffer: [], exhausted: false }));
+  const matches: LineageEventRecord[] = [];
+  let pending: string[] = [];
+
+  const flushPending = async (): Promise<boolean> => {
+    if (pending.length === 0) return false;
+    const ids = pending;
+    pending = [];
+    for (const event of await hydrate(redis, keys, ids)) {
+      if (matchesLineageFilter(event, filter)) {
+        matches.push(event);
+        if (matches.length === limit) return true;
+      }
+    }
+    return false;
+  };
+
+  for (;;) {
+    await refillEmptyStreams(redis, keys, field, streams);
+    let bestIndex = -1;
+    let bestScore = -Infinity;
+    for (let i = 0; i < streams.length; i++) {
+      const head = streams[i]!.buffer[0];
+      if (head != null && head.score > bestScore) {
+        bestScore = head.score;
+        bestIndex = i;
+      }
+    }
+    if (bestIndex === -1) break; // every stream is empty and exhausted: nothing left anywhere
+    pending.push(streams[bestIndex]!.buffer.shift()!.id);
+    if (pending.length >= LINEAGE_SCAN_CHUNK_SIZE && (await flushPending())) return matches.reverse();
+  }
+  await flushPending();
+  return matches.reverse();
+}
+
+/** The multi-value (`type`) union path: `readUnionPushdown` when the filter is fully expressed by the
+ * type indexes alone (no other predicate), `readUnionScan` otherwise. */
 async function readUnion(
   redis: Redis,
   keys: RedisKeys,
@@ -198,21 +291,9 @@ async function readUnion(
   limit: number,
   exhaustive: boolean,
 ): Promise<LineageEventRecord[]> {
-  const idsNewestFirst = await unionIndexNewestFirst(redis, keys, candidate.field, candidate.values);
-  if (exhaustive) {
-    return (await hydrate(redis, keys, idsNewestFirst.slice(0, limit))).reverse();
-  }
-  const matches: LineageEventRecord[] = [];
-  for (let i = 0; i < idsNewestFirst.length; i += LINEAGE_SCAN_CHUNK_SIZE) {
-    const chunk = idsNewestFirst.slice(i, i + LINEAGE_SCAN_CHUNK_SIZE);
-    for (const event of await hydrate(redis, keys, chunk)) {
-      if (matchesLineageFilter(event, filter)) {
-        matches.push(event);
-        if (matches.length === limit) return matches.reverse();
-      }
-    }
-  }
-  return matches.reverse();
+  return exhaustive
+    ? readUnionPushdown(redis, keys, candidate.field, candidate.values, limit)
+    : readUnionScan(redis, keys, candidate.field, candidate.values, filter, limit);
 }
 
 /**
