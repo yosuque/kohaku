@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { writeScaffold } from "../commands.js";
 import { type DatasetProfile, inferProfile, normalizeRows, slugify } from "./infer.js";
 import { readDataFile } from "./readers.js";
-import { renderProjectFiles } from "./render.js";
+import { type ProjectFile, renderEnvFile, renderProjectFiles } from "./render.js";
 
 export interface InitOptions {
   from: string;
@@ -12,6 +13,12 @@ export interface InitOptions {
   name?: string;
   table?: string;
   install?: boolean;
+  /**
+   * Generates the value written to the generated project's `.env` as `KOHAKU_CAPABILITY_SECRET`.
+   * Default: a fresh cryptographically random secret (`randomBytes(32).toString("base64url")`). Overridable
+   * so callers -- tests, in particular, which need deterministic output -- can inject a fixed value.
+   */
+  secret?: () => string;
 }
 
 export interface InitResult {
@@ -50,6 +57,10 @@ const NPM_PACKAGE_NAME_MAX_LENGTH = 214;
 // sha256-hash fallback (used for e.g. a directory named entirely in a non-Latin script): that hash
 // is still a real, if unhelpful, derived name, whereas "", ".", ".." carry no name at all.
 const DEFAULT_PROJECT_NAME = "kohaku-app";
+
+function defaultSecret(): string {
+  return randomBytes(32).toString("base64url");
+}
 
 function isValidProjectName(name: string): boolean {
   return name.length > 0 && name.length <= NPM_PACKAGE_NAME_MAX_LENGTH && NPM_PACKAGE_NAME.test(name);
@@ -100,7 +111,11 @@ export async function initProject(options: InitOptions, io: InitIo = {}): Promis
   const profile = inferProfile(sourceName, dataset);
   const rows = normalizeRows(dataset, profile);
   const files = renderProjectFiles(profile, rows, { name });
-  const written = writeScaffold(files.map((f) => [join(outDir, f.path), f.content] as const));
+  // `.env` carries a real, randomly generated secret (unlike `.env.example`'s empty placeholder) so the
+  // generated project runs immediately; it is added here rather than in renderProjectFiles so that
+  // function -- and its own tests -- stay free of randomness.
+  const envFile: ProjectFile = { path: ".env", content: renderEnvFile((options.secret ?? defaultSecret)()) };
+  const written = writeScaffold([...files, envFile].map((f) => [join(outDir, f.path), f.content] as const));
   let installed = false;
   if (options.install !== false) {
     const code = await (io.run ?? defaultRun)("npm", ["install", "--no-audit", "--no-fund"], outDir);

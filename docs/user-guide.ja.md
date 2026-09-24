@@ -293,6 +293,8 @@ npm run dev                                      # API :8787 + web :5173
 
 `init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、`@kohaku-ui/semantic-llm` の既定 SemanticPort、`@kohaku-ui/storage-memory` と `@kohaku-ui/authz-hmac`、Dashboard + Chat の Web アプリ、golden regression テスト。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。生成物はすべて出発点であり、4 つの Port はプロダクト側の責務のままです(設計書 §2)。各ファイルには何を置き換えるべきかが書かれています。
 
+手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。
+
 **認識される日付形式**: 年が先頭に来る日付だけを曖昧さなしとして扱い、時間列になります — `YYYY-MM-DD`、`YYYY-MM`、またはこれらの `/` 区切り版で、ゼロ埋めの有無は問いません(`2026-04-01`、`2026-4-1`、`2026/4` など)。US 式 `MM/DD/YYYY` や欧州式 `DD/MM/YYYY` のような日/月が先頭の形式は意図的に推測しません — 月が 12 以下の日付ではこの 2 つを区別できず、誤って推測すると行の日付を静かに取り違えてしまい、グラフが出ないことよりも悪い結果になるためです。データがこの形式の場合、`init` のサマリに列名を挙げた警告が出ます。`YYYY-MM-DD` に変換してから `init` をやり直せば、時間列と Trend ビューが得られます。
 
 **「最初の compose までの時間」の計測**(クイックスタートの KPI、目標 15 分以内): `npx @kohaku-ui/cli init` の前にストップウォッチを開始し、Dashboard に Summary ビュー(L0)が表示された時点と、キーを設定した状態で最初の Chat の回答が描画された時点(L1)で止めます。クリーンなマシン・温まった npm キャッシュで両方を記録してください。CI の `pack-smoke` ジョブは同じ生成処理をエンドツーエンドで実行します(`scripts/pack-smoke.mjs` の step 7b)。

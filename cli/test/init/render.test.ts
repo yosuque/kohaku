@@ -5,11 +5,13 @@ import { inferProfile, normalizeRows } from "../../src/init/infer.js";
 import { readDataFile } from "../../src/init/readers.js";
 import {
   renderDataset,
+  renderEnvFile,
   renderFixedSpecs,
   renderGoldenFixture,
   renderIntents,
   renderPackageJson,
   renderProjectFiles,
+  renderReadme,
 } from "../../src/init/render.js";
 import { EXTERNAL_VERSIONS } from "../../src/init/versions.js";
 import { CLI_VERSION } from "../../src/version.js";
@@ -152,6 +154,24 @@ describe("EXTERNAL_VERSIONS", () => {
     for (const [name, version] of Object.entries(EXTERNAL_VERSIONS)) {
       expect(catalog.get(name), `${name} is not in the catalog`).toBe(version);
     }
+  });
+});
+
+describe("renderReadme", () => {
+  it("explains that Chat is scoped to the generated Intent catalog (NO_MATCH otherwise)", async () => {
+    const { profile } = await profileOf();
+    const readme = renderReadme(profile);
+    expect(readme).toContain(
+      "Chat answers only within the generated Intent catalog; a question outside it returns `NO_MATCH`.",
+    );
+    expect(readme).toContain("fallbackIntent");
+  });
+});
+
+describe("renderEnvFile", () => {
+  it("writes the given secret as KOHAKU_CAPABILITY_SECRET", () => {
+    const env = renderEnvFile("shh-its-a-secret");
+    expect(env).toContain("KOHAKU_CAPABILITY_SECRET=shh-its-a-secret");
   });
 });
 

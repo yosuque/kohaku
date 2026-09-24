@@ -25,7 +25,7 @@ describe("initProject", () => {
     const result = await initProject({ from: FIXTURE, out, install: false }, noRun);
     expect(result.installed).toBe(false);
     expect(result.profile.source).toBe("sales");
-    expect(result.written).toHaveLength(18);
+    expect(result.written).toHaveLength(19);
     expect(existsSync(join(out, "server/intents.ts"))).toBe(true);
     const pkg = JSON.parse(readFileSync(join(out, "package.json"), "utf8"));
     expect(pkg.name).toBe("my-app");
@@ -42,6 +42,7 @@ describe("initProject", () => {
       "index.html",
       "dev.mjs",
       ".env.example",
+      ".env",
       ".gitignore",
       "README.md",
       "data/sales.json",
@@ -84,6 +85,46 @@ describe("initProject", () => {
     await expect(initProject({ from: FIXTURE, out }, { run: async () => 1 })).rejects.toThrow(
       /npm install exited 1/,
     );
+  });
+
+  it("writes .env with the injected secret, kept separate from .env.example's empty placeholder", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false, secret: () => "fixed-test-secret" }, noRun);
+    expect(readFileSync(join(out, ".env"), "utf8")).toContain("KOHAKU_CAPABILITY_SECRET=fixed-test-secret");
+    const example = readFileSync(join(out, ".env.example"), "utf8");
+    expect(example).toContain("KOHAKU_CAPABILITY_SECRET=\n");
+    expect(example).not.toContain("fixed-test-secret");
+    expect(example).not.toContain("change-me");
+    expect(example).toMatch(/^# KOHAKU_LLM_API_KEY=/m);
+  });
+
+  it("defaults to a fresh random secret when none is injected (two runs never collide)", async () => {
+    const dir = tmp();
+    const outA = join(dir, "a");
+    const outB = join(dir, "b");
+    await initProject({ from: FIXTURE, out: outA, install: false }, noRun);
+    await initProject({ from: FIXTURE, out: outB, install: false }, noRun);
+    const secretOf = (out: string) =>
+      /KOHAKU_CAPABILITY_SECRET=(\S+)/.exec(readFileSync(join(out, ".env"), "utf8"))?.[1];
+    const a = secretOf(outA);
+    const b = secretOf(outB);
+    expect(a).toBeTruthy();
+    expect(b).toBeTruthy();
+    expect(a).not.toBe(b);
+  });
+
+  it(".gitignore excludes .env from version control", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    expect(readFileSync(join(out, ".gitignore"), "utf8")).toContain(".env\n");
+  });
+
+  it("server/app.ts requires KOHAKU_CAPABILITY_SECRET instead of falling back to a fixed dev secret", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
+    expect(appSrc).toContain("KOHAKU_CAPABILITY_SECRET is required (see .env.example)");
+    expect(appSrc).not.toContain("dev-secret-change-me");
   });
 
   it("refuses to overwrite: an existing package.json aborts before anything is written", async () => {
