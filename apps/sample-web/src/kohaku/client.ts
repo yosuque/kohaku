@@ -2,6 +2,7 @@ import {
   type ComposeRequest,
   type ComposeView,
   createKohakuClient,
+  hostErrorFromResponse,
   type NormalizeResult,
 } from "@kohaku-ui/client";
 import type { JsonObject } from "@kohaku-ui/spec-core";
@@ -33,7 +34,7 @@ export const fixations = client.fixations;
 export const analytics = client.analytics;
 
 /**
- * Low-level fetch for routes outside SPEC (sample-specific /api/health, /api/admin/bump-data-version).
+ * Low-level fetch for routes outside SPEC (sample-specific /api/health, /api/kohaku/admin/bump-data-version).
  * Delegates to the SDK's escape hatch (client.request) — the SDK is responsible for attaching the tenant header.
  */
 export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -120,8 +121,17 @@ export async function fetchHealth(): Promise<HealthResponse> {
   return (await res.json()) as HealthResponse;
 }
 
+/**
+ * Now behind identity + governance RBAC (operation admin.bumpDataVersion — admin only) and, under a JWT
+ * deployment, disabled unless the server opts in (AppDeps.demoAdminRoutes / KOHAKU_DEMO_ADMIN_ROUTES=1), so a
+ * denial (403) or absence (404) is an expected outcome, not a bug. /api/kohaku/* is outside the SDK's typed
+ * surface, so — like fetchHealth — this is the escape hatch (apiFetch), and unlike fetchHealth it throws the
+ * SDK's typed KohakuHostError on !ok so callers can branch with isKohakuHostError/deniedMessage the same way
+ * they do for every other governance call (see admin/ui.tsx's deniedMessage).
+ */
 export async function bumpDataVersion(): Promise<string> {
-  const res = await apiFetch("/api/admin/bump-data-version", { method: "POST" });
+  const res = await apiFetch("/api/kohaku/admin/bump-data-version", { method: "POST" });
+  if (!res.ok) throw hostErrorFromResponse(res.status, await res.json().catch(() => null));
   const json = (await res.json()) as { dataVersion: string };
   return json.dataVersion;
 }

@@ -70,6 +70,10 @@ export interface UIStrings {
     tabGallery: string;
     bumpButton: string;
     bumpNotice: (dataVersion: string) => string;
+    /** Operation label for deniedMessage's role explanation on a 403 from the bump route. */
+    opBump: string;
+    /** Fallback notice when bumpDataVersion fails for a reason other than 403 (e.g. 404 — the route is not registered under JWT). */
+    bumpFailed: string;
     refresh: string;
     deniedMessage: (code: string, operation: string) => string;
     emptyDefault: string;
@@ -235,6 +239,8 @@ const EN: UIStrings = {
     tabGallery: "Gallery",
     bumpButton: "Simulate data update (bump)",
     bumpNotice: (v) => `dataVersion → ${v} (the next compose will be a cache MISS)`,
+    opBump: "simulating a data update (admin.bumpDataVersion)",
+    bumpFailed: "Failed to bump the data version (the demo admin route may not be enabled on this server)",
     refresh: "Refresh",
     deniedMessage: (code, operation) =>
       `Permission denied (${code}): the current role is not allowed to "${operation}". Switch the role at the top-right of the header to admin / reviewer.`,
@@ -414,6 +420,9 @@ const JA: UIStrings = {
     tabGallery: "ギャラリー",
     bumpButton: "データ更新をシミュレート(bump)",
     bumpNotice: (v) => `dataVersion → ${v}(次の compose はキャッシュ MISS になります)`,
+    opBump: "データ更新のシミュレート (admin.bumpDataVersion)",
+    bumpFailed:
+      "データバージョンの更新に失敗しました(このサーバーではデモ用の管理ルートが無効になっている可能性があります)",
     refresh: "更新",
     deniedMessage: (code, operation) =>
       `権限がありません(${code}): 現在のロールでは「${operation}」を実行できません。ヘッダー右上のロールを admin / reviewer に切り替えてください。`,

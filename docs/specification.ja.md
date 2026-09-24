@@ -297,7 +297,7 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 
 ### 5.5 サンプル固有ルート(host-rest 外)
 
-`GET /api/health`(LLM・シード・カタログ版・intent 一覧)/ `POST /api/admin/bump-data-version`。
+`GET /api/health`(LLM・シード・カタログ版・intent 一覧)/ `POST /api/kohaku/admin/bump-data-version`(デモ用のキャッシュ無効化ルート。identity + governance RBAC 配下で、operation は `admin.bumpDataVersion`、admin のみ許可。host-rest のマウントより前に登録され、同じ `bodyLimit` / `identity.middleware` の対象になる。JWT では `KOHAKU_DEMO_ADMIN_ROUTES=1` を指定しない限り無効。§9 参照)。
 
 昇格の承認/却下/取り下げは host-rest の named ルート(§5.4 の `POST /promotions/:id/approve|reject|withdraw`)に一級化した。以前あった `POST /api/admin/promotions/:id/approve|reject` は削除し、sample-web の管理面もそちらを叩く(reviewer はサーバー側 principal を注入するので、クライアントは承認者を申告しない)。
 
@@ -424,6 +424,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `KOHAKU_POSTGRES_URL` | — | `KOHAKU_STORAGE=postgres` で必須(pg の接続文字列) |
 | `KOHAKU_POSTGRES_SCHEMA` | `public` | kohaku のテーブルを置くスキーマ(なければ作成) |
 | `KOHAKU_AUTHZ` | `hmac` | `hmac` / `jwt` — AuthzPort とリクエスト identity の方式。`jwt` はデモの `x-kohaku-role` / `x-kohaku-tenant` ヘッダをトークンのクレームに置き換え、有効な bearer トークンがなければ 401 を返す |
+| `KOHAKU_DEMO_ADMIN_ROUTES` | 未設定 | `1` で `KOHAKU_AUTHZ=jwt` のもとでも `POST /api/kohaku/admin/bump-data-version`(§5.5)を登録する(デフォルトでは無効)。有効な bearer トークン + admin ロールは引き続き必須で、これはルートの存在自体だけを切り替える。デフォルトの `hmac` 方式では常にルートが登録される(`apps/sample-api/src/index.ts` の `demoAdminRoutes: … \|\| authzFromEnv.identity == null`) |
 | `KOHAKU_JWT_SECRET` / `KOHAKU_JWT_JWKS_URL` | — | `KOHAKU_AUTHZ=jwt` ではどちらか一方が必須(HS256 共有鍵、または OIDC JWKS エンドポイント) |
 | `KOHAKU_JWT_ISSUER` / `KOHAKU_JWT_AUDIENCE` | — | 任意の `iss` / `aud` 検証 |
 | `KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL` / `KOHAKU_ADAPTER_TESTS` | — | テスト専用: アダプタ系スイートが使うバックエンド(未指定なら testcontainers 経由の Docker、それも無ければスキップ)。`require` はスキップを禁止する |

@@ -4,7 +4,7 @@ import { createKohakuRoutes, errorBody } from "@kohaku-ui/host-rest";
 import { createFixations, createLineage, type Fixations, type Lineage } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { coreCatalog, type ResolvedCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import type { AuthzPort, DomainPort, StoragePort } from "@kohaku-ui/spec-core";
+import type { AuthzPort, DomainPort, Principal, StoragePort } from "@kohaku-ui/spec-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createComposeContext } from "./app/compose-context.js";
@@ -50,6 +50,14 @@ export interface AppDeps {
   repo?: SalesRepo;
   /** Request → principal/tenant resolution. Default: the demo's x-kohaku-role / x-kohaku-tenant headers. */
   identity?: RequestIdentity;
+  /**
+   * Registers the demo-only `POST /api/kohaku/admin/bump-data-version` route (below the identity middleware +
+   * governance RBAC, operation `admin.bumpDataVersion`). Cache-busting is free LLM-spend amplification for
+   * anyone who can reach it, so under a real identity scheme (JWT) it defaults to **off** and must be opted
+   * into explicitly. Default: `identity == null` (the header-based demo identity, where the legacy "anyone
+   * behind the demo header can bump" behavior is preserved for local development).
+   */
+  demoAdminRoutes?: boolean;
 }
 
 export interface SampleApp {
@@ -188,6 +196,34 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
       });
     }
   });
+
+  // Demo cache-busting (see AppDeps.demoAdminRoutes's doc comment for why this is opt-in under JWT). Registered
+  // ahead of the host-rest mount but *after* the bodyLimit / identity.middleware `app.use("/api/kohaku/*", …)`
+  // calls above, so this route sits behind both exactly like every host-rest route does. Authorization reuses
+  // hostDeps.authorizeGovernance (the same GovernancePolicy instance host-rest's own routes check) under the
+  // operation kind "admin.bumpDataVersion" — admin's "*" pattern allows it, reviewer/viewer are denied by
+  // deny-by-default, and it fails closed (denied) if authorizeGovernance is somehow unwired, unlike host-rest's
+  // own fail-open default: unlike the read/write routes host-rest already protects, this is a pure "spend the
+  // product's LLM budget" lever, so treating "no policy wired" as "allowed" would be the wrong default here.
+  if (deps.demoAdminRoutes ?? deps.identity == null) {
+    app.post("/api/kohaku/admin/bump-data-version", async (c) => {
+      const principal: Principal | null = await identity.auth(c);
+      if (principal == null) {
+        return c.json(errorBody("CAPABILITY_DENIED", "authentication required"), 401);
+      }
+      const tenant = await identity.tenant(c);
+      const allowed =
+        (await hostDeps.authorizeGovernance?.(principal, { kind: "admin.bumpDataVersion" }, tenant)) === true;
+      if (!allowed) {
+        return c.json(
+          errorBody("CAPABILITY_DENIED", 'governance operation "admin.bumpDataVersion" was not authorized'),
+          403,
+        );
+      }
+      return c.json({ dataVersion: repo.bump() });
+    });
+  }
+
   app.route("/api/kohaku", createKohakuRoutes(hostDeps));
 
   // Readiness flag for graceful shutdown (ops): index.ts flips this via setShuttingDown(true) on SIGINT/SIGTERM,
@@ -212,7 +248,8 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     });
   });
 
-  app.post("/api/admin/bump-data-version", (c) => c.json({ dataVersion: repo.bump() }));
+  // The demo cache-bust route now lives at POST /api/kohaku/admin/bump-data-version (identity + governance
+  // RBAC below), registered above ahead of the host-rest mount — see AppDeps.demoAdminRoutes.
 
   // Promotion approve/reject/withdraw have been elevated to first-class host-rest named routes
   // (POST /api/kohaku/promotions/:id/approve|reject|withdraw).

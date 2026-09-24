@@ -51,6 +51,10 @@ const { app, repo, setShuttingDown } = await createApp({
   storage: storageFromEnv.storage,
   authz: authzFromEnv.authz,
   ...(authzFromEnv.identity != null ? { identity: createJwtRequestIdentity(authzFromEnv.identity) } : {}),
+  // The demo bump-data-version route is on by default for the header-based demo identity (authzFromEnv.identity
+  // == null, i.e. KOHAKU_AUTHZ=hmac) and off by default under JWT; KOHAKU_DEMO_ADMIN_ROUTES=1 opts back in
+  // (e.g. to exercise it manually against a JWT-protected deployment) — see AppDeps.demoAdminRoutes.
+  demoAdminRoutes: process.env["KOHAKU_DEMO_ADMIN_ROUTES"] === "1" || authzFromEnv.identity == null,
 });
 
 const port = Number(process.env["PORT"] ?? 8787);

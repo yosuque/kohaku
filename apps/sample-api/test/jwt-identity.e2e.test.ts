@@ -15,7 +15,7 @@ async function jwt(claims: Record<string, unknown>) {
     .sign(new TextEncoder().encode(SECRET));
 }
 
-async function makeApp() {
+async function makeApp(opts: { demoAdminRoutes?: boolean } = {}) {
   const authz = createJwtAuthzPort({ key: { secret: SECRET }, capabilitySecret: "cap" });
   const storage = createMemoryStoragePort();
   const { app } = await createApp({
@@ -23,6 +23,7 @@ async function makeApp() {
     storage,
     authz,
     identity: createJwtRequestIdentity(authz.identity),
+    ...(opts.demoAdminRoutes != null ? { demoAdminRoutes: opts.demoAdminRoutes } : {}),
   });
   return { app, storage };
 }
@@ -88,5 +89,33 @@ describe("sample-api with KOHAKU_AUTHZ=jwt wiring", () => {
     expect(res.status).toBe(200);
     const composed = await storage.listLineage({ type: ["view.composed"] });
     expect(composed[0]!.tenant).toBeUndefined();
+  });
+
+  describe("the demo-only bump-data-version route (opt-in under JWT)", () => {
+    it("is not registered by default, even for an admin token (404, not 401/403)", async () => {
+      const { app } = await makeApp();
+      const admin = await jwt({ sub: "a", roles: ["admin"] });
+      const res = await app.request("/api/kohaku/admin/bump-data-version", {
+        method: "POST",
+        headers: { authorization: `Bearer ${admin}` },
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it("with demoAdminRoutes:true, requires a bearer token (401) and then honors admin RBAC (200)", async () => {
+      const { app } = await makeApp({ demoAdminRoutes: true });
+
+      const noToken = await app.request("/api/kohaku/admin/bump-data-version", { method: "POST" });
+      expect(noToken.status).toBe(401);
+      expect(((await noToken.json()) as { error: { code: string } }).error.code).toBe("CAPABILITY_DENIED");
+
+      const admin = await jwt({ sub: "a", roles: ["admin"] });
+      const res = await app.request("/api/kohaku/admin/bump-data-version", {
+        method: "POST",
+        headers: { authorization: `Bearer ${admin}` },
+      });
+      expect(res.status).toBe(200);
+      expect(typeof ((await res.json()) as { dataVersion: string }).dataVersion).toBe("string");
+    });
   });
 });

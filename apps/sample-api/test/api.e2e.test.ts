@@ -347,12 +347,36 @@ describe("sample-api E2E", () => {
     expect(health.seed.records).toBe(576);
 
     const before = (await composeJson(app, QUARTERLY_GUI)).json;
-    await app.request("/api/admin/bump-data-version", { method: "POST" });
+    await app.request("/api/kohaku/admin/bump-data-version", { method: "POST" });
     const after = (await composeJson(app, QUARTERLY_GUI)).json;
 
     // When dataVersion advances, the cache key changes and it re-composes (miss)
     expect(before.spec.dataVersion).not.toBe(after.spec.dataVersion);
     expect(after.spec.provenance.cache).toBe("miss");
+  });
+
+  // The demo cache-busting route was moved under /api/kohaku/* (identity middleware + governance RBAC) so it
+  // is no longer reachable without a role that is authorized for admin.bumpDataVersion (previously anyone could
+  // hit it to force cache invalidation / LLM spend). See governance-role.e2e.test.ts for the RBAC matrix.
+  it("bump-data-version: admin succeeds with {dataVersion}, viewer is denied, and the old path is gone", async () => {
+    const { app, repo } = await makeTestApp();
+
+    const asAdmin = await app.request("/api/kohaku/admin/bump-data-version", {
+      method: "POST",
+      headers: { "x-kohaku-role": "admin" },
+    });
+    expect(asAdmin.status).toBe(200);
+    expect(((await asAdmin.json()) as { dataVersion: string }).dataVersion).toBe(repo.dataVersion());
+
+    const asViewer = await app.request("/api/kohaku/admin/bump-data-version", {
+      method: "POST",
+      headers: { "x-kohaku-role": "viewer" },
+    });
+    expect(asViewer.status).toBe(403);
+    expect(((await asViewer.json()) as { error: { code: string } }).error.code).toBe("CAPABILITY_DENIED");
+
+    const oldPath = await app.request("/api/admin/bump-data-version", { method: "POST" });
+    expect(oldPath.status).toBe(404);
   });
 
   it("unfixate: a StoragePort without deleteFixation returns 501 NOT_IMPLEMENTED", async () => {

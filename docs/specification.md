@@ -297,7 +297,7 @@ The decision is returned by the composer's `materializeFixation` as `{result, ch
 
 ### 5.5 Sample-specific routes (outside host-rest)
 
-`GET /api/health` (LLM, seed, catalog version, intent list) / `POST /api/admin/bump-data-version`.
+`GET /api/health` (LLM, seed, catalog version, intent list) / `POST /api/kohaku/admin/bump-data-version` (demo cache-busting; behind identity + governance RBAC, operation `admin.bumpDataVersion`, admin only — registered ahead of the host-rest mount so the same `bodyLimit`/`identity.middleware` apply; disabled under JWT unless `KOHAKU_DEMO_ADMIN_ROUTES=1`, see §9).
 
 Promotion approve/reject/withdraw have been promoted to first-class host-rest named routes (§5.4's `POST /promotions/:id/approve|reject|withdraw`). The former `POST /api/admin/promotions/:id/approve|reject` have been removed, and sample-web's admin surface calls those instead (the reviewer injects the server-side principal, so the client does not declare the approver).
 
@@ -469,6 +469,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 | `KOHAKU_POSTGRES_URL` | — | Required for `KOHAKU_STORAGE=postgres` (pg connection string) |
 | `KOHAKU_POSTGRES_SCHEMA` | `public` | Schema the kohaku tables live in (created if missing) |
 | `KOHAKU_AUTHZ` | `hmac` | `hmac` / `jwt` — the AuthzPort and request-identity scheme. `jwt` replaces the demo's `x-kohaku-role` / `x-kohaku-tenant` headers with the token's claims and answers 401 without a valid bearer token |
+| `KOHAKU_DEMO_ADMIN_ROUTES` | unset | `1` registers `POST /api/kohaku/admin/bump-data-version` (§5.5) under `KOHAKU_AUTHZ=jwt`, where it is off by default (a valid bearer token with the admin role is still required — this only controls whether the route exists at all). Under the default `hmac` scheme the route is always registered (`apps/sample-api/src/index.ts`'s `demoAdminRoutes: … \|\| authzFromEnv.identity == null`) |
 | `KOHAKU_JWT_SECRET` / `KOHAKU_JWT_JWKS_URL` | — | One of the two is required for `KOHAKU_AUTHZ=jwt` (HS256 shared secret, or an OIDC JWKS endpoint) |
 | `KOHAKU_JWT_ISSUER` / `KOHAKU_JWT_AUDIENCE` | — | Optional `iss` / `aud` checks |
 | `KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL` / `KOHAKU_ADAPTER_TESTS` | — | Test-only: backend for the adapter suites (otherwise Docker via testcontainers, otherwise skip); `require` forbids the skip |

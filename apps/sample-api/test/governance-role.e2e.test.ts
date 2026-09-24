@@ -112,4 +112,21 @@ describe("governance plane RBAC (sample-api wiring. #1)", () => {
     const remove = await req(app, "POST", "/api/kohaku/fixations/sha256:abc/remove", "reviewer");
     expect(remove.status).toBe(403);
   });
+
+  it("the demo bump-data-version route shares the same RBAC (admin.bumpDataVersion: admin only)", async () => {
+    const app = await makeApp();
+
+    // admin (default / no header) is authorized (admin's "*" pattern covers admin.bumpDataVersion too).
+    const asAdmin = await req(app, "POST", "/api/kohaku/admin/bump-data-version", "admin");
+    expect(asAdmin.status).toBe(200);
+
+    // reviewer holds only promotion.* / lineage.read / analytics.read -> denied.
+    const asReviewer = await req(app, "POST", "/api/kohaku/admin/bump-data-version", "reviewer");
+    expect(asReviewer.status).toBe(403);
+
+    // viewer is likewise denied.
+    const asViewer = await req(app, "POST", "/api/kohaku/admin/bump-data-version", "viewer");
+    expect(asViewer.status).toBe(403);
+    expect(((await asViewer.json()) as { error: { code: string } }).error.code).toBe("CAPABILITY_DENIED");
+  });
 });

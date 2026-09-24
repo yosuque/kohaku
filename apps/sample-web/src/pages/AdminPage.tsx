@@ -6,7 +6,7 @@ import { AnalyticsTab } from "./admin/AnalyticsTab.js";
 import { FixationsTab } from "./admin/FixationsTab.js";
 import { LineageTab } from "./admin/LineageTab.js";
 import { PromotionsTab } from "./admin/PromotionsTab.js";
-import { ErrorBanner, type Notice, type PushNotice } from "./admin/ui.js";
+import { deniedMessage, ErrorBanner, isKohakuHostError, type Notice, type PushNotice } from "./admin/ui.js";
 
 /**
  * The Gallery tab (n-16) is dev/admin-only tooling — its hand-written showcase artifact
@@ -74,7 +74,14 @@ export function AdminPage(): ReactNode {
           type="button"
           onClick={() => {
             // dict() (not the hook value) so the notification uses the language at completion time.
-            void bumpDataVersion().then((v) => pushNotice(dict().admin.bumpNotice(v)));
+            void bumpDataVersion()
+              .then((v) => pushNotice(dict().admin.bumpNotice(v)))
+              .catch((e: unknown) => {
+                // Now RBAC-gated (admin only) and, under JWT, possibly not registered at all (404) unless the
+                // server opted in — see client.ts's bumpDataVersion doc comment.
+                const denied = isKohakuHostError(e) ? deniedMessage(e, dict().admin.opBump) : null;
+                pushNotice(denied ?? dict().admin.bumpFailed, "error");
+              });
           }}
           style={{
             marginLeft: "auto",
