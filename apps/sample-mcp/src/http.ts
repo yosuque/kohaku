@@ -42,8 +42,9 @@ import {
 } from "node:http";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createAuthzFromEnv } from "@kohaku-ui-sample/api/ports/from-env";
 import { toNodeHandler } from "@modelcontextprotocol/node";
-import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler, type McpServer, type ServerContext } from "@modelcontextprotocol/server";
 import { createKohakuMcpSetup } from "./setup.js";
 
 /** Path of the MCP endpoint (default). */
@@ -352,7 +353,39 @@ async function main(): Promise<void> {
   // Base URL for publishing snapshots. When using a public tunnel, set it to the tunnel's URL.
   // If unset, falls back to localhost (local viewing only). The trailing slash is stripped.
   const publicUrl = process.env["KOHAKU_MCP_PUBLIC_URL"]?.replace(/\/+$/, "") ?? `http://localhost:${port}`;
-  const setup = await createKohakuMcpSetup({ snapshotBaseUrl: publicUrl });
+  // Resolve storage/authz from env here (rather than leaving it to createKohakuMcpSetup) only so that, under
+  // KOHAKU_AUTHZ=jwt, the identity resolver is in hand to build resolvePrincipal below — passing `authz`
+  // through means setup.ts does not construct a second, redundant AuthzPort from the same env.
+  const authzFromEnv = createAuthzFromEnv(process.env);
+  const identity = authzFromEnv.identity;
+  const setup = await createKohakuMcpSetup({
+    snapshotBaseUrl: publicUrl,
+    authz: authzFromEnv.authz,
+    // With KOHAKU_AUTHZ=jwt, resolve the caller per tool call from the HTTP request's own bearer token
+    // (ServerContext.http.req is the fetch Request of the Streamable HTTP POST). A throw here (missing/invalid
+    // token) is fail-closed: host-mcp-apps turns it into a structured tool error (isError), never a silent
+    // anonymous fallback — see McpHostDeps.resolvePrincipal's doc comment.
+    ...(identity != null
+      ? {
+          resolvePrincipal: async (extra: ServerContext) =>
+            (await identity.fromAuthorizationHeader(extra.http?.req?.headers.get("authorization"))).principal,
+        }
+      : {}),
+  });
+  // Fail fast: with a redis/postgres backend, an unreachable server otherwise surfaces only on the first
+  // tool call (or, before storage-redis's fail-fast fix, hangs the caller indefinitely). Exit clearly here
+  // instead (a no-op for file/memory -- see StorageFromEnv.ready's doc comment). `authzFromEnv` is
+  // resolved separately from `setup` (see the comment above), so its own revocation-store readiness is
+  // checked here too, not folded into `setup.ready()`.
+  try {
+    await setup.ready();
+    await authzFromEnv.ready();
+  } catch (error) {
+    console.error(
+      `kohaku-sales-sample MCP server: storage backend is not ready: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
   const allowedHosts = parseAllowedHosts(process.env["KOHAKU_MCP_HTTP_ALLOWED_HOSTS"]);
   const httpServer = createMcpHttpServer({
     createServer: setup.createServer,
@@ -409,6 +442,11 @@ async function main(): Promise<void> {
       // (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
       // connection would otherwise stall the drain for no reason.
       httpServer.closeIdleConnections();
+      // Close the storage port this setup created from env (a no-op unless KOHAKU_STORAGE is redis/postgres),
+      // and the revocation store's own backend connection (a no-op unless KOHAKU_STORAGE is redis/postgres).
+      // Swallow a failing close (matching sample-api's index.ts) so it can never block process exit.
+      void setup.close().catch(() => {});
+      void authzFromEnv.close().catch(() => {});
       httpServer.close(() => process.exit(0));
       setTimeout(() => {
         httpServer.getConnections((err, count) => {

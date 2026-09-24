@@ -53,6 +53,16 @@ kohaku 自体を開発する場合は、以下のクイックスタートと [CO
 
 ## クイックスタート(5 分)
 
+**まず自分のデータで試したい場合**
+
+```bash
+mkdir my-app && cd my-app
+npx @kohaku-ui/cli init --from ../sales.csv   # .json 配列 / .sqlite ファイルも可
+npm run dev
+```
+
+自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。このセクションの残りはモノレポ自体の開発セットアップです。
+
 前提: Node >= 22、pnpm 12(下限は `package.json` の `engines`。CI は宣言下限の Node 22 と Node 24 の両方で検証、`.node-version` はローカル開発用に 25.7.0 を指定)。
 
 ```bash
@@ -96,6 +106,7 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/port-contracts` | **private・test-only。** 全アダプタが通す StoragePort / AuthzPort の共有契約スイート |
 | `packages/intents` | Intent DSL(`defineVocabulary` / `defineIntent`)— 値集合とラベルの単一源から SemanticPort 用定義・GUI ファセット・MCP ツール入力を導出(spec-core + data-binding のみの環境中立リーフ) |
 | `packages/llm` | LLM プロバイダ抽象(5 種切替・構造化出力の自動フォールバック) |
+| `packages/semantic-llm` | 既定 SemanticPort(`createLlmSemanticPort`): `@kohaku-ui/intents` で定義した Intent カタログに GUI/NL 入力を構造化出力でマッピングする。出発点であり、`cli` の `kohaku init` はこの上にプロジェクトを生成する。sample-api もこれを土台にしている |
 | `packages/composer` | UI Composition Service(L0/L1/L2・修復ループ・決定的後処理・Spec キャッシュ) |
 | `packages/renderer-core` | レンダラー共有核(framework-free / DOM-free の環境中立ロジック: `resolveEmit` / presenter 群)。renderer-react / renderer-wc が同一核を消費 |
 | `packages/renderer-react` | Spec→React 描画エンジン + コア部品実装(`./core`) |
@@ -109,11 +120,14 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/host-a2ui` | A2UI 互換プロファイル骨子(UISpec/SpecPatch → A2UI メッセージ。spec-core のみの独立リーフ)[Draft] |
 | `packages/client` | 型付きホストクライアント SDK(spec-core + data-binding のみに依存。host-rest 非依存) |
 | `packages/admin-react` | 統制コンソール(Lineage / Analytics / 昇格レビュー / 固定化)を `client` の上に組み込み可能な React コンポーネントとして提供(sample の Admin 画面は薄いラッパ) |
+| `packages/storage-redis` | Redis バックエンドの StoragePort 参考アダプタ(Spec cache・lineage・promotion state・fixation・テナントスコープ)。`ioredis` は peer dependency |
+| `packages/storage-postgres` | PostgreSQL バックエンドの StoragePort 参考アダプタ(storage-redis と同等のカバレッジ、idempotent なスキーマ)。`pg` は peer dependency |
+| `packages/authz-jwt` | JWT / OIDC の AuthzPort 参考アダプタ(claim から principal / roles / tenant を解決。共有シークレットまたは JWKS)。capability token は `authz-hmac` に委譲し、`jose` に依存 |
 | `apps/sample-api` | サンプル: 売上分析 API(**4 Port 実装の見本**) |
 | `apps/sample-web` | サンプル: Dashboard(GUI)/ Chat(NLUI)/ Admin(統制面) |
 | `apps/sample-wc` | サンプル: 同一 Spec を React 非依存の `<kohaku-surface>` で描く実演(レンダラー非依存の実証) |
 | `apps/sample-mcp` | サンプル: 外部チャット向け MCP サーバー + 共有レンダラー |
-| `cli/` | `kohaku conformance / scaffold / component validate` |
+| `cli/` | `kohaku conformance / scaffold / init / component validate` |
 | `python/` | **Python 参照実装** — TS `packages/*` のワイヤ互換フル移植(spec / registry / composer / lineage / host-rest / host-mcp)+ サンプル sales-api。conformance CONFORMANT。詳細は [python/README.ja.md](python/README.ja.md) |
 
 ## 開発

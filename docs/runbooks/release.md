@@ -1,6 +1,6 @@
 # Runbook: releasing kohaku
 
-This is the procedure for cutting and publishing a release of the twenty-two `@kohaku-ui/*` npm packages
+This is the procedure for cutting and publishing a release of the twenty-five `@kohaku-ui/*` npm packages
 and the `kohaku-ui` PyPI distribution, which always move together (see
 [.changeset/README.md](../../.changeset/README.md)). See [CONTRIBUTING.md §11](../../CONTRIBUTING.md)
 for the short version aimed at contributors; this runbook is the operational detail for whoever runs
@@ -58,16 +58,17 @@ registries. None of it is code, so it isn't part of any pull request.
 - [ ] **GitHub → Settings → Environments**: leave the existing `pypi` environment as is (optionally
   give it the same `main` + `v*` policy — its build step runs on `main` during a dry run too). No code
   change is needed on the PyPI side.
-- [ ] **npmjs.com, for each of the 22 packages below**: Settings → Publishing access → Trusted
+- [ ] **npmjs.com, for each of the 25 packages below**: Settings → Publishing access → Trusted
   publisher → GitHub Actions, with:
   - Organization or user: `yosuque`
   - Repository: `kohaku`
   - Workflow filename: `release.yml` (exact match, extension included)
   - Environment name: `npm`
 
-  Packages: `@kohaku-ui/authz-hmac`, `cli`, `client`, `composer`, `data-binding`, `evals`, `host-a2ui`,
-  `host-core`, `host-mcp-apps`, `host-rest`, `intents`, `lineage`, `llm`, `otel`, `registry`,
-  `renderer-core`, `renderer-react`, `renderer-wc`, `sandbox`, `spec`, `spec-core`, `storage-memory`. The
+  Packages: `@kohaku-ui/authz-hmac`, `authz-jwt`, `cli`, `client`, `composer`, `data-binding`, `evals`,
+  `host-a2ui`, `host-core`, `host-mcp-apps`, `host-rest`, `intents`, `lineage`, `llm`, `otel`, `registry`,
+  `renderer-core`, `renderer-react`, `renderer-wc`, `sandbox`, `spec`, `spec-core`, `storage-memory`,
+  `storage-postgres`, `storage-redis`. The
   `release.yml` `npm` job's dry run probes every one of these and lists any that are missing a trusted
   publisher — see §4. (`@kohaku-ui/port-contracts` is private and never appears here.)
 - [ ] **Once the first OIDC publish succeeds**: delete the repository secret `NPM_TOKEN` and revoke the
@@ -81,8 +82,8 @@ registries. None of it is code, so it isn't part of any pull request.
 Once a changeset-carrying pull request merges to `main`, `version.yml` opens or updates a pull request
 titled `chore(release): version packages`. Review it like any other pull request before merging:
 
-- All twenty-two package manifests bump to the same version (the fixed group).
-- All twenty-two `CHANGELOG.md` files gain a new `## <version>` section.
+- All twenty-five package manifests bump to the same version (the fixed group).
+- All twenty-five `CHANGELOG.md` files gain a new `## <version>` section.
 - `python/kohaku/pyproject.toml` and `python/kohaku/src/kohaku/__init__.py` bump to the matching
   version — these are the two places the Python side states its version, and `release.yml`'s `verify`
   job later asserts they agree with the tag.
@@ -101,7 +102,7 @@ Before publishing the draft release:
   correctly — it can be edited by hand before publishing if a wording fix is needed.
 - [ ] Dry run is green: `gh workflow run release.yml -f dry_run=true` run from `main` (no `tag` input on
   a dry run — it exercises whatever ref the run was started from). This also runs the npm job's
-  trusted-publisher probe, which must report every one of the 22 packages as `ok`.
+  trusted-publisher probe, which must report every one of the 25 packages as `ok`.
 - [ ] Anything that only shows up manually has been checked once more for this version (e.g. paging
   through `records`, or exercising an MCP host by hand) — CI's automated coverage does not replace a
   human look at a real release candidate.
@@ -119,7 +120,7 @@ gh release edit vX.Y.Z --draft=false
 This makes GitHub create the tag `vX.Y.Z` at the draft's target commit and fire `release: published`,
 which starts `release.yml` for real (`dry_run` is implicitly `false` on this trigger). Watch the run:
 `verify` re-checks versions/typecheck/tests/pack-smoke on the tagged tree, then `npm` publishes all
-twenty-two packages via OIDC trusted publishing with provenance, then `pypi` publishes the wheel/sdist. The
+twenty-five packages via OIDC trusted publishing with provenance, then `pypi` publishes the wheel/sdist. The
 `summary` job's step summary lists which packages this run actually published, and links to the npm
 package page, the PyPI project page, and the GitHub release.
 
@@ -143,10 +144,10 @@ npm view @kohaku-ui/<pkg> versions
 
 There is no single "undo". Depending on what's needed:
 
-- **npm**: `npm deprecate @kohaku-ui/<pkg>@<version> "<reason>"` across all 22 packages is the normal
+- **npm**: `npm deprecate @kohaku-ui/<pkg>@<version> "<reason>"` across all 25 packages is the normal
   path — it warns installers without breaking anyone already pinned to the version. `npm unpublish` is
   only possible within 72 hours of publishing and only while nothing else depends on the version; given
-  twenty-two interdependent packages, treat it as effectively unavailable once other packages have started
+  twenty-five interdependent packages, treat it as effectively unavailable once other packages have started
   depending on the new version.
 - **PyPI**: yank the release (`pypi.org` → the project → the version → "Yank"). A yanked release stays
   installable by exact version pin but is skipped by default resolution.

@@ -108,7 +108,7 @@ pnpm changeset
 ```
 
 changeset を含む PR が `main` にマージされると、Version ワークフローが `chore(release): version packages`
-PR を作成・更新します。マージ前にこの PR の diff をレビューしてください: 22 パッケージのマニフェスト全て、22
+PR を作成・更新します。マージ前にこの PR の diff をレビューしてください: 25 パッケージのマニフェスト全て、25
 件の `CHANGELOG.md`、`python/kohaku/pyproject.toml`、`python/kohaku/src/kohaku/__init__.py`、ロックファイルが
 変更されます。この PR をマージしても**公開はされません**——下書きの GitHub Release `vX.Y.Z` が現れるだけです
 (本文は CHANGELOG から自動生成されます)。公開は別の、意図的な操作です: まず `main` から Release ワークフロー
@@ -116,7 +116,7 @@ PR を作成・更新します。マージ前にこの PR の diff をレビュ�
 PyPI の順に公開するのを見守ります。手順全体と公開前チェックリストは
 [docs/runbooks/release.ja.md](docs/runbooks/release.ja.md) を参照してください。
 
-`@kohaku-ui/*` の 22 パッケージは**常に同一バージョン**です。1 つのワイヤプロトコルの 1 実装であり、バージョンが割れると利用者のツリーに互換性のない `spec-core` が 2 つ入りうるためです。詳細は [.changeset/README.md](.changeset/README.md)。**開発者のマシンから publish することはありません。**
+`@kohaku-ui/*` の 25 パッケージは**常に同一バージョン**です。1 つのワイヤプロトコルの 1 実装であり、バージョンが割れると利用者のツリーに互換性のない `spec-core` が 2 つ入りうるためです。詳細は [.changeset/README.md](.changeset/README.md)。**開発者のマシンから publish することはありません。**
 
 ## 12. 依存関係
 

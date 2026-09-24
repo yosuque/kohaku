@@ -1,8 +1,8 @@
 import type { AuthzPort, Principal, Scope, UISpec } from "@kohaku-ui/spec-core";
-import { collectCapabilityScopes } from "@kohaku-ui/spec-core";
+import { collectCapabilityScopes, DEFAULT_CAPABILITY_TTL_SECONDS } from "@kohaku-ui/spec-core";
 
-/** Default capability TTL (seconds) when a host does not override it. Shared by the REST and MCP profiles. */
-export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
+/** Default capability TTL (seconds) when a host does not override it. Shared by the REST and MCP profiles. Re-exported from spec-core for backward compatibility. */
+export { DEFAULT_CAPABILITY_TTL_SECONDS };
 
 /**
  * Raised (reported via `onDroppedAction`, never thrown) when a Spec-declared write scope's action name is not

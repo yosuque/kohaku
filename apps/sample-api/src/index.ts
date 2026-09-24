@@ -2,11 +2,10 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
-import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { createApp } from "./app.js";
+import { createAuthzFromEnv, createJwtRequestIdentity, createStorageFromEnv } from "./ports/from-env.js";
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(APP_DIR, "../../..");
@@ -23,14 +22,40 @@ for (const envPath of [join(REPO_ROOT, ".env"), join(APP_DIR, "../.env")]) {
 // they never touch the checked-out repo's local demo state; mirrors python/examples/sales-api's KOHAKU_DATA_DIR).
 const DATA_DIR = process.env["KOHAKU_DATA_DIR"] ?? join(APP_DIR, "../.data");
 const llm = createLlmFromEnv();
-const storage = createFileStoragePort(DATA_DIR);
-const authz = createHmacAuthzPort(process.env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me");
+const storageFromEnv = createStorageFromEnv(process.env, { dataDir: DATA_DIR });
+// Fail fast: with a redis/postgres backend, an unreachable server otherwise surfaces only on the first
+// request (or, before storage-redis's fail-fast fix, hangs the caller indefinitely). Exit clearly at
+// startup instead (a no-op for file/memory -- see StorageFromEnv.ready's doc comment).
+try {
+  await storageFromEnv.ready();
+} catch (error) {
+  console.error(
+    `kohaku sample-api: storage backend (${storageFromEnv.kind}) is not ready: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
+const authzFromEnv = createAuthzFromEnv(process.env);
+// Fail fast for the revocation store too (a no-op unless KOHAKU_STORAGE is redis/postgres -- see
+// createAuthzFromEnv's doc comment: the revocation store follows the storage selection).
+try {
+  await authzFromEnv.ready();
+} catch (error) {
+  console.error(
+    `kohaku sample-api: revocation store is not ready: ${error instanceof Error ? error.message : String(error)}`,
+  );
+  process.exit(1);
+}
 
 // createApp is async because it performs startup reconcile (snapshot authority -> projection).
 const { app, repo, setShuttingDown } = await createApp({
   llm,
-  storage,
-  authz,
+  storage: storageFromEnv.storage,
+  authz: authzFromEnv.authz,
+  ...(authzFromEnv.identity != null ? { identity: createJwtRequestIdentity(authzFromEnv.identity) } : {}),
+  // The demo bump-data-version route is on by default for the header-based demo identity (authzFromEnv.identity
+  // == null, i.e. KOHAKU_AUTHZ=hmac) and off by default under JWT; KOHAKU_DEMO_ADMIN_ROUTES=1 opts back in
+  // (e.g. to exercise it manually against a JWT-protected deployment) — see AppDeps.demoAdminRoutes.
+  demoAdminRoutes: process.env["KOHAKU_DEMO_ADMIN_ROUTES"] === "1" || authzFromEnv.identity == null,
   // LLM auto-extraction of the promotion schema (advisory prefill in Admin › Promotions). Opt-in at the
   // entry point so the FakeLlm-scripted tests keep their exact response order.
   schemaExtractor: createSchemaExtractor({ llm }),
@@ -41,6 +66,7 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(`kohaku sample-api: http://localhost:${info.port}`);
   console.log(`  LLM: ${llm.provider} / ${llm.modelId}`);
   console.log(`  seed: ${repo.records.length} records (${repo.dataVersion()})`);
+  console.log(`  storage: ${storageFromEnv.kind} / authz: ${authzFromEnv.kind}`);
 });
 
 /** Default drain window (ms) for graceful shutdown, overridable via KOHAKU_SHUTDOWN_GRACE_MS. */
@@ -92,6 +118,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       // serves plain HTTP/1.1, so the `in` check is always true at runtime, but narrows the type safely
       // for the union.
       if ("closeIdleConnections" in server) server.closeIdleConnections();
+      void storageFromEnv.close().catch(() => {});
+      void authzFromEnv.close().catch(() => {});
       server.close(() => process.exit(0));
       setTimeout(() => {
         server.getConnections((err, count) => {

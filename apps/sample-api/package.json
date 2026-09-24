@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/app.ts",
-    "./action-effects": "./src/action-effects.ts"
+    "./action-effects": "./src/action-effects.ts",
+    "./ports/from-env": "./src/ports/from-env.ts"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -17,6 +18,7 @@
   },
   "dependencies": {
     "@kohaku-ui/authz-hmac": "workspace:^",
+    "@kohaku-ui/authz-jwt": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
     "@kohaku-ui/data-binding": "workspace:^",
     "@kohaku-ui/evals": "workspace:^",
@@ -28,8 +30,11 @@
     "@kohaku-ui/otel": "workspace:^",
     "@kohaku-ui/registry": "workspace:^",
     "@kohaku-ui/sandbox": "workspace:^",
+    "@kohaku-ui/semantic-llm": "workspace:^",
     "@kohaku-ui/spec-core": "workspace:^",
     "@kohaku-ui/storage-memory": "workspace:^",
+    "@kohaku-ui/storage-postgres": "workspace:^",
+    "@kohaku-ui/storage-redis": "workspace:^",
     "@ai-sdk/anthropic": "catalog:",
     "@ai-sdk/google": "catalog:",
     "@ai-sdk/openai": "catalog:",
@@ -41,7 +46,11 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@kohaku-ui/port-contracts": "workspace:^",
+    "@testcontainers/postgresql": "catalog:",
+    "@testcontainers/redis": "catalog:",
     "@types/node": "catalog:",
+    "jose": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
