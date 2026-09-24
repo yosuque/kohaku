@@ -103,4 +103,43 @@ describe("reserved parameters / base-ref verification of GET /binding/resolve", 
     expect(verifiedRefs).toHaveLength(0);
     expect(invokeCalls).toHaveLength(0);
   });
+
+  it("a thrown authz.verify (infrastructure failure) is 503 INTERNAL, reported to onError, without invoking domain", async () => {
+    const seen: { endpoint: string; requestId: string; error: unknown }[] = [];
+    const throwingAuthz: AuthzPort = {
+      async issueCapability() {
+        return "cap";
+      },
+      async verify() {
+        throw new Error("revocation store unavailable (test)");
+      },
+    };
+    const invokeCalls: { op: string; args: JsonObject }[] = [];
+    const deps: KohakuHostDeps = {
+      compose: NO_COMPOSE,
+      domain: {
+        async listOperations() {
+          return [];
+        },
+        async invoke(op: string, args: JsonObject) {
+          invokeCalls.push({ op, args });
+          return { columns: [], rows: [], dataVersion: "v1" };
+        },
+      },
+      authz: throwingAuthz,
+      querySource: "sales",
+      onError: (info) => {
+        seen.push(info);
+      },
+    };
+    const res = await get(deps, "query://sales/records?fy=2026");
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("INTERNAL");
+    expect(body.error.message).toBe("capability verification unavailable");
+    expect(invokeCalls).toHaveLength(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.endpoint).toBe("binding/resolve");
+    expect(seen[0]!.error).toBeInstanceOf(Error);
+  });
 });

@@ -187,4 +187,41 @@ describe("response shape of POST /binding/action", () => {
     });
     expect(res.status).toBe(200);
   });
+
+  it("a thrown authz.verify (infrastructure failure) is 503 INTERNAL, reported to onError, without invoking domain", async () => {
+    const seen: { endpoint: string; requestId: string; error: unknown }[] = [];
+    const throwingAuthz: AuthzPort = {
+      async issueCapability() {
+        return "cap";
+      },
+      async verify() {
+        throw new Error("revocation store unavailable (test)");
+      },
+    };
+    const invokeCalls: { op: string }[] = [];
+    const deps = baseDeps({
+      authz: throwingAuthz,
+      domain: {
+        async listOperations() {
+          return [];
+        },
+        async invoke(op: string, args: JsonObject) {
+          invokeCalls.push({ op });
+          return { ok: true, op, args };
+        },
+      },
+      onError: (info) => {
+        seen.push(info);
+      },
+    });
+    const res = await postAction(deps, { action: "annotate", payload: {} });
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("INTERNAL");
+    expect(body.error.message).toBe("capability verification unavailable");
+    expect(invokeCalls).toHaveLength(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.endpoint).toBe("binding/action");
+    expect(seen[0]!.error).toBeInstanceOf(Error);
+  });
 });

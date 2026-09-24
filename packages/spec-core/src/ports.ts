@@ -126,8 +126,21 @@ export interface VerifyResult {
  */
 export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
 
+/**
+ * Issuance and verification of on-behalf-of capability tokens (see `Scope`'s doc comment for the exact-match
+ * contract). A concrete port may extend this with a `revokeCapability` method (see `CapabilityRevocationStore`
+ * below); that extension is not part of the `AuthzPort` contract itself.
+ */
 export interface AuthzPort {
   issueCapability(principal: Principal, scopes: Scope[], opts?: { ttlSeconds?: number }): Promise<string>;
+  /**
+   * Verifies a capability token against a requested scope. A denial is a normal, expected outcome and MUST
+   * be reported as `{ ok: false, reason }`, never thrown. `verify` MUST throw only on an infrastructure
+   * failure it cannot itself classify as allow/deny (e.g. a revocation-store outage) -- and such a thrown
+   * `verify` is fail-closed: the caller MUST treat it as a denial, and a host serving requests over this
+   * port MUST map it to a 5xx response (never to a 2xx, and never to the same client-visible shape as an
+   * `{ ok: false }` denial).
+   */
   verify(token: string, req: VerifyRequest): Promise<VerifyResult>;
 }
 

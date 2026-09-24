@@ -8,6 +8,8 @@ import {
   type Principal,
   type SessionContext,
   type UISpec,
+  type VerifyRequest,
+  type VerifyResult,
 } from "@kohaku-ui/spec-core";
 import {
   CLIENT_CAPABILITIES_META_KEY,
@@ -630,7 +632,11 @@ function registerResolveBindingTool(ctx: ToolContext): void {
           return toolError(`unknown query source "${parsed.source}"`);
         }
         const { base, params } = parsed.ref;
-        const verdict = await ctx.deps.authz.verify(capability, { kind: "read", ref: base.raw });
+        const verdict = await verifyCapability(ctx.deps, `${ctx.prefix}_resolve_binding`, capability, {
+          kind: "read",
+          ref: base.raw,
+        });
+        if ("isError" in verdict) return verdict;
         if (!verdict.ok) {
           return toolError(`capability denied: ${verdict.reason ?? ""}`);
         }
@@ -779,7 +785,11 @@ function registerActionTool(ctx: ToolContext): void {
           return toolError(`payload exceeds the maximum size (${MAX_ACTION_PAYLOAD_BYTES} bytes)`);
         }
         // Verify with the write scope, symmetric with the REST surface (/binding/action). A denial becomes a tool error rather than an RPC exception.
-        const verdict = await ctx.deps.authz.verify(capability, { kind: "write", ref: action });
+        const verdict = await verifyCapability(ctx.deps, `${ctx.prefix}_action`, capability, {
+          kind: "write",
+          ref: action,
+        });
+        if ("isError" in verdict) return verdict;
         if (!verdict.ok) {
           return toolError(`capability denied: ${verdict.reason ?? ""}`);
         }
@@ -1035,6 +1045,34 @@ function toolError(message: string) {
     // never produces) — see safeTool's doc comment.
     resultType: "complete" as const,
   };
+}
+
+/**
+ * The client-safe message for a thrown `authz.verify` (an infrastructure failure, e.g. a revocation-store
+ * outage -- see `AuthzPort.verify`'s doc comment in spec-core's `ports.ts`). Symmetric with the REST
+ * surface's binding routes, which use the same fixed text for the same failure.
+ */
+const CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE = "capability verification unavailable";
+
+/**
+ * Calls `authz.verify`, converting a thrown error (fail-closed, per `AuthzPort.verify`'s doc comment: verify
+ * throws only on infrastructure failure) into a structured tool error with a fixed, client-safe message,
+ * rather than letting it fall through to `safeTool`'s generic internal-error fallback (which would still be
+ * fail-closed, but with a less specific message) or propagate as an unhandled rejection. The original error
+ * still reaches the observability hook via reportMcpError.
+ */
+async function verifyCapability(
+  deps: McpHostDeps,
+  endpoint: string,
+  capability: string,
+  req: VerifyRequest,
+): Promise<VerifyResult | ReturnType<typeof toolError>> {
+  try {
+    return await deps.authz.verify(capability, req);
+  } catch (e) {
+    await reportMcpError(deps, endpoint, e);
+    return toolError(CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE);
+  }
 }
 
 /**
