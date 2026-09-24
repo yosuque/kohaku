@@ -1,4 +1,11 @@
-import type { CanonicalIntent, JsonObject, SemanticInput, UISpec } from "@kohaku-ui/spec-core";
+import type {
+  CanonicalIntent,
+  JsonObject,
+  SchemaSuggestion,
+  SemanticInput,
+  SuggestedEvent,
+  UISpec,
+} from "@kohaku-ui/spec-core";
 
 /** Session info (surface / sessionId / locale). Maps onto the `session` field of each REST body. */
 export interface SessionArg {
@@ -82,25 +89,16 @@ export interface ComponentDraft {
 }
 
 /** One event the extractor believes the component emits (element of SchemaSuggestionView.events). */
-export interface SuggestedEventView {
-  name: string;
-  description: string;
-}
+export type SuggestedEventView = SuggestedEvent;
 
 /**
  * View shape of the machine-extracted registration proposal a candidate may carry (`suggestion` on the
  * GET/POST /promotions… candidate JSON; additive optional). Advisory: the admin UI prefills its approval form
  * from `draft` and shows the reviewer's edits as a diff; approving still sends the reviewer's own draft.
+ * The single spec-core definition also used by `@kohaku-ui/lineage`'s `SchemaSuggestion` and
+ * `@kohaku-ui/evals`' `SchemaExtractionResult` (its `draft` is structurally this file's own `ComponentDraft`).
  */
-export interface SchemaSuggestionView {
-  draft: ComponentDraft;
-  events: SuggestedEventView[];
-  confidence: number;
-  model: string;
-  extractorId: string;
-  extractorVersion: string;
-  suggestedAt: string;
-}
+export type SchemaSuggestionView = SchemaSuggestion;
 
 /**
  * View shape of a promotion candidate (element of GET/POST /promotions… responses). A loose copy holding only

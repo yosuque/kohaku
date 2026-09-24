@@ -1,5 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import type { AuthzPort, CapabilityRevocationStore, Principal, Scope } from "@kohaku-ui/spec-core";
+import type {
+  AuthzPort,
+  CapabilityRevocationStore,
+  Principal,
+  RevokeCapabilityResult,
+  Scope,
+} from "@kohaku-ui/spec-core";
 import { DEFAULT_CAPABILITY_TTL_SECONDS } from "@kohaku-ui/spec-core";
 import { createMemoryRevocationStore } from "./revocation.js";
 
@@ -14,10 +20,10 @@ export interface HmacAuthzOptions {
   revocations?: CapabilityRevocationStore;
 }
 
+/** Re-exported from spec-core (moved there so port-contracts can import the union instead of re-declaring it). */
+export type { RevokeCapabilityResult } from "@kohaku-ui/spec-core";
 /** Default capability TTL (seconds); the shared spec-core default. Re-exported here for backward compatibility. */
 export { DEFAULT_CAPABILITY_TTL_SECONDS };
-
-export type RevokeCapabilityResult = { ok: true } | { ok: false; reason: string };
 
 export interface HmacAuthzPort extends AuthzPort {
   /**
@@ -73,6 +79,16 @@ export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = 
     }
   }
 
+  /**
+   * Maps a `verifySignatureAndDecode` failure reason to a `RevokeCapabilityResult` code. Kept separate
+   * from `verifySignatureAndDecode` itself (rather than baked into its own return shape) so `verify`'s
+   * result -- which reuses the same decode step and has no `code` field in its contract (VerifyResult) --
+   * is unaffected; only `revokeCapability` gains the `code`.
+   */
+  function codeForDecodeFailure(reason: string): "MALFORMED" | "INVALID_SIGNATURE" {
+    return reason === "invalid signature" ? "INVALID_SIGNATURE" : "MALFORMED";
+  }
+
   return {
     async issueCapability(principal: Principal, scopes: Scope[], opts = {}) {
       const payload = Buffer.from(
@@ -104,16 +120,19 @@ export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = 
       return { ok: true, principal: { id: claims.sub } };
     },
 
-    async revokeCapability(token) {
+    async revokeCapability(token): Promise<RevokeCapabilityResult> {
       const decoded = verifySignatureAndDecode(token);
-      if (!decoded.ok) return decoded;
+      if (!decoded.ok)
+        return { ok: false, code: codeForDecodeFailure(decoded.reason), reason: decoded.reason };
       const { claims } = decoded;
 
       if (claims.exp < Math.floor(Date.now() / 1000)) {
-        return { ok: false, reason: "capability expired" };
+        // Task 4 replaces this branch with `{ ok: true, alreadyExpired: true }`; MALFORMED is a temporary
+        // code until then (an already-expired token is not itself malformed).
+        return { ok: false, code: "MALFORMED", reason: "capability expired" };
       }
       if (claims.jti == null) {
-        return { ok: false, reason: "token predates revocation support" };
+        return { ok: false, code: "NO_JTI", reason: "token predates revocation support" };
       }
       await revocations.revoke(claims.jti, claims.exp);
       return { ok: true };

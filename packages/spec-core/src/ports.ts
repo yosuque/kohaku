@@ -150,6 +150,18 @@ export interface CapabilityRevocationStore {
   close?(): Promise<void>;
 }
 
+/**
+ * The result of revoking a capability (a concrete port's `revokeCapability` extension method, e.g.
+ * `HmacAuthzPort`). Defined here (not in an adapter package) for the same reason as
+ * `CapabilityRevocationStore`: it is a wire-shape type shared by multiple same-layer packages
+ * (authz-hmac, port-contracts, and future AuthzPort implementations) that must not depend on one
+ * another. `code` lets a caller branch on the failure kind without parsing `reason`; `alreadyExpired`
+ * distinguishes "nothing to revoke, the token had already expired" from a genuine no-op success.
+ */
+export type RevokeCapabilityResult =
+  | { ok: true; alreadyExpired?: true }
+  | { ok: false; code: "MALFORMED" | "INVALID_SIGNATURE" | "NO_JTI" | "STORE_ERROR"; reason: string };
+
 /** The persistence record for a lineage event (the strict schema is owned by @kohaku-ui/lineage). */
 export interface LineageEventRecord {
   id: string;
@@ -176,10 +188,23 @@ export interface LineageFilter {
   until?: string;
   limit?: number;
   /**
-   * Filter by tenant. When specified, returns only events whose tenant matches.
-   * Old events with no recorded tenant appear only under the unspecified filter (tenant omitted).
+   * Filter by tenant. When specified, returns only events whose tenant matches (after `normalizeTenant`
+   * on both sides, so an empty-string tenant behaves like an omitted one and matches every event,
+   * including old ones with no recorded tenant).
    */
   tenant?: string;
+}
+
+/**
+ * Normalizes a tenant identifier: `undefined`, `null`, and `""` all collapse to `undefined`
+ * ("unspecified"), everything else passes through unchanged. Every StoragePort tenant parameter (on
+ * `PromotionState` / `FixationRecord` / `LineageFilter` and the get/put/list methods below) treats an
+ * empty-string tenant as equivalent to omitting it; adapters MUST normalize with this helper before
+ * using a tenant to key or filter a record, so `""` and `undefined` can never be keyed or filtered
+ * inconsistently against each other.
+ */
+export function normalizeTenant(tenant?: string | null): string | undefined {
+  return tenant == null || tenant === "" ? undefined : tenant;
 }
 
 /**
@@ -303,6 +328,57 @@ export interface StoragePort {
    * audit event is recorded either). When tenant is specified, deletes that tenant's fixation.
    */
   deleteFixation?(intentHash: string, tenant?: string): Promise<void>;
+}
+
+/** One event a machine-extracted schema suggestion believes a promotion candidate emits (`SchemaSuggestion.events` element). */
+export interface SuggestedEvent {
+  name: string;
+  description: string;
+}
+
+/**
+ * Wire shape of the `draft` a machine-extracted schema suggestion proposes. Structurally identical to
+ * `@kohaku-ui/lineage`'s `ComponentDraft` (not imported: spec-core sits below lineage in the dependency
+ * direction, so the shape is mirrored here — the same idiom `@kohaku-ui/client`'s own `ComponentDraft`
+ * already uses for this wire contract).
+ */
+export interface SuggestedDraft {
+  componentType: string;
+  version: string;
+  intentName: string;
+  description: string;
+  /** JSON Schema for the props (LLM-extracted or a human-entered draft). */
+  paramsJsonSchema?: unknown;
+  /** Data wiring for the promotion Intent: mapping of intent params -> query://. */
+  queryTemplate?: {
+    path: string;
+    fixedParams?: Record<string, string>;
+    paramMap?: Record<string, string>;
+  };
+}
+
+/**
+ * A machine-extracted registration proposal for a promotion candidate (advisory only; docs/design.md
+ * §9.2 "Schema suggestion"). Produced by an extractor (`@kohaku-ui/evals`' `createSchemaExtractor`),
+ * persisted on the promotion snapshot (`@kohaku-ui/lineage`'s `PromotionCandidate.suggestion`) so the
+ * approval UI can prefill its form, and mirrored on the wire by `@kohaku-ui/client`'s
+ * `SchemaSuggestionView`. Defined here, not in any one of those three packages, because it is a single
+ * wire-contract type shared across same-layer packages that must not depend on one another (evals
+ * produces it, lineage persists it, client mirrors it as a REST view) — the previous state had three
+ * independently hand-maintained, structurally-identical definitions that could silently drift. Never
+ * applied without a human `approve` carrying the final draft.
+ */
+export interface SchemaSuggestion {
+  draft: SuggestedDraft;
+  events: SuggestedEvent[];
+  /** The extractor's own 0..1 estimate of how faithfully the proposal reflects the HTML. */
+  confidence: number;
+  /** The model that produced the proposal (LlmPort.modelId), for the audit trail. */
+  model: string;
+  /** Extractor identity + version, stamped like a rubric so a later prompt change is visible in lineage. */
+  extractorId: string;
+  extractorVersion: string;
+  suggestedAt: string;
 }
 
 /**

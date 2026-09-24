@@ -1,10 +1,10 @@
-import type { AuthzPort } from "@kohaku-ui/spec-core";
+import type { AuthzPort, RevokeCapabilityResult } from "@kohaku-ui/spec-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContractFixture } from "./storage.js";
 
 /** A concrete port that also exposes pre-expiry revocation (e.g. HmacAuthzPort / JwtAuthzPort). */
 export type RevocableAuthzPort = AuthzPort & {
-  revokeCapability(token: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  revokeCapability(token: string): Promise<RevokeCapabilityResult>;
 };
 
 export interface AuthzContractOptions {

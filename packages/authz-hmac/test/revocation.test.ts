@@ -40,6 +40,7 @@ describe("createHmacAuthzPort capability revocation", () => {
 
     const result = await authz.revokeCapability(tampered);
     expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ code: "INVALID_SIGNATURE" });
 
     // A forged token signed with a different secret must also be rejected, not merely "not found".
     const foreign = await createHmacAuthzPort("other-secret").issueCapability(principal, [
@@ -47,6 +48,13 @@ describe("createHmacAuthzPort capability revocation", () => {
     ]);
     const foreignResult = await authz.revokeCapability(foreign);
     expect(foreignResult.ok).toBe(false);
+    expect(foreignResult).toMatchObject({ code: "INVALID_SIGNATURE" });
+  });
+
+  it("rejects revocation of a malformed token (no signature separator)", async () => {
+    const authz = createHmacAuthzPort("test-secret");
+    const result = await authz.revokeCapability("not-a-token");
+    expect(result).toEqual({ ok: false, code: "MALFORMED", reason: "malformed token" });
   });
 
   it("verifies a jti-less (pre-upgrade) token ok, but cannot revoke it", async () => {
@@ -59,7 +67,7 @@ describe("createHmacAuthzPort capability revocation", () => {
     expect((await authz.verify(legacyToken, { kind: "read", ref: "query://s/x" })).ok).toBe(true);
 
     const result = await authz.revokeCapability(legacyToken);
-    expect(result).toEqual({ ok: false, reason: "token predates revocation support" });
+    expect(result).toEqual({ ok: false, code: "NO_JTI", reason: "token predates revocation support" });
 
     // And it must still verify fine afterwards -- the failed revoke must not have broken anything.
     expect((await authz.verify(legacyToken, { kind: "read", ref: "query://s/x" })).ok).toBe(true);
@@ -75,7 +83,7 @@ describe("createHmacAuthzPort capability revocation", () => {
     vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
 
     const result = await authz.revokeCapability(cap);
-    expect(result).toEqual({ ok: false, reason: "capability expired" });
+    expect(result).toEqual({ ok: false, code: "MALFORMED", reason: "capability expired" });
   });
 
   it("actually consults an injected revocation store", async () => {

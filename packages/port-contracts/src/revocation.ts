@@ -38,5 +38,11 @@ export function describeRevocationStoreContract(
     it("reports an unregistered jti as not revoked", async () => {
       expect(await store.isRevoked("contract-never-registered-jti")).toBe(false);
     });
+
+    it("revoking with an already-past expiresAt leaves the jti unrevoked", async () => {
+      const alreadyExpired = Math.floor(Date.now() / 1000) - 1;
+      await store.revoke("contract-jti-already-expired", alreadyExpired);
+      expect(await store.isRevoked("contract-jti-already-expired")).toBe(false);
+    });
   });
 }

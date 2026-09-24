@@ -1,7 +1,7 @@
 import { collectL2Issues } from "@kohaku-ui/composer";
 import { KOHAKU_API_ALLOWLIST } from "@kohaku-ui/composer/l2-api";
 import type { LlmPort } from "@kohaku-ui/llm";
-import { CanonicalNameSchema } from "@kohaku-ui/spec-core";
+import { CanonicalNameSchema, type SchemaSuggestion, type SuggestedDraft } from "@kohaku-ui/spec-core";
 import { z } from "zod";
 import { untrustedBlock } from "./prompt-guard.js";
 
@@ -52,15 +52,7 @@ export const SchemaSuggestionOutputSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
-/** Structurally identical to @kohaku-ui/lineage's ComponentDraft (not imported: evals and lineage are siblings). */
-export interface SuggestedDraft {
-  componentType: string;
-  version: string;
-  intentName: string;
-  description: string;
-  paramsJsonSchema?: unknown;
-  queryTemplate?: { path: string; fixedParams?: Record<string, string>; paramMap?: Record<string, string> };
-}
+export type { SuggestedDraft };
 
 export interface SchemaExtractionInput {
   html: string;
@@ -74,16 +66,8 @@ export interface SchemaExtractionInput {
   catalogSummary?: string;
 }
 
-/** Structurally identical to @kohaku-ui/lineage's SchemaSuggestion. */
-export interface SchemaExtractionResult {
-  draft: SuggestedDraft;
-  events: { name: string; description: string }[];
-  confidence: number;
-  model: string;
-  extractorId: string;
-  extractorVersion: string;
-  suggestedAt: string;
-}
+/** The single spec-core definition also used by @kohaku-ui/lineage's SchemaSuggestion. */
+export type SchemaExtractionResult = SchemaSuggestion;
 
 export interface SchemaExtractor {
   extract(input: SchemaExtractionInput): Promise<SchemaExtractionResult>;
