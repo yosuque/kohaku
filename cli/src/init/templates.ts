@@ -243,7 +243,7 @@ export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContex
   // overrides a variable already present in the environment, so calling it more than once is harmless.
   if (existsSync(".env")) process.loadEnvFile(".env");
   const storage = deps.storage ?? createMemoryStoragePort();
-  const secret = process.env["KOHAKU_CAPABILITY_SECRET"];
+  const secret = process.env["KOHAKU_CAPABILITY_SECRET"]?.trim();
   if (!secret) {
     throw new Error("KOHAKU_CAPABILITY_SECRET is required (see .env.example)");
   }

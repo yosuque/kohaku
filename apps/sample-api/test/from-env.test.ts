@@ -64,13 +64,17 @@ describe("createAuthzFromEnv", () => {
     expect(a.kind).toBe("hmac");
     expect(a.identity).toBeUndefined();
   });
+  const SECRET = "test-secret-at-least-32-bytes-long-000";
+  const CAP_SECRET = "a-real-capability-secret-for-this-test";
+
   it("jwt requires a secret or a JWKS URL and exposes the identity resolver", () => {
-    expect(() => createAuthzFromEnv({ KOHAKU_AUTHZ: "jwt" })).toThrow(
+    expect(() => createAuthzFromEnv({ KOHAKU_AUTHZ: "jwt", KOHAKU_CAPABILITY_SECRET: CAP_SECRET })).toThrow(
       /KOHAKU_JWT_SECRET|KOHAKU_JWT_JWKS_URL/,
     );
     const a = createAuthzFromEnv({
       KOHAKU_AUTHZ: "jwt",
-      KOHAKU_JWT_SECRET: "test-secret-at-least-32-bytes-long-000",
+      KOHAKU_JWT_SECRET: SECRET,
+      KOHAKU_CAPABILITY_SECRET: CAP_SECRET,
     });
     expect(a.kind).toBe("jwt");
     expect(a.identity).toBeDefined();
@@ -81,17 +85,22 @@ describe("createAuthzFromEnv", () => {
     await expect(a.close()).resolves.toBeUndefined();
   });
 
-  const SECRET = "test-secret-at-least-32-bytes-long-000";
-
   it("jwt with a jwks URL requires KOHAKU_JWT_AUDIENCE, with a named env error ahead of authz-jwt's own construction error", () => {
     expect(() =>
       createAuthzFromEnv({
         KOHAKU_AUTHZ: "jwt",
         KOHAKU_JWT_JWKS_URL: "https://issuer.example/.well-known/jwks.json",
+        KOHAKU_CAPABILITY_SECRET: CAP_SECRET,
       }),
     ).toThrow(/KOHAKU_JWT_AUDIENCE/);
     // A secret-mode config with no audience is unaffected (audience is optional in that mode).
-    expect(() => createAuthzFromEnv({ KOHAKU_AUTHZ: "jwt", KOHAKU_JWT_SECRET: SECRET })).not.toThrow();
+    expect(() =>
+      createAuthzFromEnv({
+        KOHAKU_AUTHZ: "jwt",
+        KOHAKU_JWT_SECRET: SECRET,
+        KOHAKU_CAPABILITY_SECRET: CAP_SECRET,
+      }),
+    ).not.toThrow();
   });
 
   it("KOHAKU_JWT_REQUIRE_TENANT defaults to required (1) and can be opted out with 0", async () => {
@@ -102,7 +111,11 @@ describe("createAuthzFromEnv", () => {
         .setExpirationTime("5m")
         .sign(new TextEncoder().encode(SECRET));
 
-    const required = createAuthzFromEnv({ KOHAKU_AUTHZ: "jwt", KOHAKU_JWT_SECRET: SECRET });
+    const required = createAuthzFromEnv({
+      KOHAKU_AUTHZ: "jwt",
+      KOHAKU_JWT_SECRET: SECRET,
+      KOHAKU_CAPABILITY_SECRET: CAP_SECRET,
+    });
     await expect(
       required.identity!.fromAuthorizationHeader(`Bearer ${await jwt({ sub: "u" })}`),
     ).rejects.toMatchObject({ code: "MISSING_TENANT" });
@@ -111,10 +124,60 @@ describe("createAuthzFromEnv", () => {
       KOHAKU_AUTHZ: "jwt",
       KOHAKU_JWT_SECRET: SECRET,
       KOHAKU_JWT_REQUIRE_TENANT: "0",
+      KOHAKU_CAPABILITY_SECRET: CAP_SECRET,
     });
     await expect(
       optedOut.identity!.fromAuthorizationHeader(`Bearer ${await jwt({ sub: "u" })}`),
     ).resolves.toMatchObject({ principal: { id: "u" } });
+  });
+
+  it("refuses the fixed dev secret once storage leaves file/memory, or once authz is jwt (#11)", () => {
+    // hmac + file/memory: the fixed fallback is fine (the demo default this package documents).
+    expect(() => createAuthzFromEnv({})).not.toThrow();
+    expect(() => createAuthzFromEnv({ KOHAKU_STORAGE: "memory" })).not.toThrow();
+
+    // hmac + redis/postgres: a shared backend with a publicly-known signing secret is a real forgery
+    // risk, not a quickstart nicety.
+    expect(() =>
+      createAuthzFromEnv({ KOHAKU_STORAGE: "redis", KOHAKU_REDIS_URL: "redis://127.0.0.1:1" }),
+    ).toThrow(/KOHAKU_CAPABILITY_SECRET must be set to a real secret/);
+    expect(() =>
+      createAuthzFromEnv({
+        KOHAKU_STORAGE: "postgres",
+        KOHAKU_POSTGRES_URL: "postgres://u:p@127.0.0.1:1/db",
+      }),
+    ).toThrow(/KOHAKU_CAPABILITY_SECRET must be set to a real secret/);
+
+    // jwt, regardless of storage: same reasoning -- a verified identity scheme should not still hand out
+    // capabilities signed with the well-known default.
+    expect(() => createAuthzFromEnv({ KOHAKU_AUTHZ: "jwt", KOHAKU_JWT_SECRET: SECRET })).toThrow(
+      /KOHAKU_CAPABILITY_SECRET must be set to a real secret/,
+    );
+    // An explicit KOHAKU_CAPABILITY_SECRET equal to the fixed default is refused exactly like leaving it
+    // unset -- both resolve to the same value the check is guarding against.
+    expect(() =>
+      createAuthzFromEnv({
+        KOHAKU_STORAGE: "redis",
+        KOHAKU_REDIS_URL: "redis://127.0.0.1:1",
+        KOHAKU_CAPABILITY_SECRET: "dev-secret-change-me",
+      }),
+    ).toThrow(/KOHAKU_CAPABILITY_SECRET must be set to a real secret/);
+
+    // Supplying a real secret clears it in every one of those cases.
+    expect(() =>
+      createAuthzFromEnv({
+        KOHAKU_STORAGE: "redis",
+        KOHAKU_REDIS_URL: "redis://127.0.0.1:1",
+        KOHAKU_CAPABILITY_SECRET: CAP_SECRET,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      createAuthzFromEnv({
+        KOHAKU_AUTHZ: "jwt",
+        KOHAKU_JWT_SECRET: SECRET,
+        KOHAKU_CAPABILITY_SECRET: CAP_SECRET,
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -133,7 +196,11 @@ describe.skipIf(redis.mode === "skip")(
       const container =
         redis.mode === "container" ? await new RedisContainer("redis:7-alpine").start() : null;
       const url = container?.getConnectionUrl() ?? (redis as { url: string }).url;
-      const a = createAuthzFromEnv({ KOHAKU_STORAGE: "redis", KOHAKU_REDIS_URL: url });
+      const a = createAuthzFromEnv({
+        KOHAKU_STORAGE: "redis",
+        KOHAKU_REDIS_URL: url,
+        KOHAKU_CAPABILITY_SECRET: "a-real-shared-secret-for-this-test",
+      });
       try {
         await a.ready();
         const authz = a.authz as HmacAuthzPort;
@@ -157,7 +224,11 @@ describe.skipIf(postgres.mode === "skip")(
       const container =
         postgres.mode === "container" ? await new PostgreSqlContainer("postgres:16-alpine").start() : null;
       const connectionString = container?.getConnectionUri() ?? (postgres as { url: string }).url;
-      const a = createAuthzFromEnv({ KOHAKU_STORAGE: "postgres", KOHAKU_POSTGRES_URL: connectionString });
+      const a = createAuthzFromEnv({
+        KOHAKU_STORAGE: "postgres",
+        KOHAKU_POSTGRES_URL: connectionString,
+        KOHAKU_CAPABILITY_SECRET: "a-real-shared-secret-for-this-test",
+      });
       try {
         await a.ready();
         const authz = a.authz as HmacAuthzPort;

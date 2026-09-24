@@ -44,7 +44,11 @@ describe("createPortsFromEnv: redis", () => {
     const storageSpy = vi.spyOn(storageRedis, "createRedisStoragePort");
     const revocationSpy = vi.spyOn(storageRedis, "createRedisRevocationStore");
     const ports = createPortsFromEnv(
-      { KOHAKU_STORAGE: "redis", KOHAKU_REDIS_URL: "redis://127.0.0.1:1" },
+      {
+        KOHAKU_STORAGE: "redis",
+        KOHAKU_REDIS_URL: "redis://127.0.0.1:1",
+        KOHAKU_CAPABILITY_SECRET: "a-real-shared-secret-for-this-test",
+      },
       { dataDir: dataDir() },
     );
     // from-env.ts itself builds the connection exactly once (owned:true)...
@@ -68,6 +72,7 @@ describe("createPortsFromEnv: redis", () => {
         KOHAKU_REDIS_URL: "redis://127.0.0.1:1",
         KOHAKU_AUTHZ: "jwt",
         KOHAKU_JWT_SECRET: "test-secret-at-least-32-bytes-long-000",
+        KOHAKU_CAPABILITY_SECRET: "a-real-shared-secret-for-this-test",
       },
       { dataDir: dataDir() },
     );
@@ -83,7 +88,11 @@ describe("createPortsFromEnv: postgres", () => {
     const storageSpy = vi.spyOn(storagePostgres, "createPostgresStoragePort");
     const revocationSpy = vi.spyOn(storagePostgres, "createPostgresRevocationStore");
     const ports = createPortsFromEnv(
-      { KOHAKU_STORAGE: "postgres", KOHAKU_POSTGRES_URL: "postgres://u:p@127.0.0.1:1/db" },
+      {
+        KOHAKU_STORAGE: "postgres",
+        KOHAKU_POSTGRES_URL: "postgres://u:p@127.0.0.1:1/db",
+        KOHAKU_CAPABILITY_SECRET: "a-real-shared-secret-for-this-test",
+      },
       { dataDir: dataDir() },
     );
     expect(poolSpy).toHaveBeenCalledTimes(1);
@@ -120,6 +129,7 @@ describe("createPortsFromEnv: env validation", () => {
           KOHAKU_STORAGE: "memory",
           KOHAKU_AUTHZ: "jwt",
           KOHAKU_JWT_JWKS_URL: "https://issuer.example/.well-known/jwks.json",
+          KOHAKU_CAPABILITY_SECRET: "a-real-shared-secret-for-this-test",
         },
         { dataDir: dataDir() },
       ),

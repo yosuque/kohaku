@@ -382,13 +382,6 @@ describe("suggestConcurrency (#15): bounds how many suggestSchema calls run at o
     return { promise, release };
   }
 
-  /**
-   * Waits for a macrotask boundary (not just one microtask tick): `evaluateAndList` has several `await`s of
-   * its own (storage reads, etc.) before it ever reaches the `suggestSchema` calls under test, so a fixed
-   * count of `await Promise.resolve()` cannot reliably predict how many microtask hops are needed. A
-   * `setTimeout(0)` callback only runs once the microtask queue is fully drained, so this reliably observes
-   * "everything that could run without external input already has", however many hops that took.
-   */
   // No `setTimeout` here: this package's tsconfig declares no DOM/Node ambient types, so a real macrotask
   // wait is unavailable. Draining a generous number of microtask ticks instead is enough to let
   // `evaluateAndList`'s own internal `await`s (storage reads, etc.) settle before the assertions below.

@@ -34,6 +34,7 @@ describe("sample-mcp Streamable HTTP under KOHAKU_AUTHZ=jwt", () => {
     delete process.env["KOHAKU_AUTHZ"];
     delete process.env["KOHAKU_JWT_SECRET"];
     delete process.env["KOHAKU_STORAGE"];
+    delete process.env["KOHAKU_CAPABILITY_SECRET"];
     if (httpServer != null) {
       await new Promise<void>((resolve) => {
         httpServer!.close(() => resolve());
@@ -51,6 +52,7 @@ describe("sample-mcp Streamable HTTP under KOHAKU_AUTHZ=jwt", () => {
     process.env["KOHAKU_AUTHZ"] = "jwt";
     process.env["KOHAKU_JWT_SECRET"] = SECRET;
     process.env["KOHAKU_STORAGE"] = "memory";
+    process.env["KOHAKU_CAPABILITY_SECRET"] = "test-capability-secret";
     dataDir = mkdtempSync(join(tmpdir(), "kohaku-mcp-http-jwt-"));
     const setup = await createKohakuMcpSetup({ llm: new FakeLlm({ objects: [] }), dataDir });
     httpServer = createMcpHttpServer({ createServer: setup.createServer, snapshotDir: setup.snapshotDir });

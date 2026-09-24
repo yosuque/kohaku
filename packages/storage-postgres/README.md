@@ -72,8 +72,12 @@ Schema version 1 (`POSTGRES_SCHEMA_VERSION`) is the first version this package's
    UPDATE kohaku_lineage SET tenant = '' WHERE tenant IS NULL;
    ALTER TABLE kohaku_lineage ALTER COLUMN tenant SET NOT NULL;
    ```
+4. **`kohaku_lineage.ts` must use the `"C"` collation**, matching the current schema (`ts text COLLATE "C" NOT NULL`) — `CREATE TABLE IF NOT EXISTS` does not retrofit this onto an existing table, and a byte/codepoint-order comparison (what `"C"` gives) rather than a locale-aware one is what `readLineage`'s ordering by `ts` relies on:
+   ```sql
+   ALTER TABLE kohaku_lineage ALTER COLUMN ts TYPE text COLLATE "C";
+   ```
 
-Once your schema matches the above, `ready()`'s first post-upgrade run records `kohaku_schema_meta.version = 1` and every subsequent `ready()` call verifies against it.
+Once your schema matches the above, `ready()`'s first post-upgrade run records `kohaku_schema_meta.version = 1` and every subsequent `ready()` call verifies against it. **`ready()` also verifies, at that same first-stamp moment, that `kohaku_lineage` already carries a unique constraint/index on `id`** (step 2 above) — a pre-existing table that skipped step 2 fails `ready()` outright, pointing back at this section, rather than surfacing later as an opaque `ON CONFLICT` runtime error from the first `appendLineage` call. It does not re-verify this on every subsequent call (a schema already stamped at version 1 is trusted from then on), and it does not check steps 1, 3 or 4 at all — those still need to be applied by hand before upgrading, per the checklist above.
 
 ## Capability revocation
 

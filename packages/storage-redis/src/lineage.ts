@@ -314,8 +314,16 @@ export async function readLineage(
   if (limit <= 0) return [];
 
   const candidate = chooseCandidateIndex(filter);
+  // `chooseCandidateIndex` already returns null only when `type`/`tenant`/every payload index field is
+  // absent from `filter` -- so on this branch the only predicates a `by-seq` read could still need to
+  // check client-side are `since`/`until`. When those are absent too (the empty filter the admin Lineage
+  // tab and GET /analytics/summary both issue), `by-seq` alone already satisfies the whole filter, so the
+  // `limit` pushdown (ZREVRANGE 0 limit-1) applies here exactly as it does for a single exhaustive index,
+  // instead of the chunked scan hydrating up to LINEAGE_SCAN_CHUNK_SIZE bodies for a much smaller limit.
   const events = await (candidate == null
-    ? scanForMatches(redis, keys, keys.lineage.bySeq, filter, limit)
+    ? filter.since == null && filter.until == null
+      ? readPushdown(redis, keys, keys.lineage.bySeq, limit)
+      : scanForMatches(redis, keys, keys.lineage.bySeq, filter, limit)
     : readCandidate(redis, keys, candidate, filter, limit));
   return applyLineageLimit(events, limit);
 }

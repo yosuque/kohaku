@@ -576,7 +576,11 @@ describe("rubric variant selection (#14): suggestion_fidelity drop and renormali
     expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubricV0_3.criteria.map((c) => c.id));
     expect(verdict.criteria.map((c) => c.id)).not.toContain("suggestion_fidelity");
     expect(verdict.rubricVariant).toBe("no-schema");
-    expect(verdict.rubricVersion).toBe("0.3");
+    // rubricVersion always names the CONFIGURED rubric (here the default, "0.4") -- the dropped-criterion
+    // case is expressed only by rubricVariant, never by restamping the version to "0.3" (see
+    // noSchemaRubricVariant's doc). The weights this produces still equal l2PromotionRubricV0_3's own,
+    // criterion-for-criterion, as asserted below and by "a no-suggestion input scores identically...".
+    expect(verdict.rubricVersion).toBe("0.4");
   });
 
   it("keeps suggestion_fidelity and reports rubricVariant: 'full' when a draft is supplied", async () => {

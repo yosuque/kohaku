@@ -154,6 +154,20 @@ function buildAuthzFromEnv(
 ): { kind: AuthzKind; authz: AuthzPort; identity?: JwtIdentityResolver } {
   const capabilitySecret = env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me";
   const kind = (env["KOHAKU_AUTHZ"] ?? "hmac") as AuthzKind;
+  // The fixed fallback above is a file/hmac demo convenience only. Once either storage or authz leaves
+  // the single-process, header-based demo shape -- a shared redis/postgres backend, or JWT-verified
+  // identity -- a capability token signed with a secret every clone of this repo also knows is a real
+  // forgery risk, not a quickstart nicety, so refuse to start rather than run production-shaped
+  // infrastructure on a publicly known secret.
+  const storageKind = storageKindFromEnv(env);
+  if (
+    capabilitySecret === "dev-secret-change-me" &&
+    (storageKind === "redis" || storageKind === "postgres" || kind === "jwt")
+  ) {
+    throw new Error(
+      "KOHAKU_CAPABILITY_SECRET must be set to a real secret when KOHAKU_STORAGE=redis|postgres or KOHAKU_AUTHZ=jwt",
+    );
+  }
   if (kind === "hmac") {
     return { kind, authz: createHmacAuthzPort(capabilitySecret, { revocations }) };
   }

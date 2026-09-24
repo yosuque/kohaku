@@ -121,4 +121,25 @@ describe.skipIf(backend.mode === "skip")("createRedisStoragePort: multi-value ty
     // Only "b" events (seq 1000+) ever reach `since`; the 5 newest of them (1025..1029).
     expect(result.map((e) => e.id)).toEqual([25, 26, 27, 28, 29].map((i) => ev("b", 1000 + i).id));
   });
+
+  it("an empty filter (limit only, no usable index) reads the by-seq `limit` pushdown, never the chunked scan", async () => {
+    // The admin Lineage tab and GET /analytics/summary both issue exactly this filter shape. With no
+    // type/tenant/payload predicate, chooseCandidateIndex returns null; with no since/until either, the
+    // by-seq index alone already satisfies the whole (empty) filter, so this must take the same `limit`
+    // pushdown a single exhaustive index gets (ZREVRANGE by-seq 0 limit-1), not the LINEAGE_SCAN_CHUNK_SIZE
+    // chunked scan (which would otherwise hydrate up to 500 bodies for a much smaller limit).
+    for (let i = 0; i < 20; i++) await port.appendLineage(ev("c", 2000 + i));
+    const limit = 7;
+    calls.length = 0;
+
+    const result = await port.listLineage({ limit });
+
+    const bySeqCalls = calls.filter((c) => c.key.endsWith(":lineage:by-seq"));
+    expect(bySeqCalls).toHaveLength(1);
+    expect(bySeqCalls[0]).toEqual({ key: bySeqCalls[0]!.key, start: 0, stop: limit - 1 });
+    expect(result).toHaveLength(limit);
+    expect(result.map((e) => e.id)).toEqual(
+      Array.from({ length: limit }, (_, i) => ev("c", 2000 + 20 - limit + i).id),
+    );
+  });
 });

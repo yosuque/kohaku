@@ -93,7 +93,7 @@ export const l2PromotionRubric: Rubric = {
     {
       id: "suggestion_fidelity",
       description:
-        "Schema fidelity: the schema being registered — its props, query parameters and events — is exactly what the HTML reads and emits (nothing invented, nothing missing). A machine-proposed schema, when supplied, is context only; verify against the draft actually being registered, not the proposal. When neither the draft nor a proposal is supplied, this criterion is dropped from the rubric entirely rather than scored (see JudgeVerdict.rubricVariant)",
+        "Schema fidelity: the schema under judgement — the DRAFT block when one is supplied, otherwise the SUGGESTION block — its props, query parameters and events — is exactly what the HTML reads and emits (nothing invented, nothing missing); verify it against the HTML in both cases. When a SUGGESTION is shown alongside a DRAFT, the SUGGESTION is context only — score the DRAFT, not the proposal. When neither a draft nor a suggestion is supplied, this criterion is dropped from the rubric entirely rather than scored (see JudgeVerdict.rubricVariant)",
       weight: 0.1,
     },
   ],
@@ -408,28 +408,37 @@ export interface Judge {
 /**
  * Builds the "no-schema" rubric variant `judge()` scores against when its input carries neither `draft` nor
  * `suggestion` (see `l2PromotionRubric`'s `suggestion_fidelity` criterion and `JudgeVerdict.rubricVariant`):
- * drops that criterion and renormalizes the remaining weights to sum to 1. For the built-in default rubric this
- * is `l2PromotionRubricV0_3` verbatim — see that constant's own doc for why dropping `suggestion_fidelity` from
- * `l2PromotionRubric` reproduces its exact weights (the 0.3 → 0.4 rebalance moved the whole of
- * `suggestion_fidelity`'s weight out of `schema_inferability` alone, so restoring it is not a generic
- * proportional split). A caller-supplied custom rubric that happens to define its own `suggestion_fidelity`
- * criterion instead falls back to a generic proportional renormalization of its remaining weights (sum to 1,
- * but not pinned to match any specific prior version). Returns `rubric` unchanged if it has no
+ * drops that criterion and renormalizes the remaining weights to sum to 1.
+ *
+ * The returned rubric's `version` is always the CONFIGURED rubric's version, unchanged — the dropped-criterion
+ * case is expressed only by `JudgeVerdict.rubricVariant: "no-schema"`, never by rewriting the version stamp
+ * (a verdict scored under the configured rubric must not appear, to a `component.judged` consumer grouping by
+ * `rubricVersion`, as if a different rubric version had been configured). For the built-in default rubric,
+ * the criteria/weights this produces are identical to `l2PromotionRubricV0_3`'s, criterion-for-criterion — see
+ * that constant's own doc for why dropping `suggestion_fidelity` from `l2PromotionRubric` and moving its whole
+ * weight back into `schema_inferability` alone (not a generic proportional split) reproduces its exact
+ * pre-rebalance weights; only the `version` field differs ("0.4", not "0.3"). A caller-supplied custom rubric
+ * that happens to define its own `suggestion_fidelity` criterion instead falls back to a generic proportional
+ * renormalization of its remaining weights (sum to 1). Returns `rubric` unchanged if it has no
  * `suggestion_fidelity` criterion at all (the caller only invokes this after confirming one exists).
  */
 function noSchemaRubricVariant(rubric: Rubric): Rubric {
-  if (rubric === l2PromotionRubric) return l2PromotionRubricV0_3;
   const remaining = rubric.criteria.filter((c) => c.id !== "suggestion_fidelity");
   if (remaining.length === rubric.criteria.length) return rubric;
-  const remainingSum = remaining.reduce((sum, c) => sum + c.weight, 0);
-  return {
-    id: rubric.id,
-    version: rubric.version,
-    criteria: remaining.map((c) => ({
-      ...c,
-      weight: remainingSum > 0 ? c.weight / remainingSum : c.weight,
-    })),
-  };
+  const droppedWeight = rubric.criteria.find((c) => c.id === "suggestion_fidelity")!.weight;
+  const criteria =
+    rubric === l2PromotionRubric
+      ? remaining.map((c) =>
+          c.id === "schema_inferability" ? { ...c, weight: c.weight + droppedWeight } : c,
+        )
+      : (() => {
+          const remainingSum = remaining.reduce((sum, c) => sum + c.weight, 0);
+          return remaining.map((c) => ({
+            ...c,
+            weight: remainingSum > 0 ? c.weight / remainingSum : c.weight,
+          }));
+        })();
+  return { id: rubric.id, version: rubric.version, criteria };
 }
 
 export function createJudge(opts: {

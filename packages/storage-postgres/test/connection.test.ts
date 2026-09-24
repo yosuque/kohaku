@@ -134,6 +134,11 @@ describe("createPostgresPool: ready() migration transaction", () => {
           failFirstBegin = false;
           throw new Error("transient migration failure");
         }
+        // First-stamp path's assertLineageIdIsUnique check (connection.ts): this fake pool has no real
+        // pg_index to query, so answer as if kohaku_lineage already has its UNIQUE (id) -- this test is
+        // about the migration retry, not that check (which has its own real-backend test in
+        // schema-version.test.ts).
+        if (typeof sql === "string" && sql.includes("pg_index")) return { rows: [{ ok: true }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       }),
       release: vi.fn(),
@@ -162,6 +167,8 @@ describe("createPostgresPool: ready() migration transaction", () => {
           error.code = "42P07";
           throw error;
         }
+        // See the sibling test above: answer the first-stamp unique-constraint check as if it passed.
+        if (typeof sql === "string" && sql.includes("pg_index")) return { rows: [{ ok: true }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       }),
       release: vi.fn(),

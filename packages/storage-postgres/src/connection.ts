@@ -174,6 +174,14 @@ async function ensureSchemaVersion(client: PoolClient, schema: string): Promise<
   const table = qualifiedTable(schema, "kohaku_schema_meta");
   const { rows } = await client.query<{ version: number }>(`SELECT version FROM ${table} WHERE id = 1`);
   if (rows.length === 0) {
+    // Stamping a schema as version 1 for the first time: this is exactly the case where an existing,
+    // pre-versioning deployment (see README's "Migrating from a pre-release schema") gets a free pass
+    // with no row to compare against. `CREATE TABLE IF NOT EXISTS` (run just before this, in the same
+    // transaction) does not retrofit `UNIQUE (id)` onto an already-existing `kohaku_lineage` table, and
+    // without it the first `appendLineage`'s `ON CONFLICT (id) DO NOTHING` fails at runtime with "no
+    // unique or exclusion constraint matching the ON CONFLICT specification" -- so check for it here,
+    // once, while stamping, rather than let that surface later as an opaque runtime error.
+    await assertLineageIdIsUnique(client, schema);
     await client.query(`INSERT INTO ${table} (id, version) VALUES (1, $1)`, [POSTGRES_SCHEMA_VERSION]);
     return;
   }
@@ -183,6 +191,39 @@ async function ensureSchemaVersion(client: PoolClient, schema: string): Promise<
       `@kohaku-ui/storage-postgres: schema "${schema}" is at kohaku_schema_meta.version ${found}, ` +
         `but this package expects version ${POSTGRES_SCHEMA_VERSION}. See this package's README, ` +
         `"Migrating from a pre-release schema", before upgrading a deployed database.`,
+    );
+  }
+}
+
+/**
+ * Verifies a unique index/constraint on exactly `kohaku_lineage.id` exists (a fresh install's own
+ * `CREATE TABLE` already declares `UNIQUE (id)`, so this is a no-op there; it only ever fires for a
+ * pre-existing table that predates this package's schema-versioning support and skipped the README's
+ * migration step). Checks `pg_index` directly rather than `information_schema` so a plain unique index
+ * (not only a named `UNIQUE` table constraint) also satisfies it, matching what `ON CONFLICT (id)` needs.
+ */
+async function assertLineageIdIsUnique(client: PoolClient, schema: string): Promise<void> {
+  const { rows } = await client.query<{ ok: boolean }>(
+    `SELECT true AS ok
+       FROM pg_index i
+       JOIN pg_class t ON t.oid = i.indrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+       JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(i.indkey)
+      WHERE n.nspname = $1
+        AND t.relname = 'kohaku_lineage'
+        AND i.indisunique
+        AND i.indnatts = 1
+        AND a.attname = 'id'
+      LIMIT 1`,
+    [schema],
+  );
+  if (rows.length === 0) {
+    throw new Error(
+      `@kohaku-ui/storage-postgres: schema "${schema}" has a kohaku_lineage table with no unique ` +
+        `constraint/index on "id". This package's appendLineage relies on ON CONFLICT (id) DO NOTHING, ` +
+        `which requires one. See this package's README, "Migrating from a pre-release schema", step 2 ` +
+        `(ALTER TABLE kohaku_lineage ADD CONSTRAINT kohaku_lineage_id_key UNIQUE (id)), before the first ` +
+        `appendLineage call.`,
     );
   }
 }

@@ -127,6 +127,15 @@ describe("initProject", () => {
     expect(appSrc).not.toContain("dev-secret-change-me");
   });
 
+  it("server/app.ts treats a whitespace-only KOHAKU_CAPABILITY_SECRET as missing", async () => {
+    // A user who pastes .env.example's commented block back in verbatim, or leaves a blank value,
+    // must not get a silently-accepted "" or " " secret -- .trim() makes both fail the same way.
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
+    expect(appSrc).toContain('process.env["KOHAKU_CAPABILITY_SECRET"]?.trim()');
+  });
+
   it("refuses to overwrite: an existing package.json aborts before anything is written", async () => {
     const out = tmp();
     writeFileSync(join(out, "package.json"), "{}");

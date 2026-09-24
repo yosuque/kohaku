@@ -41,6 +41,37 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: schema vers
     await second.close();
   });
 
+  it("fails ready() when a pre-existing kohaku_lineage table lacks a unique constraint/index on id (README step 2)", async () => {
+    // Simulates a pre-release deployment (predates kohaku_schema_meta) that skipped the README's
+    // "Migrating from a pre-release schema" step 2. CREATE TABLE IF NOT EXISTS leaves this table
+    // exactly as-is, so ready()'s first-stamp check must catch the missing constraint itself rather
+    // than let appendLineage's ON CONFLICT (id) fail at runtime later.
+    const schema = uniqueSchema();
+    const pool = new Pool({ connectionString });
+    try {
+      await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+      await pool.query(`
+        CREATE TABLE "${schema}"."kohaku_lineage" (
+          seq bigserial PRIMARY KEY,
+          id text NOT NULL,
+          ts text NOT NULL,
+          tenant text NOT NULL DEFAULT '',
+          type text NOT NULL,
+          intent_hash text NULL,
+          artifact_id text NULL,
+          spec_hash text NULL,
+          record text NOT NULL
+        )
+      `);
+    } finally {
+      await pool.end();
+    }
+
+    const port = createPostgresStoragePort({ connectionString, schema });
+    await expect(port.ready()).rejects.toThrow(/unique constraint\/index on "id"/);
+    await port.close();
+  });
+
   it("two ports calling ready() concurrently on a fresh schema both succeed (the advisory lock serializes the DDL)", async () => {
     const schema = uniqueSchema();
     const a = createPostgresStoragePort({ connectionString, schema });

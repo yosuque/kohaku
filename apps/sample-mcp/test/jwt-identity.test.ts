@@ -62,6 +62,7 @@ describe("createKohakuMcpSetup: default resolvePrincipal under KOHAKU_AUTHZ=jwt"
     process.env["KOHAKU_AUTHZ"] = "jwt";
     process.env["KOHAKU_JWT_SECRET"] = SECRET;
     process.env["KOHAKU_STORAGE"] = "memory";
+    process.env["KOHAKU_CAPABILITY_SECRET"] = "test-capability-secret";
     try {
       const setup = await createKohakuMcpSetup({ llm: new FakeLlm({ objects: [] }), dataDir: dataDir() });
       const resolvePrincipal = await resolvePrincipalOf(setup);
@@ -72,6 +73,7 @@ describe("createKohakuMcpSetup: default resolvePrincipal under KOHAKU_AUTHZ=jwt"
       delete process.env["KOHAKU_AUTHZ"];
       delete process.env["KOHAKU_JWT_SECRET"];
       delete process.env["KOHAKU_STORAGE"];
+      delete process.env["KOHAKU_CAPABILITY_SECRET"];
     }
   });
 
@@ -79,6 +81,7 @@ describe("createKohakuMcpSetup: default resolvePrincipal under KOHAKU_AUTHZ=jwt"
     process.env["KOHAKU_AUTHZ"] = "jwt";
     process.env["KOHAKU_JWT_SECRET"] = SECRET;
     process.env["KOHAKU_STORAGE"] = "memory";
+    process.env["KOHAKU_CAPABILITY_SECRET"] = "test-capability-secret";
     try {
       const setup = await createKohakuMcpSetup({ llm: new FakeLlm({ objects: [] }), dataDir: dataDir() });
       const resolvePrincipal = await resolvePrincipalOf(setup);
@@ -89,6 +92,7 @@ describe("createKohakuMcpSetup: default resolvePrincipal under KOHAKU_AUTHZ=jwt"
       delete process.env["KOHAKU_AUTHZ"];
       delete process.env["KOHAKU_JWT_SECRET"];
       delete process.env["KOHAKU_STORAGE"];
+      delete process.env["KOHAKU_CAPABILITY_SECRET"];
     }
   });
 
@@ -96,6 +100,7 @@ describe("createKohakuMcpSetup: default resolvePrincipal under KOHAKU_AUTHZ=jwt"
     process.env["KOHAKU_AUTHZ"] = "jwt";
     process.env["KOHAKU_JWT_SECRET"] = SECRET;
     process.env["KOHAKU_STORAGE"] = "memory";
+    process.env["KOHAKU_CAPABILITY_SECRET"] = "test-capability-secret";
     try {
       const override = vi.fn(async () => ({ id: "overridden" }));
       const setup = await createKohakuMcpSetup({
@@ -109,6 +114,7 @@ describe("createKohakuMcpSetup: default resolvePrincipal under KOHAKU_AUTHZ=jwt"
       delete process.env["KOHAKU_AUTHZ"];
       delete process.env["KOHAKU_JWT_SECRET"];
       delete process.env["KOHAKU_STORAGE"];
+      delete process.env["KOHAKU_CAPABILITY_SECRET"];
     }
   });
 
