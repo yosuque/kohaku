@@ -1,9 +1,9 @@
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 // Run conformance against the sample implementation as the subject (in-repo self-test).
 import { createApp } from "../../apps/sample-api/src/app.js";
-import { createHmacAuthzPort } from "../../apps/sample-api/src/ports/authz-port.js";
 import { buildReport, runRestSuite, runSpecFormatSuite } from "../conformance/index.js";
 
 function memoryStorage() {

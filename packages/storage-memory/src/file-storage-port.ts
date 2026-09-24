@@ -2,16 +2,16 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { appendFile, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createKeyedMutex } from "@kohaku-ui/host-core";
 import {
+  createKeyedMutex,
   type FixationRecord,
   type LineageEventRecord,
   LineageEventRecordSchema,
-  type LineageFilter,
   type PromotionState,
   type StoragePort,
-  type UISpec,
 } from "@kohaku-ui/spec-core";
+import { filterLineage, listByTenant, tenantKey } from "./shared.js";
+import { createSpecCache } from "./spec-cache.js";
 
 /**
  * StoragePort implementation (v0.1 extension).
@@ -41,21 +41,13 @@ import {
  *   operation both the file and the startup load time grow without bound (a known constraint). For production use, the
  *   assumption is to swap in a dedicated event store / DB.
  */
-/**
- * The entry cap of the in-memory Spec cache. On overflow, the oldest (least-recently-used) is dropped.
- * TTL is insurance for memory reclamation rather than data freshness; invalidation mainly happens naturally from
- * changes in key components (dataVersion / catalogFingerprint / generatorVersion).
- */
-const MAX_SPEC_CACHE_ENTRIES = 500;
-
 export function createFileStoragePort(dataDir: string): StoragePort {
   mkdirSync(dataDir, { recursive: true });
   const lineagePath = join(dataDir, "lineage.jsonl");
   const promotionsPath = join(dataDir, "promotions.json");
   const fixationsPath = join(dataDir, "fixations.json");
 
-  // Keep the Map's insertion order as "most-recently-touched order" to approximate LRU (re-insert on a get hit).
-  const specCache = new Map<string, { spec: UISpec; expiresAt: number | null }>();
+  const specCache = createSpecCache();
   // Grows without a cap (no rotation/compaction). A known constraint. See the doc at the top for details.
   const lineage: LineageEventRecord[] = loadJsonl(lineagePath);
   // One in-process mutex, keyed by snapshot file path, so promotions.json and fixations.json serialize
@@ -66,30 +58,10 @@ export function createFileStoragePort(dataDir: string): StoragePort {
 
   return {
     async getSpecCache(key) {
-      const entry = specCache.get(key);
-      if (entry == null) return null;
-      if (entry.expiresAt != null && entry.expiresAt < Date.now()) {
-        specCache.delete(key);
-        return null;
-      }
-      // Re-insert the hit entry at the tail to maintain the LRU "recently used" order.
-      specCache.delete(key);
-      specCache.set(key, entry);
-      return entry.spec;
+      return specCache.get(key);
     },
     async putSpecCache(key, spec, ttlSeconds) {
-      // Delete an existing key first, then re-insert it, placing it at the tail (newest).
-      specCache.delete(key);
-      specCache.set(key, {
-        spec,
-        expiresAt: ttlSeconds != null ? Date.now() + ttlSeconds * 1000 : null,
-      });
-      // On overflow, drop from the oldest key (the head of the Map).
-      while (specCache.size > MAX_SPEC_CACHE_ENTRIES) {
-        const oldest = specCache.keys().next().value;
-        if (oldest === undefined) break;
-        specCache.delete(oldest);
-      }
+      specCache.put(key, spec, ttlSeconds);
     },
     async appendLineage(event) {
       // Append with async I/O so the compose response is not blocked by the disk write (concurrent composes do not
@@ -100,28 +72,8 @@ export function createFileStoragePort(dataDir: string): StoragePort {
       await appendFile(lineagePath, JSON.stringify(event) + "\n");
       lineage.push(event);
     },
-    async listLineage(filter: LineageFilter = {}) {
-      let result = lineage;
-      if (filter.type != null) result = result.filter((e) => filter.type!.includes(e.type));
-      // When tenant is specified, only matching events. Unspecified (single tenant) is all = legacy behavior.
-      if (filter.tenant != null) result = result.filter((e) => e.tenant === filter.tenant);
-      if (filter.intentHash != null) {
-        result = result.filter((e) => e.payload["intentHash"] === filter.intentHash);
-      }
-      if (filter.artifactId != null) {
-        result = result.filter((e) => e.payload["artifactId"] === filter.artifactId);
-      }
-      if (filter.specHash != null) {
-        result = result.filter((e) => e.payload["specHash"] === filter.specHash);
-      }
-      if (filter.since != null) result = result.filter((e) => e.ts >= filter.since!);
-      // Apply until "before" the tail slice (otherwise the latest limit entries get all excluded by until and the window is nearly empty).
-      if (filter.until != null) result = result.filter((e) => e.ts <= filter.until!);
-      const limit = filter.limit ?? 200;
-      // limit <= 0 is an empty array (symmetric with the Python implementation; D1). Closes the trap where slice(-0)
-      // === slice(0) returns all, and the behavior where a negative value returns other than the tail. Only a positive limit returns the tail limit entries.
-      if (limit <= 0) return [];
-      return result.slice(-limit);
+    async listLineage(filter) {
+      return filterLineage(lineage, filter);
     },
     async getPromotionState(artifactId, tenant) {
       // Key-separate by (tenant, artifactId). Unspecified tenant stays as artifactId =
@@ -190,8 +142,7 @@ class TenantSnapshot<T extends { tenant?: string }> {
 
   /** Lists entries, optionally filtered to a tenant (unspecified = all, including legacy tenant-less entries). */
   list(tenant?: string): T[] {
-    const values = [...this.map.values()];
-    return tenant == null ? values : values.filter((v) => v.tenant === tenant);
+    return listByTenant(this.map, tenant);
   }
 
   /**
@@ -223,17 +174,6 @@ class TenantSnapshot<T extends { tenant?: string }> {
   delete(tenant: string | undefined, id: string): Promise<void> {
     return this.withLock(() => mergeDelete(this.path, this.map, tenantKey(tenant, id)));
   }
-}
-
-/**
- * The key convention shared by promotions.json and fixations.json (the multi-tenant contract).
- * An unspecified tenant (single tenant) is id itself = byte-matches the old (no-tenant) file's key, so an old file
- * loads compatibly as-is without conversion (legacy = tenant-neutral). Only when a tenant is specified:
- * `${tenant}\u0000${id}` (NUL separator; it appears in neither a tenant identifier nor an artifactId / intentHash,
- * so the composite key does not collide).
- */
-function tenantKey(tenant: string | undefined, id: string): string {
-  return tenant != null && tenant !== "" ? `${tenant}\u0000${id}` : id;
 }
 
 /**

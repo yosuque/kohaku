@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FixationRecord, PromotionState, UISpec } from "@kohaku-ui/spec-core";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { createFileStoragePort } from "../src/ports/storage-port.js";
+import { createFileStoragePort } from "../src/index.js";
 
 // Recovery behavior when starting up with corrupt or half-written persistence files (storage-port.ts).
 // Snapshots (promotions/fixations) are moved aside to .corrupt and then restart in an empty state,

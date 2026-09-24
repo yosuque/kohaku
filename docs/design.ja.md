@@ -86,6 +86,9 @@ flowchart LR
 | llm | LlmPort(プロバイダ非依存契約)・env 解決・構造化出力フォールバック・`streamObject`(累積 partial 通知の任意拡張 — 逐次ストリーミングの供給源) | `src/adapters/ai-sdk.ts`(SDK 隔離点) |
 | composer | compose/recompose・L0/L1/L2・修復ループ・決定的後処理・キャッシュ | `src/compose.ts`(入口)`src/tier-ladder.ts`(L1→L2 梯子)`src/single-flight.ts` `src/assemble.ts` `src/post/rules.ts` |
 | data-binding | `query://` 正規形・BindingClient(Bearer capability・STALE 検出) | `src/client.ts` |
+| storage-memory | StoragePort の参考実装: `createMemoryStoragePort()`(純インメモリ。Zero-Port の既定 & テスト用ダブル)と `createFileStoragePort(dataDir)`(旧 sample-api の port 相当。Spec キャッシュはメモリ、lineage / 昇格 / 固定化は `dataDir` 配下) | `src/memory-storage-port.ts` `src/file-storage-port.ts` |
+| authz-hmac | AuthzPort の参考実装: `createHmacAuthzPort(secret)`(HMAC-SHA256 capability token) | `src/hmac-authz-port.ts` |
+| port-contracts | **private・test-only。** StoragePort / AuthzPort の共有契約スイート(`describeStoragePortContract` / `describeAuthzPortContract`)で、参考実装・本番アダプタを問わず全アダプタが通す | `src/storage.ts` `src/authz.ts` |
 | intents | Intent DSL(環境中立)。`defineVocabulary`(値集合 + ラベルの単一源)・`defineIntent`(単一定義)から IntentDef(SemanticPort)・FacetView(GUI ファセット)・MCP ツール入力・coerce を導出 | `src/vocabulary.ts` `src/intent.ts` `src/facet-view.ts` |
 | renderer-core | framework-free / DOM-free な共有核。イベント統制(`resolveEmit`)・書き込み判定(`resolveInvokeTarget`)・state ストア・BoundDataController(鮮度突合/最後発優先/無効化)・per-part presenter・文言・テーマ解決 | `src/control/emit.ts` `src/stores/bound-data-controller.ts` `src/presenters/` |
 | renderer-react | React レンダラー。SpecView(フラットリスト解決)・ImplRegistry・useBoundData・per-node ErrorBoundary。純ロジックは renderer-core を import(単一の正)| `src/SpecView.tsx` `src/context.tsx` |
@@ -119,7 +122,7 @@ flowchart LR
 | `composer/` | composer(L0/L1/L2・修復ループ) |
 | `lineage/` | lineage(記録・昇格・固定化) |
 | `evals/` | evals(judge / golden / FixtureLlm) |
-| `storage/` | sample-api の storage-port.ts 相当(FileStoragePort) |
+| `storage/` | `@kohaku-ui/storage-memory` の `createFileStoragePort` 相当 |
 | `host_core/` | host-core の完全移植: TS の全モジュールが Python 側に対応を持ち、`host_rest` / `host_mcp` が薄いアダプタとして利用する(モジュール単位の詳細: [../python/README.ja.md](../python/README.ja.md))。挙動差が 1 点だけ残る: 両プロファイルが fixation self-heal を直列化する共有 keyed mutex(`keyed_mutex.py`)は、キー粒度がプロファイル間で異なる — REST は `(tenant, intentHash)`、MCP は `intentHash` 単独でキーする |
 | `host_rest/` | host-rest(FastAPI) |
 | `host_mcp/` | host-mcp-apps(MCP Apps プロファイル) |
@@ -546,8 +549,9 @@ stateDiagram-v2
 `FixationDeliveryHost` オブジェクト(固定化ルックアップ・自己修復 API・任意の `(tenant, intentHash)` 単位の直列化・
 `onSelfHealError` コールバック)を渡すだけで、host-core の `composeWithFixation` / `resolveFixatedResult` /
 `settleFixation` が「固定化短絡 → 陳腐化判定 → 自己修復(fire-and-forget)→ 通常 compose へのフォールバック」の
-一連を両プロファイルで同一に駆動する。両プロファイルとも `serialize` を同じ host-core の `createKeyedMutex`
-(host-rest の昇格ロックやサンプル storage port のファイル単位ロックも使う同一実装)に配線する — REST プロファイルの
+一連を両プロファイルで同一に駆動する。両プロファイルとも `serialize` を同じ `createKeyedMutex`
+(`@kohaku-ui/spec-core` で定義され、後方互換のため host-core が再エクスポートする。host-rest の昇格ロックや
+`@kohaku-ui/storage-memory` のファイル永続化 StoragePort のファイル単位ロックも使う同一実装)に配線する — REST プロファイルの
 `withFixationLock` は `(tenant, intentHash)` をキーにしテナントを解決するが、MCP プロファイルは `intentHash` 単独を
 キーにしテナントは一切解決しない(自己修復呼び出しは常に `tenant: undefined`)。それでも自身のプロセス内での
 fixate/unfixate/自己修復の競合は同様にガードする。`issueCapabilityForSpec`(デフォルト TTL 600 秒)と

@@ -93,6 +93,9 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `packages/spec-core` | UI Spec schema, Intent canonicalization, diff/patch, cacheKey, **Port types** (the framework boundary) |
 | `packages/registry` | Component catalog (15 core parts + runtime-only `ui.loading`), federated resolution, capability negotiation, LLM generation-schema conversion |
 | `packages/data-binding` | `query://` reference resolution, capability tokens, STALE detection |
+| `packages/storage-memory` | Reference StoragePort implementations: `createMemoryStoragePort()` (pure in-process) and `createFileStoragePort(dataDir)` (file-backed lineage / promotions / fixations) |
+| `packages/authz-hmac` | Reference AuthzPort implementation: `createHmacAuthzPort(secret)`, an HMAC-SHA256 capability token |
+| `packages/port-contracts` | **Private, test-only.** Shared StoragePort / AuthzPort contract suites every adapter must pass |
 | `packages/intents` | Intent DSL (`defineVocabulary` / `defineIntent`) — derives SemanticPort definitions, GUI facets, and MCP tool inputs from a single source of value sets and labels (an environment-neutral leaf depending only on spec-core + data-binding) |
 | `packages/llm` | LLM provider abstraction (5 switchable providers, automatic structured-output fallback) |
 | `packages/composer` | UI Composition Service (L0/L1/L2, repair loop, deterministic post-processing, Spec cache) |

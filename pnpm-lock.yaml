@@ -319,6 +319,9 @@ importers:
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.1(hono@4.13.8)
+      '@kohaku-ui/authz-hmac':
+        specifier: workspace:^
+        version: link:../../packages/authz-hmac
       '@kohaku-ui/composer':
         specifier: workspace:^
         version: link:../../packages/composer
@@ -355,6 +358,9 @@ importers:
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../../packages/spec-core
+      '@kohaku-ui/storage-memory':
+        specifier: workspace:^
+        version: link:../../packages/storage-memory
       '@opentelemetry/api':
         specifier: 'catalog:'
         version: 1.9.1
@@ -401,6 +407,9 @@ importers:
       '@kohaku-ui-sample/web':
         specifier: workspace:^
         version: link:../sample-web
+      '@kohaku-ui/authz-hmac':
+        specifier: workspace:^
+        version: link:../../packages/authz-hmac
       '@kohaku-ui/data-binding':
         specifier: workspace:^
         version: link:../../packages/data-binding
@@ -422,6 +431,9 @@ importers:
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../../packages/spec-core
+      '@kohaku-ui/storage-memory':
+        specifier: workspace:^
+        version: link:../../packages/storage-memory
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.0.0
@@ -594,6 +606,28 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@26.5.1)(@vitest/coverage-v8@5.0.1)(jsdom@30.0.1)(vite@8.3.0(@types/node@26.5.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.1))
+
+  packages/authz-hmac:
+    dependencies:
+      '@kohaku-ui/spec-core':
+        specifier: workspace:^
+        version: link:../spec-core
+    devDependencies:
+      '@kohaku-ui/port-contracts':
+        specifier: workspace:^
+        version: link:../port-contracts
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.5.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@26.5.1)(@vitest/coverage-v8@5.0.1)(jsdom@30.0.1)(vite@8.3.0(@types/node@26.5.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.1))
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
 
   packages/client:
     dependencies:
@@ -922,6 +956,22 @@ importers:
         specifier: 'catalog:'
         version: 4.6.5
 
+  packages/port-contracts:
+    dependencies:
+      '@kohaku-ui/spec-core':
+        specifier: workspace:^
+        version: link:../spec-core
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.5.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@26.5.1)(@vitest/coverage-v8@5.0.1)(jsdom@30.0.1)(vite@8.3.0(@types/node@26.5.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.1))
+
   packages/registry:
     dependencies:
       '@kohaku-ui/spec-core':
@@ -1110,6 +1160,28 @@ importers:
         specifier: 'catalog:'
         version: 4.6.5
 
+  packages/storage-memory:
+    dependencies:
+      '@kohaku-ui/spec-core':
+        specifier: workspace:^
+        version: link:../spec-core
+    devDependencies:
+      '@kohaku-ui/port-contracts':
+        specifier: workspace:^
+        version: link:../port-contracts
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.5.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@opentelemetry/api@1.9.1)(@types/node@26.5.1)(@vitest/coverage-v8@5.0.1)(jsdom@30.0.1)(vite@8.3.0(@types/node@26.5.1)(esbuild@0.28.2)(tsx@4.23.13)(yaml@2.9.1))
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5
+
   spec:
     dependencies:
       '@kohaku-ui/spec-core':
@@ -1119,6 +1191,9 @@ importers:
       '@kohaku-ui-sample/api':
         specifier: workspace:^
         version: link:../apps/sample-api
+      '@kohaku-ui/authz-hmac':
+        specifier: workspace:^
+        version: link:../packages/authz-hmac
       '@kohaku-ui/evals':
         specifier: workspace:^
         version: link:../packages/evals
