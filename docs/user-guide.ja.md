@@ -279,6 +279,20 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 **依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm @ai-sdk/anthropic zod`(`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
+### Zero-Port quickstart(自分のデータから、Port コードなしで)
+
+```bash
+mkdir my-app && cd my-app
+npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファイルも可(SQLite は Node >= 22.13)
+npm run dev                                      # API :8787 + web :5173
+```
+
+`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、`@kohaku-ui/semantic-llm` の既定 SemanticPort、`@kohaku-ui/storage-memory` と `@kohaku-ui/authz-hmac`、Dashboard + Chat の Web アプリ、golden regression テスト。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。生成物はすべて出発点であり、4 つの Port はプロダクト側の責務のままです(設計書 §2)。各ファイルには何を置き換えるべきかが書かれています。
+
+**認識される日付形式**: 年が先頭に来る日付だけを曖昧さなしとして扱い、時間列になります — `YYYY-MM-DD`、`YYYY-MM`、またはこれらの `/` 区切り版で、ゼロ埋めの有無は問いません(`2026-04-01`、`2026-4-1`、`2026/4` など)。US 式 `MM/DD/YYYY` や欧州式 `DD/MM/YYYY` のような日/月が先頭の形式は意図的に推測しません — 月が 12 以下の日付ではこの 2 つを区別できず、誤って推測すると行の日付を静かに取り違えてしまい、グラフが出ないことよりも悪い結果になるためです。データがこの形式の場合、`init` のサマリに列名を挙げた警告が出ます。`YYYY-MM-DD` に変換してから `init` をやり直せば、時間列と Trend ビューが得られます。
+
+**「最初の compose までの時間」の計測**(クイックスタートの KPI、目標 15 分以内): `npx @kohaku-ui/cli init` の前にストップウォッチを開始し、Dashboard に Summary ビュー(L0)が表示された時点と、キーを設定した状態で最初の Chat の回答が描画された時点(L1)で止めます。クリーンなマシン・温まった npm キャッシュで両方を記録してください。CI の `pack-smoke` ジョブは同じ生成処理をエンドツーエンドで実行します(`scripts/pack-smoke.mjs` の step 7b)。
+
 ### Step 0 — LLM なしの Server-Driven UI
 
 ```bash
@@ -297,7 +311,7 @@ composer の `policy.fixedSpecs` に固定 Spec テンプレート(`apps/sample-
 ### Step 1 — L1 宣言的合成とチャット
 
 - **Intent カタログを単一定義する(`@kohaku-ui/intents`)**: `defineIntent` で 1 Intent = 1 定義にします(見本: `apps/sample-api/src/intents/catalog.ts`)。値集合は `defineVocabulary("region", { japan: "Japan", north_america: "North America", ... })` で単一源化し、`params`(Zod)/ `examples`(NL 例文)/ `facets`(GUI に出す param)/ `queries`(テンプレート or コールバック)を宣言すると、同じ定義から `.toIntentDef()`(SemanticPort 用)・`.toFacetView()`(GUI ファセット)・`.toToolSource()`(MCP ツール)・`.parseParams()`(coerce + default)が導出されます。GUI に出すファセットは codegen(`pnpm intents:emit`)で `facet-views.json` に書き出し、web はそれをデータ import します(web は server コード非依存を保つ)。
-- `SemanticPort.normalize` の NL 側を `@kohaku-ui/llm` で実装(見本: `apps/sample-api/src/ports/semantic-port.ts` — Intent カタログをプロンプトに転写し、構造化出力でマップ。失敗は `*.custom` に倒す)
+- 既定は `@kohaku-ui/semantic-llm` の `createLlmSemanticPort`(サンプルは売上ルールを `rules` / `fallbackIntent` で配線: `apps/sample-api/src/ports/semantic-port.ts`)
 - `describeShape` を実装すると、チャート種別規則・既定ソートの決定的後処理が効くようになります
 - ドメイン部品は `CatalogContribution` で寄与(`defineComponent` + renderer 実装の `registry.register`)
 
