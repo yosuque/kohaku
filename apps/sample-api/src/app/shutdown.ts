@@ -69,6 +69,10 @@ function withTimeout(p: Promise<void>, ms: number): Promise<void> {
   ]);
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * Builds the SIGINT/SIGTERM handler for graceful shutdown (ops): optionally flips readiness, optionally
  * waits a pre-stop window, drains connections, and only THEN closes the storage/authz backends
@@ -98,29 +102,44 @@ export function createGracefulShutdownHandler(options: GracefulShutdownOptions):
       // one (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
       // connection would otherwise stall the drain for no reason.
       server.closeIdleConnections?.();
-      server.close(() => {
-        // The drain has actually completed at this point (no in-flight request can still be running):
-        // only now is it safe to close the storage/authz backends those requests might have been using.
-        void ports
-          .close()
-          .catch(() => {})
-          .then(() => exit(0));
-      });
+      // Started before server.close() itself, and explicitly cleared in its callback below: a clean
+      // drain that finishes before graceMs elapses must not leave this timer pending, or the forced-exit
+      // branch would still fire later (calling ports.close() a second time and exit(1) after exit(0)
+      // already ran).
       const graceTimer = setTimeout(() => {
         server.getConnections((err, count) => {
-          console.error(
+          log(
             `${label}: shutdown grace period (${graceMs}ms) elapsed with ` +
               `${err != null ? "an unknown number of" : count} connection(s) still open; forcing exit`,
           );
           // Best-effort, bounded: we are exiting regardless, but a close that succeeds quickly is still
-          // better than abandoning it outright.
+          // better than abandoning it outright. Logged (not swallowed) so a failing close is observable,
+          // while still never blocking or delaying the exit itself.
           void withTimeout(
-            ports.close().catch(() => {}),
+            ports.close().catch((error: unknown) => {
+              log(
+                `${label}: failed to close storage/authz backends before forced exit: ${errorMessage(error)}`,
+              );
+            }),
             FORCE_CLOSE_BOUND_MS,
           ).then(() => exit(1));
         });
       }, graceMs);
       graceTimer.unref?.();
+      server.close(() => {
+        // The drain has actually completed at this point (no in-flight request can still be running):
+        // only now is it safe to close the storage/authz backends those requests might have been using.
+        // Clear the forced-exit timer first so a clean drain can never also trigger it.
+        clearTimeout(graceTimer);
+        void ports
+          .close()
+          .catch((error: unknown) => {
+            log(
+              `${label}: failed to close storage/authz backends after a clean drain: ${errorMessage(error)}`,
+            );
+          })
+          .then(() => exit(0));
+      });
     }, prestopMs);
     prestopTimer.unref?.();
   };

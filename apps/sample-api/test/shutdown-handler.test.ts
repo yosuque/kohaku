@@ -154,3 +154,111 @@ describe("createGracefulShutdownHandler: without setShuttingDown/prestopMs (samp
     expect(exit).toHaveBeenCalledWith(1);
   });
 });
+
+describe("createGracefulShutdownHandler: grace-timer cleanup and log routing", () => {
+  it("a clean drain clears the grace timer, so the forced-exit branch never runs afterwards", async () => {
+    const server = fakeServer();
+    const ports = { close: vi.fn(async () => {}) };
+    const exit = vi.fn();
+    const handle = createGracefulShutdownHandler({
+      server,
+      ports,
+      graceMs: 10,
+      label: "test",
+      log: () => {},
+      exit,
+    });
+    handle("SIGTERM");
+    // prestopMs defaults to 0 but server.close() is only reached once that timer's callback actually
+    // runs (next tick, not synchronous) -- wait for it before the drain can complete.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    // The drain completes well within the (10ms) grace window.
+    server.fireClose();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(0);
+    // Wait past the grace window: if the timer were not cleared, getConnections/exit(1) would fire here.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(server.getConnections).not.toHaveBeenCalled();
+    expect(ports.close).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("the forced-exit message is routed through the injected log, not a bare console.error", async () => {
+    const server = fakeServer();
+    const ports = { close: vi.fn(async () => {}) };
+    const log = vi.fn();
+    const handle = createGracefulShutdownHandler({
+      server,
+      ports,
+      graceMs: 5,
+      label: "test-label",
+      log,
+      exit: vi.fn(),
+    });
+    handle("SIGINT");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    server.fireGetConnections(4);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "test-label: shutdown grace period (5ms) elapsed with 4 connection(s) still open; forcing exit",
+      ),
+    );
+  });
+
+  it("a close failure after a clean drain is logged (not silently swallowed), and shutdown still completes", async () => {
+    const server = fakeServer();
+    const closeError = new Error("boom: clean-drain close failed");
+    const ports = { close: vi.fn(async () => Promise.reject(closeError)) };
+    const log = vi.fn();
+    const exit = vi.fn();
+    const handle = createGracefulShutdownHandler({
+      server,
+      ports,
+      graceMs: 30_000,
+      label: "test-label",
+      log,
+      exit,
+    });
+    handle("SIGTERM");
+    // prestopMs defaults to 0 but server.close() is only reached on the next tick (see the timer-cleanup
+    // test above for the full explanation).
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    server.fireClose();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "test-label: failed to close storage/authz backends after a clean drain: boom: clean-drain close failed",
+      ),
+    );
+    // Non-blocking: exit still happens despite the close failure.
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it("a close failure on the forced-exit path is logged too, and the forced exit still completes", async () => {
+    const server = fakeServer();
+    const closeError = new Error("boom: forced-exit close failed");
+    const ports = { close: vi.fn(async () => Promise.reject(closeError)) };
+    const log = vi.fn();
+    const exit = vi.fn();
+    const handle = createGracefulShutdownHandler({
+      server,
+      ports,
+      graceMs: 5,
+      label: "test-label",
+      log,
+      exit,
+    });
+    handle("SIGINT");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    server.fireGetConnections(1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "test-label: failed to close storage/authz backends before forced exit: boom: forced-exit close failed",
+      ),
+    );
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+});
