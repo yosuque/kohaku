@@ -122,6 +122,9 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `packages/host-a2ui` | A2UI-compatible profile skeleton (UISpec/SpecPatch → A2UI messages; an independent leaf on spec-core only) [Draft] |
 | `packages/client` | Typed host client SDK (depends only on spec-core + data-binding; independent of host-rest) |
 | `packages/admin-react` | Governance console (Lineage / Analytics / Promotion review / Fixation) as embeddable React components on top of `client` (the sample's Admin page is a thin wrapper) |
+| `packages/storage-redis` | Redis-backed StoragePort reference adapter (Spec cache, lineage, promotion state, fixation, tenant scoping); `ioredis` is a peer dependency |
+| `packages/storage-postgres` | PostgreSQL-backed StoragePort reference adapter (same coverage as storage-redis, idempotent schema); `pg` is a peer dependency |
+| `packages/authz-jwt` | JWT / OIDC AuthzPort reference adapter (principal / roles / tenant from claims, shared secret or JWKS); delegates capability tokens to `authz-hmac`, depends on `jose` |
 | `apps/sample-api` | Sample: sales-analysis API (**a model implementation of the 4 Ports**) |
 | `apps/sample-web` | Sample: Dashboard (GUI) / Chat (NLUI) / Admin (governance) |
 | `apps/sample-wc` | Sample: rendering the same Spec with the React-free `<kohaku-surface>` (proof of renderer independence) |

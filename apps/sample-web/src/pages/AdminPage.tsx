@@ -1,4 +1,6 @@
 import { type AdminExtraTab, KohakuAdmin, useAdminNotice } from "@kohaku-ui/admin-react";
+import { deniedMessage } from "@kohaku-ui/admin-react/ui";
+import { isKohakuHostError } from "@kohaku-ui/client";
 import { lazy, type ReactNode, Suspense, useMemo } from "react";
 import { t as dict, useT } from "../i18n/ui.js";
 import { bumpDataVersion, client } from "../kohaku/client.js";
@@ -70,7 +72,12 @@ export function AdminPage(): ReactNode {
   );
 }
 
-/** Sample-only: advances the server's dataVersion so the next compose is a cache MISS (Demo 1). */
+/**
+ * Sample-only: advances the server's dataVersion so the next compose is a cache MISS (Demo 1). Now behind
+ * identity + governance RBAC (admin.bumpDataVersion — admin only) and, under a JWT deployment, disabled unless
+ * the server opts in (KOHAKU_DEMO_ADMIN_ROUTES=1) — see client.ts's bumpDataVersion doc comment — so a 403 or
+ * 404 here is an expected outcome, surfaced as an error notice rather than an unhandled rejection.
+ */
 function BumpButton(): ReactNode {
   const t = useT();
   const notify = useAdminNotice();
@@ -79,7 +86,13 @@ function BumpButton(): ReactNode {
       type="button"
       onClick={() => {
         // dict() (not the hook value) so the notification uses the language at completion time.
-        void bumpDataVersion().then((v) => notify(dict().admin.bumpNotice(v)));
+        void bumpDataVersion()
+          .then((v) => notify(dict().admin.bumpNotice(v)))
+          .catch((e: unknown) => {
+            const messages = dict().admin;
+            const denied = isKohakuHostError(e) ? deniedMessage(e, messages.opBump, messages) : null;
+            notify(denied ?? messages.bumpFailed, "error");
+          });
       }}
       style={{
         border: "1px solid var(--kohaku-color-warning-text, #854d0e)",

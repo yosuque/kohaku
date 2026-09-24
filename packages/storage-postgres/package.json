@@ -1,0 +1,61 @@
+{
+  "name": "@kohaku-ui/storage-postgres",
+  "version": "0.2.0",
+  "description": "PostgreSQL-backed StoragePort for kohaku (Spec cache, lineage, promotion state, fixation) — a reference adapter with an idempotent schema; the contract stays @kohaku-ui/spec-core's ports.ts.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@types/pg": "catalog:"
+  },
+  "peerDependencies": {
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@kohaku-ui/port-contracts": "workspace:^",
+    "@testcontainers/postgresql": "catalog:",
+    "@types/node": "catalog:",
+    "pg": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/storage-postgres#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/storage-postgres"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}

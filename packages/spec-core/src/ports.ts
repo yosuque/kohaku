@@ -120,9 +120,34 @@ export interface VerifyResult {
   reason?: string;
 }
 
+/**
+ * Default lifetime (seconds) of a capability token when the issuer is given no explicit TTL.
+ * Shared by every AuthzPort implementation and by host-core's issuance helpers.
+ */
+export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
+
 export interface AuthzPort {
   issueCapability(principal: Principal, scopes: Scope[], opts?: { ttlSeconds?: number }): Promise<string>;
   verify(token: string, req: VerifyRequest): Promise<VerifyResult>;
+}
+
+/**
+ * Persistence for pre-expiry capability revocation. Not part of `AuthzPort` itself — revocation is
+ * exposed as an extension method on a concrete port (e.g. `HmacAuthzPort.revokeCapability`), the same
+ * way `storage-postgres` exposes `ready()` alongside `StoragePort`. A port's `verify` consults a store
+ * like this one, keyed by the `jti` carried in its own token payload.
+ *
+ * This type lives here (spec-core), not in an adapter package, because it is a framework-boundary port
+ * type consumed by multiple same-layer packages (authz-hmac, storage-redis, storage-postgres,
+ * port-contracts): `spec/test/dependency-direction.test.ts` forbids a dependency on a same-or-later
+ * layer, so defining it inside any one of them would make the others unable to depend on it.
+ */
+export interface CapabilityRevocationStore {
+  /** Records jti as revoked until expiresAt (epoch seconds); the store may drop the entry after that. */
+  revoke(jti: string, expiresAt: number): Promise<void>;
+  /** Whether jti is currently revoked. Behavior after its expiresAt has passed is unspecified (the entry may or may not have been dropped). */
+  isRevoked(jti: string): Promise<boolean>;
+  close?(): Promise<void>;
 }
 
 /** The persistence record for a lineage event (the strict schema is owned by @kohaku-ui/lineage). */

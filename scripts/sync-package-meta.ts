@@ -31,6 +31,7 @@ const PUBLISHED_DIRS = [
   ...[
     "admin-react",
     "authz-hmac",
+    "authz-jwt",
     "client",
     "composer",
     "data-binding",
@@ -51,6 +52,8 @@ const PUBLISHED_DIRS = [
     "semantic-llm",
     "spec-core",
     "storage-memory",
+    "storage-postgres",
+    "storage-redis",
   ].map((name) => `packages/${name}`),
   "cli",
   "spec",

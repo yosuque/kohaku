@@ -120,6 +120,9 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/host-a2ui` | A2UI 互換プロファイル骨子(UISpec/SpecPatch → A2UI メッセージ。spec-core のみの独立リーフ)[Draft] |
 | `packages/client` | 型付きホストクライアント SDK(spec-core + data-binding のみに依存。host-rest 非依存) |
 | `packages/admin-react` | 統制コンソール(Lineage / Analytics / 昇格レビュー / 固定化)を `client` の上に組み込み可能な React コンポーネントとして提供(sample の Admin 画面は薄いラッパ) |
+| `packages/storage-redis` | Redis バックエンドの StoragePort 参考アダプタ(Spec cache・lineage・promotion state・fixation・テナントスコープ)。`ioredis` は peer dependency |
+| `packages/storage-postgres` | PostgreSQL バックエンドの StoragePort 参考アダプタ(storage-redis と同等のカバレッジ、idempotent なスキーマ)。`pg` は peer dependency |
+| `packages/authz-jwt` | JWT / OIDC の AuthzPort 参考アダプタ(claim から principal / roles / tenant を解決。共有シークレットまたは JWKS)。capability token は `authz-hmac` に委譲し、`jose` に依存 |
 | `apps/sample-api` | サンプル: 売上分析 API(**4 Port 実装の見本**) |
 | `apps/sample-web` | サンプル: Dashboard(GUI)/ Chat(NLUI)/ Admin(統制面) |
 | `apps/sample-wc` | サンプル: 同一 Spec を React 非依存の `<kohaku-surface>` で描く実演(レンダラー非依存の実証) |

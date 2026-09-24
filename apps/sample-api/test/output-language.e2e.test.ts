@@ -5,6 +5,7 @@ import type { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { languageOf } from "../src/app/compose-context.js";
 import { createApp } from "../src/app.js";
+import { createHeaderIdentity } from "../src/ports/from-env.js";
 
 // End-to-end output language (EN/JA): session.locale on the wire selects the compose-context policy
 // pair — JA gets JA L0 fixed specs and a "Japanese" Output-language section on the L1/L2 prompts,
@@ -187,6 +188,7 @@ describe("output language: fixation shortcut gate", () => {
       lineage: {} as never,
       promotions: {} as never,
       fixations: {} as never,
+      identity: createHeaderIdentity(),
     });
     await expect(deps.fixationLookup!("sha256:x", { surface: "web", locale: "en" })).resolves.toBe(record);
     await expect(deps.fixationLookup!("sha256:x", { surface: "web" })).resolves.toBe(record);
@@ -212,6 +214,7 @@ describe("output language: fixation shortcut gate", () => {
       lineage: {} as never,
       promotions: {} as never,
       fixations: {} as never,
+      identity: createHeaderIdentity(),
     });
     expect(deps.fixationAdmit!(record, { surface: "web", locale: "en" })).toBe(true);
     expect(deps.fixationAdmit!(record, { surface: "web" })).toBe(true);
