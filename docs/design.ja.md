@@ -71,8 +71,14 @@ flowchart LR
     HC & DB --> HM["host-mcp-apps"]
     CP --> OT["otel<br/>(peer: @opentelemetry/api)"]
     SC --> HA["host-a2ui"]
-    HR & LN & EV & INT & OT --> API["apps/sample-api"]
-    RR & SB & DB & CL & INT --> WEBAPP["apps/sample-web"]
+    SC --> AH["authz-hmac"]
+    SC & AH --> AJ["authz-jwt"]
+    SC --> SR["storage-redis"]
+    SC --> SP["storage-postgres"]
+    SC & DB & INT & LL --> SL["semantic-llm"]
+    CL & RC & SB & SC --> AR["admin-react"]
+    HR & LN & EV & INT & OT & SL --> API["apps/sample-api"]
+    RR & SB & DB & CL & INT & AR --> WEBAPP["apps/sample-web"]
     RW & CL --> WCAPP["apps/sample-wc<br/>(React ゼロ)"]
     HM & API --> MCP["apps/sample-mcp"]
 ```
@@ -87,9 +93,13 @@ flowchart LR
 | composer | compose/recompose・L0/L1/L2・修復ループ・決定的後処理・キャッシュ | `src/compose.ts`(入口)`src/tier-ladder.ts`(L1→L2 梯子)`src/single-flight.ts` `src/assemble.ts` `src/post/rules.ts` |
 | data-binding | `query://` 正規形・BindingClient(Bearer capability・STALE 検出) | `src/client.ts` |
 | storage-memory | StoragePort の参考実装: `createMemoryStoragePort()`(純インメモリ。Zero-Port の既定 & テスト用ダブル)と `createFileStoragePort(dataDir)`(旧 sample-api の port 相当。Spec キャッシュはメモリ、lineage / 昇格 / 固定化は `dataDir` 配下) | `src/memory-storage-port.ts` `src/file-storage-port.ts` |
+| storage-redis | Redis を裏付けとする本番向け StoragePort 実装(Spec キャッシュ / lineage / 昇格状態 / 固定化を複数インスタンスで共有)。依存は spec-core のみ(`ioredis` は peer) | `src/redis-storage-port.ts` |
+| storage-postgres | Postgres を裏付けとする本番向け StoragePort 実装。依存は spec-core のみ(`pg` は peer)。4 つの JSON ペイロード列は `jsonb` ではなく `text` で保持し、書き込み時のバイト順を厳密に維持する(§11 参照) | `src/postgres-storage-port.ts` |
 | authz-hmac | AuthzPort の参考実装: `createHmacAuthzPort(secret)`(HMAC-SHA256 capability token) | `src/hmac-authz-port.ts` |
+| authz-jwt | 本番向け AuthzPort 実装: bearer JWT による身元解決(`Principal`/テナント)を行い、capability の発行・検証・失効は `authz-hmac` にそのまま委譲する(`jose` は通常の dependency) | `src/jwt-authz-port.ts` |
 | port-contracts | **private・test-only。** StoragePort / AuthzPort の共有契約スイート(`describeStoragePortContract` / `describeAuthzPortContract`)で、参考実装・本番アダプタを問わず全アダプタが通す | `src/storage.ts` `src/authz.ts` |
 | intents | Intent DSL(環境中立)。`defineVocabulary`(値集合 + ラベルの単一源)・`defineIntent`(単一定義)から IntentDef(SemanticPort)・FacetView(GUI ファセット)・MCP ツール入力・coerce を導出 | `src/vocabulary.ts` `src/intent.ts` `src/facet-view.ts` |
+| semantic-llm | 既定の SemanticPort: `createLlmSemanticPort` が GUI アクションを決定的にマッピングし、NL の問い合わせは LLM の構造化出力で `@kohaku-ui/intents` カタログへマッピングする(参照渡しのみ)。製品固有ルールとフォールバック Intent をオプションとして提供。依存は spec-core + data-binding + intents + llm | `src/index.ts` |
 | renderer-core | framework-free / DOM-free な共有核。イベント統制(`resolveEmit`)・書き込み判定(`resolveInvokeTarget`)・state ストア・BoundDataController(鮮度突合/最後発優先/無効化)・per-part presenter・文言・テーマ解決 | `src/control/emit.ts` `src/stores/bound-data-controller.ts` `src/presenters/` |
 | renderer-react | React レンダラー。SpecView(フラットリスト解決)・ImplRegistry・useBoundData・per-node ErrorBoundary。純ロジックは renderer-core を import(単一の正)| `src/SpecView.tsx` `src/context.tsx` |
 | renderer-wc | 非 React レンダラー。単一 `<kohaku-surface>`(Custom Elements + Shadow DOM)がツリー全体を構築。chart は inline SVG、L2 は sandbox を直接再利用。renderer-react との parity を担保 | `src/kohaku-surface.ts` `src/tree.ts` `test/parity/` |
@@ -130,6 +140,7 @@ flowchart LR
 
 - **クロス言語互換の担保**は 3 点(golden fixture / core カタログ JSON export / conformance 黒箱)。レイヤ依存方向(逆流禁止)は import-linter の layers 契約で機械担保する(`uv run lint-imports`)。
 - **意図的な差異**: JS 検証(L2 の `L2_SCRIPT_SYNTAX` 構文検査 / `l2Smoke` ランナー)は同梱 TS CLI(`kohaku smoke-l2`)への **Node サイドカー委譲**で提供し、Node 非併設のスタンドアロン配備ではスキップ(仕様の「動的コード生成不可の環境ではスキップ」規定)。内部 API は snake_case、ワイヤ形状(JSON キー・エンドポイント・`_meta` キー)は TS と完全一致。恒久差異の全量とセットアップ手順は [../python/README.ja.md](../python/README.ja.md) が正。
+- **Python 移植の未対応事項**: lineage イベント `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロードフィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと `schemaSuggested` / `schemaEdited` カウンタ、rubric 0.4(Python はまだ rubric 0.3)、`CapabilityRevocationStore` と jti ベースの capability 失効、`storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`semantic-llm`、`admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない — 同じ一覧を最新に保つ [../python/README.md](../python/README.md) の "Known differences" を参照。
 
 ## 4. 中核データモデル
 

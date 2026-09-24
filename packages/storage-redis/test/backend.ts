@@ -1,13 +1,26 @@
 import { dockerAvailable, resolveAdapterBackend } from "@kohaku-ui/port-contracts";
 import { RedisContainer, type StartedRedisContainer } from "@testcontainers/redis";
+import { inject } from "vitest";
+
+declare module "vitest" {
+  export interface ProvidedContext {
+    kohakuTestRedisUrl?: string;
+  }
+}
 
 export interface RedisTestBackend {
   url: string;
   stop(): Promise<void>;
 }
 
+// global-setup.ts starts one container for the whole project run and provides its URL here via
+// vitest's provide/inject. Folding it into the env object resolveAdapterBackend reads means every test
+// file in this run lands in the "url" tier and none starts (or probes Docker for) its own container.
+const injectedUrl = inject("kohakuTestRedisUrl");
+const env = injectedUrl ? { ...process.env, KOHAKU_TEST_REDIS_URL: injectedUrl } : process.env;
+
 /** Resolved once per test file at import time so `describe.skip` can be decided synchronously. */
-export const backend = resolveAdapterBackend("redis", process.env, dockerAvailable);
+export const backend = resolveAdapterBackend("redis", env, dockerAvailable);
 
 /** Starts (or connects to) the Redis this suite runs against. Only called when `backend.mode !== "skip"`. */
 export async function startRedis(): Promise<RedisTestBackend> {

@@ -3,7 +3,7 @@
  *
  * The two implementations are one protocol implemented twice, and the conformance suite checks them
  * against each other; a user reading "kohaku 0.3.0" should get the same protocol behaviour in either
- * language. Changesets owns the TypeScript version (all twenty-two packages move together, so spec-core is
+ * language. Changesets owns the TypeScript version (all twenty-seven packages move together, so spec-core is
  * a fine stand-in for the set), and this script propagates it to the two places Python states it.
  *
  * Run by `pnpm version` as part of producing the release pull request, so the Python bump is reviewed in

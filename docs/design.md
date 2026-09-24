@@ -71,8 +71,14 @@ flowchart LR
     HC & DB --> HM["host-mcp-apps"]
     CP --> OT["otel<br/>(peer: @opentelemetry/api)"]
     SC --> HA["host-a2ui"]
-    HR & LN & EV & INT & OT --> API["apps/sample-api"]
-    RR & SB & DB & CL & INT --> WEBAPP["apps/sample-web"]
+    SC --> AH["authz-hmac"]
+    SC & AH --> AJ["authz-jwt"]
+    SC --> SR["storage-redis"]
+    SC --> SP["storage-postgres"]
+    SC & DB & INT & LL --> SL["semantic-llm"]
+    CL & RC & SB & SC --> AR["admin-react"]
+    HR & LN & EV & INT & OT & SL --> API["apps/sample-api"]
+    RR & SB & DB & CL & INT & AR --> WEBAPP["apps/sample-web"]
     RW & CL --> WCAPP["apps/sample-wc<br/>(zero React)"]
     HM & API --> MCP["apps/sample-mcp"]
 ```
@@ -87,9 +93,13 @@ Key dependency point: **`renderer-core` is the single source of truth for enviro
 | composer | compose/recompose, L0/L1/L2, repair loop, deterministic post-processing, cache | `src/compose.ts` (entry) `src/tier-ladder.ts` (L1→L2 ladder) `src/single-flight.ts` `src/assemble.ts` `src/post/rules.ts` |
 | data-binding | `query://` canonical form, BindingClient (Bearer capability, STALE detection) | `src/client.ts` |
 | storage-memory | Reference StoragePort implementations: `createMemoryStoragePort()` (pure in-process, the Zero-Port default and test double) and `createFileStoragePort(dataDir)` (the former sample-api port: Spec cache in memory, lineage / promotions / fixations under `dataDir`) | `src/memory-storage-port.ts` `src/file-storage-port.ts` |
+| storage-redis | Production StoragePort implementation backed by Redis (shared Spec cache / lineage / promotion state / fixations across instances). Depends only on spec-core (`ioredis` is a peer) | `src/redis-storage-port.ts` |
+| storage-postgres | Production StoragePort implementation backed by Postgres. Depends only on spec-core (`pg` is a peer); the four JSON payload columns are stored as `text`, not `jsonb`, to preserve exact byte order (see §11) | `src/postgres-storage-port.ts` |
 | authz-hmac | Reference AuthzPort implementation: `createHmacAuthzPort(secret)`, the HMAC-SHA256 capability token | `src/hmac-authz-port.ts` |
+| authz-jwt | Production AuthzPort implementation: bearer-JWT identity resolution (`Principal`/tenant), delegating capability issuance/verification/revocation unchanged to `authz-hmac` (`jose` is a plain dependency) | `src/jwt-authz-port.ts` |
 | port-contracts | **Private, test-only.** Shared StoragePort / AuthzPort contract suites (`describeStoragePortContract` / `describeAuthzPortContract`) that every adapter — reference or production — must pass | `src/storage.ts` `src/authz.ts` |
 | intents | Intent DSL (environment-neutral). From `defineVocabulary` (single source for value set + labels) and `defineIntent` (single definition), derives IntentDef (SemanticPort), FacetView (GUI facets), MCP tool input, and coerce | `src/vocabulary.ts` `src/intent.ts` `src/facet-view.ts` |
+| semantic-llm | Default SemanticPort: `createLlmSemanticPort` maps a GUI action deterministically and an NL question via the LLM's structured output onto an `@kohaku-ui/intents` catalog (reference passing only), with product rules and a fallback Intent as options. Depends on spec-core + data-binding + intents + llm | `src/index.ts` |
 | renderer-core | Framework-free / DOM-free shared core. Aggregates event governance (`resolveEmit`), write-target decision (`resolveInvokeTarget`), state store, BoundDataController (freshness reconciliation / last-write-wins / invalidation), per-part presenters, messages, and theme resolution | `src/control/emit.ts` `src/stores/bound-data-controller.ts` `src/presenters/` |
 | renderer-react | React renderer. SpecView (flat-list resolution), ImplRegistry, useBoundData, per-node ErrorBoundary. Pure logic is imported from renderer-core (single source of truth) | `src/SpecView.tsx` `src/context.tsx` |
 | renderer-wc | Non-React renderer. A single `<kohaku-surface>` (Custom Elements + Shadow DOM) builds the whole tree. Charts are inline SVG, and L2 directly reuses sandbox. Guarantees parity with renderer-react | `src/kohaku-surface.ts` `src/tree.ts` `test/parity/` |
@@ -130,6 +140,7 @@ A **full Python port** of the same protocol (Kohaku Protocol v0.1) is co-located
 
 - **Cross-language compatibility is guaranteed at 3 points** (golden fixture / core catalog JSON export / conformance black-box). The layer dependency direction (no back-flow) is mechanically guaranteed by import-linter's layers contract (`uv run lint-imports`).
 - **Intentional differences**: JS validation (L2's `L2_SCRIPT_SYNTAX` syntax check / the `l2Smoke` runner) is provided by **Node sidecar delegation** to the bundled TS CLI (`kohaku smoke-l2`), and is skipped in a standalone deployment where Node is not co-located (per the spec's "skip in environments where dynamic code generation is impossible" provision). Internal APIs are snake_case; the wire shape (JSON keys, endpoints, `_meta` keys) is fully identical to TS. The full set of permanent differences and setup steps is authoritatively covered by [../python/README.md](../python/README.md).
+- **Python mirror gaps (not yet ported)**: the lineage events `component.schemaSuggested` / `component.schemaEdited` (including the `acknowledged` payload field) and their rubric variants; the analytics `review` block plus the `schemaSuggested` / `schemaEdited` counters; rubric 0.4 (Python is still at rubric 0.3); `CapabilityRevocationStore` and jti-based capability revocation; the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters; `semantic-llm`; `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised by the conformance suite yet, so CONFORMANT status above does not cover them — see [../python/README.md](../python/README.md)'s "Known differences" for the same list kept current.
 
 ## 4. Core Data Model
 
