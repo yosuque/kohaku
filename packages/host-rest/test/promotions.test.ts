@@ -64,7 +64,21 @@ function fakePromotions(opts?: { approveThrows?: Error; actThrows?: Error; rejec
       return [{ artifactId: "known", status: "candidate" }];
     },
     async get(id) {
-      return known.has(id) ? { artifactId: id, status: "candidate" } : null;
+      return known.has(id)
+        ? {
+            artifactId: id,
+            status: "candidate",
+            suggestion: {
+              draft: { componentType: "x.y", version: "1.0.0", intentName: "x.y", description: "d" },
+              events: [],
+              confidence: 0.5,
+              model: "m",
+              extractorId: "l2-schema-extraction",
+              extractorVersion: "0.1",
+              suggestedAt: "2026-07-01T00:00:00.000Z",
+            },
+          }
+        : null;
     },
     async act(id, action) {
       spy.acts.push(action);
@@ -145,6 +159,15 @@ describe("promotions routes (host-rest first-class named routes)", () => {
     const missing = await app.request("/promotions/nope");
     expect(missing.status).toBe(404);
     expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("NOT_FOUND");
+  });
+
+  it("GET /promotions/:id passes the candidate's suggestion through unchanged (additive wire field)", async () => {
+    const { api } = fakePromotions();
+    const app = createKohakuRoutes(deps(api));
+    const res = await app.request("/promotions/known");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { candidate: { suggestion?: { extractorId: string } } };
+    expect(body.candidate.suggestion?.extractorId).toBe("l2-schema-extraction");
   });
 
   it("approve happy path: zod-validates the draft and returns 200 + reviewer is the server-side principal", async () => {

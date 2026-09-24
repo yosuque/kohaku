@@ -477,7 +477,7 @@ L2 自由生成にプロダクトのデザインシステムを適用する機�
 
 ### 9.1 イベントモデル
 
-追記専用の `LineageEventRecord {id(ulid), ts, actor{kind: user|model|system}, type, payload}`。View 系(composed / rendered / interacted / fallback)・Component 系(generated / used / nominated / judged / reviewed / schemaProposed / published / withdrawn — 却下は独立イベントを持たず `component.reviewed` に `decision: "reject"` として記録される)・Fixation 系(`intent.observed` / `intent.fixated` / `intent.unfixated`。`intent.observed` は将来の Intent 頻度機能向けに予約されており v0.1 では発火しない)の 3 系統。
+追記専用の `LineageEventRecord {id(ulid), ts, actor{kind: user|model|system}, type, payload}`。View 系(composed / rendered / interacted / fallback)・Component 系(generated / used / nominated / schemaSuggested / judged / reviewed / schemaEdited / schemaProposed / published / withdrawn — 却下は独立イベントを持たず `component.reviewed` に `decision: "reject"` として記録される)・Fixation 系(`intent.observed` / `intent.fixated` / `intent.unfixated`。`intent.observed` は将来の Intent 頻度機能向けに予約されており v0.1 では発火しない)の 3 系統。
 
 - `view.composed` には specHash / **structureHash**(構造のみのハッシュ — 固定化の安定度判定に使う)/ intentHash / params / tier / cache / surface を記録。
 - L2 合成時は `component.generated`(artifact html 含む — デモ規模の判断。本番は artifact ストア推奨)と `component.used` を自動記録。**利用ログが昇格の入力源**になる。
@@ -514,16 +514,24 @@ stateDiagram-v2
 - **テナント安全なスキャン**: `artifactId` はコンテンツの sha256 由来でグローバルに一意なため、同じ artifactId を複数テナントが独立に昇格させることがあり得る。テナント範囲なしで動作しうる読み取り経路(`list`/`evaluateAndList` の読み取りステップである `scanCandidates`、および `listByStatus`)はいずれも、呼び出しレベルの(未指定かもしれない)tenant ではなく各レコード自身が記録した tenant でキー付け・ロードするようになった。これにより全テナント横断のスキャンが、同じ artifactId を持つ 2 テナントの独立した候補を 1 件に潰したり、使用回数を合算したりしなくなる。テナント範囲なしで動作しうる唯一の書き込み経路である `evaluateAndList` の自動 nominate は、テナント付きの候補をテナント無し状態として永続化することは安全にできない(そのテナント自身のガバナンス状態を覆い隠す・汚染することになる)ため、代わりにその候補 1 件の永続化だけをスキップし(`in_use` のまま残す)、`onError({ endpoint: "promotion.nominate.tenant" })` でスキップを報告する — レコードが一切 tenant を持たない単一テナント運用はこのガードの影響を一切受けない。
 - **レビューのプレビューは「記録済み artifact の直接マウント」**(`POST /promotions/:id/preview`): `component.generated` に保持した html / sha256 / **ref(生成時の `data.$ref`)** を返し、レビュー UI がチャット面と同じ sandbox(隔離 iframe)で直接マウントする。**再 compose によるプレビューは採らない** — キャッシュ落ち時に LLM が別内容を再生成し「承認対象と違うもの」を見せる事故があり得るため、同一性を sha256 で保証できる記録済み artifact を正とする。データ解決には**生成時 ref 1 参照限定の read capability** を同梱発行する(sandbox ブリッジの完全一致 allowlist と対。write スコープなし)。認可は専用の `promotion.preview`(閲覧 `promotion.get` と分離 — データ read 権の発行を閲覧ロールに開かない)。
 
+#### スキーマ提案(昇格スキーマの LLM 自動抽出、助言専用)
+
+自動 nomination 時(`evaluateAndList`、すなわち `POST /promotions/evaluate`)、`createPromotions` の任意フック `suggestSchema`(`judge` と同じ形)が抽出器に、レビュアーが手で入力する代わりの登録内容 — componentType / intentName / description / props の JSON Schema / queryTemplate / 発行イベント — を尋ねる。リファレンス実装は `@kohaku-ui/evals` の `createSchemaExtractor`(id `l2-schema-extraction`、version `0.1`。rubric と同様に結果へ刻印される)で、judge と同じプロンプトインジェクション対策のもとで候補の HTML をモデルに渡すほか、決定的な裏付け情報 — HTML に実在する `query://` 参照、プロダクトが対応する query パス、`window.kohaku` の allowlist、bridge-contract lint の指摘(`collectL2Issues`)— も併せて渡す。結果は**あくまで助言**であり、候補スナップショットに永続化され(`data.suggestion`。素の object フィールドなので spec-core のスキーマ変更は不要)、`component.schemaSuggested` として監査され(model actor、`component.nominated` の直後)、候補 JSON には追加の任意項目 `suggestion` として現れ、承認フォームにプリフィルされる — `approve` は依然としてレビュアー自身の draft を受け取るので、LIN-PRM-001 も遷移表も変わらない。抽出は **fail-open** で、throw は promotions の `onError` フック(`promotion.suggest.schema`)経由で報告され、候補はこの機能導入前と同じ空フォームのまま現れる。抽出器を lineage ではなく evals に置くのは、lineage が LLM 層へ依存してはならないため — lineage は `SchemaSuggestion` 型だけを所有し、evals は構造的に同一のオブジェクトを返す(host-rest の `ComponentDraftSchema` が `ComponentDraft` を写す idiom と同じ)。
+
+**レイテンシコスト**: `POST /promotions/evaluate` は host-rest のテナント別 promotion ガバナンス mutex(approve/reject/withdraw/actions が直列化に使うものと同じロック)の内側で実行され、今回この scan で新規に nominate された各候補の抽出は逐次ではなく**並行**して走るようになったが、それでも呼び出しは、その中で最も遅い抽出が解決するまで戻らず、ロックも解放されない。上記の fail-open 契約は throw をカバーするものであり、遅い・ハングする抽出器はカバーしない — このフックが解決するまでの間、当該テナントの他の昇格遷移はすべて遅延する。
+
+approve 経路では `schema.propose` の直後に、lineage が提案された draft と提出された draft をフィールド単位で diff し(`diffDraft`。canonical JSON で比較するのでキー順序は差分にならない)、`component.schemaEdited`(user actor。`changed: []` は提案がそのまま承認されたことを意味する)として記録する。judge は rubric 0.4 の `suggestion_fidelity` 基準のための信頼できない証拠として提案を参照し、`summarizeLineage` はログから 2 つの運用指標を導出する: `review`(`component.nominated → component.reviewed(approve|reject)` の所要時間を `(tenant, artifactId)` ごとに対応付け、nearest-rank の分位で集計。`requestChanges` はレビューを完結させない)と `review.acceptedAsIs`(無編集承認の件数)で、`promotions.schemaSuggested / schemaEdited` も併せて数える。管理 UI(`@kohaku-ui/admin-react`)は提案のモデル名と確信度、レビュアーの現在のフォームとの差分、そして提案が付いている間は承認ボタンをブロックする必須の確認チェックボックスを表示する — 機械の提案をそのまま追認させない歯止めである。記録された編集は、後日の few-shot 学習ループ(未実装)の材料になる。
+
 #### 評価(LLM-as-Judge)と rubric バージョニング
 
 `packages/evals` の judge は**重み付き観点ルーブリック**を multi-sample の self-consistency 平均で採点する(重み合計≠1.0 のカスタム rubric も正規化して score を [0,1] に収める)。2 系統:
 
-- **L2 昇格審査**(`judge()` / `l2PromotionRubric`): safety / determinism / a11y / schema_inferability / generality / visual_quality。入力は HTML + 利用実績 + **実行時テレメトリ**(telemetry 経由 `component.used` の `renderedCount` / `errorCount`。昇格集計 uses とは別軸の「実描画の信頼性」観測をプロンプトに転写する。判定自体は従来どおり `judgeBlocking` に従う)。
+- **L2 昇格審査**(`judge()` / `l2PromotionRubric`): safety / determinism / a11y / schema_inferability / generality / visual_quality / suggestion_fidelity。入力は HTML + 利用実績 + **実行時テレメトリ**(telemetry 経由 `component.used` の `renderedCount` / `errorCount`。昇格集計 uses とは別軸の「実描画の信頼性」観測をプロンプトに転写する。判定自体は従来どおり `judgeBlocking` に従う)。
 - **L1 品質採点**(`judgeSpec()` / `l1QualityRubric`): chart_fit / clarity / information_density / data_reference。入力は UISpec(採点用に部品・props・`data.$ref`・events へ要約)+ 意図 + 列メタ。`runQuality()` が golden 回帰と併走する**品質回帰ハーネス**(FakeLlm/FixtureLlm で決定的)を提供する。
 
 **rubric バージョニング**: `Rubric` は `id` + `version` を持ち、`JudgeVerdict` と `component.judged` の `verdict`(`rubricId` / `rubricVersion`。additive)に刻む。どの版で判定したかが監査で再現できる。**人間オーバーライド**は新イベント型を足さず、`component.judged`(judge verdict)と `component.reviewed`(human decision)を artifactId で突合して検出する(例: judge 不合格を人間が approve で覆した)。
 
-`l2PromotionRubric` 自身の改版履歴: **0.1 → 0.2** で `visual_quality` 基準を追加。**0.2 → 0.3**(Task 8)で重みを再配分(`visual_quality` 0.10→0.20 / `generality` 0.15→0.05)し、`safety` の下限(veto)を導入した(根拠は `judge.ts` の `floor` doc コメントを参照)。旧版はそれぞれ `l2PromotionRubricV0_1` / `l2PromotionRubricV0_2`(両言語でエクスポート・ピン留め)として残り、スコアの変動に備えられない呼び出し側は `judge()` に明示的に渡せる。`rubricVersion: "0.1"` で記録された判定は `visual_quality` で全く採点されておらず(`"0.1"`/`"0.2"` で記録された判定も現行の重み・`safety` 下限では採点されていない)、過去の判定を事後的に現行ルーブリックへ突合する仕組みは無いため、既存カタログ全体を現行ルーブリックで評価し直したい運用者は該当候補を**withdraw のうえ再承認**する必要がある。
+`l2PromotionRubric` 自身の改版履歴: **0.1 → 0.2** で `visual_quality` 基準を追加。**0.2 → 0.3**(Task 8)で重みを再配分(`visual_quality` 0.10→0.20 / `generality` 0.15→0.05)し、`safety` の下限(veto)を導入した(根拠は `judge.ts` の `floor` doc コメントを参照)。**0.3 → 0.4**(B2 Task 5、上記のスキーマ提案と同時)で `suggestion_fidelity` 基準(重み 0.1)を追加し、その分の重みを確保するため `schema_inferability` を 0.15 から 0.05 へ再配分した。**この最後の変更は、`suggestSchema` 抽出器を配線せずにアップグレードする利用者にとって既定ゲートを緩める方向に働く**: 提案が無いとき `suggestion_fidelity` は 1 点になるため、提案の無い候補のスコアは rubric 0.3 と比べて最大 +0.10 上昇する(その分は `schema_inferability` が失った重みに相当する)。B2 以前のゲートを維持したい場合は `l2PromotionRubricV0_3` をピン留めすること。旧版はそれぞれ `l2PromotionRubricV0_1` / `l2PromotionRubricV0_2`(両言語でエクスポート・ピン留め)、`l2PromotionRubricV0_3`(TypeScript のみ — B2 は Python ミラーに手を入れていないため、Python 側のピン留め済み rubric 定数は `l2_promotion_rubric_v0_2` までしか無い)として残り、スコアの変動に備えられない呼び出し側は `judge()` に明示的に渡せる。`rubricVersion: "0.1"` で記録された判定は `visual_quality` で全く採点されておらず(`"0.1"`/`"0.2"` で記録された判定も現行の重み再配分・`safety` 下限では採点されておらず、`"0.1"`/`"0.2"`/`"0.3"` で記録された判定も `suggestion_fidelity` では採点されていない)、過去の判定を事後的に現行ルーブリックへ突合する仕組みは無いため、既存カタログ全体を現行ルーブリックで評価し直したい運用者は該当候補を**withdraw のうえ再承認**する必要がある。
 
 ### 9.3 固定化(L1→L0)
 
@@ -1077,7 +1085,7 @@ Python は `mcp` 1.28.1 から 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)へ、
 - **SSE 逐次ストリーミング(Spec の部分配信)は実装済み**(§5「逐次ストリーミング」。React 経路 = useSpecStream が消費)。**Python 実装も暫定 patch 0..N 対応でパリティ**(`stream_object` は StreamingLlmPort + TypeGuard の言語適応。python/README「既知の差異」参照)
 - presentSpreadsheet 編集の複式簿記的な不変条件デモ(編集の write 経路自体〈`props.editable` + `cellEdit`〉は実装済み。docs/specification.ja.md §7 参照)
 - MCP Apps サーフェスでの L2 描画(二重サンドボックス境界の検討が必要)
-- 昇格スキーマの LLM 自動抽出(現状は承認フォームで人間が確定)
+- `component.schemaEdited` として記録されているレビュアーの編集を few-shot として再利用する(現状、抽出器のプロンプトは固定)
 - artifact 専用ストア(現状 component.generated イベントに html を内包)
 - sandbox 専用オリジン配信(現状 srcdoc 方式のみ)
 - opt-in `target: "v1.0"`(`packages/host-a2ui`、判断 #26)を超えた A2UI v1.0 RC の完全追従: コンポーネント単位 `catalogId` 上書き、実際のレンダラー関数カタログ(`callRendererFunction`/`agentFunctionResponse` は型のみで未発行)、および RC 安定後の再検証(a2ui.org 目標 Q4 2026・現時点ではまだ RC)

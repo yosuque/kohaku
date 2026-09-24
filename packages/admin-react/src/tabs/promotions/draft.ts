@@ -22,6 +22,12 @@ export interface DraftForm {
 export interface PromotionDefaults {
   queryPaths?: readonly string[];
   initialDraftFor?: (candidate: PromotionCandidateView) => DraftForm;
+  /**
+   * When a candidate carries a machine-extracted `suggestion` (B2), prefill the form from it instead of
+   * `initialDraftFor` (default true). `false` forces the product's own prefill; the suggestion panel and its
+   * acknowledgement are still shown so the reviewer can compare.
+   */
+  preferSuggestion?: boolean;
 }
 
 export const DEFAULT_QUERY_PATHS: readonly string[] = [""];

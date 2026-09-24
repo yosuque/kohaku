@@ -1,4 +1,5 @@
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
+import type { DraftDiffField, DraftFieldChange, SchemaSuggestion } from "./promotion/suggestion.js";
 import { tenantField } from "./tenant-scope.js";
 
 /**
@@ -22,8 +23,14 @@ export const COMPONENT_EVENT_TYPES = [
   "component.generated",
   "component.used",
   "component.nominated",
+  // A machine-extracted registration proposal was attached to a freshly nominated candidate (advisory; see
+  // promotion/suggestion.ts). Recorded with a model actor right after component.nominated.
+  "component.schemaSuggested",
   "component.judged",
   "component.reviewed",
+  // The reviewer's field-level edits against the suggestion, recorded on the approve path next to
+  // component.schemaProposed. `changed: []` means the suggestion was accepted as-is.
+  "component.schemaEdited",
   "component.schemaProposed",
   "component.published",
   "component.withdrawn",
@@ -83,6 +90,20 @@ export interface ComponentUsedPayload {
    * equivalent to compose).
    */
   source?: "compose" | "telemetry";
+}
+
+export interface ComponentSchemaSuggestedPayload {
+  artifactId: string;
+  suggestion: SchemaSuggestion;
+}
+
+export interface ComponentSchemaEditedPayload {
+  artifactId: string;
+  reviewer: string;
+  extractorId: string;
+  extractorVersion: string;
+  changed: DraftFieldChange[];
+  unchanged: DraftDiffField[];
 }
 
 export type ActorKind = LineageEventRecord["actor"];

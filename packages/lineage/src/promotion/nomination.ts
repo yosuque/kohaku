@@ -1,7 +1,7 @@
 import type { StoragePort } from "@kohaku-ui/spec-core";
 import { NOMINATED_SCAN_WINDOW } from "../constants.js";
 import type { Lineage } from "../lineage.js";
-import { tenantField } from "../tenant-scope.js";
+import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { recordFailOpen } from "./audit.js";
 import { transition } from "./machine.js";
 import {
@@ -10,6 +10,7 @@ import {
   type PromotionErrorContext,
   type PromotionPolicy,
 } from "./service.js";
+import type { SchemaSuggestion } from "./suggestion.js";
 import { usageIndexKey } from "./usage.js";
 
 /**
@@ -27,6 +28,11 @@ export function createNomination(opts: {
    */
   persistMany: (items: { candidate: PromotionCandidate; tenant?: string }[]) => Promise<void>;
   onError?: (ctx: PromotionErrorContext, error: unknown) => void;
+  /**
+   * Optional schema extraction hook (see createPromotions' own doc for the full advisory / fail-open
+   * contract). Forwarded verbatim from createPromotions' opts.
+   */
+  suggestSchema?: (candidate: PromotionCandidate, context?: TenantScope) => Promise<SchemaSuggestion | null>;
 }): {
   /**
    * `candidates` pairs each candidate with its own owning tenant (candidate-store's `scanWithTenant`), needed by
@@ -37,7 +43,7 @@ export function createNomination(opts: {
     tenant?: string,
   ): Promise<PromotionCandidate[]>;
 } {
-  const { storage, lineage, policy, persistMany, onError } = opts;
+  const { storage, lineage, policy, persistMany, onError, suggestSchema } = opts;
 
   /**
    * Side-effecting nominate step: for candidates still in_use that satisfy the policy thresholds and are not
@@ -117,6 +123,22 @@ export function createNomination(opts: {
         nominatedIds.add(usageIndexKey(recordTenant, candidate.artifactId));
       }
     }
+    // Advisory schema extraction (fail-open), run concurrently across every freshly nominated candidate in this
+    // scan rather than sequentially: this whole call runs inside the tenant's promotion governance mutex
+    // (host-rest's withPromotionLock), so N sequential LLM calls would hold that lock for N x the extractor's
+    // own latency, queuing every other promotion transition for the tenant behind it. Still runs before
+    // persistMany so every suggestion lands in the same snapshot write as its candidate's status transition
+    // (each promise mutates its own `candidate` object in place; toPersist already holds those references).
+    // A throw from one candidate's extraction is caught by suggestFailOpen and does not affect the others
+    // (Promise.all over promises that each individually never reject).
+    if (suggestSchema != null) {
+      await Promise.all(
+        toPersist.map(async ({ candidate }) => {
+          const suggestion = await suggestFailOpen(candidate, tenant);
+          if (suggestion != null) candidate.suggestion = suggestion;
+        }),
+      );
+    }
     await persistMany(toPersist);
     // Stamp each nominate event with tenant too (so re-evaluation in the tenant scope finds the same
     // nominated and becomes idempotent). Recorded only after the batch persist above resolves. Fail-open (see
@@ -134,7 +156,42 @@ export function createNomination(opts: {
         { tenant, artifactId: candidate.artifactId },
       );
     }
+    // Audit the advisory suggestion (if any), after component.nominated -- symmetric fail-open discipline: a
+    // storage hiccup here must not undo the already-persisted suggestion or stop auditing the rest of the batch.
+    for (const { candidate } of toPersist) {
+      if (candidate.suggestion == null) continue;
+      await recordFailOpen(
+        lineage,
+        onError,
+        "promotion.suggest.audit",
+        "component.schemaSuggested",
+        { artifactId: candidate.artifactId, suggestion: candidate.suggestion },
+        { kind: "model" },
+        { tenant, artifactId: candidate.artifactId },
+      );
+    }
     return candidates.map((c) => c.candidate);
+  }
+
+  /**
+   * Fail-open wrapper around the optional `suggestSchema` hook: a throw / rejection is reported via
+   * `onError({ endpoint: "promotion.suggest.schema" })` and treated as "no suggestion" (undefined), matching
+   * `null`'s own "no proposal" meaning from the hook's own contract.
+   */
+  async function suggestFailOpen(
+    candidate: PromotionCandidate,
+    tenant: string | undefined,
+  ): Promise<SchemaSuggestion | undefined> {
+    try {
+      return (await suggestSchema!(candidate, tenantField(tenant))) ?? undefined;
+    } catch (error) {
+      notifyPromotionError(
+        onError,
+        { endpoint: "promotion.suggest.schema", artifactId: candidate.artifactId, ...tenantField(tenant) },
+        error,
+      );
+      return undefined;
+    }
   }
 
   return { nominateEligible };

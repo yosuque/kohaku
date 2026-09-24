@@ -40,6 +40,13 @@ export {
 } from "./tabs/promotions/PromotionDraftEditor.js";
 export { PromotionPreview } from "./tabs/promotions/PromotionPreview.js";
 export { PROMOTION_STATUS_FILTERS, PromotionsTab } from "./tabs/promotions/PromotionsTab.js";
+export { SuggestionPanel } from "./tabs/promotions/SuggestionPanel.js";
+export {
+  diffAgainstSuggestion,
+  draftFormFromSuggestion,
+  type SuggestionField,
+  type SuggestionFieldDiff,
+} from "./tabs/promotions/suggestion.js";
 export { adminThemeStyle, V as adminVars } from "./theme.js";
 // The generic UI primitives (card, Field, Empty, etc.) live on the `@kohaku-ui/admin-react/ui` subpath, not
 // here — the root carries only the domain API. `NoticeKind` / `NotifyFn` are the exception: they type

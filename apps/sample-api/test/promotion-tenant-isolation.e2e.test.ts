@@ -40,6 +40,7 @@ function tenantScripts(): unknown[] {
         { id: "a11y", score: 0.7, reasoning: "has text" },
         { id: "schema_inferability", score: 0.8, reasoning: "parameterizable" },
         { id: "generality", score: 0.8, reasoning: "general-purpose" },
+        { id: "suggestion_fidelity", score: 1, reasoning: "no proposal" },
       ],
       summary: "worthy of promotion",
     },

@@ -11,8 +11,9 @@ import { usePromotions } from "../../hooks.js";
 import type { AdminMessages } from "../../messages.js";
 import { V } from "../../theme.js";
 import { card, deniedMessage, selectStyle } from "../../ui.js";
-import { DEFAULT_QUERY_PATHS, genericInitialDraft, type PromotionDefaults } from "./draft.js";
+import { DEFAULT_QUERY_PATHS, type DraftForm, genericInitialDraft, type PromotionDefaults } from "./draft.js";
 import { type PromotionActionKind, PromotionCard } from "./PromotionCard.js";
+import { draftFormFromSuggestion } from "./suggestion.js";
 
 /** Status filter choices. "all" = evaluate (automatic nomination); the rest are read-only GET ?status=. */
 export const PROMOTION_STATUS_FILTERS = [
@@ -91,6 +92,24 @@ export function PromotionsTab(props: { defaults?: PromotionDefaults } = {}): Rea
   const { client, messages: t, notify, getMessages } = useAdmin();
   const queryPaths = props.defaults?.queryPaths ?? DEFAULT_QUERY_PATHS;
   const initialDraftFor = props.defaults?.initialDraftFor ?? genericInitialDraft;
+  const preferSuggestion = props.defaults?.preferSuggestion ?? true;
+  /** Suggestion first (it was extracted from this candidate's HTML), the product's generic prefill otherwise. */
+  const initialDraftOf = (candidate: PromotionCandidateView): DraftForm =>
+    preferSuggestion && candidate.suggestion != null
+      ? draftFormFromSuggestion(candidate.suggestion)
+      : initialDraftFor(candidate);
+  /**
+   * The product's own `queryPaths` first, with a suggested `queryTemplate.path` appended when it is not already
+   * in that list. Without this, a suggested path outside the product's list would be submitted on approve (the
+   * form is prefilled with it) while the <select> shows nothing selected and the diff panel calls it "unchanged" —
+   * a reviewer approving a value the UI never displayed.
+   */
+  const queryPathsFor = (candidate: PromotionCandidateView): readonly string[] => {
+    const suggestedPath = candidate.suggestion?.draft.queryTemplate?.path;
+    return suggestedPath != null && !queryPaths.includes(suggestedPath)
+      ? [...queryPaths, suggestedPath]
+      : queryPaths;
+  };
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [busy, setBusy] = useState(false);
   const { candidates, promotionMinUses, reload } = usePromotions(statusFilter);
@@ -121,11 +140,15 @@ export function PromotionsTab(props: { defaults?: PromotionDefaults } = {}): Rea
       )}
       {candidates.map((candidate) => (
         <PromotionCard
-          key={candidate.artifactId}
+          // Keyed on the suggestion's own identity too, not just artifactId: a candidate can be listed without a
+          // suggestion and later gain one (e.g. after a reload while a re-scan attaches an extraction). Without
+          // this, the card would not remount, the useState-initialized form would keep its stale prefill, and the
+          // acknowledgement checkbox would not reset even though a brand-new proposal just appeared.
+          key={`${candidate.artifactId}:${candidate.suggestion?.suggestedAt ?? ""}`}
           candidate={candidate}
           busy={busy}
-          initialDraft={initialDraftFor(candidate)}
-          queryPaths={queryPaths}
+          initialDraft={initialDraftOf(candidate)}
+          queryPaths={queryPathsFor(candidate)}
           onAction={async (kind, draft) => {
             setBusy(true);
             try {

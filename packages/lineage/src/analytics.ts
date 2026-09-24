@@ -68,10 +68,46 @@ export interface LineageSummary {
     generated: number;
     used: number;
     nominated: number;
+    /** component.schemaSuggested (a machine proposal was attached at nomination). */
+    schemaSuggested: number;
     judged: number;
     reviewed: number;
+    /** component.schemaEdited (a reviewer approved a candidate that carried a suggestion; changed may be empty). */
+    schemaEdited: number;
     published: number;
     withdrawn: number;
+  };
+  /**
+   * Human review turnaround: the time from a candidate's `component.nominated` to the next `component.reviewed`
+   * whose decision is approve or reject, paired per (tenant, artifactId). A requestChanges decision does not
+   * complete a review: the candidate is re-nominated later, but a re-nomination for a candidate whose window is
+   * already open does not restart the measurement (the original nomination's window stays open until a
+   * closing review consumes it) -- so a re-submitted candidate ("re-submit and approve", whose fresh
+   * `component.nominated` can land milliseconds before its own `component.reviewed`) is measured from its
+   * *original* nomination, including the time spent making the requested changes, rather than a near-zero
+   * duration from the resubmission. A reviewed event with no preceding open nomination in the window is
+   * ignored.
+   *
+   * **Order-dependent**: this is the only aggregation in this function that is sensitive to the order of
+   * `events` -- the pairing scans in array order and treats each `component.nominated` as opening the window
+   * that the next matching `component.reviewed` closes. It assumes `events` is in ascending `ts` order (what
+   * every call site in this repo passes), which `StoragePort.listLineage` does not itself guarantee. If a caller
+   * passes events out of `ts` order, a review can be paired with the wrong nomination (or fail to pair at all if
+   * its nomination appears after it in the array), silently skewing `durationMs` and lowering `count` with no
+   * error.
+   *
+   * `count` is the number of *paired* durations that made it into `durationMs`, not the number of
+   * approve/reject `component.reviewed` events -- a pair whose computed delta fails the finite/non-negative
+   * guard (out-of-order or malformed timestamps) is silently dropped from both `count` and the quantiles.
+   *
+   * Quantiles are nearest-rank like durationMs. `acceptedAsIs` counts component.schemaEdited records whose
+   * `changed` is empty (the machine suggestion was approved without any edit) — the ticket's "zero-edit
+   * approval" KPI.
+   */
+  review: {
+    count: number;
+    durationMs: { p50: number | null; p95: number | null; max: number | null };
+    acceptedAsIs: number;
   };
   /** Fixation event counts (intent.fixated / intent.unfixated). */
   fixations: { fixated: number; unfixated: number };
@@ -111,8 +147,10 @@ export function summarizeLineage(
     generated: 0,
     used: 0,
     nominated: 0,
+    schemaSuggested: 0,
     judged: 0,
     reviewed: 0,
+    schemaEdited: 0,
     published: 0,
     withdrawn: 0,
   };
@@ -123,6 +161,12 @@ export function summarizeLineage(
 
   let composed = 0;
   let fallbackTotal = 0;
+  // (tenant, artifactId) -> ts of the latest nomination not yet closed by an approve/reject review.
+  const openNominations = new Map<string, string>();
+  const reviewDurations: number[] = [];
+  let acceptedAsIs = 0;
+  const reviewKey = (e: LineageEventRecord): string =>
+    `${e.tenant ?? ""}\u0000${String(e.payload["artifactId"] ?? "")}`;
 
   for (const e of scoped) {
     switch (e.type) {
@@ -159,15 +203,48 @@ export function summarizeLineage(
       case "component.used":
         promotions.used++;
         break;
-      case "component.nominated":
+      case "component.nominated": {
         promotions.nominated++;
+        // Only open a *fresh* window when none is already open for this (tenant, artifactId): a re-nomination
+        // for a candidate whose window is already open (the "re-submit and approve" flow routes a
+        // changes_requested candidate back through `act(..., { kind: "nominate", by: reviewer }, ...)`,
+        // service.ts, recording a fresh component.nominated milliseconds before its own component.reviewed)
+        // does not restart the measurement -- the original nomination's window stays open, so a re-submitted
+        // candidate is still measured from its original nomination, including the time spent making the
+        // requested changes. This does not key off payload.by (a field docs/specification.md's
+        // component.nominated row does not promise as part of the wire contract): any nomination path can open
+        // the *first* window for a given candidate, including one driven purely through the generic actions
+        // route with no `by: "policy"` sentinel ever recorded.
+        const key = reviewKey(e);
+        if (!openNominations.has(key)) openNominations.set(key, e.ts);
+        break;
+      }
+      case "component.schemaSuggested":
+        promotions.schemaSuggested++;
         break;
       case "component.judged":
         promotions.judged++;
         break;
-      case "component.reviewed":
+      case "component.reviewed": {
         promotions.reviewed++;
+        const decision = e.payload["decision"];
+        if (decision === "approve" || decision === "reject") {
+          const key = reviewKey(e);
+          const nominatedAt = openNominations.get(key);
+          if (nominatedAt != null) {
+            const delta = Date.parse(e.ts) - Date.parse(nominatedAt);
+            if (Number.isFinite(delta) && delta >= 0) reviewDurations.push(delta);
+            openNominations.delete(key);
+          }
+        }
         break;
+      }
+      case "component.schemaEdited": {
+        promotions.schemaEdited++;
+        const changed = e.payload["changed"];
+        if (Array.isArray(changed) && changed.length === 0) acceptedAsIs++;
+        break;
+      }
       case "component.published":
         // Counts a promotion/reconcile audit backfill (payload.reconciled:true) the same as the original
         // synchronous record — the projection was published exactly once either way, so double-counting the
@@ -189,6 +266,7 @@ export function summarizeLineage(
   }
 
   durations.sort((a, b) => a - b);
+  reviewDurations.sort((a, b) => a - b);
   const denom = composed + fallbackTotal;
   const topN = Math.min(
     Math.max(Math.floor(opts.topIntentsLimit ?? TOP_INTENTS_DEFAULT), 1),
@@ -218,6 +296,15 @@ export function summarizeLineage(
     },
     topIntents,
     promotions,
+    review: {
+      count: reviewDurations.length,
+      durationMs: {
+        p50: quantile(reviewDurations, 50),
+        p95: quantile(reviewDurations, 95),
+        max: reviewDurations.length > 0 ? reviewDurations[reviewDurations.length - 1]! : null,
+      },
+      acceptedAsIs,
+    },
     fixations,
   };
 }

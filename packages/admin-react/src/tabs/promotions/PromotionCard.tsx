@@ -1,11 +1,13 @@
 import type { ComponentDraft, PromotionCandidateView } from "@kohaku-ui/client";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useAdmin } from "../../context.js";
 import { V } from "../../theme.js";
 import { card, ErrorBanner, StatusBadge, smallButton } from "../../ui.js";
 import { buildDraftPayload, type DraftForm } from "./draft.js";
 import { PromotionDraftEditor } from "./PromotionDraftEditor.js";
 import { PromotionPreview } from "./PromotionPreview.js";
+import { SuggestionPanel } from "./SuggestionPanel.js";
+import { diffAgainstSuggestion } from "./suggestion.js";
 
 export type PromotionActionKind = "approve" | "reject" | "withdraw" | "requestChanges";
 
@@ -22,6 +24,17 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
   const { candidate } = props;
   const { messages: t } = useAdmin();
   const [draft, setDraft] = useState<DraftForm>(props.initialDraft);
+  const suggestion = candidate.suggestion ?? null;
+  // Lineage attaches a suggestion exactly once, at the in_use → candidate transition, and never replaces it
+  // afterwards, so a bare per-mount checkbox is safe here. If that backend invariant ever changes (a candidate's
+  // suggestion mutating after mount), this state would need to reset alongside it.
+  const [acknowledged, setAcknowledged] = useState(false);
+  const diff = useMemo(
+    () => (suggestion != null ? diffAgainstSuggestion(draft, suggestion) : []),
+    [draft, suggestion],
+  );
+  // The approve button stays disabled until the reviewer confirms they compared the proposal with the preview.
+  const needsAcknowledgement = suggestion != null && !acknowledged;
   const terminal = ["published", "rejected", "withdrawn"].includes(candidate.status);
   // changes_requested (sent back) is non-terminal, and approval is restored as the "resubmit and approve" path.
   const isChangesRequested = candidate.status === "changes_requested";
@@ -31,6 +44,7 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
   const canReject =
     candidate.status === "in_use" || candidate.status === "candidate" || candidate.status === "in_review";
   const built = buildDraftPayload(draft, t);
+  const canApprove = built.ok && !needsAcknowledgement;
 
   return (
     <div style={card}>
@@ -89,19 +103,27 @@ export function PromotionCard(props: PromotionCardProps): ReactNode {
       {!terminal && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
           <PromotionDraftEditor draft={draft} setDraft={setDraft} queryPaths={props.queryPaths} />
+          {suggestion != null && (
+            <SuggestionPanel
+              suggestion={suggestion}
+              diff={diff}
+              acknowledged={acknowledged}
+              onAcknowledge={setAcknowledged}
+            />
+          )}
           {!built.ok && <ErrorBanner text={built.error} size="sm" role="alert" />}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               type="button"
-              disabled={props.busy || !built.ok}
-              onClick={() => built.ok && void props.onAction("approve", built.payload)}
+              disabled={props.busy || !canApprove}
+              onClick={() => canApprove && void props.onAction("approve", built.payload)}
               style={{
                 ...smallButton,
-                background: built.ok ? V.primary : V.disabledSurface,
+                background: canApprove ? V.primary : V.disabledSurface,
                 color: V.onPrimary,
                 border: "none",
                 padding: "8px 18px",
-                cursor: built.ok && !props.busy ? "pointer" : "not-allowed",
+                cursor: canApprove && !props.busy ? "pointer" : "not-allowed",
               }}
             >
               {isChangesRequested ? t.promotions.approveResubmitButton : t.promotions.approveButton}

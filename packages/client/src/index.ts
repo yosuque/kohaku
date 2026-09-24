@@ -51,7 +51,9 @@ export type {
   PromotionCandidateView,
   PromotionPreviewView,
   PromotionReconcileSummaryView,
+  SchemaSuggestionView,
   SendEventRequest,
   SerializedComponentDef,
   SessionArg,
+  SuggestedEventView,
 } from "./types.js";

@@ -118,6 +118,8 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 - **View Lineage**: UI Spec の Event Sourcing。全 compose / 操作 / 昇格 / 固定化がイベント列で見えます。
 - **分析**: 生イベント列を集計した俯瞰(`GET /api/kohaku/analytics/summary`)。fallback 率・tier 分布(L0/L1/L2)・cache 内訳(hit/miss/bypass/fixated)・レイテンシ分位(p50/p95/p99)・頻出 intent 上位・昇格/固定化イベント数を、表 + インラインバーで表示します。**集計は直近 200 件(既定)の窓に基づく**旨を画面上部に明記し、窓上限に到達した場合はその注記も出ます(silent cap にしない)。認可は read 系(`analytics.read`)なので admin/reviewer/viewer とも閲覧できます。
 - **昇格レビュー(L2→L1)**: 自由生成部品の候補一覧。HTML ソース確認 + **「▶ プレビュー」でレビュー対象そのものを実描画**(チャット面と同じ隔離 iframe に記録済み artifact を直接マウント — 承認対象と表示物の同一性は sha256 で保証)→ スキーマ(componentType / intentName / description)を確定 → 「承認して登録」。**上部の `status` セレクタで状態別に絞れます**(「すべて」は候補を掘り起こす `POST /promotions/evaluate`、特定の状態は読み取り専用の `GET /promotions?status=`)。候補カードの**「変更を要求(差し戻し)」で `changes_requested` に落とし**、修正のうえ**「再申請して承認」で candidate に戻して publish まで復帰**できます(差し戻しからの復帰導線)。`changes_requested` では却下は出さず、放棄は「取り下げる(withdraw)」に一本化しています。
+
+  **ホストがスキーマ抽出器を組み込んでいる場合**(sample-api の `index.ts` は組み込んでいます: `createSchemaExtractor({ llm })`)、新しい候補カードは**機械抽出された提案でプリフィル済み**のフォームで現れます — componentType / intentName / description / props スキーマ / データ配線 — モデル名と確信度のラベル付きで。異議があるフィールドは自由に編集できます: 各フィールドは提案に対して「変更なし」または「提案値: …」を表示し、**「提案されたスキーマをプレビューと照らして確認しました」チェックボックスをチェックするまで「承認して登録」は有効になりません**。編集内容は lineage(`component.schemaEdited`)に記録され、分析タブでレビューの所要時間と無編集で承認された件数が確認できます。抽出に失敗した場合はカードが空フォームにフォールバックし、失敗が記録されます(`promotion.suggest.schema`)。
 - **固定化(L1→L0)**: 頻出 L1 Intent の候補(利用回数・構造安定度)→ 「L0 に固定化」。
 - 「データ更新を模擬(bump)」: dataVersion を進めてキャッシュ無効化を再現します。`POST /api/kohaku/admin/bump-data-version` は Admin の他の操作と同じ identity + governance RBAC 配下にあり(`admin.bumpDataVersion`、admin のみ)、`KOHAKU_AUTHZ=jwt` ではサーバーが `KOHAKU_DEMO_ADMIN_ROUTES=1` を設定しない限りルート自体が無効(§7)で、その場合ボタンの実行は 404 になり赤いエラーバナーが出ます。
 - 4 タブとも上部バーで選択中の**テナント**でスコープされます(切り替えると各一覧が再取得され、テナント別に分離されていることが見えます)。分析タブの集計も選択テナントのイベントのみが対象です。
@@ -147,8 +149,8 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
 1. Chat: 「**Sales as a calendar heatmap**」(日本語「売上をカレンダーヒートマップで」でも同様)→ カタログにない要求なので `sales.custom` → **L2(橙)**。生成 HTML がネットワーク遮断の iframe で動き、データは親ブリッジ経由で取得される(配信前に静的 lint + **サーバー側スモーク検証** — jsdom 上で実行して ready 到達を確認 — を通過したものだけが届き、不合格は自動修復ループに差し戻されます)
 2. もう一度同じ質問(別の言い回しでも `sales.custom` に正規化されれば OK)→ 利用 2 回で昇格候補の閾値(デモ設定)を満たす
-3. Admin → 昇格レビュー: 候補カードの **「▶ プレビュー(隔離 iframe で実描画)」で見た目と動作を確認**し、「生成 HTML ソース」でコードも確認 → componentType `sales.calendarHeatmap` / intentName `sales.calendar_heatmap`(ヒートマップ要求ならプリフィル済み)→ **「承認して登録」**(プレビューは `viewer` ロールでは 403 — データ read capability の発行を伴うため)
-   - 裏で LLM-as-Judge(5 観点)→ 人間承認(このクリック)→ スキーマ確定 → publish が走り、各ステップが Lineage に残ります
+3. Admin → 昇格レビュー: 候補カードの **「▶ プレビュー(隔離 iframe で実描画)」で見た目と動作を確認**し、「生成 HTML ソース」でコードも確認 → componentType `sales.calendarHeatmap` / intentName `sales.calendar_heatmap`(**API が実 LLM で動いていれば抽出器の提案でプリフィル済み。それ以外はヒートマップ要求向けのヒューリスティックなプリフィル**)→ 確認チェックボックスをチェック → **「承認して登録」**(プレビューは `viewer` ロールでは 403 — データ read capability の発行を伴うため)
+   - 裏で LLM-as-Judge(7 観点)→ 人間承認(このクリック)→ スキーマ確定 → publish が走り、各ステップが Lineage に残ります
 4. Chat で同じ質問 → 今度は `sales.calendar_heatmap` に正規化され **L1(緑)+ ネイティブ実装**で描画。**API を再起動しても昇格は残ります**: スナップショット(`apps/sample-api/.data/promotions.json`)が正であり、起動時の reconcile がそこからカタログ/Intent への射影を再構築します
 5. 同じ「作成」は外部チャット(MCP)からも起こせます(→ §5)。`kohaku_compose` 経由の利用も同じ昇格カウンタに合算されます(反映は API サーバー再起動後 → §5)
 

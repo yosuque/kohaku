@@ -272,6 +272,10 @@ const JA: UIStrings = {
       topIntents: "上位 Intent",
       noComposeRecords: "compose 記録はまだありません",
       promotionLifecycle: "昇格ライフサイクル(イベント数)",
+      reviewTurnaround: "レビュー所要時間 p50",
+      reviewTurnaroundSub: (p95, count) => `p95 ${p95} ・ ${count} 件`,
+      acceptedAsIs: "修正なしで承認された提案",
+      acceptedAsIsSub: (suggested) => `提案 ${suggested} 件中`,
     },
     fixations: {
       description:
@@ -339,6 +343,14 @@ const JA: UIStrings = {
         "この候補にはデータ参照が記録されていないため、データ取得はエラーになります(見た目の骨格のみ確認できます)。",
       previewFetchFailed: (message) => `プレビューを取得できませんでした: ${message}`,
       previewMalformed: "プレビュー応答が不正です",
+      suggestionBadge: (model, confidencePct) => `${model} による提案(確信度 ${confidencePct}%)`,
+      suggestionTitle: "提案されたスキーマ(機械抽出 — 承認前に確認してください)",
+      suggestionUnchanged: "変更なし",
+      suggestionChangedFrom: (suggested) => `提案値: ${suggested}`,
+      suggestionEmptyValue: "(空)",
+      suggestionAcknowledge: "提案されたスキーマをプレビューと照らして確認しました",
+      suggestionAcknowledgeRequired: "承認する前に、提案されたスキーマを確認したことをチェックしてください。",
+      suggestionEvents: (names) => `提案されたイベント: ${names}`,
     },
     gallery: {
       description: "固定のフィクスチャデータを使用しており、このタブは API を呼び出しません。",

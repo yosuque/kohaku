@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
+import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { createApp } from "./app.js";
 import { createAuthzFromEnv, createJwtRequestIdentity, createStorageFromEnv } from "./ports/from-env.js";
@@ -55,6 +56,9 @@ const { app, repo, setShuttingDown } = await createApp({
   // == null, i.e. KOHAKU_AUTHZ=hmac) and off by default under JWT; KOHAKU_DEMO_ADMIN_ROUTES=1 opts back in
   // (e.g. to exercise it manually against a JWT-protected deployment) — see AppDeps.demoAdminRoutes.
   demoAdminRoutes: process.env["KOHAKU_DEMO_ADMIN_ROUTES"] === "1" || authzFromEnv.identity == null,
+  // LLM auto-extraction of the promotion schema (advisory prefill in Admin › Promotions). Opt-in at the
+  // entry point so the FakeLlm-scripted tests keep their exact response order.
+  schemaExtractor: createSchemaExtractor({ llm }),
 });
 
 const port = Number(process.env["PORT"] ?? 8787);

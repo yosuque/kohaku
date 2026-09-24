@@ -8,6 +8,7 @@ import { GENERATED_SCAN_WINDOW } from "../constants.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import type { ComponentDraft, PromotionStatus } from "./machine.js";
 import { notifyPromotionError, type PromotionCandidate, type PromotionErrorContext } from "./service.js";
+import type { SchemaSuggestion } from "./suggestion.js";
 import type { createUsageIndex } from "./usage.js";
 import { indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
 
@@ -149,6 +150,9 @@ export function createCandidateStore(opts: {
       sessions: usageStats.sessions,
       verdict: state?.data["verdict"],
       draft: state?.data["draft"] as ComponentDraft | undefined,
+      ...(state?.data["suggestion"] != null
+        ? { suggestion: state.data["suggestion"] as unknown as SchemaSuggestion }
+        : {}),
       updatedAt: state?.updatedAt ?? generated[0]?.ts ?? new Date(0).toISOString(),
     };
   }
@@ -167,6 +171,9 @@ export function createCandidateStore(opts: {
       data: {
         ...(candidate.verdict != null ? { verdict: candidate.verdict } : {}),
         ...(candidate.draft != null ? { draft: candidate.draft } : {}),
+        // The advisory schema suggestion (promotion/suggestion.ts). Kept across every transition once attached
+        // at nomination, so the approval UI can still prefill after a changes_requested round-trip.
+        ...(candidate.suggestion != null ? { suggestion: candidate.suggestion } : {}),
         ...(candidate.request != null ? { request: candidate.request } : {}),
         // Self-contained published projection (#9): once the candidate reaches published, duplicate what
         // `reconcile` needs to rebuild the projection (html/sha256/ref/componentType) directly onto the
