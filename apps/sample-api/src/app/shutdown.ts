@@ -87,7 +87,11 @@ function errorMessage(error: unknown): string {
 export function createGracefulShutdownHandler(options: GracefulShutdownOptions): (signal: string) => void {
   const { server, ports, graceMs, setShuttingDown, label } = options;
   const prestopMs = options.prestopMs ?? 0;
-  const log = options.log ?? ((message: string) => console.log(message));
+  // stderr, not stdout: sample-mcp's stdio profile reserves stdout for the MCP JSON-RPC protocol itself
+  // (its own index.ts logs "ready (stdio)" via console.error for the same reason), and this handler is
+  // shared verbatim with sample-mcp's http.ts, so the default must not silently move its shutdown
+  // messages onto stdout. Callers that do want stdout (or any other sink) still override via `log`.
+  const log = options.log ?? ((message: string) => console.error(message));
   const exit = options.exit ?? process.exit.bind(process);
   return (signal: string) => {
     setShuttingDown?.(true);

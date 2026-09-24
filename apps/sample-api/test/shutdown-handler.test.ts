@@ -261,4 +261,30 @@ describe("createGracefulShutdownHandler: grace-timer cleanup and log routing", (
     );
     expect(exit).toHaveBeenCalledWith(1);
   });
+
+  it("with no `log` override, the default writes to stderr (console.error), not stdout (console.log)", async () => {
+    // Regression guard: sample-mcp's stdio profile reserves stdout for the MCP JSON-RPC protocol itself,
+    // so this shared handler's default must never write shutdown messages to stdout -- both call sites
+    // (sample-api's index.ts, sample-mcp's http.ts) rely on this default rather than passing their own `log`.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const server = fakeServer();
+      const ports = { close: vi.fn(async () => {}) };
+      const handle = createGracefulShutdownHandler({
+        server,
+        ports,
+        graceMs: 30_000,
+        label: "test-stderr",
+        exit: vi.fn(),
+      });
+      handle("SIGTERM");
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("test-stderr: received SIGTERM"));
+      expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
 });
