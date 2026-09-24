@@ -1,10 +1,10 @@
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { UISpec } from "@kohaku-ui/spec-core";
 import type { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { REGIONS } from "../src/domain/types.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 // e2e for the region cross-filter (A1 two-way binding):
 // composing sales.quarterly_summary with a region returns a fixed Spec holding control.select + data.bind(region),

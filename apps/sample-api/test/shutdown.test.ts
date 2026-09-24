@@ -1,8 +1,8 @@
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { FixationRecord, UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 // Graceful shutdown (ops): setShuttingDown flips GET /api/health to a 503 readiness signal so a load balancer
 // stops routing new traffic during the drain window, ahead of the server actually closing. index.ts wires this

@@ -3,10 +3,11 @@
  * Release notes from the package CHANGELOGs.
  *
  * `changeset version` writes one `## <version>` section into every publishable package's own
- * `CHANGELOG.md` (20 packages today: `packages/*`, `cli`, `spec`). Because the fixed group moves all of
- * them together, most of those sections are identical or near-identical -- the same "Updated dependencies"
- * bump repeated 19 times, and the odd genuinely user-facing change copied verbatim into every package that
- * carries it. A GitHub Release body built by concatenating all 20 sections would be almost entirely noise.
+ * `CHANGELOG.md` (22 packages today: publishable `packages/*` -- excluding the private `port-contracts`
+ * -- plus `cli` and `spec`). Because the fixed group moves all of them together, most of those sections
+ * are identical or near-identical -- the same "Updated dependencies" bump repeated 21 times, and the odd
+ * genuinely user-facing change copied verbatim into every package that carries it. A GitHub Release body
+ * built by concatenating all 22 sections would be almost entirely noise.
  * This script computes the union instead: one entry per distinct change, annotated with which package(s)
  * it came from, with the pure dependency-bump noise dropped entirely. It is used by the Version workflow
  * (`.github/workflows/version.yml`) to generate the body of the draft release it creates once a version

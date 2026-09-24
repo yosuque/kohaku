@@ -1,9 +1,9 @@
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { FixationRecord, SpecPatch, TabularData, UISpec } from "@kohaku-ui/spec-core";
 import { applyPatch, parseSpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 const SUMMARY_REF = "query://sales/summary?fy=2026&groupBy=region&q=3";
 const TREND_REF = "query://sales/trend?granularity=month&metric=revenue";

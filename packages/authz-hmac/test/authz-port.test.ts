@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
+import { createHmacAuthzPort } from "../src/index.js";
 
 // Scope matching is exact (the contract in spec-core ports.ts). A prefix match would let value/name boundaries slip through
 // (?region=us allowing ?region=usa, annotate allowing annotateAll), so pin down that regression.
@@ -64,5 +64,26 @@ describe("createHmacAuthzPort capability expiry", () => {
     vi.setSystemTime(new Date(expSeconds * 1000));
     const result = await authz.verify(cap, { kind: "read", ref: "query://sales/summary" });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("createHmacAuthzPort options.ttlSeconds", () => {
+  const principal = { id: "u" };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("uses options.ttlSeconds as the default TTL and lets issueCapability's opts override it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const authz = createHmacAuthzPort("test-secret", { ttlSeconds: 2 });
+    const short = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }]);
+    const long = await authz.issueCapability(principal, [{ kind: "read", ref: "query://s/x" }], {
+      ttlSeconds: 10,
+    });
+    vi.setSystemTime(new Date("2026-01-01T00:00:03.000Z"));
+    expect((await authz.verify(short, { kind: "read", ref: "query://s/x" })).ok).toBe(false);
+    expect((await authz.verify(long, { kind: "read", ref: "query://s/x" })).ok).toBe(true);
   });
 });

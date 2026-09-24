@@ -30,6 +30,7 @@ const HOMEPAGE = "https://github.com/yosuque/kohaku";
 const PUBLISHED_DIRS = [
   ...[
     "admin-react",
+    "authz-hmac",
     "client",
     "composer",
     "data-binding",
@@ -48,6 +49,7 @@ const PUBLISHED_DIRS = [
     "renderer-wc",
     "sandbox",
     "spec-core",
+    "storage-memory",
   ].map((name) => `packages/${name}`),
   "cli",
   "spec",

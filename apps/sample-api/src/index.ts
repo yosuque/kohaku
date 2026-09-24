@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { createApp } from "./app.js";
-import { createHmacAuthzPort } from "./ports/authz-port.js";
-import { createFileStoragePort } from "./ports/storage-port.js";
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(APP_DIR, "../../..");

@@ -5,9 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/app.ts",
-    "./action-effects": "./src/action-effects.ts",
-    "./ports/authz-port": "./src/ports/authz-port.ts",
-    "./ports/storage-port": "./src/ports/storage-port.ts"
+    "./action-effects": "./src/action-effects.ts"
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -18,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@kohaku-ui/authz-hmac": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
     "@kohaku-ui/data-binding": "workspace:^",
     "@kohaku-ui/evals": "workspace:^",
@@ -30,6 +29,7 @@
     "@kohaku-ui/registry": "workspace:^",
     "@kohaku-ui/sandbox": "workspace:^",
     "@kohaku-ui/spec-core": "workspace:^",
+    "@kohaku-ui/storage-memory": "workspace:^",
     "@ai-sdk/anthropic": "catalog:",
     "@ai-sdk/google": "catalog:",
     "@ai-sdk/openai": "catalog:",
