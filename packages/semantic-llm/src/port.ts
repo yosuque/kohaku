@@ -26,6 +26,14 @@ export interface LlmSemanticPortOptions {
   fallbackIntent?: string;
   /** Maps a locale tag to the "(locale)" label in the prompt. Default: the tag itself, "en" when absent. */
   outputLocale?: (locale?: string) => string;
+  /** Rejects an NL question longer than this many characters before any LLM call. Default: 2000. */
+  maxQuestionChars?: number;
+  /**
+   * Observation hook, called after every successful NL normalization (both the matched-Intent and the
+   * fallback outcomes; never called before a throw). Fail-open: a throwing hook is caught and ignored, so an
+   * observability bug can never break normalization.
+   */
+  onNormalized?: (info: { text: string; canonical: string; fallback: boolean; tenant?: string }) => void;
 }
 
 /**
@@ -37,7 +45,7 @@ export interface LlmSemanticPortOptions {
  * with your own SemanticPort when the catalog, prompt or fallback policy outgrow these options.
  */
 export function createLlmSemanticPort(options: LlmSemanticPortOptions): SemanticPort {
-  const { llm, dataVersion, describeShape, rules, fallbackIntent } = options;
+  const { llm, dataVersion, describeShape, rules, fallbackIntent, maxQuestionChars, onNormalized } = options;
   const catalogFor =
     typeof options.catalog === "function" ? options.catalog : () => options.catalog as IntentCatalogLike;
   const outputLocale = options.outputLocale ?? ((locale?: string) => locale ?? "en");
@@ -46,15 +54,28 @@ export function createLlmSemanticPort(options: LlmSemanticPortOptions): Semantic
     async normalize(input: SemanticInput, ctx: SessionContext): Promise<IntentInput> {
       const catalog = catalogFor(ctx.tenant);
       if (input.kind === "gui") return normalizeGuiAction(input, catalog);
-      return normalizeNlQuery({
+      const result = await normalizeNlQuery({
         input,
-        ctx,
         catalog,
         llm,
         rules: rules?.(ctx) ?? [],
         locale: outputLocale(input.locale ?? ctx.locale),
         ...(fallbackIntent != null ? { fallbackIntent } : {}),
+        ...(maxQuestionChars != null ? { maxQuestionChars } : {}),
       });
+      if (onNormalized != null) {
+        try {
+          onNormalized({
+            text: input.text,
+            canonical: result.canonical,
+            fallback: result.fallback,
+            ...(ctx.tenant != null ? { tenant: ctx.tenant } : {}),
+          });
+        } catch {
+          // Fail-open: an observation hook must never break normalization.
+        }
+      }
+      return { canonical: result.canonical, params: result.params };
     },
     async resolveQuery(intent: CanonicalIntent, ctx?: { tenant?: string }): Promise<QueryHandle[]> {
       const def = catalogFor(ctx?.tenant).get(intent.canonical);

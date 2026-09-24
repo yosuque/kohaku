@@ -14,7 +14,7 @@ export function normalizeGuiAction(
 ): { canonical: string; params: JsonObject } {
   if (input.action === "view.select" || input.action === "facet.change") {
     const requested = (input.params["intent"] as string | undefined) ?? input.current?.canonical;
-    if (requested == null) throw new Error("view.select requires params.intent");
+    if (requested == null) throw new Error(`${input.action} requires params.intent or a current Intent`);
     const def = catalog.get(requested);
     if (def == null) throw new Error(`unknown intent: ${requested}`);
     const { intent: _drop, ...facets } = input.params;

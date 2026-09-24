@@ -84,6 +84,15 @@ describe("normalizeGuiAction", () => {
     expect(out).toEqual({ canonical: "sales.records", params: { limit: 200 } });
   });
 
+  it("view.select / facet.change without params.intent or a current Intent throws the requesting action's name", () => {
+    expect(() => normalizeGuiAction({ kind: "gui", action: "view.select", params: {} }, catalog)).toThrow(
+      "view.select requires params.intent or a current Intent",
+    );
+    expect(() => normalizeGuiAction({ kind: "gui", action: "facet.change", params: {} }, catalog)).toThrow(
+      "facet.change requires params.intent or a current Intent",
+    );
+  });
+
   it("rejects unknown Intents, invalid params and unsupported actions", () => {
     expect(() =>
       normalizeGuiAction({ kind: "gui", action: "view.select", params: { intent: "nope" } }, catalog),
