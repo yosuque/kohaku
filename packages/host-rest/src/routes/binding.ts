@@ -1,4 +1,10 @@
-import { applyActionEffects, type ParsedInvokableRef, parseInvokableRef } from "@kohaku-ui/host-core";
+import {
+  applyActionEffects,
+  CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
+  type ParsedInvokableRef,
+  parseInvokableRef,
+  verifyCapabilitySafely,
+} from "@kohaku-ui/host-core";
 import type { Principal, VerifyRequest, VerifyResult } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
@@ -15,17 +21,10 @@ import { ANONYMOUS, message, parseBody, type RouteContext, reportHostError, requ
 const REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable";
 
 /**
- * The client-safe message for a thrown `authz.verify` (an infrastructure failure, e.g. a revocation-store
- * outage -- see `AuthzPort.verify`'s doc comment in spec-core's `ports.ts`). Never the raw error's own
- * message, which may leak internals.
- */
-const CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE = "capability verification unavailable";
-
-/**
- * Calls `authz.verify`, converting a thrown error (fail-closed, per `AuthzPort.verify`'s doc comment: verify
- * throws only on infrastructure failure) into a 503 `INTERNAL` response rather than letting it propagate as
- * an unhandled rejection / raw 500. The original error still reaches the observability hook via
- * reportHostError, symmetric with every other failure-path response in this file.
+ * Calls `authz.verify` via host-core's `verifyCapabilitySafely` (shared with the MCP profile), and maps its
+ * `"unavailable"` outcome to a 503 `INTERNAL` response rather than letting a thrown `verify` propagate as an
+ * unhandled rejection / raw 500. The original error still reaches the observability hook via reportHostError,
+ * symmetric with every other failure-path response in this file.
  */
 async function verifyCapability(
   deps: KohakuHostDeps,
@@ -34,13 +33,14 @@ async function verifyCapability(
   token: string,
   req: VerifyRequest,
 ): Promise<VerifyResult | Response> {
-  try {
-    return await deps.authz.verify(token, req);
-  } catch (e) {
-    const requestId = requestIdOf(c, deps);
-    await reportHostError(deps, endpoint, requestId, e);
+  const requestId = requestIdOf(c, deps);
+  const result = await verifyCapabilitySafely(deps.authz, token, req, (e) =>
+    reportHostError(deps, endpoint, requestId, e),
+  );
+  if (result.kind === "unavailable") {
     return c.json(errorBody("INTERNAL", CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE, requestId), 503);
   }
+  return result.verdict;
 }
 
 /**

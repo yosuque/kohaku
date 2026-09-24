@@ -1048,18 +1048,13 @@ function toolError(message: string) {
 }
 
 /**
- * The client-safe message for a thrown `authz.verify` (an infrastructure failure, e.g. a revocation-store
- * outage -- see `AuthzPort.verify`'s doc comment in spec-core's `ports.ts`). Symmetric with the REST
- * surface's binding routes, which use the same fixed text for the same failure.
- */
-const CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE = "capability verification unavailable";
-
-/**
- * Calls `authz.verify`, converting a thrown error (fail-closed, per `AuthzPort.verify`'s doc comment: verify
- * throws only on infrastructure failure) into a structured tool error with a fixed, client-safe message,
- * rather than letting it fall through to `safeTool`'s generic internal-error fallback (which would still be
- * fail-closed, but with a less specific message) or propagate as an unhandled rejection. The original error
- * still reaches the observability hook via reportMcpError.
+ * Calls `authz.verify` via host-core's `verifyCapabilitySafely` (shared with the REST profile), converting
+ * its `"unavailable"` outcome (a thrown `verify` -- see `AuthzPort.verify`'s doc comment in spec-core's
+ * `ports.ts`: verify throws only on infrastructure failure) into a structured tool error with the same
+ * client-safe message the REST surface uses for the same failure, rather than letting it fall through to
+ * `safeTool`'s generic internal-error fallback (which would still be fail-closed, but with a less specific
+ * message) or propagate as an unhandled rejection. The original error still reaches the observability hook
+ * via reportMcpError.
  */
 async function verifyCapability(
   deps: McpHostDeps,
@@ -1067,12 +1062,13 @@ async function verifyCapability(
   capability: string,
   req: VerifyRequest,
 ): Promise<VerifyResult | ReturnType<typeof toolError>> {
-  try {
-    return await deps.authz.verify(capability, req);
-  } catch (e) {
-    await reportMcpError(deps, endpoint, e);
-    return toolError(CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE);
+  const result = await hostCore.verifyCapabilitySafely(deps.authz, capability, req, (e) =>
+    reportMcpError(deps, endpoint, e),
+  );
+  if (result.kind === "unavailable") {
+    return toolError(hostCore.CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE);
   }
+  return result.verdict;
 }
 
 /**

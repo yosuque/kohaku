@@ -1,6 +1,7 @@
 ---
 "@kohaku-ui/authz-hmac": minor
 "@kohaku-ui/authz-jwt": minor
+"@kohaku-ui/host-core": patch
 "@kohaku-ui/host-rest": patch
 "@kohaku-ui/host-mcp-apps": patch
 ---
@@ -26,8 +27,12 @@ the host is `localhost` / `127.0.0.1` / `::1`. New `requireTenant` option (defau
 with no (or an empty) tenant claim as `JwtIdentityError({ code: "MISSING_TENANT" })` instead of silently
 widening scope to "no tenant" (only applies to the default claim mapping).
 
+`@kohaku-ui/host-core` adds `verifyCapabilitySafely(authz, token, req, onFailure)` (alongside the existing
+`issueSpecCapabilitySafely`): calls `authz.verify` and returns a discriminated
+`{ kind: "verdict"; verdict } | { kind: "unavailable"; error }` instead of letting a thrown `verify`
+propagate, plus the shared `CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE` client-safe text constant.
 `@kohaku-ui/host-rest`'s `/binding/resolve` and `/binding/action`, and `@kohaku-ui/host-mcp-apps`'s
-`kohaku_resolve_binding` / `kohaku_action` tools, now catch a thrown `authz.verify` and report it as a
-client-safe, observed failure (REST: 503 `INTERNAL` with `"capability verification unavailable"`, reported to
-`onError`; MCP: a structured tool error with the same message, reported to `onError`) instead of letting it
-surface as a raw 500 or an unhandled rejection.
+`kohaku_resolve_binding` / `kohaku_action` tools, now call it and map `"unavailable"` to a client-safe,
+observed failure (REST: 503 `INTERNAL` with `"capability verification unavailable"`, reported to `onError`;
+MCP: a structured tool error with the same message, reported to `onError`) instead of letting a thrown
+`authz.verify` surface as a raw 500 or an unhandled rejection.

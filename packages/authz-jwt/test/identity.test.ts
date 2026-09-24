@@ -153,6 +153,18 @@ describe("createJwtIdentityResolver (JWKS)", () => {
       .sign(privateKey);
     await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "INVALID_TOKEN" });
   });
+
+  it("rejects a token whose aud does not match the configured audience (mandatory in jwks mode)", async () => {
+    const { publicKey, privateKey } = await generateKeyPair("RS256");
+    const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "RS256", use: "sig" };
+    const resolver = createJwtIdentityResolver({ key: { jwks: { keys: [jwk] } }, audience: "kohaku" });
+    const token = await new SignJWT({ sub: "rs" })
+      .setProtectedHeader({ alg: "RS256", kid: "k1" })
+      .setExpirationTime("5m")
+      .setAudience("someone-else")
+      .sign(privateKey);
+    await expect(resolver.resolve(token)).rejects.toMatchObject({ code: "INVALID_TOKEN" });
+  });
 });
 
 describe("createJwtIdentityResolver construction-time validation", () => {
