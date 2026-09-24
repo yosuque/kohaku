@@ -422,6 +422,18 @@ export interface Judge {
  * renormalization of its remaining weights (sum to 1). Returns `rubric` unchanged if it has no
  * `suggestion_fidelity` criterion at all (the caller only invokes this after confirming one exists).
  */
+/**
+ * Rounds a computed weight to 4 decimal places. Floating-point arithmetic on the tenths/hundredths that
+ * rubric weights are always written in (e.g. `0.05 + 0.1`) does not land on an exact binary value (it
+ * comes out `0.15000000000000002`), and that raw value would otherwise be interpolated verbatim into the
+ * criterion list `rubricSystem` sends the model (`weight ${c.weight}`) -- a cosmetic defect there, but one
+ * that also risks reading to the model as a deliberately, suspiciously precise number. Four decimal places
+ * is more precision than any rubric weight in this file is ever written with.
+ */
+function roundWeight(weight: number): number {
+  return Math.round(weight * 10_000) / 10_000;
+}
+
 function noSchemaRubricVariant(rubric: Rubric): Rubric {
   const remaining = rubric.criteria.filter((c) => c.id !== "suggestion_fidelity");
   if (remaining.length === rubric.criteria.length) return rubric;
@@ -429,13 +441,13 @@ function noSchemaRubricVariant(rubric: Rubric): Rubric {
   const criteria =
     rubric === l2PromotionRubric
       ? remaining.map((c) =>
-          c.id === "schema_inferability" ? { ...c, weight: c.weight + droppedWeight } : c,
+          c.id === "schema_inferability" ? { ...c, weight: roundWeight(c.weight + droppedWeight) } : c,
         )
       : (() => {
           const remainingSum = remaining.reduce((sum, c) => sum + c.weight, 0);
           return remaining.map((c) => ({
             ...c,
-            weight: remainingSum > 0 ? c.weight / remainingSum : c.weight,
+            weight: remainingSum > 0 ? roundWeight(c.weight / remainingSum) : c.weight,
           }));
         })();
   return { id: rubric.id, version: rubric.version, criteria };

@@ -162,6 +162,23 @@ describe("createAuthzFromEnv", () => {
         KOHAKU_CAPABILITY_SECRET: "dev-secret-change-me",
       }),
     ).toThrow(/KOHAKU_CAPABILITY_SECRET must be set to a real secret/);
+    // An empty string, or a whitespace-only value, must not slip through as if it were "a real secret"
+    // set to something other than the literal default -- both are treated as unset (fall back to the
+    // fixed default, which the guard above then refuses).
+    expect(() =>
+      createAuthzFromEnv({
+        KOHAKU_STORAGE: "redis",
+        KOHAKU_REDIS_URL: "redis://127.0.0.1:1",
+        KOHAKU_CAPABILITY_SECRET: "",
+      }),
+    ).toThrow(/KOHAKU_CAPABILITY_SECRET must be set to a real secret/);
+    expect(() =>
+      createAuthzFromEnv({
+        KOHAKU_STORAGE: "redis",
+        KOHAKU_REDIS_URL: "redis://127.0.0.1:1",
+        KOHAKU_CAPABILITY_SECRET: "   ",
+      }),
+    ).toThrow(/KOHAKU_CAPABILITY_SECRET must be set to a real secret/);
 
     // Supplying a real secret clears it in every one of those cases.
     expect(() =>

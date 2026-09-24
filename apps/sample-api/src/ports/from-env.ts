@@ -152,7 +152,14 @@ function buildAuthzFromEnv(
   env: NodeJS.ProcessEnv,
   revocations: CapabilityRevocationStore,
 ): { kind: AuthzKind; authz: AuthzPort; identity?: JwtIdentityResolver } {
-  const capabilitySecret = env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me";
+  // An empty or whitespace-only value is treated exactly like an unset one (falls back to the fixed
+  // default) rather than being passed through as a literal near-empty secret -- `.trim()` here only
+  // decides *whether* the env value counts as set, the value used below is still the untrimmed original.
+  const rawCapabilitySecret = env["KOHAKU_CAPABILITY_SECRET"];
+  const capabilitySecret =
+    rawCapabilitySecret != null && rawCapabilitySecret.trim() !== ""
+      ? rawCapabilitySecret
+      : "dev-secret-change-me";
   const kind = (env["KOHAKU_AUTHZ"] ?? "hmac") as AuthzKind;
   // The fixed fallback above is a file/hmac demo convenience only. Once either storage or authz leaves
   // the single-process, header-based demo shape -- a shared redis/postgres backend, or JWT-verified

@@ -611,6 +611,40 @@ describe("rubric variant selection (#14): suggestion_fidelity drop and renormali
     expect(verdict.rubricVersion).toBe("0.4");
   });
 
+  it("rounds a custom rubric's renormalized weight so it never leaks a raw floating-point tail into the prompt", async () => {
+    // 0.1 / 0.3 in IEEE 754 doubles is 0.33333333333333337, not a clean 0.3333 -- exactly the kind of
+    // value `noSchemaRubricVariant`'s generic proportional-renormalization branch must round before it
+    // reaches `rubricSystem`'s `weight ${c.weight}` interpolation into the model-facing prompt.
+    const customRubric: Rubric = {
+      id: "custom",
+      version: "1.0",
+      criteria: [
+        { id: "a", description: "a", weight: 0.1 },
+        { id: "b", description: "b", weight: 0.1 },
+        { id: "c", description: "c", weight: 0.1 },
+        { id: "suggestion_fidelity", description: "sf", weight: 0.7 },
+      ],
+    };
+    const llm = new FakeLlm({
+      objects: [
+        {
+          criteria: [
+            { id: "a", score: 1, reasoning: "a" },
+            { id: "b", score: 1, reasoning: "b" },
+            { id: "c", score: 1, reasoning: "c" },
+          ],
+          summary: "scored",
+        },
+      ],
+    });
+    const judge = createJudge({ llm, rubric: customRubric, passScore: 0.5 });
+    await judge.judge(HTML_INPUT);
+
+    const system = llm.calls[0]!.system!;
+    expect(system).toContain("a (weight 0.3333)");
+    expect(system).not.toMatch(/weight 0\.\d{5,}/);
+  });
+
   it("both variants' weights sum to 1", () => {
     expect(l2PromotionRubric.criteria.reduce((s, c) => s + c.weight, 0)).toBeCloseTo(1);
     expect(l2PromotionRubricV0_3.criteria.reduce((s, c) => s + c.weight, 0)).toBeCloseTo(1);

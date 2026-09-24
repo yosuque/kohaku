@@ -312,14 +312,23 @@ export async function readLineage(
 ): Promise<LineageEventRecord[]> {
   const limit = filter.limit ?? DEFAULT_LINEAGE_LIMIT;
   if (limit <= 0) return [];
+  // An explicit empty `type` array is a predicate no event can ever satisfy -- `matchesLineageFilter`
+  // (spec-core) and the memory/postgres ports all agree `type: []` means "match nothing", not "no type
+  // filter at all". `chooseCandidateIndex` can't tell the two apart (both fall through its own
+  // `filter.type.length > 0` guard to `null` -- see lineage-pure.test.ts's "type is an empty array" case),
+  // so without this check the `candidate == null` branch below would treat it as the genuinely empty
+  // filter and read the by-seq `limit` pushdown, ignoring the type predicate entirely. Handled here, once,
+  // before any Redis read.
+  if (filter.type != null && filter.type.length === 0) return [];
 
   const candidate = chooseCandidateIndex(filter);
-  // `chooseCandidateIndex` already returns null only when `type`/`tenant`/every payload index field is
-  // absent from `filter` -- so on this branch the only predicates a `by-seq` read could still need to
-  // check client-side are `since`/`until`. When those are absent too (the empty filter the admin Lineage
-  // tab and GET /analytics/summary both issue), `by-seq` alone already satisfies the whole filter, so the
-  // `limit` pushdown (ZREVRANGE 0 limit-1) applies here exactly as it does for a single exhaustive index,
-  // instead of the chunked scan hydrating up to LINEAGE_SCAN_CHUNK_SIZE bodies for a much smaller limit.
+  // `chooseCandidateIndex` returns null when `type`/`tenant`/every payload index field is absent from
+  // `filter` (an empty `type` array was already handled above, so it can't reach here) -- so on this
+  // branch the only predicates a `by-seq` read could still need to check client-side are `since`/`until`.
+  // When those are absent too (the empty filter the admin Lineage tab and GET /analytics/summary both
+  // issue), `by-seq` alone already satisfies the whole filter, so the `limit` pushdown (ZREVRANGE 0
+  // limit-1) applies here exactly as it does for a single exhaustive index, instead of the chunked scan
+  // hydrating up to LINEAGE_SCAN_CHUNK_SIZE bodies for a much smaller limit.
   const events = await (candidate == null
     ? filter.since == null && filter.until == null
       ? readPushdown(redis, keys, keys.lineage.bySeq, limit)
