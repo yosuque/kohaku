@@ -62,8 +62,12 @@ export function renderCatalogDoc(catalog: IntentCatalogLike): string {
 /**
  * The normalizer's system prompt: two fixed opening lines, the product's rules, two fixed closing rules
  * (the second one pairing with buildNormalizeUserPrompt's untrustedBlock delimiter).
- * @internal Exported for tests (asserting the exact rendered prompt); not a stable public contract — the
- * wording may change across minor versions.
+ *
+ * Exported for tests (asserting the exact rendered prompt) — deliberately not given the doc tag that marks
+ * a declaration internal-only, since this package's build (tsconfig.build.json's stripInternal option)
+ * strips that tag's declarations from the emitted .d.ts, which would break the type declaration for this
+ * function's re-export from index.ts while leaving the runtime export in place. Not a stable public
+ * contract regardless: the wording may change across minor versions.
  */
 export function buildNormalizeSystemPrompt(rules: readonly string[]): string {
   return [
@@ -79,8 +83,10 @@ export function buildNormalizeSystemPrompt(rules: readonly string[]): string {
  * The normalizer's user prompt: the catalog doc plus the user's question. The question is wrapped in an
  * untrustedBlock (see above) so a question that tries to inject instructions is delimited as data, paired
  * with the system prompt's closing rule about the USER_QUESTION block.
- * @internal Exported for tests (asserting the exact rendered prompt); not a stable public contract — the
- * wording may change across minor versions.
+ *
+ * Exported for tests (asserting the exact rendered prompt) — deliberately left undecorated for the same
+ * reason as buildNormalizeSystemPrompt above. Not a stable public contract regardless: the wording may
+ * change across minor versions.
  */
 export function buildNormalizeUserPrompt(catalogDoc: string, locale: string, text: string): string {
   return `## Intent catalog\n\n${catalogDoc}\n\n## User question (${locale})\n${untrustedBlock("USER_QUESTION", text)}`;
