@@ -24,6 +24,10 @@ pnpm --filter @kohaku-ui-sample/mcp start:http   # Streamable HTTP :8788(claude.
 (`KOHAKU_MCP_HTTP_PORT` / `KOHAKU_MCP_PUBLIC_URL` / `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` など)は
 ユーザーガイドを参照してください。
 
+⚠️ `KOHAKU_AUTHZ=jwt` では、認証できるのは Streamable HTTP プロファイル(bearer トークン)だけです。
+stdio プロファイルにはトランスポート層での identity がなく、すべてのツール呼び出しを拒否します
+(fail-closed)。stdio では `KOHAKU_AUTHZ=hmac`(既定値)を使ってください。
+
 ## 最初に知っておくこと
 
 - **ホストにより描画経路は 3 つ**: MCP Apps iframe(Web と同じ描画)/ `kohaku_render_snapshot` の

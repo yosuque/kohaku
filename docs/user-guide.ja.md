@@ -233,6 +233,8 @@ claude mcp add kohaku-sales -- pnpm --dir <絶対パス>/apps/sample-mcp start
 
 Claude Desktop は iframe で Web と同一描画になります。Claude Code のようなターミナルホストは iframe を描けないため、後述の `kohaku_render_snapshot` を使ってください。
 
+⚠️ `KOHAKU_AUTHZ=jwt` では、認証できるのは後述の Streamable HTTP プロファイルだけです(HTTP リクエスト自身の bearer トークンから呼び出し元の principal を導出する)。stdio プロファイルにはトークンを運ぶトランスポート層がないため、`jwt` の下では stdio のすべてのツール呼び出しが拒否されます(構造化されたツールエラー)。stdio では `KOHAKU_AUTHZ=hmac`(既定値)を使ってください。
+
 ### claude.ai / ChatGPT(Streamable HTTP + 公開トンネル)
 
 claude.ai / ChatGPT はローカル stdio に繋げず、**リモート MCP コネクタ(Streamable HTTP)**経由でしか接続できません。HTTP エントリを起動し、公開トンネルで URL を露出してコネクタに登録します。

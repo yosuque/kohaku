@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/app.ts",
     "./action-effects": "./src/action-effects.ts",
+    "./app/shutdown": "./src/app/shutdown.ts",
     "./ports/from-env": "./src/ports/from-env.ts"
   },
   "scripts": {

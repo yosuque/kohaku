@@ -5,121 +5,25 @@ import { type ServerType, serve } from "@hono/node-server";
 import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { createJwtRequestIdentity } from "./app/request-identity.js";
+import { createGracefulShutdownHandler, shutdownGraceMs } from "./app/shutdown.js";
 import { createApp } from "./app.js";
 import { createPortsFromEnv } from "./ports/from-env.js";
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(APP_DIR, "../../..");
 
-/** Default drain window (ms) for graceful shutdown, overridable via KOHAKU_SHUTDOWN_GRACE_MS. */
-const DEFAULT_SHUTDOWN_GRACE_MS = 30_000;
-
-/** Parses KOHAKU_SHUTDOWN_GRACE_MS as a positive integer; any other value (unset, non-numeric, <= 0) falls back to the default. */
-export function shutdownGraceMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env["KOHAKU_SHUTDOWN_GRACE_MS"];
-  const parsed = raw != null ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SHUTDOWN_GRACE_MS;
-}
-
 /**
  * Extra wait (ms) between flipping readiness to false and actually closing the server. Default 0
  * (behavior unchanged): with no pre-stop wait, a load balancer's next health poll can lose the race against
  * `server.close()` and observe ECONNREFUSED instead of the intended 503, because both happen in the same
  * tick. Set KOHAKU_SHUTDOWN_PRESTOP_MS to the load balancer's health-check interval (or a bit more) so at
- * least one 503 is guaranteed to be observed before connections stop being accepted.
+ * least one 503 is guaranteed to be observed before connections stop being accepted. Only sample-api's REST
+ * entry point has a readiness endpoint worth protecting this way, so this stays local (not shared).
  */
 export function shutdownPrestopMs(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env["KOHAKU_SHUTDOWN_PRESTOP_MS"];
   const parsed = raw != null ? Number.parseInt(raw, 10) : NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-/** Upper bound (ms) on the forced-exit path's own best-effort attempt to close the backends, so a hung close
- * can never delay the forced exit itself (which is already the point of that path). */
-const FORCE_CLOSE_BOUND_MS = 2000;
-
-/** The minimal server shape `createShutdownHandler` needs (a subset of `ServerType`, for testability with a fake). */
-export interface ShutdownServerLike {
-  closeIdleConnections?: () => void;
-  close: (callback: () => void) => void;
-  getConnections: (callback: (err: Error | null, count: number) => void) => void;
-}
-
-export interface ShutdownHandlerDeps {
-  server: ShutdownServerLike;
-  setShuttingDown: (value: boolean) => void;
-  /** Closes the storage/authz backends this process created from env (a no-op unless KOHAKU_STORAGE is redis/postgres). */
-  closePorts: () => Promise<void>;
-  graceMs: number;
-  prestopMs: number;
-  log?: (message: string) => void;
-  exit?: (code: number) => void;
-}
-
-/** Races `p` against a `ms`-bounded timer, so a slow-but-eventually-successful close can never hang the caller. */
-function withTimeout(p: Promise<void>, ms: number): Promise<void> {
-  return Promise.race([
-    p,
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, ms);
-      timer.unref?.();
-    }),
-  ]);
-}
-
-/**
- * Builds the SIGINT/SIGTERM handler for graceful shutdown (ops): flips readiness, optionally waits a
- * pre-stop window, drains connections, and only THEN closes the storage/authz backends — inside
- * `server.close()`'s own callback, once draining has actually finished (finding #2: closing them earlier
- * let an in-flight request's storage call race the connection close). The forced-exit path (the drain
- * window elapsing first) also makes a best-effort, time-bounded (`FORCE_CLOSE_BOUND_MS`) attempt to close
- * them before exiting, rather than abandoning the close entirely.
- * Exported as a plain function of its dependencies (rather than only wired to `process.once`) so a test can
- * invoke it directly against a fake server / fake `closePorts` without sending a real OS signal or the
- * process actually exiting.
- */
-export function createShutdownHandler(deps: ShutdownHandlerDeps): (signal: string) => void {
-  const { server, setShuttingDown, closePorts, graceMs, prestopMs } = deps;
-  const log = deps.log ?? ((message: string) => console.log(message));
-  const exit = deps.exit ?? process.exit.bind(process);
-  return (signal: string) => {
-    setShuttingDown(true);
-    log(
-      `kohaku sample-api: received ${signal}, marked not-ready` +
-        (prestopMs > 0 ? ` (pre-stop wait ${prestopMs}ms)` : "") +
-        `, then draining connections (grace ${graceMs}ms)`,
-    );
-    const prestopTimer = setTimeout(() => {
-      // Close idle keep-alive sockets immediately rather than waiting for their keep-alive timeout to
-      // elapse: server.close() alone only stops accepting *new* connections and waits for every existing
-      // one (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
-      // connection would otherwise stall the drain for no reason.
-      server.closeIdleConnections?.();
-      server.close(() => {
-        // The drain has actually completed at this point (no in-flight request can still be running):
-        // only now is it safe to close the storage/authz backends those requests might have been using.
-        void closePorts()
-          .catch(() => {})
-          .then(() => exit(0));
-      });
-      const graceTimer = setTimeout(() => {
-        server.getConnections((err, count) => {
-          console.error(
-            `kohaku sample-api: shutdown grace period (${graceMs}ms) elapsed with ` +
-              `${err != null ? "an unknown number of" : count} connection(s) still open; forcing exit`,
-          );
-          // Best-effort, bounded: we are exiting regardless, but a close that succeeds quickly is still
-          // better than abandoning it outright.
-          void withTimeout(
-            closePorts().catch(() => {}),
-            FORCE_CLOSE_BOUND_MS,
-          ).then(() => exit(1));
-        });
-      }, graceMs);
-      graceTimer.unref?.();
-    }, prestopMs);
-    prestopTimer.unref?.();
-  };
 }
 
 /** Parses KOHAKU_PROMOTION_SCHEMA_SUGGEST as a boolean-ish flag; only the literal "0" disables it (default on). */
@@ -200,13 +104,15 @@ async function main(): Promise<void> {
   // and force-exit rather than hang indefinitely; a clean drain exits 0, a forced one exits 1 (distinguishable
   // in orchestrator logs). ServerType (@hono/node-server) also covers Http2Server/Http2SecureServer, which do
   // not declare closeIdleConnections — this sample only ever serves plain HTTP/1.1, so it is always present at
-  // runtime, but createShutdownHandler treats it as optional to type the union safely.
-  const handleShutdown = createShutdownHandler({
+  // runtime, but createGracefulShutdownHandler treats it as optional to type the union safely. The handler
+  // itself is shared with sample-mcp's http.ts (see app/shutdown.ts's own doc comment).
+  const handleShutdown = createGracefulShutdownHandler({
     server,
+    ports,
     setShuttingDown,
-    closePorts: () => ports.close(),
     graceMs: shutdownGraceMs(),
     prestopMs: shutdownPrestopMs(),
+    label: "kohaku sample-api",
   });
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => handleShutdown(signal));

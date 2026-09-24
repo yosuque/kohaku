@@ -423,7 +423,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `KOHAKU_STORAGE_KEY_PREFIX` | `kohaku` | Redis のキープレフィックス |
 | `KOHAKU_POSTGRES_URL` | — | `KOHAKU_STORAGE=postgres` で必須(pg の接続文字列) |
 | `KOHAKU_POSTGRES_SCHEMA` | `public` | kohaku のテーブルを置くスキーマ(なければ作成) |
-| `KOHAKU_AUTHZ` | `hmac` | `hmac` / `jwt` — AuthzPort とリクエスト identity の方式。`jwt` はデモの `x-kohaku-role` / `x-kohaku-tenant` ヘッダをトークンのクレームに置き換え、有効な bearer トークンがなければ 401 を返す |
+| `KOHAKU_AUTHZ` | `hmac` | `hmac` / `jwt` — AuthzPort とリクエスト identity の方式。`jwt` はデモの `x-kohaku-role` / `x-kohaku-tenant` ヘッダをトークンのクレームに置き換え、有効な bearer トークンがなければ 401 を返す。**sample-mcp(TS)**: `jwt` は bearer トークンを運べる Streamable HTTP プロファイル(`src/http.ts`)でしか機能しない。stdio プロファイル(`src/index.ts`)にはトランスポート層でトークンを運ぶ場所がなく、`jwt` の下ではすべてのツール呼び出しが fail-closed になる — stdio では `hmac`(既定値)を使うこと |
 | `KOHAKU_DEMO_ADMIN_ROUTES` | 未設定 | `1` で `KOHAKU_AUTHZ=jwt` のもとでも `POST /api/kohaku/admin/bump-data-version`(§5.5)を登録する(デフォルトでは無効)。有効な bearer トークン + admin ロールは引き続き必須で、これはルートの存在自体だけを切り替える。デフォルトの `hmac` 方式では常にルートが登録される(`apps/sample-api/src/index.ts` の `demoAdminRoutes: … \|\| authzFromEnv.identity == null`) |
 | `KOHAKU_JWT_SECRET` / `KOHAKU_JWT_JWKS_URL` | — | `KOHAKU_AUTHZ=jwt` ではどちらか一方が必須(HS256 共有鍵、または OIDC JWKS エンドポイント) |
 | `KOHAKU_JWT_ISSUER` / `KOHAKU_JWT_AUDIENCE` | — | `iss` 検証は任意。`KOHAKU_JWT_JWKS_URL` を使う場合は `KOHAKU_JWT_AUDIENCE` が必須(JWKS 経由の発行者は他のオーディエンス向けトークンも発行しうるため)。`from-env.ts` 自身がこの条件をチェックし、ポートを構築する前に `KOHAKU_AUTHZ=jwt with KOHAKU_JWT_JWKS_URL requires KOHAKU_JWT_AUDIENCE` という名前付きエラーを投げる — `@kohaku-ui/authz-jwt` 自身のコンストラクタ時点のチェック(より一般的なメッセージ)は、ポートを直接組み立てる呼び出し側向けのフォールバックとして残る |

@@ -233,6 +233,8 @@ claude mcp add kohaku-sales -- pnpm --dir <absolute path>/apps/sample-mcp start
 
 Claude Desktop renders the same as the Web in an iframe. A terminal host like Claude Code cannot draw an iframe, so use `kohaku_render_snapshot` (described below).
 
+⚠️ With `KOHAKU_AUTHZ=jwt`, only the Streamable HTTP profile (below) can authenticate: it derives the caller's principal from the HTTP request's own bearer token. The stdio profile has no transport-level place to carry one, so under `jwt` every stdio tool call fails closed (a structured tool error). Use `KOHAKU_AUTHZ=hmac` (the default) for stdio.
+
 ### claude.ai / ChatGPT (Streamable HTTP + public tunnel)
 
 claude.ai / ChatGPT cannot connect to local stdio and can only connect via a **remote MCP connector (Streamable HTTP)**. Start the HTTP entry, expose the URL with a public tunnel, and register it with the connector.
