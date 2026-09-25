@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "comment": "Typechecks the sync script, the sidebar data, the tests and the documentation snippets. The VitePress theme (.vue) is compiled by VitePress itself and stays out of tsc.",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["node"]
+  },
+  "include": ["src", "scripts", "test", "snippets", ".vitepress/config.ts", "vitest.config.ts"]
+}

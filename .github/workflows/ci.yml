@@ -314,3 +314,30 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run smoke:pack
+  # The documentation site is generated from docs/ at build time (apps/docs-site/scripts/sync-docs.ts) into a
+  # gitignored directory, so "drift" here means two things: the site must still build from the Markdown as
+  # committed (dead links, broken frontmatter), and the build must leave the checkout untouched (nothing
+  # generated may be tracked or hand-edited). The sidebar <-> page, snippet <-> Markdown, and (per GitHub's
+  # own heading-slug rule) anchor-link resolution checks all run in `ci` as ordinary Vitest tests
+  # (apps/docs-site/test). A separate job rather than a step in `ci`, because VitePress brings its own Vite
+  # and Vue and is slower to install than anything `ci` needs.
+  docs-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm docs:build
+      - name: Generated-output drift check (the build must not touch the checkout)
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-site
+          path: apps/docs-site/dist/

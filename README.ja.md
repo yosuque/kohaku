@@ -25,6 +25,8 @@ GUI 操作(Web)  ─┼→ 正規化 Intent → Composition ─┼─ 外部チ�
 
 | ドキュメント | 内容 | 読者 |
 |---|---|---|
+| [docs/why-kohaku.ja.md](docs/why-kohaku.ja.md) | **なぜ kohaku か** — 3 つの保証(同一表示 / 参照渡し / 昇格パイプライン)と、プロンプト→UI ツールやエージェント UI プロトコルに対する位置付け | 導入を検討する人 |
+| [docs/paths/](docs/paths/mcp-apps.ja.md) | **1 ページで始める 3 本の入口** — (a) [MCP Apps だけ](docs/paths/mcp-apps.ja.md)、(b) [React ダッシュボードだけ](docs/paths/react-dashboard.ja.md)、(c) [フル構成](docs/paths/full-stack.ja.md)。それぞれ最初のコードは 30 行以内 | 自分に合う入口を選ぶ人 |
 | [docs/user-guide.ja.md](docs/user-guide.ja.md) | **ユーザーガイド** — セットアップ・画面の歩き方・デモ 8 本・自プロダクトへの組み込み・運用・FAQ | まず動かしたい人 / 組み込む人 |
 | [docs/design.ja.md](docs/design.ja.md) | **実装設計書** — アーキテクチャ・合成パイプライン・サンドボックス・昇格・設計判断記録 | 拡張・保守する開発者 |
 | [docs/specification.ja.md](docs/specification.ja.md) | **仕様書** — UI Spec / REST API / Port / 部品カタログ / ブリッジプロトコル / 環境変数のリファレンス | 実装に対して書く開発者 |
@@ -33,6 +35,8 @@ GUI 操作(Web)  ─┼→ 正規化 Intent → Composition ─┼─ 外部チ�
 | [AGENTS.md](AGENTS.md) | AI コーディングエージェント向け開発ガイド(コマンド・規約・落とし穴)。`CLAUDE.md` はこれを import するポインタ | AI コーディングエージェント |
 | [CONTRIBUTING.ja.md](CONTRIBUTING.ja.md) | セットアップ・検証・変更の提出方法(英語版: [CONTRIBUTING.md](CONTRIBUTING.md)) | コントリビューター |
 | [SECURITY.md](SECURITY.md) | 脆弱性の報告方法とスコープ(`apps/sample-*` のデモ実装はスコープ外) | セキュリティ研究者 |
+
+同じ文書を `docs/` から生成した静的サイトとしても公開します(`pnpm docs:build`。ソースは `apps/docs-site` で、そこに文書本体は置きません)。
 
 ## インストール
 

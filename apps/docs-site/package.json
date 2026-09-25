@@ -1,0 +1,42 @@
+{
+  "name": "@kohaku-ui-docs/site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Documentation site generated from docs/ (single source: the Markdown in the repository).",
+  "scripts": {
+    "sync": "tsx scripts/sync-docs.ts",
+    "dev": "pnpm run sync && vitepress dev",
+    "build": "pnpm run sync && vitepress build",
+    "preview": "vitepress preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@hono/node-server": "catalog:",
+    "@kohaku-ui/client": "workspace:^",
+    "@kohaku-ui/composer": "workspace:^",
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/host-mcp-apps": "workspace:^",
+    "@kohaku-ui/host-rest": "workspace:^",
+    "@kohaku-ui/intents": "workspace:^",
+    "@kohaku-ui/lineage": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^",
+    "@kohaku-ui/renderer-core": "workspace:^",
+    "@kohaku-ui/renderer-react": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@modelcontextprotocol/server": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "hono": "catalog:",
+    "mermaid": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitepress": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

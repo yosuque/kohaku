@@ -17,7 +17,20 @@ export default defineConfig({
       // global statement figure by about six points, so it is excluded and its behaviour is guarded by
       // those tests instead. The applier (`guest/dom-applier.ts`) is NOT excluded: it runs as a plain
       // function in the trusted document, so its coverage is real.
-      exclude: ["packages/sandbox/src/guest/worker-shim.ts"],
+      exclude: [
+        "packages/sandbox/src/guest/worker-shim.ts",
+        // docs-site's config, theme and sync CLI are build-time only: no test imports them, so v8
+        // would report them at ~0% however correct they are, and functions coverage has essentially
+        // no headroom left (0.92pp) to absorb that. They are not unguarded, though: the VitePress
+        // config, theme and sync CLI are exercised by the real `vitepress build` that the CI
+        // docs-site job runs, and the snippets are typechecked by tsc and asserted byte-identical to
+        // the Markdown they're extracted from by `apps/docs-site/test/snippets.test.ts`. This excludes
+        // these paths from the coverage count, not from verification, and the thresholds below are
+        // unchanged.
+        "apps/docs-site/snippets/**",
+        "apps/docs-site/.vitepress/**",
+        "apps/docs-site/scripts/**",
+      ],
       // A floor pinned below the measured baseline (statements 91.01 / branches 82.09 / functions 88.68 /
       // lines 92.95 under vitest 5), so a coverage regression (e.g. a whole error branch losing its test)
       // fails CI instead of silently shipping. autoUpdate is off on purpose: raising the floor is a deliberate
