@@ -1,0 +1,7 @@
+month,region,channel,product,units,revenue
+2026-04,japan,direct,Widget A,12,120000
+2026-04,north_america,partner,Widget B,7,98000
+2026-05,japan,online,Widget A,15,150000
+2026-05,europe,direct,"Widget, C",3,45000
+2026-06,north_america,online,Widget B,9,126000
+2026-06,europe,partner,Widget A,4,40000

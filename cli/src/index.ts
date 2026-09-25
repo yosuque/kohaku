@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { basename } from "node:path";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
 import { Command } from "commander";
 import {
@@ -14,6 +15,8 @@ import {
   scaffoldPorts,
   validateComponentFile,
 } from "./commands.js";
+import { type InitResult, initProject } from "./init/index.js";
+import { CLI_VERSION } from "./version.js";
 
 /** Reads stdin to completion and returns it as a string (the smoke-l2 sidecar's one-request-one-process contract). */
 async function readStdin(): Promise<string> {
@@ -25,8 +28,10 @@ async function readStdin(): Promise<string> {
 }
 
 const program = new Command("kohaku")
-  .description("CLI for running Kohaku Protocol conformance checks and generating scaffolds")
-  .version("0.1.0");
+  .description(
+    "CLI for kohaku: protocol conformance checks, scaffolding, project generation and component validation",
+  )
+  .version(CLI_VERSION);
 
 program
   .command("conformance")
@@ -88,6 +93,62 @@ program
     for (const path of written) console.log(`  ${path}`);
     console.log(`\nNext steps: ${target!.next}`);
   });
+
+program
+  .command("init")
+  .description(
+    "Generate a runnable kohaku app (server + dashboard + chat) from a data file, then npm install",
+  )
+  .requiredOption("--from <file>", "Data file: .csv, .json (array of objects) or .sqlite / .db")
+  .option("--out <dir>", "Output directory (default: the current directory)")
+  .option("--source <name>", "Intent catalog prefix / query source (default: the data file's basename)")
+  .option("--name <name>", "package.json name (default: the output directory's basename)")
+  .option("--table <name>", "SQLite table to read (default: the first user table)")
+  .option("--no-install", "Skip npm install")
+  .action(
+    async (opts: {
+      from: string;
+      out?: string;
+      source?: string;
+      name?: string;
+      table?: string;
+      install: boolean;
+    }) => {
+      let result: InitResult;
+      try {
+        result = await initProject(opts);
+      } catch (e) {
+        program.error(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      const p = result.profile;
+      console.log(`Generated ${result.written.length} files in ${result.outDir}`);
+      if (opts.name == null && result.name !== basename(result.outDir)) {
+        console.log(
+          `  name: ${result.name} (derived from directory "${basename(result.outDir)}"; pass --name to override)`,
+        );
+      }
+      console.log(`  source: ${p.source} (${p.rowCount} rows)`);
+      console.log(`  dimensions: ${p.dimensions.map((c) => c.name).join(", ")}`);
+      console.log(`  measures: ${p.measures.map((c) => c.name).join(", ") || "(none; row counts only)"}`);
+      console.log(`  time: ${p.time?.name ?? "(none; no trend view)"}`);
+      if (p.unrecognizedDateColumns != null && p.unrecognizedDateColumns.length > 0) {
+        console.log(
+          `  warning: column(s) ${p.unrecognizedDateColumns.join(", ")} look like dates but the format ` +
+            "is ambiguous (e.g. MM/DD/YYYY vs DD/MM/YYYY), so no time axis was created; convert the column " +
+            "to YYYY-MM-DD, the one unambiguous shape kohaku init recognizes, and run it again.",
+        );
+      }
+      console.log(
+        `\nNext steps: ${result.installed ? "" : "npm install && "}npm run dev  →  http://localhost:5173`,
+      );
+      console.log(
+        "For chat and the LLM-composed views, edit .env (created for you with a capability secret) " +
+          "and set a provider key; .env.example documents every variable.",
+      );
+      console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once, then npm test");
+    },
+  );
 
 program
   .command("smoke-l2")

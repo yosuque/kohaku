@@ -43,7 +43,12 @@ class FakeNotRejected extends Error {
 interface Spy {
   nominates: string[];
   acts: Record<string, unknown>[];
-  approves: { id: string; draft: unknown; reviewer: Principal }[];
+  approves: {
+    id: string;
+    draft: unknown;
+    reviewer: Principal;
+    scope?: { acknowledgedSuggestion?: boolean };
+  }[];
   withdraws: { id: string; actor: Principal; reason?: string }[];
 }
 
@@ -64,15 +69,29 @@ function fakePromotions(opts?: { approveThrows?: Error; actThrows?: Error; rejec
       return [{ artifactId: "known", status: "candidate" }];
     },
     async get(id) {
-      return known.has(id) ? { artifactId: id, status: "candidate" } : null;
+      return known.has(id)
+        ? {
+            artifactId: id,
+            status: "candidate",
+            suggestion: {
+              draft: { componentType: "x.y", version: "1.0.0", intentName: "x.y", description: "d" },
+              events: [],
+              confidence: 0.5,
+              model: "m",
+              extractorId: "l2-schema-extraction",
+              extractorVersion: "0.1",
+              suggestedAt: "2026-07-01T00:00:00.000Z",
+            },
+          }
+        : null;
     },
     async act(id, action) {
       spy.acts.push(action);
       if (opts?.actThrows != null) throw opts.actThrows;
       return { artifactId: id, status: "acted", action };
     },
-    async approve(id, draft, reviewer) {
-      spy.approves.push({ id, draft, reviewer });
+    async approve(id, draft, reviewer, scope) {
+      spy.approves.push({ id, draft, reviewer, ...(scope != null ? { scope } : {}) });
       if (opts?.approveThrows != null) throw opts.approveThrows;
       return { artifactId: id, status: "published", draft };
     },
@@ -147,6 +166,15 @@ describe("promotions routes (host-rest first-class named routes)", () => {
     expect(((await missing.json()) as { error: { code: string } }).error.code).toBe("NOT_FOUND");
   });
 
+  it("GET /promotions/:id passes the candidate's suggestion through unchanged (additive wire field)", async () => {
+    const { api } = fakePromotions();
+    const app = createKohakuRoutes(deps(api));
+    const res = await app.request("/promotions/known");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { candidate: { suggestion?: { extractorId: string } } };
+    expect(body.candidate.suggestion?.extractorId).toBe("l2-schema-extraction");
+  });
+
   it("approve happy path: zod-validates the draft and returns 200 + reviewer is the server-side principal", async () => {
     const { api, spy } = fakePromotions();
     const app = createKohakuRoutes(deps(api));
@@ -157,6 +185,19 @@ describe("promotions routes (host-rest first-class named routes)", () => {
     // The client did not declare a reviewer, but the server-side principal (default demo-user) is injected.
     expect(spy.approves).toHaveLength(1);
     expect(spy.approves[0]!.reviewer.id).toBe("demo-user");
+  });
+
+  it("approve: forwards an optional acknowledgedSuggestion to promotions.approve's scope (additive; absent when unspecified)", async () => {
+    const { api, spy } = fakePromotions();
+    const app = createKohakuRoutes(deps(api));
+
+    const ack = await post(app, "/promotions/known/approve", { draft, acknowledgedSuggestion: true });
+    expect(ack.status).toBe(200);
+    expect(spy.approves[0]!.scope?.acknowledgedSuggestion).toBe(true);
+
+    const noAck = await post(app, "/promotions/known/approve", { draft });
+    expect(noAck.status).toBe(200);
+    expect(spy.approves[1]!.scope?.acknowledgedSuggestion).toBeUndefined();
   });
 
   it("approve: a missing draft is 400", async () => {

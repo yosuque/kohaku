@@ -1,12 +1,17 @@
-import { lazy, type ReactNode, Suspense, useCallback, useState } from "react";
+import {
+  type AdminExtraTab,
+  describeDeniedOperation,
+  KohakuAdmin,
+  useAdminNotice,
+} from "@kohaku-ui/admin-react";
+import { isKohakuHostError } from "@kohaku-ui/client";
+import { lazy, type ReactNode, Suspense, useMemo } from "react";
 import { t as dict, useT } from "../i18n/ui.js";
-import { bumpDataVersion } from "../kohaku/client.js";
+import { bumpDataVersion, client } from "../kohaku/client.js";
 import { useTenant } from "../kohaku/tenant.js";
-import { AnalyticsTab } from "./admin/AnalyticsTab.js";
-import { FixationsTab } from "./admin/FixationsTab.js";
-import { LineageTab } from "./admin/LineageTab.js";
-import { PromotionsTab } from "./admin/PromotionsTab.js";
-import { ErrorBanner, type Notice, type PushNotice } from "./admin/ui.js";
+import { useThemeMode } from "../theme/mode.js";
+import { buildTheme } from "../theme/tokens.js";
+import { salesPromotionDefaults } from "./admin/promotion-defaults.js";
 
 /**
  * The Gallery tab (n-16) is dev/admin-only tooling — its hand-written showcase artifact
@@ -24,89 +29,88 @@ if (import.meta.env.DEV) {
 }
 
 /**
- * The governance surface: View Lineage's audit timeline, L2→L1 promotion review, L1→L0 fixation.
- * The place where "a workflow written nowhere in the code" becomes visible as a sequence of events.
+ * The governance surface, now the published `@kohaku-ui/admin-react` console. What stays in the sample is the
+ * demo plumbing: the tenant / role headers ride on `client` (kohaku/client.ts), the tenant selection is the
+ * remount key (role is deliberately not — see KohakuAdminProps' own doc comment), the theme follows the
+ * header's light/dark toggle, the dictionary follows the EN/JA toggle, the sales-catalogue draft defaults
+ * come from promotion-defaults.ts, and the "bump" control is a toolbar slot.
  */
 export function AdminPage(): ReactNode {
-  const [tab, setTab] = useState<"lineage" | "analytics" | "promotions" | "fixations" | "gallery">("lineage");
-  const [notice, setNotice] = useState<Notice | null>(null);
-  // Switching tenant remounts the tab and re-fetches (the control plane is isolated by tenant).
-  // Switching role does not remount — to demonstrate the 403 by listing candidates as admin, then switching to viewer and pressing
-  // the approve button, the candidate list is kept in state (attaching the role header is handled by client.ts).
   const [tenant] = useTenant();
   const t = useT();
-  // Push a notification. Default is info (green); 403 / failure is "error" (red). Identity is stable (used for tabs' reload dependency).
-  const pushNotice = useCallback<PushNotice>((text, kind = "info") => setNotice({ text, kind }), []);
+  const { mode } = useThemeMode();
+  const theme = useMemo(() => buildTheme(mode), [mode]);
+
+  // Sample-only tabs beyond the four built-in ones. Add further product-specific tabs to this array.
+  const extraTabs: AdminExtraTab[] = useMemo(
+    () =>
+      LazyGalleryTab != null
+        ? [
+            {
+              key: "gallery",
+              label: t.admin.tabGallery,
+              render: () => {
+                const Gallery = LazyGalleryTab!;
+                return (
+                  <Suspense fallback={<p>Loading…</p>}>
+                    <Gallery />
+                  </Suspense>
+                );
+              },
+            },
+          ]
+        : [],
+    [t.admin.tabGallery],
+  );
 
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: 24 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
-        {(
-          [
-            ["lineage", t.admin.tabLineage],
-            ["analytics", t.admin.tabAnalytics],
-            ["promotions", t.admin.tabPromotions],
-            ["fixations", t.admin.tabFixations],
-            // Only listed when the lazy import above is actually wired (dev) — otherwise the button
-            // would be a dead end pointing at a tab whose content never renders.
-            ...(LazyGalleryTab != null ? ([["gallery", t.admin.tabGallery]] as const) : []),
-          ] as const
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setTab(key)}
-            style={{
-              border: "1px solid var(--app-border, #e5e7eb)",
-              background: tab === key ? "var(--app-primary-weak, #eef2ff)" : "var(--app-elevated, #fff)",
-              color: tab === key ? "var(--app-primary, #4f46e5)" : "var(--app-subtle, #475569)",
-              fontWeight: tab === key ? 700 : 450,
-              borderRadius: 8,
-              padding: "8px 16px",
-              fontSize: 13,
-              cursor: "pointer",
-            }}
-          >
-            {label}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => {
-            // dict() (not the hook value) so the notification uses the language at completion time.
-            void bumpDataVersion().then((v) => pushNotice(dict().admin.bumpNotice(v)));
-          }}
-          style={{
-            marginLeft: "auto",
-            border: "1px solid #fbbf24",
-            background: "#fef3c7",
-            color: "#92400e",
-            borderRadius: 8,
-            padding: "8px 14px",
-            fontSize: 12.5,
-            cursor: "pointer",
-          }}
-        >
-          {t.admin.bumpButton}
-        </button>
-      </div>
-      {notice != null && (
-        <ErrorBanner
-          text={notice.text}
-          kind={notice.kind}
-          role={notice.kind === "error" ? "alert" : undefined}
-          style={{ padding: "8px 14px", fontSize: 12.5, marginBottom: 12 }}
-        />
-      )}
-      {tab === "lineage" && <LineageTab key={tenant} />}
-      {tab === "analytics" && <AnalyticsTab key={tenant} onNotice={pushNotice} />}
-      {tab === "promotions" && <PromotionsTab key={tenant} onNotice={pushNotice} />}
-      {tab === "fixations" && <FixationsTab key={tenant} onNotice={pushNotice} />}
-      {tab === "gallery" && LazyGalleryTab != null && (
-        <Suspense fallback={<p>Loading…</p>}>
-          <LazyGalleryTab key={tenant} />
-        </Suspense>
-      )}
-    </div>
+    <KohakuAdmin
+      client={client}
+      tenant={tenant}
+      theme={theme}
+      messages={t.admin}
+      promotionDefaults={salesPromotionDefaults}
+      extraTabs={extraTabs}
+      toolbar={<BumpButton />}
+    />
+  );
+}
+
+/**
+ * Sample-only: advances the server's dataVersion so the next compose is a cache MISS (Demo 1). Now behind
+ * identity + governance RBAC (admin.bumpDataVersion — admin only) and, under a JWT deployment, disabled unless
+ * the server opts in (KOHAKU_DEMO_ADMIN_ROUTES=1) — see client.ts's bumpDataVersion doc comment — so a 403 or
+ * 404 here is an expected outcome, surfaced as an error notice rather than an unhandled rejection.
+ */
+function BumpButton(): ReactNode {
+  const t = useT();
+  const notify = useAdminNotice();
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        // dict() (not the hook value) so the notification uses the language at completion time.
+        void bumpDataVersion()
+          .then((v) => notify(dict().admin.bumpNotice(v)))
+          .catch((e: unknown) => {
+            const messages = dict().admin;
+            const denied = isKohakuHostError(e)
+              ? describeDeniedOperation(e, messages.opBump, messages)
+              : null;
+            notify(denied ?? messages.bumpFailed, "error");
+          });
+      }}
+      style={{
+        border: "1px solid var(--kohaku-color-warning-text, #854d0e)",
+        background: "var(--kohaku-color-warning-surface, #fef9c3)",
+        color: "var(--kohaku-color-warning-text, #854d0e)",
+        borderRadius: 8,
+        padding: "8px 14px",
+        fontSize: 12.5,
+        cursor: "pointer",
+      }}
+    >
+      {t.admin.bumpButton}
+    </button>
   );
 }

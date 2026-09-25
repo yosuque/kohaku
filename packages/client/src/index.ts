@@ -20,6 +20,7 @@ export {
   type KohakuClient,
   type KohakuClientConfig,
   type LineageQuery,
+  type PromotionApproveOptions,
   type PromotionsClient,
   type RequestOptions,
   type TelemetryEvent,
@@ -51,7 +52,9 @@ export type {
   PromotionCandidateView,
   PromotionPreviewView,
   PromotionReconcileSummaryView,
+  SchemaSuggestionView,
   SendEventRequest,
   SerializedComponentDef,
   SessionArg,
+  SuggestedEventView,
 } from "./types.js";

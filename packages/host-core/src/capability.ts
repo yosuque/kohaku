@@ -1,8 +1,8 @@
-import type { AuthzPort, Principal, Scope, UISpec } from "@kohaku-ui/spec-core";
-import { collectCapabilityScopes } from "@kohaku-ui/spec-core";
+import type { AuthzPort, Principal, Scope, UISpec, VerifyRequest, VerifyResult } from "@kohaku-ui/spec-core";
+import { collectCapabilityScopes, DEFAULT_CAPABILITY_TTL_SECONDS } from "@kohaku-ui/spec-core";
 
-/** Default capability TTL (seconds) when a host does not override it. Shared by the REST and MCP profiles. */
-export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
+/** Default capability TTL (seconds) when a host does not override it. Shared by the REST and MCP profiles. Re-exported from spec-core for backward compatibility. */
+export { DEFAULT_CAPABILITY_TTL_SECONDS };
 
 /**
  * Raised (reported via `onDroppedAction`, never thrown) when a Spec-declared write scope's action name is not
@@ -89,6 +89,49 @@ export async function issueSpecCapabilitySafely(
     allowedActions: allowed,
     onDroppedAction: (action) => void report(new WriteScopeDroppedError(action)),
   });
+}
+
+/**
+ * The client-safe message for a thrown `authz.verify` (an infrastructure failure -- see `AuthzPort.verify`'s
+ * doc comment in spec-core's `ports.ts`: verify throws only on infrastructure failure, and a thrown verify is
+ * fail-closed). Exported so both host profiles use identical client-visible text for the same failure,
+ * instead of each keeping its own copy of the string.
+ */
+export const CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE = "capability verification unavailable";
+
+/**
+ * The result of `verifyCapabilitySafely`: either the `AuthzPort.verify` verdict itself (an ordinary allow or
+ * deny -- the caller maps `verdict.ok` to its own protocol's denial response), or `"unavailable"` when
+ * `verify` threw (an infrastructure failure the caller maps to its own protocol's 5xx / error-result shape).
+ */
+export type VerifyCapabilitySafelyResult =
+  | { kind: "verdict"; verdict: VerifyResult }
+  | { kind: "unavailable"; error: unknown };
+
+/**
+ * The fail-closed capability verification shared by both host profiles (REST's `/binding/resolve` /
+ * `/binding/action`, MCP's `resolve_binding` / `action` tools): calls `authz.verify`, and converts a thrown
+ * error into `{ kind: "unavailable", error }` instead of letting it propagate as an unhandled rejection / raw
+ * server error. `onFailure` is called with the original error before it is wrapped -- this function itself
+ * stays framework-free (no REST envelope, no MCP tool-error shape), so the caller's own observability hook
+ * (REST's `reportHostError` / MCP's `reportMcpError`) still sees it and each host maps `"unavailable"` to its
+ * own protocol's failure response (REST: 503 `INTERNAL`; MCP: a structured tool error) using
+ * `CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE` above for the client-visible text.
+ * Contract: `onFailure` must not reject -- same convention as `issueSpecCapabilitySafely`'s `report`.
+ */
+export async function verifyCapabilitySafely(
+  authz: AuthzPort,
+  token: string,
+  req: VerifyRequest,
+  onFailure: (error: unknown) => void | Promise<void>,
+): Promise<VerifyCapabilitySafelyResult> {
+  try {
+    const verdict = await authz.verify(token, req);
+    return { kind: "verdict", verdict };
+  } catch (e) {
+    await onFailure(e);
+    return { kind: "unavailable", error: e };
+  }
 }
 
 /**

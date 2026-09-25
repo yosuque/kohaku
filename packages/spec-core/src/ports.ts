@@ -120,10 +120,60 @@ export interface VerifyResult {
   reason?: string;
 }
 
+/**
+ * Default lifetime (seconds) of a capability token when the issuer is given no explicit TTL.
+ * Shared by every AuthzPort implementation and by host-core's issuance helpers.
+ */
+export const DEFAULT_CAPABILITY_TTL_SECONDS = 600;
+
+/**
+ * Issuance and verification of on-behalf-of capability tokens (see `Scope`'s doc comment for the exact-match
+ * contract). A concrete port may extend this with a `revokeCapability` method (see `CapabilityRevocationStore`
+ * below); that extension is not part of the `AuthzPort` contract itself.
+ */
 export interface AuthzPort {
   issueCapability(principal: Principal, scopes: Scope[], opts?: { ttlSeconds?: number }): Promise<string>;
+  /**
+   * Verifies a capability token against a requested scope. A denial is a normal, expected outcome and MUST
+   * be reported as `{ ok: false, reason }`, never thrown. `verify` MUST throw only on an infrastructure
+   * failure it cannot itself classify as allow/deny (e.g. a revocation-store outage) -- and such a thrown
+   * `verify` is fail-closed: the caller MUST treat it as a denial, and a host serving requests over this
+   * port MUST map it to a 5xx response (never to a 2xx, and never to the same client-visible shape as an
+   * `{ ok: false }` denial).
+   */
   verify(token: string, req: VerifyRequest): Promise<VerifyResult>;
 }
+
+/**
+ * Persistence for pre-expiry capability revocation. Not part of `AuthzPort` itself — revocation is
+ * exposed as an extension method on a concrete port (e.g. `HmacAuthzPort.revokeCapability`), the same
+ * way `storage-postgres` exposes `ready()` alongside `StoragePort`. A port's `verify` consults a store
+ * like this one, keyed by the `jti` carried in its own token payload.
+ *
+ * This type lives here (spec-core), not in an adapter package, because it is a framework-boundary port
+ * type consumed by multiple same-layer packages (authz-hmac, storage-redis, storage-postgres,
+ * port-contracts): `spec/test/dependency-direction.test.ts` forbids a dependency on a same-or-later
+ * layer, so defining it inside any one of them would make the others unable to depend on it.
+ */
+export interface CapabilityRevocationStore {
+  /** Records jti as revoked until expiresAt (epoch seconds); the store may drop the entry after that. */
+  revoke(jti: string, expiresAt: number): Promise<void>;
+  /** Whether jti is currently revoked. Behavior after its expiresAt has passed is unspecified (the entry may or may not have been dropped). */
+  isRevoked(jti: string): Promise<boolean>;
+  close?(): Promise<void>;
+}
+
+/**
+ * The result of revoking a capability (a concrete port's `revokeCapability` extension method, e.g.
+ * `HmacAuthzPort`). Defined here (not in an adapter package) for the same reason as
+ * `CapabilityRevocationStore`: it is a wire-shape type shared by multiple same-layer packages
+ * (authz-hmac, port-contracts, and future AuthzPort implementations) that must not depend on one
+ * another. `code` lets a caller branch on the failure kind without parsing `reason`; `alreadyExpired`
+ * distinguishes "nothing to revoke, the token had already expired" from a genuine no-op success.
+ */
+export type RevokeCapabilityResult =
+  | { ok: true; alreadyExpired?: true }
+  | { ok: false; code: "MALFORMED" | "INVALID_SIGNATURE" | "NO_JTI" | "STORE_ERROR"; reason: string };
 
 /** The persistence record for a lineage event (the strict schema is owned by @kohaku-ui/lineage). */
 export interface LineageEventRecord {
@@ -151,10 +201,23 @@ export interface LineageFilter {
   until?: string;
   limit?: number;
   /**
-   * Filter by tenant. When specified, returns only events whose tenant matches.
-   * Old events with no recorded tenant appear only under the unspecified filter (tenant omitted).
+   * Filter by tenant. When specified, returns only events whose tenant matches (after `normalizeTenant`
+   * on both sides, so an empty-string tenant behaves like an omitted one and matches every event,
+   * including old ones with no recorded tenant).
    */
   tenant?: string;
+}
+
+/**
+ * Normalizes a tenant identifier: `undefined`, `null`, and `""` all collapse to `undefined`
+ * ("unspecified"), everything else passes through unchanged. Every StoragePort tenant parameter (on
+ * `PromotionState` / `FixationRecord` / `LineageFilter` and the get/put/list methods below) treats an
+ * empty-string tenant as equivalent to omitting it; adapters MUST normalize with this helper before
+ * using a tenant to key or filter a record, so `""` and `undefined` can never be keyed or filtered
+ * inconsistently against each other.
+ */
+export function normalizeTenant(tenant?: string | null): string | undefined {
+  return tenant == null || tenant === "" ? undefined : tenant;
 }
 
 /**
@@ -217,8 +280,9 @@ export interface FixationRecord {
  * **Concurrency contract**: StoragePort itself carries no locking or versioning. Serializing the
  * read-modify-write of a given (tenant, key) — so that two concurrent writers cannot each read the same base
  * state and lose one another's update — is the **host's** responsibility, not the implementation's; the
- * reference host-rest does this with an in-process keyed mutex (`@kohaku-ui/host-core`'s `createKeyedMutex`,
- * shared by the promotion lock and the fixation lock) and host-mcp-apps wires the same mutex (keyed by
+ * reference host-rest does this with an in-process keyed mutex (`createKeyedMutex` in this package,
+ * re-exported by `@kohaku-ui/host-core`, shared by the promotion lock and the fixation lock) and
+ * host-mcp-apps wires the same mutex (keyed by
  * `intentHash` alone, since the MCP profile never resolves a tenant) into its fixation self-heal path. That
  * mutex only orders calls **within one process** — running multiple instances/processes against the same
  * backing store concurrently (e.g. two hosts sharing one data directory) is not supported by this contract;
@@ -277,6 +341,57 @@ export interface StoragePort {
    * audit event is recorded either). When tenant is specified, deletes that tenant's fixation.
    */
   deleteFixation?(intentHash: string, tenant?: string): Promise<void>;
+}
+
+/** One event a machine-extracted schema suggestion believes a promotion candidate emits (`SchemaSuggestion.events` element). */
+export interface SuggestedEvent {
+  name: string;
+  description: string;
+}
+
+/**
+ * Wire shape of the `draft` a machine-extracted schema suggestion proposes. Structurally identical to
+ * `@kohaku-ui/lineage`'s `ComponentDraft` (not imported: spec-core sits below lineage in the dependency
+ * direction, so the shape is mirrored here — the same idiom `@kohaku-ui/client`'s own `ComponentDraft`
+ * already uses for this wire contract).
+ */
+export interface SuggestedDraft {
+  componentType: string;
+  version: string;
+  intentName: string;
+  description: string;
+  /** JSON Schema for the props (LLM-extracted or a human-entered draft). */
+  paramsJsonSchema?: unknown;
+  /** Data wiring for the promotion Intent: mapping of intent params -> query://. */
+  queryTemplate?: {
+    path: string;
+    fixedParams?: Record<string, string>;
+    paramMap?: Record<string, string>;
+  };
+}
+
+/**
+ * A machine-extracted registration proposal for a promotion candidate (advisory only; docs/design.md
+ * §9.2 "Schema suggestion"). Produced by an extractor (`@kohaku-ui/evals`' `createSchemaExtractor`),
+ * persisted on the promotion snapshot (`@kohaku-ui/lineage`'s `PromotionCandidate.suggestion`) so the
+ * approval UI can prefill its form, and mirrored on the wire by `@kohaku-ui/client`'s
+ * `SchemaSuggestionView`. Defined here, not in any one of those three packages, because it is a single
+ * wire-contract type shared across same-layer packages that must not depend on one another (evals
+ * produces it, lineage persists it, client mirrors it as a REST view) — the previous state had three
+ * independently hand-maintained, structurally-identical definitions that could silently drift. Never
+ * applied without a human `approve` carrying the final draft.
+ */
+export interface SchemaSuggestion {
+  draft: SuggestedDraft;
+  events: SuggestedEvent[];
+  /** The extractor's own 0..1 estimate of how faithfully the proposal reflects the HTML. */
+  confidence: number;
+  /** The model that produced the proposal (LlmPort.modelId), for the audit trail. */
+  model: string;
+  /** Extractor identity + version, stamped like a rubric so a later prompt change is visible in lineage. */
+  extractorId: string;
+  extractorVersion: string;
+  suggestedAt: string;
 }
 
 /**

@@ -50,6 +50,15 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * Options for PromotionsClient.approve. acknowledgedSuggestion (additive, optional) is sent as the request
+ * body's own field of the same name; the server records it on `component.schemaEdited` as `acknowledged`
+ * (recorded, not enforced — see docs/design.md §9.2 and `@kohaku-ui/lineage`'s `ApproveOptions`).
+ */
+export interface PromotionApproveOptions extends RequestOptions {
+  acknowledgedSuggestion?: boolean;
+}
+
 /** Query for GET /lineage (audit surface; all optional). */
 export interface LineageQuery {
   /** Event type (e.g. ["view.composed"]). When set, only events matching any of them. */
@@ -99,8 +108,16 @@ export interface PromotionsClient {
    * if a data reference was recorded, the ref + a read capability. Missing html or absent → throws NOT_FOUND.
    */
   preview(artifactId: string, opts?: RequestOptions): Promise<PromotionPreviewView>;
-  /** Approve and register (POST /promotions/:id/approve). draft is the wire shape including paramsJsonSchema / queryTemplate. */
-  approve(artifactId: string, draft: ComponentDraft, opts?: RequestOptions): Promise<PromotionCandidateView>;
+  /**
+   * Approve and register (POST /promotions/:id/approve). draft is the wire shape including paramsJsonSchema /
+   * queryTemplate. opts.acknowledgedSuggestion (additive, optional) records whether the reviewer ticked the
+   * "I reviewed the suggestion" acknowledgement before approving — recorded on the server, not enforced.
+   */
+  approve(
+    artifactId: string,
+    draft: ComponentDraft,
+    opts?: PromotionApproveOptions,
+  ): Promise<PromotionCandidateView>;
   /** Reject (POST /promotions/:id/reject). */
   reject(artifactId: string, opts?: RequestOptions): Promise<PromotionCandidateView>;
   /** Withdraw / unpublish (POST /promotions/:id/withdraw). */
@@ -295,7 +312,12 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
       return (
         await post<{ candidate: PromotionCandidateView }>(
           `/promotions/${encodeURIComponent(artifactId)}/approve`,
-          { draft },
+          {
+            draft,
+            ...(opts?.acknowledgedSuggestion != null
+              ? { acknowledgedSuggestion: opts.acknowledgedSuggestion }
+              : {}),
+          },
           opts,
         )
       ).candidate;

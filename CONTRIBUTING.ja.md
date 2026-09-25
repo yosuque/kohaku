@@ -70,6 +70,7 @@ pnpm seed
 - **テストから実 LLM を呼び出さないでください。** `FakeLlm`(`@kohaku-ui/llm/fake`、スクリプト応答)または `FixtureLlm`(`@kohaku-ui/evals`、record/replay)を使ってください。
 - 永続化を伴うテストは `apps/sample-api/.data/` に触れず、`mkdtemp` の一時ディレクトリを渡してください(このディレクトリはローカルの実行時状態であり、テストフィクスチャではありません)。
 - UI の表示を意図的に変えた場合は `KOHAKU_GOLDEN_UPDATE=1` で golden Spec を再生成し、diff をレビューしてからコミットしてください。
+- `storage-redis` と `storage-postgres` のアダプタテストは、利用可能なら Docker(testcontainers 経由)を使い、初回実行時に `redis:7-alpine` / `postgres:16-alpine` を pull します。`KOHAKU_ADAPTER_TESTS=skip` を設定するとこれらを丸ごとスキップできます(Docker が無い環境など)。
 
 ## 8. 依存方向
 
@@ -108,7 +109,7 @@ pnpm changeset
 ```
 
 changeset を含む PR が `main` にマージされると、Version ワークフローが `chore(release): version packages`
-PR を作成・更新します。マージ前にこの PR の diff をレビューしてください: 20 パッケージのマニフェスト全て、20
+PR を作成・更新します。マージ前にこの PR の diff をレビューしてください: 27 パッケージのマニフェスト全て、27
 件の `CHANGELOG.md`、`python/kohaku/pyproject.toml`、`python/kohaku/src/kohaku/__init__.py`、ロックファイルが
 変更されます。この PR をマージしても**公開はされません**——下書きの GitHub Release `vX.Y.Z` が現れるだけです
 (本文は CHANGELOG から自動生成されます)。公開は別の、意図的な操作です: まず `main` から Release ワークフロー
@@ -116,7 +117,7 @@ PR を作成・更新します。マージ前にこの PR の diff をレビュ�
 PyPI の順に公開するのを見守ります。手順全体と公開前チェックリストは
 [docs/runbooks/release.ja.md](docs/runbooks/release.ja.md) を参照してください。
 
-`@kohaku-ui/*` の 20 パッケージは**常に同一バージョン**です。1 つのワイヤプロトコルの 1 実装であり、バージョンが割れると利用者のツリーに互換性のない `spec-core` が 2 つ入りうるためです。詳細は [.changeset/README.md](.changeset/README.md)。**開発者のマシンから publish することはありません。**
+`@kohaku-ui/*` の 27 パッケージは**常に同一バージョン**です。1 つのワイヤプロトコルの 1 実装であり、バージョンが割れると利用者のツリーに互換性のない `spec-core` が 2 つ入りうるためです。詳細は [.changeset/README.md](.changeset/README.md)。**開発者のマシンから publish することはありません。**
 
 ## 12. 依存関係
 

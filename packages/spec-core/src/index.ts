@@ -21,6 +21,15 @@ export {
   type IntentInput,
   normalizeIntent,
 } from "./intent.js";
+// In-process keyed mutex (a shared primitive: host locks and the reference StoragePort's per-file serialization)
+export { createKeyedMutex, type KeyedMutex } from "./keyed-mutex.js";
+// Lineage filter/limit primitives shared by every StoragePort implementation and port-contracts
+export {
+  applyLineageLimit,
+  DEFAULT_LINEAGE_LIMIT,
+  LINEAGE_PAYLOAD_INDEX_FIELDS,
+  matchesLineageFilter,
+} from "./lineage-filter.js";
 // Parsing / validation
 export {
   parsePatch,
@@ -30,9 +39,9 @@ export {
   safeParsePatch,
   safeParseSpec,
 } from "./parse.js";
-// Ports
 export type {
   AuthzPort,
+  CapabilityRevocationStore,
   CatalogContribution,
   DomainPort,
   FixationRecord,
@@ -46,16 +55,22 @@ export type {
   Principal,
   PromotionState,
   QueryHandle,
+  RevokeCapabilityResult,
+  SchemaSuggestion,
   Scope,
   SemanticInput,
   SemanticPort,
   SessionContext,
   StoragePort,
+  SuggestedDraft,
+  SuggestedEvent,
   Surface,
   ThemeTokens,
   VerifyRequest,
   VerifyResult,
 } from "./ports.js";
+// Ports
+export { DEFAULT_CAPABILITY_TTL_SECONDS, normalizeTenant } from "./ports.js";
 export { collectStateRefs, evaluateVisibleWhen } from "./predicate.js";
 export {
   formatQueryRef,
@@ -135,7 +150,6 @@ export {
   type VisibleWhen,
   VisibleWhenSchema,
 } from "./schema/state.js";
-
 // Text summary (fallback for hosts without UI support / the feed-back text for ui/update-model-context)
 export { specToText } from "./spec-text.js";
 

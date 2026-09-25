@@ -21,13 +21,14 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { type ComposeContext, type ComposeInput, compose } from "@kohaku-ui/composer";
 import { type GoldenCase, runGolden } from "@kohaku-ui/evals";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
-import type { StoragePort, UISpec } from "@kohaku-ui/spec-core";
+import type { UISpec } from "@kohaku-ui/spec-core";
+import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 const GOLDEN_DIR = join(dirname(fileURLToPath(import.meta.url)), "golden");
 const UPDATE = process.env["KOHAKU_GOLDEN_UPDATE"] === "1";
@@ -50,41 +51,11 @@ interface GoldenFixture {
   expected: UISpec | null;
 }
 
-/** In-memory StoragePort (0 fixations, so few-shot is empty and deterministic). */
-function makeMemoryStorage(): StoragePort {
-  const cache = new Map<string, UISpec>();
-  return {
-    async getSpecCache(key) {
-      return cache.get(key) ?? null;
-    },
-    async putSpecCache(key, spec) {
-      cache.set(key, spec);
-    },
-    async appendLineage() {},
-    async listLineage() {
-      return [];
-    },
-    async getPromotionState() {
-      return null;
-    },
-    async putPromotionState() {},
-    async listPromotionStates() {
-      return [];
-    },
-    async getFixation() {
-      return null;
-    },
-    async putFixation() {},
-    async listFixations() {
-      return [];
-    },
-  };
-}
-
 /** Extract the ComposeContext from the sample API's real wiring. drafts are used as the L1 FakeLlm responses. */
 async function makeContext(drafts: unknown[]): Promise<ComposeContext> {
   const llm = new FakeLlm({ objects: drafts });
-  const storage = makeMemoryStorage();
+  // In-memory StoragePort (0 fixations, so few-shot is empty and deterministic).
+  const storage = createMemoryStoragePort();
   const authz = createHmacAuthzPort("test-secret");
   return (await createApp({ llm, storage, authz })).composeCtx;
 }

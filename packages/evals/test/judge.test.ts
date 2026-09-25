@@ -10,6 +10,7 @@ import {
   l2PromotionRubric,
   l2PromotionRubricV0_1,
   l2PromotionRubricV0_2,
+  l2PromotionRubricV0_3,
   type Rubric,
   runQuality,
 } from "../src/index.js";
@@ -46,6 +47,10 @@ describe("createJudge: L2 promotion review (judge)", () => {
       html: "<html><body><script>window.kohaku.ready()</script></body></html>",
       request: "as a heatmap",
       usage: { uses: 3, sessions: 2 },
+      // A draft is supplied so this exercises the "full" rubric (all 7 criteria, including
+      // suggestion_fidelity) — see the "rubric variant selection" describe block below for the
+      // no-draft/no-suggestion ("no-schema") behavior.
+      draft: { componentType: "sales.calendarHeatmap", intentName: "sales.calendar_heatmap" },
     });
     // All criteria 0.8 and weights sum to 1.0, so the combined score is also 0.8. safety's floor is 0.5,
     // and 0.8 clears it, so nothing is vetoed.
@@ -53,8 +58,47 @@ describe("createJudge: L2 promotion review (judge)", () => {
     expect(verdict.pass).toBe(true);
     expect(verdict.vetoedBy).toEqual([]);
     expect(verdict.rubricId).toBe("l2-promotion");
-    expect(verdict.rubricVersion).toBe("0.3");
+    expect(verdict.rubricVersion).toBe("0.4");
     expect(verdict.summary).toBe("worthy of promotion");
+  });
+
+  it("rubric 0.4 carries suggestion_fidelity with weights still summing to 1.0", () => {
+    expect(l2PromotionRubric.version).toBe("0.4");
+    const ids = l2PromotionRubric.criteria.map((c) => c.id);
+    expect(ids).toContain("suggestion_fidelity");
+    expect(ids).toContain("schema_inferability");
+    const sum = l2PromotionRubric.criteria.reduce((s, c) => s + c.weight, 0);
+    expect(Math.abs(sum - 1)).toBeLessThan(1e-9);
+  });
+
+  it("copies a supplied schema suggestion into the prompt as untrusted evidence (absent when unspecified)", async () => {
+    const llm = new FakeLlm({
+      objects: [uniformVerdict(l2PromotionRubric, 0.7), uniformVerdict(l2PromotionRubric, 0.7)],
+    });
+    const judge = createJudge({ llm, passScore: 0.5 });
+    const base = {
+      kind: "l2-component" as const,
+      html: "<html><body><script>window.kohaku.ready()</script></body></html>",
+      request: "as a heatmap",
+      usage: { uses: 3, sessions: 2 },
+    };
+    await judge.judge({
+      ...base,
+      suggestion: {
+        componentType: "sales.calendarHeatmap",
+        intentName: "sales.calendar_heatmap",
+        description: "Monthly heatmap",
+        paramsJsonSchema: { type: "object", properties: {} },
+        events: [{ name: "cellSelected", description: "clicked" }],
+      },
+    });
+    await judge.judge(base);
+    expect(llm.calls[0]!.prompt).toContain(
+      "## Proposed schema (machine-extracted; verify it against the HTML)",
+    );
+    expect(llm.calls[0]!.prompt).toContain("sales.calendarHeatmap");
+    expect(llm.calls[0]!.prompt).toContain("<<<BEGIN SUGGESTION");
+    expect(llm.calls[1]!.prompt).not.toContain("## Proposed schema");
   });
 
   it("passing telemetry copies real-render observations into the prompt (absent when unspecified)", async () => {
@@ -174,6 +218,9 @@ describe("createJudge: error cases of missing and unknown criterion", () => {
       html: "<html></html>",
       request: "r",
       usage: { uses: 1, sessions: 1 },
+      // A draft keeps this on the "full" rubric variant (all 7 criteria) so the unknown-extra-id assertion
+      // below is exercised against the same criteria set the response was scripted from.
+      draft: { componentType: "sales.calendarHeatmap", intentName: "sales.calendar_heatmap" },
     });
     // Only the rubric's criteria are evaluated. Unknown ids do not appear in verdict.criteria.
     expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubric.criteria.map((c) => c.id));
@@ -321,16 +368,17 @@ describe("runQuality: L1 quality regression harness", () => {
   });
 });
 
-describe("l2PromotionRubric (v0.3, current — pinned criteria id order, weights, and safety's floor)", () => {
+describe("l2PromotionRubric (v0.4, current — pinned criteria id order, weights, and safety's floor)", () => {
   // m-21/Task 8: uniformVerdict(l2PromotionRubric, ...) generates its expectations FROM l2PromotionRubric's
   // own criteria (see the tests above), so a weight/id-order change to the rubric would pass every one of
   // them silently. Pin the shape directly, following the same literal-value style already used for
-  // l2PromotionRubricV0_1/l2PromotionRubricV0_2 below. m-22 rebalanced generality/visual_quality; n-7 added
-  // safety's floor — this test's weights/floor are exactly what a further rebalance must update (and that
-  // update is the proof the pin actually bites).
-  it("is version 0.3 with 6 criteria (safety/determinism/a11y/schema_inferability/generality/visual_quality) and weights summing to 1.0", () => {
+  // l2PromotionRubricV0_1/l2PromotionRubricV0_2/l2PromotionRubricV0_3 below. m-22 rebalanced
+  // generality/visual_quality; n-7 added safety's floor; the schema-suggestion feature added suggestion_fidelity — this test's
+  // weights/floor are exactly what a further rebalance must update (and that update is the proof the pin
+  // actually bites).
+  it("is version 0.4 with 7 criteria (safety/determinism/a11y/schema_inferability/generality/visual_quality/suggestion_fidelity) and weights summing to 1.0", () => {
     expect(l2PromotionRubric.id).toBe("l2-promotion");
-    expect(l2PromotionRubric.version).toBe("0.3");
+    expect(l2PromotionRubric.version).toBe("0.4");
     expect(l2PromotionRubric.criteria.map((c) => c.id)).toEqual([
       "safety",
       "determinism",
@@ -338,15 +386,17 @@ describe("l2PromotionRubric (v0.3, current — pinned criteria id order, weights
       "schema_inferability",
       "generality",
       "visual_quality",
+      "suggestion_fidelity",
     ]);
-    expect(l2PromotionRubric.criteria.map((c) => c.weight)).toEqual([0.25, 0.2, 0.15, 0.15, 0.05, 0.2]);
+    expect(l2PromotionRubric.criteria.map((c) => c.weight)).toEqual([0.25, 0.2, 0.15, 0.05, 0.05, 0.2, 0.1]);
     const sum = l2PromotionRubric.criteria.reduce((s, c) => s + c.weight, 0);
     expect(sum).toBeCloseTo(1.0);
   });
 
-  it("n-7: only safety carries a floor, pinned to 0.5", () => {
+  it("n-7: only safety carries a floor, pinned to 0.5 (suggestion_fidelity has no floor)", () => {
     expect(l2PromotionRubric.criteria.map((c) => c.floor)).toEqual([
       0.5,
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -446,10 +496,204 @@ describe("l2PromotionRubricV0_2 (pinned pre-Task-8 rubric)", () => {
     });
     expect(verdict.rubricVersion).toBe("0.2");
     expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubricV0_2.criteria.map((c) => c.id));
-    // Task 8's safety floor lives only on the current l2PromotionRubric (v0.3), not on this pinned
-    // pre-Task-8 snapshot — a consumer who pinned v0.2 keeps the exact pre-Task-8 behavior, including the
-    // pre-n-7 "safety 0, rest full marks still passes" shape.
+    // Task 8's safety floor lives only on l2PromotionRubricV0_3 and the current l2PromotionRubric (v0.4),
+    // not on this pinned pre-Task-8 snapshot — a consumer who pinned v0.2 keeps the exact pre-Task-8
+    // behavior, including the pre-n-7 "safety 0, rest full marks still passes" shape.
     expect(verdict.vetoedBy).toEqual([]);
     expect(verdict.pass).toBe(true);
+  });
+});
+
+describe("l2PromotionRubricV0_3 (pinned pre-Task-5 rubric)", () => {
+  it("is version 0.3 with the 6 pre-Task-5 criteria, weights summing to 1.0, and safety's floor", () => {
+    expect(l2PromotionRubricV0_3.id).toBe("l2-promotion");
+    expect(l2PromotionRubricV0_3.version).toBe("0.3");
+    expect(l2PromotionRubricV0_3.criteria.map((c) => c.id)).toEqual([
+      "safety",
+      "determinism",
+      "a11y",
+      "schema_inferability",
+      "generality",
+      "visual_quality",
+    ]);
+    expect(l2PromotionRubricV0_3.criteria.map((c) => c.weight)).toEqual([0.25, 0.2, 0.15, 0.15, 0.05, 0.2]);
+    expect(l2PromotionRubricV0_3.criteria.map((c) => c.floor)).toEqual([
+      0.5,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    const sum = l2PromotionRubricV0_3.criteria.reduce((s, c) => s + c.weight, 0);
+    expect(sum).toBeCloseTo(1.0);
+  });
+
+  it("a caller can pin it via judge()'s rubric option and get rubricVersion 0.3 in the verdict, with no suggestion_fidelity criterion", async () => {
+    const llm = new FakeLlm({ objects: [uniformVerdict(l2PromotionRubricV0_3, 0.9)] });
+    const judge = createJudge({ llm, passScore: 0.5, rubric: l2PromotionRubricV0_3 });
+    const verdict = await judge.judge({
+      kind: "l2-component",
+      html: "<html><body><script>window.kohaku.ready()</script></body></html>",
+      request: "as a table",
+      usage: { uses: 1, sessions: 1 },
+    });
+    expect(verdict.rubricVersion).toBe("0.3");
+    expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubricV0_3.criteria.map((c) => c.id));
+    expect(verdict.criteria.map((c) => c.id)).not.toContain("suggestion_fidelity");
+  });
+});
+
+describe("rubric variant selection (#14): suggestion_fidelity drop and renormalization with no known schema", () => {
+  const HTML_INPUT = {
+    kind: "l2-component" as const,
+    html: "<html></html>",
+    request: "r",
+    usage: { uses: 1, sessions: 1 },
+  };
+  // Deliberately non-uniform per-criterion scores, so the two variants would diverge if their weights
+  // actually differed (a uniform score would trivially agree regardless of the weight distribution).
+  const SCORES: Record<string, number> = {
+    safety: 0.9,
+    determinism: 0.8,
+    a11y: 0.7,
+    schema_inferability: 0.6,
+    generality: 0.5,
+    visual_quality: 0.4,
+    suggestion_fidelity: 1,
+  };
+  function scriptedFor(rubric: Rubric) {
+    return {
+      criteria: rubric.criteria.map((c) => ({ id: c.id, score: SCORES[c.id]!, reasoning: c.id })),
+      summary: "scored",
+    };
+  }
+
+  it("drops suggestion_fidelity and reports rubricVariant: 'no-schema' when neither draft nor suggestion is given", async () => {
+    const llm = new FakeLlm({ objects: [scriptedFor(l2PromotionRubricV0_3)] });
+    const judge = createJudge({ llm, passScore: 0.5 });
+    const verdict = await judge.judge(HTML_INPUT);
+    expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubricV0_3.criteria.map((c) => c.id));
+    expect(verdict.criteria.map((c) => c.id)).not.toContain("suggestion_fidelity");
+    expect(verdict.rubricVariant).toBe("no-schema");
+    // rubricVersion always names the CONFIGURED rubric (here the default, "0.4") -- the dropped-criterion
+    // case is expressed only by rubricVariant, never by restamping the version to "0.3" (see
+    // noSchemaRubricVariant's doc). The weights this produces still equal l2PromotionRubricV0_3's own,
+    // criterion-for-criterion, as asserted below and by "a no-suggestion input scores identically...".
+    expect(verdict.rubricVersion).toBe("0.4");
+  });
+
+  it("keeps suggestion_fidelity and reports rubricVariant: 'full' when a draft is supplied", async () => {
+    const llm = new FakeLlm({ objects: [scriptedFor(l2PromotionRubric)] });
+    const judge = createJudge({ llm, passScore: 0.5 });
+    const verdict = await judge.judge({
+      ...HTML_INPUT,
+      draft: { componentType: "sales.calendarHeatmap", intentName: "sales.calendar_heatmap" },
+    });
+    expect(verdict.criteria.map((c) => c.id)).toEqual(l2PromotionRubric.criteria.map((c) => c.id));
+    expect(verdict.rubricVariant).toBe("full");
+    expect(verdict.rubricVersion).toBe("0.4");
+  });
+
+  it("keeps suggestion_fidelity and reports rubricVariant: 'full' when only a suggestion is supplied (pre-existing behavior)", async () => {
+    const llm = new FakeLlm({ objects: [scriptedFor(l2PromotionRubric)] });
+    const judge = createJudge({ llm, passScore: 0.5 });
+    const verdict = await judge.judge({
+      ...HTML_INPUT,
+      suggestion: {
+        componentType: "sales.calendarHeatmap",
+        intentName: "sales.calendar_heatmap",
+        description: "d",
+        events: [],
+      },
+    });
+    expect(verdict.rubricVariant).toBe("full");
+    expect(verdict.rubricVersion).toBe("0.4");
+  });
+
+  it("rounds a custom rubric's renormalized weight so it never leaks a raw floating-point tail into the prompt", async () => {
+    // 0.1 / 0.3 in IEEE 754 doubles is 0.33333333333333337, not a clean 0.3333 -- exactly the kind of
+    // value `noSchemaRubricVariant`'s generic proportional-renormalization branch must round before it
+    // reaches `rubricSystem`'s `weight ${c.weight}` interpolation into the model-facing prompt.
+    const customRubric: Rubric = {
+      id: "custom",
+      version: "1.0",
+      criteria: [
+        { id: "a", description: "a", weight: 0.1 },
+        { id: "b", description: "b", weight: 0.1 },
+        { id: "c", description: "c", weight: 0.1 },
+        { id: "suggestion_fidelity", description: "sf", weight: 0.7 },
+      ],
+    };
+    const llm = new FakeLlm({
+      objects: [
+        {
+          criteria: [
+            { id: "a", score: 1, reasoning: "a" },
+            { id: "b", score: 1, reasoning: "b" },
+            { id: "c", score: 1, reasoning: "c" },
+          ],
+          summary: "scored",
+        },
+      ],
+    });
+    const judge = createJudge({ llm, rubric: customRubric, passScore: 0.5 });
+    await judge.judge(HTML_INPUT);
+
+    const system = llm.calls[0]!.system!;
+    expect(system).toContain("a (weight 0.3333)");
+    expect(system).not.toMatch(/weight 0\.\d{5,}/);
+  });
+
+  it("both variants' weights sum to 1", () => {
+    expect(l2PromotionRubric.criteria.reduce((s, c) => s + c.weight, 0)).toBeCloseTo(1);
+    expect(l2PromotionRubricV0_3.criteria.reduce((s, c) => s + c.weight, 0)).toBeCloseTo(1);
+  });
+
+  it("a no-suggestion input scores identically to explicitly pinning rubric 0.3, given the same per-criterion scores", async () => {
+    const autoJudge = createJudge({
+      llm: new FakeLlm({ objects: [scriptedFor(l2PromotionRubricV0_3)] }),
+      passScore: 0.5,
+    });
+    const autoVariant = await autoJudge.judge(HTML_INPUT);
+
+    const pinnedJudge = createJudge({
+      llm: new FakeLlm({ objects: [scriptedFor(l2PromotionRubricV0_3)] }),
+      passScore: 0.5,
+      rubric: l2PromotionRubricV0_3,
+    });
+    const pinned = await pinnedJudge.judge(HTML_INPUT);
+
+    expect(autoVariant.score).toBe(pinned.score);
+    expect(autoVariant.pass).toBe(pinned.pass);
+    expect(autoVariant.vetoedBy).toEqual(pinned.vetoedBy);
+    expect(autoVariant.criteria).toEqual(pinned.criteria);
+    // The only observable difference is the additive rubricVariant stamp: it is present (as "no-schema") only
+    // when the default rubric's own suggestion_fidelity criterion was actually dropped to get here, not when
+    // rubric 0.3 (which never had the criterion) was pinned explicitly.
+    expect(autoVariant.rubricVariant).toBe("no-schema");
+    expect(pinned.rubricVariant).toBeUndefined();
+  });
+
+  it("shows the draft as the schema-fidelity verification target and the suggestion as context-only when both are present", async () => {
+    const llm = new FakeLlm({ objects: [scriptedFor(l2PromotionRubric)] });
+    const judge = createJudge({ llm, passScore: 0.5 });
+    await judge.judge({
+      ...HTML_INPUT,
+      draft: { componentType: "sales.calendarHeatmap", intentName: "sales.calendar_heatmap" },
+      suggestion: {
+        componentType: "sales.oldSuggestion",
+        intentName: "sales.old_suggestion",
+        description: "d",
+        events: [],
+      },
+    });
+    const prompt = llm.calls[0]!.prompt;
+    expect(prompt).toContain("## Schema being registered (verify this against the HTML for schema fidelity)");
+    expect(prompt).toContain("sales.calendarHeatmap");
+    expect(prompt).toContain(
+      "## Proposed schema (machine-extracted; context only — the schema being registered above is the one actually published)",
+    );
+    expect(prompt).toContain("sales.oldSuggestion");
   });
 });

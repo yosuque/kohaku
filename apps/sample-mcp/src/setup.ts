@@ -14,20 +14,30 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { JwtIdentityResolver } from "@kohaku-ui/authz-jwt";
 import {
   attachKohakuToMcpServer,
   defaultMcpListCacheHints,
   intentToolsFromCatalog,
+  type McpHostDeps,
 } from "@kohaku-ui/host-mcp-apps";
 import { createViewRecorder } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
+import type { AuthzPort, StoragePort } from "@kohaku-ui/spec-core";
 import { admitFixationForLocale, createApp } from "@kohaku-ui-sample/api";
-// Reuse sample-api's Port implementations / side-effect declarations (via the package's exports subpaths)
+// Reuse sample-api's side-effect declarations (via the package's exports subpath)
 import { salesActionEffects } from "@kohaku-ui-sample/api/action-effects";
-import { createHmacAuthzPort } from "@kohaku-ui-sample/api/ports/authz-port";
-import { createFileStoragePort } from "@kohaku-ui-sample/api/ports/storage-port";
-import { McpServer } from "@modelcontextprotocol/server";
+// Reuse sample-api's env-driven adapter selection (via the package's exports subpath) so the MCP profile
+// picks the same KOHAKU_STORAGE / KOHAKU_AUTHZ adapters as the REST profile when neither is overridden, and
+// (when both are env-derived) shares a single connection between storage and the revocation store the same
+// way sample-api's own index.ts does.
+import {
+  createAuthzFromEnv,
+  createPortsFromEnv,
+  createStorageFromEnv,
+} from "@kohaku-ui-sample/api/ports/from-env";
+import { McpServer, type ServerContext } from "@modelcontextprotocol/server";
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(APP_DIR, "../../..");
@@ -114,6 +124,22 @@ export interface KohakuMcpSetupOptions {
    * When unspecified (stdio path), it returns a local path (behavior unchanged).
    */
   snapshotBaseUrl?: string;
+  /** Override the StoragePort (tests / a caller that already built one). Built from env (KOHAKU_STORAGE) when omitted. */
+  storage?: StoragePort;
+  /** Override the AuthzPort (tests / a caller that already built one). Built from env (KOHAKU_AUTHZ) when omitted. */
+  authz?: AuthzPort;
+  /**
+   * Per-tool-call principal resolution (e.g. from the HTTP request's own bearer token under KOHAKU_AUTHZ=jwt).
+   * Forwarded verbatim to `attachKohakuToMcpServer`'s `McpHostDeps.resolvePrincipal` — see its doc comment for
+   * the fallback order (resolvePrincipal → deps.principal → anonymous) and the fail-closed contract (a throw
+   * becomes a structured tool error). Left unwired for stdio (one process, one user).
+   *
+   * When omitted and `authz` is not overridden either, and `KOHAKU_AUTHZ=jwt`, this setup builds the default
+   * itself from the same env-derived identity resolver `authz` came from (deriving the caller's principal
+   * from the HTTP request's own bearer token) — see this option's use inside `createKohakuMcpSetup`. Passing
+   * this option always overrides that default.
+   */
+  resolvePrincipal?: McpHostDeps["resolvePrincipal"];
 }
 
 export interface KohakuMcpSetup {
@@ -128,6 +154,15 @@ export interface KohakuMcpSetup {
   readonly dataDir: string;
   /** Directory where snapshot HTML is stored (single source of truth). http.ts uses this as the source for /snapshots static serving. */
   readonly snapshotDir: string;
+  /**
+   * Resolves once the storage port this setup created from env is ready (a no-op when `options.storage`
+   * was supplied, or for a file/memory backend -- see `StorageFromEnv.ready`'s doc comment). http.ts awaits
+   * this before listening so an unreachable redis/postgres backend fails startup clearly instead of only
+   * surfacing on the first tool call.
+   */
+  ready(): Promise<void>;
+  /** Closes the storage port this setup created from env (a no-op when `options.storage` was supplied). */
+  close(): Promise<void>;
 }
 
 /**
@@ -185,8 +220,55 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
   }
   const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
 
-  const storage = createFileStoragePort(dataDir);
-  const authz = createHmacAuthzPort(process.env["KOHAKU_CAPABILITY_SECRET"] ?? "dev-secret-change-me");
+  // Resolve storage/authz from env, sharing a single connection when BOTH are env-derived (the common case:
+  // neither overridden, e.g. the real stdio/HTTP entry points) via createPortsFromEnv -- the same "one
+  // connection, not one per adapter" fix as sample-api's own index.ts. When only one side is overridden
+  // (mostly a test convenience), each side is resolved independently instead (createStorageFromEnv /
+  // createAuthzFromEnv), same as before this fix; a caller mixing an injected storage with an env-derived
+  // redis/postgres authz is a narrow enough case that sharing the connection there is not worth the branching.
+  let storage: StoragePort;
+  let authz: AuthzPort;
+  let identity: JwtIdentityResolver | undefined;
+  let readyFromEnv: () => Promise<void> = async () => {};
+  let closeFromEnv: () => Promise<void> = async () => {};
+  if (options.storage != null && options.authz != null) {
+    storage = options.storage;
+    authz = options.authz;
+  } else if (options.storage != null) {
+    const authzFromEnv = createAuthzFromEnv(process.env);
+    storage = options.storage;
+    authz = authzFromEnv.authz;
+    identity = authzFromEnv.identity;
+    readyFromEnv = authzFromEnv.ready;
+    closeFromEnv = authzFromEnv.close;
+  } else if (options.authz != null) {
+    const storageFromEnv = createStorageFromEnv(process.env, { dataDir });
+    storage = storageFromEnv.storage;
+    authz = options.authz;
+    readyFromEnv = storageFromEnv.ready;
+    closeFromEnv = storageFromEnv.close;
+  } else {
+    const portsFromEnv = createPortsFromEnv(process.env, { dataDir });
+    storage = portsFromEnv.storage;
+    authz = portsFromEnv.authz;
+    identity = portsFromEnv.identity;
+    readyFromEnv = portsFromEnv.ready;
+    closeFromEnv = portsFromEnv.close;
+  }
+
+  // Default per-tool-call principal resolution under KOHAKU_AUTHZ=jwt (unless options.resolvePrincipal
+  // overrides it): derive the caller's principal from the HTTP request's own bearer token, the same way
+  // http.ts used to build this itself. http.ts no longer resolves authz on its own, so this is now the only
+  // place this wiring exists. Note for the stdio entry (src/index.ts): ServerContext.http is always absent
+  // there, so under KOHAKU_AUTHZ=jwt every stdio tool call fails closed (isError, MISSING_TOKEN) rather than
+  // silently running anonymous -- stdio has no transport-level place to carry a bearer token, so `jwt` is
+  // effectively an HTTP-only choice; use `hmac` (the default) for the stdio profile.
+  const resolvePrincipal: McpHostDeps["resolvePrincipal"] =
+    options.resolvePrincipal ??
+    (identity != null
+      ? async (extra: ServerContext) =>
+          (await identity.fromAuthorizationHeader(extra.http?.req?.headers.get("authorization"))).principal
+      : undefined);
 
   const { composeCtx, domain, lineage, fixations, intentCatalog } = await createApp({
     llm,
@@ -254,6 +336,11 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
         // Side-effect declarations for writes (kohaku_action). Shares the same salesActionEffects as the REST side (app.ts),
         // making "annotate's data-version progression → invalidation of currently-displayed references" work symmetrically on the MCP side too.
         actionEffects: salesActionEffects,
+        // Per-tool-call principal resolution: options.resolvePrincipal when given, else this setup's own
+        // default built from the env-derived identity resolver under KOHAKU_AUTHZ=jwt (see this function's
+        // `resolvePrincipal` local above). Left unwired (every call runs as the anonymous principal — see
+        // McpHostDeps.resolvePrincipal's doc comment for the fallback order) when neither applies.
+        ...(resolvePrincipal != null ? { resolvePrincipal } : {}),
       },
       {
         // Use the loader that memoizes only successful reads (on absence, does not cache the FALLBACK each time).
@@ -287,7 +374,14 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
     return server;
   }
 
-  return { createServer, llm, dataDir, snapshotDir: SNAPSHOT_DIR };
+  return {
+    createServer,
+    llm,
+    dataDir,
+    snapshotDir: SNAPSHOT_DIR,
+    ready: readyFromEnv,
+    close: closeFromEnv,
+  };
 }
 
 /** Read the repository-root .env (env vars only if absent). Called only at real stdio / HTTP startup. */

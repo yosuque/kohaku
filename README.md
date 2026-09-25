@@ -59,6 +59,16 @@ Working on kohaku itself rather than building on it? Start from the quick start 
 
 ## Quick start (5 minutes)
 
+**Try it on your own data first?**
+
+```bash
+mkdir my-app && cd my-app
+npx @kohaku-ui/cli init --from ../sales.csv   # or a .json array / a .sqlite file
+npm run dev
+```
+
+Generates a runnable Dashboard + Chat app (DomainPort, Intent catalog, L0 fixed Spec) from your own CSV/JSON/SQLite, plus a `.env` with a freshly generated capability secret (add only a provider key to it — never copy `.env.example` over it) — see the [Zero-Port quickstart](docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code) for what it produces and how to add L1/L2. No data at hand? Try [`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv). The rest of this section is the monorepo's own dev setup.
+
 Prerequisites: Node >= 22, pnpm 12 (the floor is `package.json`'s `engines`; CI verifies on both Node 22 (the declared floor) and Node 24, and `.node-version` pins 25.7.0 for local development).
 
 ```bash
@@ -97,8 +107,12 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `packages/spec-core` | UI Spec schema, Intent canonicalization, diff/patch, cacheKey, **Port types** (the framework boundary) |
 | `packages/registry` | Component catalog (15 core parts + runtime-only `ui.loading`), federated resolution, capability negotiation, LLM generation-schema conversion |
 | `packages/data-binding` | `query://` reference resolution, capability tokens, STALE detection |
+| `packages/storage-memory` | Reference StoragePort implementations: `createMemoryStoragePort()` (pure in-process) and `createFileStoragePort(dataDir)` (file-backed lineage / promotions / fixations) |
+| `packages/authz-hmac` | Reference AuthzPort implementation: `createHmacAuthzPort(secret)`, an HMAC-SHA256 capability token |
+| `packages/port-contracts` | **Private, test-only.** Shared StoragePort / AuthzPort contract suites every adapter must pass |
 | `packages/intents` | Intent DSL (`defineVocabulary` / `defineIntent`) — derives SemanticPort definitions, GUI facets, and MCP tool inputs from a single source of value sets and labels (an environment-neutral leaf depending only on spec-core + data-binding) |
 | `packages/llm` | LLM provider abstraction (5 switchable providers, automatic structured-output fallback) |
+| `packages/semantic-llm` | Default SemanticPort (`createLlmSemanticPort`): maps GUI/NL input onto an Intent catalog defined with `@kohaku-ui/intents`, via structured output. A starting point — `cli`'s `kohaku init` generates a project on it; sample-api also builds on it |
 | `packages/composer` | UI Composition Service (L0/L1/L2, repair loop, deterministic post-processing, Spec cache) |
 | `packages/renderer-core` | Shared renderer core (framework-free / DOM-free environment-neutral logic: `resolveEmit`, presenters). Consumed identically by renderer-react and renderer-wc |
 | `packages/renderer-react` | Spec→React rendering engine + core component implementations (`./core`) |
@@ -111,11 +125,15 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `packages/otel` | Thin, opt-in OpenTelemetry layer (`createOtelComposeObserver`, combined via composer's `composeObservers`). Depends only on composer (peer: `@opentelemetry/api`); ships no exporter/SDK setup |
 | `packages/host-a2ui` | A2UI-compatible profile skeleton (UISpec/SpecPatch → A2UI messages; an independent leaf on spec-core only) [Draft] |
 | `packages/client` | Typed host client SDK (depends only on spec-core + data-binding; independent of host-rest) |
+| `packages/admin-react` | Governance console (Lineage / Analytics / Promotion review / Fixation) as embeddable React components on top of `client` (the sample's Admin page is a thin wrapper) |
+| `packages/storage-redis` | Redis-backed StoragePort reference adapter (Spec cache, lineage, promotion state, fixation, tenant scoping); `ioredis` is a peer dependency |
+| `packages/storage-postgres` | PostgreSQL-backed StoragePort reference adapter (same coverage as storage-redis, idempotent schema); `pg` is a peer dependency |
+| `packages/authz-jwt` | JWT / OIDC AuthzPort reference adapter (principal / roles / tenant from claims, shared secret or JWKS); delegates capability tokens to `authz-hmac`, depends on `jose` |
 | `apps/sample-api` | Sample: sales-analysis API (**a model implementation of the 4 Ports**) |
 | `apps/sample-web` | Sample: Dashboard (GUI) / Chat (NLUI) / Admin (governance) |
 | `apps/sample-wc` | Sample: rendering the same Spec with the React-free `<kohaku-surface>` (proof of renderer independence) |
 | `apps/sample-mcp` | Sample: MCP server for external chat + the shared renderer |
-| `cli/` | `kohaku conformance / scaffold / component validate` |
+| `cli/` | `kohaku conformance / scaffold / init / component validate` |
 | `python/` | **Python reference implementation** — a wire-compatible full port of the TS `packages/*` (spec / registry / composer / lineage / host-rest / host-mcp) + the sales-api sample. Conformance CONFORMANT. Details in [python/README.md](python/README.md) |
 
 ## Development

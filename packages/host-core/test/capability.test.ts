@@ -1,9 +1,11 @@
 import type { AuthzPort, Principal, Scope, UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
   DEFAULT_CAPABILITY_TTL_SECONDS,
   issueCapabilityForSpec,
   issueSpecCapabilitySafely,
+  verifyCapabilitySafely,
   WriteScopeDroppedError,
 } from "../src/capability.js";
 
@@ -254,5 +256,86 @@ describe("issueSpecCapabilitySafely", () => {
     const [, , opts] = issueCapability.mock.calls[0]!;
     expect(opts).toEqual({ ttlSeconds: 120 });
     expect(report).not.toHaveBeenCalled();
+  });
+});
+
+describe("verifyCapabilitySafely", () => {
+  it("exports the shared client-safe message text", () => {
+    expect(CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE).toBe("capability verification unavailable");
+  });
+
+  it("passes an allow verdict straight through as { kind: 'verdict' }, without calling onFailure", async () => {
+    const authz: AuthzPort = {
+      async issueCapability() {
+        return "cap";
+      },
+      async verify() {
+        return { ok: true, principal: PRINCIPAL };
+      },
+    };
+    const onFailure = vi.fn();
+    const result = await verifyCapabilitySafely(
+      authz,
+      "cap",
+      { kind: "read", ref: "query://s/x" },
+      onFailure,
+    );
+    expect(result).toEqual({ kind: "verdict", verdict: { ok: true, principal: PRINCIPAL } });
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("passes a deny verdict straight through too (an ordinary denial is not 'unavailable')", async () => {
+    const authz: AuthzPort = {
+      async issueCapability() {
+        return "cap";
+      },
+      async verify() {
+        return { ok: false, reason: "scope does not cover read:x" };
+      },
+    };
+    const onFailure = vi.fn();
+    const result = await verifyCapabilitySafely(authz, "cap", { kind: "read", ref: "x" }, onFailure);
+    expect(result).toEqual({
+      kind: "verdict",
+      verdict: { ok: false, reason: "scope does not cover read:x" },
+    });
+    expect(onFailure).not.toHaveBeenCalled();
+  });
+
+  it("converts a thrown verify into { kind: 'unavailable', error }, calling onFailure with the original error", async () => {
+    const verifyError = new Error("revocation store unavailable (test)");
+    const authz: AuthzPort = {
+      async issueCapability() {
+        return "cap";
+      },
+      async verify() {
+        throw verifyError;
+      },
+    };
+    const onFailure = vi.fn();
+    const result = await verifyCapabilitySafely(authz, "cap", { kind: "read", ref: "x" }, onFailure);
+    expect(result).toEqual({ kind: "unavailable", error: verifyError });
+    expect(onFailure).toHaveBeenCalledTimes(1);
+    expect(onFailure).toHaveBeenCalledWith(verifyError);
+  });
+
+  it("awaits an async onFailure before resolving", async () => {
+    const verifyError = new Error("store down (test)");
+    const authz: AuthzPort = {
+      async issueCapability() {
+        return "cap";
+      },
+      async verify() {
+        throw verifyError;
+      },
+    };
+    let reported = false;
+    const onFailure = vi.fn(async () => {
+      await Promise.resolve();
+      reported = true;
+    });
+    const result = await verifyCapabilitySafely(authz, "cap", { kind: "read", ref: "x" }, onFailure);
+    expect(reported).toBe(true);
+    expect(result.kind).toBe("unavailable");
   });
 });

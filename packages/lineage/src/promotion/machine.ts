@@ -49,6 +49,13 @@ export interface JudgeVerdict {
   reason?: string;
   rubricId?: string;
   rubricVersion?: string;
+  /**
+   * Which variant of the rubric scored this verdict, when the judge's rubric distinguishes one (see
+   * `@kohaku-ui/evals`' `JudgeVerdict.rubricVariant`): `"full"` when a `suggestion_fidelity`-style criterion
+   * was scored, `"no-schema"` when it was dropped because neither a draft nor a suggestion was known. Additive;
+   * a judge that does not report it (or a rubric with no such criterion) leaves this undefined.
+   */
+  rubricVariant?: "full" | "no-schema";
 }
 
 export type PromotionAction =

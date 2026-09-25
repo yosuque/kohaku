@@ -29,6 +29,9 @@ const HOMEPAGE = "https://github.com/yosuque/kohaku";
 /** Workspace directories whose packages are published to npm. `apps/*` are samples and stay private. */
 const PUBLISHED_DIRS = [
   ...[
+    "admin-react",
+    "authz-hmac",
+    "authz-jwt",
     "client",
     "composer",
     "data-binding",
@@ -46,7 +49,11 @@ const PUBLISHED_DIRS = [
     "renderer-react",
     "renderer-wc",
     "sandbox",
+    "semantic-llm",
     "spec-core",
+    "storage-memory",
+    "storage-postgres",
+    "storage-redis",
   ].map((name) => `packages/${name}`),
   "cli",
   "spec",

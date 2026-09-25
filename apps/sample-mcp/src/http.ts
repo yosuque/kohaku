@@ -42,9 +42,13 @@ import {
 } from "node:http";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+// The graceful-shutdown handler is shared with sample-api's index.ts (@kohaku-ui-sample/api/app/shutdown) --
+// see that module's own doc comment for why it lives there and why this subpath is framework-free (no hono
+// / host-rest import), so importing it here does not pull the REST framework into this profile.
+import { createGracefulShutdownHandler, shutdownGraceMs } from "@kohaku-ui-sample/api/app/shutdown";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
-import { createKohakuMcpSetup } from "./setup.js";
+import { createKohakuMcpSetup, type KohakuMcpSetup } from "./setup.js";
 
 /** Path of the MCP endpoint (default). */
 const MCP_PATH = "/mcp";
@@ -119,9 +123,11 @@ export function createMcpHttpServer(options: McpHttpServerOptions): Server {
   // fresh per-request McpServer instance from options.createServer). onerror observes failures the
   // fetch-level handler itself reports (routing/dispatch failures); toNodeHandler's own onerror below
   // observes the narrower node<->fetch adapter failures (request conversion, handler.fetch throwing).
-  // Production hook: this demo's setup.createServer leaves McpHostDeps.resolvePrincipal unwired (every
-  // call runs as the anonymous principal) — this per-request createServer() call is exactly where a real
-  // deployment would derive the caller's identity (e.g. from this request's own auth) and wire it in.
+  // Production hook: `options.createServer` (setup.createServer, built by createKohakuMcpSetup) already
+  // wires McpHostDeps.resolvePrincipal to derive the caller from this request's own bearer token under
+  // KOHAKU_AUTHZ=jwt (or runs every call as the anonymous principal under the default hmac scheme) — see
+  // setup.ts's own doc comment. A real deployment overrides this via `KohakuMcpSetupOptions.resolvePrincipal`
+  // if its identity resolution needs to differ from that default.
   const mcpHandler = createMcpHandler(() => options.createServer(), {
     onerror: (err) => console.error("[kohaku-mcp-http] MCP handler error:", err),
   });
@@ -352,7 +358,22 @@ async function main(): Promise<void> {
   // Base URL for publishing snapshots. When using a public tunnel, set it to the tunnel's URL.
   // If unset, falls back to localhost (local viewing only). The trailing slash is stripped.
   const publicUrl = process.env["KOHAKU_MCP_PUBLIC_URL"]?.replace(/\/+$/, "") ?? `http://localhost:${port}`;
+  // Storage/authz (and, under KOHAKU_AUTHZ=jwt, the per-tool-call resolvePrincipal built from the request's
+  // own bearer token) are entirely setup.ts's responsibility now — this entry point no longer resolves authz
+  // on its own, so there is exactly one AuthzPort (and, when applicable, one shared storage/revocation
+  // connection) for the whole process, not a second one redundantly built here.
   const setup = await createKohakuMcpSetup({ snapshotBaseUrl: publicUrl });
+  // Fail fast: with a redis/postgres backend, an unreachable server otherwise surfaces only on the first
+  // tool call (or, before storage-redis's fail-fast fix, hangs the caller indefinitely). Exit clearly here
+  // instead (a no-op for file/memory -- see PortsFromEnv.ready's doc comment).
+  try {
+    await setup.ready();
+  } catch (error) {
+    console.error(
+      `kohaku-sales-sample MCP server: storage backend is not ready: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
   const allowedHosts = parseAllowedHosts(process.env["KOHAKU_MCP_HTTP_ALLOWED_HOSTS"]);
   const httpServer = createMcpHttpServer({
     createServer: setup.createServer,
@@ -397,40 +418,33 @@ async function main(): Promise<void> {
   // logs the number of connections still open and exits 1 (distinguishable in orchestrator logs). This
   // server has no dedicated health endpoint today (unlike sample-api's GET /api/health), so there is no
   // readiness flag to flip here — a load balancer in front of this demo server would need to probe the
-  // MCP endpoint itself or be told out-of-band.
+  // MCP endpoint itself or be told out-of-band. The handler itself is shared with sample-api's index.ts
+  // (see buildShutdownHandler's own doc comment).
+  const handleShutdown = buildShutdownHandler(httpServer, setup);
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
-    process.once(signal, () => {
-      const graceMs = shutdownGraceMs();
-      console.error(
-        `kohaku-sales-sample MCP server: received ${signal}, draining connections (grace ${graceMs}ms)`,
-      );
-      // Close idle keep-alive sockets immediately rather than waiting for their keep-alive timeout to
-      // elapse: close() alone only stops accepting *new* connections and waits for every existing one
-      // (idle or not) to end before its callback fires, so an idle client sitting on a keep-alive
-      // connection would otherwise stall the drain for no reason.
-      httpServer.closeIdleConnections();
-      httpServer.close(() => process.exit(0));
-      setTimeout(() => {
-        httpServer.getConnections((err, count) => {
-          console.error(
-            `kohaku-sales-sample MCP server: shutdown grace period (${graceMs}ms) elapsed with ` +
-              `${err != null ? "an unknown number of" : count} connection(s) still open; forcing exit`,
-          );
-          process.exit(1);
-        });
-      }, graceMs).unref();
-    });
+    process.once(signal, () => handleShutdown(signal));
   }
 }
 
-/** Default drain window (ms) for graceful shutdown, overridable via KOHAKU_SHUTDOWN_GRACE_MS. */
-const DEFAULT_SHUTDOWN_GRACE_MS = 30_000;
-
-/** Parses KOHAKU_SHUTDOWN_GRACE_MS as a positive integer; any other value (unset, non-numeric, <= 0) falls back to the default. */
-function shutdownGraceMs(): number {
-  const raw = process.env["KOHAKU_SHUTDOWN_GRACE_MS"];
-  const parsed = raw != null ? Number.parseInt(raw, 10) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SHUTDOWN_GRACE_MS;
+/**
+ * Builds this entry point's SIGINT/SIGTERM handler from the shared graceful-shutdown machinery
+ * (`@kohaku-ui-sample/api/app/shutdown`, also used by sample-api's own `index.ts`): no readiness flag to
+ * flip here (this server has no health endpoint — see `main`'s own doc comment above) and no pre-stop
+ * wait, just drain-then-close, with the forced-exit path's bounded best-effort close.
+ * Exported (rather than inlined into `main`) so a test can prove this entry point wires the shared
+ * handler with the right `ports`/`graceMs`/`label` without re-testing the handler's own sequencing
+ * (already covered once by sample-api's own shutdown tests).
+ */
+export function buildShutdownHandler(
+  server: Server,
+  setup: Pick<KohakuMcpSetup, "close">,
+): (signal: string) => void {
+  return createGracefulShutdownHandler({
+    server,
+    ports: setup,
+    graceMs: shutdownGraceMs(),
+    label: "kohaku-sales-sample MCP server",
+  });
 }
 
 // Start listening only when this file is launched directly (tsx src/http.ts).

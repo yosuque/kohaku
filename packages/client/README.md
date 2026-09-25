@@ -28,6 +28,8 @@ try {
 }
 ```
 
+`client.promotions.approve(artifactId, draft, { acknowledgedSuggestion })` forwards `acknowledgedSuggestion` to the host's `POST /promotions/:artifactId/approve` (recorded on the approval's audit event, not enforced).
+
 The packages in this scope share a single version and are designed to be installed together.
 
 - Documentation: [docs/user-guide.md — Calling it from a client](https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#calling-it-from-a-client-the-typed-host-client-sdk)

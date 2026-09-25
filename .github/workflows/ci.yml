@@ -220,6 +220,80 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: pnpm changeset status --since="origin/$BASE_REF"
         continue-on-error: true
+  # The three production adapters against real backends. Locally these suites skip without Docker / a URL
+  # (see @kohaku-ui/port-contracts' resolveAdapterBackend); here the backends run as job services and
+  # KOHAKU_ADAPTER_TESTS=require turns a skip into a failure, so this job can never pass vacuously.
+  adapters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      KOHAKU_ADAPTER_TESTS: require
+      KOHAKU_TEST_REDIS_URL: redis://localhost:6379
+      KOHAKU_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm vitest run --project storage-redis --project storage-postgres --project authz-jwt --project sample-api
+  # REST black-box conformance with each production storage backend behind the TS sample host (the same
+  # check conformance-ts runs against the file port), so a backend-specific deviation in the Spec cache /
+  # lineage / fixation path is caught by the spec suite, not only by the contract tests.
+  conformance-ts-adapters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        storage: [redis, postgres]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Start TS sample-api on ${{ matrix.storage }} and run the REST black-box check
+        env:
+          KOHAKU_STORAGE: ${{ matrix.storage }}
+          KOHAKU_REDIS_URL: redis://localhost:6379
+          KOHAKU_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+          # A redis/postgres backend requires a real capability secret (sample-api's from-env refuses to
+          # start on the fixed demo default once storage leaves the single-process file/hmac shape) — this
+          # is a CI-only value, never used outside this ephemeral job.
+          KOHAKU_CAPABILITY_SECRET: ci-conformance-adapters-test-secret-not-for-production-use
+        run: |
+          LOG=$(mktemp)
+          (KOHAKU_DATA_DIR=$(mktemp -d) PORT=8787 pnpm --filter @kohaku-ui-sample/api start) >"$LOG" 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          scripts/wait-for-http.sh http://localhost:8787/api/kohaku/catalog 30 "$LOG"
+          node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku
   # The `ci` job above typechecks and tests against `src/*.ts` directly (packages export source; publishConfig
   # only applies once a package is packed). That means nothing in `ci` ever notices a missing publishConfig
   # entry, a `.d.ts` that stops resolving once packed, or a guest closure (packages/sandbox) whose stringified

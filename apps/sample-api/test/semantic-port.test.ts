@@ -1,88 +1,19 @@
-import { type GenerateObjectRequest, LlmError, type LlmErrorCode, type LlmPort } from "@kohaku-ui/llm";
+import type { GenerateObjectRequest, LlmPort } from "@kohaku-ui/llm";
+import { FakeLlm } from "@kohaku-ui/llm/fake";
+import { buildNormalizeSystemPrompt } from "@kohaku-ui/semantic-llm";
 import type { SessionContext } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { SalesRepo } from "../src/domain/repo.js";
-import { IntentCatalog } from "../src/intents/catalog.js";
+import { createSalesIntentCatalog } from "../src/intents/catalog.js";
 import { createSemanticPort, fiscalPeriodOf } from "../src/ports/semantic-port.js";
 
-// Provider-error vs fallback-mismatch classification for normalizeNl.
-// Falling back to custom is limited to the "normal response but does not fit any intent" case; provider failures, cancellation,
-// and misconfiguration are not swallowed but thrown (so the upstream composer can return SEMANTIC_FAILED -> COMPOSE_FAILED).
-// No LLM is used; LlmPort is stubbed directly (scripted responses / exception injection only).
+// Provider-error vs fallback-mismatch classification for normalizeNl (thrown vs. degraded to sales.custom) now
+// lives in @kohaku-ui/semantic-llm's own test suite (packages/semantic-llm/test/nl.test.ts), since that behavior
+// moved into createLlmSemanticPort in Task 2. What remains sample-api-specific: the sales rules (fiscal calendar,
+// region normalization, the sales.custom escape hatch) injected into the shared prompt, and their runtime
+// computation from an injectable clock.
 
 const CTX: SessionContext = { surface: "web", locale: "ja" };
-
-function makePort(llm: LlmPort) {
-  const catalog = new IntentCatalog();
-  return createSemanticPort({ repo: new SalesRepo(), catalogFor: () => catalog, llm });
-}
-
-/** A stub whose generateObject always throws an LlmError with the specified code. */
-function throwingLlm(code: LlmErrorCode): LlmPort {
-  return {
-    provider: "stub",
-    modelId: "stub",
-    async generateObject() {
-      throw new LlmError(code, `stub ${code}`);
-    },
-    async generateText() {
-      throw new LlmError(code, `stub ${code}`);
-    },
-  };
-}
-
-/** A stub whose generateObject returns a fixed object (does not validate the output schema). */
-function fixedLlm(object: unknown): LlmPort {
-  return {
-    provider: "stub",
-    modelId: "stub",
-    async generateObject<T>() {
-      return { object: object as T, usage: { inputTokens: 0, outputTokens: 0 }, model: "stub" };
-    },
-    async generateText() {
-      return { text: "", usage: { inputTokens: 0, outputTokens: 0 } };
-    },
-  };
-}
-
-describe("normalizeNl error classification", () => {
-  it("a PROVIDER failure is thrown rather than swallowed", async () => {
-    const port = makePort(throwingLlm("PROVIDER"));
-    await expect(port.normalize({ kind: "nl", text: "売上を見せて" }, CTX)).rejects.toBeInstanceOf(LlmError);
-  });
-
-  it("ABORTED (cancellation) is also thrown", async () => {
-    const port = makePort(throwingLlm("ABORTED"));
-    await expect(port.normalize({ kind: "nl", text: "売上を見せて" }, CTX)).rejects.toBeInstanceOf(LlmError);
-  });
-
-  it("CONFIG (misconfiguration) is also thrown", async () => {
-    const port = makePort(throwingLlm("CONFIG"));
-    await expect(port.normalize({ kind: "nl", text: "売上を見せて" }, CTX)).rejects.toBeInstanceOf(LlmError);
-  });
-
-  it("INVALID_OUTPUT (response present but inconsistent) degrades to sales.custom", async () => {
-    const port = makePort(throwingLlm("INVALID_OUTPUT"));
-    const out = await port.normalize({ kind: "nl", text: "売上をカレンダーヒートマップで" }, CTX);
-    expect(out.canonical).toBe("sales.custom");
-    expect((out.params as { request?: string }).request).toBe("売上をカレンダーヒートマップで");
-  });
-
-  it("a normal response that fails params validation degrades to sales.custom", async () => {
-    // request missing -> normalizeParams("sales.custom", {}) is null -> to the explicit fallback.
-    const port = makePort(fixedLlm({ intent: "sales.custom", params: {} }));
-    const out = await port.normalize({ kind: "nl", text: "自由な可視化" }, CTX);
-    expect(out.canonical).toBe("sales.custom");
-    expect((out.params as { request?: string }).request).toBe("自由な可視化");
-  });
-
-  it("a normal response matching a known Intent returns it (happy path)", async () => {
-    const port = makePort(fixedLlm({ intent: "sales.trend", params: { metric: "units" } }));
-    const out = await port.normalize({ kind: "nl", text: "販売数の推移" }, CTX);
-    expect(out.canonical).toBe("sales.trend");
-    expect((out.params as { metric?: string }).metric).toBe("units");
-  });
-});
 
 // Regression for computing fiscal periods like 「今四半期」 at runtime from the clock instead of hardcoding them (a staleness bugfix).
 // The FY starts in April: Q1=Apr-Jun / Q2=Jul-Sep / Q3=Oct-Dec / Q4=Jan-Mar (the convention in domain/types.ts).
@@ -126,7 +57,7 @@ function capturingLlm(captured: { system?: string }): LlmPort {
 describe("the fiscal period in the NL normalization prompt (determinized via clock injection)", () => {
   async function systemPromptAt(now: Date): Promise<string> {
     const captured: { system?: string } = {};
-    const catalog = new IntentCatalog();
+    const catalog = createSalesIntentCatalog();
     const port = createSemanticPort({
       repo: new SalesRepo(),
       catalogFor: () => catalog,
@@ -173,5 +104,28 @@ describe("the fiscal period in the NL normalization prompt (determinized via clo
     expect(system).toContain('"last year"/"prior fiscal year" (前年/昨年度) = fiscalYear=2025');
     // The current calendar year-month (informational display) is not rounded and stays at the actual time. Q1 (Apr-Jun) = quarter=1.
     expect(system).toContain('"this quarter" (今四半期) = quarter=1 (now 2027-4)');
+  });
+});
+
+describe("sales rules in the normalization prompt", () => {
+  it("renders the fiscal-year / region / custom rules from the injected clock, in the historical order", async () => {
+    const llm = new FakeLlm({ objects: [{ intent: "sales.trend", params: {} }] });
+    const catalog = createSalesIntentCatalog();
+    const port = createSemanticPort({
+      repo: new SalesRepo(),
+      catalogFor: () => catalog,
+      llm,
+      now: () => new Date("2026-05-15T00:00:00Z"),
+    });
+    await port.normalize({ kind: "nl", text: "trend" }, { surface: "web", locale: "en" });
+    expect(llm.calls[0]!.system).toBe(
+      buildNormalizeSystemPrompt([
+        '- The fiscal year starts in April (FY2026 = 2026-04 to 2027-03). "this period"/"this fiscal year" (今期/今年度) = fiscalYear=2026; "this quarter" (今四半期) = quarter=1 (now 2026-5).',
+        '- "last year"/"prior fiscal year" (前年/昨年度) = fiscalYear=2025',
+        "- Normalize region names to japan / north_america / europe / apac (日本→japan, 北米→north_america, 欧州/ヨーロッパ→europe, アジア太平洋→apac)",
+        "- For a visualization request that fits no Intent (a heatmap, matrix, or other bespoke form), choose sales.custom and put the original request text verbatim into params.request",
+      ]),
+    );
+    expect(llm.calls[0]!.prompt).toContain("## User question (en)");
   });
 });

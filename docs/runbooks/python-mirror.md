@@ -37,9 +37,10 @@ below), so a change to the fragment is fixed in one place and reflected in both 
 hand-copied. (Paths above are given in full — repo-root-relative — since `design-kit.test.ts` is not a
 unique basename in this repo.)
 
-`kohaku/src/kohaku/storage/` is Python-specific (`FileStoragePort`, equivalent to sample-api's
-`storage-port.ts`) — it has no dedicated TS package counterpart because on the TS side that role is
-folded into the sample app.
+`kohaku/src/kohaku/storage/` is Python-specific (`FileStoragePort`, equivalent to
+`@kohaku-ui/storage-memory`'s `createFileStoragePort`) — it has no dedicated TS package counterpart in the
+Python-mirror sense because it is not mechanically regenerated from the TS source the way, say, the core
+catalog is; the TS and Python file-backed StoragePort implementations are independently maintained.
 
 The following are **not ported to Python** — TS-only:
 

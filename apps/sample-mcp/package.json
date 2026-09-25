@@ -12,6 +12,7 @@
   "dependencies": {
     "@kohaku-ui-sample/api": "workspace:^",
     "@kohaku-ui-sample/web": "workspace:^",
+    "@kohaku-ui/authz-hmac": "workspace:^",
     "@kohaku-ui/data-binding": "workspace:^",
     "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@kohaku-ui/lineage": "workspace:^",
@@ -19,6 +20,7 @@
     "@kohaku-ui/renderer-core": "workspace:^",
     "@kohaku-ui/renderer-react": "workspace:^",
     "@kohaku-ui/spec-core": "workspace:^",
+    "@kohaku-ui/storage-memory": "workspace:^",
     "@ai-sdk/anthropic": "catalog:",
     "@ai-sdk/google": "catalog:",
     "@ai-sdk/openai": "catalog:",
@@ -32,10 +34,12 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@kohaku-ui/authz-jwt": "workspace:^",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "jose": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

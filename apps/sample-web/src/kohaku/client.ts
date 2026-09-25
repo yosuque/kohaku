@@ -2,6 +2,7 @@ import {
   type ComposeRequest,
   type ComposeView,
   createKohakuClient,
+  hostErrorFromResponse,
   type NormalizeResult,
 } from "@kohaku-ui/client";
 import type { JsonObject } from "@kohaku-ui/spec-core";
@@ -18,22 +19,15 @@ export type { ComposeView, NormalizeResult };
  * `session.locale` on every compose/normalize/events body (the server varies NL hints and generation output language,
  * cache-separated per language). Below are thin wrappers that adapt to sample-specific call shapes.
  */
-const client = createKohakuClient({
+// Exported for AdminPage, which hands it to @kohaku-ui/admin-react's KohakuAdmin (the package's tabs call
+// client.promotions / client.fixations / client.analytics directly; it never reads a module-level singleton).
+export const client = createKohakuClient({
   baseUrl: "/api/kohaku",
   headers: () => ({ ...tenantHeader(), ...roleHeader() }),
 });
 
 /**
- * Typed governance-plane surfaces (promotions L2→L1, fixations L1→L0, and the read-only analytics summary).
- * Admin's tabs (PromotionsTab / FixationsTab / AnalyticsTab) call these instead of hand-written apiFetch +
- * res.json() + status checks; failures surface as the SDK's KohakuHostError (see admin/ui.tsx's deniedMessage).
- */
-export const promotions = client.promotions;
-export const fixations = client.fixations;
-export const analytics = client.analytics;
-
-/**
- * Low-level fetch for routes outside SPEC (sample-specific /api/health, /api/admin/bump-data-version).
+ * Low-level fetch for routes outside SPEC (sample-specific /api/health, /api/kohaku/admin/bump-data-version).
  * Delegates to the SDK's escape hatch (client.request) — the SDK is responsible for attaching the tenant header.
  */
 export function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -120,8 +114,17 @@ export async function fetchHealth(): Promise<HealthResponse> {
   return (await res.json()) as HealthResponse;
 }
 
+/**
+ * Now behind identity + governance RBAC (operation admin.bumpDataVersion — admin only) and, under a JWT
+ * deployment, disabled unless the server opts in (AppDeps.demoAdminRoutes / KOHAKU_DEMO_ADMIN_ROUTES=1), so a
+ * denial (403) or absence (404) is an expected outcome, not a bug. /api/kohaku/* is outside the SDK's typed
+ * surface, so — like fetchHealth — this is the escape hatch (apiFetch), and unlike fetchHealth it throws the
+ * SDK's typed KohakuHostError on !ok so callers can branch with isKohakuHostError/describeDeniedOperation the
+ * same way they do for every other governance call (see AdminPage.tsx's BumpButton).
+ */
 export async function bumpDataVersion(): Promise<string> {
-  const res = await apiFetch("/api/admin/bump-data-version", { method: "POST" });
+  const res = await apiFetch("/api/kohaku/admin/bump-data-version", { method: "POST" });
+  if (!res.ok) throw hostErrorFromResponse(res.status, await res.json().catch(() => null));
   const json = (await res.json()) as { dataVersion: string };
   return json.dataVersion;
 }

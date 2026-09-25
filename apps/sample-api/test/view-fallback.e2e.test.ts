@@ -1,9 +1,9 @@
+import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { LineageEventRecord, LineageFilter, UISpec } from "@kohaku-ui/spec-core";
 import type { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
-import { createHmacAuthzPort } from "../src/ports/authz-port.js";
 
 /** An in-memory StoragePort that captures lineage events (observes view.fallback records). */
 function makeLineageStorage() {

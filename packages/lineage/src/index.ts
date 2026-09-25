@@ -7,6 +7,8 @@ export {
 export {
   COMPONENT_EVENT_TYPES,
   type ComponentGeneratedPayload,
+  type ComponentSchemaEditedPayload,
+  type ComponentSchemaSuggestedPayload,
   type ComponentUsedPayload,
   FIXATION_EVENT_TYPES,
   type LineageEventType,
@@ -41,16 +43,29 @@ export {
   transition,
 } from "./promotion/machine.js";
 export {
+  type ApproveOptions,
   createPromotions,
   DEFAULT_PROMOTION_POLICY,
+  DEFAULT_SUGGEST_CONCURRENCY,
   type PromotionCandidate,
   PromotionChainError,
+  type PromotionErrorContext,
+  type PromotionErrorEndpoint,
   type PromotionJudge,
+  type PromotionJudgeContext,
   PromotionNotPublishedError,
   PromotionNotRejectedError,
   type PromotionPolicy,
   type Promotions,
   type WithdrawOptions,
 } from "./promotion/service.js";
+export {
+  type DraftDiff,
+  type DraftDiffField,
+  type DraftFieldChange,
+  diffDraft,
+  type SchemaSuggestion,
+  type SuggestedEvent,
+} from "./promotion/suggestion.js";
 export { createViewRecorder, type RestViewRecorder } from "./recorder.js";
 export type { TenantScope } from "./tenant-scope.js";

@@ -1,6 +1,16 @@
-import type { Judge } from "@kohaku-ui/evals";
-import { createPromotions, type Lineage, type Promotions } from "@kohaku-ui/lineage";
+import type { Judge, SchemaExtractor } from "@kohaku-ui/evals";
+import {
+  createPromotions,
+  type Lineage,
+  type PromotionCandidate,
+  type Promotions,
+  type TenantScope,
+} from "@kohaku-ui/lineage";
+import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import type { StoragePort } from "@kohaku-ui/spec-core";
+import { salesContribution } from "../catalog/contribution.js";
+import { OPERATIONS } from "../domain/queries.js";
+import { INTENT_DEFS } from "../intents/catalog.js";
 import { type PromotedRegistry, toPromotedEntry } from "../intents/promoted-registry.js";
 
 /**
@@ -12,6 +22,45 @@ import { type PromotedRegistry, toPromotedEntry } from "../intents/promoted-regi
 export const PROMOTION_MIN_USES = 2;
 
 /**
+ * queryTemplate.path candidates the sales DomainPort serves (the schema extractor is told to pick from these).
+ * Derived from domain/queries.ts's OPERATIONS (the single source of the DomainPort's query paths) rather than
+ * hand-copied, so this list cannot drift out of sync with the actual set of supported operations. Mirrors
+ * `salesPromotionDefaults.queryPaths` in apps/sample-web/src/pages/admin/promotion-defaults.ts (the admin UI's
+ * queryTemplate.path select) minus its leading "" placeholder option.
+ */
+export const QUERY_PATHS = Object.keys(OPERATIONS) as (keyof typeof OPERATIONS)[];
+
+/**
+ * Core (non-promoted) component types and Intent names, computed once: the "avoid these names" baseline
+ * the schema extractor's uniqueness instruction needs even before anything has ever been promoted (#4.9 --
+ * previously catalogSummaryFor returned undefined until the first promotion, so the very first extraction
+ * had no name collisions to check against at all). `resolveCatalog(coreCatalog, salesContribution)` mirrors
+ * app.ts's own `buildCatalog([])` (core + this product's contribution, no promoted entries).
+ */
+const CORE_COMPONENT_TYPES = resolveCatalog(coreCatalog, salesContribution)
+  .list()
+  .map((d) => d.type);
+const CORE_INTENT_NAMES = INTENT_DEFS.map((d) => d.name);
+
+/**
+ * Builds the catalog summary the schema extractor's `catalogSummary` input expects (one "- <name>" line per
+ * entry): the core component types, the core Intent names, and the registry's existing per-tenant promoted
+ * entries (as `"- <componentType> (<intentName>)"`, unchanged format). Always non-empty (the core lists are
+ * never empty), so the prompt section is always sent -- see this constant's own doc comment for why the
+ * empty-until-first-promotion behavior this replaced was a gap. Deliberately not a registry method
+ * (PromotedRegistry's read API already exposes entriesFor(tenant), which carries both draft.componentType and
+ * draft.intentName; no need to widen the registry for this).
+ */
+function catalogSummaryFor(registry: PromotedRegistry, tenant?: string): string {
+  const lines = [
+    ...CORE_COMPONENT_TYPES.map((type) => `- ${type} (core component)`),
+    ...CORE_INTENT_NAMES.map((name) => `- ${name} (core intent)`),
+    ...registry.entriesFor(tenant).map((e) => `- ${e.draft.componentType} (${e.draft.intentName})`),
+  ];
+  return lines.join("\n");
+}
+
+/**
  * Assembles the promotion pipeline (telemetry aggregation + createPromotions).
  * lineage / storage / registry / judge receive the caller's shared instances and are not regenerated internally.
  */
@@ -20,8 +69,14 @@ export function createPromotionPipeline(args: {
   storage: StoragePort;
   registry: PromotedRegistry;
   judge: Judge;
+  /**
+   * Optional schema extractor (LLM auto-extraction of the promotion schema; advisory prefill for the approval
+   * form). Unset = candidates carry no suggestion (the pre-existing behaviour; every FakeLlm-scripted e2e test
+   * relies on this default so its scripted response order is unaffected). index.ts wires it for the real server.
+   */
+  schemaExtractor?: SchemaExtractor;
 }): Promotions {
-  const { lineage, storage, registry, judge } = args;
+  const { lineage, storage, registry, judge, schemaExtractor } = args;
 
   // Runtime telemetry aggregation: aggregates component.used via telemetry (source:"telemetry") as input for the
   // judge's decision. An observation of "real-render reliability" on a separate axis from the promotion aggregation uses
@@ -62,6 +117,34 @@ export function createPromotionPipeline(args: {
         usage: { uses: candidate.uses, sessions: candidate.sessions },
         // Transcribe only when there is a real-render observation (with 0 observations, do not put it in the prompt).
         ...(telemetry.renderedCount > 0 ? { telemetry } : {}),
+        // The schema actually being registered (approve()'s own draft, forwarded via context.draft; #1) is
+        // the source of truth for the "schema fidelity" criterion. ComponentDraft itself carries no events
+        // field, so this block never claims events for it -- a candidate's machine-extracted suggestion may
+        // have proposed some, but those are unverified proposal data, not part of what is actually being
+        // registered, and are surfaced below as `suggestion` context only (never mixed into `draft`).
+        ...(context?.draft != null
+          ? {
+              draft: {
+                componentType: context.draft.componentType,
+                intentName: context.draft.intentName,
+                paramsJsonSchema: context.draft.paramsJsonSchema,
+              },
+            }
+          : {}),
+        // The advisory proposal attached at nomination, handed to the judge as context (rubric 0.4's
+        // "schema fidelity" criterion verifies `draft` above when present; `suggestion` alone is verified
+        // directly when `draft` is unknown, preserving prior behavior).
+        ...(candidate.suggestion != null
+          ? {
+              suggestion: {
+                componentType: candidate.suggestion.draft.componentType,
+                intentName: candidate.suggestion.draft.intentName,
+                description: candidate.suggestion.draft.description,
+                paramsJsonSchema: candidate.suggestion.draft.paramsJsonSchema,
+                events: candidate.suggestion.events,
+              },
+            }
+          : {}),
       });
       // Return the rubric version and summary to the verdict, stamping "which version judged how" into component.judged.
       return {
@@ -102,13 +185,32 @@ export function createPromotionPipeline(args: {
     onUnpublish: async ({ artifactId, tenant }) => {
       registry.unpublish(tenant, artifactId);
     },
-    // Observability of the (fail-open) component.published audit-record path (the demo is console-based, same
-    // convention as compose-context.ts's observer.onError / host-deps.ts's onError). Fires when the audit
-    // record fails either at publish time or during a reconcile backfill attempt; the projection itself is
-    // never blocked by this (see createPromotions' handlePublish / reconcile docs).
+    // LLM auto-extraction of the promotion schema at auto-nomination (advisory; fail-open inside lineage).
+    ...(schemaExtractor != null
+      ? {
+          suggestSchema: async (candidate: PromotionCandidate, context?: TenantScope) => {
+            // No body to extract from: `null` is the hook's own "no proposal" contract, matching the outcome a
+            // real extraction would eventually reach anyway, but without spending an LLM call deriving a
+            // proposal from an empty document (which would then get prefilled into the approval form).
+            if (candidate.html == null) return null;
+            return schemaExtractor.extract({
+              html: candidate.html,
+              request: candidate.request ?? "",
+              namespace: "sales",
+              queryPaths: QUERY_PATHS,
+              catalogSummary: catalogSummaryFor(registry, context?.tenant),
+            });
+          },
+        }
+      : {}),
+    // Observability hook for every failure/skip the promotion pipeline reports (see PromotionErrorEndpoint):
+    // audit-record fail-open (publish/unpublish/nominate/suggest/approve), a failing/slow schema-extraction call,
+    // and the tenant-mismatch nomination skip. The demo just logs; a real deployment would feed this to its own
+    // observability stack (same convention as compose-context.ts's observer.onError / host-deps.ts's onError).
+    // The pipeline's own transition/projection is never blocked by any of these (fail-open by design).
     onError: ({ endpoint, artifactId, tenant }, error) => {
       console.error(
-        `[promotions] failed to record the ${endpoint} audit event for ${artifactId}${tenant != null ? ` (tenant=${tenant})` : ""}:`,
+        `[promotions] ${endpoint} failed for ${artifactId}${tenant != null ? ` (tenant=${tenant})` : ""}:`,
         error,
       );
     },

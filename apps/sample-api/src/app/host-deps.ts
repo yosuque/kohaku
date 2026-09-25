@@ -10,6 +10,7 @@ import {
 import type { AuthzPort, DomainPort, StoragePort } from "@kohaku-ui/spec-core";
 import { salesActionEffects } from "../action-effects.js";
 import { admitFixationForLocale } from "./compose-context.js";
+import type { RequestIdentity } from "./request-identity.js";
 
 /**
  * Assembles the KohakuHostDeps for host-rest.
@@ -24,21 +25,18 @@ export function createHostDeps(args: {
   lineage: Lineage;
   promotions: Promotions;
   fixations: Fixations;
+  identity: RequestIdentity;
 }): KohakuHostDeps {
-  const { composeCtx, domain, authz, storage, lineage, promotions, fixations } = args;
+  const { composeCtx, domain, authz, storage, lineage, promotions, fixations, identity } = args;
   return {
     compose: composeCtx,
     domain,
     authz,
     querySource: "sales",
-    // Principal resolution (product responsibility): in real operation, resolve the principal and roles from an auth
-    // platform (JWT/OIDC, etc.). The demo substitutes the x-kohaku-role header and treats **no header (default) as admin**
-    // (so as not to break the unauthorized behavior of the existing demo and tests; it reproduces, via the admin role,
-    // the legacy behavior where the governance plane lets anyone through).
-    auth: async (c) => {
-      const role = c.req.header("x-kohaku-role") || "admin";
-      return { id: `demo-${role}`, roles: [role] };
-    },
+    // Principal / tenant resolution (product responsibility) is delegated to `identity` (request-identity.ts):
+    // either the demo's header scheme (createHeaderIdentity) or verified JWT claims (createJwtRequestIdentity).
+    // See request-identity.ts's doc comments for the rationale of each.
+    auth: identity.auth,
     // Declarative RBAC for the governance plane (SPEC §6.1 governance-plane authorization [Draft]). A role -> allowed-operation
     // matrix: admin=all allowed / reviewer=promotion review + lineage viewing / viewer=read-only. Switching to viewer
     // makes approval/deletion operations (promotion.approve / fixation.remove, etc.) return 403 CAPABILITY_DENIED.
@@ -59,10 +57,11 @@ export function createHostDeps(args: {
         ],
       },
     }),
-    // Tenant resolution: the demo looks at the x-kohaku-tenant header. The governance plane (lineage / promotion /
-    // fixation) is separated per tenant. query:// is tenant-neutral and does not mix tenant into the cache key (an invariant).
-    // Full-fledged tenant isolation (RLS, etc.) is a product responsibility (specification.md §4.4 / §7).
-    tenant: (c) => c.req.header("x-kohaku-tenant") || undefined,
+    // Tenant resolution (product responsibility) is likewise delegated to `identity`. The governance plane
+    // (lineage / promotion / fixation) is separated per tenant. query:// is tenant-neutral and does not mix
+    // tenant into the cache key (an invariant). Full-fledged tenant isolation (RLS, etc.) is a product
+    // responsibility (specification.md §4.4 / §7).
+    tenant: identity.tenant,
     recorder: createViewRecorder(lineage),
     // Observability hook for the failure path (the demo is console-based). When wired, a requestId is issued that
     // matches error.requestId in the error response, letting you correlate logs with the client's error.

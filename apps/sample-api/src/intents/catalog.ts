@@ -1,6 +1,7 @@
 import { formatQueryRef } from "@kohaku-ui/data-binding";
 import { defineIntent, type FacetSpec, type IntentBuilder, type IntentDef } from "@kohaku-ui/intents";
-import type { JsonObject, QueryHandle } from "@kohaku-ui/spec-core";
+import { createIntentCatalog, type IntentCatalog } from "@kohaku-ui/semantic-llm";
+import type { QueryHandle } from "@kohaku-ui/spec-core";
 import { z } from "zod";
 import {
   channel,
@@ -382,39 +383,15 @@ export const INTENT_DEFINITIONS: IntentBuilder[] = [
 /** The SemanticPort IntentDefs (derived from the single definitions). All existing consumers reference this. */
 export const INTENT_DEFS: IntentDef[] = INTENT_DEFINITIONS.map((d) => d.toIntentDef());
 
-export class IntentCatalog {
-  private defs = new Map<string, IntentDef>(INTENT_DEFS.map((d) => [d.name, d]));
+/**
+ * The mutable Intent catalog (core INTENT_DEFS + whatever promotion `add`s/`remove`s), re-exported as a
+ * type so existing consumers (app.ts, promoted-registry.ts, semantic-port.ts) keep referencing the same
+ * name. The implementation itself lives in `@kohaku-ui/semantic-llm` (get/list/names/revision/add/remove/
+ * normalizeParams) -- this used to be a hand-duplicated copy of exactly that class.
+ */
+export type { IntentCatalog };
 
-  get(name: string): IntentDef | undefined {
-    return this.defs.get(name);
-  }
-
-  list(): IntentDef[] {
-    return [...this.defs.values()];
-  }
-
-  names(): string[] {
-    return [...this.defs.keys()];
-  }
-
-  /** Adds a dynamic Intent from promotion (merged in from .data/intents.json) */
-  add(def: IntentDef): void {
-    this.defs.set(def.name, def);
-  }
-
-  /**
-   * Removes a dynamic Intent on promotion withdrawal (unpublish).
-   * Core Intents (INTENT_DEFS) are not added via promotion, so this is only called to remove promoted ones.
-   */
-  remove(name: string): void {
-    this.defs.delete(name);
-  }
-
-  /** Validates params and returns the normalized form with defaults filled in. Returns null on failure. */
-  normalizeParams(name: string, params: JsonObject): JsonObject | null {
-    const def = this.defs.get(name);
-    if (def == null) return null;
-    const parsed = def.params.safeParse(params);
-    return parsed.success ? (parsed.data as JsonObject) : null;
-  }
+/** Builds a fresh IntentCatalog seeded with this sample's core INTENT_DEFS (a thin alias over createIntentCatalog). */
+export function createSalesIntentCatalog(): IntentCatalog {
+  return createIntentCatalog(INTENT_DEFS);
 }

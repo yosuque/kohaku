@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@kohaku-ui-sample/api": "workspace:^",
+    "@kohaku-ui/authz-hmac": "workspace:^",
     "@kohaku-ui/evals": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",
     "typescript": "catalog:",

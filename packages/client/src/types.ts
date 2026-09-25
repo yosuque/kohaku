@@ -1,4 +1,11 @@
-import type { CanonicalIntent, JsonObject, SemanticInput, UISpec } from "@kohaku-ui/spec-core";
+import type {
+  CanonicalIntent,
+  JsonObject,
+  SchemaSuggestion,
+  SemanticInput,
+  SuggestedEvent,
+  UISpec,
+} from "@kohaku-ui/spec-core";
 
 /** Session info (surface / sessionId / locale). Maps onto the `session` field of each REST body. */
 export interface SessionArg {
@@ -81,6 +88,18 @@ export interface ComponentDraft {
   };
 }
 
+/** One event the extractor believes the component emits (element of SchemaSuggestionView.events). */
+export type SuggestedEventView = SuggestedEvent;
+
+/**
+ * View shape of the machine-extracted registration proposal a candidate may carry (`suggestion` on the
+ * GET/POST /promotions… candidate JSON; additive optional). Advisory: the admin UI prefills its approval form
+ * from `draft` and shows the reviewer's edits as a diff; approving still sends the reviewer's own draft.
+ * The single spec-core definition also used by `@kohaku-ui/lineage`'s `SchemaSuggestion` and
+ * `@kohaku-ui/evals`' `SchemaExtractionResult` (its `draft` is structurally this file's own `ComponentDraft`).
+ */
+export type SchemaSuggestionView = SchemaSuggestion;
+
 /**
  * View shape of a promotion candidate (element of GET/POST /promotions… responses). A loose copy holding only
  * the fields the admin UI (sample-web AdminPage) actually reads, so it does not depend on lineage's internal candidate type.
@@ -93,6 +112,7 @@ export interface PromotionCandidateView {
   uses: number;
   sessions: number;
   verdict?: { pass: boolean; score: number };
+  suggestion?: SchemaSuggestionView;
   updatedAt: string;
 }
 
@@ -163,12 +183,20 @@ export interface AnalyticsSummaryView {
       generated: number;
       used: number;
       nominated: number;
+      schemaSuggested: number;
       judged: number;
       reviewed: number;
+      schemaEdited: number;
       published: number;
       withdrawn: number;
     };
     fixations: { fixated: number; unfixated: number };
+    /** Human review turnaround (component.nominated → component.reviewed approve|reject) and zero-edit acceptances. */
+    review: {
+      count: number;
+      durationMs: { p50: number | null; p95: number | null; max: number | null };
+      acceptedAsIs: number;
+    };
   };
   /**
    * Nomination thresholds for promotion / fixation candidates ("N or more uses"), when the host bundles them

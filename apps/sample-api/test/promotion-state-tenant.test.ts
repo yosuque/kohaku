@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ComponentDraft, createLineage, createPromotions } from "@kohaku-ui/lineage";
 import type { LineageEventRecord, Principal } from "@kohaku-ui/spec-core";
+import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { afterAll, describe, expect, it } from "vitest";
-import { createFileStoragePort } from "../src/ports/storage-port.js";
 
 const tmpDirs: string[] = [];
 

@@ -113,7 +113,7 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
 > **上部バーの「Tenant」セレクタ**(default / tenant-a / tenant-b)は全ページ共通です。選択は全 API 呼び出しに `x-kohaku-tenant` として載り、統制/監査プレーン(Lineage・昇格・固定化)がテナントで分離されます。生成結果(Spec)はテナント非依存 — 切り替えても Dashboard の表示は変わりません(§6.1 の不変条件: query:// 参照はテナント中立でキャッシュキーに tenant を混ぜない)。
 
-> **上部バーの「Role」セレクタ**(admin / reviewer / viewer)も全ページ共通です。選択は全 API 呼び出しに `x-kohaku-role` として載り、サーバー側の宣言的 RBAC(`createGovernancePolicy`)が統制ルートの認可を分岐します。`admin` は全許可、`reviewer` は昇格レビュー + Lineage 閲覧、`viewer` は読み取りのみ。**`viewer` に切り替えると Admin の承認・削除系操作が 403 になり、赤いエラーバナーが出ます**。`admin`(既定)ではヘッダを送らず、従来どおり全操作が通ります。ロールはデモ用のヘッダで代替していますが、実運用では認証基盤(JWT/OIDC 等)から解決するのがプロダクト責務です。
+> **上部バーの「Role」セレクタ**(admin / reviewer / viewer)も全ページ共通です。選択は全 API 呼び出しに `x-kohaku-role` として載り、サーバー側の宣言的 RBAC(`createGovernancePolicy`)が統制ルートの認可を分岐します。`admin` は全許可、`reviewer` は昇格レビュー + Lineage 閲覧、`viewer` は読み取りのみ。**`viewer`(または `reviewer`)に切り替えると Admin の承認・削除系操作、および「データ更新をシミュレート(bump)」ボタン(`admin.bumpDataVersion`、admin 専用)も 403 になり、赤いエラーバナーが出ます**。`admin`(既定)ではヘッダを送らず、従来どおり全操作が通ります。ロールはデモ用のヘッダで代替していますが、実運用では認証基盤(JWT/OIDC 等)から解決するのがプロダクト責務です。
 
 > **上部バーの「☀️ Light / 🌙 Dark」トグル**でテーマモードを切り替えられます。初期値は OS の `prefers-color-scheme` に連動し、明示的に選ぶと `localStorage` に永続化されます。**部品(Spec が描画する KPI・チャート・表・フォーム)はテーマトークンで、ページ chrome(ヘッダ・カード・背景・Admin)は CSS 変数で追従**します。ダーク配色は WCAG AA(本文 ≥ 4.5:1 / UI ≥ 3:1)を満たすよう実測調整しています。同じモードなら Web(React)と Web Components(sample-wc)の描画はピクセル一致します(§7.2)。
 
@@ -125,11 +125,15 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
 ### Admin(統制面)
 
+以下の 4 タブは公開パッケージ **`@kohaku-ui/admin-react`** のコンソールです。`apps/sample-web/src/pages/AdminPage.tsx` は sample のクライアント(テナント / ロールヘッダ)・テーマ・辞書・売上カタログのドラフト既定値を注入するだけの薄いラッパです。自分のプロダクトに同じコンソールを組み込む手順は §6「統制コンソールを組み込む」を参照してください。
+
 - **View Lineage**: UI Spec の Event Sourcing。全 compose / 操作 / 昇格 / 固定化がイベント列で見えます。
 - **分析**: 生イベント列を集計した俯瞰(`GET /api/kohaku/analytics/summary`)。fallback 率・tier 分布(L0/L1/L2)・cache 内訳(hit/miss/bypass/fixated)・レイテンシ分位(p50/p95/p99)・頻出 intent 上位・昇格/固定化イベント数を、表 + インラインバーで表示します。**集計は直近 200 件(既定)の窓に基づく**旨を画面上部に明記し、窓上限に到達した場合はその注記も出ます(silent cap にしない)。認可は read 系(`analytics.read`)なので admin/reviewer/viewer とも閲覧できます。
-- **昇格レビュー(L2→L1)**: 自由生成部品の候補一覧。HTML ソース確認 + **「▶ プレビュー」でレビュー対象そのものを実描画**(チャット面と同じ隔離 iframe に記録済み artifact を直接マウント — 承認対象と表示物の同一性は sha256 で保証)→ スキーマ(componentType / intentName / description)を確定 → 「承認して登録」。**上部の `status` セレクタで状態別に絞れます**(「すべて」は候補を掘り起こす `POST /promotions/evaluate`、特定の状態は読み取り専用の `GET /promotions?status=`)。候補カードの**「変更を要求(差し戻し)」で `changes_requested` に落とし**、修正のうえ**「再申請して承認」で candidate に戻して publish まで復帰**できます(差し戻しからの復帰導線)。`changes_requested` では却下は出さず、放棄は「取り下げる(withdraw)」に一本化しています。
+- **昇格レビュー(L2→L1)**: 自由生成部品の候補一覧。HTML ソース確認 + **「▶ プレビュー」でレビュー対象そのものを実描画**(チャット面と同じ隔離 iframe に記録済み artifact を直接マウント — 承認対象と表示物の同一性は sha256 で保証)→ スキーマ(componentType / intentName / description)を確定 → 「承認して登録」。**上部の `status` セレクタで状態別に絞れます**。「すべて」を含むどの状態も読み取り専用の `GET /promotions?status=` で取得され、新しい候補を掘り起こすのは別操作の**「候補を抽出(Extract candidates)」ツールバーボタン**(`POST /promotions/evaluate` を呼び出します)です。候補カードの**「変更を要求(差し戻し)」で `changes_requested` に落とし**、修正のうえ**「再申請して承認」で candidate に戻して publish まで復帰**できます(差し戻しからの復帰導線)。`changes_requested` では却下は出さず、放棄は「取り下げる(withdraw)」に一本化しています。
+
+  **ホストがスキーマ抽出器を組み込んでいる場合**(sample-api の `index.ts` は既定で組み込んでいます: `createSchemaExtractor({ llm, timeoutMs })` — `KOHAKU_PROMOTION_SCHEMA_SUGGEST=0` を設定するとこの配線自体を無効化できる。例えば compose 自体は削らずにこの LLM コストだけ削りたい場合。`KOHAKU_PROMOTION_SCHEMA_SUGGEST_TIMEOUT_MS` で 1 回あたりの予算を上書きできる、既定 20000ms — specification.md §9)、新しい候補カードは**機械抽出された提案でプリフィル済み**のフォームで現れます — componentType / intentName / description / props スキーマ / データ配線 — モデル名と確信度のラベル付きで。異議があるフィールドは自由に編集できます: 各フィールドは提案に対して「変更なし」または「提案値: …」を表示し、**「提案されたスキーマをプレビューと照らして確認しました」チェックボックスをチェックするまで「承認して登録」は有効になりません**。編集内容は lineage(`component.schemaEdited`)に記録され、分析タブでレビューの所要時間と無編集で承認された件数が確認できます。抽出に失敗した場合はカードが空フォームにフォールバックし、失敗が記録されます(`promotion.suggest.schema`)。
 - **固定化(L1→L0)**: 頻出 L1 Intent の候補(利用回数・構造安定度)→ 「L0 に固定化」。
-- 「データ更新を模擬(bump)」: dataVersion を進めてキャッシュ無効化を再現します。
+- 「データ更新を模擬(bump)」: dataVersion を進めてキャッシュ無効化を再現します。`POST /api/kohaku/admin/bump-data-version` は Admin の他の操作と同じ identity + governance RBAC 配下にあり(`admin.bumpDataVersion`、admin のみ)、`KOHAKU_AUTHZ=jwt` ではサーバーが `KOHAKU_DEMO_ADMIN_ROUTES=1` を設定しない限りルート自体が無効(§7)で、その場合ボタンの実行は 404 になり赤いエラーバナーが出ます。
 - 4 タブとも上部バーで選択中の**テナント**でスコープされます(切り替えると各一覧が再取得され、テナント別に分離されていることが見えます)。分析タブの集計も選択テナントのイベントのみが対象です。
 - ロールを `viewer` にすると、承認・削除系の操作に加えて**昇格候補のプレビューも 403** になります(データ read capability の発行を伴うため。閲覧は可能)。RBAC の一連の動きはデモ 7 を参照してください。
 
@@ -157,8 +161,8 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
 1. Chat: 「**Sales as a calendar heatmap**」(日本語「売上をカレンダーヒートマップで」でも同様)→ カタログにない要求なので `sales.custom` → **L2(橙)**。生成 HTML がネットワーク遮断の iframe で動き、データは親ブリッジ経由で取得される(配信前に静的 lint + **サーバー側スモーク検証** — jsdom 上で実行して ready 到達を確認 — を通過したものだけが届き、不合格は自動修復ループに差し戻されます)
 2. もう一度同じ質問(別の言い回しでも `sales.custom` に正規化されれば OK)→ 利用 2 回で昇格候補の閾値(デモ設定)を満たす
-3. Admin → 昇格レビュー: 候補カードの **「▶ プレビュー(隔離 iframe で実描画)」で見た目と動作を確認**し、「生成 HTML ソース」でコードも確認 → componentType `sales.calendarHeatmap` / intentName `sales.calendar_heatmap`(ヒートマップ要求ならプリフィル済み)→ **「承認して登録」**(プレビューは `viewer` ロールでは 403 — データ read capability の発行を伴うため)
-   - 裏で LLM-as-Judge(5 観点)→ 人間承認(このクリック)→ スキーマ確定 → publish が走り、各ステップが Lineage に残ります
+3. Admin → 昇格レビュー: 候補カードの **「▶ プレビュー(隔離 iframe で実描画)」で見た目と動作を確認**し、「生成 HTML ソース」でコードも確認 → componentType `sales.calendarHeatmap` / intentName `sales.calendar_heatmap`(**API が実 LLM で動いていれば抽出器の提案でプリフィル済み。それ以外はヒートマップ要求向けのヒューリスティックなプリフィル**)→ 確認チェックボックスをチェック → **「承認して登録」**(プレビューは `viewer` ロールでは 403 — データ read capability の発行を伴うため)
+   - 裏で LLM-as-Judge(7 観点)→ 人間承認(このクリック)→ スキーマ確定 → publish が走り、各ステップが Lineage に残ります
 4. Chat で同じ質問 → 今度は `sales.calendar_heatmap` に正規化され **L1(緑)+ ネイティブ実装**で描画。**API を再起動しても昇格は残ります**: スナップショット(`apps/sample-api/.data/promotions.json`)が正であり、起動時の reconcile がそこからカタログ/Intent への射影を再構築します
 5. 同じ「作成」は外部チャット(MCP)からも起こせます(→ §5)。`kohaku_compose` 経由の利用も同じ昇格カウンタに合算されます(反映は API サーバー再起動後 → §5)
 
@@ -241,6 +245,8 @@ claude mcp add kohaku-sales -- pnpm --dir <絶対パス>/apps/sample-mcp start
 
 Claude Desktop は iframe で Web と同一描画になります。Claude Code のようなターミナルホストは iframe を描けないため、後述の `kohaku_render_snapshot` を使ってください。
 
+⚠️ `KOHAKU_AUTHZ=jwt` では、認証できるのは後述の Streamable HTTP プロファイルだけです(HTTP リクエスト自身の bearer トークンから呼び出し元の principal を導出する)。stdio プロファイルにはトークンを運ぶトランスポート層がないため、`jwt` の下では stdio のすべてのツール呼び出しが拒否されます(構造化されたツールエラー)。stdio では `KOHAKU_AUTHZ=hmac`(既定値)を使ってください。
+
 ### claude.ai / ChatGPT(Streamable HTTP + 公開トンネル)
 
 claude.ai / ChatGPT はローカル stdio に繋げず、**リモート MCP コネクタ(Streamable HTTP)**経由でしか接続できません。HTTP エントリを起動し、公開トンネルで URL を露出してコネクタに登録します。
@@ -291,6 +297,22 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 **依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm @ai-sdk/anthropic zod`(`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
+### Zero-Port quickstart(自分のデータから、Port コードなしで)
+
+```bash
+mkdir my-app && cd my-app
+npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファイルも可(SQLite は Node >= 22.13)
+npm run dev                                      # API :8787 + web :5173
+```
+
+`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、`@kohaku-ui/semantic-llm` の既定 SemanticPort、`@kohaku-ui/storage-memory` と `@kohaku-ui/authz-hmac`、Dashboard + Chat の Web アプリ、golden regression テスト。`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、4 つの Port はプロダクト側の責務のままです(設計書 §2)。各ファイルには何を置き換えるべきかが書かれています。
+
+手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。
+
+**認識される日付形式**: 年が先頭に来る日付だけを曖昧さなしとして扱い、時間列になります — `YYYY-MM-DD`、`YYYY-MM`、またはこれらの `/` 区切り版で、ゼロ埋めの有無は問いません(`2026-04-01`、`2026-4-1`、`2026/4` など)。US 式 `MM/DD/YYYY` や欧州式 `DD/MM/YYYY` のような日/月が先頭の形式は意図的に推測しません — 月が 12 以下の日付ではこの 2 つを区別できず、誤って推測すると行の日付を静かに取り違えてしまい、グラフが出ないことよりも悪い結果になるためです。データがこの形式の場合、`init` のサマリに列名を挙げた警告が出ます。`YYYY-MM-DD` に変換してから `init` をやり直せば、時間列と Trend ビューが得られます。
+
+**「最初の compose までの時間」の計測**(クイックスタートの KPI、目標 15 分以内): `npx @kohaku-ui/cli init` の前にストップウォッチを開始し、Dashboard に Summary ビュー(L0)が表示された時点と、キーを設定した状態で最初の Chat の回答が描画された時点(L1)で止めます。クリーンなマシン・温まった npm キャッシュで両方を記録してください。CI の `pack-smoke` ジョブは同じ生成処理をエンドツーエンドで実行します(`scripts/pack-smoke.mjs` の step 7b)。
+
 ### Step 0 — LLM なしの Server-Driven UI
 
 ```bash
@@ -301,15 +323,15 @@ node cli/bin/kohaku.js scaffold ports --out ./my-app/kohaku
 
 1. **DomainPort**: 集計クエリを `op` として実装(戻りは TabularData 推奨)
 2. **SemanticPort**: `normalize` は GUI 操作の決定的マッピングだけ、`resolveQuery` は Intent → `query://` ハンドル
-3. **AuthzPort**: サンプルの HMAC 実装(`apps/sample-api/src/ports/authz-port.ts` 約 50 行)を流用可
-4. **StoragePort**: まずインメモリで十分(ファイル永続化の見本は `apps/sample-api/src/ports/storage-port.ts`)
+3. **AuthzPort**: まず `@kohaku-ui/authz-hmac`(`createHmacAuthzPort(secret)`、サンプルの HMAC capability token)から始める。JWT / OIDC で運用する場合は `@kohaku-ui/authz-jwt` の `createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })` が capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決して、`KohakuHostDeps.auth` / `tenant` フックや MCP の `resolvePrincipal` に渡せるようにする(§7「本番用アダプタ」参照)。
+4. **StoragePort**: 最初はインメモリで十分(`@kohaku-ui/storage-memory` の `createMemoryStoragePort()`。`createFileStoragePort(dataDir)` はデモのファイル永続化)。ホストインスタンスが複数になったら `@kohaku-ui/storage-redis` か `@kohaku-ui/storage-postgres` を使い、Spec キャッシュを共有する(§7)。
 
 composer の `policy.fixedSpecs` に固定 Spec テンプレート(`apps/sample-api/src/intents/fixed-specs.ts` が見本)を登録すれば、**LLM なしで** renderer-react による Server-Driven UI が動きます。
 
 ### Step 1 — L1 宣言的合成とチャット
 
 - **Intent カタログを単一定義する(`@kohaku-ui/intents`)**: `defineIntent` で 1 Intent = 1 定義にします(見本: `apps/sample-api/src/intents/catalog.ts`)。値集合は `defineVocabulary("region", { japan: "Japan", north_america: "North America", ... })` で単一源化し、`params`(Zod)/ `examples`(NL 例文)/ `facets`(GUI に出す param)/ `queries`(テンプレート or コールバック)を宣言すると、同じ定義から `.toIntentDef()`(SemanticPort 用)・`.toFacetView()`(GUI ファセット)・`.toToolSource()`(MCP ツール)・`.parseParams()`(coerce + default)が導出されます。GUI に出すファセットは codegen(`pnpm intents:emit`)で `facet-views.json` に書き出し、web はそれをデータ import します(web は server コード非依存を保つ)。
-- `SemanticPort.normalize` の NL 側を `@kohaku-ui/llm` で実装(見本: `apps/sample-api/src/ports/semantic-port.ts` — Intent カタログをプロンプトに転写し、構造化出力でマップ。失敗は `*.custom` に倒す)
+- 既定は `@kohaku-ui/semantic-llm` の `createLlmSemanticPort`(サンプルは売上ルールを `rules` / `fallbackIntent` で配線: `apps/sample-api/src/ports/semantic-port.ts`)
 - `describeShape` を実装すると、チャート種別規則・既定ソートの決定的後処理が効くようになります
 - ドメイン部品は `CatalogContribution` で寄与(`defineComponent` + renderer 実装の `registry.register`)
 
@@ -429,6 +451,61 @@ for await (const ev of client.composeStream({ intent: { canonical: "sales.trend"
 - **SPEC 対象外のルート**(独自の `/health` 等)はエスケープハッチ `client.request(path, init?)`(headers フックは効くが JSON パース・エラー変換はしない)で叩く。
 - サンプルの配線は `apps/sample-web/src/kohaku/client.ts`(SDK を薄く包んで sample 固有の呼び出し形に合わせている)。
 
+### 統制コンソールを組み込む(`@kohaku-ui/admin-react`)
+
+Admin 画面の 4 タブは React コンポーネントとして配布されています。必要なのは `KohakuClient` だけです。RBAC・テナントスコープ・承認はホスト側(`createGovernancePolicy`、統制系ルート)に残るため、コンソールを組み込んでも「誰が何を承認できるか」は変わりません — 403 `CAPABILITY_DENIED` は操作名を含む赤いバナーとして描画されます。
+
+```tsx
+import { KohakuAdmin, useAdminNotice } from "@kohaku-ui/admin-react";
+import { createKohakuClient } from "@kohaku-ui/client";
+
+const client = createKohakuClient({
+  baseUrl: "/api/kohaku",
+  // テナントとロールはどちらもこのクライアント自身の headers フックに載せる — コンソール自身はどちらも設定しない。
+  // 本番では両方とも認証層から解決すること。
+  headers: () => ({ "x-kohaku-tenant": currentTenant(), "x-kohaku-role": currentRole() }),
+});
+
+export function GovernancePage() {
+  return (
+    <KohakuAdmin
+      client={client}
+      tenant={currentTenant()}        // remount key: テナントを切り替えると全タブを再取得する。ロールは
+                                       // remount key ではない — ロールを切り替えても「次のリクエストが何を
+                                       // 許可されるか」が変わるだけなので、読み込み済みの一覧はロール切替後も残る。
+      theme={myThemeTokens}           // renderer-core の ThemeTokens → --kohaku-color-*(省略時は明るいテーマの既定値)
+      messages={myAdminMessages}      // AdminMessages。defaultAdminMessages は英語
+      promotionDefaults={{            // クエリソース側の queryTemplate.path 選択肢とドラフト初期値
+        queryPaths: ["", "trend"],
+        initialDraftFor: (candidate) => ({ /* DraftForm */ }),
+      }}
+      toolbar={<MyControls />}        // タブバーに描画される。useAdminNotice() を呼んでよい
+    />
+  );
+}
+```
+
+各タブ(`LineageTab` / `AnalyticsTab` / `PromotionsTab` / `FixationsTab`)とその裏側のフック(`useLineage` /
+`useAnalyticsSummary` / `usePromotions` / `useFixations`)も export されており、`AdminProvider` の上に自前のシェルを
+組みたいプロダクトはそちらを使えます。パッケージの依存は `client` / `renderer-core` / `sandbox` / `spec-core` のみ —
+`renderer-react` や `host-rest` には依存しません(`packages/admin-react/test/boundary.test.ts` が manifest と
+`src` の import 双方をこの一覧に対して固定しています)。
+
+パッケージのルートが export するのはこのドメイン API のみです(`KohakuAdmin`・各タブ・各フック・`AdminMessages`、
+および `onNotice` の型である `NoticeKind` / `NotifyFn`)。タブの実装で使っている汎用 UI プリミティブ — `card` /
+`Field` / `Empty` / `StatCard` / `StatusBadge` / `BarRow` / `ErrorBanner` など — は別の `@kohaku-ui/admin-react/ui`
+サブパスに置かれており、すでに自前の `Field` や `card` を持つアプリに `KohakuAdmin` を組み込んでも import の
+エイリアスが必要になりません。`/ui` が要るのは `AdminProvider` の上に自前のシェルを組んで同じプリミティブを
+使い回したい場合だけです。
+
+コンソールの配色はすべて `ThemeTokens` 由来で、レンダラーが `themeTokensToCssVars` で解決するのと同じ経路を
+`adminThemeStyle` が辿ります: `theme` prop に `ThemeTokens` を渡せば、コンソールが読む `--kohaku-color-*` 変数は
+すべてそれに追従し、トークンを省略した項目は renderer-core の明るいテーマの既定値にフォールバックします。この
+うち 2 つは `KnownThemeTokens` 自体には無いトークンです — `color.subtle`(`color.muted` とは別の控えめなテキスト)
+と `color.track`(フラットな中立トラック背景)— で、両方を供給したプロダクトはライト・ダーク両テーマでコンソールの
+配色を完全に得られます(sample は `apps/sample-web/src/theme/tokens.ts` の `buildTheme(mode)` でこれを行って
+います)。省略するとこの 2 箇所だけはテーマに関わらずパッケージ自身の明るいテーマの既定値のままになります。
+
 ### 部品を追加する
 
 ```ts
@@ -472,10 +549,17 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
 ## 7. 運用の勘どころ
 
 - **キャッシュとデータ更新**: Spec キャッシュのキーは intent + dataVersion + カタログ指紋(+ 任意の generatorVersion)。`SemanticPort.dataVersion` の粒度(全体 / テーブル単位 / イベント駆動)がそのまま無効化戦略になります。サンプルは全体一括 + bump。
-- **キャッシュの無効化と上限**: キーに dataVersion / カタログ指紋 / generatorVersion が入るため、データ更新・部品公開・プロンプト改訂はキー変化で自動的に別エントリになります。したがって能動的なキャッシュ無効化(削除)は原則不要です。TTL は鮮度制御ではなくメモリ回収の保険で、指定しなければ無期限に保持します。サンプルの `StoragePort` はインメモリ Map で、エントリ上限(既定 500)を超えると最も長く参照されていないキーから LRU で落とします。上限の目安は「同時に生きている intent × dataVersion の組」を十分覆う値にし、恒久保持や大量エントリが必要ならプロダクト側で Redis / DB 実装に差し替えてください。
+- **キャッシュの無効化と上限**: キーに dataVersion / カタログ指紋 / generatorVersion が入るため、データ更新・部品公開・プロンプト改訂はキー変化で自動的に別エントリになります。したがって能動的なキャッシュ無効化(削除)は原則不要です。TTL は鮮度制御ではなくメモリ回収の保険で、指定しなければ無期限に保持します。サンプルの `StoragePort` はインメモリ Map で、エントリ上限(既定 500)を超えると最も長く参照されていないキーから LRU で落とします。上限の目安は「同時に生きている intent × dataVersion の組」を十分覆う値にし、恒久保持や大量エントリが必要なら `@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres`(下記)に差し替えてバックエンド側にエントリを持たせてください。
 - **キャッシュバックエンド障害(`ComposePolicy.cacheFailure`)**: Spec キャッシュを支える `StoragePort` 自体が使えない場合(Redis 障害など)、`getSpecCache`/`putSpecCache` の例外送出は既定で fail-open(`cacheFailure` 未指定 = `"open"` 相当)です。lookup の失敗はミス扱い、store の失敗はスキップとして扱われ、生成は継続して Spec は配信されます。発生ごとに `observer.onError` に `phase:"cache"` で通知されます。同一表示保証を厳密にし、キャッシュ障害時にリクエストを失敗させたい場合は `cacheFailure: "closed"` を指定してください。
+- **本番用アダプタ(`@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres` / `@kohaku-ui/authz-jwt`)**: サンプルのファイル `StoragePort` は Spec キャッシュを 1 プロセス内に持つため、ロードバランサ配下の複数インスタンスでは共有されず、同一表示保証はインスタンス単位でしか成り立ちません。2 つのストレージアダプタは `StoragePort` 全体(TTL 付き Spec キャッシュ、フィルタ付きの追記専用 lineage、`(tenant, id)` で引く昇格状態と固定化)を共有バックエンド上に実装しており、1 台目が compose した Intent を 2 台目が `provenance.cache: "hit"` として返せます(`apps/sample-api/test/storage-backends.e2e.test.ts` で実証)。いずれも**参考実装**です — 契約は `ports.ts` のまま、ドライバ(`ioredis`, `pg`)は自分でインストールして共有できる peer dependency であり、クロスプロセスの並行性契約も変わりません(ホスト側が `(tenant, key)` ごとに自前の read-modify-write を直列化するのは従来どおり。specification.md §4.4)。タイムアウト・プール/接続数・`onError`・自前クライアント/プールの注入といった全オプションは `packages/storage-postgres/README.md` と `packages/storage-redis/README.md` に記載されています。
+  - Redis: `createRedisStoragePort({ url, keyPrefix })`。Redis Cluster は非対応です(standalone / Sentinel のみ。README の「Not supported」参照)。キーは `{prefix}:spec:{key}`(TTL 指定時は `EX` 付き)、`{prefix}:lineage:*`(イベントのハッシュ + type / tenant / intentHash / artifactId / specHash によるソート済みセットの索引)、`{prefix}:{tenant}:promotion|fixation:{id}`(テナント別・全テナント別の索引セット付き。テナント中立なレコードはテナントセグメントに `%` を使う)。複数キーにまたがる書き込みはすべて `MULTI` 配下で行う。**fail-fast(ハングしない)**: `url` から構築するクライアントは `lazyConnect: true` と `enableOfflineQueue: false` で作る — これがないと、Redis が到達不能なときにコマンドが黙ってキューイングされ(ioredis の既定の offline queue)、呼び出し元が永遠にハングしてしまう(このスタックにはリクエストレベルのタイムアウトが存在しない)。全メソッドがまず `ready()` を await するので、「到達不能」は `connectTimeoutMs`(既定 5000ms。`maxRetriesPerRequest` の既定は 3)で区切られた reject に変わる。`ready()` はメモ化されるが、失敗した試行はメモを破棄する(下記の `storage-postgres` の `ready()` と同じ考え方)ので、一時的な障害でポートが永久に立ち往生することはない。サンプルは `sample-api` と `sample-mcp` の HTTP エントリの両方で、起動時に `await storageFromEnv.ready()`(`StorageFromEnv.ready`、`apps/sample-api/src/ports/from-env.ts`)を呼ぶ — これにより、到達不能なバックエンドはハングしたり最初のリクエストで初めて発覚したりせず、明確なエラーで起動が失敗する。注入した `client` のオプションは上書きしない — 同じ fail-fast 挙動が欲しければ自分で `enableOfflineQueue: false` を指定して構築すること。注入クライアントの場合、`ready()` はすでに `"ready"` なら即座に解決し、そうでなければそのクライアント自身の `ready` / `error` イベントを `connectTimeoutMs` で区切って待つ。
+  - Postgres: `createPostgresStoragePort({ connectionString, schema, migrate })`。5 つのテーブル(`kohaku_spec_cache`, `kohaku_lineage`, `kohaku_promotion_state`, `kohaku_fixation`, `kohaku_capability_revocation` — 後述の「capability の失効」参照)を冪等なスクリプト(`postgresSchemaSql(schema)`。初回利用時に一度だけ実行。`migrate: false` で無効化可)で作成する。Spec / lineage / promotion / fixation の 4 テーブルの JSON ペイロード列は `jsonb` ではなく `text` として保持している — Postgres の `jsonb` はオブジェクトのキーを書き込んだ順ではなく(長さ→辞書順で)再直列化してしまい、これが同一表示保証の前提である厳密等価比較を壊す決定性違反になったため、`text` で書き込んだバイト列をそのまま往復させている(失効テーブルには JSON ペイロードが無いため、この選択はそもそも関係ない)。キャッシュの期限切れ行は読み取り時にはミス扱いになるだけで、`sweepExpiredSpecCache()` で削除する(cron から呼ぶ想定)。行のテナント中立値には `''` を使う。`ready()` はスキーマバージョンを `kohaku_schema_meta` に記録し、不一致時は fail-fast する。このバージョニング導入前にデプロイしたデータベースの移行は `packages/storage-postgres/README.md` の「Migrating from a pre-release schema」節に従う。
+  - JWT: `createJwtAuthzPort({ key: { secret } | { jwks } | { jwksUrl }, issuer, audience, claims, capabilitySecret })`。capability token は `@kohaku-ui/authz-hmac` のものをそのまま使う(失効も含めて。後述)。`identity` は bearer JWT を検証し(jose、secret 指定時は HS256、JWK セット指定時は RS256 / ES256 / EdDSA)、`sub` / `name` / `roles`(配列またはスペース区切り文字列)/ `tenant` を `{ principal, tenant }` にマッピングする(クレーム名もマッピング自体も上書き可能)。`key.secret` は 32 バイト(UTF-8)以上が必須(コンストラクタ時点で強制)で、サードパーティの `jwksUrl` を使う場合は必須の `audience` と併せて `issuer` の設定も推奨される(JWKS URL 自体が発行者ごとに分かれているためリスクは低いが、`issuer` を設定すれば `iss` 検証が暗黙ではなく明示的になる)。サンプルはこれを Hono のミドルウェアとして配線し、トークンが欠落・不正な場合は 401(`CAPABILITY_DENIED`)を返し、検証済みクレームから `KohakuHostDeps.auth` / `tenant` を供給する(`apps/sample-api/src/app/request-identity.ts` の `createJwtRequestIdentity`、`apps/sample-api/src/index.ts` の `ports.identity` から配線される)。MCP HTTP エントリはツール呼び出しごとにリクエスト自身の `Authorization` ヘッダから principal を解決する(`extra.http.req`)。`authz-jwt` は `issueCapability` / `verify` / `revokeCapability` を `@kohaku-ui/authz-hmac` に無変更で委譲する。
+  - **capability の失効(`CapabilityRevocationStore`、`ports.ts`)**: capability token を `exp` 前に失効させられるようになった。`@kohaku-ui/authz-hmac` が発行するトークンは必ず `jti` を持つ。`HmacAuthzOptions.revocations`(`authz-jwt` の `JwtAuthzOptions.revocations` からも無変更で渡される)は `verify` のたびに参照され、返されるポートの `revokeCapability(token)` はまずトークンの署名を検証してから(推測しただけの `jti` を外部から失効させられないように)記録する。デフォルトのストア(`@kohaku-ui/authz-hmac` の `createMemoryRevocationStore`)はプロセスローカルで、file `StoragePort` と同じ注意点を持つ。複数インスタンスで運用する場合は `createRedisRevocationStore({ url, keyPrefix })`(`jti` ごとのキーが `SET … EX` で自身の有効期限を持ち、トークンが失効するはずのタイミングで Redis 自身が削除する)または `createPostgresRevocationStore({ connectionString, schema })`(`kohaku_capability_revocation` に `jti` ごとの行を持ち、読み取り時に `expires_at > now()` で絞り込む。`sweepExpiredRevocations()` は `sweepExpiredSpecCache()` と同じ扱いで、cron から呼んで期限切れ行を削除する想定)を注入すること。サンプルもストレージ選択にこれを追従させている — `KOHAKU_STORAGE=redis|postgres` にすると、有効な `KOHAKU_AUTHZ` のポートに対応する失効ストアが配線される(`apps/sample-api/src/ports/from-env.ts` の `createAuthzFromEnv`)。`memory` / `file` はどちらもインメモリストアになる。**運用上重要な点**: この機能が存在する前に発行されたトークンには `jti` が無いため、依然として失効させられない — 従来どおり検証を通り、単に自然に期限切れを迎える(意図的な仕様: ローリングデプロイで旧インスタンス発行分のトークンを無効にしないため)。`jti` の無いトークンが受理されたことをログに残す仕組みは無いため、フリート全体が `jti` を発行するバージョンへの入れ替えを完了しているかどうかを把握しておくことが、失効を安心して使える唯一の目安になる。
+  - サンプルは `KOHAKU_STORAGE=file|memory|redis|postgres`(+ `KOHAKU_REDIS_URL` / `KOHAKU_POSTGRES_URL`)と `KOHAKU_AUTHZ=hmac|jwt`(+ `KOHAKU_JWT_SECRET` または `KOHAKU_JWT_JWKS_URL`、`KOHAKU_JWT_ISSUER`、`KOHAKU_JWT_AUDIENCE`、`KOHAKU_JWT_REQUIRE_TENANT`)で切り替える。詳細は specification.md §9。それぞれのテストスイートはバックエンドが必要で、`KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL` を設定するか Docker を起動しておく(それ以外はスキップ)。CI は `KOHAKU_ADAPTER_TESTS=require` を付けたジョブサービスに対して実行する。`apps/sample-api/src/ports/from-env.ts` の `createPortsFromEnv`(sample-api の `index.ts` と sample-mcp の `setup.ts` の両方が使う)はプロセスごとに redis クライアント / pg Pool をちょうど 1 つだけ開き、`client` / `pool` オプション経由で StoragePort と revocation store の両方に注入する — `createStorageFromEnv` と `createAuthzFromEnv` を個別に呼ぶ(片方だけを必要とする呼び出し側のために薄いラッパーとして残っている)と、それぞれが 1 つずつ接続を開いてしまう。
+  - **デモ用管理ルート(`KOHAKU_DEMO_ADMIN_ROUTES`)**: `POST /api/kohaku/admin/bump-data-version`(Admin 画面の「データ更新をシミュレート」ボタン)はデモ専用のキャッシュ無効化ルートで、到達できる誰にとっても LLM 生成を繰り返し強制できる無償のレバー(コスト/DoS の口)になるため、Admin の他の操作と同じ governance RBAC(`admin.bumpDataVersion`、admin ロールのみ)配下に置かれ、`KOHAKU_AUTHZ=jwt` では `KOHAKU_DEMO_ADMIN_ROUTES=1` を設定しない限りルート自体が登録されない(404)。既定の `KOHAKU_AUTHZ=hmac` のデモ identity ではこのルートは既定で有効のまま(デモの挙動は変わらない)。本番でもこのルートを残す場合は、他の統制プレーンの書き込みと同様に「JWT が検証できた」だけでなく実際の `admin` ロールで守ること。
 - **昇格の運用**: 候補化は利用ログから自動、承認は必ず人間。judge はポリシーで「助言」(不合格でもレビューに回す)か「ブロッキング」を選べます。公開後の部品はカタログ指紋を変えるので、古いキャッシュと混ざりません。
-- **固定化 Spec を蒸留データとして書き出す**: `FixationRecord.pinnedSpec` は、その Intent に対して人間がすでに承認済みの `{components, events}` そのものであり、カタログ拘束の宣言的 UI 生成において小型モデルを蒸留する際の最良の教師データになります。`node cli/bin/kohaku.js dataset export --fixations <fixations.json> [--golden <dir>] [--tenant <id>] --out <file.jsonl>` は `fixations.json` スナップショット(sample-api の `.data/fixations.json` をそのまま渡せます。オンディスクの形は `{key -> FixationRecord}` で、(tenant, intentHash) ごとに 1 エントリです — `apps/sample-api/src/ports/storage-port.ts` 参照)と、任意でディレクトリ内の golden regression Spec(`--golden`。`scaffold golden` の `{name, input, drafts, expected}` フィクスチャファイルと素の `UISpec` JSON ファイルの両方を受け付け、`expected` が未生成のフィクスチャは黙ってスキップします)を読み、Spec 1 件につき 1 行の canonical JSON を指定パスに書き出します: `{intent, refs, shape?, target: {components, events}, source: "fixation"|"golden", meta: {fixatedAt?, structureHash?, tenant?, catalogFingerprint?}}`。`kohaku`(プロトコル版数)・`provenance`・`dataVersion` は意図的に除外しています — composer がモデルの実際の出力の周りに埋めるものであり、蒸留対象として学習させるべきものではないためです。`--tenant <id>` を指定するとそのテナントの fixation だけに絞り込みます(golden Spec はテナントを持たないため常に含まれます)。指定しない場合、出力は `--fixations` に含まれる全テナントにまたがり、後から見分けるには各行の `meta.tenant` を見るしかありません。`FixationRecordSchema` の検証に失敗したエントリ(手編集や移行前の古いレコードなど)は書き出し全体を中断せずスキップされ、スキップ件数は標準エラー出力とコマンドの戻り値の両方で報告されます — これにより 1 件の不正なレコードがデータセット全体をブロックすることはなくなりました。エントリは `(intentHash, source)` 昇順にソートされ(同じ intentHash を共有する場合は `fixation` が `golden` より先に並びます)、再実行してもバイト同一になります(プログラムから使う場合は `@kohaku-ui/evals` の `exportDistillationDataset` / `kohaku.evals.export_distillation_dataset` を参照。列メタデータ用の `describeShape` コールバックやテナント絞り込み用の `tenant` を渡せます)。
+- **固定化 Spec を蒸留データとして書き出す**: `FixationRecord.pinnedSpec` は、その Intent に対して人間がすでに承認済みの `{components, events}` そのものであり、カタログ拘束の宣言的 UI 生成において小型モデルを蒸留する際の最良の教師データになります。`node cli/bin/kohaku.js dataset export --fixations <fixations.json> [--golden <dir>] [--tenant <id>] --out <file.jsonl>` は `fixations.json` スナップショット(sample-api の `.data/fixations.json` をそのまま渡せます。オンディスクの形は `{key -> FixationRecord}` で、(tenant, intentHash) ごとに 1 エントリです — `packages/storage-memory/src/file-storage-port.ts` 参照)と、任意でディレクトリ内の golden regression Spec(`--golden`。`scaffold golden` の `{name, input, drafts, expected}` フィクスチャファイルと素の `UISpec` JSON ファイルの両方を受け付け、`expected` が未生成のフィクスチャは黙ってスキップします)を読み、Spec 1 件につき 1 行の canonical JSON を指定パスに書き出します: `{intent, refs, shape?, target: {components, events}, source: "fixation"|"golden", meta: {fixatedAt?, structureHash?, tenant?, catalogFingerprint?}}`。`kohaku`(プロトコル版数)・`provenance`・`dataVersion` は意図的に除外しています — composer がモデルの実際の出力の周りに埋めるものであり、蒸留対象として学習させるべきものではないためです。`--tenant <id>` を指定するとそのテナントの fixation だけに絞り込みます(golden Spec はテナントを持たないため常に含まれます)。指定しない場合、出力は `--fixations` に含まれる全テナントにまたがり、後から見分けるには各行の `meta.tenant` を見るしかありません。`FixationRecordSchema` の検証に失敗したエントリ(手編集や移行前の古いレコードなど)は書き出し全体を中断せずスキップされ、スキップ件数は標準エラー出力とコマンドの戻り値の両方で報告されます — これにより 1 件の不正なレコードがデータセット全体をブロックすることはなくなりました。エントリは `(intentHash, source)` 昇順にソートされ(同じ intentHash を共有する場合は `fixation` が `golden` より先に並びます)、再実行してもバイト同一になります(プログラムから使う場合は `@kohaku-ui/evals` の `exportDistillationDataset` / `kohaku.evals.export_distillation_dataset` を参照。列メタデータ用の `describeShape` コールバックやテナント絞り込み用の `tenant` を渡せます)。
 - **コスト/トークン予算ガード(暴走コストの安全弁)**: `ComposePolicy.budget` を配線すると、LLM を呼ぶ直前(L1 生成前・修復前・L2 前)に予算を判定し、拒否時は修復再試行・L2 昇格を諦めて決定的フォールバック(`presentMarkdown`)へ降格します。`perCompose.stopAfterTokens` は**追加の呼び出しを止める累積トークン閾値**で、合計トークンのハード上限ではありません(単一呼び出しの超過は事前に止められず `trace.usage` に事後記録)。`check()` は日次/テナント別などプロダクト側で保持するグローバル予算のフックです(**状態の保持先はフレームワークが決めない** — Redis のカウンタ等はプロダクト実装)。降格 Spec はキャッシュされず、`observer.onError`(`phase:"fallback"` の `budgetExceeded:true`)で観測できます。予算フック `check()` が `throw` したときは素通し(fail-open)に倒しつつ、その発火を `observer.onBudgetCheckError` に転写するので、予算フックの故障を無観測にしません。`budget` 未指定なら挙動・性能とも完全不変。
 
   ```ts
