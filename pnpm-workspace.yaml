@@ -19,19 +19,19 @@ catalog:
   react-dom: 19.3.0
   "@types/react": ^19.3.0
   "@types/react-dom": ^19.3.0
-  "@types/node": ^26.5.1
+  "@types/node": ^26.6.2
   vite: ^8.3.0
   "@vitejs/plugin-react": ^6.1.1
   vitest: ^5.0.1
   "@vitest/coverage-v8": ^5.0.1
-  jsdom: ^30.0.1
+  jsdom: ^30.1.1
   "@testing-library/react": ^16.3.3
   recharts: ^3.10.1
-  ai: ^7.0.101
-  "@ai-sdk/anthropic": ^4.0.53
-  "@ai-sdk/openai": ^4.0.66
-  "@ai-sdk/google": ^4.0.70
-  "@ai-sdk/openai-compatible": ^3.0.48
+  ai: ^7.0.108
+  "@ai-sdk/anthropic": ^4.0.58
+  "@ai-sdk/openai": ^4.0.72
+  "@ai-sdk/google": ^4.0.76
+  "@ai-sdk/openai-compatible": ^3.0.53
   "@modelcontextprotocol/server": ^2.0.0
   "@modelcontextprotocol/client": ^2.0.0
   "@modelcontextprotocol/core": ^2.0.0
@@ -39,8 +39,8 @@ catalog:
   "@modelcontextprotocol/ext-apps": ^2.0.0
   "@opentelemetry/api": ^1.9.1
   "@tanstack/react-query": ^5.101.0
-  react-router-dom: ^7.17.0
-  tsx: ^4.23.13
+  react-router-dom: ^7.18.4
+  tsx: ^4.23.15
   commander: ^15.0.0
   semver: ^7.8.5
   "@types/semver": ^7.8.0
@@ -62,11 +62,6 @@ catalog:
 # minimum age had not yet elapsed at pin time. Remove an entry once its package's release age satisfies the
 # gate — in practice, at the next routine dependency update that touches it (`pnpm update` / a version bump
 # in the catalog above), not on a fixed schedule. Do not add a new entry without a version bump that needs it.
-minimumReleaseAgeExclude:
-  - '@ai-sdk/anthropic@4.0.53' # catalog pin (ai-sdk); direct dependency of packages/llm
-  - '@ai-sdk/openai-compatible@3.0.48' # catalog pin (ai-sdk); direct dependency of packages/llm
-  - '@ai-sdk/openai@4.0.66' # catalog pin (ai-sdk); direct dependency of packages/llm
-  - '@ai-sdk/provider-utils@5.0.40' # transitive dependency shared by the @ai-sdk/* packages above
-  - '@ai-sdk/provider@4.0.14' # transitive dependency shared by the @ai-sdk/* packages above
+minimumReleaseAgeExclude: []
 
 # `onlyBuiltDependencies` was removed in pnpm 12; `allowBuilds` above is its replacement.
