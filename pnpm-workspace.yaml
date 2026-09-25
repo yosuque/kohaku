@@ -27,11 +27,11 @@ catalog:
   jsdom: ^30.0.1
   "@testing-library/react": ^16.3.3
   recharts: ^3.10.1
-  ai: ^7.0.101
-  "@ai-sdk/anthropic": ^4.0.53
-  "@ai-sdk/openai": ^4.0.66
-  "@ai-sdk/google": ^4.0.70
-  "@ai-sdk/openai-compatible": ^3.0.48
+  ai: ^7.0.109
+  "@ai-sdk/anthropic": ^4.0.59
+  "@ai-sdk/openai": ^4.0.72
+  "@ai-sdk/google": ^4.0.76
+  "@ai-sdk/openai-compatible": ^3.0.53
   "@modelcontextprotocol/server": ^2.0.0
   "@modelcontextprotocol/client": ^2.0.0
   "@modelcontextprotocol/core": ^2.0.0
