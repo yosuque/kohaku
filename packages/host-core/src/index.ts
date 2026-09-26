@@ -13,7 +13,17 @@ export {
   verifyCapabilitySafely,
   WriteScopeDroppedError,
 } from "./capability.js";
-export { clientMessageFor, errorMessage, failOpen, isTypedHostError, notifyHook } from "./errors.js";
+export {
+  type ConsoleErrorReporter,
+  type ConsoleErrorReporterOptions,
+  clientMessageFor,
+  createConsoleErrorReporter,
+  errorMessage,
+  failOpen,
+  formatErrorChain,
+  isTypedHostError,
+  notifyHook,
+} from "./errors.js";
 export {
   composeWithFixation,
   type FixationDeliveryHost,
