@@ -1,0 +1,83 @@
+{
+  "name": "@kohaku-ui/host",
+  "version": "0.3.0",
+  "description": "One-call kohaku host: wires the default Port implementations (in-memory storage, HMAC capabilities, the LLM-backed SemanticPort) into host-rest, with an optional MCP Apps subpath.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mcp": "./src/mcp.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {
+    "@kohaku-ui/authz-hmac": "workspace:^",
+    "@kohaku-ui/composer": "workspace:^",
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/host-core": "workspace:^",
+    "@kohaku-ui/host-mcp-apps": "workspace:^",
+    "@kohaku-ui/host-rest": "workspace:^",
+    "@kohaku-ui/intents": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^",
+    "@kohaku-ui/semantic-llm": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@kohaku-ui/storage-memory": "workspace:^",
+    "hono": "catalog:"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/server": "catalog:",
+    "zod": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/server": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "catalog:",
+    "@modelcontextprotocol/server": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/host#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/host"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./mcp": {
+        "types": "./dist/mcp.d.ts",
+        "default": "./dist/mcp.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}
