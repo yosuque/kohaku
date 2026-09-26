@@ -88,6 +88,17 @@ function jsonDepthGuard(limit: number): z.ZodType<unknown> {
  * checked up front (see `jsonDepthGuard`) rather than in a post-hoc `superRefine`, so importing this symbol
  * is enough to close the recursion-depth gap at every one of those call sites without touching them
  * individually.
+ *
+ * Note for `pnpm --filter @kohaku-ui/spec run generate-schemas` (`z.toJSONSchema(..., { io: "input" })`):
+ * a value's *depth* cannot be bounded in JSON Schema's own vocabulary regardless of how this is implemented
+ * (there is no "recursive, but capped at N levels" construct in JSON Schema), so this being a `ZodPipe` makes
+ * the generated schema for this field `{}` (any value) rather than the string/number/boolean/null/array/object
+ * `anyOf` it used to emit. That change is inert for spec/schemas' actual consumers: a JSON Schema validator
+ * only ever runs against already-*parsed* JSON, and every value a JSON parser can produce already is one of
+ * those six types recursively -- so the old `anyOf` was already tautological for that input domain, and `{}`
+ * accepts/rejects the exact same set of real JSON documents. (Only a hypothetical caller using
+ * `z.toJSONSchema` to validate a non-JSON-shaped in-memory value, e.g. one that might contain a `Date` or
+ * `undefined`, would see a real loosening -- not this file's use case.)
  */
 export const JsonValueSchema: z.ZodType<JsonValue> =
   jsonDepthGuard(MAX_JSON_OBJECT_DEPTH).pipe(RawJsonValueSchema);
