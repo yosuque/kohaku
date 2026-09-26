@@ -20,7 +20,7 @@ import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { intents } from "./kohaku/intents.js"; // your Intent catalog (defineIntent)
+import { intents } from "./kohaku/intents.js"; // your hand-written Intent catalog (defineIntent)
 import {
   authzPort as authz,
   domainPort as domain,
@@ -48,8 +48,8 @@ Register it with a host — `claude mcp add my-product -- node ./server.js` for 
 
 What these three pieces are:
 
-- **`ports.ts`** — the four Ports: `domain` (your data API: `listOperations` / `invoke`), `semantic` (Intent → `query://` handle, plus `dataVersion`), `authz` (capability tokens; the sample's ~50-line HMAC implementation is in `apps/sample-api/src/ports/authz-port.ts`), `storage` (an in-memory Map is enough to start). `kohaku scaffold ports` writes the file with a TODO per method. The [User guide §6, Step 0](../user-guide.md#step-0--server-driven-ui-without-an-llm) walks through each one.
-- **`intents.ts`** — `defineIntent` once per Intent: canonical name, a Zod `params` schema, NL `examples`, and `queries`. The MCP tool, its input schema, and the SemanticPort definition all derive from that single definition.
+- **`ports.ts`** — the four Ports: `domain` (your data API: `listOperations` / `invoke`), `semantic` (Intent → `query://` handle, plus `dataVersion`), `authz` (capability tokens; the reference implementation is `createHmacAuthzPort` from `@kohaku-ui/authz-hmac`, `packages/authz-hmac/src/hmac-authz-port.ts`), `storage` (an in-memory Map is enough to start). `kohaku scaffold ports` writes the file with a TODO per method. The [User guide §6, Step 0](../user-guide.md#step-0--server-driven-ui-without-an-llm) walks through each one.
+- **`intents.ts`** — your Intent catalog, written by hand (`scaffold ports` only generates `ports.ts` and `server.ts`): `defineIntent` once per Intent: canonical name, a Zod `params` schema, NL `examples`, and `queries`. The MCP tool, its input schema, and the SemanticPort definition all derive from that single definition.
 - **`createLlmFromEnv()`** — reads `KOHAKU_LLM_PROVIDER` / the provider key (Claude / OpenAI / Gemini / Ollama / llama.cpp). Register fixed Specs in `policy.fixedSpecs` and the Intent never reaches the model at all — the widget still renders.
 
 ## The renderer

@@ -68,7 +68,7 @@ Point [Path (b)](react-dashboard.md)'s second snippet at it and the dashboard re
 
 ## Admin
 
-The review UI (Lineage / Promotions / Fixations / Analytics tabs) currently lives in the sample web app, `apps/sample-web/src/pages/admin/` — copy it into your product for now; it talks to the routes above through `@kohaku-ui/client`. The [User guide §3](../user-guide.md#admin-governance-plane) describes each tab and [Demo 3](../user-guide.md#demo-3--l2-free-generation--promotion-the-true-forte-of-this-framework) walks the loop with the sample.
+The review UI (Lineage / Promotions / Fixations / Analytics tabs) ships as the published **`@kohaku-ui/admin-react`** package — a `<KohakuAdmin client={...} />` React component that needs only a `KohakuClient` and talks to the routes above through `@kohaku-ui/client`; RBAC, tenant scoping and approval all stay on the host. `apps/sample-web/src/pages/AdminPage.tsx` is a thin wrapper that injects the sample's client, theme and dictionary — see [User guide, "Embedding the governance console"](../user-guide.md#embedding-the-governance-console-kohaku-uiadmin-react) for the full snippet. The [User guide §3](../user-guide.md#admin-governance-plane) describes each tab and [Demo 3](../user-guide.md#demo-3--l2-free-generation--promotion-the-true-forte-of-this-framework) walks the loop with the sample.
 
 ## Next steps
 

@@ -9,6 +9,7 @@ source are derived. IntentDef is single-defined in @kohaku-ui/intents; here it i
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from kohaku.data_binding import format_query_ref
@@ -27,7 +28,7 @@ from kohaku.intents import (
     object_schema,
     string,
 )
-from kohaku.spec import JsonObject, JsonValue, QueryHandle, js_string
+from kohaku.spec import IntentValidationIssue, JsonObject, JsonValue, QueryHandle, js_string
 
 from .domain import CHANNEL_LABELS, DEMO_FISCAL_YEAR, REGION_LABELS
 
@@ -518,6 +519,17 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
 INTENT_DEFS: list[IntentDef] = [d.to_intent_def() for d in INTENT_DEFINITIONS]
 
 
+@dataclass(frozen=True)
+class ParamsValidation:
+    """Result of IntentCatalog.validate_params: either the normalized params (defaults filled in) or a list
+    of client-safe issues. Backs SalesSemanticPort.validate_intent (port of TS sample-api's semantic-llm-based
+    validateIntent, via IntentCatalogLike.validateParams)."""
+
+    ok: bool
+    params: JsonObject | None = None
+    issues: list[IntentValidationIssue] = field(default_factory=list)
+
+
 class IntentCatalog:
     """Holds core Intents + promoted Intents and provides the vocabulary for NL/GUI normalization and resolve_query."""
 
@@ -552,11 +564,41 @@ class IntentCatalog:
         result = def_.params.safe_parse(params)
         return result.data if result.success else None
 
+    def validate_params(self, name: str, params: JsonObject) -> ParamsValidation:
+        """Strict validation for a directly-specified Intent (backs SalesSemanticPort.validate_intent).
+        Unlike normalize_params, an unknown param key is itself reported as an issue instead of being
+        silently stripped (ObjectSchema.parse's default "strip unrecognized keys" behavior, mirroring zod's
+        own non-strict object parsing), and a failure carries structured, client-safe issues -- naming which
+        param failed -- instead of collapsing to None. Uses ObjectSchema.validate (not safe_parse) so every
+        field's issue is collected, not just the first.
+        """
+        def_ = self._defs.get(name)
+        if def_ is None:
+            return ParamsValidation(
+                ok=False, issues=[IntentValidationIssue(path="", message=f'unknown intent "{name}"')]
+            )
+        shape = def_.params.shape
+        issues = [
+            IntentValidationIssue(path=key, message=f'unknown param "{key}"')
+            for key in params
+            if key not in shape
+        ]
+        result = def_.params.validate(params)
+        if not issues and result.success:
+            assert result.data is not None
+            return ParamsValidation(ok=True, params=result.data)
+        for issue in result.issues:
+            issues.append(
+                IntentValidationIssue(path=issue.path, message=f'param "{issue.path}": {issue.message}')
+            )
+        return ParamsValidation(ok=False, issues=issues)
+
 
 __all__ = [
     "INTENT_DEFINITIONS",
     "INTENT_DEFS",
     "IntentCatalog",
+    "ParamsValidation",
     "channel",
     "fiscal_year",
     "granularity",

@@ -94,6 +94,22 @@ export interface SemanticPort {
   dataVersion(handle: QueryHandle): Promise<string>;
   /** Returns only column metadata (no row data). Used for chart-kind rules and props filling. */
   describeShape?(handle: QueryHandle): Promise<DataShape>;
+  /**
+   * Validates and normalizes a directly-specified Intent (the `kind: "intent"` path of host-core's
+   * resolveIntent). Unlike `normalize`, which derives an Intent from NL/GUI input, this path lets a caller
+   * hand over an already-structured Intent, which by construction never passes through `normalize` (or
+   * whatever Intent-catalog lookup a `normalize` implementation may consult internally) -- so an unknown
+   * canonical or an invalid/unknown param can otherwise reach `finalizeIntent` unchecked, minting a fresh
+   * intentHash for a request that can never resolve. Implementing this closes that gap: reject such a
+   * request by throwing `IntentValidationError` (spec-core's `errors.ts`; `message` and every issue's
+   * `message` must be safe to show a client, since REST/MCP surface them as-is). On success, returns the
+   * normalized IntentInput (e.g. with schema defaults filled in) that the caller hashes and finalizes
+   * instead of the one it was given.
+   *
+   * Optional and backward compatible: a `SemanticPort` that does not implement it keeps the historical
+   * behavior of finalizing the caller-supplied Intent unchecked.
+   */
+  validateIntent?(intent: IntentInput, ctx: SessionContext): Promise<IntentInput>;
 }
 
 /** Issuance and verification of on-behalf-of capability tokens. */
@@ -206,6 +222,35 @@ export interface LineageFilter {
    * including old ones with no recorded tenant).
    */
   tenant?: string;
+  /**
+   * Filter by the `correlationId` payload field (exact equality; see `LINEAGE_PAYLOAD_INDEX_FIELDS` for
+   * the full set of payload fields a filter can match this way). No writer in this repository stamps
+   * `correlationId` onto a payload yet — it exists so a product's own instrumentation (or a later
+   * feature built on this StoragePort surface) can correlate lineage events that share an
+   * application-defined identifier without inventing a parallel filter mechanism.
+   */
+  correlationId?: string;
+}
+
+/**
+ * A forward (append-order) page request over lineage, for a caller that needs to walk the whole log
+ * exhaustively (e.g. an export) rather than take the tail window `listLineage` returns. Every
+ * `LineageFilter` predicate applies except `limit`, which `pageLineage` has no use for (`pageSize` takes
+ * its place). See `StoragePort.pageLineage`'s doc comment for the paging contract itself.
+ */
+export interface LineagePageRequest extends Omit<LineageFilter, "limit"> {
+  /** Opaque cursor from a previous page's `LineagePage.nextCursor`. Omitted = start from the beginning. */
+  cursor?: string;
+  /** Requested page size. Default `DEFAULT_LINEAGE_PAGE_SIZE`; clamped to `MAX_LINEAGE_PAGE_SIZE`. */
+  pageSize?: number;
+}
+
+/** One page returned by `StoragePort.pageLineage`. */
+export interface LineagePage {
+  /** In append order (oldest first within the page), matching the request's filters. */
+  events: LineageEventRecord[];
+  /** Opaque cursor for the next page. Absent on the last page (nothing further to read). */
+  nextCursor?: string;
 }
 
 /**
@@ -297,6 +342,21 @@ export interface StoragePort {
   putSpecCache(key: string, spec: UISpec, ttlSeconds?: number): Promise<void>;
   appendLineage(event: LineageEventRecord): Promise<void>;
   listLineage(filter?: LineageFilter): Promise<LineageEventRecord[]>;
+  /**
+   * Forward (append-order) paging over the lineage log (an optional v0.1 extension; design.md #53). Unlike
+   * `listLineage` (a tail window, newest-first semantics via `limit`), this walks the whole log
+   * exhaustively from an opaque `cursor` in ascending append order, so a caller (e.g. an export, or a
+   * feature that needs every matching event rather than just the most recent ones) can page through
+   * without missing or duplicating events even as new ones are appended between calls. An implementation
+   * MUST return events strictly after `req.cursor` (or from the beginning when omitted), in append order,
+   * and MUST omit `LineagePage.nextCursor` only when there is nothing further to read. `req.pageSize`
+   * defaults to 500 and is clamped to at most 1000. A malformed `cursor` MUST throw rather than silently
+   * restart from the beginning or skip to the end. Implementations that omit this method keep the legacy
+   * surface (`listLineage` only); a host without it responds to a paging request with 501
+   * `NOT_IMPLEMENTED` rather than emulating paging on top of `listLineage` (which cannot express "all
+   * events, exhaustively" without re-deriving this same cursor contract at the host layer).
+   */
+  pageLineage?(req: LineagePageRequest): Promise<LineagePage>;
   /**
    * Gets promotion state. When tenant is specified, returns only that tenant's state.
    * Old (legacy) state with no recorded tenant is treated as tenant-neutral and appears only in a

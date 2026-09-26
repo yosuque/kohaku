@@ -22,10 +22,14 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: lineage", (
     const started = await startPostgres();
     stop = started.stop;
     port = createPostgresStoragePort({ connectionString: started.connectionString, schema: uniqueSchema() });
-    await port.appendLineage(ev("01", { payload: { intentHash: "h1", artifactId: "a1" }, tenant: "acme" }));
+    await port.appendLineage(
+      ev("01", { payload: { intentHash: "h1", artifactId: "a1", correlationId: "c1" }, tenant: "acme" }),
+    );
     await port.appendLineage(ev("02", { type: "component.generated", payload: { artifactId: "a1" } }));
     await port.appendLineage(ev("03", { payload: { intentHash: "h2", specHash: "s3" }, tenant: "globex" }));
-    await port.appendLineage(ev("04", { payload: { intentHash: "h1" }, tenant: "acme" }));
+    await port.appendLineage(
+      ev("04", { payload: { intentHash: "h1", correlationId: "c1" }, tenant: "acme" }),
+    );
   });
   afterAll(async () => {
     await port.close();
@@ -48,6 +52,7 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: lineage", (
     expect(
       (await port.listLineage({ type: ["component.generated", "view.composed"] })).map((e) => e.id),
     ).toEqual(["01", "02", "03", "04"]);
+    expect((await port.listLineage({ correlationId: "c1" })).map((e) => e.id)).toEqual(["01", "04"]);
   });
 
   it("ANDs an indexed predicate with the remaining ones", async () => {
@@ -69,7 +74,7 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: lineage", (
 
   it("round-trips the whole record (actor / payload / tenant)", async () => {
     const [first] = await port.listLineage({ intentHash: "h1", limit: 1 });
-    expect(first).toEqual(ev("04", { payload: { intentHash: "h1" }, tenant: "acme" }));
+    expect(first).toEqual(ev("04", { payload: { intentHash: "h1", correlationId: "c1" }, tenant: "acme" }));
   });
 
   it("returns no rows for an empty type filter (matches the file port's `[].includes` semantics)", async () => {

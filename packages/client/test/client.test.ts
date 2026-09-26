@@ -17,6 +17,7 @@ import {
   finalizeIntent,
   type LineageEventRecord,
   type LineageFilter,
+  pageLineageArray,
   type SemanticPort,
   type StoragePort,
   type UISpec,
@@ -618,6 +619,70 @@ describe("@kohaku-ui/client lineage query", () => {
     const client = makeClient({ compose: composeCtx(storage) });
     await client.lineage({ intentHash: "sha256:" + "a".repeat(64) });
     expect(seen[0]!.intentHash).toBe("sha256:" + "a".repeat(64));
+  });
+
+  it("correlationId is passed through to the server's filter", async () => {
+    const seen: LineageFilter[] = [];
+    const storage = stubStorage({
+      async listLineage(filter = {}) {
+        seen.push(filter);
+        return [];
+      },
+    });
+    const client = makeClient({ compose: composeCtx(storage) });
+    await client.lineage({ correlationId: "c1" });
+    expect(seen[0]!.correlationId).toBe("c1");
+  });
+});
+
+describe("@kohaku-ui/client lineagePages (design.md #53)", () => {
+  function pagingEvent(id: string, ts: string, payload: Record<string, unknown> = {}): LineageEventRecord {
+    return { id, ts, actor: { kind: "system" }, type: "view.composed", payload };
+  }
+
+  it("walks every page in append order via the opaque cursor, end to end through a real StoragePort", async () => {
+    const events = Array.from({ length: 5 }, (_, i) => pagingEvent(`e${i}`, `2026-01-0${i + 1}T00:00:00Z`));
+    const storage = stubStorage({
+      async pageLineage(req) {
+        return pageLineageArray(events, req);
+      },
+    });
+    const client = makeClient({ compose: composeCtx(storage) });
+
+    const pages: string[][] = [];
+    for await (const page of client.lineagePages({ pageSize: 2 })) {
+      pages.push(page.map((e) => e.id));
+    }
+    expect(pages).toEqual([["e0", "e1"], ["e2", "e3"], ["e4"]]);
+  });
+
+  it("combines with correlationId", async () => {
+    const events = [
+      pagingEvent("e0", "2026-01-01T00:00:00Z", { correlationId: "c1" }),
+      pagingEvent("e1", "2026-01-02T00:00:00Z", { correlationId: "other" }),
+      pagingEvent("e2", "2026-01-03T00:00:00Z", { correlationId: "c1" }),
+    ];
+    const storage = stubStorage({
+      async pageLineage(req) {
+        return pageLineageArray(events, req);
+      },
+    });
+    const client = makeClient({ compose: composeCtx(storage) });
+
+    const pages: string[][] = [];
+    for await (const page of client.lineagePages({ correlationId: "c1" })) {
+      pages.push(page.map((e) => e.id));
+    }
+    expect(pages).toEqual([["e0", "e2"]]);
+  });
+
+  it("rejects with a KohakuHostError (501 NOT_IMPLEMENTED) when the storage backend has no pageLineage", async () => {
+    const client = makeClient({ compose: composeCtx(stubStorage()) });
+    await expect(async () => {
+      for await (const _page of client.lineagePages()) {
+        // no-op: the first iteration should already reject
+      }
+    }).rejects.toMatchObject({ code: "NOT_IMPLEMENTED" });
   });
 });
 

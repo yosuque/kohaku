@@ -44,4 +44,55 @@ describe("createIntentCatalog", () => {
     catalog.remove("sales.promoted");
     expect(catalog.revision).toBe(initial + 2);
   });
+
+  describe("validateParams", () => {
+    it("accepts valid params and returns the normalized form (defaults filled in)", () => {
+      const catalog = createIntentCatalog([summary]);
+      expect(catalog.validateParams("sales.summary", { region: "japan" })).toEqual({
+        ok: true,
+        params: { region: "japan", topN: 5 },
+      });
+    });
+
+    it("rejects an unknown intent name (a single whole-Intent issue, empty path)", () => {
+      const catalog = createIntentCatalog([summary]);
+      expect(catalog.validateParams("sales.unknown", {})).toEqual({
+        ok: false,
+        issues: [{ path: "", message: 'unknown intent "sales.unknown"' }],
+      });
+    });
+
+    it("rejects an invalid param value with a path-scoped issue (unlike normalizeParams' bare null)", () => {
+      const catalog = createIntentCatalog([summary]);
+      const result = catalog.validateParams("sales.summary", { region: "mars" });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected failure");
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0]!.path).toBe("region");
+      expect(result.issues[0]!.message).toContain("region");
+    });
+
+    it('rejects an unknown param key that normalizeParams would silently strip (Zod\'s default "strip unrecognized keys" behavior)', () => {
+      const catalog = createIntentCatalog([summary]);
+      // normalizeParams (a plain safeParse) silently drops the unknown key and succeeds.
+      expect(catalog.normalizeParams("sales.summary", { region: "japan", bogus: 1 })).toEqual({
+        region: "japan",
+        topN: 5,
+      });
+      // validateParams treats the same input as invalid instead.
+      expect(catalog.validateParams("sales.summary", { region: "japan", bogus: 1 })).toEqual({
+        ok: false,
+        issues: [{ path: "bogus", message: 'unknown param "bogus"' }],
+      });
+    });
+
+    it("reports both an unknown key and an invalid value together", () => {
+      const catalog = createIntentCatalog([summary]);
+      const result = catalog.validateParams("sales.summary", { region: "mars", bogus: 1 });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected failure");
+      const paths = result.issues.map((issue) => issue.path).sort();
+      expect(paths).toEqual(["bogus", "region"]);
+    });
+  });
 });

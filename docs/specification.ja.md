@@ -123,9 +123,12 @@ interface SemanticPort {
   resolveQuery(intent: CanonicalIntent): Promise<QueryHandle | QueryHandle[]>;          // Intent → query:// ハンドル
   dataVersion(handle: QueryHandle): Promise<string>;                                    // キャッシュキー成分
   describeShape?(handle: QueryHandle): Promise<DataShape>;   // 任意。列メタのみ(行データ禁止)
+  validateIntent?(intent: IntentInput, ctx: SessionContext): Promise<IntentInput>;  // 任意。直接指定 Intent を検証
 }
 ```
 契約: GUI 操作(`GuiAction {action, params, current?}`)は **LLM を通さず決定的に**正規化する。`current` は既存ビューへの操作(drilldown 等)の基点。
+
+**`validateIntent`(任意)**: 呼び出し側が直接指定した Intent(`kind: "intent"` — `POST /compose` の `{intent}` ボディ、`POST /events` の `intent`、固定化承認エンドポイント、MCP プロファイルの compose 系ツール / `kohaku_event`)を検証・正規化する。これは `normalize` を一切経由しない唯一の経路である。成功時はホストがハッシュ化・finalize する正規化済み `IntentInput`(既定値を埋めたものなど)を返し、失敗時は `IntentValidationError`(`code: "INTENT_INVALID"`、クライアントに見せてよい `issues` 配列付き)を投げる。ホストはこれを 422 `INTENT_INVALID`(REST-INT-002、§6.1)に対応付け、キャッシュ・lineage・固定化ストアには何も書かない。`validateIntent` を実装しない `SemanticPort` は、直接指定された Intent を従来どおり未検証のまま finalize する — これがホストの入口だけをスコープとし、`compose()` を直接呼ぶプロダクトをカバーしない理由は `docs/design.md` の決定 #51 を参照。
 
 **参照実装のカタログ生成(`@kohaku-ui/intents`)**: サンプルは `defineVocabulary`(値集合 + ラベルの単一源)と `defineIntent`(単一 Intent 定義)から、この `SemanticPort` が使う `IntentDef`・GUI ファセット記述子(`FacetView`。`pnpm intents:emit` で `facet-views.json` に emit)・MCP ツール入力・client coerce の `valueType` を導出する。`SemanticPort` 契約と `CanonicalIntent` のワイヤ形は不変で、DSL は正規化の**決定性部分(値域・coerce・ファセット導出)の単一定義**を提供するだけ。
 
@@ -246,9 +249,11 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 | ルート | 認可 | 内容 |
 |---|---|---|
 | `GET /catalog` | —(公開読み取り) | `{ components: [{type, version, description, capabilities, implementation, propsSchema(JSON Schema)}], catalogVersion }` |
-| `GET /lineage?type=&intentHash=&artifactId=&specHash=&since=&until=&limit=` | `authorizeGovernance`(配線時) | `{ events: LineageEventRecord[] }`。`since` / `until` は ISO8601(`/analytics/summary` と同一の正規化・境界解釈)、`limit` は既定 200(`DEFAULT_LINEAGE_LIMIT`)、上限 1000 |
+| `GET /lineage?type=&intentHash=&artifactId=&specHash=&correlationId=&since=&until=&limit=` | `authorizeGovernance`(配線時) | `{ events: LineageEventRecord[] }`。`since` / `until` は ISO8601(`/analytics/summary` と同一の正規化・境界解釈)、`limit` は既定 200(`DEFAULT_LINEAGE_LIMIT`)、上限 1000。`correlationId` は `intentHash` / `artifactId` / `specHash` と同様、payload フィールドの完全一致で絞り込む。加えて、網羅的な forward paging(下記)用に `order=asc&cursor=&pageSize=` を受け付ける |
 | `GET /analytics/summary?since=&until=&limit=` | `authorizeGovernance`(配線時。`analytics.read`) | `{ window, summary }`。lineage の生イベント列を集計した俯瞰サマリ(下記)。**参照実装レベルの拡張**(本書 §11 の必須集合外) |
 | `POST /telemetry` | `authorizeGovernance`(配線時) | `{ events: [{kind:"rendered", specHash,…} \| {kind:"componentUsed", artifactId, outcome}] }` → `{ok}` |
+
+**Lineage の forward paging(`GET /lineage?order=asc`、design.md #53)**: 同じルートの別読み取りモード。既定モードのテールウィンドウではなく、lineage ログ全体を漏れなく走査したい呼び出し側(エクスポート等)向け。`order=asc` を渡すと応答形状が `{ events, nextCursor? }` に変わる: `events` は追加順の昇順で、`nextCursor`(不透明な文字列)は次のページが存在する場合のみ含まれ、最後のページでは省略される。直前の応答の `nextCursor` を `cursor` として渡し戻せば、そのページの続きから再開する。`pageSize` は既定 500、上限 1000 にクランプされる。これは `StoragePort` の任意メソッド `pageLineage`(`deleteFixation` と同様の正真の v0.1 拡張)に支えられており、実装していないストレージバックエンドは `order=asc` リクエストに対して、`listLineage` の上に paging を疑似実装するのではなく 501 `NOT_IMPLEMENTED` を返す。デコードできない `cursor`(改竄された、あるいは別ホスト/別バックエンド由来のもの)は 400 `BAD_REQUEST` であり、`asc` 以外の `order` 値も同様である。`@kohaku-ui/client` の `lineagePages(query)` はこれを、尽きるまで 1 回のイテレーションにつき 1 ページ分のイベントを yield する非同期ジェネレータとしてラップする。`order` を省略したリクエストはこれらの影響を一切受けず、その形状・既定値・挙動は上記のとおり変わらない。
 
 **利用分析(`GET /analytics/summary`。参照実装の拡張ルート)**: 運用者が fallback 率・tier 分布・レイテンシを俯瞰するための集計面。`KohakuHostDeps.analyticsSummarizer`(`@kohaku-ui/lineage` の純関数 `summarizeLineage` を注入。host-rest は lineage 非依存のまま構造型で受ける)を配線したときのみ有効で、未配線なら 501 `NOT_IMPLEMENTED`。集計は `StoragePort.listLineage` の**読み取りだけ**で実装し、**Lineage イベントスキーマは変更しない**(既存 payload の `tier` / `cache` / `durationMs` / `intentHash` / `canonical`、`view.fallback` の `kind` を数えるのみ)。認可 `operation.kind` は `analytics.read`(read 系。サンプルは admin/reviewer/viewer とも許可)。テナントは他の統制面と同じく**セッション(`KohakuHostDeps.tenant`)由来**でスコープする(クライアント申告でなくサーバー解決)。**集計窓は既定 200 件 / 上限 1000 件**(`/lineage` と同じ制約)で、応答の `window: { limit, truncated, since?, until?, tenant? }` にクランプ後の窓を明示する(silent cap にしない。`truncated` は storage が窓上限ちょうどを返し、より古いイベントが窓外に落ちうることを示す)。`since` / `until` は **`LineageFilter` として `listLineage` へ渡し、時刻の絞り込みを `limit` の tail slice より前に適用する** — 窓は `[since, until]` の最新 `limit` 件になる(`until` を tail slice の後に掛けると、最新 `limit` 件が `until` で全除外され窓がほぼ空になるため)。`summarizeLineage` 側にも同じ `until` 後段フィルタを残すが、これは冪等な防御で、実際の窓絞りは storage 段で完結する。`summary` は `{ events, composed, tiers{L0,L1,L2}, cache{hit,miss,bypass,fixated,other}, fallback{total, byKind{generation,negotiation,unspecified}, rate}, durationMs{count,p50,p95,p99,max}, topIntents[{intentHash,canonical,count}], promotions{generated,used,nominated,schemaSuggested,judged,reviewed,schemaEdited,published,withdrawn}, fixations{fixated,unfixated}, review{count, durationMs{p50,p95,max}, acceptedAsIs} }`。`fallback.rate = total / (composed + total)`(分母 0 なら 0)、`durationMs` 分位は `durationMs` を持つ `view.composed` のみを母集団とする nearest-rank(取れる範囲での集計)。`review` は人間によるレビューの所要時間を計測する: 各候補の `component.nominated` と、その次に来る decision が approve か reject の `component.reviewed` とを(`(tenant, artifactId)` 単位で)対にする(`requestChanges` は対を閉じない)。`acceptedAsIs` は `changed` が空 **かつ** `acknowledged` が `true` の `component.schemaEdited` レコード数(機械提案が無編集で承認され、かつレビュアーが確認済みとしたもの)を数える。`acknowledged` フィールドが無い記録や `acknowledged: false` の記録は数えない。
 
@@ -472,7 +477,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 ```bash
 node cli/bin/kohaku.js conformance --self                # SPEC-* 9 件(Spec フォーマット自己検査)
 node cli/bin/kohaku.js conformance --rest <baseUrl> \
-  [--intent '{"canonical":"…","params":{…}}']             # + REST-* MUST 9 件 + SHOULD 6 件・LIN-PRM-001(黒箱検査・任意の実装に適用可)
+  [--intent '{"canonical":"…","params":{…}}']             # + REST-* MUST 9 件 + SHOULD 7 件・LIN-PRM-001(黒箱検査・任意の実装に適用可)
 ```
 
 MCP(MCPAPP-*)・sandbox(SBX-*)の要件、および黒箱検査に馴染まない文書規範 5 件(SPEC-ENV-003 テーマ非依存・SPEC-EVT-002 未宣言イベント転送禁止・SPEC-DATA-002 参照単位の版突合・CMP-DET-001 合成決定性の一般形・CMP-GEN-001 生成コンポーネントの `data.$ref` QueryHandle 集合制約)は内部不変条件で、それぞれ `packages/host-mcp-apps/test` / `packages/sandbox/test` / `packages/renderer-wc/test/parity` + `packages/renderer-core/test` / `packages/composer/test` のテストが参照実装に対して固定している(黒箱検査対象外。manifest の `verification: "reference"`)。lineage の LIN-PRM-001 は `GET /lineage` の黒箱検査(published に人間の approve が時系列先行することを確認)に格上げ済みで `--rest` に含まれ、`packages/lineage/test`(状態機械)でも重ねて担保している。

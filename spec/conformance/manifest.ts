@@ -47,6 +47,7 @@ export const REQUIREMENTS: Requirement[] = [
 
   // --- REST host (black-box check) -----------------------------------------
   { id: "REST-INT-001", level: "MUST", target: "rest-host", verification: "blackbox", description: "POST /intent/normalize returns an Intent with a hash" },
+  { id: "REST-INT-002", level: "SHOULD", target: "rest-host", verification: "blackbox", description: "A directly-specified Intent (kind: \"intent\") with an unknown canonical is rejected with 422 INTENT_INVALID" },
   { id: "REST-CMP-001", level: "MUST", target: "rest-host", verification: "blackbox", description: "POST /compose returns a §2-conformant spec and a capability" },
   { id: "REST-CMP-002", level: "MUST", target: "rest-host", verification: "blackbox", description: "Re-composing the same intent is a cache hit with identical components (determinism)" },
   { id: "REST-BND-001", level: "MUST", target: "rest-host", verification: "blackbox", description: "A binding resolve without a capability is 401" },

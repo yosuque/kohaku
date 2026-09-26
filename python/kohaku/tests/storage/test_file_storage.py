@@ -8,11 +8,15 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from kohaku.spec import (
     FixationRecord,
     LineageActor,
+    LineageCursorError,
     LineageEventRecord,
     LineageFilter,
+    LineagePageRequest,
     Principal,
     PromotionState,
     UISpec,
@@ -81,11 +85,103 @@ class TestLineage:
 
         asyncio.run(run())
 
+    def test_filters_by_correlation_id(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            await port.append_lineage(_event("e1", correlationId="c1"))
+            await port.append_lineage(_event("e2", correlationId="c2"))
+            await port.append_lineage(_event("e3", "view.rendered", correlationId="c1"))
+            filtered = await port.list_lineage(LineageFilter(correlationId="c1"))
+            assert [e.id for e in filtered] == ["e1", "e3"]
+
+        asyncio.run(run())
+
     def test_corrupt_jsonl_line_is_skipped(self, tmp_path: Path) -> None:
         (tmp_path / "lineage.jsonl").write_text('{"id":"ok","ts":"t","actor":{"kind":"system"},"type":"x","payload":{}}\n{broken\n')
         port = FileStoragePort(tmp_path)
         events = asyncio.run(port.list_lineage())
         assert [e.id for e in events] == ["ok"]
+
+
+class TestPageLineage:
+    """FileStoragePort.page_lineage (design.md #53) -- StoragePort's optional forward-paging extension."""
+
+    def test_pages_forward_in_ascending_order_with_no_gaps_or_duplicates(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            for i in range(5):
+                await port.append_lineage(_event(f"e{i}"))
+            page1 = await port.page_lineage(LineagePageRequest(pageSize=2))
+            assert [e.id for e in page1.events] == ["e0", "e1"]
+            assert page1.nextCursor is not None
+            page2 = await port.page_lineage(LineagePageRequest(pageSize=2, cursor=page1.nextCursor))
+            assert [e.id for e in page2.events] == ["e2", "e3"]
+            assert page2.nextCursor is not None
+            page3 = await port.page_lineage(LineagePageRequest(pageSize=2, cursor=page2.nextCursor))
+            assert [e.id for e in page3.events] == ["e4"]
+            assert page3.nextCursor is None
+
+        asyncio.run(run())
+
+    def test_append_between_pages_is_visible_later_without_disturbing_earlier_pages(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            # 4 events up front so page1's window (pageSize=3) leaves one behind: this is what makes
+            # page1.nextCursor non-None (otherwise, with only 3 events total, page1 would already cover
+            # everything and nextCursor would be None regardless of what is appended afterward).
+            for i in range(4):
+                await port.append_lineage(_event(f"e{i}"))
+            page1 = await port.page_lineage(LineagePageRequest(pageSize=3))
+            assert [e.id for e in page1.events] == ["e0", "e1", "e2"]
+            assert page1.nextCursor is not None
+            await port.append_lineage(_event("e4"))
+            page2 = await port.page_lineage(LineagePageRequest(pageSize=3, cursor=page1.nextCursor))
+            assert [e.id for e in page2.events] == ["e3", "e4"]
+            assert page2.nextCursor is None
+
+        asyncio.run(run())
+
+    def test_combines_with_correlation_id_and_tenant_filters(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            await port.append_lineage(_event("e0", correlationId="c1"))
+            e1 = LineageEventRecord(
+                id="e1",
+                ts="2026-07-17T00:00:01Z",
+                actor=LineageActor(kind="system"),
+                type="view.composed",
+                payload={"correlationId": "c2"},
+                tenant="t1",
+            )
+            await port.append_lineage(e1)
+            await port.append_lineage(_event("e2", correlationId="c1"))
+            page = await port.page_lineage(LineagePageRequest(correlationId="c1"))
+            assert [e.id for e in page.events] == ["e0", "e2"]
+            page_by_tenant = await port.page_lineage(LineagePageRequest(tenant="t1"))
+            assert [e.id for e in page_by_tenant.events] == ["e1"]
+
+        asyncio.run(run())
+
+    def test_truncates_an_oversized_page_size_to_the_1000_cap(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            for i in range(5):
+                await port.append_lineage(_event(f"e{i}"))
+            page = await port.page_lineage(LineagePageRequest(pageSize=1_000_000))
+            assert len(page.events) == 5
+            assert page.nextCursor is None
+
+        asyncio.run(run())
+
+    def test_raises_for_a_malformed_cursor(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            with pytest.raises(LineageCursorError):
+                await port.page_lineage(LineagePageRequest(cursor="not-a-real-cursor"))
+
+        asyncio.run(run())
 
 
 class TestPromotionAndFixation:

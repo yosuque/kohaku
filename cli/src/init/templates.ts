@@ -213,6 +213,7 @@ function summaryView(intent: CanonicalIntent, refs: QueryHandle[]): UISpec {
 export const APP_TEMPLATE = `import { existsSync } from "node:fs";
 import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { type ComposeContext, defaultGeneratorVersion } from "@kohaku-ui/composer";
+import { createConsoleErrorReporter } from "@kohaku-ui/host-core";
 import { createKohakuRoutes } from "@kohaku-ui/host-rest";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
@@ -255,6 +256,9 @@ export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContex
     dataVersion: () => DATA_VERSION,
     describeShape: (ref) => shapeOf(ref.path, ref.params),
   });
+  // Set KOHAKU_DEBUG=1 (see .env.example) for the full cause chain + stack trace on every logged failure,
+  // instead of a one-line summary -- useful when a compose falls back and you need to know why.
+  const errorReporter = createConsoleErrorReporter({ debug: process.env["KOHAKU_DEBUG"] === "1" });
   const composeCtx: ComposeContext = {
     catalog: resolveCatalog(coreCatalog),
     semantic,
@@ -267,10 +271,20 @@ export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContex
       allowL2: false,
       generatorVersion: defaultGeneratorVersion(deps.llm),
     },
+    observer: { onError: errorReporter.compose },
   };
 
   const app = new Hono();
-  app.route("/api/kohaku", createKohakuRoutes({ compose: composeCtx, domain: createDomainPort(), authz, querySource: SOURCE }));
+  app.route(
+    "/api/kohaku",
+    createKohakuRoutes({
+      compose: composeCtx,
+      domain: createDomainPort(),
+      authz,
+      querySource: SOURCE,
+      onError: errorReporter.host,
+    }),
+  );
   // Facet descriptors for the dashboard's selectors, derived from the same Intent definitions (no codegen step).
   app.get("/api/app/facet-views", (c) => c.json({ views: INTENT_DEFINITIONS.map((d) => d.toFacetView()).filter((v) => v.facets.length > 0) }));
   app.get("/api/health", (c) => c.json({ ok: true, llm: { provider: deps.llm.provider, model: deps.llm.modelId }, dataVersion: DATA_VERSION }));
@@ -576,6 +590,10 @@ KOHAKU_LLM_PROVIDER=claude
 # to start without one (see server/app.ts).
 KOHAKU_CAPABILITY_SECRET=
 PORT=8787
+
+# Set to 1 for verbose error logging (the full cause chain + stack trace on every compose/request failure,
+# instead of a one-line summary) -- see server/app.ts.
+# KOHAKU_DEBUG=
 `;
 
 export const GITIGNORE_TEMPLATE = `node_modules/

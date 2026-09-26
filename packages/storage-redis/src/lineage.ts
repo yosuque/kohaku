@@ -1,8 +1,17 @@
-import type { LineageEventRecord, LineageFilter } from "@kohaku-ui/spec-core";
+import type {
+  LineageEventRecord,
+  LineageFilter,
+  LineagePage,
+  LineagePageRequest,
+} from "@kohaku-ui/spec-core";
 import {
   applyLineageLimit,
   DEFAULT_LINEAGE_LIMIT,
+  DEFAULT_LINEAGE_PAGE_SIZE,
+  decodeSeqCursor,
+  encodeSeqCursor,
   LINEAGE_PAYLOAD_INDEX_FIELDS,
+  MAX_LINEAGE_PAGE_SIZE,
   matchesLineageFilter,
   normalizeTenant,
 } from "@kohaku-ui/spec-core";
@@ -352,4 +361,75 @@ async function readCandidate(
   return exhaustive
     ? readPushdown(redis, keys, indexKey, limit)
     : scanForMatches(redis, keys, indexKey, filter, limit);
+}
+
+/**
+ * Fetches the JSON bodies for `pairs` (id + its `by-seq` score) from the events hash and zips each body
+ * back up with its own seq, dropping any id whose body is gone (the same defensive skip `hydrate` does).
+ * Order is preserved (ascending, since callers always feed it a `ZRANGEBYSCORE ... WITHSCORES` chunk).
+ */
+async function hydrateWithSeq(
+  redis: Redis,
+  keys: RedisKeys,
+  pairs: { id: string; seq: number }[],
+): Promise<{ event: LineageEventRecord; seq: number }[]> {
+  if (pairs.length === 0) return [];
+  const raws = await redis.hmget(keys.lineage.events, ...pairs.map((p) => p.id));
+  const out: { event: LineageEventRecord; seq: number }[] = [];
+  raws.forEach((raw, i) => {
+    if (raw != null) out.push({ event: JSON.parse(raw) as LineageEventRecord, seq: pairs[i]!.seq });
+  });
+  return out;
+}
+
+/**
+ * `StoragePort.pageLineage`'s whole read path (design.md #53): scans `keys.lineage.bySeq` forward from
+ * `req.cursor`'s seq (exclusive lower bound -- Redis's `(seq` syntax) in `LINEAGE_SCAN_CHUNK_SIZE`-sized
+ * `ZRANGEBYSCORE ... WITHSCORES LIMIT` chunks (the same chunk size and "read a bounded slice, not the
+ * whole set" idiom `scanForMatches` uses for `listLineage`), hydrating and filtering each chunk with
+ * `matchesLineageFilter`. Stops the moment one match past `pageSize` is found (proof a next page exists,
+ * without reading further than necessary) or `by-seq` itself is exhausted. `pageSize` defaults to
+ * `DEFAULT_LINEAGE_PAGE_SIZE` and is clamped to `MAX_LINEAGE_PAGE_SIZE` (floored at 1, for the same reason
+ * `pageLineageArray` floors it: a page must always advance its own cursor). A malformed `req.cursor`
+ * propagates as `decodeSeqCursor`'s thrown `LineageCursorError`, before any Redis command is issued.
+ */
+export async function readLineagePage(
+  redis: Redis,
+  keys: RedisKeys,
+  req: LineagePageRequest,
+): Promise<LineagePage> {
+  const pageSize = Math.max(1, Math.min(req.pageSize ?? DEFAULT_LINEAGE_PAGE_SIZE, MAX_LINEAGE_PAGE_SIZE));
+  let cursorSeq = req.cursor != null ? decodeSeqCursor(req.cursor) : 0;
+  const matches: LineageEventRecord[] = [];
+  let lastMatchSeq = cursorSeq;
+  let hasMore = false;
+
+  for (;;) {
+    const raw = await redis.zrangebyscore(
+      keys.lineage.bySeq,
+      `(${cursorSeq}`,
+      "+inf",
+      "WITHSCORES",
+      "LIMIT",
+      0,
+      LINEAGE_SCAN_CHUNK_SIZE,
+    );
+    if (raw.length === 0) break; // by-seq exhausted: nothing after cursorSeq
+    const pairs: { id: string; seq: number }[] = [];
+    for (let i = 0; i < raw.length; i += 2) pairs.push({ id: raw[i]!, seq: Number(raw[i + 1]) });
+
+    for (const { event, seq } of await hydrateWithSeq(redis, keys, pairs)) {
+      if (!matchesLineageFilter(event, req)) continue;
+      if (matches.length === pageSize) {
+        hasMore = true;
+        break;
+      }
+      matches.push(event);
+      lastMatchSeq = seq;
+    }
+    if (hasMore) break;
+    cursorSeq = pairs[pairs.length - 1]!.seq;
+    if (pairs.length < LINEAGE_SCAN_CHUNK_SIZE) break; // this chunk was short: by-seq is exhausted
+  }
+  return hasMore ? { events: matches, nextCursor: encodeSeqCursor(lastMatchSeq) } : { events: matches };
 }

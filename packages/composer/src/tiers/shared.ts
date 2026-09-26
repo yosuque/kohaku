@@ -139,6 +139,17 @@ export interface TierResult {
   failure?: "transient" | "invalid" | "budget" | "aborted";
   /** The downgrade reason when failure==="budget" (compose places it on fallback.reason). */
   budgetReason?: string;
+  /**
+   * The thrown error behind the *last* attempt that actually threw (typically an LlmError), so callers
+   * (tier-ladder.ts's settleL1Failure / runL2Stage) can enrich a fallback reason and observer.onError's
+   * `error` argument with the underlying cause instead of leaving it undefined. Unset whenever the
+   * terminal failure did not come from a throw — in particular, an "invalid" failure whose *last* attempt
+   * failed via `config.validate` returning `{ ok: false }` (a response existed but failed validation, no
+   * exception) rather than via a caught throw. A stale error from an earlier repaired attempt would be
+   * misleading there, so `runRepairLoop` clears it in that branch rather than leaving the previous throw's
+   * value attached to a different failure.
+   */
+  lastError?: unknown;
 }
 
 /** One LLM-call attempt's outcome, as reported by a runRepairLoop `call` hook on success. */
@@ -213,6 +224,10 @@ export async function runRepairLoop(
   // carries its own budgetReason on the early-return path — this variable is for the OTHER route into
   // failure="budget": an in-flight call aborted by the deadline timer rather than skipped before it started).
   let budgetReason: string | undefined;
+  // The thrown error behind the most recent attempt that actually threw (see TierResult.lastError's doc).
+  // Set at the top of the catch block below and cleared when a later attempt's failure instead comes from
+  // `config.validate` rejecting a response that was returned without throwing.
+  let lastError: unknown;
 
   for (let attempt = 0; attempt < config.maxAttempts; attempt++) {
     if (budget != null && config.shouldCheckBudget(attempt)) {
@@ -228,6 +243,7 @@ export async function runRepairLoop(
       model = result.model;
       attempts.push({ kind, ok: true, usage: result.usage });
     } catch (e) {
+      lastError = e;
       attempts.push({
         kind,
         ok: false,
@@ -269,8 +285,11 @@ export async function runRepairLoop(
     if (validated.ok) {
       return { ok: true, components: validated.components, events: validated.events, model, attempts };
     }
-    // A validation failure is also a repair target ("invalid", L1→L2-promotable / L2-repairable).
+    // A validation failure is also a repair target ("invalid", L1→L2-promotable / L2-repairable). This
+    // attempt returned a response (no throw), so clear lastError rather than leaving an earlier attempt's
+    // thrown error attached to a failure that was not actually caused by it (see TierResult.lastError's doc).
     failure = "invalid";
+    lastError = undefined;
     attempts[attempts.length - 1] = {
       ...attempts[attempts.length - 1]!,
       ok: false,
@@ -285,5 +304,6 @@ export async function runRepairLoop(
     failure,
     ...(model != null ? { model } : {}),
     ...(budgetReason != null ? { budgetReason } : {}),
+    ...(lastError !== undefined ? { lastError } : {}),
   };
 }

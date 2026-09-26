@@ -18,6 +18,14 @@ export interface StorageContractOptions {
    * server-side (e.g. redis EXPIRE), so the suite waits ~1.1s of wall clock instead of moving the clock.
    */
   clock?: "fake" | "real";
+  /**
+   * When true, `pageLineage` (StoragePort's optional forward-paging extension, design.md #53) MUST be
+   * implemented -- the suite fails if it is missing, instead of silently skipping the paging tests the
+   * way an adapter that omits any other optional extension (`deleteFixation`, `putPromotionStates`) does.
+   * Default false (paging tests run only when `port.pageLineage` happens to exist, and are a no-op
+   * otherwise).
+   */
+  requirePaging?: boolean;
 }
 
 function spec(id: string): UISpec {
@@ -124,19 +132,19 @@ export function describeStoragePortContract(
     describe("lineage", () => {
       const e1 = event(
         "view.composed",
-        { intentHash: "h1", artifactId: "a1", specHash: "s1" },
+        { intentHash: "h1", artifactId: "a1", specHash: "s1", correlationId: "c1" },
         "2026-01-01T00:00:00.000Z",
         "t1",
       );
       const e2 = event(
         "view.composed",
-        { intentHash: "h2", artifactId: "a2", specHash: "s2" },
+        { intentHash: "h2", artifactId: "a2", specHash: "s2", correlationId: "c2" },
         "2026-01-02T00:00:00.000Z",
         "t2",
       );
       const e3 = event(
         "component.used",
-        { intentHash: "h1", artifactId: "a1", specHash: "s1" },
+        { intentHash: "h1", artifactId: "a1", specHash: "s1", correlationId: "c1" },
         "2026-01-03T00:00:00.000Z",
         "t1",
       );
@@ -157,6 +165,7 @@ export function describeStoragePortContract(
         expect((await port.listLineage({ intentHash: "h2" })).map((e) => e.id)).toEqual([e2.id]);
         expect((await port.listLineage({ artifactId: "a2" })).map((e) => e.id)).toEqual([e2.id]);
         expect((await port.listLineage({ specHash: "s1" })).map((e) => e.id)).toEqual([e1.id, e3.id]);
+        expect((await port.listLineage({ correlationId: "c1" })).map((e) => e.id)).toEqual([e1.id, e3.id]);
       });
 
       it("applies since / until inclusively and limit as a tail window; limit <= 0 is empty", async () => {
@@ -182,6 +191,93 @@ export function describeStoragePortContract(
         const all = await port.listLineage();
         expect(all.map((e) => e.id)).toEqual([e1.id, e2.id, e3.id]);
         expect(all.find((e) => e.id === e1.id)?.payload["specHash"]).toBe("s1");
+      });
+    });
+
+    describe("pageLineage (optional forward-paging extension, design.md #53)", () => {
+      it("is implemented when this suite requires it", () => {
+        if (options.requirePaging === true) {
+          expect(port.pageLineage).toBeTypeOf("function");
+        }
+      });
+
+      const p1 = event(
+        "view.composed",
+        { intentHash: "h1", correlationId: "c1" },
+        "2026-01-01T00:00:00.000Z",
+        "t1",
+      );
+      const p2 = event(
+        "view.composed",
+        { intentHash: "h2", correlationId: "c2" },
+        "2026-01-02T00:00:00.000Z",
+        "t2",
+      );
+      const p3 = event(
+        "component.used",
+        { intentHash: "h3", correlationId: "c1" },
+        "2026-01-03T00:00:00.000Z",
+        "t1",
+      );
+      const p4 = event(
+        "view.composed",
+        { intentHash: "h4", correlationId: "c3" },
+        "2026-01-04T00:00:00.000Z",
+        "t1",
+      );
+
+      beforeEach(async () => {
+        await port.appendLineage(p1);
+        await port.appendLineage(p2);
+        await port.appendLineage(p3);
+        await port.appendLineage(p4);
+      });
+
+      it("returns pages in ascending append order with no gaps or duplicates", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        const page1 = await port.pageLineage({ pageSize: 2 });
+        expect(page1.events.map((e) => e.id)).toEqual([p1.id, p2.id]);
+        expect(page1.nextCursor).toBeDefined();
+        const page2 = await port.pageLineage({ pageSize: 2, cursor: page1.nextCursor });
+        expect(page2.events.map((e) => e.id)).toEqual([p3.id, p4.id]);
+        expect(page2.nextCursor).toBeUndefined();
+      });
+
+      it("an event appended between two page reads is visible on a later page without disturbing earlier ones", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        const page1 = await port.pageLineage({ pageSize: 3 });
+        expect(page1.events.map((e) => e.id)).toEqual([p1.id, p2.id, p3.id]);
+        expect(page1.nextCursor).toBeDefined();
+        const p5 = event("view.composed", { intentHash: "h5" }, "2026-01-05T00:00:00.000Z");
+        await port.appendLineage(p5);
+        const page2 = await port.pageLineage({ pageSize: 3, cursor: page1.nextCursor });
+        expect(page2.events.map((e) => e.id)).toEqual([p4.id, p5.id]);
+        expect(page2.nextCursor).toBeUndefined();
+      });
+
+      it("combines with a filter predicate (correlationId)", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        const page = await port.pageLineage({ correlationId: "c1" });
+        expect(page.events.map((e) => e.id)).toEqual([p1.id, p3.id]);
+        expect(page.nextCursor).toBeUndefined();
+      });
+
+      it("combines with the tenant filter", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        const page = await port.pageLineage({ tenant: "t1" });
+        expect(page.events.map((e) => e.id)).toEqual([p1.id, p3.id, p4.id]);
+      });
+
+      it("truncates an oversized pageSize to the 1000 cap instead of rejecting it", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        const page = await port.pageLineage({ pageSize: 1_000_000 });
+        expect(page.events).toHaveLength(4);
+        expect(page.nextCursor).toBeUndefined();
+      });
+
+      it("throws for a malformed cursor instead of restarting or skipping silently", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        await expect(port.pageLineage({ cursor: "not-a-real-cursor" })).rejects.toThrow();
       });
     });
 

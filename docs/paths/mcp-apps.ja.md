@@ -20,7 +20,7 @@ import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { intents } from "./kohaku/intents.js"; // your Intent catalog (defineIntent)
+import { intents } from "./kohaku/intents.js"; // your hand-written Intent catalog (defineIntent)
 import {
   authzPort as authz,
   domainPort as domain,
@@ -48,8 +48,8 @@ await server.connect(new StdioServerTransport());
 
 この 3 つの正体:
 
-- **`ports.ts`** — 4 つの Port: `domain`(あなたのデータ API: `listOperations` / `invoke`)、`semantic`(Intent → `query://` ハンドルと `dataVersion`)、`authz`(capability トークン。サンプルの約 50 行の HMAC 実装は `apps/sample-api/src/ports/authz-port.ts`)、`storage`(最初はインメモリの Map で十分)。`kohaku scaffold ports` がメソッドごとに TODO 付きのファイルを書き出します。各 Port の歩き方は[ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
-- **`intents.ts`** — Intent ごとに `defineIntent` を 1 回: 正規名、Zod の `params`、NL の `examples`、`queries`。MCP ツール・その入力スキーマ・SemanticPort 定義はすべてこの単一定義から導出されます。
+- **`ports.ts`** — 4 つの Port: `domain`(あなたのデータ API: `listOperations` / `invoke`)、`semantic`(Intent → `query://` ハンドルと `dataVersion`)、`authz`(capability トークン。参照実装は `@kohaku-ui/authz-hmac` の `createHmacAuthzPort`、`packages/authz-hmac/src/hmac-authz-port.ts`)、`storage`(最初はインメモリの Map で十分)。`kohaku scaffold ports` がメソッドごとに TODO 付きのファイルを書き出します。各 Port の歩き方は[ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
+- **`intents.ts`** — 自分で書く Intent カタログです(`scaffold ports` が生成するのは `ports.ts` と `server.ts` だけです): Intent ごとに `defineIntent` を 1 回: 正規名、Zod の `params`、NL の `examples`、`queries`。MCP ツール・その入力スキーマ・SemanticPort 定義はすべてこの単一定義から導出されます。
 - **`createLlmFromEnv()`** — `KOHAKU_LLM_PROVIDER` とプロバイダのキー(Claude / OpenAI / Gemini / Ollama / llama.cpp)を読みます。`policy.fixedSpecs` に固定 Spec を登録すれば、その Intent はモデルにまったく届かず、それでもウィジェットは描画されます。
 
 ## レンダラー

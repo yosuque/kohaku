@@ -61,6 +61,15 @@ describe("postgresSchemaSql", () => {
     expect(sql).toMatch(/kohaku_lineage[\s\S]*UNIQUE \(id\)/);
   });
 
+  it("adds kohaku_lineage.correlation_id additively (design.md #53), without bumping POSTGRES_SCHEMA_VERSION", () => {
+    expect(sql).toContain(
+      'ALTER TABLE "public"."kohaku_lineage" ADD COLUMN IF NOT EXISTS correlation_id text NULL',
+    );
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS public_kohaku_lineage_correlation_id_idx ON "public"."kohaku_lineage" (correlation_id, seq)',
+    );
+  });
+
   it("makes kohaku_schema_meta a single-row table via a fixed primary key + CHECK", () => {
     expect(sql).toMatch(/kohaku_schema_meta[\s\S]*id integer PRIMARY KEY DEFAULT 1 CHECK \(id = 1\)/);
     expect(sql).toMatch(/kohaku_schema_meta[\s\S]*version integer NOT NULL/);

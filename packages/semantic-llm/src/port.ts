@@ -1,17 +1,38 @@
 import { parseQueryRef, type QueryRef } from "@kohaku-ui/data-binding";
 import type { LlmPort } from "@kohaku-ui/llm";
-import type {
-  CanonicalIntent,
-  DataShape,
-  IntentInput,
-  QueryHandle,
-  SemanticInput,
-  SemanticPort,
-  SessionContext,
+import {
+  type CanonicalIntent,
+  type DataShape,
+  type IntentInput,
+  IntentValidationError,
+  type QueryHandle,
+  type SemanticInput,
+  type SemanticPort,
+  type SessionContext,
 } from "@kohaku-ui/spec-core";
 import type { IntentCatalogLike } from "./catalog.js";
 import { normalizeGuiAction } from "./gui.js";
 import { normalizeNlQuery } from "./nl.js";
+
+/**
+ * Thrown by resolveQuery when the intent's canonical name is not present in the (possibly per-tenant)
+ * catalog. Carries a string `code` property (the general convention for a "typed" internal error) and,
+ * separately, `clientSafe: true` — the narrower, explicit opt-in composer's SEMANTIC_FAILED wrapping
+ * (packages/composer/src/refs.ts's `isClientSafeCause`) requires before it will surface a cause's own
+ * message to the client. This message is safe to opt in: it names no internals, only the (already
+ * client-supplied) intent name.
+ */
+export class UnknownIntentError extends Error {
+  readonly code = "UNKNOWN_INTENT" as const;
+  /** Opts in to composer's SEMANTIC_FAILED message enrichment — see isClientSafeCause's doc. */
+  readonly clientSafe = true as const;
+  readonly canonical: string;
+  constructor(canonical: string) {
+    super(`unknown intent "${canonical}"`);
+    this.name = "UnknownIntentError";
+    this.canonical = canonical;
+  }
+}
 
 export interface LlmSemanticPortOptions {
   llm: LlmPort;
@@ -79,11 +100,32 @@ export function createLlmSemanticPort(options: LlmSemanticPortOptions): Semantic
     },
     async resolveQuery(intent: CanonicalIntent, ctx?: { tenant?: string }): Promise<QueryHandle[]> {
       const def = catalogFor(ctx?.tenant).get(intent.canonical);
-      if (def == null) throw new Error(`unknown intent: ${intent.canonical}`);
+      if (def == null) throw new UnknownIntentError(intent.canonical);
       return def.toQueries(intent.params);
     },
     async dataVersion(handle: QueryHandle): Promise<string> {
       return dataVersion(handle);
+    },
+    async validateIntent(intent: IntentInput, ctx: SessionContext): Promise<IntentInput> {
+      const catalog = catalogFor(ctx.tenant);
+      if (catalog.validateParams != null) {
+        const result = catalog.validateParams(intent.canonical, intent.params);
+        if (result.ok) return { canonical: intent.canonical, params: result.params };
+        throw new IntentValidationError(
+          result.issues.map((issue) => issue.message).join("; "),
+          result.issues,
+        );
+      }
+      // The catalog does not implement validateParams: fall back to the looser (name-known?, normalizeParams)
+      // checks, which cannot detect an unknown param key or report per-key issues.
+      if (catalog.get(intent.canonical) == null) {
+        throw new IntentValidationError(`unknown intent "${intent.canonical}"`);
+      }
+      const params = catalog.normalizeParams(intent.canonical, intent.params);
+      if (params == null) {
+        throw new IntentValidationError(`invalid params for intent "${intent.canonical}"`);
+      }
+      return { canonical: intent.canonical, params };
     },
   };
   if (describeShape != null) {

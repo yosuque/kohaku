@@ -26,6 +26,7 @@ from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
     ComposeFixationContext,
     FixationDeliveryHost,
+    IntentSourceGui,
     IntentSourceIntent,
     IntentSourceNl,
     ParsedInvokableRefOk,
@@ -46,7 +47,6 @@ from kohaku.host_core import record_view_fallback as _host_core_record_view_fall
 from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.spec import (
     AuthzPort,
-    GuiAction,
     IntentInput,
     InvocationContext,
     JsonObject,
@@ -57,7 +57,6 @@ from kohaku.spec import (
     VerifyRequest,
     canonical_stringify,
     enumerate_bind_variants,
-    finalize_intent,
 )
 
 from . import initial_data as _initial_data
@@ -78,6 +77,7 @@ from .types import (
     AttachOptions,
     McpErrorInfo,
     McpHostDeps,
+    _CanonicalSource,
     _ComposeSource,
     _IntentSource,
 )
@@ -571,15 +571,30 @@ def attach_kohaku_to_mcp_server(
             # validator wired in), so the depth cap is enforced here instead.
             if not _json_depth_ok(intent_params) or not _json_depth_ok(payload):
                 return _tool_error(f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})")
-            current = finalize_intent(
-                IntentInput(canonical=_arg_str(intent_arg, "canonical"), params=intent_params)
-            )
             locale = _locale_of(args)
-            on = _arg_str(args, "on")
-            normalized = await deps.compose.semantic.normalize(
-                GuiAction(kind="gui", action=on, params=payload, current=current),
-                _mcp_session(locale, principal),
+            session = _mcp_session(locale, principal)
+            # Resolved through host-core's resolve_intent (the "intent" source), not a bare finalize_intent, so
+            # a SemanticPort.validate_intent implementation gets a chance to reject an unknown canonical or
+            # invalid params in `current` too (mirrors the REST profile's /events fix for the same gap;
+            # _safe_tool's catch-all converts a raised IntentValidationError into a structured tool error).
+            current_resolved = await _host_core_resolve_intent(
+                deps.compose.semantic,
+                IntentSourceIntent(
+                    intent=IntentInput(canonical=_arg_str(intent_arg, "canonical"), params=intent_params)
+                ),
+                session,
             )
+            current = current_resolved.intent
+            on = _arg_str(args, "on")
+            # Intent resolution via host-core's resolve_intent (shared with the REST profile's /events GUI-delta
+            # site), rather than a local semantic.normalize copy -- keeps the "gui" normalization behavior (and
+            # its session, including the attached principal) in one place.
+            resolved = await _host_core_resolve_intent(
+                deps.compose.semantic,
+                IntentSourceGui(action=on, params=payload, current=current),
+                session,
+            )
+            normalized = resolved.intent
             # Record view.interacted symmetrically with the REST surface's /events (which records it before
             # recomposing, via KohakuHostDeps.recorder). Fail-open: a recording failure must not block
             # recomposition, and is reported to the observation hook instead.
@@ -599,13 +614,12 @@ def attach_kohaku_to_mcp_server(
                     _record_interacted,
                     lambda exc: _report_mcp_error(deps, f"{prefix}_event", exc),
                 )
-            return await _compose_and_package(
-                _IntentSource(
-                    intent=IntentInput(canonical=normalized.canonical, params=normalized.params)
-                ),
-                locale,
-                principal,
-            )
+            # Pass the already-resolved Intent through as-is (`_CanonicalSource`) rather than re-destructuring
+            # it into a plain `IntentInput(canonical, params)` and wrapping it back into `_IntentSource`: the
+            # latter would resolve it *again* as a directly-specified Intent on the way into
+            # `_compose_with_fixation`, calling `SemanticPort.validate_intent` a second time for one request
+            # (see `_CanonicalSource`'s doc comment in types.py).
+            return await _compose_and_package(_CanonicalSource(intent=normalized), locale, principal)
 
         return await _safe_tool(f"{prefix}_event", ctx, _run)
 
@@ -886,15 +900,22 @@ async def _compose_with_fixation(
     # Intent resolution via host-core's resolveIntent (shared with the REST profile's /compose(/stream) and
     # /intent/normalize) rather than a local duplicate.
     session = _mcp_session(locale, principal)
-    if isinstance(source, _IntentSource):
+    if isinstance(source, _CanonicalSource):
+        # Already resolved (and, when the wired SemanticPort implements it, validated) by the caller -- e.g.
+        # _handle_event's GUI-delta path -- so resolve_intent must not run again here: doing so would call
+        # SemanticPort.validate_intent a second time for the same request (see _CanonicalSource's doc comment
+        # in types.py).
+        intent = source.intent
+    elif isinstance(source, _IntentSource):
         resolved = await _host_core_resolve_intent(
             deps.compose.semantic, IntentSourceIntent(intent=source.intent), session
         )
+        intent = resolved.intent
     else:
         resolved = await _host_core_resolve_intent(
             deps.compose.semantic, IntentSourceNl(text=source.text), session
         )
-    intent = resolved.intent
+        intent = resolved.intent
 
     # Delegates the fixation shortcut -> staleness check -> self-heal -> normal-compose-fallback sequence to
     # kohaku.host_core (shared with kohaku.host_rest). The MCP profile has a single ComposeContext, so it is
