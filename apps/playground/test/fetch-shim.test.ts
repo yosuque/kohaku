@@ -62,7 +62,17 @@ describe("installFetchShim: base prefixing", () => {
     expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
   });
 
-  it("a request outside the base-prefixed api/* path is not routed even under a non-root base", async () => {
+  it("plain root /api/* still matches under a non-root base too (sample-web's client hardcodes root-absolute paths)", async () => {
+    const host = await createPlaygroundHost();
+    restoreShim = installFetchShim(() => host.app, { origin: ORIGIN, base: "/kohaku/" });
+
+    // Not under /kohaku/ at all — the bare root path sample-web's kohaku/client.ts actually calls,
+    // regardless of the deployed base. Must still route to the host (see apiPrefixesFor's doc comment).
+    const res = await fetch(`${ORIGIN}/api/health`);
+    expect(res.status).toBe(200);
+  });
+
+  it("a request that is neither root /api/* nor under <base>api/* is not routed", async () => {
     const calls: string[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       calls.push(input instanceof Request ? input.url : String(input));
@@ -72,9 +82,8 @@ describe("installFetchShim: base prefixing", () => {
     const host = await createPlaygroundHost();
     restoreShim = installFetchShim(() => host.app, { origin: ORIGIN, base: "/kohaku/" });
 
-    // Looks like an API path, but at the site root rather than under /kohaku/ — must not match.
-    await fetch(`${ORIGIN}/api/health`);
-    expect(calls).toEqual([`${ORIGIN}/api/health`]);
+    await fetch(`${ORIGIN}/kohaku/assets/index.js`);
+    expect(calls).toEqual([`${ORIGIN}/kohaku/assets/index.js`]);
   });
 });
 

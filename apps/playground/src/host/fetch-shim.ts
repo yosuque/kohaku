@@ -24,12 +24,27 @@ function joinApiPrefix(base: string): string {
 }
 
 /**
- * Installs a global `fetch` shim: a same-origin request under `<base>api/*` is routed to `getHost()`'s
- * `app.fetch` (rewritten to the `/api/*` path host-rest's routes are actually mounted at — the host has no
- * concept of the page's `<base>`); everything else — a different origin, or the same origin outside
- * `<base>api/*` — passes straight through to the real network `fetch`, unchanged. No service worker: this
- * only intercepts `fetch()` calls made from the same JS realm that installed it (sample-web's own API
- * client, which is all this playground needs to serve).
+ * The two path prefixes a same-origin request is matched against, in order:
+ * - `/api/` (the site root), unconditionally — this is what sample-web's own API client
+ *   (`kohaku/client.ts`) actually calls, as a hardcoded root-absolute path, regardless of any deployed
+ *   `<base>`. sample-web is reused unforked (U5's own constraint), so the shim has to meet it here rather
+ *   than the other way around.
+ * - `<base>api/` — additive, for a base-aware caller (or a future one): under a non-root base (a GitHub
+ *   Pages project site, `<base>` = `/kohaku/`), `/kohaku/api/*` is recognized the same way.
+ * When `base` is already `/` both prefixes are the same string, which is harmless (checked twice, matches
+ * once).
+ */
+function apiPrefixesFor(base: string): string[] {
+  return ["/api/", joinApiPrefix(base)];
+}
+
+/**
+ * Installs a global `fetch` shim: a same-origin request under `/api/*` or `<base>api/*` (see
+ * `apiPrefixesFor`) is routed to `getHost()`'s `app.fetch` (rewritten to the `/api/*` path host-rest's
+ * routes are actually mounted at — the host has no concept of the page's `<base>`); everything else — a
+ * different origin, or the same origin outside both prefixes — passes straight through to the real network
+ * `fetch`, unchanged. No service worker: this only intercepts `fetch()` calls made from the same JS realm
+ * that installed it (sample-web's own API client, which is all this playground needs to serve).
  *
  * `getHost` is a callback, not a value, so `reset.ts` can swap in a freshly built host (new storage, new
  * lineage) without reinstalling the shim — every intercepted request reads whatever `getHost()` returns at
@@ -41,15 +56,17 @@ function joinApiPrefix(base: string): string {
 export function installFetchShim(getHost: () => FetchShimTarget, options: FetchShimOptions = {}): () => void {
   const realFetch = globalThis.fetch.bind(globalThis);
   const origin = options.origin ?? globalThis.location?.origin;
-  const prefix = joinApiPrefix(options.base ?? import.meta.env.BASE_URL ?? "/");
+  const prefixes = apiPrefixesFor(options.base ?? import.meta.env.BASE_URL ?? "/");
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
+    const matchedPrefix =
+      origin != null && url.origin === origin ? prefixes.find((p) => url.pathname.startsWith(p)) : undefined;
 
-    if (origin != null && url.origin === origin && url.pathname.startsWith(prefix)) {
+    if (matchedPrefix != null) {
       const rewrittenUrl = new URL(request.url);
-      rewrittenUrl.pathname = `/api/${url.pathname.slice(prefix.length)}`;
+      rewrittenUrl.pathname = `/api/${url.pathname.slice(matchedPrefix.length)}`;
       return getHost().fetch(await rewriteRequest(request, rewrittenUrl));
     }
     return realFetch(input, init);
