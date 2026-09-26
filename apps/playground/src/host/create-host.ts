@@ -2,6 +2,7 @@ import { type ReplayFixtures, ReplayLlm } from "@kohaku-ui/evals/replay";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory/memory";
 import { createApp, SalesRepo, type SampleApp } from "@kohaku-ui-sample/api/browser";
 import { createPlaygroundAuthzPort } from "./authz.js";
+import { loadFixtures } from "./fixtures.js";
 import { PLAYGROUND_SEED } from "./seed.js";
 
 /**
@@ -26,11 +27,11 @@ const PLAYGROUND_AUTHZ_SECRET = "kohaku-playground-demo-secret";
  * WebCrypto-backed AuthzPort, and a replay-only LLM. Called once at page load and again by `reset.ts` on
  * every Reset — each call is a clean slate (fresh storage, fresh lineage, a fresh SalesRepo instance).
  *
- * `fixtures` (default `{}`, i.e. every LLM call misses and throws) lets a caller — today just
- * `test/fetch-shim.test.ts`, later u5-3's recorded fixture set — supply a `ReplayFixtures` object without
- * this module needing to know where fixtures come from.
+ * `fixtures` defaults to `loadFixtures()` (everything recorded under `fixtures/*.json` — empty today, see
+ * that directory's README). A caller that wants a specific or empty fixture set instead — every test in
+ * this package — passes one explicitly.
  */
-export async function createPlaygroundHost(fixtures: ReplayFixtures = {}): Promise<SampleApp> {
+export async function createPlaygroundHost(fixtures: ReplayFixtures = loadFixtures()): Promise<SampleApp> {
   return createApp({
     llm: new ReplayLlm(fixtures),
     storage: createMemoryStoragePort(),

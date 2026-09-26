@@ -116,6 +116,55 @@ describe("installFetchShim: cross-origin passthrough", () => {
   });
 });
 
+describe("installFetchShim: onGenerationFallback", () => {
+  it("fires when an L1 compose has no recorded fixture and degrades to composer's deterministic fallback", async () => {
+    const host = await createPlaygroundHost({}); // no fixtures -> the LLM call always misses
+    const fallbacks: { from: string; reason: string }[] = [];
+    restoreShim = installFetchShim(() => host.app, {
+      origin: ORIGIN,
+      onGenerationFallback: (info) => fallbacks.push(info),
+    });
+
+    const res = await fetch(`${ORIGIN}/api/kohaku/compose`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: {
+          kind: "gui",
+          action: "view.select",
+          params: { intent: "sales.trend", metric: "revenue", granularity: "month" },
+        },
+      }),
+    });
+    expect(res.status).toBe(200); // the screen does not break — composer delivers the fallback Spec
+    // onGenerationFallback is notified asynchronously (it peeks at a clone of the response after this
+    // function already returned it), so give the microtask queue a turn before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fallbacks).toHaveLength(1);
+    // composer cascades L1 -> L2 -> deterministic fallback on failure (both attempts throw here, since
+    // neither has a recorded fixture), so `from` reports L2 — the last tier actually attempted — even
+    // though this scenario started as an L1 request.
+    expect(fallbacks[0]!.from).toBe("L2");
+  });
+
+  it("does not fire for a successful L0 compose (no fallback occurred)", async () => {
+    const host = await createPlaygroundHost();
+    const fallbacks: unknown[] = [];
+    restoreShim = installFetchShim(() => host.app, {
+      origin: ORIGIN,
+      onGenerationFallback: (info) => fallbacks.push(info),
+    });
+
+    await fetch(`${ORIGIN}/api/kohaku/compose`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(QUARTERLY_GUI),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fallbacks).toHaveLength(0);
+  });
+});
+
 describe("installFetchShim + reset: lineage starts empty again after a reset", () => {
   it("a compose recorded through the shim shows up in lineage, and disappears after reset()", async () => {
     const handle = await createPlaygroundHostHandle();

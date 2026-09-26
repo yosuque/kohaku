@@ -16,6 +16,54 @@ export interface FetchShimOptions {
    * site), so `<base>api/*` is recognized the same as `/api/*` at the site root. Defaults to `"/"`.
    */
   base?: string;
+  /**
+   * Called after a routed `/api/kohaku/compose*` response degraded to composer's deterministic fallback
+   * (`spec.provenance.fallback.kind === "generation"` — see `@kohaku-ui/spec-core`'s `ProvenanceSchema`),
+   * the one situation in this playground an LLM problem can actually reach: an unrecorded `ReplayLlm` key
+   * throws inside compose, and composer's own resilience already turns that into a fallback Spec rather
+   * than a hard error — the screen never breaks, but a visitor who typed a free-form question composer.js
+   * has no fixture for deserves to know why the result looks generic. Never called for a request outside
+   * `/api/kohaku/compose*`, and never lets a body-parsing problem here affect the response actually
+   * returned to the caller (best-effort observation only).
+   */
+  onGenerationFallback?: (info: { from: string; reason: string }) => void;
+}
+
+/** A `spec.provenance.fallback` shape worth notifying about (ProvenanceSchema, packages/spec-core). Kept
+ * minimal (not importing spec-core's own type) since this file's whole point is having no dependency
+ * beyond the Fetch/URL web standard APIs. */
+interface ComposeResponseBody {
+  spec?: { provenance?: { fallback?: { from?: string; reason?: string; kind?: string } } };
+}
+
+/** True only for the compose endpoints (not e.g. /events, /promotions, ...) — the only ones whose response
+ * body ever carries a `spec.provenance.fallback`. */
+function isComposeEndpoint(pathname: string): boolean {
+  return pathname === "/api/kohaku/compose" || pathname === "/api/kohaku/compose/stream";
+}
+
+/**
+ * Peeks at a routed compose response's body for a generation fallback and, if found, calls `onFallback`.
+ * Never throws and never consumes the original `response` (reads a clone) — a malformed or non-JSON body
+ * (e.g. an error response, or the SSE stream from /compose/stream, which this does not attempt to parse)
+ * is simply not reported, not treated as a problem.
+ */
+async function notifyGenerationFallback(
+  response: Response,
+  pathname: string,
+  onFallback: (info: { from: string; reason: string }) => void,
+): Promise<void> {
+  if (!isComposeEndpoint(pathname) || !response.ok) return;
+  if (response.headers.get("content-type")?.includes("application/json") !== true) return;
+  try {
+    const body = (await response.clone().json()) as ComposeResponseBody;
+    const fallback = body.spec?.provenance?.fallback;
+    if (fallback?.kind === "generation" && fallback.from != null && fallback.reason != null) {
+      onFallback({ from: fallback.from, reason: fallback.reason });
+    }
+  } catch {
+    // Not JSON, or shaped unexpectedly — not this function's problem to raise.
+  }
 }
 
 function joinApiPrefix(base: string): string {
@@ -74,7 +122,11 @@ export function installFetchShim(getHost: () => FetchShimTarget, options: FetchS
       const request = input instanceof Request ? input : new Request(resolvedUrl, init);
       const rewrittenUrl = new URL(resolvedUrl);
       rewrittenUrl.pathname = `/api/${resolvedUrl.pathname.slice(matchedPrefix.length)}`;
-      return getHost().fetch(await rewriteRequest(request, rewrittenUrl));
+      const response = await getHost().fetch(await rewriteRequest(request, rewrittenUrl));
+      if (options.onGenerationFallback != null) {
+        void notifyGenerationFallback(response, rewrittenUrl.pathname, options.onGenerationFallback);
+      }
+      return response;
     }
     return realFetch(input, init);
   }) as typeof fetch;

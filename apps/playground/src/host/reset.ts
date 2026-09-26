@@ -1,7 +1,16 @@
 import type { ReplayFixtures } from "@kohaku-ui/evals/replay";
 import type { SampleApp } from "@kohaku-ui-sample/api/browser";
 import { setRole, setTenant } from "@kohaku-ui-sample/web/app";
+import { bootstrapDemoState } from "./bootstrap-demo.js";
 import { createPlaygroundHost } from "./create-host.js";
+
+/** Builds a host and pre-warms its promotion/fixation demo state (see bootstrap-demo.ts) — the one place
+ * both createPlaygroundHostHandle's initial build and its reset() go through, so they can never drift. */
+async function buildHost(fixtures: ReplayFixtures | undefined): Promise<SampleApp> {
+  const host = await createPlaygroundHost(fixtures);
+  await bootstrapDemoState(host);
+  return host;
+}
 
 export interface PlaygroundHostHandle {
   /**
@@ -12,7 +21,8 @@ export interface PlaygroundHostHandle {
   getHost(): SampleApp;
   /**
    * Rebuilds the host from scratch (fresh in-memory `StoragePort` → empty lineage/promotions/fixations,
-   * fresh `SalesRepo` instance → `notes`/`bumpCount` back to their initial state) and returns the demo role
+   * fresh `SalesRepo` instance → `notes`/`bumpCount` back to their initial state), re-runs the
+   * promotion/fixation demo bootstrap (`bootstrap-demo.ts`) against the new host, and returns the demo role
    * / tenant selectors to their defaults, so the playground returns to exactly its first-load state. A
    * `fetch` shim installed via `installFetchShim(() => handle.getHost())` picks up the new host on its very
    * next call — no reinstall needed.
@@ -33,11 +43,11 @@ export interface PlaygroundHostHandle {
  * effect across a reset.
  */
 export async function createPlaygroundHostHandle(fixtures?: ReplayFixtures): Promise<PlaygroundHostHandle> {
-  let current = await createPlaygroundHost(fixtures);
+  let current = await buildHost(fixtures);
   return {
     getHost: () => current,
     reset: async () => {
-      current = await createPlaygroundHost(fixtures);
+      current = await buildHost(fixtures);
       setRole("admin");
       setTenant("default");
     },
