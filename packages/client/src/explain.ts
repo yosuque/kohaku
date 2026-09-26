@@ -14,7 +14,16 @@ import {
 export interface ExplainDecisionAttempt {
   kind: "l1" | "l2";
   ok: boolean;
+  /**
+   * For a validation-failed attempt, the actual issue strings (capped server-side to 5 entries of 200
+   * characters each). For a thrown-exception attempt (`errorCode` set below), a single fixed, non-sensitive
+   * message for that code -- the lineage recorder never persists a thrown exception's own `.message` here
+   * (it can carry a provider's hostname/URL/account details), so this is safe to render as-is.
+   */
   issues?: string[];
+  /** Set only when this attempt failed by a thrown exception (see `issues`'s doc comment above) -- a closed,
+   * non-sensitive vocabulary (composer's own `LlmErrorCode`, or `"UNKNOWN"` for a non-`LlmError` throw). */
+  errorCode?: "CONFIG" | "INVALID_OUTPUT" | "PROVIDER" | "ABORTED" | "UNKNOWN";
 }
 
 /** One capability-negotiation downgrade (see @kohaku-ui/lineage's ViewDecisionDowngrade). */
@@ -88,6 +97,8 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+const ATTEMPT_ERROR_CODES = ["CONFIG", "INVALID_OUTPUT", "PROVIDER", "ABORTED", "UNKNOWN"] as const;
+
 function decisionOf(value: unknown): ExplainDecision | undefined {
   const d = asRecord(value);
   if (d == null) return undefined;
@@ -100,7 +111,15 @@ function decisionOf(value: unknown): ExplainDecision | undefined {
       const issues = Array.isArray(rec["issues"])
         ? ((rec["issues"] as unknown[]).filter((i) => typeof i === "string") as string[])
         : undefined;
-      return [{ kind, ok: rec["ok"] as boolean, ...(issues != null && issues.length > 0 ? { issues } : {}) }];
+      const errorCode = ATTEMPT_ERROR_CODES.find((code) => code === rec["errorCode"]);
+      return [
+        {
+          kind,
+          ok: rec["ok"] as boolean,
+          ...(issues != null && issues.length > 0 ? { issues } : {}),
+          ...(errorCode != null ? { errorCode } : {}),
+        },
+      ];
     }),
     ...(Array.isArray(d["downgrades"]) ? { downgrades: d["downgrades"] as ExplainDecisionDowngrade[] } : {}),
     ...(d["coalesced"] === true ? { coalesced: true as const } : {}),

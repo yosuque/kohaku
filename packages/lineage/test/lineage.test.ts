@@ -351,6 +351,49 @@ describe("explain 用フィールド(correlationId / cacheKeyParts / decision, U
     });
   });
 
+  it("スローされた例外の issues(生の e.message)は記録せず、errorCode に応じた固定文言だけを刻む(機密漏えい対策)", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const spec = await l2Spec();
+    const sensitiveMessage = "connect ECONNREFUSED https://secret-host.internal/v1?key=abc";
+    await lineage.viewComposed({
+      spec,
+      trace: {
+        ...trace,
+        attempts: [
+          { kind: "l1" as const, ok: false, issues: [sensitiveMessage], errorCode: "PROVIDER" as const },
+        ],
+      },
+      surface: "web",
+    });
+    const composed = storage.events.find((e) => e.type === "view.composed")!;
+    const decision = composed.payload["decision"] as {
+      attempts: Array<{ issues?: string[]; errorCode?: string }>;
+    };
+    // The raw exception text must never reach the recorded payload, in any field.
+    expect(JSON.stringify(composed.payload)).not.toContain("secret-host.internal");
+    expect(JSON.stringify(composed.payload)).not.toContain("ECONNREFUSED");
+    expect(decision.attempts[0]!.errorCode).toBe("PROVIDER");
+    expect(decision.attempts[0]!.issues).toEqual(["The LLM provider call failed."]);
+  });
+
+  it("errorCode が無い attempt(検証失敗)の issues はそのまま記録する(既存の挙動を維持)", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const spec = await l2Spec();
+    await lineage.viewComposed({
+      spec,
+      trace: {
+        ...trace,
+        attempts: [{ kind: "l1" as const, ok: false, issues: ["CATALOG_UNKNOWN_TYPE (t): bad type"] }],
+      },
+      surface: "web",
+    });
+    const composed = storage.events.find((e) => e.type === "view.composed")!;
+    const decision = composed.payload["decision"] as { attempts: Array<{ issues?: string[] }> };
+    expect(decision.attempts[0]!.issues).toEqual(["CATALOG_UNKNOWN_TYPE (t): bad type"]);
+  });
+
   it("attempts の issues を 5 件・200 字までに切り詰める", async () => {
     const storage = memoryStorage();
     const lineage = createLineage({ storage });

@@ -6,6 +6,7 @@ Uses a tmp_path FileStoragePort instead of TS's in-memory double (a repository c
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from kohaku.lineage import (
@@ -37,10 +38,17 @@ TRACE = FakeTrace(durationMs=10.0)
 
 
 class _Attempt:
-    def __init__(self, kind: str, ok: bool, issues: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        kind: str,
+        ok: bool,
+        issues: list[str] | None = None,
+        errorCode: str | None = None,
+    ) -> None:
         self.kind = kind
         self.ok = ok
         self.issues = issues
+        self.errorCode = errorCode
 
 
 class _Downgrade:
@@ -370,6 +378,50 @@ def test_view_composed_records_correlation_id_cache_key_and_decision(tmp_path: P
             "coalesced": True,
             "usage": {"inputTokens": 10, "outputTokens": 20},
         }
+
+    asyncio.run(run())
+
+
+def test_thrown_exception_attempts_never_record_the_raw_message_only_a_fixed_error_code_message(
+    tmp_path: Path,
+) -> None:
+    """Security regression: a thrown LlmError's own message (which can carry a provider hostname/URL/account
+    detail) must never reach the persisted decision payload -- only the closed, non-sensitive errorCode and
+    a fixed message for it."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        lineage = create_lineage(storage)
+        sensitive_message = "connect ECONNREFUSED https://secret-host.internal/v1?key=abc"
+        trace = FakeTrace(
+            durationMs=10.0,
+            attempts=[_Attempt("l1", False, [sensitive_message], errorCode="PROVIDER")],
+        )
+        await lineage.view_composed(spec=l2_spec(), trace=trace, surface="web")
+        composed = next(e for e in await storage.list_lineage() if e.type == "view.composed")
+        payload_json = json.dumps(composed.payload)
+        assert "secret-host.internal" not in payload_json
+        assert "ECONNREFUSED" not in payload_json
+        attempt = composed.payload["decision"]["attempts"][0]
+        assert attempt["errorCode"] == "PROVIDER"
+        assert attempt["issues"] == ["The LLM provider call failed."]
+
+    asyncio.run(run())
+
+
+def test_validation_failed_attempts_without_error_code_keep_their_issues_as_is(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        lineage = create_lineage(storage)
+        trace = FakeTrace(
+            durationMs=10.0,
+            attempts=[_Attempt("l1", False, ["CATALOG_UNKNOWN_TYPE (t): bad type"])],
+        )
+        await lineage.view_composed(spec=l2_spec(), trace=trace, surface="web")
+        composed = next(e for e in await storage.list_lineage() if e.type == "view.composed")
+        attempt = composed.payload["decision"]["attempts"][0]
+        assert attempt["issues"] == ["CATALOG_UNKNOWN_TYPE (t): bad type"]
+        assert "errorCode" not in attempt
 
     asyncio.run(run())
 

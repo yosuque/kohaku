@@ -565,6 +565,15 @@ REST ルートは存在しない(design.md #55)。
 - **リクエスト ID の使い回しは複数件の compose を返しうる**: あなた(またはホストの手前のプロキシ)が発行する
   `X-Request-Id` はグローバルな一意性を保証されない — `ExplainReport.composes` は複数件のエントリを持つことが
   あり、CLI・DevTools ともに単一の結果を前提とせず、それぞれを描画する。
+- **`decision` にはプロバイダ自身のエラー文言が一切入らない**: L1/L2 の試行がスローされた例外で失敗した場合
+  (プロバイダ障害・ネットワークエラー・設定ミスなど、`LlmError` や予期しない例外自身の `.message` が
+  ホスト名・URL・アカウント情報を含みうるもの)、`decision.attempts[].issues` には閉じた `errorCode` 語彙
+  (`CONFIG` / `INVALID_OUTPUT` / `PROVIDER` / `ABORTED` / `UNKNOWN`)に応じた固定の非機密文言だけが記録され、
+  例外自身のテキストは決して記録されない。これはスローされた試行にのみ当てはまる — 検証失敗した試行の
+  `issues`(モデル自身の構造的な出力について説明する schema/catalog issue。例: 未知のコンポーネント型)は
+  引き続き実際のメッセージのままで、5 件・各 200 字までに切り詰められる。例外の実際のメッセージが必要な場合は
+  自前の `ComposeObserver.onError` / `KohakuHostDeps.onError` フック(§7 の `KOHAKU_DEBUG` の項目)を使うこと —
+  `/lineage`・`kohaku explain`・DevTools を読む `lineage.read` プリンシパルには決して見えない。
 
 ### 部品を追加する
 

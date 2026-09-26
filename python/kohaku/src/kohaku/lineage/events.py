@@ -80,8 +80,18 @@ class ViewDecisionAttempt(TypedDict, total=False):
     kind: Literal["l1", "l2"]
     ok: bool
     issues: list[str]
-    """Capped to at most 5 entries of at most 200 characters each (see lineage.py's truncate_issues) so a
-    verbose validation-error trail cannot bloat the lineage record without bound."""
+    """For a validation-failed attempt (schema/catalog issues describing the model's own structural output),
+    the actual issue strings, capped to at most 5 entries of at most 200 characters each (see lineage.py's
+    truncate_issues) so a verbose validation-error trail cannot bloat the lineage record without bound. For a
+    thrown-exception attempt (errorCode set below), this instead holds exactly one fixed, non-sensitive
+    message for that code -- never the exception's own message."""
+    errorCode: Literal["CONFIG", "INVALID_OUTPUT", "PROVIDER", "ABORTED", "UNKNOWN"]
+    """Set only when this attempt failed by a thrown exception (never by a schema/catalog validation
+    rejection of a successfully-parsed draft) -- a closed, non-sensitive vocabulary (composer's own
+    LlmErrorCode, or "UNKNOWN" for a non-LlmError throw). See lineage.py's build_decision: a
+    provider/network error's own message can carry a hostname, URL, or account details a lineage.read
+    principal (via /lineage, kohaku explain, or DevTools) has no business seeing, so it is never persisted
+    here."""
 
 
 class ViewDecisionDowngrade(TypedDict):

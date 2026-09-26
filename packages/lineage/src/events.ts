@@ -52,9 +52,22 @@ export type LineageEventType =
 export interface ViewDecisionAttempt {
   kind: "l1" | "l2";
   ok: boolean;
-  /** Capped to at most 5 entries of at most 200 characters each (see lineage.ts's truncateIssues) so a
-   * verbose validation-error trail cannot bloat the lineage record without bound. */
+  /**
+   * For a validation-failed attempt (schema/catalog issues describing the model's own structural output),
+   * these are the actual issue strings, capped to at most 5 entries of at most 200 characters each (see
+   * lineage.ts's truncateIssues) so a verbose validation-error trail cannot bloat the lineage record without
+   * bound. For a thrown-exception attempt (`errorCode` set below), this instead holds exactly one fixed,
+   * non-sensitive message for that code -- never the exception's own `.message`.
+   */
   issues?: string[];
+  /**
+   * Set only when this attempt failed by a thrown exception (never by a schema/catalog validation rejection
+   * of a successfully-parsed draft) -- a closed, non-sensitive vocabulary (composer's own `LlmErrorCode`, or
+   * `"UNKNOWN"` for a non-`LlmError` throw). See lineage.ts's `buildDecision`: a provider/network error's own
+   * message can carry a hostname, URL, or account details a `lineage.read` principal (via `/lineage`,
+   * `kohaku explain`, or DevTools) has no business seeing, so it is never persisted here.
+   */
+  errorCode?: "CONFIG" | "INVALID_OUTPUT" | "PROVIDER" | "ABORTED" | "UNKNOWN";
 }
 
 /** One capability-negotiation downgrade, as recorded on view.composed's `decision` summary (structural

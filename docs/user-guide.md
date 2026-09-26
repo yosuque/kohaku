@@ -568,6 +568,16 @@ REST route (design.md #55).
 - **A reused request id returns more than one compose**: an `X-Request-Id` you (or a proxy in front of your
   host) supply is not guaranteed unique — `ExplainReport.composes` can hold more than one entry, and both the
   CLI and DevTools render each one rather than assuming a single result.
+- **`decision` never contains a provider's own error text**: when an L1/L2 attempt fails by a thrown exception
+  (a provider outage, a network error, a misconfiguration — anything an `LlmError`/an unexpected exception's
+  own `.message` might name, which can carry a hostname, URL, or account detail), `decision.attempts[].issues`
+  records only a fixed, non-sensitive message keyed by a closed `errorCode` vocabulary (`CONFIG` /
+  `INVALID_OUTPUT` / `PROVIDER` / `ABORTED` / `UNKNOWN`) — never the exception's own text. This applies only to
+  a *thrown* attempt; a validation-failed attempt's `issues` (schema/catalog issues describing the model's own
+  structural output, e.g. an unknown component type) are still the real messages, still capped to 5 entries of
+  200 characters each. For the exception's actual message, use your own `ComposeObserver.onError` /
+  `KohakuHostDeps.onError` hook (§7's `KOHAKU_DEBUG` bullet) — a `lineage.read` principal reading `/lineage`,
+  `kohaku explain`, or DevTools never sees it.
 
 ### Adding a part
 

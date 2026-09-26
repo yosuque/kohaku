@@ -48,6 +48,8 @@ class _AttemptLike(Protocol):
     def ok(self) -> bool: ...
     @property
     def issues(self) -> list[str] | None: ...
+    @property
+    def errorCode(self) -> Literal["CONFIG", "INVALID_OUTPUT", "PROVIDER", "ABORTED", "UNKNOWN"] | None: ...
 
 
 class _DowngradeLike(Protocol):
@@ -136,6 +138,19 @@ def cache_key_parts_to_wire(parts: CacheKeyParts) -> dict[str, Any]:
     return out
 
 
+_THROWN_ATTEMPT_MESSAGE: dict[str, str] = {
+    "CONFIG": "The LLM provider was misconfigured.",
+    "INVALID_OUTPUT": "The LLM's output could not be parsed.",
+    "PROVIDER": "The LLM provider call failed.",
+    "ABORTED": "Generation was aborted.",
+    "UNKNOWN": "An unexpected error occurred during generation.",
+}
+"""The fixed, non-sensitive message persisted for a thrown-exception attempt, keyed by its errorCode (see
+ViewDecisionAttempt's doc comment). Deliberately generic and static -- never derived from the exception
+itself -- because a provider/network error's own message can carry a hostname, URL, or account details a
+lineage.read principal (via /lineage, kohaku explain, or DevTools) has no business seeing."""
+
+
 def build_decision(trace: ComposeTraceLike) -> ViewComposedDecision | None:
     """Builds view.composed's `decision` summary from the trace, or None when there is nothing to summarize
     (no attempts, no downgrades, not coalesced, no usage) -- the common case for a cache hit / L0 fixed Spec,
@@ -147,9 +162,17 @@ def build_decision(trace: ComposeTraceLike) -> ViewComposedDecision | None:
     decision_attempts: list[ViewDecisionAttempt] = []
     for a in attempts:
         entry: ViewDecisionAttempt = {"kind": a.kind, "ok": a.ok}
-        issues = truncate_issues(a.issues)
-        if issues is not None:
-            entry["issues"] = issues
+        # A thrown-exception attempt (errorCode set) never has its own issues (the exception's raw message,
+        # needed only for the repair loop's in-process feedback/visibility) persisted here -- only the
+        # fixed, non-sensitive message for its errorCode. A validation-failed attempt (errorCode unset)
+        # keeps its actual issue strings, still truncated.
+        if a.errorCode is not None:
+            entry["issues"] = [_THROWN_ATTEMPT_MESSAGE[a.errorCode]]
+            entry["errorCode"] = a.errorCode
+        else:
+            issues = truncate_issues(a.issues)
+            if issues is not None:
+                entry["issues"] = issues
         decision_attempts.append(entry)
     decision: ViewComposedDecision = {"attempts": decision_attempts}
     if len(downgrades) > 0:

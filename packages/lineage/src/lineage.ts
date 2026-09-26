@@ -67,6 +67,20 @@ function truncateIssues(issues: string[] | undefined): string[] | undefined {
     );
 }
 
+/**
+ * The fixed, non-sensitive message persisted for a thrown-exception attempt, keyed by its `errorCode` (see
+ * ViewDecisionAttempt's doc comment). Deliberately generic and static -- never derived from the exception
+ * itself -- because a provider/network error's own `.message` can carry a hostname, URL, or account details
+ * a `lineage.read` principal (via `/lineage`, `kohaku explain`, or DevTools) has no business seeing.
+ */
+const THROWN_ATTEMPT_MESSAGE: Record<NonNullable<ViewDecisionAttempt["errorCode"]>, string> = {
+  CONFIG: "The LLM provider was misconfigured.",
+  INVALID_OUTPUT: "The LLM's output could not be parsed.",
+  PROVIDER: "The LLM provider call failed.",
+  ABORTED: "Generation was aborted.",
+  UNKNOWN: "An unexpected error occurred during generation.",
+};
+
 /** Builds view.composed's `decision` summary from the trace, or undefined when there is nothing to
  * summarize (no attempts, no downgrades, not coalesced, no usage) -- the common case for a cache hit / L0
  * fixed Spec, which should not grow a `decision` key at all. */
@@ -78,8 +92,17 @@ function buildDecision(trace: ComposeTraceLike): ViewComposedDecision | undefine
   }
   return {
     attempts: attempts.map((a) => {
-      const issues = truncateIssues(a.issues);
-      return { kind: a.kind, ok: a.ok, ...(issues != null ? { issues } : {}) };
+      // A thrown-exception attempt (errorCode set) never has its own issues[] (the exception's raw message,
+      // needed only for the repair loop's in-process feedback/visibility) persisted here -- only the fixed,
+      // non-sensitive message for its errorCode. A validation-failed attempt (errorCode unset) keeps its
+      // actual issue strings, still truncated.
+      const issues = a.errorCode != null ? [THROWN_ATTEMPT_MESSAGE[a.errorCode]] : truncateIssues(a.issues);
+      return {
+        kind: a.kind,
+        ok: a.ok,
+        ...(issues != null ? { issues } : {}),
+        ...(a.errorCode != null ? { errorCode: a.errorCode } : {}),
+      };
     }),
     ...(downgrades.length > 0 ? { downgrades } : {}),
     ...(trace.coalesced === true ? { coalesced: true as const } : {}),

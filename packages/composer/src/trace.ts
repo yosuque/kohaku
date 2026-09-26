@@ -1,3 +1,4 @@
+import type { LlmErrorCode } from "@kohaku-ui/llm";
 import type { Downgrade } from "@kohaku-ui/registry";
 import type { CacheKeyParts, CanonicalIntent, SemanticInput } from "@kohaku-ui/spec-core";
 
@@ -5,6 +6,17 @@ export interface ComposeAttempt {
   kind: "l1" | "l2";
   ok: boolean;
   issues?: string[];
+  /**
+   * Set only when this attempt failed by a thrown exception (never by `config.validate` rejecting a
+   * successfully-parsed draft) -- `LlmError`'s own `code`, or `"UNKNOWN"` for a non-`LlmError` throw.
+   * `issues` in that case still carries the raw `errorMessage(e)` for in-process use (the repair loop's own
+   * feedback/visibility, an operator's own `onError` observer) -- but a downstream recorder that persists
+   * this trace to a multi-tenant-readable surface (`@kohaku-ui/lineage`'s `buildDecision`, feeding
+   * `view.composed`, `kohaku explain`, admin-react's DevTools) replaces it with a fixed, non-sensitive
+   * message keyed by this field instead of forwarding the exception's own text, which can carry a
+   * provider's hostname, URL, or account details.
+   */
+  errorCode?: LlmErrorCode | "UNKNOWN";
   usage?: { inputTokens: number; outputTokens: number };
 }
 

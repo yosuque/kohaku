@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Literal
 from kohaku.spec import CacheKeyParts, Intent, SemanticInput
 
 if TYPE_CHECKING:
+    from kohaku.llm import LlmErrorCode
     from kohaku.registry import Downgrade
 
 
@@ -23,6 +24,14 @@ class ComposeAttempt:
     kind: Literal["l1", "l2"]
     ok: bool
     issues: list[str] | None = None
+    errorCode: LlmErrorCode | Literal["UNKNOWN"] | None = None
+    """Set only when this attempt failed by a thrown exception (never by decode/validate rejecting a
+    successfully-parsed draft) -- LlmError's own `code`, or "UNKNOWN" for a non-LlmError throw. `issues` in
+    that case still carries the raw `str(e)` for in-process use (the repair loop's own feedback/visibility,
+    an operator's own error hook) -- but a downstream recorder that persists this trace to a
+    multi-tenant-readable surface (kohaku.lineage's build_decision, feeding view.composed, kohaku explain,
+    admin-react's DevTools) replaces it with a fixed, non-sensitive message keyed by this field instead of
+    forwarding the exception's own text, which can carry a provider's hostname, URL, or account details."""
     usage: TokenUsage | None = None
 
 
