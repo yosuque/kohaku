@@ -28,10 +28,13 @@ const KNOWN: Record<string, Record<string, { deprecated?: string }>> = {
 
 let server: Server;
 let registry: string;
+/** Raw request paths the stub registry received, to pin how package names are encoded in URLs. */
+const requestedPaths: string[] = [];
 const tmpDirs: string[] = [];
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    requestedPaths.push(req.url ?? "");
     const name = decodeURIComponent((req.url ?? "/").slice(1));
     if (name === "@kohaku-ui/broken") {
       res.writeHead(500).end();
@@ -93,6 +96,13 @@ describe("scripts/npm-bootstrap.mjs", () => {
     expect(stdout).not.toContain("contracts");
     expect(stdout).not.toContain("workspace-only");
     expect(stdout).toContain("node scripts/npm-bootstrap.mjs --publish");
+  });
+
+  it("requests scoped names as @scope%2Fname, the path form the registry documents", async () => {
+    const root = fixtureRoot([{ name: "@kohaku-ui/old" }]);
+    requestedPaths.length = 0;
+    await run(["--root", root]);
+    expect(requestedPaths).toEqual(["/@kohaku-ui%2Fold"]);
   });
 
   it("exits 0 when every package exists or has a finished bootstrap", async () => {

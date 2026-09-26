@@ -75,6 +75,16 @@ export function discoverPublishablePackages(root) {
 }
 
 /**
+ * The registry URL path segment of a package name: `@scope/name` becomes `@scope%2Fname` (the form the
+ * registry documents), anything else is percent-encoded as a whole. Encoding the part after the leading
+ * `@` -- rather than encoding everything and patching the `@` back afterwards -- leaves no escape
+ * sequence to undo.
+ */
+export function registryPath(name) {
+  return name.startsWith("@") ? `@${encodeURIComponent(name.slice(1))}` : encodeURIComponent(name);
+}
+
+/**
  * Where a package stands on the registry:
  *   - `missing`: the name does not exist (HTTP 404) -- needs the full bootstrap;
  *   - `placeholder`: only `0.0.0-bootstrap.*` versions exist -- bootstrapped, waiting for its first real
@@ -83,7 +93,7 @@ export function discoverPublishablePackages(root) {
  * Throws on any other status rather than guessing.
  */
 export async function registryState(name, registry, { write = false } = {}) {
-  const url = `${registry.replace(/\/$/, "")}/${encodeURIComponent(name).replace("%40", "@")}${write ? "?write=true" : ""}`;
+  const url = `${registry.replace(/\/$/, "")}/${registryPath(name)}${write ? "?write=true" : ""}`;
   const res = await fetch(url, {
     headers: { Accept: "application/vnd.npm.install-v1+json", "Cache-Control": "no-cache" },
   });
