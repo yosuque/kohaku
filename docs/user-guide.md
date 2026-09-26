@@ -316,7 +316,7 @@ No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtu
 ### Step 0 — Server-Driven UI without an LLM
 
 ```bash
-node cli/bin/kohaku.js scaffold ports --out ./my-app/kohaku
+npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 ```
 
 Implement the four Ports in the generated `ports.ts`. At first:
@@ -523,7 +523,7 @@ export const myCard = defineComponent({
 // Web side: registry.register("myapp.card", "1.0.0", MyCardComponent)  // fetch data with useBoundData
 ```
 
-Validation: `node cli/bin/kohaku.js component validate <definition.json>`. The minimal definition.json that passes validation (`type` is a dot-separated identifier, `version` is semver, `propsSchema` is a JSON Schema of `type: "object"`, and `capabilities.data` requires one of `none | optional | required`):
+Validation: `npx @kohaku-ui/cli component validate <definition.json>`. The minimal definition.json that passes validation (`type` is a dot-separated identifier, `version` is semver, `propsSchema` is a JSON Schema of `type: "object"`, and `capabilities.data` requires one of `none | optional | required`):
 
 ```json
 {
@@ -544,7 +544,7 @@ Validation: `node cli/bin/kohaku.js component validate <definition.json>`. The m
 Fix the "structure" of input Intent → generated Spec as a regression. Generate a template:
 
 ```bash
-node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
+npx @kohaku-ui/cli scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
 ```
 
 Wire your product's `ComposeContext` into the generated `golden.test.ts`'s `makeContext`, place `{name,input,drafts,expected:null}` JSON under `golden/`, and generate `expected` with `KOHAKU_GOLDEN_UPDATE=1 <run the test>`. Subsequent tests are deterministic and LLM-free, because `@kohaku-ui/evals`'s `runGolden` normalizes the jitter of provenance / intent.hash / dataVersion / refVersions and component IDs and compares only the structure (responses feed `drafts` to the FakeLlm; if you need a live recording, use FixtureLlm's record/replay). A working example is `apps/sample-api/test/golden.test.ts` (fixing the L1 generation of `sales.trend`). If you intentionally change the UI, regenerate `expected` with the same update procedure, review the git diff, and commit.
@@ -630,7 +630,7 @@ Wire your product's `ComposeContext` into the generated `golden.test.ts`'s `make
 
   With `KOHAKU_OTEL` unset (or no `TracerProvider` registered), `createOtelComposeObserver`'s default tracer is a no-op — spans are created and immediately discarded, which is a harmless, fully-supported configuration for local development. Every `gen_ai.*` / `kohaku.*` attribute **key name** is independently overridable via `createOtelComposeObserver({ attributes })`, since OpenTelemetry's GenAI semantic conventions are still "Development" status (not a stability guarantee this repo can make on their behalf).
 
-  **To actually try this against sample-api**: the repo carries only `@opentelemetry/api` as a dependency, so first `pnpm add -D @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http` (or swap in a console exporter for a no-infra smoke test). Save the first snippet above as e.g. `apps/sample-api/otel-bootstrap.ts`, then start sample-api with `NODE_OPTIONS='--import ./otel-bootstrap.ts' KOHAKU_OTEL=1 pnpm --filter @kohaku-ui-sample/api dev` — sample-api runs via tsx, which honors `--import` for a bootstrap module loaded before the app's own code. Success looks like one `kohaku.compose` span per compose call showing up in your exporter's output (console, or your OTLP backend of choice) once you trigger a compose (e.g. load the demo web app or run a `kohaku_compose` MCP call).
+  **To actually try this against sample-api**: the repo carries only `@opentelemetry/api` as a dependency, so first `pnpm add -D @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http` (or swap in a console exporter for a no-infra smoke test). Save the first snippet above as e.g. `otel-bootstrap.ts` inside `apps/sample-api/`, then start sample-api with `NODE_OPTIONS='--import ./otel-bootstrap.ts' KOHAKU_OTEL=1 pnpm --filter @kohaku-ui-sample/api dev` — sample-api runs via tsx, which honors `--import` for a bootstrap module loaded before the app's own code. Success looks like one `kohaku.compose` span per compose call showing up in your exporter's output (console, or your OTLP backend of choice) once you trigger a compose (e.g. load the demo web app or run a `kohaku_compose` MCP call).
 - **Body size limits and rate limiting are the product's responsibility**: `@kohaku-ui/host-rest` imposes no request body size cap or rate limit of its own (a library concern belongs one layer up — a reverse proxy, API gateway, or the product's own middleware). The sample wires a 1 MiB cap on `/api/kohaku/*` via Hono's `bodyLimit` middleware (`apps/sample-api/src/app.ts`); an oversized body is rejected with `413` and the standard error envelope before it reaches Intent resolution. Size the cap to your actual payloads (an NL question or an Intent + params is typically well under 1 KiB) and add rate limiting at the same layer if you need it.
 - **Graceful shutdown**: on `SIGINT`/`SIGTERM` the TS samples (sample-api / sample-mcp) stop accepting new connections and let in-flight ones (including open SSE streams) drain for up to `KOHAKU_SHUTDOWN_GRACE_MS` (default 30s; see §9 of [specification.md](specification.md)) before force-exiting. sample-api additionally flips `GET /api/health` to `503 {ok:false, reason:"shutting down"}` immediately on the signal — ahead of the drain window — so a load balancer stops routing new traffic here while the drain proceeds. The Python sample relies on `uvicorn`'s own graceful shutdown, with `timeout_graceful_shutdown=30` passed in code.
 - **Conformance check**: after changing the implementation, `node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku`. **When you change spec-core's Zod schemas, regenerate `spec/schemas` with `pnpm --filter @kohaku-ui/spec run generate-schemas` and commit it** (CI checks for drift). GitHub Actions CI (`.github/workflows/ci.yml`) automatically runs `pnpm test`, `pnpm typecheck`, `conformance --self`, and a JSON Schema drift check (fails if the `spec/schemas` regenerated from Zod shows a diff) on every push / PR.
