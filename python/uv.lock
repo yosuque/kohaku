@@ -826,7 +826,7 @@ requires-dist = [{ name = "kohaku-ui", extras = ["rest", "mcp"], editable = "koh
 
 [[package]]
 name = "kohaku-ui"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "kohaku" }
 dependencies = [
     { name = "pydantic" },
