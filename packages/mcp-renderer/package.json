@@ -1,0 +1,101 @@
+{
+  "name": "@kohaku-ui/mcp-renderer",
+  "version": "0.3.0",
+  "description": "The shared MCP Apps renderer bundle: `.` loads the pre-built, dependency-free single-file HTML (`loadRendererHtml`); `./boot` builds a product-specific renderer bundle from React source (renderer-react etc. as optional peers).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./boot": "./src/boot/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && vite build --config vite.renderer.config.ts && mv dist/renderer/index.html dist/renderer.html && rmdir dist/renderer",
+    "prepack": "pnpm run build"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/renderer-core": "workspace:^",
+    "@kohaku-ui/renderer-react": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@modelcontextprotocol/ext-apps": "catalog:",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@kohaku-ui/data-binding": {
+      "optional": true
+    },
+    "@kohaku-ui/renderer-core": {
+      "optional": true
+    },
+    "@kohaku-ui/renderer-react": {
+      "optional": true
+    },
+    "@kohaku-ui/spec-core": {
+      "optional": true
+    },
+    "@modelcontextprotocol/ext-apps": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/renderer-core": "workspace:^",
+    "@kohaku-ui/renderer-react": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@modelcontextprotocol/ext-apps": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plugin-singlefile": "catalog:",
+    "vitest": "catalog:"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/mcp-renderer#readme",
+  "bugs": {
+    "url": "https://github.com/yosuque/kohaku/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosuque/kohaku.git",
+    "directory": "packages/mcp-renderer"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./boot": {
+        "types": "./dist/boot/index.d.ts",
+        "default": "./dist/boot/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  }
+}
