@@ -522,6 +522,44 @@ describe("kohaku_event payload / intent.params nesting depth cap (JsonObjectSche
     });
     expect(result.isError).toBeFalsy();
   });
+
+  // Depths from the original recursion-DoS report (spec-core's JsonObjectSchema previously checked depth in a
+  // superRefine that only ran *after* zod had already recursed unbounded through the value -- a payload this
+  // deep overflowed the stack with an uncaught RangeError instead of failing schema validation). The MCP SDK
+  // calls the tool's zod inputSchema itself before ever invoking our registerTool callback, so this exercises
+  // a different call path than host-rest's parseBody-based tests (packages/host-rest/test/json-depth.test.ts)
+  // even though both ultimately rely on the same spec-core fix.
+  it.each([5000, 100_000])(
+    "kohaku_event: a payload nested %i levels deep is a clean isError result, not a thrown/uncaught RangeError",
+    async (depth) => {
+      const client = await connect();
+      const result = await client.callTool({
+        name: "kohaku_event",
+        arguments: {
+          intent: { canonical: "sales.trend", params: {} },
+          on: "c.pointClick",
+          payload: nestedObject(depth),
+        },
+      });
+      expect(result.isError).toBe(true);
+    },
+  );
+
+  it.each([5000, 100_000])(
+    "kohaku_action: a payload nested %i levels deep is a clean isError result, not a thrown/uncaught RangeError",
+    async (depth) => {
+      const client = await connect();
+      const result = await client.callTool({
+        name: "kohaku_action",
+        arguments: {
+          action: "widget.submit",
+          payload: nestedObject(depth),
+          capability: "cap",
+        },
+      });
+      expect(result.isError).toBe(true);
+    },
+  );
 });
 
 describe("correlation id: the tool call's JSON-RPC request id reaches ComposeTrace.correlationId", () => {
