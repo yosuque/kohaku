@@ -69,7 +69,7 @@ function unescapeJsonPointerToken(token: string): string {
  * examples use `"/"` as the "whole document" default rather than RFC 6901's literal (and rarely useful) empty-string-key
  * reading of a bare `"/"`.
  */
-function parsePointer(pointer: string): string[] {
+export function parsePointer(pointer: string): string[] {
   if (pointer === "" || pointer === "/") return [];
   if (!pointer.startsWith("/")) {
     throw new A2uiIngestError(
@@ -77,6 +77,23 @@ function parsePointer(pointer: string): string[] {
     );
   }
   return pointer.slice(1).split("/").map(unescapeJsonPointerToken);
+}
+
+/**
+ * Reads the value at `pointer` within `root` (RFC 6901, same `"/"`-means-whole-document convention as
+ * `parsePointer`). Returns `undefined` when any segment of the path does not exist — a read, unlike a write,
+ * has no reason to distinguish "absent" from "present but not an object" (either way there is nothing to
+ * return). Used by `from-a2ui.ts` to snapshot a `{path}` data binding to a literal value.
+ */
+export function getAtPointer(root: JsonObject, pointer: string): JsonValue | undefined {
+  const tokens = parsePointer(pointer);
+  let cursor: JsonValue = root;
+  for (const token of tokens) {
+    if (typeof cursor !== "object" || cursor === null || Array.isArray(cursor)) return undefined;
+    cursor = (cursor as JsonObject)[token] as JsonValue;
+    if (cursor === undefined) return undefined;
+  }
+  return cursor;
 }
 
 /**

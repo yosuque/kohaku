@@ -1,9 +1,19 @@
 export { buildKohakuCatalogDocument, type KohakuCatalogDocumentOptions } from "./catalog-document.js";
 export { fromA2uiEvent } from "./from-a2ui-event.js";
 export {
+  type A2uiIngestLoss,
+  type A2uiIngestLossKind,
+  type FromA2uiOptions,
+  type FromA2uiResult,
+  fromA2ui,
+  toKohakuComponentId,
+} from "./inbound/from-a2ui.js";
+export {
   A2UI_ROOT_COMPONENT_ID,
   A2uiIngestError,
+  getAtPointer,
   getRootComponent,
+  parsePointer,
   reduceSurfaceMessage,
   reduceSurfaces,
   type SurfaceState,
