@@ -8,6 +8,7 @@ import {
   type LineageEventRecord,
   LineageEventRecordSchema,
   type PromotionState,
+  pageLineageArray,
   type StoragePort,
 } from "@kohaku-ui/spec-core";
 import { filterLineage, listByTenant, tenantKey } from "./shared.js";
@@ -81,6 +82,14 @@ export function createFileStoragePort(dataDir: string): StoragePort {
     },
     async listLineage(filter) {
       return filterLineage(lineage, filter);
+    },
+    async pageLineage(req) {
+      // `lineage`'s array index + 1 matches lineage.jsonl's own line number: every appendLineage writes
+      // the line and pushes to the array in lockstep, and loadJsonl reconstructs the array in file order
+      // at startup (skipping only a genuinely corrupted line, which shifts later seqs by one -- an
+      // accepted edge case shared with the rest of this port's "no cap or rotation" constraints, see the
+      // module doc comment above).
+      return pageLineageArray(lineage, req);
     },
     async getPromotionState(artifactId, tenant) {
       // Key-separate by (tenant, artifactId). Unspecified tenant stays as artifactId =
