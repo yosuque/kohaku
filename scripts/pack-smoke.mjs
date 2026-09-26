@@ -245,9 +245,19 @@ function collectExternalPeers(packages, workspaceYaml) {
   // catalog: left), plus the externals the task explicitly calls out even where nothing declares them as a
   // peer (react-dom: no package here peer-depends on it, but it is the natural companion of the "react"
   // peer every React-facing entry point expects a consumer to bring).
+  //
+  // A `@kohaku-ui/*` name is deliberately excluded here even when some package peer-depends on one (e.g.
+  // @kohaku-ui/host on @kohaku-ui/host-mcp-apps, both optional): every one of `packages` already gets its
+  // own `file:<tarball>` entry in installConsumer's `dependencies` below, and Object.assign(dependencies,
+  // externalPeers) runs *after* that loop -- so leaving an internal name in this map would silently
+  // overwrite the local-tarball resolution with the peer's plain semver range, which npm would then
+  // resolve against the public registry's already-published version instead (the exact "stale published
+  // dependency" failure mode this file's own module doc / checkInit comments already describe for
+  // ordinary dependencies, just reached through a peerDependency this time).
   const peers = {};
   for (const pkg of packages) {
     for (const [name, range] of Object.entries(pkg.packedManifest.peerDependencies ?? {})) {
+      if (name.startsWith("@kohaku-ui/")) continue;
       peers[name] = range;
     }
   }
@@ -609,15 +619,16 @@ console.log("L0 summary composed without an LLM: " + body.spec.components.length
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Step 7c: @kohaku-ui/host's REST-only entry point ("."), never needs the MCP SDK
-// (@modelcontextprotocol/server, an optional peer of this package, only actually needed for the "./mcp"
-// subpath). Two independent checks: a static one (the packed dist/index.js itself references neither the
-// SDK nor ./mcp.js -- proving src/index.ts never imports mcp.ts, which is the actual guarantee), and a
-// dynamic one (a consumer that installs only @kohaku-ui/host + its required peers can still import "."
-// successfully). host-mcp-apps -- an ordinary (non-peer) dependency of @kohaku-ui/host -- declares
-// @modelcontextprotocol/server as its OWN *required* peer, so npm may still auto-install or warn about it
-// here; that is a separate, lesser concern from whether the "." entry itself needs it, which is what these
-// two checks actually establish.
+// Step 7c: @kohaku-ui/host's REST-only entry point ("."), never needs the MCP SDK or host-mcp-apps
+// (both optional peers of this package, only actually needed for the "./mcp" subpath). Three checks:
+//  (a) a static one -- the packed dist/index.js itself references neither the SDK, host-mcp-apps, nor
+//      ./mcp.js -- proving src/index.ts never imports mcp.ts, which is the actual guarantee;
+//  (b) a REST-only standalone install of only @kohaku-ui/host + its required (non-optional) peers, which
+//      must import "." successfully AND must not have pulled either optional peer into node_modules at
+//      all (npm 7+ does not auto-install a peer marked optional in peerDependenciesMeta, but this asserts
+//      it rather than assuming it);
+//  (c) the mirror image: a standalone install of @kohaku-ui/host + @kohaku-ui/host-mcp-apps +
+//      @modelcontextprotocol/server together, which must make "@kohaku-ui/host/mcp" importable.
 // ---------------------------------------------------------------------------------------------------------
 
 function checkHostWithoutMcpSdk(packages, tmpRoot) {
@@ -627,50 +638,63 @@ function checkHostWithoutMcpSdk(packages, tmpRoot) {
     return false;
   }
 
+  // --- (a) static check ---
   const distIndex = run("tar", ["-xOzf", host.tarball, "package/dist/index.js"]);
   if (distIndex.status !== 0) {
     fail("@kohaku-ui/host: could not extract package/dist/index.js from tarball", distIndex.stderr);
   }
-  if (/modelcontextprotocol|\.\/mcp\.js/.test(distIndex.stdout)) {
+  if (/modelcontextprotocol|host-mcp-apps|\.\/mcp\.js/.test(distIndex.stdout)) {
     fail(
-      "@kohaku-ui/host's packed dist/index.js references the MCP SDK or ./mcp.js -- src/index.ts must never import mcp.ts",
+      "@kohaku-ui/host's packed dist/index.js references the MCP SDK, host-mcp-apps, or ./mcp.js -- src/index.ts must never import mcp.ts",
       distIndex.stdout,
     );
   }
-  log("  packed dist/index.js has no static reference to the MCP SDK or ./mcp.js");
+  log("  packed dist/index.js has no static reference to the MCP SDK, host-mcp-apps, or ./mcp.js");
 
-  const dir = join(tmpRoot, "host-no-mcp-sdk");
-  mkdirSync(dir, { recursive: true });
+  // Same reasoning as checkInit's overrides, shared by both (b) and (c) below: @kohaku-ui/host's
+  // transitive @kohaku-ui/* dependencies (host-core, host-rest, composer, ...) are declared in its packed
+  // manifest against real semver ranges, which npm would otherwise resolve against the public registry's
+  // already-published versions instead of the tarballs this run just built.
+  const localOverrides = Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`]));
   const requiredPeers = Object.fromEntries(
     Object.entries(host.packedManifest.peerDependencies ?? {}).filter(
       ([name]) => host.packedManifest.peerDependenciesMeta?.[name]?.optional !== true,
     ),
   );
+
+  // --- (b) REST-only: neither optional peer present ---
+  const restOnlyDir = join(tmpRoot, "host-rest-only");
+  mkdirSync(restOnlyDir, { recursive: true });
   writeFileSync(
-    join(dir, "package.json"),
+    join(restOnlyDir, "package.json"),
     JSON.stringify(
       {
-        name: "kohaku-pack-smoke-host-no-mcp-sdk",
+        name: "kohaku-pack-smoke-host-rest-only",
         type: "module",
         private: true,
-        // Deliberately no @modelcontextprotocol/server here -- only @kohaku-ui/host plus its required
-        // (non-optional) peers, mirroring a REST-only consumer's own package.json.
+        // Deliberately neither @kohaku-ui/host-mcp-apps nor @modelcontextprotocol/server here -- only
+        // @kohaku-ui/host plus its required (non-optional) peers, mirroring a REST-only consumer's own
+        // package.json.
         dependencies: { [host.packedName]: `file:${host.tarball}`, ...requiredPeers },
-        // Same reasoning as checkInit's overrides: @kohaku-ui/host's transitive @kohaku-ui/* dependencies
-        // (host-core, host-mcp-apps, host-rest, composer, ...) are declared in its packed manifest against
-        // real semver ranges, which npm would otherwise resolve against the public registry's already-
-        // published versions instead of the tarballs this run just built.
-        overrides: Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`])),
+        overrides: localOverrides,
       },
       null,
       2,
     ),
   );
-  runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: dir });
+  runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: restOnlyDir });
+  for (const optionalPeer of ["@kohaku-ui/host-mcp-apps", "@modelcontextprotocol/server"]) {
+    if (existsSync(join(restOnlyDir, "node_modules", ...optionalPeer.split("/")))) {
+      fail(
+        `a REST-only "npm install @kohaku-ui/host" pulled in ${optionalPeer} anyway (expected it to stay an uninstalled optional peer)`,
+      );
+    }
+  }
+  log("  a REST-only install pulls in neither @kohaku-ui/host-mcp-apps nor @modelcontextprotocol/server");
 
-  const scriptPath = join(dir, "check-host-import.generated.mjs");
+  const restOnlyScript = join(restOnlyDir, "check-host-import.generated.mjs");
   writeFileSync(
-    scriptPath,
+    restOnlyScript,
     `
 const mod = await import("@kohaku-ui/host");
 if (typeof mod.createKohakuHost !== "function") {
@@ -679,14 +703,66 @@ if (typeof mod.createKohakuHost !== "function") {
 console.log("ok");
 `,
   );
-  const result = run("node", [scriptPath], { cwd: dir });
-  if (result.status !== 0) {
+  const restOnlyResult = run("node", [restOnlyScript], { cwd: restOnlyDir });
+  if (restOnlyResult.status !== 0) {
     fail(
-      'importing @kohaku-ui/host\'s "." entry failed with only its required peers installed (no @modelcontextprotocol/server)',
-      `--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`,
+      'importing @kohaku-ui/host\'s "." entry failed with only its required peers installed (no host-mcp-apps / MCP SDK)',
+      `--- stdout ---\n${restOnlyResult.stdout}\n--- stderr ---\n${restOnlyResult.stderr}`,
     );
   }
-  log('  "." imports successfully with only @kohaku-ui/host\'s required peers installed (no @modelcontextprotocol/server listed)');
+  log('  "." imports successfully with only @kohaku-ui/host\'s required peers installed');
+
+  // --- (c) mirror image: with both optional peers installed, "./mcp" must work ---
+  const withMcpDir = join(tmpRoot, "host-with-mcp-sdk");
+  mkdirSync(withMcpDir, { recursive: true });
+  const hostMcpApps = packages.find((p) => p.packedName === "@kohaku-ui/host-mcp-apps");
+  if (hostMcpApps == null) {
+    fail("@kohaku-ui/host-mcp-apps is not part of this smoke run's package set, but @kohaku-ui/host is -- check (c) cannot run");
+  }
+  writeFileSync(
+    join(withMcpDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "kohaku-pack-smoke-host-with-mcp-sdk",
+        type: "module",
+        private: true,
+        dependencies: {
+          [host.packedName]: `file:${host.tarball}`,
+          [hostMcpApps.packedName]: `file:${hostMcpApps.tarball}`,
+          ...requiredPeers,
+          // @modelcontextprotocol/server is optional for @kohaku-ui/host itself (excluded from
+          // requiredPeers above), but host-mcp-apps' own manifest declares it as a *required* peer -- list
+          // it explicitly (at the same resolved version @kohaku-ui/host's own manifest names) rather than
+          // relying on npm's peer auto-install to fetch whatever version happens to be on the registry.
+          "@modelcontextprotocol/server": host.packedManifest.peerDependencies["@modelcontextprotocol/server"],
+        },
+        overrides: localOverrides,
+      },
+      null,
+      2,
+    ),
+  );
+  runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: withMcpDir });
+  const withMcpScript = join(withMcpDir, "check-host-mcp-import.generated.mjs");
+  writeFileSync(
+    withMcpScript,
+    `
+const mod = await import("@kohaku-ui/host/mcp");
+if (typeof mod.attachKohakuMcp !== "function") {
+  throw new Error("attachKohakuMcp is not exported: " + JSON.stringify(Object.keys(mod)));
+}
+console.log("ok");
+`,
+  );
+  const withMcpResult = run("node", [withMcpScript], { cwd: withMcpDir });
+  if (withMcpResult.status !== 0) {
+    fail(
+      '"@kohaku-ui/host/mcp" failed to import with @kohaku-ui/host-mcp-apps + the MCP SDK installed alongside @kohaku-ui/host',
+      `--- stdout ---\n${withMcpResult.stdout}\n--- stderr ---\n${withMcpResult.stderr}`,
+    );
+  }
+  log('  "@kohaku-ui/host/mcp" imports successfully once @kohaku-ui/host-mcp-apps + the MCP SDK are installed alongside it');
+
   return true;
 }
 

@@ -43,8 +43,13 @@ development only; every capability issued under it is invalidated on restart).
 
 ## MCP Apps
 
-`@kohaku-ui/host/mcp` attaches the same host to an MCP server (`@modelcontextprotocol/server`, an optional
-peer dependency — only needed if you import this subpath):
+`@kohaku-ui/host/mcp` attaches the same host to an MCP server. Both `@kohaku-ui/host-mcp-apps` and
+`@modelcontextprotocol/server` are optional peer dependencies — neither is installed by a plain
+`npm install @kohaku-ui/host`; install both yourself to use this subpath:
+
+```bash
+npm install @kohaku-ui/host-mcp-apps @modelcontextprotocol/server
+```
 
 ```ts
 import { attachKohakuMcp } from "@kohaku-ui/host/mcp";

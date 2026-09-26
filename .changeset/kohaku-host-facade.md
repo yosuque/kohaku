@@ -16,7 +16,8 @@ development only.
 MCP is a separate `@kohaku-ui/host/mcp` subpath (`attachKohakuMcp(server, host, options)`, calling
 `@kohaku-ui/host-mcp-apps`'s `attachKohakuToMcpServer` with the `compose` / Ports the facade already built) —
 `@kohaku-ui/host`'s main entry point never imports it, so a REST-only consumer never needs
-`@modelcontextprotocol/server` (declared an optional peer dependency of this package).
+`@kohaku-ui/host-mcp-apps` or `@modelcontextprotocol/server` (both are optional peer dependencies of this
+package, not ordinary ones — install both yourself to use `./mcp`).
 
 `kohaku init`'s generated `server/app.ts` and `kohaku scaffold ports`'s scaffold are both rewired onto
 `createKohakuHost`: the generated project's direct `@kohaku-ui/*` dependencies drop from 15 to 10 (host-rest

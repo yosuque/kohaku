@@ -17,7 +17,6 @@
     "@kohaku-ui/composer": "workspace:^",
     "@kohaku-ui/data-binding": "workspace:^",
     "@kohaku-ui/host-core": "workspace:^",
-    "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@kohaku-ui/host-rest": "workspace:^",
     "@kohaku-ui/intents": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",
@@ -28,15 +27,20 @@
     "hono": "catalog:"
   },
   "peerDependencies": {
+    "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@modelcontextprotocol/server": "catalog:",
     "zod": "catalog:"
   },
   "peerDependenciesMeta": {
+    "@kohaku-ui/host-mcp-apps": {
+      "optional": true
+    },
     "@modelcontextprotocol/server": {
       "optional": true
     }
   },
   "devDependencies": {
+    "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@modelcontextprotocol/client": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "@types/node": "catalog:",

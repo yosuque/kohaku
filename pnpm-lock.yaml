@@ -961,9 +961,6 @@ importers:
       '@kohaku-ui/host-core':
         specifier: workspace:^
         version: link:../host-core
-      '@kohaku-ui/host-mcp-apps':
-        specifier: workspace:^
-        version: link:../host-mcp-apps
       '@kohaku-ui/host-rest':
         specifier: workspace:^
         version: link:../host-rest
@@ -989,6 +986,9 @@ importers:
         specifier: 'catalog:'
         version: 4.13.8
     devDependencies:
+      '@kohaku-ui/host-mcp-apps':
+        specifier: workspace:^
+        version: link:../host-mcp-apps
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.0.0
