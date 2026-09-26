@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/host-core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Framework-free shared host core for kohaku: fixation delivery and self-healing, capability issuance, intent resolution and fail-open observability helpers.",
   "type": "module",
   "exports": {

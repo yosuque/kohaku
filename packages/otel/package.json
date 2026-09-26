@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/otel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Opt-in OpenTelemetry layer for kohaku: turns compose observer callbacks into spans. Ships no exporter or SDK wiring.",
   "type": "module",
   "exports": {

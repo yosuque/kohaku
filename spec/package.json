@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/spec",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Kohaku Protocol v0.1: the normative specification, its machine-readable requirements and the conformance suite.",
   "type": "module",
   "exports": {

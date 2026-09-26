@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/renderer-core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Framework-free, DOM-free renderer core for kohaku: event governance, write-target resolution, the state store and per-part presenters.",
   "type": "module",
   "exports": {

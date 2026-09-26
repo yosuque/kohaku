@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/authz-jwt",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "JWT / OIDC identity resolution for kohaku hosts (principal, roles, tenant from claims) with capability tokens delegated to @kohaku-ui/authz-hmac — a reference adapter; the contract stays @kohaku-ui/spec-core's ports.ts.",
   "type": "module",
   "license": "Apache-2.0",
