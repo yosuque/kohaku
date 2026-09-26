@@ -4,7 +4,7 @@ import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
-import { intents } from "./kohaku/intents.js"; // your Intent catalog (defineIntent)
+import { intents } from "./kohaku/intents.js"; // your hand-written Intent catalog (defineIntent)
 import {
   authzPort as authz,
   domainPort as domain,

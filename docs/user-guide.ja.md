@@ -316,7 +316,7 @@ npm run dev                                      # API :8787 + web :5173
 ### Step 0 — LLM なしの Server-Driven UI
 
 ```bash
-node cli/bin/kohaku.js scaffold ports --out ./my-app/kohaku
+npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 ```
 
 生成された `ports.ts` の 4 つの Port を実装します。最初は:
@@ -520,7 +520,7 @@ export const myCard = defineComponent({
 // Web 側: registry.register("myapp.card", "1.0.0", MyCardComponent)  // useBoundData でデータ取得
 ```
 
-検証: `node cli/bin/kohaku.js component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
+検証: `npx @kohaku-ui/cli component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
 
 ```json
 {
@@ -541,7 +541,7 @@ export const myCard = defineComponent({
 入力 Intent → 生成 Spec の「構造」を回帰として固定します。雛形を生成:
 
 ```bash
-node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
+npx @kohaku-ui/cli scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
 ```
 
 生成された `golden.test.ts` の `makeContext` にプロダクトの `ComposeContext` を配線し、`golden/` に `{name,input,drafts,expected:null}` の JSON を置いて `KOHAKU_GOLDEN_UPDATE=1 <テスト実行>` で `expected` を生成します。以降のテストは `@kohaku-ui/evals` の `runGolden` が provenance / intent.hash / dataVersion / refVersions とコンポーネント ID の揺らぎを正規化して構造だけを比較するため、LLM 不要で決定的です(応答は `drafts` を FakeLlm に流す。ライブ記録が要るなら FixtureLlm の record/replay)。動く実例は `apps/sample-api/test/golden.test.ts`(`sales.trend` の L1 生成を固定)。意図的に UI を変えたら同じ更新手順で `expected` を再生成し、git diff をレビューしてコミットします。
@@ -628,7 +628,7 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
 
   `KOHAKU_OTEL` 未設定(または `TracerProvider` が未登録)のときは `createOtelComposeObserver` の既定 tracer が no-op になる — スパンは生成された瞬間に捨てられるだけで、ローカル開発では害のない、完全にサポートされた構成である。`gen_ai.*` / `kohaku.*` のあらゆる属性**キー名**は `createOtelComposeObserver({ attributes })` で個別に差し替え可能 — OpenTelemetry の GenAI semantic conventions がまだ "Development" ステータスであり、本リポジトリがそれらの代わりに安定性を保証できるものではないため。
 
-  **実際に sample-api で試す手順**: このリポジトリが持つ依存は `@opentelemetry/api` だけなので、まず `pnpm add -D @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http` を実行する(インフラ無しですぐ確認したいだけならコンソール exporter に差し替えてもよい)。上の最初のスニペットを例えば `apps/sample-api/otel-bootstrap.ts` として保存し、`NODE_OPTIONS='--import ./otel-bootstrap.ts' KOHAKU_OTEL=1 pnpm --filter @kohaku-ui-sample/api dev` で sample-api を起動する — sample-api は tsx 経由で動くため、アプリ自身のコードより先に読み込むブートストラップモジュールとして `--import` を解釈する。成功の目印は、compose を 1 回起こす(デモの Web アプリを開く、または `kohaku_compose` の MCP 呼び出しを実行する)たびに、exporter の出力(コンソールまたは任意の OTLP バックエンド)に `kohaku.compose` スパンが 1 本ずつ現れることである。
+  **実際に sample-api で試す手順**: このリポジトリが持つ依存は `@opentelemetry/api` だけなので、まず `pnpm add -D @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http` を実行する(インフラ無しですぐ確認したいだけならコンソール exporter に差し替えてもよい)。上の最初のスニペットを `apps/sample-api/` の中に例えば `otel-bootstrap.ts` として保存し、`NODE_OPTIONS='--import ./otel-bootstrap.ts' KOHAKU_OTEL=1 pnpm --filter @kohaku-ui-sample/api dev` で sample-api を起動する — sample-api は tsx 経由で動くため、アプリ自身のコードより先に読み込むブートストラップモジュールとして `--import` を解釈する。成功の目印は、compose を 1 回起こす(デモの Web アプリを開く、または `kohaku_compose` の MCP 呼び出しを実行する)たびに、exporter の出力(コンソールまたは任意の OTLP バックエンド)に `kohaku.compose` スパンが 1 本ずつ現れることである。
 - **ボディサイズ上限とレート制限はプロダクト責務**: `@kohaku-ui/host-rest` 自体はリクエストボディのサイズ上限もレート制限も課さない(ライブラリの関心事ではなく、一段上のリバースプロキシ・API ゲートウェイ・プロダクト自身のミドルウェアが担うべき責務)。サンプルは Hono の `bodyLimit` ミドルウェアで `/api/kohaku/*` に 1 MiB の上限を配線しており(`apps/sample-api/src/app.ts`)、超過したボディは Intent 解決に届く前に `413` と標準エラーエンベロープで拒否される。実際のペイロード(NL の質問や Intent + params は通常 1 KiB を大きく下回る)に合わせて上限を調整し、必要ならレート制限も同じ層に追加すること。
 - **グレースフルシャットダウン**: `SIGINT`/`SIGTERM` を受けると TS サンプル(sample-api / sample-mcp)は新規接続の受け付けを止め、進行中の接続(開いている SSE ストリーム含む)を `KOHAKU_SHUTDOWN_GRACE_MS`(既定 30 秒。[specification.ja.md](specification.ja.md) §9 参照)まで待ってドレインさせてから強制終了する。sample-api はさらにシグナル受信と同時に(ドレイン窓より前に)`GET /api/health` を `503 {ok:false, reason:"shutting down"}` に切り替え、ドレイン中もロードバランサが新規トラフィックをこのインスタンスへ送らないようにする。Python サンプルは `uvicorn` 自体のグレースフルシャットダウンに委ね、`timeout_graceful_shutdown=30` をコードで渡している。
 - **適合検査**: 実装を変えたら `node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku`。**spec-core の Zod スキーマを変更したときは `pnpm --filter @kohaku-ui/spec run generate-schemas` で `spec/schemas` を再生成してコミットしてください**(CI がドリフトを検査します)。GitHub Actions CI(`.github/workflows/ci.yml`)が push / PR ごとに `pnpm test`・`pnpm typecheck`・`conformance --self`・JSON Schema ドリフト検査(Zod から再生成した `spec/schemas` に差分が出たら失敗)を自動実行します。

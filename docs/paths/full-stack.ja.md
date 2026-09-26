@@ -68,7 +68,7 @@ serve({ fetch: app.fetch, port: 8787 });
 
 ## Admin
 
-レビュー UI(Lineage / Promotions / Fixations / Analytics のタブ)は現在サンプル Web アプリ `apps/sample-web/src/pages/admin/` にあります。いまはプロダクトへコピーしてください。上のルートには `@kohaku-ui/client` 経由で話します。各タブは[ユーザーガイド §3](../user-guide.ja.md#admin統制面)に、ループの歩き方は[デモ 3](../user-guide.ja.md#デモ-3--l2-自由生成--昇格このフレームワークの真骨頂)にあります。
+レビュー UI(Lineage / Promotions / Fixations / Analytics のタブ)は公開パッケージ **`@kohaku-ui/admin-react`** として配布されています — `<KohakuAdmin client={...} />` という React コンポーネントで、必要なのは `KohakuClient` だけ、上のルートには `@kohaku-ui/client` 経由で話します。RBAC・テナントスコープ・承認はすべてホスト側に残ります。`apps/sample-web/src/pages/AdminPage.tsx` はサンプルのクライアント・テーマ・辞書を注入する薄いラッパーです — 完全なスニペットは[ユーザーガイド「統制コンソールを組み込む」](../user-guide.ja.md#統制コンソールを組み込むkohaku-uiadmin-react)にあります。各タブは[ユーザーガイド §3](../user-guide.ja.md#admin統制面)に、ループの歩き方は[デモ 3](../user-guide.ja.md#デモ-3--l2-自由生成--昇格このフレームワークの真骨頂)にあります。
 
 ## 次のステップ
 
