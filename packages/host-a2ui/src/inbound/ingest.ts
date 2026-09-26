@@ -159,12 +159,35 @@ function defaultCanonical(agentId: string, surfaceId: string): string {
   return `a2ui.${slugSegment(agentId)}.${slugSegment(surfaceId)}`;
 }
 
+/**
+ * The raw (pre-slug) input `slugSegment` will look at. `agentId`/`surfaceId` are otherwise unbounded
+ * strings (an agent chooses its own `surfaceId`), so this keeps the whole default-canonical derivation —
+ * and, in particular, `trimUnderscoreRuns` below — bounded to a small constant amount of work regardless of
+ * how long the input actually is.
+ */
+const MAX_SLUG_INPUT_LENGTH = 128;
+
+/**
+ * Trims leading/trailing `"_"` with a plain index walk from each end — **not** a regex. A regex shaped like
+ * `/^_+|_+$/` is exactly `js/polynomial-redos` (CodeQL alert): its second alternative, `_+$`, is not itself
+ * anchored at the *start*, so on a long run of `"_"` that is not already at the true end of the string (e.g.
+ * one sitting in the interior after the surrounding text is collapsed by the caller's own
+ * `[^a-z0-9]+` → `"_"` pass), the engine retries the greedy-match-then-backtrack-against-`$` dance at every
+ * position within that run, an O(k) cost repeated k times = O(k²) for a run of length k. An index walk has
+ * no backtracking to begin with, so it stays O(n) regardless of input shape.
+ */
+function trimUnderscoreRuns(input: string): string {
+  let start = 0;
+  let end = input.length;
+  while (start < end && input[start] === "_") start++;
+  while (end > start && input[end - 1] === "_") end--;
+  return input.slice(start, end);
+}
+
 /** Deterministic best-effort mapping of an arbitrary string to one `CanonicalNameSchema` segment (`[a-z][a-z0-9_]*`). */
 function slugSegment(input: string): string {
-  const collapsed = input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+  const bounded = input.length > MAX_SLUG_INPUT_LENGTH ? input.slice(0, MAX_SLUG_INPUT_LENGTH) : input;
+  const collapsed = trimUnderscoreRuns(bounded.toLowerCase().replace(/[^a-z0-9]+/g, "_"));
   if (collapsed === "") return "a";
   return /^[a-z]/.test(collapsed) ? collapsed : `a_${collapsed}`;
 }

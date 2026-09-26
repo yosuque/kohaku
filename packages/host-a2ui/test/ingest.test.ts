@@ -1,5 +1,5 @@
 import { createFixations, createLineage, createViewRecorder } from "@kohaku-ui/lineage";
-import type { Principal } from "@kohaku-ui/spec-core";
+import { CanonicalNameSchema, type Principal } from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -86,6 +86,17 @@ describe("createA2uiIngest", () => {
     const outcome = await ingest.ingest(surfaceMessages("Srf One!", "Hi"));
     expect(outcome.spec.intent.canonical).toBe("a2ui.vendor_agent.srf_one");
     expect(outcome.spec.intent.params).toEqual({ agent: "vendor-agent", surfaceId: "Srf One!" });
+  });
+
+  it("security: a pathologically long, all-underscore surfaceId slugs quickly (no polynomial-ReDoS) into a CanonicalNameSchema-valid canonical", async () => {
+    // A regex-based leading/trailing "_" trim (/^_+|_+$/g — CodeQL js/polynomial-redos) is O(k²) on a run of
+    // k "_" not already at the string's true end; 100k would make that hang for a very long time (well past
+    // any reasonable test timeout) instead of completing in milliseconds.
+    const hugeSurfaceId = "_".repeat(100_000);
+    const startedAt = Date.now();
+    const outcome = await ingest.ingest(surfaceMessages(hugeSurfaceId, "Hi"));
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(CanonicalNameSchema.safeParse(outcome.spec.intent.canonical).success).toBe(true);
   });
 
   it("drift: the same cache key producing different content is reported via onDrift", async () => {
