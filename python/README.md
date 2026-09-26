@@ -164,7 +164,11 @@ read-modify-write against the same snapshot file is serialized only within one p
 `asyncio.Lock`, the counterpart of TS's `createKeyedMutex`) — two processes pointed at the same `data_dir`
 can still race and lose an update. A production deployment should replace it with a DB-backed `StoragePort`
 implementation for real durability, cross-process concurrency safety, and lineage rotation/compaction. See
-`kohaku.storage.file`'s module docstring for the full writeup.
+`kohaku.storage.file`'s module docstring for the full writeup. It also implements the optional
+forward-paging extension `page_lineage` (design.md #53), checked at call sites with a plain
+`hasattr(storage, "page_lineage")` probe rather than the `isinstance`-against-a-`runtime_checkable`-Protocol
+mechanism `put_promotion_states` uses — see `kohaku.spec.ports.StoragePort`'s comment on `page_lineage` for
+why.
 
 ## How cross-language compatibility is preserved
 
@@ -181,6 +185,10 @@ implementation for real durability, cross-process concurrency safety, and lineag
   `kohaku/src/kohaku/spec/canonical_json.py`.
 - **conformance**: CI's `conformance-python` job starts the Python host and runs the
   TS-side CLI's black-box inspection against it.
+- **lineage forward-paging cursor** (design.md #53): `kohaku.spec.lineage_page`'s
+  `encode_seq_cursor` / `decode_seq_cursor` produce and accept the same opaque
+  `{"v":1,"seq":<n>}` base64url string as TS's `packages/spec-core/src/lineage-page.ts`, so a
+  cursor issued by one language's host is a valid `cursor` to the other's.
 
 ## Distillation dataset export
 

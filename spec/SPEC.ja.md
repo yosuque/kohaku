@@ -146,6 +146,8 @@
 
 **統制プレーンの認可 [Draft]**: 監査・統制系ルート(lineage / telemetry / promotions / fixations)の認可はホストに委ねる(認可の合流点のみを規定し、要件としては定めない)。参照実装はオプショナルフック `KohakuHostDeps.authorizeGovernance` を設け、配線時は各リクエスト前に認可判定し、拒否を 403 `CAPABILITY_DENIED` で返す。未配線時は認可なし(統制面が無防備)となるため、実運用ではフック配線か外部ミドルウェアでの保護がプロダクト責務となる。conformance はこの認可を検査しない(未配線でも conformant)。
 
+**Lineage の forward paging [Draft](design.md #53)**: `GET /lineage` は追加で `correlationId`(payload の完全一致。`intentHash` / `artifactId` / `specHash` と同様)、および `order` / `cursor` / `pageSize` を合わせて受け付けてよい(MAY)。`order=asc` を指定すると、ホストは既定のテールウィンドウを返す代わりに、StoragePort の任意メソッド `pageLineage` に基づいて lineage ログを追加順に漏れなく走査する。このときの応答形状は既定の `{events}` ではなく `{events, nextCursor?}`(`nextCursor` は不透明な文字列で、次のページが存在する場合のみ含まれる)になる。`cursor` は不透明で、直前の応答の `nextCursor` から得たものを渡す。このホストが発行したものとしてデコードできない `cursor` は 400 `BAD_REQUEST` であり、`asc` 以外の `order` 値も同様に 400 とする。`pageLineage` を実装していないストレージを持つホストは、`order=asc` を伴うリクエストに対して 501 `NOT_IMPLEMENTED` を返す。`order` を省略したリクエストはこれらの影響を一切受けず、その形状・挙動は REST-LIN-001 のままである。
+
 ### 6.1.1 Compose ストリーミング [Draft]
 
 ホストは `POST /compose/stream` を Server-Sent Events(SSE)で公開してもよい(MAY)。リクエストボディは `/compose` と同一(`{intent}` or `{input, session?}`)。目的は、遅い生成経路(L1/L2)でスケルトン(`ui.loading`)を即時に返し、生成完了後に確定形への差分(SpecPatch)を送ることで初期表示の体感を縮めることにある。公開する場合、以下を満たす — **ルート自体は MAY だが、実装するなら各要件(REST-STR-001〜003)は当該実装に対して MUST**。ただしルートがオプショナル(MAY)であり本プロファイルが [Draft] のため、[conformance/manifest.ts](conformance/manifest.ts) では 3 要件を **SHOULD** として登録・黒箱検査する(未実装なら検査は skip 扱いで conformant を損なわない。実装済みで違反すればレポートに SHOULD 警告として出る)。この「実装すれば MUST・manifest は SHOULD」の条件付き規範により、本文の (MUST) 表記と manifest の `level: "SHOULD"` は矛盾しない:

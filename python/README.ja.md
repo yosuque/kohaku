@@ -148,7 +148,7 @@ id を導出すると 1 会話内の全ツール呼び出しが同じ id に潰�
 
 Python サンプル(`examples/sales-api`)はシード JSON をリポジトリルートの `apps/sample-api/src/domain/seed` から直読みする(データ二重管理を避けるため)。したがって `python/` サブツリー単独ではなく**フル monorepo チェックアウト**が前提。
 
-**`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。
+**`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。任意の forward-paging 拡張 `page_lineage`(design.md #53)も実装しており、呼び出し側では `put_promotion_states` が使う「`isinstance` と `runtime_checkable` Protocol」の仕組みではなく、単純な `hasattr(storage, "page_lineage")` プローブで確認する — 理由は `kohaku.spec.ports.StoragePort` の `page_lineage` に付けたコメントを参照。
 
 ## クロス言語互換の守り方
 
@@ -164,6 +164,11 @@ Python サンプル(`examples/sales-api`)はシード JSON をリポジトリル
   実装は `kohaku/src/kohaku/spec/canonical_json.py`。
 - **conformance**: CI の `conformance-python` ジョブが Python ホストを起動して
   TS 側 CLI の黒箱検査を実行する。
+- **lineage forward-paging カーソル**(design.md #53): `kohaku.spec.lineage_page` の
+  `encode_seq_cursor` / `decode_seq_cursor` は、TS の
+  `packages/spec-core/src/lineage-page.ts` と同じ不透明な `{"v":1,"seq":<n>}` base64url
+  文字列を生成・受理するため、一方の言語のホストが発行した cursor はもう一方の `cursor` として
+  そのまま使える。
 
 ## 蒸留データセットの書き出し
 
