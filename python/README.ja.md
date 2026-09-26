@@ -281,6 +281,28 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
   意味に一致)。これは呼び出し側からは見えない差異で、ガード内部の `remaining_ms` の計算方法にのみ影響する。
 - タイマーの後始末(`_run_tier_generation` の `finally` で dispose)は TS の `runTierGeneration` と一致。
 
+## 詳細な失敗ログ(`KOHAKU_DEBUG`、TS と対称)
+
+`kohaku.host_core.format_error_chain`(Python の例外連鎖属性 `__cause__` を辿る。TS の ES2022
+`Error.cause` に相当。循環に対して深さの上限を持つ)と `create_console_error_reporter`(
+`KohakuHostDeps.on_error` の型そのもの、および `ComposeObserver.onError` の型そのものに配線済みの
+ハンドラ 2 つを返す)は、TS host-core の `formatErrorChain` / `createConsoleErrorReporter` の移植。
+`python/examples/sales-api` の `app.py` 自身が `KOHAKU_DEBUG` を読む(これらの関数自体は環境変数を一切
+読まない): 未設定(既定)なら既存の 1 行の `logging` モジュールによる要約のまま変わらず、
+`KOHAKU_DEBUG=1` にすると compose observer の `onError` と REST ホストの `on_error` の両方で、原因の
+連鎖(実際の例外なら `exc_info=` によるトレースバックも)を追加で出力する。
+
+同じく TS と対称: `composer` の L1 段階ラダー(`compose.py` の `_settle_l1_failure`)は、transient な
+LLM 失敗(provider が一度も応答しなかった。`code="PROVIDER"`/`"CONFIG"` の `LlmError`、または想定外の
+非 `LlmError`)に、provider 名を含む専用の fallback 理由を返すようになった —「L1 constrained generation
+failed catalog/structure validation」という文言とは別物にし、この文言は実際の検証失敗のためだけに
+残す。新しい `ComposeErrorContext.failure` と `L1Result`/`L2Result.last_error` により、
+`ComposeObserver.onError` は分類された失敗種別と根本の例外(フォールバックでは以前は常に `None`
+だった)を受け取れる。`_resolve_refs` の `SEMANTIC_FAILED` の包み方も同様に、原因が「型付き」の例外
+(文字列の `code` 属性を持つ — 規約の詳細は `kohaku.host_core.is_typed_host_error` のドキュメント参照)
+なら `resolve_query` の失敗自身のメッセージを追記するようになった。型を持たない原因はこれまでどおり
+(内部情報を漏らさないため何も追記しない)。
+
 ## TS 実装との既知の差異(意図的・恒久)
 
 - **JS 検証は Node サイドカーへ委譲(スタンドアロン時のみスキップ)**: L2 契約 lint の

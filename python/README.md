@@ -305,6 +305,28 @@ surface (`AbortSignal.timeout` / `AbortSignal.any`, used throughout `adapters/_b
   `remaining_ms`.
 - Timer hygiene (disposed in `_run_tier_generation`'s `finally`) matches TS's `runTierGeneration`.
 
+## Verbose failure logging (`KOHAKU_DEBUG`, symmetric with TS)
+
+`kohaku.host_core.format_error_chain` (walks Python's `__cause__` exception-chaining attribute, the
+equivalent of TS's ES2022 `Error.cause`, depth-capped against a circular chain) and
+`create_console_error_reporter` (a pair of handlers pre-wired to `KohakuHostDeps.on_error`'s exact signature
+and `ComposeObserver.onError`'s exact signature) mirror TS host-core's `formatErrorChain` /
+`createConsoleErrorReporter`. `python/examples/sales-api`'s `app.py` reads `KOHAKU_DEBUG` itself (these
+functions never read an environment variable on their own): unset (the default) keeps the existing one-line
+`logging`-module summaries unchanged; `KOHAKU_DEBUG=1` additionally logs the full cause chain (and, for an
+actual exception, its traceback via `exc_info=`) for both the compose observer's `onError` and the REST
+host's `on_error`.
+
+Also symmetric: `composer`'s L1 tier ladder (`compose.py`'s `_settle_l1_failure`) now gives a transient LLM
+failure (the provider never answered, an `LlmError` with `code="PROVIDER"`/`"CONFIG"`, or an unexpected
+non-`LlmError`) its own fallback reason naming the provider — distinct from the "L1 constrained generation
+failed catalog/structure validation" wording, which is now reserved for an actual validation failure. New
+`ComposeErrorContext.failure` and `L1Result`/`L2Result.last_error` let `ComposeObserver.onError` receive the
+classified failure kind and the underlying exception (previously always `None` for a fallback). `_resolve_refs`'s
+`SEMANTIC_FAILED` wrapping likewise appends a `resolve_query` failure's own message when the cause is a
+"typed" exception (a string `code` attribute — see `kohaku.host_core.is_typed_host_error`'s doc for the
+convention), leaving an untyped cause's wrapping unchanged so internals never leak.
+
 ## Known differences from the TS implementation (intentional & permanent)
 
 - **JS validation is delegated to a Node sidecar (skipped only when standalone)**: the
