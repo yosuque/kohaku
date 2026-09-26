@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from kohaku.spec.models import ComponentNode
+from kohaku.spec.models import MAX_PREDICATE_DEPTH, ComponentNode
 
 
 def nested_object(depth: int) -> dict[str, object]:
@@ -21,6 +21,15 @@ def nested_object(depth: int) -> dict[str, object]:
     obj: dict[str, object] = {"leaf": True}
     for _ in range(1, depth):
         obj = {"nested": obj}
+    return obj
+
+
+def nested_not(depth: int) -> dict[str, object]:
+    """A `visibleWhen` predicate nested `depth` `not`s deep (a bare leaf is depth 1). Mirrors TS's
+    packages/spec-core/test/state.test.ts's own nest() helper."""
+    obj: dict[str, object] = {"ref": "$state.tab", "eq": "a"}
+    for _ in range(1, depth):
+        obj = {"not": obj}
     return obj
 
 
@@ -39,3 +48,24 @@ def test_component_props_deep_nesting_does_not_crash_uncatchably(depth: int) -> 
     # Accepted: confirm it round-trips back out (to_wire) without incident either, since that is the next
     # recursive traversal a composed/persisted Spec goes through.
     assert node.props["a"] is not None
+
+
+@pytest.mark.parametrize("depth", [MAX_PREDICATE_DEPTH, MAX_PREDICATE_DEPTH + 1, 33, 5000, 100_000])
+def test_visible_when_deep_nesting_does_not_crash_uncatchably(depth: int) -> None:
+    """Companion to the JSON-depth fix's TS follow-up (packages/spec-core/src/schema/state.ts's
+    VisibleWhenSchema): `visibleWhen`'s `AllPredicate`/`AnyPredicate`/`NotPredicate` recursive union is
+    validated by pydantic *before* the `@field_validator("visibleWhen", mode="after")` depth check runs --
+    the same ordering as TS's pre-fix superRefine. Diagnostic + regression pin: whatever pydantic-core does
+    with a pathologically deep predicate (accept at/under MAX_PREDICATE_DEPTH, or reject at any depth beyond
+    it), it must never surface as an uncaught RecursionError.
+    """
+    try:
+        node = ComponentNode.model_validate(
+            {"id": "root", "type": "x", "visibleWhen": nested_not(depth)}
+        )
+    except ValidationError as e:
+        if depth <= MAX_PREDICATE_DEPTH:
+            pytest.fail(f"depth {depth} (<= the limit) should have been accepted: {e}")
+        return
+    assert depth <= MAX_PREDICATE_DEPTH, f"depth {depth} (> the limit) should have been rejected"
+    assert node.visibleWhen is not None
