@@ -446,7 +446,8 @@ for await (const ev of client.composeStream({ intent: { canonical: "sales.trend"
 
 - **切断されたストリームは正常終了ではなく失敗として扱う**: `done` / `error` イベント(REST-STR-003)より前に接続が切れた場合、`composeStream` の反復は `for await` ループが単に終わるのではなく `KohakuHostError`(`code: "INTERNAL"`)を throw する。
 - **参照渡しバインディング**: `client.binding({ capability })` が `@kohaku-ui/data-binding` の `BindingClient` を SDK 設定(baseUrl / headers)ごと合成する(`createBindingClient` は SDK からも再エクスポート)。
-- **統制系**: `client.catalog()` / `client.lineage()` / `client.telemetry()` / `client.promotions.*` / `client.fixations.*` が型付き。
+- **統制系**: `client.catalog()` / `client.lineage()` / `client.telemetry()` / `client.promotions.*` / `client.fixations.*` が型付き。`client.lineagePages(query)` は `GET /lineage?order=asc` を(ページを返す非同期ジェネレータとして)漏れなく辿る — `lineage()` のテールウィンドウとは異なる。
+- **「なぜこの画面はこうなったのか」**: `compose()` / `sendEvent()` の成功応答(およびストリームの `done` イベント)にはすべて `requestId` が付く — ワイヤーの本文ではなく `X-Request-Id` 応答ヘッダから読み取ったもの。これを `client.explain(requestId)` に渡すと、`lineagePages({correlationId: requestId})` から組み立てた `ExplainReport`(provenance、キャッシュキーの内訳、判断の流れ、capability スコープ、生の lineage イベント)が得られる — 詳しくは後述の「Kohaku DevTools と `kohaku explain`」を参照。
 - **renderer-react の `useSpecStream`** に渡す fetch サンクは `client.composeStreamRequest(req)` で得られる。
 - **SPEC 対象外のルート**(独自の `/health` 等)はエスケープハッチ `client.request(path, init?)`(headers フックは効くが JSON パース・エラー変換はしない)で叩く。
 - サンプルの配線は `apps/sample-web/src/kohaku/client.ts`(SDK を薄く包んで sample 固有の呼び出し形に合わせている)。
@@ -505,6 +506,64 @@ export function GovernancePage() {
 と `color.track`(フラットな中立トラック背景)— で、両方を供給したプロダクトはライト・ダーク両テーマでコンソールの
 配色を完全に得られます(sample は `apps/sample-web/src/theme/tokens.ts` の `buildTheme(mode)` でこれを行って
 います)。省略するとこの 2 箇所だけはテーマに関わらずパッケージ自身の明るいテーマの既定値のままになります。
+
+### Kohaku DevTools と `kohaku explain`
+
+「なぜこの画面はこうなったのか」— ティア、キャッシュのヒット/ミス、キャッシュキーの個々の内訳、どの L1/L2 の
+試行が走ってなぜ失敗したか、capability negotiation による降格、そのリクエストが生んだ lineage イベント — は
+`requestId` 1 つから答えられる(compose の `X-Request-Id` 応答ヘッダ、または MCP ツール呼び出しの
+`mcp:<sessionId>:<jsonrpc id>` 相関 ID)。方法は 2 通りある。
+
+**CLI から**、動いている任意の REST ホストに対して:
+
+```bash
+node cli/bin/kohaku.js explain <requestId> --rest http://localhost:8787/api/kohaku
+# --json で整形テキストの代わりに生の ExplainReport JSON を出力
+# --header "x-kohaku-tenant:acme"(繰り返し可)でテナント/認証ヘッダを付与
+# --spec spec.json を渡すと capability スコープ(collectCapabilityScopes)も表示される
+```
+
+**フローティングパネルとして**(`@kohaku-ui/admin-react/devtools`。`AdminProvider` / `KohakuAdmin` から切り離された
+別サブパス — 上の依存境界の注意はここにも当てはまる: client / renderer-core / sandbox / spec-core のみ、
+`renderer-react` には決して依存しない):
+
+```tsx
+import { KohakuDevTools, withDevToolsCapture } from "@kohaku-ui/admin-react/devtools";
+import { createKohakuClient } from "@kohaku-ui/client";
+
+// withDevToolsCapture は onResponse をラップし、パネルの「直近のリクエスト」クイックピックを自動的に埋める —
+// アプリがすでに KohakuClient を組み立てている箇所で、クライアント構築時に一度だけ配線すればよい。
+const { config, capture } = withDevToolsCapture({ baseUrl: "/api/kohaku" });
+const client = createKohakuClient(config);
+
+function DevToolsMount() {
+  // デベロッパーツールは決して誤って描画されてはならない: `enabled` は必須かつ明示的にする(
+  // `import.meta.env.DEV` などの dev 限定チェックの裏に置く。apps/sample-web の
+  // src/kohaku/DevToolsMount.tsx がそうしているように、JSX 内のランタイムチェックだけでなく
+  // 動的 import 自体を `if (import.meta.env.DEV)` というリテラルの分岐の中に置き、Vite/Rollup の
+  // デッドコード除去が本番バンドルからモジュールごと落とせるようにする)。
+  return <KohakuDevTools enabled client={client} capture={capture} />;
+}
+```
+
+どちらの経路も同じ純粋関数、`@kohaku-ui/client` の `buildExplainReport(events, spec?)` の上に構築されており、
+これは `client.explain(requestId, {spec?})` から呼ばれる — その実体は `lineagePages({correlationId:
+requestId})`(design.md #53 の forward paging フィルタ)にこの関数を適用しているだけである。専用の `/explain`
+REST ルートは存在しない(design.md #55)。
+
+- **CORS(ブラウザで動くクライアントがクロスオリジンのホストと話す場合)**: `fetch` の `Response.headers` から
+  `X-Request-Id` 応答ヘッダを読むには、ホスト側が `Access-Control-Expose-Headers: X-Request-Id` を送る必要がある
+  — 通常の CORS 応答はクライアント側 JavaScript にカスタムヘッダを既定では公開しない。同一オリジンでの
+  デプロイ(sample の Vite 開発サーバープロキシ、同一オリジンの本番デプロイ)は影響を受けない。
+- **これが入る前に記録されたイベントには `correlationId` が無い**: `view.composed` / `component.generated` /
+  `component.used` / `view.fallback` の `correlationId`(および `view.composed` の `cacheKey` /
+  `cacheKeyParts` / `decision`)は追加フィールドである — 旧バージョンの kohaku が記録したイベントや、forward
+  paging(design.md #53)より前の `StoragePort` を使うホストが記録したイベントにはこれらが一切無く、`kohaku
+  explain` / DevTools はそのリクエスト ID に対して「不完全な結果」ではなく「view.composed イベントが
+  見つからない」と報告する。
+- **リクエスト ID の使い回しは複数件の compose を返しうる**: あなた(またはホストの手前のプロキシ)が発行する
+  `X-Request-Id` はグローバルな一意性を保証されない — `ExplainReport.composes` は複数件のエントリを持つことが
+  あり、CLI・DevTools ともに単一の結果を前提とせず、それぞれを描画する。
 
 ### 部品を追加する
 
@@ -600,7 +659,7 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
   - `ComposePolicy.refConstraint: "validate"` は生成スキーマの `data.$ref` をプレーンな文字列に緩和し(修復再試行間だけでなく compose 間でも再利用可能な intent 非依存の文法になる)、代わりに生成後に明示的に集合所属を検証する(`DATA_REF_UNRESOLVED`。既存の修復ループに送り返す)。
   - 実際のモデルに対して `KOHAKU_LLM_PROVIDER=claude KOHAKU_LLM_MODEL=<自分のモデル> ANTHROPIC_API_KEY=<自分のキー> pnpm --filter @kohaku-ui-sample/api run measure-grammar-latency`(`apps/sample-api/scripts/measure-grammar-latency.ts`)を実行してから、自分のデプロイでどちらの逃げ道を有効にする価値があるか決める — このスクリプトは実際の LLM を呼ぶため、意図的に `pnpm test` から除外されている。すべての行が `provenance.cache: "bypass"` になることを期待している — これは比較軸ではなく、LLM 経路が実際に走ったことの確認である。有効な API キーが無いと `claude` プロバイダは起動時に警告を出すだけで決定的フォールバックへ落ちるため、キー未設定はエラーにならず「`tier` 列が `L1` ではなく `L0`/フォールバックになった、明らかに速い実行」として現れる — レイテンシの数値を信じる前に必ず `tier` 列を確認すること。表の読み方(Anthropic の文法キャッシュは 24 時間有効なので、同一 intent の初回/2 回目の呼び出しでは 2 モードを区別できない)はスクリプト自身のヘッダコメントを参照し、トレードオフの全体は [design.ja.md#prompt-caching](design.ja.md#prompt-caching) を参照。
 - **監査**: 「なぜこの画面が出たか」は Admin の Lineage か `GET /api/kohaku/lineage` で specHash / intentHash を辿れます。
-- **`x-request-id` によるログ突合**: マウントされた kohaku ルートのすべての応答は `X-Request-Id` ヘッダを持つ(呼び出し側が送った `x-request-id` リクエストヘッダが存在し正しい形式ならそれをエコーし、なければ新規発番する)。同じ ID はすべてのエラーエンベロープの `error.requestId` にも現れ、`KohakuHostDeps.onError` にも渡されるので、サポートチケットに載るクライアント側の ID・サーバーログ・`onError` フックの記録が追加配線なしで一つの値で揃う。既存の相関 ID 規約がある場合は `KohakuHostDeps.requestId`(TS)/ `request_id`(Python)でこの解決を丸ごと上書きできる。
+- **`x-request-id` によるログ突合**: マウントされた kohaku ルートのすべての応答は `X-Request-Id` ヘッダを持つ(呼び出し側が送った `x-request-id` リクエストヘッダが存在し正しい形式ならそれをエコーし、なければ新規発番する)。同じ ID はすべてのエラーエンベロープの `error.requestId` にも現れ、`KohakuHostDeps.onError` にも渡されるので、サポートチケットに載るクライアント側の ID・サーバーログ・`onError` フックの記録が追加配線なしで一つの値で揃う。既存の相関 ID 規約がある場合は `KohakuHostDeps.requestId`(TS)/ `request_id`(Python)でこの解決を丸ごと上書きできる。同じ ID を `kohaku explain <requestId>` または admin-react の DevTools(§6「Kohaku DevTools と `kohaku explain`」)に渡せば、その compose が生んだ結果を最初から最後まで確認できる — ティア、キャッシュ、キャッシュキーの内訳、判断の流れ、すべての lineage イベント。
 - **Trace context / OTel**: `host-rest` は受信した `traceparent` / `tracestate` リクエストヘッダ(W3C Trace Context)を、`host-mcp-apps` はツール呼び出しの `_meta.traceparent` / `_meta.tracestate`(MCP 2026-07-28 / SEP-414)を読み取り、両方とも `ComposeOptions.traceContext` へ充填する。`correlationId` と同じ経路で `ComposeTrace` / `ComposeErrorContext` に乗る — 純粋な追加で、呼び出し側がどちらのヘッダも送らなければ no-op。`@kohaku-ui/otel` の `createOtelComposeObserver()` は `ComposeObserver` の呼び出しをスパン(`kohaku.compose`。`gen_ai.*`/`kohaku.*` 属性 — 詳細は [design.ja.md#trace-context-otel](design.ja.md#trace-context-otel))へ変換し、その `traceContext` をスパンの親として復元するので、compose は常に新しいルートトレースを開始するのではなく呼び出し側自身のトレースの子として記録される。**kohaku 自体は exporter も SDK 初期化も一切出荷しない** — それは各自のプロセス自身の責務のまま(プロセス起動時に一度、compose が動く前に登録する通常の `@opentelemetry/sdk-node` / `@opentelemetry/sdk-trace-node` セットアップ)。最小構成の配線例:
 
   ```ts
