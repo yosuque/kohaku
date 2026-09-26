@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { createKohakuClient, type ExplainReport, type Transport } from "@kohaku-ui/client";
 import { collectScriptSyntaxIssues } from "@kohaku-ui/composer";
 import { exportDistillationDataset } from "@kohaku-ui/evals";
 import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
@@ -102,6 +103,145 @@ export async function runRestConformance(baseUrl: string, intentJson?: string): 
 }
 
 export { formatReport };
+
+/** Options for `kohaku explain <requestId>`. */
+export interface ExplainOptions {
+  /** REST host base URL (e.g. http://localhost:8787/api/kohaku). */
+  rest: string;
+  /** Extra request headers as "name:value" strings (repeatable --header flag; commonly tenant/auth headers). */
+  headers?: string[];
+  /** Path to a UISpec JSON file. When given, the report's `scopes` field is populated (collectCapabilityScopes). */
+  specPath?: string;
+  /**
+   * Transport override (no CLI flag exposes this). Symmetric with KohakuClientConfig.transport: exists so
+   * tests can inject an in-process Hono app's `app.request` instead of a real network fetch. Defaults to the
+   * client SDK's own default (the global fetch) when omitted, which is what every real CLI invocation gets.
+   */
+  transport?: Transport;
+}
+
+/**
+ * Parses repeated `--header name:value` flags into a headers record. Throws on a malformed entry (no `:`, or
+ * an empty name) so a typo is caught at the CLI boundary rather than silently sending a broken header.
+ */
+export function parseHeaderArgs(headers: string[] | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const h of headers ?? []) {
+    const idx = h.indexOf(":");
+    if (idx <= 0) {
+      throw new Error(`--header must be given as "name:value" (got "${h}")`);
+    }
+    out[h.slice(0, idx).trim()] = h.slice(idx + 1).trim();
+  }
+  return out;
+}
+
+/**
+ * `kohaku explain <requestId>`: fetches every lineage event recorded under `requestId`'s correlationId from
+ * a REST host and builds an ExplainReport (@kohaku-ui/client's buildExplainReport, via KohakuClient.explain).
+ * When `opts.specPath` is given, the file is parsed and validated as a UISpec (UISpecSchema) so the report's
+ * `scopes` field can be computed -- a malformed file is rejected here with a clear message rather than
+ * reaching collectCapabilityScopes with an untyped value.
+ */
+export async function runExplain(requestId: string, opts: ExplainOptions): Promise<ExplainReport> {
+  const headers = parseHeaderArgs(opts.headers);
+  const client = createKohakuClient({
+    baseUrl: opts.rest.replace(/\/$/, ""),
+    headers: () => headers,
+    ...(opts.transport != null ? { transport: opts.transport } : {}),
+  });
+  let spec: UISpec | undefined;
+  if (opts.specPath != null) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(opts.specPath, "utf8"));
+    } catch (e) {
+      throw new Error(
+        `Cannot read/parse --spec ${opts.specPath} (${e instanceof Error ? e.message : String(e)})`,
+      );
+    }
+    spec = UISpecSchema.parse(raw);
+  }
+  return client.explain(requestId, spec != null ? { spec } : undefined);
+}
+
+/** Right-pads a label to a fixed column width for formatExplainReport's aligned key/value lines. */
+function label(text: string, width = 20): string {
+  return text.length >= width ? `${text}: ` : `${text}:${" ".repeat(width - text.length)}`;
+}
+
+/**
+ * Formats an ExplainReport as human-readable text: `kohaku explain`'s default output (the non-`--json`
+ * path). Renders provenance, the cache-key breakdown, the decision flow, capability scopes (when present),
+ * and the raw lineage events -- in that order, matching the brief's "tier, cache, cache-key breakdown,
+ * decision flow, related lineage events" acceptance criterion.
+ */
+export function formatExplainReport(report: ExplainReport): string {
+  const lines: string[] = [];
+  if (report.composes.length === 0) {
+    lines.push("No view.composed event found for this requestId.");
+    lines.push(
+      "(Events recorded before correlationId support shipped -- LQ/U2 -- have none and will never match; " +
+        "see docs/user-guide.md's DevTools section.)",
+    );
+  }
+  report.composes.forEach((c, i) => {
+    if (report.composes.length > 1) {
+      lines.push(`--- compose ${i + 1}/${report.composes.length} (a reused requestId) ---`);
+    }
+    lines.push(`${label("Intent")}${c.canonical} (${c.intentHash})`);
+    lines.push(
+      `${label("Tier / cache")}${c.tier} / ${c.cache}${c.model != null ? ` (model: ${c.model})` : ""}`,
+    );
+    if (c.generatorVersion != null) lines.push(`${label("Generator")}${c.generatorVersion}`);
+    if (c.kit != null) lines.push(`${label("Design kit")}${c.kit.id}@${c.kit.version}`);
+    if (c.fallback != null) {
+      lines.push(
+        `${label("Fallback")}${c.fallback.from} (${c.fallback.kind ?? "generation"}): ${c.fallback.reason}`,
+      );
+    }
+    if (c.cacheKey != null) {
+      lines.push(`${label("Cache key")}${c.cacheKey}`);
+      if (c.cacheKeyParts != null) {
+        const p = c.cacheKeyParts;
+        lines.push(
+          `${label("  specVersion")}${p.specVersion ?? "-"}`,
+          `${label("  intentHash")}${p.intentHash}`,
+          `${label("  dataVersion")}${p.dataVersion}`,
+          `${label("  catalogFingerprint")}${p.catalogFingerprint ?? "-"}`,
+          `${label("  generatorVersion")}${p.generatorVersion ?? "-"}`,
+          `${label("  policyFingerprint")}${p.policyFingerprint ?? "-"}`,
+        );
+      }
+    }
+    if (c.decision != null) {
+      lines.push("Decision:");
+      for (const a of c.decision.attempts) {
+        lines.push(
+          `  ${a.kind} attempt: ${a.ok ? "ok" : "failed"}${a.issues != null ? ` -- ${a.issues.join("; ")}` : ""}`,
+        );
+      }
+      for (const d of c.decision.downgrades ?? []) {
+        lines.push(`  downgrade: ${d.id} ${d.from} -> ${d.to} (${d.reason})`);
+      }
+      if (c.decision.coalesced === true) {
+        lines.push("  coalesced: rode along on another compose under single-flight");
+      }
+      if (c.decision.usage != null) {
+        lines.push(
+          `  usage: ${c.decision.usage.inputTokens} input / ${c.decision.usage.outputTokens} output tokens`,
+        );
+      }
+    }
+  });
+  if (report.scopes != null) {
+    lines.push(`Capability scopes (${report.scopes.length}):`);
+    for (const s of report.scopes) lines.push(`  ${s.kind}: ${s.ref}`);
+  }
+  lines.push(`Lineage events (${report.events.length}):`);
+  for (const e of report.events) lines.push(`  ${e.ts}  ${e.type}  ${e.id}`);
+  return lines.join("\n");
+}
 
 /**
  * Generate the scaffold files atomically (check-all-then-write).
