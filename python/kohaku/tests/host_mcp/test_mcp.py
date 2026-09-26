@@ -234,6 +234,33 @@ class TestComposeTool:
         asyncio.run(run())
 
 
+class TestMcpCorrelationId:
+    """U2: ComposeTrace.correlationId is now populated for MCP tool calls (mcp:<jsonrpc id> -- this SDK's
+    ServerRequestContext exposes no public transport session id, unlike TS's ServerContext.sessionId, so
+    the `mcp:<sessionId>:<jsonrpc id>` form is not yet reachable here; see _correlation_id_of's doc comment
+    in server.py for that parity gap)."""
+
+    def test_correlation_id_reaches_the_compose_trace_with_the_mcp_prefix(self, tmp_path: Path) -> None:
+        correlation_ids: list[str | None] = []
+
+        async def _on_composed(spec: Any, trace: Any) -> None:
+            correlation_ids.append(trace.correlationId)
+
+        async def run() -> None:
+            deps = _deps(tmp_path, on_composed=_on_composed)
+            async with connect(deps, _OPTIONS) as client:
+                await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                await client.call_tool("kohaku_compose", {"question": "Monthly sales trend take 2"})
+
+        asyncio.run(run())
+        assert len(correlation_ids) == 2
+        for cid in correlation_ids:
+            assert cid is not None
+            assert cid.startswith("mcp:")
+        # Different calls -> different correlation ids (each carries its own JSON-RPC request id).
+        assert correlation_ids[0] != correlation_ids[1]
+
+
 class TestResultType:
     """MCP 2026-07-28 (SEP-2322): every tool result carries resultType.
 

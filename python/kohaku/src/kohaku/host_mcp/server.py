@@ -159,29 +159,44 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
 
 
 def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
-    """The per-call correlation id: always the JSON-RPC request id of this tool call, never derived from
-    `_meta.traceparent`. Mirrors TS host-mcp-apps' `requestContextOf().requestId` (used directly as the
-    correlation id there too, after the removal of the former `correlationIdOf` helper — see that module's
-    history). A W3C trace-id is shared by an entire trace, so deriving the correlation id from it would give
-    every tool call in one conversation the SAME id, making it impossible to tell which call a reported
-    failure belongs to; the JSON-RPC request id is unique per call. Trace correlation (linking this call's
-    OTel span to the caller's own trace) flows separately, only through `_trace_context_of` below /
-    McpErrorInfo.trace_context. Port note: see kohaku.host_core.trace_context's module docstring for why this
-    has no ComposeOptions sink yet, so this id is used only for this profile's own failure-path observability
-    hook (McpErrorInfo.correlation_id below). Fail-open: None when this call's `ctx.request_id` is unset (a
-    notification has none; every request this profile handles does).
+    """The per-call correlation id: `mcp:<sessionId>:<jsonrpc id>` when a transport session id is available,
+    or `mcp:<jsonrpc id>` when it is not -- never derived from `_meta.traceparent`. Mirrors TS host-mcp-apps'
+    `mcpCorrelationId(extra)` (see that module's server.ts).
+
+    Port gap (session id): unlike TS's `ServerContext.sessionId` (a public field on `BaseContext`), this
+    port's `mcp` SDK (`mcp.server.context.ServerRequestContext`) does not expose a transport session id to a
+    request handler at all -- `ServerSession` only exposes it privately (`_connection.session_id`), and
+    reaching into that would mean depending on the SDK's private API. Until the SDK grows a public accessor,
+    this always returns the `mcp:<jsonrpc id>` form (equivalent to always treating the call as
+    session-less, e.g. stdio) -- so a Streamable HTTP deployment with multiple concurrent sessions does not
+    yet get the extra session-scoping TS's id carries. This is a known, tracked parity gap (not a design
+    choice this function makes), see brief u2's report for the open question.
+
+    A W3C trace-id is shared by an entire trace, so deriving the correlation id from it would give every tool
+    call in one conversation the SAME id, making it impossible to tell which call a reported failure belongs
+    to; the JSON-RPC request id is unique per call. Trace correlation (linking this call's OTel span to the
+    caller's own trace) flows separately, only through `_trace_context_of` below / McpErrorInfo.trace_context.
+
+    This id is now also threaded into ComposeOptions.correlation_id (via `_compose_with_fixation`'s
+    `correlation_id` parameter), not just this profile's own failure-path observability hook
+    (McpErrorInfo.correlation_id below) -- see kohaku.host_core.trace_context's module docstring for the
+    still-missing traceContext half of this parity gap. Fail-open: None when this call's `ctx.request_id` is
+    unset (a notification has none; every request this profile handles does).
     """
-    return str(ctx.request_id) if ctx.request_id is not None else None
+    if ctx.request_id is None:
+        return None
+    return f"mcp:{ctx.request_id}"
 
 
 def _trace_context_of(ctx: ServerRequestContext[Any]) -> TraceContext | None:
     """The `_meta.traceparent` (+ `_meta.tracestate`, when present) as a TraceContext (kohaku.host_core's
     shared parse_trace_context, also used by kohaku.host_rest's `traceparent` request-header counterpart).
     `ctx.meta` is a `RequestParamsMeta` TypedDict (dict access, not attribute access — unlike the mcp SDK's
-    pre-2.x `meta` object). Same parity-gap pointer as `_correlation_id_of` above (see
-    kohaku.host_core.trace_context's module docstring): used only for this profile's own failure-path
-    observability hook (McpErrorInfo.trace_context). Fail-open: None on a missing/malformed traceparent, or no
-    `_meta` on this call."""
+    pre-2.x `meta` object). Unlike `_correlation_id_of` above (which now also reaches
+    ComposeOptions.correlation_id), this trace context still has no ComposeOptions sink -- see
+    kohaku.host_core.trace_context's module docstring's still-open half of this parity gap. Used only for
+    this profile's own failure-path observability hook (McpErrorInfo.trace_context). Fail-open: None on a
+    missing/malformed traceparent, or no `_meta` on this call."""
     meta = ctx.meta
     if meta is None:
         return None
@@ -310,9 +325,12 @@ def attach_kohaku_to_mcp_server(
             return _tool_error(message)
 
     async def _compose_and_package(
-        source: _ComposeSource, locale: str | None, principal: Principal
+        source: _ComposeSource,
+        locale: str | None,
+        principal: Principal,
+        correlation_id: str | None = None,
     ) -> mcp_types.CallToolResult:
-        result = await _compose_with_fixation(source, deps, locale, principal)
+        result = await _compose_with_fixation(source, deps, locale, principal, correlation_id)
         try:
             allowed = await _allowed_actions()
         except Exception as exc:  # noqa: BLE001 — reported, then fail-closed for writes (delivery proceeds)
@@ -387,7 +405,10 @@ def attach_kohaku_to_mcp_server(
         async def _run() -> mcp_types.CallToolResult:
             principal = await _current_principal(ctx)
             return await _compose_and_package(
-                _NlSource(text=_arg_str(args, "question")), _locale_of(args), principal
+                _NlSource(text=_arg_str(args, "question")),
+                _locale_of(args),
+                principal,
+                _correlation_id_of(ctx),
             )
 
         return await _safe_tool(f"{prefix}_compose", ctx, _run)
@@ -435,6 +456,7 @@ def attach_kohaku_to_mcp_server(
                     options,
                     principal,
                     _locale_of(args),
+                    _correlation_id_of(ctx),
                 )
                 # The file name is derived from the intent hash (identical displays coalesce into the same file and do not collide).
                 locator = await snapshot_writer(f"snapshot-{spec.intent.hash}.html", html)
@@ -605,6 +627,7 @@ def attach_kohaku_to_mcp_server(
                 ),
                 locale,
                 principal,
+                _correlation_id_of(ctx),
             )
 
         return await _safe_tool(f"{prefix}_event", ctx, _run)
@@ -874,6 +897,7 @@ async def _compose_with_fixation(
     deps: McpHostDeps,
     locale: str | None = None,
     principal: Principal | None = None,
+    correlation_id: str | None = None,
 ) -> ComposeResult:
     # One session per tool call: the caller-provided locale rides SessionContext.locale so NL
     # normalization, the fixation gate, and the compose policy (ComposeContext.policyFor) all see it.
@@ -899,8 +923,15 @@ async def _compose_with_fixation(
     # Delegates the fixation shortcut -> staleness check -> self-heal -> normal-compose-fallback sequence to
     # kohaku.host_core (shared with kohaku.host_rest). The MCP profile has a single ComposeContext, so it is
     # passed as both the materialize and (by omission, defaulting to materialize) the normal-compose context.
+    # correlation_id (the caller's _correlation_id_of(ctx), when given) is forwarded to the normal-compose
+    # fallback as ComposeOptions.correlation_id (see compose_with_fixation's own doc comment) -- the fixation
+    # shortcut itself never calls compose(), so a fixation hit has no use for it.
     return await _host_core_compose_with_fixation(
-        intent, session, ComposeFixationContext(materialize=deps.compose), _fixation_host(deps)
+        intent,
+        session,
+        ComposeFixationContext(materialize=deps.compose),
+        _fixation_host(deps),
+        correlation_id=correlation_id,
     )
 
 
@@ -1003,11 +1034,12 @@ async def _build_snapshot(
     options: AttachOptions,
     principal: Principal,
     locale: str | None = None,
+    correlation_id: str | None = None,
 ) -> tuple[UISpec, str]:
     """Assemble the body of the self-contained snapshot HTML. Records audit symmetrically with the compose
     surface, preresolves all bind variants of each data in the Spec via domain.invoke, and embeds them into #kohaku-snapshot.
     """
-    result = await _compose_with_fixation(source, deps, locale, principal)
+    result = await _compose_with_fixation(source, deps, locale, principal, correlation_id)
     # The audit record is fail-open symmetrically with the existing compose (see _audit_compose's doc comment).
     await _audit_compose(deps, result, "render_snapshot")
     # HTML assembly is shared with #6 (legacy UIResource co-emission) via _snapshot_html_for (bounded
@@ -1131,7 +1163,9 @@ def _make_intent_handler(
         [str, ServerRequestContext[Any], Callable[[], Awaitable[mcp_types.CallToolResult]]],
         Awaitable[mcp_types.CallToolResult],
     ],
-    compose_and_package: Callable[[_ComposeSource, str | None, Principal], Awaitable[mcp_types.CallToolResult]],
+    compose_and_package: Callable[
+        [_ComposeSource, str | None, Principal, str | None], Awaitable[mcp_types.CallToolResult]
+    ],
     current_principal: Callable[[ServerRequestContext[Any]], Awaitable[Principal]],
 ) -> Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]:
     """Build the handler for an intent tool (avoids late binding of the loop variable tool)."""
@@ -1144,7 +1178,9 @@ def _make_intent_handler(
 
         async def _run() -> mcp_types.CallToolResult:
             principal = await current_principal(ctx)
-            return await compose_and_package(_IntentSource(intent=tool.to_intent(params)), locale, principal)
+            return await compose_and_package(
+                _IntentSource(intent=tool.to_intent(params)), locale, principal, _correlation_id_of(ctx)
+            )
 
         return await safe_tool(tool.name, ctx, _run)
 
