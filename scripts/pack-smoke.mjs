@@ -767,6 +767,109 @@ console.log("ok");
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Step 7d: @kohaku-ui/mcp-renderer's "." entry needs zero dependencies (mirroring checkHostWithoutMcpSdk's
+// (b) above), and its tarball carries a real pre-built dist/renderer.html, not a stub. "./boot" itself is
+// already exercised by the shared consumer's steps 5/6 (its optional peers -- renderer-react, renderer-core,
+// data-binding, spec-core, @modelcontextprotocol/ext-apps, react, react-dom -- flow into that consumer
+// automatically: collectExternalPeers unions every packed package's own peerDependencies, mcp-renderer
+// included, and its @kohaku-ui/* peers are already among the packed tarballs installConsumer adds to
+// `dependencies`), so this step only needs to prove the zero-dependency claim of "." in isolation.
+// ---------------------------------------------------------------------------------------------------------
+
+const MCP_RENDERER_HTML_MIN_BYTES = 100 * 1024;
+
+function checkMcpRendererBundle(packages, tmpRoot) {
+  const pkg = packages.find((p) => p.packedName === "@kohaku-ui/mcp-renderer");
+  if (pkg == null) {
+    log("  @kohaku-ui/mcp-renderer is not part of this smoke run's package set -- skipping this check");
+    return false;
+  }
+
+  // --- dist/renderer.html is present and large enough to be a real single-file build, not an empty stub ---
+  const rendererHtml = run("tar", ["-xOzf", pkg.tarball, "package/dist/renderer.html"]);
+  if (rendererHtml.status !== 0) {
+    fail(
+      "@kohaku-ui/mcp-renderer: could not extract package/dist/renderer.html from the tarball -- did `pnpm run build`'s vite step run?",
+      rendererHtml.stderr,
+    );
+  }
+  const rendererHtmlBytes = Buffer.byteLength(rendererHtml.stdout, "utf8");
+  if (rendererHtmlBytes <= MCP_RENDERER_HTML_MIN_BYTES) {
+    fail(
+      `@kohaku-ui/mcp-renderer: packed dist/renderer.html is only ${rendererHtmlBytes} bytes (expected > ${MCP_RENDERER_HTML_MIN_BYTES}, a single-file React bundle with inlined JS/CSS) -- looks like a stub, not a real build`,
+    );
+  }
+  if (!rendererHtml.stdout.includes('<meta name="kohaku-renderer" content="core">')) {
+    fail('@kohaku-ui/mcp-renderer: packed dist/renderer.html is missing the <meta name="kohaku-renderer" content="core"> marker');
+  }
+  log(`  packed dist/renderer.html is a real build (${rendererHtmlBytes} bytes > ${MCP_RENDERER_HTML_MIN_BYTES}, core marker present)`);
+
+  // --- "." needs zero dependencies: a standalone install of only this package, no peers at all ---
+  const localOverrides = Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`]));
+  const zeroDepDir = join(tmpRoot, "mcp-renderer-zero-dep");
+  mkdirSync(zeroDepDir, { recursive: true });
+  writeFileSync(
+    join(zeroDepDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "kohaku-pack-smoke-mcp-renderer-zero-dep",
+        type: "module",
+        private: true,
+        // Deliberately none of "./boot"'s optional peers here -- proves "." truly needs nothing beyond
+        // this one package, the whole point of shipping a pre-built bundle instead of React source.
+        dependencies: { [pkg.packedName]: `file:${pkg.tarball}` },
+        overrides: localOverrides,
+      },
+      null,
+      2,
+    ),
+  );
+  runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: zeroDepDir });
+  for (const optionalPeer of [
+    "@kohaku-ui/renderer-react",
+    "@kohaku-ui/renderer-core",
+    "@kohaku-ui/data-binding",
+    "@kohaku-ui/spec-core",
+    "@modelcontextprotocol/ext-apps",
+    "react",
+    "react-dom",
+  ]) {
+    if (existsSync(join(zeroDepDir, "node_modules", ...optionalPeer.split("/")))) {
+      fail(
+        `a zero-dep "npm install @kohaku-ui/mcp-renderer" pulled in ${optionalPeer} anyway (expected it to stay an uninstalled optional peer)`,
+      );
+    }
+  }
+  log("  a zero-dep install pulls in none of \"./boot\"'s optional peers");
+
+  const zeroDepScript = join(zeroDepDir, "check-mcp-renderer-import.generated.mjs");
+  writeFileSync(
+    zeroDepScript,
+    `
+const mod = await import("@kohaku-ui/mcp-renderer");
+if (typeof mod.loadRendererHtml !== "function") {
+  throw new Error("loadRendererHtml is not exported: " + JSON.stringify(Object.keys(mod)));
+}
+const html = await mod.loadRendererHtml();
+if (typeof html !== "string" || !html.includes("kohaku-renderer")) {
+  throw new Error("loadRendererHtml() did not resolve to the built renderer HTML");
+}
+console.log("ok");
+`,
+  );
+  const zeroDepResult = run("node", [zeroDepScript], { cwd: zeroDepDir });
+  if (zeroDepResult.status !== 0) {
+    fail(
+      'importing @kohaku-ui/mcp-renderer\'s "." entry and calling loadRendererHtml() failed with zero extra dependencies installed',
+      `--- stdout ---\n${zeroDepResult.stdout}\n--- stderr ---\n${zeroDepResult.stderr}`,
+    );
+  }
+  log('  "." imports and loadRendererHtml() resolves with zero extra dependencies installed');
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Step 8: sandbox guest contract check
 // ---------------------------------------------------------------------------------------------------------
 
@@ -979,6 +1082,9 @@ function main() {
   step("7c", "@kohaku-ui/host's \".\" entry needs no MCP SDK (static + a standalone install)");
   const hostNoMcpChecked = checkHostWithoutMcpSdk(packages, tmpRoot);
 
+  step("7d", "@kohaku-ui/mcp-renderer's \".\" entry is zero-dependency and ships a real dist/renderer.html");
+  const mcpRendererChecked = checkMcpRendererBundle(packages, tmpRoot);
+
   step(8, "sandbox guest contract check (buildWorkerShimJs evaluated in node:vm)");
   const sandboxChecked = checkSandboxGuestContract(packages, consumerDir);
 
@@ -996,6 +1102,7 @@ function main() {
   console.log(`[pack-smoke]   CLI check: ${cliChecked ? "ran" : "skipped (cli not in this package set)"}`);
   console.log(`[pack-smoke]   init smoke: ${initChecked ? "ran" : "skipped"}`);
   console.log(`[pack-smoke]   @kohaku-ui/host without the MCP SDK: ${hostNoMcpChecked ? "ran" : "skipped (host not in this package set)"}`);
+  console.log(`[pack-smoke]   @kohaku-ui/mcp-renderer zero-dep "." + dist/renderer.html size: ${mcpRendererChecked ? "ran" : "skipped (mcp-renderer not in this package set)"}`);
   console.log(`[pack-smoke]   sandbox guest contract check: ${sandboxChecked ? "ran" : "skipped (sandbox not in this package set)"}`);
   console.log(`[pack-smoke]   publint/attw: ${anySkipped ? "ran, with some tools skipped (no network access to fetch them)" : "ran fully"}`);
 }
