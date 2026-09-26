@@ -3,13 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>kohaku playground (spike)</title>
+    <title>kohaku playground</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+      }
+      #root { min-height: 100vh; }
+      a { color: inherit; }
+      button { font-family: inherit; }
+    </style>
   </head>
   <body>
-    <!-- Node-dependency spike only (U5-1 task 1): this page just proves sample-api's app runs in the
-         browser at all. The real playground UI (sample-web's ./app export, HashRouter-mounted) lands in
-         a later brief. -->
-    <pre id="output">loading…</pre>
+    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

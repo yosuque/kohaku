@@ -59,14 +59,21 @@ export function installFetchShim(getHost: () => FetchShimTarget, options: FetchS
   const prefixes = apiPrefixesFor(options.base ?? import.meta.env.BASE_URL ?? "/");
 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request = input instanceof Request ? input : new Request(input, init);
-    const url = new URL(request.url);
+    // input may be a bare relative string ("/api/health", exactly what sample-web's own client calls with)
+    // — resolve it against `origin` before doing anything else, rather than handing it straight to `new
+    // Request()`, which (unlike a real browser's own fetch) has no notion of "the current page" to resolve
+    // a relative URL against and throws instead.
+    const rawUrl = input instanceof Request ? input.url : input.toString();
+    const resolvedUrl = new URL(rawUrl, origin);
     const matchedPrefix =
-      origin != null && url.origin === origin ? prefixes.find((p) => url.pathname.startsWith(p)) : undefined;
+      origin != null && resolvedUrl.origin === origin
+        ? prefixes.find((p) => resolvedUrl.pathname.startsWith(p))
+        : undefined;
 
     if (matchedPrefix != null) {
-      const rewrittenUrl = new URL(request.url);
-      rewrittenUrl.pathname = `/api/${url.pathname.slice(matchedPrefix.length)}`;
+      const request = input instanceof Request ? input : new Request(resolvedUrl, init);
+      const rewrittenUrl = new URL(resolvedUrl);
+      rewrittenUrl.pathname = `/api/${resolvedUrl.pathname.slice(matchedPrefix.length)}`;
       return getHost().fetch(await rewriteRequest(request, rewrittenUrl));
     }
     return realFetch(input, init);

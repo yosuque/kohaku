@@ -11,14 +11,22 @@
   },
   "dependencies": {
     "@kohaku-ui-sample/api": "workspace:^",
-    "@kohaku-ui/authz-hmac": "workspace:^",
+    "@kohaku-ui-sample/web": "workspace:^",
     "@kohaku-ui/evals": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",
     "@kohaku-ui/spec-core": "workspace:^",
-    "@kohaku-ui/storage-memory": "workspace:^"
+    "@kohaku-ui/storage-memory": "workspace:^",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "react-router-dom": "catalog:"
   },
   "devDependencies": {
     "@kohaku-ui/port-contracts": "workspace:^",
+    "@testing-library/react": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "jsdom": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"

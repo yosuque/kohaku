@@ -1,14 +1,7 @@
 import type { ReplayFixtures } from "@kohaku-ui/evals/replay";
 import type { SampleApp } from "@kohaku-ui-sample/api/browser";
+import { setRole, setTenant } from "@kohaku-ui-sample/web/app";
 import { createPlaygroundHost } from "./create-host.js";
-
-/**
- * localStorage keys the playground's UI (`PlaygroundBar`, u5-2 task 6) persists the selected demo role /
- * tenant under. Defined here — not in the UI module — so `reset()` can clear them without depending on the
- * UI layer, and so the UI module imports the same two constants instead of re-typing the strings.
- */
-export const ROLE_STORAGE_KEY = "kohaku-playground:role";
-export const TENANT_STORAGE_KEY = "kohaku-playground:tenant";
 
 export interface PlaygroundHostHandle {
   /**
@@ -19,10 +12,17 @@ export interface PlaygroundHostHandle {
   getHost(): SampleApp;
   /**
    * Rebuilds the host from scratch (fresh in-memory `StoragePort` → empty lineage/promotions/fixations,
-   * fresh `SalesRepo` instance → `notes`/`bumpCount` back to their initial state) and clears the persisted
-   * role/tenant selection, so the playground returns to exactly its first-load state. A `fetch` shim
-   * installed via `installFetchShim(() => handle.getHost())` picks up the new host on its very next call —
-   * no reinstall needed.
+   * fresh `SalesRepo` instance → `notes`/`bumpCount` back to their initial state) and returns the demo role
+   * / tenant selectors to their defaults, so the playground returns to exactly its first-load state. A
+   * `fetch` shim installed via `installFetchShim(() => handle.getHost())` picks up the new host on its very
+   * next call — no reinstall needed.
+   *
+   * Role/tenant reset goes through sample-web's own `setRole("admin")`/`setTenant("default")` (its `./app`
+   * export — see `entry.ts`'s doc comment), not a guessed localStorage key: `role.ts`/`tenant.ts` keep a
+   * module-level `current` value that a header selector's `useRole`/`useTenant` hook is subscribed to, so
+   * clearing localStorage directly would leave an already-rendered selector showing the stale choice until
+   * a full page reload. Calling the real setters updates `current`, persists it, and notifies every
+   * subscriber immediately — exactly like a user picking "admin"/"default" from the selector themselves.
    */
   reset(): Promise<void>;
 }
@@ -38,14 +38,8 @@ export async function createPlaygroundHostHandle(fixtures?: ReplayFixtures): Pro
     getHost: () => current,
     reset: async () => {
       current = await createPlaygroundHost(fixtures);
-      try {
-        globalThis.localStorage?.removeItem(ROLE_STORAGE_KEY);
-        globalThis.localStorage?.removeItem(TENANT_STORAGE_KEY);
-      } catch {
-        // localStorage can throw (private browsing, blocked site data, a non-browser test environment
-        // with no localStorage at all) — the host itself is already the new one at this point, so reset()
-        // still succeeds; only the persisted role/tenant selection fails to also clear.
-      }
+      setRole("admin");
+      setTenant("default");
     },
   };
 }

@@ -1,3 +1,4 @@
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { forbidNodeBuiltins } from "./vite/forbid-node-builtins.js";
 
@@ -9,5 +10,5 @@ import { forbidNodeBuiltins } from "./vite/forbid-node-builtins.js";
 const auditMode = process.env["KOHAKU_PLAYGROUND_AUDIT"] === "1";
 
 export default defineConfig({
-  plugins: [forbidNodeBuiltins({ mode: auditMode ? "audit" : "strict" })],
+  plugins: [react(), forbidNodeBuiltins({ mode: auditMode ? "audit" : "strict" })],
 });

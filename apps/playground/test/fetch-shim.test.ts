@@ -23,6 +23,18 @@ afterEach(() => {
 });
 
 describe("installFetchShim: routing", () => {
+  it("routes a bare relative /api/* string — exactly how sample-web's own client calls fetch()", async () => {
+    const host = await createPlaygroundHost();
+    restoreShim = installFetchShim(() => host.app, { origin: ORIGIN });
+
+    // No origin/host prefix at all: new Request("/api/health") would throw without resolving this against
+    // `origin` first (Node's fetch, unlike a real browser's, has no "current page" to resolve a relative
+    // URL against) — this is the exact call shape apps/sample-web/src/kohaku/client.ts uses.
+    const res = await fetch("/api/health");
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
   it("routes a same-origin /api/* request to the host's app.fetch", async () => {
     const host = await createPlaygroundHost();
     restoreShim = installFetchShim(() => host.app, { origin: ORIGIN });
