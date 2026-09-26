@@ -9,14 +9,24 @@ export function errorMessage(e: unknown): string {
 }
 
 /**
- * Whether `e` is a "typed" error whose message is safe to expose to a client as-is — the convention this
- * codebase uses for a deliberately thrown Error carrying a string `code` property (see host-core's
- * `isTypedHostError` for the full rationale; this is a narrower duplicate of that same check, scoped to
- * what refs.ts needs for SEMANTIC_FAILED message enrichment). composer cannot import host-core (the
- * dependency direction fixed by AGENTS.md is composer -> host-core), and a SemanticPort.resolveQuery
- * failure can come from any product's own port implementation (not just @kohaku-ui/semantic-llm), so this
- * deliberately checks the general "string code property" shape rather than importing any specific error class.
+ * Whether `e` explicitly opts in to having its own message shown to a client — a narrower, opt-in marker
+ * (a readonly `clientSafe: true` property) than host-core's `isTypedHostError`, which treats *any* Error
+ * carrying a string `code` property as safe. That broader convention is fine for kohaku's own internal
+ * errors (SpecError / ComposeError / QueryRefError and the governance/capability errors that follow the
+ * same pattern), but the cause this function inspects (refs.ts's SEMANTIC_FAILED enrichment) can be
+ * *anything* a product's own `SemanticPort.resolveQuery` implementation throws — and a real implementation
+ * commonly delegates to a database/filesystem/HTTP client (pg / fs / ioredis / fetch, ...) whose own error
+ * types also carry a string `code` (e.g. `ECONNREFUSED`, `ENOENT`) while their `message` can contain
+ * hostnames, file paths, table names, or other connection internals that must never reach a client
+ * verbatim. Gating on `code` alone would silently leak those. `clientSafe` requires the throwing code to
+ * make an explicit, individual decision instead: a `SemanticPort` implementer should set
+ * `readonly clientSafe = true` only on an error class whose `message` is written to be end-user-safe (see
+ * `@kohaku-ui/semantic-llm`'s `UnknownIntentError` for an example) — never on a caught/rethrown error from
+ * a lower-level client library.
+ *
+ * composer cannot import host-core (the dependency direction fixed by AGENTS.md is composer -> host-core),
+ * hence this being a local duplicate rather than a shared helper.
  */
-export function isTypedCause(e: unknown): e is Error & { code: string } {
-  return e instanceof Error && typeof (e as { code?: unknown }).code === "string";
+export function isClientSafeCause(e: unknown): e is Error & { clientSafe: true } {
+  return e instanceof Error && (e as { clientSafe?: unknown }).clientSafe === true;
 }

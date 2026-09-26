@@ -1265,14 +1265,15 @@ describe("compose: observability of the failure path (observer.onError, #7)", ()
     expect((captured[0]!.error as Error).message).toBe("query resolution failed");
   });
 
-  it("when resolveQuery throws a typed error (a string `code` property), SEMANTIC_FAILED's message includes the cause's own message", async () => {
+  it("when resolveQuery throws a cause marked `clientSafe: true`, SEMANTIC_FAILED's message includes the cause's own message", async () => {
     const captured: Captured[] = [];
     const semantic = makeSemantic();
-    class TypedCause extends Error {
+    class ClientSafeCause extends Error {
       readonly code = "UNKNOWN_INTENT" as const;
+      readonly clientSafe = true as const;
     }
     semantic.resolveQuery = async () => {
-      throw new TypedCause('unknown intent "sales.nope"');
+      throw new ClientSafeCause('unknown intent "sales.nope"');
     };
     const ctx: ComposeContext = {
       catalog,
@@ -1295,6 +1296,36 @@ describe("compose: observability of the failure path (observer.onError, #7)", ()
     );
     // The wire is unaffected: the wrapped ComposeError's own `code` stays SEMANTIC_FAILED, not the cause's.
     expect((captured[0]!.error as Error & { code?: string }).code).toBe("SEMANTIC_FAILED");
+  });
+
+  it("a cause with a string `code` but no `clientSafe` marker is NOT concatenated (a raw pg/fs/ioredis/fetch error must not leak internals)", async () => {
+    const captured: Captured[] = [];
+    const semantic = makeSemantic();
+    // Shaped like a real ioredis/pg connection error: a string `code` (the "typed error" shape alone) but a
+    // message carrying a hostname — exactly what isClientSafeCause's stricter marker exists to withhold.
+    class ConnectionRefusedError extends Error {
+      readonly code = "ECONNREFUSED" as const;
+    }
+    semantic.resolveQuery = async () => {
+      throw new ConnectionRefusedError("connect ECONNREFUSED internal-db.prod.example.internal:5432");
+    };
+    const ctx: ComposeContext = {
+      catalog,
+      semantic,
+      storage: makeStorage(),
+      llm: new FakeLlm(),
+      observer: {
+        onError: (c, error) => {
+          captured.push({ ctx: c, error });
+        },
+      },
+    };
+
+    await expect(compose(GUI_INPUT, ctx)).rejects.toThrow(/^query resolution failed$/);
+    expect(captured).toHaveLength(1);
+    const message = (captured[0]!.error as Error).message;
+    expect(message).toBe("query resolution failed");
+    expect(message).not.toContain("internal-db.prod.example.internal");
   });
 
   it("on the deterministic downgrade from a generation failure, onError(phase:fallback) is called once with the reason and intent", async () => {

@@ -1115,19 +1115,20 @@ class TestSemanticFailedCauseEnrichment:
 
         asyncio.run(run())
 
-    def test_typed_cause_message_is_appended(self, tmp_path: Any) -> None:
+    def test_client_safe_cause_message_is_appended(self, tmp_path: Any) -> None:
         async def run() -> None:
             storage = FileStoragePort(tmp_path)
             captured: list[tuple[ComposeErrorContext, BaseException | None]] = []
 
-            class _TypedCause(RuntimeError):
+            class _ClientSafeCause(RuntimeError):
                 code = "UNKNOWN_INTENT"
+                clientSafe = True
 
             class _FailingSemantic(_FakeSemantic):
                 async def resolve_query(
                     self, intent: Intent, *, tenant: str | None = None
                 ) -> QueryHandle | list[QueryHandle]:
-                    raise _TypedCause('unknown intent "sales.nope"')
+                    raise _ClientSafeCause('unknown intent "sales.nope"')
 
             llm = FakeLlm(objects=[_l1_draft()])
             ctx = replace(
@@ -1143,6 +1144,42 @@ class TestSemanticFailedCauseEnrichment:
             assert str(error) == 'query resolution failed: unknown intent "sales.nope"'
             # The wire is unaffected: the wrapped ComposeError's own `code` stays SEMANTIC_FAILED, not the cause's.
             assert isinstance(error, ComposeError) and error.code == "SEMANTIC_FAILED"
+
+        asyncio.run(run())
+
+    def test_a_code_only_cause_without_client_safe_is_not_concatenated(self, tmp_path: Any) -> None:
+        """A raw psycopg/os/redis/httpx-shaped error commonly carries a string `code`-like attribute (e.g.
+        errno's "ECONNREFUSED") but its message can contain hostnames/paths/table names -- `code` alone must
+        never be enough to leak it (see _is_client_safe_cause's doc)."""
+
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            captured: list[tuple[ComposeErrorContext, BaseException | None]] = []
+
+            class _ConnectionRefusedError(RuntimeError):
+                code = "ECONNREFUSED"
+
+            class _FailingSemantic(_FakeSemantic):
+                async def resolve_query(
+                    self, intent: Intent, *, tenant: str | None = None
+                ) -> QueryHandle | list[QueryHandle]:
+                    raise _ConnectionRefusedError(
+                        "connect ECONNREFUSED internal-db.prod.example.internal:5432"
+                    )
+
+            llm = FakeLlm(objects=[_l1_draft()])
+            ctx = replace(
+                _ctx(llm, storage, observer=ComposeObserver(onError=lambda c, e: captured.append((c, e)))),
+                semantic=_FailingSemantic(),
+            )
+
+            with pytest.raises(ComposeError, match="^query resolution failed$"):
+                await compose(_INTENT_INPUT, ctx)
+            await asyncio.sleep(0)
+            assert len(captured) == 1
+            message = str(captured[0][1])
+            assert message == "query resolution failed"
+            assert "internal-db.prod.example.internal" not in message
 
         asyncio.run(run())
 

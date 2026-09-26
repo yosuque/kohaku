@@ -323,9 +323,12 @@ non-`LlmError`) its own fallback reason naming the provider — distinct from th
 failed catalog/structure validation" wording, which is now reserved for an actual validation failure. New
 `ComposeErrorContext.failure` and `L1Result`/`L2Result.last_error` let `ComposeObserver.onError` receive the
 classified failure kind and the underlying exception (previously always `None` for a fallback). `_resolve_refs`'s
-`SEMANTIC_FAILED` wrapping likewise appends a `resolve_query` failure's own message when the cause is a
-"typed" exception (a string `code` attribute — see `kohaku.host_core.is_typed_host_error`'s doc for the
-convention), leaving an untyped cause's wrapping unchanged so internals never leak.
+`SEMANTIC_FAILED` wrapping likewise appends a `resolve_query` failure's own message when the cause
+explicitly opts in with `clientSafe = True` (`_is_client_safe_cause`) — deliberately narrower than "any
+exception with a string `code`" (`kohaku.host_core.is_typed_host_error`'s broader convention), since a
+`SemanticPort` commonly delegates to a database/filesystem/HTTP client whose own exceptions also carry a
+string `code`-shaped attribute while their message can contain hostnames, paths, or table names. Every
+cause without `clientSafe = True` is left exactly as before, so internals never leak.
 
 ## Known differences from the TS implementation (intentional & permanent)
 

@@ -38,7 +38,7 @@ describe("createLlmSemanticPort", () => {
     ).rejects.toThrow(/unknown intent/);
   });
 
-  it("resolveQuery on an unknown intent throws a typed UnknownIntentError (a string `code` property)", async () => {
+  it("resolveQuery on an unknown intent throws a typed UnknownIntentError (a string `code` property, `clientSafe: true`)", async () => {
     await expect(
       port.resolveQuery({ canonical: "sales.summary", params: {}, hash: "h" }, { tenant: "t2" }),
     ).rejects.toBeInstanceOf(UnknownIntentError);
@@ -48,6 +48,9 @@ describe("createLlmSemanticPort", () => {
     } catch (e) {
       expect(e).toBeInstanceOf(UnknownIntentError);
       expect((e as UnknownIntentError).code).toBe("UNKNOWN_INTENT");
+      // clientSafe:true is what actually lets composer's SEMANTIC_FAILED wrapping (isClientSafeCause)
+      // surface this message to the client — `code` alone is not enough (see refs.ts's doc).
+      expect((e as UnknownIntentError).clientSafe).toBe(true);
       expect((e as UnknownIntentError).canonical).toBe("sales.summary");
       expect((e as Error).message).toBe('unknown intent "sales.summary"');
     }

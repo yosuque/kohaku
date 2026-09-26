@@ -17,11 +17,15 @@ unchanged. New `ComposeErrorContext.failure` and `TierResult.lastError` let `obs
 classified failure kind and the underlying error (previously always `undefined` for a fallback) without
 string-matching `reason`.
 
-`refs.ts`'s `SEMANTIC_FAILED` wrapping now appends a `resolveQuery` failure's own message when the cause is
-a "typed" error (a string `code` property — the existing convention for a client-safe message), so e.g. an
-unknown Intent name reaches the caller instead of the generic "query resolution failed" alone; an untyped
-cause is left exactly as before. `semantic-llm`'s `resolveQuery` now throws a typed `UnknownIntentError`
-(exported) instead of a plain `Error`, so its own unknown-intent failures benefit from this.
+`refs.ts`'s `SEMANTIC_FAILED` wrapping now appends a `resolveQuery` failure's own message when the cause
+explicitly opts in with a readonly `clientSafe: true` property, so e.g. an unknown Intent name reaches the
+caller instead of the generic "query resolution failed" alone. This is deliberately narrower than "any
+error with a string `code`" (host-core's existing `isTypedHostError` convention): a `SemanticPort` commonly
+delegates to a database/filesystem/HTTP client whose own errors also carry a string `code` (e.g.
+`ECONNREFUSED`) while their `message` can contain hostnames, paths, or table names, so `code` alone is not
+safe to trust here — every cause without `clientSafe: true` is left exactly as before. `semantic-llm`'s
+`resolveQuery` now throws a typed `UnknownIntentError` (exported, `clientSafe: true`) instead of a plain
+`Error`, so its own unknown-intent failures benefit from this.
 
 New `host-core` `formatErrorChain` (walks `Error.cause`, depth-capped against cycles) and
 `createConsoleErrorReporter` (a pair of handlers pre-wired to `KohakuHostDeps.onError` and

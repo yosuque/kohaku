@@ -298,10 +298,13 @@ LLM 失敗(provider が一度も応答しなかった。`code="PROVIDER"`/`"CONF
 failed catalog/structure validation」という文言とは別物にし、この文言は実際の検証失敗のためだけに
 残す。新しい `ComposeErrorContext.failure` と `L1Result`/`L2Result.last_error` により、
 `ComposeObserver.onError` は分類された失敗種別と根本の例外(フォールバックでは以前は常に `None`
-だった)を受け取れる。`_resolve_refs` の `SEMANTIC_FAILED` の包み方も同様に、原因が「型付き」の例外
-(文字列の `code` 属性を持つ — 規約の詳細は `kohaku.host_core.is_typed_host_error` のドキュメント参照)
-なら `resolve_query` の失敗自身のメッセージを追記するようになった。型を持たない原因はこれまでどおり
-(内部情報を漏らさないため何も追記しない)。
+だった)を受け取れる。`_resolve_refs` の `SEMANTIC_FAILED` の包み方も同様に、原因が明示的に
+`clientSafe = True`(`_is_client_safe_cause`)を名乗っている場合だけ `resolve_query` の失敗自身の
+メッセージを追記するようになった — これは「文字列の `code` 属性を持つ例外なら何でも」という
+`kohaku.host_core.is_typed_host_error` のより広い規約より意図的に狭い。`SemanticPort` はよく
+データベース/ファイルシステム/HTTP クライアントに処理を委譲しており、それらの例外も `code` 相当の
+属性を持つことがある一方で、そのメッセージにはホスト名・パス・テーブル名などが含まれ得るため。
+`clientSafe = True` を持たない原因はこれまでどおり(内部情報を漏らさないため何も追記しない)。
 
 ## TS 実装との既知の差異(意図的・恒久)
 

@@ -430,16 +430,22 @@ def _transient_error_detail(error: BaseException | None) -> str:
     return "transient error"
 
 
-def _is_typed_cause(e: BaseException) -> bool:
-    """Whether `e` is a "typed" error whose message is safe to expose to a client as-is — the convention
-    this codebase uses for a deliberately raised exception carrying a string `code` attribute (see
-    host_core's is_typed_host_error for the full rationale; this is a narrower duplicate of that same check,
-    scoped to what _resolve_refs needs for SEMANTIC_FAILED message enrichment). composer cannot import
-    host_core (the dependency direction fixed by AGENTS.md is composer -> host_core), and a
-    SemanticPort.resolve_query failure can come from any product's own port implementation, so this
-    deliberately checks the general "string code attribute" shape rather than importing any specific error
-    class. Port of TS composer's isTypedCause (error-message.ts)."""
-    return isinstance(getattr(e, "code", None), str)
+def _is_client_safe_cause(e: BaseException) -> bool:
+    """Whether `e` explicitly opts in to having its own message shown to a client — a narrower, opt-in
+    marker (`clientSafe == True`) than host_core's is_typed_host_error, which treats *any* exception
+    carrying a string `code` attribute as safe. That broader convention is fine for kohaku's own internal
+    errors, but the cause this function inspects (_resolve_refs's SEMANTIC_FAILED enrichment) can be
+    *anything* a product's own SemanticPort.resolve_query implementation raises -- and a real implementation
+    commonly delegates to a database/filesystem/HTTP client (psycopg / os / redis / httpx, ...) whose own
+    exception types also carry a string `code`-shaped attribute while their message can contain hostnames,
+    file paths, table names, or other connection internals that must never reach a client verbatim. Gating
+    on `code` alone would silently leak those. `clientSafe` requires the raising code to make an explicit,
+    individual decision instead: a SemanticPort implementer should set `clientSafe = True` only on an
+    exception class whose message is written to be end-user-safe -- never on a caught/re-raised exception
+    from a lower-level client library. composer cannot import host_core (the dependency direction fixed by
+    AGENTS.md is composer -> host_core), hence this being a local duplicate rather than a shared helper.
+    Port of TS composer's isClientSafeCause (error-message.ts)."""
+    return getattr(e, "clientSafe", None) is True
 
 
 type _BudgetCheckErrorReporterFor = (
@@ -1072,12 +1078,14 @@ async def _resolve_refs(
     try:
         resolved = await ctx.semantic.resolve_query(intent, tenant=tenant)
     except Exception as e:
-        # When the cause is a "typed" error (a string `code` attribute — the convention for a client-safe
-        # message; see _is_typed_cause's doc), its own message is appended so the caller learns *what*
-        # failed (e.g. an unknown Intent name) instead of the generic text alone. An untyped cause (a raw
-        # exception from a SemanticPort implementation) may carry internals and is never appended — the
-        # wrapped message stays exactly as before for that case.
-        detail = f": {e}" if _is_typed_cause(e) else ""
+        # When the cause explicitly opts in via clientSafe == True (see _is_client_safe_cause's doc --
+        # deliberately narrower than "any exception with a string `code`", since a SemanticPort can raise a
+        # raw psycopg/os/redis/httpx error whose `code`-shaped attribute is also present but whose message
+        # carries hostnames/paths/table names), its own message is appended so the caller learns *what*
+        # failed (e.g. an unknown Intent name) instead of the generic text alone. Every other cause
+        # (including one with an unrelated `code`) may carry internals and is never appended — the wrapped
+        # message stays exactly as before for that case.
+        detail = f": {e}" if _is_client_safe_cause(e) else ""
         raise ComposeError("SEMANTIC_FAILED", f"query resolution failed{detail}", cause=e) from e
     handles: list[QueryHandle] = resolved if isinstance(resolved, list) else [resolved]
     versions = list(await asyncio.gather(*(ctx.semantic.data_version(h) for h in handles)))
