@@ -42,7 +42,7 @@ from kohaku.host_core import parse_trace_context as _parse_trace_context
 from kohaku.host_core.keyed_mutex import _locks as _locks
 from kohaku.spec import Principal, SessionContext
 
-from ..bodies import SessionBody
+from ..bodies import MAX_JSON_OBJECT_DEPTH, SessionBody, _json_depth_ok
 from ..deps import HostErrorInfo, KohakuHostDeps
 from ..errors import error_body
 from ..governance_policy import GovernanceOperation
@@ -412,14 +412,31 @@ def _error(code: Any, message: str, status: int, request_id: str | None = None) 
     return JSONResponse(content=error_body(code, message, request_id), status_code=status)
 
 
+# A few levels looser than MAX_JSON_OBJECT_DEPTH, mirroring TS's routes/shared.ts MAX_REQUEST_BODY_DEPTH: the
+# whole body wraps the fields bodies.py's _json_depth_ok caps at that depth (e.g. {"intent": {"params": <=32
+# levels>}}), so a well-formed request nests a handful of levels deeper than a single capped field before this
+# whole-body check even starts counting from the body's own root.
+_MAX_REQUEST_BODY_DEPTH = MAX_JSON_OBJECT_DEPTH + 8
+
+
 async def _read_json(request: Request) -> Any:
     raw = await request.body()
     if not raw:
         return None
     try:
-        return json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
+        data = json.loads(raw)
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        # RecursionError: CPython's json decoder recurses once per nesting level and raises this (a catchable
+        # RuntimeError subclass -- not a hard, uncatchable stack overflow) once a payload is nested deep
+        # enough. Treated the same as any other malformed body (None -> the caller's existing 400 BAD_REQUEST
+        # path), rather than propagating as an unhandled 500.
         return None
+    # Checked before any field-level parser in bodies.py (or a pydantic model_validate) ever walks `data` --
+    # a second, schema-independent line of defense on top of bodies.py's own per-field _json_depth_ok
+    # (params/payload), in case a future body shape forgets to route a field through it.
+    if not _json_depth_ok(data, _MAX_REQUEST_BODY_DEPTH):
+        return None
+    return data
 
 
 # --- Governance/audit-plane authorization --------------------------------
