@@ -3,7 +3,7 @@ import { normalizeTenant } from "@kohaku-ui/spec-core";
 import type { Redis } from "ioredis";
 import { createRedisConnection } from "./connection.js";
 import { DEFAULT_KEY_PREFIX, type RedisKeys, redisKeys } from "./keys.js";
-import { indexValues, readLineage } from "./lineage.js";
+import { indexValues, readLineage, readLineagePage } from "./lineage.js";
 
 export interface RedisStoragePortOptions {
   /** ioredis connection URL (`redis://…` / `rediss://…`). Mutually exclusive with `client`. */
@@ -141,6 +141,10 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
     async listLineage(filter = {}) {
       await ready();
       return readLineage(redis, keys, filter);
+    },
+    async pageLineage(req) {
+      await ready();
+      return readLineagePage(redis, keys, req);
     },
     async getPromotionState(artifactId, tenant) {
       await ready();
