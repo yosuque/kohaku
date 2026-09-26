@@ -19,6 +19,7 @@ export {
   type FixationsClient,
   type KohakuClient,
   type KohakuClientConfig,
+  type LineagePageQuery,
   type LineageQuery,
   type PromotionApproveOptions,
   type PromotionsClient,
@@ -27,6 +28,15 @@ export {
 } from "./client.js";
 // Errors (discriminable exception)
 export { hostErrorFromResponse, isKohakuHostError, KohakuHostError } from "./errors.js";
+// kohaku explain <requestId> / admin-react DevTools: the pure report builder + its types
+export {
+  buildExplainReport,
+  type ExplainCompose,
+  type ExplainDecision,
+  type ExplainDecisionAttempt,
+  type ExplainDecisionDowngrade,
+  type ExplainReport,
+} from "./explain.js";
 // SSE stream (typed events + low-level reader)
 export {
   type ComposeStreamEvent,

@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./ui": "./src/ui.tsx"
+    "./ui": "./src/ui.tsx",
+    "./devtools": "./src/devtools/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -67,6 +68,10 @@
       "./ui": {
         "types": "./dist/ui.d.ts",
         "default": "./dist/ui.js"
+      },
+      "./devtools": {
+        "types": "./dist/devtools/index.d.ts",
+        "default": "./dist/devtools/index.js"
       },
       "./package.json": "./package.json"
     }

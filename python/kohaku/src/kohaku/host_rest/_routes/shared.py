@@ -144,9 +144,10 @@ def trace_context_of(request: Request) -> TraceContext | None:
     headers (https://www.w3.org/TR/trace-context/), via kohaku.host_core's shared parse_trace_context (also
     used by kohaku.host_mcp's `_meta.traceparent` counterpart). Fail-open / additive: None when the header
     is absent or not strictly W3C-formatted. Port note: see kohaku.host_core.trace_context's module
-    docstring for why this has no ComposeOptions sink yet (same parity gap as correlation_id/request_id) --
-    it is used only by report_host_error's `trace_context` (HostErrorInfo.trace_context) today. Not
-    memoized (unlike request_id_of): header parsing is cheap and this is read at most once per request."""
+    docstring for why this (unlike request_id, which now reaches ComposeOptions.correlation_id) still has no
+    ComposeOptions sink -- it is used only by report_host_error's `trace_context` (HostErrorInfo.trace_context)
+    today. Not memoized (unlike request_id_of): header parsing is cheap and this is read at most once per
+    request."""
     return _parse_trace_context(request.headers.get("traceparent"), request.headers.get("tracestate"))
 
 

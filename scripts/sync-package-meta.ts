@@ -36,6 +36,7 @@ const PUBLISHED_DIRS = [
     "composer",
     "data-binding",
     "evals",
+    "host",
     "host-a2ui",
     "host-core",
     "host-mcp-apps",

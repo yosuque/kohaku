@@ -104,6 +104,7 @@ class ViewRecorder:
         surface: Surface,
         session_id: str | None = None,
         tenant: str | None = None,
+        correlation_id: str | None = None,
     ) -> None:
         # Derive specHash / intentHash from spec and record view.fallback.
         # Makes the occurrence rate (L1/L2 failure, capability downgrade) observable from lineage.
@@ -116,6 +117,7 @@ class ViewRecorder:
             intent_hash=spec.intent.hash,
             session_id=session_id,
             tenant=tenant,
+            correlation_id=correlation_id,
         )
 
 

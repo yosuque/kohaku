@@ -514,6 +514,7 @@ async function recordFallbackIfAny(
     surface: session.surface,
     ...(specHash != null ? { specHash } : {}),
     ...sessionMeta(session),
+    ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
   });
 }
 

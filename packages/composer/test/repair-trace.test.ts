@@ -106,6 +106,7 @@ describe("repair loop trace characterization (pre-refactor pin)", () => {
     expect(trace.attempts).toMatchInlineSnapshot(`
       [
         {
+          "errorCode": "ABORTED",
           "issues": [
             "timeout(test)",
           ],
@@ -142,6 +143,7 @@ describe("repair loop trace characterization (pre-refactor pin)", () => {
     expect(trace.attempts).toMatchInlineSnapshot(`
       [
         {
+          "errorCode": "PROVIDER",
           "issues": [
             "provider down(test)",
           ],

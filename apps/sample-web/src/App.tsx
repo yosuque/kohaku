@@ -4,6 +4,7 @@ import { LangToggle } from "./i18n/LangToggle.js";
 import { useLang } from "./i18n/lang.js";
 import { useT } from "./i18n/ui.js";
 import { fetchHealth } from "./kohaku/client.js";
+import { DevToolsMount } from "./kohaku/DevToolsMount.js";
 import { RoleSelector } from "./kohaku/RoleSelector.js";
 import { TenantSelector } from "./kohaku/TenantSelector.js";
 import { AdminPage } from "./pages/AdminPage.js";
@@ -113,6 +114,7 @@ export function App(): ReactNode {
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/admin" element={<AdminPage />} />
       </Routes>
+      <DevToolsMount />
     </div>
   );
 }
