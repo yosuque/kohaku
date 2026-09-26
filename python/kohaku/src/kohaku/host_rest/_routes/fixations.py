@@ -12,13 +12,14 @@ from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
-from kohaku.host_core import is_typed_host_error
-from kohaku.spec import GovernanceErrorDiscriminators, finalize_intent
+from kohaku.host_core import IntentSourceIntent, is_typed_host_error
+from kohaku.host_core import resolve_intent as _host_core_resolve_intent
+from kohaku.spec import GovernanceErrorDiscriminators
 
 from ..bodies import SessionBody, parse_compose_body
 from ..deps import KohakuHostDeps
 from ..governance_policy import GovernanceOperation
-from .compose import _COMPOSE_FAILED_MESSAGE, compose_with_fixation
+from .compose import _COMPOSE_FAILED_MESSAGE, _INTENT_INVALID_MESSAGE, compose_with_fixation
 from .shared import (
     _error,
     _fixation_key,
@@ -77,11 +78,25 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         body = parse_compose_body(await _read_json(request))
         if body is None or body.intent is None:
             return _error("BAD_REQUEST", "intent (canonical + params) is required", 400)
+        session = to_session(SessionBody(), principal, tenant)
+        # Resolved through host-core's resolve_intent (the "intent" source) -- separately from the
+        # compose/fixate try/except below -- so a SemanticPort.validate_intent implementation gets a chance to
+        # reject an unknown canonical or invalid params with 422 INTENT_INVALID before anything is composed or
+        # fixated, rather than an unresolvable Intent surfacing later as a 500 COMPOSE_FAILED (or worse, being
+        # composed/fixated anyway).
         try:
-            intent = finalize_intent(body.intent)
+            resolved = await _host_core_resolve_intent(
+                deps.compose.semantic, IntentSourceIntent(intent=body.intent), session
+            )
+            intent = resolved.intent
+        except BaseException as e:
+            await report_host_error(deps, "fixations/approve", request_id, e)
+            client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
+            return _error("INTENT_INVALID", client_message, 422, request_id)
+        try:
             result = await compose_with_fixation(
                 intent,
-                to_session(SessionBody(), principal, tenant),
+                session,
                 deps,
                 request_id=request_id,
             )

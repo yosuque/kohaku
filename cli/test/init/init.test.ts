@@ -127,6 +127,24 @@ describe("initProject", () => {
     expect(appSrc).not.toContain("dev-secret-change-me");
   });
 
+  it("server/app.ts wires createConsoleErrorReporter into both host-rest's onError and the compose observer, gated by KOHAKU_DEBUG", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
+    expect(appSrc).toContain('import { createConsoleErrorReporter } from "@kohaku-ui/host-core";');
+    expect(appSrc).toContain('createConsoleErrorReporter({ debug: process.env["KOHAKU_DEBUG"] === "1" })');
+    expect(appSrc).toContain("observer: { onError: errorReporter.compose }");
+    expect(appSrc).toContain("onError: errorReporter.host");
+    const pkg = JSON.parse(readFileSync(join(out, "package.json"), "utf8"));
+    expect(pkg.dependencies["@kohaku-ui/host-core"]).toBeDefined();
+  });
+
+  it(".env.example documents KOHAKU_DEBUG", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    expect(readFileSync(join(out, ".env.example"), "utf8")).toMatch(/^# KOHAKU_DEBUG=/m);
+  });
+
   it("server/app.ts treats a whitespace-only KOHAKU_CAPABILITY_SECRET as missing", async () => {
     // A user who pastes .env.example's commented block back in verbatim, or leaves a blank value,
     // must not get a silently-accepted "" or " " secret -- .trim() makes both fail the same way.
