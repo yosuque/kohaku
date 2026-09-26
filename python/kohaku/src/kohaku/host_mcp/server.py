@@ -26,6 +26,7 @@ from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
     ComposeFixationContext,
     FixationDeliveryHost,
+    IntentSourceGui,
     IntentSourceIntent,
     IntentSourceNl,
     ParsedInvokableRefOk,
@@ -46,7 +47,6 @@ from kohaku.host_core import record_view_fallback as _host_core_record_view_fall
 from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.spec import (
     AuthzPort,
-    GuiAction,
     IntentInput,
     InvocationContext,
     JsonObject,
@@ -57,7 +57,6 @@ from kohaku.spec import (
     VerifyRequest,
     canonical_stringify,
     enumerate_bind_variants,
-    finalize_intent,
 )
 
 from . import initial_data as _initial_data
@@ -571,15 +570,30 @@ def attach_kohaku_to_mcp_server(
             # validator wired in), so the depth cap is enforced here instead.
             if not _json_depth_ok(intent_params) or not _json_depth_ok(payload):
                 return _tool_error(f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})")
-            current = finalize_intent(
-                IntentInput(canonical=_arg_str(intent_arg, "canonical"), params=intent_params)
-            )
             locale = _locale_of(args)
-            on = _arg_str(args, "on")
-            normalized = await deps.compose.semantic.normalize(
-                GuiAction(kind="gui", action=on, params=payload, current=current),
-                _mcp_session(locale, principal),
+            session = _mcp_session(locale, principal)
+            # Resolved through host-core's resolve_intent (the "intent" source), not a bare finalize_intent, so
+            # a SemanticPort.validate_intent implementation gets a chance to reject an unknown canonical or
+            # invalid params in `current` too (mirrors the REST profile's /events fix for the same gap;
+            # _safe_tool's catch-all converts a raised IntentValidationError into a structured tool error).
+            current_resolved = await _host_core_resolve_intent(
+                deps.compose.semantic,
+                IntentSourceIntent(
+                    intent=IntentInput(canonical=_arg_str(intent_arg, "canonical"), params=intent_params)
+                ),
+                session,
             )
+            current = current_resolved.intent
+            on = _arg_str(args, "on")
+            # Intent resolution via host-core's resolve_intent (shared with the REST profile's /events GUI-delta
+            # site), rather than a local semantic.normalize copy -- keeps the "gui" normalization behavior (and
+            # its session, including the attached principal) in one place.
+            resolved = await _host_core_resolve_intent(
+                deps.compose.semantic,
+                IntentSourceGui(action=on, params=payload, current=current),
+                session,
+            )
+            normalized = resolved.intent
             # Record view.interacted symmetrically with the REST surface's /events (which records it before
             # recomposing, via KohakuHostDeps.recorder). Fail-open: a recording failure must not block
             # recomposition, and is reported to the observation hook instead.
