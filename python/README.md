@@ -142,11 +142,15 @@ empirically: two calls on the same connection produce two `ctx.session` objects 
 a stable per-connection anchor is reachable only via that wrapper's private `_connection` attribute.
 `_session_correlation_prefix` keys a `WeakKeyDictionary` by that object, generating a uuid4 hex once per
 connection and caching it for the connection's lifetime (evicted automatically once the connection is
-garbage-collected); it raises `RuntimeError` rather than falling back to a session-less id if no such anchor
-is reachable at all (a silent fallback would let two concurrent sessions collide onto the same correlation
-id, exactly the bug this exists to prevent — see that function's own doc comment for the full account,
-including why reaching into a private attribute was the only way to get a genuinely stable anchor). Unlike
-TS, Python includes the connection segment for every transport uniformly (even a single long-lived stdio
+garbage-collected). If no such anchor is reachable at all (session missing, or a future `mcp` SDK release
+renaming/removing the private attribute), it degrades rather than fails: each call gets its own fresh,
+never-reused id instead of the shared per-connection one — concurrent sessions still never collide, only
+same-session grouping is lost — and a `warnings.warn` fires once per process, not once per call, to surface
+the degradation (see that function's own doc comment for the full account, including why reaching into a
+private attribute was the only way to get a genuinely stable anchor at all, and why an earlier revision's
+hard `RuntimeError` here was reworked after review: a renamed/removed private attribute failing every single
+MCP call in production is worse than the degradation this replaces it with). Unlike TS, Python includes the
+connection segment for every transport uniformly (even a single long-lived stdio
 connection gets one stable prefix) rather than varying the format by transport. This id now reaches
 `ComposeOptions.correlation_id` / `ComposeTrace.correlationId` (via `compose_with_fixation`'s
 `correlation_id` parameter) in addition to the failure-path observability hook

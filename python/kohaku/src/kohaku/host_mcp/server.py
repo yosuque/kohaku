@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import uuid
+import warnings
 import weakref
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -179,29 +180,45 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
 # `ServerSession(...)` it builds) -- but `ServerSession` exposes no public accessor for it (every property
 # delegates to `self._connection.*` internally; none returns the object itself or a stable id derived from
 # it). Reaching into the private `_connection` attribute is the only way to obtain a genuinely per-connection
-# anchor at all; done defensively via `getattr` below, with a hard failure (never a silent, collision-prone
-# fallback) if a future SDK version renames or removes it.
+# anchor at all; done defensively via `getattr` below. If a future SDK version renames or removes it, this
+# degrades rather than fails: see `_session_correlation_prefix`'s doc comment.
 _connection_correlation_ids: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+
+# Set the first time `_session_correlation_prefix` cannot find a per-connection anchor, so the degraded-mode
+# warning below fires at most once per process -- not once per call, which on a busy server would otherwise
+# spam a warning (or a log) on every single request.
+_warned_connection_anchor_unavailable = False
 
 
 def _session_correlation_prefix(ctx: ServerRequestContext[Any]) -> str:
     """The stable opaque id for this call's transport connection (see `_connection_correlation_ids` above).
 
-    Raises `RuntimeError` if no per-connection anchor object is reachable at all, rather than silently
-    falling back to a session-less id: two concurrent Streamable HTTP sessions that both start their own
-    JSON-RPC id counter at 1 would otherwise collide onto the same correlation id, and `kohaku
-    explain`/DevTools would mix their lineage events together -- a silent fallback would hide exactly the bug
-    this function exists to prevent.
+    Degrades rather than raises when no per-connection anchor object is reachable at all (`session` is
+    unavailable, or the installed `mcp` SDK's `ServerSession` no longer exposes `_connection`): returns a
+    fresh, never-reused uuid4 hex for this one request instead of the (unreachable) per-connection id, and
+    emits a `warnings.warn` the first time this happens in the process (see `_warned_connection_anchor_unavailable`
+    above -- at most once, not once per request). This still guarantees the one thing that actually matters for
+    correctness -- concurrent sessions' correlation ids never collide -- at the cost of the one thing that
+    doesn't affect correctness -- grouping every call from the *same* session under the same prefix, which is
+    lost in this mode. A previous revision raised `RuntimeError` here instead; that was reverted because a
+    future `mcp` SDK release renaming or removing the private `_connection` attribute would then fail every
+    single MCP call in production, which is a far worse outcome than degraded (but still collision-free)
+    correlation ids.
     """
     session = ctx.session
     connection = getattr(session, "_connection", None) if session is not None else None
     if connection is None:
-        raise RuntimeError(
-            "No per-connection anchor is reachable from this ServerRequestContext (session is unavailable, "
-            "or the installed mcp SDK's ServerSession no longer exposes _connection); cannot build a "
-            "collision-free per-session correlation id (see _session_correlation_prefix's doc comment) -- "
-            "refusing to fall back to an id that could collide with another session's."
-        )
+        global _warned_connection_anchor_unavailable
+        if not _warned_connection_anchor_unavailable:
+            _warned_connection_anchor_unavailable = True
+            warnings.warn(
+                "kohaku.host_mcp: no per-connection anchor is reachable from ServerRequestContext (session "
+                "is unavailable, or the installed mcp SDK's ServerSession no longer exposes _connection); "
+                "correlation ids will still never collide across sessions, but calls within the same session "
+                "will no longer share a common id prefix (see _session_correlation_prefix's doc comment)",
+                stacklevel=2,
+            )
+        return uuid.uuid4().hex
     correlation_id = _connection_correlation_ids.get(connection)
     if correlation_id is None:
         correlation_id = uuid.uuid4().hex

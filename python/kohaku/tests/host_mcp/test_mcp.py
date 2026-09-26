@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import warnings
 from pathlib import Path
 from typing import Any, cast
 
@@ -313,19 +314,21 @@ class TestMcpCorrelationId:
         prefix_b1 = b1.rsplit(":", 1)[0]
         assert prefix_a1 != prefix_b1
 
-    def test_session_correlation_prefix_refuses_to_fall_back_when_no_connection_anchor_is_reachable(
-        self,
+    def test_session_correlation_prefix_degrades_instead_of_raising_when_no_connection_anchor_is_reachable(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`_session_correlation_prefix` must stop and raise -- never silently return a colliding id -- when
-        it cannot find a per-connection anchor object at all (session missing, or the installed mcp SDK's
-        ServerSession no longer exposes `_connection`)."""
+        """`_session_correlation_prefix` must never raise when it cannot find a per-connection anchor object
+        at all (session missing, or the installed mcp SDK's ServerSession no longer exposes `_connection`) --
+        a future mcp SDK release renaming/removing that private attribute would otherwise fail every MCP call
+        in production. Instead it returns a fresh id per call (still collision-free across sessions, just no
+        longer grouped by session) and warns exactly once per process, not once per call."""
+        import kohaku.host_mcp.server as server_module
         from kohaku.host_mcp.server import _session_correlation_prefix
+
+        monkeypatch.setattr(server_module, "_warned_connection_anchor_unavailable", False)
 
         class _FakeCtxNoSession:
             session = None
-
-        with pytest.raises(RuntimeError, match="No per-connection anchor is reachable"):
-            _session_correlation_prefix(cast(Any, _FakeCtxNoSession()))
 
         class _SessionWithoutConnectionAttr:
             pass
@@ -333,8 +336,15 @@ class TestMcpCorrelationId:
         class _FakeCtxSessionWithoutConnection:
             session = _SessionWithoutConnectionAttr()
 
-        with pytest.raises(RuntimeError, match="No per-connection anchor is reachable"):
-            _session_correlation_prefix(cast(Any, _FakeCtxSessionWithoutConnection()))
+        with pytest.warns(UserWarning, match="no per-connection anchor is reachable"):
+            id_1 = _session_correlation_prefix(cast(Any, _FakeCtxNoSession()))
+        # A second occurrence (a different fake context shape entirely) must not warn again.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            id_2 = _session_correlation_prefix(cast(Any, _FakeCtxSessionWithoutConnection()))
+
+        assert id_1 != id_2
+        assert server_module._warned_connection_anchor_unavailable is True
 
 
 class TestResultType:

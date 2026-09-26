@@ -681,8 +681,12 @@ The additive items, unaffected by which TS SDK major version is installed:
   (`_session_correlation_prefix` in `host_mcp/server.py`, keyed via a `weakref.WeakKeyDictionary` so an entry
   is dropped once its connection is garbage-collected) — reaching into a private SDK attribute was accepted
   here specifically because no public alternative gives the required guarantee (two concurrent sessions must
-  never collide), with a hard `RuntimeError` (never a silent, collision-prone fallback) if that attribute
-  becomes unavailable in a future SDK version. **`trace_context` remains open**: reaching full symmetry (a
+  never collide). An earlier revision raised a hard `RuntimeError` if that attribute became unavailable in a
+  future SDK version; reworked (review feedback) into a degrade-not-fail path instead, since a renamed/removed
+  private attribute failing every single MCP call in production is a far worse outcome than a smaller one: when
+  the anchor is unreachable, each call now gets its own fresh, never-reused id (collision-free across sessions
+  is preserved; only same-session grouping is lost), and a `warnings.warn` fires once per process — not once
+  per call — to surface the degradation. **`trace_context` remains open**: reaching full symmetry (a
   `trace_context` sink on `ComposeOptions`/`ComposeTrace`) is still a follow-up item for whichever WP next
   touches `host_core`/`composer` — it was not automatically closed alongside `correlation_id`. The same
   workaround applies to REST (`HostErrorInfo.trace_context`, from the `traceparent` request header): Python
