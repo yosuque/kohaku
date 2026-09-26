@@ -12,6 +12,7 @@
     "prepack": "pnpm run build"
   },
   "dependencies": {
+    "@kohaku-ui/client": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
     "@kohaku-ui/evals": "workspace:^",
     "@kohaku-ui/sandbox": "workspace:^",
@@ -22,8 +23,14 @@
     "semver": "catalog:"
   },
   "devDependencies": {
+    "@kohaku-ui/host-rest": "workspace:^",
+    "@kohaku-ui/lineage": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^",
+    "@kohaku-ui/storage-memory": "workspace:^",
     "@types/node": "catalog:",
     "@types/semver": "catalog:",
+    "hono": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

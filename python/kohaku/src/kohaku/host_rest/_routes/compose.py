@@ -262,7 +262,10 @@ async def compose_with_fixation(
     materialize validates against the tenant catalog; the normal-compose fallback runs against the untenanted
     deps.compose (compose() re-applies tenant/session internally, as before extraction). Every REST route
     handler passes its own resolved request_id; it is optional here only for direct callers outside a request
-    (see _fixation_host's docstring).
+    (see _fixation_host's docstring). request_id is also threaded into the normal-compose fallback as
+    ComposeOptions.correlation_id (kohaku.host_core.compose_with_fixation's correlation_id parameter), so a
+    degraded/failed delivery's ComposeTrace carries the same id this request's X-Request-Id response header
+    does.
     """
     return await _host_core_compose_with_fixation(
         intent,
@@ -273,6 +276,7 @@ async def compose_with_fixation(
             abort=abort,
         ),
         _fixation_host(deps, request_id),
+        correlation_id=request_id,
     )
 
 
@@ -334,6 +338,7 @@ async def record_fallback_if_any(
         surface=session.surface,
         session_id=session.sessionId,
         tenant=session.tenant,
+        correlation_id=result.trace.correlationId,
     )
 
 
@@ -470,7 +475,9 @@ async def _compose_stream_body(
             intent=IntentInput(canonical=intent.canonical, params=intent.params)
         )
         async for ev in compose_stream(
-            stream_input, deps.compose, ComposeOptions(session=session, abort=abort)
+            stream_input,
+            deps.compose,
+            ComposeOptions(session=session, abort=abort, correlation_id=request_id),
         ):
             if isinstance(ev, StreamSpecEvent):
                 if capability_ref is None:

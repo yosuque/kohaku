@@ -248,6 +248,7 @@ export async function runRepairLoop(
         kind,
         ok: false,
         issues: [errorMessage(e)],
+        errorCode: e instanceof LlmError ? e.code : "UNKNOWN",
       });
       if (e instanceof LlmError && e.code === "ABORTED") {
         // deadlineSignal fires only from budget.ts's createDeadlineGuard, never from the caller's own

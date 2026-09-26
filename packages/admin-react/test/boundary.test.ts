@@ -28,6 +28,9 @@ const RELOCATED_UI_PRIMITIVES = [
 // never needs /ui" claim. They now live at the package root instead.
 const DOMAIN_HELPERS_NOT_ON_UI = ["TIER_COLOR", "describeDeniedOperation"] as const;
 
+// U2's DevTools API surface, reachable only through the `@kohaku-ui/admin-react/devtools` subpath.
+const DEVTOOLS_EXPORTS = ["KohakuDevTools", "withDevToolsCapture", "defaultDevToolsMessages"] as const;
+
 // The ticket's dependency contract: client + renderer-core (+ sandbox for the promotion preview, spec-core for
 // the shared types) → admin-react. Never renderer-react (the console is not a Spec renderer) and never
 // host-rest (the console talks to the host only through the typed client). tsc already refuses an import of an
@@ -110,5 +113,22 @@ describe("dependency boundary", () => {
     const ui: Record<string, unknown> = await import("@kohaku-ui/admin-react/ui");
     const leakedIntoUi = DOMAIN_HELPERS_NOT_ON_UI.filter((name) => name in ui);
     expect(leakedIntoUi).toEqual([]);
+  });
+
+  // U2's DevTools ("kohaku explain" as a console panel) lives on its own subpath, same as /ui, so it does not
+  // force every AdminProvider/KohakuAdmin consumer to pull it in. It must not leak onto the root, and must
+  // expose the components/helpers a product actually wires (KohakuDevTools + withDevToolsCapture).
+  it("does not export DevTools from the root", () => {
+    const rootExportNames = new Set(Object.keys(adminReactRoot));
+    const leaked = DEVTOOLS_EXPORTS.filter((name) => rootExportNames.has(name));
+    expect(leaked).toEqual([]);
+  });
+
+  it("exposes KohakuDevTools / withDevToolsCapture from the @kohaku-ui/admin-react/devtools subpath", async () => {
+    const devtools: Record<string, unknown> = await import("@kohaku-ui/admin-react/devtools");
+    const missing = DEVTOOLS_EXPORTS.filter((name) => !(name in devtools));
+    expect(missing).toEqual([]);
+    expect(typeof devtools["KohakuDevTools"]).toBe("function");
+    expect(typeof devtools["withDevToolsCapture"]).toBe("function");
   });
 });

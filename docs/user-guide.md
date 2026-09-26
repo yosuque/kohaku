@@ -450,7 +450,8 @@ for await (const ev of client.composeStream({ intent: { canonical: "sales.trend"
 
 - **A disconnected stream is a failure, not a silent success**: if the connection closes before a `done` or `error` event (REST-STR-003), `composeStream`'s iteration throws `KohakuHostError` (`code: "INTERNAL"`) instead of the `for await` loop just ending.
 - **Pass-by-reference binding**: `client.binding({ capability })` composes `@kohaku-ui/data-binding`'s `BindingClient` together with the SDK settings (baseUrl / headers) (`createBindingClient` is also re-exported from the SDK).
-- **Governance**: `client.catalog()` / `client.lineage()` / `client.telemetry()` / `client.promotions.*` / `client.fixations.*` are typed.
+- **Governance**: `client.catalog()` / `client.lineage()` / `client.telemetry()` / `client.promotions.*` / `client.fixations.*` are typed. `client.lineagePages(query)` walks `GET /lineage?order=asc` exhaustively (an async generator of pages) rather than `lineage()`'s tail window.
+- **"Why did this view come out this way"**: every successful `compose()` / `sendEvent()` response (and the stream's `done` event) carries `requestId` — read from the `X-Request-Id` response header, not the wire body. Pass it to `client.explain(requestId)` to get an `ExplainReport` (provenance, the cache-key breakdown, the decision flow, capability scopes, and the raw lineage events) built from `lineagePages({correlationId: requestId})` — see "Kohaku DevTools and `kohaku explain`" below.
 - **The fetch thunk to pass to renderer-react's `useSpecStream`** is obtained via `client.composeStreamRequest(req)`.
 - **Routes outside the SPEC** (your own `/health`, etc.) are called via the escape hatch `client.request(path, init?)` (the headers hook works, but JSON parsing and error conversion do not).
 - The sample's wiring is `apps/sample-web/src/kohaku/client.ts` (a thin wrapper around the SDK to match the sample-specific call shapes).
@@ -512,6 +513,74 @@ fallback when a token is omitted. Two of those variables are not part of `KnownT
 background) — and a product that supplies both gets the console's full color palette in both light and dark mode
 (the sample does this in `apps/sample-web/src/theme/tokens.ts`'s `buildTheme(mode)`); omit them and those two
 spots fall back to the package's own light-mode default regardless of theme.
+
+### Kohaku DevTools and `kohaku explain`
+
+"Why did this view come out this way" — tier, cache hit/miss, the cache key's individual components,
+which L1/L2 attempts ran and why they failed, capability-negotiation downgrades, and the lineage events a
+request produced — is answerable from a `requestId` alone (a compose's `X-Request-Id` response header, or an
+MCP tool call's `mcp:<sessionId>:<jsonrpc id>` correlation id) two ways:
+
+**From the CLI**, against any running REST host:
+
+```bash
+node cli/bin/kohaku.js explain <requestId> --rest http://localhost:8787/api/kohaku
+# --json for the raw ExplainReport JSON instead of formatted text
+# --header "x-kohaku-tenant:acme" (repeatable) for tenant/auth headers
+# --spec spec.json to additionally show capability scopes (collectCapabilityScopes)
+```
+
+**As a floating panel** (`@kohaku-ui/admin-react/devtools`, a separate subpath decoupled from
+`AdminProvider`/`KohakuAdmin` — see the boundary note above, which applies here too: client / renderer-core /
+sandbox / spec-core only, never `renderer-react`):
+
+```tsx
+import { KohakuDevTools, withDevToolsCapture } from "@kohaku-ui/admin-react/devtools";
+import { createKohakuClient } from "@kohaku-ui/client";
+
+// withDevToolsCapture wraps onResponse so the panel's "recent requests" quick-pick fills itself in —
+// wire it once, at client construction time, wherever your app already builds its KohakuClient.
+const { config, capture } = withDevToolsCapture({ baseUrl: "/api/kohaku" });
+const client = createKohakuClient(config);
+
+function DevToolsMount() {
+  // A devtool must never render by accident: `enabled` is required and explicit (gate it behind
+  // `import.meta.env.DEV` or an equivalent dev-only check, the way apps/sample-web's
+  // src/kohaku/DevToolsMount.tsx does — a literal `if (import.meta.env.DEV)` around the dynamic
+  // import, not only a runtime check inside JSX, so Vite/Rollup's dead-code elimination drops the
+  // whole module from a production bundle).
+  return <KohakuDevTools enabled client={client} capture={capture} />;
+}
+```
+
+Both surfaces build on the same pure function, `@kohaku-ui/client`'s `buildExplainReport(events, spec?)`, fed
+by `client.explain(requestId, {spec?})` — which itself is nothing more than `lineagePages({correlationId:
+requestId})` (design.md #53's forward-paging filter) plus that function. There is no dedicated `/explain`
+REST route (design.md #55).
+
+- **CORS, for a browser-hosted client talking to a cross-origin host**: reading the `X-Request-Id` response
+  header from `fetch`'s `Response.headers` requires the host to send
+  `Access-Control-Expose-Headers: X-Request-Id` — a plain CORS response does not expose custom headers to
+  client-side JavaScript by default. Same-origin deployments (the sample's Vite dev-server proxy, a
+  same-origin production deployment) are unaffected.
+- **Events recorded before this shipped have no `correlationId`**: `view.composed` / `component.generated` /
+  `component.used` / `view.fallback`'s `correlationId` (and `view.composed`'s `cacheKey` / `cacheKeyParts` /
+  `decision`) are additive fields — an event recorded by an older kohaku version, or by a host whose
+  `StoragePort` predates forward paging (`design.md` #53), simply has none of them, and `kohaku explain` /
+  DevTools report "no view.composed event found" for that request id rather than a stale/partial one.
+- **A reused request id returns more than one compose**: an `X-Request-Id` you (or a proxy in front of your
+  host) supply is not guaranteed unique — `ExplainReport.composes` can hold more than one entry, and both the
+  CLI and DevTools render each one rather than assuming a single result.
+- **`decision` never contains a provider's own error text**: when an L1/L2 attempt fails by a thrown exception
+  (a provider outage, a network error, a misconfiguration — anything an `LlmError`/an unexpected exception's
+  own `.message` might name, which can carry a hostname, URL, or account detail), `decision.attempts[].issues`
+  records only a fixed, non-sensitive message keyed by a closed `errorCode` vocabulary (`CONFIG` /
+  `INVALID_OUTPUT` / `PROVIDER` / `ABORTED` / `UNKNOWN`) — never the exception's own text. This applies only to
+  a *thrown* attempt; a validation-failed attempt's `issues` (schema/catalog issues describing the model's own
+  structural output, e.g. an unknown component type) are still the real messages, still capped to 5 entries of
+  200 characters each. For the exception's actual message, use your own `ComposeObserver.onError` /
+  `KohakuHostDeps.onError` hook (§7's `KOHAKU_DEBUG` bullet) — a `lineage.read` principal reading `/lineage`,
+  `kohaku explain`, or DevTools never sees it.
 
 ### Adding a part
 
@@ -641,7 +710,7 @@ Unmappable content (a component type your catalog doesn't recognize, a data-boun
   - `ComposePolicy.refConstraint: "validate"` relaxes the generation schema's `data.$ref` to a plain string (an Intent-independent grammar reusable across composes, not just repair retries) and instead validates set-membership explicitly after generation (`DATA_REF_UNRESOLVED`, fed into the existing repair loop).
   - Run `KOHAKU_LLM_PROVIDER=claude KOHAKU_LLM_MODEL=<your model> ANTHROPIC_API_KEY=<your key> pnpm --filter @kohaku-ui-sample/api run measure-grammar-latency` (`apps/sample-api/scripts/measure-grammar-latency.ts`) against your actual model before deciding whether either escape hatch is worth turning on for your deployment — this script calls a real LLM and is intentionally excluded from `pnpm test`. Every row is expected to read `provenance.cache: "bypass"` — that is not a comparison axis, it is a check that the LLM path actually ran; without a valid API key the `claude` provider only warns at startup and falls through to the deterministic fallback, so a missing key shows up as a much *faster* run with the `tier` column reading `L0`/fallback instead of `L1` rather than as an error — always check `tier` before trusting the latency numbers. See the script's own header comment for how to read the table (the 24h Anthropic grammar cache means the first-vs-second call of the *same* Intent does not separate the two modes) and [design.md#prompt-caching](design.md#prompt-caching) for the full trade-off.
 - **Audit**: "Why this screen appeared" can be traced via specHash / intentHash in Admin's Lineage or `GET /api/kohaku/lineage`.
-- **Correlating logs via `x-request-id`**: every response of the mounted kohaku routes carries an `X-Request-Id` header (echoing the inbound `x-request-id` request header when the caller sends one and it is well-formed, otherwise a freshly generated id). The same id appears on every error envelope's `error.requestId` and is passed to `KohakuHostDeps.onError`, so a support ticket's client-visible id, your server logs, and the `onError` hook's records all line up on one value without extra wiring. Override the resolution via `KohakuHostDeps.requestId` (TS) / `request_id` (Python) if your infrastructure already has its own correlation-id convention to defer to.
+- **Correlating logs via `x-request-id`**: every response of the mounted kohaku routes carries an `X-Request-Id` header (echoing the inbound `x-request-id` request header when the caller sends one and it is well-formed, otherwise a freshly generated id). The same id appears on every error envelope's `error.requestId` and is passed to `KohakuHostDeps.onError`, so a support ticket's client-visible id, your server logs, and the `onError` hook's records all line up on one value without extra wiring. Override the resolution via `KohakuHostDeps.requestId` (TS) / `request_id` (Python) if your infrastructure already has its own correlation-id convention to defer to. Feed that same id to `kohaku explain <requestId>` or admin-react's DevTools (§6 "Kohaku DevTools and `kohaku explain`") to see the compose it produced end to end — tier, cache, the cache-key breakdown, the decision flow, and every lineage event.
 - **`KOHAKU_DEBUG` (verbose failure logging)**: a project generated by `kohaku init` wires `@kohaku-ui/host-core`'s `createConsoleErrorReporter()` into both `KohakuHostDeps.onError` and the compose observer's `onError` (the generated `app.ts`). By default (`KOHAKU_DEBUG` unset, see the generated `.env.example`) each failure logs a one-line summary; `KOHAKU_DEBUG=1` logs the full cause chain instead (`formatErrorChain`/`format_error_chain`, walking `Error.cause`/`__cause__`) plus the stack trace/traceback. `apps/sample-api` and `python/examples/sales-api` wire the same env var into their own logging without changing the default (unset) output. A related, always-on signal regardless of `KOHAKU_DEBUG`: `ComposeErrorContext.failure` (`"transient" | "invalid" | "budget" | "aborted"`) on every `observer.onError` fallback call lets you tell a provider outage apart from a validation failure programmatically, without parsing `reason` — see the troubleshooting row below.
 - **Trace context / OTel**: `host-rest` reads an incoming `traceparent` / `tracestate` request header pair (W3C Trace Context) and `host-mcp-apps` reads a tool call's `_meta.traceparent` / `_meta.tracestate` (MCP 2026-07-28 / SEP-414); both feed `ComposeOptions.traceContext`, riding along `ComposeTrace` / `ComposeErrorContext` the same way `correlationId` does — purely additive, no-op if the caller sends neither header. `@kohaku-ui/otel`'s `createOtelComposeObserver()` turns `ComposeObserver` calls into spans (`kohaku.compose`, with `gen_ai.*`/`kohaku.*` attributes — see [design.md#trace-context-otel](design.md#trace-context-otel)) and restores that `traceContext` as the span's parent, so the compose nests under the caller's own trace instead of always starting a fresh root. **kohaku ships no exporter or SDK initialization** — that stays your process's own responsibility (a normal `@opentelemetry/sdk-node` / `@opentelemetry/sdk-trace-node` setup registered once at process start, before any compose runs). A minimal wiring:
 
