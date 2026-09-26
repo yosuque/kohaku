@@ -13,10 +13,13 @@
     "@kohaku-ui-sample/api": "workspace:^",
     "@kohaku-ui/authz-hmac": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
     "@kohaku-ui/storage-memory": "workspace:^"
   },
   "devDependencies": {
+    "@kohaku-ui/port-contracts": "workspace:^",
     "typescript": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "vitest": "catalog:"
   }
 }
