@@ -1,0 +1,22 @@
+{
+  "name": "@kohaku-ui-sample/playground",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:audit": "KOHAKU_PLAYGROUND_AUDIT=1 vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@kohaku-ui-sample/api": "workspace:^",
+    "@kohaku-ui/authz-hmac": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/storage-memory": "workspace:^"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}
