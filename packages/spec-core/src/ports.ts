@@ -94,6 +94,22 @@ export interface SemanticPort {
   dataVersion(handle: QueryHandle): Promise<string>;
   /** Returns only column metadata (no row data). Used for chart-kind rules and props filling. */
   describeShape?(handle: QueryHandle): Promise<DataShape>;
+  /**
+   * Validates and normalizes a directly-specified Intent (the `kind: "intent"` path of host-core's
+   * resolveIntent). Unlike `normalize`, which derives an Intent from NL/GUI input, this path lets a caller
+   * hand over an already-structured Intent, which by construction never passes through `normalize` (or
+   * whatever Intent-catalog lookup a `normalize` implementation may consult internally) -- so an unknown
+   * canonical or an invalid/unknown param can otherwise reach `finalizeIntent` unchecked, minting a fresh
+   * intentHash for a request that can never resolve. Implementing this closes that gap: reject such a
+   * request by throwing `IntentValidationError` (spec-core's `errors.ts`; `message` and every issue's
+   * `message` must be safe to show a client, since REST/MCP surface them as-is). On success, returns the
+   * normalized IntentInput (e.g. with schema defaults filled in) that the caller hashes and finalizes
+   * instead of the one it was given.
+   *
+   * Optional and backward compatible: a `SemanticPort` that does not implement it keeps the historical
+   * behavior of finalizing the caller-supplied Intent unchecked.
+   */
+  validateIntent?(intent: IntentInput, ctx: SessionContext): Promise<IntentInput>;
 }
 
 /** Issuance and verification of on-behalf-of capability tokens. */
