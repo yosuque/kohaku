@@ -19,8 +19,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = join(REPO_ROOT, "scripts", "npm-bootstrap.mjs");
 
-/** Package names the stub registry knows; every other name answers 404. */
-const KNOWN = new Set(["@kohaku-ui/old"]);
+/** Package documents the stub registry knows (name -> `versions`); every other name answers 404. */
+const KNOWN: Record<string, Record<string, { deprecated?: string }>> = {
+  "@kohaku-ui/old": { "0.2.0": {} },
+  "@kohaku-ui/boot-done": { "0.0.0-bootstrap.0": { deprecated: "placeholder" } },
+  "@kohaku-ui/boot-half": { "0.0.0-bootstrap.0": {} },
+};
 
 let server: Server;
 let registry: string;
@@ -33,7 +37,9 @@ beforeAll(async () => {
       res.writeHead(500).end();
       return;
     }
-    if (KNOWN.has(name)) res.writeHead(200, { "content-type": "application/json" }).end(`{"name":"${name}"}`);
+    const versions = KNOWN[name];
+    if (versions)
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ name, versions }));
     else res.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -82,18 +88,36 @@ describe("scripts/npm-bootstrap.mjs", () => {
     ]);
     const { code, stdout } = await run(["--root", root]);
     expect(code).toBe(1);
-    expect(stdout).toContain("exists   @kohaku-ui/old");
-    expect(stdout).toContain("MISSING  @kohaku-ui/new");
+    expect(stdout).toContain("exists     @kohaku-ui/old");
+    expect(stdout).toContain("MISSING    @kohaku-ui/new");
     expect(stdout).not.toContain("contracts");
     expect(stdout).not.toContain("workspace-only");
     expect(stdout).toContain("node scripts/npm-bootstrap.mjs --publish");
   });
 
-  it("exits 0 when every publishable package already exists", async () => {
-    const root = fixtureRoot([{ name: "@kohaku-ui/old" }]);
+  it("exits 0 when every package exists or has a finished bootstrap", async () => {
+    const root = fixtureRoot([{ name: "@kohaku-ui/old" }, { name: "@kohaku-ui/boot-done" }]);
     const { code, stdout } = await run(["--root", root]);
     expect(code).toBe(0);
-    expect(stdout).toContain("exists   @kohaku-ui/old");
+    expect(stdout).toContain("exists     @kohaku-ui/old");
+    expect(stdout).toContain("bootstrap  @kohaku-ui/boot-done");
+  });
+
+  it("exits 1 for a placeholder that was never deprecated (a bootstrap that stopped part-way)", async () => {
+    const root = fixtureRoot([{ name: "@kohaku-ui/boot-half" }]);
+    const { code, stdout } = await run(["--root", root]);
+    expect(code).toBe(1);
+    expect(stdout).toContain("BOOTSTRAP  @kohaku-ui/boot-half (unfinished)");
+  });
+
+  it("--publish --dry-run resumes an unfinished bootstrap without publishing the placeholder again", async () => {
+    const root = fixtureRoot([{ name: "@kohaku-ui/boot-half" }, { name: "@kohaku-ui/boot-done" }]);
+    const { code, stdout } = await run(["--root", root, "--publish", "--dry-run"]);
+    expect(code).toBe(0);
+    expect(stdout).not.toContain("$ npm publish");
+    expect(stdout).toContain("$ npm trust github @kohaku-ui/boot-half");
+    expect(stdout).toContain("$ npm deprecate @kohaku-ui/boot-half@0.0.0-bootstrap.0");
+    expect(stdout).not.toContain("# @kohaku-ui/boot-done");
   });
 
   it("--publish --dry-run prints placeholder publish, trusted-publisher and deprecate commands for missing packages only", async () => {

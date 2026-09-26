@@ -24,8 +24,12 @@
  *   node scripts/npm-bootstrap.mjs --publish --dry-run  # print the npm commands instead of running them
  *   options: --root <dir> (default: repo root), --registry <url> (default: https://registry.npmjs.org)
  *
- * Exit codes: list mode exits 1 when any package is missing (so it can gate a checklist), 0 otherwise;
- * `--publish` exits non-zero on the first failing npm command.
+ * Re-running is safe: a package whose only versions are placeholders is never published again. If its
+ * placeholder is not deprecated yet (an earlier run stopped part-way), `--publish` resumes with the
+ * trusted-publisher and deprecate steps.
+ *
+ * Exit codes: list mode exits 1 when any package is missing or has an unfinished bootstrap (so it can
+ * gate a checklist), 0 otherwise. `--publish` exits 1 when a publish or a fresh trust registration fails.
  *
  * ESM, `node:*` only -- no dependencies.
  */
@@ -70,13 +74,41 @@ export function discoverPublishablePackages(root) {
   return packages;
 }
 
-/** `true` if the registry knows the package name, `false` on 404; throws on anything else. */
-export async function existsOnRegistry(name, registry) {
+/**
+ * Where a package stands on the registry:
+ *   - `missing`: the name does not exist (HTTP 404) -- needs the full bootstrap;
+ *   - `placeholder`: only `0.0.0-bootstrap.*` versions exist -- bootstrapped, waiting for its first real
+ *     release; `deprecated` tells whether the last bootstrap step finished;
+ *   - `published`: at least one real version exists -- nothing to do.
+ * Throws on any other status rather than guessing.
+ */
+export async function registryState(name, registry) {
   const url = `${registry.replace(/\/$/, "")}/${encodeURIComponent(name).replace("%40", "@")}`;
-  const res = await fetch(url, { headers: { Accept: "application/vnd.npm.install-v1+json" } });
-  if (res.status === 200) return true;
-  if (res.status === 404) return false;
-  throw new Error(`GET ${url} answered HTTP ${res.status}`);
+  const res = await fetch(url, {
+    headers: { Accept: "application/vnd.npm.install-v1+json", "Cache-Control": "no-cache" },
+  });
+  if (res.status === 404) return { state: "missing", deprecated: false };
+  if (res.status !== 200) throw new Error(`GET ${url} answered HTTP ${res.status}`);
+  const versions = (await res.json()).versions ?? {};
+  const names = Object.keys(versions);
+  if (names.length > 0 && names.every((v) => v.startsWith("0.0.0-bootstrap."))) {
+    return { state: "placeholder", deprecated: Boolean(versions[PLACEHOLDER_VERSION]?.deprecated) };
+  }
+  return { state: "published", deprecated: false };
+}
+
+/**
+ * Waits until a just-published package is readable. The registry answers 404 for a new name for a while
+ * after the PUT succeeds (observed: still 404 ~40 s later), and `npm deprecate` -- which reads the
+ * package first -- fails in that window.
+ */
+async function waitUntilVisible(name, registry, timeoutMs = 300_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await registryState(name, registry)).state !== "missing") return true;
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  return false;
 }
 
 /** `owner/repo` from a `repository.url` like `git+https://github.com/owner/repo.git`. */
@@ -98,13 +130,12 @@ export function placeholderManifest(manifest) {
   };
 }
 
-/** The npm commands that bootstrap one package, as argv arrays (`dir` is the placeholder's directory). */
+/** The npm commands of the three bootstrap steps, as argv arrays (`dir` is the placeholder's directory). */
 export function bootstrapCommands(manifest, dir, registry) {
-  const slug = githubRepoSlug(manifest);
   const reg = ["--registry", registry];
-  return [
-    ["npm", "publish", dir, "--access", "public", "--tag", PLACEHOLDER_TAG, ...reg],
-    [
+  return {
+    publish: ["npm", "publish", dir, "--access", "public", "--tag", PLACEHOLDER_TAG, ...reg],
+    trust: [
       "npm",
       "trust",
       "github",
@@ -112,21 +143,21 @@ export function bootstrapCommands(manifest, dir, registry) {
       "--file",
       WORKFLOW_FILE,
       "--repository",
-      slug,
+      githubRepoSlug(manifest),
       "--environment",
       ENVIRONMENT,
       "--allow-publish",
       "--yes",
       ...reg,
     ],
-    [
+    deprecate: [
       "npm",
       "deprecate",
       `${manifest.name}@${PLACEHOLDER_VERSION}`,
       "Placeholder for the first trusted-publishing release; install a real version instead.",
       ...reg,
     ],
-  ];
+  };
 }
 
 function parseArgs(argv) {
@@ -159,46 +190,69 @@ async function main(argv) {
     return 1;
   }
   const packages = discoverPublishablePackages(opts.root);
-  const missing = [];
+  const todo = [];
   for (const pkg of packages) {
-    const exists = await existsOnRegistry(pkg.name, opts.registry);
-    console.log(`${exists ? "exists " : "MISSING"}  ${pkg.name}`);
-    if (!exists) missing.push(pkg);
+    const { state, deprecated } = await registryState(pkg.name, opts.registry);
+    const label =
+      state === "missing" ? "MISSING  " : state === "published" ? "exists   " : deprecated ? "bootstrap" : "BOOTSTRAP";
+    console.log(`${label}  ${pkg.name}${state === "placeholder" && !deprecated ? " (unfinished)" : ""}`);
+    if (state === "missing" || (state === "placeholder" && !deprecated)) todo.push({ ...pkg, state });
   }
 
   if (!opts.publish) {
-    if (missing.length > 0) {
+    if (todo.length > 0) {
       console.log(
-        `\n${missing.length} package(s) have never been published. Bootstrap them before the release:\n  node scripts/npm-bootstrap.mjs --publish`,
+        `\n${todo.length} package(s) are missing on npm or have an unfinished bootstrap. Bootstrap them before the release:\n  node scripts/npm-bootstrap.mjs --publish`,
       );
       return 1;
     }
     return 0;
   }
 
-  for (const pkg of missing) {
+  /** Runs one npm command; returns whether it succeeded. */
+  const exec = ([cmd, ...args]) => {
+    console.log(`$ ${[cmd, ...args].map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`);
+    if (opts.dryRun) return true;
+    return spawnSync(cmd, args, { stdio: "inherit" }).status === 0;
+  };
+
+  for (const pkg of todo) {
     const dir = mkdtempSync(join(tmpdir(), "kohaku-npm-bootstrap-"));
     try {
-      writeFileSync(join(dir, "package.json"), `${JSON.stringify(placeholderManifest(pkg.manifest), null, 2)}\n`);
-      writeFileSync(
-        join(dir, "README.md"),
-        `# ${pkg.name}\n\nPlaceholder. The real package is published from https://github.com/${githubRepoSlug(pkg.manifest)} by trusted publishing.\n`,
-      );
+      const commands = bootstrapCommands(pkg.manifest, dir, opts.registry);
       console.log(`\n# ${pkg.name}`);
-      for (const [cmd, ...args] of bootstrapCommands(pkg.manifest, dir, opts.registry)) {
-        console.log(`$ ${[cmd, ...args].map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`);
-        if (opts.dryRun) continue;
-        const result = spawnSync(cmd, args, { stdio: "inherit" });
-        if (result.status !== 0) {
-          console.error(`\n${pkg.name}: \`${cmd} ${args[0]}\` failed (exit ${result.status ?? result.signal}).`);
+      if (pkg.state === "missing") {
+        writeFileSync(join(dir, "package.json"), `${JSON.stringify(placeholderManifest(pkg.manifest), null, 2)}\n`);
+        writeFileSync(
+          join(dir, "README.md"),
+          `# ${pkg.name}\n\nPlaceholder. The real package is published from https://github.com/${githubRepoSlug(pkg.manifest)} by trusted publishing.\n`,
+        );
+        if (!exec(commands.publish)) {
+          console.error(`\n${pkg.name}: npm publish failed. Fix the cause and re-run; finished steps are skipped.`);
           return 1;
         }
+        if (!opts.dryRun && !(await waitUntilVisible(pkg.name, opts.registry))) {
+          console.error(`\n${pkg.name}: published, but still not readable on the registry. Re-run later to resume.`);
+          return 1;
+        }
+        if (!exec(commands.trust)) {
+          console.error(`\n${pkg.name}: npm trust failed. Re-run to resume; the placeholder will not be published again.`);
+          return 1;
+        }
+      } else if (!exec(commands.trust)) {
+        // Resuming an unfinished bootstrap: whether the earlier run already registered the trusted
+        // publisher is not readable without another 2FA round-trip, so a failure here (typically "already
+        // configured") is only a warning. release.yml's preflight probe is the authoritative check.
+        console.warn(`${pkg.name}: npm trust failed -- it may already be configured; the release dry run's probe will tell.`);
       }
+      // The placeholder's deprecation is cosmetic (the real release becomes `latest` anyway), so a
+      // failure is reported but does not stop the remaining packages.
+      if (!exec(commands.deprecate)) console.warn(`${pkg.name}: npm deprecate failed; re-run later to retry.`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  if (missing.length === 0) console.log("\nNothing to bootstrap.");
+  if (todo.length === 0) console.log("\nNothing to bootstrap.");
   return 0;
 }
 
