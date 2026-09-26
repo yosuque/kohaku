@@ -104,7 +104,7 @@ jobs:
         run: |
           pnpm python:version
           git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         if: matrix.node-version == 24
         with:
           enable-cache: true
@@ -130,7 +130,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # setup-uv stopped publishing floating major/minor tags after v7 (no `@v10` ref exists), so the full
       # version tag is required here; Dependabot still bumps exact tags.
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
@@ -177,7 +177,7 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: "3.12"
           enable-cache: true
