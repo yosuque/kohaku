@@ -1,4 +1,4 @@
-import { ComposeError } from "@kohaku-ui/composer";
+import { ComposeError, type ComposeErrorContext } from "@kohaku-ui/composer";
 import { QueryRefError, SpecError } from "@kohaku-ui/spec-core";
 
 /**
@@ -76,4 +76,83 @@ export async function failOpen(
   } catch (e) {
     await onFailure(e);
   }
+}
+
+/** Default depth cap for formatErrorChain's `cause` walk — see its doc for why a cap exists at all. */
+const DEFAULT_MAX_CHAIN_DEPTH = 10;
+
+/**
+ * Formats `err`'s full `cause` chain (the ES2022 `Error.cause` convention) as a single log-friendly line:
+ * "name: message" for `err` itself, then for each error it is caused by, joined by " <- " so the immediate
+ * failure reads first and its root cause last. A non-Error value — either `err` itself or a link partway
+ * through the chain — is rendered with `String()` and ends the walk there (a non-Error has no `.cause` of
+ * its own to keep following). Stops after `maxDepth` links regardless of whether the chain is actually
+ * exhausted, so a circular or unexpectedly long `cause` chain can never make this loop forever or produce
+ * an unbounded string.
+ */
+export function formatErrorChain(err: unknown, maxDepth = DEFAULT_MAX_CHAIN_DEPTH): string {
+  const segments: string[] = [];
+  let current: unknown = err;
+  for (let depth = 0; depth < maxDepth && current != null; depth += 1) {
+    if (!(current instanceof Error)) {
+      segments.push(String(current));
+      break;
+    }
+    segments.push(`${current.name}: ${current.message}`);
+    current = current.cause;
+  }
+  return segments.join(" <- ");
+}
+
+export interface ConsoleErrorReporterOptions {
+  /**
+   * Verbose mode: each logged line becomes the full `cause` chain (formatErrorChain) plus the top error's
+   * stack trace, instead of a one-line "prefix: message" summary. Default false. This function never reads
+   * an environment variable itself (e.g. KOHAKU_DEBUG) — resolving `debug` from one is the caller's job
+   * (see `kohaku init`'s generated app.ts and apps/sample-api's wiring), which keeps this function usable
+   * outside a Node/env-var environment too.
+   */
+  debug?: boolean;
+  /** Where to write each formatted line. Default `console.error`. Injectable for tests or a custom log sink. */
+  log?: (line: string) => void;
+}
+
+export interface ConsoleErrorReporter {
+  /** Matches `KohakuHostDeps.onError` (host-rest) verbatim — pass as `onError` directly. */
+  host: (info: { endpoint: string; requestId: string; error: unknown }) => void;
+  /** Matches `ComposeObserver.onError` (composer) verbatim — pass as `observer.onError` directly. */
+  compose: (ctx: ComposeErrorContext, error: unknown) => void;
+}
+
+/**
+ * Builds a pair of `console.error`-backed handlers pre-wired to `KohakuHostDeps.onError` and
+ * `ComposeObserver.onError`'s exact signatures — the smallest reasonable default for a generated project
+ * (`kohaku init`) or a demo host that has not wired its own logging/metrics yet. A product with real
+ * observability infrastructure should supply its own hooks instead; this exists so "what actually went
+ * wrong" is visible on stderr out of the box rather than only inferable from an HTTP 500.
+ */
+export function createConsoleErrorReporter(options: ConsoleErrorReporterOptions = {}): ConsoleErrorReporter {
+  const { debug = false, log = (line: string): void => console.error(line) } = options;
+
+  function writeLine(prefix: string, error: unknown): void {
+    if (!debug) {
+      log(`${prefix}: ${errorMessage(error)}`);
+      return;
+    }
+    const lines = [`${prefix}: ${formatErrorChain(error)}`];
+    if (error instanceof Error && error.stack != null) lines.push(error.stack);
+    log(lines.join("\n"));
+  }
+
+  return {
+    host: (info) => {
+      writeLine(`[kohaku] ${info.endpoint} (request ${info.requestId})`, info.error);
+    },
+    compose: (ctx, error) => {
+      // A "fallback"/"cancelled" phase carries no thrown exception (error is undefined for most failure
+      // kinds) — the failure is described by ctx.reason instead. "hard"/"cache" always carry the causing
+      // exception in `error`. See ComposeErrorContext's own doc for the full phase/field contract.
+      writeLine(`[kohaku] compose ${ctx.phase}`, error ?? ctx.reason ?? "unknown failure");
+    },
+  };
 }

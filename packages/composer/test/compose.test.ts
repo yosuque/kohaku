@@ -1110,12 +1110,40 @@ describe("compose: L1 failure kinds and L2 promotion", () => {
     expect(trace.attempts).toHaveLength(1);
   });
 
-  it("when L1 is transient (PROVIDER), also does not route to L2 (avoiding a double full generation on a provider failure)", async () => {
+  it("when L1 is transient (PROVIDER), also does not route to L2 (avoiding a double full generation on a provider failure), and the reason names the provider outage distinctly from a validation failure", async () => {
     const { llm, callCount } = makeThrowingLlm("PROVIDER");
     const { spec } = await compose(GUI_INPUT, makeCtx(llm, { allowL2: true }));
 
     expect(callCount()).toBe(1);
     expect(spec.provenance.fallback?.from).toBe("L1");
+    // The reason names the LLM provider explicitly (with the underlying LlmError code in parentheses) and
+    // mentions the skipped L2 promotion — not the generic "abort/provider" wording of before, and never the
+    // catalog/structure validation wording (that would be indistinguishable from an actual validation failure).
+    expect(spec.provenance.fallback?.reason).toContain("Skipped L2");
+    expect(spec.provenance.fallback?.reason).toContain("the LLM provider was unavailable (provider error)");
+    expect(spec.provenance.fallback?.reason).not.toContain("catalog/structure validation");
+  });
+
+  it("when L1 is transient (PROVIDER) and L2 is disabled (default), the reason names the provider outage rather than reusing the validation-failure wording", async () => {
+    const { llm, callCount } = makeThrowingLlm("PROVIDER");
+    const { spec } = await compose(GUI_INPUT, makeCtx(llm)); // allowL2 unset (default false)
+
+    expect(callCount()).toBe(1);
+    expect(spec.provenance.fallback?.from).toBe("L1");
+    expect(spec.provenance.fallback?.reason).toBe(
+      "L1 generation failed: the LLM provider was unavailable (provider error). Check KOHAKU_LLM_PROVIDER and the provider API key.",
+    );
+  });
+
+  it("when L1 is invalid (validation failure) and L2 is disabled, the reason is the plain validation-failure message (unchanged)", async () => {
+    const empty = { components: [], events: [] };
+    const llm = new FakeLlm({ objects: [empty, empty] }); // allowL2 unset (default false)
+    const { spec } = await compose(GUI_INPUT, makeCtx(llm));
+
+    expect(spec.provenance.fallback?.from).toBe("L1");
+    expect(spec.provenance.fallback?.reason).toBe(
+      "L1 constrained generation failed catalog/structure validation",
+    );
   });
 
   it("when L1 is invalid (validation failure), promotes to L2 with allowL2=true (happy-path invariance)", async () => {
@@ -1232,6 +1260,72 @@ describe("compose: observability of the failure path (observer.onError, #7)", ()
     expect(captured).toHaveLength(1);
     expect(captured[0]!.ctx.phase).toBe("hard");
     expect(captured[0]!.error).toBeInstanceOf(Error);
+    // An untyped cause (a plain Error with no `code` property) may leak internals, so its message is not
+    // appended — the wrapped message stays exactly "query resolution failed".
+    expect((captured[0]!.error as Error).message).toBe("query resolution failed");
+  });
+
+  it("when resolveQuery throws a cause marked `clientSafe: true`, SEMANTIC_FAILED's message includes the cause's own message", async () => {
+    const captured: Captured[] = [];
+    const semantic = makeSemantic();
+    class ClientSafeCause extends Error {
+      readonly code = "UNKNOWN_INTENT" as const;
+      readonly clientSafe = true as const;
+    }
+    semantic.resolveQuery = async () => {
+      throw new ClientSafeCause('unknown intent "sales.nope"');
+    };
+    const ctx: ComposeContext = {
+      catalog,
+      semantic,
+      storage: makeStorage(),
+      llm: new FakeLlm(),
+      observer: {
+        onError: (c, error) => {
+          captured.push({ ctx: c, error });
+        },
+      },
+    };
+
+    await expect(compose(GUI_INPUT, ctx)).rejects.toThrow(
+      'query resolution failed: unknown intent "sales.nope"',
+    );
+    expect(captured).toHaveLength(1);
+    expect((captured[0]!.error as Error).message).toBe(
+      'query resolution failed: unknown intent "sales.nope"',
+    );
+    // The wire is unaffected: the wrapped ComposeError's own `code` stays SEMANTIC_FAILED, not the cause's.
+    expect((captured[0]!.error as Error & { code?: string }).code).toBe("SEMANTIC_FAILED");
+  });
+
+  it("a cause with a string `code` but no `clientSafe` marker is NOT concatenated (a raw pg/fs/ioredis/fetch error must not leak internals)", async () => {
+    const captured: Captured[] = [];
+    const semantic = makeSemantic();
+    // Shaped like a real ioredis/pg connection error: a string `code` (the "typed error" shape alone) but a
+    // message carrying a hostname — exactly what isClientSafeCause's stricter marker exists to withhold.
+    class ConnectionRefusedError extends Error {
+      readonly code = "ECONNREFUSED" as const;
+    }
+    semantic.resolveQuery = async () => {
+      throw new ConnectionRefusedError("connect ECONNREFUSED internal-db.prod.example.internal:5432");
+    };
+    const ctx: ComposeContext = {
+      catalog,
+      semantic,
+      storage: makeStorage(),
+      llm: new FakeLlm(),
+      observer: {
+        onError: (c, error) => {
+          captured.push({ ctx: c, error });
+        },
+      },
+    };
+
+    await expect(compose(GUI_INPUT, ctx)).rejects.toThrow(/^query resolution failed$/);
+    expect(captured).toHaveLength(1);
+    const message = (captured[0]!.error as Error).message;
+    expect(message).toBe("query resolution failed");
+    expect(message).not.toContain("internal-db.prod.example.internal");
   });
 
   it("on the deterministic downgrade from a generation failure, onError(phase:fallback) is called once with the reason and intent", async () => {
@@ -1255,8 +1349,33 @@ describe("compose: observability of the failure path (observer.onError, #7)", ()
     expect(captured[0]!.ctx.reason).toContain("L1");
     expect(captured[0]!.ctx.intent).toBeDefined();
     expect(captured[0]!.ctx.cacheKey).toBeDefined();
-    // A fallback involves no exception throwing, so error is undefined (the information is in ctx.reason)
+    // A validate()-rejected (not thrown) response classifies as "invalid", and involves no exception
+    // throwing, so error is undefined (the information is in ctx.reason).
+    expect(captured[0]!.ctx.failure).toBe("invalid");
     expect(captured[0]!.error).toBeUndefined();
+  });
+
+  it("on a transient (LLM provider) fallback, onError receives failure:'transient' and the underlying LlmError", async () => {
+    const captured: Captured[] = [];
+    const { llm } = makeThrowingLlm("PROVIDER");
+    const ctx: ComposeContext = {
+      ...makeCtx(llm),
+      observer: {
+        onError: (c, error) => {
+          captured.push({ ctx: c, error });
+        },
+      },
+    };
+
+    const { spec } = await compose(GUI_INPUT, ctx);
+    expect(spec.provenance.fallback?.from).toBe("L1");
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.ctx.phase).toBe("fallback");
+    expect(captured[0]!.ctx.failure).toBe("transient");
+    // Previously always undefined for a fallback — now carries the LlmError that actually caused it.
+    expect(captured[0]!.error).toBeInstanceOf(LlmError);
+    expect((captured[0]!.error as InstanceType<typeof LlmError>).code).toBe("PROVIDER");
   });
 
   it("a normal compose does not call onError", async () => {

@@ -130,6 +130,7 @@ describe("renderPackageJson", () => {
       scripts: Record<string, string>;
     };
     expect(pkg.dependencies["@kohaku-ui/host-rest"]).toBe(`^${CLI_VERSION}`);
+    expect(pkg.dependencies["@kohaku-ui/host-core"]).toBe(`^${CLI_VERSION}`);
     expect(pkg.dependencies["@kohaku-ui/semantic-llm"]).toBe(`^${CLI_VERSION}`);
     expect(pkg.dependencies["@kohaku-ui/storage-memory"]).toBe(`^${CLI_VERSION}`);
     expect(pkg.dependencies["@kohaku-ui/authz-hmac"]).toBe(`^${CLI_VERSION}`);
