@@ -9,38 +9,35 @@
 ## 最初のコード
 
 ```bash
-npm install @kohaku-ui/host-mcp-apps @kohaku-ui/registry @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/spec-core @modelcontextprotocol/server zod
-npx @kohaku-ui/cli scaffold ports --out ./kohaku   # 4 つの Port を埋めるためのファイル
+npm install @kohaku-ui/host @kohaku-ui/host-mcp-apps @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/spec-core @modelcontextprotocol/server zod
+npx @kohaku-ui/cli scaffold ports --out ./kohaku   # DomainPort と Intent カタログを埋めるためのファイル
 ```
 
 ```ts
 import { readFile } from "node:fs/promises";
-import { attachKohakuToMcpServer, intentToolsFromCatalog } from "@kohaku-ui/host-mcp-apps";
+import { createKohakuHost } from "@kohaku-ui/host";
+import { attachKohakuMcp } from "@kohaku-ui/host/mcp";
+import { intentToolsFromCatalog } from "@kohaku-ui/host-mcp-apps";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { intents } from "./kohaku/intents.js"; // your hand-written Intent catalog (defineIntent)
-import {
-  authzPort as authz,
-  domainPort as domain,
-  semanticPort as semantic,
-  storagePort as storage,
-} from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports gives you a DomainPort to start from)
+import { domainPort as domain } from "./kohaku/ports.js"; // your DomainPort (kohaku scaffold ports)
 
-// The same Composition Service a REST host would use: one Spec per Intent, cached, whoever asks.
-const compose = { catalog: resolveCatalog(coreCatalog), semantic, storage, llm: createLlmFromEnv() };
+const host = createKohakuHost({
+  domain,
+  querySource: "my-product",
+  llm: createLlmFromEnv(),
+  intents: intents.map((i) => i.toIntentDef()),
+  dataVersion: () => "my-product@1",
+});
 const server = new McpServer({ name: "my-product", version: "0.1.0" });
-attachKohakuToMcpServer(
-  server,
-  { compose, domain, authz, querySource: "my-product" },
-  {
-    // The shared renderer bundle the host shows in its iframe (built once; see "The renderer" below).
-    rendererHtml: () => readFile("./renderer/index.html", "utf8"),
-    // One typed MCP tool per Intent (sales.summary → sales_summary), input schema derived from the Zod params.
-    intentTools: intentToolsFromCatalog(intents.map((i) => i.toToolSource())),
-  },
-);
+attachKohakuMcp(server, host, {
+  // The shared renderer bundle the host shows in its iframe (built once; see "The renderer" below).
+  rendererHtml: () => readFile("./renderer/index.html", "utf8"),
+  // One typed MCP tool per Intent (sales.summary → sales_summary), input schema derived from the Zod params.
+  intentTools: intentToolsFromCatalog(intents.map((i) => i.toToolSource())),
+});
 await server.connect(new StdioServerTransport());
 ```
 
@@ -48,9 +45,9 @@ await server.connect(new StdioServerTransport());
 
 この 3 つの正体:
 
-- **`ports.ts`** — 4 つの Port: `domain`(あなたのデータ API: `listOperations` / `invoke`)、`semantic`(Intent → `query://` ハンドルと `dataVersion`)、`authz`(capability トークン。参照実装は `@kohaku-ui/authz-hmac` の `createHmacAuthzPort`、`packages/authz-hmac/src/hmac-authz-port.ts`)、`storage`(最初はインメモリの Map で十分)。`kohaku scaffold ports` がメソッドごとに TODO 付きのファイルを書き出します。各 Port の歩き方は[ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
-- **`intents.ts`** — 自分で書く Intent カタログです(`scaffold ports` が生成するのは `ports.ts` と `server.ts` だけです): Intent ごとに `defineIntent` を 1 回: 正規名、Zod の `params`、NL の `examples`、`queries`。MCP ツール・その入力スキーマ・SemanticPort 定義はすべてこの単一定義から導出されます。
-- **`createLlmFromEnv()`** — `KOHAKU_LLM_PROVIDER` とプロバイダのキー(Claude / OpenAI / Gemini / Ollama / llama.cpp)を読みます。`policy.fixedSpecs` に固定 Spec を登録すれば、その Intent はモデルにまったく届かず、それでもウィジェットは描画されます。
+- **`ports.ts`** — あなたが自分で書き続ける唯一の Port: `domain`(あなたのデータ API: `listOperations` / `invoke`)。他の 3 つ(インメモリの `storage`、HMAC の `authz`、下の `intents.ts` から組み立てる `semantic`)は `createKohakuHost` が既定を用意します — 既定を超えたら差し替えてください([`@kohaku-ui/host` の README](https://github.com/yosuque/kohaku/tree/main/packages/host#readme))。`kohaku scaffold ports` が TODO 付きのファイルを書き出します。既定が置き換えている 4 つの Port の歩き方は[ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
+- **`intents.ts`** — こちらも `kohaku scaffold ports` が書き出す Intent カタログです: Intent ごとに `defineIntent` を 1 回: 正規名、Zod の `params`、NL の `examples`、`queries`。MCP ツール・その入力スキーマ・`createKohakuHost` の既定 SemanticPort はすべてこの単一定義から導出されます。
+- **`createLlmFromEnv()`** — `KOHAKU_LLM_PROVIDER` とプロバイダのキー(Claude / OpenAI / Gemini / Ollama / llama.cpp)を読みます。`createKohakuHost` の `policy` オプションに固定 Spec を登録すれば、その Intent はモデルにまったく届かず、それでもウィジェットは描画されます。
 
 ## レンダラー
 
@@ -64,6 +61,6 @@ iframe には共有レンダラーが**自己完結の HTML 1 ファイル**と�
 
 ## 次のステップ
 
-- 同じ Spec を Web アプリにも配信する: [パス (b)](react-dashboard.ja.md)(React レンダラー)と REST プロファイルの `@kohaku-ui/host-rest`。
+- 同じ Spec を Web アプリにも配信する: [パス (b)](react-dashboard.ja.md)(React レンダラー)— 上の `host.app` はすでに REST ホストです(内部は `@kohaku-ui/host-rest`)。`@hono/node-server` の `serve()` でそのままマウントできます。
 - カタログの範囲内でモデルに合成させ、モデルの発明を統制する: [パス (c)](full-stack.ja.md)。
 - リモートホスト向け Streamable HTTP、ターミナル向け `kohaku_render_snapshot`、レガシーの `ui://` リソース: [ユーザーガイド §5](../user-guide.ja.md#5-外部チャットmcpから使う)。参照配線は `apps/sample-mcp/src/setup.ts`。

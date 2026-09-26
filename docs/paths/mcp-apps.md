@@ -9,38 +9,35 @@ English | [日本語](mcp-apps.ja.md)
 ## The first code
 
 ```bash
-npm install @kohaku-ui/host-mcp-apps @kohaku-ui/registry @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/spec-core @modelcontextprotocol/server zod
-npx @kohaku-ui/cli scaffold ports --out ./kohaku   # the four Ports, as a file to fill in
+npm install @kohaku-ui/host @kohaku-ui/host-mcp-apps @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/spec-core @modelcontextprotocol/server zod
+npx @kohaku-ui/cli scaffold ports --out ./kohaku   # a DomainPort + an Intent catalog, as files to fill in
 ```
 
 ```ts
 import { readFile } from "node:fs/promises";
-import { attachKohakuToMcpServer, intentToolsFromCatalog } from "@kohaku-ui/host-mcp-apps";
+import { createKohakuHost } from "@kohaku-ui/host";
+import { attachKohakuMcp } from "@kohaku-ui/host/mcp";
+import { intentToolsFromCatalog } from "@kohaku-ui/host-mcp-apps";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { intents } from "./kohaku/intents.js"; // your hand-written Intent catalog (defineIntent)
-import {
-  authzPort as authz,
-  domainPort as domain,
-  semanticPort as semantic,
-  storagePort as storage,
-} from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports gives you a DomainPort to start from)
+import { domainPort as domain } from "./kohaku/ports.js"; // your DomainPort (kohaku scaffold ports)
 
-// The same Composition Service a REST host would use: one Spec per Intent, cached, whoever asks.
-const compose = { catalog: resolveCatalog(coreCatalog), semantic, storage, llm: createLlmFromEnv() };
+const host = createKohakuHost({
+  domain,
+  querySource: "my-product",
+  llm: createLlmFromEnv(),
+  intents: intents.map((i) => i.toIntentDef()),
+  dataVersion: () => "my-product@1",
+});
 const server = new McpServer({ name: "my-product", version: "0.1.0" });
-attachKohakuToMcpServer(
-  server,
-  { compose, domain, authz, querySource: "my-product" },
-  {
-    // The shared renderer bundle the host shows in its iframe (built once; see "The renderer" below).
-    rendererHtml: () => readFile("./renderer/index.html", "utf8"),
-    // One typed MCP tool per Intent (sales.summary → sales_summary), input schema derived from the Zod params.
-    intentTools: intentToolsFromCatalog(intents.map((i) => i.toToolSource())),
-  },
-);
+attachKohakuMcp(server, host, {
+  // The shared renderer bundle the host shows in its iframe (built once; see "The renderer" below).
+  rendererHtml: () => readFile("./renderer/index.html", "utf8"),
+  // One typed MCP tool per Intent (sales.summary → sales_summary), input schema derived from the Zod params.
+  intentTools: intentToolsFromCatalog(intents.map((i) => i.toToolSource())),
+});
 await server.connect(new StdioServerTransport());
 ```
 
@@ -48,9 +45,9 @@ Register it with a host — `claude mcp add my-product -- node ./server.js` for 
 
 What these three pieces are:
 
-- **`ports.ts`** — the four Ports: `domain` (your data API: `listOperations` / `invoke`), `semantic` (Intent → `query://` handle, plus `dataVersion`), `authz` (capability tokens; the reference implementation is `createHmacAuthzPort` from `@kohaku-ui/authz-hmac`, `packages/authz-hmac/src/hmac-authz-port.ts`), `storage` (an in-memory Map is enough to start). `kohaku scaffold ports` writes the file with a TODO per method. The [User guide §6, Step 0](../user-guide.md#step-0--server-driven-ui-without-an-llm) walks through each one.
-- **`intents.ts`** — your Intent catalog, written by hand (`scaffold ports` only generates `ports.ts` and `server.ts`): `defineIntent` once per Intent: canonical name, a Zod `params` schema, NL `examples`, and `queries`. The MCP tool, its input schema, and the SemanticPort definition all derive from that single definition.
-- **`createLlmFromEnv()`** — reads `KOHAKU_LLM_PROVIDER` / the provider key (Claude / OpenAI / Gemini / Ollama / llama.cpp). Register fixed Specs in `policy.fixedSpecs` and the Intent never reaches the model at all — the widget still renders.
+- **`ports.ts`** — the one Port every product still writes by hand: `domain` (your data API: `listOperations` / `invoke`). `createKohakuHost` supplies working defaults for the other three (an in-memory `storage`, HMAC `authz`, and a `semantic` built from `intents.ts` below) — override any of them once you outgrow the default (see [`@kohaku-ui/host`'s README](https://github.com/yosuque/kohaku/tree/main/packages/host#readme)). `kohaku scaffold ports` writes the file with a TODO. The [User guide §6, Step 0](../user-guide.md#step-0--server-driven-ui-without-an-llm) walks through the four Ports this replaces defaults for.
+- **`intents.ts`** — your Intent catalog, also written by `kohaku scaffold ports`: `defineIntent` once per Intent: canonical name, a Zod `params` schema, NL `examples`, and `queries`. The MCP tool, its input schema, and `createKohakuHost`'s default SemanticPort all derive from that single definition.
+- **`createLlmFromEnv()`** — reads `KOHAKU_LLM_PROVIDER` / the provider key (Claude / OpenAI / Gemini / Ollama / llama.cpp). Register fixed Specs in `policy` (an option of `createKohakuHost`) and the Intent never reaches the model at all — the widget still renders.
 
 ## The renderer
 
@@ -64,6 +61,6 @@ The iframe needs the shared renderer as a **single self-contained HTML file** (`
 
 ## Next steps
 
-- Serve the same Specs to a web app: [Path (b)](react-dashboard.md) (the React renderer) and `@kohaku-ui/host-rest` for the REST profile.
+- Serve the same Specs to a web app: [Path (b)](react-dashboard.md) (the React renderer) — `host.app` above already is a REST host (`@kohaku-ui/host-rest` under the hood); mount it with `@hono/node-server`'s `serve()`.
 - Let the model compose within your catalog, and govern what it invents: [Path (c)](full-stack.md).
 - Streamable HTTP for remote hosts, `kohaku_render_snapshot` for terminals, legacy `ui://` resources: [User guide §5](../user-guide.md#5-using-it-from-an-external-chat-mcp). The reference wiring is `apps/sample-mcp/src/setup.ts`.

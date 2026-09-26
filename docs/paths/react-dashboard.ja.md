@@ -46,7 +46,7 @@ export function Dashboard() {
 
 ## 2. ホストから流す(参照渡しのデータ)
 
-チャートや表が運ぶのは `query://` **参照**で、行データではありません。Spec を合成したホストがその参照に対してだけ短命の capability を発行し、部品はそれを使って取得します。同梱のサンプルホスト(リポジトリで `pnpm dev`、API は `:8787`)か自作ホスト([パス (c)](full-stack.ja.md))を起動して:
+チャートや表が運ぶのは `query://` **参照**で、行データではありません。Spec を合成したホストがその参照に対してだけ短命の capability を発行し、部品はそれを使って取得します。同梱のサンプルホスト(リポジトリで `pnpm dev`、API は `:8787`)か自作ホスト(自作の最短経路は `@kohaku-ui/host` の `createKohakuHost()` — [パス (a)](mcp-apps.ja.md)がエンドツーエンドで示します。書くのは `DomainPort` と Intent カタログだけです。L2・昇格・固定化まで含む本格的な統治が要るなら[パス (c)](full-stack.ja.md))を起動して:
 
 ```bash
 npm install @kohaku-ui/client @kohaku-ui/data-binding
@@ -85,7 +85,7 @@ export function Dashboard() {
 
 ## この先
 
-- **自分のデータで自分の L0 画面**: 4 つの Port を実装し(`node cli/bin/kohaku.js scaffold ports` がファイルを生成)、固定 Spec を `policy.fixedSpecs` に登録する — [ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
+- **自分のデータで自分の L0 画面**: `createKohakuHost()`(`@kohaku-ui/host`)が要求するのは `DomainPort` だけ(`node cli/bin/kohaku.js scaffold ports` がファイルを生成)。固定 Spec はその `policy` オプションに登録する — [ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
 - **イベントとドリルダウン**: Spec に `events`(`table1.rowClick → intent.patch`)を宣言し、`RendererProvider` に `onEvent` を渡すとホストが再合成する — [ユーザーガイド デモ 4](../user-guide.ja.md#デモ-4--インタラクションループと固定化)。
 - **カタログの範囲内でモデルに合成させる(L1)**: [パス (c)](full-stack.ja.md)。
 - **React なしで同じ Spec を**: `@kohaku-ui/renderer-wc` の `<kohaku-surface>` — [ユーザーガイド §2](../user-guide.ja.md#非-react-レンダラーの実演web-components--react-ゼロ)。

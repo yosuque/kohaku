@@ -6,6 +6,8 @@
 
 **所要時間目安:** あなたの LLM で合成する REST ホストまで約 30 分。サンプルで昇格ループを端から端まで歩くのに半日。
 
+lineage・昇格・固定化が要らないなら、`@kohaku-ui/host` の `createKohakuHost()`([パス (a)](mcp-apps.ja.md))がこのパスで今も手で配線している 3 つの Port(`authz`、`storage`、`semantic`)に既定を用意して 1 回の呼び出しで済ませます。このパスが `createKohakuRoutes` を直接使い続けるのは、下記の `recorder` / `promotions` / `fixations` / `authorizeGovernance` が `createKohakuHost` がまだカバーしていない統治面のオプションだからです。
+
 ## 最初のコード: 統制付き REST ホスト
 
 ```bash

@@ -36,6 +36,11 @@ Every default (`storage`, `authz`, `semantic`, `catalog`) can be overridden with
 implementation; the contract is [@kohaku-ui/spec-core](https://github.com/yosuque/kohaku/tree/main/packages/spec-core)'s
 `ports.ts`. `kohaku init` generates a project wired this way.
 
+The default `authz` needs a capability secret: set the `KOHAKU_CAPABILITY_SECRET` environment variable
+(`kohaku init` generates one into a project's `.env`) or pass `capabilitySecret`. Without either,
+`createKohakuHost` throws — pass `dev: true` for a temporary, randomly generated secret instead (local
+development only; every capability issued under it is invalidated on restart).
+
 ## MCP Apps
 
 `@kohaku-ui/host/mcp` attaches the same host to an MCP server (`@modelcontextprotocol/server`, an optional

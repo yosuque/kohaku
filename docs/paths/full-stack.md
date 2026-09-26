@@ -6,6 +6,8 @@ English | [日本語](full-stack.ja.md)
 
 **Time:** about 30 minutes to a REST host that composes with your LLM; an afternoon to walk the promotion loop end to end with the sample.
 
+Don't need lineage, promotion or fixation? `@kohaku-ui/host`'s `createKohakuHost()` ([Path (a)](mcp-apps.md)) wires the same three Ports this path still hand-wires (`authz`, `storage`, `semantic`) with working defaults in one call — this path builds on `createKohakuRoutes` directly instead, because `recorder` / `promotions` / `fixations` / `authorizeGovernance` below are governance-plane options `createKohakuHost` does not (yet) cover.
+
 ## The first code: a governed REST host
 
 ```bash
