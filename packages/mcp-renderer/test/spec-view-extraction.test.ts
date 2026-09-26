@@ -1,5 +1,5 @@
 /**
- * Pure-logic checks for the bridge's Spec extraction / self-recovery decisions (renderer/host-integration.ts).
+ * Pure-logic checks for the bridge's Spec extraction / self-recovery decisions (boot/host-integration.ts).
  * Pins the behavior of extractSpecView (the shared core of tool-result / self-recovery / kohaku_event),
  * readInitialData (the tool-result's _meta co-embedded initial data), and recoveryBlockReason without a DOM — the characterization
  * net for decomposing main.tsx's bootBridge.
@@ -12,7 +12,7 @@ import {
   INITIAL_DATA_META_KEY,
   readInitialData,
   recoveryBlockReason,
-} from "../renderer/host-integration.js";
+} from "../src/boot/host-integration.js";
 
 /** Minimal valid Spec that passes parseSpec (wire form). intent.hash must be in `sha256:<hex64>` format. */
 const WIRE_SPEC = {
