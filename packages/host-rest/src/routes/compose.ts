@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { type ComposeResult, composeStream, type TraceContext, withTenantCatalog } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
@@ -407,9 +406,11 @@ function fixationHost(deps: KohakuHostDeps): hostCore.FixationDeliveryHost {
       fixations: deps.fixations,
       serialize: (scope, fn) => withFixationLock(deps, scope.tenant, scope.intentHash, fn),
       // requestId is threaded in by resolveFixatedForRest/composeForRest below from the triggering request;
-      // the randomUUID() fallback only guards a hypothetical future caller that omits it.
+      // the crypto.randomUUID() fallback only guards a hypothetical future caller that omits it.
+      // globalThis.crypto (not node:crypto) so this file has no Node-only import: Node >= 19 and every
+      // evergreen browser both expose the same Web Crypto randomUUID() on globalThis.crypto.
       onSelfHealError: (endpoint, error, requestId) => {
-        void reportHostError(deps, endpoint, requestId ?? randomUUID(), error);
+        void reportHostError(deps, endpoint, requestId ?? globalThis.crypto.randomUUID(), error);
       },
     };
     fixationHostByDeps.set(deps, host);
