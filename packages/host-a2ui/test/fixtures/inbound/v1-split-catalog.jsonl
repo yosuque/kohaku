@@ -1,0 +1,1 @@
+{"version":"v1.0","createSurface":{"surfaceId":"srf-3","components":[{"id":"root","component":"Column","catalogId":"https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json","children":["kpi"]},{"id":"kpi","component":"presentChart","catalogId":"https://kohaku-ui.dev/a2ui/catalogs/core.json","kind":"bar","x":"region","y":"revenue"}]}}

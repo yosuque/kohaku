@@ -950,6 +950,15 @@ importers:
         specifier: workspace:^
         version: link:../spec-core
     devDependencies:
+      '@kohaku-ui/lineage':
+        specifier: workspace:^
+        version: link:../lineage
+      '@kohaku-ui/storage-memory':
+        specifier: workspace:^
+        version: link:../storage-memory
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

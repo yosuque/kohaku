@@ -1,0 +1,3 @@
+{"version":"v0.9.1","createSurface":{"surfaceId":"srf-1","catalogId":"https://a2ui.org/specification/v0_9_1/catalogs/basic/catalog.json"}}
+{"version":"v0.9.1","updateComponents":{"surfaceId":"srf-1","components":[{"id":"root","component":"Column","children":["hdr","btn"]},{"id":"hdr","component":"Text","text":"Hello from a third-party agent","variant":"h2"},{"id":"btn","component":"Button","child":"btn_label","action":{"event":{"name":"btn.press","context":{}}}},{"id":"btn_label","component":"Text","text":"Go"}]}}
+{"version":"v0.9.1","updateDataModel":{"surfaceId":"srf-1","path":"/greeting","value":"hi"}}
