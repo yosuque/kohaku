@@ -46,14 +46,19 @@ jobs:
       # Report-only: the remaining high-severity findings come from transitive dependencies of jsdom, the MCP SDK,
       # and the sample web app, not from any published package's own runtime dependencies. Kept non-blocking until
       # upstream fixes land; still visible in the job log for tracking.
+      # One leg only: the audit reads the lockfile, not the Node runtime, so the 22 leg would repeat it verbatim.
       - name: Production dependency audit (report only)
+        if: matrix.node-version == 24
         run: pnpm audit --prod --audit-level=high
         continue-on-error: true
       # One run of the suite per leg: the 24 leg runs it under coverage (the thresholds in
       # vitest.config.ts are the gate), the 22 leg runs it plain to prove the declared Node floor.
       - name: Test (with coverage on the primary leg)
         run: ${{ matrix.node-version == 24 && 'pnpm test:coverage' || 'pnpm test' }}
+      # One leg only: tsc's output depends on the TypeScript version and @types/node (both pinned in the
+      # catalog), never on the Node runtime executing it, so the 22 leg would repeat it verbatim.
       - run: pnpm typecheck
+        if: matrix.node-version == 24
       - run: node cli/bin/kohaku.js conformance --self
       # Everything below this line must run exactly once per CI run (a coverage upload artifact name
       # collision, or two legs racing to write/verify the same generated files), so it is gated to a single
@@ -104,10 +109,11 @@ jobs:
         run: |
           pnpm python:version
           git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py
+      # Only here for `uvx zizmor` below, so no cache: with caching on, setup-uv hashes its default
+      # `**/pyproject.toml` / `**/uv.lock` / ... globs to build the key, and after `pnpm install` that walk
+      # descends into node_modules and took ~8 minutes of this job's ~11.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         if: matrix.node-version == 24
-        with:
-          enable-cache: true
       # Report-only static analysis of the workflows themselves (template injection, unpinned actions,
       # excessive permissions). Same stance as the dependency audit: visible, not yet blocking.
       # Pinned to an exact version for the same reason the actions above are pinned to a commit SHA
@@ -134,19 +140,39 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+          # uv.lock alone determines the environment; the default globs walk the whole checkout.
+          cache-dependency-glob: python/uv.lock
       - run: uv sync --frozen
       - run: uv run ruff check
       - run: uv run mypy
       - run: uv run lint-imports
       - run: uv run pytest
-  # Conformance black-box check against the TS host itself (previously only exercised in-process by
-  # spec/test/conformance.test.ts; this additionally proves the compiled CLI against a real running server, the
-  # same way conformance-python below proves the Python port). No LLM key is configured, so the default `claude`
-  # provider only warns at startup (KOHAKU_LLM_STRUCTURED_MODE etc. never engage); the checked Intent
-  # (sales.quarterly_summary) is served by the L0 fixed path and never calls the LLM.
+  # REST black-box conformance against the TS host itself, once per storage backend behind it: `file` (the
+  # sample's default port) proves the compiled CLI against a real running server, the same way
+  # conformance-python below proves the Python port; `redis` / `postgres` catch a backend-specific deviation
+  # in the Spec cache / lineage / fixation path through the spec suite, not only through the contract tests.
+  # (Formerly two jobs, conformance-ts and conformance-ts-adapters; one matrix is one fewer runner per run.)
+  # No LLM key is configured, so the default `claude` provider only warns at startup (KOHAKU_LLM_STRUCTURED_MODE
+  # etc. never engage); the checked Intent (sales.quarterly_summary) is served by the L0 fixed path and never
+  # calls the LLM.
   conformance-ts:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      matrix:
+        storage: [file, redis, postgres]
+    # Each leg starts only the backend it tests: a service whose image is an empty string is not started.
+    services:
+      redis:
+        image: ${{ matrix.storage == 'redis' && 'redis:7-alpine' || '' }}
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: ${{ matrix.storage == 'postgres' && 'postgres:16-alpine' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -155,7 +181,16 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Start TS sample-api and run REST black-box check
+      - name: Start TS sample-api on ${{ matrix.storage }} and run the REST black-box check
+        env:
+          KOHAKU_STORAGE: ${{ matrix.storage }}
+          KOHAKU_REDIS_URL: redis://localhost:6379
+          KOHAKU_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+          # A redis/postgres backend requires a real capability secret (sample-api's from-env refuses to
+          # start on the fixed demo default once storage leaves the single-process file/hmac shape) — this
+          # is a CI-only value, never used outside this ephemeral job. The `file` leg gets an empty value,
+          # which from-env treats as unset, so it keeps exercising the zero-config demo default.
+          KOHAKU_CAPABILITY_SECRET: ${{ matrix.storage != 'file' && 'ci-conformance-adapters-test-secret-not-for-production-use' || '' }}
         run: |
           LOG=$(mktemp)
           (KOHAKU_DATA_DIR=$(mktemp -d) PORT=8787 pnpm --filter @kohaku-ui-sample/api start) >"$LOG" 2>&1 &
@@ -181,6 +216,9 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+          # Must stay scoped: the default globs (**/pyproject.toml, **/uv.lock, ...) are walked after
+          # `pnpm install` above, i.e. through node_modules, which took ~7 minutes of this ~7.5-minute job.
+          cache-dependency-glob: python/uv.lock
       - run: uv sync --frozen
         working-directory: python
       # The L2 JS sidecar live test requires Node+CLI. The python job has no Node and always skips it, so we run it
@@ -250,50 +288,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm vitest run --project storage-redis --project storage-postgres --project authz-jwt --project sample-api
-  # REST black-box conformance with each production storage backend behind the TS sample host (the same
-  # check conformance-ts runs against the file port), so a backend-specific deviation in the Spec cache /
-  # lineage / fixation path is caught by the spec suite, not only by the contract tests.
-  conformance-ts-adapters:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      matrix:
-        storage: [redis, postgres]
-    services:
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
-        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - name: Start TS sample-api on ${{ matrix.storage }} and run the REST black-box check
-        env:
-          KOHAKU_STORAGE: ${{ matrix.storage }}
-          KOHAKU_REDIS_URL: redis://localhost:6379
-          KOHAKU_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
-          # A redis/postgres backend requires a real capability secret (sample-api's from-env refuses to
-          # start on the fixed demo default once storage leaves the single-process file/hmac shape) — this
-          # is a CI-only value, never used outside this ephemeral job.
-          KOHAKU_CAPABILITY_SECRET: ci-conformance-adapters-test-secret-not-for-production-use
-        run: |
-          LOG=$(mktemp)
-          (KOHAKU_DATA_DIR=$(mktemp -d) PORT=8787 pnpm --filter @kohaku-ui-sample/api start) >"$LOG" 2>&1 &
-          SERVER_PID=$!
-          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
-          scripts/wait-for-http.sh http://localhost:8787/api/kohaku/catalog 30 "$LOG"
-          node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku
   # The `ci` job above typechecks and tests against `src/*.ts` directly (packages export source; publishConfig
   # only applies once a package is packed). That means nothing in `ci` ever notices a missing publishConfig
   # entry, a `.d.ts` that stops resolving once packed, or a guest closure (packages/sandbox) whose stringified
