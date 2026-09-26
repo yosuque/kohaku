@@ -50,6 +50,8 @@ export type {
   CapabilityDecl,
   CatalogIssue,
   ComponentDefinition,
+  DeprecationDecl,
+  DeprecationReplacedBy,
   FallbackDecl,
   GoldenFixtureRef,
   ImplementationDecl,
