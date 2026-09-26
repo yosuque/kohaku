@@ -175,7 +175,7 @@
 
 ### 6.3 A2UI プロファイル [Draft]
 
-UISpec / SpecPatch を A2UI(隣接リスト形の宣言的 UI メッセージ)へ写すプロファイル。既定の対象は **A2UI v0.9.1**(a2ui.org の現行安定版)。**opt-in の `target: "v1.0"`** を指定すると **A2UI v1.0 RC**(a2ui.org 目標では Q4 2026 安定化予定・現時点で未安定)にも追従できる — 詳細は後述の「v1.0 RC ターゲット(opt-in)」を参照。参照実装は `packages/host-a2ui`(`toA2ui` / `patchToA2ui` / `fromA2uiEvent` / `serializeA2uiLines`)。**Draft のため conformance 検査対象外**(§7)。
+UISpec / SpecPatch を A2UI(隣接リスト形の宣言的 UI メッセージ)へ写すプロファイル。既定の対象は **A2UI v0.9.1**(a2ui.org の現行安定版)。**opt-in の `target: "v1.0"`** を指定すると **A2UI v1.0 RC**(a2ui.org 目標では Q4 2026 安定化予定・現時点で未安定)にも追従できる — 詳細は後述の「v1.0 RC ターゲット(opt-in)」を参照。参照実装は `packages/host-a2ui`(送信方向: `toA2ui` / `patchToA2ui` / `fromA2uiEvent` / `serializeA2uiLines`。受信方向: `fromA2ui` / `createA2uiIngest` / `toA2uiClientAction` — 後述の「Inbound A2UI(取り込み)[Draft]」を参照)。**Draft のため conformance 検査対象外**(§7)。
 
 エンベロープは `{ "version": "v0.9.1", "<messageKey>": {…} }`(メッセージキーはちょうど 1 つ)。コンポーネントはフラット形 `{id, component: "Text", …props 直置き, children | child, action?}`。ストリーミングは JSONL(1 行 1 メッセージ。`serializeA2uiLines`)。**既定出力(`target` 省略または `"v0.9.1"`)は本プロファイルの旧来出力とバイト同一**(golden テストで固定。`packages/host-a2ui/test/a2ui.test.ts` の "target v0.9.1 (default) output is byte-identical to pre-v1.0 output")。
 
@@ -214,9 +214,38 @@ UISpec / SpecPatch を A2UI(隣接リスト形の宣言的 UI メッセージ)�
 | (無し) | `callRendererFunction {functionCallId, callFunction}` / `agentFunctionResponse`(server→client)、`callAgentFunction` / `rendererFunctionResponse`(client→server) | 新設の function-call チャネル(レンダラー側・エージェント側のカタログ関数)。kohaku にはレンダラー関数カタログという概念が無いため `toA2ui`/`patchToA2ui` はこれらを発行しない。型は `packages/host-a2ui/src/types.ts` に完全性のため定義 |
 | `SpecPatch` → `updateComponents` | 変更なし | `updateComponents` 自体は 2 つのスキーマ間で変わっていない。発行される `version` 文字列のみが異なる |
 | `fromA2uiEvent(action)` → `GuiAction` | 変更なし(同一オーバーロード・同一戻り値形) | `fromA2uiEvent` は追加で `{callAgentFunction}` / `{rendererFunctionResponse}` を受理し、それらには明示的な `{kind: "unsupported", reason}` 結果を返す(function-call チャネルに対応する kohaku 概念が無いため)。既存の `action` → `GuiAction` オーバーロードとその戻り値形は不変 |
-| コンポーネント単位の `catalogId` 上書き | 未実装 | v1.0 RC の `ComponentCommon` はコンポーネント単位の `catalogId`(サーフェス既定を上書き)を追加している。本プロファイルは 1 サーフェス 1 カタログのため未出力(今回の対応のスコープ外。混在カタログのサーフェスが必要になった際の将来課題) |
+| コンポーネント単位の `catalogId` 上書き | opt-in(`catalogMode: "split"`) | `ToA2uiOptions.catalogMode`(既定 `"single"`。basic 形と kohaku 独自コンポーネントを 1 つのカタログ id でまかない、従来と完全にバイト同一)を `"split"` にすると、サーフェスの既定 `catalogId` が実際の A2UI basic カタログ URI(`A2UI_V1_BASIC_CATALOG_ID`。`basicCatalogId` で上書き可)になり、kohaku 独自(basic 外)のコンポーネントはそれぞれ自身の `catalogId`(既定 `KOHAKU_CATALOG_ID`。既存の `catalogId` オプションで上書き可)を持つ — RC の「component の `catalogId` → サーフェス既定 → 解決エラー」規則に従う。`target: "v0.9.1"` の下で `"split"` を指定するとエラー(その版には `catalogId` フィールドが無い) |
+| (無し) | `rendererFunctions` opt-in(クライアントローカルな `state.set`) | `ToA2uiOptions.rendererFunctions`(既定 `false`): `state.set` の `EventBinding` は、汎用の `action.event` 形の代わりに `kohaku.setState` を呼ぶ `action.functionCall`(`{call, catalogId, args: {key, value}}`)として写像される。これにより v1.0 対応クライアントはサーバー往復無しにクライアントローカルな状態更新を適用できる。`catalog-document.ts` の `buildKohakuCatalogDocument` は `KOHAKU_CATALOG_ID` を解決するカタログ向けに `kohaku.setState`(`allowedCallers: "rendererOnly"`)を宣言する。その `components` 節は明記されたプレースホルダである(RC 事実メモにはカタログの component スキーマ形が記録されていない)。`callRendererFunction` は引き続き未出力・未宣言(kohaku にレンダラー側カタログ関数は無い) |
 
 **既定出力は無影響**: `target` 省略、または明示的な `target: "v0.9.1"` は v1.0 以前のプロファイルとバイト同一の出力を生成する(golden テストで固定)。
+
+#### Inbound A2UI(取り込み)[Draft]
+
+逆方向: kohaku が**他社の** A2UI エージェントの「レンダラー」クライアントとして振る舞い、そのサーフェスを kohaku 自身の UI 内に描画し、操作をエージェントへ送り返す。参照実装は `packages/host-a2ui/src/inbound/`(`schemas.ts` / `reduce.ts` / `from-a2ui.ts` / `ingest.ts` / `to-a2ui-client-action.ts`)。**§6.3 の他の部分と同様、conformance 検査対象外**であり、MUST/SHOULD 要件は登録しない。
+
+受信側のワイヤ(v0.9.1・v1.0 RC いずれの `createSurface`/`updateComponents`/`updateDataModel`/`deleteSurface` も)は厳密に検証され(エンベロープ・構造キーの未知キーは拒否、コンポーネントのカタログ直置き props は開放のまま)、`SurfaceState`(サーフェスごとの `{id -> component}` マップと蓄積されたデータモデル)へ畳み込まれ、`fromA2ui` によって `UISpec` へ変換される。これは `toA2ui` の厳密な逆変換では**ない**: 真に他社製のサーフェスは `KohakuSidecar` を持たないため、変換はベストエフォートであり損失を伴いうる — kohaku 自身が過去に `toA2ui` で出力したものを sidecar 付きで再取り込みした場合に限り、component 単位で sidecar から無損失に復元される。
+
+逆対応表(その component id に sidecar のエントリが無い場合):
+
+| A2UI(受信) | kohaku | 備考 |
+|---|---|---|
+| `Column` / `Row` | `layout.stack`(vertical / horizontal) | `justify`/`align` は単純なリテラルとしてそのまま写す |
+| `variant: "h1".."h6"` の `Text` | `text.heading`(`level`) | |
+| 見出し variant の無い `Text` | `presentMarkdown` | |
+| `Button`(`child` が `Text`) | `action.button` | ラベルは子から復元。`variant` は送信側 `mapButtonVariant` のベストエフォート逆変換(`"primary"` → `"primary"`、それ以外 → `"secondary"` — 送信側の `secondary`/`danger` → `"primary"`/`"default"` への圧縮は sidecar 無しには復元不能) |
+| 呼び出し側が渡したカタログが認識する型(`catalog.has(type)`) | その型のまま verbatim | props をそのまま写す(各値は下のバインディング行の通り解決) |
+| 任意のコンポーネントの `action.event` | 合成された `EventBinding`(`on: "<id>.<sanitized-name>"`、`emit: "action.invoke"`、`payload` = 解決済み `context`) | 取り込んだ Spec が kohaku 自身のレンダラーで実際に操作可能になる(見た目の再現に留まらない)ようにする。`action.invoke` は kohaku 自身の送信側 `action.button` のテスト用フィクスチャが press に使うのと同じ emit 種別。`toA2uiClientAction`(後述)が逆変換する |
+| 任意のコンポーネントの `action.functionCall` | (なし) | A2UI 自身の定義上クライアントローカル(例: `openUrl`)— サーバーへ転送すべき通知が無いため `EventBinding` は生成されず、損失としても記録されない |
+| props/context のいずれかに現れる `{path}` データバインディング | サーフェスのデータモデルから一度だけ解決されたリテラル | `"binding-snapshotted"` の損失として記録される(後述)。呼び出し側が渡す `bindPath(path)` フックが kohaku の `{$ref}` を返せば、参照渡しのまま置き換えられる(損失としては記録されない) |
+| spec-core の `ComponentIdSchema` に反する id(先頭が数字・unicode・記号・長さ超過) | 決定的にサニタイズされた id | 他社の id は無制約な文字列であるため。異なる 2 つの受信 id が同じ kohaku id にサニタイズされた場合は、下記の `DUPLICATE_ID` として表面化する |
+
+**損失方針**(`FromA2uiOptions.unmappable`、既定 `"fallback"`): 「表現できないもの」は 4 種類 — 未知のコンポーネント型、データにひも付いた反復テンプレート(`{children: {path, componentId}}`。RC 事実メモには反復のためのデータバインディング機構が他に記録されていないため、データにひも付いたテーブル/チャート風ウィジェットもこれに含めて扱う)、そして(action.functionCall とは別の)計算された function-call **値** — これらは該当コンポーネント**全体**を決定的な `presentMarkdown` のプレースホルダに置き換えて損失を記録する。`"reject"` を指定した場合は代わりに例外を投げ、変換全体を失敗させる。`"binding-snapshotted"` の損失はこの方針の対象外(スナップショットは常に表現可能であり、ライブでないというだけである)。**LLM は一切呼び出さない**。変換結果は `validateSpecStructure` を通し、エラー重大度の問題(壊れた参照など)があれば同様に変換を失敗させ、壊れた Spec を出荷しない。
+
+**Intent の決め方**(`createA2uiIngest`): 呼び出し側はサーフェスごとに明示的な `{canonical, params}` の Intent を渡すべきである(SHOULD)。渡さない場合の既定の canonical 名は `a2ui.<agent_slug>.<surface_slug>`(params は `{agent, surfaceId}`)— 実際のエージェントの `surfaceId` は通常セッション/接続ごとに一意なため、この既定値はほとんど繰り返されず Spec キャッシュがほとんど効かない(`packages/host-a2ui/README.md` の「governance proxy」節を参照)。`agentId` は常に呼び出し側自身の認証から渡され、メッセージのペイロードからは取らない。
+
+**Provenance**: `tier: "L1"`、`composedBy: "a2ui-ingest"`、`model: "a2ui:<agentId>"`、`cache` は `"miss"` / `"hit"` / `"fixated"` のいずれか(`"bypass"` は無い — composer の bypass パスに相当するものがここには存在しない)。キャッシュキーは spec-core の `cacheKey({intentHash, dataVersion, generatorVersion: "a2ui-ingest/<agentId>"})` にテナント指定時はテナントのセグメントを付加したもの。`dataVersion` は既定では正規化されたデータモデルの短縮ハッシュ。固定化(`storage.getFixation`)は変換作業の前に確認され、host-core の固定化ショートカットと同様に `cache: "fixated"` へ短絡する。
+
+`toA2uiClientAction` は `fromA2uiEvent` の逆であり、取り込んだサーフェスへのユーザー操作が生む `GuiAction` を `{action: {name, context}}`(RC 事実メモが記す renderer→agent の形。`surfaceId`/`sourceComponentId`/`timestamp` は意図的に含めていない — 同メモがそれらを transport 依存としているため)に変換する。実際の transport でそれらの引き回しが必要になった場合は **A2UI v1.0 仕様に照らして確認すること**。
 
 ### 6.4 AG-UI / A2A プロファイル [Reserved]
 

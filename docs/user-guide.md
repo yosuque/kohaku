@@ -549,6 +549,38 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
 
 Wire your product's `ComposeContext` into the generated `golden.test.ts`'s `makeContext`, place `{name,input,drafts,expected:null}` JSON under `golden/`, and generate `expected` with `KOHAKU_GOLDEN_UPDATE=1 <run the test>`. Subsequent tests are deterministic and LLM-free, because `@kohaku-ui/evals`'s `runGolden` normalizes the jitter of provenance / intent.hash / dataVersion / refVersions and component IDs and compares only the structure (responses feed `drafts` to the FakeLlm; if you need a live recording, use FixtureLlm's record/replay). A working example is `apps/sample-api/test/golden.test.ts` (fixing the L1 generation of `sales.trend`). If you intentionally change the UI, regenerate `expected` with the same update procedure, review the git diff, and commit.
 
+### A2UI ingest (governance proxy for a third-party agent's surface) [Draft]
+
+`@kohaku-ui/host-a2ui`'s inbound side (`fromA2ui` / `createA2uiIngest` / `toA2uiClientAction`) lets you render a **third-party** A2UI agent's surface inside your own kohaku-based product and bring it under the same governance you already get for your own generated views: the ingested content becomes an ordinary L1 `UISpec` (`provenance.composedBy: "a2ui-ingest"`), so it is cached, appears in View Lineage, and is eligible for the same L1→L0 fixation as anything else. No LLM is called anywhere in this path.
+
+```ts
+import { createA2uiIngest } from "@kohaku-ui/host-a2ui";
+import { createFileStoragePort } from "@kohaku-ui/storage-memory";
+import { createLineage, createViewRecorder, createFixations } from "@kohaku-ui/lineage";
+
+const storage = createFileStoragePort("./.data");
+const lineage = createLineage({ storage });
+const ingest = createA2uiIngest({
+  storage,
+  recorder: createViewRecorder(lineage),
+  fixations: createFixations({ lineage, storage }),
+  agentId: "vendor-checkout-agent", // from your own auth, never from the message payload
+});
+
+// Forward the vendor agent's raw A2UI messages (createSurface / updateComponents / updateDataModel / deleteSurface)
+// as they arrive; ingest() schema-validates them and returns the current UISpec for that surface.
+const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
+  // Recommended: pass an explicit Intent (see the governance-proxy note below).
+  intent: { canonical: "vendor.checkout", params: { orderId } },
+});
+```
+
+**Pass an explicit `intent`.** Without one, `ingest()` derives a default canonical name from `surfaceId` (`a2ui.<agent_slug>.<surface_slug>`) — and a real agent typically mints a fresh `surfaceId` per session/connection, so that default almost never repeats and the Spec cache almost never hits. An explicit, product-meaningful Intent (e.g. `{canonical: "vendor.checkout", params: {orderId}}`, keyed by something that's actually stable across requests for "the same logical view") is what makes repeated ingests of the same live surface share one cache entry, participate in fixation-proposal aggregation, and show up coherently in the Lineage / Analytics views.
+
+When the user interacts with the rendered surface, your renderer fires an ordinary kohaku `GuiAction` (kohaku synthesizes an `EventBinding` from the agent's own `action.event` during ingest, so this is a real interaction, not just a static reconstruction); route it back to the originating agent with `toA2uiClientAction(guiAction)`, which recovers the agent's own event name and context.
+
+Unmappable content (a component type your catalog doesn't recognize, a data-bound repeated template, a computed function-call value) becomes a deterministic placeholder by default (`unmappable: "fallback"`, the default) — never a fresh LLM regeneration — or fails the whole ingest (`unmappable: "reject"`) if you'd rather surface the error immediately. See `packages/host-a2ui/README.md` and [spec/SPEC.md](../spec/SPEC.md)'s §6.3 "Inbound A2UI (ingest)" for the full mapping table and loss policy (out of conformance scope, like the rest of the A2UI profile).
+
 ## 7. Operational tips
 
 - **Cache and data updates**: The Spec cache key is intent + dataVersion + catalog fingerprint (+ an optional generatorVersion). The granularity of `SemanticPort.dataVersion` (whole / per-table / event-driven) directly becomes the invalidation strategy. The sample is whole-at-once + bump.

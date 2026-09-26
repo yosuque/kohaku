@@ -546,6 +546,38 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
 
 生成された `golden.test.ts` の `makeContext` にプロダクトの `ComposeContext` を配線し、`golden/` に `{name,input,drafts,expected:null}` の JSON を置いて `KOHAKU_GOLDEN_UPDATE=1 <テスト実行>` で `expected` を生成します。以降のテストは `@kohaku-ui/evals` の `runGolden` が provenance / intent.hash / dataVersion / refVersions とコンポーネント ID の揺らぎを正規化して構造だけを比較するため、LLM 不要で決定的です(応答は `drafts` を FakeLlm に流す。ライブ記録が要るなら FixtureLlm の record/replay)。動く実例は `apps/sample-api/test/golden.test.ts`(`sales.trend` の L1 生成を固定)。意図的に UI を変えたら同じ更新手順で `expected` を再生成し、git diff をレビューしてコミットします。
 
+### A2UI 取り込み(他社エージェントのサーフェス向け governance proxy)[Draft]
+
+`@kohaku-ui/host-a2ui` の受信側(`fromA2ui` / `createA2uiIngest` / `toA2uiClientAction`)を使うと、**他社の** A2UI エージェントのサーフェスを自社の kohaku ベース製品の中に描画しつつ、自社が生成したビューと同じガバナンスの下に置けます: 取り込んだコンテンツは普通の L1 `UISpec`(`provenance.composedBy: "a2ui-ingest"`)になるので、キャッシュされ、View Lineage に現れ、他のものと同じ L1→L0 固定化の対象になります。この経路のどこでも LLM は呼び出されません。
+
+```ts
+import { createA2uiIngest } from "@kohaku-ui/host-a2ui";
+import { createFileStoragePort } from "@kohaku-ui/storage-memory";
+import { createLineage, createViewRecorder, createFixations } from "@kohaku-ui/lineage";
+
+const storage = createFileStoragePort("./.data");
+const lineage = createLineage({ storage });
+const ingest = createA2uiIngest({
+  storage,
+  recorder: createViewRecorder(lineage),
+  fixations: createFixations({ lineage, storage }),
+  agentId: "vendor-checkout-agent", // 自社の認証由来。メッセージのペイロードからは取らない
+});
+
+// ベンダーエージェントの生の A2UI メッセージ(createSurface / updateComponents / updateDataModel / deleteSurface)
+// を届いた順に渡す。ingest() がスキーマ検証し、そのサーフェスの現在の UISpec を返す。
+const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
+  // 推奨: 明示的な Intent を渡す(下の governance-proxy の注記参照)。
+  intent: { canonical: "vendor.checkout", params: { orderId } },
+});
+```
+
+**明示的な `intent` を渡してください。** 渡さない場合、`ingest()` は `surfaceId` から既定の canonical 名(`a2ui.<agent_slug>.<surface_slug>`)を導出しますが、実際のエージェントは通常セッション/接続ごとに新しい `surfaceId` を採番するため、この既定値はほとんど繰り返されず Spec キャッシュもほとんど効きません。明示的でプロダクト上意味のある Intent(例: `{canonical: "vendor.checkout", params: {orderId}}`。リクエストをまたいで「同じ論理ビュー」を実際に安定して特定できる値をキーにする)を渡すことで、初めて同じライブサーフェスへの繰り返しの取り込みが 1 つのキャッシュエントリを共有し、固定化提案の集計に参加し、Lineage / Analytics のビューに一貫した形で現れます。
+
+ユーザーが描画済みサーフェスを操作すると、レンダラーは普通の kohaku `GuiAction` を発火します(kohaku は取り込み時にエージェント自身の `action.event` から `EventBinding` を合成しているため、これは見た目だけの再現ではなく本物の操作です)。これを `toA2uiClientAction(guiAction)` で元のエージェントへ送り返すと、エージェント自身のイベント名と context が復元されます。
+
+表現できないコンテンツ(自社カタログが認識しないコンポーネント型、データにひも付いた反復テンプレート、計算された function-call 値)は既定では決定的なプレースホルダになります(`unmappable: "fallback"`、既定値)——LLM による再生成では**ありません**——または、エラーをすぐに表面化させたいなら取り込み全体を失敗させます(`unmappable: "reject"`)。完全な対応表と損失方針は `packages/host-a2ui/README.md` と [spec/SPEC.ja.md](../spec/SPEC.ja.md) の §6.3「Inbound A2UI(取り込み)」を参照してください(A2UI プロファイルの他の部分と同様、conformance 検査対象外です)。
+
 ## 7. 運用の勘どころ
 
 - **キャッシュとデータ更新**: Spec キャッシュのキーは intent + dataVersion + カタログ指紋(+ 任意の generatorVersion)。`SemanticPort.dataVersion` の粒度(全体 / テーブル単位 / イベント駆動)がそのまま無効化戦略になります。サンプルは全体一括 + bump。
