@@ -385,10 +385,12 @@ class _TierOutcomeFallback:
     hosts skip recording view.composed/view.fallback for it, so a cancel does not inflate the
     generation-fallback-rate analytics."""
     failure: Literal["transient", "invalid", "budget", "aborted"] | None = None
-    """The classified failure kind behind this fallback, mirrored from the settling L1Result/L2Result.failure
-    (None for the two fallbacks with no underlying tier result: L2-disabled and the L2 pre-generation budget
-    skip). Threaded by _build_spec_from_outcome into ComposeErrorContext.failure. Port of TS's TierOutcome
-    fallback branch (tier-ladder.ts)."""
+    """The classified failure kind behind this fallback, mirrored from the settling L1Result/L2Result.failure.
+    None only for the one fallback with no underlying tier result at all and no failure kind to report
+    ("L2 (free-form generation) is disabled in this environment"). The L2 pre-generation budget skip has no
+    underlying tier result either, but is still explicitly given failure="budget" by its caller -- see
+    _run_l2_stage. Threaded by _build_spec_from_outcome into ComposeErrorContext.failure. Port of TS's
+    TierOutcome fallback branch (tier-ladder.ts)."""
     error: BaseException | None = None
     """The exception behind this fallback (typically an LlmError), mirrored from the settling
     L1Result/L2Result.last_error. Threaded by _build_spec_from_outcome into observer.onError's `error`

@@ -37,11 +37,13 @@ export type TierOutcome =
        */
       cancelled?: true;
       /**
-       * The classified failure kind behind this fallback, mirrored from the settling TierResult.failure
-       * (unset for the two fallbacks with no underlying TierResult: L2-disabled and the L2 pre-generation
-       * budget skip). Threaded by buildSpecFromOutcome (compose.ts) into ComposeErrorContext.failure so an
-       * observer can machine-distinguish a provider outage from a validation failure without
-       * string-matching `reason`.
+       * The classified failure kind behind this fallback, mirrored from the settling TierResult.failure.
+       * Unset only for the one fallback with no underlying TierResult at all: "L2 (free-form generation)
+       * is disabled in this environment" (route=L2 direct entry with allowL2 false). The L2 pre-generation
+       * budget skip has no TierResult either, but is still explicitly given `failure: "budget"` by its
+       * caller (runL2Stage) since the budget-guard rejection itself is exactly that failure kind. Threaded
+       * by buildSpecFromOutcome (compose.ts) into ComposeErrorContext.failure so an observer can
+       * machine-distinguish a provider outage from a validation failure without string-matching `reason`.
        */
       failure?: TierResult["failure"];
       /**
