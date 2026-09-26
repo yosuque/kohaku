@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Only test/ needs this (loading the test/fixtures/inbound/*.jsonl fixtures via node:fs/path/url); src/
+    // itself still imports nothing from node and keeps host-a2ui's runtime dependency at spec-core alone.
+    "types": ["node"]
+  },
   "include": ["src", "test"]
 }
