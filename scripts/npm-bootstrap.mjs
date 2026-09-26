@@ -82,8 +82,8 @@ export function discoverPublishablePackages(root) {
  *   - `published`: at least one real version exists -- nothing to do.
  * Throws on any other status rather than guessing.
  */
-export async function registryState(name, registry) {
-  const url = `${registry.replace(/\/$/, "")}/${encodeURIComponent(name).replace("%40", "@")}`;
+export async function registryState(name, registry, { write = false } = {}) {
+  const url = `${registry.replace(/\/$/, "")}/${encodeURIComponent(name).replace("%40", "@")}${write ? "?write=true" : ""}`;
   const res = await fetch(url, {
     headers: { Accept: "application/vnd.npm.install-v1+json", "Cache-Control": "no-cache" },
   });
@@ -100,12 +100,13 @@ export async function registryState(name, registry) {
 /**
  * Waits until a just-published package is readable. The registry answers 404 for a new name for a while
  * after the PUT succeeds (observed: still 404 ~40 s later), and `npm deprecate` -- which reads the
- * package first -- fails in that window.
+ * package first, from the uncached `?write=true` document -- fails in that window. That is the document
+ * polled here, since the cached one can turn readable earlier.
  */
 async function waitUntilVisible(name, registry, timeoutMs = 300_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if ((await registryState(name, registry)).state !== "missing") return true;
+    if ((await registryState(name, registry, { write: true })).state !== "missing") return true;
     await new Promise((resolve) => setTimeout(resolve, 5_000));
   }
   return false;
@@ -243,7 +244,9 @@ async function main(argv) {
         // Resuming an unfinished bootstrap: whether the earlier run already registered the trusted
         // publisher is not readable without another 2FA round-trip, so a failure here (typically "already
         // configured") is only a warning. release.yml's preflight probe is the authoritative check.
-        console.warn(`${pkg.name}: npm trust failed -- it may already be configured; the release dry run's probe will tell.`);
+        console.warn(
+          `${pkg.name}: npm trust failed. An E409 "configuration ... already exists" means an earlier run already registered it, which is fine; release.yml's dry-run probe confirms either way.`,
+        );
       }
       // The placeholder's deprecation is cosmetic (the real release becomes `latest` anyway), so a
       // failure is reported but does not stop the remaining packages.
