@@ -83,6 +83,8 @@ export interface KohakuHost {
   compose: ComposeContext;
   /** The resolved Ports (yours, when overridden; the default otherwise) -- useful for `@kohaku-ui/host/mcp`. */
   ports: { storage: StoragePort; authz: AuthzPort; semantic: SemanticPort; domain: DomainPort };
+  /** The allowed source for `query://<source>/...` references, as given to `createKohakuHost`. Also consumed by `@kohaku-ui/host/mcp`'s `attachKohakuMcp`. */
+  querySource: string;
 }
 
 function resolveIntentCatalog(intents: IntentDef[] | IntentCatalogLike): IntentCatalogLike {
@@ -175,5 +177,10 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
     }),
   );
 
-  return { app, compose, ports: { storage, authz, semantic, domain: options.domain } };
+  return {
+    app,
+    compose,
+    ports: { storage, authz, semantic, domain: options.domain },
+    querySource: options.querySource,
+  };
 }
