@@ -378,6 +378,16 @@ class ComposeErrorContext:
     reason: str | None = None
     budgetExceeded: bool = False
     """True when the degradation was caused by the budget guard (for machine discrimination that does not rely on string-matching reason)."""
+    failure: Literal["transient", "invalid", "budget", "aborted"] | None = None
+    """The classified failure kind behind a "fallback"/"cancelled" phase, mirrored from the settling
+    L1Result/L2Result.failure. Unset on "hard"/"cache", and on the one fallback with no underlying tier
+    result at all and no failure kind to report ("L2 (free-form generation) is disabled in this
+    environment"). The L2 pre-generation budget skip has no underlying tier result either, but is still
+    explicitly given failure="budget" by its caller -- see _run_l2_stage. Wire-independent (not part of
+    provenance.fallback.reason, which stays a free-text string) — an additive field so an observer can
+    machine-distinguish a transient LLM-provider outage ("transient") from a catalog/structural validation
+    failure ("invalid") without string-matching `reason`. Port of TS composer's ComposeErrorContext.failure
+    (context.ts)."""
 
 
 @dataclass(frozen=True)

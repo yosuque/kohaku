@@ -29,6 +29,7 @@ const KOHAKU_RUNTIME = [
   "composer",
   "data-binding",
   "evals",
+  "host-core",
   "host-rest",
   "intents",
   "llm",

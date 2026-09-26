@@ -57,8 +57,9 @@ export const authzPort: AuthzPort = {
   /**
    * STUB — trusts the token's contents unconditionally: it decodes and reads the claims but checks
    * neither an integrity signature nor an expiry, so any caller can forge a token for any principal and
-   * any scope. Copy `apps/sample-api/src/ports/authz-port.ts` instead: HMAC-SHA256 signature, a
-   * constant-time comparison (`timingSafeEqual`), and an `exp` check before any claim is trusted.
+   * any scope. Use `createHmacAuthzPort` from `@kohaku-ui/authz-hmac`
+   * (`packages/authz-hmac/src/hmac-authz-port.ts`) instead: HMAC-SHA256 signature, a constant-time
+   * comparison (`timingSafeEqual`), and an `exp` check before any claim is trusted.
    */
   async verify(token, req) {
     const claims = JSON.parse(Buffer.from(token, "base64url").toString("utf8")) as {

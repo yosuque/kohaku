@@ -3,7 +3,12 @@ import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { IntentValidationError } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createIntentCatalog, createLlmSemanticPort, type IntentCatalogLike } from "../src/index.js";
+import {
+  createIntentCatalog,
+  createLlmSemanticPort,
+  type IntentCatalogLike,
+  UnknownIntentError,
+} from "../src/index.js";
 
 const catalog = createIntentCatalog([
   defineIntent({
@@ -37,6 +42,24 @@ describe("createLlmSemanticPort", () => {
     await expect(
       port.resolveQuery({ canonical: "sales.summary", params: {}, hash: "h" }, { tenant: "t2" }),
     ).rejects.toThrow(/unknown intent/);
+  });
+
+  it("resolveQuery on an unknown intent throws a typed UnknownIntentError (a string `code` property, `clientSafe: true`)", async () => {
+    await expect(
+      port.resolveQuery({ canonical: "sales.summary", params: {}, hash: "h" }, { tenant: "t2" }),
+    ).rejects.toBeInstanceOf(UnknownIntentError);
+    try {
+      await port.resolveQuery({ canonical: "sales.summary", params: {}, hash: "h" }, { tenant: "t2" });
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(UnknownIntentError);
+      expect((e as UnknownIntentError).code).toBe("UNKNOWN_INTENT");
+      // clientSafe:true is what actually lets composer's SEMANTIC_FAILED wrapping (isClientSafeCause)
+      // surface this message to the client — `code` alone is not enough (see refs.ts's doc).
+      expect((e as UnknownIntentError).clientSafe).toBe(true);
+      expect((e as UnknownIntentError).canonical).toBe("sales.summary");
+      expect((e as Error).message).toBe('unknown intent "sales.summary"');
+    }
   });
 
   it("dataVersion delegates to the option", async () => {

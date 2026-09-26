@@ -5,6 +5,7 @@ import {
   composeObservers,
   defaultGeneratorVersion,
 } from "@kohaku-ui/composer";
+import { formatErrorChain } from "@kohaku-ui/host-core";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { createOtelComposeObserver } from "@kohaku-ui/otel";
 import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
@@ -141,6 +142,7 @@ export function createComposeContext(args: {
  * discarded), which is a harmless, fully-supported configuration.
  */
 function composeObserver(): ComposeObserver {
+  const debug = process.env["KOHAKU_DEBUG"] === "1";
   const consoleObserver: ComposeObserver = {
     onError: (errCtx, error) => {
       const intentLabel = errCtx.intent != null ? `(intent=${errCtx.intent.canonical})` : "";
@@ -152,6 +154,15 @@ function composeObserver(): ComposeObserver {
         console.warn(
           `[compose] ${errCtx.tier ?? "?"} generation failed and was degraded to the deterministic fallback${intentLabel}${requestIdLabel}: ${errCtx.reason ?? "reason unknown"}`,
         );
+        // KOHAKU_DEBUG=1: also surface the underlying cause's chain when one was thrown (a transient
+        // provider outage, an aborted/budget-stopped generation) — still undefined for a plain
+        // catalog/structure validation failure, which has no exception to chain (see ComposeErrorContext.failure).
+        if (debug && error !== undefined) console.warn(`  ${formatErrorChain(error)}`);
+      } else if (debug) {
+        console.error(
+          `[compose] compose failed (Spec not delivered)${intentLabel}${requestIdLabel}: ${formatErrorChain(error)}`,
+        );
+        if (error instanceof Error && error.stack != null) console.error(error.stack);
       } else {
         console.error(`[compose] compose failed (Spec not delivered)${intentLabel}${requestIdLabel}:`, error);
       }

@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| 最終更新 | 2026-09-23 |
+| 最終更新 | 2026-09-27 |
 | 対象 | ① サンプルアプリを動かして概念を体験したい人 ② 自分のプロダクトに kohaku を組み込みたい人 |
 | 関連 | 仕組みの解説は [design.ja.md](design.ja.md)、API の詳細は [specification.ja.md](specification.ja.md) |
 
@@ -316,7 +316,7 @@ npm run dev                                      # API :8787 + web :5173
 ### Step 0 — LLM なしの Server-Driven UI
 
 ```bash
-node cli/bin/kohaku.js scaffold ports --out ./my-app/kohaku
+npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 ```
 
 生成された `ports.ts` の 4 つの Port を実装します。最初は:
@@ -521,7 +521,7 @@ export const myCard = defineComponent({
 // Web 側: registry.register("myapp.card", "1.0.0", MyCardComponent)  // useBoundData でデータ取得
 ```
 
-検証: `node cli/bin/kohaku.js component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
+検証: `npx @kohaku-ui/cli component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
 
 ```json
 {
@@ -542,7 +542,7 @@ export const myCard = defineComponent({
 入力 Intent → 生成 Spec の「構造」を回帰として固定します。雛形を生成:
 
 ```bash
-node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
+npx @kohaku-ui/cli scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
 ```
 
 生成された `golden.test.ts` の `makeContext` にプロダクトの `ComposeContext` を配線し、`golden/` に `{name,input,drafts,expected:null}` の JSON を置いて `KOHAKU_GOLDEN_UPDATE=1 <テスト実行>` で `expected` を生成します。以降のテストは `@kohaku-ui/evals` の `runGolden` が provenance / intent.hash / dataVersion / refVersions とコンポーネント ID の揺らぎを正規化して構造だけを比較するため、LLM 不要で決定的です(応答は `drafts` を FakeLlm に流す。ライブ記録が要るなら FixtureLlm の record/replay)。動く実例は `apps/sample-api/test/golden.test.ts`(`sales.trend` の L1 生成を固定)。意図的に UI を変えたら同じ更新手順で `expected` を再生成し、git diff をレビューしてコミットします。
@@ -602,6 +602,7 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
   - 実際のモデルに対して `KOHAKU_LLM_PROVIDER=claude KOHAKU_LLM_MODEL=<自分のモデル> ANTHROPIC_API_KEY=<自分のキー> pnpm --filter @kohaku-ui-sample/api run measure-grammar-latency`(`apps/sample-api/scripts/measure-grammar-latency.ts`)を実行してから、自分のデプロイでどちらの逃げ道を有効にする価値があるか決める — このスクリプトは実際の LLM を呼ぶため、意図的に `pnpm test` から除外されている。すべての行が `provenance.cache: "bypass"` になることを期待している — これは比較軸ではなく、LLM 経路が実際に走ったことの確認である。有効な API キーが無いと `claude` プロバイダは起動時に警告を出すだけで決定的フォールバックへ落ちるため、キー未設定はエラーにならず「`tier` 列が `L1` ではなく `L0`/フォールバックになった、明らかに速い実行」として現れる — レイテンシの数値を信じる前に必ず `tier` 列を確認すること。表の読み方(Anthropic の文法キャッシュは 24 時間有効なので、同一 intent の初回/2 回目の呼び出しでは 2 モードを区別できない)はスクリプト自身のヘッダコメントを参照し、トレードオフの全体は [design.ja.md#prompt-caching](design.ja.md#prompt-caching) を参照。
 - **監査**: 「なぜこの画面が出たか」は Admin の Lineage か `GET /api/kohaku/lineage` で specHash / intentHash を辿れます。
 - **`x-request-id` によるログ突合**: マウントされた kohaku ルートのすべての応答は `X-Request-Id` ヘッダを持つ(呼び出し側が送った `x-request-id` リクエストヘッダが存在し正しい形式ならそれをエコーし、なければ新規発番する)。同じ ID はすべてのエラーエンベロープの `error.requestId` にも現れ、`KohakuHostDeps.onError` にも渡されるので、サポートチケットに載るクライアント側の ID・サーバーログ・`onError` フックの記録が追加配線なしで一つの値で揃う。既存の相関 ID 規約がある場合は `KohakuHostDeps.requestId`(TS)/ `request_id`(Python)でこの解決を丸ごと上書きできる。
+- **`KOHAKU_DEBUG`(詳細な失敗ログ)**: `kohaku init` が生成するプロジェクトは `@kohaku-ui/host-core` の `createConsoleErrorReporter()` を `KohakuHostDeps.onError` と compose observer の `onError` の両方(生成される `app.ts`)に配線する。既定(`KOHAKU_DEBUG` 未設定。生成される `.env.example` を参照)では各失敗を 1 行の要約でログ出力するが、`KOHAKU_DEBUG=1` にすると原因の連鎖(`formatErrorChain` / `format_error_chain`。`Error.cause` / `__cause__` を辿る)とスタックトレースを代わりに出力する。`apps/sample-api` と `python/examples/sales-api` も同じ環境変数を自前のログに配線しており、既定(未設定)の出力は変わらない。`KOHAKU_DEBUG` の有無によらず常に得られるシグナルとして、`observer.onError` の毎回のフォールバック呼び出しに乗る `ComposeErrorContext.failure`(`"transient" | "invalid" | "budget" | "aborted"`)があり、`reason` を文字列解析しなくても provider 障害と検証失敗をプログラムから判別できる — 下のトラブルシューティングの行も参照。
 - **Trace context / OTel**: `host-rest` は受信した `traceparent` / `tracestate` リクエストヘッダ(W3C Trace Context)を、`host-mcp-apps` はツール呼び出しの `_meta.traceparent` / `_meta.tracestate`(MCP 2026-07-28 / SEP-414)を読み取り、両方とも `ComposeOptions.traceContext` へ充填する。`correlationId` と同じ経路で `ComposeTrace` / `ComposeErrorContext` に乗る — 純粋な追加で、呼び出し側がどちらのヘッダも送らなければ no-op。`@kohaku-ui/otel` の `createOtelComposeObserver()` は `ComposeObserver` の呼び出しをスパン(`kohaku.compose`。`gen_ai.*`/`kohaku.*` 属性 — 詳細は [design.ja.md#trace-context-otel](design.ja.md#trace-context-otel))へ変換し、その `traceContext` をスパンの親として復元するので、compose は常に新しいルートトレースを開始するのではなく呼び出し側自身のトレースの子として記録される。**kohaku 自体は exporter も SDK 初期化も一切出荷しない** — それは各自のプロセス自身の責務のまま(プロセス起動時に一度、compose が動く前に登録する通常の `@opentelemetry/sdk-node` / `@opentelemetry/sdk-trace-node` セットアップ)。最小構成の配線例:
 
   ```ts
@@ -628,7 +629,7 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
 
   `KOHAKU_OTEL` 未設定(または `TracerProvider` が未登録)のときは `createOtelComposeObserver` の既定 tracer が no-op になる — スパンは生成された瞬間に捨てられるだけで、ローカル開発では害のない、完全にサポートされた構成である。`gen_ai.*` / `kohaku.*` のあらゆる属性**キー名**は `createOtelComposeObserver({ attributes })` で個別に差し替え可能 — OpenTelemetry の GenAI semantic conventions がまだ "Development" ステータスであり、本リポジトリがそれらの代わりに安定性を保証できるものではないため。
 
-  **実際に sample-api で試す手順**: このリポジトリが持つ依存は `@opentelemetry/api` だけなので、まず `pnpm add -D @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http` を実行する(インフラ無しですぐ確認したいだけならコンソール exporter に差し替えてもよい)。上の最初のスニペットを例えば `apps/sample-api/otel-bootstrap.ts` として保存し、`NODE_OPTIONS='--import ./otel-bootstrap.ts' KOHAKU_OTEL=1 pnpm --filter @kohaku-ui-sample/api dev` で sample-api を起動する — sample-api は tsx 経由で動くため、アプリ自身のコードより先に読み込むブートストラップモジュールとして `--import` を解釈する。成功の目印は、compose を 1 回起こす(デモの Web アプリを開く、または `kohaku_compose` の MCP 呼び出しを実行する)たびに、exporter の出力(コンソールまたは任意の OTLP バックエンド)に `kohaku.compose` スパンが 1 本ずつ現れることである。
+  **実際に sample-api で試す手順**: このリポジトリが持つ依存は `@opentelemetry/api` だけなので、まず `pnpm add -D @opentelemetry/sdk-node @opentelemetry/exporter-trace-otlp-http` を実行する(インフラ無しですぐ確認したいだけならコンソール exporter に差し替えてもよい)。上の最初のスニペットを `apps/sample-api/` の中に例えば `otel-bootstrap.ts` として保存し、`NODE_OPTIONS='--import ./otel-bootstrap.ts' KOHAKU_OTEL=1 pnpm --filter @kohaku-ui-sample/api dev` で sample-api を起動する — sample-api は tsx 経由で動くため、アプリ自身のコードより先に読み込むブートストラップモジュールとして `--import` を解釈する。成功の目印は、compose を 1 回起こす(デモの Web アプリを開く、または `kohaku_compose` の MCP 呼び出しを実行する)たびに、exporter の出力(コンソールまたは任意の OTLP バックエンド)に `kohaku.compose` スパンが 1 本ずつ現れることである。
 - **ボディサイズ上限とレート制限はプロダクト責務**: `@kohaku-ui/host-rest` 自体はリクエストボディのサイズ上限もレート制限も課さない(ライブラリの関心事ではなく、一段上のリバースプロキシ・API ゲートウェイ・プロダクト自身のミドルウェアが担うべき責務)。サンプルは Hono の `bodyLimit` ミドルウェアで `/api/kohaku/*` に 1 MiB の上限を配線しており(`apps/sample-api/src/app.ts`)、超過したボディは Intent 解決に届く前に `413` と標準エラーエンベロープで拒否される。実際のペイロード(NL の質問や Intent + params は通常 1 KiB を大きく下回る)に合わせて上限を調整し、必要ならレート制限も同じ層に追加すること。
 - **グレースフルシャットダウン**: `SIGINT`/`SIGTERM` を受けると TS サンプル(sample-api / sample-mcp)は新規接続の受け付けを止め、進行中の接続(開いている SSE ストリーム含む)を `KOHAKU_SHUTDOWN_GRACE_MS`(既定 30 秒。[specification.ja.md](specification.ja.md) §9 参照)まで待ってドレインさせてから強制終了する。sample-api はさらにシグナル受信と同時に(ドレイン窓より前に)`GET /api/health` を `503 {ok:false, reason:"shutting down"}` に切り替え、ドレイン中もロードバランサが新規トラフィックをこのインスタンスへ送らないようにする。Python サンプルは `uvicorn` 自体のグレースフルシャットダウンに委ね、`timeout_graceful_shutdown=30` をコードで渡している。
 - **適合検査**: 実装を変えたら `node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku`。**spec-core の Zod スキーマを変更したときは `pnpm --filter @kohaku-ui/spec run generate-schemas` で `spec/schemas` を再生成してコミットしてください**(CI がドリフトを検査します)。GitHub Actions CI(`.github/workflows/ci.yml`)が push / PR ごとに `pnpm test`・`pnpm typecheck`・`conformance --self`・JSON Schema ドリフト検査(Zod から再生成した `spec/schemas` に差分が出たら失敗)を自動実行します。
@@ -638,6 +639,7 @@ node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + 
 | 症状 | 原因と対処 |
 |---|---|
 | 画面に「Could not render this request」(presentMarkdown) | L1 生成が 2 回とも検証に落ちた決定的フォールバック。LLM 設定(キー・モデル)を確認。ollama なら非思考モデルへ変更。**予算ガード(`ComposePolicy.budget`)配線時は予算超過でも同じ画面**になる(`fallback.reason` の英語文言「budget exceeded」/ `observer.onError` の `budgetExceeded` で判別) |
+| `fallback.reason` が「the LLM provider was unavailable」と言っている | LLM が一度も応答しなかった(provider/config の一時的な障害)ケースで、「failed catalog/structure validation」(LLM は応答したが出力が検証に落ちた)とは異なる。`KOHAKU_LLM_PROVIDER` と provider の API キーを確認 — 上記の `KOHAKU_DEBUG` と、`observer.onError` の `ComposeErrorContext.failure` / `error` で根本原因を調べられる |
 | Chat が常に L2(橙)になる | NL 正規化が既知 Intent にマップできていない。`/api/health` の `intents` と質問の噛み合わせ、モデル品質を確認 |
 | `cache:HIT` にならない | params が完全一致しているか(チップの hash を比較)。bump 後は dataVersion が変わるので MISS が正しい |
 | データ部分だけ「データが更新されています」 | STALE_VERSION(Spec が古い)。再操作で新しい dataVersion の Spec に切り替わる |

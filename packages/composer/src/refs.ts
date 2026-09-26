@@ -5,6 +5,7 @@ import {
   type QueryHandle,
 } from "@kohaku-ui/spec-core";
 import type { ComposeContext } from "./context.js";
+import { isClientSafeCause } from "./error-message.js";
 import { ComposeError } from "./errors.js";
 
 export interface ResolvedRefs {
@@ -67,9 +68,16 @@ export async function resolveRefs(
   // Propagate tenant to resolveQuery to correctly resolve per-tenant promoted Intents.
   // A resolveQuery failure is wrapped as SEMANTIC_FAILED here (fixation.ts's materializeFixation shares
   // the same resolution sequence via resolveHandleVersions but lets the failure pass through as-is).
+  // When the cause explicitly opts in via `clientSafe === true` (see isClientSafeCause's doc — deliberately
+  // narrower than "any Error with a string `code`", since a SemanticPort can throw a raw pg/fs/ioredis/fetch
+  // error whose `code` is also a string but whose `message` carries hostnames/paths/table names), its own
+  // message is appended so the caller learns *what* failed (e.g. an unknown Intent name) instead of the
+  // generic text alone. Every other cause (including one with an unrelated string `code`) may carry
+  // internals and is never appended — the wrapped message stays exactly as before for that case.
   const { handles, dataVersion, versionsByRef } = await resolveHandleVersions(intent, ctx, tenant, {
     onResolveError: (e) => {
-      throw new ComposeError("SEMANTIC_FAILED", "query resolution failed", { cause: e });
+      const detail = isClientSafeCause(e) ? `: ${e.message}` : "";
+      throw new ComposeError("SEMANTIC_FAILED", `query resolution failed${detail}`, { cause: e });
     },
   });
 

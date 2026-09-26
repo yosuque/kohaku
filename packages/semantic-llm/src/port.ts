@@ -14,6 +14,26 @@ import type { IntentCatalogLike } from "./catalog.js";
 import { normalizeGuiAction } from "./gui.js";
 import { normalizeNlQuery } from "./nl.js";
 
+/**
+ * Thrown by resolveQuery when the intent's canonical name is not present in the (possibly per-tenant)
+ * catalog. Carries a string `code` property (the general convention for a "typed" internal error) and,
+ * separately, `clientSafe: true` — the narrower, explicit opt-in composer's SEMANTIC_FAILED wrapping
+ * (packages/composer/src/refs.ts's `isClientSafeCause`) requires before it will surface a cause's own
+ * message to the client. This message is safe to opt in: it names no internals, only the (already
+ * client-supplied) intent name.
+ */
+export class UnknownIntentError extends Error {
+  readonly code = "UNKNOWN_INTENT" as const;
+  /** Opts in to composer's SEMANTIC_FAILED message enrichment — see isClientSafeCause's doc. */
+  readonly clientSafe = true as const;
+  readonly canonical: string;
+  constructor(canonical: string) {
+    super(`unknown intent "${canonical}"`);
+    this.name = "UnknownIntentError";
+    this.canonical = canonical;
+  }
+}
+
 export interface LlmSemanticPortOptions {
   llm: LlmPort;
   /** One catalog, or a per-tenant resolver (promotion adds Intents per tenant). */
@@ -80,7 +100,7 @@ export function createLlmSemanticPort(options: LlmSemanticPortOptions): Semantic
     },
     async resolveQuery(intent: CanonicalIntent, ctx?: { tenant?: string }): Promise<QueryHandle[]> {
       const def = catalogFor(ctx?.tenant).get(intent.canonical);
-      if (def == null) throw new Error(`unknown intent: ${intent.canonical}`);
+      if (def == null) throw new UnknownIntentError(intent.canonical);
       return def.toQueries(intent.params);
     },
     async dataVersion(handle: QueryHandle): Promise<string> {
