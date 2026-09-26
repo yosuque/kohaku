@@ -32,6 +32,14 @@ export interface ComposeRequest {
 export interface ComposeView {
   spec: UISpec;
   capability: string;
+  /**
+   * The response's `X-Request-Id` header, read by the client (not part of the REST wire body -- host-rest
+   * stamps it as a response header on every request, success or failure). Pass this to
+   * `KohakuClient.explain(requestId)` to look up "why did this compose come out this way" via lineage.
+   * Unset when the transport response carried no such header (e.g. a non-conformant host, or a test double
+   * that does not set it).
+   */
+  requestId?: string;
 }
 
 /** Request for POST /intent/normalize (natural language or GUI action). */

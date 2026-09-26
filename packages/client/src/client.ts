@@ -1,6 +1,7 @@
 import { type BindingClient, type BindingClientConfig, createBindingClient } from "@kohaku-ui/data-binding";
-import type { JsonObject, LineageEventRecord } from "@kohaku-ui/spec-core";
+import type { JsonObject, LineageEventRecord, UISpec } from "@kohaku-ui/spec-core";
 import { hostErrorFromResponse } from "./errors.js";
+import { buildExplainReport, type ExplainReport } from "./explain.js";
 import { type ComposeStreamEvent, readComposeStream, toComposeStreamEvent } from "./stream.js";
 import { globalTransport, type Transport } from "./transport.js";
 import type {
@@ -39,6 +40,20 @@ export interface KohakuClientConfig {
    * default fetcher (this transport only applies to compose / events / stream / governance routes).
    */
   transport?: Transport;
+  /**
+   * Called after every response this client receives (success or failure alike; not called for the
+   * `binding()` sub-client, which has its own fetcher). `requestId` is the response's `X-Request-Id` header
+   * (host-rest stamps one on every response) -- undefined when the header is absent, e.g. a non-conformant
+   * host or a test double transport that does not set it. Exists so a devtool (admin-react's DevTools, via
+   * `withDevToolsCapture`) can passively collect recent requestIds without wrapping every call site by hand;
+   * a caller uninterested in this can simply omit it (no behavior change).
+   *
+   * Browser callers: reading `X-Request-Id` cross-origin requires the host to send
+   * `Access-Control-Expose-Headers: X-Request-Id` (a plain same-origin CORS response header list does not
+   * expose custom headers to `fetch`'s `Response.headers` by default) -- see docs/user-guide.md's DevTools
+   * section.
+   */
+  onResponse?: (info: { path: string; status: number; requestId?: string }) => void;
 }
 
 /**
@@ -219,6 +234,17 @@ export interface KohakuClient {
   lineagePages(query?: LineagePageQuery, opts?: RequestOptions): AsyncGenerator<LineageEventRecord[], void>;
   /** POST /telemetry (batch ingest of rendered / component.used). */
   telemetry(events: TelemetryEvent[], opts?: RequestOptions): Promise<void>;
+  /**
+   * `kohaku explain <requestId>`'s data source: gathers every lineage event recorded under `requestId`'s
+   * correlationId (via `lineagePages({correlationId: requestId})`, so it is exhaustive, not limit-bounded)
+   * and builds an {@link ExplainReport} from them (see {@link buildExplainReport}, the pure function this
+   * wraps -- callers that already have the events in hand, e.g. from a cached page, can call it directly
+   * instead). `opts.spec`, when passed, additionally populates the report's `scopes` field.
+   *
+   * A caller-supplied `X-Request-Id` is not guaranteed globally unique (see ExplainReport.composes's doc
+   * comment), so this can return more than one compose's worth of data for a reused id.
+   */
+  explain(requestId: string, opts?: RequestOptions & { spec?: UISpec }): Promise<ExplainReport>;
   /** Management surface for the promotion pipeline (L2→L1). */
   promotions: PromotionsClient;
   /** Management surface for fixation (L1→L0). */
@@ -263,17 +289,31 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
   const withSignal = (init: RequestInit, opts?: RequestOptions): RequestInit =>
     opts?.signal != null ? { ...init, signal: opts.signal } : init;
 
+  /** The response's X-Request-Id header, or undefined when absent (see ComposeView.requestId's doc comment). */
+  const requestIdOf = (res: Response): string | undefined => res.headers.get("X-Request-Id") ?? undefined;
+
+  /**
+   * Runs the transport and reports the response to config.onResponse (success or failure alike), before the
+   * caller inspects/parses it. Every request path below (post / get / streamRequest / request) goes through
+   * this single choke point so onResponse observes everything uniformly.
+   */
+  const callTransport = async (path: string, url: string, init: RequestInit): Promise<Response> => {
+    const res = await transport(url, init);
+    config.onResponse?.({ path, status: res.status, requestId: requestIdOf(res) });
+    return res;
+  };
+
   /** JSON POST (no body when body is omitted). */
   const post = async <T>(path: string, body?: unknown, opts?: RequestOptions): Promise<T> => {
     const init: RequestInit =
       body !== undefined
         ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
         : { method: "POST" };
-    return parse<T>(await transport(`${baseUrl}${path}`, withHeaders(withSignal(init, opts))));
+    return parse<T>(await callTransport(path, `${baseUrl}${path}`, withHeaders(withSignal(init, opts))));
   };
 
   const get = async <T>(path: string, opts?: RequestOptions): Promise<T> =>
-    parse<T>(await transport(`${baseUrl}${path}`, withHeaders(withSignal({}, opts))));
+    parse<T>(await callTransport(path, `${baseUrl}${path}`, withHeaders(withSignal({}, opts))));
 
   const composeBody = (req: ComposeRequest): Record<string, unknown> => ({
     ...(req.intent != null ? { intent: req.intent } : {}),
@@ -283,7 +323,8 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
 
   const streamRequest = (req: ComposeRequest, opts?: RequestOptions): (() => Promise<Response>) => {
     return () =>
-      transport(
+      callTransport(
+        "/compose/stream",
         `${baseUrl}/compose/stream`,
         withHeaders(
           withSignal(
@@ -404,9 +445,22 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
     },
   };
 
-  return {
+  /** POST that additionally stamps the response's X-Request-Id onto the parsed ComposeView (compose / sendEvent share this). */
+  const postCompose = async (path: string, body: unknown, opts?: RequestOptions): Promise<ComposeView> => {
+    const init: RequestInit = {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    };
+    const res = await callTransport(path, `${baseUrl}${path}`, withHeaders(withSignal(init, opts)));
+    const view = await parse<ComposeView>(res);
+    const requestId = requestIdOf(res);
+    return requestId != null ? { ...view, requestId } : view;
+  };
+
+  const client: KohakuClient = {
     async compose(req, opts) {
-      return post<ComposeView>("/compose", composeBody(req), opts);
+      return postCompose("/compose", composeBody(req), opts);
     },
     async normalizeIntent(req, opts) {
       return post<NormalizeResult>(
@@ -419,7 +473,7 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
       );
     },
     async sendEvent(req, opts) {
-      return post<ComposeView>(
+      return postCompose(
         "/events",
         {
           intent: req.intent,
@@ -440,8 +494,15 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
       }
       for await (const wire of readComposeStream(res.body)) {
         const ev = toComposeStreamEvent(wire);
+        if (ev.kind === "done") {
+          // The X-Request-Id header applies to the whole response (there is no per-frame id on the wire), so
+          // it is stamped here rather than inside toComposeStreamEvent (which has no access to `res`).
+          const requestId = requestIdOf(res);
+          yield requestId != null ? { ...ev, requestId } : ev;
+          return;
+        }
         yield ev;
-        if (ev.kind === "done" || ev.kind === "error") return;
+        if (ev.kind === "error") return;
       }
       // The body ended (EOF) without a done or error event — a disconnected/truncated stream, not a
       // successful completion (REST-STR-003 requires exactly one of done|error). Without this, the
@@ -500,6 +561,13 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
     async telemetry(events, opts) {
       await post<{ ok: true }>("/telemetry", { events }, opts);
     },
+    async explain(requestId, opts) {
+      const events: LineageEventRecord[] = [];
+      for await (const page of client.lineagePages({ correlationId: requestId }, opts)) {
+        events.push(...page);
+      }
+      return buildExplainReport(events, opts?.spec);
+    },
     promotions,
     fixations,
     analytics,
@@ -512,7 +580,8 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
     },
     request(input, init) {
       const url = input.startsWith("/") || /^https?:/i.test(input) ? input : `${baseUrl}${input}`;
-      return transport(url, withHeaders(init));
+      return callTransport(input, url, withHeaders(init));
     },
   };
+  return client;
 }
