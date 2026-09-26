@@ -385,6 +385,11 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters; `semantic-llm`;
   `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
+  (`semantic-llm`'s own `validateIntent` behavior is not left behind by this gap, though: since
+  the package itself has no Python mirror, its logic lives directly in `examples/sales-api`'s
+  `semantic_port.py` / `intents_catalog.py`, and that sample implements `validate_intent` /
+  `IntentCatalog.validate_params` matching TS's `createLlmSemanticPort` — see
+  `kohaku.spec.ports.SupportsValidateIntent` and `kohaku.host_core.intent.resolve_intent`.)
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant
 > reconcile for promotion → fully ported PromotedRegistry / projection / startup reconcile

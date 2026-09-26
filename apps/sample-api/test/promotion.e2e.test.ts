@@ -270,15 +270,20 @@ describe("promotion pipeline E2E (L2 -> approve -> L1 part + dynamic Intent + pe
     expect(catalogAfter.catalogVersion).not.toBe(fpPublished);
 
     // Compose of the same Intent is not "cache-reused". Because the fingerprint changes and the
-    // publish-time cache becomes unreachable, and because the promoted Intent itself is removed so
-    // resolveQuery can no longer resolve, the compose that was 200 (fallback) before withdrawal becomes
-    // 500 after withdrawal (if the cache were reused, it would keep returning 200).
+    // publish-time cache becomes unreachable, and because the promoted Intent itself is removed from the
+    // catalog, the compose that was 200 (fallback) before withdrawal is now rejected after withdrawal (if
+    // the cache were reused, it would keep returning 200). It is rejected as 422 INTENT_INVALID rather than
+    // 500: SemanticPort.validateIntent (t0-3a) checks a directly-specified Intent's canonical against the
+    // catalog before compose ever runs, so an Intent that no longer exists is now a client-caused rejection
+    // instead of an internal failure surfacing later from resolveQuery.
     const afterWithdraw = await app.request("/api/kohaku/compose", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ intent: { canonical: "sales.calendar_heatmap", params: { fiscalYear: 2026 } } }),
     });
-    expect(afterWithdraw.status).toBe(500);
+    expect(afterWithdraw.status).toBe(422);
+    const afterWithdrawBody = (await afterWithdraw.json()) as { error: { code: string } };
+    expect(afterWithdrawBody.error.code).toBe("INTENT_INVALID");
 
     // Lineage retains component.withdrawn (from:"published").
     const lineageRes = await app.request(`/api/kohaku/lineage?artifactId=${artifactId}&limit=50`);

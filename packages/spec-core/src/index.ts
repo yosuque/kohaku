@@ -14,7 +14,12 @@ export { canonicalStringify, normalizeJsonValue, sha256Hex } from "./canonical-j
 export { collectCapabilityScopes } from "./capability-scopes.js";
 // Diff / patch
 export { applyPatch, diffSpec, orderComponents, type SpecPatch } from "./diff.js";
-export { SpecError, type SpecErrorCode } from "./errors.js";
+export {
+  IntentValidationError,
+  type IntentValidationIssue,
+  SpecError,
+  type SpecErrorCode,
+} from "./errors.js";
 export {
   computeIntentHash,
   finalizeIntent,

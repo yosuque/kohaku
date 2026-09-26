@@ -124,6 +124,25 @@ class ParamParseResult:
 
 
 @dataclass(frozen=True)
+class ParamFieldIssue:
+    """One field's problem from ObjectSchema.validate. A params-DSL-level result distinct from
+    kohaku.spec.errors' IntentValidationIssue, the spec-core-level / product-facing shape a caller (e.g.
+    sales_api's IntentCatalog.validate_params) maps this onto."""
+
+    path: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ParamValidateResult:
+    """The result of ObjectSchema.validate: every field's issue (not just the first, unlike safe_parse)."""
+
+    success: bool
+    data: JsonObject | None
+    issues: list[ParamFieldIssue]
+
+
+@dataclass(frozen=True)
 class ObjectSchema:
     """Equivalent to z.object(shape). parse fills defaults + coerces + strips unknown keys."""
 
@@ -152,6 +171,35 @@ class ObjectSchema:
             return ParamParseResult(success=True, data=self.parse(raw), error=None)
         except ParamError as exc:
             return ParamParseResult(success=False, data=None, error=str(exc))
+
+    def validate(self, raw: Mapping[str, JsonValue]) -> ParamValidateResult:
+        """Validate every field, collecting every issue instead of stopping at the first (as `parse` /
+        `safe_parse` do -- both raise/report only the first `ParamError` encountered, since they delegate to
+        the same single-pass loop). Equivalent to zod's `safeParse().error.issues`, which already collects
+        every field's problem in one pass; here the per-field `_coerce` loop is run directly rather than via
+        `parse`, so a coerce failure on one field does not stop the others from being checked too. Used by a
+        caller that needs a per-key issue list rather than a single pass/fail -- e.g. a strict, catalog-level
+        `validate_params` backing a `SupportsValidateIntent.validate_intent` implementation (kohaku.spec.ports),
+        which must report *which* param failed, not just that some param did.
+        """
+        issues: list[ParamFieldIssue] = []
+        out: JsonObject = {}
+        for key, field_schema in self.shape.items():
+            if key not in raw:
+                if field_schema.has_default:
+                    out[key] = field_schema.default_value
+                elif field_schema.is_optional:
+                    continue
+                else:
+                    issues.append(ParamFieldIssue(path=key, message=f'missing required parameter "{key}"'))
+                continue
+            try:
+                out[key] = field_schema._coerce(raw[key])
+            except ParamError as exc:
+                issues.append(ParamFieldIssue(path=key, message=str(exc)))
+        if issues:
+            return ParamValidateResult(success=False, data=None, issues=issues)
+        return ParamValidateResult(success=True, data=out, issues=[])
 
 
 def object_schema(shape: dict[str, ParamField]) -> ObjectSchema:

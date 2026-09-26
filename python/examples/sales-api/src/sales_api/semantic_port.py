@@ -29,6 +29,7 @@ from kohaku.spec import (
     GuiAction,
     Intent,
     IntentInput,
+    IntentValidationError,
     JsonObject,
     NLQuery,
     QueryHandle,
@@ -128,6 +129,19 @@ class SalesSemanticPort:
         if shape is None:
             raise ValueError(f"unknown query path: {ref.path}")
         return shape
+
+    async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput:
+        """Validates and normalizes a directly-specified Intent (port of TS sample-api's semantic-llm-based
+        validateIntent). Backs kohaku.host_core.intent.resolve_intent's "intent" source: an unknown canonical
+        or an unknown/invalid param is rejected with IntentValidationError instead of reaching finalize_intent
+        unchecked. Uses the per-tenant catalog (promoted Intents are per-tenant), same as normalize/resolve_query.
+        """
+        catalog = self._catalog_for(ctx.tenant)
+        result = catalog.validate_params(intent.canonical, intent.params)
+        if result.ok:
+            assert result.params is not None
+            return IntentInput(canonical=intent.canonical, params=result.params)
+        raise IntentValidationError("; ".join(issue.message for issue in result.issues), result.issues)
 
 
 def create_semantic_port(
