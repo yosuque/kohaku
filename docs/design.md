@@ -289,7 +289,7 @@ Today's token budget guard (above) and the per-LLM-call timeout (`KOHAKU_LLM_TIM
 `ComposeOptions.correlationId` (optional, purely additive) is threaded unchanged into every `ComposeErrorContext.correlationId` (each `observer.onError` call for that compose) and into the delivered `ComposeTrace.correlationId` — hit, miss, fallback, and single-flight follower alike, since it rides `PreparedCompose.traceBase`. When the caller passes none, neither field is set and behavior is byte-identical to before this option existed.
 
 - **host-rest** passes its per-request `requestId` (the same value already echoed as the `X-Request-Id` response header and `error.requestId`) both to `composeWithFixation`'s fixation self-heal reporting and, via host-core's forwarding, as `correlationId` — so a degraded/failed compose's log line and the client-visible request id are the same string.
-- **host-mcp-apps** passes the MCP SDK's per-call request id (`requestContextOf(extra).requestId` — the JSON-RPC id of the tool call, `extra.mcpReq.id` in SDK v2's `ServerContext`) the same way, through `composeForTool` → `composeWithFixation`. **The correlation id is the per-call request id on every profile, unconditionally** — it is never derived from `_meta.traceparent`, even when the tool call carries one: a W3C trace-id is shared by an entire trace, so an agent that calls several tools in one conversation would otherwise get the SAME correlation id on all of them, making it impossible to tell which call a reported failure or self-heal belongs to. (An earlier revision did derive it from `_meta.traceparent`'s trace-id when present — that behavior was removed for exactly this reason; trace correlation is `traceContext`'s job, see below.) Python mirrors the same request-id-only rule for its own failure-path hook (`McpErrorInfo.correlation_id`) — see §11's "MCP 2026-07-28 / SDK v2 migration" section for why it does not yet reach `ComposeTrace.correlationId` there.
+- **host-mcp-apps** passes the MCP SDK's per-call correlation id (`mcpCorrelationId(extra)` — `mcp:<sessionId>:<jsonrpc id>`, or `mcp:<jsonrpc id>` for a session-less transport such as stdio) the same way, through `composeForTool` → `composeWithFixation`. **The correlation id is derived from the per-call request id (plus a session/connection anchor) on every profile, unconditionally** — it is never derived from `_meta.traceparent`, even when the tool call carries one: a W3C trace-id is shared by an entire trace, so an agent that calls several tools in one conversation would otherwise get the SAME correlation id on all of them, making it impossible to tell which call a reported failure or self-heal belongs to. (An earlier revision did derive it from `_meta.traceparent`'s trace-id when present — that behavior was removed for exactly this reason; trace correlation is `traceContext`'s job, see below.) Python mirrors the same rule for its own failure-path hook (`McpErrorInfo.correlation_id`) and, since the review follow-up that closed its earlier session-collision gap, reaches `ComposeTrace.correlationId` too — see §11's "MCP 2026-07-28 / SDK v2 migration" section for exactly how Python's per-connection id is generated (it has no public transport session id to read at all, unlike TS).
 - **sample-api** logs it in `compose-context.ts`'s `observer.onError` as `(requestId=…)`, so an operator can grep a fallback/hard-failure log line straight back to the request that triggered it.
 
 Both host profiles' `composeWithFixation` (`packages/host-core/src/fixation.ts`) forward the same `requestId` parameter to both purposes (self-heal reporting and `ComposeOptions.correlationId`), so there is exactly one id per request to reason about, not two independently-threaded ones.
@@ -300,7 +300,7 @@ Both host profiles' `composeWithFixation` (`packages/host-core/src/fixation.ts`)
 `ComposeOptions.traceContext` (optional, purely additive — `{ traceparent; tracestate? }`, [W3C Trace Context](https://www.w3.org/TR/trace-context/)) is threaded the same way `correlationId` is: unchanged into `ComposeErrorContext.traceContext` and `ComposeTrace.traceContext` (hit/miss/fallback/follower alike, riding `TraceBase`). It exists so a compose can be recorded as a **child span of the caller's own trace**, not merely tagged with a caller-chosen id. **Trace correlation flows only through `traceContext`** — `correlationId` (above) never doubles as a trace-linking mechanism, on either profile.
 
 - **host-rest** fills it from the `traceparent` / `tracestate` request headers; **host-mcp-apps** fills it from the tool call's `_meta.traceparent` / `_meta.tracestate` (MCP 2026-07-28 / SEP-414). Both validate via host-core's shared `parseTraceContext` (`packages/host-core/src/trace-context.ts`, also the home of `TRACEPARENT_RE`) — a missing or malformed `traceparent` is never an error, it simply leaves `traceContext` unset (fail-open). `TRACEPARENT_RE` additionally rejects an all-zero trace-id or an all-zero parent-id (both invalid per the W3C spec — accepting them here only to have OpenTelemetry's own `isSpanContextValid` silently discard them on the export side would be an inconsistency), and `tracestate` longer than the W3C-recommended 512 characters is dropped (the `traceparent` is still carried) rather than forwarded unbounded to a downstream observer. Both hosts' `composeWithFixation` forward the parsed `traceContext` into the normal-compose fallback's `ComposeOptions.traceContext` alongside `correlationId`.
-- **Python** mirrors only the extraction/validation (`kohaku.host_core.trace_context.parse_trace_context`, including the same all-zero-id rejection and 512-character `tracestate` cap), surfaced via each profile's own local failure-path observability info (`HostErrorInfo.trace_context` / `McpErrorInfo.trace_context`) — see §11's "MCP 2026-07-28 / SDK v2 migration" section for why it does not yet reach `ComposeTrace` there (the same parity gap already recorded for `correlation_id`).
+- **Python** mirrors only the extraction/validation (`kohaku.host_core.trace_context.parse_trace_context`, including the same all-zero-id rejection and 512-character `tracestate` cap), surfaced via each profile's own local failure-path observability info (`HostErrorInfo.trace_context` / `McpErrorInfo.trace_context`) — see §11's "MCP 2026-07-28 / SDK v2 migration" section for why it does not yet reach `ComposeTrace` there. `correlation_id` had the identical shape of gap (no `ComposeOptions` sink) until U2 closed it; `trace_context` remains open (a separate, still-unaddressed piece of work, not automatically closed alongside it).
 
 `@kohaku-ui/otel`'s `createOtelComposeObserver({ tracer?, attributes?, providerName? })` turns `ComposeObserver` calls into spans:
 
@@ -658,24 +658,39 @@ The additive items, unaffected by which TS SDK major version is installed:
   the per-call JSON-RPC request id regardless of whether a traceparent is present. (An earlier revision derived
   the correlation id from the traceparent's trace-id when one was present — that collapsed every tool call in
   one trace onto the same correlation id, defeating per-call identification, and was removed; see the two
-  sections above.) **Python has a parity gap, deliberately not papered over**:
-  `kohaku.host_core.compose_with_fixation` / `kohaku.composer.ComposeOptions` carry no `correlation_id` /
-  `trace_context` parameter at all yet (a pre-existing asymmetry, not introduced by that work), and extending them
-  touches `host_core`/`composer` — outside the host_mcp-only file scope that work kept to. Python therefore threads
-  `correlation_id` (always the JSON-RPC request id — the same request-id-only rule as TS, never derived from the
-  traceparent) and `trace_context` only into this profile's own failure-path hook (`McpErrorInfo.correlation_id` /
-  `McpErrorInfo.trace_context`, read off the `ServerRequestContext` (`ctx`) the mcp SDK hands directly to every
-  low-level request handler — `mcp` 2.x removed the request-scoped `request_ctx` contextvar / decorator-registration
-  style this used to read instead; `ctx.meta` is a `RequestParamsMeta` TypedDict, so it is dict-accessed
-  (`meta.get("traceparent")`), not attribute-accessed). Reaching full
-  symmetry (a `correlation_id`/`trace_context` sink on `ComposeOptions`/`ComposeTrace`) is a follow-up item for
-  whichever WP next touches `host_core`/`composer`. The same workaround applies to REST
-  (`HostErrorInfo.trace_context`, from the `traceparent` request header): Python parses and validates
-  `traceparent`/`tracestate` identically to TS (`kohaku.host_core.trace_context`, a straight port of TS's
-  `packages/host-core/src/trace-context.ts`, including the all-zero-id rejection and 512-character `tracestate`
-  cap) but surfaces it only on the failure-path hooks, never on `ComposeTrace`. The OTel SDK itself (span
-  creation/export) is out of scope for the Python port entirely — see "Trace context / OTel" above, which is
-  TS-only (`@kohaku-ui/otel`).
+  sections above.) **Python originally had a parity gap here, deliberately not papered over**:
+  `kohaku.host_core.compose_with_fixation` / `kohaku.composer.ComposeOptions` carried no `correlation_id` /
+  `trace_context` parameter at all (a pre-existing asymmetry), and extending them touched `host_core`/`composer` —
+  outside the host_mcp-only file scope that original work kept to, so both ids threaded only into this profile's
+  own failure-path hook (`McpErrorInfo.correlation_id` / `McpErrorInfo.trace_context`, read off the
+  `ServerRequestContext` (`ctx`) the mcp SDK hands directly to every low-level request handler — `mcp` 2.x removed
+  the request-scoped `request_ctx` contextvar / decorator-registration style this used to read instead; `ctx.meta`
+  is a `RequestParamsMeta` TypedDict, so it is dict-accessed (`meta.get("traceparent")`), not attribute-accessed).
+  **U2 (and a review follow-up) closed the `correlation_id` half of this gap**: `ComposeOptions.correlation_id`
+  and `kohaku.host_core.compose_with_fixation`'s `correlation_id` parameter now exist, and Python's
+  `_correlation_id_of` threads through them the same way TS does. The id's *shape* still differs from TS,
+  though, for a reason specific to this SDK: TS reads a real transport session id (`ServerContext.sessionId`,
+  public on `BaseContext`), omitting the segment for a session-less transport (stdio); this port's `mcp` SDK
+  exposes no such public accessor to a request handler at all, and worse, `ServerRequestContext.session` is
+  itself a *fresh* `ServerSession` wrapper the SDK constructs per request (verified empirically: two calls on
+  one connection produce two `ctx.session` objects distinct by identity), not a stable per-connection object —
+  so naively keying a cache by `ctx.session` (as first attempted) does not work: it produces a fresh id on
+  every single call, satisfying "no collision" but not "the same session keeps the same prefix". The only
+  reachable anchor that is actually stable for a connection's lifetime is the `Connection` object each
+  request's `ServerSession` wraps, itself only reachable via that wrapper's private `_connection` attribute
+  (`_session_correlation_prefix` in `host_mcp/server.py`, keyed via a `weakref.WeakKeyDictionary` so an entry
+  is dropped once its connection is garbage-collected) — reaching into a private SDK attribute was accepted
+  here specifically because no public alternative gives the required guarantee (two concurrent sessions must
+  never collide), with a hard `RuntimeError` (never a silent, collision-prone fallback) if that attribute
+  becomes unavailable in a future SDK version. **`trace_context` remains open**: reaching full symmetry (a
+  `trace_context` sink on `ComposeOptions`/`ComposeTrace`) is still a follow-up item for whichever WP next
+  touches `host_core`/`composer` — it was not automatically closed alongside `correlation_id`. The same
+  workaround applies to REST (`HostErrorInfo.trace_context`, from the `traceparent` request header): Python
+  parses and validates `traceparent`/`tracestate` identically to TS (`kohaku.host_core.trace_context`, a
+  straight port of TS's `packages/host-core/src/trace-context.ts`, including the all-zero-id rejection and
+  512-character `tracestate` cap) but surfaces it only on the failure-path hooks, never on `ComposeTrace`. The
+  OTel SDK itself (span creation/export) is out of scope for the Python port entirely — see "Trace context /
+  OTel" above, which is TS-only (`@kohaku-ui/otel`).
 - **Deterministic `tools/list` order**: intent tool registration order already followed the (stable) catalog
   order — tests were added (TS `intent-tools.test.ts`, Python `test_intent_tools.py`) pinning the full
   `tools/list` name sequence (fixed tools, then intent tools in catalog order) and asserting repeat calls

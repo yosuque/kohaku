@@ -127,16 +127,25 @@ compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_i
 全ツール結果はすでに `result_type: "complete"` を実の宣言済み pydantic フィールドとして持つ(2.x の
 `CallToolResult` 他の `Result` サブクラスが直接宣言している — TS は自身の SDK バージョン事情で引き続き明示的
 にスタンプしているのとは異なり、事後のスタンプ処理は不要)。compose の相関 id(`_correlation_id_of`、U2)は
-`mcp:<jsonrpc id>` — `_meta.traceparent`(SEP-414)からは**決して導出しない** — TS と同じルールである。W3C の
-trace-id は 1 つのトレース全体で共有されるため、そこから相関 id を導出すると 1 会話内の全ツール呼び出しが同じ
-id に潰れてしまう。TS の `mcpCorrelationId(extra)` はトランスポートのセッション id が取得できる場合にそれを
-追加で前置する(`mcp:<sessionId>:<jsonrpc id>`。`ServerContext.sessionId` 経由)のに対し、この移植が使う
-`mcp` SDK(`ServerRequestContext`)はリクエストハンドラに公開のトランスポートセッション id を一切露出しない
-ため、ここでは常に `mcp:<jsonrpc id>` の形になる — 設計上の選択ではなく、言語固有の既知のギャップである
-(詳細は `host_mcp/server.py` の `_correlation_id_of` 自身の doc comment を参照)。この id は現在、失敗経路の
-観測フック(`McpErrorInfo.correlation_id`)に加えて、`ComposeOptions.correlation_id` / `ComposeTrace.correlationId`
-にも(`compose_with_fixation` の `correlation_id` パラメータ経由で)到達するようになり、TS と一致する。ツール
-呼び出しの `_meta.traceparent`(+ `_meta.tracestate`)は、整形式であれば別途 `TraceContext`
+`mcp:<sessionId>:<jsonrpc id>` — `_meta.traceparent`(SEP-414)からは**決して導出しない** — TS と同じ
+ルールである。W3C の trace-id は 1 つのトレース全体で共有されるため、そこから相関 id を導出すると 1 会話内の
+全ツール呼び出しが同じ id に潰れてしまう。TS の `mcpCorrelationId(extra)` は実際のトランスポートセッション id
+が取得できる場合にそれを読む(`ServerContext.sessionId`)が、セッションという概念の無いトランスポート(stdio)
+ではセッション部分をまるごと省略する(`mcp:<jsonrpc id>`)。この移植が使う `mcp` SDK はリクエストハンドラに
+公開のトランスポートセッション id を一切露出しない——`ServerRequestContext.session` 自体が(接続ごとではなく)
+**リクエストごとに**新規構築される `ServerSession` ラッパーである(実測で確認済み: 同一接続上の 2 回の
+呼び出しが、id が異なる 2 つの `ctx.session` オブジェクトを生成した)ため、接続ごとに安定したアンカーは
+このラッパーの非公開属性 `_connection` 経由でしか到達できない。`_session_correlation_prefix` はそのオブジェクト
+をキーにして `WeakKeyDictionary` を引き、接続ごとに uuid4 hex を 1 回だけ生成して接続の寿命の間キャッシュする
+(接続がガベージコレクトされると自動的に破棄される)。そのようなアンカーが一切到達できない場合は、
+セッション無しの id へ黙ってフォールバックするのではなく `RuntimeError` を送出する(黙ったフォールバックは、
+2 つの同時セッションが同じ相関 id に衝突することを許してしまう——まさにこの仕組みが防ぐべきバグである。
+非公開属性への到達が唯一の安定したアンカーを得る手段だった経緯を含む詳細は、同関数自身の doc comment を
+参照)。TS と異なり、Python はこのセグメントをトランスポートによらず(stdio でも)一律に含める——フォーマットを
+トランスポートごとに出し分けるのではなく。この id は現在、失敗経路の観測フック(`McpErrorInfo.correlation_id`)
+に加えて、`ComposeOptions.correlation_id` / `ComposeTrace.correlationId` にも(`compose_with_fixation` の
+`correlation_id` パラメータ経由で)到達するようになり、TS と一致する。ツール呼び出しの `_meta.traceparent`
+(+ `_meta.tracestate`)は、整形式であれば別途 `TraceContext`
 (`kohaku.host_core.trace_context`。TS の `packages/host-core/src/trace-context.ts` をそのまま移植したもの —
 全ゼロの trace-id/parent-id の拒否や `tracestate` の W3C 推奨 512 文字上限も含む。`host_rest` は同等の
 `traceparent` / `tracestate` リクエストヘッダを読む)として解析され、同じ理由で `McpErrorInfo.trace_context` /

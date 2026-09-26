@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import uuid
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -158,19 +160,69 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
-def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
-    """The per-call correlation id: `mcp:<sessionId>:<jsonrpc id>` when a transport session id is available,
-    or `mcp:<jsonrpc id>` when it is not -- never derived from `_meta.traceparent`. Mirrors TS host-mcp-apps'
-    `mcpCorrelationId(extra)` (see that module's server.ts).
+# Per-connection opaque id (uuid4 hex), generated once per underlying transport connection and cached for
+# its lifetime. Keyed by object identity via a WeakKeyDictionary, so an entry is dropped automatically once
+# its key object is garbage-collected (the connection ends) rather than leaking indefinitely -- there is no
+# explicit "connection closed" hook to unwire this from. Module-level and process-wide (not per-`deps` /
+# per-attach-call): the key object is unique per connection regardless of which attach call handled it, so a
+# single shared table keyed by that identity is correct and simpler than threading one through every call
+# site.
+#
+# Keyed by `ctx.session._connection`, NOT by `ctx.session` itself: `ServerRequestContext.session` (a
+# `ServerSession`) is a *per-request* wrapper -- the installed `mcp` SDK's `ServerRunner._make_context`
+# constructs a brand new `ServerSession` for every inbound message ("Built once per inbound request", per
+# its own docstring), verified empirically (two calls on the same client connection produced two `ctx.session`
+# objects that compared unequal by identity). Keying by that object would give every call within one
+# connection its own random id -- collision-free, but violating "the same session keeps the same prefix".
+# The object that IS stable for the connection's whole lifetime is the `Connection` each per-request
+# `ServerSession` wraps (`ServerRunner._make_context` passes the same `self.connection` into every
+# `ServerSession(...)` it builds) -- but `ServerSession` exposes no public accessor for it (every property
+# delegates to `self._connection.*` internally; none returns the object itself or a stable id derived from
+# it). Reaching into the private `_connection` attribute is the only way to obtain a genuinely per-connection
+# anchor at all; done defensively via `getattr` below, with a hard failure (never a silent, collision-prone
+# fallback) if a future SDK version renames or removes it.
+_connection_correlation_ids: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
 
-    Port gap (session id): unlike TS's `ServerContext.sessionId` (a public field on `BaseContext`), this
-    port's `mcp` SDK (`mcp.server.context.ServerRequestContext`) does not expose a transport session id to a
-    request handler at all -- `ServerSession` only exposes it privately (`_connection.session_id`), and
-    reaching into that would mean depending on the SDK's private API. Until the SDK grows a public accessor,
-    this always returns the `mcp:<jsonrpc id>` form (equivalent to always treating the call as
-    session-less, e.g. stdio) -- so a Streamable HTTP deployment with multiple concurrent sessions does not
-    yet get the extra session-scoping TS's id carries. This is a known, tracked parity gap (not a design
-    choice this function makes), see brief u2's report for the open question.
+
+def _session_correlation_prefix(ctx: ServerRequestContext[Any]) -> str:
+    """The stable opaque id for this call's transport connection (see `_connection_correlation_ids` above).
+
+    Raises `RuntimeError` if no per-connection anchor object is reachable at all, rather than silently
+    falling back to a session-less id: two concurrent Streamable HTTP sessions that both start their own
+    JSON-RPC id counter at 1 would otherwise collide onto the same correlation id, and `kohaku
+    explain`/DevTools would mix their lineage events together -- a silent fallback would hide exactly the bug
+    this function exists to prevent.
+    """
+    session = ctx.session
+    connection = getattr(session, "_connection", None) if session is not None else None
+    if connection is None:
+        raise RuntimeError(
+            "No per-connection anchor is reachable from this ServerRequestContext (session is unavailable, "
+            "or the installed mcp SDK's ServerSession no longer exposes _connection); cannot build a "
+            "collision-free per-session correlation id (see _session_correlation_prefix's doc comment) -- "
+            "refusing to fall back to an id that could collide with another session's."
+        )
+    correlation_id = _connection_correlation_ids.get(connection)
+    if correlation_id is None:
+        correlation_id = uuid.uuid4().hex
+        _connection_correlation_ids[connection] = correlation_id
+    return correlation_id
+
+
+def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
+    """The per-call correlation id: `mcp:<sessionId>:<jsonrpc id>`, where `<sessionId>` is a stable opaque id
+    (uuid4 hex) generated once per transport connection (see `_session_correlation_prefix` above) -- never
+    derived from `_meta.traceparent`. Mirrors the shape of TS host-mcp-apps' `mcpCorrelationId(extra)` (see
+    that module's server.ts), though not byte-for-byte: TS reads a real `ServerContext.sessionId` (a public
+    field on `BaseContext`, absent for a session-less transport such as stdio, in which case TS omits the
+    segment entirely: `mcp:<jsonrpc id>`), while this port's `mcp` SDK exposes no equivalent public transport
+    session id to a request handler at all (see `_session_correlation_prefix`'s doc comment for exactly what
+    is and is not reachable). This port instead always includes a generated per-connection id -- covering
+    every transport uniformly, so even a single long-lived stdio connection gets one stable prefix for its
+    lifetime rather than omitting the segment -- rather than trying to detect "is this a session-less
+    transport" and varying the format. Previously (pre-review-follow-up) this always returned the bare
+    `mcp:<jsonrpc id>` form, which let two concurrent Streamable HTTP sessions whose JSON-RPC id counters both
+    started at 1 collide onto the same correlation id.
 
     A W3C trace-id is shared by an entire trace, so deriving the correlation id from it would give every tool
     call in one conversation the SAME id, making it impossible to tell which call a reported failure belongs
@@ -185,7 +237,7 @@ def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
     """
     if ctx.request_id is None:
         return None
-    return f"mcp:{ctx.request_id}"
+    return f"mcp:{_session_correlation_prefix(ctx)}:{ctx.request_id}"
 
 
 def _trace_context_of(ctx: ServerRequestContext[Any]) -> TraceContext | None:

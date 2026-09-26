@@ -289,7 +289,7 @@ Anthropic の構造化出力経路はリクエストの出力文法(スキーマ
 `ComposeOptions.correlationId`(任意・純粋な追加)は、その compose の `observer.onError` 呼び出しごとの `ComposeErrorContext.correlationId` と、配信される `ComposeTrace.correlationId` の両方へそのまま透過する — `PreparedCompose.traceBase` に乗るため、ヒット・ミス・フォールバック・single-flight の follower のいずれでも同様。呼び出し側が渡さなければどちらのフィールドもセットされず、このオプション導入前とバイト単位で不変。
 
 - **host-rest** はリクエストごとの `requestId`(`X-Request-Id` レスポンスヘッダや `error.requestId` に既に反映済みの値と同一)を、`composeWithFixation` の固定化セルフヒール報告と、host-core 側の橋渡しによる `correlationId` の両方へ渡す — 降格/失敗した compose のログ行とクライアントに見える request id が同じ文字列になる。
-- **host-mcp-apps** は MCP SDK のツール呼び出しごとの request id(`requestContextOf(extra).requestId` — ツール呼び出しの JSON-RPC id。SDK v2 の `ServerContext` の `extra.mcpReq.id`)を、`composeForTool` → `composeWithFixation` を通じて同様に渡す。**相関 id はどのプロファイルでも常にこのリクエストごとの id であり**、`_meta.traceparent` が付いていても一切それ由来にはならない — W3C の trace-id は 1 つのトレース全体で共有されるため、1 会話の中で複数ツールを呼ぶエージェントに同じ相関 id が付いてしまい、どの呼び出しに障害/セルフヒールが起きたか区別できなくなる(以前のリビジョンは `_meta.traceparent` の trace-id が存在すればそれを相関 id にしていたが、まさにこの理由で削除した。トレースの相関は下記の `traceContext` の役目)。Python も同じ「相関 id はリクエスト id のみ」というルールを、このプロファイル自身の失敗経路フック(`McpErrorInfo.correlation_id`)にそのまま踏襲する — なぜ `ComposeTrace.correlationId` まで到達しないかは §11 の「MCP 2026-07-28 / SDK v2 移行」節参照。
+- **host-mcp-apps** は MCP SDK のツール呼び出しごとの相関 id(`mcpCorrelationId(extra)` — `mcp:<sessionId>:<jsonrpc id>`。stdio のようなセッションという概念の無いトランスポートでは `mcp:<jsonrpc id>`)を、`composeForTool` → `composeWithFixation` を通じて同様に渡す。**相関 id はどのプロファイルでも常にこのリクエストごとの id(に加えてセッション/接続のアンカー)由来であり**、`_meta.traceparent` が付いていても一切それ由来にはならない — W3C の trace-id は 1 つのトレース全体で共有されるため、1 会話の中で複数ツールを呼ぶエージェントに同じ相関 id が付いてしまい、どの呼び出しに障害/セルフヒールが起きたか区別できなくなる(以前のリビジョンは `_meta.traceparent` の trace-id が存在すればそれを相関 id にしていたが、まさにこの理由で削除した。トレースの相関は下記の `traceContext` の役目)。Python も同じルールをこのプロファイル自身の失敗経路フック(`McpErrorInfo.correlation_id`)に踏襲しており、以前のセッション衝突ギャップを閉じたレビュー追随以降は `ComposeTrace.correlationId` にも到達する — Python の接続ごとの id がどう生成されるか(TS と違って公開のトランスポートセッション id を一切読めない)は §11 の「MCP 2026-07-28 / SDK v2 移行」節参照。
 - **sample-api** は `compose-context.ts` の `observer.onError` でこれを `(requestId=…)` としてログに出す — オペレーターがフォールバック/hard failure のログ行から起点リクエストへそのまま辿れる。
 
 両ホストプロファイルの `composeWithFixation`(`packages/host-core/src/fixation.ts`)は同じ `requestId` パラメータを 2 つの用途(セルフヒール報告と `ComposeOptions.correlationId`)へ両方渡すため、リクエストごとに考えるべき ID は独立した 2 つではなく常に 1 つ。
@@ -300,7 +300,7 @@ Anthropic の構造化出力経路はリクエストの出力文法(スキーマ
 `ComposeOptions.traceContext`(任意・純粋な追加 — `{ traceparent; tracestate? }`、[W3C Trace Context](https://www.w3.org/TR/trace-context/))は `correlationId` と同じ経路で透過する — `ComposeErrorContext.traceContext` と `ComposeTrace.traceContext`(`TraceBase` に乗るためヒット/ミス/フォールバック/follower いずれも同様)へそのまま伝わる。狙いは呼び出し側が選んだ id を付けるだけでなく、compose を**呼び出し側自身のトレースの子スパン**として記録できるようにすること。**トレースの相関は `traceContext` だけが担い**、上の `correlationId` がトレース紐付けを兼ねることはどちらのプロファイルでも無い。
 
 - **host-rest** は `traceparent` / `tracestate` リクエストヘッダから、**host-mcp-apps** はツール呼び出しの `_meta.traceparent` / `_meta.tracestate`(MCP 2026-07-28 / SEP-414)から充填する。両者とも host-core が共有する `parseTraceContext`(`packages/host-core/src/trace-context.ts`。`TRACEPARENT_RE` もここが定義元)で検証する — `traceparent` が欠落・不整形なら常にエラーではなく `traceContext` が単に未設定になる(fail-open)。`TRACEPARENT_RE` は全ゼロの trace-id・全ゼロの parent-id も拒否するようになった(どちらも W3C 仕様上は無効な値で、OpenTelemetry 自身の `isSpanContextValid` がエクスポート側で黙って捨てるだけになっていたのは一貫性を欠いていた)。`tracestate` は W3C 推奨の 512 文字を超えると(`traceparent` は残したまま)破棄する — 下流の observer へ未検証のまま無制限に渡さないため。両ホストの `composeWithFixation` は、通常 compose フォールバックの `ComposeOptions.traceContext` へ `correlationId` と並べてこれを転送する。
-- **Python** は抽出・検証のみを移植する(`kohaku.host_core.trace_context.parse_trace_context`。全ゼロ id の拒否・512 文字の `tracestate` 上限も同様に移植済み)。各プロファイル自身の失敗経路観測情報(`HostErrorInfo.trace_context` / `McpErrorInfo.trace_context`)にのみ現れる — なぜ `ComposeTrace` まで到達しないかは §11 の「MCP 2026-07-28 / SDK v2 移行」節を参照(`correlation_id` について既に記録済みのパリティギャップと同じ理由)。
+- **Python** は抽出・検証のみを移植する(`kohaku.host_core.trace_context.parse_trace_context`。全ゼロ id の拒否・512 文字の `tracestate` 上限も同様に移植済み)。各プロファイル自身の失敗経路観測情報(`HostErrorInfo.trace_context` / `McpErrorInfo.trace_context`)にのみ現れる — なぜ `ComposeTrace` まで到達しないかは §11 の「MCP 2026-07-28 / SDK v2 移行」節を参照。`correlation_id` はかつて全く同じ形のギャップ(`ComposeOptions` へのシンクが無い)を抱えていたが U2 で解消済み。`trace_context` は依然としてオープンなまま(別件の未着手作業であり、`correlation_id` と一緒に自動的には閉じない)。
 
 `@kohaku-ui/otel` の `createOtelComposeObserver({ tracer?, attributes?, providerName? })` は `ComposeObserver` の呼び出しをスパンへ変換する:
 
@@ -645,18 +645,38 @@ TS の SDK メジャーバージョンに関わらず成立する加算的項目
   `ComposeTrace.traceContext` へ流れる一方、相関 id は traceparent の有無に関わらず常にツール呼び出しごとの
   JSON-RPC リクエスト id のまま(以前のリビジョンは traceparent が存在すればその trace-id を相関 id にしていた
   が、それだと 1 トレース内の全ツール呼び出しが同じ相関 id に潰れ、呼び出し単位の識別ができなくなるため削除
-  した。上記 2 節参照)。**Python には意図的に覆い隠さないギャップがある**:
+  した。上記 2 節参照)。**Python にはかつてここにパリティギャップがあった、意図的に覆い隠さないまま**:
   `kohaku.host_core.compose_with_fixation` / `kohaku.composer.ComposeOptions` にはそもそも `correlation_id` /
   `trace_context` 用のパラメータが無く(この対応が持ち込んだ非対称ではなく既存のもの)、これを拡張するには
-  `host_core`/`composer` に触る必要があり、この対応が守った host_mcp 限定のファイル範囲の外にある。そのため Python 側は
-  `correlation_id`(TS と同じ「相関 id はリクエスト id のみ」というルールで、traceparent 由来には決してしない)
-  と `trace_context` を、このプロファイル自身の失敗経路フック(`McpErrorInfo.correlation_id` /
+  `host_core`/`composer` に触る必要があり、当時の対応が守った host_mcp 限定のファイル範囲の外にあった。その
+  ため両方の id は、このプロファイル自身の失敗経路フック(`McpErrorInfo.correlation_id` /
   `McpErrorInfo.trace_context`。mcp SDK が全ての低レベルリクエストハンドラへ直接渡す `ServerRequestContext`
   〈`ctx`〉から読む — `mcp` 2.x はこれまで使っていたリクエストスコープ contextvar `request_ctx` /
   デコレータ登録方式を廃止した。`ctx.meta` は `RequestParamsMeta` の TypedDict なので、辞書アクセス
-  〈`meta.get("traceparent")`〉であり属性アクセスではない)にのみ通す。
-  完全な対称化(`ComposeOptions`/`ComposeTrace` への `correlation_id`/`trace_context` シンク追加)は、次に
-  `host_core`/`composer` に触る WP への持ち越し課題とする。同じ回避策が REST(`HostErrorInfo.trace_context`。
+  〈`meta.get("traceparent")`〉であり属性アクセスではない)にのみ通っていた。
+
+  **U2(とそのレビュー追随対応)がこのギャップのうち `correlation_id` の半分を解消した**:
+  `ComposeOptions.correlation_id` と `kohaku.host_core.compose_with_fixation` の `correlation_id` パラメータが
+  今は存在し、Python の `_correlation_id_of` は TS と同じ経路でそこへ流し込む。ただし id の*形*は依然として
+  TS と異なる — この SDK 固有の理由による: TS は実際のトランスポートセッション id(`ServerContext.sessionId`、
+  `BaseContext` 上の public プロパティ)を読み、セッションという概念の無いトランスポート(stdio)ではその
+  セグメントを省く。この移植で使っている `mcp` SDK はリクエストハンドラに対してそのような public アクセサを
+  一切公開しておらず、さらに悪いことに `ServerRequestContext.session` 自体が SDK がリクエストごとに構築する
+  *使い捨ての* `ServerSession` ラッパーである(実証済み: 同一コネクション上の 2 回の呼び出しが、identity で
+  区別される 2 つの異なる `ctx.session` オブジェクトを生成した)— コネクションごとに安定なオブジェクトではない。
+  そのため(最初に試みたように)`ctx.session` そのものをキーにキャッシュするやり方は機能しない: 呼び出しの
+  たびに新しい id を生成してしまい、「衝突しない」は満たすが「同一セッションは同じ接頭辞を保つ」は満たさない。
+  コネクションの生存期間にわたって実際に安定している唯一の到達可能なアンカーは、各リクエストの `ServerSession`
+  がラップしている `Connection` オブジェクトであり、これはそのラッパーの private な `_connection` 属性からしか
+  到達できない(`host_mcp/server.py` の `_session_correlation_prefix`。`weakref.WeakKeyDictionary` でキー管理
+  し、コネクションが GC されればエントリも消える)— private な SDK 属性へ踏み込むことをここで受け入れたのは、
+  必要な保証(同時に存在する複数セッションが決して衝突しないこと)を満たす public な代替が他に無いためであり、
+  将来の SDK バージョンでその属性が失われた場合には(衝突を招きうる無言のフォールバックではなく)必ず
+  `RuntimeError` で止まるようにしてある。
+
+  **`trace_context` は依然としてオープンなまま**: 完全な対称化(`ComposeOptions`/`ComposeTrace` への
+  `trace_context` シンク追加)は、次に `host_core`/`composer` に触る WP への持ち越し課題であり続けている —
+  `correlation_id` と一緒に自動的には閉じなかった。同じ回避策は REST(`HostErrorInfo.trace_context`。
   `traceparent` リクエストヘッダから)にも当てはまる: Python は `traceparent`/`tracestate` の解析・検証自体を
   TS と同一に行う(`kohaku.host_core.trace_context` — TS の `packages/host-core/src/trace-context.ts` をそのまま
   移植したもので、全ゼロ id の拒否・512 文字の `tracestate` 上限も含む)が、失敗経路フックにのみ現れ、

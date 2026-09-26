@@ -131,16 +131,26 @@ decorators mcp 1.x used, and every handler receives its own `ServerRequestContex
 request-scoped contextvar). Every tool result already carries `result_type: "complete"` as a real declared
 pydantic field (2.x's `CallToolResult` and other `Result` subclasses declare it directly — no post-hoc
 stamping needed, unlike TS which still stamps it explicitly for its own SDK-version reasons). The compose
-correlation id (`_correlation_id_of`, U2) is `mcp:<jsonrpc id>` — **never** derived from `_meta.traceparent`
-(SEP-414), the same rule TS enforces: a W3C trace-id is shared by an entire trace, so deriving the correlation
-id from it would collapse every tool call in one conversation onto the same id. Unlike TS's
-`mcpCorrelationId(extra)`, which additionally prefixes a transport session id when one is available
-(`mcp:<sessionId>:<jsonrpc id>`, via `ServerContext.sessionId`), this port's `mcp` SDK
-(`ServerRequestContext`) exposes no public transport session id to a request handler at all, so the
-`mcp:<jsonrpc id>` form is always used here — a tracked, language-specific gap (see `_correlation_id_of`'s own
-doc comment in `host_mcp/server.py`), not a design choice. This id now reaches `ComposeOptions.correlation_id`
-/ `ComposeTrace.correlationId` (via `compose_with_fixation`'s `correlation_id` parameter) in addition to the
-failure-path observability hook (`McpErrorInfo.correlation_id`), matching TS. A tool call's `_meta.traceparent`
+correlation id (`_correlation_id_of`, U2) is `mcp:<sessionId>:<jsonrpc id>` — **never** derived from
+`_meta.traceparent` (SEP-414), the same rule TS enforces: a W3C trace-id is shared by an entire trace, so
+deriving the correlation id from it would collapse every tool call in one conversation onto the same id. TS's
+`mcpCorrelationId(extra)` reads a real transport session id when one is available (`ServerContext.sessionId`),
+omitting the session segment entirely (`mcp:<jsonrpc id>`) for a session-less transport (stdio). This port's
+`mcp` SDK exposes no public transport session id to a request handler at all — `ServerRequestContext.session`
+is itself a fresh `ServerSession` wrapper the SDK constructs *per request*, not per connection (verified
+empirically: two calls on the same connection produce two `ctx.session` objects that differ by identity), so
+a stable per-connection anchor is reachable only via that wrapper's private `_connection` attribute.
+`_session_correlation_prefix` keys a `WeakKeyDictionary` by that object, generating a uuid4 hex once per
+connection and caching it for the connection's lifetime (evicted automatically once the connection is
+garbage-collected); it raises `RuntimeError` rather than falling back to a session-less id if no such anchor
+is reachable at all (a silent fallback would let two concurrent sessions collide onto the same correlation
+id, exactly the bug this exists to prevent — see that function's own doc comment for the full account,
+including why reaching into a private attribute was the only way to get a genuinely stable anchor). Unlike
+TS, Python includes the connection segment for every transport uniformly (even a single long-lived stdio
+connection gets one stable prefix) rather than varying the format by transport. This id now reaches
+`ComposeOptions.correlation_id` / `ComposeTrace.correlationId` (via `compose_with_fixation`'s
+`correlation_id` parameter) in addition to the failure-path observability hook
+(`McpErrorInfo.correlation_id`), matching TS. A tool call's `_meta.traceparent`
 (+ `_meta.tracestate`), when well-formed, is separately parsed as a `TraceContext`
 (`kohaku.host_core.trace_context`, a straight port of TS's `packages/host-core/src/trace-context.ts` —
 including rejecting an all-zero trace-id/parent-id and capping `tracestate` at the W3C-recommended 512
