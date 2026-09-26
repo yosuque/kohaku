@@ -1,5 +1,6 @@
 import type { JsonObject, JsonValue } from "@kohaku-ui/spec-core";
 import type { A2uiComponent } from "../types.js";
+import { RESERVED_OBJECT_KEYS } from "./reserved-keys.js";
 import type { InboundA2uiMessage } from "./schemas.js";
 
 /** The single component id an inbound surface's root must have (matches kohaku's own root convention — see spec-core's `ROOT_COMPONENT_ID`). */
@@ -39,6 +40,12 @@ function isJsonObjectValue(value: JsonValue | undefined): value is JsonObject {
  * component-delete message, updateComponents is upsert-only" fact this profile's outbound side already
  * relies on). Rejects a *duplicate id within the same incoming array* — two components both claiming, say,
  * `id: "root"` in one message is a malformed message, not a legal "last one wins" upsert.
+ *
+ * **Security**: also rejects a reserved id (see {@link RESERVED_OBJECT_KEYS}) and stores the result on a
+ * null-prototype object (`Object.create(null)`), the same two-layer defense `setAtPointer`/`getAtPointer`
+ * use — `A2uiComponentSchema` already rejects a reserved `id` at the schema layer (so this should be
+ * unreachable in practice), but the plain `next[c.id] = c` this function used before would, on an ordinary
+ * object, have let `id: "__proto__"` reassign `next`'s own prototype instead of storing a component.
  */
 function upsertComponents(
   base: Record<string, A2uiComponent>,
@@ -51,9 +58,13 @@ function upsertComponents(
         `duplicate component id "${c.id}" within a single createSurface/updateComponents message`,
       );
     }
+    if (RESERVED_OBJECT_KEYS.has(c.id)) {
+      throw new A2uiIngestError(`component id "${c.id}" is reserved and cannot be used`);
+    }
     seen.add(c.id);
   }
-  const next = { ...base };
+  const next: Record<string, A2uiComponent> = Object.create(null) as Record<string, A2uiComponent>;
+  for (const key of Object.keys(base)) next[key] = base[key] as A2uiComponent;
   for (const c of incoming) next[c.id] = c;
   return next;
 }
@@ -68,6 +79,18 @@ function unescapeJsonPointerToken(token: string): string {
  * both mean "the whole data model" here — no token, not a property named `""` — since A2UI's own updateDataModel
  * examples use `"/"` as the "whole document" default rather than RFC 6901's literal (and rarely useful) empty-string-key
  * reading of a bare `"/"`.
+ *
+ * **Security**: rejects any token in {@link RESERVED_OBJECT_KEYS} (`__proto__`/`constructor`/`prototype`).
+ * Without this, `updateDataModel({path: "/__proto__/polluted", value: "yes"})` would let a third-party agent
+ * reach `setAtPointer`'s `cursor[token] = child` with `token === "__proto__"` — on an ordinary object this is
+ * not a plain property write, it *reassigns the object's own prototype* (the accessor every object inherits
+ * from `Object.prototype`). The result is a `dataModel` whose injected value is invisible to
+ * `canonicalStringify`/`JSON.stringify` (own-enumerable-only, so `deriveDataVersion` hashes it identically to
+ * the unmodified data model — a cache-key collision) yet *is* visible to a plain `cursor[token]` read
+ * (property lookup walks the prototype chain) — exactly the kind of same-key-different-content drift
+ * `createA2uiIngest`'s cache is supposed to make impossible. Rejecting the token here (defense layer 1) is
+ * paired with the walkers below never reading/writing anything but each object's own properties regardless
+ * of key name (defense layer 2, independent of this list).
  */
 export function parsePointer(pointer: string): string[] {
   if (pointer === "" || pointer === "/") return [];
@@ -76,22 +99,46 @@ export function parsePointer(pointer: string): string[] {
       `updateDataModel path must be RFC 6901 ("" , "/", or starting with "/"), got "${pointer}"`,
     );
   }
-  return pointer.slice(1).split("/").map(unescapeJsonPointerToken);
+  const tokens = pointer.slice(1).split("/").map(unescapeJsonPointerToken);
+  for (const token of tokens) {
+    if (RESERVED_OBJECT_KEYS.has(token)) {
+      throw new A2uiIngestError(
+        `updateDataModel path must not address the reserved property name "${token}", got path "${pointer}"`,
+      );
+    }
+  }
+  return tokens;
+}
+
+/**
+ * Shallow-clones `obj`'s own enumerable properties onto a fresh, prototype-*less* object (`Object.create(null)`).
+ * A null-prototype object has no inherited `__proto__` accessor at all, so a later `clone[token] = value` is an
+ * ordinary property write regardless of what `token` is — the walkers below use this for every object they
+ * construct, as the second, key-name-independent defense layer described in `parsePointer`'s doc.
+ * `JSON.stringify`/`canonicalStringify` serialize a null-prototype object identically to a plain one (both
+ * only ever look at own enumerable properties), so this is invisible to every other consumer of `JsonObject`.
+ */
+function cloneOwn(obj: JsonObject): JsonObject {
+  const clone: JsonObject = Object.create(null) as JsonObject;
+  for (const key of Object.keys(obj)) clone[key] = obj[key] as JsonValue;
+  return clone;
 }
 
 /**
  * Reads the value at `pointer` within `root` (RFC 6901, same `"/"`-means-whole-document convention as
- * `parsePointer`). Returns `undefined` when any segment of the path does not exist — a read, unlike a write,
- * has no reason to distinguish "absent" from "present but not an object" (either way there is nothing to
- * return). Used by `from-a2ui.ts` to snapshot a `{path}` data binding to a literal value.
+ * `parsePointer`). Returns `undefined` when any segment of the path does not exist as an *own* property of
+ * its parent (see `parsePointer`'s security note — this also stops a path like `/toString` from resolving to
+ * an inherited `Object.prototype` member as if it were stored data) — a read, unlike a write, has no reason
+ * to distinguish "absent" from "present but not an object" (either way there is nothing to return). Used by
+ * `from-a2ui.ts` to snapshot a `{path}` data binding to a literal value.
  */
 export function getAtPointer(root: JsonObject, pointer: string): JsonValue | undefined {
   const tokens = parsePointer(pointer);
   let cursor: JsonValue = root;
   for (const token of tokens) {
     if (typeof cursor !== "object" || cursor === null || Array.isArray(cursor)) return undefined;
+    if (!Object.hasOwn(cursor, token)) return undefined;
     cursor = (cursor as JsonObject)[token] as JsonValue;
-    if (cursor === undefined) return undefined;
   }
   return cursor;
 }
@@ -101,6 +148,8 @@ export function getAtPointer(root: JsonObject, pointer: string): JsonValue | und
  * value along the path is replaced by a fresh object, not merged into). An empty `tokens` array (path `"/"`)
  * replaces the whole data model, which therefore requires an object `value` — kohaku's `SurfaceState.dataModel`
  * is always a `JsonObject`, so replacing it wholesale with a bare scalar/array has no representation here.
+ * See `parsePointer`/`cloneOwn`'s doc comments for why every object here is built via `cloneOwn`/
+ * `Object.create(null)` rather than `{...existing}`/`{}`.
  *
  * Array-valued intermediate segments are not specially handled (an array along the path is simply replaced
  * by a fresh object for the remaining descent, same as any other non-object) — the RC facts note does not
@@ -114,13 +163,15 @@ function setAtPointer(root: JsonObject, tokens: readonly string[], value: JsonVa
         'updateDataModel: replacing the whole data model (path "/") requires an object value',
       );
     }
-    return value;
+    return cloneOwn(value);
   }
-  const next: JsonObject = { ...root };
+  const next = cloneOwn(root);
   let cursor: JsonObject = next;
   for (const token of tokens.slice(0, -1)) {
-    const existing = cursor[token];
-    const child: JsonObject = isJsonObjectValue(existing) ? { ...existing } : {};
+    const existing = Object.hasOwn(cursor, token) ? cursor[token] : undefined;
+    const child: JsonObject = isJsonObjectValue(existing)
+      ? cloneOwn(existing)
+      : (Object.create(null) as JsonObject);
     cursor[token] = child;
     cursor = child;
   }
@@ -131,20 +182,21 @@ function setAtPointer(root: JsonObject, tokens: readonly string[], value: JsonVa
 /**
  * Deletes the key at `tokens` within `root` (v0.9.1 only — see `A2uiUpdateDataModelV091Schema`'s doc). A
  * missing intermediate segment is a no-op (fail-open: nothing to delete), and an empty `tokens` array (path
- * `"/"`) resets the whole data model to `{}`.
+ * `"/"`) resets the whole data model to `{}`. See `setAtPointer`'s doc for why `cloneOwn`/`Object.create(null)`.
  */
 function deleteAtPointer(root: JsonObject, tokens: readonly string[]): JsonObject {
-  if (tokens.length === 0) return {};
-  const next: JsonObject = { ...root };
+  if (tokens.length === 0) return Object.create(null) as JsonObject;
+  const next = cloneOwn(root);
   let cursor: JsonObject = next;
   for (const token of tokens.slice(0, -1)) {
-    const existing = cursor[token];
+    const existing = Object.hasOwn(cursor, token) ? cursor[token] : undefined;
     if (!isJsonObjectValue(existing)) return next;
-    const child = { ...existing };
+    const child = cloneOwn(existing);
     cursor[token] = child;
     cursor = child;
   }
-  delete cursor[tokens[tokens.length - 1]!];
+  const lastToken = tokens[tokens.length - 1]!;
+  if (Object.hasOwn(cursor, lastToken)) delete cursor[lastToken];
   return next;
 }
 

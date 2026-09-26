@@ -7,6 +7,7 @@ import type {
   A2uiFunctionCall,
   A2uiValue,
 } from "../types.js";
+import { RESERVED_OBJECT_KEYS } from "./reserved-keys.js";
 
 /**
  * Zod validation for **inbound** A2UI server→client messages (a third-party agent's `createSurface` /
@@ -66,7 +67,15 @@ export const A2uiComponentActionSchema: z.ZodType<A2uiComponentAction> = z.union
  */
 export const A2uiComponentSchema: z.ZodType<A2uiComponent> = z
   .object({
-    id: z.string().min(1),
+    // Security: id becomes an object key (SurfaceState.components, keyed by id — see reduce.ts's
+    // upsertComponents). A reserved name here (see RESERVED_OBJECT_KEYS's doc) would, on an ordinary
+    // object, reassign that object's own prototype instead of storing a component.
+    id: z
+      .string()
+      .min(1)
+      .refine((id) => !RESERVED_OBJECT_KEYS.has(id), {
+        message: 'component id must not be a reserved property name ("__proto__"/"constructor"/"prototype")',
+      }),
     component: z.string().min(1),
     children: A2uiChildrenSchema.optional(),
     child: z.string().optional(),

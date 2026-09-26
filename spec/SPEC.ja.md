@@ -225,6 +225,8 @@ UISpec / SpecPatch を A2UI(隣接リスト形の宣言的 UI メッセージ)�
 
 受信側のワイヤ(v0.9.1・v1.0 RC いずれの `createSurface`/`updateComponents`/`updateDataModel`/`deleteSurface` も)は厳密に検証され(エンベロープ・構造キーの未知キーは拒否、コンポーネントのカタログ直置き props は開放のまま)、`SurfaceState`(サーフェスごとの `{id -> component}` マップと蓄積されたデータモデル)へ畳み込まれ、`fromA2ui` によって `UISpec` へ変換される。これは `toA2ui` の厳密な逆変換では**ない**: 真に他社製のサーフェスは `KohakuSidecar` を持たないため、変換はベストエフォートであり損失を伴いうる — kohaku 自身が過去に `toA2ui` で出力したものを sidecar 付き、かつ明示的な **`trust: "trusted"`** で再取り込みした場合に限り、component 単位で sidecar から(元のイベントも含めて)無損失に復元される。`trust` の既定値は `"untrusted"` であり、その下では渡された `sidecar` は一切参照されない — なぜこの既定値が単なる忠実度だけでなく重要なのかは後述の「セキュリティ: write-action の転送」を参照。
 
+**セキュリティ: JSON Pointer / component id の安全性。** `updateDataModel.path` とコンポーネントの `id` はどちらも信頼できない、エージェントが選ぶ文字列であり、これを本プロファイル内部のオブジェクトグラフ走査(`reduce.ts` の `setAtPointer`/`getAtPointer`/`deleteAtPointer`/`upsertComponents`)がそのまま素のオブジェクトキーとして使ってしまうと問題になる。パスセグメントや id が `"__proto__"` である場合、これは通常のオブジェクトにおける普通のプロパティ名ではない — bracket 代入すると*そのオブジェクト自身のプロトタイプを再代入してしまう*ため、注入された値は `canonicalStringify`(own-enumerable のみを見る)からは見えず(`dataVersion` は変更されていないデータモデルと同一にハッシュされる = キャッシュキーの衝突)、それでいて通常のプロパティ参照(プロトタイプチェーンをたどる)からは読み取れてしまう — 同じキャッシュキーが黙って異なる内容を返すことになる。`"__proto__"`/`"constructor"`/`"prototype"` は、それがキーになりうる箇所(スキーマ検証されるコンポーネントの `id`、または `path` のセグメント)ではすべて即座に拒否され(メッセージ全体を失敗させる)、それとは独立に、この文字列入力から本プロファイル自身が構築するすべてのオブジェクトは `Object.create(null)` で作られ、`Object.hasOwn` チェックを介して読み書きされるため、キーの内容に関わらず(予約語であれ、`"toString"` のような無関係な名前であれ)プロパティ参照が継承済みの `Object.prototype` メンバーへフォールスルーすることは無い。
+
 逆対応表(その component id に sidecar のエントリが無い場合):
 
 | A2UI(受信) | kohaku | 備考 |

@@ -53,6 +53,12 @@ content you can prove is kohaku's own prior `toA2ui` output re-ingested, never b
 the surface itself; `createA2uiIngest` (below) always uses `"untrusted"` and does not expose this as a
 caller-settable option.
 
+An agent-chosen `updateDataModel.path` or component `id` is also never treated as an ordinary object key
+unguarded: `"__proto__"`/`"constructor"`/`"prototype"` are rejected outright wherever they would become one,
+and every object this package's internal JSON-Pointer walk builds from such input is a
+prototype-less (`Object.create(null)`) object read/written only via `Object.hasOwn` — closing a
+same-cache-key-different-content class of bug a naive `obj[token] = value` walk would otherwise be open to.
+
 `createA2uiIngest({storage, recorder, fixations, agentId, ...})` wires this into a caching + lineage
 pipeline over structural subsets of `StoragePort` / `@kohaku-ui/lineage`'s `RestViewRecorder` /
 `Fixations` (so this package gains no runtime dependency on either):

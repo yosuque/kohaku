@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   A2UI_ROOT_COMPONENT_ID,
   A2uiIngestError,
+  getAtPointer,
   getRootComponent,
   type InboundA2uiMessage,
   parseInboundA2uiMessage,
@@ -228,5 +229,81 @@ describe("reduceSurfaceMessage / reduceSurfaces: folding into SurfaceState", () 
       parseInboundA2uiMessage({ version: "v0.9.1", deleteSurface: { surfaceId: "does-not-exist" } }),
     );
     expect(noop.size).toBe(0);
+  });
+});
+
+describe("security: prototype-pollution-shaped JSON Pointer / component id input is rejected, never mistaken for own data", () => {
+  it("rejects updateDataModel({path: '/__proto__/polluted', value: ...}) outright", () => {
+    const state = reduceSurfaceMessage(
+      undefined,
+      parseInboundA2uiMessage({ version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: "c" } }),
+    );
+    expect(() =>
+      reduceSurfaceMessage(
+        state,
+        parseInboundA2uiMessage({
+          version: "v0.9.1",
+          updateDataModel: { surfaceId: "s", path: "/__proto__/polluted", value: "yes" },
+        }),
+      ),
+    ).toThrow(A2uiIngestError);
+  });
+
+  it("rejects 'constructor' and 'prototype' pointer tokens too", () => {
+    const state = reduceSurfaceMessage(
+      undefined,
+      parseInboundA2uiMessage({ version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: "c" } }),
+    );
+    for (const reserved of ["constructor", "prototype"]) {
+      expect(() =>
+        reduceSurfaceMessage(
+          state,
+          parseInboundA2uiMessage({
+            version: "v0.9.1",
+            updateDataModel: { surfaceId: "s", path: `/${reserved}/x`, value: "yes" },
+          }),
+        ),
+      ).toThrow(A2uiIngestError);
+    }
+  });
+
+  it("getAtPointer never returns an inherited value for a path that was never actually set", () => {
+    const dataModel = { greeting: "hi" };
+    // None of these are own properties of `dataModel`, even though they exist on Object.prototype.
+    expect(getAtPointer(dataModel, "/toString")).toBeUndefined();
+    expect(getAtPointer(dataModel, "/hasOwnProperty")).toBeUndefined();
+    expect(getAtPointer(dataModel, "/valueOf")).toBeUndefined();
+  });
+
+  it("rejects a component id of '__proto__' / 'constructor' / 'prototype' at the schema layer", () => {
+    for (const reserved of ["__proto__", "constructor", "prototype"]) {
+      // Parsed from a JSON string (like a real wire message would be) rather than an object literal, so
+      // "id" is an ordinary own string property with the value "__proto__" — the schema's refine check is
+      // what is actually being exercised here, not JS's own bracket-assignment quirks.
+      const raw: unknown = JSON.parse(
+        JSON.stringify({
+          version: "v0.9.1",
+          updateComponents: { surfaceId: "s", components: [{ id: reserved, component: "Text", text: "x" }] },
+        }),
+      );
+      expect(() => parseInboundA2uiMessage(raw)).toThrow();
+    }
+  });
+
+  it("upsertComponents (reduceSurfaceMessage) independently rejects a reserved id even if schema validation were bypassed", () => {
+    const state = reduceSurfaceMessage(
+      undefined,
+      parseInboundA2uiMessage({ version: "v0.9.1", createSurface: { surfaceId: "s", catalogId: "c" } }),
+    );
+    // Bypasses parseInboundA2uiMessage's schema check on purpose, to prove reduceSurfaceMessage's own
+    // defense (RESERVED_OBJECT_KEYS check in upsertComponents) is independent of the schema layer.
+    const smuggled = {
+      version: "v0.9.1" as const,
+      updateComponents: {
+        surfaceId: "s",
+        components: [{ id: "constructor", component: "Text" }],
+      },
+    };
+    expect(() => reduceSurfaceMessage(state, smuggled)).toThrow(A2uiIngestError);
   });
 });
