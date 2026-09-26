@@ -89,7 +89,8 @@ function jsonDepthGuard(limit: number): z.ZodType<unknown> {
  * is enough to close the recursion-depth gap at every one of those call sites without touching them
  * individually.
  */
-export const JsonValueSchema: z.ZodType<JsonValue> = jsonDepthGuard(MAX_JSON_OBJECT_DEPTH).pipe(RawJsonValueSchema);
+export const JsonValueSchema: z.ZodType<JsonValue> =
+  jsonDepthGuard(MAX_JSON_OBJECT_DEPTH).pipe(RawJsonValueSchema);
 
 /**
  * A JSON object (the top-level value must itself be a record), matching JsonValueSchema's depth bound (the
