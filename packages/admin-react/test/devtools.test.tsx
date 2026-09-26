@@ -132,6 +132,35 @@ describe("KohakuDevTools", () => {
     expect((screen.getByLabelText("Request ID") as HTMLInputElement).value).toBe("req-1");
   });
 
+  it("runs explain once on mount when defaultRequestId is non-empty and enabled is true", async () => {
+    const explain = vi.fn().mockResolvedValue(REPORT);
+    render(<KohakuDevTools enabled client={fakeClient(explain)} spec={SPEC} defaultRequestId="req-1" />);
+
+    await screen.findByText("L1 / miss");
+    expect(explain).toHaveBeenCalledOnce();
+    expect(explain).toHaveBeenCalledWith("req-1", { spec: SPEC });
+    expect((screen.getByLabelText("Request ID") as HTMLInputElement).value).toBe("req-1");
+  });
+
+  it("does not run explain on mount when defaultRequestId is empty", () => {
+    const explain = vi.fn().mockResolvedValue(REPORT);
+    render(<KohakuDevTools enabled client={fakeClient(explain)} />);
+
+    expect(explain).not.toHaveBeenCalled();
+  });
+
+  it("does not run explain while disabled, but does once it becomes enabled", async () => {
+    const explain = vi.fn().mockResolvedValue(REPORT);
+    const { rerender } = render(
+      <KohakuDevTools enabled={false} client={fakeClient(explain)} spec={SPEC} defaultRequestId="req-1" />,
+    );
+    expect(explain).not.toHaveBeenCalled();
+
+    rerender(<KohakuDevTools enabled client={fakeClient(explain)} spec={SPEC} defaultRequestId="req-1" />);
+    await waitFor(() => expect(explain).toHaveBeenCalledOnce());
+    expect(explain).toHaveBeenCalledWith("req-1", { spec: SPEC });
+  });
+
   it("passes the axe structural ruleset once a report is rendered", async () => {
     const explain = vi.fn().mockResolvedValue(REPORT);
     const { container } = render(<KohakuDevTools enabled client={fakeClient(explain)} spec={SPEC} />);

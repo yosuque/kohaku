@@ -1,6 +1,6 @@
 import type { ExplainReport, KohakuClient } from "@kohaku-ui/client";
 import type { ThemeTokens, UISpec } from "@kohaku-ui/spec-core";
-import { type ReactNode, useCallback, useState, useSyncExternalStore } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { adminThemeStyle, V } from "../theme.js";
 import { card, Empty, ErrorBanner, Field, sectionTitle, smallButton } from "../ui.js";
 import type { DevToolsCapture } from "./capture.js";
@@ -80,6 +80,21 @@ export function KohakuDevTools(props: KohakuDevToolsProps): ReactNode {
     },
     [client, spec],
   );
+
+  // Runs `defaultRequestId` through explain exactly once, the first time it is both non-empty and `enabled`
+  // is true (a mount-time run when both already hold; deferred until `enabled` flips true otherwise). The ref
+  // guard -- not an empty dependency array -- is what makes this "once": `props.enabled`/`props.defaultRequestId`
+  // must stay in the dependency list (this effect calls runExplain, which closes over `client`/`spec`) for the
+  // rule of hooks' exhaustive-deps guarantee, but re-running the effect after the first successful fire is a
+  // no-op because of the guard.
+  const hasRunDefaultRequestRef = useRef(false);
+  useEffect(() => {
+    if (hasRunDefaultRequestRef.current) return;
+    if (!props.enabled) return;
+    if (props.defaultRequestId == null || props.defaultRequestId === "") return;
+    hasRunDefaultRequestRef.current = true;
+    void runExplain(props.defaultRequestId);
+  }, [props.enabled, props.defaultRequestId, runExplain]);
 
   if (!props.enabled) return null;
 
