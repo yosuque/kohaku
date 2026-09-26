@@ -1,5 +1,5 @@
 import type { Downgrade } from "@kohaku-ui/registry";
-import type { CanonicalIntent, SemanticInput } from "@kohaku-ui/spec-core";
+import type { CacheKeyParts, CanonicalIntent, SemanticInput } from "@kohaku-ui/spec-core";
 
 export interface ComposeAttempt {
   kind: "l1" | "l2";
@@ -33,6 +33,15 @@ export interface ComposeTrace {
   refs: string[];
   dataVersion: string;
   cacheKey: string;
+  /**
+   * The individual components `cacheKey` was built from (see @kohaku-ui/spec-core's `cacheKey` /
+   * `CacheKeyParts`). `cacheKey` itself is an opaque, colon-joined string (`intentHash` is
+   * `sha256:<hex>` and a combined `dataVersion` is `multi:<hex>`, so the joined string cannot be
+   * split back apart) -- this field exists so a devtool (`kohaku explain`, admin-react's DevTools)
+   * can show the breakdown without parsing it. Always set (mirrors the exact parts passed to
+   * `cacheKey()` in prepareCompose), unlike correlationId/traceContext below which are opt-in.
+   */
+  cacheKeyParts: CacheKeyParts;
   // "fixated" represents a fixation short-circuit (host-side short-circuit). The composer itself only sets
   // hit/miss/bypass; when the host short-circuits via fixation, it uses this value downstream (adding a value, so existing usage is backward compatible).
   cache: "hit" | "miss" | "bypass" | "fixated";
@@ -70,7 +79,14 @@ export interface ComposeTrace {
 /** The invariant part of the trace (through intent normalization + reference resolution + cacheKey computation). Shared by both hit and miss. */
 export type TraceBase = Pick<
   ComposeTrace,
-  "input" | "intent" | "refs" | "dataVersion" | "cacheKey" | "correlationId" | "traceContext"
+  | "input"
+  | "intent"
+  | "refs"
+  | "dataVersion"
+  | "cacheKey"
+  | "cacheKeyParts"
+  | "correlationId"
+  | "traceContext"
 >;
 
 /** The per-path trace fields on top of TraceBase (durationMs is derived from startedAt inside buildComposeTrace). */

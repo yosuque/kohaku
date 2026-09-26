@@ -19,6 +19,7 @@ function traceOf(fields: Partial<ComposeTrace> = {}): ComposeTrace {
     refs: [],
     dataVersion: "v1",
     cacheKey: "k1",
+    cacheKeyParts: { intentHash: SPEC.intent.hash, dataVersion: "v1" },
     cache: "miss",
     tier: "L0",
     attempts: [],
