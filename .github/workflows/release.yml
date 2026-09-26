@@ -159,7 +159,8 @@ jobs:
       # package without a trusted publisher -- after having already published every package sorted before
       # it -- so without this preflight a missing registration leaves the release half-published (0.3.0
       # did exactly that: seven packages went out before @kohaku-ui/authz-hmac failed). The exchange itself
-      # has no side effect on the registry. A package that has never been published at all cannot carry a
+      # has no side effect on the registry; it answers 201 (not 200) on success, so any 2xx counts as ok.
+      # A package that has never been published at all cannot carry a
       # trusted publisher yet (npm requires the package to exist), so that case gets its own pointer to the
       # bootstrap script instead of the generic "register it" message.
       - name: Preflight -- probe the npm trusted-publisher registration of every package
@@ -174,7 +175,7 @@ jobs:
             ENC=$(node -p "encodeURIComponent('$NAME')")
             STATUS=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $ID_TOKEN" -H "Accept: application/json" -H "Content-Length: 0" \
               "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$ENC")
-            if [ "$STATUS" = "200" ]; then echo "ok               $NAME"; continue; fi
+            case "$STATUS" in 2??) echo "ok               $NAME"; continue ;; esac
             MISSING=1
             EXISTS=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$ENC")
             if [ "$EXISTS" = "404" ]; then echo "NEVER PUBLISHED  $NAME (HTTP $STATUS)"; NEVER_PUBLISHED=1; else echo "MISSING          $NAME (HTTP $STATUS)"; fi
