@@ -15,6 +15,7 @@ from kohaku.spec import (
     GuiAction,
     Intent,
     IntentInput,
+    IntentValidationError,
     NLQuery,
     SemanticInput,
     SessionContext,
@@ -24,7 +25,9 @@ from kohaku.spec import (
 SESSION = SessionContext(surface="web")
 
 
-def test_kind_intent_finalizes_the_given_intent_input_directly_without_calling_normalize() -> None:
+def test_kind_intent_with_no_validate_intent_finalizes_the_given_intent_input_directly_unchecked() -> None:
+    """Backward compatible: a `semantic` without `validate_intent` keeps the historical unchecked-finalize
+    behavior, and `normalize` is never called for a directly-specified Intent either way."""
     calls: list[SemanticInput] = []
 
     async def normalize(input: SemanticInput, ctx: SessionContext) -> IntentInput:
@@ -42,6 +45,55 @@ def test_kind_intent_finalizes_the_given_intent_input_directly_without_calling_n
         assert result.intent.params == {"fiscalYear": 2026}
         assert result.intent.hash.startswith("sha256:")
         assert result.current is None
+
+    asyncio.run(run())
+
+
+def test_kind_intent_with_validate_intent_calls_it_before_finalizing_and_finalizes_its_return_value() -> None:
+    normalize_calls: list[SemanticInput] = []
+    validate_calls: list[tuple[IntentInput, SessionContext]] = []
+
+    async def normalize(input: SemanticInput, ctx: SessionContext) -> IntentInput:
+        normalize_calls.append(input)
+        return IntentInput(canonical="unused", params={})
+
+    async def validate_intent(intent: IntentInput, ctx: SessionContext) -> IntentInput:
+        validate_calls.append((intent, ctx))
+        # Simulates a catalog filling in a schema default the caller omitted.
+        return IntentInput(canonical=intent.canonical, params={"metric": "revenue", **intent.params})
+
+    async def run() -> None:
+        result = await resolve_intent(
+            _FakeSemantic(normalize, validate_intent),
+            IntentSourceIntent(intent=IntentInput(canonical="sales.trend", params={"fiscalYear": 2026})),
+            SESSION,
+        )
+        assert normalize_calls == []
+        assert validate_calls == [
+            (IntentInput(canonical="sales.trend", params={"fiscalYear": 2026}), SESSION)
+        ]
+        assert result.intent.params == {"fiscalYear": 2026, "metric": "revenue"}
+
+    asyncio.run(run())
+
+
+def test_kind_intent_propagates_an_intent_validation_error_without_finalizing_anything() -> None:
+    async def normalize(input: SemanticInput, ctx: SessionContext) -> IntentInput:
+        raise AssertionError("normalize must not be called for a directly-specified Intent")
+
+    async def validate_intent(intent: IntentInput, ctx: SessionContext) -> IntentInput:
+        raise IntentValidationError(f'unknown intent "{intent.canonical}"')
+
+    async def run() -> None:
+        try:
+            await resolve_intent(
+                _FakeSemantic(normalize, validate_intent),
+                IntentSourceIntent(intent=IntentInput(canonical="sales.bogus", params={})),
+                SESSION,
+            )
+        except IntentValidationError:
+            return
+        raise AssertionError("expected IntentValidationError")
 
     asyncio.run(run())
 
@@ -136,12 +188,18 @@ def test_kind_gui_with_no_current_normalizes_without_one_and_returns_no_current(
 
 
 class _FakeSemantic:
-    """Structurally satisfies host_core.intent's narrow normalize-only protocol."""
+    """Structurally satisfies host_core.intent's narrow normalize-only protocol, plus an optional
+    `validate_intent` (resolve_intent detects it via `getattr(semantic, "validate_intent", None)`, so simply
+    omitting the constructor argument reproduces a SemanticPort without it)."""
 
     def __init__(
-        self, normalize: Callable[[SemanticInput, SessionContext], Awaitable[IntentInput]]
+        self,
+        normalize: Callable[[SemanticInput, SessionContext], Awaitable[IntentInput]],
+        validate_intent: Callable[[IntentInput, SessionContext], Awaitable[IntentInput]] | None = None,
     ) -> None:
         self._normalize = normalize
+        if validate_intent is not None:
+            self.validate_intent = validate_intent
 
     async def normalize(self, input: SemanticInput, ctx: SessionContext) -> IntentInput:
         return await self._normalize(input, ctx)

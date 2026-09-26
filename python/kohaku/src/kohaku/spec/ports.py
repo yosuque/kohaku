@@ -134,6 +134,34 @@ class SemanticPort(Protocol):
         ...
 
 
+class SupportsValidateIntent(Protocol):
+    """Optional `SemanticPort` extension (port of TS spec-core's `SemanticPort.validateIntent?`). Validates and
+    normalizes a directly-specified Intent (the `kind: "intent"` path of `kohaku.host_core.intent.resolve_intent`).
+    Unlike `normalize`, which derives an Intent from NL/GUI input, this path lets a caller hand over an
+    already-structured Intent, which by construction never passes through `normalize` (or whatever Intent-catalog
+    lookup a `normalize` implementation may consult internally) -- so an unknown canonical or an invalid/unknown
+    param can otherwise reach `finalize_intent` unchecked, minting a fresh intentHash for a request that can
+    never resolve. Implementing this closes that gap: reject such a request by raising `IntentValidationError`
+    (`kohaku.spec.errors`; `message` and every issue's `message` must be safe to show a client, since REST/MCP
+    surface them as-is). On success, return the normalized IntentInput (e.g. with schema defaults filled in)
+    that the caller hashes and finalizes instead of the one it was given.
+
+    Deliberately **not** declared as a member of `SemanticPort` itself: unlike TS's real optional interface
+    field (`validateIntent?()`), `typing.Protocol` cannot express an optional method, and adding a required one
+    would force every existing `SemanticPort` implementation (including minimal test stubs) to grow it just to
+    keep type-checking. Callers instead check for it at the call site with
+    `getattr(semantic, "validate_intent", None)` (see `kohaku.host_core.intent.resolve_intent`) rather than
+    `isinstance` against this Protocol -- a plain presence probe is enough here (unlike
+    `SupportsBatchPromotionStates` above, whose narrower `isinstance` semantics matter because `StoragePort`
+    adapters are real production classes that might expose the batch method dynamically via a proxy; a
+    `SemanticPort` handed to `resolve_intent` in tests is commonly an ad hoc stub object, where the plain
+    `getattr` probe is the simpler and sufficient check). A `SemanticPort` that omits `validate_intent` keeps
+    the historical behavior of finalizing the caller-supplied Intent unchecked (backward compatible).
+    """
+
+    async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput: ...
+
+
 @dataclass(frozen=True)
 class Scope:
     """One scope of an on-behalf-of capability.
