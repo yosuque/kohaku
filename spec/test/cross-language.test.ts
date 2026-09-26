@@ -12,6 +12,8 @@ import {
   computeIntentHash,
   computeSpecHash,
   computeStructureHash,
+  decodeSeqCursor,
+  encodeSeqCursor,
   type FixationRecord,
   parseSpec,
   sha256Hex,
@@ -43,6 +45,7 @@ interface Fixture {
   intents: { canonical: string; params: Record<string, never>; hash: string }[];
   spec: { file: string; specHash: string; structureHash: string };
   cacheKey: { parts: CacheKeyParts; key: string }[];
+  lineageCursor: { seq: number; cursor: string }[];
   sandboxDom: { tags: string[]; attrs: string[]; styleProps: string[] };
   distillation: { jsonl: string };
   promptFragments: {
@@ -82,6 +85,13 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
   it("cacheKey reproduces the fixture (the policyFingerprint 7th component's segment/placeholder format)", () => {
     for (const c of fixture.cacheKey) {
       expect(cacheKey(c.parts)).toBe(c.key);
+    }
+  });
+
+  it("encodeSeqCursor/decodeSeqCursor reproduce the fixture's literal cursor bytes (design.md #53)", () => {
+    for (const c of fixture.lineageCursor) {
+      expect(encodeSeqCursor(c.seq)).toBe(c.cursor);
+      expect(decodeSeqCursor(c.cursor)).toBe(c.seq);
     }
   });
 

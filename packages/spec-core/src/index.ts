@@ -35,6 +35,15 @@ export {
   LINEAGE_PAYLOAD_INDEX_FIELDS,
   matchesLineageFilter,
 } from "./lineage-filter.js";
+// Lineage forward-paging cursor codec + the array-backed pageLineage reference implementation (design.md #53)
+export {
+  DEFAULT_LINEAGE_PAGE_SIZE,
+  decodeSeqCursor,
+  encodeSeqCursor,
+  LineageCursorError,
+  MAX_LINEAGE_PAGE_SIZE,
+  pageLineageArray,
+} from "./lineage-page.js";
 // Parsing / validation
 export {
   parsePatch,
@@ -55,6 +64,8 @@ export type {
   KnownThemeTokens,
   LineageEventRecord,
   LineageFilter,
+  LineagePage,
+  LineagePageRequest,
   NLQuery,
   OperationDescriptor,
   Principal,

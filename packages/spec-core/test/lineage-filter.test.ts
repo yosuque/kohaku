@@ -25,14 +25,14 @@ function event(
 
 describe("LINEAGE_PAYLOAD_INDEX_FIELDS", () => {
   it("lists exactly the payload fields matchesLineageFilter reads", () => {
-    expect(LINEAGE_PAYLOAD_INDEX_FIELDS).toEqual(["intentHash", "artifactId", "specHash"]);
+    expect(LINEAGE_PAYLOAD_INDEX_FIELDS).toEqual(["intentHash", "artifactId", "specHash", "correlationId"]);
   });
 });
 
 describe("matchesLineageFilter", () => {
   const e = event(
     "view.composed",
-    { intentHash: "h1", artifactId: "a1", specHash: "s1" },
+    { intentHash: "h1", artifactId: "a1", specHash: "s1", correlationId: "c1" },
     "2026-01-02T00:00:00.000Z",
     "t1",
   );
@@ -53,6 +53,8 @@ describe("matchesLineageFilter", () => {
     expect(matchesLineageFilter(e, { artifactId: "other" })).toBe(false);
     expect(matchesLineageFilter(e, { specHash: "s1" })).toBe(true);
     expect(matchesLineageFilter(e, { specHash: "other" })).toBe(false);
+    expect(matchesLineageFilter(e, { correlationId: "c1" })).toBe(true);
+    expect(matchesLineageFilter(e, { correlationId: "other" })).toBe(false);
   });
 
   it("applies since / until inclusively", () => {

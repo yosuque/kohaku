@@ -18,12 +18,18 @@ function ev(
 describe("indexValues", () => {
   it("emits one entry per present index field (type always; tenant / hashes only when present)", () => {
     expect(
-      indexValues(ev({ payload: { intentHash: "sha256:a", specHash: "sha256:s" }, tenant: "acme" })),
+      indexValues(
+        ev({
+          payload: { intentHash: "sha256:a", specHash: "sha256:s", correlationId: "c1" },
+          tenant: "acme",
+        }),
+      ),
     ).toEqual([
       { field: "type", value: "view.composed" },
       { field: "tenant", value: "acme" },
       { field: "intentHash", value: "sha256:a" },
       { field: "specHash", value: "sha256:s" },
+      { field: "correlationId", value: "c1" },
     ]);
     expect(indexValues(ev({}))).toEqual([{ field: "type", value: "view.composed" }]);
   });
@@ -46,6 +52,10 @@ describe("chooseCandidateIndex", () => {
     expect(chooseCandidateIndex({ artifactId: "a1", specHash: "s1" })).toEqual({
       field: "artifactId",
       values: ["a1"],
+    });
+    expect(chooseCandidateIndex({ type: ["a"], correlationId: "c1" })).toEqual({
+      field: "correlationId",
+      values: ["c1"],
     });
   });
   it("prefers a single type over tenant", () => {

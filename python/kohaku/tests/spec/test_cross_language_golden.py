@@ -33,6 +33,8 @@ from kohaku.spec import (
     compute_intent_hash,
     compute_spec_hash,
     compute_structure_hash,
+    decode_seq_cursor,
+    encode_seq_cursor,
     parse_spec,
     sha256_hex,
 )
@@ -67,6 +69,15 @@ def test_cache_key(cross_language_fixture: dict[str, Any]) -> None:
     for case in cross_language_fixture["cacheKey"]:
         parts = CacheKeyParts(**case["parts"])
         assert cache_key(parts) == case["key"], f"cacheKey mismatch for {case['parts']!r}"
+
+
+def test_lineage_cursor(cross_language_fixture: dict[str, Any]) -> None:
+    """encode_seq_cursor/decode_seq_cursor must reproduce the TS-generated fixture's literal cursor bytes
+    (design.md #53) -- the opaque {v,seq} base64url codec is meant to be byte-for-byte shared, not merely
+    mutually decodable."""
+    for case in cross_language_fixture["lineageCursor"]:
+        assert encode_seq_cursor(case["seq"]) == case["cursor"], f"cursor mismatch for seq {case['seq']}"
+        assert decode_seq_cursor(case["cursor"]) == case["seq"]
 
 
 def test_sandbox_dom_allowlist(cross_language_fixture: dict[str, Any]) -> None:

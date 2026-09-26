@@ -222,6 +222,35 @@ export interface LineageFilter {
    * including old ones with no recorded tenant).
    */
   tenant?: string;
+  /**
+   * Filter by the `correlationId` payload field (exact equality; see `LINEAGE_PAYLOAD_INDEX_FIELDS` for
+   * the full set of payload fields a filter can match this way). No writer in this repository stamps
+   * `correlationId` onto a payload yet — it exists so a product's own instrumentation (or a later
+   * feature built on this StoragePort surface) can correlate lineage events that share an
+   * application-defined identifier without inventing a parallel filter mechanism.
+   */
+  correlationId?: string;
+}
+
+/**
+ * A forward (append-order) page request over lineage, for a caller that needs to walk the whole log
+ * exhaustively (e.g. an export) rather than take the tail window `listLineage` returns. Every
+ * `LineageFilter` predicate applies except `limit`, which `pageLineage` has no use for (`pageSize` takes
+ * its place). See `StoragePort.pageLineage`'s doc comment for the paging contract itself.
+ */
+export interface LineagePageRequest extends Omit<LineageFilter, "limit"> {
+  /** Opaque cursor from a previous page's `LineagePage.nextCursor`. Omitted = start from the beginning. */
+  cursor?: string;
+  /** Requested page size. Default `DEFAULT_LINEAGE_PAGE_SIZE`; clamped to `MAX_LINEAGE_PAGE_SIZE`. */
+  pageSize?: number;
+}
+
+/** One page returned by `StoragePort.pageLineage`. */
+export interface LineagePage {
+  /** In append order (oldest first within the page), matching the request's filters. */
+  events: LineageEventRecord[];
+  /** Opaque cursor for the next page. Absent on the last page (nothing further to read). */
+  nextCursor?: string;
 }
 
 /**
@@ -313,6 +342,21 @@ export interface StoragePort {
   putSpecCache(key: string, spec: UISpec, ttlSeconds?: number): Promise<void>;
   appendLineage(event: LineageEventRecord): Promise<void>;
   listLineage(filter?: LineageFilter): Promise<LineageEventRecord[]>;
+  /**
+   * Forward (append-order) paging over the lineage log (an optional v0.1 extension; design.md #53). Unlike
+   * `listLineage` (a tail window, newest-first semantics via `limit`), this walks the whole log
+   * exhaustively from an opaque `cursor` in ascending append order, so a caller (e.g. an export, or a
+   * feature that needs every matching event rather than just the most recent ones) can page through
+   * without missing or duplicating events even as new ones are appended between calls. An implementation
+   * MUST return events strictly after `req.cursor` (or from the beginning when omitted), in append order,
+   * and MUST omit `LineagePage.nextCursor` only when there is nothing further to read. `req.pageSize`
+   * defaults to 500 and is clamped to at most 1000. A malformed `cursor` MUST throw rather than silently
+   * restart from the beginning or skip to the end. Implementations that omit this method keep the legacy
+   * surface (`listLineage` only); a host without it responds to a paging request with 501
+   * `NOT_IMPLEMENTED` rather than emulating paging on top of `listLineage` (which cannot express "all
+   * events, exhaustively" without re-deriving this same cursor contract at the host layer).
+   */
+  pageLineage?(req: LineagePageRequest): Promise<LineagePage>;
   /**
    * Gets promotion state. When tenant is specified, returns only that tenant's state.
    * Old (legacy) state with no recorded tenant is treated as tenant-neutral and appears only in a

@@ -1,4 +1,10 @@
-import type { FixationRecord, LineageEventRecord, PromotionState, StoragePort } from "@kohaku-ui/spec-core";
+import {
+  type FixationRecord,
+  type LineageEventRecord,
+  type PromotionState,
+  pageLineageArray,
+  type StoragePort,
+} from "@kohaku-ui/spec-core";
 import { filterLineage, listByTenant, tenantKey } from "./shared.js";
 import { createSpecCache } from "./spec-cache.js";
 
@@ -36,6 +42,11 @@ export function createMemoryStoragePort(): StoragePort {
     },
     async listLineage(filter) {
       return filterLineage(lineage, filter);
+    },
+    async pageLineage(req) {
+      // `lineage` is append-ordered (appendLineage only ever pushes), so its array index + 1 is exactly
+      // the seq pageLineageArray needs.
+      return pageLineageArray(lineage, req);
     },
     async getPromotionState(artifactId, tenant) {
       return promotions.get(tenantKey(tenant, artifactId)) ?? null;

@@ -13,15 +13,20 @@ export const DEFAULT_LINEAGE_LIMIT = 200;
  * maintain a secondary index over lineage (a DB column, a JSON index, ...) should index exactly these
  * fields, since they are the only payload fields `matchesLineageFilter` ever reads.
  */
-export const LINEAGE_PAYLOAD_INDEX_FIELDS = ["intentHash", "artifactId", "specHash"] as const;
+export const LINEAGE_PAYLOAD_INDEX_FIELDS = [
+  "intentHash",
+  "artifactId",
+  "specHash",
+  "correlationId",
+] as const;
 
 /**
  * Whether a single lineage event satisfies every condition of a `LineageFilter` (all ANDed): `type`
  * membership, `tenant` equality (after `normalizeTenant` on both sides, so an empty-string tenant on
- * either side behaves like an unspecified one), the `intentHash` / `artifactId` / `specHash` payload
- * fields by exact equality, and `since` / `until` inclusive bounds on `ts`. Does not apply `limit` (see
- * `applyLineageLimit`) — this is the per-event predicate every StoragePort's `listLineage` should share
- * instead of re-deriving it.
+ * either side behaves like an unspecified one), the `intentHash` / `artifactId` / `specHash` /
+ * `correlationId` payload fields by exact equality, and `since` / `until` inclusive bounds on `ts`. Does
+ * not apply `limit` (see `applyLineageLimit`) — this is the per-event predicate every StoragePort's
+ * `listLineage` (and `pageLineage`, via `pageLineageArray`) should share instead of re-deriving it.
  */
 export function matchesLineageFilter(event: LineageEventRecord, filter: LineageFilter): boolean {
   if (filter.type != null && !filter.type.includes(event.type)) return false;
@@ -30,6 +35,7 @@ export function matchesLineageFilter(event: LineageEventRecord, filter: LineageF
   if (filter.intentHash != null && event.payload["intentHash"] !== filter.intentHash) return false;
   if (filter.artifactId != null && event.payload["artifactId"] !== filter.artifactId) return false;
   if (filter.specHash != null && event.payload["specHash"] !== filter.specHash) return false;
+  if (filter.correlationId != null && event.payload["correlationId"] !== filter.correlationId) return false;
   if (filter.since != null && event.ts < filter.since) return false;
   if (filter.until != null && event.ts > filter.until) return false;
   return true;

@@ -58,9 +58,12 @@ from kohaku.spec import (
     LineageActor,
     LineageEventRecord,
     LineageFilter,
+    LineagePage,
+    LineagePageRequest,
     Principal,
     PromotionState,
     UISpec,
+    page_lineage_events,
 )
 
 _MAX_SPEC_CACHE_ENTRIES = 500
@@ -255,6 +258,8 @@ class FileStoragePort:
             result = [e for e in result if e.payload.get("artifactId") == f.artifactId]
         if f.specHash is not None:
             result = [e for e in result if e.payload.get("specHash") == f.specHash]
+        if f.correlationId is not None:
+            result = [e for e in result if e.payload.get("correlationId") == f.correlationId]
         if f.since is not None:
             result = [e for e in result if e.ts >= f.since]
         # Apply until "before" the tail slice (otherwise the latest limit items would be entirely excluded and the window would be nearly empty).
@@ -262,6 +267,14 @@ class FileStoragePort:
             result = [e for e in result if e.ts <= f.until]
         limit = f.limit if f.limit is not None else 200
         return result[-limit:] if limit > 0 else []
+
+    async def page_lineage(self, req: LineagePageRequest) -> LineagePage:
+        """StoragePort's optional forward-paging extension (design.md #53) -- a genuinely optional method,
+        like put_promotion_states; see kohaku.spec.ports.StoragePort's comment on it for why it is not a
+        Protocol member and how callers check for it (hasattr). `self._lineage`'s index + 1 matches
+        lineage.jsonl's own line number: every append_lineage writes the line and appends to the list in
+        lockstep, and __init__ reconstructs the list in file order at startup."""
+        return page_lineage_events(self._lineage, req)
 
     async def get_promotion_state(
         self, artifact_id: str, tenant: str | None = None

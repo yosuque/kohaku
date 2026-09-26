@@ -11,7 +11,12 @@ from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
-from kohaku.spec import LineageEventRecord, LineageFilter
+from kohaku.spec import (
+    LineageCursorError,
+    LineageEventRecord,
+    LineageFilter,
+    LineagePageRequest,
+)
 
 from ..bodies import RenderedEvent, parse_telemetry_body
 from ..deps import AnalyticsWindow, KohakuHostDeps
@@ -57,18 +62,56 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         if until_raw is not None and until is None:
             return _error("BAD_REQUEST", "until must be an ISO8601 timestamp", 400)
         tenant = await _resolve_tenant(deps, request)
-        events = await deps.compose.storage.list_lineage(
-            LineageFilter(
-                type=types if types else None,
-                intentHash=q.get("intentHash"),
-                artifactId=q.get("artifactId"),
-                specHash=q.get("specHash"),
-                since=since,
-                until=until,
-                limit=limit,
-                tenant=tenant,
+        # Shared by both the default (tail-window) and order=asc (forward-paging) reads below; design.md #53.
+        filter_kwargs: dict[str, Any] = {
+            "type": types if types else None,
+            "intentHash": q.get("intentHash"),
+            "artifactId": q.get("artifactId"),
+            "specHash": q.get("specHash"),
+            "correlationId": q.get("correlationId"),
+            "since": since,
+            "until": until,
+            "tenant": tenant,
+        }
+
+        order = q.get("order")
+        if order is not None:
+            # order=asc (design.md #53): forward, append-order paging via StoragePort.page_lineage instead
+            # of the default tail window below. Any other order value is a client error (only "asc" is
+            # defined); leaving `order` unset entirely keeps the pre-existing response shape and behavior
+            # unchanged.
+            if order != "asc":
+                return _error("BAD_REQUEST", 'order must be "asc"', 400)
+            # page_lineage is a genuinely optional StoragePort extension (see kohaku.spec.ports.StoragePort's
+            # comment on it) -- checked with hasattr, not isinstance (unlike put_promotion_states).
+            if not hasattr(deps.compose.storage, "page_lineage"):
+                return _error(
+                    "NOT_IMPLEMENTED",
+                    "forward paging (order=asc) is not supported by this storage backend",
+                    501,
+                )
+            page_size = _parse_limit(q.get("pageSize"), 1000, None)
+            page_req = LineagePageRequest(
+                cursor=q.get("cursor"),
+                pageSize=page_size,
+                **filter_kwargs,
             )
-        )
+            try:
+                page = await deps.compose.storage.page_lineage(page_req)
+                return _json(page)
+            except LineageCursorError:
+                return _error("BAD_REQUEST", "cursor is invalid", 400)
+            except BaseException as e:
+                request_id = request_id_of(request, deps)
+                await report_host_error(deps, "lineage", request_id, e)
+                return _error(
+                    "INTERNAL",
+                    "lineage paging failed; see the observability hook (on_error) for details",
+                    500,
+                    request_id,
+                )
+
+        events = await deps.compose.storage.list_lineage(LineageFilter(limit=limit, **filter_kwargs))
         return _json({"events": events})
 
     # --- Usage analytics -----------------------------------------------
