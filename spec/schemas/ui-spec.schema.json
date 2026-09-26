@@ -24,7 +24,9 @@
           "propertyNames": {
             "type": "string"
           },
-          "additionalProperties": {}
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
         },
         "hash": {
           "type": "string",
@@ -56,7 +58,9 @@
         "type": "string",
         "pattern": "^[a-zA-Z][a-zA-Z0-9_]{0,63}$"
       },
-      "additionalProperties": {}
+      "additionalProperties": {
+        "$ref": "#/$defs/__schema0"
+      }
     },
     "components": {
       "minItems": 1,
@@ -81,7 +85,9 @@
             "propertyNames": {
               "type": "string"
             },
-            "additionalProperties": {}
+            "additionalProperties": {
+              "$ref": "#/$defs/__schema0"
+            }
           },
           "children": {
             "type": "array",
@@ -151,7 +157,7 @@
             "additionalProperties": false
           },
           "visibleWhen": {
-            "$ref": "#/$defs/__schema0"
+            "$ref": "#/$defs/__schema1"
           }
         },
         "required": [
@@ -184,7 +190,9 @@
             "propertyNames": {
               "type": "string"
             },
-            "additionalProperties": {}
+            "additionalProperties": {
+              "$ref": "#/$defs/__schema0"
+            }
           }
         },
         "required": [
@@ -284,17 +292,54 @@
     "__schema0": {
       "anyOf": [
         {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema0"
+          }
+        }
+      ]
+    },
+    "__schema1": {
+      "anyOf": [
+        {
           "type": "object",
           "properties": {
             "ref": {
               "type": "string",
               "pattern": "^\\$state\\.[a-zA-Z][a-zA-Z0-9_]{0,63}$"
             },
-            "eq": {},
-            "ne": {},
+            "eq": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "ne": {
+              "$ref": "#/$defs/__schema0"
+            },
             "in": {
               "type": "array",
-              "items": {}
+              "items": {
+                "$ref": "#/$defs/__schema0"
+              }
             },
             "gt": {
               "type": "number"
@@ -325,7 +370,7 @@
               "maxItems": 16,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema0"
+                "$ref": "#/$defs/__schema1"
               }
             }
           },
@@ -342,7 +387,7 @@
               "maxItems": 16,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema0"
+                "$ref": "#/$defs/__schema1"
               }
             }
           },
@@ -355,7 +400,7 @@
           "type": "object",
           "properties": {
             "not": {
-              "$ref": "#/$defs/__schema0"
+              "$ref": "#/$defs/__schema1"
             }
           },
           "required": [
