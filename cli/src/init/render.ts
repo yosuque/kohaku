@@ -24,21 +24,16 @@ export interface ProjectFile {
 }
 
 const KOHAKU_RUNTIME = [
-  "authz-hmac",
   "client",
   "composer",
   "data-binding",
   "evals",
-  "host-core",
-  "host-rest",
+  "host",
   "intents",
   "llm",
-  "registry",
   "renderer-core",
   "renderer-react",
-  "semantic-llm",
   "spec-core",
-  "storage-memory",
 ];
 
 function q(s: string): string {
@@ -307,7 +302,7 @@ Next steps (\`fallbackIntent\`).
 - \`server/intents.ts\` — the Intent catalog (\`defineVocabulary\` / \`defineIntent\`). Vocabularies are the categorical columns.
 - \`server/domain-port.ts\` — the DomainPort (sum / avg / count × group by × time window). Your data never enters the model: only column metadata does.
 - \`server/fixed-specs.ts\` — the L0 fixed Spec for \`${profile.source}.summary\`.
-- \`server/app.ts\` — the wiring (host-rest + in-memory storage + HMAC capabilities + the LLM SemanticPort). Every default here is a starting point; the contract is \`@kohaku-ui/spec-core\`'s \`ports.ts\`.
+- \`server/app.ts\` — the wiring, via \`@kohaku-ui/host\`'s \`createKohakuHost()\` (in-memory storage + HMAC capabilities + the LLM SemanticPort by default). Every default here is a starting point; the contract is \`@kohaku-ui/spec-core\`'s \`ports.ts\`.
 - \`web/main.tsx\` — Dashboard + Chat on renderer-react.
 - \`test/golden.test.ts\` — golden regression. Generate the fixture's \`expected\` once with \`KOHAKU_GOLDEN_UPDATE=1 npm test\` (review, commit); \`npm test\` then asserts it.
 

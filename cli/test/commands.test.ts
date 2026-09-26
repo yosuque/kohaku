@@ -74,10 +74,11 @@ describe("validateComponentFile", () => {
 });
 
 describe("scaffoldPorts", () => {
-  it("generates ports.ts / server.ts in an empty directory", () => {
+  it("generates ports.ts / intents.ts / server.ts in an empty directory", () => {
     const written = scaffoldPorts(tmp());
-    expect(written).toHaveLength(2);
+    expect(written).toHaveLength(3);
     expect(written.some((p) => p.endsWith("ports.ts"))).toBe(true);
+    expect(written.some((p) => p.endsWith("intents.ts"))).toBe(true);
     expect(written.some((p) => p.endsWith("server.ts"))).toBe(true);
   });
 
@@ -87,13 +88,14 @@ describe("scaffoldPorts", () => {
     expect(() => scaffoldPorts(dir)).toThrow(/already exists/);
   });
 
-  it("throws without partially generating ports.ts even when only server.ts exists (atomicity)", () => {
-    // Without check-all-then-write, after writing ports.ts a server.ts collision would throw and
-    // leave ports.ts behind. This guarantees that every file is checked before writing.
+  it("throws without partially generating ports.ts / intents.ts even when only server.ts exists (atomicity)", () => {
+    // Without check-all-then-write, writing ports.ts and intents.ts before hitting the server.ts
+    // collision would leave them behind. This guarantees that every file is checked before writing.
     const dir = tmp();
     writeFileSync(join(dir, "server.ts"), "// existing");
     expect(() => scaffoldPorts(dir)).toThrow(/already exists/);
     expect(existsSync(join(dir, "ports.ts"))).toBe(false);
+    expect(existsSync(join(dir, "intents.ts"))).toBe(false);
   });
 });
 

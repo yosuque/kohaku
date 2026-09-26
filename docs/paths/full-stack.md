@@ -6,6 +6,8 @@ English | [日本語](full-stack.ja.md)
 
 **Time:** about 30 minutes to a REST host that composes with your LLM; an afternoon to walk the promotion loop end to end with the sample.
 
+Don't need lineage, promotion or fixation? `@kohaku-ui/host`'s `createKohakuHost()` ([Path (a)](mcp-apps.md)) wires the same three Ports this path still hand-wires (`authz`, `storage`, `semantic`) with working defaults in one call — this path builds on `createKohakuRoutes` directly instead, because `recorder` / `promotions` / `fixations` / `authorizeGovernance` below are governance-plane options `createKohakuHost` does not (yet) cover.
+
 ## The first code: a governed REST host
 
 ```bash
@@ -21,7 +23,7 @@ import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { Hono } from "hono";
 import { fixedSpecs } from "./kohaku/fixed-specs.js"; // L0: screens that never touch the model
-import * as ports from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
+import * as ports from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports gives you a DomainPort to start from)
 
 const { authzPort: authz, domainPort: domain, semanticPort: semantic, storagePort: storage } = ports;
 const lineage = createLineage({ storage }); // every compose / review / fixation becomes an event

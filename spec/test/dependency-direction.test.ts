@@ -27,6 +27,11 @@ import { describe, expect, it } from "vitest";
  * which matches every dependency actually declared in packages/*\/package.json. If a future change to the
  * package graph contradicts this ordering, the failure message below names the offending edge and the
  * expected layer so it can be triaged (either the code or the documented order is wrong).
+ *
+ * `host` (the one-call `createKohakuHost()` facade, design.md #52) sits in its own final layer: it depends
+ * on host-rest / host-mcp-apps / composer / semantic-llm / storage-memory / authz-hmac / registry / intents
+ * (all strictly earlier), and depends on no renderer -- its position relative to the renderer-react/
+ * renderer-wc/admin-react layer is otherwise arbitrary (AGENTS.md notes "host はどの renderer にも依存しない").
  */
 
 // Ordered from the root of the dependency graph outward. Each package must depend (via "dependencies",
@@ -48,6 +53,7 @@ const LAYERS: string[][] = [
   ["host-core"],
   ["sandbox", "lineage", "evals", "host-rest", "host-mcp-apps", "client", "otel"],
   ["renderer-react", "renderer-wc", "admin-react"],
+  ["host"],
 ];
 
 const SCOPE = "@kohaku-ui/";
