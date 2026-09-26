@@ -1,11 +1,11 @@
-import { clientMessageFor } from "@kohaku-ui/host-core";
-import { finalizeIntent, GOVERNANCE_ERROR_DISCRIMINATORS } from "@kohaku-ui/spec-core";
+import { clientMessageFor, resolveIntent } from "@kohaku-ui/host-core";
+import { type CanonicalIntent, GOVERNANCE_ERROR_DISCRIMINATORS } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { GovernanceOperation } from "../governance-policy.js";
 import { withFixationLock } from "../keyed-mutex.js";
 import type { FixationsApi } from "../types.js";
-import { COMPOSE_FAILED_MESSAGE, composeForRest } from "./compose.js";
+import { COMPOSE_FAILED_MESSAGE, composeForRest, INTENT_INVALID_MESSAGE } from "./compose.js";
 import { ComposeBodySchema } from "./schemas.js";
 import {
   message,
@@ -79,13 +79,26 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
         signal: c.req.raw.signal,
         traceContext: traceContextOf(c),
       };
+      const session = toSession(undefined, principal, tenant);
+      // Resolved through host-core's resolveIntent (the "intent" source) — separately from the compose/fixate
+      // try/catch below — so a SemanticPort.validateIntent implementation gets a chance to reject an unknown
+      // canonical or invalid params with 422 INTENT_INVALID before anything is composed or fixated, rather than
+      // an unresolvable Intent surfacing later as a 500 COMPOSE_FAILED (or worse, being composed/fixated anyway).
+      let intent: CanonicalIntent;
+      try {
+        ({ intent } = await resolveIntent(
+          deps.compose.semantic,
+          { kind: "intent", intent: { canonical: body.intent.canonical, params: body.intent.params } },
+          session,
+        ));
+      } catch (e) {
+        await reportHostError(deps, call.endpoint, call.requestId, e);
+        const clientMessage = clientMessageFor(e, INTENT_INVALID_MESSAGE);
+        return c.json(errorBody("INTENT_INVALID", clientMessage, requestId), 422);
+      }
       try {
         // Fetch the current composition result (should be cached) and fix its structure. The fixation is stamped onto this tenant.
-        const intent = await finalizeIntent({
-          canonical: body.intent.canonical,
-          params: body.intent.params,
-        });
-        const result = await composeForRest(intent, toSession(undefined, principal, tenant), deps, call);
+        const result = await composeForRest(intent, session, deps, call);
         // A generation failure must not be pinned as L0 for everyone: a deterministic fallback Spec
         // ("Could not render") is not fixatable.
         const fb = result.spec.provenance.fallback;

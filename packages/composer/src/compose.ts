@@ -430,6 +430,9 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
   // budgetExceeded is true only for a budget-guard downgrade (for machine discrimination without relying on reason string-matching).
   // phase is "cancelled" rather than "fallback" when the fallback was caused by the caller's abort
   // (client disconnect/timeout), so hosts can skip counting it against the generation-fallback rate.
+  // failure/error mirror the settling TierResult (see TierOutcome's fallback branch doc) so an observer
+  // gets the classified failure kind and, when the fallback was caused by a throw, the underlying error —
+  // previously always undefined here regardless of whether one was available.
   reportComposeError(
     ctx,
     {
@@ -440,9 +443,10 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
       tier: outcome.from,
       reason: outcome.reason,
       ...(outcome.budgetExceeded ? { budgetExceeded: true } : {}),
+      ...(outcome.failure != null ? { failure: outcome.failure } : {}),
       ...traceIdentity(traceBase),
     },
-    undefined,
+    outcome.error,
   );
   return spec;
 }

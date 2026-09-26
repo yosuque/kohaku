@@ -329,6 +329,31 @@ surface (`AbortSignal.timeout` / `AbortSignal.any`, used throughout `adapters/_b
   `remaining_ms`.
 - Timer hygiene (disposed in `_run_tier_generation`'s `finally`) matches TS's `runTierGeneration`.
 
+## Verbose failure logging (`KOHAKU_DEBUG`, symmetric with TS)
+
+`kohaku.host_core.format_error_chain` (walks Python's `__cause__` exception-chaining attribute, the
+equivalent of TS's ES2022 `Error.cause`, depth-capped against a circular chain) and
+`create_console_error_reporter` (a pair of handlers pre-wired to `KohakuHostDeps.on_error`'s exact signature
+and `ComposeObserver.onError`'s exact signature) mirror TS host-core's `formatErrorChain` /
+`createConsoleErrorReporter`. `python/examples/sales-api`'s `app.py` reads `KOHAKU_DEBUG` itself (these
+functions never read an environment variable on their own): unset (the default) keeps the existing one-line
+`logging`-module summaries unchanged; `KOHAKU_DEBUG=1` additionally logs the full cause chain (and, for an
+actual exception, its traceback via `exc_info=`) for both the compose observer's `onError` and the REST
+host's `on_error`.
+
+Also symmetric: `composer`'s L1 tier ladder (`compose.py`'s `_settle_l1_failure`) now gives a transient LLM
+failure (the provider never answered, an `LlmError` with `code="PROVIDER"`/`"CONFIG"`, or an unexpected
+non-`LlmError`) its own fallback reason naming the provider — distinct from the "L1 constrained generation
+failed catalog/structure validation" wording, which is now reserved for an actual validation failure. New
+`ComposeErrorContext.failure` and `L1Result`/`L2Result.last_error` let `ComposeObserver.onError` receive the
+classified failure kind and the underlying exception (previously always `None` for a fallback). `_resolve_refs`'s
+`SEMANTIC_FAILED` wrapping likewise appends a `resolve_query` failure's own message when the cause
+explicitly opts in with `clientSafe = True` (`_is_client_safe_cause`) — deliberately narrower than "any
+exception with a string `code`" (`kohaku.host_core.is_typed_host_error`'s broader convention), since a
+`SemanticPort` commonly delegates to a database/filesystem/HTTP client whose own exceptions also carry a
+string `code`-shaped attribute while their message can contain hostnames, paths, or table names. Every
+cause without `clientSafe = True` is left exactly as before, so internals never leak.
+
 ## Known differences from the TS implementation (intentional & permanent)
 
 - **JS validation is delegated to a Node sidecar (skipped only when standalone)**: the
@@ -384,6 +409,11 @@ surface (`AbortSignal.timeout` / `AbortSignal.any`, used throughout `adapters/_b
   the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters; `semantic-llm`;
   `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
+  (`semantic-llm`'s own `validateIntent` behavior is not left behind by this gap, though: since
+  the package itself has no Python mirror, its logic lives directly in `examples/sales-api`'s
+  `semantic_port.py` / `intents_catalog.py`, and that sample implements `validate_intent` /
+  `IntentCatalog.validate_params` matching TS's `createLlmSemanticPort` — see
+  `kohaku.spec.ports.SupportsValidateIntent` and `kohaku.host_core.intent.resolve_intent`.)
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant
 > reconcile for promotion → fully ported PromotedRegistry / projection / startup reconcile

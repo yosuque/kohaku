@@ -32,8 +32,10 @@ from kohaku.composer import (
     default_generator_version,
 )
 from kohaku.evals import JudgeInput, JudgeUsage, Telemetry, create_judge
+from kohaku.host_core import format_error_chain
 from kohaku.host_rest import (
     GovernancePolicy,
+    HostErrorInfo,
     KohakuHostDeps,
     attach_kohaku_routes,
     create_governance_policy,
@@ -408,6 +410,11 @@ async def create_app(
             ),
         )
 
+    # Set KOHAKU_DEBUG=1 for the full cause chain (kohaku.host_core's format_error_chain) on every logged
+    # compose/request failure below, instead of the one-line summary -- see docs/user-guide.md's
+    # troubleshooting section (mirrors TS sample-api's app/compose-context.py + app/host-deps.ts wiring).
+    debug = os.environ.get("KOHAKU_DEBUG", "") == "1"
+
     def on_compose_error(err_ctx: ComposeErrorContext, error: BaseException | None) -> None:
         """Observability of the compose failure path (the demo is logging-based). Logs the deterministic-fallback
         demotion of L1/L2 and hard failures (Spec not delivered). It is a fire-and-forget contract, so it does not
@@ -422,6 +429,18 @@ async def create_app(
                 err_ctx.tier if err_ctx.tier is not None else "?",
                 intent_label,
                 err_ctx.reason if err_ctx.reason is not None else "unknown reason",
+            )
+            # KOHAKU_DEBUG=1: also surface the underlying cause's chain when one was raised (a transient
+            # provider outage, an aborted/budget-stopped generation) -- still None for a plain
+            # catalog/structure validation failure, which has no exception to chain.
+            if debug and error is not None:
+                _logger.warning("  %s", format_error_chain(error))
+        elif debug:
+            _logger.error(
+                "[compose] compose failed (Spec not delivered)%s: %s",
+                intent_label,
+                format_error_chain(error),
+                exc_info=error if isinstance(error, BaseException) else None,
             )
         else:
             _logger.error(
@@ -531,6 +550,28 @@ async def create_app(
         effect = await sales_action_effects(action, payload, result)
         return ActionEffects(invalidates=effect.invalidates, refVersions=effect.refVersions)
 
+    def on_host_error(info: HostErrorInfo) -> None:
+        """Observability hook for the REST failure path (the demo is logging-based; mirrors on_compose_error
+        above and TS sample-api's app/host-deps.ts). When wired, a request_id is issued that matches the
+        error response's requestId, letting logs be correlated with the client's error. KOHAKU_DEBUG=1 adds
+        the full cause chain (and, when the error is an exception, its traceback) instead of the one-line summary.
+        """
+        if debug:
+            _logger.error(
+                "[host-rest] A failure occurred in %s (requestId=%s): %s",
+                info.endpoint,
+                info.request_id,
+                format_error_chain(info.error),
+                exc_info=info.error if isinstance(info.error, BaseException) else None,
+            )
+        else:
+            _logger.error(
+                "[host-rest] A failure occurred in %s (requestId=%s): %s",
+                info.endpoint,
+                info.request_id,
+                info.error,
+            )
+
     deps = KohakuHostDeps(
         compose=compose_ctx,
         domain=domain,
@@ -542,6 +583,7 @@ async def create_app(
         promotions=promotions,
         fixations=fixations,
         analytics_summarizer=analytics_summarizer,
+        on_error=on_host_error,
         action_effects=action_effects_hook,
         # Authorization of the governance/audit plane (symmetric with app.ts). auth resolves the role, and
         # authorize_governance permits/denies with declarative RBAC. With x-kohaku-role=viewer, approval/deletion

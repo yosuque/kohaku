@@ -123,9 +123,12 @@ interface SemanticPort {
   resolveQuery(intent: CanonicalIntent): Promise<QueryHandle | QueryHandle[]>;          // Intent → query:// ハンドル
   dataVersion(handle: QueryHandle): Promise<string>;                                    // キャッシュキー成分
   describeShape?(handle: QueryHandle): Promise<DataShape>;   // 任意。列メタのみ(行データ禁止)
+  validateIntent?(intent: IntentInput, ctx: SessionContext): Promise<IntentInput>;  // 任意。直接指定 Intent を検証
 }
 ```
 契約: GUI 操作(`GuiAction {action, params, current?}`)は **LLM を通さず決定的に**正規化する。`current` は既存ビューへの操作(drilldown 等)の基点。
+
+**`validateIntent`(任意)**: 呼び出し側が直接指定した Intent(`kind: "intent"` — `POST /compose` の `{intent}` ボディ、`POST /events` の `intent`、固定化承認エンドポイント、MCP プロファイルの compose 系ツール / `kohaku_event`)を検証・正規化する。これは `normalize` を一切経由しない唯一の経路である。成功時はホストがハッシュ化・finalize する正規化済み `IntentInput`(既定値を埋めたものなど)を返し、失敗時は `IntentValidationError`(`code: "INTENT_INVALID"`、クライアントに見せてよい `issues` 配列付き)を投げる。ホストはこれを 422 `INTENT_INVALID`(REST-INT-002、§6.1)に対応付け、キャッシュ・lineage・固定化ストアには何も書かない。`validateIntent` を実装しない `SemanticPort` は、直接指定された Intent を従来どおり未検証のまま finalize する — これがホストの入口だけをスコープとし、`compose()` を直接呼ぶプロダクトをカバーしない理由は `docs/design.md` の決定 #51 を参照。
 
 **参照実装のカタログ生成(`@kohaku-ui/intents`)**: サンプルは `defineVocabulary`(値集合 + ラベルの単一源)と `defineIntent`(単一 Intent 定義)から、この `SemanticPort` が使う `IntentDef`・GUI ファセット記述子(`FacetView`。`pnpm intents:emit` で `facet-views.json` に emit)・MCP ツール入力・client coerce の `valueType` を導出する。`SemanticPort` 契約と `CanonicalIntent` のワイヤ形は不変で、DSL は正規化の**決定性部分(値域・coerce・ファセット導出)の単一定義**を提供するだけ。
 
@@ -474,7 +477,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 ```bash
 node cli/bin/kohaku.js conformance --self                # SPEC-* 9 件(Spec フォーマット自己検査)
 node cli/bin/kohaku.js conformance --rest <baseUrl> \
-  [--intent '{"canonical":"…","params":{…}}']             # + REST-* MUST 9 件 + SHOULD 6 件・LIN-PRM-001(黒箱検査・任意の実装に適用可)
+  [--intent '{"canonical":"…","params":{…}}']             # + REST-* MUST 9 件 + SHOULD 7 件・LIN-PRM-001(黒箱検査・任意の実装に適用可)
 ```
 
 MCP(MCPAPP-*)・sandbox(SBX-*)の要件、および黒箱検査に馴染まない文書規範 5 件(SPEC-ENV-003 テーマ非依存・SPEC-EVT-002 未宣言イベント転送禁止・SPEC-DATA-002 参照単位の版突合・CMP-DET-001 合成決定性の一般形・CMP-GEN-001 生成コンポーネントの `data.$ref` QueryHandle 集合制約)は内部不変条件で、それぞれ `packages/host-mcp-apps/test` / `packages/sandbox/test` / `packages/renderer-wc/test/parity` + `packages/renderer-core/test` / `packages/composer/test` のテストが参照実装に対して固定している(黒箱検査対象外。manifest の `verification: "reference"`)。lineage の LIN-PRM-001 は `GET /lineage` の黒箱検査(published に人間の approve が時系列先行することを確認)に格上げ済みで `--rest` に含まれ、`packages/lineage/test`(状態機械)でも重ねて担保している。

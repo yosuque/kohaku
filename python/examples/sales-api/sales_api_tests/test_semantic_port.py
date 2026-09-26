@@ -24,6 +24,7 @@ from kohaku.llm import (
 from kohaku.spec import (
     GuiAction,
     IntentInput,
+    IntentValidationError,
     NLQuery,
     QueryHandle,
     SessionContext,
@@ -299,3 +300,74 @@ class TestResolveAndShape:
         port = _make_port(_FixedLlm({}))
         with pytest.raises(ValueError):
             asyncio.run(port.describe_shape(QueryHandle(uri="query://sales/bogus")))  # type: ignore[attr-defined]
+
+
+class TestValidateIntent:
+    """Port of TS semantic-llm's port.test.ts validateIntent describe block."""
+
+    def test_accepts_a_fully_specified_intent_and_returns_it_unchanged_hash_stable(self) -> None:
+        port = _make_port(_FixedLlm({}))
+        result = asyncio.run(
+            port.validate_intent(  # type: ignore[attr-defined]
+                IntentInput(canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}),
+                CTX,
+            )
+        )
+        assert result == IntentInput(
+            canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}
+        )
+
+    def test_fills_in_a_schema_default_the_caller_omitted_this_changes_the_hash_by_design(self) -> None:
+        port = _make_port(_FixedLlm({}))
+        result = asyncio.run(
+            port.validate_intent(IntentInput(canonical="sales.trend", params={}), CTX)  # type: ignore[attr-defined]
+        )
+        assert result == IntentInput(
+            canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}
+        )
+
+    def test_rejects_an_unknown_canonical(self) -> None:
+        port = _make_port(_FixedLlm({}))
+        with pytest.raises(IntentValidationError, match='unknown intent "sales.bogus"'):
+            asyncio.run(
+                port.validate_intent(IntentInput(canonical="sales.bogus", params={}), CTX)  # type: ignore[attr-defined]
+            )
+
+    def test_rejects_an_invalid_param_value(self) -> None:
+        port = _make_port(_FixedLlm({}))
+        with pytest.raises(IntentValidationError):
+            asyncio.run(
+                port.validate_intent(  # type: ignore[attr-defined]
+                    IntentInput(canonical="sales.trend", params={"metric": "bogus"}), CTX
+                )
+            )
+
+    def test_rejects_an_unknown_param_key_instead_of_silently_stripping_it(self) -> None:
+        port = _make_port(_FixedLlm({}))
+        error: IntentValidationError | None = None
+        try:
+            asyncio.run(
+                port.validate_intent(  # type: ignore[attr-defined]
+                    IntentInput(canonical="sales.trend", params={"metric": "revenue", "bogus": 1}), CTX
+                )
+            )
+        except IntentValidationError as e:
+            error = e
+        assert error is not None
+        assert [i.path for i in error.issues] == ["bogus"]
+
+    def test_resolves_the_per_tenant_catalog(self) -> None:
+        cat_default = IntentCatalog()
+        cat_other = IntentCatalog(defs=[])
+        port = create_semantic_port(
+            repo=SalesRepo(),
+            catalog_for=lambda t: cat_other if t == "t2" else cat_default,
+            llm=_FixedLlm({}),
+        )
+        with pytest.raises(IntentValidationError, match="unknown intent"):
+            asyncio.run(
+                port.validate_intent(
+                    IntentInput(canonical="sales.trend", params={}),
+                    SessionContext(surface="web", tenant="t2"),
+                )
+            )

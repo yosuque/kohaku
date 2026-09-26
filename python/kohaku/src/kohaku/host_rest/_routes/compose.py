@@ -50,7 +50,6 @@ from kohaku.spec import (
     SessionContext,
     UISpec,
     compute_spec_hash,
-    finalize_intent,
 )
 
 from ..bodies import ComposeBody, parse_compose_body, parse_events_body
@@ -726,9 +725,15 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         principal = await _get_principal(deps, request)
         session = to_session(body.session, principal, await _resolve_tenant(deps, request))
         try:
+            # Resolved through host-core's resolve_intent (the "intent" source), not a bare finalize_intent, so
+            # a SemanticPort.validate_intent implementation gets a chance to reject an unknown canonical or
+            # invalid params in `current` too (the same closed gap as body.intent on /compose).
+            current_resolved = await _host_core_resolve_intent(
+                deps.compose.semantic, IntentSourceIntent(intent=body.intent), session
+            )
+            current = current_resolved.intent
             # Intent resolution via host-core's resolve_intent (shared with the MCP profile's compose-tool
             # nl/intent branch), rather than a local semantic.normalize copy.
-            current = finalize_intent(body.intent)
             resolved = await _host_core_resolve_intent(
                 deps.compose.semantic,
                 IntentSourceGui(action=body.event.on, params=body.event.payload, current=current),

@@ -19,6 +19,7 @@ from kohaku.spec import (
     AuthzPort,
     DomainPort,
     FixationRecord,
+    Intent,
     IntentInput,
     JsonObject,
     Principal,
@@ -215,7 +216,7 @@ class AttachOptions:
     reported to the observation hook, and answered normally without co-emission (fail-open)."""
 
 
-# Internal: the source of a compose (NL / structured Intent).
+# Internal: the source of a compose (NL / structured Intent / already-finalized CanonicalIntent).
 @dataclass(frozen=True)
 class _NlSource:
     text: str
@@ -226,4 +227,21 @@ class _IntentSource:
     intent: IntentInput
 
 
-_ComposeSource = _NlSource | _IntentSource
+@dataclass(frozen=True)
+class _CanonicalSource:
+    """An already-finalized `CanonicalIntent` (port of TS `ComposeSource`'s `{kind: "canonical"}`; TS's own doc
+    comment on that type calls this "the Python port's `_ComposeSource`" -- this variant is what makes that
+    true). Lets a caller that has already gone through host-core's `resolve_intent` (e.g. `_handle_event`'s
+    GUI-delta path, which resolves `current` via `_IntentSource` -- calling `SemanticPort.validate_intent` when
+    present -- and then the delta itself via `IntentSourceGui`) hand the resolved `Intent` straight to
+    `_compose_with_fixation` without a second resolve_intent pass. Without this, wrapping the already-resolved
+    Intent back into `_IntentSource` would resolve it *again* as a directly-specified Intent on the way into
+    compose, calling `validate_intent` a second time for the same request (and would recompute the hash via
+    `finalize_intent`, though `finalize_intent`'s own already-`Intent` short-circuit makes that half harmless --
+    the double `validate_intent` call is the real bug this variant closes).
+    """
+
+    intent: Intent
+
+
+_ComposeSource = _NlSource | _IntentSource | _CanonicalSource

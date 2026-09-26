@@ -2,7 +2,6 @@ import type { ComposeResult, TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
   canonicalStringify,
-  finalizeIntent,
   type JsonObject,
   JsonObjectSchema,
   type Principal,
@@ -695,17 +694,23 @@ function registerEventTool(ctx: ToolContext): void {
     async ({ intent, on, payload, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_event`, async () => {
         const call = forCall(ctx, await ctx.principalOf(extra));
-        const current = await finalizeIntent({
-          canonical: intent.canonical,
-          params: intent.params as JsonObject,
-        });
+        const session = mcpSession(locale, call.principal);
+        // Resolved through host-core's resolveIntent (the "intent" source), not a bare finalizeIntent, so a
+        // SemanticPort.validateIntent implementation gets a chance to reject an unknown canonical or invalid
+        // params in `current` too (mirroring the REST profile's /events fix for the same gap; safeTool's
+        // catch-all converts a thrown IntentValidationError into a structured tool error).
+        const { intent: current } = await hostCore.resolveIntent(
+          ctx.deps.compose.semantic,
+          { kind: "intent", intent: { canonical: intent.canonical, params: intent.params as JsonObject } },
+          session,
+        );
         // Intent resolution via host-core's resolveIntent (shared with the REST profile's /events GUI-delta
         // site), rather than a local semantic.normalize copy — keeps the "gui" normalization behavior (and
         // its session, including the attached principal) in one place.
         const { intent: resolved } = await hostCore.resolveIntent(
           ctx.deps.compose.semantic,
           { kind: "gui", current, action: on, params: payload as JsonObject },
-          mcpSession(locale, call.principal),
+          session,
         );
         // Record view.interacted symmetrically with the REST surface's /events (which records it before
         // recomposing, via KohakuHostDeps.recorder). Fail-open: a recording failure must not block

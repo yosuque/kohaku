@@ -1,7 +1,15 @@
-import { ComposeError } from "@kohaku-ui/composer";
+import { ComposeError, type ComposeErrorContext } from "@kohaku-ui/composer";
 import { QueryRefError, SpecError } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
-import { clientMessageFor, errorMessage, failOpen, isTypedHostError, notifyHook } from "../src/errors.js";
+import {
+  clientMessageFor,
+  createConsoleErrorReporter,
+  errorMessage,
+  failOpen,
+  formatErrorChain,
+  isTypedHostError,
+  notifyHook,
+} from "../src/errors.js";
 
 describe("errorMessage", () => {
   it("returns the message of an Error", () => {
@@ -112,5 +120,94 @@ describe("failOpen", () => {
       throw new Error("original");
     });
     await expect(failOpen(fn, onFailure)).rejects.toThrow("onFailure broke");
+  });
+});
+
+describe("formatErrorChain", () => {
+  it("formats a single Error with no cause as one segment", () => {
+    expect(formatErrorChain(new Error("boom"))).toBe("Error: boom");
+  });
+
+  it("walks the cause chain, joining with ' <- ' from immediate failure to root cause", () => {
+    const root = new TypeError("network down");
+    const middle = new Error("provider call failed", { cause: root });
+    const top = new Error("compose failed", { cause: middle });
+    expect(formatErrorChain(top)).toBe(
+      "Error: compose failed <- Error: provider call failed <- TypeError: network down",
+    );
+  });
+
+  it("stringifies a non-Error value (both as the top value and as a cause link)", () => {
+    expect(formatErrorChain("just a string")).toBe("just a string");
+    const withNonErrorCause = new Error("outer", { cause: "raw string cause" });
+    expect(formatErrorChain(withNonErrorCause)).toBe("Error: outer <- raw string cause");
+  });
+
+  it("stops at maxDepth rather than looping forever on a circular cause chain", () => {
+    const a = new Error("a") as Error & { cause?: unknown };
+    const b = new Error("b", { cause: a });
+    a.cause = b; // a <- b <- a <- b <- ... (circular)
+    const result = formatErrorChain(a, 4);
+    expect(result.split(" <- ")).toHaveLength(4);
+  });
+});
+
+describe("createConsoleErrorReporter", () => {
+  function captureLines(): { lines: string[]; log: (line: string) => void } {
+    const lines: string[] = [];
+    return { lines, log: (line: string) => lines.push(line) };
+  }
+
+  it("debug:false (default) logs a one-line 'prefix: message' summary for the host hook", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    reporter.host({ endpoint: "/compose", requestId: "r1", error: new Error("boom") });
+    expect(lines).toEqual(["[kohaku] /compose (request r1): boom"]);
+  });
+
+  it("debug:true logs the full cause chain and the stack trace, as separate lines", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ debug: true, log });
+    const cause = new Error("root cause");
+    const err = new Error("top failure", { cause });
+    reporter.host({ endpoint: "/compose", requestId: "r1", error: err });
+
+    expect(lines).toHaveLength(1);
+    const [line] = lines as [string];
+    expect(line).toContain("[kohaku] /compose (request r1): Error: top failure <- Error: root cause");
+    expect(line).toContain(err.stack as string);
+  });
+
+  it("compose(): a fallback with no thrown error (error undefined) logs ctx.reason instead", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    const ctx: ComposeErrorContext = {
+      phase: "fallback",
+      input: { kind: "intent" },
+      reason: "L1 constrained generation failed catalog/structure validation",
+    };
+    reporter.compose(ctx, undefined);
+    expect(lines).toEqual([
+      "[kohaku] compose fallback: L1 constrained generation failed catalog/structure validation",
+    ]);
+  });
+
+  it("compose(): a hard failure logs the thrown error", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    const ctx: ComposeErrorContext = { phase: "hard", input: { kind: "intent" } };
+    reporter.compose(ctx, new Error("reference resolution failed"));
+    expect(lines).toEqual(["[kohaku] compose hard: reference resolution failed"]);
+  });
+
+  it("defaults to console.error when log is not supplied", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const reporter = createConsoleErrorReporter();
+      reporter.host({ endpoint: "/compose", requestId: "r1", error: new Error("boom") });
+      expect(spy).toHaveBeenCalledWith("[kohaku] /compose (request r1): boom");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
