@@ -9,11 +9,8 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 /**
  * apps/docs-site/snippets/kohaku/ports.ts is a hand-written fixture for the fuller governance demo
  * (full-stack.ts), which wires all four Ports directly (no createKohakuHost) so it can also plug in
- * lineage / promotions / fixations. (The now-unreferenced snippets/mcp-apps.ts — superseded by
- * minimal-host.ts as docs/paths/mcp-apps.md's first code block, which needs only `domainPort` via
- * createKohakuHost — still imports all four from this same fixture too, so it stays typecheckable;
- * apps/docs-site's tsconfig includes snippets/ wholesale, regardless of whether a file is shown on any
- * page.) Since `@kohaku-ui/host`'s createKohakuHost() (design.md #52) supplies working defaults for
+ * lineage / promotions / fixations. (docs/paths/mcp-apps.md's first code block, minimal-host.ts, needs
+ * only `domainPort` via createKohakuHost.) Since `@kohaku-ui/host`'s createKohakuHost() (design.md #52) supplies working defaults for
  * authz / storage / the SemanticPort, `kohaku scaffold ports`'s own PORTS_TEMPLATE (cli/src/templates.ts)
  * now scaffolds only a DomainPort — a strict subset of what this fixture exports, not an exact match any
  * more. The adoption-path pages still credit that command for `domainPort` specifically, so this guards
