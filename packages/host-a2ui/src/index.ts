@@ -5,12 +5,14 @@ export {
   applyEventBindings,
   escapeJsonPointerToken,
   KOHAKU_CATALOG_ID,
+  type ProjectContext,
   projectNode,
   surfaceIdFromIntentHash,
   type ToA2uiOptions,
   toA2ui,
 } from "./to-a2ui.js";
 export {
+  A2UI_V1_BASIC_CATALOG_ID,
   A2UI_V1_VERSION,
   A2UI_VERSION,
   type A2uiAction,

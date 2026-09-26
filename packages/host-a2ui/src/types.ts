@@ -51,6 +51,16 @@ export const A2UI_V1_VERSION = "v1.0" as const;
 /** `toA2ui` / `patchToA2ui` output target. Defaults to `"v0.9.1"` everywhere (byte-identical to pre-v1.0 output). */
 export type A2uiTarget = "v0.9.1" | "v1.0";
 
+/**
+ * URI of the A2UI v1.0 RC's basic catalog, confirmed against
+ * https://a2ui.org/specification/v1.0-basic-catalog-implementation-guide/ and
+ * https://a2ui.org/concepts/catalogs/ (`kohaku-pm-2026-09-run/a2ui-v1.0-rc-facts.md`). Used as the
+ * surface's default `catalogId` under `ToA2uiOptions.catalogMode: "split"`, overridable via
+ * `ToA2uiOptions.basicCatalogId` since the RC's catalog URIs may still change before stabilization.
+ */
+export const A2UI_V1_BASIC_CATALOG_ID =
+  "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json" as const;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Values (literal / binding / function). Correspond to v0.9.1's DynamicString/Number/Value.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,6 +115,13 @@ export interface A2uiComponent {
   child?: string;
   /** Event / local function. */
   action?: A2uiComponentAction;
+  /**
+   * Per-component catalog override (v1.0 RC's `ComponentCommon.catalogId`; resolution order is
+   * component-level → the surface's default `catalogId` → a resolution error, per the RC facts). Emitted
+   * only under `ToA2uiOptions.catalogMode: "split"` (v1.0 only); omitted in `"single"` mode (the default),
+   * which keeps the v0.9.1 wire shape and the v1.0-single golden byte-identical.
+   */
+  catalogId?: string;
   /** Everything else: catalog props inlined. */
   [prop: string]: JsonValue | A2uiChildren | A2uiComponentAction | undefined;
 }
@@ -165,8 +182,10 @@ export type A2uiEnvelope =
 //   callFunction.catalogId is REQUIRED) and `agentFunctionResponse` (a `FunctionResponse`:
 //   {functionCallId, value XOR error}).
 // - Component objects gain an optional per-component `catalogId` (`ComponentCommon`), overriding the
-//   surface-level default. Not emitted by this profile (kohaku has one catalog per surface); the field
-//   is omitted from {@link A2uiComponent} to keep the v0.9.1 wire shape shared and byte-identical.
+//   surface-level default. Emitted only under `ToA2uiOptions.catalogMode: "split"` (see
+//   `A2UI_V1_BASIC_CATALOG_ID` / `KOHAKU_CATALOG_ID`); {@link A2uiComponent.catalogId} stays undefined
+//   (and therefore absent from the JSON) in the default `"single"` mode, keeping the v0.9.1 wire shape
+//   and the v1.0-single golden byte-identical.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** v1.0 `createSurface`: components / data model bundled directly, no `theme`. */
