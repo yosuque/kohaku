@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   FixationRecordSchema,
+  KohakuPolicyFileSchema,
   LineageEventRecordSchema,
   PromotionStateSchema,
   SpecPatchSchema,
@@ -133,3 +134,26 @@ writeFileSync(
 );
 
 console.log("generated: spec/schemas/lineage-event-record.schema.json");
+
+const policyFile = z.toJSONSchema(KohakuPolicyFileSchema, {
+  target: "draft-2020-12",
+  reused: "inline",
+  io: "input",
+});
+
+writeFileSync(
+  join(OUT_DIR, "policy.schema.json"),
+  JSON.stringify(
+    {
+      $id: "https://kohaku-ui.dev/schemas/0.1/policy.schema.json",
+      title: "kohaku Policy file",
+      description:
+        "Declarative Policy-as-Code file (design.md #69): default and per-tenant ComposePolicy/rate-limit/RBAC overrides, loaded by host-core's createPolicyRuntime. Fields that are functions in ComposePolicy (routeTier, fewShot, designSystem, fixedSpecs, l2Smoke, selectComponents, extraRules) cannot be expressed in JSON and are intentionally absent -- they remain the base ComposePolicy supplied by product code.",
+      ...policyFile,
+    },
+    null,
+    2,
+  ) + "\n",
+);
+
+console.log("generated: spec/schemas/policy.schema.json");

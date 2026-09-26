@@ -27,7 +27,7 @@ If you added or removed a MUST, update the MUST-count prose in SPEC.md §7 to ma
 
 ## 3. Update the Zod schema
 
-Edit the relevant schema in `packages/spec-core/src/schema/*.ts`. Only five of these schemas feed
+Edit the relevant schema in `packages/spec-core/src/schema/*.ts`. Only six of these schemas feed
 JSON Schema generation — the ones imported by
 [spec/scripts/generate-schemas.ts](../../spec/scripts/generate-schemas.ts):
 
@@ -36,6 +36,9 @@ JSON Schema generation — the ones imported by
 - `FixationRecordSchema`
 - `LineageEventRecordSchema`
 - `PromotionStateSchema`
+- `KohakuPolicyFileSchema` (the Policy-as-Code file, design.md #69 — a host-side operational
+  document, not part of the wire protocol between a Renderer and a host; still generated here so
+  editors get completion and CI catches drift the same way as the other five)
 
 `packages/spec-core/src/rest-errors.ts` (`HostErrorCode`, the governance error discriminators) is
 plain TypeScript, not Zod — it does not participate in JSON Schema generation and needs no

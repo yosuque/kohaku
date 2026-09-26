@@ -1,0 +1,41 @@
+{
+  "$schema": "../../schemas/policy.schema.json",
+  "version": 1,
+  "label": "kohaku demo policy",
+  "defaults": {
+    "compose": {
+      "allowL2": true,
+      "maxRepairAttempts": 1,
+      "refConstraint": "schema",
+      "effort": { "l1": "low", "l2": "medium" },
+      "outputLanguage": "English",
+      "cacheFailure": "open",
+      "ttlSeconds": 3600,
+      "budget": {
+        "perCompose": { "stopAfterTokens": 20000 },
+        "deadlineMs": 15000,
+        "dailyTokens": 500000
+      }
+    },
+    "rateLimits": {
+      "compose": { "capacity": 60, "refillPerSecond": 1 },
+      "action": { "capacity": 30, "refillPerSecond": 0.5 },
+      "resolve": { "capacity": 120, "refillPerSecond": 2 }
+    },
+    "governance": {
+      "roles": {
+        "admin": ["*"],
+        "reviewer": ["promotion.*", "lineage.read"],
+        "viewer": ["lineage.read"]
+      }
+    }
+  },
+  "tenants": {
+    "tenant-a": {
+      "compose": { "allowL2": false }
+    },
+    "tenant-b": {
+      "compose": { "budget": { "dailyTokens": 1000 } }
+    }
+  }
+}
