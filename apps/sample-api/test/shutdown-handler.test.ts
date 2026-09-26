@@ -1,10 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createGracefulShutdownHandler, shutdownGraceMs } from "../src/app/shutdown.js";
 
 // The single test suite for the graceful-shutdown machinery shared between sample-api's own index.ts and
 // sample-mcp's http.ts (@kohaku-ui-sample/api/app/shutdown) — see that module's own doc comment. Both entry
 // points used to carry a near-identical copy of this sequence with its own fakeServer() test helper; this
 // file (and the one `fakeServer()` below) now covers it once for both.
+
+// Fake timers throughout: the handler only registers its grace timer from inside the prestop timer's own
+// callback, so real-time waits raced a busy CI event loop (the grace timer could still be unregistered when a
+// fixed 10ms sleep ended). advanceTimersByTimeAsync runs every due timer and settles the promise chains
+// between them, deterministically.
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("shutdownGraceMs (env parsing, shared by both entry points)", () => {
   it("defaults when unset", () => {
@@ -60,7 +71,7 @@ describe("createGracefulShutdownHandler: with setShuttingDown + prestopMs (sampl
     // Readiness flips synchronously, ahead of any draining.
     expect(setShuttingDown).toHaveBeenCalledWith(true);
     // Wait for the prestop timer (0ms) to fire and reach server.close(...).
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(server.closeIdleConnections).toHaveBeenCalled();
     expect(server.close).toHaveBeenCalled();
     // The server has not yet invoked its own close callback: storage must still be untouched.
@@ -70,7 +81,7 @@ describe("createGracefulShutdownHandler: with setShuttingDown + prestopMs (sampl
 
     // Now the drain actually completes (the fake server's close callback fires).
     server.fireClose();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(ports.close).toHaveBeenCalledTimes(1);
     expect(portsClosed).toBe(true);
     expect(exit).toHaveBeenCalledWith(0);
@@ -91,10 +102,10 @@ describe("createGracefulShutdownHandler: with setShuttingDown + prestopMs (sampl
       exit,
     });
     handle("SIGINT");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.advanceTimersByTimeAsync(20);
     // The grace window elapsed before server.close's own callback fired (fireClose was never called).
     server.fireGetConnections(2);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(ports.close).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledWith(1);
   });
@@ -121,14 +132,14 @@ describe("createGracefulShutdownHandler: without setShuttingDown/prestopMs (samp
     });
     handle("SIGTERM");
     // prestopMs defaults to 0 but is still scheduled via setTimeout (next tick), not synchronous.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(server.closeIdleConnections).toHaveBeenCalled();
     expect(server.close).toHaveBeenCalled();
     expect(ports.close).not.toHaveBeenCalled();
     expect(portsClosed).toBe(false);
 
     server.fireClose();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(ports.close).toHaveBeenCalledTimes(1);
     expect(portsClosed).toBe(true);
     expect(exit).toHaveBeenCalledWith(0);
@@ -147,9 +158,9 @@ describe("createGracefulShutdownHandler: without setShuttingDown/prestopMs (samp
       exit,
     });
     handle("SIGINT");
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await vi.advanceTimersByTimeAsync(15);
     server.fireGetConnections(3);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(ports.close).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledWith(1);
   });
@@ -171,14 +182,14 @@ describe("createGracefulShutdownHandler: grace-timer cleanup and log routing", (
     handle("SIGTERM");
     // prestopMs defaults to 0 but server.close() is only reached once that timer's callback actually
     // runs (next tick, not synchronous) -- wait for it before the drain can complete.
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await vi.advanceTimersByTimeAsync(2);
     // The drain completes well within the (10ms) grace window.
     server.fireClose();
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await vi.advanceTimersByTimeAsync(5);
     expect(exit).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledWith(0);
     // Wait past the grace window: if the timer were not cleared, getConnections/exit(1) would fire here.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await vi.advanceTimersByTimeAsync(20);
     expect(server.getConnections).not.toHaveBeenCalled();
     expect(ports.close).toHaveBeenCalledTimes(1);
     expect(exit).toHaveBeenCalledTimes(1);
@@ -197,9 +208,9 @@ describe("createGracefulShutdownHandler: grace-timer cleanup and log routing", (
       exit: vi.fn(),
     });
     handle("SIGINT");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     server.fireGetConnections(4);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining(
         "test-label: shutdown grace period (5ms) elapsed with 4 connection(s) still open; forcing exit",
@@ -224,9 +235,9 @@ describe("createGracefulShutdownHandler: grace-timer cleanup and log routing", (
     handle("SIGTERM");
     // prestopMs defaults to 0 but server.close() is only reached on the next tick (see the timer-cleanup
     // test above for the full explanation).
-    await new Promise((resolve) => setTimeout(resolve, 2));
+    await vi.advanceTimersByTimeAsync(2);
     server.fireClose();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining(
         "test-label: failed to close storage/authz backends after a clean drain: boom: clean-drain close failed",
@@ -251,9 +262,9 @@ describe("createGracefulShutdownHandler: grace-timer cleanup and log routing", (
       exit,
     });
     handle("SIGINT");
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     server.fireGetConnections(1);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(10);
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining(
         "test-label: failed to close storage/authz backends before forced exit: boom: forced-exit close failed",
@@ -279,7 +290,7 @@ describe("createGracefulShutdownHandler: grace-timer cleanup and log routing", (
         exit: vi.fn(),
       });
       handle("SIGTERM");
-      await new Promise((resolve) => setTimeout(resolve, 2));
+      await vi.advanceTimersByTimeAsync(2);
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("test-stderr: received SIGTERM"));
       expect(logSpy).not.toHaveBeenCalled();
     } finally {
