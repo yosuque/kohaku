@@ -129,11 +129,21 @@ describe("renderPackageJson", () => {
       devDependencies: Record<string, string>;
       scripts: Record<string, string>;
     };
-    expect(pkg.dependencies["@kohaku-ui/host-rest"]).toBe(`^${CLI_VERSION}`);
-    expect(pkg.dependencies["@kohaku-ui/host-core"]).toBe(`^${CLI_VERSION}`);
-    expect(pkg.dependencies["@kohaku-ui/semantic-llm"]).toBe(`^${CLI_VERSION}`);
-    expect(pkg.dependencies["@kohaku-ui/storage-memory"]).toBe(`^${CLI_VERSION}`);
-    expect(pkg.dependencies["@kohaku-ui/authz-hmac"]).toBe(`^${CLI_VERSION}`);
+    // createKohakuHost (@kohaku-ui/host) now wires host-rest / host-core / semantic-llm / storage-memory /
+    // authz-hmac / registry internally, so the generated project no longer depends on any of those directly.
+    expect(pkg.dependencies["@kohaku-ui/host"]).toBe(`^${CLI_VERSION}`);
+    expect(pkg.dependencies["@kohaku-ui/composer"]).toBe(`^${CLI_VERSION}`);
+    expect(pkg.dependencies["@kohaku-ui/spec-core"]).toBe(`^${CLI_VERSION}`);
+    for (const removed of [
+      "@kohaku-ui/host-rest",
+      "@kohaku-ui/host-core",
+      "@kohaku-ui/semantic-llm",
+      "@kohaku-ui/storage-memory",
+      "@kohaku-ui/authz-hmac",
+      "@kohaku-ui/registry",
+    ]) {
+      expect(pkg.dependencies[removed], `${removed} should no longer be a direct dependency`).toBeUndefined();
+    }
     expect(
       Object.values({ ...pkg.dependencies, ...pkg.devDependencies }).some(
         (v) => v.startsWith("workspace:") || v.startsWith("catalog:"),

@@ -26,7 +26,7 @@ import {
   domainPort as domain,
   semanticPort as semantic,
   storagePort as storage,
-} from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
+} from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports gives you a DomainPort to start from)
 
 // The same Composition Service a REST host would use: one Spec per Intent, cached, whoever asks.
 const compose = { catalog: resolveCatalog(coreCatalog), semantic, storage, llm: createLlmFromEnv() };

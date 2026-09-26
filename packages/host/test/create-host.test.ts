@@ -143,6 +143,21 @@ describe("createKohakuHost", () => {
     ).toThrow(/capability secret/);
   });
 
+  it("treats a whitespace-only KOHAKU_CAPABILITY_SECRET as missing", () => {
+    // A user who pastes .env.example's commented block back in verbatim, or leaves a blank value, must
+    // not get a silently-accepted "" or " " secret -- .trim() makes both fail the same way.
+    process.env[SECRET_ENV] = "   ";
+    expect(() =>
+      createKohakuHost({
+        domain,
+        querySource: "test",
+        llm: new FakeLlm(),
+        intents: [testIntentDef],
+        dataVersion: () => "v1",
+      }),
+    ).toThrow(/capability secret/);
+  });
+
   it("dev: true generates a temporary secret and warns on console.warn instead of throwing", () => {
     delete process.env[SECRET_ENV];
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

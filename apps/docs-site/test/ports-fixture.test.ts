@@ -7,11 +7,16 @@ import * as portsFixture from "../snippets/kohaku/ports.js";
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 /**
- * apps/docs-site/snippets/kohaku/ports.ts is a hand-written fixture standing in for the file
- * `npx @kohaku-ui/cli scaffold ports` actually generates. The adoption-path pages credit that command for
- * it (a trailing "(kohaku scaffold ports)" comment on the import), so the fixture's exported names must
- * match what the CLI's own template emits — otherwise a reader who runs the documented command and pastes
- * the documented snippet gets "has no exported member" errors on the first file they touch (I-3).
+ * apps/docs-site/snippets/kohaku/ports.ts is a hand-written fixture for the fuller governance demo
+ * (full-stack.ts / mcp-apps.ts), which wire all four Ports directly (no createKohakuHost) so they can also
+ * plug in lineage / promotions / fixations. Since `@kohaku-ui/host`'s createKohakuHost() (design.md #52)
+ * supplies working defaults for authz / storage / the SemanticPort, `kohaku scaffold ports`'s own
+ * PORTS_TEMPLATE (cli/src/templates.ts) now scaffolds only a DomainPort — a strict subset of what this
+ * fixture exports, not an exact match any more. The adoption-path pages still credit that command for
+ * `domainPort` specifically, so this guards that every name PORTS_TEMPLATE emits is still present here —
+ * otherwise a reader who runs the documented command and pastes the documented snippet gets "has no
+ * exported member" errors on the first file they touch (I-3). It does not require the reverse (the fixture
+ * may export more than the CLI scaffolds, e.g. `authzPort` / `semanticPort` / `storagePort`).
  *
  * This is read as plain text, not imported as a module: `cli` is not a package.json dependency of
  * docs-site (nor is it in the repo's spec-core → … → apps dependency chain in AGENTS.md), so importing
@@ -28,11 +33,12 @@ function portsTemplateExportNames(): string[] {
   return [...template.matchAll(/^export const (\w+): \w+Port = \{/gm)].map((m) => m[1] ?? "");
 }
 
-describe("snippets/kohaku/ports.ts fixture matches the CLI's scaffold ports template", () => {
-  it("exports exactly the names PORTS_TEMPLATE (cli/src/templates.ts) emits", () => {
-    const expected = portsTemplateExportNames().sort();
-    const actual = Object.keys(portsFixture).sort();
+describe("snippets/kohaku/ports.ts fixture covers the CLI's scaffold ports template", () => {
+  it("exports at least every name PORTS_TEMPLATE (cli/src/templates.ts) emits", () => {
+    const expected = portsTemplateExportNames();
+    const actual = new Set(Object.keys(portsFixture));
     expect(expected.length).toBeGreaterThan(0); // guards against the regex silently matching nothing
-    expect(actual).toEqual(expected);
+    const missing = expected.filter((name) => !actual.has(name));
+    expect(missing, `snippets/kohaku/ports.ts is missing: ${missing.join(", ")}`).toEqual([]);
   });
 });
