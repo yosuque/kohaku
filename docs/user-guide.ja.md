@@ -316,7 +316,7 @@ npm run dev                                      # API :8787 + web :5173
 ### Step 0 — LLM なしの Server-Driven UI
 
 ```bash
-node cli/bin/kohaku.js scaffold ports --out ./my-app/kohaku
+npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 ```
 
 生成された `ports.ts` の 4 つの Port を実装します。最初は:
@@ -520,7 +520,7 @@ export const myCard = defineComponent({
 // Web 側: registry.register("myapp.card", "1.0.0", MyCardComponent)  // useBoundData でデータ取得
 ```
 
-検証: `node cli/bin/kohaku.js component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
+検証: `npx @kohaku-ui/cli component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
 
 ```json
 {
@@ -541,7 +541,7 @@ export const myCard = defineComponent({
 入力 Intent → 生成 Spec の「構造」を回帰として固定します。雛形を生成:
 
 ```bash
-node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
+npx @kohaku-ui/cli scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
 ```
 
 生成された `golden.test.ts` の `makeContext` にプロダクトの `ComposeContext` を配線し、`golden/` に `{name,input,drafts,expected:null}` の JSON を置いて `KOHAKU_GOLDEN_UPDATE=1 <テスト実行>` で `expected` を生成します。以降のテストは `@kohaku-ui/evals` の `runGolden` が provenance / intent.hash / dataVersion / refVersions とコンポーネント ID の揺らぎを正規化して構造だけを比較するため、LLM 不要で決定的です(応答は `drafts` を FakeLlm に流す。ライブ記録が要るなら FixtureLlm の record/replay)。動く実例は `apps/sample-api/test/golden.test.ts`(`sales.trend` の L1 生成を固定)。意図的に UI を変えたら同じ更新手順で `expected` を再生成し、git diff をレビューしてコミットします。

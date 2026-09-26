@@ -316,7 +316,7 @@ No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtu
 ### Step 0 — Server-Driven UI without an LLM
 
 ```bash
-node cli/bin/kohaku.js scaffold ports --out ./my-app/kohaku
+npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 ```
 
 Implement the four Ports in the generated `ports.ts`. At first:
@@ -523,7 +523,7 @@ export const myCard = defineComponent({
 // Web side: registry.register("myapp.card", "1.0.0", MyCardComponent)  // fetch data with useBoundData
 ```
 
-Validation: `node cli/bin/kohaku.js component validate <definition.json>`. The minimal definition.json that passes validation (`type` is a dot-separated identifier, `version` is semver, `propsSchema` is a JSON Schema of `type: "object"`, and `capabilities.data` requires one of `none | optional | required`):
+Validation: `npx @kohaku-ui/cli component validate <definition.json>`. The minimal definition.json that passes validation (`type` is a dot-separated identifier, `version` is semver, `propsSchema` is a JSON Schema of `type: "object"`, and `capabilities.data` requires one of `none | optional | required`):
 
 ```json
 {
@@ -544,7 +544,7 @@ Validation: `node cli/bin/kohaku.js component validate <definition.json>`. The m
 Fix the "structure" of input Intent → generated Spec as a regression. Generate a template:
 
 ```bash
-node cli/bin/kohaku.js scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
+npx @kohaku-ui/cli scaffold golden --out ./my-app/test   # golden.test.ts + golden/README.md
 ```
 
 Wire your product's `ComposeContext` into the generated `golden.test.ts`'s `makeContext`, place `{name,input,drafts,expected:null}` JSON under `golden/`, and generate `expected` with `KOHAKU_GOLDEN_UPDATE=1 <run the test>`. Subsequent tests are deterministic and LLM-free, because `@kohaku-ui/evals`'s `runGolden` normalizes the jitter of provenance / intent.hash / dataVersion / refVersions and component IDs and compares only the structure (responses feed `drafts` to the FakeLlm; if you need a live recording, use FixtureLlm's record/replay). A working example is `apps/sample-api/test/golden.test.ts` (fixing the L1 generation of `sales.trend`). If you intentionally change the UI, regenerate `expected` with the same update procedure, review the git diff, and commit.
