@@ -415,6 +415,9 @@ importers:
       '@kohaku-ui/authz-hmac':
         specifier: workspace:^
         version: link:../../packages/authz-hmac
+      '@kohaku-ui/evals':
+        specifier: workspace:^
+        version: link:../../packages/evals
       '@kohaku-ui/llm':
         specifier: workspace:^
         version: link:../../packages/llm
