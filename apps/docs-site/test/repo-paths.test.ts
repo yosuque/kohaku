@@ -1,10 +1,11 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { listMirrorSources } from "../src/mirror.js";
 
-const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+const SITE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = join(SITE_DIR, "../..");
 
 /**
  * One repository-path-shaped reference found in a Markdown file's prose (an inline code span or a
@@ -66,6 +67,21 @@ function isOutOfScope(href: string): boolean {
 }
 
 /**
+ * Every repository-path-shaped backtick-quoted span in `text` (":line" / "#anchor" already stripped),
+ * filtered to checkable candidates. Shared by extractPathReferences (a Markdown inline-code span) and
+ * extractTsCommentPathReferences (a TypeScript `//` or `/* *\/` comment) — both quote a repository path
+ * inside backticks the same way, and neither resolves it against the file's own directory.
+ */
+function checkablePathsIn(text: string): string[] {
+  const found: string[] = [];
+  for (const m of text.matchAll(/`([^`]+)`/g)) {
+    const candidate = stripLineAndAnchor(m[1] ?? "");
+    if (isCheckable(candidate)) found.push(candidate);
+  }
+  return found;
+}
+
+/**
  * Every repository-path-shaped inline-code span or Markdown link href in `markdown`'s prose, resolved to a
  * repository-relative posix path (a link's relative href is resolved against `file`'s own directory; an
  * inline-code path is taken as already repository-relative, matching how this repository always writes
@@ -77,10 +93,7 @@ export function extractPathReferences(markdown: string, file: string): PathRefer
   const refs: PathReference[] = [];
   prose.split("\n").forEach((line, index) => {
     const lineNumber = index + 1;
-    for (const m of line.matchAll(/`([^`]+)`/g)) {
-      const candidate = stripLineAndAnchor(m[1] ?? "");
-      if (isCheckable(candidate)) refs.push({ file, line: lineNumber, path: candidate });
-    }
+    for (const path of checkablePathsIn(line)) refs.push({ file, line: lineNumber, path });
     for (const m of line.matchAll(/\]\(([^)\s]+)\)/g)) {
       const href = stripLineAndAnchor(m[1] ?? "");
       if (isOutOfScope(href)) continue;
@@ -108,11 +121,117 @@ function corpusFiles(): string[] {
   return [...mirroredMarkdown, "README.md", "AGENTS.md"];
 }
 
+/**
+ * The text of every `//` line comment and `/* *\/` block comment in a TypeScript/TSX source, one entry per
+ * source line (a line with no comment on it gets ""). Strings and template literals are tracked (with
+ * `\`-escape handling) so an occurrence like "http://" inside a string is never mistaken for a comment —
+ * e.g. `const BASE_URL = "http://localhost:8787/api/kohaku";` in react-dashboard-host.tsx has no comment on
+ * it at all. This is a minimal hand-rolled scanner, not a full parser: it only has to find comment
+ * boundaries in the small, hand-written, conventionally formatted files under apps/docs-site/snippets/**.
+ */
+function commentTextByLine(source: string): string[] {
+  const lines = source.split("\n");
+  const out: string[] = lines.map(() => "");
+  let inBlockComment = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    let j = 0;
+    let quote: string | null = null;
+    while (j < line.length) {
+      if (inBlockComment) {
+        const end = line.indexOf("*/", j);
+        if (end === -1) {
+          out[i] += line.slice(j);
+          break;
+        }
+        out[i] += line.slice(j, end);
+        inBlockComment = false;
+        j = end + 2;
+        continue;
+      }
+      const ch = line[j];
+      if (quote != null) {
+        if (ch === "\\") {
+          j += 2;
+          continue;
+        }
+        if (ch === quote) quote = null;
+        j++;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") {
+        quote = ch;
+        j++;
+        continue;
+      }
+      if (ch === "/" && line[j + 1] === "/") {
+        out[i] += line.slice(j + 2);
+        break;
+      }
+      if (ch === "/" && line[j + 1] === "*") {
+        const end = line.indexOf("*/", j + 2);
+        if (end === -1) {
+          inBlockComment = true;
+          out[i] += line.slice(j + 2);
+          break;
+        }
+        out[i] += line.slice(j + 2, end);
+        j = end + 2;
+        continue;
+      }
+      j++;
+    }
+  }
+  return out;
+}
+
+/**
+ * Every repository-path-shaped backtick-quoted path written inside a `//` or `/* *\/` comment of a
+ * TypeScript/TSX source file, e.g. the stale `apps/sample-api/src/ports/authz-port.ts` this test's own
+ * "deliberately broken" case below is modeled on (a real defect once present in
+ * apps/docs-site/snippets/kohaku/ports.ts's JSDoc). Exported separately from findMissingPaths for the same
+ * reason as extractPathReferences.
+ */
+export function extractTsCommentPathReferences(source: string, file: string): PathReference[] {
+  const refs: PathReference[] = [];
+  commentTextByLine(source).forEach((commentText, index) => {
+    for (const path of checkablePathsIn(commentText)) refs.push({ file, line: index + 1, path });
+  });
+  return refs;
+}
+
+/** Every `.ts` / `.tsx` file under `dir`, recursively, as absolute paths (sorted, for stable test order). */
+function listTsFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const name of readdirSync(dir).sort()) {
+    const abs = join(dir, name);
+    if (statSync(abs).isDirectory()) out.push(...listTsFiles(abs));
+    else if (/\.tsx?$/.test(name)) out.push(abs);
+  }
+  return out;
+}
+
+/** Every adoption-path snippet .ts/.tsx file (apps/docs-site/snippets/**), as repository-relative posix paths. */
+function snippetTsFiles(): string[] {
+  return listTsFiles(join(SITE_DIR, "snippets")).map((abs) => relative(REPO_ROOT, abs).split(sep).join("/"));
+}
+
 describe("every apps|packages|cli|spec|python|scripts|docs path written in the docs corpus exists", () => {
   for (const file of corpusFiles()) {
     it(file, () => {
       const markdown = readFileSync(join(REPO_ROOT, file), "utf8");
       const missing = findMissingPaths(extractPathReferences(markdown, file), REPO_ROOT);
+      const detail = missing.map((ref) => `${ref.file}:${ref.line}: \`${ref.path}\` does not exist`);
+      expect(detail).toEqual([]);
+    });
+  }
+});
+
+describe("every apps|packages|cli|spec|python|scripts|docs path written in a docs-site snippet .ts/.tsx comment exists", () => {
+  for (const file of snippetTsFiles()) {
+    it(file, () => {
+      const source = readFileSync(join(REPO_ROOT, file), "utf8");
+      const missing = findMissingPaths(extractTsCommentPathReferences(source, file), REPO_ROOT);
       const detail = missing.map((ref) => `${ref.file}:${ref.line}: \`${ref.path}\` does not exist`);
       expect(detail).toEqual([]);
     });
@@ -180,6 +299,41 @@ describe("extractPathReferences", () => {
   });
 });
 
+describe("extractTsCommentPathReferences", () => {
+  it("finds a repository-relative path quoted inside a // line comment", () => {
+    const source = 'import { x } from "./x.js"; // see `packages/spec-core/src/ports.ts`\n';
+    const refs = extractTsCommentPathReferences(source, "apps/docs-site/snippets/kohaku/ports.ts");
+    expect(refs).toEqual([
+      { file: "apps/docs-site/snippets/kohaku/ports.ts", line: 1, path: "packages/spec-core/src/ports.ts" },
+    ]);
+  });
+
+  it("finds a repository-relative path quoted inside a multi-line /* */ block comment", () => {
+    const source = ["/**", " * Copy `packages/spec-core/src/ports.ts` instead.", " */", "export {};"].join(
+      "\n",
+    );
+    const refs = extractTsCommentPathReferences(source, "apps/docs-site/snippets/kohaku/ports.ts");
+    expect(refs).toEqual([
+      { file: "apps/docs-site/snippets/kohaku/ports.ts", line: 2, path: "packages/spec-core/src/ports.ts" },
+    ]);
+  });
+
+  it("does not mistake // inside a string literal for the start of a comment", () => {
+    const source = 'const BASE_URL = "http://localhost:8787/api/kohaku"; // real comment, no backtick path\n';
+    expect(extractTsCommentPathReferences(source, "apps/docs-site/snippets/x.ts")).toEqual([]);
+  });
+
+  it("ignores a backtick-quoted path inside a plain code string, not a comment", () => {
+    const source = 'const s = "`packages/does-not-exist/x.ts`"; // no path in the comment itself\n';
+    expect(extractTsCommentPathReferences(source, "apps/docs-site/snippets/x.ts")).toEqual([]);
+  });
+
+  it("applies the same placeholder / build-output exclusions as Markdown extraction", () => {
+    const source = "// `apps/<your-app>/x.ts` and `packages/spec-core/dist/index.js`\n";
+    expect(extractTsCommentPathReferences(source, "apps/docs-site/snippets/x.ts")).toEqual([]);
+  });
+});
+
 describe("findMissingPaths", () => {
   it("flags a path that does not exist and passes one that does", () => {
     const refs = [
@@ -203,5 +357,13 @@ describe("extraction + existence together detect a deliberately broken reference
     expect(missing).toEqual([
       { file: "docs/fake.md", line: 1, path: "packages/this-package-does-not-exist/src/ports.ts" },
     ]);
+  });
+
+  it("flags a nonexistent path written in a fabricated TypeScript comment", () => {
+    const source = "  // Copy `apps/sample-api/src/ports/authz-port.ts` instead.\n";
+    const file = "apps/docs-site/snippets/kohaku/fake.ts";
+    const refs = extractTsCommentPathReferences(source, file);
+    const missing = findMissingPaths(refs, REPO_ROOT);
+    expect(missing).toEqual([{ file, line: 1, path: "apps/sample-api/src/ports/authz-port.ts" }]);
   });
 });
