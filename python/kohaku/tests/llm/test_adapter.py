@@ -23,6 +23,7 @@ from kohaku.llm import (
     supports_streaming,
 )
 from kohaku.llm.abort import AbortError, AbortSignal
+from kohaku.llm.adapters._base import extract_json, parse_native_text
 from kohaku.llm.adapters.openai_compat import (
     ChatRequest,
     ChatResponse,
@@ -499,6 +500,39 @@ def test_parse_partial_json_returns_none_for_unrecoverable() -> None:
     assert _parse_partial_json("") is None
     assert _parse_partial_json("   ") is None
     assert _parse_partial_json("garbage") is None
+
+
+# --- deep-nesting recursion-DoS fix (mirrors host_rest/test_json_depth.py) --------------------------------
+#
+# A malicious or compromised LLM provider/proxy could return a pathologically deeply nested structured-output
+# payload. CPython's json decoder recurses per nesting level and raises RecursionError (a catchable
+# RuntimeError subclass) rather than JSONDecodeError once a payload is nested deep enough -- before this fix,
+# extract_json / parse_partial_json / parse_native_text only caught JSONDecodeError, so that RecursionError
+# escaped uncaught instead of degrading through each function's existing "not valid JSON" handling.
+
+
+def _deep_array_json(depth: int) -> str:
+    return "[" * depth + "]" * depth
+
+
+def test_extract_json_does_not_crash_on_a_pathologically_deep_payload() -> None:
+    deep = _deep_array_json(100_000)
+    # Neither branch is a crash: whatever extract_json decides the body is, it must return without raising.
+    result = extract_json(deep)
+    assert isinstance(result, str)
+
+
+def test_parse_partial_json_does_not_crash_on_a_pathologically_deep_payload() -> None:
+    deep = _deep_array_json(100_000)
+    # Accepted (parsed) or given up on (None) -- either is fine; an uncaught RecursionError is not.
+    _parse_partial_json(deep)
+
+
+def test_parse_native_text_reports_invalid_output_for_a_pathologically_deep_payload() -> None:
+    deep = _deep_array_json(100_000)
+    with pytest.raises(LlmError) as exc_info:
+        parse_native_text(JsonSchema(json_schema={}), deep, CONFIG)
+    assert exc_info.value.code == "INVALID_OUTPUT"
 
 
 def test_close_open_structures_rejects_overclosed_and_dangling_colon() -> None:

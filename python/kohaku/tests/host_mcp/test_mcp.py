@@ -1174,6 +1174,55 @@ class TestEventActionPayloadDepthCap:
 
         asyncio.run(run())
 
+    def test_event_and_action_payloads_at_200_levels_are_rejected_without_crashing(
+        self, tmp_path: Path
+    ) -> None:
+        """A depth well past MAX_JSON_OBJECT_DEPTH (32) but still one the reference mcp Python client SDK can
+        itself serialize (its own pydantic-core model_dump refuses a payload nested much past ~250-300 levels
+        with a ValueError("Circular reference detected (depth exceeded)") of its own -- probed directly, not
+        asserted here, since it is the client's behavior, not this package's). server.py's _json_depth_ok
+        bounds its own recursion to MAX_JSON_OBJECT_DEPTH + 1 stack frames regardless of the input's actual
+        depth (it stops descending the instant depth exceeds the limit), so -- unlike TS's pre-fix
+        JsonObjectSchema, which let zod recurse the full depth before ever checking it -- this was never at
+        risk of the same uncaught RangeError-equivalent; test_json_depth_ok_bounds_its_own_recursion below
+        confirms that directly at the report's original depths (5000 / 100000), independent of any transport."""
+
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                composed = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
+                capability = _capability_of(composed)
+                event_result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": {}},
+                        "on": "c.pointClick",
+                        "payload": _nested_object(200),
+                    },
+                )
+                assert event_result.is_error
+                assert "nesting exceeds the maximum depth (32)" in event_result.content[0].text  # type: ignore[union-attr]
+
+                action_result = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": _nested_object(200), "capability": capability},
+                )
+                assert action_result.is_error
+                assert "nesting exceeds the maximum depth (32)" in action_result.content[0].text  # type: ignore[union-attr]
+
+        asyncio.run(run())
+
+
+def test_json_depth_ok_bounds_its_own_recursion() -> None:
+    """Direct, transport-independent pin on server.py's _json_depth_ok at the original report's depths (5000 /
+    100000): it must return False (rejected) without raising, confirming its recursion truly stays bounded to
+    MAX_JSON_OBJECT_DEPTH + 1 stack frames no matter how deep the input actually is."""
+    from kohaku.host_mcp.server import MAX_JSON_OBJECT_DEPTH, _json_depth_ok
+
+    for depth in (5000, 100_000):
+        assert _json_depth_ok(_nested_object(depth), MAX_JSON_OBJECT_DEPTH) is False
+
 
 def test_no_lingering_script_marker_regex() -> None:
     """Regression guard: the snapshot placeholder regex has the expected shape (detects embedding-marker drift)."""
