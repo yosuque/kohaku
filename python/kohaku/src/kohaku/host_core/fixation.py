@@ -208,13 +208,23 @@ async def compose_with_fixation(
     session: SessionContext,
     ctx: ComposeFixationContext,
     host: FixationDeliveryHost,
+    correlation_id: str | None = None,
 ) -> ComposeResult:
-    """Fixation shortcut -> normal compose."""
+    """Fixation shortcut -> normal compose.
+
+    correlation_id, when passed, is threaded into the normal-compose fallback as
+    ComposeOptions.correlation_id -- so a degraded/failed delivery's resulting ComposeTrace carries the same
+    correlation id the caller (a REST X-Request-Id, or an MCP tool call's JSON-RPC request id) already uses
+    for its own logs (port of TS host-core's composeWithFixation `requestId` parameter). The fixation
+    shortcut itself never calls compose(), so a fixation hit has no use for this parameter; self-heal failure
+    reporting already carries its own correlation id via the host's `run_self_heal` closure (see
+    FixationDeliveryHost's doc comment) and is unaffected by this parameter.
+    """
     settled = await resolve_fixated_result(intent, session, ctx.materialize, host)
     if settled is not None:
         return settled
     return await compose(
         IntentComposeInput(intent=IntentInput(canonical=intent.canonical, params=intent.params)),
         ctx.compose if ctx.compose is not None else ctx.materialize,
-        ComposeOptions(session=session, abort=ctx.abort),
+        ComposeOptions(session=session, abort=ctx.abort, correlation_id=correlation_id),
     )

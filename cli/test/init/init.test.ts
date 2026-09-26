@@ -119,39 +119,37 @@ describe("initProject", () => {
     expect(readFileSync(join(out, ".gitignore"), "utf8")).toContain(".env\n");
   });
 
-  it("server/app.ts requires KOHAKU_CAPABILITY_SECRET instead of falling back to a fixed dev secret", async () => {
+  it("server/app.ts delegates the capability secret to createKohakuHost (no hand-rolled fallback secret)", async () => {
+    // The secret resolution (env var / whitespace-only-is-missing / no-fallback-secret) now lives in
+    // @kohaku-ui/host's createKohakuHost (see packages/host/test/create-host.test.ts) rather than being
+    // hand-rolled in the generated app.ts, so this only asserts app.ts doesn't reimplement or shadow it.
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false }, noRun);
     const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
-    expect(appSrc).toContain("KOHAKU_CAPABILITY_SECRET is required (see .env.example)");
+    expect(appSrc).toContain('import { createKohakuHost } from "@kohaku-ui/host";');
     expect(appSrc).not.toContain("dev-secret-change-me");
+    // The env var is still mentioned in prose (a doc comment pointing at createKohakuHost's own
+    // resolution), but app.ts must not read it itself any more.
+    expect(appSrc).not.toContain('process.env["KOHAKU_CAPABILITY_SECRET"]');
   });
 
-  it("server/app.ts wires createConsoleErrorReporter into both host-rest's onError and the compose observer, gated by KOHAKU_DEBUG", async () => {
+  it("server/app.ts wires debug (KOHAKU_DEBUG) through to createKohakuHost, which wires its own error reporter", async () => {
+    // createConsoleErrorReporter (host-rest's onError + the compose observer's onError) is now wired
+    // inside createKohakuHost itself (see packages/host/src/create-host.ts), not in the generated app.ts.
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false }, noRun);
     const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
-    expect(appSrc).toContain('import { createConsoleErrorReporter } from "@kohaku-ui/host-core";');
-    expect(appSrc).toContain('createConsoleErrorReporter({ debug: process.env["KOHAKU_DEBUG"] === "1" })');
-    expect(appSrc).toContain("observer: { onError: errorReporter.compose }");
-    expect(appSrc).toContain("onError: errorReporter.host");
+    expect(appSrc).not.toContain("createConsoleErrorReporter");
+    expect(appSrc).toContain('debug: process.env["KOHAKU_DEBUG"] === "1"');
     const pkg = JSON.parse(readFileSync(join(out, "package.json"), "utf8"));
-    expect(pkg.dependencies["@kohaku-ui/host-core"]).toBeDefined();
+    expect(pkg.dependencies["@kohaku-ui/host"]).toBeDefined();
+    expect(pkg.dependencies["@kohaku-ui/host-core"]).toBeUndefined();
   });
 
   it(".env.example documents KOHAKU_DEBUG", async () => {
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false }, noRun);
     expect(readFileSync(join(out, ".env.example"), "utf8")).toMatch(/^# KOHAKU_DEBUG=/m);
-  });
-
-  it("server/app.ts treats a whitespace-only KOHAKU_CAPABILITY_SECRET as missing", async () => {
-    // A user who pastes .env.example's commented block back in verbatim, or leaves a blank value,
-    // must not get a silently-accepted "" or " " secret -- .trim() makes both fail the same way.
-    const out = join(tmp(), "app");
-    await initProject({ from: FIXTURE, out, install: false }, noRun);
-    const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
-    expect(appSrc).toContain('process.env["KOHAKU_CAPABILITY_SECRET"]?.trim()');
   });
 
   it("refuses to overwrite: an existing package.json aborts before anything is written", async () => {

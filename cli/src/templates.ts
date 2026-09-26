@@ -1,98 +1,62 @@
 /** Embedded template for scaffold ports */
-export const PORTS_TEMPLATE = `import type {
-  AuthzPort,
-  CanonicalIntent,
-  DomainPort,
-  QueryHandle,
-  SemanticPort,
-  StoragePort,
-} from "@kohaku-ui/spec-core";
+export const PORTS_TEMPLATE = `import type { DomainPort } from "@kohaku-ui/spec-core";
 
 /**
- * The four Ports the product implements (the kohaku framework boundary).
- * "Write only this and it works" — the framework owns the composition, rendering, and control machinery.
+ * The one Port every product still writes by hand: how "query://<source>/<op>" reads and action.invoke
+ * writes actually reach your data. createKohakuHost() (see server.ts) already supplies working defaults
+ * for the other three Ports (storage, authz, the LLM-backed SemanticPort built from intents.ts) -- replace
+ * those only once your product outgrows them (see @kohaku-ui/host's README).
  */
-
 export const domainPort: DomainPort = {
+  // TODO: enumerate your real operations (the op in query://<source>/<op>; include write actions invoked
+  // via action.invoke too -- hosts restrict issued capability write scopes to the names listed here) and
+  // implement invoke to actually read/write your data instead of throwing.
   async listOperations() {
-    // TODO: enumerate the domain operations (the op in query://<source>/<op>). Include write actions too
-    // (those invoked via action.invoke) — hosts restrict issued capability write scopes to the names listed
-    // here, silently dropping any action.invoke action a composed UI declares that is not listed.
     return [{ name: "example", description: "sample operation" }];
   },
-  async invoke(op, args, ctx) {
-    // TODO: enforce invariants behind this (in the domain module)
+  async invoke(op) {
     throw new Error(\`unknown operation: \${op}\`);
   },
 };
+`;
 
-export const semanticPort: SemanticPort = {
-  async normalize(input, ctx) {
-    // TODO: map GUI operations deterministically, and natural language via the LLM (@kohaku-ui/llm) to the Intent catalog
-    throw new Error("not implemented");
-  },
-  async resolveQuery(intent: CanonicalIntent): Promise<QueryHandle[]> {
-    // TODO: Intent → query:// handle (reference-passing)
-    throw new Error("not implemented");
-  },
-  async dataVersion() {
-    return "example@v1";
-  },
-};
+/** Embedded template for scaffold ports: the Intent catalog backing createKohakuHost's default SemanticPort. */
+export const INTENTS_TEMPLATE = `import { defineIntent, type IntentBuilder } from "@kohaku-ui/intents";
+import { z } from "zod";
 
-export const authzPort: AuthzPort = {
-  async issueCapability(principal, scopes, opts) {
-    // TODO: issue an on-behalf-of capability via HMAC / JWT etc.
-    throw new Error("not implemented");
-  },
-  async verify(token, req) {
-    return { ok: false, reason: "not implemented" };
-  },
-};
-
-export const storagePort: StoragePort = {
-  async getSpecCache() { return null; },
-  async putSpecCache() {},
-  async appendLineage() {},
-  async listLineage() { return []; },
-  async getPromotionState() { return null; },
-  async putPromotionState() {},
-  async listPromotionStates() { return []; },
-  async getFixation() { return null; },
-  async putFixation() {},
-  async listFixations() { return []; },
-};
+// TODO: replace with your own Intent(s) -- canonical name, params (zod), and how they map to queries (each
+// query's path must be one of domainPort.listOperations()'s names in ports.ts).
+export const intents: IntentBuilder[] = [
+  defineIntent({
+    canonical: "example.summary",
+    description: "Example view (replace with your own Intent)",
+    source: "example",
+    params: z.object({}),
+    examples: ["show the example view"],
+    queries: [{ path: "example" }],
+  }),
+];
 `;
 
 export const SERVER_TEMPLATE = `// Dependencies this file needs in your app's package.json: "hono", "@hono/node-server", "tsx",
-// and the @kohaku-ui/* packages imported below (npm install @kohaku-ui/host-rest @kohaku-ui/registry
-// @kohaku-ui/llm @ai-sdk/anthropic zod — @ai-sdk/anthropic is the provider SDK for Claude, an optional
-// peer dependency of @kohaku-ui/llm; swap it for @ai-sdk/openai / @ai-sdk/google / @ai-sdk/openai-compatible
-// depending on the provider you configure — see docs/user-guide.md §6 Step 0). Building this inside the
-// kohaku monorepo itself instead of a standalone app? Depend on them via "workspace:*" there instead.
-import { createKohakuRoutes } from "@kohaku-ui/host-rest";
-import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import { createLlmFromEnv } from "@kohaku-ui/llm";
+// and the @kohaku-ui/* packages imported below (npm install @kohaku-ui/host @kohaku-ui/llm
+// @ai-sdk/anthropic zod — @ai-sdk/anthropic is the provider SDK for Claude, an optional peer dependency
+// of @kohaku-ui/llm; swap it for @ai-sdk/openai / @ai-sdk/google / @ai-sdk/openai-compatible depending on
+// the provider you configure — see docs/user-guide.md §6 Step 0). Building this inside the kohaku monorepo
+// itself instead of a standalone app? Depend on them via "workspace:*" there instead.
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
-import { authzPort, domainPort, semanticPort, storagePort } from "./ports.js";
+import { createKohakuHost } from "@kohaku-ui/host";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { intents } from "./intents.js";
+import { domainPort } from "./ports.js";
 
-const app = new Hono();
-
-app.route(
-  "/api/kohaku",
-  createKohakuRoutes({
-    compose: {
-      catalog: resolveCatalog(coreCatalog /* , yourContribution */),
-      semantic: semanticPort,
-      storage: storagePort,
-      llm: createLlmFromEnv(),
-    },
-    domain: domainPort,
-    authz: authzPort,
-    querySource: "example", // TODO: the source name in query://<source>/
-  }),
-);
+const { app } = createKohakuHost({
+  domain: domainPort,
+  querySource: "example", // must match ports.ts / intents.ts's source name
+  llm: createLlmFromEnv(),
+  intents: intents.map((i) => i.toIntentDef()),
+  dataVersion: () => "example@v1", // bump this whenever the underlying data changes
+});
 
 serve({ fetch: app.fetch, port: 8787 }, (info) =>
   console.log(\`kohaku host: http://localhost:\${info.port}\`),

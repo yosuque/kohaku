@@ -5,7 +5,7 @@ import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import { Hono } from "hono";
 import { fixedSpecs } from "./kohaku/fixed-specs.js"; // L0: screens that never touch the model
-import * as ports from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports)
+import * as ports from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports gives you a DomainPort to start from)
 
 const { authzPort: authz, domainPort: domain, semanticPort: semantic, storagePort: storage } = ports;
 const lineage = createLineage({ storage }); // every compose / review / fixation becomes an event

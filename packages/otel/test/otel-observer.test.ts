@@ -113,6 +113,7 @@ function baseTrace(overrides: Partial<ComposeTrace> = {}): ComposeTrace {
     refs: [],
     dataVersion: "v1",
     cacheKey: "key-1",
+    cacheKeyParts: { intentHash: INTENT.hash, dataVersion: "v1" },
     cache: "miss",
     tier: "L1",
     attempts: [],

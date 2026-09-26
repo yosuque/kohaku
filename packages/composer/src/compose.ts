@@ -1,5 +1,6 @@
 import { negotiate } from "@kohaku-ui/registry";
 import {
+  type CacheKeyParts,
   type CanonicalIntent,
   cacheKey,
   diffSpec,
@@ -7,6 +8,7 @@ import {
   type JsonObject,
   type SemanticInput,
   type SessionContext,
+  SPEC_VERSION,
   type SpecPatch,
   type UISpec,
 } from "@kohaku-ui/spec-core";
@@ -215,13 +217,18 @@ export async function prepareCompose(
   // is a derived 7th component — see context.ts's policyFingerprint doc — that is likewise omitted (empty
   // string) whenever the policy touches none of its fingerprinted fields, keeping the key unchanged).
   const pf = await policyFingerprint(policy, tierLlmFingerprintMaterial(ctx));
-  const key = cacheKey({
+  const keyParts: CacheKeyParts = {
     intentHash: intent.hash,
     dataVersion: refs.dataVersion,
     catalogFingerprint: ctx.catalog.fingerprint,
+    // cacheKey() below falls back to SPEC_VERSION itself when specVersion is omitted, but the *recorded*
+    // keyParts must carry the value it actually used -- otherwise `kohaku explain`/DevTools show a "-"
+    // placeholder for a component that in fact contributed a real segment to the cache key string.
+    specVersion: SPEC_VERSION,
     ...(policy.generatorVersion != null ? { generatorVersion: policy.generatorVersion } : {}),
     ...(pf !== "" ? { policyFingerprint: pf } : {}),
-  });
+  };
+  const key = cacheKey(keyParts);
 
   const traceBase: TraceBase = {
     input: toTraceInput(input),
@@ -229,6 +236,7 @@ export async function prepareCompose(
     refs: refs.uris,
     dataVersion: refs.dataVersion,
     cacheKey: key,
+    cacheKeyParts: keyParts,
     ...traceIdentity(opts),
   };
 

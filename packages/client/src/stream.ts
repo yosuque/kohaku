@@ -23,7 +23,7 @@ export type ComposeStreamWireEvent =
 export type ComposeStreamEvent =
   | { kind: "spec"; spec: UISpec; capability?: string; final: boolean }
   | { kind: "patch"; patch: SpecPatch }
-  | { kind: "done"; specHash: string; tier: string; cache: string }
+  | { kind: "done"; specHash: string; tier: string; cache: string; requestId?: string }
   | { kind: "error"; error: { code: HostErrorCode; message: string } };
 
 /**

@@ -48,6 +48,8 @@ export interface RestViewRecorder {
     tenant?: string;
     /** Precomputed hash. If passed, does not re-hash the Spec. Unset means internal computation (backward compatible). */
     specHash?: string;
+    /** The compose trace's correlation id (see ComposeTraceLike's doc comment / lineage.ts's ViewComposedPayload.correlationId). */
+    correlationId?: string;
   }): Promise<void>;
 }
 
@@ -80,6 +82,7 @@ export function createViewRecorder(lineage: Lineage): RestViewRecorder {
         intentHash: args.spec.intent.hash,
         ...(args.sessionId != null ? { sessionId: args.sessionId } : {}),
         ...(args.tenant != null ? { tenant: args.tenant } : {}),
+        ...(args.correlationId != null ? { correlationId: args.correlationId } : {}),
       });
     },
   };
