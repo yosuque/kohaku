@@ -93,6 +93,10 @@ node scripts/npm-bootstrap.mjs --publish --dry-run  # show the npm commands it w
 node scripts/npm-bootstrap.mjs --publish            # run them
 ```
 
+Run `--publish` from your own terminal. npm's two-factor authentication for these commands is a
+browser handshake that npm waits for only on a TTY; from a non-interactive shell (an AI agent's shell,
+Claude Code's `!` prefix, CI) every command fails with `EOTP`, so the script refuses to start there.
+
 For each missing package, `--publish` does three things. It publishes a placeholder
 `0.0.0-bootstrap.0` (manifest and README only, dist-tag `bootstrap`) so the name exists. It registers the
 trusted publisher with `npm trust github`, using the same repository, `release.yml` and environment `npm`

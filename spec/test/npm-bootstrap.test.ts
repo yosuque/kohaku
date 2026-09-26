@@ -108,6 +108,14 @@ describe("scripts/npm-bootstrap.mjs", () => {
     expect(stdout).not.toContain("# @kohaku-ui/old");
   });
 
+  it("--publish without --dry-run refuses to run without a terminal, before touching the registry", async () => {
+    const root = fixtureRoot([{ name: "@kohaku-ui/new" }]);
+    const { code, stdout, stderr } = await run(["--root", root, "--publish"]);
+    expect(code).toBe(1);
+    expect(stderr).toContain("--publish needs an interactive terminal");
+    expect(stdout).not.toContain("MISSING");
+  });
+
   it("fails loudly instead of guessing when the registry answers something other than 200/404", async () => {
     const root = fixtureRoot([{ name: "@kohaku-ui/broken" }]);
     const { code, stderr } = await run(["--root", root]);

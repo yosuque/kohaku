@@ -90,6 +90,10 @@ node scripts/npm-bootstrap.mjs --publish --dry-run  # 実行する npm コマン
 node scripts/npm-bootstrap.mjs --publish            # 実行する
 ```
 
+`--publish` は自分のターミナルから実行してください。これらのコマンドに対する npm の二要素認証はブラウザでの
+認証で、npm は TTY 上でしかその完了を待ちません。非対話のシェル(AI エージェントのシェル、Claude Code の `!`
+プレフィックス、CI)ではすべてのコマンドが `EOTP` で失敗するため、スクリプトはそこでは開始自体を拒否します。
+
 `--publish` は存在しないパッケージごとに三つの処理を行います。まず、名前を確保するためにプレースホルダー
 `0.0.0-bootstrap.0`(manifest と README のみ、dist-tag `bootstrap`)を公開します。次に、`npm trust github`
 で Trusted Publisher を登録します(リポジトリ・`release.yml`・environment `npm` は上記と同じ値)。最後に、

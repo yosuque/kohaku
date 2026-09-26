@@ -149,6 +149,15 @@ function parseArgs(argv) {
 
 async function main(argv) {
   const opts = parseArgs(argv);
+  // npm's 2FA for publish / trust / deprecate is an interactive browser handshake that npm only waits
+  // for on a real terminal; without one it fails every command with EOTP. Refuse up front instead of
+  // failing on the first package (an agent's shell or a CI step is not a terminal).
+  if (opts.publish && !opts.dryRun && !(process.stdin.isTTY && process.stdout.isTTY)) {
+    console.error(
+      "--publish needs an interactive terminal: npm's two-factor authentication waits for a browser login only on a TTY. Run it from your own terminal (or pass --dry-run to only print the commands).",
+    );
+    return 1;
+  }
   const packages = discoverPublishablePackages(opts.root);
   const missing = [];
   for (const pkg of packages) {
