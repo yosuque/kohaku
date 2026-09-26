@@ -66,12 +66,23 @@ export interface LineageQuery {
   intentHash?: string;
   artifactId?: string;
   specHash?: string;
+  /** Filter by the `correlationId` payload field (exact equality; design.md #53). */
+  correlationId?: string;
   /** ISO8601 timestamp. Narrows to events at or after this. */
   since?: string;
   /** ISO8601 timestamp. Narrows to events at or before this (ts <= until, inclusive; same interpretation as /analytics). */
   until?: string;
   /** Return limit (clamped to 1..1000 on the host side). */
   limit?: number;
+}
+
+/**
+ * Query for the GET /lineage?order=asc forward-paging iterator (`KohakuClient.lineagePages`, design.md
+ * #53). Every `LineageQuery` field applies except `limit` (`pageSize` takes its place).
+ */
+export interface LineagePageQuery extends Omit<LineageQuery, "limit"> {
+  /** Requested page size (clamped to 1..1000 on the host side; the host's own default applies when omitted). */
+  pageSize?: number;
 }
 
 /** A single POST /telemetry event (rendered / componentUsed). */
@@ -198,6 +209,14 @@ export interface KohakuClient {
   catalog(opts?: RequestOptions): Promise<CatalogResponse>;
   /** GET /lineage (event sequence for the audit surface). */
   lineage(query?: LineageQuery, opts?: RequestOptions): Promise<LineageEventRecord[]>;
+  /**
+   * Walks the whole lineage log exhaustively via GET /lineage?order=asc (design.md #53), yielding one
+   * page's events per iteration until the host reports no further page (`nextCursor` absent) -- unlike
+   * `lineage()` (a tail window bounded by `limit`), this covers every matching event, in append order.
+   * Requires the host's storage to implement `StoragePort.pageLineage`; an unsupported backend rejects the
+   * first page with a `KohakuHostError` (501 `NOT_IMPLEMENTED`).
+   */
+  lineagePages(query?: LineagePageQuery, opts?: RequestOptions): AsyncGenerator<LineageEventRecord[], void>;
   /** POST /telemetry (batch ingest of rendered / component.used). */
   telemetry(events: TelemetryEvent[], opts?: RequestOptions): Promise<void>;
   /** Management surface for the promotion pipeline (L2→L1). */
@@ -444,6 +463,7 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
       if (query.intentHash != null) params.set("intentHash", query.intentHash);
       if (query.artifactId != null) params.set("artifactId", query.artifactId);
       if (query.specHash != null) params.set("specHash", query.specHash);
+      if (query.correlationId != null) params.set("correlationId", query.correlationId);
       if (query.since != null) params.set("since", query.since);
       if (query.until != null) params.set("until", query.until);
       if (query.limit != null) params.set("limit", String(query.limit));
@@ -452,6 +472,30 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
         (await get<{ events: LineageEventRecord[] }>(`/lineage${qs !== "" ? `?${qs}` : ""}`, opts)).events ??
         []
       );
+    },
+    async *lineagePages(query = {}, opts) {
+      let cursor: string | undefined;
+      for (;;) {
+        const params = new URLSearchParams();
+        params.set("order", "asc");
+        const types = (query.type ?? []).filter((t) => t.length > 0);
+        if (types.length > 0) params.set("type", types.join(","));
+        if (query.intentHash != null) params.set("intentHash", query.intentHash);
+        if (query.artifactId != null) params.set("artifactId", query.artifactId);
+        if (query.specHash != null) params.set("specHash", query.specHash);
+        if (query.correlationId != null) params.set("correlationId", query.correlationId);
+        if (query.since != null) params.set("since", query.since);
+        if (query.until != null) params.set("until", query.until);
+        if (query.pageSize != null) params.set("pageSize", String(query.pageSize));
+        if (cursor != null) params.set("cursor", cursor);
+        const page = await get<{ events: LineageEventRecord[]; nextCursor?: string }>(
+          `/lineage?${params.toString()}`,
+          opts,
+        );
+        yield page.events ?? [];
+        if (page.nextCursor == null) return;
+        cursor = page.nextCursor;
+      }
     },
     async telemetry(events, opts) {
       await post<{ ok: true }>("/telemetry", { events }, opts);
