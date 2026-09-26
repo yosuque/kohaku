@@ -25,7 +25,15 @@ from .capability import (
     WriteScopeDroppedError,
     issue_capability_for_spec,
 )
-from .errors import fail_open, is_typed_host_error, notify_hook
+from .errors import (
+    ConsoleErrorReporter,
+    ConsoleErrorReporterOptions,
+    create_console_error_reporter,
+    fail_open,
+    format_error_chain,
+    is_typed_host_error,
+    notify_hook,
+)
 from .fixation import (
     ComposeFixationContext,
     FixationDeliveryHost,
@@ -56,6 +64,8 @@ __all__ = [
     "ActionEffectsResult",
     "AllowedActions",
     "ComposeFixationContext",
+    "ConsoleErrorReporter",
+    "ConsoleErrorReporterOptions",
     "FixationDeliveryHost",
     "FixationSelfHealApi",
     "FixationSelfHealKind",
@@ -74,7 +84,9 @@ __all__ = [
     "apply_action_effects",
     "compose_with_fixation",
     "create_allowed_actions",
+    "create_console_error_reporter",
     "fail_open",
+    "format_error_chain",
     "get_lock",
     "is_typed_host_error",
     "issue_capability_for_spec",

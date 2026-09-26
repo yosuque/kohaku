@@ -16,6 +16,7 @@ import pytest
 from kohaku.composer import (
     ComposeBudget,
     ComposeContext,
+    ComposeError,
     ComposeErrorContext,
     ComposeObserver,
     ComposeOptions,
@@ -200,18 +201,75 @@ class TestComposeL1:
     def test_transient_failure_skips_l2(self, tmp_path: Any) -> None:
         async def run() -> None:
             storage = FileStoragePort(tmp_path)
+            errors: list[tuple[ComposeErrorContext, BaseException | None]] = []
+            observer = ComposeObserver(onError=lambda c, e: errors.append((c, e)))
 
             def _raise(req: Any) -> Any:
                 raise LlmError("PROVIDER", "upstream 500")
 
             llm = FakeLlm(objects=_raise, texts=[_L2_HTML])
-            ctx = _ctx(llm, storage, policy=ComposePolicy(allowL2=True))
+            ctx = _ctx(llm, storage, policy=ComposePolicy(allowL2=True), observer=observer)
 
             result = await compose(_INTENT_INPUT, ctx)
             fb = result.spec.provenance.fallback
-            assert fb is not None and "transient error" in fb.reason
+            assert fb is not None
+            # The reason names the LLM provider explicitly (with the underlying LlmError code in
+            # parentheses) and mentions the skipped L2 promotion — not the generic "abort/provider" wording
+            # of before, and never the catalog/structure validation wording (that would be indistinguishable
+            # from an actual validation failure).
+            assert "Skipped L2" in fb.reason
+            assert "the LLM provider was unavailable (provider error)" in fb.reason
+            assert "catalog/structure validation" not in fb.reason
             # L2 (generate_text) is not called
             assert all(c.kind != "text" for c in llm.calls)
+            # onError receives failure="transient" and the underlying LlmError (previously always None).
+            await asyncio.sleep(0)  # synchronous flush of fire-and-forget
+            assert len(errors) == 1
+            ctx_err, error = errors[0]
+            assert ctx_err.failure == "transient"
+            assert isinstance(error, LlmError) and error.code == "PROVIDER"
+
+        asyncio.run(run())
+
+    def test_transient_failure_with_l2_disabled_names_the_provider_outage(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+
+            def _raise(req: Any) -> Any:
+                raise LlmError("PROVIDER", "upstream 500")
+
+            llm = FakeLlm(objects=_raise)
+            ctx = _ctx(llm, storage)  # allowL2 unset (default False)
+
+            result = await compose(_INTENT_INPUT, ctx)
+            fb = result.spec.provenance.fallback
+            assert fb is not None
+            assert fb.reason == (
+                "L1 generation failed: the LLM provider was unavailable (provider error). "
+                "Check KOHAKU_LLM_PROVIDER and the provider API key."
+            )
+
+        asyncio.run(run())
+
+    def test_invalid_failure_with_l2_disabled_keeps_the_plain_validation_reason(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            errors: list[tuple[ComposeErrorContext, BaseException | None]] = []
+            observer = ComposeObserver(onError=lambda c, e: errors.append((c, e)))
+            bad: dict[str, list[Any]] = {"components": [], "events": []}
+            llm = FakeLlm(objects=[bad, bad])
+            ctx = _ctx(llm, storage, observer=observer)  # allowL2 unset (default False)
+
+            result = await compose(_INTENT_INPUT, ctx)
+            fb = result.spec.provenance.fallback
+            assert fb is not None
+            assert fb.reason == "L1 constrained generation failed catalog/structure validation"
+            await asyncio.sleep(0)
+            assert len(errors) == 1
+            ctx_err, error = errors[0]
+            assert ctx_err.failure == "invalid"
+            # A validate()-rejected (not raised) response classifies as "invalid" with no exception to chain.
+            assert error is None
 
         asyncio.run(run())
 
@@ -1022,6 +1080,69 @@ class TestSpecCacheFailOpen:
 
             with pytest.raises(RuntimeError, match="cache backend unavailable"):
                 await compose(_INTENT_INPUT, ctx)
+
+        asyncio.run(run())
+
+
+class TestSemanticFailedCauseEnrichment:
+    """Port of TS's "SEMANTIC_FAILED includes a typed cause's own message" tests (compose.test.ts)."""
+
+    def test_untyped_cause_leaves_the_wrapped_message_unchanged(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            captured: list[tuple[ComposeErrorContext, BaseException | None]] = []
+
+            class _FailingSemantic(_FakeSemantic):
+                async def resolve_query(
+                    self, intent: Intent, *, tenant: str | None = None
+                ) -> QueryHandle | list[QueryHandle]:
+                    raise RuntimeError("reference resolution failed(test)")
+
+            llm = FakeLlm(objects=[_l1_draft()])
+            ctx = replace(
+                _ctx(llm, storage, observer=ComposeObserver(onError=lambda c, e: captured.append((c, e)))),
+                semantic=_FailingSemantic(),
+            )
+
+            with pytest.raises(ComposeError, match="^query resolution failed$"):
+                await compose(_INTENT_INPUT, ctx)
+            await asyncio.sleep(0)
+            assert len(captured) == 1
+            assert captured[0][0].phase == "hard"
+            # An untyped cause (a plain exception with no `code` attribute) may leak internals, so its
+            # message is not appended — the wrapped message stays exactly "query resolution failed".
+            assert str(captured[0][1]) == "query resolution failed"
+
+        asyncio.run(run())
+
+    def test_typed_cause_message_is_appended(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            captured: list[tuple[ComposeErrorContext, BaseException | None]] = []
+
+            class _TypedCause(RuntimeError):
+                code = "UNKNOWN_INTENT"
+
+            class _FailingSemantic(_FakeSemantic):
+                async def resolve_query(
+                    self, intent: Intent, *, tenant: str | None = None
+                ) -> QueryHandle | list[QueryHandle]:
+                    raise _TypedCause('unknown intent "sales.nope"')
+
+            llm = FakeLlm(objects=[_l1_draft()])
+            ctx = replace(
+                _ctx(llm, storage, observer=ComposeObserver(onError=lambda c, e: captured.append((c, e)))),
+                semantic=_FailingSemantic(),
+            )
+
+            with pytest.raises(ComposeError, match=r'query resolution failed: unknown intent "sales\.nope"'):
+                await compose(_INTENT_INPUT, ctx)
+            await asyncio.sleep(0)
+            assert len(captured) == 1
+            error = captured[0][1]
+            assert str(error) == 'query resolution failed: unknown intent "sales.nope"'
+            # The wire is unaffected: the wrapped ComposeError's own `code` stays SEMANTIC_FAILED, not the cause's.
+            assert isinstance(error, ComposeError) and error.code == "SEMANTIC_FAILED"
 
         asyncio.run(run())
 

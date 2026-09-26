@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
-from kohaku.llm import AbortController, AbortSignal
+from kohaku.llm import AbortController, AbortSignal, LlmError
 from kohaku.registry import negotiate
 from kohaku.spec import (
     SPEC_VERSION,
@@ -50,7 +50,7 @@ from .context import (
 )
 from .errors import ComposeError
 from .fallback import build_fallback_spec
-from .l1_generate import generate_l1
+from .l1_generate import L1Result, generate_l1
 from .l2_generate import generate_l2
 from .post import PostProcessContext, post_process
 from .trace import ComposeAttempt, ComposeTrace, TokenUsage, TraceInput
@@ -384,6 +384,16 @@ class _TierOutcomeFallback:
     timeout) rather than an actual generation failure. compose.py marks the resulting trace cancelled and
     hosts skip recording view.composed/view.fallback for it, so a cancel does not inflate the
     generation-fallback-rate analytics."""
+    failure: Literal["transient", "invalid", "budget", "aborted"] | None = None
+    """The classified failure kind behind this fallback, mirrored from the settling L1Result/L2Result.failure
+    (None for the two fallbacks with no underlying tier result: L2-disabled and the L2 pre-generation budget
+    skip). Threaded by _build_spec_from_outcome into ComposeErrorContext.failure. Port of TS's TierOutcome
+    fallback branch (tier-ladder.ts)."""
+    error: BaseException | None = None
+    """The exception behind this fallback (typically an LlmError), mirrored from the settling
+    L1Result/L2Result.last_error. Threaded by _build_spec_from_outcome into observer.onError's `error`
+    argument (previously always None for a fallback). None whenever the terminal failure did not come from
+    a raise. Port of TS's TierOutcome fallback branch (tier-ladder.ts)."""
     kind: Literal["fallback"] = "fallback"
 
 
@@ -391,10 +401,45 @@ type _TierOutcome = _TierOutcomeOk | _TierOutcomeFallback
 
 
 def _tier_fallback(
-    from_tier: Literal["L1", "L2"], reason: str, budget_exceeded: bool = False
+    from_tier: Literal["L1", "L2"],
+    reason: str,
+    budget_exceeded: bool = False,
+    *,
+    failure: Literal["transient", "invalid", "budget", "aborted"] | None = None,
+    error: BaseException | None = None,
 ) -> _TierOutcomeFallback:
     """Constructs the fallback form of a _TierOutcome (mirrors TS's `fallback()` helper)."""
-    return _TierOutcomeFallback(from_tier=from_tier, reason=reason, budget_exceeded=budget_exceeded)
+    return _TierOutcomeFallback(
+        from_tier=from_tier, reason=reason, budget_exceeded=budget_exceeded, failure=failure, error=error
+    )
+
+
+def _transient_error_detail(error: BaseException | None) -> str:
+    """A short, human-readable label for the LlmError code (when determinable) behind a "transient" L1/L2
+    failure, for inclusion in a fallback reason's parenthetical (e.g. "(provider error)"). Falls back to the
+    generic "transient error" when the underlying error is not an LlmError (an unexpected non-LlmError raise)
+    or carries a code this fallback path does not otherwise expect. Port of TS's transientErrorDetail
+    (tier-ladder.ts)."""
+    if isinstance(error, LlmError):
+        if error.code == "PROVIDER":
+            return "provider error"
+        if error.code == "CONFIG":
+            return "configuration error"
+        if error.code == "ABORTED":
+            return "abort"
+    return "transient error"
+
+
+def _is_typed_cause(e: BaseException) -> bool:
+    """Whether `e` is a "typed" error whose message is safe to expose to a client as-is — the convention
+    this codebase uses for a deliberately raised exception carrying a string `code` attribute (see
+    host_core's is_typed_host_error for the full rationale; this is a narrower duplicate of that same check,
+    scoped to what _resolve_refs needs for SEMANTIC_FAILED message enrichment). composer cannot import
+    host_core (the dependency direction fixed by AGENTS.md is composer -> host_core), and a
+    SemanticPort.resolve_query failure can come from any product's own port implementation, so this
+    deliberately checks the general "string code attribute" shape rather than importing any specific error
+    class. Port of TS composer's isTypedCause (error-message.ts)."""
+    return isinstance(getattr(e, "code", None), str)
 
 
 type _BudgetCheckErrorReporterFor = (
@@ -533,6 +578,9 @@ def _build_spec_from_outcome(
     # Make the deterministic degradation on generation failure observable (once per generation = only the leader passes through).
     # phase is "cancelled" rather than "fallback" when the fallback was caused by the caller's abort
     # (client disconnect/timeout), so hosts can skip counting it against the generation-fallback rate.
+    # failure/error mirror the settling L1Result/L2Result (see _TierOutcomeFallback's doc) so an observer
+    # gets the classified failure kind and, when the fallback was caused by a raise, the underlying error —
+    # previously always None here regardless of whether one was available.
     report_compose_error(
         ctx,
         ComposeErrorContext(
@@ -543,8 +591,9 @@ def _build_spec_from_outcome(
             tier=outcome.from_tier,
             reason=outcome.reason,
             budgetExceeded=outcome.budget_exceeded,
+            failure=outcome.failure,
         ),
-        None,
+        outcome.error,
     )
     return spec
 
@@ -648,11 +697,62 @@ async def _run_tier_generation(
         deadline_guard.dispose()
 
 
-@dataclass(frozen=True)
-class _L1Fallback:
-    reason: str
-    failure: Literal["transient", "invalid", "budget", "aborted"] | None
-    budget_exceeded: bool
+def _settle_l1_failure(
+    l1: L1Result, can_l2: bool, initial_from: Literal["L1", "L2"]
+) -> _TierOutcome | None:
+    """The failure→reason table for a settled (non-promotable-or-not) L1 failure. Precedence: budget always
+    wins regardless of can_l2; transient gets a provider-outage reason either way (the wording differs
+    slightly depending on whether L2 was skipped as a result); invalid (or an unexpected None) is promotable
+    to L2 (returns None) only when can_l2 is True, else it takes the plain validation-failure reason
+    (unchanged from before this failure/error split existed — a caller distinguishing a validation failure
+    from a provider outage should key off `failure`, not string-match `reason`). Returns None only for the
+    invalid/None + can_l2 case (proceed to L2). Port of TS's settleL1Failure (tier-ladder.ts)."""
+    if l1.failure == "aborted":
+        # The caller's AbortSignal fired — a client disconnect/timeout, not a generation failure. Never
+        # promoted to L2 (there is no one left to receive it), and marked cancelled so hosts skip recording
+        # it as a generation fallback.
+        return _TierOutcomeFallback(
+            from_tier=initial_from,
+            reason="Generation cancelled by the caller",
+            cancelled=True,
+            failure="aborted",
+            error=l1.last_error,
+        )
+    if l1.failure == "budget":
+        # L1 was cut off due to budget overrun (first-attempt skip or repair skip). Not escalated to L2 either.
+        return _tier_fallback(
+            initial_from,
+            l1.budgetReason if l1.budgetReason is not None else "Generation stopped: token budget exceeded",
+            True,
+            failure="budget",
+            error=l1.last_error,
+        )
+    if l1.failure == "transient":
+        # When L1 fell with a transient failure (LLM provider unavailable, misconfigured, or an unexpected
+        # non-LlmError raise), do not send it to L2 — throwing another full generation (1×timeout) at the
+        # same failing provider would just hit the same failure. The reason names the provider explicitly
+        # (rather than reusing the validation-failure wording below) so an operator can tell "the LLM never
+        # answered" apart from "the LLM answered but the output didn't validate" without inspecting failure/error.
+        detail = _transient_error_detail(l1.last_error)
+        reason = (
+            f"Skipped L2 because L1 generation failed: the LLM provider was unavailable ({detail}). "
+            "Check KOHAKU_LLM_PROVIDER and the provider API key."
+            if can_l2
+            else f"L1 generation failed: the LLM provider was unavailable ({detail}). "
+            "Check KOHAKU_LLM_PROVIDER and the provider API key."
+        )
+        return _tier_fallback(initial_from, reason, failure="transient", error=l1.last_error)
+    # "invalid" or an unexpected None: only a schema-derived (invalid: a response existed but failed
+    # validation) L1 failure is promoted to L2 (return None). If L2 is disabled, the reason is the plain
+    # validation-failure message (unchanged wording — this is not a provider outage).
+    if can_l2:
+        return None
+    return _tier_fallback(
+        initial_from,
+        "L1 constrained generation failed catalog/structure validation",
+        failure="invalid",
+        error=l1.last_error,
+    )
 
 
 async def _run_l1_stage(
@@ -667,8 +767,8 @@ async def _run_l1_stage(
     deadline_signal: AbortSignal | None,
 ) -> _TierOutcome | None:
     """The L1 stage + L2 promotion-eligibility decision. Returns a settled _TierOutcome, or None when proceeding
-    to L2. If route=L1, runs generate_l1 → an early return according to the failure kind. route=L2 direct entry
-    does not generate and only passes the allowL2 decision.
+    to L2. If route=L1, runs generate_l1 → an early return according to the failure kind (via
+    _settle_l1_failure). route=L2 direct entry does not generate and only passes the allowL2 decision.
 
     `signal` is create_deadline_guard's output (prepared.abort combined with a deadline timer when
     budget.deadline_ms is set, or prepared.abort unchanged otherwise) — passed to generate_l1 in place of
@@ -676,9 +776,8 @@ async def _run_l1_stage(
     intent = prepared.intent
     refs = prepared.refs
     policy = prepared.policy
+    can_l2 = policy.allowL2
 
-    # The L1 stage. Settle immediately on success; on failure, carry the kind and reason to the L2 promotion decision.
-    l1_fallback: _L1Fallback | None = None
     if route == "L1":
         l1 = await generate_l1(
             intent,
@@ -700,49 +799,12 @@ async def _run_l1_stage(
                 events=l1.events if l1.events is not None else [],
                 model=l1.model,
             )
-        if l1.failure == "aborted":
-            # The caller's AbortSignal fired — a client disconnect/timeout, not a generation failure. Never
-            # promoted to L2 (there is no one left to receive it), and marked cancelled so hosts skip
-            # recording it as a generation fallback. Returned immediately, unlike the other failure kinds
-            # below, because this decision does not depend on can_l2 at all.
-            return _TierOutcomeFallback(
-                from_tier=initial_from,
-                reason="Generation cancelled by the caller",
-                cancelled=True,
-            )
-        if l1.failure == "budget":
-            # L1 was cut off due to budget overrun (first-attempt skip or repair skip). Not escalated to L2 either.
-            l1_fallback = _L1Fallback(
-                reason=l1.budgetReason
-                if l1.budgetReason is not None
-                else "Generation stopped: token budget exceeded",
-                failure=l1.failure,
-                budget_exceeded=True,
-            )
-        else:
-            l1_fallback = _L1Fallback(
-                reason="L1 constrained generation failed catalog/structure validation",
-                failure=l1.failure,
-                budget_exceeded=False,
-            )
+        settled = _settle_l1_failure(l1, can_l2, initial_from)
+        if settled is not None:
+            return settled
 
-    # Try L2 only when allowL2 is enabled. Even if requested via route=="L2", if disabled, keep the reason.
-    can_l2 = policy.allowL2
-    if l1_fallback is not None and not can_l2:
-        # In an environment where L2 is disabled, L1's failure reason becomes the final reason as-is.
-        return _tier_fallback(initial_from, l1_fallback.reason, l1_fallback.budget_exceeded)
-    # When L1 failed transiently (abort/provider failure), do not route to L2 (throwing another full generation
-    # at a failing provider would only hit the same failure). Only a schema-derived (invalid) L1 failure is
-    # promoted to L2 as before.
-    if l1_fallback is not None and l1_fallback.failure == "transient":
-        return _tier_fallback(
-            initial_from, "Skipped L2 because L1 failed with a transient error (abort/provider)"
-        )
-    # If L1 stopped due to budget overrun, do not send it to L2 (the additional cost of full generation) either.
-    if l1_fallback is not None and l1_fallback.failure == "budget":
-        return _tier_fallback(initial_from, l1_fallback.reason, True)
     if not can_l2:
-        # Only route=L2 direct entry reaches here (L1 success has already returned; L1 failure was already fixed above).
+        # Only route=L2 direct entry reaches here (L1 success/failure has already returned above).
         return _tier_fallback(initial_from, "L2 (free-form generation) is disabled in this environment")
 
     return None
@@ -787,6 +849,7 @@ async def _run_l2_stage(
             initial_from,
             l2_verdict.reason if l2_verdict.reason is not None else "Skipped L2 escalation: token budget exceeded",
             True,
+            failure="budget",
         )
 
     l2 = await generate_l2(
@@ -814,6 +877,8 @@ async def _run_l2_stage(
             from_tier="L2",
             reason="Generation cancelled by the caller",
             cancelled=True,
+            failure="aborted",
+            error=l2.last_error,
         )
     if l2.failure == "budget":
         # L2's repair retry was cut off by budget. The "stage that actually failed" is L2.
@@ -821,9 +886,13 @@ async def _run_l2_stage(
             "L2",
             l2.budgetReason if l2.budgetReason is not None else "Skipped L2 repair retry: token budget exceeded",
             True,
+            failure="budget",
+            error=l2.last_error,
         )
-    # Tried L2 and failed (align from_tier with reality).
-    return _tier_fallback("L2", "L2 free-form generation failed")
+    # Tried L2 and failed (align from_tier with reality). failure mirrors l2.failure ("transient" or
+    # "invalid") so an observer can tell a provider outage apart from an L2 validation/lint failure the same
+    # way L1 does.
+    return _tier_fallback("L2", "L2 free-form generation failed", failure=l2.failure, error=l2.last_error)
 
 
 def _build_trace(
@@ -1003,7 +1072,13 @@ async def _resolve_refs(
     try:
         resolved = await ctx.semantic.resolve_query(intent, tenant=tenant)
     except Exception as e:
-        raise ComposeError("SEMANTIC_FAILED", "query resolution failed", cause=e) from e
+        # When the cause is a "typed" error (a string `code` attribute — the convention for a client-safe
+        # message; see _is_typed_cause's doc), its own message is appended so the caller learns *what*
+        # failed (e.g. an unknown Intent name) instead of the generic text alone. An untyped cause (a raw
+        # exception from a SemanticPort implementation) may carry internals and is never appended — the
+        # wrapped message stays exactly as before for that case.
+        detail = f": {e}" if _is_typed_cause(e) else ""
+        raise ComposeError("SEMANTIC_FAILED", f"query resolution failed{detail}", cause=e) from e
     handles: list[QueryHandle] = resolved if isinstance(resolved, list) else [resolved]
     versions = list(await asyncio.gather(*(ctx.semantic.data_version(h) for h in handles)))
     data_version = combine_data_versions([(h.uri, versions[i]) for i, h in enumerate(handles)])

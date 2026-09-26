@@ -114,6 +114,15 @@ class L1Result:
       disconnect/timeout must not inflate the fallback-rate analytics the same way a real provider failure does.
     """
     budgetReason: str | None = None
+    last_error: BaseException | None = None
+    """The exception behind the *last* attempt that actually raised (typically an LlmError), so callers
+    (compose.py's _settle_l1_failure) can enrich a fallback reason and observer.onError's `error` argument
+    with the underlying cause instead of leaving it None. Unset whenever the terminal failure did not come
+    from a raise — in particular, an "invalid" failure whose *last* attempt failed via decode/validation
+    returning issues (a response existed but failed validation, no exception) rather than a raised error. A
+    stale error from an earlier repaired attempt would be misleading there, so generate_l1 clears it in that
+    branch rather than leaving the previous raise's value attached to a different failure. Port of TS
+    composer's TierResult.lastError (tiers/shared.ts)."""
 
 
 async def generate_l1(
@@ -165,6 +174,10 @@ async def generate_l1(
     # already carries its own budgetReason on that early-return path — this variable is for the OTHER route
     # into failure="budget": an in-flight call aborted by the deadline timer rather than skipped before it started).
     budget_reason: str | None = None
+    # The exception behind the most recent attempt that actually raised (see L1Result.last_error's doc). Set
+    # at the top of the except block below and cleared when a later attempt's failure instead comes from
+    # decode/validation rejecting a response that was returned without raising.
+    last_error: BaseException | None = None
 
     # few-shot is fetched exactly once before the loop, and the same examples are injected into every attempt
     # including repair retries. A throw from examples() is swallowed and treated as empty (a supply-side
@@ -252,6 +265,7 @@ async def generate_l1(
                 )
             )
         except Exception as e:  # noqa: BLE001 — LLM-call failures branch by kind
+            last_error = e
             attempts.append(ComposeAttempt(kind="l1", ok=False, issues=[str(e)]))
             if isinstance(e, LlmError) and e.code == "ABORTED":
                 # deadline_signal fires only from budget.py's create_deadline_guard, never from the caller's
@@ -297,7 +311,11 @@ async def generate_l1(
                     attempts=attempts,
                 )
             # A catalog/structural validation failure is also a repair target ("invalid", escalatable to L2).
+            # This attempt returned a response (no raise), so clear last_error rather than leaving an
+            # earlier attempt's raised error attached to a failure it did not actually cause (see
+            # L1Result.last_error's doc).
             failure = "invalid"
+            last_error = None
             attempts[-1] = ComposeAttempt(kind="l1", ok=False, issues=issues, usage=attempts[-1].usage)
             feedback = issues
         except ValueError as e:
@@ -306,12 +324,15 @@ async def generate_l1(
             # hard exception would turn the whole compose into INTERNAL / a host 500).
             message = str(e)
             failure = "invalid"
+            last_error = None
             attempts[-1] = ComposeAttempt(
                 kind="l1", ok=False, issues=[message], usage=attempts[-1].usage
             )
             feedback = [message]
 
-    return L1Result(ok=False, attempts=attempts, failure=failure, model=model, budgetReason=budget_reason)
+    return L1Result(
+        ok=False, attempts=attempts, failure=failure, model=model, budgetReason=budget_reason, last_error=last_error
+    )
 
 
 def _collect_issues(
