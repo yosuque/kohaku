@@ -20,6 +20,12 @@
 # (`EXTERNAL_VERSIONS`, the versions `kohaku init` writes into a generated project) is synced by hand:
 # `cli/test/init/render.test.ts` asserts it matches the catalog. Dependabot cannot edit that file.
 #
+# --- Cadence -----------------------------------------------------------------------------------------------
+# Version updates run monthly with a 7-day cooldown, and uv / github-actions each land as one grouped PR, so a
+# month produces a handful of PRs instead of ~10 a week. The cooldown also stops a fast-moving package from
+# opening a PR that the next patch release supersedes a few days later. Neither setting applies to security
+# updates (enabled in the repository settings): those still open as soon as an advisory is published.
+#
 # --- minimumReleaseAgeExclude interaction ----------------------------------------------------------------
 # pnpm-workspace.yaml also enforces a release-age supply-chain gate, with a `minimumReleaseAgeExclude` list
 # carved out for a few just-pinned AI SDK packages. A Dependabot PR that bumps a catalog entry to a
@@ -29,8 +35,8 @@
 #
 # --- audit interaction ------------------------------------------------------------------------------------
 # CI's `pnpm audit --prod --audit-level=high` step is report-only (continue-on-error), so it does not block
-# merges on its own. Dependabot's security updates are therefore the main *enforced* path for actually
-# landing a fix for a vulnerable dependency, not the audit step.
+# merges on its own. Dependabot's security updates (Settings > Code security; enabled) are therefore the main
+# *enforced* path for actually landing a fix for a vulnerable dependency, not the audit step.
 
 version: 2
 
@@ -41,10 +47,11 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
@@ -93,16 +100,23 @@ updates:
   - package-ecosystem: "uv"
     directory: "/python"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 3
     labels:
       - "dependencies"
       - "python"
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      # One PR per run for the whole Python workspace: every package here only touches python/uv.lock, so
+      # separate PRs just conflict with each other on that one file.
+      python:
+        patterns:
+          - "*"
 
   # ---------------------------------------------------------------------------------------------------
   # github-actions (workflow pinned action versions — all files under .github/workflows/)
@@ -110,10 +124,11 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: "monthly"
       time: "09:00"
       timezone: "Asia/Tokyo"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 3
     labels:
       - "dependencies"
@@ -121,8 +136,8 @@ updates:
     commit-message:
       prefix: "ci"
     groups:
-      # CodeQL's `init` and `analyze` actions must run the same version ("Loaded a configuration file for
-      # version X, but running version Y"), so they have to be bumped in one PR.
-      codeql:
+      # One PR per run for every pinned action. This also keeps CodeQL's `init` and `analyze` together,
+      # which must run the same version ("Loaded a configuration file for version X, but running version Y").
+      github-actions:
         patterns:
-          - "github/codeql-action*"
+          - "*"
