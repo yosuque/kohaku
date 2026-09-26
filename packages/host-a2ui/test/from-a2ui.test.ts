@@ -377,19 +377,96 @@ describe("fromA2ui: {path} data binding resolution", () => {
     expect(spec.provenance.fallback).toMatchObject({ from: "root", kind: "negotiation" });
   });
 
-  it("bindPath overrides the snapshot with a $ref, and is not recorded as a loss", () => {
+  it("a {path} binding on an ordinary prop (not 'data') is always snapshotted, even when bindPath could resolve it", () => {
     const surface = surfaceOf(
       { root: { id: "root", component: "presentChart", kind: "bar", x: { path: "/x" }, y: "revenue" } },
       { x: "region" },
+    );
+    const bindPath = (path: string): { $ref: string } | undefined =>
+      path === "/x" ? { $ref: "query://sales/summary" } : undefined;
+    const { spec, losses } = fromA2ui(surface, {
+      intent: INTENT,
+      dataVersion: "d1",
+      catalog: { has: () => true },
+      bindPath,
+    });
+    // bindPath is only ever consulted for the "data" prop (see the describe block below) — an ordinary prop
+    // like "x" has no structural place for a live reference, so it is always a literal snapshot + a loss,
+    // regardless of what bindPath would have returned for that same path.
+    expect(losses).toEqual([
+      { componentId: "root", kind: "binding-snapshotted", detail: expect.any(String) },
+    ]);
+    expect(spec.components[0]!.props["x"]).toBe("region");
+  });
+});
+
+describe("fromA2ui: bindPath makes a component's 'data' prop a live ComponentNode.data.$ref", () => {
+  function surfaceOf(
+    components: SurfaceState["components"],
+    dataModel: SurfaceState["dataModel"],
+  ): SurfaceState {
+    return { surfaceId: "s", sendDataModel: false, components, dataModel };
+  }
+
+  it("a 'data' prop bound to {path}, resolved by bindPath, becomes ComponentNode.data.$ref (not a props.data literal)", () => {
+    const surface = surfaceOf(
+      { root: { id: "root", component: "presentChart", kind: "bar", data: { path: "/rows" } } },
+      { rows: [{ region: "west", revenue: 100 }] },
     );
     const { spec, losses } = fromA2ui(surface, {
       intent: INTENT,
       dataVersion: "d1",
       catalog: { has: () => true },
-      bindPath: (path) => (path === "/x" ? { $ref: "query://sales/summary" } : undefined),
+      bindPath: (path) => (path === "/rows" ? { $ref: "query://sales/summary" } : undefined),
     });
     expect(losses).toEqual([]);
-    expect(spec.components[0]!.props["x"]).toEqual({ $ref: "query://sales/summary" });
+    const root = spec.components[0]!;
+    expect(root.data).toEqual({ $ref: "query://sales/summary" });
+    expect(root.props).not.toHaveProperty("data");
+  });
+
+  it("without bindPath (or when it declines), a 'data' prop bound to {path} falls back to an ordinary literal snapshot in props.data", () => {
+    const surface = surfaceOf(
+      { root: { id: "root", component: "presentChart", kind: "bar", data: { path: "/rows" } } },
+      { rows: [{ region: "west", revenue: 100 }] },
+    );
+    const { spec: withoutBindPath, losses: lossesWithout } = fromA2ui(surface, {
+      intent: INTENT,
+      dataVersion: "d1",
+      catalog: { has: () => true },
+    });
+    expect(lossesWithout).toEqual([
+      { componentId: "root", kind: "binding-snapshotted", detail: expect.any(String) },
+    ]);
+    expect(withoutBindPath.components[0]!.data).toBeUndefined();
+    expect(withoutBindPath.components[0]!.props["data"]).toEqual([{ region: "west", revenue: 100 }]);
+
+    const { spec: declined, losses: lossesDeclined } = fromA2ui(surface, {
+      intent: INTENT,
+      dataVersion: "d1",
+      catalog: { has: () => true },
+      bindPath: () => undefined,
+    });
+    expect(lossesDeclined).toEqual([
+      { componentId: "root", kind: "binding-snapshotted", detail: expect.any(String) },
+    ]);
+    expect(declined.components[0]!.data).toBeUndefined();
+  });
+
+  it("a 'data' prop that is not a {path} binding (an ordinary literal) is unaffected", () => {
+    const surface = surfaceOf(
+      { root: { id: "root", component: "presentChart", kind: "bar", data: "not-a-binding" } },
+      {},
+    );
+    const { spec, losses } = fromA2ui(surface, {
+      intent: INTENT,
+      dataVersion: "d1",
+      catalog: { has: () => true },
+      bindPath: () => ({ $ref: "query://should-not-be-used" }),
+    });
+    expect(losses).toEqual([]);
+    expect(spec.components[0]!.data).toBeUndefined();
+    expect(spec.components[0]!.props["data"]).toBe("not-a-binding");
   });
 });
 

@@ -69,11 +69,17 @@ export interface FromA2uiOptions {
    */
   unmappable?: "fallback" | "reject";
   /**
-   * Escape hatch for a `{path}` data binding: return a kohaku query `$ref` for that path to preserve
-   * reference-passing instead of a one-time literal snapshot (a caller wires this when it knows which A2UI
-   * data-model paths correspond to a live kohaku query it can re-resolve). Returning `undefined` (including
-   * when this option itself is omitted) falls back to a literal snapshot for that one path, recorded as a
-   * `"binding-snapshotted"` loss.
+   * Escape hatch for a kohaku-catalog component's **data source** — a `"data"` prop whose value is a
+   * `{path}` binding (see `convertDataBinding`'s doc). Return a kohaku query `$ref` for that path to make it
+   * a genuine live `ComponentNode.data.$ref` (reference-passing, resolved by `collectCapabilityScopes`/
+   * renderer-core like any other component's data source) instead of a one-time literal snapshot; a caller
+   * wires this when it knows which A2UI data-model paths correspond to a live kohaku query it can
+   * re-resolve. Returning `undefined` (including when this option itself is omitted) falls back to a
+   * literal snapshot for that one path, recorded as a `"binding-snapshotted"` loss — same as every other
+   * `{path}` binding, which `bindPath` is deliberately **never** consulted for (an ordinary display prop or
+   * an event's `context` has no structural home for a live reference to begin with, only `ComponentNode.data`
+   * does). Only the host's own choice of `$ref` ever reaches this, never anything the agent supplies, so a
+   * read capability is issued only for a ref the host itself associated with that path.
    */
   bindPath?: (path: string) => { $ref: string } | undefined;
   /**
@@ -174,17 +180,18 @@ interface ConvertCtx {
 }
 
 /**
- * Resolves one `A2uiValue` to a literal `JsonValue`. A `{path}` binding is snapshotted from the surface's
- * data model (or replaced by `ctx.bindPath`'s `$ref`, used verbatim as the resolved value — see
- * `FromA2uiOptions.bindPath`'s doc); this always succeeds and only ever *records* a loss, it never throws.
- * A function-call value throws `UnmappableSignal` (fromA2ui cannot execute it), demoting the *whole*
- * containing component to a placeholder — a computed value is not a "leave this one field null" situation,
- * since the value's meaning wasn't just uncertain, it was never asked for from a fixed data source at all.
+ * Resolves one `A2uiValue` to a literal `JsonValue`. A `{path}` binding is **always** snapshotted from the
+ * surface's data model here — `ctx.bindPath` is consulted only for a component's own `"data"` prop (see
+ * `convertDataBinding`, the one place a binding can become a live `ComponentNode.data.$ref` instead of a
+ * literal); every other position (an ordinary display prop, an event's `context`) has no structural home for
+ * a live reference at all, so this always just snapshots and records the loss, never calling `bindPath`.
+ * This always succeeds, it never throws. A function-call value throws `UnmappableSignal` (fromA2ui cannot
+ * execute it), demoting the *whole* containing component to a placeholder — a computed value is not a
+ * "leave this one field null" situation, since the value's meaning wasn't just uncertain, it was never asked
+ * for from a fixed data source at all.
  */
 function resolveValue(value: A2uiValue, ctx: ConvertCtx, componentId: string, hint: string): JsonValue {
   if (isBindingValue(value)) {
-    const ref = ctx.bindPath?.(value.path);
-    if (ref != null) return ref as unknown as JsonValue;
     const snapshot = getAtPointer(ctx.surface.dataModel, value.path);
     ctx.losses.push({
       componentId,
@@ -200,6 +207,30 @@ function resolveValue(value: A2uiValue, ctx: ConvertCtx, componentId: string, hi
     );
   }
   return value;
+}
+
+/**
+ * The one place `ctx.bindPath` is actually consulted: a kohaku-catalog component's own `"data"` prop, when
+ * it is a `{path}` binding, names that component's *data source* (the same concept kohaku's own outbound
+ * side calls `ComponentNode.data.$ref` — `to-a2ui.ts`'s verbatim projection just never emits it, since
+ * reference-passing has no wire representation at all in A2UI). Returning a real `$ref` here — instead of
+ * treating it as an ordinary display prop and snapshotting it to a literal — makes it a genuine structural
+ * binding: `collectCapabilityScopes`/renderer-core read `ComponentNode.data.$ref` to issue a read capability
+ * and resolve it live, exactly as they would for any other kohaku component's data source.
+ *
+ * `bindPath` is the **host's** own hook, never the agent's: the agent can only cause a `{path}` binding to
+ * exist on `"data"` at all, never choose *which* `$ref` it resolves to (that mapping lives entirely in the
+ * caller-supplied `bindPath` function). A read capability is therefore only ever issued for a ref the host
+ * itself chose to associate with that data-model path — an ingested surface cannot mint itself read access
+ * to an arbitrary kohaku query this way.
+ *
+ * Returns `undefined` (not a `JsonValue`) when `value` is not a `{path}` binding, or `bindPath` is absent or
+ * declines to resolve it — the caller then falls through to the ordinary `resolveValue` handling for
+ * `"data"` (snapshot to a literal `props.data`, same as any other prop), never silently dropping the field.
+ */
+function convertDataBinding(value: A2uiValue, ctx: ConvertCtx): { $ref: string } | undefined {
+  if (!isBindingValue(value)) return undefined;
+  return ctx.bindPath?.(value.path);
 }
 
 function resolveTextValue(
@@ -360,6 +391,7 @@ function convertOne(rawId: string, node: A2uiComponent, ctx: ConvertCtx): Compon
         );
       }
       const props: JsonObject = {};
+      let data: ComponentNode["data"];
       for (const [key, value] of Object.entries(node)) {
         if (
           key === "id" ||
@@ -371,9 +403,22 @@ function convertOne(rawId: string, node: A2uiComponent, ctx: ConvertCtx): Compon
         ) {
           continue;
         }
+        // A prop literally named "data" bound to a {path} is this node's data *source* (kohaku's own
+        // outbound convention for the same concept — see convertDataBinding's doc), not an ordinary display
+        // prop: when ctx.bindPath resolves it to a $ref, it becomes the structural ComponentNode.data field
+        // instead of an inert props.data value. Anything else about "data" (not a binding, or bindPath
+        // unavailable/declining it) falls through to the exact same handling every other prop gets.
+        if (key === "data") {
+          const bound = convertDataBinding(value as A2uiValue, ctx);
+          if (bound != null) {
+            data = bound;
+            continue;
+          }
+        }
         props[key] = resolveValue(value as A2uiValue, ctx, id, key);
       }
       const result: ComponentNode = { id, type: node.component, props };
+      if (data != null) result.data = data;
       if (children.kind === "array") result.children = children.ids;
       attachEvent(result, node, ctx);
       return result;

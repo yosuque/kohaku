@@ -38,6 +38,17 @@ an LLM**. `action.event` on any component becomes a real, interactive kohaku `Ev
 "action.invoke"`); `toA2uiClientAction(guiAction)` routes a resulting interaction back to the original
 agent.
 
+A recognized catalog component's own `"data"` prop, when it is a `{path}` binding, is that component's
+**data source**. Pass `opts.bindPath(path)` to make it a live `ComponentNode.data.$ref` (reference-passing,
+resolved by `collectCapabilityScopes`/renderer-core exactly like any other component's data) instead of a
+one-time literal snapshot — wire it when you know which A2UI data-model paths correspond to a kohaku query
+you can re-resolve. `bindPath` is consulted *only* for that one `"data"` prop: an ordinary display prop or an
+event's `context` has no structural home for a live reference at all, so a `{path}` binding anywhere else is
+always a literal snapshot (a recorded `"binding-snapshotted"` loss), never passed to `bindPath`. Since
+`bindPath` is your own hook and never the agent's, a read capability is only ever issued for a ref you
+yourself associated with that data-model path — an ingested surface cannot mint itself access to an
+arbitrary query this way.
+
 `opts.trust` defaults to `"untrusted"`, which treats the surface as genuinely third-party: any supplied
 `sidecar` (see below) is ignored entirely, and every synthesized event's payload is the fixed envelope
 `{action: A2UI_FORWARD_ACTION, event, context}` — never the agent's raw `context` directly. This matters
