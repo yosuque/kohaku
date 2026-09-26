@@ -95,6 +95,15 @@ export interface AppDeps {
    * whichever Node entry point has an env to read (index.ts) so this file never references `process` at all.
    */
   otel?: boolean;
+  /**
+   * Verbose error logging on the failure path: the compose observer's console output
+   * (`app/compose-context.ts`) and host-rest's own `onError` hook (`app/host-deps.ts`) both print the full
+   * cause chain (`@kohaku-ui/host-core`'s `formatErrorChain`) and the stack trace instead of a one-line
+   * summary when this is true. Default false. A concurrent branch (T0-2) originally read
+   * `process.env.KOHAKU_DEBUG` directly in both of those files; merged in as a plain parameter instead, for
+   * the same reason `otel` is one — this file must stay env-neutral, and only index.ts has an env to read.
+   */
+  debug?: boolean;
 }
 
 export interface SampleApp {
@@ -165,6 +174,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     llm: deps.llm,
     l2Smoke: deps.l2Smoke,
     otel: deps.otel ?? false,
+    debug: deps.debug ?? false,
   });
 
   // --- Lineage / promotion / fixation ---------------------------------------
@@ -210,6 +220,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     promotions,
     fixations,
     identity,
+    debug: deps.debug ?? false,
   });
 
   const app = new Hono();

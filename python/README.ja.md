@@ -148,7 +148,7 @@ id を導出すると 1 会話内の全ツール呼び出しが同じ id に潰�
 
 Python サンプル(`examples/sales-api`)はシード JSON をリポジトリルートの `apps/sample-api/src/domain/seed` から直読みする(データ二重管理を避けるため)。したがって `python/` サブツリー単独ではなく**フル monorepo チェックアウト**が前提。
 
-**`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。
+**`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。任意の forward-paging 拡張 `page_lineage`(design.md #53)も実装しており、呼び出し側では `put_promotion_states` が使う「`isinstance` と `runtime_checkable` Protocol」の仕組みではなく、単純な `hasattr(storage, "page_lineage")` プローブで確認する — 理由は `kohaku.spec.ports.StoragePort` の `page_lineage` に付けたコメントを参照。
 
 ## クロス言語互換の守り方
 
@@ -164,6 +164,11 @@ Python サンプル(`examples/sales-api`)はシード JSON をリポジトリル
   実装は `kohaku/src/kohaku/spec/canonical_json.py`。
 - **conformance**: CI の `conformance-python` ジョブが Python ホストを起動して
   TS 側 CLI の黒箱検査を実行する。
+- **lineage forward-paging カーソル**(design.md #53): `kohaku.spec.lineage_page` の
+  `encode_seq_cursor` / `decode_seq_cursor` は、TS の
+  `packages/spec-core/src/lineage-page.ts` と同じ不透明な `{"v":1,"seq":<n>}` base64url
+  文字列を生成・受理するため、一方の言語のホストが発行した cursor はもう一方の `cursor` として
+  そのまま使える。
 
 ## 蒸留データセットの書き出し
 
@@ -281,6 +286,31 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
   意味に一致)。これは呼び出し側からは見えない差異で、ガード内部の `remaining_ms` の計算方法にのみ影響する。
 - タイマーの後始末(`_run_tier_generation` の `finally` で dispose)は TS の `runTierGeneration` と一致。
 
+## 詳細な失敗ログ(`KOHAKU_DEBUG`、TS と対称)
+
+`kohaku.host_core.format_error_chain`(Python の例外連鎖属性 `__cause__` を辿る。TS の ES2022
+`Error.cause` に相当。循環に対して深さの上限を持つ)と `create_console_error_reporter`(
+`KohakuHostDeps.on_error` の型そのもの、および `ComposeObserver.onError` の型そのものに配線済みの
+ハンドラ 2 つを返す)は、TS host-core の `formatErrorChain` / `createConsoleErrorReporter` の移植。
+`python/examples/sales-api` の `app.py` 自身が `KOHAKU_DEBUG` を読む(これらの関数自体は環境変数を一切
+読まない): 未設定(既定)なら既存の 1 行の `logging` モジュールによる要約のまま変わらず、
+`KOHAKU_DEBUG=1` にすると compose observer の `onError` と REST ホストの `on_error` の両方で、原因の
+連鎖(実際の例外なら `exc_info=` によるトレースバックも)を追加で出力する。
+
+同じく TS と対称: `composer` の L1 段階ラダー(`compose.py` の `_settle_l1_failure`)は、transient な
+LLM 失敗(provider が一度も応答しなかった。`code="PROVIDER"`/`"CONFIG"` の `LlmError`、または想定外の
+非 `LlmError`)に、provider 名を含む専用の fallback 理由を返すようになった —「L1 constrained generation
+failed catalog/structure validation」という文言とは別物にし、この文言は実際の検証失敗のためだけに
+残す。新しい `ComposeErrorContext.failure` と `L1Result`/`L2Result.last_error` により、
+`ComposeObserver.onError` は分類された失敗種別と根本の例外(フォールバックでは以前は常に `None`
+だった)を受け取れる。`_resolve_refs` の `SEMANTIC_FAILED` の包み方も同様に、原因が明示的に
+`clientSafe = True`(`_is_client_safe_cause`)を名乗っている場合だけ `resolve_query` の失敗自身の
+メッセージを追記するようになった — これは「文字列の `code` 属性を持つ例外なら何でも」という
+`kohaku.host_core.is_typed_host_error` のより広い規約より意図的に狭い。`SemanticPort` はよく
+データベース/ファイルシステム/HTTP クライアントに処理を委譲しており、それらの例外も `code` 相当の
+属性を持つことがある一方で、そのメッセージにはホスト名・パス・テーブル名などが含まれ得るため。
+`clientSafe = True` を持たない原因はこれまでどおり(内部情報を漏らさないため何も追記しない)。
+
 ## TS 実装との既知の差異(意図的・恒久)
 
 - **JS 検証は Node サイドカーへ委譲(スタンドアロン時のみスキップ)**: L2 契約 lint の
@@ -326,6 +356,12 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
   `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`semantic-llm`、
   `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
+  (ただし `semantic-llm` 自体の `validateIntent` 挙動はこのギャップに取り残されていない:
+  同パッケージには Python 移植先が無いため、そのロジックは `examples/sales-api` の
+  `semantic_port.py` / `intents_catalog.py` に直接存在し、このサンプルは TS の
+  `createLlmSemanticPort` と同じ `validate_intent` / `IntentCatalog.validate_params` を
+  実装している — `kohaku.spec.ports.SupportsValidateIntent` と
+  `kohaku.host_core.intent.resolve_intent` を参照。)
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch

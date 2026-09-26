@@ -1,4 +1,5 @@
-import type { Surface } from "@kohaku-ui/spec-core";
+import type { LineageFilter, LineagePageRequest, Surface } from "@kohaku-ui/spec-core";
+import { LineageCursorError } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import { TelemetryBodySchema } from "./schemas.js";
@@ -37,15 +38,62 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
     // /fixations). Use the server-resolved tenant rather than the client-declared (query) one (impersonation
     // prevention). If unset, return all (legacy behavior).
     const tenant = await resolveTenant(c, deps);
-    const events = await deps.compose.storage.listLineage({
+    // Shared by both the default (tail-window) and order=asc (forward-paging) reads below; design.md #53.
+    const filter: Omit<LineageFilter, "limit"> = {
       ...(types.length > 0 ? { type: types } : {}),
       ...(c.req.query("intentHash") != null ? { intentHash: c.req.query("intentHash")! } : {}),
       ...(c.req.query("artifactId") != null ? { artifactId: c.req.query("artifactId")! } : {}),
       ...(c.req.query("specHash") != null ? { specHash: c.req.query("specHash")! } : {}),
+      ...(c.req.query("correlationId") != null ? { correlationId: c.req.query("correlationId")! } : {}),
       ...(since != null ? { since } : {}),
       ...(until != null ? { until } : {}),
-      ...(limit != null ? { limit } : {}),
       ...(tenant != null ? { tenant } : {}),
+    };
+
+    const order = c.req.query("order");
+    if (order != null) {
+      // order=asc (design.md #53): forward, append-order paging via StoragePort.pageLineage instead of the
+      // default tail window below. Any other order value is a client error (only "asc" is defined); leaving
+      // `order` unset entirely keeps the pre-existing response shape and behavior unchanged.
+      if (order !== "asc") {
+        return c.json(errorBody("BAD_REQUEST", 'order must be "asc"'), 400);
+      }
+      if (deps.compose.storage.pageLineage == null) {
+        return c.json(
+          errorBody("NOT_IMPLEMENTED", "forward paging (order=asc) is not supported by this storage backend"),
+          501,
+        );
+      }
+      const pageSize = parseLimit(c.req.query("pageSize"), 1000);
+      const cursor = c.req.query("cursor");
+      const pageReq: LineagePageRequest = {
+        ...filter,
+        ...(cursor != null ? { cursor } : {}),
+        ...(pageSize != null ? { pageSize } : {}),
+      };
+      try {
+        const page = await deps.compose.storage.pageLineage(pageReq);
+        return c.json(page);
+      } catch (e) {
+        if (e instanceof LineageCursorError) {
+          return c.json(errorBody("BAD_REQUEST", "cursor is invalid"), 400);
+        }
+        const requestId = requestIdOf(c, deps);
+        await reportHostError(deps, "lineage", requestId, e);
+        return c.json(
+          errorBody(
+            "INTERNAL",
+            "lineage paging failed; see the observability hook (onError) for details",
+            requestId,
+          ),
+          500,
+        );
+      }
+    }
+
+    const events = await deps.compose.storage.listLineage({
+      ...filter,
+      ...(limit != null ? { limit } : {}),
     });
     return c.json({ events });
   });

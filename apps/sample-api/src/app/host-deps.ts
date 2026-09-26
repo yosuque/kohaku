@@ -1,4 +1,5 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
+import { formatErrorChain } from "@kohaku-ui/host-core";
 import { createGovernancePolicy, type KohakuHostDeps } from "@kohaku-ui/host-rest";
 import {
   createViewRecorder,
@@ -26,8 +27,22 @@ export function createHostDeps(args: {
   promotions: Promotions;
   fixations: Fixations;
   identity: RequestIdentity;
+  /** Verbose `onError` logging (the full cause chain + stack trace) below. Default false. Passed in rather
+   * than read from `process.env.KOHAKU_DEBUG` directly (a concurrent branch, T0-2, originally did that
+   * here) — see `app-core.ts`'s `AppDeps.debug` doc comment for why this file must stay env-neutral. */
+  debug?: boolean;
 }): KohakuHostDeps {
-  const { composeCtx, domain, authz, storage, lineage, promotions, fixations, identity } = args;
+  const {
+    composeCtx,
+    domain,
+    authz,
+    storage,
+    lineage,
+    promotions,
+    fixations,
+    identity,
+    debug = false,
+  } = args;
   return {
     compose: composeCtx,
     domain,
@@ -66,7 +81,17 @@ export function createHostDeps(args: {
     // Observability hook for the failure path (the demo is console-based). When wired, a requestId is issued that
     // matches error.requestId in the error response, letting you correlate logs with the client's error.
     // Failures that are "swallowed while the response stays successful", such as a recorder (lineage recording) failure, also reach here.
+    // debug (AppDeps.debug, KOHAKU_DEBUG=1 at the process entry point) prints the full cause chain
+    // (host-core's formatErrorChain) plus the stack trace instead of the one-line summary below — see
+    // docs/user-guide.md's troubleshooting section.
     onError: ({ endpoint, requestId, error }) => {
+      if (debug) {
+        console.error(
+          `[host-rest] A failure occurred in ${endpoint} (requestId=${requestId}): ${formatErrorChain(error)}`,
+        );
+        if (error instanceof Error && error.stack != null) console.error(error.stack);
+        return;
+      }
       console.error(`[host-rest] A failure occurred in ${endpoint} (requestId=${requestId}):`, error);
     },
     // The fixation short-circuit looks up the given tenant's fixation by session.tenant. Delivery gating

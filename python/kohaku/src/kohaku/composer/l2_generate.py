@@ -43,6 +43,11 @@ class L2Result:
     """"aborted" (the caller's AbortSignal fired, LlmError code ABORTED) is distinguished from "transient" so
     the resulting fallback Spec is marked cancelled rather than treated as a generation failure."""
     budgetReason: str | None = None
+    last_error: BaseException | None = None
+    """The exception behind the *last* attempt that actually raised (typically an LlmError). Mirrors
+    L1Result.last_error — see its doc for the full rationale, including why it is cleared rather than kept
+    when a later attempt's failure comes from the bridge-contract lint rejecting a response instead of a
+    raised error. Port of TS composer's TierResult.lastError (tiers/shared.ts)."""
 
 
 async def generate_l2(
@@ -89,6 +94,10 @@ async def generate_l2(
     # already carries its own budgetReason on that early-return path — this variable is for the OTHER route
     # into failure="budget": an in-flight call aborted by the deadline timer rather than skipped before it started).
     budget_reason: str | None = None
+    # The exception behind the most recent attempt that actually raised (see L2Result.last_error's doc). Set
+    # at the top of the except block below and cleared when a later attempt's failure instead comes from the
+    # bridge-contract lint rejecting a response that was returned without raising.
+    last_error: BaseException | None = None
     # ComposeContext.llmByTier resolution (additive; resolves to ctx.llm when unset — see resolve_tier_llm's doc).
     llm = resolve_tier_llm(ctx, "L2")
     effort = ctx.policy.effort.l2 if ctx.policy is not None and ctx.policy.effort is not None else None
@@ -160,6 +169,7 @@ async def generate_l2(
             )
             html = extract_html_document(result.text)
         except Exception as e:  # noqa: BLE001 — LLM-call failures branch by kind
+            last_error = e
             attempts.append(ComposeAttempt(kind="l2", ok=False, issues=[str(e)]))
             if isinstance(e, LlmError) and e.code == "ABORTED":
                 # deadline_signal fires only from budget.py's create_deadline_guard, never from the caller's
@@ -227,9 +237,14 @@ async def generate_l2(
                 },
             ]
             return L2Result(ok=True, components=components, events=[], model=model, attempts=attempts)
-        # A bridge-contract lint failure is a repair target. Send the issues back as feedback to the next attempt.
+        # A bridge-contract lint failure is a repair target. Send the issues back as feedback to the next
+        # attempt. This attempt returned a response (no raise), so clear last_error rather than leaving an
+        # earlier attempt's raised error attached to a failure it did not actually cause.
         failure = "invalid"
+        last_error = None
         attempts[-1] = ComposeAttempt(kind="l2", ok=False, issues=issues, usage=attempts[-1].usage)
         feedback = issues
 
-    return L2Result(ok=False, attempts=attempts, failure=failure, model=model, budgetReason=budget_reason)
+    return L2Result(
+        ok=False, attempts=attempts, failure=failure, model=model, budgetReason=budget_reason, last_error=last_error
+    )

@@ -263,6 +263,17 @@ export interface ComposeErrorContext {
    */
   budgetExceeded?: boolean;
   /**
+   * The classified failure kind behind a "fallback"/"cancelled" phase, mirrored from the settling
+   * TierResult.failure. Unset on "hard"/"cache", and on the one fallback with no underlying TierResult at
+   * all and no failure kind to report ("L2 (free-form generation) is disabled in this environment"). The L2
+   * pre-generation budget skip likewise has no underlying TierResult, but is still explicitly given
+   * `failure: "budget"` by its caller — see TierOutcome's fallback branch (tier-ladder.ts) for the full
+   * accounting. Wire-independent — not part of `provenance.fallback.reason`, which stays a free-text string
+   * — an additive field so an observer can machine-distinguish a transient LLM-provider outage ("transient")
+   * from a catalog/structural validation failure ("invalid") without string-matching `reason`.
+   */
+  failure?: "transient" | "invalid" | "budget" | "aborted";
+  /**
    * The caller-supplied correlation id (ComposeOptions.correlationId), threaded through unchanged so a
    * degradation reported here can be tied back to the triggering request (e.g. host-rest's X-Request-Id /
    * error.requestId, or an MCP tool call's JSON-RPC request id). Unset when the caller passed none — a

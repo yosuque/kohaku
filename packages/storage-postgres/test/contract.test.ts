@@ -38,6 +38,6 @@ describe.skipIf(backend.mode === "skip")("storage-postgres contract", () => {
         },
       };
     },
-    { clock: "real" },
+    { clock: "real", requirePaging: true },
   );
 });

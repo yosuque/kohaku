@@ -53,6 +53,27 @@ export async function runRestSuite(target: RestTarget): Promise<ConformanceResul
     }),
   );
 
+  // REST-INT-002 (SHOULD): a directly-specified Intent (kind: "intent") with an unknown canonical is
+  // rejected with 422 INTENT_INVALID, rather than being finalized unchecked (SPEC §6.1's "Intent validation
+  // for directly-specified Intents"). Only meaningful when the host's SemanticPort implements
+  // validateIntent; a host that does not is expected to fail this SHOULD (reported as a warning, never as a
+  // blocker for CONFORMANT).
+  results.push(
+    await tryCheck("REST-INT-002", async () => {
+      // CanonicalNameSchema requires each dot-separated segment to start with a lowercase letter, so this
+      // probe name is itself well-formed -- only unknown to any real catalog.
+      const res = await post("/compose", {
+        intent: { canonical: "kohaku_conformance_unknown_intent", params: {} },
+      });
+      if (res.status !== 422) return `an unknown canonical returned status ${res.status} (should be 422)`;
+      const json = (await res.json().catch(() => null)) as { error?: { code?: unknown } } | null;
+      return (
+        json?.error?.code === "INTENT_INVALID" ||
+        `error.code is ${String(json?.error?.code)} (should be INTENT_INVALID)`
+      );
+    }),
+  );
+
   // REST-CMP-001 / 002
   let spec: UISpec | null = null;
   let capability = "";

@@ -41,14 +41,26 @@ export type IntentSource =
  * Locale precedence for "nl": `source.locale` (mirroring NLQuery.locale) is forwarded to semantic.normalize
  * alongside `session.locale`; per-input locale winning over the session's is the SemanticPort
  * implementation's own concern (see apps/sample-api/src/ports/semantic-port.ts), not this helper's.
+ *
+ * "intent" validation: unlike "nl" / "gui", a directly-specified Intent never passes through
+ * `semantic.normalize`, so when `semantic.validateIntent` is implemented it is called here before
+ * `finalizeIntent` (rejecting an unknown canonical or invalid params before a fresh intentHash is ever
+ * minted for them — see SemanticPort.validateIntent's doc comment in spec-core). A `semantic` without it
+ * keeps the historical behavior of finalizing `source.intent` unchecked (backward compatible). Note this
+ * only covers callers that route a directly-specified Intent through this helper (host-rest's /compose,
+ * /events' `current`, and /fixations/approve; host-mcp-apps' compose-family tools and `${prefix}_event`'s
+ * `current`) — a product calling `compose()` directly with a `{kind: "intent"}` ComposeInput bypasses this
+ * helper entirely and is therefore unvalidated by design (see docs/design.md).
  */
 export async function resolveIntent(
-  semantic: Pick<SemanticPort, "normalize">,
+  semantic: Pick<SemanticPort, "normalize" | "validateIntent">,
   source: IntentSource,
   session: SessionContext,
 ): Promise<{ intent: CanonicalIntent; current?: CanonicalIntent }> {
   if (source.kind === "intent") {
-    return { intent: await finalizeIntent(source.intent) };
+    const validated =
+      semantic.validateIntent != null ? await semantic.validateIntent(source.intent, session) : source.intent;
+    return { intent: await finalizeIntent(validated) };
   }
   if (source.kind === "nl") {
     const normalized = await semantic.normalize(

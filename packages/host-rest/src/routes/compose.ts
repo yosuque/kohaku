@@ -3,7 +3,6 @@ import * as hostCore from "@kohaku-ui/host-core";
 import {
   type CanonicalIntent,
   computeSpecHash,
-  finalizeIntent,
   type Principal,
   type SemanticInput,
   type SessionContext,
@@ -117,16 +116,20 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
     const principal = await getPrincipal(c);
     const session = toSession(body.session, principal, await resolveTenant(c, deps));
 
-    // Intent normalization (finalizeIntent / semantic.normalize) failures are client-caused (unknown action, etc.).
-    // Symmetrically with /compose, map them to 422 INTENT_INVALID and separate them from internal-error
-    // (recomposition) 500 COMPOSE_FAILED.
+    // Intent resolution (resolveIntent's "intent" / "gui" sources, covering validateIntent + semantic.normalize)
+    // failures are client-caused (unknown intent/action, invalid params, etc.). Symmetrically with /compose,
+    // map them to 422 INTENT_INVALID and separate them from internal-error (recomposition) 500 COMPOSE_FAILED.
     let current: CanonicalIntent;
     let intent: CanonicalIntent;
     try {
-      current = await finalizeIntent({
-        canonical: body.intent.canonical,
-        params: body.intent.params,
-      });
+      // Resolved through host-core's resolveIntent (the "intent" source), not a bare finalizeIntent, so a
+      // SemanticPort.validateIntent implementation gets a chance to reject an unknown canonical or invalid
+      // params in `current` too — the same closed gap as body.intent on /compose.
+      ({ intent: current } = await hostCore.resolveIntent(
+        deps.compose.semantic,
+        { kind: "intent", intent: { canonical: body.intent.canonical, params: body.intent.params } },
+        session,
+      ));
       // Intent resolution (host-core's resolveIntent, shared with the MCP profile's compose-tool nl/intent branch).
       ({ intent } = await hostCore.resolveIntent(
         deps.compose.semantic,

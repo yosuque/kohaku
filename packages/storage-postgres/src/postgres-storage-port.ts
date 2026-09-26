@@ -1,6 +1,10 @@
 import {
+  DEFAULT_LINEAGE_PAGE_SIZE,
+  decodeSeqCursor,
+  encodeSeqCursor,
   type FixationRecord,
   type LineageEventRecord,
+  MAX_LINEAGE_PAGE_SIZE,
   normalizeTenant,
   type PromotionState,
   type StoragePort,
@@ -75,8 +79,8 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       // `ON CONFLICT (id) DO NOTHING`: appending an event whose `id` was already recorded is a no-op
       // (the contract's idempotent-append case), not a duplicate row or a thrown unique-violation.
       await pool.query(
-        `INSERT INTO ${tables.lineage} (id, ts, tenant, type, intent_hash, artifact_id, spec_hash, record)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO ${tables.lineage} (id, ts, tenant, type, intent_hash, artifact_id, spec_hash, correlation_id, record)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (id) DO NOTHING`,
         [
           event.id,
@@ -86,6 +90,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
           str("intentHash"),
           str("artifactId"),
           str("specHash"),
+          str("correlationId"),
           JSON.stringify(event),
         ],
       );
@@ -108,6 +113,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       if (filter.intentHash != null) add("intent_hash = ?", filter.intentHash);
       if (filter.artifactId != null) add("artifact_id = ?", filter.artifactId);
       if (filter.specHash != null) add("spec_hash = ?", filter.specHash);
+      if (filter.correlationId != null) add("correlation_id = ?", filter.correlationId);
       if (filter.since != null) add("ts >= ?", filter.since);
       if (filter.until != null) add("ts <= ?", filter.until);
       params.push(limit);
@@ -116,6 +122,45 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       const { rows } = await pool.query<{ record: string }>(sql, params);
       // Newest-first from the query; the contract returns append order, so reverse.
       return rows.map((r) => JSON.parse(r.record) as LineageEventRecord).reverse();
+    },
+    async pageLineage(req) {
+      await ready();
+      const pageSize = Math.max(
+        1,
+        Math.min(req.pageSize ?? DEFAULT_LINEAGE_PAGE_SIZE, MAX_LINEAGE_PAGE_SIZE),
+      );
+      // Malformed cursor throws before issuing any query (same contract as pageLineageArray / readLineagePage).
+      const afterSeq = req.cursor != null ? decodeSeqCursor(req.cursor) : 0;
+      const where: string[] = [];
+      const params: unknown[] = [];
+      const add = (clause: string, value: unknown) => {
+        params.push(value);
+        where.push(clause.replace("?", `$${params.length}`));
+      };
+      add("seq > ?", afterSeq);
+      if (req.type != null) add("type = ANY(?::text[])", req.type);
+      const filterTenant = normalizeTenant(req.tenant);
+      if (filterTenant != null) add("tenant = ?", filterTenant);
+      if (req.intentHash != null) add("intent_hash = ?", req.intentHash);
+      if (req.artifactId != null) add("artifact_id = ?", req.artifactId);
+      if (req.specHash != null) add("spec_hash = ?", req.specHash);
+      if (req.correlationId != null) add("correlation_id = ?", req.correlationId);
+      if (req.since != null) add("ts >= ?", req.since);
+      if (req.until != null) add("ts <= ?", req.until);
+      // Read one past pageSize to detect whether a further page exists, mirroring pageLineageArray /
+      // readLineagePage's "peek one match ahead" strategy.
+      params.push(pageSize + 1);
+      const sql = `SELECT seq, record FROM ${tables.lineage} WHERE ${where.join(" AND ")} ORDER BY seq ASC LIMIT $${params.length}`;
+      const { rows } = await pool.query<{ seq: string; record: string }>(sql, params);
+      const hasMore = rows.length > pageSize;
+      const page = hasMore ? rows.slice(0, pageSize) : rows;
+      const events = page.map((r) => JSON.parse(r.record) as LineageEventRecord);
+      if (!hasMore) return { events };
+      // `seq` is a bigint (bigserial) -- pg returns it as a string; Number() is safe here because a
+      // lineage log reaching Number.MAX_SAFE_INTEGER rows is not a realistic operating condition for
+      // this reference adapter, matching the assumption every other adapter's seq already makes.
+      const lastSeq = Number(page[page.length - 1]!.seq);
+      return { events, nextCursor: encodeSeqCursor(lastSeq) };
     },
     async getPromotionState(artifactId, tenant) {
       await ready();

@@ -75,11 +75,13 @@ async function main(): Promise<void> {
     llm,
     storage: ports.storage,
     authz: ports.authz,
-    // Pre-delivery L2 smoke validation (jsdom / node:vm) and the OTel wrap: both are Node/env-specific
-    // concerns app.ts no longer decides on its own (see AppDeps.l2Smoke / AppDeps.otel's doc comments) —
-    // this is the one place that still reads process.env and constructs the real jsdom-backed checker.
+    // Pre-delivery L2 smoke validation (jsdom / node:vm), the OTel wrap, and verbose (KOHAKU_DEBUG) error
+    // logging: all three are Node/env-specific concerns app.ts no longer decides on its own (see
+    // AppDeps.l2Smoke / AppDeps.otel / AppDeps.debug's doc comments) — this is the one place that still
+    // reads process.env and constructs the real jsdom-backed checker.
     l2Smoke: createL2Smoke(),
     otel: process.env["KOHAKU_OTEL"] === "1",
+    debug: process.env["KOHAKU_DEBUG"] === "1",
     ...(ports.identity != null ? { identity: createJwtRequestIdentity(ports.identity) } : {}),
     // The demo bump-data-version route is on by default for the header-based demo identity (ports.identity
     // == null, i.e. KOHAKU_AUTHZ=hmac) and off by default under JWT; KOHAKU_DEMO_ADMIN_ROUTES=1 opts back in

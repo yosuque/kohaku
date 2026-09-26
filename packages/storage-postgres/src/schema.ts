@@ -65,11 +65,17 @@ CREATE TABLE IF NOT EXISTS ${t("kohaku_lineage")} (
   record text NOT NULL,
   UNIQUE (id)
 );
+-- Added for correlationId filtering (design.md #53) after the table already existed in deployed
+-- databases; ADD COLUMN IF NOT EXISTS keeps this script idempotent without bumping
+-- POSTGRES_SCHEMA_VERSION. A row written before this migration has correlation_id NULL and can never
+-- match a correlationId filter (there is nothing to backfill it from).
+ALTER TABLE ${t("kohaku_lineage")} ADD COLUMN IF NOT EXISTS correlation_id text NULL;
 CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_type_idx ON ${t("kohaku_lineage")} (type, seq);
 CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_tenant_idx ON ${t("kohaku_lineage")} (tenant, seq);
 CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_intent_hash_idx ON ${t("kohaku_lineage")} (intent_hash, seq);
 CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_artifact_id_idx ON ${t("kohaku_lineage")} (artifact_id, seq);
 CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_spec_hash_idx ON ${t("kohaku_lineage")} (spec_hash, seq);
+CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_correlation_id_idx ON ${t("kohaku_lineage")} (correlation_id, seq);
 CREATE INDEX IF NOT EXISTS ${ix}_kohaku_lineage_ts_idx ON ${t("kohaku_lineage")} (ts);
 CREATE TABLE IF NOT EXISTS ${t("kohaku_promotion_state")} (
   tenant text NOT NULL DEFAULT '',

@@ -28,6 +28,34 @@ class SpecError(Exception):
         self.issues: list[SpecIssue] = issues if issues is not None else []
 
 
+@dataclass(frozen=True)
+class IntentValidationIssue:
+    """One reason a directly-specified Intent (`kind: "intent"`) failed `SupportsValidateIntent.validate_intent`
+    (kohaku.spec.ports; port of TS spec-core's IntentValidationIssue)."""
+
+    path: str
+    """Dot-separated path into `params` (empty string for a whole-Intent problem, e.g. an unknown canonical)."""
+    message: str
+    """Client-safe explanation. May name the Intent / param, but must never include a stack trace or raw
+    internal values."""
+
+
+class IntentValidationError(Exception):
+    """Raised by `SupportsValidateIntent.validate_intent` (kohaku.spec.ports) when a directly-specified Intent
+    fails validation: an unknown canonical, an unknown param key, or a param value that fails the Intent's own
+    schema. `code` reuses the existing `HostErrorCode` "INTENT_INVALID" (SPEC §6.1) rather than minting a new
+    one, so host_rest / host_mcp map it the same way they already map other 422s (and, by carrying a string
+    `code` attribute, it is automatically a "typed" host error per host_core's `is_typed_host_error` -- its own
+    `message` passes through to the client instead of a fixed fallback string). `message` and every issue's
+    `message` must be safe to show a client as-is. Port of TS spec-core's IntentValidationError (errors.ts).
+    """
+
+    def __init__(self, message: str, issues: list[IntentValidationIssue] | None = None) -> None:
+        super().__init__(message)
+        self.code: Literal["INTENT_INVALID"] = "INTENT_INVALID"
+        self.issues: list[IntentValidationIssue] = issues if issues is not None else []
+
+
 # Wire contract of the REST profile's (SPEC §6.1) error envelope.
 # Error codes are part of the "protocol", not the "server implementation", and are shared by host and client.
 type HostErrorCode = Literal[

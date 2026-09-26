@@ -78,9 +78,23 @@ async def resolve_intent(
 
     Takes `session` as given — it does not construct or unify SessionContext. The REST and MCP profiles build
     theirs differently (e.g. whether a principal is attached), and this helper must not paper over that.
+
+    "intent" validation: unlike "nl" / "gui", a directly-specified Intent never passes through
+    `semantic.normalize`, so when `semantic` has a `validate_intent` method (kohaku.spec.ports'
+    `SupportsValidateIntent` -- a genuinely optional `SemanticPort` extension, checked here via `getattr`
+    rather than `isinstance` since `typing.Protocol` cannot express an optional member; see that Protocol's
+    doc comment) it is called before `finalize_intent` (rejecting an unknown canonical or invalid params
+    before a fresh intentHash is ever minted for them). A `semantic` without it keeps the historical behavior
+    of finalizing `source.intent` unchecked (backward compatible). Note this only covers callers that route a
+    directly-specified Intent through this helper (host_rest's /compose, /events' `current`, and
+    /fixations/approve; host_mcp's compose-family tools and `kohaku_event`'s `current`) -- a product calling
+    `compose()` directly with a `{kind: "intent"}` ComposeInput bypasses this helper entirely and is therefore
+    unvalidated by design (see docs/design.md).
     """
     if isinstance(source, IntentSourceIntent):
-        return ResolvedIntent(intent=finalize_intent(source.intent))
+        validate_intent = getattr(semantic, "validate_intent", None)
+        validated = source.intent if validate_intent is None else await validate_intent(source.intent, session)
+        return ResolvedIntent(intent=finalize_intent(validated))
     if isinstance(source, IntentSourceNl):
         normalized = await semantic.normalize(
             NLQuery(kind="nl", text=source.text, locale=source.locale), session

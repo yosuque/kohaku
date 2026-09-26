@@ -5,14 +5,16 @@
  * **This script has never been run.** Recording with a real LLM was deliberately postponed by the user on
  * 2026-09-27 (see `reports/u5-3.md`) — writing it was in scope for u5-3, running it was not. Treat it as
  * reviewed-but-unverified: the API calls it makes (compose, then, for a `promotion` scenario, list + approve)
- * are believed correct from reading `packages/host-rest/src/routes/{compose,promotions}.ts`, but nothing has
- * actually exercised this file end to end. Re-check it against those routes before the first real run.
+ * are believed correct from reading `packages/host-rest/src/routes/compose.ts` and
+ * `packages/host-rest/src/routes/promotions.ts`, but nothing has actually exercised this file end to end.
+ * Re-check it against those routes before the first real run.
  *
  * Usage (once actually run): pick any LlmPort @kohaku-ui/llm's `createLlmFromEnv()` can build, e.g.
  *   KOHAKU_LLM_PROVIDER=ollama KOHAKU_LLM_MODEL=gemma4:e4b pnpm --filter @kohaku-ui-sample/playground run record-fixtures
  * Re-run it (for every affected scenario id, not just the changed one — see the module doc below on why)
- * whenever a prompt that could affect one of these scenarios changes: `apps/sample-api/src/{design-system,fewshot}.ts`,
- * `intents/{catalog,fixed-specs}.ts`, `ports/semantic-port.ts`, or `@kohaku-ui/composer`'s own prompt-building.
+ * whenever a prompt that could affect one of these scenarios changes: `apps/sample-api/src/design-system.ts`,
+ * `apps/sample-api/src/fewshot.ts`, `intents/{catalog,fixed-specs}.ts`, `ports/semantic-port.ts`, or
+ * `@kohaku-ui/composer`'s own prompt-building.
  */
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

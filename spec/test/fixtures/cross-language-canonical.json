@@ -336,6 +336,24 @@
       "key": "kohaku:0.2:sha256:aaa:v1:cat1"
     }
   ],
+  "lineageCursor": [
+    {
+      "seq": 0,
+      "cursor": "eyJ2IjoxLCJzZXEiOjB9"
+    },
+    {
+      "seq": 1,
+      "cursor": "eyJ2IjoxLCJzZXEiOjF9"
+    },
+    {
+      "seq": 42,
+      "cursor": "eyJ2IjoxLCJzZXEiOjQyfQ"
+    },
+    {
+      "seq": 1234567890123,
+      "cursor": "eyJ2IjoxLCJzZXEiOjEyMzQ1Njc4OTAxMjN9"
+    }
+  ],
   "sandboxDom": {
     "tags": [
       "article",

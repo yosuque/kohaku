@@ -5,6 +5,7 @@ import {
   composeObservers,
   defaultGeneratorVersion,
 } from "@kohaku-ui/composer";
+import { formatErrorChain } from "@kohaku-ui/host-core";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { createOtelComposeObserver } from "@kohaku-ui/otel";
 import type { FixationRecord, SemanticPort, SessionContext, StoragePort } from "@kohaku-ui/spec-core";
@@ -68,8 +69,12 @@ export function createComposeContext(args: {
   /** Wraps the console observer with `@kohaku-ui/otel`'s OTel observer. Default false. See app.ts's
    * `AppDeps.otel` doc comment for why this is a plain boolean rather than a `process.env` read. */
   otel?: boolean;
+  /** Verbose error-chain + stack trace logging on the observer's failure path (KOHAKU_DEBUG=1 at the
+   * process entry point). Default false. See app-core.ts's `AppDeps.debug` doc comment for why this is a
+   * plain boolean rather than a `process.env` read. */
+  debug?: boolean;
 }): ComposeContext {
-  const { registry, semantic, storage, llm, l2Smoke, otel = false } = args;
+  const { registry, semantic, storage, llm, l2Smoke, otel = false, debug = false } = args;
   const shared: Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget"> = {
     allowL2: true,
     // Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
@@ -137,7 +142,7 @@ export function createComposeContext(args: {
     // Observability of the compose failure path (the demo is console-based). Logs L1/L2 deterministic fallback
     // degradation (the Spec is delivered but generation failed) and hard failure (Spec not delivered). Because of the
     // fire-and-forget contract (the composer side catches the throw), it does not affect compose's result or existing behavior.
-    observer: composeObserver(otel),
+    observer: composeObserver(otel, debug),
   };
 }
 
@@ -148,12 +153,13 @@ export function createComposeContext(args: {
  * TracerProvider registered by the host process, createOtelComposeObserver's tracer is a no-op (spans are
  * created and discarded), which is a harmless, fully-supported configuration.
  *
- * `otelEnabled` used to be this function's own `process.env.KOHAKU_OTEL === "1"` read; it is now a plain
- * parameter (app.ts's `AppDeps.otel`, set from `process.env` only by index.ts, the actual Node entry point)
- * so this file never references `process` — index.ts still passes the exact same env-derived value, so
- * behavior for the REST server is unchanged.
+ * `otelEnabled` and `debug` used to be this function's own `process.env.KOHAKU_OTEL === "1"` /
+ * `process.env.KOHAKU_DEBUG === "1"` reads; they are now plain parameters (app-core.ts's `AppDeps.otel` /
+ * `AppDeps.debug`, set from `process.env` only by index.ts, the actual Node entry point) so this file never
+ * references `process` — index.ts still passes the exact same env-derived values, so behavior for the REST
+ * server is unchanged.
  */
-function composeObserver(otelEnabled: boolean): ComposeObserver {
+function composeObserver(otelEnabled: boolean, debug: boolean): ComposeObserver {
   const consoleObserver: ComposeObserver = {
     onError: (errCtx, error) => {
       const intentLabel = errCtx.intent != null ? `(intent=${errCtx.intent.canonical})` : "";
@@ -165,6 +171,15 @@ function composeObserver(otelEnabled: boolean): ComposeObserver {
         console.warn(
           `[compose] ${errCtx.tier ?? "?"} generation failed and was degraded to the deterministic fallback${intentLabel}${requestIdLabel}: ${errCtx.reason ?? "reason unknown"}`,
         );
+        // KOHAKU_DEBUG=1: also surface the underlying cause's chain when one was thrown (a transient
+        // provider outage, an aborted/budget-stopped generation) — still undefined for a plain
+        // catalog/structure validation failure, which has no exception to chain (see ComposeErrorContext.failure).
+        if (debug && error !== undefined) console.warn(`  ${formatErrorChain(error)}`);
+      } else if (debug) {
+        console.error(
+          `[compose] compose failed (Spec not delivered)${intentLabel}${requestIdLabel}: ${formatErrorChain(error)}`,
+        );
+        if (error instanceof Error && error.stack != null) console.error(error.stack);
       } else {
         console.error(`[compose] compose failed (Spec not delivered)${intentLabel}${requestIdLabel}:`, error);
       }

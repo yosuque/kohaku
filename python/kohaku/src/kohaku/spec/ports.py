@@ -134,6 +134,34 @@ class SemanticPort(Protocol):
         ...
 
 
+class SupportsValidateIntent(Protocol):
+    """Optional `SemanticPort` extension (port of TS spec-core's `SemanticPort.validateIntent?`). Validates and
+    normalizes a directly-specified Intent (the `kind: "intent"` path of `kohaku.host_core.intent.resolve_intent`).
+    Unlike `normalize`, which derives an Intent from NL/GUI input, this path lets a caller hand over an
+    already-structured Intent, which by construction never passes through `normalize` (or whatever Intent-catalog
+    lookup a `normalize` implementation may consult internally) -- so an unknown canonical or an invalid/unknown
+    param can otherwise reach `finalize_intent` unchecked, minting a fresh intentHash for a request that can
+    never resolve. Implementing this closes that gap: reject such a request by raising `IntentValidationError`
+    (`kohaku.spec.errors`; `message` and every issue's `message` must be safe to show a client, since REST/MCP
+    surface them as-is). On success, return the normalized IntentInput (e.g. with schema defaults filled in)
+    that the caller hashes and finalizes instead of the one it was given.
+
+    Deliberately **not** declared as a member of `SemanticPort` itself: unlike TS's real optional interface
+    field (`validateIntent?()`), `typing.Protocol` cannot express an optional method, and adding a required one
+    would force every existing `SemanticPort` implementation (including minimal test stubs) to grow it just to
+    keep type-checking. Callers instead check for it at the call site with
+    `getattr(semantic, "validate_intent", None)` (see `kohaku.host_core.intent.resolve_intent`) rather than
+    `isinstance` against this Protocol -- a plain presence probe is enough here (unlike
+    `SupportsBatchPromotionStates` above, whose narrower `isinstance` semantics matter because `StoragePort`
+    adapters are real production classes that might expose the batch method dynamically via a proxy; a
+    `SemanticPort` handed to `resolve_intent` in tests is commonly an ad hoc stub object, where the plain
+    `getattr` probe is the simpler and sufficient check). A `SemanticPort` that omits `validate_intent` keeps
+    the historical behavior of finalizing the caller-supplied Intent unchecked (backward compatible).
+    """
+
+    async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput: ...
+
+
 @dataclass(frozen=True)
 class Scope:
     """One scope of an on-behalf-of capability.
@@ -193,6 +221,11 @@ class LineageFilter:
     artifactId: str | None = None
     specHash: str | None = None
     intentHash: str | None = None
+    correlationId: str | None = None
+    """Filter by the `correlationId` payload field (exact equality; port of TS ports.ts's
+    LineageFilter.correlationId, design.md #53). No writer in this repository stamps `correlationId` onto a
+    payload yet -- it exists so a product's own instrumentation can correlate lineage events sharing an
+    application-defined identifier."""
     since: str | None = None
     """Only events at or after this time (ts >= since, inclusive). Assumes canonical ISO8601 form."""
     until: str | None = None
@@ -200,6 +233,36 @@ class LineageFilter:
     limit: int | None = None
     tenant: str | None = None
     """When set, only events whose tenant matches. Legacy events without a recorded tenant appear only under an unset filter."""
+
+
+@dataclass(frozen=True)
+class LineagePageRequest:
+    """Forward (append-order) page request over lineage (port of TS ports.ts's LineagePageRequest,
+    design.md #53). Every LineageFilter predicate applies except `limit` (`page_size` takes its place).
+    See `StoragePort`'s doc comment on `page_lineage` for the paging contract itself."""
+
+    type: list[str] | None = None
+    artifactId: str | None = None
+    specHash: str | None = None
+    intentHash: str | None = None
+    correlationId: str | None = None
+    since: str | None = None
+    until: str | None = None
+    tenant: str | None = None
+    cursor: str | None = None
+    """Opaque cursor from a previous page's `LineagePage.nextCursor`. None = start from the beginning."""
+    pageSize: int | None = None
+    """Requested page size. Default DEFAULT_LINEAGE_PAGE_SIZE; clamped to MAX_LINEAGE_PAGE_SIZE."""
+
+
+@dataclass(frozen=True)
+class LineagePage:
+    """One page returned by StoragePort's optional `page_lineage` (port of TS ports.ts's LineagePage)."""
+
+    events: list[LineageEventRecord]
+    """In append order (oldest first within the page), matching the request's filters."""
+    nextCursor: str | None = None
+    """Opaque cursor for the next page. None on the last page (nothing further to read)."""
 
 
 @dataclass(frozen=True)
@@ -343,6 +406,21 @@ class StoragePort(Protocol):
     async def append_lineage(self, event: LineageEventRecord) -> None: ...
 
     async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]: ...
+
+    # `page_lineage` (forward, append-order paging; design.md #53) is a *genuinely optional* StoragePort
+    # extension, like `put_promotion_states` above -- and for the same reason, deliberately **not** declared
+    # as a member of this Protocol. TS's counterpart (packages/spec-core/src/ports.ts) is a real optional
+    # interface field (`pageLineage?()`); Python has no equivalent construct that would not force every
+    # existing StoragePort implementation (including minimal test stubs) to grow a new method. Unlike
+    # `put_promotion_states`, callers check for this one with a plain `hasattr(storage, "page_lineage")`
+    # probe rather than `isinstance` against a dedicated `runtime_checkable` Protocol -- there is no
+    # equivalent narrowing concern here (page_lineage is never silently "fallen back" to a slower path the
+    # way an absent batch write is; its absence instead surfaces as 501 NOT_IMPLEMENTED to the REST caller,
+    # so a `__getattr__`-based proxy or `Mock` matching `hasattr` when a real implementation would not is an
+    # accepted, harmless gap here). See kohaku.storage.file.FileStoragePort.page_lineage for the reference
+    # implementation and kohaku.spec.lineage_page for the shared cursor codec.
+    #
+    # async def page_lineage(self, req: LineagePageRequest) -> LineagePage: ...
 
     async def get_promotion_state(
         self, artifact_id: str, tenant: str | None = None
