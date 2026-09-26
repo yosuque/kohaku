@@ -4,7 +4,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { type ServerType, serve } from "@hono/node-server";
 import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import { createJwtRequestIdentity } from "./app/request-identity.js";
+import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
+import { createJwtRequestIdentity } from "./app/request-identity-jwt.js";
 import { createGracefulShutdownHandler, shutdownGraceMs } from "./app/shutdown.js";
 import { createApp } from "./app.js";
 import { createPortsFromEnv } from "./ports/from-env.js";
@@ -74,6 +75,11 @@ async function main(): Promise<void> {
     llm,
     storage: ports.storage,
     authz: ports.authz,
+    // Pre-delivery L2 smoke validation (jsdom / node:vm) and the OTel wrap: both are Node/env-specific
+    // concerns app.ts no longer decides on its own (see AppDeps.l2Smoke / AppDeps.otel's doc comments) —
+    // this is the one place that still reads process.env and constructs the real jsdom-backed checker.
+    l2Smoke: createL2Smoke(),
+    otel: process.env["KOHAKU_OTEL"] === "1",
     ...(ports.identity != null ? { identity: createJwtRequestIdentity(ports.identity) } : {}),
     // The demo bump-data-version route is on by default for the header-based demo identity (ports.identity
     // == null, i.e. KOHAKU_AUTHZ=hmac) and off by default under JWT; KOHAKU_DEMO_ADMIN_ROUTES=1 opts back in

@@ -4,6 +4,7 @@ import { buildNormalizeSystemPrompt } from "@kohaku-ui/semantic-llm";
 import type { SessionContext } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { SalesRepo } from "../src/domain/repo.js";
+import { readSeedFromDisk } from "../src/domain/seed-fs.js";
 import { createSalesIntentCatalog } from "../src/intents/catalog.js";
 import { createSemanticPort, fiscalPeriodOf } from "../src/ports/semantic-port.js";
 
@@ -59,7 +60,7 @@ describe("the fiscal period in the NL normalization prompt (determinized via clo
     const captured: { system?: string } = {};
     const catalog = createSalesIntentCatalog();
     const port = createSemanticPort({
-      repo: new SalesRepo(),
+      repo: new SalesRepo(readSeedFromDisk()),
       catalogFor: () => catalog,
       llm: capturingLlm(captured),
       now: () => now,
@@ -112,7 +113,7 @@ describe("sales rules in the normalization prompt", () => {
     const llm = new FakeLlm({ objects: [{ intent: "sales.trend", params: {} }] });
     const catalog = createSalesIntentCatalog();
     const port = createSemanticPort({
-      repo: new SalesRepo(),
+      repo: new SalesRepo(readSeedFromDisk()),
       catalogFor: () => catalog,
       llm,
       now: () => new Date("2026-05-15T00:00:00Z"),
