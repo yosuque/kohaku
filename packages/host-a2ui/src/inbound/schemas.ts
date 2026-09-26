@@ -1,4 +1,4 @@
-import { JsonObjectSchema, JsonValueSchema } from "@kohaku-ui/spec-core";
+import { JsonObjectSchema, JsonValueSchema, MAX_JSON_OBJECT_DEPTH } from "@kohaku-ui/spec-core";
 import { z } from "zod";
 import type {
   A2uiBinding,
@@ -8,6 +8,28 @@ import type {
   A2uiValue,
 } from "../types.js";
 import { RESERVED_OBJECT_KEYS } from "./reserved-keys.js";
+
+/**
+ * Local equivalent of spec-core's own (unexported) `exceedsMaxJsonDepth` (`schema/json.ts`) — this
+ * package's runtime dependency stays spec-core-only (see AGENTS.md), so the small, pure traversal is
+ * mirrored here rather than exported from spec-core just for this one reuse; `MAX_JSON_OBJECT_DEPTH`
+ * (spec-core's own public constant) is reused as the shared limit so the two packages agree on what "too
+ * deep" means. Operates on `unknown` rather than `JsonValue` because it also guards `A2uiComponent`/
+ * `A2uiFunctionCall`-shaped parsed values (plain objects that recurse via props/`args`), not just literal
+ * JSON — a pathologically deep (but otherwise schema-valid) inbound message would otherwise cost this
+ * profile's `fromA2ui` conversion and, later, `canonicalStringify`/lineage persistence unbounded recursion.
+ */
+function exceedsMaxDepth(value: unknown, limit: number, depth: number): boolean {
+  if (Array.isArray(value)) {
+    if (depth > limit) return true;
+    return value.some((item) => exceedsMaxDepth(item, limit, depth + 1));
+  }
+  if (value !== null && typeof value === "object") {
+    if (depth > limit) return true;
+    return Object.values(value).some((item) => exceedsMaxDepth(item, limit, depth + 1));
+  }
+  return false;
+}
 
 /**
  * Zod validation for **inbound** A2UI server→client messages (a third-party agent's `createSurface` /
@@ -64,6 +86,14 @@ export const A2uiComponentActionSchema: z.ZodType<A2uiComponentAction> = z.union
  * catalogId) are validated strictly by shape; everything else is a catalog-inlined prop (Text.text,
  * Row.justify, etc.) and is therefore intentionally open-ended (`.catchall`, not `.strict`) — the basic
  * catalog's own vocabulary is not part of the message envelope this schema is responsible for.
+ *
+ * The depth guard below (`exceedsMaxDepth`) is applied to the **whole parsed component** in one pass —
+ * covering the catchall props, `action.functionCall.args`, and any function call nested inside another —
+ * rather than separately to each nested schema (`A2uiValueSchema`/`A2uiFunctionCallSchema`'s own `args`).
+ * A per-nested-schema check would restart counting from depth 1 at every nesting boundary and so would
+ * *under*-count the true depth from this component's own root (e.g. two independently-"depth 30" structures
+ * nested inside one another would each pass its own local check while the combined structure, at depth ~60,
+ * should not) — checking the component as a whole is both simpler and the only way to get this right.
  */
 export const A2uiComponentSchema: z.ZodType<A2uiComponent> = z
   .object({
@@ -82,7 +112,15 @@ export const A2uiComponentSchema: z.ZodType<A2uiComponent> = z
     action: A2uiComponentActionSchema.optional(),
     catalogId: z.string().min(1).optional(),
   })
-  .catchall(A2uiValueSchema);
+  .catchall(A2uiValueSchema)
+  .superRefine((value, ctx) => {
+    if (exceedsMaxDepth(value, MAX_JSON_OBJECT_DEPTH, 1)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `component nesting exceeds the maximum depth (${MAX_JSON_OBJECT_DEPTH})`,
+      });
+    }
+  });
 
 /** `createSurface` (v0.9.1): surfaceId + catalogId required, matching `types.ts`'s `A2uiCreateSurface`. */
 export const A2uiCreateSurfaceV091Schema = z.strictObject({
@@ -122,14 +160,28 @@ export const A2uiUpdateComponentsSchema = z.strictObject({
 export const A2uiUpdateDataModelV091Schema = z.strictObject({
   surfaceId: z.string().min(1),
   path: z.string().optional(),
-  value: JsonValueSchema.optional(),
+  value: JsonValueSchema.superRefine((value, ctx) => {
+    if (exceedsMaxDepth(value, MAX_JSON_OBJECT_DEPTH, 1)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `updateDataModel value nesting exceeds the maximum depth (${MAX_JSON_OBJECT_DEPTH})`,
+      });
+    }
+  }).optional(),
 });
 
 /** `updateDataModel` (v1.0 RC): per the facts note, `value` is required (no delete-by-omission in v1.0). */
 export const A2uiUpdateDataModelV1Schema = z.strictObject({
   surfaceId: z.string().min(1),
   path: z.string().optional(),
-  value: JsonValueSchema,
+  value: JsonValueSchema.superRefine((value, ctx) => {
+    if (exceedsMaxDepth(value, MAX_JSON_OBJECT_DEPTH, 1)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `updateDataModel value nesting exceeds the maximum depth (${MAX_JSON_OBJECT_DEPTH})`,
+      });
+    }
+  }),
 });
 
 /** `deleteSurface`: unchanged between v0.9.1 and v1.0. */

@@ -19,6 +19,9 @@ export {
   type A2uiIngestTrace,
   type CreateA2uiIngestOptions,
   createA2uiIngest,
+  DEFAULT_MAX_COMPONENTS_PER_SURFACE,
+  DEFAULT_MAX_DATA_MODEL_SIZE_BYTES,
+  DEFAULT_MAX_MESSAGES_PER_INGEST,
 } from "./inbound/ingest.js";
 export {
   A2UI_ROOT_COMPONENT_ID,

@@ -227,6 +227,8 @@ UISpec / SpecPatch を A2UI(隣接リスト形の宣言的 UI メッセージ)�
 
 **セキュリティ: JSON Pointer / component id の安全性。** `updateDataModel.path` とコンポーネントの `id` はどちらも信頼できない、エージェントが選ぶ文字列であり、これを本プロファイル内部のオブジェクトグラフ走査(`reduce.ts` の `setAtPointer`/`getAtPointer`/`deleteAtPointer`/`upsertComponents`)がそのまま素のオブジェクトキーとして使ってしまうと問題になる。パスセグメントや id が `"__proto__"` である場合、これは通常のオブジェクトにおける普通のプロパティ名ではない — bracket 代入すると*そのオブジェクト自身のプロトタイプを再代入してしまう*ため、注入された値は `canonicalStringify`(own-enumerable のみを見る)からは見えず(`dataVersion` は変更されていないデータモデルと同一にハッシュされる = キャッシュキーの衝突)、それでいて通常のプロパティ参照(プロトタイプチェーンをたどる)からは読み取れてしまう — 同じキャッシュキーが黙って異なる内容を返すことになる。`"__proto__"`/`"constructor"`/`"prototype"` は、それがキーになりうる箇所(スキーマ検証されるコンポーネントの `id`、または `path` のセグメント)ではすべて即座に拒否され(メッセージ全体を失敗させる)、それとは独立に、この文字列入力から本プロファイル自身が構築するすべてのオブジェクトは `Object.create(null)` で作られ、`Object.hasOwn` チェックを介して読み書きされるため、キーの内容に関わらず(予約語であれ、`"toString"` のような無関係な名前であれ)プロパティ参照が継承済みの `Object.prototype` メンバーへフォールスルーすることは無い。
 
+**セキュリティ: DoS 境界。** スキーマ的に妥当な受信メッセージであっても、その処理コストに固有の上限は無い。これを閉じる 2 つの独立した上限がある: JSON のネスト深さ(`updateDataModel.value`、およびコンポーネントのカタログ props / `action` / ネストした function call をまとめた深さを 1 回で測定するもの — 個々のネストしたサブスキーマを独立にチェックすると、それぞれが深さ 1 から数え直してしまうため、コンポーネント自身のルートから見た真の深さを*過小に*数えてしまう)は spec-core の `MAX_JSON_OBJECT_DEPTH` を上限とし、`createA2uiIngest` は 1 回の `ingest()` 呼び出しのメッセージ数、サーフェスが(今回の呼び出しだけでなく、これまでの全呼び出しを通じて累積で)保持するコンポーネント数、データモデルのシリアライズ後サイズ(`JSON.stringify(...).length`)を、それぞれ `maxMessagesPerIngest` / `maxComponentsPerSurface` / `maxDataModelSizeBytes`(いずれも上書き可能。既定値は控えめに 1000 / 2000 / 1 MiB)で上限を設ける。
+
 逆対応表(その component id に sidecar のエントリが無い場合):
 
 | A2UI(受信) | kohaku | 備考 |

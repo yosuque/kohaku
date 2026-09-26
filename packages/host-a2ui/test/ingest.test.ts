@@ -200,4 +200,74 @@ describe("createA2uiIngest", () => {
       ]),
     ).rejects.toThrow(/exactly one surface/);
   });
+
+  describe("security: DoS bounds", () => {
+    it("maxMessagesPerIngest rejects a single ingest() call with too many messages", async () => {
+      const bounded = makeIngest({ maxMessagesPerIngest: 2 });
+      await expect(bounded.ingest(surfaceMessages("srf-cap", "Hi"))).resolves.toBeDefined(); // exactly 2, OK
+      const tooMany = [...surfaceMessages("srf-cap-2", "Hi"), ...updateMessages("srf-cap-2", "Hi again")];
+      expect(tooMany.length).toBe(3);
+      await expect(bounded.ingest(tooMany)).rejects.toThrow(/maxMessagesPerIngest/);
+    });
+
+    it("maxComponentsPerSurface rejects once a surface's accumulated component count exceeds the cap", async () => {
+      const bounded = makeIngest({ maxComponentsPerSurface: 2 });
+      // root + 2 more = 3 components, over the cap of 2.
+      await expect(
+        bounded.ingest([
+          {
+            version: "v0.9.1",
+            createSurface: { surfaceId: "srf-many", catalogId: "https://example.com/c.json" },
+          },
+          {
+            version: "v0.9.1",
+            updateComponents: {
+              surfaceId: "srf-many",
+              components: [
+                { id: "root", component: "Column", children: ["a", "b"] },
+                { id: "a", component: "Text", text: "A" },
+                { id: "b", component: "Text", text: "B" },
+              ],
+            },
+          },
+        ]),
+      ).rejects.toThrow(/maxComponentsPerSurface/);
+    });
+
+    it("maxComponentsPerSurface is checked cumulatively across separate ingest() calls, not just within one", async () => {
+      const bounded = makeIngest({ maxComponentsPerSurface: 1 });
+      await expect(bounded.ingest(surfaceMessages("srf-grow", "Hi"))).resolves.toBeDefined(); // 1 component (root), OK
+      await expect(
+        bounded.ingest([
+          {
+            version: "v0.9.1",
+            updateComponents: {
+              surfaceId: "srf-grow",
+              components: [{ id: "extra", component: "Text", text: "x" }],
+            },
+          },
+        ]),
+      ).rejects.toThrow(/maxComponentsPerSurface/);
+    });
+
+    it("maxDataModelSizeBytes rejects once the surface's data model grows past the cap", async () => {
+      const bounded = makeIngest({ maxDataModelSizeBytes: 64 });
+      await expect(bounded.ingest(surfaceMessages("srf-big-data", "Hi"))).resolves.toBeDefined(); // empty data model, OK
+      const bigValue = "x".repeat(200);
+      await expect(
+        bounded.ingest([
+          {
+            version: "v0.9.1",
+            updateDataModel: { surfaceId: "srf-big-data", path: "/blob", value: bigValue },
+          },
+        ]),
+      ).rejects.toThrow(/maxDataModelSizeBytes/);
+    });
+
+    it("the default caps are generous enough not to reject ordinary-sized ingests", async () => {
+      // No overrides: uses DEFAULT_MAX_MESSAGES_PER_INGEST / DEFAULT_MAX_COMPONENTS_PER_SURFACE /
+      // DEFAULT_MAX_DATA_MODEL_SIZE_BYTES, all comfortably above this test's small payload.
+      await expect(ingest.ingest(surfaceMessages("srf-default-caps", "Hi"))).resolves.toBeDefined();
+    });
+  });
 });

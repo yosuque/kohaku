@@ -59,6 +59,15 @@ and every object this package's internal JSON-Pointer walk builds from such inpu
 prototype-less (`Object.create(null)`) object read/written only via `Object.hasOwn` — closing a
 same-cache-key-different-content class of bug a naive `obj[token] = value` walk would otherwise be open to.
 
+A schema-valid message still has no *inherent* upper bound on cost, so the inbound schemas additionally cap
+JSON nesting depth (`updateDataModel.value`, and a whole component's combined props/`action`/nested function
+calls, each to spec-core's `MAX_JSON_OBJECT_DEPTH`), and `createA2uiIngest` caps how many messages one
+`ingest()` call may carry, how many components a surface may accumulate across calls, and the data model's
+serialized size (`maxMessagesPerIngest` / `maxComponentsPerSurface` / `maxDataModelSizeBytes`, all
+overridable — conservative defaults `DEFAULT_MAX_MESSAGES_PER_INGEST` (1000) /
+`DEFAULT_MAX_COMPONENTS_PER_SURFACE` (2000) / `DEFAULT_MAX_DATA_MODEL_SIZE_BYTES` (1 MiB, measured as
+`JSON.stringify(...).length`)).
+
 `createA2uiIngest({storage, recorder, fixations, agentId, ...})` wires this into a caching + lineage
 pipeline over structural subsets of `StoragePort` / `@kohaku-ui/lineage`'s `RestViewRecorder` /
 `Fixations` (so this package gains no runtime dependency on either):

@@ -56,6 +56,19 @@ export interface A2uiIngestFixations {
   fixate(args: { pinnedSpec: UISpec; approver: Principal; tenant?: string }): Promise<FixationRecord>;
 }
 
+/**
+ * Conservative default bounds for `ingest()` (all overridable via `CreateA2uiIngestOptions`). A schema-valid
+ * A2UI message has no upper bound on how many of them a caller sends in one `ingest()` call, how many
+ * components a surface accumulates across calls, or how large its data model grows — each is an independent
+ * DoS lever (parse/fold cost, `fromA2ui` conversion cost, `canonicalStringify`/hashing cost, cache storage
+ * size) that schema validation alone does not close. These three are deliberately coarse, cheap-to-check
+ * bounds, not a precise resource budget.
+ */
+export const DEFAULT_MAX_MESSAGES_PER_INGEST = 1000;
+export const DEFAULT_MAX_COMPONENTS_PER_SURFACE = 2000;
+/** Measured as `JSON.stringify(dataModel).length` (UTF-16 code units — a portable size proxy that needs no Node `Buffer`/DOM `TextEncoder`, keeping this package's `src` free of any global assumption beyond plain JS). */
+export const DEFAULT_MAX_DATA_MODEL_SIZE_BYTES = 1_048_576;
+
 export interface CreateA2uiIngestOptions {
   storage: A2uiIngestStorage;
   recorder?: A2uiIngestRecorder;
@@ -104,6 +117,12 @@ export interface CreateA2uiIngestOptions {
   unmappable?: "fallback" | "reject";
   /** Forwarded to `fromA2ui`'s `bindPath` option. */
   bindPath?: (path: string) => { $ref: string } | undefined;
+  /** Caps a single `ingest()` call's `messages` array length. Default {@link DEFAULT_MAX_MESSAGES_PER_INGEST}. */
+  maxMessagesPerIngest?: number;
+  /** Caps a surface's total component count after folding (across every `ingest()` call so far, not just this one). Default {@link DEFAULT_MAX_COMPONENTS_PER_SURFACE}. */
+  maxComponentsPerSurface?: number;
+  /** Caps the data model's serialized size (see {@link DEFAULT_MAX_DATA_MODEL_SIZE_BYTES} for how it is measured). Default {@link DEFAULT_MAX_DATA_MODEL_SIZE_BYTES}. */
+  maxDataModelSizeBytes?: number;
 }
 
 /** Per-call override of what `ingest()` would otherwise derive on its own. */
@@ -193,6 +212,14 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
 
   async function ingest(messages: unknown[], meta?: A2uiIngestMeta): Promise<A2uiIngestOutcome> {
     const startedAt = Date.now();
+    // Cheapest possible check first, before parsing/validating a single message: a pathologically large
+    // messages array costs work (schema validation, folding) regardless of what each message contains.
+    const maxMessages = opts.maxMessagesPerIngest ?? DEFAULT_MAX_MESSAGES_PER_INGEST;
+    if (messages.length > maxMessages) {
+      throw new A2uiIngestError(
+        `ingest(): received ${messages.length} messages in one call, exceeding maxMessagesPerIngest (${maxMessages})`,
+      );
+    }
     const parsed = messages.map(parseInboundA2uiMessage);
     const surfaceIds = new Set(parsed.map(surfaceIdOf));
     if (surfaceIds.size !== 1) {
@@ -206,6 +233,24 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
     if (surface == null) {
       throw new A2uiIngestError(
         `ingest(): surface "${surfaceId}" no longer exists (its last message deleted it)`,
+      );
+    }
+
+    // Bounds on the *accumulated* surface state, checked regardless of whether this call turns out to be a
+    // fixation hit below — these guard against unbounded growth across many ingest() calls over a surface's
+    // lifetime, not just this one call's own messages.
+    const maxComponents = opts.maxComponentsPerSurface ?? DEFAULT_MAX_COMPONENTS_PER_SURFACE;
+    const componentCount = Object.keys(surface.components).length;
+    if (componentCount > maxComponents) {
+      throw new A2uiIngestError(
+        `ingest(): surface "${surfaceId}" has ${componentCount} components, exceeding maxComponentsPerSurface (${maxComponents})`,
+      );
+    }
+    const maxDataModelSize = opts.maxDataModelSizeBytes ?? DEFAULT_MAX_DATA_MODEL_SIZE_BYTES;
+    const dataModelSize = JSON.stringify(surface.dataModel).length;
+    if (dataModelSize > maxDataModelSize) {
+      throw new A2uiIngestError(
+        `ingest(): surface "${surfaceId}"'s data model is ${dataModelSize} (JSON.stringify length), exceeding maxDataModelSizeBytes (${maxDataModelSize})`,
       );
     }
 

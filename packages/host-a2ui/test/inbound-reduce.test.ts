@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAX_JSON_OBJECT_DEPTH } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import {
   A2UI_ROOT_COMPONENT_ID,
@@ -305,5 +306,91 @@ describe("security: prototype-pollution-shaped JSON Pointer / component id input
       },
     };
     expect(() => reduceSurfaceMessage(state, smuggled)).toThrow(A2uiIngestError);
+  });
+});
+
+describe("security: DoS bounds (JSON nesting depth)", () => {
+  /** `levels` nested `{n: ...}` wrappers around a scalar leaf. `exceedsMaxDepth` treats this as exactly `levels` deep (a bare scalar is depth 0 — it never itself triggers the check). */
+  function nestedValue(levels: number): unknown {
+    let value: unknown = "leaf";
+    for (let i = 0; i < levels; i++) value = { n: value };
+    return value;
+  }
+
+  it("updateDataModel.value at exactly MAX_JSON_OBJECT_DEPTH is accepted; one level deeper is rejected", () => {
+    expect(() =>
+      parseInboundA2uiMessage({
+        version: "v0.9.1",
+        updateDataModel: { surfaceId: "s", path: "/x", value: nestedValue(MAX_JSON_OBJECT_DEPTH) },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      parseInboundA2uiMessage({
+        version: "v0.9.1",
+        updateDataModel: { surfaceId: "s", path: "/x", value: nestedValue(MAX_JSON_OBJECT_DEPTH + 1) },
+      }),
+    ).toThrow();
+  });
+
+  it("the same bound applies to the v1.0 (required-value) updateDataModel schema", () => {
+    expect(() =>
+      parseInboundA2uiMessage({
+        version: "v1.0",
+        updateDataModel: { surfaceId: "s", path: "/x", value: nestedValue(MAX_JSON_OBJECT_DEPTH + 1) },
+      }),
+    ).toThrow();
+  });
+
+  it("a component's catchall prop value nested beyond the limit is rejected", () => {
+    expect(() =>
+      parseInboundA2uiMessage({
+        version: "v0.9.1",
+        updateComponents: {
+          surfaceId: "s",
+          components: [{ id: "c", component: "presentChart", data: nestedValue(MAX_JSON_OBJECT_DEPTH + 1) }],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("checks the WHOLE component's combined depth, not each nested value independently: a value that is exactly at the limit *by itself* exceeds it once nested one level deeper inside a component", () => {
+    // A per-nested-schema check (one that re-applied the same superRefine to A2uiValueSchema itself, so it
+    // ran again at every recursion and restarted counting from depth 1 each time) would see this exact same
+    // value pass at the prop-value level (it is, in isolation, exactly at MAX_JSON_OBJECT_DEPTH — see the
+    // updateDataModel test above) even though, measured correctly from the component's own root, it is now
+    // one level too deep (the component object itself, then the "wrapper" prop's value, is +1 vs. being the
+    // top-level updateDataModel.value). Only a check against the whole component catches this.
+    expect(() =>
+      parseInboundA2uiMessage({
+        version: "v0.9.1",
+        updateComponents: {
+          surfaceId: "s",
+          components: [{ id: "c", component: "presentChart", wrapper: nestedValue(MAX_JSON_OBJECT_DEPTH) }],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("a function call's args nested beyond the limit is rejected (reachable via A2uiComponentSchema's whole-component check)", () => {
+    expect(() =>
+      parseInboundA2uiMessage({
+        version: "v0.9.1",
+        updateComponents: {
+          surfaceId: "s",
+          components: [
+            {
+              id: "btn",
+              component: "Button",
+              action: {
+                functionCall: {
+                  call: "compute",
+                  args: { deep: nestedValue(MAX_JSON_OBJECT_DEPTH + 1) },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    ).toThrow();
   });
 });
