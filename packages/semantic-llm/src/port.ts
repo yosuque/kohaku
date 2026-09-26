@@ -13,6 +13,23 @@ import type { IntentCatalogLike } from "./catalog.js";
 import { normalizeGuiAction } from "./gui.js";
 import { normalizeNlQuery } from "./nl.js";
 
+/**
+ * Thrown by resolveQuery when the intent's canonical name is not present in the (possibly per-tenant)
+ * catalog. A "typed" error (a string `code` property) so a caller such as composer's SEMANTIC_FAILED
+ * wrapping (packages/composer/src/refs.ts) can safely surface this message to the client instead of the
+ * generic "query resolution failed" alone — the message names no internals, only the (already
+ * client-supplied) intent name.
+ */
+export class UnknownIntentError extends Error {
+  readonly code = "UNKNOWN_INTENT" as const;
+  readonly canonical: string;
+  constructor(canonical: string) {
+    super(`unknown intent "${canonical}"`);
+    this.name = "UnknownIntentError";
+    this.canonical = canonical;
+  }
+}
+
 export interface LlmSemanticPortOptions {
   llm: LlmPort;
   /** One catalog, or a per-tenant resolver (promotion adds Intents per tenant). */
@@ -79,7 +96,7 @@ export function createLlmSemanticPort(options: LlmSemanticPortOptions): Semantic
     },
     async resolveQuery(intent: CanonicalIntent, ctx?: { tenant?: string }): Promise<QueryHandle[]> {
       const def = catalogFor(ctx?.tenant).get(intent.canonical);
-      if (def == null) throw new Error(`unknown intent: ${intent.canonical}`);
+      if (def == null) throw new UnknownIntentError(intent.canonical);
       return def.toQueries(intent.params);
     },
     async dataVersion(handle: QueryHandle): Promise<string> {

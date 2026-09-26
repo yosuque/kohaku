@@ -5,6 +5,7 @@ import {
   type QueryHandle,
 } from "@kohaku-ui/spec-core";
 import type { ComposeContext } from "./context.js";
+import { isTypedCause } from "./error-message.js";
 import { ComposeError } from "./errors.js";
 
 export interface ResolvedRefs {
@@ -67,9 +68,15 @@ export async function resolveRefs(
   // Propagate tenant to resolveQuery to correctly resolve per-tenant promoted Intents.
   // A resolveQuery failure is wrapped as SEMANTIC_FAILED here (fixation.ts's materializeFixation shares
   // the same resolution sequence via resolveHandleVersions but lets the failure pass through as-is).
+  // When the cause is a "typed" error (a string `code` property — the convention for a client-safe
+  // message; see isTypedCause's doc), its own message is appended so the caller learns *what* failed
+  // (e.g. an unknown Intent name) instead of the generic text alone. An untyped cause (a raw exception from
+  // a SemanticPort implementation) may carry internals and is never appended — the wrapped message stays
+  // exactly as before for that case.
   const { handles, dataVersion, versionsByRef } = await resolveHandleVersions(intent, ctx, tenant, {
     onResolveError: (e) => {
-      throw new ComposeError("SEMANTIC_FAILED", "query resolution failed", { cause: e });
+      const detail = isTypedCause(e) ? `: ${e.message}` : "";
+      throw new ComposeError("SEMANTIC_FAILED", `query resolution failed${detail}`, { cause: e });
     },
   });
 

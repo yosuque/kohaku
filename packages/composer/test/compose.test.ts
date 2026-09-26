@@ -1260,6 +1260,41 @@ describe("compose: observability of the failure path (observer.onError, #7)", ()
     expect(captured).toHaveLength(1);
     expect(captured[0]!.ctx.phase).toBe("hard");
     expect(captured[0]!.error).toBeInstanceOf(Error);
+    // An untyped cause (a plain Error with no `code` property) may leak internals, so its message is not
+    // appended — the wrapped message stays exactly "query resolution failed".
+    expect((captured[0]!.error as Error).message).toBe("query resolution failed");
+  });
+
+  it("when resolveQuery throws a typed error (a string `code` property), SEMANTIC_FAILED's message includes the cause's own message", async () => {
+    const captured: Captured[] = [];
+    const semantic = makeSemantic();
+    class TypedCause extends Error {
+      readonly code = "UNKNOWN_INTENT" as const;
+    }
+    semantic.resolveQuery = async () => {
+      throw new TypedCause('unknown intent "sales.nope"');
+    };
+    const ctx: ComposeContext = {
+      catalog,
+      semantic,
+      storage: makeStorage(),
+      llm: new FakeLlm(),
+      observer: {
+        onError: (c, error) => {
+          captured.push({ ctx: c, error });
+        },
+      },
+    };
+
+    await expect(compose(GUI_INPUT, ctx)).rejects.toThrow(
+      'query resolution failed: unknown intent "sales.nope"',
+    );
+    expect(captured).toHaveLength(1);
+    expect((captured[0]!.error as Error).message).toBe(
+      'query resolution failed: unknown intent "sales.nope"',
+    );
+    // The wire is unaffected: the wrapped ComposeError's own `code` stays SEMANTIC_FAILED, not the cause's.
+    expect((captured[0]!.error as Error & { code?: string }).code).toBe("SEMANTIC_FAILED");
   });
 
   it("on the deterministic downgrade from a generation failure, onError(phase:fallback) is called once with the reason and intent", async () => {
