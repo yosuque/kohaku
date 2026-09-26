@@ -37,10 +37,12 @@ function load<T>(file: string): T {
 
 /**
  * Reads the demo seed (products / records / targets) plus the derived seedTag from disk (`node:fs`). Node
- * only — this is the file `SalesRepo`'s own module (`repo.ts`, browser-safe) never imports; `app.ts`'s
- * `createApp` reaches it only through a dynamic `import()` behind a variable specifier (see
- * `createDefaultRepo` in `app.ts`), so a bundler building for the browser cannot resolve it statically and
- * a host that always supplies its own seed (the static playground, U5) never triggers it at all.
+ * only — this is the file `SalesRepo`'s own module (`repo.ts`, browser-safe) never imports; `app.ts` is the
+ * only caller, importing it statically at module load (see `app.ts`'s own doc comment for why a dynamic
+ * `import()` behind a variable specifier was tried first and abandoned — it broke Vite/Vitest's SSR module
+ * resolution). `app-core.ts` never imports this file at all, so a bundler building for the browser through
+ * the `./browser` export (`browser.ts` → `app-core.ts`, never `app.ts`) cannot reach `node:fs` even
+ * statically, and a host that always supplies its own seed (the static playground, U5) never triggers it.
  */
 export function readSeedFromDisk(): SalesSeedInput {
   const products = load<Product[]>("products.json");

@@ -141,6 +141,12 @@ export function installFetchShim(getHost: () => FetchShimTarget, options: FetchS
  * `request.body`, a ReadableStream, straight through) so the Fetch spec's `duplex: "half"` requirement for
  * a streamed request body never comes up — every request this playground proxies (compose, events, the
  * governance endpoints) is a small, fully-buffered JSON payload anyway (host-rest's own 1 MiB bodyLimit).
+ *
+ * `signal` is forwarded unchanged. Without it, the rebuilt Request gets its own never-aborted signal, so a
+ * caller's `AbortController.abort()` would silently stop being observable the moment a request crosses this
+ * shim — host-rest's routes read `c.req.raw.signal` to cancel an in-flight compose (`composeWithFixation` /
+ * `composeStream`, and host-core's cancelled-aware `recordComposedResult`), so losing the signal here would
+ * make every one of those cancellation paths unreachable from the browser.
  */
 async function rewriteRequest(request: Request, newUrl: URL): Promise<Request> {
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
@@ -148,5 +154,6 @@ async function rewriteRequest(request: Request, newUrl: URL): Promise<Request> {
     method: request.method,
     headers: request.headers,
     body: hasBody ? await request.clone().arrayBuffer() : undefined,
+    signal: request.signal,
   });
 }

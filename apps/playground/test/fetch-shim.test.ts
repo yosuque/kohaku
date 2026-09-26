@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPlaygroundHost } from "../src/host/create-host.js";
-import { installFetchShim } from "../src/host/fetch-shim.js";
+import { type FetchShimTarget, installFetchShim } from "../src/host/fetch-shim.js";
 import { createPlaygroundHostHandle } from "../src/host/reset.js";
 
 const ORIGIN = "http://localhost:5173";
@@ -113,6 +113,57 @@ describe("installFetchShim: cross-origin passthrough", () => {
     const res = await fetch("https://example.com/some/api/path");
     expect(await res.text()).toBe("stub-network");
     expect(calls).toEqual(["https://example.com/some/api/path"]);
+  });
+});
+
+describe("installFetchShim: AbortSignal forwarding", () => {
+  it("forwards the caller's AbortSignal, so aborting mid-request is observable by the routed handler", async () => {
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let observedAborted: boolean | undefined;
+    const target: FetchShimTarget = {
+      fetch: (request) =>
+        new Promise((resolve) => {
+          started();
+          request.signal.addEventListener("abort", () => {
+            observedAborted = request.signal.aborted;
+            resolve(new Response(null, { status: 499 }));
+          });
+        }),
+    };
+    restoreShim = installFetchShim(() => target, { origin: ORIGIN });
+
+    const controller = new AbortController();
+    const pending = fetch(`${ORIGIN}/api/kohaku/compose`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(QUARTERLY_GUI),
+      signal: controller.signal,
+    });
+    // Wait for the request to actually reach the routed handler before aborting, so this exercises
+    // cancellation of an in-flight request rather than one that never started.
+    await startedPromise;
+    controller.abort();
+    await pending;
+
+    expect(observedAborted).toBe(true);
+  });
+
+  it("leaves an unaborted request's signal unaffected", async () => {
+    let observedAborted: boolean | undefined;
+    const target: FetchShimTarget = {
+      fetch: (request) => {
+        observedAborted = request.signal.aborted;
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      },
+    };
+    restoreShim = installFetchShim(() => target, { origin: ORIGIN });
+
+    const res = await fetch(`${ORIGIN}/api/health`);
+    expect(res.status).toBe(200);
+    expect(observedAborted).toBe(false);
   });
 });
 
