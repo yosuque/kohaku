@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
 
   // Use .gitignore as the single source of exclusions (don't double-maintain node_modules / dist / coverage / .data).
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true, "defaultBranch": "main" },

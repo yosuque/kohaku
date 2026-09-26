@@ -16,6 +16,9 @@
 # directly (see AGENTS.md), and Dependabot's main value for npm here is *detecting* that an update exists
 # (and updating the handful of root-level, non-catalog devDependencies, if any) rather than opening
 # ready-to-merge PRs for every catalog package.
+# A Dependabot PR that does bump a catalog entry still fails CI until `cli/src/init/versions.ts`
+# (`EXTERNAL_VERSIONS`, the versions `kohaku init` writes into a generated project) is synced by hand:
+# `cli/test/init/render.test.ts` asserts it matches the catalog. Dependabot cannot edit that file.
 #
 # --- minimumReleaseAgeExclude interaction ----------------------------------------------------------------
 # pnpm-workspace.yaml also enforces a release-age supply-chain gate, with a `minimumReleaseAgeExclude` list
@@ -117,3 +120,9 @@ updates:
       - "github-actions"
     commit-message:
       prefix: "ci"
+    groups:
+      # CodeQL's `init` and `analyze` actions must run the same version ("Loaded a configuration file for
+      # version X, but running version Y"), so they have to be bumped in one PR.
+      codeql:
+        patterns:
+          - "github/codeql-action*"
