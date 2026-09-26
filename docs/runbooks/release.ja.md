@@ -66,13 +66,40 @@ changeset 付き PR ──merge──▶ main push ──▶ .github/workflows/v
   `data-binding`, `evals`, `host-a2ui`, `host-core`, `host-mcp-apps`, `host-rest`, `intents`, `lineage`,
   `llm`, `otel`, `registry`, `renderer-core`, `renderer-react`, `renderer-wc`, `sandbox`, `semantic-llm`,
   `spec`, `spec-core`, `storage-memory`, `storage-postgres`, `storage-redis`。
-  `release.yml` の `npm` ジョブのドライランはこの 27 件全てをプローブし、未登録のものを列挙します(§4 参照)。
-  (`@kohaku-ui/port-contracts` は private のためここには現れません。)
+  `release.yml` の `npm` ジョブは、何かを公開する前に(ドライランでも実公開でも)この 27 件全てをプローブし、
+  未登録のものを列挙します(§4 参照)。(`@kohaku-ui/port-contracts` は private のためここには現れません。)
+  一度も公開されていないパッケージには Settings ページがまだ無いため、先にブートストラップしてください
+  (下記「新規パッケージの初回公開」)。
 - [ ] **初回の OIDC 公開が成功したら**: リポジトリシークレット `NPM_TOKEN` を削除し、npmjs.com 上で対応する
   トークンを revoke する(この変更以降、ワークフローはこのシークレットを参照しません)。任意で各パッケージの
   「Require two-factor authentication and disallow tokens」を有効化しても良い。
 - [ ] **PyPI**: 変更不要。`kohaku-ui` の既存 Trusted Publisher(`yosuque/kohaku` / `release.yml` /
   environment `pypi`)がそのまま使えます。
+
+### 新規パッケージの初回公開
+
+npm が Trusted Publisher を登録できるのは、レジストリに**既に存在する**パッケージだけです
+(`npm help trust`: "Package must exist")。そのため、前回のリリース以降にワークスペースへ追加したパッケージ
+は `release.yml` で初回公開できず、OIDC 交換が 404 を返します。0.3.0 の実行が `@kohaku-ui/authz-hmac` で
+失敗したのはこのためです。新規パッケージを初めて出すリリースの前に、npm にログインした(`npm login`)
+メンテナが一度だけブートストラップします:
+
+```bash
+node scripts/npm-bootstrap.mjs                      # 読み取りのみ: npm に存在しない公開対象パッケージを列挙
+node scripts/npm-bootstrap.mjs --publish --dry-run  # 実行する npm コマンドを表示するだけ
+node scripts/npm-bootstrap.mjs --publish            # 実行する
+```
+
+`--publish` は自分のターミナルから実行してください。これらのコマンドに対する npm の二要素認証はブラウザでの
+認証で、npm は TTY 上でしかその完了を待ちません。非対話のシェル(AI エージェントのシェル、Claude Code の `!`
+プレフィックス、CI)ではすべてのコマンドが `EOTP` で失敗するため、スクリプトはそこでは開始自体を拒否します。
+
+`--publish` は存在しないパッケージごとに三つの処理を行います。まず、名前を確保するためにプレースホルダー
+`0.0.0-bootstrap.0`(manifest と README のみ、dist-tag `bootstrap`)を公開します。次に、`npm trust github`
+で Trusted Publisher を登録します(リポジトリ・`release.yml`・environment `npm` は上記と同じ値)。最後に、
+プレースホルダーを deprecate します。実バージョンはその後 `release.yml` が他のパッケージと同様に
+provenance 付きで公開し、`latest` になります。ワークフロー外で公開されるのは、コードを含まない
+プレースホルダーだけです。
 
 ## 3. version PR
 
@@ -101,6 +128,8 @@ changeset 付きの PR が `main` にマージされると、`version.yml` が `
 - [ ] ドライランが緑であること: `main` から `gh workflow run release.yml -f dry_run=true` を実行する
   (ドライランでは `tag` 入力を付けない——実行を開始したブランチをそのまま検証します)。これは npm ジョブの
   Trusted Publisher プローブも実行し、27 パッケージ全てが `ok` と報告されなければなりません。
+- [ ] `node scripts/npm-bootstrap.mjs` が 0 で終了すること(npm に存在しない公開対象パッケージが無いこと)。
+  列挙された場合は先にブートストラップする(§2「新規パッケージの初回公開」)。
 - [ ] 自動化されたカバレッジでは拾えない、このバージョン固有の手動確認を済ませていること(例: `records` の
   ページングを実際に触る、MCP ホストを実機で動かす、など)——CI の自動テストは実際のリリース候補を人が見る
   代わりにはなりません。
@@ -124,7 +153,8 @@ PyPI プロジェクトページ・GitHub Release へのリンクが載ります
 
 ## 6. 失敗した公開の再実行
 
-部分的な失敗(例: ある npm パッケージだけ Trusted Publisher が未登録だった)は再実行して安全です:
+失敗した公開は、原因を取り除けば再実行して安全です。Trusted Publisher の未登録は、何も公開しないうちに
+プリフライトのプローブで止まります。途中でのレジストリエラーなど、それ以外の失敗では部分公開の状態が残り得ます:
 
 ```bash
 gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=false
@@ -159,7 +189,11 @@ npm view @kohaku-ui/<pkg> versions
 - **「Skipped OIDC: ERR_PNPM_AUTH_TOKEN_EXCHANGE」**: 該当の npm パッケージに Trusted Publisher が登録され
   ていません(リポジトリ・ワークフローファイル名・environment が厳密に一致している必要があります。§2 参照)。
   `npm` ジョブはこれをトークンへの静かなフォールバックにはせず、そのままハードエラーにします——もはやフォール
-  バック先のトークンが存在しないためです。
+  バック先のトークンが存在しないためです。通常はプリフライトのプローブが公開前にこれを検出します。公開ステップ
+  自体でこれが出た場合、そのワークフロー実行はプリフライト導入より前の版です。
+- **プリフライトのプローブで `NEVER PUBLISHED`**(OIDC 交換が 404 で、パッケージ自体もレジストリで 404):
+  新規パッケージで、まだ Trusted Publisher を持てない状態です。ブートストラップ(§2「新規パッケージの初回公開」)
+  してから再実行(§6)してください。
 - **「still a draft」**(`release.yml` の `verify` ステップに `tag` 入力を渡したとき): 指定した Release は
   存在するがまだ公開されておらず、タグもまだ存在しません。下書きを公開する(§5)か、`tag` 入力を付けずに
   ドライランして現在の ref を検証してください。

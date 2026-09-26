@@ -69,13 +69,40 @@ registries. None of it is code, so it isn't part of any pull request.
   `data-binding`, `evals`, `host-a2ui`, `host-core`, `host-mcp-apps`, `host-rest`, `intents`, `lineage`,
   `llm`, `otel`, `registry`, `renderer-core`, `renderer-react`, `renderer-wc`, `sandbox`, `semantic-llm`,
   `spec`, `spec-core`, `storage-memory`, `storage-postgres`, `storage-redis`. The
-  `release.yml` `npm` job's dry run probes every one of these and lists any that are missing a trusted
-  publisher — see §4. (`@kohaku-ui/port-contracts` is private and never appears here.)
+  `release.yml` `npm` job probes every one of these before publishing anything (on the dry run and on
+  the real run) and lists any that are missing a trusted publisher — see §4.
+  (`@kohaku-ui/port-contracts` is private and never appears here.) A package that has never been
+  published has no Settings page yet: bootstrap it first ("First publish of a new package" below).
 - [ ] **Once the first OIDC publish succeeds**: delete the repository secret `NPM_TOKEN` and revoke the
   corresponding token on npmjs.com (the workflow no longer references it after this change).
   Optionally enable "Require two-factor authentication and disallow tokens" on each package.
 - [ ] **PyPI**: no change needed. The existing trusted publisher for `kohaku-ui` (`yosuque/kohaku`,
   `release.yml`, environment `pypi`) already covers this.
+
+### First publish of a new package
+
+npm can only attach a trusted publisher to a package that **already exists** on the registry
+(`npm help trust`: "Package must exist"). A package added to the workspace since the last release
+therefore cannot make its own first publish through `release.yml`: its OIDC exchange answers 404. This
+is how the 0.3.0 run failed on `@kohaku-ui/authz-hmac`. Before the release that first ships a new
+package, a maintainer logged in to npm (`npm login`) bootstraps it once:
+
+```bash
+node scripts/npm-bootstrap.mjs                      # read-only: which publishable packages are missing on npm
+node scripts/npm-bootstrap.mjs --publish --dry-run  # show the npm commands it would run
+node scripts/npm-bootstrap.mjs --publish            # run them
+```
+
+Run `--publish` from your own terminal. npm's two-factor authentication for these commands is a
+browser handshake that npm waits for only on a TTY; from a non-interactive shell (an AI agent's shell,
+Claude Code's `!` prefix, CI) every command fails with `EOTP`, so the script refuses to start there.
+
+For each missing package, `--publish` does three things. It publishes a placeholder
+`0.0.0-bootstrap.0` (manifest and README only, dist-tag `bootstrap`) so the name exists. It registers the
+trusted publisher with `npm trust github`, using the same repository, `release.yml` and environment `npm`
+as above. Then it deprecates the placeholder. The real version is published afterwards by `release.yml`
+with provenance, like every other package, and becomes `latest`. The only thing ever published outside
+the workflow is the placeholder, and it contains no code.
 
 ## 3. The version PR
 
@@ -104,6 +131,8 @@ Before publishing the draft release:
 - [ ] Dry run is green: `gh workflow run release.yml -f dry_run=true` run from `main` (no `tag` input on
   a dry run — it exercises whatever ref the run was started from). This also runs the npm job's
   trusted-publisher probe, which must report every one of the 27 packages as `ok`.
+- [ ] `node scripts/npm-bootstrap.mjs` exits 0, which means no publishable package is missing on npm. If
+  it lists any, bootstrap them first (§2, "First publish of a new package").
 - [ ] Anything that only shows up manually has been checked once more for this version (e.g. paging
   through `records`, or exercising an MCP host by hand) — CI's automated coverage does not replace a
   human look at a real release candidate.
@@ -127,7 +156,9 @@ package page, the PyPI project page, and the GitHub release.
 
 ## 6. Re-running a failed publish
 
-A partial failure (e.g. one npm package's trusted publisher was missing) is safe to re-run:
+A failed publish is safe to re-run once its cause is fixed. A missing trusted publisher stops the run in
+the preflight probe before anything is published. Other failures, such as a registry error partway
+through, can leave the release partially published:
 
 ```bash
 gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=false
@@ -163,7 +194,11 @@ There is no single "undo". Depending on what's needed:
 - **"Skipped OIDC: ERR_PNPM_AUTH_TOKEN_EXCHANGE"**: no trusted publisher is registered for that npm
   package (repository, workflow filename, and environment must match exactly — see §2). The `npm` job
   turns this into a hard failure rather than silently falling back to a token, because there is no
-  token to fall back to any more.
+  token to fall back to any more. The preflight probe normally catches this before anything is
+  published; seeing it in the publish step itself means the workflow run predates the preflight.
+- **`NEVER PUBLISHED` in the preflight probe** (the OIDC exchange answers 404 and the package itself is
+  404 on the registry): the package is new and has no trusted publisher because it cannot have one yet.
+  Bootstrap it (§2, "First publish of a new package"), then re-run (§6).
 - **"still a draft"** (from `release.yml`'s `verify` step when given a `tag` input): the named release
   exists but hasn't been published yet, so the tag doesn't exist yet either. Publish the draft (§5), or
   run a dry run without a `tag` input to exercise the current ref instead.
