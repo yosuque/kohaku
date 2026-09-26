@@ -103,7 +103,7 @@ jobs:
         if: matrix.node-version == 24
         run: |
           pnpm python:version
-          git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py
+          git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py python/uv.lock
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         if: matrix.node-version == 24
         with:
@@ -134,6 +134,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
+      # `uv sync --frozen` installs from uv.lock without checking it against the pyproject files, so a stale
+      # lock (e.g. a version bump without re-locking) would otherwise pass silently. Fail on it instead.
+      - run: uv lock --check
       - run: uv sync --frozen
       - run: uv run ruff check
       - run: uv run mypy

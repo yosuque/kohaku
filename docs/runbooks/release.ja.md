@@ -83,7 +83,8 @@ changeset 付きの PR が `main` にマージされると、`version.yml` が `
 - 27 件の `CHANGELOG.md` それぞれに新しい `## <version>` 節が追加されている。
 - `python/kohaku/pyproject.toml` と `python/kohaku/src/kohaku/__init__.py` が同じバージョンに上がっている
   ——Python 側がバージョンを保持する 2 箇所であり、`release.yml` の `verify` ジョブが後でタグとの一致を
-  検査します。
+  検査します。`python/uv.lock` の `kohaku-ui` エントリも同時に上がります(lock が古いと CI の
+  `uv lock --check` が失敗します)。
 - ロックファイルが更新されている(changeset の削除とバージョン上げの両方が影響します)。
 
 この PR をマージしても**公開はされません**。マージされた changeset が消えるだけで、それによって

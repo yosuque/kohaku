@@ -4,7 +4,9 @@
  * The two implementations are one protocol implemented twice, and the conformance suite checks them
  * against each other; a user reading "kohaku 0.3.0" should get the same protocol behaviour in either
  * language. Changesets owns the TypeScript version (all twenty-seven packages move together, so spec-core is
- * a fine stand-in for the set), and this script propagates it to the two places Python states it.
+ * a fine stand-in for the set), and this script propagates it to the two places Python states it, plus the
+ * workspace's own `kohaku-ui` entry in python/uv.lock (which records that version too, and which a release
+ * once left stale because only the first two were bumped; CI's `uv lock --check` now also fails on it).
  *
  * Run by `pnpm version` as part of producing the release pull request, so the Python bump is reviewed in
  * the same diff. CI re-runs it and fails on any drift, like the other generated artifacts.
@@ -31,6 +33,11 @@ const targets: { path: string; pattern: RegExp; replacement: string }[] = [
     path: "python/kohaku/src/kohaku/__init__.py",
     pattern: /^__version__ = ".*"$/m,
     replacement: `__version__ = "${version}"`,
+  },
+  {
+    path: "python/uv.lock",
+    pattern: /^(name = "kohaku-ui"\nversion = )".*"$/m,
+    replacement: `$1"${version}"`,
   },
 ];
 
