@@ -2,6 +2,7 @@ import type { CanonicalIntent, QueryHandle, UISpec } from "@kohaku-ui/spec-core"
 import { describe, expect, it } from "vitest";
 import { summary } from "../src/domain/queries.js";
 import { SalesRepo } from "../src/domain/repo.js";
+import { readSeedFromDisk } from "../src/domain/seed-fs.js";
 import { createFixedSpecs, type OutputLang } from "../src/intents/fixed-specs.js";
 
 // Byte-stability guard for the fixed-specs.ts refactor (Replace Conditional with Lookup Table):
@@ -2509,7 +2510,7 @@ describe("fixed-specs snapshot: unmapped intent", () => {
 // the label is exposed as columns[0].label on the aggregated result. Consolidating this with
 // fixed-specs.ts's GROUP_LABELS (Step 2 of the refactor) must not change any of these three labels.
 describe("groupLabel snapshot (via domain/queries.ts summary() column labels)", () => {
-  const repo = new SalesRepo();
+  const repo = new SalesRepo(readSeedFromDisk());
 
   it("region", () => {
     const t = summary(repo, { groupBy: "region" });
