@@ -111,9 +111,12 @@ jobs:
           git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py
       # Only here for `uvx zizmor` below, so no cache: with caching on, setup-uv hashes its default
       # `**/pyproject.toml` / `**/uv.lock` / ... globs to build the key, and after `pnpm install` that walk
-      # descends into node_modules and took ~8 minutes of this job's ~11.
+      # descends into node_modules and took ~8 minutes of this job's ~11. It must be an explicit `false`:
+      # since v10 the default is `auto`, which enables the cache on GitHub-hosted runners.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         if: matrix.node-version == 24
+        with:
+          enable-cache: false
       # Report-only static analysis of the workflows themselves (template injection, unpinned actions,
       # excessive permissions). Same stance as the dependency audit: visible, not yet blocking.
       # Pinned to an exact version for the same reason the actions above are pinned to a commit SHA
