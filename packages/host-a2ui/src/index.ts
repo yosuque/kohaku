@@ -37,6 +37,7 @@ export {
   type InboundA2uiMessage,
   parseInboundA2uiMessage,
 } from "./inbound/schemas.js";
+export { type A2uiClientActionMessage, toA2uiClientAction } from "./inbound/to-a2ui-client-action.js";
 export { serializeA2uiLines } from "./jsonl.js";
 export { type PatchToA2uiOptions, patchToA2ui } from "./patch-to-a2ui.js";
 export {
