@@ -77,6 +77,7 @@ from .types import (
     AttachOptions,
     McpErrorInfo,
     McpHostDeps,
+    _CanonicalSource,
     _ComposeSource,
     _IntentSource,
 )
@@ -613,13 +614,12 @@ def attach_kohaku_to_mcp_server(
                     _record_interacted,
                     lambda exc: _report_mcp_error(deps, f"{prefix}_event", exc),
                 )
-            return await _compose_and_package(
-                _IntentSource(
-                    intent=IntentInput(canonical=normalized.canonical, params=normalized.params)
-                ),
-                locale,
-                principal,
-            )
+            # Pass the already-resolved Intent through as-is (`_CanonicalSource`) rather than re-destructuring
+            # it into a plain `IntentInput(canonical, params)` and wrapping it back into `_IntentSource`: the
+            # latter would resolve it *again* as a directly-specified Intent on the way into
+            # `_compose_with_fixation`, calling `SemanticPort.validate_intent` a second time for one request
+            # (see `_CanonicalSource`'s doc comment in types.py).
+            return await _compose_and_package(_CanonicalSource(intent=normalized), locale, principal)
 
         return await _safe_tool(f"{prefix}_event", ctx, _run)
 
@@ -900,15 +900,22 @@ async def _compose_with_fixation(
     # Intent resolution via host-core's resolveIntent (shared with the REST profile's /compose(/stream) and
     # /intent/normalize) rather than a local duplicate.
     session = _mcp_session(locale, principal)
-    if isinstance(source, _IntentSource):
+    if isinstance(source, _CanonicalSource):
+        # Already resolved (and, when the wired SemanticPort implements it, validated) by the caller -- e.g.
+        # _handle_event's GUI-delta path -- so resolve_intent must not run again here: doing so would call
+        # SemanticPort.validate_intent a second time for the same request (see _CanonicalSource's doc comment
+        # in types.py).
+        intent = source.intent
+    elif isinstance(source, _IntentSource):
         resolved = await _host_core_resolve_intent(
             deps.compose.semantic, IntentSourceIntent(intent=source.intent), session
         )
+        intent = resolved.intent
     else:
         resolved = await _host_core_resolve_intent(
             deps.compose.semantic, IntentSourceNl(text=source.text), session
         )
-    intent = resolved.intent
+        intent = resolved.intent
 
     # Delegates the fixation shortcut -> staleness check -> self-heal -> normal-compose-fallback sequence to
     # kohaku.host_core (shared with kohaku.host_rest). The MCP profile has a single ComposeContext, so it is

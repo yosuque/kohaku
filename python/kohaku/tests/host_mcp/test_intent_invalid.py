@@ -41,7 +41,16 @@ REF = "query://sales/trend?granularity=month&metric=revenue"
 
 
 class ValidatingSemantic:
-    """Only "sales.trend" / "sales.quarterly_summary" with groupBy in {region, product, channel} validates."""
+    """Only "sales.trend" / "sales.quarterly_summary" with groupBy in {region, product, channel} validates.
+
+    Counts `validate_intent` calls (`validate_intent_calls`) so a test can pin how many times a single
+    request invokes it -- e.g. `kohaku_event` must call it exactly once (for the pre-event `current`), not
+    twice (once more for the post-delta recompose), a regression `_CanonicalSource` (types.py) exists to
+    prevent.
+    """
+
+    def __init__(self) -> None:
+        self.validate_intent_calls = 0
 
     async def normalize(self, input: SemanticInput, ctx: SessionContext) -> IntentInput:
         if isinstance(input, GuiAction):
@@ -60,6 +69,7 @@ class ValidatingSemantic:
         return None
 
     async def validate_intent(self, intent: IntentInput, ctx: SessionContext) -> IntentInput:
+        self.validate_intent_calls += 1
         if intent.canonical not in ("sales.trend", "sales.quarterly_summary"):
             raise IntentValidationError(f'unknown intent "{intent.canonical}"')
         group_by = intent.params.get("groupBy", "region")
@@ -69,10 +79,10 @@ class ValidatingSemantic:
         return IntentInput(canonical=intent.canonical, params={**intent.params, "groupBy": group_by})
 
 
-def _deps(tmp_path: Path) -> McpHostDeps:
+def _deps(tmp_path: Path, semantic: ValidatingSemantic | None = None) -> McpHostDeps:
     ctx = ComposeContext(
         catalog=CATALOG,
-        semantic=ValidatingSemantic(),
+        semantic=semantic if semantic is not None else ValidatingSemantic(),
         storage=FileStoragePort(tmp_path),
         llm=FakeLlm(),
         policy=ComposePolicy(fixedSpecs=_fixed_source(trend_spec_builder)),
@@ -171,5 +181,31 @@ class TestKohakuEventWithAnInvalidDirectlySpecifiedIntent:
                     },
                 )
                 assert not result.is_error
+
+        asyncio.run(run())
+
+    def test_calls_validate_intent_exactly_once_not_twice(self, tmp_path: Path) -> None:
+        """Regression test: kohaku_event resolves `current` (kind: "intent", calling validate_intent) and
+        then the GUI delta (kind: "gui", calling only normalize) via host-core's resolve_intent, then must
+        hand the already-resolved Intent to _compose_with_fixation as a _CanonicalSource -- not re-wrap it
+        into an _IntentSource, which would resolve (and therefore validate) it a second time for the same
+        request. TS calls validateIntent once per kohaku_event call for the same reason (ComposeSource's
+        "canonical" kind); this pins the Python side to the same count.
+        """
+
+        async def run() -> None:
+            semantic = ValidatingSemantic()
+            options = AttachOptions(renderer_html=RENDERER_HTML_PLAIN)
+            async with connect(_deps(tmp_path, semantic), options) as client:
+                result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": {"groupBy": "region"}},
+                        "on": "table1.sort",
+                        "payload": {},
+                    },
+                )
+                assert not result.is_error
+                assert semantic.validate_intent_calls == 1
 
         asyncio.run(run())

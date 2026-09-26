@@ -80,7 +80,7 @@ function validatingSemantic(): SemanticPort {
   };
 }
 
-function makeComposeCtx(): ComposeContext {
+function makeComposeCtx(semantic: SemanticPort = validatingSemantic()): ComposeContext {
   const cache = new Map<string, UISpec>();
   return {
     catalog: resolveCatalog(coreCatalog),
@@ -94,7 +94,7 @@ function makeComposeCtx(): ComposeContext {
         throw new Error("no");
       },
     },
-    semantic: validatingSemantic(),
+    semantic,
     storage: {
       async getSpecCache(k) {
         return cache.get(k) ?? null;
@@ -227,5 +227,46 @@ describe("a directly-specified Intent that fails SemanticPort.validateIntent is 
       },
     });
     expect(result.isError).toBeFalsy();
+  });
+});
+
+// Regression: kohaku_event resolves `current` (host-core's "intent" IntentSource, which calls
+// validateIntent) and then the GUI delta (the "gui" IntentSource, which calls only normalize), and must hand
+// the already-resolved CanonicalIntent to composeForTool as a `{kind: "canonical"}` ComposeSource -- not
+// re-destructure it back into a plain `{canonical, params}` and resolve it again as a directly-specified
+// Intent, which would call validateIntent a second time for the same request (see ComposeSource's doc
+// comment in types.ts). Own describe/client so the call count is isolated from the other tests above.
+describe("kohaku_event calls SemanticPort.validateIntent exactly once per request", () => {
+  it("does not validate the resolved Intent a second time when recomposing", async () => {
+    let calls = 0;
+    const base = validatingSemantic();
+    const counting: SemanticPort = {
+      ...base,
+      async validateIntent(intent, ctx) {
+        calls++;
+        return base.validateIntent!(intent, ctx);
+      },
+    };
+    const server = new McpServer({ name: "kohaku-intent-invalid-count-test", version: "0.1.0" });
+    attachKohakuToMcpServer(
+      server,
+      { compose: makeComposeCtx(counting), domain, authz, querySource: "sales" },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+    const client = new Client({ name: "test-client", version: "0.0.1" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const result = await client.callTool({
+      name: "kohaku_event",
+      arguments: {
+        intent: { canonical: "sales.trend", params: { groupBy: "region" } },
+        on: "table1.sort",
+        payload: {},
+      },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(calls).toBe(1);
   });
 });
