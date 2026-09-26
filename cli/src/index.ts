@@ -109,7 +109,7 @@ program
         ports: {
           defaultOut: "./kohaku-ports",
           scaffold: scaffoldPorts,
-          next: "Implement the TODOs in ports.ts and start server.ts.",
+          next: "Implement the TODOs in ports.ts and intents.ts, then start server.ts.",
         },
         golden: {
           defaultOut: "./kohaku-golden",

@@ -295,7 +295,7 @@ If you have not yet, pick one of the three one-page starts in ["Choose your path
 
 You can adopt it in stages along the adoption ladder (design doc §12 "Design of the sample implementation").
 
-**Dependency method**: `@kohaku-ui/*` packages are published to npm. In a standalone app, `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm @ai-sdk/anthropic zod` (`@ai-sdk/anthropic` is the provider SDK for Claude — an optional peer dependency of `@kohaku-ui/llm`; swap it for `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` depending on the provider you configure) (add `@kohaku-ui/composer`, `@kohaku-ui/renderer-react react react-dom`, etc. as you reach the later steps below) and import them normally — each package's `publishConfig` points `exports` at its `dist` build, so this works outside the monorepo with no extra setup. If you are instead building your app **inside this monorepo** (e.g. to contribute back, or to iterate against `src` without a publish step), add it under `apps/<your-app>`, reference the packages as `workspace:*` in its `package.json`, and run it with `tsx` (packages export `.ts` directly in that case — there is no `dist` build to consume from outside the workspace). The generated `server.ts` below assumes the npm-install path; swap the comment's dependency line for `workspace:*` if you took the monorepo path instead.
+**Dependency method**: `@kohaku-ui/*` packages are published to npm. In a standalone app, `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod` (`@kohaku-ui/host`'s `createKohakuHost()` is the one-call facade over `@kohaku-ui/host-rest` — see below; its `@kohaku-ui/host/mcp` subpath additionally needs `@kohaku-ui/host-mcp-apps` and `@modelcontextprotocol/server`, both optional peers not installed by the command above — see [Path (a)](paths/mcp-apps.md); `@ai-sdk/anthropic` is the provider SDK for Claude — an optional peer dependency of `@kohaku-ui/llm`; swap it for `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` depending on the provider you configure) (add `@kohaku-ui/composer`, `@kohaku-ui/renderer-react react react-dom`, etc. as you reach the later steps below) and import them normally — each package's `publishConfig` points `exports` at its `dist` build, so this works outside the monorepo with no extra setup. If you are instead building your app **inside this monorepo** (e.g. to contribute back, or to iterate against `src` without a publish step), add it under `apps/<your-app>`, reference the packages as `workspace:*` in its `package.json`, and run it with `tsx` (packages export `.ts` directly in that case — there is no `dist` build to consume from outside the workspace). The generated `server.ts` below assumes the npm-install path; swap the comment's dependency line for `workspace:*` if you took the monorepo path instead.
 
 ### Zero-Port quickstart (from your own data, no Port code)
 
@@ -305,7 +305,7 @@ npx @kohaku-ui/cli init --from ../sales.csv     # or a .json array / a .sqlite f
 npm run dev                                      # API :8787 + web :5173
 ```
 
-`init` reads the file, infers which columns are categories (→ vocabularies), measures (→ metrics) and time (→ granularity), and generates a project that only depends on the published `@kohaku-ui/*` packages: a DomainPort over the data (sum / avg / count × group by × time window; `describeShape` exposes column metadata only — rows never enter the model), an Intent catalog (`defineVocabulary` / `defineIntent`), an L0 fixed Spec for `<source>.summary`, `@kohaku-ui/semantic-llm`'s default SemanticPort, `@kohaku-ui/storage-memory` and `@kohaku-ui/authz-hmac`, a Dashboard + Chat web app and a golden regression test. `init` also writes a `.env` with a freshly generated capability secret, so add only a provider key to it — never copy `.env.example` over it. The **Summary** view renders with no LLM configured; set a provider in `.env` for Chat and the L1 views. Chat answers only within the generated Intent catalog and returns `NO_MATCH` for anything outside it (widen it with `fallbackIntent`). Everything generated is a starting point — the four Ports remain your product's responsibility (design doc §2), and each file says what to replace.
+`init` reads the file, infers which columns are categories (→ vocabularies), measures (→ metrics) and time (→ granularity), and generates a project that only depends on the published `@kohaku-ui/*` packages: a DomainPort over the data (sum / avg / count × group by × time window; `describeShape` exposes column metadata only — rows never enter the model), an Intent catalog (`defineVocabulary` / `defineIntent`), an L0 fixed Spec for `<source>.summary`, a Dashboard + Chat web app and a golden regression test — all wired together with `@kohaku-ui/host`'s `createKohakuHost()` (design doc #52), which supplies the SemanticPort (`@kohaku-ui/semantic-llm`), storage (`@kohaku-ui/storage-memory`) and capability tokens (`@kohaku-ui/authz-hmac`) as defaults. `init` also writes a `.env` with a freshly generated capability secret, so add only a provider key to it — never copy `.env.example` over it. The **Summary** view renders with no LLM configured; set a provider in `.env` for Chat and the L1 views. Chat answers only within the generated Intent catalog and returns `NO_MATCH` for anything outside it (widen it with `fallbackIntent`). Everything generated is a starting point — the DomainPort remains your product's responsibility (design doc §2), and each file says what else to replace (`createKohakuHost`'s other defaults included).
 
 No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv).
 
@@ -319,14 +319,17 @@ No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtu
 npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 ```
 
-Implement the four Ports in the generated `ports.ts`. At first:
+Implement the one Port `createKohakuHost()` (`@kohaku-ui/host`) does not default for you, in the generated `ports.ts`, and your Intent catalog in `intents.ts`:
 
-1. **DomainPort**: implement aggregation queries as `op` (returning TabularData is recommended)
-2. **SemanticPort**: `normalize` is only the deterministic mapping of GUI operations; `resolveQuery` is Intent → a `query://` handle
-3. **AuthzPort**: start from `@kohaku-ui/authz-hmac` (`createHmacAuthzPort(secret)`, the sample's HMAC capability tokens). For a JWT / OIDC deployment, `@kohaku-ui/authz-jwt`'s `createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })` keeps the same capability tokens and adds `identity.fromAuthorizationHeader(...)`, which resolves `Principal` (id / name / roles) and the tenant from the token's claims for your `KohakuHostDeps.auth` / `tenant` hooks and MCP's `resolvePrincipal` (see §7 "Production adapters").
-4. **StoragePort**: in-memory is enough at first (`@kohaku-ui/storage-memory`'s `createMemoryStoragePort()`; `createFileStoragePort(dataDir)` is the demo's file persistence). For more than one host instance, use `@kohaku-ui/storage-redis` or `@kohaku-ui/storage-postgres` so the Spec cache is shared (§7).
+1. **DomainPort** (yours — no default exists): implement aggregation queries as `op` (returning TabularData is recommended). Pass it as `createKohakuHost({ domain, ... })`.
 
-If you register fixed Spec templates (the sample is `apps/sample-api/src/intents/fixed-specs.ts`) in composer's `policy.fixedSpecs`, a Server-Driven UI via renderer-react works **without an LLM**.
+The other three Ports have working defaults; override any of them by passing your own once you outgrow the default:
+
+2. **SemanticPort** (default: `@kohaku-ui/semantic-llm`'s `createLlmSemanticPort`, built from `intents.ts` + `dataVersion`/`describeShape`): `normalize` is only the deterministic mapping of GUI operations; `resolveQuery` is Intent → a `query://` handle. Pass your own as `createKohakuHost({ semantic, ... })` — `intents` / `dataVersion` / `describeShape` are then ignored.
+3. **AuthzPort** (default: `@kohaku-ui/authz-hmac`'s `createHmacAuthzPort(secret)`, `secret` resolved from `capabilitySecret` or the `KOHAKU_CAPABILITY_SECRET` environment variable). For a JWT / OIDC deployment, pass `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })` (`@kohaku-ui/authz-jwt`) instead — it keeps the same capability tokens and adds `identity.fromAuthorizationHeader(...)`, which resolves `Principal` (id / name / roles) and the tenant from the token's claims for your `KohakuHostDeps.auth` / `tenant` hooks and MCP's `resolvePrincipal` (see §7 "Production adapters").
+4. **StoragePort** (default: `@kohaku-ui/storage-memory`'s `createMemoryStoragePort()`). For more than one host instance, pass `storage: createRedisStoragePort(...)` / `createPostgresStoragePort(...)` (`@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres`) so the Spec cache is shared (§7).
+
+If you register fixed Spec templates (the sample is `apps/sample-api/src/intents/fixed-specs.ts`) in `createKohakuHost`'s `policy.fixedSpecs` option, a Server-Driven UI via renderer-react works **without an LLM** actually being called — `llm` is still a required argument (`createKohakuHost` never defaults it), but nothing invokes it as long as every Intent you compose resolves through `fixedSpecs`.
 
 ### Step 1 — L1 declarative synthesis and chat
 
@@ -618,6 +621,40 @@ npx @kohaku-ui/cli scaffold golden --out ./my-app/test   # golden.test.ts + gold
 ```
 
 Wire your product's `ComposeContext` into the generated `golden.test.ts`'s `makeContext`, place `{name,input,drafts,expected:null}` JSON under `golden/`, and generate `expected` with `KOHAKU_GOLDEN_UPDATE=1 <run the test>`. Subsequent tests are deterministic and LLM-free, because `@kohaku-ui/evals`'s `runGolden` normalizes the jitter of provenance / intent.hash / dataVersion / refVersions and component IDs and compares only the structure (responses feed `drafts` to the FakeLlm; if you need a live recording, use FixtureLlm's record/replay). A working example is `apps/sample-api/test/golden.test.ts` (fixing the L1 generation of `sales.trend`). If you intentionally change the UI, regenerate `expected` with the same update procedure, review the git diff, and commit.
+
+### A2UI ingest (governance proxy for a third-party agent's surface) [Draft]
+
+`@kohaku-ui/host-a2ui`'s inbound side (`fromA2ui` / `createA2uiIngest` / `toA2uiClientAction`) lets you render a **third-party** A2UI agent's surface inside your own kohaku-based product and bring it under the same governance you already get for your own generated views: the ingested content becomes an ordinary L1 `UISpec` (`provenance.composedBy: "a2ui-ingest"`), so it is cached, appears in View Lineage, and is eligible for the same L1→L0 fixation as anything else. No LLM is called anywhere in this path.
+
+```ts
+import { createA2uiIngest } from "@kohaku-ui/host-a2ui";
+import { createFileStoragePort } from "@kohaku-ui/storage-memory";
+import { createLineage, createViewRecorder, createFixations } from "@kohaku-ui/lineage";
+
+const storage = createFileStoragePort("./.data");
+const lineage = createLineage({ storage });
+const ingest = createA2uiIngest({
+  storage,
+  recorder: createViewRecorder(lineage),
+  fixations: createFixations({ lineage, storage }),
+  agentId: "vendor-checkout-agent", // from your own auth, never from the message payload
+});
+
+// Forward the vendor agent's raw A2UI messages (createSurface / updateComponents / updateDataModel / deleteSurface)
+// as they arrive; ingest() schema-validates them and returns the current UISpec for that surface.
+const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
+  // Recommended: pass an explicit Intent (see the governance-proxy note below).
+  intent: { canonical: "vendor.checkout", params: { orderId } },
+});
+```
+
+**Pass an explicit `intent`.** Without one, `ingest()` derives a default canonical name from `surfaceId` (`a2ui.<agent_slug>.<surface_slug>`) — and a real agent typically mints a fresh `surfaceId` per session/connection, so that default almost never repeats and the Spec cache almost never hits. An explicit, product-meaningful Intent (e.g. `{canonical: "vendor.checkout", params: {orderId}}`, keyed by something that's actually stable across requests for "the same logical view") is what makes repeated ingests of the same live surface share one cache entry, participate in fixation-proposal aggregation, and show up coherently in the Lineage / Analytics views.
+
+When the user interacts with the rendered surface, your renderer fires an ordinary kohaku `GuiAction` (kohaku synthesizes an `EventBinding` from the agent's own `action.event` during ingest, so this is a real interaction, not just a static reconstruction); route it back to the originating agent with `toA2uiClientAction(guiAction)`, which recovers the agent's own event name and context.
+
+**Security: never register `A2UI_FORWARD_ACTION` as a real operation.** The `EventBinding` kohaku synthesizes for an ingested interaction always carries `payload.action: A2UI_FORWARD_ACTION` — never the agent's own data — because spec-core's `collectWriteActions` (what decides which write capability your host issues for a Spec) reads exactly that field, and an A2UI event's `context` is otherwise a wholly agent-controlled dictionary a malicious agent could use to name a real operation of yours. Your dispatcher MUST recognize `A2UI_FORWARD_ACTION` and route it to `toA2uiClientAction` *before* ever considering a `DomainPort` call, and MUST NOT register it as an actual operation. `createA2uiIngest` always treats ingested content as untrusted this way; only call `fromA2ui` directly with `trust: "trusted"` (which also restores a `KohakuSidecar`'s original events verbatim) for content you can prove is kohaku's own prior output re-ingested, e.g. in a test.
+
+Unmappable content (a component type your catalog doesn't recognize, a data-bound repeated template, a computed function-call value) becomes a deterministic placeholder by default (`unmappable: "fallback"`, the default) — never a fresh LLM regeneration — or fails the whole ingest (`unmappable: "reject"`) if you'd rather surface the error immediately. See `packages/host-a2ui/README.md` and [spec/SPEC.md](../spec/SPEC.md)'s §6.3 "Inbound A2UI (ingest)" for the full mapping table, the write-action forwarding security note, and the loss policy (out of conformance scope, like the rest of the A2UI profile).
 
 ## 7. Operational tips
 

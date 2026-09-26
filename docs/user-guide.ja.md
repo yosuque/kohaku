@@ -295,7 +295,7 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 導入ラダー(設計書 §12「サンプル実装の設計」)に沿って段階導入できます。
 
-**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm @ai-sdk/anthropic zod`(`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
+**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod`(`@kohaku-ui/host` の `createKohakuHost()` は `@kohaku-ui/host-rest` を包む one-call ファサードです。詳細は後述。その `@kohaku-ui/host/mcp` サブパスを使うには追加で `@kohaku-ui/host-mcp-apps` と `@modelcontextprotocol/server` が要り、どちらも上のコマンドではインストールされない optional peer です——[パス (a)](paths/mcp-apps.ja.md)参照。`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
 ### Zero-Port quickstart(自分のデータから、Port コードなしで)
 
@@ -305,7 +305,7 @@ npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファ�
 npm run dev                                      # API :8787 + web :5173
 ```
 
-`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、`@kohaku-ui/semantic-llm` の既定 SemanticPort、`@kohaku-ui/storage-memory` と `@kohaku-ui/authz-hmac`、Dashboard + Chat の Web アプリ、golden regression テスト。`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、4 つの Port はプロダクト側の責務のままです(設計書 §2)。各ファイルには何を置き換えるべきかが書かれています。
+`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
 
 手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。
 
@@ -319,14 +319,17 @@ npm run dev                                      # API :8787 + web :5173
 npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 ```
 
-生成された `ports.ts` の 4 つの Port を実装します。最初は:
+`createKohakuHost()`(`@kohaku-ui/host`)が既定を用意しない唯一の Port を生成された `ports.ts` に、Intent カタログを `intents.ts` に実装します:
 
-1. **DomainPort**: 集計クエリを `op` として実装(戻りは TabularData 推奨)
-2. **SemanticPort**: `normalize` は GUI 操作の決定的マッピングだけ、`resolveQuery` は Intent → `query://` ハンドル
-3. **AuthzPort**: まず `@kohaku-ui/authz-hmac`(`createHmacAuthzPort(secret)`、サンプルの HMAC capability token)から始める。JWT / OIDC で運用する場合は `@kohaku-ui/authz-jwt` の `createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })` が capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決して、`KohakuHostDeps.auth` / `tenant` フックや MCP の `resolvePrincipal` に渡せるようにする(§7「本番用アダプタ」参照)。
-4. **StoragePort**: 最初はインメモリで十分(`@kohaku-ui/storage-memory` の `createMemoryStoragePort()`。`createFileStoragePort(dataDir)` はデモのファイル永続化)。ホストインスタンスが複数になったら `@kohaku-ui/storage-redis` か `@kohaku-ui/storage-postgres` を使い、Spec キャッシュを共有する(§7)。
+1. **DomainPort**(あなたの責務 — 既定は存在しません): 集計クエリを `op` として実装(戻りは TabularData 推奨)。`createKohakuHost({ domain, ... })` として渡します。
 
-composer の `policy.fixedSpecs` に固定 Spec テンプレート(`apps/sample-api/src/intents/fixed-specs.ts` が見本)を登録すれば、**LLM なしで** renderer-react による Server-Driven UI が動きます。
+残り 3 つの Port には動く既定値があります。既定を超えたら、自分の実装を渡して差し替えてください:
+
+2. **SemanticPort**(既定: `@kohaku-ui/semantic-llm` の `createLlmSemanticPort`。`intents.ts` + `dataVersion` / `describeShape` から組み立てられます): `normalize` は GUI 操作の決定的マッピングだけ、`resolveQuery` は Intent → `query://` ハンドル。自分の実装は `createKohakuHost({ semantic, ... })` として渡します — このとき `intents` / `dataVersion` / `describeShape` は無視されます。
+3. **AuthzPort**(既定: `@kohaku-ui/authz-hmac` の `createHmacAuthzPort(secret)`。`secret` は `capabilitySecret` か環境変数 `KOHAKU_CAPABILITY_SECRET` から解決されます)。JWT / OIDC で運用する場合は代わりに `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })`(`@kohaku-ui/authz-jwt`)を渡してください — capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決して、`KohakuHostDeps.auth` / `tenant` フックや MCP の `resolvePrincipal` に渡せます(§7「本番用アダプタ」参照)。
+4. **StoragePort**(既定: `@kohaku-ui/storage-memory` の `createMemoryStoragePort()`)。ホストインスタンスが複数になったら `storage: createRedisStoragePort(...)` / `createPostgresStoragePort(...)`(`@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres`)を渡し、Spec キャッシュを共有する(§7)。
+
+`createKohakuHost` の `policy.fixedSpecs` オプションに固定 Spec テンプレート(`apps/sample-api/src/intents/fixed-specs.ts` が見本)を登録すれば、**LLM が実際に呼ばれることなく** renderer-react による Server-Driven UI が動きます — `llm` は必須の引数のままです(`createKohakuHost` は既定値を作りません)が、compose する全 Intent が `fixedSpecs` で解決される限り、それが呼び出されることはありません。
 
 ### Step 1 — L1 宣言的合成とチャット
 
@@ -614,6 +617,40 @@ npx @kohaku-ui/cli scaffold golden --out ./my-app/test   # golden.test.ts + gold
 ```
 
 生成された `golden.test.ts` の `makeContext` にプロダクトの `ComposeContext` を配線し、`golden/` に `{name,input,drafts,expected:null}` の JSON を置いて `KOHAKU_GOLDEN_UPDATE=1 <テスト実行>` で `expected` を生成します。以降のテストは `@kohaku-ui/evals` の `runGolden` が provenance / intent.hash / dataVersion / refVersions とコンポーネント ID の揺らぎを正規化して構造だけを比較するため、LLM 不要で決定的です(応答は `drafts` を FakeLlm に流す。ライブ記録が要るなら FixtureLlm の record/replay)。動く実例は `apps/sample-api/test/golden.test.ts`(`sales.trend` の L1 生成を固定)。意図的に UI を変えたら同じ更新手順で `expected` を再生成し、git diff をレビューしてコミットします。
+
+### A2UI 取り込み(他社エージェントのサーフェス向け governance proxy)[Draft]
+
+`@kohaku-ui/host-a2ui` の受信側(`fromA2ui` / `createA2uiIngest` / `toA2uiClientAction`)を使うと、**他社の** A2UI エージェントのサーフェスを自社の kohaku ベース製品の中に描画しつつ、自社が生成したビューと同じガバナンスの下に置けます: 取り込んだコンテンツは普通の L1 `UISpec`(`provenance.composedBy: "a2ui-ingest"`)になるので、キャッシュされ、View Lineage に現れ、他のものと同じ L1→L0 固定化の対象になります。この経路のどこでも LLM は呼び出されません。
+
+```ts
+import { createA2uiIngest } from "@kohaku-ui/host-a2ui";
+import { createFileStoragePort } from "@kohaku-ui/storage-memory";
+import { createLineage, createViewRecorder, createFixations } from "@kohaku-ui/lineage";
+
+const storage = createFileStoragePort("./.data");
+const lineage = createLineage({ storage });
+const ingest = createA2uiIngest({
+  storage,
+  recorder: createViewRecorder(lineage),
+  fixations: createFixations({ lineage, storage }),
+  agentId: "vendor-checkout-agent", // 自社の認証由来。メッセージのペイロードからは取らない
+});
+
+// ベンダーエージェントの生の A2UI メッセージ(createSurface / updateComponents / updateDataModel / deleteSurface)
+// を届いた順に渡す。ingest() がスキーマ検証し、そのサーフェスの現在の UISpec を返す。
+const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
+  // 推奨: 明示的な Intent を渡す(下の governance-proxy の注記参照)。
+  intent: { canonical: "vendor.checkout", params: { orderId } },
+});
+```
+
+**明示的な `intent` を渡してください。** 渡さない場合、`ingest()` は `surfaceId` から既定の canonical 名(`a2ui.<agent_slug>.<surface_slug>`)を導出しますが、実際のエージェントは通常セッション/接続ごとに新しい `surfaceId` を採番するため、この既定値はほとんど繰り返されず Spec キャッシュもほとんど効きません。明示的でプロダクト上意味のある Intent(例: `{canonical: "vendor.checkout", params: {orderId}}`。リクエストをまたいで「同じ論理ビュー」を実際に安定して特定できる値をキーにする)を渡すことで、初めて同じライブサーフェスへの繰り返しの取り込みが 1 つのキャッシュエントリを共有し、固定化提案の集計に参加し、Lineage / Analytics のビューに一貫した形で現れます。
+
+ユーザーが描画済みサーフェスを操作すると、レンダラーは普通の kohaku `GuiAction` を発火します(kohaku は取り込み時にエージェント自身の `action.event` から `EventBinding` を合成しているため、これは見た目だけの再現ではなく本物の操作です)。これを `toA2uiClientAction(guiAction)` で元のエージェントへ送り返すと、エージェント自身のイベント名と context が復元されます。
+
+**セキュリティ: `A2UI_FORWARD_ACTION` を実際の操作として登録しないでください。** 取り込んだ操作のために kohaku が合成する `EventBinding` は、常に `payload.action: A2UI_FORWARD_ACTION` を持ちます——エージェント自身のデータではありません。spec-core の `collectWriteActions`(自社ホストが Spec に対してどの write capability を発行するか決めるもの)がまさにそのフィールドを読むためで、A2UI イベントの `context` はそうでなければ完全にエージェント制御下の辞書であり、悪意あるエージェントがそれを使って自社の実際の操作を名指しできてしまいます。ディスパッチャは `A2UI_FORWARD_ACTION` を認識し、`DomainPort` 呼び出しを検討する*前に*必ず `toA2uiClientAction` へ経路付けしなければならず、実際の操作として登録してはいけません。`createA2uiIngest` は常にこの方式で取り込んだコンテンツを信頼できないものとして扱います。`fromA2ui` を `trust: "trusted"`(`KohakuSidecar` の元のイベントも無損失に復元する)付きで直接呼ぶのは、テストなど、kohaku 自身の過去の出力の再取り込みであると証明できるコンテンツに限ってください。
+
+表現できないコンテンツ(自社カタログが認識しないコンポーネント型、データにひも付いた反復テンプレート、計算された function-call 値)は既定では決定的なプレースホルダになります(`unmappable: "fallback"`、既定値)——LLM による再生成では**ありません**——または、エラーをすぐに表面化させたいなら取り込み全体を失敗させます(`unmappable: "reject"`)。完全な対応表・write-action 転送のセキュリティに関する注記・損失方針は `packages/host-a2ui/README.md` と [spec/SPEC.ja.md](../spec/SPEC.ja.md) の §6.3「Inbound A2UI(取り込み)」を参照してください(A2UI プロファイルの他の部分と同様、conformance 検査対象外です)。
 
 ## 7. 運用の勘どころ
 

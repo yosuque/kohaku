@@ -22,6 +22,7 @@ import semver from "semver";
 import {
   GOLDEN_README_TEMPLATE,
   GOLDEN_TEST_TEMPLATE,
+  INTENTS_TEMPLATE,
   PORTS_TEMPLATE,
   SERVER_TEMPLATE,
 } from "./templates.js";
@@ -265,10 +266,11 @@ export function writeScaffold(files: readonly (readonly [string, string])[]): st
   return written;
 }
 
-/** scaffold ports: generate scaffolds for the Ports the product implements and a Hono server */
+/** scaffold ports: generate scaffolds for the DomainPort, an Intent catalog, and a Hono server built on createKohakuHost() */
 export function scaffoldPorts(outDir: string): string[] {
   return writeScaffold([
     [join(outDir, "ports.ts"), PORTS_TEMPLATE],
+    [join(outDir, "intents.ts"), INTENTS_TEMPLATE],
     [join(outDir, "server.ts"), SERVER_TEMPLATE],
   ]);
 }

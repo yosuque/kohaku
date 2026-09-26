@@ -7,10 +7,12 @@ import type {
   A2uiUpdateComponents,
 } from "../src/index.js";
 import {
+  A2UI_V1_BASIC_CATALOG_ID,
   A2UI_V1_VERSION,
   A2UI_VERSION,
   escapeJsonPointerToken,
   fromA2uiEvent,
+  KOHAKU_CATALOG_ID,
   patchToA2ui,
   serializeA2uiLines,
   toA2ui,
@@ -465,6 +467,173 @@ describe("toA2ui: target 'v1.0' (A2UI v1.0 RC, opt-in)", () => {
     // Object key: the raw (unescaped) ref, since this is a plain object key, not a JSON Pointer path segment.
     const dataModel = createSurface.dataModel as unknown as { refs: Record<string, TabularData> };
     expect(dataModel.refs[REF]?.rows).toEqual(data.rows);
+  });
+});
+
+describe("toA2ui: catalogMode 'split' (A2UI v1.0 RC, opt-in)", () => {
+  it("rejects split mode under target v0.9.1 (v0.9.1 has no catalogId field)", async () => {
+    await expect(toA2ui(quarterlySalesSpec(), { catalogMode: "split" })).rejects.toThrow(
+      /catalogMode "split"|target: "v1\.0"/,
+    );
+  });
+
+  it("surface catalogId becomes the basic catalog URI (overridable via basicCatalogId)", async () => {
+    const { messages } = await toA2ui(quarterlySalesSpec(), { target: "v1.0", catalogMode: "split" });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    expect(createSurface.catalogId).toBe(A2UI_V1_BASIC_CATALOG_ID);
+
+    const overridden = await toA2ui(quarterlySalesSpec(), {
+      target: "v1.0",
+      catalogMode: "split",
+      basicCatalogId: "https://example.com/my-basic-catalog.json",
+    });
+    const overriddenSurface = (overridden.messages[0] as { createSurface: A2uiCreateSurfaceV1 })
+      .createSurface;
+    expect(overriddenSurface.catalogId).toBe("https://example.com/my-basic-catalog.json");
+  });
+
+  it("basic-mapped components (Row/Column/Text/Button) carry no catalogId of their own", async () => {
+    const { messages } = await toA2ui(buttonSpec(), { target: "v1.0", catalogMode: "split" });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    for (const c of createSurface.components!) {
+      expect(c.catalogId).toBeUndefined();
+    }
+  });
+
+  it("kohaku's own (verbatim) components carry catalogId: KOHAKU_CATALOG_ID (overridable via catalogId)", async () => {
+    const { messages } = await toA2ui(quarterlySalesSpec(), { target: "v1.0", catalogMode: "split" });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    const byId = new Map(createSurface.components!.map((c) => [c.id, c]));
+    expect(byId.get("c")!.catalogId).toBe(KOHAKU_CATALOG_ID);
+    expect(byId.get("g")!.catalogId).toBe(KOHAKU_CATALOG_ID);
+    // Basic-mapped siblings in the same tree are unaffected
+    expect(byId.get("root")!.catalogId).toBeUndefined();
+    expect(byId.get("t")!.catalogId).toBeUndefined();
+
+    const overridden = await toA2ui(quarterlySalesSpec(), {
+      target: "v1.0",
+      catalogMode: "split",
+      catalogId: "https://example.com/my-kohaku-catalog.json",
+    });
+    const overriddenSurface = (overridden.messages[0] as { createSurface: A2uiCreateSurfaceV1 })
+      .createSurface;
+    const overriddenById = new Map(overriddenSurface.components!.map((c) => [c.id, c]));
+    expect(overriddenById.get("c")!.catalogId).toBe("https://example.com/my-kohaku-catalog.json");
+  });
+
+  it("does not change the v0.9.1 and v1.0 'single' goldens (split is additive and opt-in)", async () => {
+    const v091 = await toA2ui(quarterlySalesSpec());
+    const v1Single = await toA2ui(quarterlySalesSpec(), { target: "v1.0" });
+    const v1SingleExplicit = await toA2ui(quarterlySalesSpec(), { target: "v1.0", catalogMode: "single" });
+    expect(JSON.stringify(v091.messages)).toBe(
+      `[{"version":"v0.9.1","createSurface":{"surfaceId":"${SURFACE}",` +
+        `"catalogId":"https://kohaku-ui.dev/a2ui/catalogs/core.json"}},` +
+        `{"version":"v0.9.1","updateComponents":{"surfaceId":"${SURFACE}","components":[` +
+        `{"id":"root","component":"Column","children":["t","c","g"]},` +
+        `{"id":"t","component":"Text","text":"FY2026 Q3 Sales (by region)","variant":"h2"},` +
+        `{"id":"c","component":"presentChart","kind":"bar","x":"region","y":"revenue"},` +
+        `{"id":"g","component":"presentSpreadsheet","editable":false,"action":{"event":{"name":"g.rowClick","context":{}}}}` +
+        `]}}]`,
+    );
+    expect(JSON.stringify(v1Single.messages)).toBe(JSON.stringify(v1SingleExplicit.messages));
+    // No component in "single" mode carries catalogId (it rides only on the surface's own default).
+    const createSurface = (v1Single.messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    for (const c of createSurface.components!) {
+      expect(c).not.toHaveProperty("catalogId");
+    }
+  });
+});
+
+describe("toA2ui: rendererFunctions (A2UI v1.0 RC, opt-in)", () => {
+  /** A spec whose event is a client-local state.set (rather than a server-notifying emit). */
+  function stateSetSpec(): UISpec {
+    return {
+      kohaku: "0.2",
+      intent: { canonical: "sales.toggle", params: {}, hash: HASH },
+      dataVersion: "sales@seed-1",
+      state: { expanded: false },
+      components: [
+        {
+          id: "root",
+          type: "layout.stack",
+          props: {},
+          children: ["btn"],
+        },
+        { id: "btn", type: "action.button", props: { label: "Toggle" } },
+      ],
+      events: [{ on: "btn.press", emit: "state.set", payload: { key: "expanded", value: true } }],
+      provenance: { tier: "L0", composedBy: "test", cache: "miss" },
+    };
+  }
+
+  it("rejects rendererFunctions under target v0.9.1", async () => {
+    await expect(toA2ui(stateSetSpec(), { rendererFunctions: true })).rejects.toThrow(
+      /rendererFunctions|target: "v1\.0"/,
+    );
+  });
+
+  it("projects a state.set EventBinding as action.functionCall calling kohaku.setState", async () => {
+    const { messages } = await toA2ui(stateSetSpec(), { target: "v1.0", rendererFunctions: true });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    const btn = createSurface.components!.find((c) => c.id === "btn")!;
+    expect(btn.action).toEqual({
+      functionCall: {
+        call: "kohaku.setState",
+        catalogId: KOHAKU_CATALOG_ID,
+        args: { key: "expanded", value: true },
+      },
+    });
+  });
+
+  it("without rendererFunctions (default), a state.set EventBinding still gets the generic action.event form", async () => {
+    const { messages } = await toA2ui(stateSetSpec(), { target: "v1.0" });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    const btn = createSurface.components!.find((c) => c.id === "btn")!;
+    expect(btn.action).toEqual({ event: { name: "btn.press", context: {} } });
+  });
+
+  it("leaves non-state.set emits (e.g. action.invoke) on the generic action.event form even with rendererFunctions: true", async () => {
+    const { messages } = await toA2ui(buttonSpec(), { target: "v1.0", rendererFunctions: true });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    const btn = createSurface.components!.find((c) => c.id === "btn")!;
+    expect(btn.action).toEqual({ event: { name: "btn.press", context: {} } });
+  });
+});
+
+describe("patchToA2ui: catalogMode 'split' (A2UI v1.0 RC, opt-in)", () => {
+  it("rejects split mode under target v0.9.1", () => {
+    const patch: SpecPatch = { baseIntentHash: HASH, upsert: [{ id: "t", type: "text.heading", props: {} }] };
+    expect(() => patchToA2ui(patch, undefined, { catalogMode: "split" })).toThrow(
+      /catalogMode "split"|target: "v1\.0"/,
+    );
+  });
+
+  it("stamps catalogId on a verbatim upserted component, none on a basic-mapped one", () => {
+    const patch: SpecPatch = {
+      baseIntentHash: HASH,
+      upsert: [
+        { id: "t", type: "text.heading", props: { level: 2, text: "New title" } },
+        { id: "c", type: "presentChart", props: { kind: "bar", x: "region", y: "revenue" } },
+      ],
+    };
+    const { messages } = patchToA2ui(patch, undefined, { target: "v1.0", catalogMode: "split" });
+    const uc = (messages[0] as { updateComponents: A2uiUpdateComponents }).updateComponents;
+    const byId = new Map(uc.components.map((c) => [c.id, c]));
+    expect(byId.get("t")!.catalogId).toBeUndefined();
+    expect(byId.get("c")!.catalogId).toBe(KOHAKU_CATALOG_ID);
+  });
+
+  it("does not change the default (single-mode) patch golden", () => {
+    const patch: SpecPatch = {
+      baseIntentHash: HASH,
+      upsert: [{ id: "t", type: "text.heading", props: { level: 2, text: "New title" } }],
+      dataVersion: "sales@seed-2",
+    };
+    const { messages } = patchToA2ui(patch);
+    expect(JSON.stringify(messages)).toBe(
+      `[{"version":"v0.9.1","updateComponents":{"surfaceId":"${SURFACE}","components":[` +
+        `{"id":"t","component":"Text","text":"New title","variant":"h2"}]}}]`,
+    );
   });
 });
 
