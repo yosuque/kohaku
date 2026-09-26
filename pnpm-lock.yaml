@@ -340,6 +340,9 @@ importers:
       '@kohaku-ui/data-binding':
         specifier: workspace:^
         version: link:../../packages/data-binding
+      '@kohaku-ui/host':
+        specifier: workspace:^
+        version: link:../../packages/host
       '@kohaku-ui/host-mcp-apps':
         specifier: workspace:^
         version: link:../../packages/host-mcp-apps
