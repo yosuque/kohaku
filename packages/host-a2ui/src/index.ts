@@ -9,6 +9,17 @@ export {
   toKohakuComponentId,
 } from "./inbound/from-a2ui.js";
 export {
+  type A2uiIngest,
+  type A2uiIngestFixations,
+  type A2uiIngestMeta,
+  type A2uiIngestOutcome,
+  type A2uiIngestRecorder,
+  type A2uiIngestStorage,
+  type A2uiIngestTrace,
+  type CreateA2uiIngestOptions,
+  createA2uiIngest,
+} from "./inbound/ingest.js";
+export {
   A2UI_ROOT_COMPONENT_ID,
   A2uiIngestError,
   getAtPointer,

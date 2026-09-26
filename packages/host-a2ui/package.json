@@ -18,6 +18,8 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@kohaku-ui/lineage": "workspace:^",
+    "@kohaku-ui/storage-memory": "workspace:^",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
