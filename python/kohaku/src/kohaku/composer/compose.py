@@ -265,6 +265,10 @@ async def prepare_compose(
         intentHash=intent.hash,
         dataVersion=refs.dataVersion,
         catalogFingerprint=ctx.catalog.fingerprint,
+        # cache_key() below falls back to SPEC_VERSION itself when specVersion is omitted, but the
+        # *recorded* key_parts must carry the value it actually used -- otherwise `kohaku explain`/DevTools
+        # show a "-" placeholder for a component that in fact contributed a real segment to the cache key.
+        specVersion=SPEC_VERSION,
         generatorVersion=policy.generatorVersion,
         policyFingerprint=policy_fingerprint(policy, tier_llm_fingerprint_material(ctx)),
     )

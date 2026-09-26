@@ -8,6 +8,7 @@ import {
   type JsonObject,
   type SemanticInput,
   type SessionContext,
+  SPEC_VERSION,
   type SpecPatch,
   type UISpec,
 } from "@kohaku-ui/spec-core";
@@ -220,6 +221,10 @@ export async function prepareCompose(
     intentHash: intent.hash,
     dataVersion: refs.dataVersion,
     catalogFingerprint: ctx.catalog.fingerprint,
+    // cacheKey() below falls back to SPEC_VERSION itself when specVersion is omitted, but the *recorded*
+    // keyParts must carry the value it actually used -- otherwise `kohaku explain`/DevTools show a "-"
+    // placeholder for a component that in fact contributed a real segment to the cache key string.
+    specVersion: SPEC_VERSION,
     ...(policy.generatorVersion != null ? { generatorVersion: policy.generatorVersion } : {}),
     ...(pf !== "" ? { policyFingerprint: pf } : {}),
   };

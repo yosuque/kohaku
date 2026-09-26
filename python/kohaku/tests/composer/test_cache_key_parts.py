@@ -15,7 +15,7 @@ from kohaku.composer import (
 )
 from kohaku.llm import FakeLlm, LlmPort
 from kohaku.registry import core_catalog, resolve_catalog
-from kohaku.spec import IntentInput, cache_key
+from kohaku.spec import SPEC_VERSION, IntentInput, cache_key
 from kohaku.storage import FileStoragePort
 
 from .test_compose import _FakeSemantic, _l1_draft
@@ -38,7 +38,31 @@ class TestCacheKeyParts:
             assert parts.intentHash == result.trace.intent.hash
             assert parts.dataVersion == result.trace.dataVersion
             assert parts.catalogFingerprint == _CATALOG.fingerprint
+            # Regression: specVersion was previously left unset on the recorded parts even though
+            # cache_key() always falls back to SPEC_VERSION internally when building the key string --
+            # so `kohaku explain`/DevTools showed a "-" placeholder for a component that had in fact
+            # contributed a real segment.
+            assert parts.specVersion == SPEC_VERSION
             # cache_key() applied to the recorded parts reproduces the recorded cacheKey exactly.
+            assert cache_key(parts) == result.trace.cacheKey
+
+        asyncio.run(run())
+
+    def test_carries_every_component_cache_key_reads_and_rebuilding_reproduces_the_recorded_key(
+        self, tmp_path: Any
+    ) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            policy = ComposePolicy(generatorVersion="gen-2", outputLanguage="Japanese")
+            ctx = _ctx(FakeLlm(objects=[_l1_draft()]), storage, policy=policy)
+            result = await compose(_INTENT_INPUT, ctx)
+            parts = result.trace.cacheKeyParts
+            assert parts.intentHash
+            assert parts.dataVersion
+            assert parts.catalogFingerprint
+            assert parts.specVersion
+            assert parts.generatorVersion
+            assert parts.policyFingerprint
             assert cache_key(parts) == result.trace.cacheKey
 
         asyncio.run(run())
