@@ -86,7 +86,8 @@ titled `chore(release): version packages`. Review it like any other pull request
 - All twenty-seven `CHANGELOG.md` files gain a new `## <version>` section.
 - `python/kohaku/pyproject.toml` and `python/kohaku/src/kohaku/__init__.py` bump to the matching
   version — these are the two places the Python side states its version, and `release.yml`'s `verify`
-  job later asserts they agree with the tag.
+  job later asserts they agree with the tag. The `kohaku-ui` entry in `python/uv.lock` bumps with them
+  (CI's `uv lock --check` fails on a stale lock).
 - The lockfile updates (changeset removal + version bumps touch it).
 
 Merging this pull request does **not** publish anything. It only removes the merged changesets, which

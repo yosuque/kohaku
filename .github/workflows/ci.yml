@@ -108,7 +108,7 @@ jobs:
         if: matrix.node-version == 24
         run: |
           pnpm python:version
-          git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py
+          git diff --exit-code -- python/kohaku/pyproject.toml python/kohaku/src/kohaku/__init__.py python/uv.lock
       # Only here for `uvx zizmor` below, so no cache: with caching on, setup-uv hashes its default
       # `**/pyproject.toml` / `**/uv.lock` / ... globs to build the key, and after `pnpm install` that walk
       # descends into node_modules and took ~8 minutes of this job's ~11. It must be an explicit `false`:
@@ -145,6 +145,9 @@ jobs:
           enable-cache: true
           # uv.lock alone determines the environment; the default globs walk the whole checkout.
           cache-dependency-glob: python/uv.lock
+      # `uv sync --frozen` installs from uv.lock without checking it against the pyproject files, so a stale
+      # lock (e.g. a version bump without re-locking) would otherwise pass silently. Fail on it instead.
+      - run: uv lock --check
       - run: uv sync --frozen
       - run: uv run ruff check
       - run: uv run mypy
