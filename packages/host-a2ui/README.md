@@ -77,7 +77,13 @@ calls, each to spec-core's `MAX_JSON_OBJECT_DEPTH`), and `createA2uiIngest` caps
 serialized size (`maxMessagesPerIngest` / `maxComponentsPerSurface` / `maxDataModelSizeBytes`, all
 overridable — conservative defaults `DEFAULT_MAX_MESSAGES_PER_INGEST` (1000) /
 `DEFAULT_MAX_COMPONENTS_PER_SURFACE` (2000) / `DEFAULT_MAX_DATA_MODEL_SIZE_BYTES` (1 MiB, measured as
-`JSON.stringify(...).length`)).
+`JSON.stringify(...).length`)). Those per-field depth checks alone are not enough — they run only *after*
+zod has already recursed through the mutually-recursive value schemas to validate everything beneath that
+field, so a pathologically deep raw message can exhaust the call stack during that descent itself.
+`parseInboundA2uiMessage` therefore also runs a stack-safe depth check directly against the raw message
+before ever calling into zod, so parsing a message like that always fails cleanly (`A2uiIngestError`), never
+with an uncaught `RangeError`; `ingest()` additionally wraps its own parse step so any other unexpected
+exception is mapped the same way rather than escaping.
 
 `createA2uiIngest({storage, recorder, fixations, agentId, ...})` wires this into a caching + lineage
 pipeline over structural subsets of `StoragePort` / `@kohaku-ui/lineage`'s `RestViewRecorder` /

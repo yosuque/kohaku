@@ -2,7 +2,12 @@ import { createFixations, createLineage, createViewRecorder } from "@kohaku-ui/l
 import type { Principal } from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { beforeEach, describe, expect, it } from "vitest";
-import { type A2uiIngest, type CreateA2uiIngestOptions, createA2uiIngest } from "../src/index.js";
+import {
+  type A2uiIngest,
+  A2uiIngestError,
+  type CreateA2uiIngestOptions,
+  createA2uiIngest,
+} from "../src/index.js";
 
 const APPROVER: Principal = { id: "reviewer-1", name: "Reviewer" };
 
@@ -268,6 +273,22 @@ describe("createA2uiIngest", () => {
       // No overrides: uses DEFAULT_MAX_MESSAGES_PER_INGEST / DEFAULT_MAX_COMPONENTS_PER_SURFACE /
       // DEFAULT_MAX_DATA_MODEL_SIZE_BYTES, all comfortably above this test's small payload.
       await expect(ingest.ingest(surfaceMessages("srf-default-caps", "Hi"))).resolves.toBeDefined();
+    });
+
+    it("a pathologically deep message rejects cleanly through ingest() itself, never an uncaught RangeError", async () => {
+      // Built iteratively (a for loop, not recursion) so constructing the fixture never risks the test's
+      // own stack; parseInboundA2uiMessage's raw-depth pre-check (schemas.ts) is what actually stops this
+      // before zod ever recurses through it, and ingest()'s own try/catch is a second line of defense.
+      let deepValue: unknown = "leaf";
+      for (let i = 0; i < 100000; i++) deepValue = { n: deepValue };
+      await expect(
+        ingest.ingest([
+          {
+            version: "v0.9.1",
+            updateDataModel: { surfaceId: "srf-deep", path: "/x", value: deepValue },
+          },
+        ]),
+      ).rejects.toThrow(A2uiIngestError);
     });
   });
 });

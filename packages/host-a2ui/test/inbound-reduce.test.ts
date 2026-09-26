@@ -393,4 +393,48 @@ describe("security: DoS bounds (JSON nesting depth)", () => {
       }),
     ).toThrow();
   });
+
+  describe("security: stack-safety (parseInboundA2uiMessage rejects a pathologically deep raw message cleanly, never an uncaught RangeError)", () => {
+    // 5000 / 100000 are the depths the reviewer reproduced a stack-exhausting RangeError at (whereas 1000
+    // was already rejected cleanly by the per-field superRefine, since 1000 still safely fits zod's own
+    // recursive descent) — both are built iteratively here (a for loop, not recursion), so constructing the
+    // fixture itself never risks the test's own stack.
+    const DEEP = [5000, 100000];
+
+    it("updateDataModel.value", () => {
+      for (const depth of DEEP) {
+        expect(() =>
+          parseInboundA2uiMessage({
+            version: "v0.9.1",
+            updateDataModel: { surfaceId: "s", path: "/x", value: nestedValue(depth) },
+          }),
+        ).toThrow(A2uiIngestError);
+      }
+    });
+
+    it("a component's catchall prop", () => {
+      for (const depth of DEEP) {
+        expect(() =>
+          parseInboundA2uiMessage({
+            version: "v0.9.1",
+            updateComponents: {
+              surfaceId: "s",
+              components: [{ id: "c", component: "presentChart", data: nestedValue(depth) }],
+            },
+          }),
+        ).toThrow(A2uiIngestError);
+      }
+    });
+
+    it("createSurface.dataModel (spec-core's JsonObjectSchema — covered because the pre-check runs on the whole raw envelope regardless of which field the depth lives in)", () => {
+      for (const depth of DEEP) {
+        expect(() =>
+          parseInboundA2uiMessage({
+            version: "v1.0",
+            createSurface: { surfaceId: "s", dataModel: { rows: nestedValue(depth) } },
+          }),
+        ).toThrow(A2uiIngestError);
+      }
+    });
+  });
 });

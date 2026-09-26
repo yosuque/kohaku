@@ -9,9 +9,10 @@ import {
   sha256Hex,
   type UISpec,
 } from "@kohaku-ui/spec-core";
+import { z } from "zod";
 import { type A2uiIngestLoss, fromA2ui } from "./from-a2ui.js";
 import { A2uiIngestError, reduceSurfaces, type SurfaceState, surfaceIdOf } from "./reduce.js";
-import { parseInboundA2uiMessage } from "./schemas.js";
+import { type InboundA2uiMessage, parseInboundA2uiMessage } from "./schemas.js";
 
 /**
  * `createA2uiIngest`'s view of the persistence it needs: the Spec cache and fixation lookup only — a
@@ -220,7 +221,21 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
         `ingest(): received ${messages.length} messages in one call, exceeding maxMessagesPerIngest (${maxMessages})`,
       );
     }
-    const parsed = messages.map(parseInboundA2uiMessage);
+    // Security: parseInboundA2uiMessage's own raw-depth pre-check (see its doc) closes the main
+    // stack-exhaustion gap, but this is still a second, unconditional line of defense at the ingest()
+    // boundary itself: any exception that is not already one of the two clean, expected shapes (a
+    // `z.ZodError` from schema validation, or our own `A2uiIngestError`) — most notably a `RangeError` from
+    // some future/overlooked pathologically deep or wide input — is mapped to a clean `A2uiIngestError`
+    // here rather than escaping `ingest()` as a raw, unexpected exception type a caller cannot reasonably
+    // plan for.
+    let parsed: InboundA2uiMessage[];
+    try {
+      parsed = messages.map(parseInboundA2uiMessage);
+    } catch (e) {
+      if (e instanceof z.ZodError || e instanceof A2uiIngestError) throw e;
+      const detail = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      throw new A2uiIngestError(`ingest(): failed to parse inbound messages (${detail})`);
+    }
     const surfaceIds = new Set(parsed.map(surfaceIdOf));
     if (surfaceIds.size !== 1) {
       throw new A2uiIngestError(

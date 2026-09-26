@@ -7,6 +7,7 @@ import type {
   A2uiFunctionCall,
   A2uiValue,
 } from "../types.js";
+import { A2uiIngestError } from "./reduce.js";
 import { RESERVED_OBJECT_KEYS } from "./reserved-keys.js";
 
 /**
@@ -212,10 +213,44 @@ export const InboundA2uiEnvelopeSchema = z.union([
 export type InboundA2uiMessage = z.infer<typeof InboundA2uiEnvelopeSchema>;
 
 /**
- * Parses and strictly validates one inbound A2UI message. Throws (a `z.ZodError`) on anything that is not
- * exactly one of the 8 known (version, messageKey) shapes above — an ingest boundary is expected to reject
- * malformed/unknown third-party input rather than silently coerce or strip it.
+ * Security: the per-field `.superRefine` depth checks above (on `A2uiComponentSchema` and
+ * `updateDataModel.value`) run only *after* zod has already recursively descended through the
+ * mutually-recursive `A2uiValueSchema`/`JsonValueSchema` lazy union to validate the shape of everything
+ * beneath that field — for a sufficiently deep (but otherwise shallow/narrow, so schema-cheap) input, that
+ * descent itself is what exhausts the JS call stack (`RangeError: Maximum call stack size exceeded`),
+ * *before* any `superRefine` ever runs to reject it. `exceedsMaxDepth` is safe against exactly this (it
+ * stops recursing the instant `depth` exceeds `limit`, so its own stack usage is bounded to `limit + 1`
+ * frames no matter how deep `value` actually is) — so `parseInboundA2uiMessage` runs it directly against the
+ * **raw, not-yet-validated** message *before* handing anything to zod at all, closing the gap the
+ * superRefine-only checks left open.
+ *
+ * The limit here is deliberately looser than `MAX_JSON_OBJECT_DEPTH` (not the same number): the raw message
+ * still carries the *legitimate* envelope/message-body/component wrapping around a depth-guarded field, and
+ * this check has no schema to tell those layers apart from the field's own content yet. The deepest such
+ * wrapping in this schema is 5 levels — `{version, <messageKey>: {surfaceId, ..., components: [ {id,
+ * component, ..., <prop>: <value>} ] }}` (envelope=1, message body=2, components array=3, component
+ * object=4, prop value=5) — for a component prop nested inside a bundled `createSurface`/`updateComponents`;
+ * `updateDataModel.value` needs only 3. `+ 8` leaves comfortable headroom above the 5 actually needed (for
+ * future envelope shapes) while staying far below the depth (confirmed in the low thousands) at which zod's
+ * own recursive descent risks a `RangeError` itself — this check only has to guarantee that *its own* limit
+ * is never deep enough to reach that danger zone, not to enforce the precise per-field rule (that stays each
+ * field's own `superRefine`, which still runs afterward and is what actually reports `MAX_JSON_OBJECT_DEPTH`
+ * as the violated limit).
+ */
+export const MAX_RAW_ENVELOPE_DEPTH = MAX_JSON_OBJECT_DEPTH + 8;
+
+/**
+ * Parses and strictly validates one inbound A2UI message. Throws `A2uiIngestError` if `raw`'s nesting depth
+ * alone makes it unsafe to even attempt schema validation (see `MAX_RAW_ENVELOPE_DEPTH`'s doc), or a
+ * `z.ZodError` if it is not exactly one of the 8 known (version, messageKey) shapes above (including a
+ * depth-guarded field individually exceeding `MAX_JSON_OBJECT_DEPTH`) — an ingest boundary is expected to
+ * reject malformed/unknown third-party input rather than silently coerce or strip it.
  */
 export function parseInboundA2uiMessage(raw: unknown): InboundA2uiMessage {
+  if (exceedsMaxDepth(raw, MAX_RAW_ENVELOPE_DEPTH, 1)) {
+    throw new A2uiIngestError(
+      `inbound A2UI message nesting exceeds the maximum depth (${MAX_RAW_ENVELOPE_DEPTH}) checked before schema validation`,
+    );
+  }
   return InboundA2uiEnvelopeSchema.parse(raw);
 }
