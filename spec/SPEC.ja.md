@@ -84,11 +84,14 @@
 
 ### 3.1 ComponentDefinition [Normative]
 
-`{ type, version(semver), description, propsSchema(JSON Schema), capabilities { events, data: none|optional|required, children, editable? }, implementation { kind: native | sandbox-template }, fallback?, golden? }`
+`{ type, version(semver), description, propsSchema(JSON Schema), capabilities { events, data: none|optional|required, children, editable? }, implementation { kind: native | sandbox-template }, fallback?, golden?, deprecated? }`
 
 - props は JSON 表現可能でなければならない(MUST。日時等は文字列で表す)。
 - `description` は LLM の選択ガイダンスとして生成プロンプトに転写される(SHOULD は具体的に)。
 - **型名の命名規約**: コア型の `type` は `<namespace>.<name>`(例: `layout.stack`、`control.select`)を原則とする。`present*` 系(`presentList` / `presentMetric` / `presentChart` / `presentForm` / `presentSpreadsheet` / `presentMarkdown`)は例外で、v0.1 でワイヤ契約を固定した当時のフラットな camelCase 名をそのまま維持している — 今からリネームすると命名整理では済まずワイヤ契約とカタログフィンガープリントが変わってしまう(破壊的変更)ため。新規のコア型・プロダクト拡張は名前空間付きの名前を使うべき(SHOULD)。
+- **`deprecated?`**(MAY)は部品が代替されたことを示す: `{ reason, since?, replacedBy?: { type, version? }, sunset? }`。deprecated な部品は既にそれを参照している既存の Spec の検証を通し続けなければならない(MUST — deprecated 化は今後の生成対象を変えるのであって、既に描画済みのものを変えるのではない)が、L1 生成の語彙からは除外すべき(SHOULD。§4)。`replacedBy` が存在する場合、同じ解決済みカタログ内の別エントリに解決できなければならない — `type` が一致し、`version` を指定した場合はそれと厳密に一致すること(MUST)。ホストは `GET /catalog`(§6.1)でこのフィールドを公開してよい(MAY)。deprecated でない部品ではこのフィールド自体を省略する(明示的な不在値としては送らない)。
+
+リファレンス実装は、加えて `fallback` の隣に TS のみ・ワイヤ非対応の `migrateProps(props)` フックを持ち、deprecated な部品の props を `replacedBy` の形へ書き換える。関数であるためシリアライズされることは無く、ワイヤ上の規範的な意味は持たない(design.md #65 参照)。
 
 ### 3.2 Surface capability negotiation(capability 交渉)とフォールバック [Draft]
 
@@ -96,7 +99,7 @@
 
 ### 3.3 federated 配信 [Draft]
 
-カタログ = コア ⊕ プロダクト寄与 ⊕ 昇格分。既存 type の上書きは semver 上昇時のみ(MUST)。カタログ指紋(`type@version` ソート結合のハッシュ。sandbox-template 分は `#fnv1a64(html)` を付加)はキャッシュキー成分。
+カタログ = コア ⊕ プロダクト寄与 ⊕ 昇格分。既存 type の上書きは semver 上昇時のみ(MUST)。カタログ指紋(`type@version` ソート結合のハッシュ。sandbox-template 分は `#fnv1a64(html)` を、`deprecated` を持つエントリはさらに `!deprecated` を付加)はキャッシュキー成分。部品を deprecated にするとそのカタログの指紋(ひいてはコンポーズキャッシュキー)が変わるが、他のエントリの識別子文字列 — ひいては指紋への寄与分 — は変わらない。
 
 ## 4. 合成規約 [Normative(後処理規範は Draft)]
 

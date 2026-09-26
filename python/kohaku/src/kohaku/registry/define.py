@@ -35,6 +35,20 @@ def define_component(definition: ComponentDefinition) -> ComponentDefinition:
         raise ComponentDefinitionError(
             definition.type, "description is required (used in LLM prompt)"
         )
+    if definition.deprecated is not None:
+        if len(definition.deprecated.reason.strip()) == 0:
+            raise ComponentDefinitionError(definition.type, "deprecated.reason is required")
+        replaced_by = definition.deprecated.replacedBy
+        if replaced_by is not None:
+            if replaced_by.type == definition.type:
+                raise ComponentDefinitionError(
+                    definition.type, "deprecated.replacedBy cannot reference itself"
+                )
+            if replaced_by.version is not None and not is_valid(replaced_by.version):
+                raise ComponentDefinitionError(
+                    definition.type,
+                    f'deprecated.replacedBy.version "{replaced_by.version}" is not valid semver',
+                )
     try:
         canonical_stringify(definition.propsSchema.json_schema)
     except TypeError as e:

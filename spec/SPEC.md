@@ -84,11 +84,14 @@ The response of the interaction loop (recomposition from GUI interaction / event
 
 ### 3.1 ComponentDefinition [Normative]
 
-`{ type, version(semver), description, propsSchema(JSON Schema), capabilities { events, data: none|optional|required, children, editable? }, implementation { kind: native | sandbox-template }, fallback?, golden? }`
+`{ type, version(semver), description, propsSchema(JSON Schema), capabilities { events, data: none|optional|required, children, editable? }, implementation { kind: native | sandbox-template }, fallback?, golden?, deprecated? }`
 
 - props MUST be JSON-representable (MUST. Dates and the like are expressed as strings).
 - `description` is transcribed into the generation prompt as selection guidance for the LLM (SHOULD be concrete).
 - **Type-naming convention**: a core type's `type` uses `<namespace>.<name>` (e.g. `layout.stack`, `control.select`). The `present*` family (`presentList`, `presentMetric`, `presentChart`, `presentForm`, `presentSpreadsheet`, `presentMarkdown`) is a deliberate exception: it keeps the flat camelCase name it was given when v0.1 fixed the wire contract — renaming it now would change the wire contract and the catalog fingerprint (a breaking change, not a naming cleanup). New core types and product extensions SHOULD use a namespaced name.
+- **`deprecated?`** (MAY) marks a part as superseded: `{ reason, since?, replacedBy?: { type, version? }, sunset? }`. A deprecated part MUST continue to validate Specs that already reference it (MUST — deprecating a part changes what gets generated from here on, not what already renders) but SHOULD be excluded from the L1 generation vocabulary (SHOULD; §4). When `replacedBy` is present, it MUST resolve to another entry of the same resolved catalog — matching `type`, and matching `version` exactly when `version` is given (MUST). A host MAY expose this field on `GET /catalog` (§6.1); when the part is not deprecated the field is omitted rather than sent as an explicit absent value.
+
+The reference implementation additionally supports a TS-only, non-wire `migrateProps(props)` hook next to `fallback` for rewriting a deprecated part's props into its `replacedBy`'s shape; being a function, it is never serialized and carries no normative wire meaning (see design.md #65).
 
 ### 3.2 Surface capability negotiation and fallback [Draft]
 
@@ -96,7 +99,7 @@ A surface declares `supports: { type: semverRange }`. Unsupported components are
 
 ### 3.3 Federated distribution [Draft]
 
-Catalog = core ⊕ product contributions ⊕ promotions. Overriding an existing type is allowed only on a semver increase (MUST). The catalog fingerprint (the hash of the sorted join of `type@version`, with sandbox-template entries appending `#fnv1a64(html)`) is a cache-key component.
+Catalog = core ⊕ product contributions ⊕ promotions. Overriding an existing type is allowed only on a semver increase (MUST). The catalog fingerprint (the hash of the sorted join of `type@version`, with sandbox-template entries appending `#fnv1a64(html)` and, for an entry carrying `deprecated`, further appending `!deprecated`) is a cache-key component. Marking a part deprecated therefore changes the fingerprint (and so the compose cache key) for that catalog, while leaving every other entry's identity string — and so its contribution to the fingerprint — unchanged.
 
 ## 4. Composition rules [Normative (post-processing norms are Draft)]
 

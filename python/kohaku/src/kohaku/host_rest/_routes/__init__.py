@@ -69,6 +69,8 @@ def register_routes(app: FastAPI, deps: KohakuHostDeps, prefix: str = "/api/koha
                 "capabilities": d.capabilities.to_wire(),
                 "implementation": d.implementation.to_wire(),
                 "propsSchema": d.propsSchema.json_schema,
+                # MAY per SPEC §3.1; omitted when the part isn't deprecated.
+                **({"deprecated": d.deprecated.to_wire()} if d.deprecated is not None else {}),
             }
             for d in catalog.list()
         ]

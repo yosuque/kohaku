@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  buildGenerationSchema,
   CatalogConflictError,
   ComponentDefinitionError,
-  buildGenerationSchema,
   coreCatalog,
   defineComponent,
   resolveCatalog,
@@ -58,9 +58,9 @@ describe("defineComponent: deprecated validation", () => {
   });
 
   it("rejects an invalid semver in replacedBy.version", () => {
-    expect(() => makeDeprecated({ replacedBy: { type: "sales.kpiCardV2", version: "not-a-version" } })).toThrow(
-      /not valid semver/,
-    );
+    expect(() =>
+      makeDeprecated({ replacedBy: { type: "sales.kpiCardV2", version: "not-a-version" } }),
+    ).toThrow(/not valid semver/);
   });
 });
 
@@ -88,9 +88,7 @@ describe("resolveCatalog: deprecated.replacedBy resolution", () => {
   it("resolves when replacedBy.version matches the resolved version exactly", () => {
     const deprecated = makeDeprecated({ replacedBy: { type: "sales.kpiCardV2", version: "1.0.0" } });
     const replacement = makeReplacement();
-    expect(() =>
-      resolveCatalog(coreCatalog, { components: [replacement, deprecated] }),
-    ).not.toThrow();
+    expect(() => resolveCatalog(coreCatalog, { components: [replacement, deprecated] })).not.toThrow();
   });
 });
 

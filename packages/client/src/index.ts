@@ -65,6 +65,7 @@ export type {
   SchemaSuggestionView,
   SendEventRequest,
   SerializedComponentDef,
+  SerializedDeprecation,
   SessionArg,
   SuggestedEventView,
 } from "./types.js";

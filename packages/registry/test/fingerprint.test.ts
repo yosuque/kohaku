@@ -8,9 +8,13 @@ describe("catalogEntryIdentity", () => {
 
   it("sandbox-template entry folds an fnv1a64 of the html into the identity", () => {
     const html = "<div>A</div>";
-    expect(catalogEntryIdentity({ type: "promoted.widget", version: "1.0.0", implementation: { kind: "sandbox-template", html } })).toBe(
-      `promoted.widget@1.0.0#${fnv1a64(html)}`,
-    );
+    expect(
+      catalogEntryIdentity({
+        type: "promoted.widget",
+        version: "1.0.0",
+        implementation: { kind: "sandbox-template", html },
+      }),
+    ).toBe(`promoted.widget@1.0.0#${fnv1a64(html)}`);
   });
 
   it("a deprecated entry appends !deprecated, leaving a non-deprecated entry's identity untouched", () => {

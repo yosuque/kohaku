@@ -62,6 +62,14 @@ export interface SendEventRequest {
   session?: SessionArg;
 }
 
+/** Wire shape of ComponentDefinition.deprecated (see SPEC §3.1). */
+export interface SerializedDeprecation {
+  reason: string;
+  since?: string;
+  replacedBy?: { type: string; version?: string };
+  sunset?: string;
+}
+
 /** Serialized form of a ComponentDefinition returned by GET /catalog (one entry). */
 export interface SerializedComponentDef {
   type: string;
@@ -70,6 +78,8 @@ export interface SerializedComponentDef {
   capabilities?: string[];
   implementation: { kind: string } & Record<string, unknown>;
   propsSchema: unknown;
+  /** Present only once the part is deprecated (MAY, SPEC §3.1). */
+  deprecated?: SerializedDeprecation;
 }
 
 /** Response of GET /catalog. */
