@@ -519,6 +519,20 @@ describe("@kohaku-ui/client error code discrimination (KohakuHostError)", () => 
     expect(err.promotionStatus).toBe("judge_failed");
   });
 
+  it("a 429 RATE_LIMITED envelope's error.retryAfterMs is exposed as retryAfterMs", () => {
+    const err = hostErrorFromResponse(429, {
+      error: { code: "RATE_LIMITED", message: "rate limit exceeded", retryAfterMs: 2500 },
+    });
+    expect(err.code).toBe("RATE_LIMITED");
+    expect(err.status).toBe(429);
+    expect(err.retryAfterMs).toBe(2500);
+  });
+
+  it("an envelope without error.retryAfterMs leaves retryAfterMs undefined", () => {
+    const err = hostErrorFromResponse(400, { error: { code: "BAD_REQUEST", message: "bad" } });
+    expect(err.retryAfterMs).toBeUndefined();
+  });
+
   it("an envelope without error.status leaves promotionStatus undefined", () => {
     const err = hostErrorFromResponse(400, { error: { code: "BAD_REQUEST", message: "bad" } });
     expect(err.promotionStatus).toBeUndefined();

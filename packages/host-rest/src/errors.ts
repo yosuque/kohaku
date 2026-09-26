@@ -9,6 +9,18 @@ import type { ErrorEnvelope, HostErrorCode } from "@kohaku-ui/spec-core";
  */
 export type { ErrorEnvelope, HostErrorCode } from "@kohaku-ui/spec-core";
 
-export function errorBody(code: HostErrorCode, message: string, requestId?: string): ErrorEnvelope {
-  return { error: { code, message, ...(requestId != null ? { requestId } : {}) } };
+export function errorBody(
+  code: HostErrorCode,
+  message: string,
+  requestId?: string,
+  retryAfterMs?: number,
+): ErrorEnvelope {
+  return {
+    error: {
+      code,
+      message,
+      ...(requestId != null ? { requestId } : {}),
+      ...(retryAfterMs != null ? { retryAfterMs } : {}),
+    },
+  };
 }

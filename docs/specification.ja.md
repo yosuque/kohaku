@@ -185,11 +185,13 @@ Spec エンベロープは**テーマを持たない**(SPEC-ENV-003 — UI Spec 
 { "error": { "code": "CAPABILITY_DENIED", "message": "…" } }
 ```
 
-コード: `BAD_REQUEST`(400)/ `INTENT_INVALID`(422)/ `CAPABILITY_REQUIRED`(401)/ `CAPABILITY_DENIED`(403)/ `REF_NOT_FOUND`(404)/ `SOURCE_MISMATCH`(404)/ `NOT_FOUND`(404)/ `PROMOTION_INVALID`(422)/ `PROMOTION_NOT_PUBLISHED`(409)/ `COMPOSE_FAILED`(500)/ `INTERNAL`(500。ただし `authz.verify` がインフラ障害で拒否したときは 503 — メッセージは `capability verification unavailable`、§4.3 参照)/ `NOT_IMPLEMENTED`(501)。`NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` は統制系(promotions)の named ルート用(§5.4)。
+コード: `BAD_REQUEST`(400)/ `INTENT_INVALID`(422)/ `CAPABILITY_REQUIRED`(401)/ `CAPABILITY_DENIED`(403)/ `REF_NOT_FOUND`(404)/ `SOURCE_MISMATCH`(404)/ `NOT_FOUND`(404)/ `PROMOTION_INVALID`(422)/ `PROMOTION_NOT_PUBLISHED`(409)/ `COMPOSE_FAILED`(500)/ `INTERNAL`(500。ただし `authz.verify` がインフラ障害で拒否したときは 503 — メッセージは `capability verification unavailable`、§4.3 参照)/ `NOT_IMPLEMENTED`(501)/ `RATE_LIMITED`(429。レート制限ポリシーが設定されているとき — ユーザーガイドの予算/レート制限節を参照)。`NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` は統制系(promotions)の named ルート用(§5.4)。
 
 コード集合はワイヤ契約なので、型 `HostErrorCode` / `ErrorEnvelope` は **`@kohaku-ui/spec-core` が定義元**(host-rest はサーバー側生成ヘルパ `errorBody` を残しつつ後方互換で再エクスポート)。クライアント側はこれらを型付きで扱う **`@kohaku-ui/client`**(型付きホストクライアント SDK)を使うと、`{spec, capability}` 等の応答と `{error:{code,message}}` を判別可能例外 `KohakuHostError`(`code: HostErrorCode` / `status` / `requestId`)として受け取れる(手書き fetch でコードが文字列に潰れるのを避ける)。SDK の使い方はユーザーガイド §6「クライアントから叩く」を参照。
 
 `ErrorEnvelope.error` は省略可能な **`status`** も持つ。これは 409 `PROMOTION_NOT_PUBLISHED` エンベロープにのみ現れ、バッチ遷移が止まったプロモーション状態(例: `"judge_failed"`)を示す — **応答自体の HTTP ステータスコードとは別物**。クライアント SDK はこれを `KohakuHostError.promotionStatus` として公開する(HTTP ステータスを表す `KohakuHostError.status` と混同しないよう別名にしている)。
+
+`ErrorEnvelope.error` は省略可能な **`retryAfterMs`** も持つ。これは 429 `RATE_LIMITED` エンベロープにのみ現れ(SPEC §6.1、REST-RL-001)、ミリ秒単位の推奨バックオフを示す — レート制限を行うホストが設定する HTTP `Retry-After` ヘッダと同じ値を運ぶ。クライアント SDK はこれを `KohakuHostError.retryAfterMs` として公開する。
 
 **予期しない失敗に対するエラーメッセージ方針**: 500(`INTERNAL` / `COMPOSE_FAILED`)応答、および生の `DomainPort.invoke` の失敗がマップされる 404 `REF_NOT_FOUND` は、元の例外のメッセージをクライアントにそのまま返さない(SQL の断片・スタックトレース・下流ライブラリの文言など内部情報が漏れる可能性があるため)。代わりに固定のホスト側文言を返す。ホスト自身のコードが生成した「型付き」エラー(`SpecError` / `ComposeError` / `QueryRefError`、または `@kohaku-ui/host-core` の `isTypedHostError` が認識する `code` 付きの例外)はメッセージがそのまま通る。元の例外は常に `onError`(上述)には届き、応答が運ぶのと同じ `requestId` で突合できるので、診断に必要な情報は失われない。MCP Apps プロファイルもツールエラーのテキストに同じ方針を適用する。
 

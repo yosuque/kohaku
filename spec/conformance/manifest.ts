@@ -59,6 +59,9 @@ export const REQUIREMENTS: Requirement[] = [
   { id: "REST-ERR-002", level: "SHOULD", target: "rest-host", verification: "blackbox", description: "GET /promotions and /fixations are either 200 with a {candidates}/{fixations} shape or a 501 NOT_IMPLEMENTED envelope" },
   { id: "REST-LIN-001", level: "SHOULD", target: "rest-host", verification: "blackbox", description: "GET /lineage has an {events:[]} shape and ?limit=1 returns ≤1 items" },
   { id: "REST-GOV-001", level: "SHOULD", target: "rest-host", verification: "blackbox", description: "POST /promotions/:id/actions returns 400 for an invalid payload and 404 for a valid action on an unknown artifact" },
+  // Rate limiting itself is MAY; enforcing it is only exercised when the reference host is configured with a
+  // rate-limit policy, so this is "reference" rather than a black-box check against the unconfigured demo host.
+  { id: "REST-RL-001", level: "SHOULD", target: "rest-host", verification: "reference", verifiedBy: "packages/host-rest/test/rate-limited-error.test.ts, packages/client/test/client.test.ts", description: "A rate-limited request is rejected with HTTP 429 and an {error:{code:RATE_LIMITED}} envelope, retryAfterMs round-trips through the client" },
 
   // --- Compose streaming (SPEC §6.1.1 [Draft]. SHOULD because the route itself is MAY) --------
   { id: "REST-STR-001", level: "SHOULD", target: "rest-host", verification: "blackbox", description: "POST /compose/stream begins with event: spec {spec, capability, final} whose spec is §2-conformant" },

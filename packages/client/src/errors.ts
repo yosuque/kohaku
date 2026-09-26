@@ -18,6 +18,11 @@ export class KohakuHostError extends Error {
    * avoid confusion between the two.
    */
   readonly promotionStatus?: string;
+  /**
+   * The client-suggested backoff before retrying, in milliseconds (envelope's error.retryAfterMs).
+   * Only present on a 429 RATE_LIMITED error (SPEC §6.1, REST-RL-001).
+   */
+  readonly retryAfterMs?: number;
 
   constructor(
     code: HostErrorCode,
@@ -25,6 +30,7 @@ export class KohakuHostError extends Error {
     status: number,
     requestId?: string,
     promotionStatus?: string,
+    retryAfterMs?: number,
   ) {
     super(message);
     this.name = "KohakuHostError";
@@ -32,6 +38,7 @@ export class KohakuHostError extends Error {
     this.status = status;
     if (requestId != null) this.requestId = requestId;
     if (promotionStatus != null) this.promotionStatus = promotionStatus;
+    if (retryAfterMs != null) this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -54,6 +61,7 @@ export function hostErrorFromResponse(status: number, body: unknown): KohakuHost
       status,
       envelope.requestId,
       envelope.status,
+      envelope.retryAfterMs,
     );
   }
   return new KohakuHostError("INTERNAL", `HTTP ${status}`, status);

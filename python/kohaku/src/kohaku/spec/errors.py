@@ -72,6 +72,9 @@ type HostErrorCode = Literal[
     "NOT_FOUND",
     "PROMOTION_INVALID",
     "PROMOTION_NOT_PUBLISHED",
+    # Rate limiting (SPEC §6.1, REST-RL-001): a host MAY enforce a rate limit; when it does, an
+    # over-limit request MUST use this code with HTTP 429.
+    "RATE_LIMITED",
 ]
 
 
@@ -87,6 +90,10 @@ class ErrorEnvelope:
     """The promotion state that stopped the transition. Present only on the 409 PROMOTION_NOT_PUBLISHED
     envelope (approve's batch transition reached this state instead of "published"). Distinct from the HTTP
     status code of the response."""
+    retryAfterMs: int | None = None
+    """The client-suggested backoff before retrying, in milliseconds. Present only on the 429
+    RATE_LIMITED envelope (SPEC §6.1, REST-RL-001); mirrors the HTTP Retry-After header a host SHOULD
+    also set, in a form usable by a non-HTTP transport (host_mcp's structured tool error, §6.2)."""
 
     def to_wire(self) -> dict[str, object]:
         error: dict[str, object] = {"code": self.code, "message": self.message}
@@ -94,6 +101,8 @@ class ErrorEnvelope:
             error["requestId"] = self.requestId
         if self.status is not None:
             error["status"] = self.status
+        if self.retryAfterMs is not None:
+            error["retryAfterMs"] = self.retryAfterMs
         return {"error": error}
 
 

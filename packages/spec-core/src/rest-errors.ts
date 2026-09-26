@@ -22,7 +22,10 @@ export type HostErrorCode =
   // For the named routes of the governance side (promotions)
   | "NOT_FOUND"
   | "PROMOTION_INVALID"
-  | "PROMOTION_NOT_PUBLISHED";
+  | "PROMOTION_NOT_PUBLISHED"
+  // Rate limiting (SPEC §6.1, REST-RL-001): a host MAY enforce a rate limit; when it does, an
+  // over-limit request MUST use this code with HTTP 429.
+  | "RATE_LIMITED";
 
 /**
  * Discriminators of the governance-plane errors thrown by the promotion / fixation services
@@ -68,5 +71,12 @@ export interface ErrorEnvelope {
      * from the HTTP status code of the response.
      */
     status?: string;
+    /**
+     * The client-suggested backoff before retrying, in milliseconds. Present only on the 429
+     * RATE_LIMITED envelope (SPEC §6.1, REST-RL-001). Carries the same backoff a host SHOULD also
+     * expose via the HTTP `Retry-After` header, in a form usable by a non-HTTP transport (the MCP
+     * profile's structured tool error, §6.2) and by callers without access to response headers.
+     */
+    retryAfterMs?: number;
   };
 }
