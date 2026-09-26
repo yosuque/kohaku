@@ -8,15 +8,19 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 /**
  * apps/docs-site/snippets/kohaku/ports.ts is a hand-written fixture for the fuller governance demo
- * (full-stack.ts / mcp-apps.ts), which wire all four Ports directly (no createKohakuHost) so they can also
- * plug in lineage / promotions / fixations. Since `@kohaku-ui/host`'s createKohakuHost() (design.md #52)
- * supplies working defaults for authz / storage / the SemanticPort, `kohaku scaffold ports`'s own
- * PORTS_TEMPLATE (cli/src/templates.ts) now scaffolds only a DomainPort — a strict subset of what this
- * fixture exports, not an exact match any more. The adoption-path pages still credit that command for
- * `domainPort` specifically, so this guards that every name PORTS_TEMPLATE emits is still present here —
- * otherwise a reader who runs the documented command and pastes the documented snippet gets "has no
- * exported member" errors on the first file they touch (I-3). It does not require the reverse (the fixture
- * may export more than the CLI scaffolds, e.g. `authzPort` / `semanticPort` / `storagePort`).
+ * (full-stack.ts), which wires all four Ports directly (no createKohakuHost) so it can also plug in
+ * lineage / promotions / fixations. (The now-unreferenced snippets/mcp-apps.ts — superseded by
+ * minimal-host.ts as docs/paths/mcp-apps.md's first code block, which needs only `domainPort` via
+ * createKohakuHost — still imports all four from this same fixture too, so it stays typecheckable;
+ * apps/docs-site's tsconfig includes snippets/ wholesale, regardless of whether a file is shown on any
+ * page.) Since `@kohaku-ui/host`'s createKohakuHost() (design.md #52) supplies working defaults for
+ * authz / storage / the SemanticPort, `kohaku scaffold ports`'s own PORTS_TEMPLATE (cli/src/templates.ts)
+ * now scaffolds only a DomainPort — a strict subset of what this fixture exports, not an exact match any
+ * more. The adoption-path pages still credit that command for `domainPort` specifically, so this guards
+ * that every name PORTS_TEMPLATE emits is still present here — otherwise a reader who runs the documented
+ * command and pastes the documented snippet gets "has no exported member" errors on the first file they
+ * touch (I-3). It does not require the reverse (the fixture may export more than the CLI scaffolds, e.g.
+ * `authzPort` / `semanticPort` / `storagePort`).
  *
  * This is read as plain text, not imported as a module: `cli` is not a package.json dependency of
  * docs-site (nor is it in the repo's spec-core → … → apps dependency chain in AGENTS.md), so importing
