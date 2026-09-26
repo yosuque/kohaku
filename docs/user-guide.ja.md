@@ -333,6 +333,7 @@ composer の `policy.fixedSpecs` に固定 Spec テンプレート(`apps/sample-
 - **Intent カタログを単一定義する(`@kohaku-ui/intents`)**: `defineIntent` で 1 Intent = 1 定義にします(見本: `apps/sample-api/src/intents/catalog.ts`)。値集合は `defineVocabulary("region", { japan: "Japan", north_america: "North America", ... })` で単一源化し、`params`(Zod)/ `examples`(NL 例文)/ `facets`(GUI に出す param)/ `queries`(テンプレート or コールバック)を宣言すると、同じ定義から `.toIntentDef()`(SemanticPort 用)・`.toFacetView()`(GUI ファセット)・`.toToolSource()`(MCP ツール)・`.parseParams()`(coerce + default)が導出されます。GUI に出すファセットは codegen(`pnpm intents:emit`)で `facet-views.json` に書き出し、web はそれをデータ import します(web は server コード非依存を保つ)。
 - 既定は `@kohaku-ui/semantic-llm` の `createLlmSemanticPort`(サンプルは売上ルールを `rules` / `fallbackIntent` で配線: `apps/sample-api/src/ports/semantic-port.ts`)
 - `describeShape` を実装すると、チャート種別規則・既定ソートの決定的後処理が効くようになります
+- `validateIntent`(任意)を実装すると、直接指定された Intent(`POST /compose` の `{intent}` ボディ、`/events`、固定化承認、MCP プロファイルの compose 系ツール / `kohaku_event`)について、未知の canonical や不正な params を `finalizeIntent` に未検証のまま到達させず 422 `INTENT_INVALID` で拒否するようになります — `@kohaku-ui/semantic-llm` の既定ポートはすでにこれを実装済みです。これを実装しない自前の `SemanticPort` では、直接指定された Intent は従来どおり未検証のままです(design.md の決定 #51 を参照)
 - ドメイン部品は `CatalogContribution` で寄与(`defineComponent` + renderer 実装の `registry.register`)
 
 ### Step 2 — L2・昇格・固定化(完全形)

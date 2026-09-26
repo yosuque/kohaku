@@ -123,9 +123,12 @@ interface SemanticPort {
   resolveQuery(intent: CanonicalIntent): Promise<QueryHandle | QueryHandle[]>;          // Intent → query:// handle
   dataVersion(handle: QueryHandle): Promise<string>;                                    // Cache-key component
   describeShape?(handle: QueryHandle): Promise<DataShape>;   // Optional. Column metadata only (row data forbidden)
+  validateIntent?(intent: IntentInput, ctx: SessionContext): Promise<IntentInput>;  // Optional. Validates a directly-specified Intent
 }
 ```
 Contract: GUI actions (`GuiAction {action, params, current?}`) are normalized **deterministically, without going through the LLM**. `current` is the basis for an operation on an existing view (drilldown, etc.).
+
+**`validateIntent` (optional)**: validates and normalizes an Intent the caller specifies directly (`kind: "intent"` — `POST /compose`'s `{intent}` body, `POST /events`' `intent`, the fixation-approval endpoint, and the MCP profile's compose-family tools / `kohaku_event`), the one path that bypasses `normalize` entirely. On success it returns the normalized `IntentInput` (e.g. with schema defaults filled in) that the host hashes and finalizes instead of the caller-supplied one; on failure it throws/raises `IntentValidationError` (`code: "INTENT_INVALID"`, plus a client-safe `issues` array), which a host maps to 422 `INTENT_INVALID` (REST-INT-002, §6.1) without writing anything to the cache, lineage, or fixation store. A `SemanticPort` that omits it keeps the historical behavior of finalizing a directly-specified Intent unchecked — see `docs/design.md` decision #51 for why this is scoped to the host entry points and does not cover a product calling `compose()` directly.
 
 **Catalog generation in the reference implementation (`@kohaku-ui/intents`)**: from `defineVocabulary` (a single source for the value set + labels) and `defineIntent` (a single Intent definition), the sample derives the `IntentDef` used by this `SemanticPort`, the GUI facet descriptor (`FacetView`; emitted to `facet-views.json` by `pnpm intents:emit`), the MCP tool input, and the `valueType` for client coercion. The `SemanticPort` contract and the wire form of `CanonicalIntent` are unchanged; the DSL merely provides a **single definition of the deterministic parts of normalization (value domains, coercion, facet derivation)**.
 
@@ -517,7 +520,7 @@ Requirements list (machine-readable): [../spec/conformance/manifest.ts](../spec/
 ```bash
 node cli/bin/kohaku.js conformance --self                # SPEC-* 9 items (Spec-format self-inspection)
 node cli/bin/kohaku.js conformance --rest <baseUrl> \
-  [--intent '{"canonical":"…","params":{…}}']             # + REST-* 9 MUST + 6 SHOULD, LIN-PRM-001 (black-box inspection; applicable to any implementation)
+  [--intent '{"canonical":"…","params":{…}}']             # + REST-* 9 MUST + 7 SHOULD, LIN-PRM-001 (black-box inspection; applicable to any implementation)
 ```
 
 The MCP (MCPAPP-*) and sandbox (SBX-*) requirements, plus five documentary norms not amenable to black-box checking (SPEC-ENV-003 theme independence, SPEC-EVT-002 undeclared-event forwarding prohibition, SPEC-DATA-002 per-reference version reconciliation, CMP-DET-001 the general form of composition determinism, CMP-GEN-001 the `data.$ref` QueryHandle-set constraint on generated components), are internal invariants; the tests in `packages/host-mcp-apps/test` / `packages/sandbox/test` / `packages/renderer-wc/test/parity` + `packages/renderer-core/test` / `packages/composer/test` respectively pin them against the reference implementation (out of scope for black-box inspection; `verification: "reference"` in the manifest). lineage's LIN-PRM-001 has been upgraded to a black-box inspection of `GET /lineage` (confirming that a human approve precedes published in time), is included in `--rest`, and is additionally guaranteed by `packages/lineage/test` (the state machine).

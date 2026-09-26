@@ -326,6 +326,12 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
   `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`semantic-llm`、
   `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
+  (ただし `semantic-llm` 自体の `validateIntent` 挙動はこのギャップに取り残されていない:
+  同パッケージには Python 移植先が無いため、そのロジックは `examples/sales-api` の
+  `semantic_port.py` / `intents_catalog.py` に直接存在し、このサンプルは TS の
+  `createLlmSemanticPort` と同じ `validate_intent` / `IntentCatalog.validate_params` を
+  実装している — `kohaku.spec.ports.SupportsValidateIntent` と
+  `kohaku.host_core.intent.resolve_intent` を参照。)
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch
