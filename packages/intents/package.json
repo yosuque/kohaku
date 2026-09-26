@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/intents",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Intent DSL for kohaku: derives SemanticPort definitions, GUI facet descriptors and MCP tool inputs from one declaration of value sets and labels.",
   "type": "module",
   "exports": {

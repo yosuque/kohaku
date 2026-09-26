@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/renderer-wc",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Web Components renderer for kohaku UI Specs: a single <kohaku-surface> custom element with Shadow DOM.",
   "type": "module",
   "exports": {

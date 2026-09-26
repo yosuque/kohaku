@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/storage-redis",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Redis-backed StoragePort for kohaku (Spec cache, lineage, promotion state, fixation) — a reference adapter; the contract stays @kohaku-ui/spec-core's ports.ts.",
   "type": "module",
   "license": "Apache-2.0",

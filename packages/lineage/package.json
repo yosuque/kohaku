@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/lineage",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "View and component lineage for kohaku, with the promotion (L2 to L1) and fixation (L1 to L0) state machines.",
   "type": "module",
   "exports": {

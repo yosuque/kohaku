@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/storage-memory",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "In-memory and file-backed StoragePort implementations for kohaku: the Spec cache, lineage, promotion and fixation stores for a single process (the Zero-Port default and the reference for production adapters).",
   "type": "module",
   "exports": {

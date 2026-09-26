@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/registry",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Component catalog for kohaku: federated resolution, surface capability negotiation, fallback chains and LLM generation-schema conversion.",
   "type": "module",
   "exports": {

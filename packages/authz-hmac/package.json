@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/authz-hmac",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "HMAC-SHA256 capability tokens for kohaku's AuthzPort: an on-behalf-of token whose payload is transparent (base64url(payload).base64url(hmac)), suitable as the default issuer for a single host and as the capability signer behind a JWT/OIDC principal resolver.",
   "type": "module",
   "exports": {
