@@ -960,7 +960,9 @@ async def _audit_compose(deps: McpHostDeps, result: ComposeResult, endpoint: str
     async def _record() -> None:
         if recorder is not None:
             await recorder.composed(spec=result.spec, trace=result.trace, surface="mcp-app")
-            await _host_core_record_view_fallback(recorder, result.spec, surface="mcp-app")
+            await _host_core_record_view_fallback(
+                recorder, result.spec, surface="mcp-app", correlation_id=result.trace.correlationId
+            )
         elif on_composed is not None:
             await on_composed(result.spec, result.trace)
 

@@ -1,4 +1,5 @@
 import {
+  type CacheKeyParts,
   computeSpecHash,
   computeStructureHash,
   type JsonObject,
@@ -15,10 +16,25 @@ import {
   type ComponentUsedPayload,
   type LineageEventType,
   makeEvent,
+  type ViewComposedDecision,
   type ViewComposedPayload,
+  type ViewDecisionAttempt,
+  type ViewDecisionDowngrade,
 } from "./events.js";
 import { tenantField } from "./tenant-scope.js";
 
+/**
+ * The subset of @kohaku-ui/composer's ComposeTrace that viewComposed needs. A structural duck type rather
+ * than an import of ComposeTrace itself: lineage does not depend on composer (see AGENTS.md's dependency
+ * direction -- composer sits below lineage in the layer graph, but the package.json edge was never added,
+ * and this decoupling lets any caller build its own trace-shaped object without a hard dependency).
+ *
+ * correlationId / cacheKey / cacheKeyParts / attempts / downgrades / coalesced / usage are all optional
+ * additions (U2): a caller that builds a ComposeTraceLike without them (or a pre-existing test fixture) gets
+ * the exact same view.composed / component.generated / component.used payload shape as before they existed
+ * -- see viewComposed's payload construction, which omits each corresponding key when its trace field is
+ * unset.
+ */
 export interface ComposeTraceLike {
   intent: { canonical: string; hash: string };
   dataVersion: string;
@@ -26,6 +42,49 @@ export interface ComposeTraceLike {
   tier: "L0" | "L1" | "L2";
   model?: string;
   durationMs: number;
+  correlationId?: string;
+  cacheKey?: string;
+  cacheKeyParts?: CacheKeyParts;
+  attempts?: ViewDecisionAttempt[];
+  downgrades?: ViewDecisionDowngrade[];
+  coalesced?: boolean;
+  usage?: { inputTokens: number; outputTokens: number };
+}
+
+const MAX_DECISION_ISSUES = 5;
+const MAX_DECISION_ISSUE_LENGTH = 200;
+
+/** Caps an attempt's issues to at most MAX_DECISION_ISSUES entries of at most MAX_DECISION_ISSUE_LENGTH
+ * characters each (an ellipsis marks a truncated string), so a verbose validation-error trail cannot bloat
+ * the lineage record without bound. Returns undefined for an empty/unset list (keeps `issues` off the
+ * payload rather than recording `issues: []`). */
+function truncateIssues(issues: string[] | undefined): string[] | undefined {
+  if (issues == null || issues.length === 0) return undefined;
+  return issues
+    .slice(0, MAX_DECISION_ISSUES)
+    .map((issue) =>
+      issue.length > MAX_DECISION_ISSUE_LENGTH ? `${issue.slice(0, MAX_DECISION_ISSUE_LENGTH)}…` : issue,
+    );
+}
+
+/** Builds view.composed's `decision` summary from the trace, or undefined when there is nothing to
+ * summarize (no attempts, no downgrades, not coalesced, no usage) -- the common case for a cache hit / L0
+ * fixed Spec, which should not grow a `decision` key at all. */
+function buildDecision(trace: ComposeTraceLike): ViewComposedDecision | undefined {
+  const attempts = trace.attempts ?? [];
+  const downgrades = trace.downgrades ?? [];
+  if (attempts.length === 0 && downgrades.length === 0 && trace.coalesced !== true && trace.usage == null) {
+    return undefined;
+  }
+  return {
+    attempts: attempts.map((a) => {
+      const issues = truncateIssues(a.issues);
+      return { kind: a.kind, ok: a.ok, ...(issues != null ? { issues } : {}) };
+    }),
+    ...(downgrades.length > 0 ? { downgrades } : {}),
+    ...(trace.coalesced === true ? { coalesced: true as const } : {}),
+    ...(trace.usage != null ? { usage: trace.usage } : {}),
+  };
 }
 
 export interface Lineage {
@@ -81,6 +140,8 @@ export interface Lineage {
     intentHash?: string;
     sessionId?: string;
     tenant?: string;
+    /** The compose trace's correlation id (see ViewComposedPayload.correlationId's doc comment). */
+    correlationId?: string;
   }): Promise<void>;
   componentUsed(args: ComponentUsedPayload & { tenant?: string }): Promise<void>;
 
@@ -137,6 +198,7 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
       const artifactId =
         sandboxNode?.artifact != null ? artifactIdOf(sandboxNode.artifact.sha256) : undefined;
 
+      const decision = buildDecision(trace);
       const payload: ViewComposedPayload & { structureHash: string; params: JsonObject } = {
         specHash,
         structureHash,
@@ -151,6 +213,15 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
         ...(spec.provenance.model != null ? { model: spec.provenance.model } : {}),
         durationMs: trace.durationMs,
         ...(artifactId != null ? { artifactId } : {}),
+        ...(trace.correlationId != null ? { correlationId: trace.correlationId } : {}),
+        ...(trace.cacheKey != null ? { cacheKey: trace.cacheKey } : {}),
+        ...(trace.cacheKeyParts != null ? { cacheKeyParts: trace.cacheKeyParts } : {}),
+        ...(spec.provenance.generatorVersion != null
+          ? { generatorVersion: spec.provenance.generatorVersion }
+          : {}),
+        ...(spec.provenance.kit != null ? { kit: spec.provenance.kit } : {}),
+        ...(spec.provenance.fallback != null ? { fallback: spec.provenance.fallback } : {}),
+        ...(decision != null ? { decision } : {}),
       };
       await record(
         "view.composed",
@@ -203,6 +274,11 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
                   ...(typeof spec.intent.params["request"] === "string"
                     ? { request: spec.intent.params["request"] }
                     : {}),
+                  ...(trace.correlationId != null ? { correlationId: trace.correlationId } : {}),
+                  ...(spec.provenance.kit != null ? { kit: spec.provenance.kit } : {}),
+                  ...(spec.provenance.generatorVersion != null
+                    ? { generatorVersion: spec.provenance.generatorVersion }
+                    : {}),
                 },
                 {
                   kind: "model",
@@ -224,6 +300,7 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
             surface,
             ...(sessionId != null ? { sessionId } : {}),
             outcome: "ok",
+            ...(trace.correlationId != null ? { correlationId: trace.correlationId } : {}),
           },
           undefined,
           tenant,
@@ -240,8 +317,9 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
     },
 
     async viewFallback(args) {
-      // Unspecified optionals (kind / intentHash / sessionId) are not stamped into the payload (no undefined keys left behind).
-      // The tenant is stamped into the record's tenant field, not into the payload.
+      // Unspecified optionals (kind / intentHash / sessionId / correlationId) are not stamped into the
+      // payload (no undefined keys left behind). The tenant is stamped into the record's tenant field, not
+      // into the payload.
       await record(
         "view.fallback",
         {
@@ -251,6 +329,7 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
           ...(args.kind != null ? { kind: args.kind } : {}),
           ...(args.intentHash != null ? { intentHash: args.intentHash } : {}),
           ...(args.sessionId != null ? { sessionId: args.sessionId } : {}),
+          ...(args.correlationId != null ? { correlationId: args.correlationId } : {}),
         },
         undefined,
         args.tenant,

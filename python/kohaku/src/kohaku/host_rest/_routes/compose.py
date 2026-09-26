@@ -339,6 +339,7 @@ async def record_fallback_if_any(
         surface=session.surface,
         session_id=session.sessionId,
         tenant=session.tenant,
+        correlation_id=result.trace.correlationId,
     )
 
 

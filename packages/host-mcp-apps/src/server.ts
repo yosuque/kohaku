@@ -237,7 +237,10 @@ async function composeAndAudit(
           trace: result.trace,
           surface: MCP_APP_SURFACE,
         });
-        await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, { surface: MCP_APP_SURFACE });
+        await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, {
+          surface: MCP_APP_SURFACE,
+          ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
+        });
       } else {
         await ctx.deps.onComposed?.(result.spec, result.trace);
       }

@@ -14,7 +14,14 @@ from kohaku.lineage import (
     create_promotions,
     create_view_recorder,
 )
-from kohaku.spec import LineageActor, LineageEventRecord, LineageFilter, compute_spec_hash
+from kohaku.spec import (
+    CacheKeyParts,
+    LineageActor,
+    LineageEventRecord,
+    LineageFilter,
+    ProvenanceKit,
+    compute_spec_hash,
+)
 from kohaku.storage import FileStoragePort
 
 from ._helpers import (
@@ -27,6 +34,27 @@ from ._helpers import (
 )
 
 TRACE = FakeTrace(durationMs=10.0)
+
+
+class _Attempt:
+    def __init__(self, kind: str, ok: bool, issues: list[str] | None = None) -> None:
+        self.kind = kind
+        self.ok = ok
+        self.issues = issues
+
+
+class _Downgrade:
+    def __init__(self, id: str, from_: str, to: str, reason: str) -> None:
+        self.id = id
+        self.from_ = from_
+        self.to = to
+        self.reason = reason
+
+
+class _Usage:
+    def __init__(self, inputTokens: int, outputTokens: int) -> None:
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
 
 
 def _types(records: list[LineageEventRecord]) -> list[str]:
@@ -300,5 +328,146 @@ def test_generated_recorded_per_tenant_globex_uses_only_own(tmp_path: Path) -> N
         globex = await promotions.list_candidates(tenant="globex")
         assert acme[0].uses == 1
         assert globex[0].uses == 1
+
+    asyncio.run(run())
+
+
+# --- U2: explain-facing fields (correlationId / cacheKeyParts / decision) --------------------------------
+
+RICH_TRACE = FakeTrace(
+    durationMs=10.0,
+    correlationId="req-1",
+    cacheKey="kohaku:0.2:sha256:aaa:sales@seed-1:-",
+    cacheKeyParts=CacheKeyParts(intentHash="sha256:" + "1" * 64, dataVersion="sales@seed-1"),
+    attempts=[_Attempt("l1", False, ["bad output"]), _Attempt("l2", True)],
+    downgrades=[_Downgrade("sandbox1", "sandbox.html", "presentMarkdown", "unsupported")],
+    coalesced=True,
+    usage=_Usage(10, 20),
+)
+
+
+def test_view_composed_records_correlation_id_cache_key_and_decision(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        lineage = create_lineage(storage)
+        spec = l2_spec()
+        await lineage.view_composed(spec=spec, trace=RICH_TRACE, surface="web")
+        composed = next(e for e in await storage.list_lineage() if e.type == "view.composed")
+        assert composed.payload["correlationId"] == "req-1"
+        assert composed.payload["cacheKey"] == RICH_TRACE.cacheKey
+        assert composed.payload["cacheKeyParts"] == {
+            "intentHash": "sha256:" + "1" * 64,
+            "dataVersion": "sales@seed-1",
+        }
+        assert composed.payload["decision"] == {
+            "attempts": [
+                {"kind": "l1", "ok": False, "issues": ["bad output"]},
+                {"kind": "l2", "ok": True},
+            ],
+            "downgrades": [
+                {"id": "sandbox1", "from_": "sandbox.html", "to": "presentMarkdown", "reason": "unsupported"}
+            ],
+            "coalesced": True,
+            "usage": {"inputTokens": 10, "outputTokens": 20},
+        }
+
+    asyncio.run(run())
+
+
+def test_attempts_issues_are_capped_to_5_entries_of_200_chars(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        lineage = create_lineage(storage)
+        long_issue = "x" * 250
+        trace = FakeTrace(
+            durationMs=10.0,
+            attempts=[_Attempt("l1", False, [long_issue, "a", "b", "c", "d", "e", "f"])],
+        )
+        await lineage.view_composed(spec=l2_spec(), trace=trace, surface="web")
+        composed = next(e for e in await storage.list_lineage() if e.type == "view.composed")
+        issues = composed.payload["decision"]["attempts"][0]["issues"]
+        assert len(issues) == 5
+        # 200 characters kept + a trailing ellipsis marker.
+        assert len(issues[0]) == 201
+
+    asyncio.run(run())
+
+
+def test_decision_and_correlation_fields_absent_when_the_trace_carries_none(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        lineage = create_lineage(storage)
+        await lineage.view_composed(spec=l2_spec(), trace=TRACE, surface="web")
+        composed = next(e for e in await storage.list_lineage() if e.type == "view.composed")
+        assert "decision" not in composed.payload
+        assert "correlationId" not in composed.payload
+        assert "cacheKey" not in composed.payload
+        assert "cacheKeyParts" not in composed.payload
+
+    asyncio.run(run())
+
+
+def test_component_generated_and_used_record_correlation_id_kit_and_generator_version(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        lineage = create_lineage(storage)
+        spec = l2_spec()
+        spec_with_kit = spec.model_copy(
+            update={
+                "provenance": spec.provenance.model_copy(
+                    update={"kit": ProvenanceKit(id="default", version="1"), "generatorVersion": "gen-1"}
+                )
+            }
+        )
+        await lineage.view_composed(spec=spec_with_kit, trace=RICH_TRACE, surface="web")
+        events = await storage.list_lineage()
+        generated = next(e for e in events if e.type == "component.generated")
+        assert generated.payload["correlationId"] == "req-1"
+        assert generated.payload["kit"] == {"id": "default", "version": "1"}
+        assert generated.payload["generatorVersion"] == "gen-1"
+        used = next(e for e in events if e.type == "component.used")
+        assert used.payload["correlationId"] == "req-1"
+
+    asyncio.run(run())
+
+
+def test_fallback_records_correlation_id_when_given(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        recorder = create_view_recorder(create_lineage(storage))
+        spec = negotiated_spec()
+        assert spec.provenance.fallback is not None
+
+        await recorder.fallback(
+            spec=spec,
+            reason=spec.provenance.fallback.reason,
+            kind="negotiation",
+            surface="web",
+            correlation_id="req-fallback",
+        )
+        payload = next(
+            e for e in await storage.list_lineage() if e.type == "view.fallback"
+        ).payload
+        assert payload["correlationId"] == "req-fallback"
+
+    asyncio.run(run())
+
+
+def test_fallback_omits_correlation_id_when_absent(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        recorder = create_view_recorder(create_lineage(storage))
+        spec = negotiated_spec()
+        assert spec.provenance.fallback is not None
+
+        await recorder.fallback(
+            spec=spec, reason=spec.provenance.fallback.reason, kind="negotiation", surface="web"
+        )
+        payload = next(
+            e for e in await storage.list_lineage() if e.type == "view.fallback"
+        ).payload
+        assert "correlationId" not in payload
 
     asyncio.run(run())

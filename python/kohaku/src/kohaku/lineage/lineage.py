@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable
-from typing import Any, Protocol
+from collections.abc import Callable, Sequence
+from typing import Any, Literal, Protocol
 
 from kohaku.spec import (
+    CacheKeyParts,
     JsonObject,
     LineageActor,
     LineageEventRecord,
@@ -27,7 +28,47 @@ from kohaku.spec import (
     compute_structure_hash,
 )
 
-from .events import COMPONENT_EVENT_TYPES, Clock, make_event, now_iso
+from .events import (
+    COMPONENT_EVENT_TYPES,
+    Clock,
+    ViewComposedDecision,
+    ViewDecisionAttempt,
+    ViewDecisionDowngrade,
+    make_event,
+    now_iso,
+)
+
+
+class _AttemptLike(Protocol):
+    """Structural subset of kohaku.composer's ComposeAttempt (lineage does not depend on composer)."""
+
+    @property
+    def kind(self) -> Literal["l1", "l2"]: ...
+    @property
+    def ok(self) -> bool: ...
+    @property
+    def issues(self) -> list[str] | None: ...
+
+
+class _DowngradeLike(Protocol):
+    """Structural subset of kohaku.registry's Downgrade (lineage does not depend on registry). `from_` mirrors
+    that dataclass's own field name (a trailing underscore since `from` is a Python keyword)."""
+
+    @property
+    def id(self) -> str: ...
+    @property
+    def from_(self) -> str: ...
+    @property
+    def to(self) -> str: ...
+    @property
+    def reason(self) -> str: ...
+
+
+class _UsageLike(Protocol):
+    @property
+    def inputTokens(self) -> int: ...
+    @property
+    def outputTokens(self) -> int: ...
 
 
 class ComposeTraceLike(Protocol):
@@ -37,10 +78,89 @@ class ComposeTraceLike(Protocol):
     view_composed references only durationMs (tier / cache / model etc. are taken from spec.provenance). This
     port requires only durationMs and leaves the rest to structural matching (composer.ComposeTrace satisfies it).
     Declared as a read-only property so a frozen dataclass (a test's FakeTrace, etc.) can also satisfy it.
+
+    correlationId / cacheKey / cacheKeyParts / attempts / downgrades / coalesced / usage are all optional
+    additions (U2) read by view_composed's explain-facing payload fields -- see its doc comment on each
+    corresponding TypedDict key in events.py. A trace that lacks them (or returns None) gets the exact same
+    view.composed / component.generated / component.used payload shape as before they existed.
     """
 
     @property
     def durationMs(self) -> float: ...
+    @property
+    def correlationId(self) -> str | None: ...
+    @property
+    def cacheKey(self) -> str | None: ...
+    @property
+    def cacheKeyParts(self) -> CacheKeyParts | None: ...
+    @property
+    def attempts(self) -> Sequence[_AttemptLike] | None: ...
+    @property
+    def downgrades(self) -> Sequence[_DowngradeLike] | None: ...
+    @property
+    def coalesced(self) -> bool | None: ...
+    @property
+    def usage(self) -> _UsageLike | None: ...
+
+
+_MAX_DECISION_ISSUES = 5
+_MAX_DECISION_ISSUE_LENGTH = 200
+
+
+def truncate_issues(issues: list[str] | None) -> list[str] | None:
+    """Caps an attempt's issues to at most _MAX_DECISION_ISSUES entries of at most
+    _MAX_DECISION_ISSUE_LENGTH characters each (an ellipsis marks a truncated string), so a verbose
+    validation-error trail cannot bloat the lineage record without bound. Returns None for an empty/unset
+    list (keeps `issues` off the payload rather than recording `issues: []`)."""
+    if not issues:
+        return None
+    capped = issues[:_MAX_DECISION_ISSUES]
+    return [
+        f"{issue[:_MAX_DECISION_ISSUE_LENGTH]}…" if len(issue) > _MAX_DECISION_ISSUE_LENGTH else issue
+        for issue in capped
+    ]
+
+
+def cache_key_parts_to_wire(parts: CacheKeyParts) -> dict[str, Any]:
+    """CacheKeyParts as a plain JSON-safe dict, omitting unset optional fields (mirrors TS's cacheKeyParts,
+    which JSON.stringify drops `undefined` fields from automatically)."""
+    out: dict[str, Any] = {"intentHash": parts.intentHash, "dataVersion": parts.dataVersion}
+    if parts.catalogFingerprint is not None:
+        out["catalogFingerprint"] = parts.catalogFingerprint
+    if parts.specVersion is not None:
+        out["specVersion"] = parts.specVersion
+    if parts.generatorVersion is not None:
+        out["generatorVersion"] = parts.generatorVersion
+    if parts.policyFingerprint is not None:
+        out["policyFingerprint"] = parts.policyFingerprint
+    return out
+
+
+def build_decision(trace: ComposeTraceLike) -> ViewComposedDecision | None:
+    """Builds view.composed's `decision` summary from the trace, or None when there is nothing to summarize
+    (no attempts, no downgrades, not coalesced, no usage) -- the common case for a cache hit / L0 fixed Spec,
+    which should not grow a `decision` key at all."""
+    attempts = trace.attempts or []
+    downgrades = trace.downgrades or []
+    if len(attempts) == 0 and len(downgrades) == 0 and trace.coalesced is not True and trace.usage is None:
+        return None
+    decision_attempts: list[ViewDecisionAttempt] = []
+    for a in attempts:
+        entry: ViewDecisionAttempt = {"kind": a.kind, "ok": a.ok}
+        issues = truncate_issues(a.issues)
+        if issues is not None:
+            entry["issues"] = issues
+        decision_attempts.append(entry)
+    decision: ViewComposedDecision = {"attempts": decision_attempts}
+    if len(downgrades) > 0:
+        decision["downgrades"] = [
+            ViewDecisionDowngrade(id=d.id, from_=d.from_, to=d.to, reason=d.reason) for d in downgrades
+        ]
+    if trace.coalesced is True:
+        decision["coalesced"] = True
+    if trace.usage is not None:
+        decision["usage"] = {"inputTokens": trace.usage.inputTokens, "outputTokens": trace.usage.outputTokens}
+    return decision
 
 
 def artifact_id_of(sha256: str) -> str:
@@ -154,6 +274,21 @@ class Lineage:
         payload["durationMs"] = trace.durationMs
         if artifact_id is not None:
             payload["artifactId"] = artifact_id
+        if trace.correlationId is not None:
+            payload["correlationId"] = trace.correlationId
+        if trace.cacheKey is not None:
+            payload["cacheKey"] = trace.cacheKey
+        if trace.cacheKeyParts is not None:
+            payload["cacheKeyParts"] = cache_key_parts_to_wire(trace.cacheKeyParts)
+        if spec.provenance.generatorVersion is not None:
+            payload["generatorVersion"] = spec.provenance.generatorVersion
+        if spec.provenance.kit is not None:
+            payload["kit"] = spec.provenance.kit.to_wire()
+        if spec.provenance.fallback is not None:
+            payload["fallback"] = spec.provenance.fallback.to_wire()
+        decision = build_decision(trace)
+        if decision is not None:
+            payload["decision"] = decision
 
         await self.record(
             "view.composed",
@@ -204,6 +339,12 @@ class Lineage:
                         request = spec.intent.params.get("request")
                         if isinstance(request, str):
                             generated_payload["request"] = request
+                        if trace.correlationId is not None:
+                            generated_payload["correlationId"] = trace.correlationId
+                        if spec.provenance.kit is not None:
+                            generated_payload["kit"] = spec.provenance.kit.to_wire()
+                        if spec.provenance.generatorVersion is not None:
+                            generated_payload["generatorVersion"] = spec.provenance.generatorVersion
                         await self.record(
                             "component.generated",
                             generated_payload,
@@ -221,6 +362,8 @@ class Lineage:
             }
             if session_id is not None:
                 used_payload["sessionId"] = session_id
+            if trace.correlationId is not None:
+                used_payload["correlationId"] = trace.correlationId
             await self.record("component.used", used_payload, None, tenant)
 
     async def view_rendered(
@@ -269,9 +412,10 @@ class Lineage:
         intent_hash: str | None = None,
         session_id: str | None = None,
         tenant: str | None = None,
+        correlation_id: str | None = None,
     ) -> None:
-        # Unspecified optionals (kind / intentHash / sessionId) are not stamped into the payload.
-        # tenant is stamped into the record's tenant field, not the payload.
+        # Unspecified optionals (kind / intentHash / sessionId / correlationId) are not stamped into the
+        # payload. tenant is stamped into the record's tenant field, not the payload.
         payload: dict[str, Any] = {"specHash": spec_hash, "reason": reason, "surface": surface}
         if kind is not None:
             payload["kind"] = kind
@@ -279,6 +423,8 @@ class Lineage:
             payload["intentHash"] = intent_hash
         if session_id is not None:
             payload["sessionId"] = session_id
+        if correlation_id is not None:
+            payload["correlationId"] = correlation_id
         await self.record("view.fallback", payload, None, tenant)
 
     async def component_used(
