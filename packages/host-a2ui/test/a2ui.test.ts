@@ -544,6 +544,62 @@ describe("toA2ui: catalogMode 'split' (A2UI v1.0 RC, opt-in)", () => {
   });
 });
 
+describe("toA2ui: rendererFunctions (A2UI v1.0 RC, opt-in)", () => {
+  /** A spec whose event is a client-local state.set (rather than a server-notifying emit). */
+  function stateSetSpec(): UISpec {
+    return {
+      kohaku: "0.2",
+      intent: { canonical: "sales.toggle", params: {}, hash: HASH },
+      dataVersion: "sales@seed-1",
+      state: { expanded: false },
+      components: [
+        {
+          id: "root",
+          type: "layout.stack",
+          props: {},
+          children: ["btn"],
+        },
+        { id: "btn", type: "action.button", props: { label: "Toggle" } },
+      ],
+      events: [{ on: "btn.press", emit: "state.set", payload: { key: "expanded", value: true } }],
+      provenance: { tier: "L0", composedBy: "test", cache: "miss" },
+    };
+  }
+
+  it("rejects rendererFunctions under target v0.9.1", async () => {
+    await expect(toA2ui(stateSetSpec(), { rendererFunctions: true })).rejects.toThrow(
+      /rendererFunctions|target: "v1\.0"/,
+    );
+  });
+
+  it("projects a state.set EventBinding as action.functionCall calling kohaku.setState", async () => {
+    const { messages } = await toA2ui(stateSetSpec(), { target: "v1.0", rendererFunctions: true });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    const btn = createSurface.components!.find((c) => c.id === "btn")!;
+    expect(btn.action).toEqual({
+      functionCall: {
+        call: "kohaku.setState",
+        catalogId: KOHAKU_CATALOG_ID,
+        args: { key: "expanded", value: true },
+      },
+    });
+  });
+
+  it("without rendererFunctions (default), a state.set EventBinding still gets the generic action.event form", async () => {
+    const { messages } = await toA2ui(stateSetSpec(), { target: "v1.0" });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    const btn = createSurface.components!.find((c) => c.id === "btn")!;
+    expect(btn.action).toEqual({ event: { name: "btn.press", context: {} } });
+  });
+
+  it("leaves non-state.set emits (e.g. action.invoke) on the generic action.event form even with rendererFunctions: true", async () => {
+    const { messages } = await toA2ui(buttonSpec(), { target: "v1.0", rendererFunctions: true });
+    const createSurface = (messages[0] as { createSurface: A2uiCreateSurfaceV1 }).createSurface;
+    const btn = createSurface.components!.find((c) => c.id === "btn")!;
+    expect(btn.action).toEqual({ event: { name: "btn.press", context: {} } });
+  });
+});
+
 describe("patchToA2ui: catalogMode 'split' (A2UI v1.0 RC, opt-in)", () => {
   it("rejects split mode under target v0.9.1", () => {
     const patch: SpecPatch = { baseIntentHash: HASH, upsert: [{ id: "t", type: "text.heading", props: {} }] };

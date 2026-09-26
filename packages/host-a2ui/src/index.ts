@@ -1,3 +1,4 @@
+export { buildKohakuCatalogDocument, type KohakuCatalogDocumentOptions } from "./catalog-document.js";
 export { fromA2uiEvent } from "./from-a2ui-event.js";
 export { serializeA2uiLines } from "./jsonl.js";
 export { type PatchToA2uiOptions, patchToA2ui } from "./patch-to-a2ui.js";
@@ -5,6 +6,7 @@ export {
   applyEventBindings,
   escapeJsonPointerToken,
   KOHAKU_CATALOG_ID,
+  KOHAKU_SET_STATE_FUNCTION,
   type ProjectContext,
   projectNode,
   surfaceIdFromIntentHash,

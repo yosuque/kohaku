@@ -143,12 +143,32 @@ function asText(value: JsonValue | undefined): string {
 }
 
 /**
- * Map a spec-level EventBinding onto the firing component's `action.event` (A2UI holds the action on the component side).
- * The <componentId> in `on: "<componentId>.<eventName>"` is the firing component, and action.event.name gets `on` as-is
- * (so fromA2uiEvent can convert it back cleanly on round-trip). context is empty (the client resolves the values).
- * kohaku-specific information such as the emit target / payload is preserved by the sidecar (events).
+ * The v1.0 RC catalog function name `applyEventBindings` emits a `state.set` `EventBinding` as, under
+ * `rendererFunctions: true` (see `ToA2uiOptions.rendererFunctions`). Declared in the kohaku catalog document
+ * by `catalog-document.ts` with `allowedCallers: "rendererOnly"` (kohaku never calls it from the agent side).
  */
-export function applyEventBindings(components: A2uiComponent[], events: readonly EventBinding[]): void {
+export const KOHAKU_SET_STATE_FUNCTION = "kohaku.setState";
+
+/**
+ * Map a spec-level EventBinding onto the firing component's `action` (A2UI holds the action on the component side).
+ * The <componentId> in `on: "<componentId>.<eventName>"` is the firing component. context is empty (the client
+ * resolves the values). kohaku-specific information such as the emit target / payload is preserved by the sidecar
+ * (events), except when `rendererFunctions` recovers `state.set`'s `{key, value}` onto the wire directly (below).
+ *
+ * `rendererFunctions` (v1.0 RC only): a `state.set` binding — a client-local state update with no server
+ * round-trip (SPEC-EVT-002) — is instead projected as `action.functionCall` calling
+ * {@link KOHAKU_SET_STATE_FUNCTION} with `args: {key, value}`, rather than the generic `action.event` form
+ * (which would misrepresent it as a server-notifying event). Every other emit kind (`intent.patch` /
+ * `intent.replace` / `action.invoke`) is unaffected — only a real A2UI client that also understands kohaku's
+ * catalog function can execute it locally; a generic client without that awareness simply has no action to
+ * fire for that component, same as if the event had been dropped, so this option only ever adds information
+ * for clients that request it, never a lossier substitute.
+ */
+export function applyEventBindings(
+  components: A2uiComponent[],
+  events: readonly EventBinding[],
+  opts?: { rendererFunctions?: boolean },
+): void {
   if (events.length === 0) return;
   const byId = new Map(components.map((c) => [c.id, c] as const));
   for (const ev of events) {
@@ -156,6 +176,16 @@ export function applyEventBindings(components: A2uiComponent[], events: readonly
     const sourceId = dot >= 0 ? ev.on.slice(0, dot) : ev.on;
     const target = byId.get(sourceId);
     if (target == null) continue; // Skip if the firing component was not projected (tolerated by this skeleton)
+    if (opts?.rendererFunctions === true && ev.emit === "state.set") {
+      target.action = {
+        functionCall: {
+          call: KOHAKU_SET_STATE_FUNCTION,
+          catalogId: KOHAKU_CATALOG_ID,
+          args: { key: ev.payload["key"] ?? null, value: ev.payload["value"] ?? null },
+        },
+      };
+      continue;
+    }
     target.action = { event: { name: ev.on, context: {} } };
   }
 }
@@ -217,6 +247,13 @@ export interface ToA2uiOptions {
    * {@link A2UI_V1_BASIC_CATALOG_ID}). Kept overridable because the RC's catalog URIs are not yet final.
    */
   basicCatalogId?: string;
+  /**
+   * Project a `state.set` `EventBinding` as an `action.functionCall` to {@link KOHAKU_SET_STATE_FUNCTION}
+   * instead of the generic `action.event` form (v1.0 only; see `applyEventBindings`'s doc). Defaults to
+   * `false` (byte-identical to pre-v1.0 output). `true` under `target: "v0.9.1"` (the default target) throws,
+   * since v0.9.1 has no `functionCall` action form.
+   */
+  rendererFunctions?: boolean;
 }
 
 /**
@@ -239,6 +276,11 @@ export async function toA2ui(spec: UISpec, opts?: ToA2uiOptions): Promise<A2uiCo
       'toA2ui: catalogMode "split" requires target: "v1.0" (the A2UI v0.9.1 profile has no catalogId field to split with)',
     );
   }
+  if (opts?.rendererFunctions === true && opts?.target !== "v1.0") {
+    throw new Error(
+      'toA2ui: rendererFunctions requires target: "v1.0" (the A2UI v0.9.1 profile has no functionCall action form)',
+    );
+  }
   const kohakuCatalogId = opts?.catalogId ?? KOHAKU_CATALOG_ID;
   // In "split" mode the surface's own default catalogId becomes the basic catalog (kohaku's own types
   // instead carry an explicit per-component catalogId — see projectNode/verbatimComponent); in "single"
@@ -248,7 +290,7 @@ export async function toA2ui(spec: UISpec, opts?: ToA2uiOptions): Promise<A2uiCo
   const projectCtx: ProjectContext = { catalogMode, kohakuCatalogId };
 
   const components = spec.components.flatMap((node) => projectNode(node, projectCtx));
-  applyEventBindings(components, spec.events);
+  applyEventBindings(components, spec.events, { rendererFunctions: opts?.rendererFunctions });
 
   if (opts?.target === "v1.0") {
     const createSurface: A2uiCreateSurfaceV1 = { surfaceId, catalogId, components };

@@ -31,6 +31,8 @@ export interface PatchToA2uiOptions {
   catalogMode?: "single" | "split";
   /** Override for kohaku's own catalog id stamped on verbatim components (only meaningful under `catalogMode: "split"`; defaults to {@link KOHAKU_CATALOG_ID}). */
   catalogId?: string;
+  /** Same as `ToA2uiOptions.rendererFunctions` (v1.0 only; throws under `target: "v0.9.1"`). Defaults to `false`. */
+  rendererFunctions?: boolean;
 }
 
 /**
@@ -62,7 +64,13 @@ export function patchToA2ui(
       'patchToA2ui: catalogMode "split" requires target: "v1.0" (the A2UI v0.9.1 profile has no catalogId field to split with)',
     );
   }
+  if (opts?.rendererFunctions === true && opts?.target !== "v1.0") {
+    throw new Error(
+      'patchToA2ui: rendererFunctions requires target: "v1.0" (the A2UI v0.9.1 profile has no functionCall action form)',
+    );
+  }
   const projectCtx: ProjectContext = { catalogMode, kohakuCatalogId: opts?.catalogId ?? KOHAKU_CATALOG_ID };
+  const eventOpts = { rendererFunctions: opts?.rendererFunctions };
 
   let components: A2uiComponent[];
   if (hasRemove) {
@@ -73,11 +81,11 @@ export function patchToA2ui(
       );
     }
     components = appliedSpec.components.flatMap((node) => projectNode(node, projectCtx));
-    applyEventBindings(components, appliedSpec.events);
+    applyEventBindings(components, appliedSpec.events, eventOpts);
   } else {
     components = (patch.upsert ?? []).flatMap((node) => projectNode(node, projectCtx));
     // If the patch itself declares events, map them onto the firing components (limited to upserted components).
-    if (patch.events != null) applyEventBindings(components, patch.events);
+    if (patch.events != null) applyEventBindings(components, patch.events, eventOpts);
   }
 
   const messages: A2uiMessage[] = [{ version, updateComponents: { surfaceId, components } }];

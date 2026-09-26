@@ -73,6 +73,14 @@ export interface A2uiBinding {
 /** Client-side function call (shared shape for validation checks / action.functionCall / value computation). */
 export interface A2uiFunctionCall {
   call: string;
+  /**
+   * Catalog override for this call (v1.0 RC only; optional per the RC facts' `action` shape
+   * `{call, catalogId(optional), args}`). Resolution order is this field → the surface's default
+   * `catalogId` → a resolution error, same as a component's own {@link A2uiComponent.catalogId}. Emitted
+   * only under `ToA2uiOptions.rendererFunctions: true` (v1.0 only); omitted otherwise, so v0.9.1 output and
+   * v1.0 output without `rendererFunctions` are unaffected.
+   */
+  catalogId?: string;
   args: Record<string, A2uiValue>;
   /** Return-type hint (used by some v0.9.1 functions). */
   returnType?: string;
