@@ -235,6 +235,12 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
     const converted = fromA2ui(surface, {
       intent,
       dataVersion,
+      // Always "untrusted" and never taken from CreateA2uiIngestOptions: createA2uiIngest exists
+      // specifically to ingest content whose trust this host cannot itself vouch for, so there is no safe
+      // way to expose this as a caller-settable option here (see FromA2uiOptions.trust's doc). A caller
+      // that genuinely needs to replay kohaku's own prior toA2ui output losslessly (trust: "trusted") calls
+      // fromA2ui directly instead of going through this ingest pipeline.
+      trust: "untrusted",
       ...(opts.catalog != null ? { catalog: opts.catalog } : {}),
       ...(opts.unmappable != null ? { unmappable: opts.unmappable } : {}),
       ...(opts.bindPath != null ? { bindPath: opts.bindPath } : {}),

@@ -1,4 +1,6 @@
 import type { GuiAction, JsonObject } from "@kohaku-ui/spec-core";
+import { A2UI_FORWARD_ACTION } from "./from-a2ui.js";
+import { A2uiIngestError } from "./reduce.js";
 
 /**
  * The client→agent action shape `toA2uiClientAction` produces. Per the RC facts note: "renderer → agent の
@@ -18,18 +20,28 @@ export interface A2uiClientActionMessage {
 
 /**
  * The reverse of `fromA2uiEvent`: converts a kohaku `GuiAction` (the result of a user interacting with a
- * component in an *ingested* surface — see `fromA2ui`'s `attachEvent`, which synthesizes exactly this
- * `{kind:"gui", action: "<id>.<eventName>", params}` shape from the original agent's `action.event`) back
- * into the wire form the original third-party agent expects to receive.
+ * component in an *ingested* surface) back into the wire form the original third-party agent expects to
+ * receive.
  *
- * `action.action` is split on its *first* `.` — the inverse of `attachEvent`'s `on: "${id}.${eventNamePart}"`
- * construction — so the recovered `name` is exactly the (possibly sanitized — see `fromA2ui`'s
- * `toKohakuEventNamePart`) event name segment, not kohaku's own `<id>.<eventName>` convention. `context`
- * (kohaku's already-resolved `params`) is copied straight through, matching `fromA2uiEvent`'s own
- * `context -> params` direction reversed.
+ * This is the **only** correct way to handle a `GuiAction` whose write-action name (spec-core's
+ * `resolveWriteActionName`) is `A2UI_FORWARD_ACTION` — a host MUST recognize that sentinel and route here
+ * *before* ever considering dispatching to its `DomainPort` (see `A2UI_FORWARD_ACTION`'s doc in
+ * `from-a2ui.ts`, and the package README's "Inbound: A2UI agent → kohaku Spec (ingest)" section). The
+ * actual forwarded event name/context live nested in `params.event`/`params.context` (`fromA2ui`'s
+ * `attachEvent` puts them there precisely so a third-party agent's own `context` — which could otherwise
+ * contain an `action` key — never reaches a position `resolveWriteActionName` reads); this function throws
+ * `A2uiIngestError` if `params` is not shaped that way, since calling it on an unrelated `GuiAction` is a
+ * host wiring bug, not a case to silently paper over.
  */
 export function toA2uiClientAction(action: GuiAction): A2uiClientActionMessage {
-  const dot = action.action.indexOf(".");
-  const name = dot >= 0 ? action.action.slice(dot + 1) : action.action;
-  return { action: { name, context: action.params } };
+  const { params } = action;
+  if (params["action"] !== A2UI_FORWARD_ACTION || typeof params["event"] !== "string") {
+    throw new A2uiIngestError(
+      `toA2uiClientAction: expected a GuiAction forwarded from A2UI ingest ` +
+        `({params: {action: "${A2UI_FORWARD_ACTION}", event: string, context}}), got params: ${JSON.stringify(params)}`,
+    );
+  }
+  const context = params["context"];
+  const isJsonObject = typeof context === "object" && context !== null && !Array.isArray(context);
+  return { action: { name: params["event"], context: isJsonObject ? (context as JsonObject) : {} } };
 }

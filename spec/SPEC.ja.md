@@ -223,7 +223,7 @@ UISpec / SpecPatch を A2UI(隣接リスト形の宣言的 UI メッセージ)�
 
 逆方向: kohaku が**他社の** A2UI エージェントの「レンダラー」クライアントとして振る舞い、そのサーフェスを kohaku 自身の UI 内に描画し、操作をエージェントへ送り返す。参照実装は `packages/host-a2ui/src/inbound/`(`schemas.ts` / `reduce.ts` / `from-a2ui.ts` / `ingest.ts` / `to-a2ui-client-action.ts`)。**§6.3 の他の部分と同様、conformance 検査対象外**であり、MUST/SHOULD 要件は登録しない。
 
-受信側のワイヤ(v0.9.1・v1.0 RC いずれの `createSurface`/`updateComponents`/`updateDataModel`/`deleteSurface` も)は厳密に検証され(エンベロープ・構造キーの未知キーは拒否、コンポーネントのカタログ直置き props は開放のまま)、`SurfaceState`(サーフェスごとの `{id -> component}` マップと蓄積されたデータモデル)へ畳み込まれ、`fromA2ui` によって `UISpec` へ変換される。これは `toA2ui` の厳密な逆変換では**ない**: 真に他社製のサーフェスは `KohakuSidecar` を持たないため、変換はベストエフォートであり損失を伴いうる — kohaku 自身が過去に `toA2ui` で出力したものを sidecar 付きで再取り込みした場合に限り、component 単位で sidecar から無損失に復元される。
+受信側のワイヤ(v0.9.1・v1.0 RC いずれの `createSurface`/`updateComponents`/`updateDataModel`/`deleteSurface` も)は厳密に検証され(エンベロープ・構造キーの未知キーは拒否、コンポーネントのカタログ直置き props は開放のまま)、`SurfaceState`(サーフェスごとの `{id -> component}` マップと蓄積されたデータモデル)へ畳み込まれ、`fromA2ui` によって `UISpec` へ変換される。これは `toA2ui` の厳密な逆変換では**ない**: 真に他社製のサーフェスは `KohakuSidecar` を持たないため、変換はベストエフォートであり損失を伴いうる — kohaku 自身が過去に `toA2ui` で出力したものを sidecar 付き、かつ明示的な **`trust: "trusted"`** で再取り込みした場合に限り、component 単位で sidecar から(元のイベントも含めて)無損失に復元される。`trust` の既定値は `"untrusted"` であり、その下では渡された `sidecar` は一切参照されない — なぜこの既定値が単なる忠実度だけでなく重要なのかは後述の「セキュリティ: write-action の転送」を参照。
 
 逆対応表(その component id に sidecar のエントリが無い場合):
 
@@ -234,7 +234,7 @@ UISpec / SpecPatch を A2UI(隣接リスト形の宣言的 UI メッセージ)�
 | 見出し variant の無い `Text` | `presentMarkdown` | |
 | `Button`(`child` が `Text`) | `action.button` | ラベルは子から復元。`variant` は送信側 `mapButtonVariant` のベストエフォート逆変換(`"primary"` → `"primary"`、それ以外 → `"secondary"` — 送信側の `secondary`/`danger` → `"primary"`/`"default"` への圧縮は sidecar 無しには復元不能) |
 | 呼び出し側が渡したカタログが認識する型(`catalog.has(type)`) | その型のまま verbatim | props をそのまま写す(各値は下のバインディング行の通り解決) |
-| 任意のコンポーネントの `action.event` | 合成された `EventBinding`(`on: "<id>.<sanitized-name>"`、`emit: "action.invoke"`、`payload` = 解決済み `context`) | 取り込んだ Spec が kohaku 自身のレンダラーで実際に操作可能になる(見た目の再現に留まらない)ようにする。`action.invoke` は kohaku 自身の送信側 `action.button` のテスト用フィクスチャが press に使うのと同じ emit 種別。`toA2uiClientAction`(後述)が逆変換する |
+| 任意のコンポーネントの `action.event` | 合成された `EventBinding`(`on: "<id>.<sanitized-name>"`、`emit: "action.invoke"`、`payload: {action: A2UI_FORWARD_ACTION, event: <sanitized-name>, context: <解決済み context>}`) | 取り込んだ Spec が kohaku 自身のレンダラーで実際に操作可能になる(見た目の再現に留まらない)ようにする。`action.invoke` は kohaku 自身の送信側 `action.button` のテスト用フィクスチャが press に使うのと同じ emit 種別。`payload.action` は常に固定のセンチネルであり、エージェントのデータが入ることはない — 後述の「セキュリティ: write-action の転送」参照。`toA2uiClientAction`(後述)が逆変換する |
 | 任意のコンポーネントの `action.functionCall` | (なし) | A2UI 自身の定義上クライアントローカル(例: `openUrl`)— サーバーへ転送すべき通知が無いため `EventBinding` は生成されず、損失としても記録されない |
 | props/context のいずれかに現れる `{path}` データバインディング | サーフェスのデータモデルから一度だけ解決されたリテラル | `"binding-snapshotted"` の損失として記録される(後述)。呼び出し側が渡す `bindPath(path)` フックが kohaku の `{$ref}` を返せば、参照渡しのまま置き換えられる(損失としては記録されない) |
 | spec-core の `ComponentIdSchema` に反する id(先頭が数字・unicode・記号・長さ超過) | 決定的にサニタイズされた id | 他社の id は無制約な文字列であるため。異なる 2 つの受信 id が同じ kohaku id にサニタイズされた場合は、下記の `DUPLICATE_ID` として表面化する |
@@ -245,7 +245,9 @@ UISpec / SpecPatch を A2UI(隣接リスト形の宣言的 UI メッセージ)�
 
 **Provenance**: `tier: "L1"`、`composedBy: "a2ui-ingest"`、`model: "a2ui:<agentId>"`、`cache` は `"miss"` / `"hit"` / `"fixated"` のいずれか(`"bypass"` は無い — composer の bypass パスに相当するものがここには存在しない)。キャッシュキーは spec-core の `cacheKey({intentHash, dataVersion, generatorVersion: "a2ui-ingest/<agentId>"})` にテナント指定時はテナントのセグメントを付加したもの。`dataVersion` は既定では正規化されたデータモデルの短縮ハッシュ。固定化(`storage.getFixation`)は変換作業の前に確認され、host-core の固定化ショートカットと同様に `cache: "fixated"` へ短絡する。
 
-`toA2uiClientAction` は `fromA2uiEvent` の逆であり、取り込んだサーフェスへのユーザー操作が生む `GuiAction` を `{action: {name, context}}`(RC 事実メモが記す renderer→agent の形。`surfaceId`/`sourceComponentId`/`timestamp` は意図的に含めていない — 同メモがそれらを transport 依存としているため)に変換する。実際の transport でそれらの引き回しが必要になった場合は **A2UI v1.0 仕様に照らして確認すること**。
+**セキュリティ: write-action の転送。** spec-core の `resolveWriteActionName`/`collectWriteActions`(ホストが Spec に対してどの write capability を発行するか決めるのに使う)は、write action の名前を、発火元コンポーネントの `props.action`、次に発火した `EventBinding` の `payload.action` の順に解決する。A2UI の `action.event` の `context` は完全にエージェント制御下にあるスキーマ非制約の辞書(§6.3 の `A2uiEventSchema`)であるため、そうでなければ他社エージェントが `context: {action: "someRealOperation"}` を設定し、ホストに名指しする権限の無いドメイン操作の write capability を発行させることができてしまう — component 自身の props がフィルタなしにそのまま写されるようなことがあれば、それについても同様である。`fromA2ui` はこれを 2 つの方法で、`trust` の値に関わらず無条件に(sidecar から復元された component はそもそもこのロジックに到達しないため — 前述参照)閉じている: 合成されるすべてのイベントの `payload.action` は常に固定のセンチネル `A2UI_FORWARD_ACTION`(`"a2ui.forward"`)であり、エージェントの実際のイベント名/context は代わりに `payload.event`/`payload.context` に(`resolveWriteActionName` の届かない場所に)ネストされる。また、ワイヤの `action` キー自体が予約済みの構造的フィールド(`A2uiComponentAction`。単なる文字列ではない)であるため、kohaku 側の component の `props` にコピーされて紛れ込むことは決してない。**取り込んだ Spec を配信するホストは `A2UI_FORWARD_ACTION` を認識し、自身の `DomainPort` へのディスパッチを検討する前に必ず `toA2uiClientAction` へ経路付けしなければならず(MUST)、`A2UI_FORWARD_ACTION` 自体を実際の操作として登録してはならない(MUST NOT)** — そうしてしまうと、取り込んだ(他社の)コンテンツがその操作を直接引き起こせてしまう。
+
+`toA2uiClientAction` は `fromA2uiEvent` の逆であり、取り込んだサーフェスへのユーザー操作が生む `GuiAction` を受け取り、`params.event`/`params.context` から転送されたイベント名/context を読み取って(`params.action` が `A2UI_FORWARD_ACTION` でなければ例外を投げる — 無関係な `GuiAction` に対して呼び出すのはホスト側の配線ミスである)`{action: {name, context}}`(RC 事実メモが記す renderer→agent の形。`surfaceId`/`sourceComponentId`/`timestamp` は意図的に含めていない — 同メモがそれらを transport 依存としているため)を返す。実際の transport でそれらの引き回しが必要になった場合は **A2UI v1.0 仕様に照らして確認すること**。
 
 ### 6.4 AG-UI / A2A プロファイル [Reserved]
 

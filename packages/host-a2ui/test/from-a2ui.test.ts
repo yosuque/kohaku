@@ -1,8 +1,10 @@
-import type { CanonicalIntent, UISpec } from "@kohaku-ui/spec-core";
+import { type CanonicalIntent, collectWriteActions, type UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import {
+  A2UI_FORWARD_ACTION,
   A2uiIngestError,
   fromA2ui,
+  type KohakuSidecar,
   parseInboundA2uiMessage,
   reduceSurfaces,
   type SurfaceState,
@@ -48,7 +50,7 @@ function sampleSpec(): UISpec {
 }
 
 describe("fromA2ui: round trip via sidecar (kohaku's own toA2ui output re-ingested)", () => {
-  it("fromA2ui(ingest(toA2ui(spec))) restores every original component losslessly via the sidecar", async () => {
+  it("fromA2ui(ingest(toA2ui(spec))) restores every original component and event losslessly via the sidecar (trust: 'trusted')", async () => {
     const spec = sampleSpec();
     const { messages, sidecar } = await toA2ui(spec, { target: "v1.0" });
     const surface = ingestMessages(messages);
@@ -57,6 +59,7 @@ describe("fromA2ui: round trip via sidecar (kohaku's own toA2ui output re-ingest
       intent: INTENT,
       dataVersion: "sales@seed-1",
       sidecar,
+      trust: "trusted",
     });
 
     expect(losses).toEqual([]);
@@ -69,6 +72,75 @@ describe("fromA2ui: round trip via sidecar (kohaku's own toA2ui output re-ingest
     // The synthesized "btn__label" wire component is not independently re-emitted.
     expect(byId.has("btn__label")).toBe(false);
     expect(restored.components).toHaveLength(4);
+    // The original EventBinding is restored verbatim too (not re-synthesized through attachEvent's
+    // forwarding envelope — this is trusted, kohaku-origin data, not a third-party action).
+    expect(restored.events).toEqual(spec.events);
+  });
+
+  it("without trust: 'trusted', a supplied sidecar is ignored entirely (default is safe against untrusted content)", async () => {
+    const spec = sampleSpec();
+    const { messages, sidecar } = await toA2ui(spec, { target: "v1.0" });
+    const surface = ingestMessages(messages);
+
+    // Same call as above, minus `trust: "trusted"` — the sidecar must not be consulted at all.
+    const { spec: restored, losses } = fromA2ui(surface, {
+      intent: INTENT,
+      dataVersion: "sales@seed-1",
+      sidecar,
+    });
+
+    // Falls through to the generic best-effort mapping (presentChart is unknown without a catalog, even
+    // though the sidecar has a verbatim entry for it) — proving the sidecar had no effect whatsoever.
+    expect(losses).toEqual([{ componentId: "c", kind: "unknown-component", detail: expect.any(String) }]);
+    const byId = new Map(restored.components.map((c) => [c.id, c] as const));
+    expect(byId.get("c")!.type).toBe("presentMarkdown"); // not sidecar's verbatim "presentChart"
+    // The event is re-synthesized through the (safe) forwarding envelope, not restored verbatim from the sidecar.
+    expect(restored.events).toEqual([
+      {
+        on: "btn.press",
+        emit: "action.invoke",
+        payload: { action: A2UI_FORWARD_ACTION, event: "press", context: {} },
+      },
+    ]);
+  });
+
+  it("security: a maliciously-crafted sidecar (an injected event/component the wire never declared) has zero effect without trust: 'trusted'", () => {
+    const surface: SurfaceState = {
+      surfaceId: "s",
+      sendDataModel: false,
+      dataModel: {},
+      components: { root: { id: "root", component: "Column", children: [] } },
+    };
+    // Shaped like a real KohakuSidecar, but purely attacker-controlled content — e.g. a compromised or
+    // malicious relay claiming "trust me, this is what the original kohaku Spec looked like."
+    const maliciousSidecar: KohakuSidecar = {
+      components: {
+        root: {
+          id: "root",
+          type: "layout.stack",
+          props: {},
+          data: { $ref: "query://sales/summary" },
+        },
+      },
+      events: [
+        { on: "root.annotate", emit: "action.invoke", payload: { action: "annotate", note: "pwned" } },
+      ],
+    };
+
+    const { spec } = fromA2ui(surface, {
+      intent: INTENT,
+      dataVersion: "d1",
+      sidecar: maliciousSidecar,
+      // trust defaults to "untrusted" — deliberately not set here.
+    });
+
+    // The injected component (with its data.$ref) never appears; root is the plain best-effort conversion.
+    expect(spec.components).toEqual([
+      { id: "root", type: "layout.stack", props: { direction: "vertical" }, children: [] },
+    ]);
+    // The injected event ("root.annotate") never appears at all — the wire declared no action on root.
+    expect(spec.events).toEqual([]);
+    expect(collectWriteActions(spec)).toEqual([]);
   });
 
   it("without a sidecar or a catalog, core-mapped components still round-trip; a non-core type (presentChart) is unmappable", async () => {
@@ -90,8 +162,15 @@ describe("fromA2ui: round trip via sidecar (kohaku's own toA2ui output re-ingest
       type: "action.button",
       props: { label: "Recompute", variant: "primary" },
     });
-    // The event survives byte-identically (event.name was already kohaku's own "<id>.<eventName>" form).
-    expect(restored.events).toEqual([{ on: "btn.press", emit: "action.invoke", payload: {} }]);
+    // The event's "on" survives byte-identically (event.name was already kohaku's own "<id>.<eventName>"
+    // form), but the payload is always the safe forwarding envelope, never the raw (here empty) context.
+    expect(restored.events).toEqual([
+      {
+        on: "btn.press",
+        emit: "action.invoke",
+        payload: { action: A2UI_FORWARD_ACTION, event: "press", context: {} },
+      },
+    ]);
     expect(byId.has("btn__label")).toBe(false);
   });
 });
@@ -157,7 +236,7 @@ describe("fromA2ui: events (action.event -> EventBinding, action.invoke)", () =>
     return { surfaceId: "s", sendDataModel: false, components, dataModel: {} };
   }
 
-  it("maps action.event to an EventBinding with emit: action.invoke, preserving a regex-compliant event name", () => {
+  it("maps action.event to an EventBinding with emit: action.invoke, wrapping the resolved context under a fixed forwarding payload", () => {
     const surface = surfaceOf({
       root: { id: "root", component: "Column", children: ["btn"] },
       btn: {
@@ -169,7 +248,56 @@ describe("fromA2ui: events (action.event -> EventBinding, action.invoke)", () =>
       btn_label: { id: "btn_label", component: "Text", text: "Go" },
     });
     const { spec } = fromA2ui(surface, { intent: INTENT, dataVersion: "d1" });
-    expect(spec.events).toEqual([{ on: "btn.press", emit: "action.invoke", payload: { source: "toolbar" } }]);
+    expect(spec.events).toEqual([
+      {
+        on: "btn.press",
+        emit: "action.invoke",
+        payload: { action: A2UI_FORWARD_ACTION, event: "press", context: { source: "toolbar" } },
+      },
+    ]);
+  });
+
+  it("security: an agent-controlled context.action can never surface as the write action collectWriteActions resolves", () => {
+    const surface = surfaceOf({
+      root: { id: "root", component: "Column", children: ["btn"] },
+      btn: {
+        id: "btn",
+        component: "Button",
+        child: "btn_label",
+        // A malicious/compromised third-party agent tries to smuggle a real write-action name through the
+        // (otherwise wholly agent-controlled) event context.
+        action: { event: { name: "press", context: { action: "annotate", orderId: "123" } } },
+      },
+      btn_label: { id: "btn_label", component: "Text", text: "Go" },
+    });
+    const { spec } = fromA2ui(surface, { intent: INTENT, dataVersion: "d1" });
+    // The smuggled "action" value survives only nested under payload.context, never at payload.action.
+    expect(spec.events[0]!.payload).toEqual({
+      action: A2UI_FORWARD_ACTION,
+      event: "press",
+      context: { action: "annotate", orderId: "123" },
+    });
+    expect(collectWriteActions(spec)).toEqual([A2UI_FORWARD_ACTION]);
+  });
+
+  it("security: a catalog-verbatim component's own 'action' field is always the structural A2UI action descriptor, never copied into props", () => {
+    const surface = surfaceOf({
+      root: { id: "root", component: "Column", children: ["c"] },
+      c: {
+        id: "c",
+        component: "presentChart",
+        kind: "bar",
+        action: { event: { name: "select", context: {} } },
+      },
+    });
+    const { spec } = fromA2ui(surface, {
+      intent: INTENT,
+      dataVersion: "d1",
+      catalog: { has: () => true },
+    });
+    const chart = spec.components.find((c) => c.id === "c")!;
+    expect(chart.props).not.toHaveProperty("action");
+    expect(collectWriteActions(spec)).toEqual([A2UI_FORWARD_ACTION]);
   });
 
   it("sanitizes a non-regex-compliant event name deterministically", () => {

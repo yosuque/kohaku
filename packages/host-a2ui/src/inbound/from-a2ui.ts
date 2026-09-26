@@ -36,6 +36,18 @@ export interface A2uiIngestLoss {
   detail: string;
 }
 
+/**
+ * The reserved write-action name `attachEvent` stamps on every synthesized `action.invoke` event's
+ * `payload.action` (see `attachEvent`'s doc for why). **A host MUST NEVER register this as a real
+ * `DomainPort` operation** — its only correct handling is: recognize it (before dispatching to the
+ * DomainPort at all), extract the forwarded `event`/`context` from the payload, and route it to
+ * `toA2uiClientAction` to notify the originating agent. Registering it as a real operation would let any
+ * ingested (third-party) content trigger that operation directly, since `payload.action` is exactly the
+ * field spec-core's `collectWriteActions`/`resolveWriteActionName` read to decide which write capability
+ * a host issues for a Spec.
+ */
+export const A2UI_FORWARD_ACTION = "a2ui.forward";
+
 export interface FromA2uiOptions {
   /** The Spec's Intent (already resolved/hashed by the caller — see `createA2uiIngest`, task 5). */
   intent: CanonicalIntent;
@@ -67,10 +79,28 @@ export interface FromA2uiOptions {
   /**
    * The sidecar `toA2ui`/`patchToA2ui` returned for this exact surface, if this surface is kohaku's own
    * prior output re-ingested (the round-trip case, not third-party content). When a component id has a
-   * sidecar entry, it is restored **verbatim and losslessly** from `sidecar.components[id]`, bypassing every
-   * mapping rule below entirely.
+   * sidecar entry, it is restored **verbatim and losslessly** from `sidecar.components[id]` (and its
+   * original `EventBinding`s from `sidecar.events`), bypassing every mapping rule below entirely.
+   *
+   * **Only consulted when `trust: "trusted"`** (see that option) — passing a `sidecar` alone does not
+   * enable it, since a sidecar handed to the default `"untrusted"` mode is silently ignored rather than
+   * trusted. This is deliberate: a sidecar is a structure the *caller* constructs, and `fromA2ui` cannot
+   * itself distinguish "this really is kohaku's own prior `toA2ui` output" from "something shaped like a
+   * sidecar that ultimately traces back to the same untrusted agent" — restoring it verbatim would bypass
+   * every safety transform below (id sanitization, the props/event exclusions, `attachEvent`'s forwarding
+   * envelope) for whatever it contains.
    */
   sidecar?: KohakuSidecar;
+  /**
+   * Whether `sidecar` (above) may be trusted. `"untrusted"` (the default, and what `createA2uiIngest`
+   * always uses — see the package README's "Inbound: A2UI agent → kohaku Spec (ingest)" section): ignore
+   * `sidecar` entirely, so ingest is safe against real third-party content by default. `"trusted"`: this
+   * call is a genuine "kohaku's own `toA2ui` output, re-ingested" round trip (e.g. a relay/mirroring
+   * scenario, or a test), so `sidecar` restoration is honored. Only set this when the surface being
+   * converted is provably not third-party-influenced — never based on anything present *in* the surface
+   * itself (an agent cannot elevate its own trust by claiming to be kohaku).
+   */
+  trust?: "untrusted" | "trusted";
 }
 
 export interface FromA2uiResult {
@@ -205,12 +235,25 @@ function resolveChildren(node: A2uiComponent): ChildrenResolution {
  * there is no server-bound notification to route for it, so no EventBinding is produced (not a loss either:
  * a client-local action legitimately has nothing to forward).
  *
+ * **Security**: the payload is always `{action: A2UI_FORWARD_ACTION, event, context}`, never the raw
+ * resolved `context` object directly. spec-core's `resolveWriteActionName` (consumed by
+ * `collectWriteActions`, which hosts use to decide which write capability to issue for a Spec) reads
+ * `payload.action` directly — since `context` is an agent-controlled, wholly open dictionary (see
+ * `A2uiEventSchema`), a third-party agent could otherwise set `context: {action: "someRealOperation"}` and
+ * have `collectWriteActions` mint a capability for a real domain write it never should have been able to
+ * name. Nesting the resolved context under `context` keeps it out of `resolveWriteActionName`'s reach
+ * entirely, and `action` is always the fixed sentinel regardless of what the agent sent. This is
+ * unconditional (not gated by `trust`): `trust` only controls whether the *sidecar* escape hatch is
+ * honored (see `FromA2uiOptions.trust`), and a sidecar-restored node never reaches this function at all
+ * (its original `EventBinding`s, if any, are restored separately — see `convertOne`).
+ *
  * The wire's `event.name` is not reused as-is for `on`'s second segment: kohaku's `EventOnSchema` requires
  * `[a-zA-Z][a-zA-Z0-9]*` there, while a third-party agent's event name is an unconstrained string. When the
- * name already satisfies that shape (the common case: "press", "click", "rowClick", …) it survives unchanged,
- * so `toA2uiClientAction`'s reverse mapping (splitting `on` on its first `.`) recovers the exact original
- * name; a name that does not already satisfy it is deterministically sanitized instead, which is a real,
- * documented (README "governance proxy" section) loss of exact fidelity for that one case.
+ * name already satisfies that shape (the common case: "press", "click", "rowClick", …) it survives
+ * unchanged as both `on`'s suffix and `payload.event`; a name that does not already satisfy it is
+ * deterministically sanitized instead, which is a real, documented (README "governance proxy" section)
+ * loss of exact fidelity for that one case (`payload.event` carries the same, already-sanitized name `on`
+ * does, so `toA2uiClientAction` never needs to re-derive it from `on`).
  */
 function attachEvent(result: ComponentNode, node: A2uiComponent, ctx: ConvertCtx): void {
   if (node.action == null) return;
@@ -224,17 +267,36 @@ function attachEvent(result: ComponentNode, node: A2uiComponent, ctx: ConvertCtx
   const eventNamePart = toKohakuEventNamePart(
     rawName.startsWith(ownPrefix) ? rawName.slice(ownPrefix.length) : rawName,
   );
-  const payload: JsonObject = {};
+  const context: JsonObject = {};
   for (const [key, value] of Object.entries(node.action.event.context)) {
-    payload[key] = resolveValue(value, ctx, result.id, `action.event.context.${key}`);
+    context[key] = resolveValue(value, ctx, result.id, `action.event.context.${key}`);
   }
+  const payload: JsonObject = { action: A2UI_FORWARD_ACTION, event: eventNamePart, context };
   ctx.events.push({ on: `${result.id}.${eventNamePart}`, emit: "action.invoke", payload });
+}
+
+/**
+ * Restores every `EventBinding` in `sidecar.events` whose firing component is `rawId` (matching `on`
+ * against the `"<rawId>."` prefix), verbatim, onto `ctx.events`. `sidecar.events` holds the *whole*
+ * original Spec's events (see `to-a2ui.ts`'s `buildSidecar`), so this is filtered per component rather
+ * than restored once for the whole surface. Only called from the sidecar-restore branch of `convertOne`
+ * (i.e. only when `trust: "trusted"` — see `FromA2uiOptions.trust` — since `ctx.sidecar` is `undefined`
+ * otherwise), so this never runs against untrusted data.
+ */
+function restoreSidecarEvents(rawId: string, ctx: ConvertCtx): void {
+  const prefix = `${rawId}.`;
+  for (const ev of ctx.sidecar?.events ?? []) {
+    if (ev.on.startsWith(prefix)) ctx.events.push(ev);
+  }
 }
 
 /** Converts one raw component (identified by its *wire* id) into exactly one `ComponentNode`, or throws `UnmappableSignal`. */
 function convertOne(rawId: string, node: A2uiComponent, ctx: ConvertCtx): ComponentNode {
   const restored = ctx.sidecar?.components[rawId];
-  if (restored != null) return restored;
+  if (restored != null) {
+    restoreSidecarEvents(rawId, ctx);
+    return restored;
+  }
 
   const id = toKohakuComponentId(rawId);
 
@@ -348,14 +410,18 @@ export function fromA2ui(surface: SurfaceState, opts: FromA2uiOptions): FromA2ui
   getRootComponent(surface);
 
   const policy = opts.unmappable ?? "fallback";
-  const consumedIds = computeConsumedLabelIds(surface, opts.sidecar);
+  // The sidecar escape hatch is honored only under explicit trust: "trusted" (default "untrusted" — see
+  // FromA2uiOptions.trust / sidecar's doc). A sidecar supplied without that flag is silently ignored, not
+  // partially trusted, so a caller cannot be caught out by "I passed a sidecar, so it must be safe."
+  const effectiveSidecar = opts.trust === "trusted" ? opts.sidecar : undefined;
+  const consumedIds = computeConsumedLabelIds(surface, effectiveSidecar);
   const losses: A2uiIngestLoss[] = [];
   const events: EventBinding[] = [];
   const ctx: ConvertCtx = {
     surface,
     ...(opts.catalog != null ? { catalog: opts.catalog } : {}),
     ...(opts.bindPath != null ? { bindPath: opts.bindPath } : {}),
-    ...(opts.sidecar != null ? { sidecar: opts.sidecar } : {}),
+    ...(effectiveSidecar != null ? { sidecar: effectiveSidecar } : {}),
     losses,
     events,
   };

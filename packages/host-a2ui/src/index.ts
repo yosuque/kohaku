@@ -1,6 +1,7 @@
 export { buildKohakuCatalogDocument, type KohakuCatalogDocumentOptions } from "./catalog-document.js";
 export { fromA2uiEvent } from "./from-a2ui-event.js";
 export {
+  A2UI_FORWARD_ACTION,
   type A2uiIngestLoss,
   type A2uiIngestLossKind,
   type FromA2uiOptions,

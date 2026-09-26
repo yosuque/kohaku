@@ -576,7 +576,9 @@ const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
 
 ユーザーが描画済みサーフェスを操作すると、レンダラーは普通の kohaku `GuiAction` を発火します(kohaku は取り込み時にエージェント自身の `action.event` から `EventBinding` を合成しているため、これは見た目だけの再現ではなく本物の操作です)。これを `toA2uiClientAction(guiAction)` で元のエージェントへ送り返すと、エージェント自身のイベント名と context が復元されます。
 
-表現できないコンテンツ(自社カタログが認識しないコンポーネント型、データにひも付いた反復テンプレート、計算された function-call 値)は既定では決定的なプレースホルダになります(`unmappable: "fallback"`、既定値)——LLM による再生成では**ありません**——または、エラーをすぐに表面化させたいなら取り込み全体を失敗させます(`unmappable: "reject"`)。完全な対応表と損失方針は `packages/host-a2ui/README.md` と [spec/SPEC.ja.md](../spec/SPEC.ja.md) の §6.3「Inbound A2UI(取り込み)」を参照してください(A2UI プロファイルの他の部分と同様、conformance 検査対象外です)。
+**セキュリティ: `A2UI_FORWARD_ACTION` を実際の操作として登録しないでください。** 取り込んだ操作のために kohaku が合成する `EventBinding` は、常に `payload.action: A2UI_FORWARD_ACTION` を持ちます——エージェント自身のデータではありません。spec-core の `collectWriteActions`(自社ホストが Spec に対してどの write capability を発行するか決めるもの)がまさにそのフィールドを読むためで、A2UI イベントの `context` はそうでなければ完全にエージェント制御下の辞書であり、悪意あるエージェントがそれを使って自社の実際の操作を名指しできてしまいます。ディスパッチャは `A2UI_FORWARD_ACTION` を認識し、`DomainPort` 呼び出しを検討する*前に*必ず `toA2uiClientAction` へ経路付けしなければならず、実際の操作として登録してはいけません。`createA2uiIngest` は常にこの方式で取り込んだコンテンツを信頼できないものとして扱います。`fromA2ui` を `trust: "trusted"`(`KohakuSidecar` の元のイベントも無損失に復元する)付きで直接呼ぶのは、テストなど、kohaku 自身の過去の出力の再取り込みであると証明できるコンテンツに限ってください。
+
+表現できないコンテンツ(自社カタログが認識しないコンポーネント型、データにひも付いた反復テンプレート、計算された function-call 値)は既定では決定的なプレースホルダになります(`unmappable: "fallback"`、既定値)——LLM による再生成では**ありません**——または、エラーをすぐに表面化させたいなら取り込み全体を失敗させます(`unmappable: "reject"`)。完全な対応表・write-action 転送のセキュリティに関する注記・損失方針は `packages/host-a2ui/README.md` と [spec/SPEC.ja.md](../spec/SPEC.ja.md) の §6.3「Inbound A2UI(取り込み)」を参照してください(A2UI プロファイルの他の部分と同様、conformance 検査対象外です)。
 
 ## 7. 運用の勘どころ
 

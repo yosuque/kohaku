@@ -1,6 +1,7 @@
-import type { CanonicalIntent, GuiAction } from "@kohaku-ui/spec-core";
+import { type CanonicalIntent, collectWriteActions, type GuiAction } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import {
+  A2UI_FORWARD_ACTION,
   fromA2ui,
   parseInboundA2uiMessage,
   reduceSurfaces,
@@ -60,17 +61,30 @@ describe("proxy e2e: third-party A2UI -> ingest -> kohaku Spec event -> A2UI cli
       type: "action.button",
       props: { label: "Confirm order", variant: "primary" },
     });
-    // The EventBinding is genuinely interactive (emit: action.invoke), not just visually reconstructed.
+    // The EventBinding is genuinely interactive (emit: action.invoke), not just visually reconstructed —
+    // and its payload is the fixed forwarding envelope (never the raw agent-controlled context directly),
+    // so collectWriteActions (spec-core, what a host uses to decide which write capability to issue) can
+    // only ever resolve the reserved A2UI_FORWARD_ACTION for it, never something the agent's context named.
     expect(spec.events).toEqual([
-      { on: "confirm_btn.confirm", emit: "action.invoke", payload: { orderId: "123" } },
+      {
+        on: "confirm_btn.confirm",
+        emit: "action.invoke",
+        payload: { action: A2UI_FORWARD_ACTION, event: "confirm", context: { orderId: "123" } },
+      },
     ]);
+    expect(collectWriteActions(spec)).toEqual([A2UI_FORWARD_ACTION]);
 
     // 3. A user clicks the button in kohaku's own renderer: the renderer matches the EventBinding above and
     // produces exactly this GuiAction (simulated here — renderer-core's own emit resolution is out of scope
     // for this package's tests).
-    const guiAction: GuiAction = { kind: "gui", action: "confirm_btn.confirm", params: { orderId: "123" } };
+    const guiAction: GuiAction = {
+      kind: "gui",
+      action: "confirm_btn.confirm",
+      params: { action: A2UI_FORWARD_ACTION, event: "confirm", context: { orderId: "123" } },
+    };
 
-    // 4. kohaku Spec event -> A2UI client action (toA2uiClientAction, the reverse of fromA2uiEvent).
+    // 4. A host recognizes A2UI_FORWARD_ACTION (never dispatching it to its own DomainPort) and routes the
+    // GuiAction to toA2uiClientAction (the reverse of fromA2uiEvent) to notify the originating agent.
     const clientAction = toA2uiClientAction(guiAction);
     // The original agent-facing event name ("confirm") is recovered exactly — not kohaku's own
     // "confirm_btn.confirm" on-string — and the context is passed straight through.
@@ -93,5 +107,21 @@ describe("proxy e2e: third-party A2UI -> ingest -> kohaku Spec event -> A2UI cli
     // passthrough of the original agent's wire bytes — the sidecar-based lossless path is for kohaku's own
     // round trip, not third-party content, which has no sidecar to restore from).
     expect(reexportedButton.action?.event?.name).toBe("confirm_btn.confirm");
+  });
+});
+
+describe("toA2uiClientAction: rejects a GuiAction that is not a forwarded A2UI ingest action", () => {
+  it("throws when params.action is not A2UI_FORWARD_ACTION", () => {
+    const action: GuiAction = {
+      kind: "gui",
+      action: "sales.recompute",
+      params: { action: "sales.recompute" },
+    };
+    expect(() => toA2uiClientAction(action)).toThrow(/A2UI ingest/);
+  });
+
+  it("throws when params.event is missing", () => {
+    const action: GuiAction = { kind: "gui", action: "x.y", params: { action: A2UI_FORWARD_ACTION } };
+    expect(() => toA2uiClientAction(action)).toThrow(/A2UI ingest/);
   });
 });
