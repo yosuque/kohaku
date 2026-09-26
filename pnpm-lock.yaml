@@ -950,6 +950,9 @@ importers:
         specifier: workspace:^
         version: link:../spec-core
     devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.2
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

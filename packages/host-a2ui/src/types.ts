@@ -130,8 +130,13 @@ export interface A2uiComponent {
    * which keeps the v0.9.1 wire shape and the v1.0-single golden byte-identical.
    */
   catalogId?: string;
-  /** Everything else: catalog props inlined. */
-  [prop: string]: JsonValue | A2uiChildren | A2uiComponentAction | undefined;
+  /**
+   * Everything else: catalog props inlined. Includes `A2uiValue`'s binding/function-call forms (not just
+   * `JsonValue`) so an *inbound* component (a third-party agent's `Text.text: {path: "/x"}`, etc. — this
+   * profile's own outbound projection never emits either form as a bare prop value) type-checks under the
+   * same `A2uiComponent` type both directions share.
+   */
+  [prop: string]: JsonValue | A2uiBinding | A2uiFunctionCall | A2uiChildren | A2uiComponentAction | undefined;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

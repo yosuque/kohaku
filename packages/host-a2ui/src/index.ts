@@ -1,5 +1,21 @@
 export { buildKohakuCatalogDocument, type KohakuCatalogDocumentOptions } from "./catalog-document.js";
 export { fromA2uiEvent } from "./from-a2ui-event.js";
+export {
+  A2UI_ROOT_COMPONENT_ID,
+  A2uiIngestError,
+  getRootComponent,
+  reduceSurfaceMessage,
+  reduceSurfaces,
+  type SurfaceState,
+  surfaceIdOf,
+} from "./inbound/reduce.js";
+export {
+  InboundA2uiEnvelopeSchema,
+  InboundA2uiEnvelopeV1Schema,
+  InboundA2uiEnvelopeV091Schema,
+  type InboundA2uiMessage,
+  parseInboundA2uiMessage,
+} from "./inbound/schemas.js";
 export { serializeA2uiLines } from "./jsonl.js";
 export { type PatchToA2uiOptions, patchToA2ui } from "./patch-to-a2ui.js";
 export {
