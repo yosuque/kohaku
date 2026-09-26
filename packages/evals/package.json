@@ -4,7 +4,9 @@
   "description": "Evaluation harness for kohaku: golden Spec regression, LLM-as-judge scoring and a record/replay LLM.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./judge": "./src/judge/index.ts",
+    "./replay": "./src/replay/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -54,6 +56,14 @@
       ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
+      },
+      "./judge": {
+        "types": "./dist/judge/index.d.ts",
+        "default": "./dist/judge/index.js"
+      },
+      "./replay": {
+        "types": "./dist/replay/index.d.ts",
+        "default": "./dist/replay/index.js"
       },
       "./package.json": "./package.json"
     }
