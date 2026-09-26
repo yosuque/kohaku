@@ -22,6 +22,7 @@ import {
   computeIntentHash,
   computeSpecHash,
   computeStructureHash,
+  encodeSeqCursor,
   type FixationRecord,
   type JsonObject,
   parseSpec,
@@ -154,6 +155,13 @@ const DESIGN_SYSTEM_GUIDE: DesignSystemGuide = {
 // component). Every legacy shape (5 / 6 components) plus the new 7-component shapes (policyFingerprint
 // alone with its "-" generatorVersion placeholder, and both together) so a language port that gets the
 // positional placeholder logic wrong fails this golden immediately.
+// Pins the opaque {v,seq} base64url lineage-paging cursor (design.md #53) byte-for-byte across languages:
+// packages/spec-core/src/lineage-page.ts's encodeSeqCursor/decodeSeqCursor and their Python mirror
+// (kohaku.spec.lineage_page). 0 / 1 are the boundary seqs a fresh page/cursor start from; 42 is an
+// arbitrary mid-range value; 1234567890123 exceeds 2^32 (a value large enough that a naive 32-bit-int
+// encoding on either side would truncate it) while staying within IEEE-754/Python-int exact range.
+const LINEAGE_CURSOR_SEQS: number[] = [0, 1, 42, 1234567890123];
+
 const CACHE_KEY_CASES: CacheKeyParts[] = [
   { intentHash: "sha256:aaa", dataVersion: "v1" },
   { intentHash: "sha256:aaa", dataVersion: "v1", catalogFingerprint: "cat1" },
@@ -204,6 +212,8 @@ async function main(): Promise<void> {
   };
 
   const cacheKeyCases = CACHE_KEY_CASES.map((parts) => ({ parts, key: cacheKey(parts) }));
+
+  const lineageCursorCases = LINEAGE_CURSOR_SEQS.map((seq) => ({ seq, cursor: encodeSeqCursor(seq) }));
 
   // Pins the prompt fragments that are hand-transcribed as goldens in both languages' composer tests
   // (packages/composer/test/design-kit.test.ts + design-system.test.ts and their Python mirrors under
@@ -279,6 +289,7 @@ async function main(): Promise<void> {
         intents: intentCases,
         spec,
         cacheKey: cacheKeyCases,
+        lineageCursor: lineageCursorCases,
         sandboxDom,
         distillation,
         fallback: fallbackCases,
@@ -289,7 +300,7 @@ async function main(): Promise<void> {
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
   );
 }
 
