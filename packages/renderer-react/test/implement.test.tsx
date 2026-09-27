@@ -90,12 +90,31 @@ describe("implement / ImplRegistry.use", () => {
     }
   });
 
-  it("skips validation (and the warning) in a NODE_ENV=production build by default", () => {
+  it("skips only the warning (not the parsing) on a mismatch in a NODE_ENV=production build by default", () => {
     vi.stubEnv("NODE_ENV", "production");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const registry = new ImplRegistry().use(implement(badgeDef, Badge));
-      renderSpec(badgeSpec({}), registry);
+      // `label` is missing — safeParse still runs and still fails, but no console.warn in production;
+      // rendering proceeds fail-open with the raw props, same as outside production.
+      const { container } = renderSpec(badgeSpec({}), registry);
+      expect(warn).not.toHaveBeenCalled();
+      expect(container.querySelector('[data-kohaku="root"]')).not.toBeNull();
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("applies propsSchema defaults even in a NODE_ENV=production build (parsing is unconditional)", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const registry = new ImplRegistry().use(implement(badgeDef, Badge));
+      // `tone` is omitted but has a Zod default — if production skipped safeParse entirely (the bug this
+      // guards against), Badge would receive raw props without a `tone` key at all instead of "info".
+      renderSpec(badgeSpec({ label: "Steady" }), registry);
+      expect(screen.getByText("Steady").getAttribute("data-tone")).toBe("info");
       expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();

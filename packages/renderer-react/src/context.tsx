@@ -64,25 +64,29 @@ export interface ImplEntry {
  * `ComponentDefinition`) instead of being re-typed as string literals at the registration call site
  * (design.md #68). Pass the result to `ImplRegistry.use`.
  *
- * By default, outside a `NODE_ENV=production` build (see `isDevEnvironment`), the node's `props` are
- * validated against `def.propsSchema` before every render; a mismatch is reported via `console.warn` and
- * rendering proceeds with the raw (unvalidated) props, matching the renderer's general fail-open policy
- * (a malformed prop should degrade the part's own display, not take down the surface). Pass `{ validate }`
- * to force the check on or off regardless of environment.
+ * `def.propsSchema.safeParse` always runs, in every environment — not just outside a `NODE_ENV=production`
+ * build — because it is also what materializes a `.default()`-ed prop (or any other Zod transform) the Spec
+ * omits; skipping it in production would silently make `Component` see `undefined` for a prop its type says
+ * is always present. On success, `Component` receives `parsed.data`; on failure it receives the raw
+ * (unvalidated) `node.props` instead, matching the renderer's general fail-open policy (a malformed prop
+ * should degrade the part's own display, not take down the surface). Only the **diagnostic** — a
+ * `console.warn` on a mismatch — is gated by environment: by default it fires outside a `NODE_ENV=production`
+ * build (see `isDevEnvironment`); pass `{ validate }` to force it on or off regardless of environment.
  */
 export function implement<P extends z.ZodObject>(
   def: ComponentDefinition<P>,
   Component: TypedComponentImpl<z.infer<P>>,
   options?: { validate?: boolean },
 ): ImplEntry {
-  const shouldValidate = options?.validate ?? isDevEnvironment();
+  const shouldWarn = options?.validate ?? isDevEnvironment();
   const Wrapped: ComponentImpl = ({ node, children }: ImplProps) => {
-    let props = node.props as z.infer<P>;
-    if (shouldValidate) {
-      const parsed = def.propsSchema.safeParse(node.props);
-      if (parsed.success) {
-        props = parsed.data as z.infer<P>;
-      } else {
+    const parsed = def.propsSchema.safeParse(node.props);
+    let props: z.infer<P>;
+    if (parsed.success) {
+      props = parsed.data as z.infer<P>;
+    } else {
+      props = node.props as z.infer<P>;
+      if (shouldWarn) {
         console.warn(
           `[kohaku] component "${def.type}" (node ${node.id}) received props that don't match its schema: ${parsed.error.message}`,
         );

@@ -11,10 +11,14 @@ declare const process: { env?: { NODE_ENV?: string } } | undefined;
 
 /**
  * Best-effort development-mode check, shared by renderer-react's `implement` and renderer-wc's `implementWc`
- * to decide, by default, whether to validate a component's props against its `ComponentDefinition.propsSchema`
- * at render time (design.md #68). Deliberately not based on a bundler-specific global (`import.meta.env.DEV`,
- * etc.) so the same check works unmodified in both renderers' build pipelines; callers can always override the
- * default via an explicit option instead of relying on this.
+ * to decide, by default, whether a schema mismatch between a node's props and its
+ * `ComponentDefinition.propsSchema` is reported via `console.warn` at render time (design.md #68). This
+ * gates only that diagnostic, never whether the props get parsed: `implement`/`implementWc` always run
+ * `propsSchema.safeParse` so a `.default()`-ed value the Spec omits is materialized in every environment,
+ * including a `NODE_ENV=production` build where this function returns `false`. Deliberately not based on a
+ * bundler-specific global (`import.meta.env.DEV`, etc.) so the same check works unmodified in both
+ * renderers' build pipelines; callers can always override the default via an explicit option instead of
+ * relying on this.
  *
  * `typeof process === "undefined"` is the standard safe existence check (unlike `process !== undefined`,
  * `typeof` never throws on an identifier that was never declared as a global in the current environment), so

@@ -82,7 +82,7 @@ describe("registerPart / implementWc", () => {
     }
   });
 
-  it("skips validation (and the warning) in a NODE_ENV=production build by default", async () => {
+  it("skips only the warning (not the parsing) on a mismatch in a NODE_ENV=production build by default", async () => {
     vi.stubEnv("NODE_ENV", "production");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
@@ -90,8 +90,33 @@ describe("registerPart / implementWc", () => {
       document.body.appendChild(surface);
       const entry = implementWc(badgeDef, badgeBuilder);
       surface.registerPart(entry.type, entry.version, entry.builder);
+      // `label` is missing — safeParse still runs and still fails, but no console.warn in production;
+      // the builder still runs fail-open with the raw props, same as outside production.
       surface.spec = badgeSpec({});
       await tick();
+      expect(warn).not.toHaveBeenCalled();
+      expect(byKohaku(surface, "root")).not.toBeNull();
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("applies propsSchema defaults even in a NODE_ENV=production build (parsing is unconditional)", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const surface = document.createElement("kohaku-surface") as KohakuSurface;
+      document.body.appendChild(surface);
+      const entry = implementWc(badgeDef, badgeBuilder);
+      surface.registerPart(entry.type, entry.version, entry.builder);
+      // `tone` is omitted but has a Zod default — if production skipped safeParse entirely (the bug this
+      // guards against), the builder would receive raw props without a `tone` key at all instead of "info".
+      surface.spec = badgeSpec({ label: "Steady" });
+      await tick();
+      const el = byKohaku(surface, "root")!;
+      expect(el.textContent).toBe("Steady");
+      expect(el.dataset["tone"]).toBe("info");
       expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
