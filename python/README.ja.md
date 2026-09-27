@@ -89,7 +89,9 @@ python/
 │  │                       #   ツール登録。tool-error / safe-tool / エラー可観測性ヘルパも TS の server.ts
 │  │                       #   と同様ここに残す)+ types.py(← types.ts)+ initial_data.py
 │  │                       #   (← initial-data.ts)+ cache_hints.py(← cache-hints.ts)+
-│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py(変更なし)
+│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py(変更なし)+
+│  │                       #   renderer.py(← @kohaku-ui/mcp-renderer の loadRendererHtml。TS 側限定 —
+│  │                       #   下記「MCP Apps レンダラーバンドル」参照)
 │  └─ tests/
 └─ examples/
    └─ sales-api/           # ← apps/sample-api 相当(REST :8790 + MCP stdio / Streamable HTTP :8791)
@@ -145,6 +147,8 @@ id を導出すると 1 会話内の全ツール呼び出しが同じ id に潰�
 配線上に現れるのは 2026-07-28 以降でネゴシエートした接続に限られる(mcp SDK 自身の結果シリアライザが古いプロ
 トコルバージョンではそれらを篩い落とす)ため、`kohaku/tests/host_mcp` のキャッシュヒントテストは
 `mode="2026-07-28"` で接続している。
+
+**MCP Apps レンダラーバンドル**: TS(`@kohaku-ui/mcp-renderer`。ビルド済み・依存ゼロの `dist/renderer.html` を自身で持つパッケージ)とは異なり、`kohaku-ui` wheel はまだ自前のレンダラー HTML を同梱していない(後続チケット)。`host_mcp.load_default_renderer_html(path: str | None = None)` は、それが実現する日に備えて TS 側の関数の形を踏襲する: `path` を渡せばそのファイルを読み(例えば `@kohaku-ui/mcp-renderer` のビルド成果物のコピーや、プロダクト自身の MCP Apps レンダラービルド)、渡さなければ `DEFAULT_RENDERER_PLACEHOLDER_HTML`(レンダラーがまだ同梱されていないことを説明する静的なプレースホルダ)を返す。`AttachOptions.renderer_html` はすでに文字列・呼び出し可能オブジェクトのどちらも受け付けるので、後で実際に同梱したバンドルへ切り替えても呼び出し側のシグネチャは変わらない。サンプル(`examples/sales-api`)はこの関数を使っていない — 独自の `make_renderer_html_loader`(下記)を持ち、こちらは **TS 側**のビルド成果物を固定のリポジトリ相対パスから読み、成功した読み込みだけキャッシュする。
 
 Python サンプル(`examples/sales-api`)はシード JSON をリポジトリルートの `apps/sample-api/src/domain/seed` から直読みする(データ二重管理を避けるため)。したがって `python/` サブツリー単独ではなく**フル monorepo チェックアウト**が前提。
 
