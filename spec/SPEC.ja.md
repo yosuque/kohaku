@@ -291,10 +291,11 @@ MUST 要件をすべて満たす実装を conformant とする。SHOULD 違反�
 | **SPEC-STA-001** | クライアントローカル state(`spec.state`)の意味論 — `visibleWhen` 評価・`state.set` によるローカル更新・`intent.hash` 追従の再初期化。 | parity の state.set → visibleWhen DOM 出現コーパス + `renderer-core` の SpecStateStore 単体テスト |
 | **SPEC-DATA-002** | 参照渡しデータの版突合を参照単位(`refVersions[ref] ?? dataVersion`)で行い、書き込みループの再解決は event の版で突合(不明なら突合スキップ)する。A1 の `$state` 由来 variant は突合しない。 | parity の A1 bind 再解決 / 書き込みループコーパス + `renderer-core` の BoundDataController 単体テスト |
 | **SPEC-A11Y-001**(SHOULD) | 生成された各部品の DOM は、両レンダラーで axe-core の構造的アクセシビリティルール(ARIA 属性・role の妥当性、name/role/value の意味論、ラベル、見出し階層、テーブルヘッダ、フォーム部品のラベル付け)を満たすべきである(SHOULD)。実際の視覚レイアウトに依存して判定するルール(`color-contrast`・`target-size` 等)や、ページ全体の文書・landmark 構造を前提とするルールは、断片単位でのレンダラー検査には対象外(ホストページの責務であり、個々の部品の欠陥ではない)として除外する — 除外の一覧と理由は `packages/renderer-wc/test/parity/axe-config.ts` を参照。 | parity の axe a11y コーパス(`packages/renderer-wc/test/parity/a11y.test.ts`)。SPEC-ENV-003 と同じ golden Spec コーパスに対して両レンダラーで実行する |
+| **SPEC-DISC-001**(SHOULD) | AI 生成であることの表示(design.md #66)をエンドユーザーに示すレンダラーは、専用フィールドではなく `provenance`(`tier` / `cache` / `fallback`)のみから導出すべきである(SHOULD)— Spec 形式自体は表示用のフィールドを一切持たないため、ホストが降格時に古い値を消し忘れることも、レンダラーが信頼できない相手にペイロードへ焼き込まれた値を信用してしまうこともない。導出規則: `fallback` がある場合は表示しない(決定的な代替経路であり model の出力ではない。tier に関わらず)。tier が `L1`/`L2` なら AI 生成。tier `L0` かつ `cache: "fixated"` なら AI 生成後に人がレビュー済み。それ以外は表示しない。表示は既定で off(オプトイン)。 | `deriveDisclosure` の tier × cache × fallback 表(`packages/renderer-core/test/disclosure.test.ts`)、`SpecView` の `disclosure` prop(`packages/renderer-react/test/disclosure.test.tsx`)、`<kohaku-surface disclosure>` の parity コーパス(`packages/renderer-wc/test/parity/disclosure.test.ts`) |
 
 `chart` の視覚描画はレンダラー間で pixel 一致を要求しない(参照実装は Recharts と inline SVG で描画が異なる)。ただし a11y 代替(視覚非表示データテーブル)の内容は意味的に等価であること(parity の chart 意味的等価テストが担保)。
 
-上記 4 件の MUST 規範と異なり、**SPEC-A11Y-001 は SHOULD** である: これを満たさなくても適合性検査は失敗しないが、収斂させることが期待される。manifest の MUST 件数(§7)には影響しない。
+上記 4 件の MUST 規範と異なり、**SPEC-A11Y-001 と SPEC-DISC-001 は SHOULD** である: いずれを満たさなくても適合性検査は失敗しないが、収斂させることが期待される。いずれも manifest の MUST 件数(§7)には影響しない。
 
 ## 8. 昇格と Lineage [Normative]
 

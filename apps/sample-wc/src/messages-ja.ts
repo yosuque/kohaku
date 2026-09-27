@@ -36,4 +36,6 @@ export const JA_MESSAGES: RendererMessages = {
   sandboxErrorFallback: "サンドボックス内でエラーが発生しました",
   sandboxArtifactMissing: "サンドボックスの部品がありません(インライン HTML が必要です)",
   sandboxBridgeMissing: (type) => `L2 部品(${type})の描画にはサンドボックスブリッジの注入が必要です`,
+  disclosureAiGenerated: "AIが生成したコンテンツ",
+  disclosureAiReviewed: "AI生成後に人がレビューしたコンテンツ",
 };

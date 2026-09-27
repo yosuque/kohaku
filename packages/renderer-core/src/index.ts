@@ -27,6 +27,15 @@ export { boundStateKey, normalizeSelectOptions, type SelectOption } from "./cont
 export { type DesignKit, defaultDesignKit, PARTS_STATE_CSS } from "./design-kit.js";
 // Development-mode check (shared by renderer-react's `implement` / renderer-wc's `implementWc`)
 export { isDevEnvironment } from "./dev-mode.js";
+// AI-generation disclosure (design.md #66)
+export {
+  type DigitalSourceType,
+  type Disclosure,
+  type DisclosureDomAttributes,
+  type DisclosureLevel,
+  deriveDisclosure,
+  disclosureDomAttributes,
+} from "./disclosure.js";
 // Messages
 export { DEFAULT_LOCALE, DEFAULT_MESSAGES, type RendererMessages } from "./messages.js";
 export { type ActionButtonTokens, actionButtonStyle } from "./presenters/action-button.js";

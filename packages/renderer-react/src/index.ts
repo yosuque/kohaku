@@ -27,6 +27,7 @@ export {
   type DataInvalidationEvent,
   useDataInvalidation,
 } from "./data-invalidation.js";
+export { KohakuDisclosureLabel, useDisclosure } from "./disclosure.js";
 export { DEFAULT_MESSAGES, type RendererMessages } from "./messages.js";
 export { NodeErrorBoundary } from "./node-error-boundary.js";
 export { SpecView, type SpecViewProps } from "./SpecView.js";

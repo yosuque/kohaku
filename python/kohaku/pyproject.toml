@@ -33,8 +33,11 @@ llm = ["httpx>=0.28"]
 # Native LLM adapters (other than OpenAI-compatible). Symmetric with the TS claude / gemini providers.
 claude = ["anthropic>=1.5"]
 gemini = ["google-genai>=1.0"]
+# Ed25519 signing/verification for Compliance Evidence Packs (kohaku.lineage.evidence). Symmetric with
+# the TS side's WebCrypto usage -- Python has no built-in Ed25519, so this is a real added dependency.
+evidence = ["cryptography>=43"]
 # Convenience bundle: every optional feature set, for demos and quickstarts that don't want to pick individually.
-all = ["kohaku-ui[rest,mcp,llm,claude,gemini]"]
+all = ["kohaku-ui[rest,mcp,llm,claude,gemini,evidence]"]
 
 [build-system]
 requires = ["hatchling"]
