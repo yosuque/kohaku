@@ -25,7 +25,7 @@ describe("initProject", () => {
     const result = await initProject({ from: FIXTURE, out, install: false }, noRun);
     expect(result.installed).toBe(false);
     expect(result.profile.source).toBe("sales");
-    expect(result.written).toHaveLength(19);
+    expect(result.written).toHaveLength(20);
     expect(existsSync(join(out, "server/intents.ts"))).toBe(true);
     const pkg = JSON.parse(readFileSync(join(out, "package.json"), "utf8"));
     expect(pkg.name).toBe("my-app");
@@ -50,6 +50,7 @@ describe("initProject", () => {
       "server/domain-port.ts",
       "server/intents.ts",
       "server/fixed-specs.ts",
+      "server/ports.ts",
       "server/app.ts",
       "server/main.ts",
       "web/main.tsx",
@@ -119,28 +120,34 @@ describe("initProject", () => {
     expect(readFileSync(join(out, ".gitignore"), "utf8")).toContain(".env\n");
   });
 
-  it("server/app.ts delegates the capability secret to createKohakuHost (no hand-rolled fallback secret)", async () => {
+  it("server/ports.ts delegates the capability secret to createKohakuHost (no hand-rolled fallback secret)", async () => {
     // The secret resolution (env var / whitespace-only-is-missing / no-fallback-secret) now lives in
     // @kohaku-ui/host's createKohakuHost (see packages/host/test/create-host.test.ts) rather than being
-    // hand-rolled in the generated app.ts, so this only asserts app.ts doesn't reimplement or shadow it.
+    // hand-rolled in the generated project, so this only asserts ports.ts doesn't reimplement or shadow it.
+    // (server/ports.ts is where the createKohakuHost() call itself now lives, split out of app.ts so a
+    // non-REST front door -- e.g. an MCP server -- can build the same host without Hono routes.)
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false }, noRun);
-    const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
-    expect(appSrc).toContain('import { createKohakuHost } from "@kohaku-ui/host";');
-    expect(appSrc).not.toContain("dev-secret-change-me");
+    const portsSrc = readFileSync(join(out, "server/ports.ts"), "utf8");
+    expect(portsSrc).toContain('import { createKohakuHost, type KohakuHost } from "@kohaku-ui/host";');
+    expect(portsSrc).not.toContain("dev-secret-change-me");
     // The env var is still mentioned in prose (a doc comment pointing at createKohakuHost's own
-    // resolution), but app.ts must not read it itself any more.
-    expect(appSrc).not.toContain('process.env["KOHAKU_CAPABILITY_SECRET"]');
+    // resolution), but ports.ts must not read it itself any more.
+    expect(portsSrc).not.toContain('process.env["KOHAKU_CAPABILITY_SECRET"]');
+    // app.ts no longer calls createKohakuHost directly; it builds the host through server/ports.ts.
+    const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
+    expect(appSrc).not.toContain("createKohakuHost");
+    expect(appSrc).toContain('import { createPorts, type PortDeps } from "./ports.js";');
   });
 
-  it("server/app.ts wires debug (KOHAKU_DEBUG) through to createKohakuHost, which wires its own error reporter", async () => {
+  it("server/ports.ts wires debug (KOHAKU_DEBUG) through to createKohakuHost, which wires its own error reporter", async () => {
     // createConsoleErrorReporter (host-rest's onError + the compose observer's onError) is now wired
-    // inside createKohakuHost itself (see packages/host/src/create-host.ts), not in the generated app.ts.
+    // inside createKohakuHost itself (see packages/host/src/create-host.ts), not in the generated project.
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false }, noRun);
-    const appSrc = readFileSync(join(out, "server/app.ts"), "utf8");
-    expect(appSrc).not.toContain("createConsoleErrorReporter");
-    expect(appSrc).toContain('debug: process.env["KOHAKU_DEBUG"] === "1"');
+    const portsSrc = readFileSync(join(out, "server/ports.ts"), "utf8");
+    expect(portsSrc).not.toContain("createConsoleErrorReporter");
+    expect(portsSrc).toContain('debug: process.env["KOHAKU_DEBUG"] === "1"');
     const pkg = JSON.parse(readFileSync(join(out, "package.json"), "utf8"));
     expect(pkg.dependencies["@kohaku-ui/host"]).toBeDefined();
     expect(pkg.dependencies["@kohaku-ui/host-core"]).toBeUndefined();

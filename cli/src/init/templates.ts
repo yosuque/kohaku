@@ -210,18 +210,16 @@ function summaryView(intent: CanonicalIntent, refs: QueryHandle[]): UISpec {
 }
 `;
 
-export const APP_TEMPLATE = `import { existsSync } from "node:fs";
-import { type ComposeContext, defaultGeneratorVersion } from "@kohaku-ui/composer";
-import { createKohakuHost } from "@kohaku-ui/host";
+export const SERVER_PORTS_TEMPLATE = `import { defaultGeneratorVersion } from "@kohaku-ui/composer";
+import { createKohakuHost, type KohakuHost } from "@kohaku-ui/host";
 import type { LlmPort } from "@kohaku-ui/llm";
 import type { AuthzPort, StoragePort } from "@kohaku-ui/spec-core";
-import type { Hono } from "hono";
 import { DATA_VERSION } from "./dataset.js";
 import { createDomainPort, shapeOf } from "./domain-port.js";
 import { createFixedSpecs } from "./fixed-specs.js";
 import { INTENT_DEFINITIONS, SOURCE } from "./intents.js";
 
-export interface AppDeps {
+export interface PortDeps {
   llm: LlmPort;
   storage?: StoragePort;
   authz?: AuthzPort;
@@ -233,14 +231,13 @@ export interface AppDeps {
  * them with your product's own implementation (the contract is @kohaku-ui/spec-core's ports.ts). The
  * capability secret is resolved from KOHAKU_CAPABILITY_SECRET by createKohakuHost itself (see .env.example);
  * it throws if neither that env var nor \`deps.authz\` is set.
+ *
+ * Kept separate from app.ts (which adds the REST-specific facet-views / health routes) so any other front
+ * door built on the same Ports -- an MCP server (see server/mcp-server.ts if you generated one with
+ * \`--mcp\`), a script, a test -- builds the exact same host without importing Hono routes it does not need.
  */
-export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContext } {
-  // Load .env here too (not just in server/main.ts): this function is also called directly by
-  // test/golden.test.ts and by anyone scripting against the generated project without going through
-  // main.ts, and it must see the same KOHAKU_CAPABILITY_SECRET either way. process.loadEnvFile never
-  // overrides a variable already present in the environment, so calling it more than once is harmless.
-  if (existsSync(".env")) process.loadEnvFile(".env");
-  const { app, compose } = createKohakuHost({
+export function createPorts(deps: PortDeps): KohakuHost {
+  return createKohakuHost({
     domain: createDomainPort(),
     querySource: SOURCE,
     llm: deps.llm,
@@ -260,6 +257,29 @@ export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContex
     // instead of a one-line summary -- useful when a compose falls back and you need to know why.
     debug: process.env["KOHAKU_DEBUG"] === "1",
   });
+}
+`;
+
+export const APP_TEMPLATE = `import { existsSync } from "node:fs";
+import type { ComposeContext } from "@kohaku-ui/composer";
+import type { Hono } from "hono";
+import { DATA_VERSION } from "./dataset.js";
+import { INTENT_DEFINITIONS } from "./intents.js";
+import { createPorts, type PortDeps } from "./ports.js";
+
+export type AppDeps = PortDeps;
+
+/**
+ * The REST front door: server/ports.ts's createPorts builds the host (Ports + compose), and this adds the
+ * two extra routes the generated dashboard uses (facet-views for the selector UI, health for a smoke check).
+ */
+export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContext } {
+  // Load .env here too (not just in server/main.ts): this function is also called directly by
+  // test/golden.test.ts and by anyone scripting against the generated project without going through
+  // main.ts, and it must see the same KOHAKU_CAPABILITY_SECRET either way. process.loadEnvFile never
+  // overrides a variable already present in the environment, so calling it more than once is harmless.
+  if (existsSync(".env")) process.loadEnvFile(".env");
+  const { app, compose } = createPorts(deps);
   // Facet descriptors for the dashboard's selectors, derived from the same Intent definitions (no codegen step).
   app.get("/api/app/facet-views", (c) => c.json({ views: INTENT_DEFINITIONS.map((d) => d.toFacetView()).filter((v) => v.facets.length > 0) }));
   app.get("/api/health", (c) => c.json({ ok: true, llm: { provider: deps.llm.provider, model: deps.llm.modelId }, dataVersion: DATA_VERSION }));

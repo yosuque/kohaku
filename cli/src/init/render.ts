@@ -12,6 +12,7 @@ import {
   GOLDEN_TEST_TEMPLATE_INIT,
   INDEX_HTML_TEMPLATE,
   MAIN_TEMPLATE,
+  SERVER_PORTS_TEMPLATE,
   TSCONFIG_TEMPLATE,
   VITE_CONFIG_TEMPLATE,
   WEB_MAIN_TEMPLATE,
@@ -302,7 +303,8 @@ Next steps (\`fallbackIntent\`).
 - \`server/intents.ts\` — the Intent catalog (\`defineVocabulary\` / \`defineIntent\`). Vocabularies are the categorical columns.
 - \`server/domain-port.ts\` — the DomainPort (sum / avg / count × group by × time window). Your data never enters the model: only column metadata does.
 - \`server/fixed-specs.ts\` — the L0 fixed Spec for \`${profile.source}.summary\`.
-- \`server/app.ts\` — the wiring, via \`@kohaku-ui/host\`'s \`createKohakuHost()\` (in-memory storage + HMAC capabilities + the LLM SemanticPort by default). Every default here is a starting point; the contract is \`@kohaku-ui/spec-core\`'s \`ports.ts\`.
+- \`server/ports.ts\` — the wiring, via \`@kohaku-ui/host\`'s \`createKohakuHost()\` (in-memory storage + HMAC capabilities + the LLM SemanticPort by default). Every default here is a starting point; the contract is \`@kohaku-ui/spec-core\`'s \`ports.ts\`.
+- \`server/app.ts\` — the REST front door: adds the dashboard's facet-views / health routes on top of \`server/ports.ts\`'s host.
 - \`web/main.tsx\` — Dashboard + Chat on renderer-react.
 - \`test/golden.test.ts\` — golden regression. Generate the fixture's \`expected\` once with \`KOHAKU_GOLDEN_UPDATE=1 npm test\` (review, commit); \`npm test\` then asserts it.
 
@@ -353,6 +355,7 @@ export function renderProjectFiles(
     { path: "server/domain-port.ts", content: DOMAIN_PORT_TEMPLATE },
     { path: "server/intents.ts", content: renderIntents(profile) },
     { path: "server/fixed-specs.ts", content: renderFixedSpecs(profile) },
+    { path: "server/ports.ts", content: SERVER_PORTS_TEMPLATE },
     { path: "server/app.ts", content: APP_TEMPLATE },
     { path: "server/main.ts", content: MAIN_TEMPLATE },
     { path: "web/main.tsx", content: WEB_MAIN_TEMPLATE },
