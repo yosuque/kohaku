@@ -4,6 +4,7 @@ import {
   createDailyTokenLedger,
   createMemoryRateLimitStore,
   createPolicyRuntime,
+  formatErrorChain,
   type PolicyRuntime,
 } from "@kohaku-ui/host-core";
 import { createKohakuRoutes, errorBody } from "@kohaku-ui/host-rest";
@@ -206,6 +207,13 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
           basePolicyFor: () => shared,
           ledger: createDailyTokenLedger(),
           rateLimitStore: createMemoryRateLimitStore(),
+          // A RateLimitStore failure is fail-open (createRateLimiter already lets the request through);
+          // this only makes that failure observable, reusing the same console-based, debug-aware
+          // reporting style as host-deps.ts's onError / compose-context.ts's observer.onError.
+          onRateLimitError: ({ error, tenant, principal, routeClass }) => {
+            const label = `[policy] rate-limit store failed for tenant=${tenant ?? "-"} principal=${principal ?? "-"} routeClass=${routeClass} (failing open)`;
+            console.error((deps.debug ?? false) ? `${label}: ${formatErrorChain(error)}` : label);
+          },
           // Records policy.applied (lineage, task 9) on every effective change. actor is reload()'s own
           // free-string label (an operator id, "system", …); mapped onto lineage's typed Actor shape as a
           // "system" actor carrying that label as its id (a policy reload is an operational/config action,

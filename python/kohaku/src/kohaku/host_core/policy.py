@@ -44,7 +44,12 @@ from kohaku.spec import (
 )
 
 from .daily_token_ledger import DailyTokenLedger
-from .rate_limit import RateLimiter, RateLimiterTakeParams, create_rate_limiter
+from .rate_limit import (
+    RateLimiter,
+    RateLimiterErrorInfo,
+    RateLimiterTakeParams,
+    create_rate_limiter,
+)
 
 RouteClass = Literal["compose", "action", "resolve"]
 
@@ -331,6 +336,7 @@ class PolicyRuntime:
         ledger: DailyTokenLedger | None,
         rate_limit_store: RateLimitStore | None,
         audit: Callable[[PolicyAppliedEvent, str | None], object] | None,
+        on_rate_limit_error: Callable[[RateLimiterErrorInfo], object] | None = None,
     ) -> None:
         self._file = file
         self._policy_id = compute_policy_id(file)
@@ -338,7 +344,9 @@ class PolicyRuntime:
         self._ledger = ledger
         self._audit = audit
         self._memo: dict[str, _PolicyForMemoEntry] = {}
-        inner_rate_limiter = create_rate_limiter(rate_limit_store) if rate_limit_store is not None else None
+        inner_rate_limiter = (
+            create_rate_limiter(rate_limit_store, on_rate_limit_error) if rate_limit_store is not None else None
+        )
         self.rate_limiter = PolicyRateLimiter(lambda: self._file, inner_rate_limiter)
 
     def policy_for(self, session: SessionContext | None = None) -> ComposePolicy:
@@ -406,6 +414,7 @@ def create_policy_runtime(
     ledger: DailyTokenLedger | None = None,
     rate_limit_store: RateLimitStore | None = None,
     audit: Callable[[PolicyAppliedEvent, str | None], object] | None = None,
+    on_rate_limit_error: Callable[[RateLimiterErrorInfo], object] | None = None,
 ) -> PolicyRuntime:
     """Builds the runtime half of Policy as Code: resolves an effective `ComposePolicy` per tenant
     (layering the policy file's data onto a product-supplied base -- design.md #69), a rate limiter
@@ -428,5 +437,11 @@ def create_policy_runtime(
       second argument, threaded through unchanged (never inspected by this module) -- the caller's
       lineage-wiring glue is expected to place it on the recorded event's actor field, not inside the
       payload.
+    - `on_rate_limit_error`: forwarded as `create_rate_limiter`'s `on_error` -- fired (fire-and-forget)
+      whenever `rate_limit_store.take` raises. `rate_limiter.take` always fails open regardless of
+      whether this is wired (the request is still allowed); omitting it only means a `RateLimitStore`
+      outage goes unobserved. Wire it to the same `on_error`/observability hook the rest of your host
+      already uses so a rate-limit backend failure surfaces the same way any other fail-open failure
+      does.
     """
-    return PolicyRuntime(file, base_policy_for, ledger, rate_limit_store, audit)
+    return PolicyRuntime(file, base_policy_for, ledger, rate_limit_store, audit, on_rate_limit_error)

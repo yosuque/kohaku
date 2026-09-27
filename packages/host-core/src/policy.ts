@@ -12,6 +12,7 @@ import {
   type SessionContext,
 } from "@kohaku-ui/spec-core";
 import type { DailyTokenLedger } from "./daily-token-ledger.js";
+import type { RateLimiterErrorInfo } from "./rate-limit.js";
 import { createRateLimiter } from "./rate-limit.js";
 
 /** `PolicySection.compose`, unwrapped from its optional. */
@@ -249,6 +250,15 @@ export interface CreatePolicyRuntimeOptions {
   ledger?: DailyTokenLedger;
   /** Backs `rateLimiter`. Only needed when some section actually declares `rateLimits`; omitted, `rateLimiter.take` always allows. */
   rateLimitStore?: RateLimitStore;
+  /**
+   * Forwarded as `createRateLimiter`'s `onError`: fired (fire-and-forget, `notifyHook`'s convention)
+   * whenever `rateLimitStore.take` throws. `rateLimiter.take` itself always fails open (the request is
+   * still allowed) regardless of whether this is wired — omitting it does not change request handling,
+   * it only means a `RateLimitStore` outage goes unobserved. Wire it to the same `onError`/observability
+   * hook the rest of your host already uses (e.g. `KohakuHostDeps.onError` / the compose observer's
+   * `onError`) so a rate-limit backend failure surfaces the same way any other fail-open failure does.
+   */
+  onRateLimitError?: (info: RateLimiterErrorInfo) => void | Promise<void>;
   /** Fired by `reload()`; see `PolicyRuntime.reload`'s doc. `actor` is `reload`'s own second argument, threaded through unchanged (never inspected by this module) — the caller's lineage-wiring glue is expected to place it on the recorded event's `actor` field, not inside the payload. */
   audit?: (event: PolicyAppliedEvent, actor: string | undefined) => void | Promise<void>;
 }
@@ -288,7 +298,9 @@ export async function createPolicyRuntime(options: CreatePolicyRuntimeOptions): 
   }
 
   const innerRateLimiter =
-    options.rateLimitStore != null ? createRateLimiter(options.rateLimitStore) : undefined;
+    options.rateLimitStore != null
+      ? createRateLimiter(options.rateLimitStore, options.onRateLimitError)
+      : undefined;
   const rateLimiter: PolicyRateLimiter = {
     async take({ tenant, principal, routeClass, cost }) {
       if (innerRateLimiter == null) return { allow: true };

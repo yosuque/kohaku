@@ -18,6 +18,7 @@ from kohaku.composer import (
 from kohaku.host_core import PolicyAppliedEvent, create_policy_runtime, parse_policy
 from kohaku.host_core.daily_token_ledger import create_daily_token_ledger
 from kohaku.host_core.policy import PolicyRateLimiterTakeParams
+from kohaku.host_core.rate_limit import RateLimiterErrorInfo
 from kohaku.spec import (
     KohakuPolicyFile,
     RateLimitResult,
@@ -303,6 +304,32 @@ class TestRateLimiter:
             assert len(store.calls) == 1
             assert store.calls[0]["key"] == "tenant-a:p1:compose"
             assert store.calls[0]["rule"] == RateLimitRule(capacity=1, refillPerSecond=2)
+
+        asyncio.run(run())
+
+    def test_on_rate_limit_error_is_wired_through_to_create_rate_limiter(self) -> None:
+        """A throwing store still allows the request (fail-open) and on_rate_limit_error is called --
+        mirrors the TS test of the same intent."""
+
+        class _ThrowingStore:
+            async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+                raise RuntimeError("store outage")
+
+        async def run() -> None:
+            errors: list[RateLimiterErrorInfo] = []
+            runtime = create_policy_runtime(
+                make_file(defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}}),
+                rate_limit_store=_ThrowingStore(),
+                on_rate_limit_error=errors.append,
+            )
+            result = await runtime.rate_limiter.take(
+                PolicyRateLimiterTakeParams(tenant="t1", principal="p1", routeClass="compose")
+            )
+            assert result == RateLimitResult(allow=True)
+            assert len(errors) == 1
+            assert errors[0].tenant == "t1"
+            assert errors[0].principal == "p1"
+            assert errors[0].routeClass == "compose"
 
         asyncio.run(run())
 

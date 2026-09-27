@@ -35,6 +35,7 @@ from kohaku.evals import JudgeInput, JudgeUsage, Telemetry, create_judge
 from kohaku.host_core import (
     PolicyAppliedEvent,
     PolicyRuntime,
+    RateLimiterErrorInfo,
     create_daily_token_ledger,
     create_memory_rate_limit_store,
     create_policy_runtime,
@@ -547,12 +548,26 @@ async def create_app(
                 payload, LineageActor(kind="system", id=actor) if actor is not None else None
             )
 
+        def on_rate_limit_error(info: RateLimiterErrorInfo) -> None:
+            """A RateLimitStore failure is fail-open (create_rate_limiter already lets the request
+            through); this only makes that failure observable, reusing the same logging-based,
+            KOHAKU_DEBUG-aware style as on_compose_error/on_host_error above."""
+            label = (
+                f"[policy] rate-limit store failed for tenant={info.tenant or '-'} "
+                f"principal={info.principal or '-'} routeClass={info.routeClass} (failing open)"
+            )
+            if debug:
+                _logger.error("%s: %s", label, format_error_chain(info.error))
+            else:
+                _logger.error(label)
+
         policy_runtime = create_policy_runtime(
             file=policy_file,
             base_policy_for=lambda _tenant: shared,
             ledger=create_daily_token_ledger(),
             rate_limit_store=create_memory_rate_limit_store(),
             audit=_audit_policy_applied,
+            on_rate_limit_error=on_rate_limit_error,
         )
 
     def _lang_overrides(lang: str) -> dict[str, Any]:

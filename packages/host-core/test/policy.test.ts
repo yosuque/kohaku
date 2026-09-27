@@ -253,6 +253,24 @@ describe("createPolicyRuntime: rateLimiter", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ key: "tenant-a:p1:compose", rule: { capacity: 1, refillPerSecond: 2 } });
   });
+
+  it("onRateLimitError is wired through to createRateLimiter: a throwing store still allows the request, and the hook is called", async () => {
+    const errors: unknown[] = [];
+    const store: RateLimitStore = {
+      take: async () => {
+        throw new Error("store outage");
+      },
+    };
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { rateLimits: { compose: { capacity: 1, refillPerSecond: 1 } } } }),
+      rateLimitStore: store,
+      onRateLimitError: (info) => void errors.push(info),
+    });
+    const result = await runtime.rateLimiter.take({ tenant: "t1", principal: "p1", routeClass: "compose" });
+    expect(result).toEqual({ allow: true }); // fail-open
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ tenant: "t1", principal: "p1", routeClass: "compose" });
+  });
 });
 
 describe("createPolicyRuntime: reload", () => {
