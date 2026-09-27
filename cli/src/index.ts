@@ -339,7 +339,11 @@ evidence
     (value: string, prev: string[]) => [...prev, value],
     [] as string[],
   )
-  .option("--tenant <id>", "Restrict the export to this tenant")
+  .option(
+    "--tenant <id>",
+    "Restrict the export to this tenant. In --rest mode this must match the x-kohaku-tenant --header " +
+      "(the header is what actually scopes the request); omit --tenant to have it derived from the header",
+  )
   .requiredOption("--since <iso8601>", "Inclusive lower bound of the exported lineage window")
   .requiredOption("--until <iso8601>", "Inclusive upper bound of the exported lineage window")
   .requiredOption("--private-key <pem>", "Path to a PEM-encoded Ed25519 private key (PKCS8)")

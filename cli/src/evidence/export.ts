@@ -38,6 +38,40 @@ export interface EvidenceExportResult {
 }
 
 /**
+ * In `--rest` mode, `--tenant` cannot by itself scope the export -- the request headers do (a
+ * REST-sourced pack only ever sees whatever the transport actually sends). Resolves the manifest's
+ * `scope.tenant` label from the `x-kohaku-tenant` header (case-insensitive, matching
+ * apps/sample-api's own convention in request-identity.ts, which is a product convention, not a
+ * protocol-level guarantee) and rejects a `--tenant` that disagrees with it, so the two can never
+ * silently diverge -- an auditor reading `scope.tenant` must be able to trust it reflects the actual
+ * REST scope, not just whatever label the caller happened to type.
+ */
+export function resolveRestTenant(
+  headers: Record<string, string>,
+  requestedTenant: string | undefined,
+): string | undefined {
+  const headerEntry = Object.entries(headers).find(([name]) => name.toLowerCase() === "x-kohaku-tenant");
+  const headerTenant = headerEntry?.[1];
+  if (headerTenant == null) {
+    if (requestedTenant != null) {
+      throw new Error(
+        `--tenant ${requestedTenant} was given but no x-kohaku-tenant header was supplied; in --rest ` +
+          `mode the header determines the actual scope, so pass ` +
+          `--header "x-kohaku-tenant:${requestedTenant}" as well`,
+      );
+    }
+    return undefined;
+  }
+  if (requestedTenant != null && requestedTenant !== headerTenant) {
+    throw new Error(
+      `--tenant ${requestedTenant} conflicts with the x-kohaku-tenant header (${headerTenant}); the ` +
+        "header determines the actual REST scope, so remove --tenant or make it match",
+    );
+  }
+  return headerTenant;
+}
+
+/**
  * `kohaku evidence export`: assembles and signs a Compliance Evidence Pack (design.md #67), then writes
  * it to `--out <dir>` (events.jsonl / approvals.jsonl / promotions.jsonl / fixations.jsonl /
  * artifacts/<sha256>.html / manifest.json / manifest.sig).
@@ -51,13 +85,15 @@ export async function runEvidenceExport(opts: EvidenceExportOptions): Promise<Ev
   }
 
   const restFixationsWarning = opts.rest != null ? REST_FIXATIONS_LIMITATION_WARNING : undefined;
+  const restHeaders = opts.rest != null ? parseHeaderArgs(opts.headers) : undefined;
+  const scopeTenant = opts.rest != null ? resolveRestTenant(restHeaders!, opts.tenant) : opts.tenant;
   const source =
     opts.dataDir != null
       ? createStorageEvidenceSource(createFileStoragePort(opts.dataDir))
       : createRestEvidenceSource(
           createKohakuClient({
             baseUrl: opts.rest!.replace(/\/$/, ""),
-            headers: () => parseHeaderArgs(opts.headers),
+            headers: () => restHeaders!,
             ...(opts.transport != null ? { transport: opts.transport } : {}),
           }),
         );
@@ -75,7 +111,7 @@ export async function runEvidenceExport(opts: EvidenceExportOptions): Promise<Ev
 
   const pack = await buildEvidencePack({
     source,
-    scope: { tenant: opts.tenant, since: opts.since, until: opts.until },
+    scope: { tenant: scopeTenant, since: opts.since, until: opts.until },
     generator: `kohaku-cli/${CLI_VERSION}`,
     signer: { alg: "Ed25519", keyId },
     allowIncomplete: opts.allowIncomplete,

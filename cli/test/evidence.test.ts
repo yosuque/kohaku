@@ -400,4 +400,78 @@ describe("kohaku evidence export --rest (in-process host-rest app)", () => {
       }),
     ).rejects.toThrow(/--header must be given as/);
   });
+
+  it("derives scope.tenant from an x-kohaku-tenant header when --tenant is omitted", async () => {
+    const { app } = makeRestApp();
+    const transport = (url: string, init?: RequestInit) => Promise.resolve(app.request(url, init));
+    const { privateKeyPath } = await keyPaths();
+
+    const result = await runEvidenceExport({
+      rest: "/api/kohaku",
+      transport,
+      headers: ["x-kohaku-tenant:acme"],
+      since: "2026-01-01T00:00:00.000Z",
+      until: "2026-12-31T23:59:59.999Z",
+      privateKeyPath,
+      outDir: tmp("kohaku-evidence-out-"),
+    });
+
+    expect(result.manifest.scope.tenant).toBe("acme");
+  });
+
+  it("accepts --tenant when it matches the x-kohaku-tenant header", async () => {
+    const { app } = makeRestApp();
+    const transport = (url: string, init?: RequestInit) => Promise.resolve(app.request(url, init));
+    const { privateKeyPath } = await keyPaths();
+
+    const result = await runEvidenceExport({
+      rest: "/api/kohaku",
+      transport,
+      headers: ["x-kohaku-tenant:acme"],
+      tenant: "acme",
+      since: "2026-01-01T00:00:00.000Z",
+      until: "2026-12-31T23:59:59.999Z",
+      privateKeyPath,
+      outDir: tmp("kohaku-evidence-out-"),
+    });
+
+    expect(result.manifest.scope.tenant).toBe("acme");
+  });
+
+  it("rejects --tenant when it conflicts with the x-kohaku-tenant header (mismatch rejection)", async () => {
+    const { app } = makeRestApp();
+    const transport = (url: string, init?: RequestInit) => Promise.resolve(app.request(url, init));
+    const { privateKeyPath } = await keyPaths();
+
+    await expect(
+      runEvidenceExport({
+        rest: "/api/kohaku",
+        transport,
+        headers: ["x-kohaku-tenant:acme"],
+        tenant: "globex",
+        since: "2026-01-01T00:00:00.000Z",
+        until: "2026-12-31T23:59:59.999Z",
+        privateKeyPath,
+        outDir: tmp("kohaku-evidence-out-"),
+      }),
+    ).rejects.toThrow(/--tenant globex conflicts with the x-kohaku-tenant header \(acme\)/);
+  });
+
+  it("rejects --tenant in --rest mode when no x-kohaku-tenant header is supplied", async () => {
+    const { app } = makeRestApp();
+    const transport = (url: string, init?: RequestInit) => Promise.resolve(app.request(url, init));
+    const { privateKeyPath } = await keyPaths();
+
+    await expect(
+      runEvidenceExport({
+        rest: "/api/kohaku",
+        transport,
+        tenant: "acme",
+        since: "2026-01-01T00:00:00.000Z",
+        until: "2026-12-31T23:59:59.999Z",
+        privateKeyPath,
+        outDir: tmp("kohaku-evidence-out-"),
+      }),
+    ).rejects.toThrow(/no x-kohaku-tenant header was supplied/);
+  });
 });
