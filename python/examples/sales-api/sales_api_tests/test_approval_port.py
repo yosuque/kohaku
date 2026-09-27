@@ -118,6 +118,30 @@ class TestBindingChecks:
 
         asyncio.run(run())
 
+    def test_treats_empty_string_tenant_as_distinct_from_unspecified_in_both_directions(self) -> None:
+        # Regression: the tenant comparison used to fold "" to None via `x or None`, matching a token
+        # issued for tenant="" against a verification request with no tenant at all (or vice versa). TS's
+        # `claims.tenant ?? undefined` only normalizes null/undefined, never a falsy-but-present empty
+        # string, so this pins the same behavior here.
+        async def run() -> None:
+            approvals = create_hmac_approval_port("test-secret")
+
+            empty_tenant_token = await _issue(approvals, tenant="")
+            empty_vs_unset = await _verify(approvals, empty_tenant_token)
+            assert empty_vs_unset.ok is False
+            assert empty_vs_unset.reason == "approval is bound to a different tenant"
+
+            no_tenant_token = await _issue(approvals)
+            unset_vs_empty = await _verify(approvals, no_tenant_token, tenant="")
+            assert unset_vs_empty.ok is False
+            assert unset_vs_empty.reason == "approval is bound to a different tenant"
+
+            # tenant="" on both sides still matches (it is a real, if unusual, tenant value).
+            both_empty = await _verify(approvals, empty_tenant_token, tenant="")
+            assert both_empty.ok is True
+
+        asyncio.run(run())
+
 
 class TestExpiry:
     def test_rejects_an_expired_approval(self) -> None:

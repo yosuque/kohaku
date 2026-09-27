@@ -150,7 +150,12 @@ class HmacApprovalPort:
             return ApprovalVerifyResult(ok=False, reason="approval is bound to a different payload")
         if claims.get("requesterId") != requester_id:
             return ApprovalVerifyResult(ok=False, reason="approval is bound to a different requester")
-        if (claims.get("tenant") or None) != (tenant or None):
+        # `claims.get("tenant")` (not `or None`): dict.get already returns None for both a missing key and
+        # an explicit JSON null, matching TS's `claims.tenant ?? undefined`. `or None` additionally folded
+        # an empty-string tenant to None, silently treating "tenant: ''" as "no tenant" and letting a token
+        # issued for one verify against the other (or vice versa) -- a real, if narrow, tenant-isolation
+        # gap TS's `??` (which only normalizes null/undefined, never falsy strings) never had.
+        if claims.get("tenant") != tenant:
             return ApprovalVerifyResult(ok=False, reason="approval is bound to a different tenant")
 
         approver_id = claims.get("approverId")

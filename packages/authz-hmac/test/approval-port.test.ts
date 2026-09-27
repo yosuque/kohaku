@@ -79,6 +79,22 @@ describe("createHmacApprovalPort binding checks", () => {
     const { approvals: noTenant, token: tokenNoTenant } = await issue();
     expect((await noTenant.verifyApproval(tokenNoTenant, REQ)).ok).toBe(true);
   });
+
+  it("treats an empty-string tenant as distinct from an unspecified tenant, in both directions", async () => {
+    // Cross-language parity regression: TS's `claims.tenant ?? undefined` only normalizes null/undefined,
+    // never a falsy-but-present empty string, so tenant: "" and an unset tenant must never match each other.
+    const { approvals: emptyTenant, token: tokenEmptyTenant } = await issue({ tenant: "" });
+    const emptyVsUnset = await emptyTenant.verifyApproval(tokenEmptyTenant, REQ);
+    expect(emptyVsUnset).toEqual({ ok: false, reason: "approval is bound to a different tenant" });
+
+    const { approvals: noTenant, token: tokenNoTenant } = await issue();
+    const unsetVsEmpty = await noTenant.verifyApproval(tokenNoTenant, { ...REQ, tenant: "" });
+    expect(unsetVsEmpty).toEqual({ ok: false, reason: "approval is bound to a different tenant" });
+
+    // tenant: "" on both sides still matches (it is a real, if unusual, tenant value).
+    const bothEmpty = await emptyTenant.verifyApproval(tokenEmptyTenant, { ...REQ, tenant: "" });
+    expect(bothEmpty.ok).toBe(true);
+  });
 });
 
 describe("createHmacApprovalPort expiry", () => {
