@@ -566,10 +566,13 @@ environment — so a `.default()`-ed value the Spec omits is materialized regard
 below is on; on a mismatch, the raw (unvalidated) props are used instead of failing the node. Only the
 **diagnostic** (the `console.warn` on a mismatch) is gated by environment: on by default outside a
 `NODE_ENV=production` build, off inside one — pass `{ validate: false }` / `{ validate: true }` to override
-either way regardless of environment. The untyped `ImplRegistry.register` / a plain `PartBuilder` registered
-via `registerPart` both keep working unchanged for a part that has no static `ComponentDefinition` (e.g. a
-promoted part whose schema is generated per-artifact from the approval draft — see
-`apps/sample-api/src/intents/promoted.ts`).
+either way regardless of environment. A build that never actually sets `process.env.NODE_ENV` (a bare
+esbuild invocation without `--define:process.env.NODE_ENV='"production"'`, or a bundler config that never
+switches to its production mode) leaves the diagnostic on — the same convention React's own bundled builds
+use, and the safe side to default to, since it costs nothing beyond an extra `console.warn` call on the rare
+mismatch path. The untyped `ImplRegistry.register` / a plain `PartBuilder` registered via `registerPart` both
+keep working unchanged for a part that has no static `ComponentDefinition` (e.g. a promoted part whose schema
+is generated per-artifact from the approval draft — see `apps/sample-api/src/intents/promoted.ts`).
 
 Validation: `npx @kohaku-ui/cli component validate <definition.json>`. The minimal definition.json that passes validation (`type` is a dot-separated identifier, `version` is semver, `propsSchema` is a JSON Schema of `type: "object"`, and `capabilities.data` requires one of `none | optional | required`):
 

@@ -562,9 +562,13 @@ surface.registerPart(entry.type, entry.version, entry.builder);
 必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。環境によって
 切り替わるのは**診断だけ**(不一致時の `console.warn`)であり、既定では `NODE_ENV=production` のビルド以外で
 オン、その内側でオフになる——`{ validate: false }` / `{ validate: true }` を渡せば環境に関わらずどちらの向きにも
-上書きできる。型なしの `ImplRegistry.register` や、`registerPart` に生の `PartBuilder` を渡す登録も、静的な
-`ComponentDefinition` を持たない部品(例:承認ドラフトからアーティファクトごとにスキーマが生成される昇格済み
-部品——`apps/sample-api/src/intents/promoted.ts` を参照)のためにそのまま動作し続ける。
+上書きできる。`process.env.NODE_ENV` を実際には設定しないビルド(`--define:process.env.NODE_ENV='"production"'`
+を渡さない素の esbuild 呼び出しや、本番モードに切り替えないバンドラ設定)では、この診断はオンのままになる——
+これは React 自身のバンドル済みビルドと同じ慣習であり、稀にしか起きない不一致経路で余分な `console.warn` が
+呼ばれるだけなので、既定として安全側に倒している。型なしの `ImplRegistry.register` や、`registerPart` に生の
+`PartBuilder` を渡す登録も、静的な `ComponentDefinition` を持たない部品(例:承認ドラフトからアーティファクト
+ごとにスキーマが生成される昇格済み部品——`apps/sample-api/src/intents/promoted.ts` を参照)のためにそのまま
+動作し続ける。
 
 検証: `npx @kohaku-ui/cli component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
 

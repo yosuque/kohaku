@@ -23,7 +23,16 @@ declare const process: { env?: { NODE_ENV?: string } } | undefined;
  * `typeof process === "undefined"` is the standard safe existence check (unlike `process !== undefined`,
  * `typeof` never throws on an identifier that was never declared as a global in the current environment), so
  * this is also safe to evaluate in a raw browser with no bundler define step at all — it then falls back to
- * "development" (validate), the conservative side to err on for a diagnostic-only check.
+ * "development" (the warning stays on), the conservative side to err on for a diagnostic-only check. The
+ * same applies to a bare esbuild build invoked without `--define:process.env.NODE_ENV='"production"'` (e.g.
+ * a plain `tsx`/`vite build` config that never sets `mode: "production"`): the literal
+ * `process.env.NODE_ENV` expression above is never rewritten, so this still falls through to "development"
+ * there too. This mirrors React's own bundled builds, which gate their development-only warnings on this
+ * exact `process.env.NODE_ENV !== "production"` pattern. It costs nothing beyond an extra `console.warn`
+ * call on the rare schema-mismatch path if left on by mistake — never a behavior difference, since parsing
+ * itself is unconditional — but a host that wants the warning silenced in its own production build without
+ * relying on a bundler's define should pass the explicit `{ validate: false }` option instead (see
+ * `implement`'s and `implementWc`'s doc comments, and docs/user-guide.md's "Adding a part").
  */
 export function isDevEnvironment(): boolean {
   return typeof process === "undefined" || process.env?.NODE_ENV !== "production";
