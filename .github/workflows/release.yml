@@ -40,7 +40,9 @@ jobs:
     outputs:
       ref: ${{ steps.plan.outputs.ref }}
       tag: ${{ steps.plan.outputs.tag }}
-      version: ${{ steps.plan.outputs.version }}
+      # The version this run checks and publishes: the tag's on a real run, the tree's own on a tagless dry
+      # run (the plan step runs before checkout, so it cannot read the tree -- the versions step can).
+      version: ${{ steps.versions.outputs.version }}
       dry_run: ${{ steps.plan.outputs.dry_run }}
     steps:
       - id: plan
@@ -73,7 +75,7 @@ jobs:
           fi
           if [ -n "$TAG" ] && ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::Tag '$TAG' is not of the form vX.Y.Z."; exit 1; fi
           {
-            echo "ref=$REF"; echo "tag=$TAG"; echo "version=${TAG#v}"; echo "dry_run=$DRY_RUN"
+            echo "ref=$REF"; echo "tag=$TAG"; echo "dry_run=$DRY_RUN"
           } >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -92,6 +94,7 @@ jobs:
       # check covers the Python side on every push; this is the last gate before an asymmetric release,
       # and the only place the tag itself is compared with the tree.
       - name: Assert the tag and every version in the tree agree
+        id: versions
         env:
           TAG: ${{ steps.plan.outputs.tag }}
         run: |
@@ -112,6 +115,7 @@ jobs:
             git merge-base --is-ancestor HEAD origin/main || { echo "$TAG is not an ancestor of main"; FAIL=1; }
           fi
           [ "$FAIL" = "0" ] || { echo "::error::version mismatch — see above"; exit 1; }
+          echo "version=$EXPECTED" >> "$GITHUB_OUTPUT"
       - run: pnpm typecheck
       - run: pnpm test
       # The same gate the pack-smoke job runs on pull requests, repeated immediately before publishing:
