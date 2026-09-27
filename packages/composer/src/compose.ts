@@ -571,7 +571,7 @@ export async function recompose(
   const canRespectL2 =
     opts.respectPrevTier === true &&
     prev.provenance.tier === "L2" &&
-    (resolveEntryContext(ctx, opts).policy.allowL2 ?? false);
+    (resolveEntryContext(ctx, opts).policy?.allowL2 ?? false);
   // The L2 pin is passed as a policyOverride rather than folded into ctx up front, so that it survives
   // resolveEntryContext's withSessionPolicy step even when ctx.policyFor is wired (a session policy
   // resolved from scratch would otherwise silently discard this override — see resolveEntryContext).
