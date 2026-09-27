@@ -520,7 +520,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 
 ## 11. conformance
 
-Requirements list (machine-readable): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — 34 MUSTs (the manifest is authoritative for the count and categorization).
+Requirements list (machine-readable): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — 37 MUSTs (the manifest is authoritative for the count and categorization).
 
 ```bash
 node cli/bin/kohaku.js conformance --self                # SPEC-* 9 items (Spec-format self-inspection)

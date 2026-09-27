@@ -13,9 +13,10 @@ intent.hash / specHash / cache keys / catalogFingerprint match across languages.
 **conformance**: passes **MUST 19/19 = CONFORMANT** under the black-box inspection of
 the TS-side CLI (`node cli/bin/kohaku.js conformance --rest`) (including the SHOULD
 streaming check; CI's `conformance-python` job inspects it on every commit). The 19 are
-the black-box-verifiable MUSTs of the 34 in the conformance manifest; the remaining 15
-reference MUSTs (MCPAPP-* / SBX-*, and six documentary norms guaranteed by
-the TS renderer/composer package tests) are covered by package tests (pytest on this side).
+the black-box-verifiable MUSTs of the 37 in the conformance manifest; the remaining 18
+reference MUSTs (MCPAPP-* / SBX-* / ACT-PRM-001 / ACT-APR-001, and six documentary norms
+guaranteed by the TS renderer/composer package tests) are covered by package tests (pytest
+on this side).
 
 ## Setup & verification
 
@@ -394,6 +395,38 @@ Three Python-specific divergences from the TS port, none of them wire-visible:
   same kind of gap this file's "Structure" section already documents for `McpErrorInfo.correlation_id`
   (always the tool call's own JSON-RPC request id, never a per-connection session id) for the same
   underlying SDK-accessor reason.
+
+## Governed actions (symmetric with TS)
+
+`kohaku.spec.action_params` (env-neutral, dependency-free): `validate_action_params(schema, payload)`
+checks a `DomainPort` operation's payload against kohaku's own closed JSON Schema subset (`type`,
+`properties`, `required`, `additionalProperties: false`, `enum`, `minimum`/`maximum`,
+`minLength`/`maxLength`, `items`, `maxItems`, `x-message` — no `pattern`), returning
+`list[ActionParamIssue]`; `assert_valid_action_params_schema(operation_name, schema)` runs once per
+operation at attach time (not per request) and raises `ActionParamsSchemaError` on an unknown keyword;
+`action_payload_hash(payload)` is the canonical-JSON sha256 an approval token binds to. Pinned
+byte-for-byte against `packages/spec-core/src/action-params.ts` via the cross-language golden
+(`spec/test/fixtures/cross-language-canonical.json`'s `actionParams` section).
+
+`kohaku.host_core.action_gate` (`ActionGate` / `create_action_gate(approvals=None)`): runs params
+validation before the tier check (`ActionGateInvalid`), then enforces `"confirm"` (`confirmed: true`
+in the same request) and `"approve"` (a bound `ApprovalPort.verify_approval` token) tiers, returning
+`ActionGateAllow` / `ActionGateApprovalRequired` / `ActionGateDenied` — the same result shape
+`host_rest`'s `POST /binding/action` and `host_mcp`'s `${prefix}_action` both consult before calling
+`DomainPort.invoke`. `kohaku.host_core.action_audit`'s `ActionAuditRecorder` protocol is the optional
+`action.*` lineage event sink (`action.invoked` / `action.denied` / `action.approvalRequested` /
+`action.approved`; fail-open — a recorder failure never blocks the write).
+
+The stateless HMAC `ApprovalPort` reference implementation (`HmacApprovalPort` /
+`create_hmac_approval_port` / `MemoryApprovalStore`, the `"kohaku-approval.v1."`-prefixed token TS's
+`packages/authz-hmac` package ships) lives in `python/examples/sales-api/src/sales_api/approval_port.py`
+rather than in the shared `kohaku` library — the same place `sales_api/authz_port.py` already keeps the
+HMAC `AuthzPort`/capability-token counterpart, since this port has no standalone-package boundary on the
+Python side to begin with (unlike TS's many-packages layout, Python ports the reference *adapters* as
+part of the sample app, not as separately importable packages). `python/examples/sales-api`'s `annotate`
+(`"confirm"` tier) and `publish` (`"approve"` tier) operations, and `sales_api_tests/test_governed_actions.py`
+/ `test_approval_port.py`, mirror the TS sample's own governed-actions demo (see the [user
+guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).
 
 ## Verbose failure logging (`KOHAKU_DEBUG`, symmetric with TS)
 
