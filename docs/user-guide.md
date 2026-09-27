@@ -20,18 +20,31 @@ kohaku serves three kinds of readers, and each has a one-page start with its fir
 | **A product team** that wants Server-Driven UI now and LLM composition later (or never) | [Path (b): React dashboard only](paths/react-dashboard.md) | L0 fixed Specs rendered by `@kohaku-ui/renderer-react`, data by reference, no model | [§6 Step 0](#step-0--server-driven-ui-without-an-llm) |
 | **A team putting model-composed UI into production** | [Path (c): Full stack](paths/full-stack.md) | L1 / L2 composition, the promotion pipeline, fixation, the Admin governance plane | [§6 Steps 1–2](#step-1--l1-declarative-synthesis-and-chat), [§7](#7-operational-tips) |
 
-The rest of this guide is the long form: setting up the bundled sample (§2), a tour of its screens (§3), eight demos (§4), MCP hosts (§5), embedding (§6), operations (§7), troubleshooting (§8) and FAQ (§9).
+The rest of this guide is the long form: setting up the bundled sample (§2), a tour of its screens (§3), eight demos (§4), MCP hosts (§5), embedding (§6), operations (§7), troubleshooting (§8) and FAQ (§9). Prefer to start from the concepts rather than from a persona? [§1](#1-what-is-this) below introduces them in three stages, each pointing at the [glossary](glossary.md).
 
 ## 1. What is this
 
 kohaku is a framework that **merges "natural-language questions" and "GUI narrowing operations" into the same normalized Intent**, generates the **same declarative UI Spec**, and renders it with the **same renderer**. A sales-analytics app (API + Web + MCP server) ships with it as a sample.
 
-There are four core things to experience:
+The rest of this section introduces that in three stages, each building on the last. The [glossary](glossary.md) has a short, plain-language definition of every term below; come back to it whenever a word is unfamiliar.
 
-1. Whether you ask via chat or narrow via the GUI, **the same screen** appears (R5)
-2. The UI Spec **carries no data** (pass-by-reference; the LLM never handles numbers)
-3. Requests outside the catalog are **freely generated in a sandbox** (L2) and, after review, are **promoted into official parts** (L1)
-4. Frequently used screens are **fixated** and stop going through the LLM entirely (L0)
+### Stage 1 — Intent, Spec, `$ref`: the first screen
+
+Three concepts get a screen on the page, with or without an LLM. A chat question and a GUI action both normalize into an **Intent** — kohaku's one request format (`sales.quarterly_summary` plus params, for instance). Composing an Intent returns a **UI Spec**: a JSON document describing the screen, not code, and it never carries a single data value — only a `$ref` a component resolves later, directly against your own API. `createKohakuHost` wires this up in one call, and `npx @kohaku-ui/cli init` generates it from a data file with no Port code to write first.
+
+→ Glossary: [Intent, UI Spec, `$ref`](glossary.md#terms). Next: the [Zero-Port quickstart](#zero-port-quickstart-from-your-own-data-no-port-code) puts this on screen in one command.
+
+### Stage 2 — L0 / L1 / L2 and the cache: the same request, the same screen
+
+Once a screen needs the model, a request climbs one of three tiers to get there. **L0** is a fixed template or a pinned structure that never touches the LLM. **L1** is the LLM selecting known catalog parts and filling their typed props. **L2** is free generation in a sandbox, for a request the catalog cannot express yet. Whichever tier answers a request, the result is cached by Intent, so the same request always returns the same Spec — "identical display" (R5) is a cache guarantee, not a hope that the model behaves the same way twice.
+
+→ Glossary: [L0 / L1 / L2](glossary.md#terms). Next: [§3, Walking through the screens](#3-walking-through-the-screens) shows the tiers in the sample's own ProvenanceBadge.
+
+### Stage 3 — Governance: what happens to what the model invents
+
+An L2 artifact is not the end of the story: it is recorded in **lineage**, and once it earns enough use it becomes a **promotion** candidate that a human reviews before it joins the catalog as a native part. A frequent, structurally stable L1 Intent can likewise be **fixated** to L0, so it stops going through the LLM entirely. Every read or write a rendered component performs is scoped by a short-lived **capability** token rather than a standing credential, and `kohaku explain` (or its DevTools panel) turns any `requestId` into the full story of tier, cache and lineage behind one screen.
+
+→ Glossary: [promotion, fixation, lineage, capability](glossary.md#terms). Next: [§4, Demo walkthroughs](#4-demo-walkthroughs-8) walks through promotion and fixation end to end, and [§6, Step 2](#step-2--l2-promotion-and-fixation-complete-form) wires them into your own product.
 
 ## 2. Setup
 
@@ -100,7 +113,13 @@ uv run python -m sales_api          # Python sample REST host (:8790; the defaul
 
 ## 3. Walking through the screens
 
-> **About display language**: The demo runs in **English by default**. Selecting **JA** on the header **EN/JA toggle** switches the whole sample-web app: the page chrome (nav, chat, admin), the Spec renderer's messages and formatting locale (via `RendererProvider.messages` / `locale`), the dashboard facet labels (bilingual overlays baked into `facet-views.json`), **and the generated content itself** — the toggle rides `session.locale` on every API call, and the server selects a per-session `ComposePolicy` (JA sets `outputLanguage: "Japanese"` plus Japanese L0 fixed specs, with caches separated per language via a `/ja` generatorVersion token). The dashboard re-composes on toggle; existing chat bubbles keep the language they were composed in (the next question follows the new language). Known limits: data cell values inside charts/tables (region/channel names) stay English (`query://` results are language-neutral by invariant), and so do column headers, KPI labels, and KPI notes coming from the DomainPort (e.g. "Total revenue", "Revenue (JPY)", "No target set") — bilingualizing those DomainPort-sourced labels is a future item. A Spec fixated from EN traffic is not served to JA sessions (they fall through to normal compose). sample-wc still takes `?lang=ja` and switches renderer messages only.
+> **About display language**: The demo runs in **English by default**. Selecting **JA** on the header **EN/JA toggle** switches the whole sample-web app: the page chrome (nav, chat, admin), the Spec renderer's messages and formatting locale (via `RendererProvider.messages` / `locale`), the dashboard facet labels (bilingual overlays baked into `facet-views.json`), **and the generated content itself** — the toggle rides `session.locale` on every API call, and the server selects a per-session `ComposePolicy` (JA sets `outputLanguage: "Japanese"` plus Japanese L0 fixed specs, with caches separated per language via a `/ja` generatorVersion token).
+>
+> The dashboard re-composes on toggle; existing chat bubbles keep the language they were composed in (the next question follows the new language).
+>
+> Known limits: data cell values inside charts/tables (region/channel names) stay English (`query://` results are language-neutral by invariant), and so do column headers, KPI labels, and KPI notes coming from the DomainPort (e.g. "Total revenue", "Revenue (JPY)", "No target set") — bilingualizing those DomainPort-sourced labels is a future item.
+>
+> A Spec fixated from EN traffic is not served to JA sessions (they fall through to normal compose). sample-wc still takes `?lang=ja` and switches renderer messages only.
 
 ### Dashboard (GUI surface)
 
@@ -297,7 +316,9 @@ If you have not yet, pick one of the three one-page starts in ["Choose your path
 
 You can adopt it in stages along the adoption ladder (design doc §12 "Design of the sample implementation").
 
-**Dependency method**: `@kohaku-ui/*` packages are published to npm. In a standalone app, `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod` (`@kohaku-ui/host`'s `createKohakuHost()` is the one-call facade over `@kohaku-ui/host-rest` — see below; its `@kohaku-ui/host/mcp` subpath additionally needs `@kohaku-ui/host-mcp-apps` and `@modelcontextprotocol/server`, both optional peers not installed by the command above — see [Path (a)](paths/mcp-apps.md); `@ai-sdk/anthropic` is the provider SDK for Claude — an optional peer dependency of `@kohaku-ui/llm`; swap it for `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` depending on the provider you configure) (add `@kohaku-ui/composer`, `@kohaku-ui/renderer-react react react-dom`, etc. as you reach the later steps below) and import them normally — each package's `publishConfig` points `exports` at its `dist` build, so this works outside the monorepo with no extra setup. If you are instead building your app **inside this monorepo** (e.g. to contribute back, or to iterate against `src` without a publish step), add it under `apps/<your-app>`, reference the packages as `workspace:*` in its `package.json`, and run it with `tsx` (packages export `.ts` directly in that case — there is no `dist` build to consume from outside the workspace). The generated `server.ts` below assumes the npm-install path; swap the comment's dependency line for `workspace:*` if you took the monorepo path instead.
+**Dependency method**: `@kohaku-ui/*` packages are published to npm. In a standalone app, `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod` (`@kohaku-ui/host`'s `createKohakuHost()` is the one-call facade over `@kohaku-ui/host-rest` — see below; its `@kohaku-ui/host/mcp` subpath additionally needs `@kohaku-ui/host-mcp-apps` and `@modelcontextprotocol/server`, both optional peers not installed by the command above — see [Path (a)](paths/mcp-apps.md); `@ai-sdk/anthropic` is the provider SDK for Claude — an optional peer dependency of `@kohaku-ui/llm`; swap it for `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` depending on the provider you configure) (add `@kohaku-ui/composer`, `@kohaku-ui/renderer-react react react-dom`, etc. as you reach the later steps below) and import them normally — each package's `publishConfig` points `exports` at its `dist` build, so this works outside the monorepo with no extra setup.
+
+If you are instead building your app **inside this monorepo** (e.g. to contribute back, or to iterate against `src` without a publish step), add it under `apps/<your-app>`, reference the packages as `workspace:*` in its `package.json`, and run it with `tsx` (packages export `.ts` directly in that case — there is no `dist` build to consume from outside the workspace). The generated `server.ts` below assumes the npm-install path; swap the comment's dependency line for `workspace:*` if you took the monorepo path instead.
 
 ### Zero-Port quickstart (from your own data, no Port code)
 
@@ -307,7 +328,11 @@ npx @kohaku-ui/cli init --from ../sales.csv     # or a .json array / a .sqlite f
 npm run dev                                      # API :8787 + web :5173
 ```
 
-`init` reads the file, infers which columns are categories (→ vocabularies), measures (→ metrics) and time (→ granularity), and generates a project that only depends on the published `@kohaku-ui/*` packages: a DomainPort over the data (sum / avg / count × group by × time window; `describeShape` exposes column metadata only — rows never enter the model), an Intent catalog (`defineVocabulary` / `defineIntent`), an L0 fixed Spec for `<source>.summary`, a Dashboard + Chat web app and a golden regression test — all wired together with `@kohaku-ui/host`'s `createKohakuHost()` (design doc #52), which supplies the SemanticPort (`@kohaku-ui/semantic-llm`), storage (`@kohaku-ui/storage-memory`) and capability tokens (`@kohaku-ui/authz-hmac`) as defaults. `init` also writes a `.env` with a freshly generated capability secret, so add only a provider key to it — never copy `.env.example` over it. The **Summary** view renders with no LLM configured; set a provider in `.env` for Chat and the L1 views. Chat answers only within the generated Intent catalog and returns `NO_MATCH` for anything outside it (widen it with `fallbackIntent`). Everything generated is a starting point — the DomainPort remains your product's responsibility (design doc §2), and each file says what else to replace (`createKohakuHost`'s other defaults included).
+`init` reads the file, infers which columns are categories (→ vocabularies), measures (→ metrics) and time (→ granularity), and generates a project that only depends on the published `@kohaku-ui/*` packages: a DomainPort over the data (sum / avg / count × group by × time window; `describeShape` exposes column metadata only — rows never enter the model), an Intent catalog (`defineVocabulary` / `defineIntent`), an L0 fixed Spec for `<source>.summary`, a Dashboard + Chat web app and a golden regression test — all wired together with `@kohaku-ui/host`'s `createKohakuHost()` (design doc #52), which supplies the SemanticPort (`@kohaku-ui/semantic-llm`), storage (`@kohaku-ui/storage-memory`) and capability tokens (`@kohaku-ui/authz-hmac`) as defaults.
+
+`init` also writes a `.env` with a freshly generated capability secret, so add only a provider key to it — never copy `.env.example` over it. The **Summary** view renders with no LLM configured; set a provider in `.env` for Chat and the L1 views.
+
+Chat answers only within the generated Intent catalog and returns `NO_MATCH` for anything outside it (widen it with `fallbackIntent`). Everything generated is a starting point — the DomainPort remains your product's responsibility (design doc §2), and each file says what else to replace (`createKohakuHost`'s other defaults included).
 
 No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv).
 
@@ -637,14 +662,17 @@ silent shadowing of a core part is an easy way to lose it by accident.
 
 Both `implement` and `implementWc` always run `def.propsSchema.safeParse` on the node's props — in every
 environment — so a `.default()`-ed value the Spec omits is materialized regardless of whether the diagnostic
-below is on; on a mismatch, the raw (unvalidated) props are used instead of failing the node. Only the
-**diagnostic** (the `console.warn` on a mismatch) is gated by environment: on by default outside a
+below is on; on a mismatch, the raw (unvalidated) props are used instead of failing the node.
+
+Only the **diagnostic** (the `console.warn` on a mismatch) is gated by environment: on by default outside a
 `NODE_ENV=production` build, off inside one — pass `{ validate: false }` / `{ validate: true }` to override
 either way regardless of environment. A build that never actually sets `process.env.NODE_ENV` (a bare
 esbuild invocation without `--define:process.env.NODE_ENV='"production"'`, or a bundler config that never
 switches to its production mode) leaves the diagnostic on — the same convention React's own bundled builds
 use, and the safe side to default to, since it costs nothing beyond an extra `console.warn` call on the rare
-mismatch path. The untyped `ImplRegistry.register` / a plain `PartBuilder` registered via `registerPart` both
+mismatch path.
+
+The untyped `ImplRegistry.register` / a plain `PartBuilder` registered via `registerPart` both
 keep working unchanged for a part that has no static `ComponentDefinition` (e.g. a promoted part whose schema
 is generated per-artifact from the approval draft — see `apps/sample-api/src/intents/promoted.ts`).
 
@@ -901,7 +929,13 @@ export function buildTheme(mode: "light" | "dark"): ThemeTokens {
 }
 ```
 
-Pass this to `RendererProvider`'s `theme` (React) / `surface.theme` (Web Components). The color token vocabulary is `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`, plus the deprecated alias `color.danger`→negative and the reserved `color.focus`→primary. `color.scrim` (the modal dialog backdrop) has its own light/dark value like any other listed token — it is simply not part of the *L2 generation* vocabulary the model sees, since the sandbox never renders a dialog backdrop (design.md §7.2 has the full default-value table). You can freely add custom tokens (keys outside the vocabulary) too (`ThemeTokens` is an open type). Non-color tokens (`font.family.*`, `font.size.*`, `space.*`, `radius.*`, `shadow.*`, `motion.*`) are part of the vocabulary too and take CSS strings with units (e.g. `"radius.md": "4px"` for a squarer brand). See design doc §7.2 for the full list of both, their default values, and the dark AA policy. Non-color tokens shape the built-in parts too (e.g. `"radius.md": "2px"` squares every button and input); the `L2 SANDBOXED` badge can be hidden with `badge="hidden"` on `SandboxFrame` / `context.sandbox.badge` — but hide it only on a surface that signals sandboxing some other way, and if a brand theme overrides `color.warning.surface` / `color.warning.text` (the pill's background/text pair), keep the two readable together, since the badge is the only consumer of that pairing today.
+Pass this to `RendererProvider`'s `theme` (React) / `surface.theme` (Web Components). The color token vocabulary is `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`, plus the deprecated alias `color.danger`→negative and the reserved `color.focus`→primary.
+
+`color.scrim` (the modal dialog backdrop) has its own light/dark value like any other listed token — it is simply not part of the *L2 generation* vocabulary the model sees, since the sandbox never renders a dialog backdrop (design.md §7.2 has the full default-value table).
+
+You can freely add custom tokens (keys outside the vocabulary) too (`ThemeTokens` is an open type). Non-color tokens (`font.family.*`, `font.size.*`, `space.*`, `radius.*`, `shadow.*`, `motion.*`) are part of the vocabulary too and take CSS strings with units (e.g. `"radius.md": "4px"` for a squarer brand). See design doc §7.2 for the full list of both, their default values, and the dark AA policy.
+
+Non-color tokens shape the built-in parts too (e.g. `"radius.md": "2px"` squares every button and input); the `L2 SANDBOXED` badge can be hidden with `badge="hidden"` on `SandboxFrame` / `context.sandbox.badge` — but hide it only on a surface that signals sandboxing some other way, and if a brand theme overrides `color.warning.surface` / `color.warning.text` (the pill's background/text pair), keep the two readable together, since the badge is the only consumer of that pairing today.
 
 ## 10. Static playground
 
