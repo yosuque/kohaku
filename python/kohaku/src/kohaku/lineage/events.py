@@ -258,12 +258,14 @@ class ActionInvokedPayload(TypedDict, total=False):
 
 
 class ActionDeniedPayload(TypedDict, total=False):
-    """The action.denied payload (design.md #63): an "approve"-tier invoke whose presented token did not
-    verify (or no ApprovalPort was configured at all)."""
+    """The action.denied payload (design.md #62/#63): either an "approve"-tier invoke whose presented
+    token did not verify (or no ApprovalPort was configured at all; tier is "confirm" or "approve"), or an
+    invoke whose action name is not one of the DomainPort's own declared operations, rejected before any
+    governed-action gate ever ran (tier is "auto")."""
 
     action: str
     payloadHash: str
-    tier: Literal["confirm", "approve"]
+    tier: Literal["auto", "confirm", "approve"]
     reason: str
     correlationId: str
 

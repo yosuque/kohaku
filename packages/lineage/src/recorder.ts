@@ -115,7 +115,7 @@ export interface RestActionAuditRecorder {
   denied(args: {
     action: string;
     payloadHash: string;
-    tier: "confirm" | "approve";
+    tier: ActionTier;
     reason: string;
     principal: Principal;
     tenant?: string;

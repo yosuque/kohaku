@@ -23,6 +23,7 @@ from kohaku.spec import (
     QueryRefError,
     VerifyRequest,
     VerifyResult,
+    action_payload_hash,
 )
 
 from ..bodies import parse_action_body
@@ -48,6 +49,11 @@ from .shared import (
 # may carry internals (SQL fragments, stack-trace text, library-internal wording). The original error still
 # reaches the observability hook (on_error) via report_host_error.
 _REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable"
+
+# An action name absent from the DomainPort's own operation index is not a declared operation at all -- it
+# must never reach domain.invoke (fail-closed), on the same footing as a capability that lacks the needed
+# write scope (this reuses that exact response shape: 403 CAPABILITY_DENIED, no new error code).
+_UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation"
 
 
 def _resolve_principal(deps: KohakuHostDeps, verdict: VerifyResult) -> Principal | Response:
@@ -259,36 +265,53 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         tenant = await _resolve_tenant(deps, request)
 
         # Governed actions (design.md #62/#63): validate params and enforce the action's tier before
-        # domain.invoke ever runs. An action absent from the DomainPort's own operation index (should not
-        # normally happen once capability issuance has already scoped write access to it) is let through
-        # ungated, matching the pre-existing (pre-F2) behavior for a host whose index and DomainPort
-        # momentarily disagree.
+        # domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
+        # because the index and DomainPort momentarily disagree, or because the name was never a real
+        # operation to begin with -- is rejected here rather than let through ungated (fail-closed;
+        # ACT-PRM-001).
         index = await operation_index(deps)
         entry = index.get(body.action)
-        if entry is not None:
-            gate = action_gate_for(deps)
-            gate_result = await gate.check(
-                ActionGateRequest(
-                    descriptor=entry.descriptor,
-                    params_schema=entry.params_schema,
-                    payload=payload,
-                    confirmed=body.confirmed,
-                    approval=body.approval,
-                    requester_id=principal.id,
+        if entry is None:
+
+            async def _record_undeclared() -> None:
+                if deps.action_audit_recorder is None:
+                    return
+                await deps.action_audit_recorder.denied(
+                    action=body.action,
+                    payload_hash=action_payload_hash(payload),
+                    tier="auto",
+                    reason=_UNDECLARED_ACTION_MESSAGE,
+                    principal=principal,
                     tenant=tenant,
+                    correlation_id=request_id,
                 )
-            )
-            gated = await _handle_action_gate_result(
-                deps,
-                gate_result,
-                action=body.action,
+
+            await safe_record(deps, "binding/action.audit", request_id, _record_undeclared)
+            return _error("CAPABILITY_DENIED", _UNDECLARED_ACTION_MESSAGE, 403)
+
+        gate = action_gate_for(deps)
+        gate_result = await gate.check(
+            ActionGateRequest(
+                descriptor=entry.descriptor,
+                params_schema=entry.params_schema,
                 payload=payload,
-                principal=principal,
+                confirmed=body.confirmed,
+                approval=body.approval,
+                requester_id=principal.id,
                 tenant=tenant,
-                request_id=request_id,
             )
-            if gated is not None:
-                return gated
+        )
+        gated = await _handle_action_gate_result(
+            deps,
+            gate_result,
+            action=body.action,
+            payload=payload,
+            principal=principal,
+            tenant=tenant,
+            request_id=request_id,
+        )
+        if gated is not None:
+            return gated
 
         try:
             result = await deps.domain.invoke(

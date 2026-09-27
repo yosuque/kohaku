@@ -2426,6 +2426,109 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
+  it("rejects an action absent from the operation index even when allowedActions() (memoized separately, from an earlier snapshot) still has it -- fail-closed", async () => {
+    // allowedActions() (capability write-scope issuance) and operationIndex() (the action gate) are two
+    // independently memoized readers of the same DomainPort.listOperations() (see the doc comment at
+    // this fix's call site in server.ts). kohaku_compose triggers both, moments apart, so a domain whose
+    // listOperations() changes between those two specific calls freezes each memoizer on a different
+    // snapshot -- reproducing the "index and DomainPort momentarily disagree" case this fix guards.
+    let calls = 0;
+    const invocations: { op: string; args: JsonObject }[] = [];
+    const flakyDomain: DomainPort & { invocations: typeof invocations } = {
+      invocations,
+      async listOperations() {
+        calls += 1;
+        // Call 1 (allowedActions(), during compose's capability issuance): annotate is declared.
+        // Call 2 onward (operationIndex(), moments later in the same compose): annotate is gone.
+        return calls === 1 ? [{ name: "annotate", description: "d", tier: "confirm" }] : [];
+      },
+      async invoke(op, args) {
+        invocations.push({ op, args });
+        return { ok: true, op, args };
+      },
+    };
+    const { client } = await connectGoverned({ domain: flakyDomain });
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    const result = await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "annotate", payload: {}, capability, confirmed: true },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      { type: "text", text: "capability denied: action is not a declared DomainPort operation" },
+    ]);
+    // No structuredContent.error.code: this reuses the plain, unstructured "capability denied" tool
+    // error shape (the same one an insufficient write scope already returns), not a new error code.
+    expect(result.structuredContent).toBeUndefined();
+    expect(flakyDomain.invocations).toHaveLength(0);
+    await client.close();
+  });
+
+  it("records action.denied (fail-open) for an action absent from the operation index", async () => {
+    let calls = 0;
+    const flakyDomain: DomainPort = {
+      async listOperations() {
+        calls += 1;
+        return calls === 1 ? [{ name: "annotate", description: "d" }] : [];
+      },
+      async invoke(op, args) {
+        return { ok: true, op, args };
+      },
+    };
+    const denied: unknown[] = [];
+    const { client } = await connectGoverned({
+      domain: flakyDomain,
+      actionAuditRecorder: {
+        invoked: async () => {},
+        denied: async (args) => {
+          denied.push(args);
+        },
+        approvalRequested: async () => {},
+        approved: async () => {},
+      },
+    });
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "annotate", payload: {}, capability, confirmed: true },
+    });
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({
+      action: "annotate",
+      tier: "auto",
+      reason: "action is not a declared DomainPort operation",
+    });
+    await client.close();
+  });
+
+  it("rejects the A2UI inbound forwarding sentinel -- it must never be a real registered operation (F3)", async () => {
+    // "a2ui.forward" is host-a2ui's A2UI_FORWARD_ACTION (packages/host-a2ui/src/inbound/from-a2ui.ts):
+    // decision #60 requires it is never registered as a real DomainPort operation, so a governedDomain()
+    // that (correctly) never declares it must reject it -- here via the earlier allowedActions() check
+    // ("unknown action"), the sibling fail-closed check this same fix's doc comment cross-references.
+    const { client, domain } = await connectGoverned();
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    const result = await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "a2ui.forward", payload: {}, capability },
+    });
+    expect(result.isError).toBe(true);
+    expect(domain.invocations).toHaveLength(0);
+    await client.close();
+  });
+
   it("records action.approvalRequested / action.invoked via actionAuditRecorder (fail-open)", async () => {
     const invoked: unknown[] = [];
     const approvalRequested: unknown[] = [];

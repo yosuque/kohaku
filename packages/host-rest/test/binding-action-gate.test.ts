@@ -66,10 +66,47 @@ const NOTE_SCHEMA = {
 };
 
 describe("POST /binding/action: tier auto (default, and explicit)", () => {
-  it("an action absent from listOperations() is invoked ungated (backward compatible)", async () => {
-    const deps = baseDeps();
+  it("an action absent from listOperations() is rejected with 403 CAPABILITY_DENIED, without invoking the domain (fail-closed)", async () => {
+    const domain = domainWith();
+    const deps = baseDeps({ domain });
     const res = await postAction(deps, { action: "annotate", payload: { note: "hi" } });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("CAPABILITY_DENIED");
+    expect(body.error.message).toBe("action is not a declared DomainPort operation");
+    expect((domain as unknown as { invokeCalls: unknown[] }).invokeCalls).toHaveLength(0);
+  });
+
+  it("records action.denied (fail-open) for an action absent from listOperations()", async () => {
+    const domain = domainWith();
+    const denied = vi.fn(async (_args: Parameters<ActionAuditRecorder["denied"]>[0]) => {});
+    const deps = baseDeps({
+      domain,
+      actionAuditRecorder: {
+        invoked: async () => {},
+        denied,
+        approvalRequested: async () => {},
+        approved: async () => {},
+      },
+    });
+    await postAction(deps, { action: "annotate", payload: { note: "hi" } });
+    expect(denied).toHaveBeenCalledTimes(1);
+    expect(denied.mock.calls[0]![0]).toMatchObject({
+      action: "annotate",
+      tier: "auto",
+      reason: "action is not a declared DomainPort operation",
+    });
+  });
+
+  it("rejects the A2UI inbound forwarding sentinel the same way -- it must never be a real registered operation (F3)", async () => {
+    // "a2ui.forward" is host-a2ui's A2UI_FORWARD_ACTION (packages/host-a2ui/src/inbound/from-a2ui.ts):
+    // decision #60 requires it is never registered as a real DomainPort operation, so it must always fall
+    // into this same undeclared-action path regardless of which DomainPort a host wires.
+    const domain = domainWith();
+    const deps = baseDeps({ domain });
+    const res = await postAction(deps, { action: "a2ui.forward", payload: {} });
+    expect(res.status).toBe(403);
+    expect((domain as unknown as { invokeCalls: unknown[] }).invokeCalls).toHaveLength(0);
   });
 
   it("an action present with tier auto (or omitted) is invoked once params validate", async () => {

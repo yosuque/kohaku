@@ -7,7 +7,13 @@ import {
   parseInvokableRef,
   verifyCapabilitySafely,
 } from "@kohaku-ui/host-core";
-import type { JsonObject, Principal, VerifyRequest, VerifyResult } from "@kohaku-ui/spec-core";
+import {
+  actionPayloadHash,
+  type JsonObject,
+  type Principal,
+  type VerifyRequest,
+  type VerifyResult,
+} from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { KohakuHostDeps } from "../types.js";
@@ -31,6 +37,13 @@ import {
  * fixed message; the original error still reaches the observability hook (onError) via reportHostError.
  */
 const REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable";
+
+/**
+ * An action name absent from the DomainPort's own operation index is not a declared operation at all --
+ * it must never reach `domain.invoke` (fail-closed), on the same footing as a capability that lacks the
+ * needed write scope (this reuses that exact response shape: 403 CAPABILITY_DENIED, no new error code).
+ */
+const UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation";
 
 /**
  * Calls `authz.verify` via host-core's `verifyCapabilitySafely` (shared with the MCP profile), and maps its
@@ -154,32 +167,46 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     const tenant = await resolveTenant(c, deps);
 
     // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
-    // domain.invoke ever runs. An action absent from the DomainPort's own operation index (should not
-    // normally happen once capability issuance has already scoped write access to it -- see
-    // collectCapabilityScopes / createOperationIndex) is let through ungated, matching the pre-existing
-    // (pre-F2) behavior for a host whose index and DomainPort momentarily disagree.
+    // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
+    // because the index and DomainPort momentarily disagree, or because the name was never a real
+    // operation to begin with -- is rejected here rather than let through ungated (fail-closed; ACT-PRM-001).
     const index = await operationIndex(deps);
     const entry = index.get(body.action);
-    if (entry != null) {
-      const gate = actionGateFor(deps);
-      const gateResult = await gate.check({
-        descriptor: entry.descriptor,
-        paramsSchema: entry.paramsSchema,
-        payload,
-        confirmed: body.confirmed,
-        approval: body.approval,
-        requesterId: principal.id,
-        tenant,
-      });
-      const gated = await handleActionGateResult(deps, c, gateResult, {
-        action: body.action,
-        payload,
-        principal,
-        tenant,
-        requestId,
-      });
-      if (gated != null) return gated;
+    if (entry == null) {
+      await failOpen(
+        async () => {
+          await deps.actionAuditRecorder?.denied({
+            action: body.action,
+            payloadHash: await actionPayloadHash(payload),
+            tier: "auto",
+            reason: UNDECLARED_ACTION_MESSAGE,
+            principal,
+            ...(tenant != null ? { tenant } : {}),
+            correlationId: requestId,
+          });
+        },
+        (e) => reportHostError(deps, "binding/action.audit", requestId, e),
+      );
+      return c.json(errorBody("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE), 403);
     }
+    const gate = actionGateFor(deps);
+    const gateResult = await gate.check({
+      descriptor: entry.descriptor,
+      paramsSchema: entry.paramsSchema,
+      payload,
+      confirmed: body.confirmed,
+      approval: body.approval,
+      requesterId: principal.id,
+      tenant,
+    });
+    const gated = await handleActionGateResult(deps, c, gateResult, {
+      action: body.action,
+      payload,
+      principal,
+      tenant,
+      requestId,
+    });
+    if (gated != null) return gated;
 
     let result: unknown;
     try {

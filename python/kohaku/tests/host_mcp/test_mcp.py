@@ -1340,6 +1340,108 @@ class TestGovernedActions:
 
         asyncio.run(run())
 
+    class FlakyDomain:
+        """listOperations() declares "annotate" on its 1st call (allowed_actions(), during compose's
+        capability issuance) and nothing from the 2nd call onward (operation_index(), moments later in the
+        same compose) -- reproducing the "index and DomainPort momentarily disagree" case
+        ACT-PRM-001's undeclared-action fail-closed check guards against. Port of TS's flakyDomain."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.invocations: list[tuple[str, Any]] = []
+
+        async def list_operations(self) -> list[Any]:
+            self.calls += 1
+            if self.calls == 1:
+                return [OperationDescriptor(name="annotate", description="d", tier="confirm")]
+            return []
+
+        async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+            self.invocations.append((op, args))
+            return {"ok": True, "op": op, "args": args}
+
+    def test_rejects_undeclared_action_fail_closed(self, tmp_path: Path) -> None:
+        """An action absent from the operation index is rejected even when allowed_actions() (memoized
+        separately, from an earlier snapshot) still has it -- fail-closed."""
+
+        async def run() -> None:
+            domain = self.FlakyDomain()
+            deps = _deps(
+                tmp_path, compose=make_compose_ctx(tmp_path, builder=governed_spec_builder), domain=domain
+            )
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                capability = _capability_of(composed)
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": {}, "capability": capability, "confirmed": True},
+                )
+                assert result.is_error is True
+                assert (
+                    result.content[0].text  # type: ignore[union-attr]
+                    == "capability denied: action is not a declared DomainPort operation"
+                )
+                assert result.structured_content is None
+                assert domain.invocations == []
+
+        asyncio.run(run())
+
+    def test_records_action_denied_for_undeclared_action(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            domain = self.FlakyDomain()
+            denied: list[Any] = []
+
+            class Recorder:
+                async def invoked(self, **kwargs: Any) -> None:
+                    pass
+
+                async def denied(self, **kwargs: Any) -> None:
+                    denied.append(kwargs)
+
+                async def approval_requested(self, **kwargs: Any) -> None:
+                    pass
+
+                async def approved(self, **kwargs: Any) -> None:
+                    pass
+
+            deps = _deps(
+                tmp_path,
+                compose=make_compose_ctx(tmp_path, builder=governed_spec_builder),
+                domain=domain,
+                action_audit_recorder=Recorder(),
+            )
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                capability = _capability_of(composed)
+                await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": {}, "capability": capability, "confirmed": True},
+                )
+                assert len(denied) == 1
+                assert denied[0]["action"] == "annotate"
+                assert denied[0]["tier"] == "auto"
+                assert denied[0]["reason"] == "action is not a declared DomainPort operation"
+
+        asyncio.run(run())
+
+    def test_rejects_a2ui_forward_action(self, tmp_path: Path) -> None:
+        """"a2ui.forward" (host_a2ui's A2UI_FORWARD_ACTION) must never be a real registered operation
+        (decision #60, F3) -- a GovernedDomain that never declares it rejects it via the earlier
+        allowed_actions() check ("unknown action")."""
+
+        async def run() -> None:
+            deps, domain = self._governed_deps(tmp_path)
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                capability = _capability_of(composed)
+                result = await client.call_tool(
+                    "kohaku_action", {"action": "a2ui.forward", "payload": {}, "capability": capability}
+                )
+                assert result.is_error is True
+                assert domain.invocations == []
+
+        asyncio.run(run())
+
     def test_action_audit_recorder_records_fail_open(self, tmp_path: Path) -> None:
         """Records action.approvalRequested / action.invoked via action_audit_recorder (fail-open)."""
 

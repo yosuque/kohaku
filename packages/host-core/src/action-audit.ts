@@ -24,13 +24,16 @@ export interface ActionAuditRecorder {
     correlationId?: string;
   }): Promise<void>;
   /**
-   * Records a denied invoke attempt (the `ActionGate` returned `denied`: an `"approve"`-tier token was
-   * presented but did not verify, or no `ApprovalPort` is configured at all).
+   * Records a denied invoke attempt: either the `ActionGate` returned `denied` (an `"approve"`-tier
+   * token was presented but did not verify, or no `ApprovalPort` is configured at all -- `tier` is
+   * `"confirm"` or `"approve"` for these), or the action name was rejected before the gate ever ran
+   * because it is not one of the `DomainPort`'s own declared operations (`tier` is `"auto"` here -- no
+   * governed-action tier applies to a name that was never a real operation to begin with).
    */
   denied(args: {
     action: string;
     payloadHash: string;
-    tier: "confirm" | "approve";
+    tier: ActionTier;
     reason: string;
     principal: Principal;
     tenant?: string;

@@ -39,14 +39,17 @@ class ActionAuditRecorder(Protocol):
         *,
         action: str,
         payload_hash: str,
-        tier: Literal["confirm", "approve"],
+        tier: ActionTier,
         reason: str,
         principal: Principal,
         tenant: str | None = None,
         correlation_id: str | None = None,
     ) -> None:
-        """Records a denied invoke attempt (the ActionGate returned "denied": an "approve"-tier token was
-        presented but did not verify, or no ApprovalPort is configured at all)."""
+        """Records a denied invoke attempt: either the ActionGate returned "denied" (an "approve"-tier
+        token was presented but did not verify, or no ApprovalPort is configured at all -- tier is
+        "confirm" or "approve" for these), or the action name was rejected before the gate ever ran
+        because it is not one of the DomainPort's own declared operations (tier is "auto" here -- no
+        governed-action tier applies to a name that was never a real operation to begin with)."""
         ...
 
     async def approval_requested(

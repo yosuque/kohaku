@@ -70,12 +70,27 @@ def _post_action(harness: Any, body: dict[str, Any], token: str) -> Any:
 
 
 class TestTierAuto:
-    def test_absent_from_list_operations_is_invoked_ungated(self, tmp_path: Path) -> None:
+    def test_absent_from_list_operations_is_rejected_403_fail_closed(self, tmp_path: Path) -> None:
         domain = _EchoDomain()
         harness = build_harness(tmp_path, domain=domain)
         token = harness.issue([Scope(kind="write", ref="annotate")])
         res = _post_action(harness, {"action": "annotate", "payload": {"note": "hi"}}, token)
-        assert res.status_code == 200
+        assert res.status_code == 403
+        body = res.json()
+        assert body["error"]["code"] == "CAPABILITY_DENIED"
+        assert body["error"]["message"] == "action is not a declared DomainPort operation"
+        assert domain.invoke_calls == []
+
+    def test_absent_from_list_operations_records_action_denied(self, tmp_path: Path) -> None:
+        domain = _EchoDomain()
+        recorder = _RecordingAuditRecorder()
+        harness = build_harness(tmp_path, domain=domain, action_audit_recorder=recorder)
+        token = harness.issue([Scope(kind="write", ref="annotate")])
+        _post_action(harness, {"action": "annotate", "payload": {"note": "hi"}}, token)
+        assert len(recorder.denied_calls) == 1
+        assert recorder.denied_calls[0]["action"] == "annotate"
+        assert recorder.denied_calls[0]["tier"] == "auto"
+        assert recorder.denied_calls[0]["reason"] == "action is not a declared DomainPort operation"
 
     def test_present_with_tier_auto_is_invoked_once_params_validate(self, tmp_path: Path) -> None:
         domain = _EchoDomain(

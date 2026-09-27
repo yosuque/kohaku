@@ -247,12 +247,14 @@ export interface ActionInvokedPayload {
   correlationId?: string;
 }
 
-/** Payload of `action.denied` (design.md #63): an `"approve"`-tier invoke whose presented token did not
- * verify (or no `ApprovalPort` was configured at all). */
+/** Payload of `action.denied` (design.md #62/#63): either an `"approve"`-tier invoke whose presented
+ * token did not verify (or no `ApprovalPort` was configured at all; `tier` is `"confirm"` or
+ * `"approve"`), or an invoke whose action name is not one of the `DomainPort`'s own declared operations,
+ * rejected before any governed-action gate ever ran (`tier` is `"auto"`). */
 export interface ActionDeniedPayload {
   action: string;
   payloadHash: string;
-  tier: "confirm" | "approve";
+  tier: "auto" | "confirm" | "approve";
   reason: string;
   correlationId?: string;
 }

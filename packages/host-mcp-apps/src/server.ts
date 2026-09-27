@@ -2,6 +2,7 @@ import type { ComposeResult, TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
   type ActionParamIssue,
+  actionPayloadHash,
   canonicalStringify,
   type JsonObject,
   JsonObjectSchema,
@@ -782,6 +783,14 @@ function registerEventTool(ctx: ToolContext): void {
 const MAX_ACTION_PAYLOAD_BYTES = 64 * 1024;
 
 /**
+ * An action name absent from the DomainPort's own operation index is not a declared operation at all --
+ * it must never reach `domain.invoke` (fail-closed), on the same footing as a capability that lacks the
+ * needed write scope (this reuses that exact response shape: a plain tool error, no structured error
+ * code -- symmetric with REST's identical reuse of 403 CAPABILITY_DENIED).
+ */
+const UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation";
+
+/**
  * Registers `${prefix}_action` (app-only): direct write path (presentForm submit / action.button).
  * Symmetric with the REST surface's /binding/action. Callable only from the iframe (widget) (visibility ["app"]).
  * On hosts where ext-apps' app-originated tools/call is broken it may fail, but that failure surfaces in
@@ -947,30 +956,44 @@ function registerActionTool(ctx: ToolContext): void {
         const resolvedPrincipal = verdict.principal ?? principal;
 
         // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
-        // domain.invoke ever runs. An action absent from the DomainPort's own operation index (should not
-        // normally happen once `allowed.has(action)` above already passed) is let through ungated,
-        // matching the pre-existing (pre-F2) behavior for a host whose index and DomainPort momentarily
-        // disagree.
+        // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
+        // because the index and DomainPort momentarily disagree, or (should not normally happen once
+        // `allowed.has(action)` above already passed) because the name was never a real operation to
+        // begin with -- is rejected here rather than let through ungated (fail-closed; ACT-PRM-001).
         const index = await ctx.operationIndex();
         const entry = index.get(action);
-        if (entry != null) {
-          const gateResult = await ctx.actionGate.check({
-            descriptor: entry.descriptor,
-            paramsSchema: entry.paramsSchema,
-            payload: payload as JsonObject,
-            confirmed,
-            approval,
-            requesterId: resolvedPrincipal.id,
-          });
-          const gated = await handleActionGateResult(ctx.deps, gateResult, {
-            action,
-            payload: payload as JsonObject,
-            principal: resolvedPrincipal,
-            endpoint: `${ctx.prefix}_action`,
-            correlationId: requestId,
-          });
-          if (gated != null) return gated;
+        if (entry == null) {
+          await hostCore.failOpen(
+            async () => {
+              await ctx.deps.actionAuditRecorder?.denied({
+                action,
+                payloadHash: await actionPayloadHash(payload as JsonObject),
+                tier: "auto",
+                reason: UNDECLARED_ACTION_MESSAGE,
+                principal: resolvedPrincipal,
+                correlationId: requestId,
+              });
+            },
+            (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
+          );
+          return toolError(`capability denied: ${UNDECLARED_ACTION_MESSAGE}`);
         }
+        const gateResult = await ctx.actionGate.check({
+          descriptor: entry.descriptor,
+          paramsSchema: entry.paramsSchema,
+          payload: payload as JsonObject,
+          confirmed,
+          approval,
+          requesterId: resolvedPrincipal.id,
+        });
+        const gated = await handleActionGateResult(ctx.deps, gateResult, {
+          action,
+          payload: payload as JsonObject,
+          principal: resolvedPrincipal,
+          endpoint: `${ctx.prefix}_action`,
+          correlationId: requestId,
+        });
+        if (gated != null) return gated;
 
         const result = await ctx.deps.domain.invoke(action, payload as JsonObject, {
           principal: resolvedPrincipal,

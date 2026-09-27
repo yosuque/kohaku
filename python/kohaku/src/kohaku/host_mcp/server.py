@@ -66,6 +66,7 @@ from kohaku.spec import (
     TabularData,
     UISpec,
     VerifyRequest,
+    action_payload_hash,
     canonical_stringify,
     enumerate_bind_variants,
 )
@@ -149,6 +150,11 @@ def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 
 # _tool_error(...) call inside the tool body already produced). Port of TS host-mcp-apps'
 # TOOL_INTERNAL_ERROR_MESSAGE (server.ts).
 _TOOL_INTERNAL_ERROR_MESSAGE = "internal error; see the observability hook (on_error) for details"
+
+# An action name absent from the DomainPort's own operation index is not a declared operation at all -- it
+# must never reach domain.invoke (fail-closed), on the same footing as a capability that lacks the needed
+# write scope (this reuses that exact response shape: a plain tool error, no structured error code).
+_UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation"
 
 # Shared optional `locale` input for every UI-producing tool (compose / render_snapshot / intent
 # tools / event). The calling LLM sets it to the user's language so the composed UI (fixed-spec
@@ -1046,35 +1052,54 @@ def attach_kohaku_to_mcp_server(
             resolved_principal = verdict.principal or principal
             # Governed actions (design.md #62/#63): validate params and enforce the action's tier before
             # domain.invoke ever runs, symmetric with the REST surface's /binding/action. An action absent
-            # from the DomainPort's own operation index (should not normally happen once `action in allowed`
-            # above already passed) is let through ungated, matching the pre-existing (pre-F2) behavior for a
-            # host whose index and DomainPort momentarily disagree. Unlike `_allowed_actions()` above, a
+            # from the DomainPort's own operation index -- whether because the index and DomainPort
+            # momentarily disagree, or (should not normally happen once `action in allowed` above already
+            # passed) because the name was never a real operation to begin with -- is rejected here rather
+            # than let through ungated (fail-closed; ACT-PRM-001). Unlike `_allowed_actions()` above, a
             # rejected `_operation_index()` here is NOT swallowed (an invalid paramsSchema is a configuration
             # bug that should surface loudly for a governed action) -- it propagates to `_safe_tool`'s own
             # except branch, symmetric with the REST/TS profiles.
             index = await _operation_index()
             entry = index.get(action)
-            if entry is not None:
-                gate_result = await _action_gate.check(
-                    ActionGateRequest(
-                        descriptor=entry.descriptor,
-                        params_schema=entry.params_schema,
-                        payload=payload,
-                        confirmed=confirmed,
-                        approval=approval,
-                        requester_id=resolved_principal.id,
-                        tenant=None,
+            if entry is None:
+
+                async def _record_undeclared() -> None:
+                    if deps.action_audit_recorder is None:
+                        return
+                    await deps.action_audit_recorder.denied(
+                        action=action,
+                        payload_hash=action_payload_hash(payload),
+                        tier="auto",
+                        reason=_UNDECLARED_ACTION_MESSAGE,
+                        principal=resolved_principal,
+                        correlation_id=_correlation_id_of(ctx),
                     )
+
+                await _host_core_fail_open(
+                    _record_undeclared,
+                    lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
                 )
-                gated = await _handle_action_gate_result(
-                    gate_result,
-                    action=action,
+                return _tool_error(f"capability denied: {_UNDECLARED_ACTION_MESSAGE}")
+            gate_result = await _action_gate.check(
+                ActionGateRequest(
+                    descriptor=entry.descriptor,
+                    params_schema=entry.params_schema,
                     payload=payload,
-                    principal=resolved_principal,
-                    correlation_id=_correlation_id_of(ctx),
+                    confirmed=confirmed,
+                    approval=approval,
+                    requester_id=resolved_principal.id,
+                    tenant=None,
                 )
-                if gated is not None:
-                    return gated
+            )
+            gated = await _handle_action_gate_result(
+                gate_result,
+                action=action,
+                payload=payload,
+                principal=resolved_principal,
+                correlation_id=_correlation_id_of(ctx),
+            )
+            if gated is not None:
+                return gated
             result = await deps.domain.invoke(
                 action,
                 payload,

@@ -168,7 +168,7 @@ class ActionAuditRecorder:
         *,
         action: str,
         payload_hash: str,
-        tier: Literal["confirm", "approve"],
+        tier: Literal["auto", "confirm", "approve"],
         reason: str,
         principal: Principal,
         tenant: str | None = None,

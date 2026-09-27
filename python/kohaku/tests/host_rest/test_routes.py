@@ -203,11 +203,14 @@ def test_binding_action_success_with_effects(tmp_path: Path) -> None:
             refVersions={"query://sales/summary": "v2"},
         )
 
+    # "annotate" (not "sales.update"): the default FakeDomain declares it via list_operations(), so it is
+    # not rejected by the undeclared-action fail-closed check (design.md #62/#63) -- unrelated to what
+    # this test itself checks (response shape when actionEffects is wired).
     harness = build_harness(tmp_path, action_effects=effects)
-    token = harness.issue([Scope(kind="write", ref="sales.update")])
+    token = harness.issue([Scope(kind="write", ref="annotate")])
     res = harness.client.post(
         _url("/binding/action"),
-        json={"action": "sales.update", "payload": {"target": 100}},
+        json={"action": "annotate", "payload": {"target": 100}},
         headers={"authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
@@ -227,11 +230,12 @@ def test_binding_action_effects_failure_still_succeeds(tmp_path: Path) -> None:
     def on_error(info: HostErrorInfo) -> None:
         captured.append(info)
 
+    # "annotate" (not "sales.update"): see the sibling test above for why.
     harness = build_harness(tmp_path, action_effects=effects, on_error=on_error)
-    token = harness.issue([Scope(kind="write", ref="sales.update")])
+    token = harness.issue([Scope(kind="write", ref="annotate")])
     res = harness.client.post(
         _url("/binding/action"),
-        json={"action": "sales.update", "payload": {"target": 100}},
+        json={"action": "annotate", "payload": {"target": 100}},
         headers={"authorization": f"Bearer {token}"},
     )
     # The write is already committed, so 200. The failed effects are omitted, leaving the backward-compatible {result} only.
