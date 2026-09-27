@@ -25,6 +25,7 @@ from .capability import (
     WriteScopeDroppedError,
     issue_capability_for_spec,
 )
+from .daily_token_ledger import DailyTokenLedger, create_daily_token_ledger
 from .errors import (
     ConsoleErrorReporter,
     ConsoleErrorReporterOptions,
@@ -74,6 +75,7 @@ __all__ = [
     "ComposeFixationContext",
     "ConsoleErrorReporter",
     "ConsoleErrorReporterOptions",
+    "DailyTokenLedger",
     "FixationDeliveryHost",
     "FixationSelfHealApi",
     "FixationSelfHealKind",
@@ -97,6 +99,7 @@ __all__ = [
     "compose_with_fixation",
     "create_allowed_actions",
     "create_console_error_reporter",
+    "create_daily_token_ledger",
     "create_memory_rate_limit_store",
     "create_rate_limiter",
     "fail_open",
