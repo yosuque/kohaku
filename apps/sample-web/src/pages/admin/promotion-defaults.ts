@@ -1,4 +1,5 @@
 import type { PromotionDefaults } from "@kohaku-ui/admin-react";
+import { salesCalendarHeatmap } from "@kohaku-ui-sample/parts";
 
 /**
  * Sales-sample knowledge for the promotion approval form (kept out of the published console package):
@@ -27,8 +28,8 @@ export const salesPromotionDefaults: PromotionDefaults = {
     // Detect the heatmap request in either language (the demo suggestion is English by default, but a JA session may send Japanese).
     const isHeatmap = /ヒートマップ|heatmap/i.test(candidate.request ?? "");
     return {
-      componentType: isHeatmap ? "sales.calendarHeatmap" : "sales.customViz1",
-      version: "1.0.0",
+      componentType: isHeatmap ? salesCalendarHeatmap.type : "sales.customViz1",
+      version: salesCalendarHeatmap.version,
       intentName: isHeatmap ? "sales.calendar_heatmap" : "sales.custom_viz_1",
       description: isHeatmap
         ? "Display sales as a monthly calendar heatmap"

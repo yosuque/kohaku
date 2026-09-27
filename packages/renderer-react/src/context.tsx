@@ -1,6 +1,8 @@
 import type { BindingClient } from "@kohaku-ui/data-binding";
+import type { ComponentDefinition } from "@kohaku-ui/registry";
 import {
   DEFAULT_LOCALE,
+  isDevEnvironment,
   PARTS_STATE_CSS,
   resolveEmit,
   resolvePayloadTemplate,
@@ -12,6 +14,7 @@ import {
 } from "@kohaku-ui/renderer-core";
 import type { ComponentNode, JsonObject, KnownThemeTokens, ThemeTokens, UISpec } from "@kohaku-ui/spec-core";
 import { type ComponentType, createContext, type ReactNode, useContext, useMemo, useRef } from "react";
+import type { z } from "zod";
 import {
   createDataInvalidationBus,
   type DataInvalidationBus,
@@ -35,6 +38,70 @@ export interface ImplProps {
 
 export type ComponentImpl = ComponentType<ImplProps>;
 
+/**
+ * Props received by a typed component implementation built via `implement` (design.md #68): `props` is the
+ * node's `props` parsed against the definition's `propsSchema` (no `node.props["x"] as T` cast at the call
+ * site), while `node` stays available for anything the schema doesn't cover (id, data ref, etc.).
+ */
+export interface TypedImplProps<P> {
+  node: ComponentNode;
+  props: P;
+  children?: ReactNode;
+}
+
+export type TypedComponentImpl<P> = ComponentType<TypedImplProps<P>>;
+
+/** Registration triple returned by `implement`, consumed by `ImplRegistry.use`. */
+export interface ImplEntry {
+  type: string;
+  version: string;
+  component: ComponentImpl;
+}
+
+/**
+ * Wraps a typed component (`TypedComponentImpl`) into a plain `ComponentImpl` bound to `def`'s own type and
+ * version, so a product-specific part's `{type, version, propsSchema}` lives in exactly one place (the
+ * `ComponentDefinition`) instead of being re-typed as string literals at the registration call site
+ * (design.md #68). Pass the result to `ImplRegistry.use`.
+ *
+ * `def.propsSchema.safeParse` always runs, in every environment — not just outside a `NODE_ENV=production`
+ * build — because it is also what materializes a `.default()`-ed prop (or any other Zod transform) the Spec
+ * omits; skipping it in production would silently make `Component` see `undefined` for a prop its type says
+ * is always present. On success, `Component` receives `parsed.data`; on failure it receives the raw
+ * (unvalidated) `node.props` instead, matching the renderer's general fail-open policy (a malformed prop
+ * should degrade the part's own display, not take down the surface). Only the **diagnostic** — a
+ * `console.warn` on a mismatch — is gated by environment: by default it fires outside a `NODE_ENV=production`
+ * build (see `isDevEnvironment`); pass `{ validate }` to force it on or off regardless of environment.
+ */
+export function implement<P extends z.ZodObject>(
+  def: ComponentDefinition<P>,
+  Component: TypedComponentImpl<z.infer<P>>,
+  options?: { validate?: boolean },
+): ImplEntry {
+  const shouldWarn = options?.validate ?? isDevEnvironment();
+  const Wrapped: ComponentImpl = ({ node, children }: ImplProps) => {
+    const parsed = def.propsSchema.safeParse(node.props);
+    let props: z.infer<P>;
+    if (parsed.success) {
+      props = parsed.data as z.infer<P>;
+    } else {
+      props = node.props as z.infer<P>;
+      if (shouldWarn) {
+        console.warn(
+          `[kohaku] component "${def.type}" (node ${node.id}) received props that don't match its schema: ${parsed.error.message}`,
+        );
+      }
+    }
+    return (
+      <Component node={node} props={props}>
+        {children}
+      </Component>
+    );
+  };
+  Wrapped.displayName = `Implement(${def.type})`;
+  return { type: def.type, version: def.version, component: Wrapped };
+}
+
 /** Registry of type → React implementation (the range the surface has implemented = the source of SurfaceCapabilities) */
 export class ImplRegistry {
   private readonly impls = new Map<string, { version: string; component: ComponentImpl }>();
@@ -42,6 +109,11 @@ export class ImplRegistry {
   register(type: string, version: string, component: ComponentImpl): this {
     this.impls.set(type, { version, component });
     return this;
+  }
+
+  /** Sugar for `register(entry.type, entry.version, entry.component)` — registers the result of `implement`. */
+  use(entry: ImplEntry): this {
+    return this.register(entry.type, entry.version, entry.component);
   }
 
   get(type: string): ComponentImpl | undefined {

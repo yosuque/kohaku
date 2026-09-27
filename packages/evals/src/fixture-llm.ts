@@ -9,12 +9,13 @@ import {
   type LlmPort,
   type LlmUsage,
 } from "@kohaku-ui/llm";
-import { sha256Hex } from "@kohaku-ui/spec-core";
+import { objectFixtureKey, textFixtureKey } from "./fixture-key.js";
 
 const USAGE: LlmUsage = { inputTokens: 0, outputTokens: 0 };
 
 /**
- * A record/replay LlmPort. The key is sha256(prompt + system + schemaName).
+ * A record/replay LlmPort. The key is sha256(prompt + system + schemaName) — see fixture-key.ts, shared
+ * with ReplayLlm (`./replay` subpath) so a fixture recorded here replays there under the identical key.
  * - replay (default): responds deterministically from fixtures (CI runs on this)
  * - record: delegates to a real LLM and writes the response back to a fixture (pass `{ record: true, live: <LlmPort> }` to the constructor; remove record when replaying)
  */
@@ -30,10 +31,6 @@ export class FixtureLlm implements LlmPort {
     if (opts.record === true && opts.live == null) {
       throw new LlmError("CONFIG", "FixtureLlm record mode requires a live LlmPort");
     }
-  }
-
-  private async keyOf(parts: (string | undefined)[]): Promise<string> {
-    return (await sha256Hex(parts.map((p) => p ?? "").join("\u0000"))).slice(0, 24);
   }
 
   private read(key: string): unknown | undefined {
@@ -56,7 +53,7 @@ export class FixtureLlm implements LlmPort {
   }
 
   async generateObject<T>(req: GenerateObjectRequest<T>): Promise<GenerateObjectResult<T>> {
-    const key = await this.keyOf(["object", req.schemaName, req.system, req.prompt]);
+    const key = await objectFixtureKey(req);
     const recorded = this.read(key);
     if (recorded !== undefined) {
       const object = (recorded as { object: T }).object;
@@ -87,7 +84,7 @@ export class FixtureLlm implements LlmPort {
   }
 
   async generateText(req: GenerateTextRequest): Promise<{ text: string; usage: LlmUsage }> {
-    const key = await this.keyOf(["text", req.system, req.prompt]);
+    const key = await textFixtureKey(req);
     const recorded = this.read(key);
     if (recorded !== undefined) {
       return { text: (recorded as { text: string }).text, usage: USAGE };

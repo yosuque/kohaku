@@ -26,9 +26,21 @@ older line receiving security fixes.
 
 **Out of scope:**
 
-`apps/sample-*` and `python/examples/*` are demonstration sample
-implementations, not production-hardened code, and are **out of scope** for
-vulnerability reports. In particular:
+`apps/sample-*`, `apps/playground`, and `python/examples/*` are demonstration
+sample implementations, not production-hardened code, and are **out of
+scope** for vulnerability reports. In particular:
+
+- `apps/playground` is a static site with **no server component at all**: it
+  runs sample-api's own host entirely inside the visitor's browser tab (a
+  fetch shim routes same-origin `/api/*` calls to it directly), backed by an
+  in-memory `StoragePort` that never persists past a page reload and a
+  replay-only LLM (`@kohaku-ui/evals/replay`'s `ReplayLlm`) that answers from
+  fixtures bundled into the published site — it never calls a real model and
+  never asks for or transmits a BYO API key. Its `AuthzPort`
+  (`apps/playground/src/host/authz.ts`, WebCrypto-backed) signs with a fixed
+  secret literally present in the published source; this is intentional, not
+  an oversight — the token it signs never leaves the browser tab that issued
+  it, so there is no confidentiality property for that secret to uphold.
 
 - The MCP Streamable HTTP entry point (`start:http` / `sales_api.mcp_http`)
   is **intentionally unauthenticated** — it exists to make the demo easy to

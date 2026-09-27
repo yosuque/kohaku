@@ -2,10 +2,19 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    projects: ["packages/*", "apps/*", "cli", "spec"],
     // Do not put passWithNoTests here (across all projects): making it global would hide a total
     // loss of test files (e.g. a glob mistake). Place passWithNoTests via a local vitest.config.ts
     // only in workspaces that have no tests (see apps/sample-wc / apps/sample-web).
+    //
+    // The last entry, apps/playground/vitest.drift.config.ts, is listed explicitly (a file path, not a
+    // directory glob) because Vitest does not flatten a `projects` array nested inside a config that was
+    // itself discovered via another entry's glob (apps/playground/vitest.config.ts already matches
+    // "apps/*" as the "playground" project) — this is the only way to register a second, independently
+    // selectable project ("playground-drift") for the same package. It is deliberately excluded from the
+    // package.json "test" script's own invocation (`--project "!playground-drift"`), since it replays real
+    // recorded fixtures and is meant to be run on purpose (`pnpm vitest run --project playground-drift`),
+    // not on every `pnpm test` — see that project's own config file for why.
+    projects: ["packages/*", "apps/*", "cli", "spec", "apps/playground/vitest.drift.config.ts"],
     coverage: {
       // The L2 guest shim never runs in this realm: it is emitted as a source string
       // (`buildWorkerShimJs()`) and evaluated inside a dedicated Worker in the browser, or inside a

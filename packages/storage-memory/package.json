@@ -4,7 +4,8 @@
   "description": "In-memory and file-backed StoragePort implementations for kohaku: the Spec cache, lineage, promotion and fixation stores for a single process (the Zero-Port default and the reference for production adapters).",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./memory": "./src/memory/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -52,6 +53,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
+      },
+      "./memory": {
+        "types": "./dist/memory/index.d.ts",
+        "default": "./dist/memory/index.js"
       },
       "./package.json": "./package.json"
     }

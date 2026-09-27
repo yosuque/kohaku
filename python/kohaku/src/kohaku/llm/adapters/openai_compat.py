@@ -387,7 +387,10 @@ def _build_httpx_stream_transport(config: LlmConfig) -> StreamingChatTransport:
                                 continue
                             try:
                                 event = json.loads(payload)
-                            except json.JSONDecodeError:
+                            except (json.JSONDecodeError, RecursionError):
+                                # RecursionError: CPython's json decoder recurses per nesting level, so a
+                                # pathologically deep SSE chunk raises this instead of JSONDecodeError -- skip
+                                # it the same way (see kohaku.llm.adapters._base's extract_json comment).
                                 continue
                             choices = event.get("choices") or []
                             delta = ""
