@@ -193,9 +193,20 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 ### デモ 5 — 書き込みループ(小ループ = 表だけ in-place 更新)
 
 1. Dashboard: 左パネルで **「Records」ビュー**を選ぶ → 表の上に **「Add a note」ボタン**が出る → 押すと確認ダイアログ(`overlay.dialog`)が開き、中に注記フォームが出る(開閉は `state.set` + `visibleWhen` の宣言だけ)
-2. 注記(例「Check North America's growth」)を入力 → **「Save」**。DevTools → Network に `/binding/action`(`Authorization: Bearer …`、ボディ `{action:"annotate", payload:{note, refs}}`)が 1 本
+2. 注記(例「Check North America's growth」)を入力 → **「Save」**。`annotate` は `"confirm"` tier の統制された Action(design.md #62/#63)なので、まずネイティブの `window.confirm` プロンプトが出る(renderer-react の既定 `confirm` フック — 下の「統制された Action: tier」を参照)。承諾すると `/binding/action`(`Authorization: Bearer …`、ボディ `{action:"annotate", confirmed:true, payload:{note, refs}}`)が 1 本送られる
 3. **Spec は差し替わらず**、下の表だけが `/binding/resolve` を新しいデータ版で叩き直す(バッジのデータ版が進む)。ページ上部に完了バナー
 4. 書き込みは部品 → API 直結で、**LLM のコンテキストには一切流れません**(生成する LLM は「配管」、書き込むデータは「水」)。compose が返す capability が read($ref)だけでなく宣言された write(`annotate`)も覆うので、追加のトークン発行なしで発火します
+5. 同じビューには **「Publish」ボタン**もあり、`"approve"` tier の action(`publish`)に配線されている。このデモは承認者向け UI をあえて持たない(この機能のスコープ外)ため、押してもクライアント側では書き込みがゲートされたまま(`preflightAction` の `"awaitingApproval"` フェーズ。既定の `requestApproval` フックは配線されていない — 下記参照)で見た目の変化は無い。`"approve"` tier の書き込みが実際に束縛トークンを要求することのエンドツーエンドの証明は `apps/sample-api/test/api.e2e.test.ts` にあり、別プリンシパルとして `POST /approvals` を呼び、得たトークンを `POST /binding/action` に対して再送している
+
+#### 統制された Action: tier(`"auto"` / `"confirm"` / `"approve"`)
+
+`DomainPort` operation は `tier` と `paramsSchema` を宣言できる(design.md #62/#63/#64;SPEC §5 の ACT-PRM-001/ACT-APR-001/ACT-CNF-001)。`paramsSchema` に反する payload は tier のチェックより前に拒否される(`422 ACTION_PARAMS_INVALID`。`error.issues` を伴う)。その上で:
+
+- **`"auto"`**(既定。`tier` 省略と同義): この機能が存在する前と同様に即座に実行される。
+- **`"confirm"`**: 同一プリンシパルが単独で満たせる誤操作防止のゲート。同一リクエストの body に `confirmed: true` を伴わない場合は `403 APPROVAL_REQUIRED` で拒否される。`renderer-react` の `useInvokeAction` は `globalThis.confirm` を使う既定の `confirm` フックを同梱するが、`renderer-wc` と `mcp-renderer` には React 以外の共通デフォルトが無いため、プロダクト側でフック(`SurfaceContext.confirm` / `RenderRuntime.confirm`)を配線する必要がある。
+- **`"approve"`**: 2 つの異なるプリンシパル間の正真の認可境界。リクエストは `POST /approvals`(REST)が発行した束縛済みの `approval` トークン — リクエスト者とは別のプリンシパルが発行し、厳密な `(action, payloadHash, requesterId, tenant)` に対して発行されたもの — を伴わなければならず、欠落・期限切れ・不一致、あるいは(`ApprovalStore` を設定している場合)既に消費済みのときは `403 APPROVAL_REQUIRED`(`error.approval: {requestId, action, tier, payloadHash}` を伴う)で拒否される。この tier にはクライアント側の既定は無い — プロダクトは独自の `requestApproval` フック(例: 承認者受信箱を開く)を配線し、配線するまでは `"approve"` tier の action のクライアント側事前チェックはリクエストを送る前に単に止まる。**`ApprovalPort` を一切設定していないホストは、`"approve"` tier の invoke をすべて無条件に拒否する** — 呼び出し側がトークンを提示したかどうかに関わらず、REST でも MCP でも、その旨を明示するメッセージ(「no ApprovalPort is configured for this host」)を伴う `403` を返す。これは上記のトークン欠落のケース(少なくとも再試行すれば成功しうることを示唆する)とは意図的に区別される — このようなホストではどのトークンも検証に通ることは無く、`POST /approvals` 自体もトークンの発行を(`501` で)拒否するからである。
+
+すべての write 面 — REST の `POST /binding/action`、MCP の `${prefix}_action`、そしてどちらより先に `renderer-core` が実行するクライアント側の `preflightAction` チェック — が同じ規則を強制する。MCP はゲート失敗を HTTP ステータスではなく構造化ツールエラー(`structuredContent.error.code`)として表現する。compose の応答は任意で **Action マニフェスト**(REST の `actions?`、MCP の `_meta["kohaku/actions"]`)を運べ、各統制された Action 名を `{tier, paramsSchema?, confirmMessage?}` に写像する — これは Spec 自体の外側、capability の隣に置かれるため、`specHash` やキャッシュキーには一切影響しない(スキーマだけの変更が固定化を破壊する Spec 変更を強制することは無い)。action の結果を lineage に記録するホストは、区別された `action.*` イベント群(`action.invoked` / `action.denied` / `action.approvalRequested` / `action.approved`)の下で記録し、`payloadHash` を運ぶが payload 自身のフィールド値は運ばない。
 
 ### デモ 6 — テナント分離(統制プレーン)
 

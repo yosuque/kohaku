@@ -537,6 +537,43 @@ describe("@kohaku-ui/client error code discrimination (KohakuHostError)", () => 
     const err = hostErrorFromResponse(400, { error: { code: "BAD_REQUEST", message: "bad" } });
     expect(err.promotionStatus).toBeUndefined();
   });
+
+  it("a 422 ACTION_PARAMS_INVALID envelope's error.issues is exposed as issues", () => {
+    const err = hostErrorFromResponse(422, {
+      error: {
+        code: "ACTION_PARAMS_INVALID",
+        message: "action parameters failed validation",
+        issues: [{ path: "note", code: "maxLength", message: "expected at most 5 characters" }],
+      },
+    });
+    expect(err.code).toBe("ACTION_PARAMS_INVALID");
+    expect(err.issues).toEqual([
+      { path: "note", code: "maxLength", message: "expected at most 5 characters" },
+    ]);
+  });
+
+  it("a 403 APPROVAL_REQUIRED envelope's error.approval is exposed as approval", () => {
+    const err = hostErrorFromResponse(403, {
+      error: {
+        code: "APPROVAL_REQUIRED",
+        message: "this action requires an approval token",
+        approval: { requestId: "r1", action: "publish", tier: "approve", payloadHash: "sha256:x" },
+      },
+    });
+    expect(err.code).toBe("APPROVAL_REQUIRED");
+    expect(err.approval).toEqual({
+      requestId: "r1",
+      action: "publish",
+      tier: "approve",
+      payloadHash: "sha256:x",
+    });
+  });
+
+  it("an envelope without error.issues/error.approval leaves both undefined", () => {
+    const err = hostErrorFromResponse(400, { error: { code: "BAD_REQUEST", message: "bad" } });
+    expect(err.issues).toBeUndefined();
+    expect(err.approval).toBeUndefined();
+  });
 });
 
 describe("@kohaku-ui/client headers hook (tenant propagation)", () => {
@@ -748,6 +785,48 @@ describe("@kohaku-ui/client composeStream(SSE)", () => {
       }
     };
     await expect(iterate()).rejects.toSatisfy((e: unknown) => isKohakuHostError(e) && e.code === "INTERNAL");
+  });
+
+  it("threads the actions manifest through from the event: spec payload (design.md #62/#64)", async () => {
+    const transport: Transport = () =>
+      Promise.resolve(
+        new Response(
+          sseStream([
+            "event: spec\n",
+            'data: {"spec":{"id":"s"},"capability":"cap","final":true,"actions":{"annotate":{"tier":"confirm"}}}\n\n',
+            "event: done\n",
+            'data: {"specHash":"h","tier":"L0","cache":"hit"}\n\n',
+          ]),
+          { status: 200 },
+        ),
+      );
+    const client = createKohakuClient({ baseUrl: "/api/kohaku", transport });
+    const events = await collect(client.composeStream({ intent: { canonical: "sales.trend", params: {} } }));
+    expect(events[0]!.kind).toBe("spec");
+    if (events[0]!.kind === "spec") {
+      expect(events[0]!.actions).toEqual({ annotate: { tier: "confirm" } });
+    }
+  });
+
+  it("omits actions when the event: spec payload does not carry it (backward compatible)", async () => {
+    const transport: Transport = () =>
+      Promise.resolve(
+        new Response(
+          sseStream([
+            "event: spec\n",
+            'data: {"spec":{"id":"s"},"capability":"cap","final":true}\n\n',
+            "event: done\n",
+            'data: {"specHash":"h","tier":"L0","cache":"hit"}\n\n',
+          ]),
+          { status: 200 },
+        ),
+      );
+    const client = createKohakuClient({ baseUrl: "/api/kohaku", transport });
+    const events = await collect(client.composeStream({ intent: { canonical: "sales.trend", params: {} } }));
+    expect(events[0]!.kind).toBe("spec");
+    if (events[0]!.kind === "spec") {
+      expect(events[0]!.actions).toBeUndefined();
+    }
   });
 });
 

@@ -1,4 +1,9 @@
-import { canonicalStringify, type JsonValue, type TabularData } from "@kohaku-ui/spec-core";
+import {
+  type ActionParamIssue,
+  canonicalStringify,
+  type JsonValue,
+  type TabularData,
+} from "@kohaku-ui/spec-core";
 import { BindingError } from "./errors.js";
 import { formatQueryRef, parseQueryRef, type QueryRef, RESERVED_PARAM_PREFIX } from "./query-ref.js";
 
@@ -21,7 +26,15 @@ export type ActionFetcher = (
   action: string,
   payload: JsonValue,
   // signal and headers are symmetric with BindingFetcher (writes can also be aborted / auth-pinned per-request).
-  init: { capability?: string; headers?: Record<string, string>; signal?: AbortSignalLike },
+  // confirmed / approval (design.md #62/#63) are sibling fields of the wire body, not part of payload itself
+  // (mirrors POST /binding/action's `{action, payload, confirmed?, approval?}` shape).
+  init: {
+    capability?: string;
+    headers?: Record<string, string>;
+    signal?: AbortSignalLike;
+    confirmed?: boolean;
+    approval?: string;
+  },
 ) => Promise<FetchResponseLike>;
 
 export interface BindingClientConfig {
@@ -82,6 +95,17 @@ export interface BindingClient {
 export interface ActionOptions {
   /** Per-request cancellation. Propagated to actionFetcher's init.signal (symmetric with BindingFetcher). */
   signal?: AbortSignalLike;
+  /**
+   * Confirms a "confirm"-tier action (design.md #62/#63). Ignored (harmless) for "auto" / "approve"
+   * tiers. Without it, a "confirm"-tier invoke fails with `APPROVAL_REQUIRED`.
+   */
+  confirmed?: boolean;
+  /**
+   * A bound, short-lived approval token for an "approve"-tier action (design.md #63; obtained out of
+   * band, e.g. via the host's `POST /approvals`). Ignored (harmless) for "auto" / "confirm" tiers.
+   * Without it, an "approve"-tier invoke fails with `APPROVAL_REQUIRED`.
+   */
+  approval?: string;
 }
 
 const runtime = globalThis as unknown as {
@@ -126,7 +150,12 @@ function defaultActionFetcher(
     const res = await runtime.fetch(`${baseUrl}/binding/action`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ action, payload }),
+      body: JSON.stringify({
+        action,
+        payload,
+        ...(init.confirmed != null ? { confirmed: init.confirmed } : {}),
+        ...(init.approval != null ? { approval: init.approval } : {}),
+      }),
       signal: init.signal,
     });
     const body = await res.json().catch(() => null);
@@ -270,7 +299,27 @@ export function createBindingClient(config: BindingClientConfig): BindingClient 
         ...(cap != null ? { capability: cap } : {}),
         headers: hdrs,
         ...(opts.signal != null ? { signal: opts.signal } : {}),
+        ...(opts.confirmed != null ? { confirmed: opts.confirmed } : {}),
+        ...(opts.approval != null ? { approval: opts.approval } : {}),
       });
+      // Governed actions (design.md #62/#63): a 422/403 carrying the host's structured envelope maps to
+      // its own BindingErrorCode (distinct from the generic UNAUTHORIZED/RESOLVE_FAILED below) so a
+      // caller (renderer-core's runInvokeTarget) can drive an "invalid" / "awaitingApproval" phase
+      // without string-matching the message. A 422/403 without that envelope shape (a non-conformant
+      // host, or a 403 that is a genuine capability denial) falls through to the generic mapping.
+      const envelope = actionErrorEnvelope(body);
+      if (status === 422 && envelope?.code === "ACTION_PARAMS_INVALID") {
+        throw new BindingError("ACTION_PARAMS_INVALID", envelope.message, {
+          status,
+          issues: envelope.issues,
+        });
+      }
+      if (status === 403 && envelope?.code === "APPROVAL_REQUIRED") {
+        throw new BindingError("APPROVAL_REQUIRED", envelope.message, {
+          status,
+          approval: envelope.approval,
+        });
+      }
       if (status === 401 || status === 403) {
         throw new BindingError("UNAUTHORIZED", `action "${action}" denied`, { status });
       }
@@ -292,6 +341,31 @@ function reservedFromOptions(opts: ResolveOptions): Record<string, string> {
     reserved["_dir"] = opts.sort.dir;
   }
   return reserved;
+}
+
+/**
+ * Extracts `{code, message, issues?, approval?}` from a `/binding/action` error response body shaped
+ * `{error:{...}}` (host-rest's ErrorEnvelope), or undefined for a non-conformant / empty body. message
+ * falls back to a generic string so callers never construct a BindingError with an empty message.
+ */
+function actionErrorEnvelope(body: unknown): {
+  code: string;
+  message: string;
+  issues?: ActionParamIssue[];
+  approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+} | null {
+  const error = (
+    body as { error?: { code?: unknown; message?: unknown; issues?: unknown; approval?: unknown } } | null
+  )?.error;
+  if (error == null || typeof error.code !== "string") return null;
+  return {
+    code: error.code,
+    message: typeof error.message === "string" ? error.message : error.code,
+    issues: error.issues as ActionParamIssue[] | undefined,
+    approval: error.approval as
+      | { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string }
+      | undefined,
+  };
 }
 
 /**

@@ -354,6 +354,353 @@
       "cursor": "eyJ2IjoxLCJzZXEiOjEyMzQ1Njc4OTAxMjN9"
     }
   ],
+  "actionParams": [
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "payload": {
+        "note": "Looks good to me."
+      },
+      "issues": [],
+      "payloadHash": "sha256:14f58f896b1126d42abf09264b14c5b180e2c07d61efc536e59d493bf591e708"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "payload": {},
+      "issues": [
+        {
+          "path": "note",
+          "code": "required",
+          "message": "missing required property \"note\""
+        }
+      ],
+      "payloadHash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "payload": {
+        "note": "ok",
+        "extra": 1
+      },
+      "issues": [
+        {
+          "path": "extra",
+          "code": "additionalProperties",
+          "message": "unexpected property \"extra\""
+        }
+      ],
+      "payloadHash": "sha256:4be72deaf7645fe1a7491e3641ad685a00aae3d9c8ebd14eacd4f01c10b42949"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 4
+          }
+        }
+      },
+      "payload": {
+        "s": "a"
+      },
+      "issues": [
+        {
+          "path": "s",
+          "code": "minLength",
+          "message": "expected at least 2 characters"
+        }
+      ],
+      "payloadHash": "sha256:3390a5617b3c2fffbab6630038182bf2d0c4ab770f6ed8bb4148bcfb57a0df74"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 4
+          }
+        }
+      },
+      "payload": {
+        "s": "abcde"
+      },
+      "issues": [
+        {
+          "path": "s",
+          "code": "maxLength",
+          "message": "expected at most 4 characters"
+        }
+      ],
+      "payloadHash": "sha256:48fb9f62150634437d09072b5c246fc3fd13c00e58f6681b4558aacb36b03bf0"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          }
+        }
+      },
+      "payload": {
+        "n": -1
+      },
+      "issues": [
+        {
+          "path": "n",
+          "code": "minimum",
+          "message": "expected at least 0"
+        }
+      ],
+      "payloadHash": "sha256:0c31e9341837b3869856e8ea000cdc2668e68a8bd0f291d61c3d7ea52bbcff96"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          }
+        }
+      },
+      "payload": {
+        "n": 1.5
+      },
+      "issues": [
+        {
+          "path": "n",
+          "code": "type",
+          "message": "expected an integer at \"n\""
+        }
+      ],
+      "payloadHash": "sha256:cb14d55cfe562fd6592d919f5dfacfa8708687b746a1d110c6dd5529c410e772"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "high"
+            ]
+          }
+        }
+      },
+      "payload": {
+        "severity": "medium"
+      },
+      "issues": [
+        {
+          "path": "severity",
+          "code": "enum",
+          "message": "expected one of [\"low\",\"high\"]"
+        }
+      ],
+      "payloadHash": "sha256:0a61931e2a6457839021739167fb8db47331fee0c5e5f791fd6981f9d54c1048"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 3
+            },
+            "maxItems": 2
+          }
+        }
+      },
+      "payload": {
+        "tags": [
+          "ok",
+          "toolong",
+          "x"
+        ]
+      },
+      "issues": [
+        {
+          "path": "tags",
+          "code": "maxItems",
+          "message": "expected at most 2 items"
+        },
+        {
+          "path": "tags[1]",
+          "code": "maxLength",
+          "message": "expected at most 3 characters"
+        }
+      ],
+      "payloadHash": "sha256:47e2f17022efcdc9f4d4c09a1a7f3fe1eb48b95df997dc38cd191780c1676dde"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "object",
+            "properties": {
+              "city": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "city"
+            ]
+          }
+        }
+      },
+      "payload": {
+        "address": {
+          "city": ""
+        }
+      },
+      "issues": [
+        {
+          "path": "address.city",
+          "code": "minLength",
+          "message": "expected at least 1 characters"
+        }
+      ],
+      "payloadHash": "sha256:66d8c36476135f9875ab8c1c977a1ea92fc86e312cc75a39ec8ffc17388e15ed"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string",
+            "maxLength": 3,
+            "x-message": "note is too long"
+          }
+        }
+      },
+      "payload": {
+        "note": "abcd"
+      },
+      "issues": [
+        {
+          "path": "note",
+          "code": "maxLength",
+          "message": "note is too long"
+        }
+      ],
+      "payloadHash": "sha256:400128d845395b554d317ff26537f8bd69e7da1035ba0b6f41d409308a822a46"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          }
+        }
+      },
+      "payload": {
+        "amount": 10,
+        "__proto__": {
+          "polluted": true
+        }
+      },
+      "issues": [
+        {
+          "path": "__proto__",
+          "code": "unsafeKey",
+          "message": "the property name \"__proto__\" is not allowed"
+        }
+      ],
+      "payloadHash": "sha256:08a8466c8b7b85c5509a6e798340cfee6a97e809d913075b35859d215cdc8b37"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          }
+        }
+      },
+      "payload": {
+        "amount": 10,
+        "constructor": {
+          "polluted": true
+        }
+      },
+      "issues": [
+        {
+          "path": "constructor",
+          "code": "unsafeKey",
+          "message": "the property name \"constructor\" is not allowed"
+        }
+      ],
+      "payloadHash": "sha256:ead5758c1b295206d4a09396cd79c5a0fbab98c05a7dca28b2349b5d32f717de"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false
+      },
+      "payload": {
+        "amount": 10,
+        "toString": 1
+      },
+      "issues": [
+        {
+          "path": "toString",
+          "code": "additionalProperties",
+          "message": "unexpected property \"toString\""
+        }
+      ],
+      "payloadHash": "sha256:d45820cda1eac507d4c8f38a9e29ccb5856a38dc51d147e0dea1613b10ffc6f5"
+    }
+  ],
   "sandboxDom": {
     "tags": [
       "article",

@@ -14,8 +14,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from kohaku.composer import ComposeContext, ComposeTrace
-from kohaku.host_core import FixationSelfHealApi, PolicyRateLimiter, TraceContext
+from kohaku.host_core import (
+    ActionAuditRecorder,
+    FixationSelfHealApi,
+    PolicyRateLimiter,
+    TraceContext,
+)
 from kohaku.spec import (
+    ApprovalPort,
     AuthzPort,
     DomainPort,
     FixationRecord,
@@ -192,6 +198,20 @@ class McpHostDeps:
     """Failure-path observability hook. Silent when unwired. Hook throws are swallowed (observation only)."""
     action_effects: Callable[[str, JsonObject, object], Awaitable[ActionEffects]] | None = None
     """Write side-effect declaration (optional). When unspecified, the response is only `{result}` (backward compatible)."""
+    approvals: ApprovalPort | None = None
+    """Verifies stateless approval tokens for "approve"-tier actions (design.md #63; typically
+    kohaku_authz_hmac's create_hmac_approval_port), symmetric with the REST profile's
+    KohakuHostDeps.approvals. Consulted by ${prefix}_action's ActionGate. If not wired, an
+    "approve"-tier action can never be allowed (the gate returns denied). This profile exposes no
+    POST /approvals-equivalent tool of its own (design.md #63 scopes approval issuance to the REST
+    governance plane); a deployment that also mounts the REST profile shares one ApprovalPort instance
+    across both."""
+    action_audit_recorder: ActionAuditRecorder | None = None
+    """Audit-recording hooks for governed Actions (design.md #62/#63; typically kohaku.lineage's
+    create_action_audit_recorder), symmetric with the REST profile's KohakuHostDeps.action_audit_recorder.
+    Called by ${prefix}_action's ActionGate outcome, fail-open (a recording failure never blocks the tool
+    response, allowed or denied). If not wired, no action.* lineage events are recorded (backward
+    compatible)."""
     rate_limiter: PolicyRateLimiter | None = None
     """Rate limiter for the tool calls (product responsibility; typically host_core's
     PolicyRuntime.rate_limiter, which resolves the effective RateLimitRule per route_class from a Policy

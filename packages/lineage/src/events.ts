@@ -1,4 +1,4 @@
-import type { CacheKeyParts, LineageEventRecord } from "@kohaku-ui/spec-core";
+import type { CacheKeyParts, JsonObject, LineageEventRecord } from "@kohaku-ui/spec-core";
 import type { DraftDiffField, DraftFieldChange, SchemaSuggestion } from "./promotion/suggestion.js";
 import { tenantField } from "./tenant-scope.js";
 
@@ -57,11 +57,30 @@ export const FIXATION_EVENT_TYPES = [
  */
 export const POLICY_EVENT_TYPES = ["policy.applied"] as const;
 
+/**
+ * Governed Actions' audit trail (design.md #62/#63). Fired by `createActionAuditRecorder`'s adapter
+ * (recorder.ts), driven by host-core's `ActionGate` outcome for every invoke attempt:
+ * - `action.invoked` — the gate returned `allow` (params validated, tier satisfied).
+ * - `action.denied` — tier `"approve"` and a token *was* presented but did not verify (or no
+ *   `ApprovalPort` is configured at all).
+ * - `action.approvalRequested` — nothing was presented yet (`"confirm"` without `confirmed: true`, or
+ *   `"approve"` without a token).
+ * - `action.approved` — tier `"approve"` and the presented approval grant was successfully consumed
+ *   (recorded in addition to, not instead of, `action.invoked`).
+ */
+export const ACTION_EVENT_TYPES = [
+  "action.invoked",
+  "action.denied",
+  "action.approvalRequested",
+  "action.approved",
+] as const;
+
 export type LineageEventType =
   | (typeof VIEW_EVENT_TYPES)[number]
   | (typeof COMPONENT_EVENT_TYPES)[number]
   | (typeof FIXATION_EVENT_TYPES)[number]
-  | (typeof POLICY_EVENT_TYPES)[number];
+  | (typeof POLICY_EVENT_TYPES)[number]
+  | (typeof ACTION_EVENT_TYPES)[number];
 
 /** One L1/L2 generation attempt, as recorded on view.composed's `decision` summary (structural subset of
  * @kohaku-ui/composer's ComposeAttempt -- lineage does not depend on composer, see ComposeTraceLike's doc). */
@@ -214,6 +233,56 @@ export interface PolicyAppliedPayload {
   label?: string;
   changedPaths: string[];
   tenants: string[];
+}
+
+/**
+ * Payload of `action.invoked` (design.md #62/#63). Only `payloadHash` is recorded, never the invoke
+ * payload itself -- the audit trail proves *that* a specific payload (by hash) was invoked and under
+ * which tier, without persisting whatever business data the payload carried.
+ */
+export interface ActionInvokedPayload {
+  action: string;
+  payloadHash: string;
+  tier: "auto" | "confirm" | "approve";
+  correlationId?: string;
+}
+
+/** Payload of `action.denied` (design.md #62/#63): either an `"approve"`-tier invoke whose presented
+ * token did not verify (or no `ApprovalPort` was configured at all; `tier` is `"confirm"` or
+ * `"approve"`), or an invoke whose action name is not one of the `DomainPort`'s own declared operations,
+ * rejected before any governed-action gate ever ran (`tier` is `"auto"`). */
+export interface ActionDeniedPayload {
+  action: string;
+  payloadHash: string;
+  tier: "auto" | "confirm" | "approve";
+  reason: string;
+  correlationId?: string;
+}
+
+/**
+ * Payload of `action.approvalRequested` (design.md #63): nothing was presented yet for a `"confirm"` or
+ * `"approve"`-tier invoke. `payload` (the raw invoke payload, not just its hash) is included only when
+ * the recorder is configured with `recordPayload: true` -- the default omits it, matching every other
+ * action.* event's "hash only" stance; an operator opts in when an approver-facing flow needs to see the
+ * actual content being approved (e.g. the note text of an `annotate` action) rather than just its hash.
+ */
+export interface ActionApprovalRequestedPayload {
+  action: string;
+  payloadHash: string;
+  tier: "confirm" | "approve";
+  requestId: string;
+  payload?: JsonObject;
+  correlationId?: string;
+}
+
+/** Payload of `action.approved` (design.md #63): an `"approve"`-tier invoke whose presented approval
+ * grant was successfully consumed. Recorded in addition to (not instead of) `action.invoked`. */
+export interface ActionApprovedPayload {
+  action: string;
+  payloadHash: string;
+  approverId: string;
+  requesterId: string;
+  correlationId?: string;
 }
 
 export type ActorKind = LineageEventRecord["actor"];

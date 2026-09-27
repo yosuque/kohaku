@@ -5,6 +5,11 @@ export {
   summarizeLineage,
 } from "./analytics.js";
 export {
+  ACTION_EVENT_TYPES,
+  type ActionApprovalRequestedPayload,
+  type ActionApprovedPayload,
+  type ActionDeniedPayload,
+  type ActionInvokedPayload,
   COMPONENT_EVENT_TYPES,
   type ComponentGeneratedPayload,
   type ComponentSchemaEditedPayload,
@@ -112,5 +117,11 @@ export {
   type SchemaSuggestion,
   type SuggestedEvent,
 } from "./promotion/suggestion.js";
-export { createViewRecorder, type RestViewRecorder } from "./recorder.js";
+export {
+  type CreateActionAuditRecorderOptions,
+  createActionAuditRecorder,
+  createViewRecorder,
+  type RestActionAuditRecorder,
+  type RestViewRecorder,
+} from "./recorder.js";
 export type { TenantScope } from "./tenant-scope.js";

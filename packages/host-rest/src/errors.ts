@@ -14,6 +14,10 @@ export function errorBody(
   message: string,
   requestId?: string,
   retryAfterMs?: number,
+  /** Present only on ACTION_PARAMS_INVALID (SPEC §6.1, ACT-PRM-001) -- validateActionParams's issues. */
+  issues?: { path: string; code: string; message: string }[],
+  /** Present only on APPROVAL_REQUIRED (SPEC §6.1, ACT-APR-001). */
+  approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string },
 ): ErrorEnvelope {
   return {
     error: {
@@ -21,6 +25,8 @@ export function errorBody(
       message,
       ...(requestId != null ? { requestId } : {}),
       ...(retryAfterMs != null ? { retryAfterMs } : {}),
+      ...(issues != null ? { issues } : {}),
+      ...(approval != null ? { approval } : {}),
     },
   };
 }

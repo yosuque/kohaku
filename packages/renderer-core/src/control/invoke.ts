@@ -1,11 +1,13 @@
-import type { ActionResult, BindingClient } from "@kohaku-ui/data-binding";
+import { type ActionResult, type BindingClient, BindingError } from "@kohaku-ui/data-binding";
 import {
+  type ActionParamIssue,
   type ComponentNode,
   type JsonObject,
   resolveWriteActionName,
   type UISpec,
 } from "@kohaku-ui/spec-core";
 import type { DataInvalidationBus } from "../stores/invalidation-bus.js";
+import { type ActionManifest, preflightAction } from "./action-manifest.js";
 import { resolvePayloadTemplate } from "./emit.js";
 
 /**
@@ -72,12 +74,30 @@ export function resolveActionName(node: ComponentNode, payload: JsonObject): str
  * Progress state of a write (action.invoke). The framework-free source of truth.
  * renderer-react and renderer-wc each re-export this type under the same name they
  * exported before (their own local declarations were duplicates of this shape).
+ *
+ * "invalid" and "awaitingApproval" (design.md #62/#63) are reached either locally, before any network
+ * call, via `preflightAction` against `RunInvokeTargetDeps.actionManifest` (a pure UX shortcut), or from
+ * the server's own response (`BindingError`'s `ACTION_PARAMS_INVALID` / `APPROVAL_REQUIRED` codes) when
+ * no manifest entry was available to check locally, or the manifest is stale relative to the server's own
+ * state. Neither is a "failed" write (nothing was committed either way, gated or rejected before commit),
+ * so `onActionResult` (a completion notification) is not called for them -- only "succeeded" / "failed"
+ * report there, unchanged from before these two phases existed.
  */
 export type ActionPhase =
   | { phase: "idle" }
   | { phase: "pending" }
   | { phase: "succeeded"; result: unknown }
-  | { phase: "failed"; message: string };
+  | { phase: "failed"; message: string }
+  | { phase: "invalid"; issues: ActionParamIssue[] }
+  | {
+      phase: "awaitingApproval";
+      tier: "confirm" | "approve";
+      message: string;
+      /** The server-issued pending-approval descriptor, present only when this phase was reached from
+       * the server's own APPROVAL_REQUIRED response (absent for a locally short-circuited preflight,
+       * which never reaches the network). */
+      approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+    };
 
 export interface RunInvokeTargetDeps {
   /** The reference-resolution client (already known non-null at the call site — resolveInvokeTarget only returns "invoke" when hasBinding is true). */
@@ -92,15 +112,55 @@ export interface RunInvokeTargetDeps {
     result?: unknown;
     message?: string;
   }) => void;
+  /**
+   * The compose-issued Action manifest (design.md #64), for a client-side `preflightAction` check before
+   * the round trip. Absent -> no local check; the server remains authoritative and the same
+   * "invalid" / "awaitingApproval" phases are still driven by its response instead.
+   */
+  actionManifest?: ActionManifest;
+  /**
+   * Confirmation hook for a "confirm"-tier action (design.md #62/#63), consulted only when
+   * `preflightAction` (or, absent a manifest, a later server rejection -- see below) determines the
+   * action needs one. Returning `true` (sync or async) retries the invoke with `confirmed: true`;
+   * `false`/undefined leaves the action unexecuted, reporting phase "awaitingApproval" instead. When
+   * unset, a "confirm"-tier action is never confirmed locally (renderer-react / renderer-wc default this
+   * to `globalThis.confirm` when the host does not supply one -- see their own AttachOptions).
+   */
+  confirm?: (args: { action: string; message?: string }) => boolean | Promise<boolean>;
+  /**
+   * Approval-token hook for an "approve"-tier action (design.md #63), consulted the same way as
+   * `confirm`. Returning a token (sync or async) retries the invoke with that `approval` token;
+   * `undefined` leaves the action unexecuted, reporting phase "awaitingApproval" instead. This profile
+   * exposes no default (an approval token is obtained out of band, e.g. the host's `POST /approvals` or
+   * an approver-facing surface -- there is no generic browser-native equivalent of `globalThis.confirm`
+   * for it).
+   */
+  requestApproval?: (args: {
+    action: string;
+    payload: JsonObject;
+  }) => string | undefined | Promise<string | undefined>;
 }
 
 /**
  * Directly executes the write path decided by resolveInvokeTarget (kind === "invoke"):
- * pending → binding.invokeAction → succeeded/failed phase → bus.publish(invalidates) →
- * onActionResult, in that exact order. The framework-free source of truth for the
- * sequence, avoiding duplicating it in renderer-react's useInvokeAction and
- * renderer-wc's tree.ts invokeAction. onPhase reports progress (React's setState /
- * WC's phase callback); nodeId identifies the component in onActionResult.
+ * preflightAction → (confirm/requestApproval hook, when the tier needs one) → pending →
+ * binding.invokeAction → succeeded/failed/invalid/awaitingApproval phase →
+ * bus.publish(invalidates) → onActionResult, in that exact order. The framework-free
+ * source of truth for the sequence, avoiding duplicating it in renderer-react's
+ * useInvokeAction and renderer-wc's tree.ts invokeAction. onPhase reports progress
+ * (React's setState / WC's phase callback); nodeId identifies the component in
+ * onActionResult.
+ *
+ * Governed actions (design.md #62/#63): `preflightAction` runs first, purely locally (no network call
+ * yet). "invalid" short-circuits immediately (never attempts the invoke at all — a payload invalid on its
+ * own terms should never even reach the tier gate, mirroring host-core's ActionGate order). "confirm" /
+ * "approve" consult `deps.confirm` / `deps.requestApproval`; a hook that is unset, or that declines
+ * (returns false / undefined), also short-circuits (phase "awaitingApproval") without attempting the
+ * invoke. Only once the local gate is satisfied (or there was nothing to check — no manifest, or the
+ * action's tier is "auto") does execution proceed to `binding.invokeAction`, whose own rejection is
+ * additionally mapped: a `BindingError` with code `ACTION_PARAMS_INVALID` / `APPROVAL_REQUIRED` maps to
+ * the same "invalid" / "awaitingApproval" phases (the server is always the final authority — a stale or
+ * absent manifest just means this mapping happens after the round trip instead of before it).
  */
 export async function runInvokeTarget(
   target: Extract<InvokeTarget, { kind: "invoke" }>,
@@ -108,11 +168,40 @@ export async function runInvokeTarget(
   nodeId: string,
   onPhase: (phase: ActionPhase) => void,
 ): Promise<void> {
-  const { binding, bus, onActionResult } = deps;
+  const { binding, bus, onActionResult, actionManifest, confirm, requestApproval } = deps;
   const { action, payload } = target;
+
+  const preflight = preflightAction(actionManifest, action, payload);
+  if (preflight.kind === "invalid") {
+    onPhase({ phase: "invalid", issues: preflight.issues });
+    return;
+  }
+
+  let confirmed: boolean | undefined;
+  let approval: string | undefined;
+  if (preflight.kind === "confirm") {
+    const ok = confirm != null ? await confirm({ action, message: preflight.confirmMessage }) : false;
+    if (!ok) {
+      onPhase({
+        phase: "awaitingApproval",
+        tier: "confirm",
+        message: preflight.confirmMessage ?? "this action requires confirmation",
+      });
+      return;
+    }
+    confirmed = true;
+  } else if (preflight.kind === "approve") {
+    const token = requestApproval != null ? await requestApproval({ action, payload }) : undefined;
+    if (token == null) {
+      onPhase({ phase: "awaitingApproval", tier: "approve", message: "this action requires approval" });
+      return;
+    }
+    approval = token;
+  }
+
   onPhase({ phase: "pending" });
   try {
-    const res = (await binding.invokeAction(action, payload)) as ActionResult | null;
+    const res = (await binding.invokeAction(action, payload, { confirmed, approval })) as ActionResult | null;
     const result = res?.result ?? null;
     onPhase({ phase: "succeeded", result });
     if (res?.invalidates != null && res.invalidates.length > 0) {
@@ -123,6 +212,19 @@ export async function runInvokeTarget(
     }
     onActionResult?.({ componentId: nodeId, action, phase: "succeeded", result });
   } catch (e) {
+    if (e instanceof BindingError && e.code === "ACTION_PARAMS_INVALID") {
+      onPhase({ phase: "invalid", issues: e.issues ?? [] });
+      return;
+    }
+    if (e instanceof BindingError && e.code === "APPROVAL_REQUIRED") {
+      onPhase({
+        phase: "awaitingApproval",
+        tier: e.approval?.tier ?? "confirm",
+        message: e.message,
+        approval: e.approval,
+      });
+      return;
+    }
     const message = e instanceof Error ? e.message : String(e);
     onPhase({ phase: "failed", message });
     onActionResult?.({ componentId: nodeId, action, phase: "failed", message });

@@ -57,6 +57,27 @@ export const ActionBodySchema = z.object({
   // A JSON object only (an array/string/etc. is rejected with 400): DomainPort.invoke's `args` contract is an
   // object of named params, and passing anything else through would misrepresent it as one.
   payload: JsonObjectSchema.optional(),
+  // Governed actions (design.md #62/#63, SPEC ACT-CNF-001/ACT-APR-001): the same-request acknowledgement for
+  // a `"confirm"`-tier action. Ignored by the gate for any other tier.
+  confirmed: z.boolean().optional(),
+  // The bound approval token for a `"approve"`-tier action (issued by `POST /approvals`). Bounded length: an
+  // approval token is a fixed-shape HMAC token, never expected to approach this size -- the bound only guards
+  // against an oversized garbage value being carried through to `ApprovalPort.verifyApproval`.
+  approval: z.string().max(4096).optional(),
+});
+
+/**
+ * `POST /approvals` (Draft; SPEC ACT-APR-001): an authorized approver mints a token bound to
+ * `(action, payloadHash, requesterId, tenant)` for a pending `"approve"`-tier action. `requesterId` is
+ * read from the requester's own `action.approvalRequested` lineage record (or the requester's 403
+ * `APPROVAL_REQUIRED` response, relayed out of band) -- this route has no notion of "the current pending
+ * request" of its own (design.md #63: approvals are stateless and unbound to any persisted request).
+ */
+export const ApprovalRequestBodySchema = z.object({
+  action: z.string().min(1),
+  payloadHash: z.string().min(1).max(128),
+  requesterId: z.string().min(1).max(256),
+  ttlSeconds: z.number().int().positive().max(86400).optional(),
 });
 
 export const TelemetryBodySchema = z.object({

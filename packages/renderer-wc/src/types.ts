@@ -1,5 +1,6 @@
 import type { BindingClient } from "@kohaku-ui/data-binding";
 import type {
+  ActionManifest,
   ActionPhase,
   BoundDataController,
   DataInvalidationBus,
@@ -85,6 +86,26 @@ export interface SurfaceContext {
     result?: unknown;
     message?: string;
   }) => void;
+  /**
+   * The compose-issued Action manifest (design.md #62/#64), threaded through to `runInvokeTarget` for a
+   * client-side `preflightAction` check before the round trip. Absent -> no local check; the server
+   * remains authoritative.
+   */
+  actionManifest?: ActionManifest;
+  /**
+   * Confirmation hook for a "confirm"-tier action (design.md #62/#63). When unset, defaults to
+   * `globalThis.confirm` (declining when unavailable in this environment, e.g. SSR).
+   */
+  confirm?: (args: { action: string; message?: string }) => boolean | Promise<boolean>;
+  /**
+   * Approval-token hook for an "approve"-tier action (design.md #63). No default is provided (an approval
+   * token is obtained out of band — there is no generic browser-native equivalent of `globalThis.confirm`
+   * for it).
+   */
+  requestApproval?: (args: {
+    action: string;
+    payload: JsonObject;
+  }) => string | undefined | Promise<string | undefined>;
   /** Bridge / policy / kit / badge visibility for running L2 (sandbox.html) parts. See {@link SandboxSurfaceContext}. */
   sandbox?: SandboxSurfaceContext;
 }
@@ -107,6 +128,9 @@ export interface RenderRuntime {
   messages: RendererMessages;
   onNodeError: SurfaceContext["onNodeError"];
   onActionResult: SurfaceContext["onActionResult"];
+  actionManifest: SurfaceContext["actionManifest"];
+  confirm: SurfaceContext["confirm"];
+  requestApproval: SurfaceContext["requestApproval"];
   sandbox: SurfaceContext["sandbox"];
   /** Table of type → part builder (createCoreRenderRegistry). */
   registry: Map<string, PartBuilder>;

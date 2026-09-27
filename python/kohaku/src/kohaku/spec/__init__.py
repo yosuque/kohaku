@@ -4,6 +4,15 @@ Provides the same public surface as the TS reference implementation's index.ts.
 """
 
 from .action_name import collect_write_actions, resolve_write_action_name
+from .action_params import (
+    ActionParamIssue,
+    ActionParamsSchema,
+    ActionParamsSchemaError,
+    ActionTier,
+    action_payload_hash,
+    assert_valid_action_params_schema,
+    validate_action_params,
+)
 from .bind import enumerate_bind_variants, resolve_bound_ref
 from .cache_key import (
     CacheKeyParts,
@@ -22,6 +31,7 @@ from .canonical_json import (
 from .capability_scopes import collect_capability_scopes
 from .diff import apply_patch, diff_spec, order_components
 from .errors import (
+    ApprovalRequiredInfo,
     ErrorEnvelope,
     GovernanceErrorDiscriminators,
     HostErrorCode,
@@ -95,6 +105,11 @@ from .policy import (
     merge_policy_sections,
 )
 from .ports import (
+    DEFAULT_APPROVAL_TTL_SECONDS,
+    ApprovalGrant,
+    ApprovalPort,
+    ApprovalStore,
+    ApprovalVerifyResult,
     AuthzPort,
     CatalogContribution,
     DomainPort,
@@ -169,6 +184,7 @@ __all__ = [
     "ALLOWED_STYLE_PROPS",
     "ALLOWED_TAGS",
     "ALWAYS_DENIED_ATTRS",
+    "DEFAULT_APPROVAL_TTL_SECONDS",
     "DEFAULT_LINEAGE_PAGE_SIZE",
     "DEFAULT_MAX_DOM_DEPTH",
     "DEFAULT_MAX_DOM_NODES",
@@ -184,8 +200,17 @@ __all__ = [
     "SPEC_VERSION",
     "UNDEFINED",
     "VOID_TAGS",
+    "ActionParamIssue",
+    "ActionParamsSchema",
+    "ActionParamsSchemaError",
+    "ActionTier",
     "AllPredicate",
     "AnyPredicate",
+    "ApprovalGrant",
+    "ApprovalPort",
+    "ApprovalRequiredInfo",
+    "ApprovalStore",
+    "ApprovalVerifyResult",
     "AuthzPort",
     "BindParam",
     "CacheKeyParts",
@@ -269,7 +294,9 @@ __all__ = [
     "VerifyRequest",
     "VerifyResult",
     "VisibleWhen",
+    "action_payload_hash",
     "apply_patch",
+    "assert_valid_action_params_schema",
     "cache_key",
     "canonical_stringify",
     "collect_capability_scopes",
@@ -311,6 +338,7 @@ __all__ = [
     "sha256_hex",
     "spec_to_text",
     "to_kebab_case",
+    "validate_action_params",
     "validate_fixation_record",
     "validate_promotion_state",
     "validate_spec_structure",

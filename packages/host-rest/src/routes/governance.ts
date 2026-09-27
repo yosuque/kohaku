@@ -2,8 +2,15 @@ import type { LineageFilter, LineagePageRequest, Surface } from "@kohaku-ui/spec
 import { LineageCursorError } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
-import { TelemetryBodySchema } from "./schemas.js";
-import { parseBody, type RouteContext, reportHostError, requestIdOf, resolveTenant } from "./shared.js";
+import { ApprovalRequestBodySchema, TelemetryBodySchema } from "./schemas.js";
+import {
+  message,
+  parseBody,
+  type RouteContext,
+  reportHostError,
+  requestIdOf,
+  resolveTenant,
+} from "./shared.js";
 
 /** Aggregation window for usage analytics. Default 200 / max 1000 (aligned with the /lineage window limits). */
 const ANALYTICS_DEFAULT_LIMIT = 200;
@@ -11,7 +18,7 @@ const ANALYTICS_MAX_LIMIT = 1000;
 
 /** Audit / observability plane (/lineage, /analytics/summary, /telemetry). */
 export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
-  const { deps, requireGovernance } = ctx;
+  const { deps, getPrincipal, requireGovernance } = ctx;
 
   // --- Reading View Lineage (audit plane) ---
   app.get("/lineage", async (c) => {
@@ -179,6 +186,46 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
       }
     }
     return c.json({ ok: true });
+  });
+
+  // --- Approval issuance for "approve"-tier governed Actions (design.md #63, SPEC ACT-APR-001 [Draft]) ---
+  app.post("/approvals", async (c) => {
+    const denied = await requireGovernance(c, { kind: "action.approve" });
+    if (denied != null) return denied;
+    if (deps.approvals == null) {
+      return c.json(errorBody("NOT_IMPLEMENTED", "approvals are not configured for this host"), 501);
+    }
+    const requestId = requestIdOf(c, deps);
+    const body = await parseBody(
+      c,
+      ApprovalRequestBodySchema,
+      "action, payloadHash, and requesterId are required",
+    );
+    if (body instanceof Response) return body;
+    const approver = await getPrincipal(c);
+    // design.md #63: an approver must not be able to approve their own pending action. The ApprovalPort
+    // itself also refuses this (defense in depth), but checking here first gives a clearer, dedicated
+    // message rather than surfacing whatever generic error the port happens to throw.
+    if (approver.id === body.requesterId) {
+      return c.json(errorBody("BAD_REQUEST", "an approver cannot approve their own request"), 400);
+    }
+    const tenant = await resolveTenant(c, deps);
+    try {
+      const token = await deps.approvals.issueApproval(
+        {
+          action: body.action,
+          payloadHash: body.payloadHash,
+          requesterId: body.requesterId,
+          approverId: approver.id,
+          ...(tenant != null ? { tenant } : {}),
+        },
+        body.ttlSeconds != null ? { ttlSeconds: body.ttlSeconds } : undefined,
+      );
+      return c.json({ approval: token });
+    } catch (e) {
+      await reportHostError(deps, "approvals", requestId, e);
+      return c.json(errorBody("BAD_REQUEST", message(e), requestId), 400);
+    }
   });
 }
 

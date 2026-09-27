@@ -11,10 +11,10 @@ TS 実装とはワイヤ互換 — canonical JSON がバイト一致するため
 
 **conformance**: TS 側 CLI の黒箱検査(`node cli/bin/kohaku.js conformance --rest`)で
 **MUST 19/19 = CONFORMANT** を通過済み(SHOULD のストリーミング検査を含む。CI の
-`conformance-python` ジョブが毎コミット検査する)。19 は conformance manifest の全 34
-MUST のうち黒箱検査可能なもので、残り 15 件の reference MUST(MCPAPP-* / SBX-*、および
-TS のレンダラー/composer パッケージテストで担保される文書規範 6 件)は
-パッケージテスト(この側では pytest)で担保する。
+`conformance-python` ジョブが毎コミット検査する)。19 は conformance manifest の全 37
+MUST のうち黒箱検査可能なもので、残り 18 件の reference MUST(MCPAPP-* / SBX-* /
+ACT-PRM-001 / ACT-APR-001、および TS のレンダラー/composer パッケージテストで
+担保される文書規範 6 件)はパッケージテスト(この側では pytest)で担保する。
 
 ## セットアップ・検証
 
@@ -357,6 +357,40 @@ TS 版との Python 固有の差異が 3 点あるが、いずれもワイヤに
   (設計判断ではない)、同じ根本原因(SDK のアクセサ不足)により、本ファイルの「構成」の節が
   `McpErrorInfo.correlation_id`(常にツール呼び出し自身の JSON-RPC リクエスト id であり、接続ごとの
   セッション id ではない)についてすでに記録しているのと同種のギャップである。
+
+## 統制された Action(TS と対称)
+
+`kohaku.spec.action_params`(環境中立・依存無し): `validate_action_params(schema, payload)` は
+`DomainPort` operation の payload を kohaku 独自の閉じた JSON Schema サブセット(`type`、
+`properties`、`required`、`additionalProperties: false`、`enum`、`minimum`/`maximum`、
+`minLength`/`maxLength`、`items`、`maxItems`、`x-message` — `pattern` は無し)で検証し、
+`list[ActionParamIssue]` を返す。`assert_valid_action_params_schema(operation_name, schema)` は各
+operation につきリクエストごとではなく attach 時に一度だけ実行され、未知のキーワードには
+`ActionParamsSchemaError` を送出する。`action_payload_hash(payload)` は承認トークンが束縛する
+canonical-JSON sha256 である。`packages/spec-core/src/action-params.ts` に対し言語間 golden
+(`spec/test/fixtures/cross-language-canonical.json` の `actionParams` セクション)でバイト単位に
+固定されている。
+
+`kohaku.host_core.action_gate`(`ActionGate` / `create_action_gate(approvals=None)`): tier チェックの
+前に params 検証を実行し(`ActionGateInvalid`)、その後 `"confirm"` tier(同一リクエストの
+`confirmed: true`)と `"approve"` tier(束縛された `ApprovalPort.verify_approval` トークン)を強制する
+— 結果は `ActionGateAllow` / `ActionGateApprovalRequired` / `ActionGateDenied` のいずれかで、これは
+`host_rest` の `POST /binding/action` と `host_mcp` の `${prefix}_action` の両方が `DomainPort.invoke`
+を呼ぶ前に参照する同じ形である。`kohaku.host_core.action_audit` の `ActionAuditRecorder` プロトコルは
+任意の `action.*` lineage イベントの記録先である(`action.invoked` / `action.denied` /
+`action.approvalRequested` / `action.approved`。fail-open — recorder の失敗が書き込みを止めることは無い)。
+
+ステートレスな HMAC `ApprovalPort` の参照実装(`HmacApprovalPort` / `create_hmac_approval_port` /
+`MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v1."` prefix の
+トークン)は、共有の `kohaku` ライブラリではなく
+`python/examples/sales-api/src/sales_api/approval_port.py` に置かれている — `sales_api/authz_port.py`
+がすでに HMAC `AuthzPort`/capability トークン対を置いているのと同じ場所である。これは、この port が
+Python 側ではそもそも独立パッケージ境界を持たないため(TS の多パッケージ構成と異なり、Python は
+参照*アダプタ*をサンプルアプリの一部として移植しており、個別にインポート可能なパッケージとしては
+移植していない)。`python/examples/sales-api` の `annotate`(`"confirm"` tier)と `publish`
+(`"approve"` tier)operation、および `sales_api_tests/test_governed_actions.py` /
+`test_approval_port.py` は、TS サンプル自身の統制された Action デモを写している(全体の手順は
+[ユーザーガイド](../docs/user-guide.ja.md)の「統制された Action: tier」の節を参照)。
 
 ## 詳細な失敗ログ(`KOHAKU_DEBUG`、TS と対称)
 

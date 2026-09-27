@@ -160,6 +160,7 @@ export function DashboardPage(): ReactNode {
               <SpecSurface
                 spec={view.spec}
                 capability={view.capability}
+                actionManifest={view.actions}
                 enableViewTransitions={viewTransitionsEnabled}
                 onEvent={(e) => void handleEvent(e)}
                 onActionResult={(r) => {

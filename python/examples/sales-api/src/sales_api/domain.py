@@ -207,6 +207,8 @@ class SalesRepo:
         )
         self._seed_tag = f"{_SEED_VERSION}{hash_part}"
         self._bump_count = 0
+        # The "approve"-tier write demo's counter (design.md #62/#63). Like _bump_count, in-memory only and non-persistent.
+        self.publish_count = 0
 
     def data_version(self) -> str:
         return f"sales@{self._seed_tag}#bump-{self._bump_count}"
@@ -219,6 +221,11 @@ class SalesRepo:
     def annotate(self, note: str) -> str:
         """The demo's write: adds one note and advances the data version."""
         self.notes.append(note)
+        return self.bump()
+
+    def publish(self) -> str:
+        """The demo's "approve"-tier write (design.md #62/#63): counts a publish and advances the data version."""
+        self.publish_count += 1
         return self.bump()
 
     def product_name(self, product_id: str) -> str:

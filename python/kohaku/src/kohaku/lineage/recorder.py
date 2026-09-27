@@ -6,7 +6,17 @@ computeSpecHash is a synchronous function of kohaku.spec (the existing port's st
 
 from __future__ import annotations
 
-from kohaku.spec import JsonObject, Surface, UISpec, compute_spec_hash
+from typing import Literal
+
+from kohaku.spec import (
+    ApprovalGrant,
+    JsonObject,
+    LineageActor,
+    Principal,
+    Surface,
+    UISpec,
+    compute_spec_hash,
+)
 
 from .lineage import ComposeTraceLike, Lineage
 
@@ -123,3 +133,105 @@ class ViewRecorder:
 
 def create_view_recorder(lineage: Lineage) -> ViewRecorder:
     return ViewRecorder(lineage)
+
+
+class ActionAuditRecorder:
+    """Implements kohaku.host_core.action_audit.ActionAuditRecorder (structural typing -- Protocol, no
+    inheritance needed), backed by `lineage`'s `action.*` event family. Every event is recorded with actor
+    kohaku.spec.LineageActor(kind="user", id=principal.id) -- the principal that made the invoke request,
+    whether or not that specific attempt was allowed, denied, or left pending (an approval decision
+    itself, once made, is out of scope for this recorder: action.approved records *that* a given grant
+    was consumed by this invoke, not the separate act of the approver having issued it).
+    """
+
+    def __init__(self, lineage: Lineage, *, record_payload: bool = False) -> None:
+        self._lineage = lineage
+        self._record_payload = record_payload
+
+    async def invoked(
+        self,
+        *,
+        action: str,
+        payload_hash: str,
+        tier: Literal["auto", "confirm", "approve"],
+        principal: Principal,
+        tenant: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        event: dict[str, object] = {"action": action, "payloadHash": payload_hash, "tier": tier}
+        if correlation_id is not None:
+            event["correlationId"] = correlation_id
+        await self._lineage.action_invoked(event, LineageActor(kind="user", id=principal.id), tenant)  # type: ignore[arg-type]
+
+    async def denied(
+        self,
+        *,
+        action: str,
+        payload_hash: str,
+        tier: Literal["auto", "confirm", "approve"],
+        reason: str,
+        principal: Principal,
+        tenant: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        event: dict[str, object] = {
+            "action": action,
+            "payloadHash": payload_hash,
+            "tier": tier,
+            "reason": reason,
+        }
+        if correlation_id is not None:
+            event["correlationId"] = correlation_id
+        await self._lineage.action_denied(event, LineageActor(kind="user", id=principal.id), tenant)  # type: ignore[arg-type]
+
+    async def approval_requested(
+        self,
+        *,
+        action: str,
+        payload_hash: str,
+        tier: Literal["confirm", "approve"],
+        request_id: str,
+        payload: JsonObject,
+        principal: Principal,
+        tenant: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        event: dict[str, object] = {
+            "action": action,
+            "payloadHash": payload_hash,
+            "tier": tier,
+            "requestId": request_id,
+        }
+        if self._record_payload:
+            event["payload"] = payload
+        if correlation_id is not None:
+            event["correlationId"] = correlation_id
+        await self._lineage.action_approval_requested(
+            event,  # type: ignore[arg-type]
+            LineageActor(kind="user", id=principal.id),
+            tenant,
+        )
+
+    async def approved(
+        self,
+        *,
+        action: str,
+        payload_hash: str,
+        grant: ApprovalGrant,
+        principal: Principal,
+        tenant: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        event: dict[str, object] = {
+            "action": action,
+            "payloadHash": payload_hash,
+            "approverId": grant.approverId,
+            "requesterId": grant.requesterId,
+        }
+        if correlation_id is not None:
+            event["correlationId"] = correlation_id
+        await self._lineage.action_approved(event, LineageActor(kind="user", id=principal.id), tenant)  # type: ignore[arg-type]
+
+
+def create_action_audit_recorder(lineage: Lineage, *, record_payload: bool = False) -> ActionAuditRecorder:
+    return ActionAuditRecorder(lineage, record_payload=record_payload)

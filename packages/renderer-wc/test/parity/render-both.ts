@@ -6,6 +6,7 @@
 // WC renders <kohaku-surface> via property assignment and drains microtasks. We wait for both before comparing.
 
 import type { BindingClient } from "@kohaku-ui/data-binding";
+import type { ActionManifest } from "@kohaku-ui/renderer-core";
 import {
   type ImplRegistry,
   type RendererContextValue,
@@ -14,7 +15,7 @@ import {
   type SurfaceEvent,
 } from "@kohaku-ui/renderer-react";
 import { createCoreRegistry } from "@kohaku-ui/renderer-react/core";
-import type { ComponentNode, ThemeTokens, UISpec } from "@kohaku-ui/spec-core";
+import type { ComponentNode, JsonObject, ThemeTokens, UISpec } from "@kohaku-ui/spec-core";
 import { act, cleanup, render } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import {
@@ -63,6 +64,13 @@ export interface ParityContext {
    * the React side (design.md #68's `<kohaku-surface>.registerPart` / `implementWc`).
    */
   registerParts?: (surface: KohakuSurface) => void;
+  /** Governed actions (design.md #62/#63/#64) -- the compose-issued manifest + confirm/requestApproval hooks. */
+  actionManifest?: ActionManifest;
+  confirm?: (args: { action: string; message?: string }) => boolean | Promise<boolean>;
+  requestApproval?: (args: {
+    action: string;
+    payload: JsonObject;
+  }) => string | undefined | Promise<string | undefined>;
 }
 
 function toReactCtx(ctx: ParityContext, onEvent?: (e: SurfaceEvent) => void): RendererContextValue {
@@ -75,6 +83,9 @@ function toReactCtx(ctx: ParityContext, onEvent?: (e: SurfaceEvent) => void): Re
     ...(onEvent != null ? { onEvent } : {}),
     ...(ctx.onActionResult != null ? { onActionResult: ctx.onActionResult } : {}),
     ...(ctx.renderSandbox != null ? { renderSandbox: ctx.renderSandbox } : {}),
+    ...(ctx.actionManifest != null ? { actionManifest: ctx.actionManifest } : {}),
+    ...(ctx.confirm != null ? { confirm: ctx.confirm } : {}),
+    ...(ctx.requestApproval != null ? { requestApproval: ctx.requestApproval } : {}),
   };
 }
 
@@ -87,6 +98,9 @@ function toWcCtx(ctx: ParityContext, onEvent?: (e: SurfaceEvent) => void): Surfa
     ...(onEvent != null ? { onEvent } : {}),
     ...(ctx.onActionResult != null ? { onActionResult: ctx.onActionResult } : {}),
     ...(ctx.sandbox != null ? { sandbox: ctx.sandbox } : {}),
+    ...(ctx.actionManifest != null ? { actionManifest: ctx.actionManifest } : {}),
+    ...(ctx.confirm != null ? { confirm: ctx.confirm } : {}),
+    ...(ctx.requestApproval != null ? { requestApproval: ctx.requestApproval } : {}),
   };
 }
 

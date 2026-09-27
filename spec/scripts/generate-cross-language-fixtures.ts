@@ -13,9 +13,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exportDistillationDataset } from "@kohaku-ui/evals";
 import {
+  type ActionParamsSchema,
   ALLOWED_ATTRS,
   ALLOWED_STYLE_PROPS,
   ALLOWED_TAGS,
+  actionPayloadHash,
   type CacheKeyParts,
   cacheKey,
   canonicalStringify,
@@ -32,6 +34,7 @@ import {
   pageLineageArray,
   parseSpec,
   sha256Hex,
+  validateActionParams,
 } from "@kohaku-ui/spec-core";
 // Relative rather than "@kohaku-ui/composer", same reasoning as the registry import below: spec does
 // not declare a dependency on composer either. design-system.ts is safe to reach this way because it
@@ -194,6 +197,117 @@ const CACHE_KEY_CASES: CacheKeyParts[] = [
   { intentHash: "sha256:aaa", dataVersion: "v1", catalogFingerprint: "cat1", policyFingerprint: "" },
 ];
 
+// Pins kohaku's action-params JSON Schema subset validator (design.md #62; spec-core's
+// action-params.ts / schema/action-params.ts and their Python mirror spec/action_params.py) byte-for-byte
+// across languages: the exact `issues[]` (`{ path, code, message }`) validateActionParams reports for a
+// given (schema, payload) pair, and the `sha256:<hex>` actionPayloadHash binds an approval token to
+// (design.md #63). Every root schema is `type: "object"` (the real shape of an action's params), so a
+// single payloadHash can be computed per case alongside its issues. Covers: a fully valid payload;
+// `required` / `additionalProperties: false` violations; `minLength`/`maxLength` on a nested string;
+// `minimum`/`maximum` and integer-vs-number on a nested number; `enum`; array `items` + `maxItems` with
+// the `parent[i]` index-path convention; a nested object's dot-separated path; and an `x-message`
+// override replacing the default wording.
+const ACTION_PARAMS_CASES: { schema: ActionParamsSchema; payload: JsonObject }[] = [
+  {
+    schema: {
+      type: "object",
+      properties: { note: { type: "string", maxLength: 500 } },
+      required: ["note"],
+      additionalProperties: false,
+    },
+    payload: { note: "Looks good to me." },
+  },
+  {
+    schema: {
+      type: "object",
+      properties: { note: { type: "string", maxLength: 500 } },
+      required: ["note"],
+      additionalProperties: false,
+    },
+    payload: {},
+  },
+  {
+    schema: {
+      type: "object",
+      properties: { note: { type: "string" } },
+      additionalProperties: false,
+    },
+    payload: { note: "ok", extra: 1 },
+  },
+  {
+    schema: { type: "object", properties: { s: { type: "string", minLength: 2, maxLength: 4 } } },
+    payload: { s: "a" },
+  },
+  {
+    schema: { type: "object", properties: { s: { type: "string", minLength: 2, maxLength: 4 } } },
+    payload: { s: "abcde" },
+  },
+  {
+    schema: { type: "object", properties: { n: { type: "integer", minimum: 0, maximum: 10 } } },
+    payload: { n: -1 },
+  },
+  {
+    schema: { type: "object", properties: { n: { type: "integer", minimum: 0, maximum: 10 } } },
+    payload: { n: 1.5 },
+  },
+  {
+    schema: { type: "object", properties: { severity: { type: "string", enum: ["low", "high"] } } },
+    payload: { severity: "medium" },
+  },
+  {
+    schema: {
+      type: "object",
+      properties: { tags: { type: "array", items: { type: "string", maxLength: 3 }, maxItems: 2 } },
+    },
+    payload: { tags: ["ok", "toolong", "x"] },
+  },
+  {
+    schema: {
+      type: "object",
+      properties: {
+        address: {
+          type: "object",
+          properties: { city: { type: "string", minLength: 1 } },
+          required: ["city"],
+        },
+      },
+    },
+    payload: { address: { city: "" } },
+  },
+  {
+    schema: {
+      type: "object",
+      properties: { note: { type: "string", maxLength: 3, "x-message": "note is too long" } },
+    },
+    payload: { note: "abcd" },
+  },
+  // Prototype-pollution-shaped keys (the review finding this golden section was extended for): a plain
+  // object literal with a `__proto__:` key sets the prototype rather than creating an own property (a
+  // JS-source-only quirk), so this is built via JSON.parse to match the own-property shape a real
+  // request body actually has once parsed off the wire -- the same shape both languages' hosts see.
+  {
+    schema: { type: "object", properties: { amount: { type: "number" } } },
+    payload: JSON.parse('{"amount":10,"__proto__":{"polluted":true}}') as JsonObject,
+  },
+  {
+    schema: { type: "object", properties: { amount: { type: "number" } } },
+    payload: JSON.parse('{"amount":10,"constructor":{"polluted":true}}') as JsonObject,
+  },
+  // "toString" is not in the hard-rejected set (unlike __proto__/constructor/prototype above), but
+  // without Object.hasOwn-based property lookup it would previously resolve `properties["toString"]` to
+  // the inherited Object.prototype.toString function instead of undefined, silently skipping both the
+  // additionalProperties check below and real validation. This pins that it now correctly reports
+  // additionalProperties, the same as any other undeclared key would.
+  {
+    schema: {
+      type: "object",
+      properties: { amount: { type: "number" } },
+      additionalProperties: false,
+    },
+    payload: JSON.parse('{"amount":10,"toString":1}') as JsonObject,
+  },
+];
+
 // Pins the Compliance Evidence Pack (design.md #67) byte-for-byte across languages: canonical-JSON
 // serialization of events.jsonl/approvals.jsonl/promotions.jsonl/fixations.jsonl, artifact extraction
 // and hash-mismatch warning wording, manifest assembly, and the Ed25519 signature itself (deterministic,
@@ -265,6 +379,15 @@ async function main(): Promise<void> {
   const cacheKeyCases = CACHE_KEY_CASES.map((parts) => ({ parts, key: cacheKey(parts) }));
 
   const lineageCursorCases = LINEAGE_CURSOR_SEQS.map((seq) => ({ seq, cursor: encodeSeqCursor(seq) }));
+
+  const actionParamsCases = await Promise.all(
+    ACTION_PARAMS_CASES.map(async ({ schema, payload }) => ({
+      schema,
+      payload,
+      issues: validateActionParams(schema, payload),
+      payloadHash: await actionPayloadHash(payload),
+    })),
+  );
 
   // Pins the prompt fragments that are hand-transcribed as goldens in both languages' composer tests
   // (packages/composer/test/design-kit.test.ts + design-system.test.ts and their Python mirrors under
@@ -465,6 +588,7 @@ async function main(): Promise<void> {
         spec,
         cacheKey: cacheKeyCases,
         lineageCursor: lineageCursorCases,
+        actionParams: actionParamsCases,
         sandboxDom,
         distillation,
         fallback: fallbackCases,
@@ -475,7 +599,7 @@ async function main(): Promise<void> {
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
   );
   console.log(
     `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,

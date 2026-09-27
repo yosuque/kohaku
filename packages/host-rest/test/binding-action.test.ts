@@ -18,11 +18,13 @@ function allowAuthz(): AuthzPort {
   };
 }
 
-/** A domain that echoes the write. */
+/** A domain that echoes the write. Declares "annotate" (this file's action under test) so it is not
+ * rejected by the undeclared-action fail-closed check (design.md #62/#63; unrelated to what this file
+ * itself tests -- response shape / error-handling of an already-declared action). */
 function echoDomain(): DomainPort {
   return {
     async listOperations() {
-      return [];
+      return [{ name: "annotate", description: "d" }];
     },
     async invoke(op: string, args: JsonObject) {
       return { ok: true, op, args };
@@ -108,7 +110,7 @@ describe("response shape of POST /binding/action", () => {
   it("failure of domain.invoke (the write itself) is 404 (distinguished from effects failure)", async () => {
     const throwingDomain: DomainPort = {
       async listOperations() {
-        return [];
+        return [{ name: "annotate", description: "d" }];
       },
       async invoke() {
         throw new Error("write failed (test)");

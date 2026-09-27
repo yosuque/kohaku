@@ -6,12 +6,24 @@ source of truth for the fixation (L1->L0) delivery + staleness self-healing sequ
 a composed Spec, and fail-open observability-hook helpers.
 """
 
+from .action_audit import ActionAuditRecorder
 from .action_effects import (
     ActionEffectsHook,
     ActionEffectsResponse,
     ActionEffectsResult,
     apply_action_effects,
 )
+from .action_gate import (
+    ActionGate,
+    ActionGateAllow,
+    ActionGateApprovalRequired,
+    ActionGateDenied,
+    ActionGateInvalid,
+    ActionGateRequest,
+    ActionGateResult,
+    create_action_gate,
+)
+from .action_manifest import ActionManifest, ActionManifestEntry, build_action_manifest
 from .allowed_actions import AllowedActions, create_allowed_actions
 from .binding_ref import (
     InvokableRef,
@@ -76,6 +88,7 @@ from .intent import (
     resolve_intent,
 )
 from .keyed_mutex import get_lock
+from .operation_index import OperationIndex, OperationIndexEntry, create_operation_index
 from .policy import (
     ParsedPolicy,
     PolicyAppliedEvent,
@@ -95,6 +108,7 @@ from .rate_limit import (
     create_memory_rate_limit_store,
     create_rate_limiter,
 )
+from .serialize import to_jsonable
 from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 from .view_recorder import record_view_fallback
 
@@ -102,9 +116,19 @@ __all__ = [
     "DEFAULT_CAPABILITY_TTL_SECONDS",
     "DEFAULT_MAX_MEMORY_ENTRIES",
     "TRACEPARENT_RE",
+    "ActionAuditRecorder",
     "ActionEffectsHook",
     "ActionEffectsResponse",
     "ActionEffectsResult",
+    "ActionGate",
+    "ActionGateAllow",
+    "ActionGateApprovalRequired",
+    "ActionGateDenied",
+    "ActionGateInvalid",
+    "ActionGateRequest",
+    "ActionGateResult",
+    "ActionManifest",
+    "ActionManifestEntry",
     "AllowedActions",
     "CatalogDeprecatedUsageEntry",
     "CatalogDeprecatedUsageFixation",
@@ -134,6 +158,8 @@ __all__ = [
     "IntentSourceNl",
     "InvokableRef",
     "MemoryRateLimitStore",
+    "OperationIndex",
+    "OperationIndexEntry",
     "ParsedInvokableRef",
     "ParsedInvokableRefOk",
     "ParsedInvokableRefSourceMismatch",
@@ -151,11 +177,14 @@ __all__ = [
     "analyze_catalog_impact",
     "apply_action_effects",
     "apply_catalog_migration",
+    "build_action_manifest",
     "compose_with_fixation",
+    "create_action_gate",
     "create_allowed_actions",
     "create_console_error_reporter",
     "create_daily_token_ledger",
     "create_memory_rate_limit_store",
+    "create_operation_index",
     "create_policy_runtime",
     "create_rate_limiter",
     "fail_open",
@@ -173,5 +202,6 @@ __all__ = [
     "resolve_fixated_result",
     "resolve_intent",
     "settle_fixation",
+    "to_jsonable",
     "verify_catalog_migration_plan",
 ]

@@ -1,6 +1,7 @@
 import type { ActionResult, BindingClient, ResolveOptions } from "@kohaku-ui/data-binding";
+import type { ActionManifest } from "@kohaku-ui/renderer-core";
 import type { TabularData } from "@kohaku-ui/spec-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SurfaceEvent } from "../src/index.js";
 import { KOHAKU_EVENT } from "../src/index.js";
 import { buildSpec, byKohaku, mount, root, tick } from "./util.js";
@@ -364,6 +365,139 @@ describe("Phase 2: action.button and control", () => {
     expect(custom).toEqual([
       expect.objectContaining({ componentId: "b2", on: "b2.press", payload: { kind: "go" } }),
     ]);
+  });
+});
+
+describe("Phase 2: governed actions on action.button (design.md #62/#63)", () => {
+  function actionButtonSpec(action = "annotate") {
+    return buildSpec({
+      components: [
+        { id: "root", type: "layout.stack", props: {}, children: ["b1"] },
+        { id: "b1", type: "action.button", props: { action, label: "Go" } },
+      ],
+      events: [{ on: "b1.press", emit: "action.invoke", payload: { note: "hi" } }],
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a locally-invalid payload (per actionManifest) never calls binding.invokeAction", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = {
+      annotate: {
+        tier: "auto",
+        paramsSchema: { type: "object", properties: { note: { type: "string", maxLength: 1 } } },
+      },
+    };
+    const surface = mount(actionButtonSpec(), { binding, actionManifest: manifest });
+    (byKohaku(surface, "b1") as HTMLButtonElement).click();
+    await tick();
+    expect(invokeAction).not.toHaveBeenCalled();
+  });
+
+  it("tier confirm with no host confirm hook defaults to globalThis.confirm — accepted", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "confirm" } };
+    const confirmSpy = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirmSpy);
+    const surface = mount(actionButtonSpec(), { binding, actionManifest: manifest });
+    (byKohaku(surface, "b1") as HTMLButtonElement).click();
+    await tick();
+    expect(confirmSpy).toHaveBeenCalledWith('Proceed with "annotate"?');
+    expect(invokeAction).toHaveBeenCalledWith(
+      "annotate",
+      { note: "hi" },
+      { confirmed: true, approval: undefined },
+    );
+  });
+
+  it("tier confirm with no host confirm hook defaults to globalThis.confirm — declined", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "confirm" } };
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => false),
+    );
+    const surface = mount(actionButtonSpec(), { binding, actionManifest: manifest });
+    (byKohaku(surface, "b1") as HTMLButtonElement).click();
+    await tick();
+    expect(invokeAction).not.toHaveBeenCalled();
+  });
+
+  it("a host-supplied confirm hook takes priority over globalThis.confirm", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "confirm", confirmMessage: "Sure?" } };
+    const globalConfirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", globalConfirm);
+    const confirm = vi.fn(async () => true);
+    const surface = mount(actionButtonSpec(), { binding, actionManifest: manifest, confirm });
+    (byKohaku(surface, "b1") as HTMLButtonElement).click();
+    await tick();
+    expect(confirm).toHaveBeenCalledWith({ action: "annotate", message: "Sure?" });
+    expect(globalConfirm).not.toHaveBeenCalled();
+    expect(invokeAction).toHaveBeenCalled();
+  });
+
+  it("tier approve invokes with the requestApproval hook's token", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "approve" } };
+    const requestApproval = vi.fn(async () => "kohaku-approval.v1.tok");
+    const surface = mount(actionButtonSpec(), { binding, actionManifest: manifest, requestApproval });
+    (byKohaku(surface, "b1") as HTMLButtonElement).click();
+    await tick();
+    expect(requestApproval).toHaveBeenCalledWith({ action: "annotate", payload: { note: "hi" } });
+    expect(invokeAction).toHaveBeenCalledWith(
+      "annotate",
+      { note: "hi" },
+      { confirmed: undefined, approval: "kohaku-approval.v1.tok" },
+    );
+  });
+
+  it("tier approve with no requestApproval hook never calls binding.invokeAction (no browser-native default)", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "approve" } };
+    const surface = mount(actionButtonSpec(), { binding, actionManifest: manifest });
+    (byKohaku(surface, "b1") as HTMLButtonElement).click();
+    await tick();
+    expect(invokeAction).not.toHaveBeenCalled();
   });
 });
 

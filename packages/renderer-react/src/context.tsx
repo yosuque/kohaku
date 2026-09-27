@@ -1,6 +1,7 @@
 import type { BindingClient } from "@kohaku-ui/data-binding";
 import type { ComponentDefinition } from "@kohaku-ui/registry";
 import {
+  type ActionManifest,
   DEFAULT_LOCALE,
   isDevEnvironment,
   PARTS_STATE_CSS,
@@ -159,6 +160,28 @@ export interface RendererContextValue {
     result?: unknown;
     message?: string;
   }) => void;
+  /**
+   * The compose-issued Action manifest (design.md #62/#64), threaded through to `useInvokeAction` /
+   * `runInvokeTarget` for a client-side `preflightAction` check before the round trip. Typically taken
+   * from the current `ComposeView.actions` (undefined when the Spec declares no write actions). Absent ->
+   * no local check; the server remains authoritative.
+   */
+  actionManifest?: ActionManifest;
+  /**
+   * Confirmation hook for a "confirm"-tier action (design.md #62/#63). When unset, defaults to
+   * `globalThis.confirm` (declining — i.e. returning `false` — when `confirm` is unavailable in this
+   * environment, e.g. SSR). Pass your own to replace the native browser dialog with an in-app one.
+   */
+  confirm?: (args: { action: string; message?: string }) => boolean | Promise<boolean>;
+  /**
+   * Approval-token hook for an "approve"-tier action (design.md #63). No default is provided (an approval
+   * token is obtained out of band — e.g. the host's `POST /approvals` or an approver-facing surface —
+   * there is no generic browser-native equivalent of `globalThis.confirm` for it).
+   */
+  requestApproval?: (args: {
+    action: string;
+    payload: JsonObject;
+  }) => string | undefined | Promise<string | undefined>;
   /**
    * `nonce` passed through to the `<style href="kohaku-parts-state">` RendererProvider injects (see
    * `PARTS_STATE_CSS`'s own doc comment). A host running a strict `style-src-elem` CSP with a per-request

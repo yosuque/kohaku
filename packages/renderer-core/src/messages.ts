@@ -73,6 +73,12 @@ export interface RendererMessages {
   disclosureAiGenerated: string;
   /** AI-generation disclosure label shown when `deriveDisclosure` returns "ai-assisted-reviewed" (tier L0, cache "fixated") */
   disclosureAiReviewed: string;
+  /**
+   * Governed actions (design.md #62/#63): the default confirmation-dialog text for a "confirm"-tier
+   * action whose manifest entry declares no `confirmMessage` of its own. Used by the renderer's default
+   * `confirm` hook (`globalThis.confirm`), consulted only when the host does not supply its own.
+   */
+  actionConfirmDefault: (action: string) => string;
 }
 
 /** Default English strings. The default value of RendererMessages. */
@@ -110,4 +116,5 @@ export const DEFAULT_MESSAGES: RendererMessages = {
     `Rendering the L2 component (${type}) requires injecting the sandbox bridge`,
   disclosureAiGenerated: "AI-generated content",
   disclosureAiReviewed: "AI-assisted, human-reviewed content",
+  actionConfirmDefault: (action) => `Proceed with "${action}"?`,
 };

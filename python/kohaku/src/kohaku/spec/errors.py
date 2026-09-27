@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from .action_params import ActionParamIssue
+
 if TYPE_CHECKING:
     from .validate import SpecIssue
 
@@ -75,7 +77,26 @@ type HostErrorCode = Literal[
     # Rate limiting (SPEC §6.1, REST-RL-001): a host MAY enforce a rate limit; when it does, an
     # over-limit request MUST use this code with HTTP 429.
     "RATE_LIMITED",
+    # Governed actions (SPEC §6.1, ACT-PRM-001): the invoke payload failed validate_action_params
+    # against the action's paramsSchema. MUST be reported with HTTP 422, before DomainPort.invoke ever
+    # runs.
+    "ACTION_PARAMS_INVALID",
+    # Governed actions (SPEC §6.1, ACT-APR-001): the action's tier requires a same-request
+    # `confirmed: true` (tier "confirm") or a valid unused approval token bound to this exact
+    # invocation (tier "approve"), and neither was satisfied. MUST be reported with HTTP 403.
+    "APPROVAL_REQUIRED",
 ]
+
+
+@dataclass(frozen=True)
+class ApprovalRequiredInfo:
+    """Wire shape of `ErrorEnvelope.approval` (SPEC §6.1, ACT-APR-001). Port of TS rest-errors.ts's inline
+    `error.approval` field."""
+
+    requestId: str
+    action: str
+    tier: Literal["confirm", "approve"]
+    payloadHash: str
 
 
 @dataclass(frozen=True)
@@ -94,6 +115,12 @@ class ErrorEnvelope:
     """The client-suggested backoff before retrying, in milliseconds. Present only on the 429
     RATE_LIMITED envelope (SPEC §6.1, REST-RL-001); mirrors the HTTP Retry-After header a host SHOULD
     also set, in a form usable by a non-HTTP transport (host_mcp's structured tool error, §6.2)."""
+    issues: list[ActionParamIssue] | None = None
+    """Per-field validation problems. Present only on the 422 ACTION_PARAMS_INVALID envelope (SPEC §6.1,
+    ACT-PRM-001) -- the exact list `validate_action_params` (`kohaku.spec.action_params`) returned."""
+    approval: ApprovalRequiredInfo | None = None
+    """The pending-approval descriptor. Present only on the 403 APPROVAL_REQUIRED envelope (SPEC §6.1,
+    ACT-APR-001)."""
 
     def to_wire(self) -> dict[str, object]:
         error: dict[str, object] = {"code": self.code, "message": self.message}
@@ -103,6 +130,17 @@ class ErrorEnvelope:
             error["status"] = self.status
         if self.retryAfterMs is not None:
             error["retryAfterMs"] = self.retryAfterMs
+        if self.issues is not None:
+            error["issues"] = [
+                {"path": issue.path, "code": issue.code, "message": issue.message} for issue in self.issues
+            ]
+        if self.approval is not None:
+            error["approval"] = {
+                "requestId": self.approval.requestId,
+                "action": self.approval.action,
+                "tier": self.approval.tier,
+                "payloadHash": self.approval.payloadHash,
+            }
         return {"error": error}
 
 

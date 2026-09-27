@@ -64,6 +64,9 @@ export function createRuntime(deps: RuntimeDeps): RenderRuntime {
     messages: deps.messages,
     onNodeError: deps.ctx.onNodeError,
     onActionResult: deps.ctx.onActionResult,
+    actionManifest: deps.ctx.actionManifest,
+    confirm: deps.ctx.confirm,
+    requestApproval: deps.ctx.requestApproval,
     sandbox: deps.ctx.sandbox,
     registry: deps.registry,
     dispatchForward: deps.dispatchForward,
@@ -209,9 +212,21 @@ function emitEvent(
 }
 
 /**
+ * The default "confirm"-tier hook (design.md #62/#63) used when the host does not supply its own via
+ * `SurfaceContext.confirm`: `globalThis.confirm` (the native browser dialog). Declines (returns `false`)
+ * when `confirm` is unavailable in this environment (e.g. SSR) rather than throwing — the same fail-safe
+ * posture as an explicitly declining host hook.
+ */
+function defaultConfirmHook(messages: RendererMessages, args: { action: string; message?: string }): boolean {
+  if (typeof globalThis.confirm !== "function") return false;
+  return globalThis.confirm(args.message ?? messages.actionConfirmDefault(args.action));
+}
+
+/**
  * Applies the write path (the glue for resolveInvokeTarget). Whether binding exists is passed as a boolean.
- * For invoke, delegates the pending/invokeAction/phase/publish/onActionResult sequence to renderer-core's
- * runInvokeTarget (shared with renderer-react); otherwise delegates to emit.
+ * For invoke, delegates the preflightAction/confirm/requestApproval/pending/invokeAction/phase/publish/
+ * onActionResult sequence to renderer-core's runInvokeTarget (shared with renderer-react); otherwise
+ * delegates to emit.
  */
 async function invokeAction(
   rt: RenderRuntime,
@@ -230,11 +245,20 @@ async function invokeAction(
     return;
   }
   const binding = rt.binding as BindingClient;
-  // The pending → invokeAction → succeeded/failed phase → bus.publish → onActionResult sequence has
-  // renderer-core's runInvokeTarget as the single source of truth (shared with renderer-react).
+  // The pending → invokeAction → succeeded/failed/invalid/awaitingApproval phase → bus.publish →
+  // onActionResult sequence has renderer-core's runInvokeTarget as the single source of truth (shared
+  // with renderer-react). `confirm` defaults to `globalThis.confirm` (defaultConfirmHook) when the host
+  // does not supply its own; `requestApproval` has no default (design.md #63).
   await runInvokeTarget(
     target,
-    { binding, bus: rt.bus, onActionResult: rt.onActionResult },
+    {
+      binding,
+      bus: rt.bus,
+      onActionResult: rt.onActionResult,
+      actionManifest: rt.actionManifest,
+      confirm: rt.confirm ?? ((args) => defaultConfirmHook(rt.messages, args)),
+      requestApproval: rt.requestApproval,
+    },
     node.id,
     onPhase,
   );

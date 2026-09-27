@@ -1,6 +1,16 @@
-import type { ComponentNode, UISpec } from "@kohaku-ui/spec-core";
-import { describe, expect, it } from "vitest";
-import { resolveActionName, resolveInvokeTarget } from "../src/index.js";
+import { type BindingClient, BindingError } from "@kohaku-ui/data-binding";
+import type { ComponentNode, JsonObject, UISpec } from "@kohaku-ui/spec-core";
+import { describe, expect, it, vi } from "vitest";
+import {
+  type ActionManifest,
+  type ActionPhase,
+  NOOP_INVALIDATION_BUS,
+  preflightAction,
+  resolveActionName,
+  resolveInvokeTarget,
+  runInvokeTarget,
+  summarizeActionForModel,
+} from "../src/index.js";
 
 type EventDecl = { on: string; emit: string; payload: Record<string, unknown> };
 
@@ -76,5 +86,298 @@ describe("resolveActionName", () => {
     expect(resolveActionName(makeNode("b"), { action: "q" })).toBe("q");
     expect(resolveActionName(makeNode("b"), {})).toBeUndefined();
     expect(resolveActionName(makeNode("b", { action: "" }), {})).toBeUndefined();
+  });
+});
+
+const NOTE_SCHEMA = {
+  type: "object" as const,
+  properties: { note: { type: "string" as const, maxLength: 5 } },
+};
+
+describe("preflightAction (design.md #62/#63)", () => {
+  it("no manifest -> allow", () => {
+    expect(preflightAction(undefined, "annotate", { note: "hi" })).toEqual({ kind: "allow" });
+  });
+
+  it("action absent from the manifest -> allow (unknown to this check)", () => {
+    const manifest: ActionManifest = { publish: { tier: "auto" } };
+    expect(preflightAction(manifest, "annotate", { note: "hi" })).toEqual({ kind: "allow" });
+  });
+
+  it("tier auto with a valid payload -> allow", () => {
+    const manifest: ActionManifest = { annotate: { tier: "auto", paramsSchema: NOTE_SCHEMA } };
+    expect(preflightAction(manifest, "annotate", { note: "hi" })).toEqual({ kind: "allow" });
+  });
+
+  it("an invalid payload -> invalid with issues, regardless of tier", () => {
+    const manifest: ActionManifest = { annotate: { tier: "confirm", paramsSchema: NOTE_SCHEMA } };
+    expect(preflightAction(manifest, "annotate", { note: "way too long" })).toEqual({
+      kind: "invalid",
+      issues: [{ path: "note", code: "maxLength", message: "expected at most 5 characters" }],
+    });
+  });
+
+  it("tier confirm with a valid payload -> confirm, carrying confirmMessage", () => {
+    const manifest: ActionManifest = {
+      annotate: { tier: "confirm", paramsSchema: NOTE_SCHEMA, confirmMessage: "Are you sure?" },
+    };
+    expect(preflightAction(manifest, "annotate", { note: "hi" })).toEqual({
+      kind: "confirm",
+      confirmMessage: "Are you sure?",
+    });
+  });
+
+  it("tier approve with a valid payload -> approve", () => {
+    const manifest: ActionManifest = { publish: { tier: "approve" } };
+    expect(preflightAction(manifest, "publish", {})).toEqual({ kind: "approve" });
+  });
+});
+
+describe("summarizeActionForModel (never includes payload values)", () => {
+  it.each<[ActionPhase, string]>([
+    [{ phase: "idle" }, "annotate: not yet attempted"],
+    [{ phase: "pending" }, "annotate: in progress"],
+    [{ phase: "succeeded", result: { ok: true } }, "annotate: completed"],
+    [{ phase: "failed", message: "network error" }, "annotate: failed (network error)"],
+    [
+      { phase: "awaitingApproval", tier: "confirm", message: "please confirm" },
+      "annotate: requires user confirmation before it can run",
+    ],
+    [
+      { phase: "awaitingApproval", tier: "approve", message: "please approve" },
+      "annotate: requires approval before it can run",
+    ],
+  ])("%o -> %s", (phase, expected) => {
+    expect(summarizeActionForModel("annotate", phase)).toBe(expected);
+  });
+
+  it("an invalid phase's summary carries only path/code metadata, never the submitted value", () => {
+    const summary = summarizeActionForModel("annotate", {
+      phase: "invalid",
+      issues: [{ path: "note", code: "maxLength", message: "expected at most 5 characters" }],
+    });
+    expect(summary).toBe("annotate: rejected (note: maxLength)");
+    expect(summary).not.toContain("way too long"); // the actual submitted value never appears
+  });
+});
+
+describe("runInvokeTarget (design.md #62/#63 gating)", () => {
+  function fakeBinding(invokeAction: BindingClient["invokeAction"]): BindingClient {
+    return {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+  }
+
+  it("no manifest: proceeds directly to invoke and publishes invalidates on success", async () => {
+    const invokeAction = vi.fn(async () => ({ result: { ok: true }, invalidates: ["query://sales/x"] }));
+    const publish = vi.fn();
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "annotate", payload: { note: "hi" } },
+      {
+        binding: fakeBinding(invokeAction),
+        bus: { ...NOOP_INVALIDATION_BUS, publish },
+        onActionResult: undefined,
+      },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(phases.map((p) => p.phase)).toEqual(["pending", "succeeded"]);
+    expect(invokeAction).toHaveBeenCalledWith(
+      "annotate",
+      { note: "hi" },
+      { confirmed: undefined, approval: undefined },
+    );
+    expect(publish).toHaveBeenCalledWith({ refs: ["query://sales/x"] });
+  });
+
+  it("a locally-invalid payload short-circuits before ever calling invokeAction", async () => {
+    const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
+    const manifest: ActionManifest = { annotate: { tier: "auto", paramsSchema: NOTE_SCHEMA } };
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "annotate", payload: { note: "way too long" } },
+      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, actionManifest: manifest },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(phases).toEqual([
+      {
+        phase: "invalid",
+        issues: [{ path: "note", code: "maxLength", message: "expected at most 5 characters" }],
+      },
+    ]);
+    expect(invokeAction).not.toHaveBeenCalled();
+  });
+
+  it("tier confirm without a confirm hook short-circuits to awaitingApproval", async () => {
+    const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
+    const manifest: ActionManifest = { annotate: { tier: "confirm", confirmMessage: "Sure?" } };
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "annotate", payload: { note: "hi" } },
+      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, actionManifest: manifest },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(phases).toEqual([{ phase: "awaitingApproval", tier: "confirm", message: "Sure?" }]);
+    expect(invokeAction).not.toHaveBeenCalled();
+  });
+
+  it("tier confirm with a confirm hook that declines short-circuits to awaitingApproval", async () => {
+    const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
+    const manifest: ActionManifest = { annotate: { tier: "confirm" } };
+    const confirm = vi.fn(async () => false);
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "annotate", payload: { note: "hi" } },
+      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, actionManifest: manifest, confirm },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(confirm).toHaveBeenCalledWith({ action: "annotate", message: undefined });
+    expect(phases).toEqual([
+      { phase: "awaitingApproval", tier: "confirm", message: "this action requires confirmation" },
+    ]);
+    expect(invokeAction).not.toHaveBeenCalled();
+  });
+
+  it("tier confirm with an accepting confirm hook invokes with confirmed: true", async () => {
+    const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
+    const manifest: ActionManifest = { annotate: { tier: "confirm" } };
+    const confirm = vi.fn(async () => true);
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "annotate", payload: { note: "hi" } },
+      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, actionManifest: manifest, confirm },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(phases.map((p) => p.phase)).toEqual(["pending", "succeeded"]);
+    expect(invokeAction).toHaveBeenCalledWith(
+      "annotate",
+      { note: "hi" },
+      { confirmed: true, approval: undefined },
+    );
+  });
+
+  it("tier approve without a requestApproval hook short-circuits to awaitingApproval", async () => {
+    const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
+    const manifest: ActionManifest = { publish: { tier: "approve" } };
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "publish", payload: {} },
+      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, actionManifest: manifest },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(phases).toEqual([
+      { phase: "awaitingApproval", tier: "approve", message: "this action requires approval" },
+    ]);
+    expect(invokeAction).not.toHaveBeenCalled();
+  });
+
+  it("tier approve with a requestApproval hook returning a token invokes with that approval", async () => {
+    const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
+    const manifest: ActionManifest = { publish: { tier: "approve" } };
+    const requestApproval = vi.fn(async () => "kohaku-approval.v1.tok");
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "publish", payload: {} },
+      {
+        binding: fakeBinding(invokeAction),
+        bus: NOOP_INVALIDATION_BUS,
+        actionManifest: manifest,
+        requestApproval,
+      },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(requestApproval).toHaveBeenCalledWith({ action: "publish", payload: {} });
+    expect(phases.map((p) => p.phase)).toEqual(["pending", "succeeded"]);
+    expect(invokeAction).toHaveBeenCalledWith(
+      "publish",
+      {},
+      { confirmed: undefined, approval: "kohaku-approval.v1.tok" },
+    );
+  });
+
+  it("a server-rejected ACTION_PARAMS_INVALID maps to phase invalid (no local manifest to catch it first)", async () => {
+    const issues: JsonObject[] = [
+      { path: "note", code: "maxLength", message: "expected at most 5 characters" },
+    ];
+    const invokeAction = vi.fn(async () => {
+      throw new BindingError("ACTION_PARAMS_INVALID", "action parameters failed validation", {
+        status: 422,
+        issues: issues as never,
+      });
+    });
+    const onActionResult = vi.fn();
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "annotate", payload: { note: "way too long" } },
+      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, onActionResult },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(phases).toEqual([{ phase: "pending" }, { phase: "invalid", issues }]);
+    expect(onActionResult).not.toHaveBeenCalled();
+  });
+
+  it("a server-rejected APPROVAL_REQUIRED maps to phase awaitingApproval, carrying the approval descriptor", async () => {
+    const approval = {
+      requestId: "r1",
+      action: "annotate",
+      tier: "confirm" as const,
+      payloadHash: "sha256:x",
+    };
+    const invokeAction = vi.fn(async () => {
+      throw new BindingError("APPROVAL_REQUIRED", "this action requires confirmation (confirmed: true)", {
+        status: 403,
+        approval,
+      });
+    });
+    const onActionResult = vi.fn();
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "annotate", payload: { note: "hi" } },
+      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, onActionResult },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(phases).toEqual([
+      { phase: "pending" },
+      {
+        phase: "awaitingApproval",
+        tier: "confirm",
+        message: "this action requires confirmation (confirmed: true)",
+        approval,
+      },
+    ]);
+    expect(onActionResult).not.toHaveBeenCalled();
+  });
+
+  it("a generic invoke failure still maps to phase failed and notifies onActionResult (unchanged pre-existing behavior)", async () => {
+    const invokeAction = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const onActionResult = vi.fn();
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "annotate", payload: {} },
+      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, onActionResult },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(phases).toEqual([{ phase: "pending" }, { phase: "failed", message: "boom" }]);
+    expect(onActionResult).toHaveBeenCalledWith({
+      componentId: "node1",
+      action: "annotate",
+      phase: "failed",
+      message: "boom",
+    });
   });
 });

@@ -163,6 +163,95 @@ describe("invokeAction: error mapping", () => {
   });
 });
 
+describe("invokeAction: governed-action error mapping (design.md #62/#63)", () => {
+  it("422 ACTION_PARAMS_INVALID → BindingError with issues", async () => {
+    const client = createBindingClient({
+      fetcher: async () => ({ status: 200, body: DATA }),
+      actionFetcher: async () => ({
+        status: 422,
+        body: {
+          error: {
+            code: "ACTION_PARAMS_INVALID",
+            message: "action parameters failed validation",
+            issues: [{ path: "note", code: "maxLength", message: "expected at most 5 characters" }],
+          },
+        },
+      }),
+    });
+    await expect(client.invokeAction("annotate", { note: "way too long" })).rejects.toMatchObject({
+      code: "ACTION_PARAMS_INVALID",
+      issues: [{ path: "note", code: "maxLength", message: "expected at most 5 characters" }],
+    } satisfies Partial<BindingError>);
+  });
+
+  it("403 APPROVAL_REQUIRED → BindingError with the approval descriptor", async () => {
+    const client = createBindingClient({
+      fetcher: async () => ({ status: 200, body: DATA }),
+      actionFetcher: async () => ({
+        status: 403,
+        body: {
+          error: {
+            code: "APPROVAL_REQUIRED",
+            message: "this action requires confirmation (confirmed: true)",
+            approval: { requestId: "r1", action: "annotate", tier: "confirm", payloadHash: "sha256:x" },
+          },
+        },
+      }),
+    });
+    await expect(client.invokeAction("annotate", { note: "hi" })).rejects.toMatchObject({
+      code: "APPROVAL_REQUIRED",
+      approval: { requestId: "r1", action: "annotate", tier: "confirm", payloadHash: "sha256:x" },
+    } satisfies Partial<BindingError>);
+  });
+
+  it("a plain 403 (no envelope) still falls back to UNAUTHORIZED (backward compatible)", async () => {
+    const client = createBindingClient({
+      fetcher: async () => ({ status: 200, body: DATA }),
+      actionFetcher: async () => ({ status: 403, body: { error: { code: "CAPABILITY_DENIED" } } }),
+    });
+    await expect(client.invokeAction("annotate", { note: "hi" })).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+    });
+  });
+
+  it("confirmed / approval are forwarded to actionFetcher's init", async () => {
+    let seen: { confirmed?: boolean; approval?: string } = {};
+    const client = createBindingClient({
+      fetcher: async () => ({ status: 200, body: DATA }),
+      actionFetcher: async (_action, _payload, init) => {
+        seen = { confirmed: init.confirmed, approval: init.approval };
+        return { status: 200, body: { result: { ok: true } } };
+      },
+    });
+    await client.invokeAction("annotate", { note: "hi" }, { confirmed: true, approval: "tok" });
+    expect(seen).toEqual({ confirmed: true, approval: "tok" });
+  });
+
+  it("the default (fetch-based) actionFetcher sends confirmed / approval on the wire body", async () => {
+    // data-binding is environment-neutral (no DOM lib), so the default fetcher is consumed through a
+    // structurally-typed `globalThis.fetch` (see src/client.ts's `runtime`) rather than the DOM `fetch` /
+    // `Response` types, which are unavailable in this package's tsconfig.
+    const runtime = globalThis as unknown as {
+      fetch: (url: string, init?: { body?: string }) => Promise<{ status: number; json(): Promise<unknown> }>;
+    };
+    const calls: unknown[] = [];
+    const originalFetch = runtime.fetch;
+    runtime.fetch = async (_url, init) => {
+      calls.push(init?.body != null ? JSON.parse(init.body) : null);
+      return { status: 200, json: async () => ({ result: { ok: true } }) };
+    };
+    try {
+      const client = createBindingClient({ baseUrl: "https://host/api/kohaku" });
+      await client.invokeAction("annotate", { note: "hi" }, { confirmed: true, approval: "tok" });
+      expect(calls).toEqual([
+        { action: "annotate", payload: { note: "hi" }, confirmed: true, approval: "tok" },
+      ]);
+    } finally {
+      runtime.fetch = originalFetch;
+    }
+  });
+});
+
 describe("invokeAction: parseActionResult shaping", () => {
   it("a non-object body is wrapped as { result: body }", async () => {
     const client = createBindingClient({

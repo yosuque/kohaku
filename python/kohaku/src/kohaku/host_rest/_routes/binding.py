@@ -9,8 +9,22 @@ from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
-from kohaku.host_core import ParsedInvokableRefOk, apply_action_effects, parse_invokable_ref
-from kohaku.spec import InvocationContext, Principal, QueryRefError, VerifyRequest, VerifyResult
+from kohaku.host_core import (
+    ActionGateRequest,
+    ActionGateResult,
+    ParsedInvokableRefOk,
+    apply_action_effects,
+    parse_invokable_ref,
+)
+from kohaku.spec import (
+    InvocationContext,
+    JsonObject,
+    Principal,
+    QueryRefError,
+    VerifyRequest,
+    VerifyResult,
+    action_payload_hash,
+)
 
 from ..bodies import parse_action_body
 from ..deps import KohakuHostDeps
@@ -23,15 +37,23 @@ from .shared import (
     _message,
     _read_json,
     _resolve_tenant,
+    action_gate_for,
     check_rate_limit,
+    operation_index,
     report_host_error,
     request_id_of,
+    safe_record,
 )
 
 # A raw downstream (DomainPort.invoke) failure never reaches the client verbatim on the REF_NOT_FOUND path: it
 # may carry internals (SQL fragments, stack-trace text, library-internal wording). The original error still
 # reaches the observability hook (on_error) via report_host_error.
 _REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable"
+
+# An action name absent from the DomainPort's own operation index is not a declared operation at all -- it
+# must never reach domain.invoke (fail-closed), on the same footing as a capability that lacks the needed
+# write scope (this reuses that exact response shape: 403 CAPABILITY_DENIED, no new error code).
+_UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation"
 
 
 def _resolve_principal(deps: KohakuHostDeps, verdict: VerifyResult) -> Principal | Response:
@@ -47,6 +69,121 @@ def _resolve_principal(deps: KohakuHostDeps, verdict: VerifyResult) -> Principal
     if deps.auth is None:
         return ANONYMOUS
     return _error("CAPABILITY_DENIED", "capability verified without a principal", 403)
+
+
+async def _handle_action_gate_result(
+    deps: KohakuHostDeps,
+    gate_result: ActionGateResult,
+    *,
+    action: str,
+    payload: JsonObject,
+    principal: Principal,
+    tenant: str | None,
+    request_id: str,
+) -> Response | None:
+    """Maps one ActionGate.check outcome onto the REST response + audit trail (design.md #62/#63). Returns
+    the Response to send back to the client (invalid / approvalRequired / denied), or None when the gate
+    allowed the invoke and the caller should proceed to domain.invoke. Audit recording is always fail-open
+    (kohaku.host_core.fail_open via safe_record): a recording failure must never turn an otherwise-successful
+    allow, or an otherwise-correct denial, into a 500."""
+
+    if gate_result.kind == "invalid":
+        return _error(
+            "ACTION_PARAMS_INVALID",
+            "action parameters failed validation",
+            422,
+            request_id,
+            issues=gate_result.issues,
+        )
+
+    if gate_result.kind == "approvalRequired":
+
+        async def _record_approval_requested() -> None:
+            if deps.action_audit_recorder is None:
+                return
+            await deps.action_audit_recorder.approval_requested(
+                action=action,
+                payload_hash=gate_result.payloadHash,
+                tier=gate_result.tier,
+                request_id=gate_result.requestId,
+                payload=payload,
+                principal=principal,
+                tenant=tenant,
+                correlation_id=request_id,
+            )
+
+        await safe_record(deps, "binding/action.audit", request_id, _record_approval_requested)
+        message = (
+            "this action requires confirmation (confirmed: true)"
+            if gate_result.tier == "confirm"
+            else "this action requires an approval token"
+        )
+        return _error(
+            "APPROVAL_REQUIRED",
+            message,
+            403,
+            request_id,
+            approval={
+                "requestId": gate_result.requestId,
+                "action": action,
+                "tier": gate_result.tier,
+                "payloadHash": gate_result.payloadHash,
+            },
+        )
+
+    if gate_result.kind == "denied":
+
+        async def _record_denied() -> None:
+            if deps.action_audit_recorder is None:
+                return
+            await deps.action_audit_recorder.denied(
+                action=action,
+                payload_hash=gate_result.payloadHash,
+                tier=gate_result.tier,
+                reason=gate_result.reason,
+                principal=principal,
+                tenant=tenant,
+                correlation_id=request_id,
+            )
+
+        await safe_record(deps, "binding/action.audit", request_id, _record_denied)
+        return _error(
+            "APPROVAL_REQUIRED",
+            gate_result.reason,
+            403,
+            request_id,
+            approval={
+                "requestId": gate_result.requestId,
+                "action": action,
+                "tier": gate_result.tier,
+                "payloadHash": gate_result.payloadHash,
+            },
+        )
+
+    # gate_result.kind == "allow"
+    async def _record_allow() -> None:
+        if deps.action_audit_recorder is None:
+            return
+        await deps.action_audit_recorder.invoked(
+            action=action,
+            payload_hash=gate_result.payloadHash,
+            tier=gate_result.tier,
+            principal=principal,
+            tenant=tenant,
+            correlation_id=request_id,
+        )
+        if gate_result.grant is not None:
+            await deps.action_audit_recorder.approved(
+                action=action,
+                payload_hash=gate_result.payloadHash,
+                grant=gate_result.grant,
+                principal=principal,
+                tenant=tenant,
+                correlation_id=request_id,
+            )
+
+    await safe_record(deps, "binding/action.audit", request_id, _record_allow)
+    return None
 
 
 def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
@@ -124,6 +261,58 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         if isinstance(principal, Response):
             return principal
         payload = body.payload if body.payload is not None else {}
+        request_id = request_id_of(request, deps)
+        tenant = await _resolve_tenant(deps, request)
+
+        # Governed actions (design.md #62/#63): validate params and enforce the action's tier before
+        # domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
+        # because the index and DomainPort momentarily disagree, or because the name was never a real
+        # operation to begin with -- is rejected here rather than let through ungated (fail-closed;
+        # ACT-PRM-001).
+        index = await operation_index(deps)
+        entry = index.get(body.action)
+        if entry is None:
+
+            async def _record_undeclared() -> None:
+                if deps.action_audit_recorder is None:
+                    return
+                await deps.action_audit_recorder.denied(
+                    action=body.action,
+                    payload_hash=action_payload_hash(payload),
+                    tier="auto",
+                    reason=_UNDECLARED_ACTION_MESSAGE,
+                    principal=principal,
+                    tenant=tenant,
+                    correlation_id=request_id,
+                )
+
+            await safe_record(deps, "binding/action.audit", request_id, _record_undeclared)
+            return _error("CAPABILITY_DENIED", _UNDECLARED_ACTION_MESSAGE, 403)
+
+        gate = action_gate_for(deps)
+        gate_result = await gate.check(
+            ActionGateRequest(
+                descriptor=entry.descriptor,
+                params_schema=entry.params_schema,
+                payload=payload,
+                confirmed=body.confirmed,
+                approval=body.approval,
+                requester_id=principal.id,
+                tenant=tenant,
+            )
+        )
+        gated = await _handle_action_gate_result(
+            deps,
+            gate_result,
+            action=body.action,
+            payload=payload,
+            principal=principal,
+            tenant=tenant,
+            request_id=request_id,
+        )
+        if gated is not None:
+            return gated
+
         try:
             result = await deps.domain.invoke(
                 body.action,

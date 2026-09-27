@@ -7,11 +7,13 @@ Bearer, extra headers, and JSON parsing behave the same as the TS default fetche
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import httpx
 
 from kohaku.data_binding import (
+    ActionOptions,
     BindingClientConfig,
     create_binding_client,
     create_httpx_action_fetcher,
@@ -80,3 +82,29 @@ def test_httpx_action_fetcher_posts_action_and_parses_result() -> None:
     assert seen["url"] == "http://host/api/kohaku/binding/action"
     assert seen["content_type"] == "application/json"
     assert '"action":"annotate"' in seen["body"].replace(" ", "")
+
+
+def test_httpx_action_fetcher_sends_confirmed_and_approval_on_the_wire_body() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content.decode())
+        return httpx.Response(200, json={"result": {"ok": True}})
+
+    action_fetcher = create_httpx_action_fetcher(
+        "http://host/api/kohaku", transport=httpx.MockTransport(handler)
+    )
+    client = create_binding_client(
+        BindingClientConfig(base_url="http://host/api/kohaku", action_fetcher=action_fetcher)
+    )
+    asyncio.run(
+        client.invoke_action(
+            "annotate", {"note": "hi"}, ActionOptions(confirmed=True, approval="tok")
+        )
+    )
+    assert seen["body"] == {
+        "action": "annotate",
+        "payload": {"note": "hi"},
+        "confirmed": True,
+        "approval": "tok",
+    }

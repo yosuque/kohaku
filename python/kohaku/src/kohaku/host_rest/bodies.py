@@ -256,6 +256,16 @@ def parse_events_body(data: Any) -> EventsBody | None:
 class ActionBody:
     action: str
     payload: dict[str, Any] | None
+    confirmed: bool | None = None
+    """Governed actions (design.md #62/#63, SPEC ACT-CNF-001/ACT-APR-001): the same-request acknowledgement
+    for a "confirm"-tier action. Ignored by the gate for any other tier."""
+    approval: str | None = None
+    """The bound approval token for a "approve"-tier action (issued by POST /approvals)."""
+
+
+# Upper bound on the approval token field (a fixed-shape HMAC token, never expected to approach this size --
+# the bound only guards against an oversized garbage value being carried through to ApprovalPort.verify_approval).
+MAX_APPROVAL_TOKEN_LEN = 4096
 
 
 def parse_action_body(data: Any) -> ActionBody | None:
@@ -274,7 +284,61 @@ def parse_action_body(data: Any) -> ActionBody | None:
             return None
     else:
         payload = None
-    return ActionBody(action=action, payload=payload)
+    confirmed = body.get("confirmed")
+    if confirmed is not None and not isinstance(confirmed, bool):
+        return None
+    approval = body.get("approval")
+    if approval is not None and _as_bounded_str(approval, MAX_APPROVAL_TOKEN_LEN) is None:
+        return None
+    return ActionBody(action=action, payload=payload, confirmed=confirmed, approval=approval)
+
+
+# ---------------------------------------------------------------------------
+# /approvals (Draft; SPEC ACT-APR-001)
+# ---------------------------------------------------------------------------
+
+# Mirrors TS routes/schemas.ts's ApprovalRequestBodySchema bounds.
+MAX_APPROVAL_ACTION_LEN = 4096  # action has no explicit TS bound beyond min(1); kept generous here
+MAX_APPROVAL_PAYLOAD_HASH_LEN = 128
+MAX_APPROVAL_REQUESTER_ID_LEN = 256
+MAX_APPROVAL_TTL_SECONDS = 86400
+
+
+@dataclass(frozen=True)
+class ApprovalRequestBody:
+    """POST /approvals (Draft; SPEC ACT-APR-001): an authorized approver mints a token bound to
+    (action, payloadHash, requesterId, tenant) for a pending "approve"-tier action."""
+
+    action: str
+    payload_hash: str
+    requester_id: str
+    ttl_seconds: int | None = None
+
+
+def parse_approval_request_body(data: Any) -> ApprovalRequestBody | None:
+    body = _as_dict(data)
+    if body is None:
+        return None
+    action = _as_nonempty_str(body.get("action"))
+    if action is None:
+        return None
+    payload_hash = _as_bounded_str(body.get("payloadHash"), MAX_APPROVAL_PAYLOAD_HASH_LEN)
+    if payload_hash is None or len(payload_hash) == 0:
+        return None
+    requester_id = _as_bounded_str(body.get("requesterId"), MAX_APPROVAL_REQUESTER_ID_LEN)
+    if requester_id is None or len(requester_id) == 0:
+        return None
+    ttl_raw = body.get("ttlSeconds")
+    ttl_seconds: int | None = None
+    if ttl_raw is not None:
+        if not isinstance(ttl_raw, int) or isinstance(ttl_raw, bool):
+            return None
+        if ttl_raw <= 0 or ttl_raw > MAX_APPROVAL_TTL_SECONDS:
+            return None
+        ttl_seconds = ttl_raw
+    return ApprovalRequestBody(
+        action=action, payload_hash=payload_hash, requester_id=requester_id, ttl_seconds=ttl_seconds
+    )
 
 
 # ---------------------------------------------------------------------------

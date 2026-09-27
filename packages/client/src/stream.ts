@@ -1,11 +1,12 @@
 import type { HostErrorCode, SpecPatch, UISpec } from "@kohaku-ui/spec-core";
+import type { ActionManifest } from "./types.js";
 
 /**
  * A single event on the SSE wire (host-rest's POST /compose/stream; SPEC §6.1.1 [Draft]).
  * The spec / patch payloads are unvalidated (unknown). Typed conversion is done by {@link toComposeStreamEvent} below.
  */
 export type ComposeStreamWireEvent =
-  | { kind: "spec"; spec: unknown; capability?: string; final: boolean }
+  | { kind: "spec"; spec: unknown; capability?: string; final: boolean; actions?: ActionManifest }
   | { kind: "patch"; patch: unknown }
   | { kind: "done"; specHash: string; tier: string; cache: string }
   | { kind: "error"; error: { code: string; message: string } };
@@ -21,7 +22,7 @@ export type ComposeStreamWireEvent =
  * validation is the responsibility of the render side (the renderer's safeParseSpec / safeParsePatch).
  */
 export type ComposeStreamEvent =
-  | { kind: "spec"; spec: UISpec; capability?: string; final: boolean }
+  | { kind: "spec"; spec: UISpec; capability?: string; final: boolean; actions?: ActionManifest }
   | { kind: "patch"; patch: SpecPatch }
   | { kind: "done"; specHash: string; tier: string; cache: string; requestId?: string }
   | { kind: "error"; error: { code: HostErrorCode; message: string } };
@@ -109,6 +110,7 @@ function wireEvent(event: string, data: string): ComposeStreamWireEvent | null {
         spec: json["spec"],
         ...(typeof json["capability"] === "string" ? { capability: json["capability"] } : {}),
         final: json["final"] === true,
+        ...(json["actions"] != null ? { actions: json["actions"] as ActionManifest } : {}),
       };
     case "patch":
       return { kind: "patch", patch: json["patch"] };
@@ -143,6 +145,7 @@ export function toComposeStreamEvent(wire: ComposeStreamWireEvent): ComposeStrea
         spec: wire.spec as UISpec,
         ...(wire.capability != null ? { capability: wire.capability } : {}),
         final: wire.final,
+        ...(wire.actions != null ? { actions: wire.actions } : {}),
       };
     case "patch":
       return { kind: "patch", patch: wire.patch as SpecPatch };

@@ -1666,6 +1666,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "children": [
               "t",
               "openNote",
+              "publishBtn",
               "noteDialog",
               "g",
             ],
@@ -1693,6 +1694,15 @@ describe("fixed-specs snapshot: sales.records", () => {
             "type": "action.button",
           },
           {
+            "id": "publishBtn",
+            "props": {
+              "action": "publish",
+              "label": "Publish report",
+              "variant": "secondary",
+            },
+            "type": "action.button",
+          },
+          {
             "children": [
               "noteForm",
             ],
@@ -1714,6 +1724,7 @@ describe("fixed-specs snapshot: sales.records", () => {
               "fields": [
                 {
                   "label": "Note for these records",
+                  "maxLength": 500,
                   "name": "note",
                   "placeholder": "e.g. Check North America's growth",
                   "required": true,
@@ -1765,6 +1776,11 @@ describe("fixed-specs snapshot: sales.records", () => {
                 "query://sales/records?fy=2026&q=3&region=japan&channel=direct&productId=p1&limit=50",
               ],
             },
+          },
+          {
+            "emit": "action.invoke",
+            "on": "publishBtn.press",
+            "payload": {},
           },
         ],
         "intent": {
@@ -1811,6 +1827,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "children": [
               "t",
               "openNote",
+              "publishBtn",
               "noteDialog",
               "g",
             ],
@@ -1838,6 +1855,15 @@ describe("fixed-specs snapshot: sales.records", () => {
             "type": "action.button",
           },
           {
+            "id": "publishBtn",
+            "props": {
+              "action": "publish",
+              "label": "レポートを公開",
+              "variant": "secondary",
+            },
+            "type": "action.button",
+          },
+          {
             "children": [
               "noteForm",
             ],
@@ -1859,6 +1885,7 @@ describe("fixed-specs snapshot: sales.records", () => {
               "fields": [
                 {
                   "label": "この明細へのメモ",
+                  "maxLength": 500,
                   "name": "note",
                   "placeholder": "例: 北米の成長を確認",
                   "required": true,
@@ -1911,6 +1938,11 @@ describe("fixed-specs snapshot: sales.records", () => {
               ],
             },
           },
+          {
+            "emit": "action.invoke",
+            "on": "publishBtn.press",
+            "payload": {},
+          },
         ],
         "intent": {
           "canonical": "sales.records",
@@ -1946,6 +1978,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "children": [
               "t",
               "openNote",
+              "publishBtn",
               "noteDialog",
               "g",
             ],
@@ -1973,6 +2006,15 @@ describe("fixed-specs snapshot: sales.records", () => {
             "type": "action.button",
           },
           {
+            "id": "publishBtn",
+            "props": {
+              "action": "publish",
+              "label": "Publish report",
+              "variant": "secondary",
+            },
+            "type": "action.button",
+          },
+          {
             "children": [
               "noteForm",
             ],
@@ -1994,6 +2036,7 @@ describe("fixed-specs snapshot: sales.records", () => {
               "fields": [
                 {
                   "label": "Note for these records",
+                  "maxLength": 500,
                   "name": "note",
                   "placeholder": "e.g. Check North America's growth",
                   "required": true,
@@ -2046,6 +2089,11 @@ describe("fixed-specs snapshot: sales.records", () => {
               ],
             },
           },
+          {
+            "emit": "action.invoke",
+            "on": "publishBtn.press",
+            "payload": {},
+          },
         ],
         "intent": {
           "canonical": "sales.records",
@@ -2073,6 +2121,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "children": [
               "t",
               "openNote",
+              "publishBtn",
               "noteDialog",
               "g",
             ],
@@ -2100,6 +2149,15 @@ describe("fixed-specs snapshot: sales.records", () => {
             "type": "action.button",
           },
           {
+            "id": "publishBtn",
+            "props": {
+              "action": "publish",
+              "label": "レポートを公開",
+              "variant": "secondary",
+            },
+            "type": "action.button",
+          },
+          {
             "children": [
               "noteForm",
             ],
@@ -2121,6 +2179,7 @@ describe("fixed-specs snapshot: sales.records", () => {
               "fields": [
                 {
                   "label": "この明細へのメモ",
+                  "maxLength": 500,
                   "name": "note",
                   "placeholder": "例: 北米の成長を確認",
                   "required": true,
@@ -2173,6 +2232,11 @@ describe("fixed-specs snapshot: sales.records", () => {
               ],
             },
           },
+          {
+            "emit": "action.invoke",
+            "on": "publishBtn.press",
+            "payload": {},
+          },
         ],
         "intent": {
           "canonical": "sales.records",
@@ -2205,6 +2269,7 @@ describe("fixed-specs snapshot: sales.records", () => {
             "children": [
               "t",
               "openNote",
+              "publishBtn",
               "noteDialog",
               "g",
             ],
@@ -2232,6 +2297,15 @@ describe("fixed-specs snapshot: sales.records", () => {
             "type": "action.button",
           },
           {
+            "id": "publishBtn",
+            "props": {
+              "action": "publish",
+              "label": "Publish report",
+              "variant": "secondary",
+            },
+            "type": "action.button",
+          },
+          {
             "children": [
               "noteForm",
             ],
@@ -2253,6 +2327,7 @@ describe("fixed-specs snapshot: sales.records", () => {
               "fields": [
                 {
                   "label": "Note for these records",
+                  "maxLength": 500,
                   "name": "note",
                   "placeholder": "e.g. Check North America's growth",
                   "required": true,
@@ -2304,6 +2379,11 @@ describe("fixed-specs snapshot: sales.records", () => {
                 "query://sales/records?limit=500",
               ],
             },
+          },
+          {
+            "emit": "action.invoke",
+            "on": "publishBtn.press",
+            "payload": {},
           },
         ],
         "intent": {

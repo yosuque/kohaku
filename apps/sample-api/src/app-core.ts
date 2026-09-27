@@ -11,7 +11,14 @@ import { createKohakuRoutes, errorBody } from "@kohaku-ui/host-rest";
 import { createFixations, createLineage, type Fixations, type Lineage } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { coreCatalog, type ResolvedCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import type { AuthzPort, DomainPort, KohakuPolicyFile, Principal, StoragePort } from "@kohaku-ui/spec-core";
+import type {
+  ApprovalPort,
+  AuthzPort,
+  DomainPort,
+  KohakuPolicyFile,
+  Principal,
+  StoragePort,
+} from "@kohaku-ui/spec-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createComposeContext, sharedComposePolicy } from "./app/compose-context.js";
@@ -121,6 +128,14 @@ export interface AppDeps {
    * Node-only caller (index.ts, via host-core's `./policy-node` subpath) is expected to load one from disk.
    */
   policyFile?: KohakuPolicyFile;
+  /**
+   * Verifies stateless approval tokens for "approve"-tier actions (design.md #62/#63; the demo's
+   * DomainPort declares "publish" as tier "approve" — apps/sample-api/src/domain/port.ts). Unset by
+   * default: an "approve"-tier action can then never be allowed (the gate returns denied), unchanged
+   * from before governed actions existed. index.ts wires a real one (createHmacApprovalPort, reusing
+   * the same KOHAKU_CAPABILITY_SECRET as the AuthzPort) for the running demo; tests wire their own.
+   */
+  approvals?: ApprovalPort;
 }
 
 export interface SampleApp {
@@ -280,6 +295,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     identity,
     debug: deps.debug ?? false,
     ...(policyRuntime != null ? { rateLimiter: policyRuntime.rateLimiter } : {}),
+    ...(deps.approvals != null ? { approvals: deps.approvals } : {}),
   });
 
   const app = new Hono();

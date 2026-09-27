@@ -1,16 +1,34 @@
 import {
+  type ActionGateResult,
   applyActionEffects,
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
+  failOpen,
   type ParsedInvokableRef,
   parseInvokableRef,
   verifyCapabilitySafely,
 } from "@kohaku-ui/host-core";
-import type { Principal, VerifyRequest, VerifyResult } from "@kohaku-ui/spec-core";
+import {
+  actionPayloadHash,
+  type JsonObject,
+  type Principal,
+  type VerifyRequest,
+  type VerifyResult,
+} from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { KohakuHostDeps } from "../types.js";
 import { ActionBodySchema } from "./schemas.js";
-import { ANONYMOUS, message, parseBody, type RouteContext, reportHostError, requestIdOf } from "./shared.js";
+import {
+  ANONYMOUS,
+  actionGateFor,
+  message,
+  operationIndex,
+  parseBody,
+  type RouteContext,
+  reportHostError,
+  requestIdOf,
+  resolveTenant,
+} from "./shared.js";
 
 /**
  * A raw downstream (DomainPort.invoke) failure never reaches the client verbatim on the REF_NOT_FOUND path: it
@@ -19,6 +37,13 @@ import { ANONYMOUS, message, parseBody, type RouteContext, reportHostError, requ
  * fixed message; the original error still reaches the observability hook (onError) via reportHostError.
  */
 const REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable";
+
+/**
+ * An action name absent from the DomainPort's own operation index is not a declared operation at all --
+ * it must never reach `domain.invoke` (fail-closed), on the same footing as a capability that lacks the
+ * needed write scope (this reuses that exact response shape: 403 CAPABILITY_DENIED, no new error code).
+ */
+const UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation";
 
 /**
  * Calls `authz.verify` via host-core's `verifyCapabilitySafely` (shared with the MCP profile), and maps its
@@ -138,23 +163,183 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     if (principal instanceof Response) return principal;
     // body.payload is already a validated JsonObject | undefined (ActionBodySchema); no cast needed.
     const payload = body.payload ?? {};
+    const requestId = requestIdOf(c, deps);
+    const tenant = await resolveTenant(c, deps);
+
+    // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
+    // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
+    // because the index and DomainPort momentarily disagree, or because the name was never a real
+    // operation to begin with -- is rejected here rather than let through ungated (fail-closed; ACT-PRM-001).
+    const index = await operationIndex(deps);
+    const entry = index.get(body.action);
+    if (entry == null) {
+      await failOpen(
+        async () => {
+          await deps.actionAuditRecorder?.denied({
+            action: body.action,
+            payloadHash: await actionPayloadHash(payload),
+            tier: "auto",
+            reason: UNDECLARED_ACTION_MESSAGE,
+            principal,
+            ...(tenant != null ? { tenant } : {}),
+            correlationId: requestId,
+          });
+        },
+        (e) => reportHostError(deps, "binding/action.audit", requestId, e),
+      );
+      return c.json(errorBody("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE), 403);
+    }
+    const gate = actionGateFor(deps);
+    const gateResult = await gate.check({
+      descriptor: entry.descriptor,
+      paramsSchema: entry.paramsSchema,
+      payload,
+      confirmed: body.confirmed,
+      approval: body.approval,
+      requesterId: principal.id,
+      tenant,
+    });
+    const gated = await handleActionGateResult(deps, c, gateResult, {
+      action: body.action,
+      payload,
+      principal,
+      tenant,
+      requestId,
+    });
+    if (gated != null) return gated;
+
     let result: unknown;
     try {
       result = await deps.domain.invoke(body.action, payload, { principal, capability: token });
     } catch (e) {
       // Failure of the write itself (domain.invoke) is 404. Place the downstream failure on the
       // observability hook, then map it. The raw error message never reaches the client (see REF_NOT_FOUND_MESSAGE).
-      const requestId = requestIdOf(c, deps);
       await reportHostError(deps, "binding/action", requestId, e);
       return c.json(errorBody("REF_NOT_FOUND", REF_NOT_FOUND_MESSAGE, requestId), 404);
     }
     // Write-already-committed vs. side-effect-declaration failure: see host-core's applyActionEffects.
     const response = await applyActionEffects(deps.actionEffects, body.action, payload, result, async (e) => {
-      const requestId = requestIdOf(c, deps);
       await reportHostError(deps, "binding/action.effects", requestId, e);
     });
     return c.json(response);
   });
+}
+
+/**
+ * Maps one `ActionGate.check` outcome onto the REST response + audit trail (design.md #62/#63; shared
+ * shape so `handleActionGateResult`'s caller does not itself branch on `gateResult.kind`). Returns the
+ * `Response` to send back to the client (`invalid` / `approvalRequested` / `denied`), or `null` when the
+ * gate allowed the invoke (`allow`) and the caller should proceed to `domain.invoke`. Audit recording is
+ * always fail-open (host-core's `failOpen`): a recording failure must never turn an otherwise-successful
+ * allow, or an otherwise-correct denial, into a 500.
+ */
+async function handleActionGateResult(
+  deps: KohakuHostDeps,
+  c: Context,
+  gateResult: ActionGateResult,
+  ctx: {
+    action: string;
+    payload: JsonObject;
+    principal: Principal;
+    tenant: string | undefined;
+    requestId: string;
+  },
+): Promise<Response | null> {
+  const { action, principal, tenant, requestId } = ctx;
+  const auditReport = (e: unknown): Promise<void> =>
+    reportHostError(deps, "binding/action.audit", requestId, e);
+
+  if (gateResult.kind === "invalid") {
+    return c.json(
+      errorBody(
+        "ACTION_PARAMS_INVALID",
+        "action parameters failed validation",
+        requestId,
+        undefined,
+        gateResult.issues,
+      ),
+      422,
+    );
+  }
+
+  if (gateResult.kind === "approvalRequired") {
+    await failOpen(async () => {
+      await deps.actionAuditRecorder?.approvalRequested({
+        action,
+        payloadHash: gateResult.payloadHash,
+        tier: gateResult.tier,
+        requestId: gateResult.requestId,
+        payload: ctx.payload,
+        principal,
+        ...(tenant != null ? { tenant } : {}),
+        correlationId: requestId,
+      });
+    }, auditReport);
+    return c.json(
+      errorBody(
+        "APPROVAL_REQUIRED",
+        gateResult.tier === "confirm"
+          ? "this action requires confirmation (confirmed: true)"
+          : "this action requires an approval token",
+        requestId,
+        undefined,
+        undefined,
+        {
+          requestId: gateResult.requestId,
+          action,
+          tier: gateResult.tier,
+          payloadHash: gateResult.payloadHash,
+        },
+      ),
+      403,
+    );
+  }
+
+  if (gateResult.kind === "denied") {
+    await failOpen(async () => {
+      await deps.actionAuditRecorder?.denied({
+        action,
+        payloadHash: gateResult.payloadHash,
+        tier: gateResult.tier,
+        reason: gateResult.reason,
+        principal,
+        ...(tenant != null ? { tenant } : {}),
+        correlationId: requestId,
+      });
+    }, auditReport);
+    return c.json(
+      errorBody("APPROVAL_REQUIRED", gateResult.reason, requestId, undefined, undefined, {
+        requestId: gateResult.requestId,
+        action,
+        tier: gateResult.tier,
+        payloadHash: gateResult.payloadHash,
+      }),
+      403,
+    );
+  }
+
+  // gateResult.kind === "allow"
+  await failOpen(async () => {
+    await deps.actionAuditRecorder?.invoked({
+      action,
+      payloadHash: gateResult.payloadHash,
+      tier: gateResult.tier,
+      principal,
+      ...(tenant != null ? { tenant } : {}),
+      correlationId: requestId,
+    });
+    if (gateResult.grant != null) {
+      await deps.actionAuditRecorder?.approved({
+        action,
+        payloadHash: gateResult.payloadHash,
+        grant: gateResult.grant,
+        principal,
+        ...(tenant != null ? { tenant } : {}),
+        correlationId: requestId,
+      });
+    }
+  }, auditReport);
+  return null;
 }
 
 function bearerToken(c: Context): string | null {

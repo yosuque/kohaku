@@ -66,6 +66,17 @@ export const REQUIREMENTS: Requirement[] = [
   // rate-limit policy, so this is "reference" rather than a black-box check against the unconfigured demo host.
   { id: "REST-RL-001", level: "SHOULD", target: "rest-host", verification: "reference", verifiedBy: "packages/host-rest/test/rate-limited-error.test.ts, packages/client/test/client.test.ts, packages/host-rest/test/rate-limit-middleware.test.ts", description: "A rate-limited request is rejected with HTTP 429 and an {error:{code:RATE_LIMITED}} envelope, retryAfterMs round-trips through the client, and governance routes are exempt" },
 
+  // --- Governed Actions (SPEC §5 [Draft], design.md #62/#63/#64). Action names and paramsSchema/tier are
+  // DomainPort configuration a generic conformance host has none of, so — like REST-RL-001 above — these
+  // are "reference" (guaranteed by the reference implementation's own package tests) rather than a
+  // black-box check against an arbitrary host's own action set.
+  { id: "ACT-PRM-001", level: "MUST", target: "rest-host", verification: "reference", verifiedBy: "packages/spec-core/test/action-params.test.ts, packages/host-rest/test/binding-action-gate.test.ts, python/kohaku/tests/spec/test_action_params.py, python/kohaku/tests/host_rest/test_binding_action_gate.py", description: "A payload for an action with a declared paramsSchema is validated against it and rejected (422 ACTION_PARAMS_INVALID) before DomainPort.invoke ever runs" },
+  { id: "ACT-APR-001", level: "MUST", target: "rest-host", verification: "reference", verifiedBy: "packages/authz-hmac/test/approval-port.test.ts, packages/host-rest/test/approvals.test.ts, packages/host-rest/test/binding-action-gate.test.ts, python/examples/sales-api/sales_api_tests/test_approval_port.py, python/kohaku/tests/host_rest/test_approvals.py, python/kohaku/tests/host_rest/test_binding_action_gate.py", description: "An \"approve\"-tier action is never invoked without a bound, unexpired, unused (when an ApprovalStore is configured) token issued by a principal other than the requester; a self-approval is refused and a verify failure the host cannot classify is treated as fail-closed denial" },
+  // ACT-CNF-001 is SHOULD (not MUST), so it does not change the manifest's MUST count (spec/SPEC.md §7).
+  { id: "ACT-CNF-001", level: "SHOULD", target: "rest-host", verification: "reference", verifiedBy: "packages/host-rest/test/binding-action-gate.test.ts, python/kohaku/tests/host_rest/test_binding_action_gate.py", description: "A \"confirm\"-tier action's same-request body is expected to carry confirmed: true before it is invoked" },
+  // LIN-ACT-001 is SHOULD (not MUST), so it does not change the manifest's MUST count (spec/SPEC.md §7).
+  { id: "LIN-ACT-001", level: "SHOULD", target: "lineage", verification: "reference", verifiedBy: "packages/lineage/test/action-audit.test.ts, python/kohaku/tests/lineage/test_action_audit.py", description: "A governed Action's outcome is recorded under a distinct action.* event family (action.invoked/action.denied/action.approvalRequested/action.approved), carrying payloadHash but never the payload's own field values" },
+
   // --- Compose streaming (SPEC §6.1.1 [Draft]. SHOULD because the route itself is MAY) --------
   { id: "REST-STR-001", level: "SHOULD", target: "rest-host", verification: "blackbox", description: "POST /compose/stream begins with event: spec {spec, capability, final} whose spec is §2-conformant" },
   { id: "REST-STR-002", level: "SHOULD", target: "rest-host", verification: "blackbox", description: "The components/events resulting from applying patches match the non-streaming /compose (equivalence)" },
@@ -76,6 +87,7 @@ export const REQUIREMENTS: Requirement[] = [
   { id: "MCPAPP-FBK-001", level: "MUST", target: "mcp-host", verification: "reference", verifiedBy: "packages/host-mcp-apps/test", description: "A tool result with UI has a non-empty text fallback" },
   { id: "MCPAPP-APP-001", level: "MUST", target: "mcp-host", verification: "reference", verifiedBy: "packages/host-mcp-apps/test", description: "The binding/event/action tools are ui/visibility=[app]" },
   { id: "MCPAPP-CAP-001", level: "MUST", target: "mcp-host", verification: "reference", verifiedBy: "packages/host-mcp-apps/test", description: "A compose-family tool result carries the capability token only in _meta[\"kohaku/capability\"], never in structuredContent" },
+  { id: "MCPAPP-ACT-001", level: "MUST", target: "mcp-host", verification: "reference", verifiedBy: "packages/host-mcp-apps/test/mcp.test.ts, python/kohaku/tests/host_mcp/test_mcp.py", description: "The action tool enforces ACT-PRM-001/ACT-APR-001 identically to REST's POST /binding/action, expressed as a structured tool error (structuredContent.error.code ACTION_PARAMS_INVALID / APPROVAL_REQUIRED) rather than an HTTP status" },
 
   // --- sandbox (guaranteed by reference-implementation tests) ---------------
   { id: "SBX-ATTR-001", level: "MUST", target: "sandbox", verification: "reference", verifiedBy: "packages/sandbox/test", description: "The L2 iframe sandbox attribute does not include allow-same-origin" },

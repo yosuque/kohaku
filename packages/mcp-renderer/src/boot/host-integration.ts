@@ -7,6 +7,7 @@
  * - displayMode (MCP Apps standard): `ui/request-display-mode` (inline / fullscreen / pip).
  *   Availability is determined by the host context's availableDisplayModes.
  */
+import type { ActionManifest } from "@kohaku-ui/renderer-core";
 import { parseSpec, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
 
 /** Minimal structural type of ChatGPT's own widget persistence API (window.openai). */
@@ -18,6 +19,11 @@ export interface OpenAiWidgetApi {
 export interface PersistedView {
   spec: UISpec;
   capability: string;
+  /** The Governed Actions manifest (design.md #62/#64), if the compose response carried one. See
+   * ACTIONS_META_KEY's doc comment -- persisted alongside spec/capability (unlike initialData) since it is
+   * small, static per intentHash, and needed again after a remount-restore for preflightAction to keep
+   * working (an "auto"-tier-only Spec has none, so this stays undefined for the common case). */
+  actions?: ActionManifest;
 }
 
 /** Version marker for the saved shape. Lets us silently discard the old shape when we change the shape in the future. */
@@ -30,11 +36,15 @@ const WIDGET_STATE_VERSION = 1;
 export function readPersistedView(openai: OpenAiWidgetApi | undefined): PersistedView | null {
   const state = openai?.widgetState;
   if (state == null || typeof state !== "object") return null;
-  const s = state as { kohaku?: unknown; spec?: unknown; capability?: unknown };
+  const s = state as { kohaku?: unknown; spec?: unknown; capability?: unknown; actions?: unknown };
   if (s.kohaku !== WIDGET_STATE_VERSION) return null;
   if (s.spec == null || typeof s.capability !== "string" || s.capability === "") return null;
   try {
-    return { spec: parseSpec(s.spec), capability: s.capability };
+    return {
+      spec: parseSpec(s.spec),
+      capability: s.capability,
+      ...(s.actions != null && typeof s.actions === "object" ? { actions: s.actions as ActionManifest } : {}),
+    };
   } catch {
     return null;
   }
@@ -46,7 +56,7 @@ export function readPersistedView(openai: OpenAiWidgetApi | undefined): Persiste
  */
 export function persistView(
   openai: OpenAiWidgetApi | undefined,
-  view: { spec: UISpec; capability: string },
+  view: { spec: UISpec; capability: string; actions?: ActionManifest },
 ): void {
   if (typeof openai?.setWidgetState !== "function") return;
   try {
@@ -54,6 +64,7 @@ export function persistView(
       kohaku: WIDGET_STATE_VERSION,
       spec: view.spec,
       capability: view.capability,
+      ...(view.actions != null ? { actions: view.actions } : {}),
     });
   } catch {
     // A save failure is harmless (next time it is displayed via the tool-result / self-recovery paths)
@@ -79,6 +90,18 @@ export const INITIAL_DATA_META_KEY = "kohaku/initialData";
  */
 export const CAPABILITY_META_KEY = "kohaku/capability";
 
+/**
+ * Key for the Governed Actions manifest (design.md #62/#64) co-embedded in the _meta of tool-result /
+ * kohaku_event, alongside CAPABILITY_META_KEY. Keep it in sync with host-mcp-apps's ACTIONS_META_KEY
+ * (packages/host-mcp-apps/src/meta.ts). It rides `_meta` for the same reason the capability token does:
+ * `paramsSchema` / `confirmMessage` are operational detail for the widget's own `preflightAction`, not
+ * something that needs to enter the model's context. Held here as a literal string for the same reason as
+ * INITIAL_DATA_META_KEY / CAPABILITY_META_KEY (importing host-mcp-apps would reverse the dependency
+ * direction and bloat the single-file bundle); the match is guaranteed by a test
+ * (packages/host-mcp-apps/test/mcp.test.ts).
+ */
+export const ACTIONS_META_KEY = "kohaku/actions";
+
 /** Extract the _meta-embedded initial data from the response of tool-result / kohaku_event into a Map. */
 export function readInitialData(result: {
   _meta?: Record<string, unknown>;
@@ -88,11 +111,20 @@ export function readInitialData(result: {
   return new Map(Object.entries(embedded));
 }
 
+/** Extract the _meta-embedded Governed Actions manifest from the response of tool-result / kohaku_event. */
+export function readActionManifest(result: { _meta?: Record<string, unknown> }): ActionManifest | undefined {
+  const embedded = result._meta?.[ACTIONS_META_KEY];
+  if (embedded == null || typeof embedded !== "object") return undefined;
+  return embedded as ActionManifest;
+}
+
 /** The view extracted from a tool result ({spec, capability} + the consume-once initial-data map). */
 export interface ExtractedSpecView {
   spec: UISpec;
   capability: string;
   initialData?: Map<string, TabularData>;
+  /** The Governed Actions manifest (design.md #62/#64), when the compose response carried one. */
+  actions?: ActionManifest;
 }
 
 /** extractSpecView's result: ok, or the reason it could not be applied (the caller keeps its own logging / error policy). */
@@ -126,12 +158,14 @@ export function extractSpecView(result: unknown): SpecViewExtraction {
   try {
     const parsed = parseSpec(spec);
     const initialData = readInitialData(r);
+    const actions = readActionManifest(r);
     return {
       ok: true,
       view: {
         spec: parsed,
         capability,
         ...(initialData != null ? { initialData } : {}),
+        ...(actions != null ? { actions } : {}),
       },
     };
   } catch (e) {

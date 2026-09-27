@@ -55,6 +55,22 @@ FIXATION_EVENT_TYPES: tuple[str, ...] = (
 # audit-worthy" -- lives in host_core, not here).
 POLICY_EVENT_TYPES: tuple[str, ...] = ("policy.applied",)
 
+# Governed Actions' audit trail (design.md #62/#63). Fired by create_action_audit_recorder's adapter
+# (recorder.py), driven by host_core's ActionGate outcome for every invoke attempt:
+# - action.invoked -- the gate returned "allow" (params validated, tier satisfied).
+# - action.denied -- tier "approve" and a token *was* presented but did not verify (or no ApprovalPort
+#   is configured at all).
+# - action.approvalRequested -- nothing was presented yet ("confirm" without confirmed: true, or
+#   "approve" without a token).
+# - action.approved -- tier "approve" and the presented approval grant was successfully consumed
+#   (recorded in addition to, not instead of, action.invoked).
+ACTION_EVENT_TYPES: tuple[str, ...] = (
+    "action.invoked",
+    "action.denied",
+    "action.approvalRequested",
+    "action.approved",
+)
+
 LineageEventType = Literal[
     "view.composed",
     "view.rendered",
@@ -73,6 +89,10 @@ LineageEventType = Literal[
     "intent.unfixated",
     "intent.migrated",
     "policy.applied",
+    "action.invoked",
+    "action.denied",
+    "action.approvalRequested",
+    "action.approved",
 ]
 """Closed vocabulary of Lineage event types."""
 
@@ -224,6 +244,56 @@ class PolicyAppliedPayload(TypedDict, total=False):
     label: str
     changedPaths: list[str]
     tenants: list[str]
+
+
+class ActionInvokedPayload(TypedDict, total=False):
+    """The action.invoked payload (design.md #62/#63). Only payloadHash is recorded, never the invoke
+    payload itself -- the audit trail proves *that* a specific payload (by hash) was invoked and under
+    which tier, without persisting whatever business data the payload carried."""
+
+    action: str
+    payloadHash: str
+    tier: Literal["auto", "confirm", "approve"]
+    correlationId: str
+
+
+class ActionDeniedPayload(TypedDict, total=False):
+    """The action.denied payload (design.md #62/#63): either an "approve"-tier invoke whose presented
+    token did not verify (or no ApprovalPort was configured at all; tier is "confirm" or "approve"), or an
+    invoke whose action name is not one of the DomainPort's own declared operations, rejected before any
+    governed-action gate ever ran (tier is "auto")."""
+
+    action: str
+    payloadHash: str
+    tier: Literal["auto", "confirm", "approve"]
+    reason: str
+    correlationId: str
+
+
+class ActionApprovalRequestedPayload(TypedDict, total=False):
+    """The action.approvalRequested payload (design.md #63): nothing was presented yet for a "confirm" or
+    "approve"-tier invoke. `payload` (the raw invoke payload, not just its hash) is included only when the
+    recorder is configured with record_payload=True -- the default omits it, matching every other action.*
+    event's "hash only" stance; an operator opts in when an approver-facing flow needs to see the actual
+    content being approved (e.g. the note text of an annotate action) rather than just its hash."""
+
+    action: str
+    payloadHash: str
+    tier: Literal["confirm", "approve"]
+    requestId: str
+    payload: dict[str, Any]
+    correlationId: str
+
+
+class ActionApprovedPayload(TypedDict, total=False):
+    """The action.approved payload (design.md #63): an "approve"-tier invoke whose presented approval
+    grant was successfully consumed. Recorded in addition to (not instead of) action.invoked."""
+
+    action: str
+    payloadHash: str
+    approverId: str
+    requesterId: str
+    correlationId: str
 
 
 _SYSTEM_ACTOR = LineageActor(kind="system")

@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from kohaku.composer import ComposeContext
-from kohaku.host_core import PolicyRateLimiter
+from kohaku.host_core import ActionAuditRecorder, PolicyRateLimiter
 from kohaku.host_rest import (
     KohakuHostDeps,
     attach_kohaku_routes,
@@ -40,7 +40,9 @@ from kohaku.lineage import (
 from kohaku.llm import FakeLlm
 from kohaku.registry import core_catalog, resolve_catalog
 from kohaku.spec import (
+    ApprovalPort,
     DataShape,
+    DomainPort,
     Intent,
     IntentInput,
     InvocationContext,
@@ -167,7 +169,7 @@ class Harness:
     client: TestClient
     deps: KohakuHostDeps
     ctx: ComposeContext
-    domain: FakeDomain
+    domain: DomainPort
     authz: FakeAuthz
     storage: FileStoragePort
     ref: str = REF
@@ -194,6 +196,9 @@ def build_harness(
     action_effects: ActionEffectsHook | None = None,
     max_body_bytes: int | None = None,
     rate_limiter: PolicyRateLimiter | None = None,
+    domain: DomainPort | None = None,
+    approvals: ApprovalPort | None = None,
+    action_audit_recorder: ActionAuditRecorder | None = None,
 ) -> Harness:
     storage = FileStoragePort(tmp_path)
     catalog = resolve_catalog(core_catalog())
@@ -204,11 +209,11 @@ def build_harness(
         llm=FakeLlm(objects=lambda _req: _l1_draft()),
     )
     lineage = create_lineage(storage)
-    domain = FakeDomain()
+    domain_impl: DomainPort = domain if domain is not None else FakeDomain()
     authz = FakeAuthz()
     deps = KohakuHostDeps(
         compose=ctx,
-        domain=domain,
+        domain=domain_impl,
         authz=authz,
         query_source="sales",
         recorder=create_view_recorder(lineage) if with_recorder else None,
@@ -229,12 +234,14 @@ def build_harness(
         action_effects=action_effects,
         max_body_bytes=max_body_bytes,
         rate_limiter=rate_limiter,
+        approvals=approvals,
+        action_audit_recorder=action_audit_recorder,
     )
     app = FastAPI()
     attach_kohaku_routes(app, deps)
     client = TestClient(app)
     return Harness(
-        client=client, deps=deps, ctx=ctx, domain=domain, authz=authz, storage=storage
+        client=client, deps=deps, ctx=ctx, domain=domain_impl, authz=authz, storage=storage
     )
 
 

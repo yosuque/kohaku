@@ -1,5 +1,13 @@
 import type { TraceContext } from "@kohaku-ui/composer";
-import { errorMessage, notifyHook, parseTraceContext } from "@kohaku-ui/host-core";
+import {
+  type ActionGate,
+  createActionGate,
+  createOperationIndex,
+  errorMessage,
+  notifyHook,
+  type OperationIndex,
+  parseTraceContext,
+} from "@kohaku-ui/host-core";
 import {
   exceedsMaxJsonDepth,
   MAX_JSON_OBJECT_DEPTH,
@@ -245,4 +253,37 @@ export function errorReporterFor(
   return {
     report: (e: unknown) => reportHostError(deps, call.endpoint, call.requestId, e),
   };
+}
+
+/**
+ * Per-deps memoized `OperationIndex` (host-core's `createOperationIndex`), the governed-action
+ * counterpart of compose.ts's own `allowedActions` memoization (same WeakMap-keyed-by-deps idiom;
+ * `listOperations()` is async and must not be re-awaited on every action invoke / compose). Shared by
+ * `/binding/action` (the `ActionGate`, below) and the compose routes (the `actions` manifest on the
+ * response, SPEC §6.1.1) so both consult the exact same index rather than each memoizing its own.
+ */
+const operationIndexByDeps = new WeakMap<KohakuHostDeps, OperationIndex>();
+export function operationIndex(deps: KohakuHostDeps): ReturnType<OperationIndex> {
+  let fn = operationIndexByDeps.get(deps);
+  if (fn == null) {
+    fn = createOperationIndex(deps.domain);
+    operationIndexByDeps.set(deps, fn);
+  }
+  return fn();
+}
+
+/**
+ * Per-deps memoized `ActionGate` (host-core's `createActionGate`, design.md #62/#63), consulted by
+ * `POST /binding/action` before `domain.invoke`. Building it is cheap (no I/O), but memoizing keeps one
+ * gate instance per deps rather than a fresh closure per request, the same convention as `operationIndex`
+ * above.
+ */
+const actionGateByDeps = new WeakMap<KohakuHostDeps, ActionGate>();
+export function actionGateFor(deps: KohakuHostDeps): ActionGate {
+  let gate = actionGateByDeps.get(deps);
+  if (gate == null) {
+    gate = createActionGate({ approvals: deps.approvals });
+    actionGateByDeps.set(deps, gate);
+  }
+  return gate;
 }

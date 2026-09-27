@@ -46,6 +46,7 @@ from kohaku.spec import (
     LineagePageRequest,
     Principal,
     PromotionState,
+    action_payload_hash,
     cache_key,
     canonical_stringify,
     compute_intent_hash,
@@ -56,6 +57,7 @@ from kohaku.spec import (
     page_lineage_events,
     parse_spec,
     sha256_hex,
+    validate_action_params,
     validate_fixation_record,
     validate_promotion_state,
 )
@@ -99,6 +101,17 @@ def test_lineage_cursor(cross_language_fixture: dict[str, Any]) -> None:
             f"cursor mismatch for seq {case['seq']}"
         )
         assert decode_seq_cursor(case["cursor"]) == case["seq"]
+
+
+def test_action_params(cross_language_fixture: dict[str, Any]) -> None:
+    """validate_action_params / action_payload_hash must reproduce the fixture byte-for-byte
+    (design.md #62/#63) -- the exact `issues` array and `sha256:<hex>` payload hash for each
+    (schema, payload) pair."""
+    for case in cross_language_fixture["actionParams"]:
+        issues = validate_action_params(case["schema"], case["payload"])
+        got = [{"path": issue.path, "code": issue.code, "message": issue.message} for issue in issues]
+        assert got == case["issues"], f"issues mismatch for schema={case['schema']!r} payload={case['payload']!r}"
+        assert action_payload_hash(case["payload"]) == case["payloadHash"]
 
 
 def test_sandbox_dom_allowlist(cross_language_fixture: dict[str, Any]) -> None:
