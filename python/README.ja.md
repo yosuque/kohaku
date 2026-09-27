@@ -83,7 +83,9 @@ python/
 │  │  │                    #   (← view-recorder.ts)+ binding_ref.py(← binding-ref.ts)+
 │  │  │                    #   capability.py(← capability.ts)+ fixation.py(← fixation.ts)+
 │  │  │                    #   keyed_mutex.py(← keyed-mutex.ts)+ trace_context.py
-│  │  │                    #   (← trace-context.ts)+ errors.py(← errors.ts)
+│  │  │                    #   (← trace-context.ts)+ errors.py(← errors.ts)+ catalog_impact.py
+│  │  │                    #   (← catalog-impact.ts)+ catalog_migration.py(← catalog-migration.ts、
+│  │  │                    #   design.md #65)
 │  │  ├─ host_rest/        # ← packages/host-rest(FastAPI。SPEC §6.1)
 │  │  └─ host_mcp/         # ← packages/host-mcp-apps(MCP Apps プロファイル): server.py(attach・
 │  │                       #   ツール登録。tool-error / safe-tool / エラー可観測性ヘルパも TS の server.ts
@@ -370,6 +372,14 @@ failed catalog/structure validation」という文言とは別物にし、この
   返ってきたオブジェクトの検証は、退避前の元のスキーマに対して行われる。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
+- **`ComponentDefinition.deprecated` に `migrateProps` 相当が無い**(design.md #65):
+  TS の `migrateProps(props)` は `fallback` の隣に付く関数であるため
+  `core-catalog.json` へは決して export されず、`fallback.mapProps` のように
+  手で移植する先の Python 側フィールドも存在しない。そのため
+  `host_core.catalog_migration` の `plan_catalog_migration` は、Python 側では
+  deprecated なノードの `type`/`version` のみを書き換える。置き換え先のスキーマに
+  合わせて props の形を変える必要がある書き換えは(TS で `migrateProps` を宣言しなかった
+  カタログと同じ結果として)`steps` ではなく `blocked` に入る。
 - **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`)は未移植**。TS 側
   (`packages/host-mcp-apps/src/tasks.ts`)では、リクエストがオプトインし、かつ
   `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と

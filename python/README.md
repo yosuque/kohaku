@@ -84,7 +84,9 @@ python/
 │  │  │                    #   (← view-recorder.ts) + binding_ref.py (← binding-ref.ts) +
 │  │  │                    #   capability.py (← capability.ts) + fixation.py (← fixation.ts) +
 │  │  │                    #   keyed_mutex.py (← keyed-mutex.ts) + trace_context.py
-│  │  │                    #   (← trace-context.ts) + errors.py (← errors.ts)
+│  │  │                    #   (← trace-context.ts) + errors.py (← errors.ts) + catalog_impact.py
+│  │  │                    #   (← catalog-impact.ts) + catalog_migration.py (← catalog-migration.ts,
+│  │  │                    #   design.md #65)
 │  │  ├─ host_rest/        # ← packages/host-rest (FastAPI; SPEC §6.1)
 │  │  └─ host_mcp/         # ← packages/host-mcp-apps (MCP Apps profile): server.py (attach + tool
 │  │                       #   registration; the tool-error / safe-tool / error-observability helpers stay
@@ -408,6 +410,14 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
 - Internal APIs (functions and methods that do not appear on the wire) follow Python's
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
+- **`ComponentDefinition.deprecated` has no `migrateProps` counterpart** (design.md #65):
+  TS's `migrateProps(props)` is a function attached next to `fallback`, so it is never
+  exported to `core-catalog.json` and has no Python field to hand-port it into either
+  (unlike `fallback.mapProps`, which *is* hand-ported into `_FALLBACK_MAP_PROPS`).
+  `host_core.catalog_migration`'s `plan_catalog_migration` therefore only rewrites a
+  deprecated node's `type`/`version` on the Python side; a rewrite whose props need
+  reshaping to satisfy the replacement's schema lands in `blocked` rather than `steps`,
+  the same outcome a TS catalog with no `migrateProps` declared would produce.
 - **The MCP Tasks extension (`io.modelcontextprotocol/tasks`) is not ported.** On the TS
   side (`packages/host-mcp-apps/src/tasks.ts`), `kohaku_compose` and the intent tools
   become task-capable for a request that opts in, but only when `AttachOptions.tasksEnabled`
