@@ -1,5 +1,212 @@
 # @kohaku-ui/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- [#58](https://github.com/yosuque/kohaku/pull/58) [`fcd4eb7`](https://github.com/yosuque/kohaku/commit/fcd4eb7c8c6608030d4f9045648a305fa2e5992f) Thanks [@yosuque](https://github.com/yosuque)! - Add catalog migration: deprecate a part, roll out a replacement gradually, and bulk-rewrite the fixations
+  still pinned on the old one (see `docs/design.md` decision [#65](https://github.com/yosuque/kohaku/issues/65)).
+  
+  - `@kohaku-ui/registry`: `ComponentDefinition` gains `deprecated?` (`{reason, since?, replacedBy?: {type,
+    version?}, sunset?}`) and a TS-only `migrateProps?(props)` hook next to `fallback`. `resolveCatalog`
+    validates that every `replacedBy` resolves in the merged catalog. A deprecated part drops out of the L1
+    generation vocabulary but keeps validating Specs that already reference it, and the catalog fingerprint
+    folds in a `!deprecated` suffix per such entry (every other entry's fingerprint contribution is
+    unaffected). New `stagedCatalogFor({ stable, next, inRollout })` builds a `catalogFor`-shaped function for
+    canary-rolling a migrated catalog in per tenant (tenant-neutral traffic always gets `stable`).
+  - `@kohaku-ui/lineage`: `FIXATION_EVENT_TYPES` gains `intent.migrated`, recorded by a new
+    `Fixations.replace(intentHash, pinnedSpec, { approver, guard, planId })` that rewrites a fixation's
+    pinned structure in place (TOCTOU-guarded on the caller's observed revision/fixatedAt/structureHash/
+    catalogFingerprint). `PromotionCandidate` also gains `origin` (kit/generatorVersion/model, read from
+    `component.generated` and kept across every transition) — a promotion-review gap noted since U2.
+  - `@kohaku-ui/host-core`: new `analyzeCatalogImpact` (broken fixations, deprecated-part usage, published
+    promotions on a deprecated/removed part, origin-kit mismatches) and `planCatalogMigration` /
+    `applyCatalogMigration` / `verifyCatalogMigrationPlan` (plan a bulk rewrite, revalidate it against the
+    target catalog, then commit it through a host-supplied fixation-replace surface).
+  - `@kohaku-ui/host-rest`: `GET /catalog` now serializes `deprecated` on each component (MAY, omitted when
+    the part isn't deprecated).
+  - `@kohaku-ui/client`: `SerializedComponentDef` / `CatalogResponse` gain `deprecated` /
+    `SerializedDeprecation`; `PromotionCandidateView` gains `origin` / `PromotionOriginView`.
+  - `@kohaku-ui/cli`: new `kohaku migrate plan --data-dir --catalog --out` (read-only) and `kohaku migrate
+    apply --plan --approver --data-dir` (commits it; not safe to run concurrently with a live host sharing
+    `--data-dir`).
+  - `@kohaku-ui/admin-react`: the promotion card shows the candidate's generation kit/generatorVersion when
+    known (`origin`, EN + JA copy).
+  
+  Fully additive: a catalog with no deprecated parts, a fixation store with no `intent.migrated` events, and a
+  promotion record with no `origin` are all byte-identical to before this change.
+
+- [#60](https://github.com/yosuque/kohaku/pull/60) [`5f1bbbd`](https://github.com/yosuque/kohaku/commit/5f1bbbd09fe1edb984a7b0f5a0c5212c3da628ea) Thanks [@yosuque](https://github.com/yosuque)! - Adds a Compliance Evidence Pack export (`@kohaku-ui/lineage`'s new `evidence` module; `kohaku evidence
+  keygen`/`export`/`verify`) and opt-in AI-generation disclosure for both renderers (design.md [#66](https://github.com/yosuque/kohaku/issues/66)/[#67](https://github.com/yosuque/kohaku/issues/67)).
+  
+  **Evidence Pack** (`@kohaku-ui/lineage`): `buildEvidencePack` assembles a normalized, Ed25519-signed
+  export of the lineage log (`events.jsonl`), a governance-decision index (`approvals.jsonl`:
+  `component.reviewed`/`published`/`withdrawn`, `intent.fixated`/`unfixated`), promotion/fixation
+  snapshots, and the referenced component HTML artifacts, plus `manifest.json` and a detached signature
+  (`manifest.sig`). `EvidenceManifestSchema` is new but deliberately not part of `spec/schemas` — it
+  describes an export format for auditors, not a wire type. Ed25519 signing uses `globalThis.crypto.subtle`
+  (no new runtime dependency for TS); an artifact whose recorded hash does not match its own content is
+  still exported, recorded as a non-fatal warning rather than aborting the export.
+  
+  **CLI** (`@kohaku-ui/cli`): `kohaku evidence keygen --out-dir <dir>` generates an Ed25519 keypair (private
+  key file mode 0600). `kohaku evidence export (--data-dir <dir> | --rest <baseUrl> [--header k:v])
+  [--tenant <id>] --since --until --private-key <pem> --out <dir> [--allow-incomplete]` builds and signs a
+  pack from a local `StoragePort` data directory or, over REST, from the existing `KohakuClient` surface
+  (`lineagePages`/`promotions.list`/`fixations.list`) — the REST source leaves `fixations.jsonl` empty with
+  a recorded warning, since `GET /fixations` does not expose enough fields to reconstruct a full
+  `FixationRecord`. `kohaku evidence verify <dir> --public-key <pem>` checks the manifest schema, the
+  signature, and every file's hash/size, and reports an independent artifact-hash cross-check as non-fatal
+  `mismatches`; exit code 0 valid / 1 invalid / 2 usage error. `@kohaku-ui/lineage` and
+  `@kohaku-ui/storage-memory` move from `cli`'s devDependencies to dependencies.
+  
+  **AI-generation disclosure** (`@kohaku-ui/renderer-core`, `@kohaku-ui/renderer-react`,
+  `@kohaku-ui/renderer-wc`): `deriveDisclosure(provenance)` (renderer-core) derives a disclosure level
+  (`"ai-generated"` for tier L1/L2, `"ai-assisted-reviewed"` for a fixated tier-L0 Spec, `"none"` otherwise
+  — never encoded on the wire) and the corresponding `data-kohaku-disclosure`/`data-kohaku-tier`/
+  `data-digital-source-type` (IPTC Digital Source Type) attributes. `SpecView` gains a `disclosure?: "off" |
+  "attributes" | "label"` prop (renderer-react; also exports `useDisclosure`/`KohakuDisclosureLabel`), and
+  `<kohaku-surface>` gains a matching `disclosure` attribute (renderer-wc, applied to the host element,
+  with the visible label — `"label"` mode only — inside the shadow root). Both default to `"off"`: existing
+  DOM output is unchanged unless a host opts in.
+  
+  See [docs/user-guide.md](../docs/user-guide.md)'s "Compliance Evidence Pack and AI-generation disclosure"
+  section for usage, EU AI Act Article 50 context (not legal advice), and a PII caution for exported Intent
+  `params`/request text.
+
+- [#55](https://github.com/yosuque/kohaku/pull/55) [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049) Thanks [@yosuque](https://github.com/yosuque)! - Add `@kohaku-ui/host`, a new package: `createKohakuHost()` wires the default Port implementations
+  (`createMemoryStoragePort`, `createHmacAuthzPort`, `createLlmSemanticPort` built from an `intents` catalog,
+  `resolveCatalog(coreCatalog)`) into `@kohaku-ui/host-rest`'s `createKohakuRoutes` in one call, with every
+  default independently overridable via `storage` / `authz` / `semantic` / `catalog`. `llm` is always required
+  (never defaulted from a fake or the environment). `host-core`'s `createConsoleErrorReporter` is wired into
+  both the REST profile's `onError` and the compose observer's `onError` by default. The capability secret for
+  the default `authz` is resolved from `capabilitySecret` or the `KOHAKU_CAPABILITY_SECRET` environment
+  variable; `dev: true` generates a temporary one (with a `console.warn`) instead of throwing, for local
+  development only.
+  
+  MCP is a separate `@kohaku-ui/host/mcp` subpath (`attachKohakuMcp(server, host, options)`, calling
+  `@kohaku-ui/host-mcp-apps`'s `attachKohakuToMcpServer` with the `compose` / Ports the facade already built) —
+  `@kohaku-ui/host`'s main entry point never imports it, so a REST-only consumer never needs
+  `@kohaku-ui/host-mcp-apps` or `@modelcontextprotocol/server` (both are optional peer dependencies of this
+  package, not ordinary ones — install both yourself to use `./mcp`).
+  
+  `kohaku init`'s generated `server/app.ts` and `kohaku scaffold ports`'s scaffold are both rewired onto
+  `createKohakuHost`: the generated project's direct `@kohaku-ui/*` dependencies drop from 15 to 10 (host-rest
+  / host-core / semantic-llm / storage-memory / authz-hmac / registry are no longer imported directly), and
+  `scaffold ports` now generates only a `DomainPort` (`ports.ts`) plus an Intent catalog (`intents.ts`, new
+  file) instead of hand-writing all four Ports — 2 TODOs instead of 5.
+  
+  See `docs/design.md` decision [#52](https://github.com/yosuque/kohaku/issues/52) for the full rationale, including why MCP is a separate subpath.
+  
+  **Before its first release, a maintainer must bootstrap the new package** (`node scripts/npm-bootstrap.mjs
+  --publish`, run from a maintainer's own terminal) — see `docs/runbooks/release.md`, "First publish of a new
+  package": npm can only register a trusted publisher for a package that already exists on the registry, so
+  `@kohaku-ui/host`'s own first publish cannot go through `release.yml`'s OIDC flow the way every other
+  package's release already does.
+
+- [#57](https://github.com/yosuque/kohaku/pull/57) [`b303d70`](https://github.com/yosuque/kohaku/commit/b303d702e1530698401c28c6ff50074ef632dac6) Thanks [@yosuque](https://github.com/yosuque)! - Add `@kohaku-ui/mcp-renderer`, a new package: the shared renderer that runs inside an MCP Apps iframe,
+  distributed for reuse outside this repository (it used to live only inside `apps/sample-mcp`).
+  
+  - `.` — `loadRendererHtml(): Promise<string>` reads this package's own pre-built, single-file
+    `dist/renderer.html` (the core kohaku component set, no product-specific implementations). **Zero npm
+    dependencies** — a consumer that only wants the stock renderer installs nothing beyond this package.
+  - `./boot` — `bootMcpRenderer({ registerImpls?, root? })` is the source the core build itself is built from,
+    and what a product rebuilds with its own component implementations baked in (mirroring the Web app's
+    registry overlay). Its `@kohaku-ui/renderer-react` / `renderer-core` / `data-binding` / `spec-core` /
+    `@modelcontextprotocol/ext-apps` / `react` / `react-dom` dependencies are all optional peer dependencies —
+    `.` never imports `./boot`, so they are never installed by a plain `npm install @kohaku-ui/mcp-renderer`.
+  
+  `apps/sample-mcp`'s own renderer (sales-domain implementations baked in) is now a thin rebuild against
+  `./boot` instead of the renderer's original home.
+  
+  `kohaku init --mcp` generates an MCP front door on top of the always-generated REST one:
+  `server/mcp-server.ts` (`attachMcpServer`, wiring the same host `server/ports.ts` builds onto
+  `@kohaku-ui/host/mcp`'s `attachKohakuMcp`, with `@kohaku-ui/mcp-renderer`'s `loadRendererHtml` and typed
+  MCP tools from the generated Intent catalog), `server/mcp.ts` (stdio, `npm run mcp`) and
+  `server/mcp-http.ts` (Streamable HTTP on :8788, `npm run mcp:http`), plus a
+  `claude_desktop_config.example.json` and `scripts/claude-desktop.mjs` (`npm run mcp:claude-desktop`
+  registers the project with Claude Desktop, backing up its existing config to `.bak` first; `-- --print`
+  previews the merge without writing anything — the real config is only ever touched by a person running
+  this script themselves).
+  
+  `kohaku init`'s generated `server/app.ts` is split into `server/ports.ts` (`createPorts`, the
+  `createKohakuHost()` call) + `server/app.ts` (the REST-specific facet-views / health routes on top of it),
+  so the new MCP front door builds the same host without importing Hono routes it does not need.
+  
+  See `docs/design.md` decision [#56](https://github.com/yosuque/kohaku/issues/56) for the full rationale.
+  
+  **Before its first release, a maintainer must bootstrap the new package** (`node scripts/npm-bootstrap.mjs
+  --publish`, run from a maintainer's own terminal) — see `docs/runbooks/release.md`, "First publish of a new
+  package": npm can only register a trusted publisher for a package that already exists on the registry, so
+  `@kohaku-ui/mcp-renderer`'s own first publish cannot go through `release.yml`'s OIDC flow the way every
+  other already-published package's release does.
+
+- [#55](https://github.com/yosuque/kohaku/pull/55) [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049) Thanks [@yosuque](https://github.com/yosuque)! - Add `kohaku explain <requestId>` and Kohaku DevTools (`@kohaku-ui/admin-react/devtools`), answering "why
+  did this view come out this way" from a request id alone: tier, cache hit/miss, the cache key's individual
+  components, the L1/L2 decision flow (attempts, capability-negotiation downgrades, single-flight
+  coalescing, token usage), capability scopes, and the related lineage events.
+  
+  - `ComposeTrace.cacheKeyParts` records the exact `CacheKeyParts` a compose's `cacheKey` was built from
+    (the opaque, colon-joined `cacheKey` string cannot be split back apart after the fact).
+  - `view.composed` / `component.generated` / `component.used` / `view.fallback` lineage payloads gain
+    `correlationId`, `cacheKey`, `cacheKeyParts`, `generatorVersion`, `kit`, `fallback`, and a `decision`
+    summary — all optional and omitted when unset, so every pre-existing event keeps its exact shape.
+  - `host-mcp-apps`' MCP compose correlation id is now `mcp:<sessionId>:<jsonrpc id>` (or `mcp:<jsonrpc id>`
+    for a session-less transport such as stdio), replacing the bare JSON-RPC request id.
+  - `@kohaku-ui/client` reads a compose response's `X-Request-Id` header (`ComposeView.requestId`, the
+    stream's `done` event), adds `KohakuClientConfig.onResponse`, and exposes `client.explain(requestId)` /
+    the pure `buildExplainReport(events, spec?)`.
+  - `kohaku explain <requestId> --rest <baseUrl>` renders the explain report as text or JSON (`--json`),
+    optionally with capability scopes (`--spec <file>`).
+  - `@kohaku-ui/admin-react/devtools`'s `KohakuDevTools` component (+ `withDevToolsCapture` for a
+    "recent requests" quick-pick) renders the same report across six panels, on its own subpath decoupled
+    from `AdminProvider`/`KohakuAdmin` (same dependency boundary as the package root: client / renderer-core
+    / sandbox / spec-core only, never `renderer-react`).
+  
+  See docs/user-guide.md's "Kohaku DevTools and `kohaku explain`" section, including the
+  `Access-Control-Expose-Headers: X-Request-Id` CORS requirement for a browser-hosted client.
+
+### Patch Changes
+
+- [#55](https://github.com/yosuque/kohaku/pull/55) [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049) Thanks [@yosuque](https://github.com/yosuque)! - Makes a fallback's reason and an `onError` observation honest about *why* generation degraded, instead of
+  collapsing every non-happy-path into the same wording.
+  
+  `composer`'s L1 tier ladder previously returned the identical "L1 constrained generation failed
+  catalog/structure validation" reason whether the LLM provider was actually unreachable (a transient
+  error) or the model answered but its output failed validation. A transient failure now gets its own
+  reason naming the provider (with the underlying `LlmError` code in parentheses when known, e.g. "(provider
+  error)") and pointing at `KOHAKU_LLM_PROVIDER`/the provider API key; the validation-failure wording is
+  unchanged. New `ComposeErrorContext.failure` and `TierResult.lastError` let `observer.onError` receive the
+  classified failure kind and the underlying error (previously always `undefined` for a fallback) without
+  string-matching `reason`.
+  
+  `refs.ts`'s `SEMANTIC_FAILED` wrapping now appends a `resolveQuery` failure's own message when the cause
+  explicitly opts in with a readonly `clientSafe: true` property, so e.g. an unknown Intent name reaches the
+  caller instead of the generic "query resolution failed" alone. This is deliberately narrower than "any
+  error with a string `code`" (host-core's existing `isTypedHostError` convention): a `SemanticPort` commonly
+  delegates to a database/filesystem/HTTP client whose own errors also carry a string `code` (e.g.
+  `ECONNREFUSED`) while their `message` can contain hostnames, paths, or table names, so `code` alone is not
+  safe to trust here — every cause without `clientSafe: true` is left exactly as before. `semantic-llm`'s
+  `resolveQuery` now throws a typed `UnknownIntentError` (exported, `clientSafe: true`) instead of a plain
+  `Error`, so its own unknown-intent failures benefit from this.
+  
+  New `host-core` `formatErrorChain` (walks `Error.cause`, depth-capped against cycles) and
+  `createConsoleErrorReporter` (a pair of handlers pre-wired to `KohakuHostDeps.onError` and
+  `ComposeObserver.onError`'s exact signatures) give a generated project sensible default logging.
+  `kohaku init` wires both hooks in the generated `app.ts`, gated by a new `KOHAKU_DEBUG` env var
+  (documented in `.env.example`): unset/any other value keeps today's one-line summaries, `KOHAKU_DEBUG=1`
+  prints the full cause chain and stack trace instead.
+- Updated dependencies [[`fcd4eb7`](https://github.com/yosuque/kohaku/commit/fcd4eb7c8c6608030d4f9045648a305fa2e5992f), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`5f1bbbd`](https://github.com/yosuque/kohaku/commit/5f1bbbd09fe1edb984a7b0f5a0c5212c3da628ea), [`cc17b7b`](https://github.com/yosuque/kohaku/commit/cc17b7bc3c96e49b1b74197ac20cd7a3d8ee0b47), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`5d167cb`](https://github.com/yosuque/kohaku/commit/5d167cb386cc1f91102644f8a99bd5b5c2949ce0), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049)]:
+  - @kohaku-ui/registry@0.4.0
+  - @kohaku-ui/lineage@0.4.0
+  - @kohaku-ui/host-core@0.4.0
+  - @kohaku-ui/client@0.4.0
+  - @kohaku-ui/storage-memory@0.4.0
+  - @kohaku-ui/evals@0.4.0
+  - @kohaku-ui/spec-core@0.4.0
+  - @kohaku-ui/composer@0.4.0
+  - @kohaku-ui/spec@0.4.0
+  - @kohaku-ui/sandbox@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

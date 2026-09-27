@@ -1,5 +1,101 @@
 # @kohaku-ui/composer
 
+## 0.4.0
+
+### Minor Changes
+
+- [#61](https://github.com/yosuque/kohaku/pull/61) [`5d167cb`](https://github.com/yosuque/kohaku/commit/5d167cb386cc1f91102644f8a99bd5b5c2949ce0) Thanks [@yosuque](https://github.com/yosuque)! - Add Policy as Code (design.md [#69](https://github.com/yosuque/kohaku/issues/69)/[#70](https://github.com/yosuque/kohaku/issues/70)): a declarative JSON policy file (`KohakuPolicyFileSchema`,
+  spec-core) layers per-tenant overrides — `allowL2`, `budget.dailyTokens`, `rateLimits`, `governance.roles`
+  — onto a product-supplied base `ComposePolicy`, without a code change or redeploy. `host-core`'s
+  `createPolicyRuntime` builds the runtime (`policyFor`, `rateLimiter`, `rolesFor`, `reload`); `loadPolicyFile`
+  reads and validates one from disk. Every function-shaped `ComposePolicy` field (`routeTier`, `fewShot`,
+  `designSystem`, `fixedSpecs`, `l2Smoke`, `selectComponents`, `extraRules`) has no schema field at all and
+  always comes from the base policy.
+  
+  Add rate limiting: a new `RateLimitStore` port (spec-core) and `createMemoryRateLimitStore`/
+  `createRateLimiter` (host-core) back the policy file's `rateLimits` section. The REST profile
+  (`host-rest`) checks it before the compose-family routes and returns `429` with a `RATE_LIMITED` error
+  envelope and, when reported, an HTTP `Retry-After` header; the client SDK exposes the new
+  `KohakuHostError.retryAfterMs`. The MCP Apps profile (`host-mcp-apps`) checks it before its 6 tool
+  handlers and returns a structured tool error (`structuredContent.error.code: "RATE_LIMITED"`, with
+  `retryAfterMs` when reported) instead. `host-rest` also gains `governancePolicyFromRoles`, a
+  `GovernanceEvaluator` that re-resolves a `PolicyRuntime`'s roles on every call rather than baking them in
+  once. `@kohaku-ui/lineage` gains a `policy.applied` audit event (`Lineage.policyApplied`), recorded only
+  when a policy reload actually changes the effective policy.
+  
+  **Cache-isolation fix (SPEC CMP-DET-002, new)**: a session's L2 (free-generation) availability
+  (`allowL2`/`routeTier`) is now folded into the compose cache key's fingerprint (`policyFingerprint`'s new
+  `tierGate` component), so a cache entry produced under an L2-permissive tenant/policy can no longer be
+  served to a session where L2 is disallowed. This is additive to `ComposeBudget`, whose `check` hook now
+  optionally receives a `BudgetCheckContext` (tenant/tier/spentTokens/elapsedMs) and gains an optional
+  `onUsage` hook, fired once per compose that actually generated.
+  
+  **Compatibility note**: a policy file (or base `ComposePolicy`) that never sets `allowL2` or `routeTier`
+  produces a byte-identical fingerprint to before this change — no cache impact. An environment with
+  `allowL2: true` or a `routeTier` configured (in code or via a policy file) will see exactly one cache miss
+  per previously-cached intent/tenant/policy combination the first time it composes after upgrading, as the
+  new `tierGate` fingerprint component takes effect; every subsequent call caches normally.
+
+- [#55](https://github.com/yosuque/kohaku/pull/55) [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049) Thanks [@yosuque](https://github.com/yosuque)! - Add `kohaku explain <requestId>` and Kohaku DevTools (`@kohaku-ui/admin-react/devtools`), answering "why
+  did this view come out this way" from a request id alone: tier, cache hit/miss, the cache key's individual
+  components, the L1/L2 decision flow (attempts, capability-negotiation downgrades, single-flight
+  coalescing, token usage), capability scopes, and the related lineage events.
+  
+  - `ComposeTrace.cacheKeyParts` records the exact `CacheKeyParts` a compose's `cacheKey` was built from
+    (the opaque, colon-joined `cacheKey` string cannot be split back apart after the fact).
+  - `view.composed` / `component.generated` / `component.used` / `view.fallback` lineage payloads gain
+    `correlationId`, `cacheKey`, `cacheKeyParts`, `generatorVersion`, `kit`, `fallback`, and a `decision`
+    summary — all optional and omitted when unset, so every pre-existing event keeps its exact shape.
+  - `host-mcp-apps`' MCP compose correlation id is now `mcp:<sessionId>:<jsonrpc id>` (or `mcp:<jsonrpc id>`
+    for a session-less transport such as stdio), replacing the bare JSON-RPC request id.
+  - `@kohaku-ui/client` reads a compose response's `X-Request-Id` header (`ComposeView.requestId`, the
+    stream's `done` event), adds `KohakuClientConfig.onResponse`, and exposes `client.explain(requestId)` /
+    the pure `buildExplainReport(events, spec?)`.
+  - `kohaku explain <requestId> --rest <baseUrl>` renders the explain report as text or JSON (`--json`),
+    optionally with capability scopes (`--spec <file>`).
+  - `@kohaku-ui/admin-react/devtools`'s `KohakuDevTools` component (+ `withDevToolsCapture` for a
+    "recent requests" quick-pick) renders the same report across six panels, on its own subpath decoupled
+    from `AdminProvider`/`KohakuAdmin` (same dependency boundary as the package root: client / renderer-core
+    / sandbox / spec-core only, never `renderer-react`).
+  
+  See docs/user-guide.md's "Kohaku DevTools and `kohaku explain`" section, including the
+  `Access-Control-Expose-Headers: X-Request-Id` CORS requirement for a browser-hosted client.
+
+### Patch Changes
+
+- [#55](https://github.com/yosuque/kohaku/pull/55) [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049) Thanks [@yosuque](https://github.com/yosuque)! - Makes a fallback's reason and an `onError` observation honest about *why* generation degraded, instead of
+  collapsing every non-happy-path into the same wording.
+  
+  `composer`'s L1 tier ladder previously returned the identical "L1 constrained generation failed
+  catalog/structure validation" reason whether the LLM provider was actually unreachable (a transient
+  error) or the model answered but its output failed validation. A transient failure now gets its own
+  reason naming the provider (with the underlying `LlmError` code in parentheses when known, e.g. "(provider
+  error)") and pointing at `KOHAKU_LLM_PROVIDER`/the provider API key; the validation-failure wording is
+  unchanged. New `ComposeErrorContext.failure` and `TierResult.lastError` let `observer.onError` receive the
+  classified failure kind and the underlying error (previously always `undefined` for a fallback) without
+  string-matching `reason`.
+  
+  `refs.ts`'s `SEMANTIC_FAILED` wrapping now appends a `resolveQuery` failure's own message when the cause
+  explicitly opts in with a readonly `clientSafe: true` property, so e.g. an unknown Intent name reaches the
+  caller instead of the generic "query resolution failed" alone. This is deliberately narrower than "any
+  error with a string `code`" (host-core's existing `isTypedHostError` convention): a `SemanticPort` commonly
+  delegates to a database/filesystem/HTTP client whose own errors also carry a string `code` (e.g.
+  `ECONNREFUSED`) while their `message` can contain hostnames, paths, or table names, so `code` alone is not
+  safe to trust here — every cause without `clientSafe: true` is left exactly as before. `semantic-llm`'s
+  `resolveQuery` now throws a typed `UnknownIntentError` (exported, `clientSafe: true`) instead of a plain
+  `Error`, so its own unknown-intent failures benefit from this.
+  
+  New `host-core` `formatErrorChain` (walks `Error.cause`, depth-capped against cycles) and
+  `createConsoleErrorReporter` (a pair of handlers pre-wired to `KohakuHostDeps.onError` and
+  `ComposeObserver.onError`'s exact signatures) give a generated project sensible default logging.
+  `kohaku init` wires both hooks in the generated `app.ts`, gated by a new `KOHAKU_DEBUG` env var
+  (documented in `.env.example`): unset/any other value keeps today's one-line summaries, `KOHAKU_DEBUG=1`
+  prints the full cause chain and stack trace instead.
+- Updated dependencies [[`fcd4eb7`](https://github.com/yosuque/kohaku/commit/fcd4eb7c8c6608030d4f9045648a305fa2e5992f), [`cc17b7b`](https://github.com/yosuque/kohaku/commit/cc17b7bc3c96e49b1b74197ac20cd7a3d8ee0b47), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`5d167cb`](https://github.com/yosuque/kohaku/commit/5d167cb386cc1f91102644f8a99bd5b5c2949ce0)]:
+  - @kohaku-ui/registry@0.4.0
+  - @kohaku-ui/spec-core@0.4.0
+  - @kohaku-ui/llm@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes

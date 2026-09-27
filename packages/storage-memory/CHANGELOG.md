@@ -1,5 +1,28 @@
 # @kohaku-ui/storage-memory
 
+## 0.4.0
+
+### Minor Changes
+
+- [#55](https://github.com/yosuque/kohaku/pull/55) [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049) Thanks [@yosuque](https://github.com/yosuque)! - Add Node-free subpaths for use in a browser host (the static playground, U5): `@kohaku-ui/storage-memory/memory`
+  re-exports `createMemoryStoragePort` (and `MAX_SPEC_CACHE_ENTRIES`) without `createFileStoragePort`'s
+  `node:fs`/`node:path`/`node:crypto` dependency; `@kohaku-ui/evals/judge` re-exports `createJudge` and the
+  `SchemaExtractor` pieces without `FixtureLlm`'s `node:fs`/`node:path`; `@kohaku-ui/evals/replay` adds a new
+  `ReplayLlm` (a replay-only `LlmPort` with no filesystem access, looking up a recorded response by the same
+  key function as `FixtureLlm` — also newly shared as `fixtureKeyOf`/`objectFixtureKey`/`textFixtureKey`).
+  All three existing top-level `"."` exports are unchanged.
+
+- [#55](https://github.com/yosuque/kohaku/pull/55) [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049) Thanks [@yosuque](https://github.com/yosuque)! - Add `LineageFilter.correlationId` (payload equality) and forward (append-order) paging over the lineage
+  log, exposed as the optional `StoragePort.pageLineage` method (implemented by all four reference storage
+  adapters), `GET /lineage?order=asc&cursor=&pageSize=` on the REST profile, and `KohakuClient.lineagePages()`
+  on the client SDK. Both additions are backward compatible: a request that omits the new query parameters,
+  and a `StoragePort` that does not implement `pageLineage`, behave exactly as before.
+
+### Patch Changes
+
+- Updated dependencies [[`cc17b7b`](https://github.com/yosuque/kohaku/commit/cc17b7bc3c96e49b1b74197ac20cd7a3d8ee0b47), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`5d167cb`](https://github.com/yosuque/kohaku/commit/5d167cb386cc1f91102644f8a99bd5b5c2949ce0)]:
+  - @kohaku-ui/spec-core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

@@ -1,4 +1,4 @@
-# @kohaku-ui/data-binding
+# @kohaku-ui/mcp-renderer
 
 ## 0.4.0
 
@@ -51,21 +51,47 @@
   property named `__proto__`, `constructor` or `prototype` at any depth (issue code `unsafeKey`), whatever
   the schema's `additionalProperties` says.
 
+- [#57](https://github.com/yosuque/kohaku/pull/57) [`b303d70`](https://github.com/yosuque/kohaku/commit/b303d702e1530698401c28c6ff50074ef632dac6) Thanks [@yosuque](https://github.com/yosuque)! - Add `@kohaku-ui/mcp-renderer`, a new package: the shared renderer that runs inside an MCP Apps iframe,
+  distributed for reuse outside this repository (it used to live only inside `apps/sample-mcp`).
+  
+  - `.` — `loadRendererHtml(): Promise<string>` reads this package's own pre-built, single-file
+    `dist/renderer.html` (the core kohaku component set, no product-specific implementations). **Zero npm
+    dependencies** — a consumer that only wants the stock renderer installs nothing beyond this package.
+  - `./boot` — `bootMcpRenderer({ registerImpls?, root? })` is the source the core build itself is built from,
+    and what a product rebuilds with its own component implementations baked in (mirroring the Web app's
+    registry overlay). Its `@kohaku-ui/renderer-react` / `renderer-core` / `data-binding` / `spec-core` /
+    `@modelcontextprotocol/ext-apps` / `react` / `react-dom` dependencies are all optional peer dependencies —
+    `.` never imports `./boot`, so they are never installed by a plain `npm install @kohaku-ui/mcp-renderer`.
+  
+  `apps/sample-mcp`'s own renderer (sales-domain implementations baked in) is now a thin rebuild against
+  `./boot` instead of the renderer's original home.
+  
+  `kohaku init --mcp` generates an MCP front door on top of the always-generated REST one:
+  `server/mcp-server.ts` (`attachMcpServer`, wiring the same host `server/ports.ts` builds onto
+  `@kohaku-ui/host/mcp`'s `attachKohakuMcp`, with `@kohaku-ui/mcp-renderer`'s `loadRendererHtml` and typed
+  MCP tools from the generated Intent catalog), `server/mcp.ts` (stdio, `npm run mcp`) and
+  `server/mcp-http.ts` (Streamable HTTP on :8788, `npm run mcp:http`), plus a
+  `claude_desktop_config.example.json` and `scripts/claude-desktop.mjs` (`npm run mcp:claude-desktop`
+  registers the project with Claude Desktop, backing up its existing config to `.bak` first; `-- --print`
+  previews the merge without writing anything — the real config is only ever touched by a person running
+  this script themselves).
+  
+  `kohaku init`'s generated `server/app.ts` is split into `server/ports.ts` (`createPorts`, the
+  `createKohakuHost()` call) + `server/app.ts` (the REST-specific facet-views / health routes on top of it),
+  so the new MCP front door builds the same host without importing Hono routes it does not need.
+  
+  See `docs/design.md` decision [#56](https://github.com/yosuque/kohaku/issues/56) for the full rationale.
+  
+  **Before its first release, a maintainer must bootstrap the new package** (`node scripts/npm-bootstrap.mjs
+  --publish`, run from a maintainer's own terminal) — see `docs/runbooks/release.md`, "First publish of a new
+  package": npm can only register a trusted publisher for a package that already exists on the registry, so
+  `@kohaku-ui/mcp-renderer`'s own first publish cannot go through `release.yml`'s OIDC flow the way every
+  other already-published package's release does.
+
 ### Patch Changes
 
-- Updated dependencies [[`cc17b7b`](https://github.com/yosuque/kohaku/commit/cc17b7bc3c96e49b1b74197ac20cd7a3d8ee0b47), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`5d167cb`](https://github.com/yosuque/kohaku/commit/5d167cb386cc1f91102644f8a99bd5b5c2949ce0)]:
+- Updated dependencies [[`5f1bbbd`](https://github.com/yosuque/kohaku/commit/5f1bbbd09fe1edb984a7b0f5a0c5212c3da628ea), [`cc17b7b`](https://github.com/yosuque/kohaku/commit/cc17b7bc3c96e49b1b74197ac20cd7a3d8ee0b47), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`5d167cb`](https://github.com/yosuque/kohaku/commit/5d167cb386cc1f91102644f8a99bd5b5c2949ce0), [`bd2d484`](https://github.com/yosuque/kohaku/commit/bd2d484826bec86c78dcb720502740494a672ea8)]:
+  - @kohaku-ui/renderer-core@0.4.0
+  - @kohaku-ui/renderer-react@0.4.0
   - @kohaku-ui/spec-core@0.4.0
-
-## 0.3.0
-
-### Patch Changes
-
-- Updated dependencies [[`a26f9be`](https://github.com/yosuque/kohaku/commit/a26f9be35f5702287e79f67f13bd3298bfb73bc5), [`ad51284`](https://github.com/yosuque/kohaku/commit/ad5128464169d389e0c462c59184d411ba359d8e), [`cffc1aa`](https://github.com/yosuque/kohaku/commit/cffc1aac259bfdc8f22c48ae57427a809853924e)]:
-  - @kohaku-ui/spec-core@0.3.0
-
-## 0.2.0
-
-### Patch Changes
-
-- Updated dependencies [[`ffff046`](https://github.com/yosuque/kohaku/commit/ffff046628f1779bbc9b1a1a4c9d4256f82a9cd3), [`cec01e1`](https://github.com/yosuque/kohaku/commit/cec01e166d2947fe8b4bbbfbe5c306c33aaccf99), [`a318995`](https://github.com/yosuque/kohaku/commit/a318995245309f7b492b52a44fbae1a8c891a353)]:
-  - @kohaku-ui/spec-core@0.2.0
+  - @kohaku-ui/data-binding@0.4.0
