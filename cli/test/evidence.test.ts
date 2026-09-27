@@ -60,6 +60,33 @@ describe("kohaku evidence keygen", () => {
     const result = await runEvidenceKeygen(outDir);
     expect(result.privateKeyPath.startsWith(dataDir)).toBe(false);
   });
+
+  it("refuses to overwrite an existing key file without --force", async () => {
+    const outDir = tmp("kohaku-evidence-keygen-");
+    const first = await runEvidenceKeygen(outDir);
+    const originalPrivateKey = readFileSync(first.privateKeyPath, "utf8");
+
+    await expect(runEvidenceKeygen(outDir)).rejects.toThrow(/already exist.*--force/s);
+
+    // The refusal must be a true no-op: the original key material is untouched.
+    expect(readFileSync(first.privateKeyPath, "utf8")).toBe(originalPrivateKey);
+  });
+
+  it("overwrites both key files with --force", async () => {
+    const outDir = tmp("kohaku-evidence-keygen-");
+    const first = await runEvidenceKeygen(outDir);
+    const originalPrivateKey = readFileSync(first.privateKeyPath, "utf8");
+
+    const second = await runEvidenceKeygen(outDir, { force: true });
+
+    expect(second.privateKeyPath).toBe(first.privateKeyPath);
+    expect(readFileSync(second.privateKeyPath, "utf8")).not.toBe(originalPrivateKey);
+    expect(second.keyId).not.toBe(first.keyId);
+    // mode 0600 still holds after an overwrite (writeFileSync's own `mode` only applies file creation;
+    // chmodSync after the write is what actually re-asserts it).
+    const mode = statSync(second.privateKeyPath).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
 });
 
 async function keyPaths(): Promise<{ privateKeyPath: string; publicKeyPath: string }> {

@@ -309,10 +309,14 @@ evidence
     "--out-dir <dir>",
     "Output directory for the generated key files (mode 0600 on the private key)",
   )
-  .action(async (opts: { outDir: string }) => {
+  .option(
+    "--force",
+    "Overwrite an existing key file (permanently invalidates every pack signed with the old key)",
+  )
+  .action(async (opts: { outDir: string; force?: boolean }) => {
     let result: EvidenceKeygenResult;
     try {
-      result = await runEvidenceKeygen(opts.outDir);
+      result = await runEvidenceKeygen(opts.outDir, { force: opts.force === true });
     } catch (e) {
       program.error(e instanceof Error ? e.message : String(e));
       return;
