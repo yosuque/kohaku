@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -228,6 +229,27 @@ describe("kohaku init --mcp: Claude Desktop config", () => {
         args: [],
       });
       expect(result.merged.mcpServers["sales-mcp-app"]).toBeDefined();
+    });
+
+    // Regression test: importing the module and calling syncClaudeDesktopConfig directly (the tests
+    // above) never exercises the `isMain` / CLI-invocation branch at the bottom of the generated script,
+    // which used a process.argv[1] vs. import.meta.url comparison that silently evaluated to false (main()
+    // never ran, no error, no output) whenever the script's real path is reached through a symlink -- which
+    // is exactly what os.tmpdir() is on macOS (/var/folders/... -> /private/var/folders/...), so this failed
+    // for every generated project until the comparison started resolving process.argv[1] with realpathSync
+    // first. A real `node scripts/claude-desktop.mjs --print` subprocess is the only way to catch that class
+    // of bug (an import-only test cannot).
+    it("running as a real subprocess (node scripts/claude-desktop.mjs --print) also works", async () => {
+      const { out } = await generate();
+      const fakeHome = tmp("kohaku-claude-home-");
+      const result = spawnSync(process.execPath, [join(out, "scripts", "claude-desktop.mjs"), "--print"], {
+        env: { ...process.env, HOME: fakeHome },
+        encoding: "utf8",
+      });
+      expect(result.status, `stderr: ${result.stderr}`).toBe(0);
+      const printed = JSON.parse(result.stdout);
+      expect(printed.mcpServers["sales-mcp-app"]).toBeDefined();
+      expect(existsSync(fakeHome + "/Library")).toBe(false);
     });
   });
 });

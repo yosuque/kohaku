@@ -746,7 +746,7 @@ export const CLAUDE_DESKTOP_SCRIPT_TEMPLATE = `#!/usr/bin/env node
  *
  * Restart Claude Desktop afterwards to pick up the change.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -829,7 +829,18 @@ function main() {
 }
 
 // Run only when launched directly (npm run mcp:claude-desktop); importing this module (e.g. from a test)
-// has no side effects beyond the pure/read-only exports above.
-const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+// has no side effects beyond the pure/read-only exports above. realpathSync matters here: on macOS, the
+// system temp directory is reached through a symlink (/tmp -> /private/tmp, /var -> /private/var), so
+// process.argv[1] (the literal path node was invoked with) and import.meta.url (already resolved through
+// the symlink by the module loader) would otherwise never compare equal, silently skipping main()
+// entirely -- exactly the failure this comment is here to prevent a future edit from reintroducing.
+let isMain = false;
+if (process.argv[1] !== undefined) {
+  try {
+    isMain = import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    isMain = false;
+  }
+}
 if (isMain) main();
 `;

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && vite build --config vite.renderer.config.ts && mv dist/renderer/index.html dist/renderer.html && rmdir dist/renderer",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && vite build --logLevel silent --config vite.renderer.config.ts && mv dist/renderer/index.html dist/renderer.html && rmdir dist/renderer",
     "prepack": "pnpm run build"
   },
   "dependencies": {},
