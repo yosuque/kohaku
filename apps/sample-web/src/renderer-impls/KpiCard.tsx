@@ -1,13 +1,18 @@
 import { formatNumber } from "@kohaku-ui/renderer-core";
-import { type ImplProps, useBoundData, useLocale, useToken } from "@kohaku-ui/renderer-react";
+import { type TypedImplProps, useBoundData, useLocale, useToken } from "@kohaku-ui/renderer-react";
 import { DataStateNotice } from "@kohaku-ui/renderer-react/core";
+import type { salesKpiCard } from "@kohaku-ui-sample/parts";
 import type { ReactNode } from "react";
+import type { z } from "zod";
 
 /**
  * React implementation of the CatalogContribution (sales.kpiCard).
  * The data reference is a single row of {label, value, format, note}.
  */
-export function KpiCard({ node }: ImplProps): ReactNode {
+export function KpiCard({
+  node,
+  props,
+}: TypedImplProps<z.infer<typeof salesKpiCard.propsSchema>>): ReactNode {
   const state = useBoundData(node);
   const locale = useLocale();
   const border = String(useToken("color.border", "#e5e7eb"));
@@ -17,7 +22,7 @@ export function KpiCard({ node }: ImplProps): ReactNode {
 
   if (state.status !== "ready") return <DataStateNotice state={state} />;
   const row = state.data.rows[0] ?? {};
-  const label = (node.props["label"] as string) ?? String(row["label"] ?? "KPI");
+  const label = props.label ?? String(row["label"] ?? "KPI");
   // When value is null/undefined it is a missing measurement (e.g. a denominator of 0. #27). We render it as "—",
   // distinct from 0%, to prevent it being misread as "zero growth / not achieved". The reason goes into note (e.g. "no baseline data").
   const rawValue = row["value"];

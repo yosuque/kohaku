@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@kohaku-ui-sample/parts": "workspace:^",
     "@kohaku-ui/admin-react": "workspace:^",
     "@kohaku-ui/client": "workspace:^",
     "@kohaku-ui/data-binding": "workspace:^",
@@ -32,6 +33,7 @@
     "@vitejs/plugin-react": "catalog:",
     "jsdom": "catalog:",
     "typescript": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "zod": "catalog:"
   }
 }

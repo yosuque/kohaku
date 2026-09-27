@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@kohaku-ui-sample/parts": "workspace:^",
     "@kohaku-ui/authz-hmac": "workspace:^",
     "@kohaku-ui/authz-jwt": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
