@@ -1170,6 +1170,9 @@ importers:
       '@kohaku-ui/llm':
         specifier: workspace:^
         version: link:../llm
+      '@kohaku-ui/port-contracts':
+        specifier: workspace:^
+        version: link:../port-contracts
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.2

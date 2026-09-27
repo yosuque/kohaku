@@ -13,8 +13,8 @@ intent.hash / specHash / cache keys / catalogFingerprint match across languages.
 **conformance**: passes **MUST 19/19 = CONFORMANT** under the black-box inspection of
 the TS-side CLI (`node cli/bin/kohaku.js conformance --rest`) (including the SHOULD
 streaming check; CI's `conformance-python` job inspects it on every commit). The 19 are
-the black-box-verifiable MUSTs of the 33 in the conformance manifest; the remaining 14
-reference MUSTs (MCPAPP-* / SBX-*, and five documentary norms guaranteed by
+the black-box-verifiable MUSTs of the 34 in the conformance manifest; the remaining 15
+reference MUSTs (MCPAPP-* / SBX-*, and six documentary norms guaranteed by
 the TS renderer/composer package tests) are covered by package tests (pytest on this side).
 
 ## Setup & verification
@@ -357,6 +357,43 @@ surface (`AbortSignal.timeout` / `AbortSignal.any`, used throughout `adapters/_b
   and TS's meaning exactly. This is invisible to callers; it only affects how the guard's internals compute
   `remaining_ms`.
 - Timer hygiene (disposed in `_run_tier_generation`'s `finally`) matches TS's `runTierGeneration`.
+
+## Policy as Code and rate limiting (symmetric with TS)
+
+`kohaku.host_core.policy` (env-neutral) + `kohaku.host_core.policy_node` (the one `pathlib`-reading
+function, `load_policy_file`, split out the same way TS's `./policy-node` subpath is — importing the
+rest of `host_core` never pulls file I/O in): a declarative JSON file (`kohaku.spec.policy`'s
+`KohakuPolicyFile`, a Pydantic model with `extra="forbid"` throughout) layers per-tenant overrides
+(`allowL2`, `budget.dailyTokens`, `rateLimits`, `governance.roles`) onto a product-supplied base
+`ComposePolicy`. `create_policy_runtime(file, base_policy_for=None, ledger=None, rate_limit_store=None,
+audit=None)` returns a `PolicyRuntime` (`policy_for(session)`, `rate_limiter`, `roles_for(tenant)`,
+`policy_id`, and `async reload(file, actor=None)`); wire `policy_for` into `ComposeContext.policyFor` and
+`rate_limiter` into `KohakuHostDeps.rate_limiter` — see the [user guide](../docs/user-guide.md)'s "Policy
+as Code and rate limiting" section for the full contract (cache-key impact, the REST 429 / MCP structured
+`RATE_LIMITED` error shape, the `policy.applied` lineage audit event). `python/examples/sales-api/policy/
+kohaku.policy.json` mirrors the TS sample's demo policy byte-for-byte in content (`tenant-a:
+{allowL2: false}` / `tenant-b: {budget: {dailyTokens: 0}}`).
+
+Three Python-specific divergences from the TS port, none of them wire-visible:
+
+- **`create_policy_runtime`/`parse_policy` are synchronous** (unlike TS's `Promise`-returning versions),
+  because `compute_policy_id` (canonical-JSON sha256) is itself sync in Python — only `load_policy_file`
+  (the file read) and `PolicyRuntime.reload` stay `async`, matching TS's own async/sync split exactly.
+- **`ComposeBudget.check_with_context` is a separate field from `check`**, not a widened same-name
+  signature the way TS's structural typing allows (`check(ctx?)` accepts both call shapes) — Python has no
+  "fewer parameters is a subtype" rule, and `inspect`-based arity detection was deliberately rejected as
+  too fragile. Whichever of a base policy's `check`/`check_with_context` was originally set is folded
+  entirely into a *new* `check_with_context` once `compose.budget.dailyTokens` layers its own check on top
+  (`policy.py`'s `_build_effective_budget`), so a base policy that only ever set the plain `check` field is
+  never silently dropped.
+- **The MCP rate-limit bucket key has no session-id fallback step**: TS's key chain is
+  `principal.id -> sessionId -> "anonymous"`; Python's is `principal.id -> "anonymous"` only. The installed
+  `mcp` SDK's `ServerRequestContext` (what every `host_mcp` handler actually receives) exposes no public
+  per-connection session id — only the richer `Context` class has one, and `ServerRunner` does not
+  construct that class for handlers. This is a tracked, language-specific gap (not a design choice), the
+  same kind of gap this file's "Structure" section already documents for `McpErrorInfo.correlation_id`
+  (always the tool call's own JSON-RPC request id, never a per-connection session id) for the same
+  underlying SDK-accessor reason.
 
 ## Verbose failure logging (`KOHAKU_DEBUG`, symmetric with TS)
 

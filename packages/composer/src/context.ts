@@ -44,8 +44,18 @@ export interface ComposePolicy {
   extraRules?: PostRule[];
   /** When false (default), L1 failure = the deterministic fallback Spec with presentMarkdown */
   allowL2?: boolean;
-  /** Routing such as skipping L1 and going directly to L2 depending on the intent */
-  routeTier?: (intent: CanonicalIntent) => "L1" | "L2" | undefined;
+  /**
+   * Routing such as skipping L1 and going directly to L2 depending on the intent.
+   *
+   * An optional `id` may be attached to the function value, the same convention as
+   * `selectComponents.id` (`Object.assign` a plain function with `{ id: "..." }`, or declare it as
+   * `((intent) => ...) & { id?: string }`). Together with `allowL2`, it is folded into
+   * `policyFingerprint`'s `tierGate` material (this module's `policyFingerprint`) so that a
+   * tenant/session policy that actually reaches L2 (or swaps to a different `routeTier`) never
+   * shares a cache key with one that cannot (SPEC CMP-DET-002) — see `fingerprintTierGate`'s own doc
+   * for why the row is folded in only when non-default.
+   */
+  routeTier?: ((intent: CanonicalIntent) => "L1" | "L2" | undefined) & { id?: string };
   ttlSeconds?: number;
   /**
    * The generator version. When specified it becomes the 6th component of the cache key, separating
@@ -177,6 +187,23 @@ export interface ComposePolicy {
  * trace.usage). L0 (fixed Spec) and cache hits do not call the LLM, so they are out of scope (passed
  * through). perCompose and check can be combined (a rejection from either one causes a downgrade).
  */
+/**
+ * The context passed to `ComposeBudget.check`, so a host-supplied hook can make a tenant- or
+ * tier-aware decision instead of a single global on/off switch. Also the shape `checkBudget`
+ * (budget.ts) uses for its own internal per-compose-token / deadline checks, so the object it hands
+ * to `check` is the exact same data those checks already computed (no duplicated bookkeeping).
+ */
+export interface BudgetCheckContext {
+  /** `SessionContext.tenant`, threaded through unchanged (`PreparedCompose.tenant`). Unset when the caller's session carries no tenant. */
+  tenant?: string;
+  /** The tier about to make an LLM call. */
+  tier: "L1" | "L2";
+  /** The accumulated usage (inputTokens + outputTokens) of the attempts so far in this compose. */
+  spentTokens: number;
+  /** Wall-clock milliseconds elapsed since the compose started. Only set when `budget.deadlineMs` is in play (matching `checkBudget`'s own contract). */
+  elapsedMs?: number;
+}
+
 export interface ComposeBudget {
   /**
    * **A cumulative token threshold that stops additional LLM calls** (not a hard cap on total tokens).
@@ -198,8 +225,31 @@ export interface ComposeBudget {
    * be determined. The fail-open occurrence can be observed via observer.onBudgetCheckError (a throw is
    * merely swallowed, not left unobserved).
    * When allow:false, reason is placed on fallback.reason (a default message if unspecified).
+   *
+   * The optional `ctx` argument (`BudgetCheckContext`) is new and purely additive: an existing `check`
+   * implementation declared as `() => {...}` (arity 0) stays a valid `ComposeBudget.check` unchanged —
+   * TypeScript's function-parameter compatibility allows a narrower (fewer-parameter) function value
+   * wherever the wider signature is expected, and at runtime a JS function simply ignores an argument
+   * it does not declare. A host that wants a tenant-scoped or daily budget (host-core's
+   * `createPolicyRuntime`, layered on the daily-token ledger) reads `ctx.tenant`/`ctx.tier` instead of
+   * closing over a single global counter.
    */
-  check?: () => { allow: boolean; reason?: string };
+  check?: (ctx?: BudgetCheckContext) => { allow: boolean; reason?: string };
+  /**
+   * Fired **after** an LLM call that actually happened (never for a cache hit or the L0 fixed-Spec
+   * short-circuit, neither of which reach the budget guard at all), with the compose's total usage
+   * (the same aggregation as `ComposeTrace.usage`). Unlike `check` (a read consulted *before* every
+   * call, potentially several times per compose), this fires **exactly once per compose that actually
+   * generated**, after generation has settled — the natural point for a host to debit a persisted
+   * daily/tenant budget ledger that `check` later reads back. Side effects belong here, not in `check`.
+   * A throw / rejected Promise is swallowed (fail-open, the same fire-and-forget contract as
+   * `ComposeObserver`'s hooks) so a broken ledger write never turns an already-delivered Spec into a
+   * hard failure. Purely additive: when unset, behavior is completely unchanged.
+   */
+  onUsage?: (info: {
+    tenant?: string;
+    usage: { inputTokens: number; outputTokens: number };
+  }) => void | Promise<void>;
   /**
    * **A wall-clock deadline for one whole `compose`/`composeStream` call**, in milliseconds elapsed since
    * the compose started (`PreparedCompose.startedAt`). A sibling of `perCompose`/`check` above but measuring
@@ -519,9 +569,10 @@ export type { ResolvedRefs } from "./refs.js";
  * its current cache key, so leaving them `null` changes nothing further. **It is not the pattern to copy**
  * — `fingerprintDesignSystem` below appears to write `?? null` ten times over, but that is historical
  * grandfathering, not a model for a new field. `designSystem.kit` / `designSystem.enforceKitClasses`
- * (Task 7b) show the correct shape for a field added *after* callers already depend on this material's
- * bytes: fold to `undefined` (an absent key), never `null` — see the ABSENT-key paragraph on their own
- * extractor below. **Any new fingerprinted field must follow `kit`/`enforceKitClasses`, not the other
+ * (Task 7b) and the top-level `tierGate` row (`fingerprintTierGate`, Policy as Code) show the correct
+ * shape for a field added *after* callers already depend on this material's bytes: fold to `undefined`
+ * (an absent key), never `null` — see the ABSENT-key paragraph on their own extractor below.
+ * **Any new fingerprinted field must follow `kit`/`enforceKitClasses`/`tierGate`, not the other
  * ten** (`canonicalStringify`'s `sortDeep` drops `undefined` but keeps `null` — see spec-core/canonical-json.ts).
  */
 type PolicyFingerprintExtractor = (
@@ -565,6 +616,35 @@ function fingerprintDesignSystem(policy: ComposePolicy): unknown {
     kit: designSystem.kit != null ? { ...designSystem.kit } : undefined,
     enforceKitClasses: designSystem.enforceKitClasses === false ? false : undefined,
   };
+}
+
+/**
+ * Whether `allowL2`/`routeTier` (the "tier gate") diverge from their conventional defaults
+ * (`allowL2` unset/false, `routeTier` unset) — closes SPEC CMP-DET-002's cache-isolation gap: neither
+ * field was part of `policyFingerprint` before this row existed, so two sessions differing only in
+ * `allowL2` could otherwise share a cache entry produced under the more permissive one (a tenant with
+ * `allowL2:false` receiving an L2 Spec that another tenant's `allowL2:true` session actually
+ * generated) — see `tenant-cache-isolation.test.ts`.
+ *
+ * **Folded in as an ABSENT key (`undefined`), not `null`, whenever `allowL2` is not `true` and
+ * `routeTier` is unset** — the overwhelming majority of existing policies touch neither field, and
+ * this row is new (added after callers already depend on `policyFingerprint`'s current bytes), so
+ * unlike the ten grandfathered `null`-default keys above it (see this file's `policyFingerprint` doc
+ * comment), it must reproduce the pre-existing byte layout exactly for every such policy — returning
+ * `null` here would add `"tierGate":null` to every existing fingerprint and silently invalidate every
+ * existing compose cache the first time this ships.
+ *
+ * Once the row does activate (`allowL2 === true` or `routeTier` set), the material records **whether**
+ * L2 is reachable and, when a `routeTier` function is supplied, **which** one — via its optional `id`
+ * (`fewShot.id`/`selectComponents.id`'s convention: `"anonymous"` when the function carries no `id`)
+ * — not the function's actual per-intent routing decisions, which are unobservable here (same
+ * reasoning as `fingerprintSelectComponentsId`).
+ */
+function fingerprintTierGate(policy: ComposePolicy): unknown {
+  const allowL2 = policy.allowL2 === true;
+  const { routeTier } = policy;
+  if (!allowL2 && routeTier == null) return undefined;
+  return { allowL2, routeTierId: routeTier != null ? (routeTier.id ?? "anonymous") : null };
 }
 
 function fingerprintFewShotId(policy: ComposePolicy): unknown {
@@ -618,6 +698,7 @@ export const FINGERPRINTED: ReadonlyArray<readonly [string, PolicyFingerprintExt
   ["refConstraint", fingerprintRefConstraint],
   ["effort", fingerprintEffort],
   ["tierLlm", fingerprintTierLlm],
+  ["tierGate", fingerprintTierGate],
 ];
 
 export async function policyFingerprint(

@@ -47,6 +47,7 @@ from .catalog_migration import (
     plan_catalog_migration,
     verify_catalog_migration_plan,
 )
+from .daily_token_ledger import DailyTokenLedger, create_daily_token_ledger
 from .errors import (
     ConsoleErrorReporter,
     ConsoleErrorReporterOptions,
@@ -75,11 +76,31 @@ from .intent import (
     resolve_intent,
 )
 from .keyed_mutex import get_lock
+from .policy import (
+    ParsedPolicy,
+    PolicyAppliedEvent,
+    PolicyRateLimiter,
+    PolicyRateLimiterTakeParams,
+    PolicyRuntime,
+    create_policy_runtime,
+    parse_policy,
+)
+from .policy_node import load_policy_file
+from .rate_limit import (
+    DEFAULT_MAX_MEMORY_ENTRIES,
+    MemoryRateLimitStore,
+    RateLimiter,
+    RateLimiterErrorInfo,
+    RateLimiterTakeParams,
+    create_memory_rate_limit_store,
+    create_rate_limiter,
+)
 from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 from .view_recorder import record_view_fallback
 
 __all__ = [
     "DEFAULT_CAPABILITY_TTL_SECONDS",
+    "DEFAULT_MAX_MEMORY_ENTRIES",
     "TRACEPARENT_RE",
     "ActionEffectsHook",
     "ActionEffectsResponse",
@@ -102,6 +123,7 @@ __all__ = [
     "ComposeFixationContext",
     "ConsoleErrorReporter",
     "ConsoleErrorReporterOptions",
+    "DailyTokenLedger",
     "FixationDeliveryHost",
     "FixationSelfHealApi",
     "FixationSelfHealKind",
@@ -111,9 +133,18 @@ __all__ = [
     "IntentSourceIntent",
     "IntentSourceNl",
     "InvokableRef",
+    "MemoryRateLimitStore",
     "ParsedInvokableRef",
     "ParsedInvokableRefOk",
     "ParsedInvokableRefSourceMismatch",
+    "ParsedPolicy",
+    "PolicyAppliedEvent",
+    "PolicyRateLimiter",
+    "PolicyRateLimiterTakeParams",
+    "PolicyRuntime",
+    "RateLimiter",
+    "RateLimiterErrorInfo",
+    "RateLimiterTakeParams",
     "ResolvedIntent",
     "TraceContext",
     "WriteScopeDroppedError",
@@ -123,13 +154,19 @@ __all__ = [
     "compose_with_fixation",
     "create_allowed_actions",
     "create_console_error_reporter",
+    "create_daily_token_ledger",
+    "create_memory_rate_limit_store",
+    "create_policy_runtime",
+    "create_rate_limiter",
     "fail_open",
     "format_error_chain",
     "get_lock",
     "is_typed_host_error",
     "issue_capability_for_spec",
+    "load_policy_file",
     "notify_hook",
     "parse_invokable_ref",
+    "parse_policy",
     "parse_trace_context",
     "plan_catalog_migration",
     "record_view_fallback",

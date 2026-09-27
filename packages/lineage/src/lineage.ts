@@ -16,6 +16,7 @@ import {
   type ComponentUsedPayload,
   type LineageEventType,
   makeEvent,
+  type PolicyAppliedPayload,
   type ViewComposedDecision,
   type ViewComposedPayload,
   type ViewDecisionAttempt,
@@ -167,6 +168,13 @@ export interface Lineage {
     correlationId?: string;
   }): Promise<void>;
   componentUsed(args: ComponentUsedPayload & { tenant?: string }): Promise<void>;
+
+  /**
+   * Records a `policy.applied` audit event (design.md #69). The caller (host-core's
+   * `PolicyRuntime`'s `audit` callback) is responsible for the dedup rule ("a byte-identical reload is
+   * not audit-worthy") -- this method unconditionally records whatever event it is given.
+   */
+  policyApplied(event: PolicyAppliedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
 
   /** Audit query for "why was this view shown" */
   explainView(specHash: string): Promise<LineageEventRecord[]>;
@@ -361,6 +369,24 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
 
     async componentUsed({ tenant, ...args }) {
       await record("component.used", { ...args }, undefined, tenant);
+    },
+
+    async policyApplied(event, actor, tenant) {
+      // Unspecified optionals (previousPolicyId / label) are not stamped into the payload (no
+      // undefined keys left behind) -- the same convention as viewFallback above.
+      await record(
+        "policy.applied",
+        {
+          policyId: event.policyId,
+          ...(event.previousPolicyId != null ? { previousPolicyId: event.previousPolicyId } : {}),
+          version: event.version,
+          ...(event.label != null ? { label: event.label } : {}),
+          changedPaths: event.changedPaths,
+          tenants: event.tenants,
+        },
+        actor,
+        tenant,
+      );
     },
 
     async explainView(specHash) {

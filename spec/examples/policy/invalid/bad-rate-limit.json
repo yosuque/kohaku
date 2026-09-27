@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "defaults": {
+    "rateLimits": {
+      "compose": { "capacity": -1, "refillPerSecond": 1 }
+    }
+  }
+}

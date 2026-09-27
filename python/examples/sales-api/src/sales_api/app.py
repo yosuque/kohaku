@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -32,7 +32,15 @@ from kohaku.composer import (
     default_generator_version,
 )
 from kohaku.evals import JudgeInput, JudgeUsage, Telemetry, create_judge
-from kohaku.host_core import format_error_chain
+from kohaku.host_core import (
+    PolicyAppliedEvent,
+    PolicyRuntime,
+    RateLimiterErrorInfo,
+    create_daily_token_ledger,
+    create_memory_rate_limit_store,
+    create_policy_runtime,
+    format_error_chain,
+)
 from kohaku.host_rest import (
     GovernancePolicy,
     HostErrorInfo,
@@ -46,6 +54,7 @@ from kohaku.lineage import (
     FixationPolicy,
     JudgeContext,
     Lineage,
+    PolicyAppliedPayload,
     PromotionCandidate,
     PromotionErrorContext,
     PromotionPolicy,
@@ -69,6 +78,8 @@ from kohaku.spec import (
     Intent,
     InvocationContext,
     JsonObject,
+    KohakuPolicyFile,
+    LineageActor,
     LineageEventRecord,
     LineageFilter,
     OperationDescriptor,
@@ -218,6 +229,11 @@ class SalesApp:
     fixations: FixationsApi
     # The Intent catalog (core + the default tenant's promotions). Used by the MCP side to generate intent_tools.
     intent_catalog: IntentCatalog
+    # The Policy as Code runtime (design.md #69/#70), when `policy_file` was passed to create_app. Exposed
+    # so a caller (e.g. a test verifying "changing the policy changes the fingerprint") can `reload()` it
+    # directly. `None` when `policy_file` was not set (backward compatible). Mirrors TS sample-api's
+    # SampleApp.policyRuntime.
+    policy_runtime: PolicyRuntime | None = None
 
 
 async def create_app(
@@ -227,10 +243,17 @@ async def create_app(
     authz: AuthzPort,
     seed_dir: Path | None = None,
     prefix: str = "/api/kohaku",
+    policy_file: KohakuPolicyFile | None = None,
 ) -> SalesApp:
     """Assembles the FastAPI app by converging all packages (equivalent to app.ts's createApp).
 
     async because it performs the startup reconciliation (reconcile) of the promotion snapshot authority -> projection.
+
+    policy_file (Policy as Code, design.md #69/#70 -- optional, off by default): when set, a
+    PolicyRuntime is built (host_core's create_policy_runtime) and layered onto the compose policy
+    (allowL2/budget/etc., per tenant), KohakuHostDeps.rate_limiter, and lineage's policy.applied audit
+    event. When unset, behavior is unchanged from before Policy as Code existed. Mirrors TS sample-api's
+    AppDeps.policyFile.
     """
     try:
         from fastapi import FastAPI, Header
@@ -465,14 +488,12 @@ async def create_app(
                 "L2_SCRIPT_SYNTAX / smoke verification will be skipped"
             )
 
-    # The EN/JA policy pair (selected per request by policyFor via session.locale; mirrors TS
-    # sample-api's compose-context). EN is the historical default policy verbatim — generatorVersion,
-    # few-shot wiring, and fixed specs are byte-identical to the single-policy era. JA varies the
-    # prompt (outputLanguage + JA fixed specs), so its generatorVersion carries the "/ja" token
-    # (the ComposePolicy contract: prompt-content changes must vary generatorVersion). JA omits
-    # fewShot: fixated few-shot examples are EN specs and would bias JA generation toward English.
-    # Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
-    # to the deterministic fallback on expiry rather than hanging indefinitely behind a slow/hung LLM call.
+    # The language-neutral, tenant-neutral half of the compose policy (mirrors TS sample-api's
+    # compose-context.py's sharedComposePolicy): every function-shaped ComposePolicy field this demo sets
+    # (design.md #69 -- none of these are expressible in the Policy-as-Code schema, so they always come
+    # from code). Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call
+    # and downgrades to the deterministic fallback on expiry rather than hanging indefinitely behind a
+    # slow/hung LLM call.
     compose_budget = ComposeBudget(deadline_ms=_compose_deadline_ms())
     # allowL2 is on by default (matches the TS sample's unconditional allowL2: true) -- KOHAKU_ALLOW_L2=0 is
     # an opt-out for this Python sample only, not a TS-parity flag.
@@ -482,39 +503,107 @@ async def create_app(
         # Free-form requests (sales.custom) skip L1 and go directly to L2, matching TS sample-api's routeTier.
         return "L2" if intent.canonical == "sales.custom" else None
 
-    policy_en = ComposePolicy(
+    # Built once and passed to both create_policy_runtime (as base_policy_for, ignoring its tenant
+    # argument -- shared never varies by tenant; only the policy file introduces tenant variance) and
+    # _policy_for_session (as the base policy_for falls back to when policy_runtime is unset) -- the
+    # *same* object both times, so create_policy_runtime's per-tenant memoization sees a stable base
+    # identity (see PolicyRuntime.policy_for's docstring) rather than a fresh object per call.
+    shared = ComposePolicy(
         allowL2=allow_l2,
         routeTier=route_tier,
         budget=compose_budget,
-        # The standard views are L0 fixed Specs (do not pass through the LLM). "App UI = the solidified form of L1".
-        fixedSpecs=create_fixed_specs(),
         # Application of the design system to L2 free generation (identical in content to TS sample-api): presents
         # the token vocabulary + style rules in the prompt, and the output is written with var(--kohaku-*) references
         # (direct color literals are sent back for repair by the L2_RAW_COLOR lint). The values are injected by the
         # sandbox at render time (SPEC-ENV-003).
         designSystem=SALES_DESIGN_SYSTEM,
-        # Mixes the generator version into the cache key. Generation separation via the prompt revision of the
-        # version that turned few-shot on by default. "/ds3" is the designSystem version (bump it when the content
-        # changes — an operation that separates generations by prompt-content change).
-        generatorVersion=f"{default_generator_version(llm.model_id)}/ds3",
-        # few-shot self-reinforcement (3-9): supplies fixated (review-passed) Specs as examples for L1 generation.
-        fewShot=create_fixation_fewshot(storage),
         # The L2 verification JS sidecar (non-None only when Node is co-located. See the is_available check above).
         l2ScriptSyntax=l2_script_syntax,
         l2Smoke=l2_smoke,
     )
-    policy_ja = ComposePolicy(
-        allowL2=policy_en.allowL2,
-        routeTier=route_tier,
-        budget=compose_budget,
-        fixedSpecs=create_fixed_specs("ja"),
-        designSystem=SALES_DESIGN_SYSTEM,
-        outputLanguage="Japanese",
-        generatorVersion=f"{default_generator_version(llm.model_id)}/ds3/ja",
-        l2ScriptSyntax=l2_script_syntax,
-        l2Smoke=l2_smoke,
-    )
-    policy_by_lang = {"en": policy_en, "ja": policy_ja}
+
+    # --- Policy as Code (design.md #69/#70 -- optional, off by default; see create_app's policy_file) ---
+    policy_runtime: PolicyRuntime | None = None
+    if policy_file is not None:
+
+        async def _audit_policy_applied(event: PolicyAppliedEvent, actor: str | None) -> None:
+            # Records policy.applied (lineage, task 9) on every effective change. actor is reload()'s own
+            # free-string label (an operator id, "system", ...); mapped onto lineage's typed LineageActor
+            # shape as a "system" actor carrying that label as its id (a policy reload is an
+            # operational/config action, never a "model"-kind actor, and this demo has no
+            # principal-typed caller for it). Tenant-neutral (omitted): the event's own `tenants` field
+            # already carries the affected roster, and the change itself is cross-tenant by nature (a
+            # whole file swap), not scoped to one tenant's own timeline.
+            payload: PolicyAppliedPayload = {
+                "policyId": event.policyId,
+                "version": event.version,
+                "changedPaths": event.changedPaths,
+                "tenants": event.tenants,
+            }
+            if event.previousPolicyId is not None:
+                payload["previousPolicyId"] = event.previousPolicyId
+            if event.label is not None:
+                payload["label"] = event.label
+            await lineage.policy_applied(
+                payload, LineageActor(kind="system", id=actor) if actor is not None else None
+            )
+
+        def on_rate_limit_error(info: RateLimiterErrorInfo) -> None:
+            """A RateLimitStore failure is fail-open (create_rate_limiter already lets the request
+            through); this only makes that failure observable, reusing the same logging-based,
+            KOHAKU_DEBUG-aware style as on_compose_error/on_host_error above."""
+            label = (
+                f"[policy] rate-limit store failed for tenant={info.tenant or '-'} "
+                f"principal={info.principal or '-'} routeClass={info.routeClass} (failing open)"
+            )
+            if debug:
+                _logger.error("%s: %s", label, format_error_chain(info.error))
+            else:
+                _logger.error(label)
+
+        policy_runtime = create_policy_runtime(
+            file=policy_file,
+            base_policy_for=lambda _tenant: shared,
+            ledger=create_daily_token_ledger(),
+            rate_limit_store=create_memory_rate_limit_store(),
+            audit=_audit_policy_applied,
+            on_rate_limit_error=on_rate_limit_error,
+        )
+
+    def _lang_overrides(lang: str) -> dict[str, Any]:
+        # The EN/JA function-shaped overrides (layered on top of shared -- or, when policy_runtime is
+        # wired, on top of policy_runtime.policy_for's result -- by _policy_for_session below), selected
+        # per request via session.locale. EN is the historical default policy verbatim -- its
+        # generatorVersion string, few-shot wiring, and fixed specs are byte-identical to the
+        # single-policy era. JA varies the prompt (outputLanguage + JA fixed specs), so its
+        # generatorVersion carries the "/ja" token (the ComposePolicy contract: prompt-content changes
+        # must vary generatorVersion -- the cache key itself has no language segment). JA omits fewShot:
+        # fixated few-shot examples are EN specs and would bias JA generation toward English labels.
+        if lang == "ja":
+            return {
+                "fixedSpecs": create_fixed_specs("ja"),
+                "outputLanguage": "Japanese",
+                "generatorVersion": f"{default_generator_version(llm.model_id)}/ds3/ja",
+            }
+        return {
+            # The standard views are L0 fixed Specs (do not pass through the LLM). "App UI = the solidified form of L1".
+            "fixedSpecs": create_fixed_specs(),
+            # Mixes the generator version into the cache key. Generation separation via the prompt revision of the
+            # version that turned few-shot on by default. "/ds3" is the designSystem version (bump it when the
+            # content changes -- an operation that separates generations by prompt-content change).
+            "generatorVersion": f"{default_generator_version(llm.model_id)}/ds3",
+            # few-shot self-reinforcement (3-9): supplies fixated (review-passed) Specs as examples for L1 generation.
+            "fewShot": create_fixation_fewshot(storage),
+        }
+
+    def _policy_for_session(session: SessionContext | None) -> ComposePolicy:
+        # The effective ComposePolicy for one session: the tenant's Policy-as-Code overrides (when
+        # policy_runtime is wired -- allowL2/budget/etc., layered onto shared) plus this session's
+        # language overrides on top. Byte-identical to the pre-Policy-as-Code shape when policy_runtime
+        # is unset.
+        lang = language_of(session.locale if session is not None else None)
+        base = policy_runtime.policy_for(session) if policy_runtime is not None else shared
+        return replace(base, **_lang_overrides(lang))
 
     compose_ctx = ComposeContext(
         # The initial value of the tenant-neutral (base) catalog. compose prefers catalog_for (with_tenant_catalog),
@@ -527,12 +616,12 @@ async def create_app(
         storage=storage,
         llm=llm,
         # The default policy for direct consumers that do not resolve a session (scripts, direct
-        # compose calls) — EN. The MCP host resolves a per-tool-call session (locale argument) via policyFor.
-        policy=policy_en,
-        # Per-session policy resolution: session.locale selects the language pair above.
-        policyFor=lambda session: policy_by_lang[
-            language_of(session.locale if session is not None else None)
-        ],
+        # compose calls) — EN, tenant-neutral. The MCP host resolves a per-tool-call session (locale
+        # argument) via policyFor.
+        policy=_policy_for_session(None),
+        # Per-session policy resolution: session.locale selects the language overrides above, and
+        # session.tenant (when policy_runtime is wired) selects the Policy-as-Code overrides.
+        policyFor=_policy_for_session,
         observer=ComposeObserver(onError=on_compose_error),
     )
 
@@ -591,6 +680,7 @@ async def create_app(
         auth=_demo_auth,
         tenant=_demo_tenant,
         authorize_governance=create_governance_policy(_GOVERNANCE_POLICY),
+        rate_limiter=policy_runtime.rate_limiter if policy_runtime is not None else None,
     )
 
     app = FastAPI(title="kohaku sample sales API (Python)")
@@ -629,4 +719,5 @@ async def create_app(
         fixations=fixations,
         # Exposes base (tenant-neutral + the default tenant's promotions) (used by the MCP side to generate intent_tools).
         intent_catalog=registry.intent_catalog_for(None),
+        policy_runtime=policy_runtime,
     )

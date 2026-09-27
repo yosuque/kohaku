@@ -37,7 +37,14 @@ from kohaku.spec import (
     parse_spec,
 )
 
-from .budget import ComposeBudget, check_budget, create_deadline_guard, sum_spent_tokens
+from .budget import (
+    BudgetCheckContext,
+    ComposeBudget,
+    check_budget,
+    create_deadline_guard,
+    notify_budget_usage,
+    sum_spent_tokens,
+)
 from .context import (
     BudgetCheckErrorContext,
     ComposeContext,
@@ -127,6 +134,11 @@ class PreparedCompose:
     abort: AbortSignal | None
     cached: tuple[UISpec, ComposeTrace] | None
     """On a cache hit, the Spec (with cache:"hit" applied) + the hit trace. None for miss/bypass."""
+    tenant: str | None = None
+    """opts.session.tenant, threaded through for ComposeBudget.check_with_context/on_usage's `tenant`
+    field (BudgetCheckContext) — not part of the cache key (SPEC §6.1: query:// is tenant-neutral);
+    tenant-scoped cache isolation for the tier gate is policy_fingerprint's tierGate row's job, not this
+    field's."""
     on_draft_partial: OnDraftPartial | None = None
     """Notification target for the in-progress state of L1 generation (the LLM's cumulative partial draft)
     (incremental streaming). Only compose_stream wires it (assigned via replace after prepare_compose); compose()
@@ -317,6 +329,7 @@ async def prepare_compose(
         policy=policy,
         abort=opts.abort,
         cached=cached,
+        tenant=tenant,
     )
 
 
@@ -639,6 +652,10 @@ async def _persist_and_trace(
     fallback_reason = outcome.reason if isinstance(outcome, _TierOutcomeFallback) else None
     model = outcome.model if isinstance(outcome, _TierOutcomeOk) else None
     cancelled = outcome.cancelled if isinstance(outcome, _TierOutcomeFallback) else False
+    # Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
+    # this function at all; a no-attempts fallback has usage=None and is excluded by
+    # notify_budget_usage's own check) — see ComposeBudget.on_usage's doc.
+    notify_budget_usage(prepared.policy.budget, _sum_usage(attempts), prepared.tenant)
     trace = _build_trace(
         prepared,
         tier=spec.provenance.tier,
@@ -814,6 +831,7 @@ async def _run_l1_stage(
             prepared.on_draft_partial,
             started_at=prepared.started_at,
             deadline_signal=deadline_signal,
+            tenant=prepared.tenant,
         )
         attempts.extend(l1.attempts)
         if l1.ok:
@@ -861,9 +879,10 @@ async def _run_l2_stage(
     l2_verdict = (
         check_budget(
             budget,
-            sum_spent_tokens(attempts),
+            BudgetCheckContext(
+                tier="L2", spent_tokens=sum_spent_tokens(attempts), tenant=prepared.tenant, elapsed_ms=elapsed_ms
+            ),
             budget_check_error_reporter_for("L2") if budget_check_error_reporter_for is not None else None,
-            elapsed_ms,
         )
         if budget is not None
         else None
@@ -886,6 +905,7 @@ async def _run_l2_stage(
         budget_check_error_reporter_for("L2") if budget_check_error_reporter_for is not None else None,
         started_at=prepared.started_at,
         deadline_signal=deadline_signal,
+        tenant=prepared.tenant,
     )
     attempts.extend(l2.attempts)
     if l2.ok:
@@ -1073,18 +1093,39 @@ async def recompose(
 
     When respect_prev_tier=True and the previous Spec is L2, pin the differential update to the L2 path too
     (to prevent a screen that succeeded at L2 from dropping to L1 on every params change and being swapped for a different UI).
+
+    **Never overrides a resolved policy's own allowL2 (design.md #70)**: the pin is applied only when the
+    session's *current* effective policy (after with_session_policy + opts.policy_override, before this
+    pin's own override -- see the canRespectL2 check below) already allows L2. A tenant whose Policy as
+    Code disallows L2 must have that gate hold even for an interaction against a Spec that was already L2
+    under a since-changed policy (a policy reload, or the same prev Spec somehow reaching a different
+    tenant's session) -- otherwise a param tweak on an existing L2 view would silently smuggle a fresh L2
+    generation past a governance decision, defeating the same cache-isolation guarantee CMP-DET-002 exists
+    to provide.
     """
     intent = IntentInput(
         canonical=patch.canonical if patch.canonical is not None else prev.intent.canonical,
         params={**prev.intent.params, **patch.params},
     )
     opts = opts or ComposeOptions()
+    # Peek at the resolved policy (session + any caller-supplied policy_override, but not yet this pin's
+    # own routeTier/allowL2 override) to decide whether the pin below may even apply. Cheap and pure (no
+    # I/O) -- the same chain runs again inside compose() for the real thing.
+    resolved_policy = (
+        ctx.with_tenant_catalog(opts.session.tenant if opts.session is not None else None)
+        .with_session_policy(opts.session)
+        .with_policy_override(opts.policy_override)
+        .policy
+    ) or ComposePolicy()
+    can_respect_l2 = (
+        respect_prev_tier and prev.provenance.tier == "L2" and resolved_policy.allowL2
+    )
     # The L2 pin is passed as a policy_override rather than folded into ctx up front, so that it
     # survives ComposeContext.with_policy_override's placement after with_session_policy even when
     # ctx.policyFor is wired (a session policy resolved from scratch would otherwise silently discard
     # this override).
     compose_opts = opts
-    if respect_prev_tier and prev.provenance.tier == "L2":
+    if can_respect_l2:
         compose_opts = replace(
             opts,
             policy_override={

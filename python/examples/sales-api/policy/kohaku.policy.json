@@ -1,0 +1,14 @@
+{
+  "$schema": "../../../../spec/schemas/policy.schema.json",
+  "version": 1,
+  "label": "kohaku sample sales-api (Python) demo policy",
+  "defaults": {},
+  "tenants": {
+    "tenant-a": {
+      "compose": { "allowL2": false }
+    },
+    "tenant-b": {
+      "compose": { "budget": { "dailyTokens": 0 } }
+    }
+  }
+}

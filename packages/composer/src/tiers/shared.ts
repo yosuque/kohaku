@@ -21,6 +21,8 @@ export interface TierRequest {
    */
   signal?: AbortSignal;
   budget?: ComposeBudget;
+  /** `PreparedCompose.tenant`, threaded through for `ComposeBudget.check`'s `BudgetCheckContext.tenant`. */
+  tenant?: string;
   /** The forwarding target for the occurrence of a fail-open-swallowed throw from the budget hook check() (for observation). Wired by compose. */
   onBudgetCheckError?: (error: unknown) => void;
   /**
@@ -81,15 +83,22 @@ export interface BudgetSkipResult {
  * Returns null when allowed (continue calling).
  * elapsedMs (wall-clock since the compose started) is forwarded to checkBudget's deadline check; pass
  * undefined (the default) when budget.deadlineMs is not in play, matching checkBudget's own contract.
+ * tier/tenant are forwarded verbatim into `BudgetCheckContext` for `ComposeBudget.check`.
  */
 export function budgetSkipIfDenied(
   budget: ComposeBudget,
+  tier: "L1" | "L2",
   attempts: ComposeAttempt[],
   onBudgetCheckError: ((error: unknown) => void) | undefined,
   model: string | undefined,
   elapsedMs?: number,
+  tenant?: string,
 ): BudgetSkipResult | null {
-  const verdict = checkBudget(budget, sumSpentTokens(attempts), onBudgetCheckError, elapsedMs);
+  const verdict = checkBudget(
+    budget,
+    { tenant, tier, spentTokens: sumSpentTokens(attempts), elapsedMs },
+    onBudgetCheckError,
+  );
   if (!verdict.allow) {
     return {
       ok: false,
@@ -211,9 +220,10 @@ export interface RepairLoopConfig {
 export async function runRepairLoop(
   kind: "l1" | "l2",
   config: RepairLoopConfig,
-  req: Pick<TierRequest, "budget" | "onBudgetCheckError" | "startedAt" | "deadlineSignal">,
+  req: Pick<TierRequest, "budget" | "tenant" | "onBudgetCheckError" | "startedAt" | "deadlineSignal">,
 ): Promise<TierResult> {
-  const { budget, onBudgetCheckError, startedAt, deadlineSignal } = req;
+  const { budget, tenant, onBudgetCheckError, startedAt, deadlineSignal } = req;
+  const tier: "L1" | "L2" = kind === "l1" ? "L1" : "L2";
   const attempts: ComposeAttempt[] = [];
   let feedback: string[] = [];
   let model: string | undefined;
@@ -232,7 +242,15 @@ export async function runRepairLoop(
   for (let attempt = 0; attempt < config.maxAttempts; attempt++) {
     if (budget != null && config.shouldCheckBudget(attempt)) {
       const elapsedMs = budget.deadlineMs != null && startedAt != null ? Date.now() - startedAt : undefined;
-      const skipped = budgetSkipIfDenied(budget, attempts, onBudgetCheckError, model, elapsedMs);
+      const skipped = budgetSkipIfDenied(
+        budget,
+        tier,
+        attempts,
+        onBudgetCheckError,
+        model,
+        elapsedMs,
+        tenant,
+      );
       if (skipped != null) return skipped;
     }
 

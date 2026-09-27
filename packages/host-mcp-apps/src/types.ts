@@ -3,6 +3,7 @@ import type {
   ActionEffects,
   FixationDeliveryHost,
   FixationSelfHealApi,
+  PolicyRateLimiter,
   ViewRecorder,
 } from "@kohaku-ui/host-core";
 import type {
@@ -134,6 +135,26 @@ export interface McpHostDeps {
    * domain.invoke; the side-effect "declaration" is separated out here).
    */
   actionEffects?: ActionEffects;
+  /**
+   * Rate limiter for the tool calls (product responsibility; typically host_core's
+   * PolicyRuntime.rateLimiter, which resolves the effective RateLimitRule per routeClass from a Policy
+   * file's rateLimits section — the MCP surface never resolves a tenant, so every call's tenant is
+   * always undefined here, unlike the REST profile). Checked before `${prefix}_compose` /
+   * `${prefix}_render_snapshot` / the intent tools / `${prefix}_event` (routeClass "compose"),
+   * `${prefix}_action` ("action"), and `${prefix}_resolve_binding` ("resolve").
+   *
+   * The bucket key's "principal" component is `resolvePrincipal`'s resolved `principal.id` only when
+   * `resolvePrincipal` is wired (a real per-caller identity); otherwise (the unauthenticated demo path,
+   * where every call resolves to the same constant `principal`/anonymous fallback) it falls back to the
+   * MCP transport's `ServerContext.sessionId`, and only then to the literal string `"anonymous"` — so a
+   * single anonymous client cannot exhaust the shared bucket for every other anonymous client on a
+   * multi-session Streamable HTTP deployment (see `mcpRateLimitKey` in server.ts).
+   *
+   * On denial, returns a structured tool error (`isError: true`) whose `structuredContent.error.code` is
+   * `"RATE_LIMITED"` (SPEC §6.1, REST-RL-001's MCP counterpart) with a `retryAfterMs` when the limiter
+   * reports one. When unwired, no rate limiting occurs (backward compatible).
+   */
+  rateLimiter?: PolicyRateLimiter;
 }
 
 export interface IntentToolDef {

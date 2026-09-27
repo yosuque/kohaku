@@ -71,6 +71,9 @@ export type {
   Principal,
   PromotionState,
   QueryHandle,
+  RateLimitResult,
+  RateLimitRule,
+  RateLimitStore,
   RevokeCapabilityResult,
   SchemaSuggestion,
   Scope,
@@ -130,6 +133,14 @@ export {
   LineageEventRecordSchema,
   PromotionStateSchema,
 } from "./schema/persistence.js";
+export {
+  computePolicyId,
+  KOHAKU_POLICY_FILE_VERSION,
+  type KohakuPolicyFile,
+  KohakuPolicyFileSchema,
+  mergePolicySections,
+  type PolicySection,
+} from "./schema/policy.js";
 export { type Provenance, ProvenanceSchema } from "./schema/provenance.js";
 export {
   ALLOWED_ATTR_PREFIXES,

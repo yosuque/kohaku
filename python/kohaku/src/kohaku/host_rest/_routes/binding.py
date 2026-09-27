@@ -18,9 +18,12 @@ from .shared import (
     ANONYMOUS,
     _bearer_token,
     _error,
+    _get_principal,
     _json,
     _message,
     _read_json,
+    _resolve_tenant,
+    check_rate_limit,
     report_host_error,
     request_id_of,
 )
@@ -52,6 +55,11 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     # --- Reference-passing data resolution -----------------------------------
     @router.get("/binding/resolve")
     async def binding_resolve(request: Request) -> Response:
+        rate_limited = await check_rate_limit(
+            deps, await _get_principal(deps, request), await _resolve_tenant(deps, request), "resolve"
+        )
+        if rate_limited is not None:
+            return rate_limited
         ref_param = request.query_params.get("ref")
         if ref_param is None:
             return _error("BAD_REQUEST", "ref query parameter is required", 400)
@@ -96,6 +104,11 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     # --- Direct write path ----------------------------------------------------
     @router.post("/binding/action")
     async def binding_action(request: Request) -> Response:
+        rate_limited = await check_rate_limit(
+            deps, await _get_principal(deps, request), await _resolve_tenant(deps, request), "action"
+        )
+        if rate_limited is not None:
+            return rate_limited
         body = parse_action_body(await _read_json(request))
         if body is None:
             return _error("BAD_REQUEST", "action is required", 400)

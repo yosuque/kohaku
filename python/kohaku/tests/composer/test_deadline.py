@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from kohaku.composer import (
+    BudgetCheckContext,
     ComposeBudget,
     ComposeContext,
     ComposeErrorContext,
@@ -38,34 +39,45 @@ _BAD: dict[str, Any] = {"components": [], "events": []}  # empty components = ca
 
 class TestCheckBudgetDeadlineUnit:
     def test_allows_when_elapsed_below_deadline(self) -> None:
-        verdict = check_budget(ComposeBudget(deadline_ms=1000), 0, elapsed_ms=500)
+        verdict = check_budget(
+            ComposeBudget(deadline_ms=1000), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=500)
+        )
         assert verdict.allow is True
 
     def test_rejects_with_deadline_specific_reason_once_elapsed_reaches_deadline(self) -> None:
-        verdict = check_budget(ComposeBudget(deadline_ms=1000), 0, elapsed_ms=1000)
+        verdict = check_budget(
+            ComposeBudget(deadline_ms=1000), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=1000)
+        )
         assert verdict.allow is False
         assert verdict.reason is not None
         assert "budget exceeded" in verdict.reason.lower()
         assert "deadline" in verdict.reason.lower()
 
     def test_deadline_reason_distinguishable_from_token_threshold_reason(self) -> None:
-        token_verdict = check_budget(ComposeBudget(per_compose_stop_after_tokens=10), 10)
-        deadline_verdict = check_budget(ComposeBudget(deadline_ms=1000), 0, elapsed_ms=1000)
+        token_verdict = check_budget(
+            ComposeBudget(per_compose_stop_after_tokens=10), BudgetCheckContext(tier="L1", spent_tokens=10)
+        )
+        deadline_verdict = check_budget(
+            ComposeBudget(deadline_ms=1000), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=1000)
+        )
         assert token_verdict.reason != deadline_verdict.reason
         assert token_verdict.reason is not None and "token threshold" in token_verdict.reason.lower()
         assert deadline_verdict.reason is not None and "token threshold" not in deadline_verdict.reason.lower()
 
     def test_does_not_check_deadline_when_elapsed_ms_not_supplied(self) -> None:
-        verdict = check_budget(ComposeBudget(deadline_ms=0), 0, elapsed_ms=None)
+        verdict = check_budget(
+            ComposeBudget(deadline_ms=0), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=None)
+        )
         assert verdict.allow is True
 
     def test_does_not_check_deadline_when_deadline_ms_unset(self) -> None:
-        verdict = check_budget(ComposeBudget(), 0, elapsed_ms=999_999)
+        verdict = check_budget(ComposeBudget(), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=999_999))
         assert verdict.allow is True
 
     def test_simultaneous_token_threshold_overage_takes_precedence(self) -> None:
         verdict = check_budget(
-            ComposeBudget(per_compose_stop_after_tokens=10, deadline_ms=1000), 10, elapsed_ms=2000
+            ComposeBudget(per_compose_stop_after_tokens=10, deadline_ms=1000),
+            BudgetCheckContext(tier="L1", spent_tokens=10, elapsed_ms=2000),
         )
         assert verdict.allow is False
         assert verdict.reason is not None and "token threshold" in verdict.reason.lower()

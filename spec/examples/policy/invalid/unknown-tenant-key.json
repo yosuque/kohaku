@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "defaults": {},
+  "tenants": {
+    "tenant-a": { "compose": { "allowL2": false } },
+    "tenant-b": { "notASection": true }
+  }
+}

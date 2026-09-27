@@ -37,6 +37,11 @@ export {
   verifyCatalogMigrationPlan,
 } from "./catalog-migration.js";
 export {
+  type CreateDailyTokenLedgerOptions,
+  createDailyTokenLedger,
+  type DailyTokenLedger,
+} from "./daily-token-ledger.js";
+export {
   type ConsoleErrorReporter,
   type ConsoleErrorReporterOptions,
   clientMessageFor,
@@ -56,5 +61,24 @@ export {
   settleFixation,
 } from "./fixation.js";
 export { type IntentSource, resolveIntent } from "./intent.js";
+export {
+  type CreatePolicyRuntimeOptions,
+  createPolicyRuntime,
+  type ParsedPolicy,
+  type PolicyAppliedEvent,
+  type PolicyRateLimiter,
+  type PolicyRateLimiterTakeParams,
+  type PolicyRuntime,
+  parsePolicy,
+} from "./policy.js";
+export {
+  type CreateMemoryRateLimitStoreOptions,
+  createMemoryRateLimitStore,
+  createRateLimiter,
+  DEFAULT_MAX_MEMORY_ENTRIES,
+  type RateLimiter,
+  type RateLimiterErrorInfo,
+  type RateLimiterTakeParams,
+} from "./rate-limit.js";
 export { parseTraceContext, TRACEPARENT_RE } from "./trace-context.js";
 export { recordComposedResult, recordViewFallback, type ViewRecorder } from "./view-recorder.js";

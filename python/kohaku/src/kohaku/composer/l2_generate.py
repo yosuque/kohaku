@@ -15,7 +15,7 @@ from typing import Any, Literal
 from kohaku.llm import AbortSignal, GenerateTextRequest, LlmError
 from kohaku.spec import SANDBOX_HTML_TYPE, Intent, sha256_hex
 
-from .budget import ComposeBudget, check_budget, sum_spent_tokens
+from .budget import BudgetCheckContext, ComposeBudget, check_budget, sum_spent_tokens
 from .context import (
     ComposeContext,
     L2SmokeContext,
@@ -60,6 +60,7 @@ async def generate_l2(
     *,
     started_at: float | None = None,
     deadline_signal: AbortSignal | None = None,
+    tenant: str | None = None,
 ) -> L2Result:
     """`started_at`/`deadline_signal` are `budget.deadline_ms`'s two extra inputs (both None when it is
     unset, which keeps this function's behavior byte-identical to before they existed): `started_at` lets
@@ -112,7 +113,13 @@ async def generate_l2(
                 if budget.deadline_ms is not None and started_at is not None
                 else None
             )
-            verdict = check_budget(budget, sum_spent_tokens(attempts), on_budget_check_error, elapsed_ms)
+            verdict = check_budget(
+                budget,
+                BudgetCheckContext(
+                    tier="L2", spent_tokens=sum_spent_tokens(attempts), tenant=tenant, elapsed_ms=elapsed_ms
+                ),
+                on_budget_check_error,
+            )
             if not verdict.allow:
                 return L2Result(
                     ok=False,

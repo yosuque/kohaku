@@ -1,4 +1,5 @@
-import type { ComposeBudget } from "./context.js";
+import type { BudgetCheckContext, ComposeBudget } from "./context.js";
+import { fireObserverHook } from "./observer.js";
 import type { ComposeAttempt } from "./trace.js";
 
 /** Result of a budget check. When allow:false, reason carries the downgrade reason (the value placed on fallback.reason). */
@@ -32,17 +33,24 @@ export interface BudgetVerdict {
  * perCompose is checked first, then deadlineMs, then check() (each earlier check short-circuits the
  * later ones). Even when several are involved, the first one to reject wins and is placed on reason —
  * perCompose's token-threshold reason takes precedence over a simultaneous deadline overage.
+ *
+ * `ctx` (`BudgetCheckContext`) doubles as the object passed verbatim to `budget.check(ctx)` — the same
+ * `tier`/`spentTokens`/`elapsedMs` this function already computed its own perCompose/deadline verdicts
+ * from, plus `ctx.tenant` (unused by this function itself, threaded through only for `check`).
  */
 export function checkBudget(
   budget: ComposeBudget | undefined,
-  spent: number,
+  ctx: BudgetCheckContext,
   onCheckError?: (error: unknown) => void,
-  elapsedMs?: number,
 ): BudgetVerdict {
   if (budget == null) return { allow: true };
+  const { spentTokens, elapsedMs } = ctx;
   const max = budget.perCompose?.stopAfterTokens;
-  if (max != null && spent >= max) {
-    return { allow: false, reason: `Budget exceeded: token threshold ${max} reached (spent ${spent})` };
+  if (max != null && spentTokens >= max) {
+    return {
+      allow: false,
+      reason: `Budget exceeded: token threshold ${max} reached (spent ${spentTokens})`,
+    };
   }
   const deadlineMs = budget.deadlineMs;
   if (deadlineMs != null && elapsedMs != null && elapsedMs >= deadlineMs) {
@@ -54,7 +62,7 @@ export function checkBudget(
   if (budget.check != null) {
     let verdict: { allow: boolean; reason?: string };
     try {
-      verdict = budget.check();
+      verdict = budget.check(ctx);
     } catch (e) {
       // Do not break compose on a throw from the budget hook. When undecidable, pass through (continue generation).
       // Forward the occurrence to onCheckError to keep it observable (do not leave the fail-open unobserved).
@@ -69,6 +77,25 @@ export function checkBudget(
     }
   }
   return { allow: true };
+}
+
+/**
+ * Fail-open call of `ComposeBudget.onUsage`, made exactly once per compose that actually generated
+ * (`usage` is `undefined` whenever no attempt reported usage — a cache hit or the L0 fixed-Spec
+ * short-circuit never reach the caller of this function at all, and a fallback with zero LLM attempts
+ * has nothing to report either, so both are already excluded by this same check). A thrown /
+ * rejected-Promise `onUsage` is swallowed via `fireObserverHook`'s fire-and-forget contract, so a
+ * broken usage-ledger write can never turn an already-delivered Spec into a hard failure. A no-op
+ * (byte-identical to before `onUsage` existed) whenever `budget`/`budget.onUsage` is unset.
+ */
+export function notifyBudgetUsage(
+  budget: ComposeBudget | undefined,
+  usage: { inputTokens: number; outputTokens: number } | undefined,
+  tenant?: string,
+): void {
+  const onUsage = budget?.onUsage;
+  if (onUsage == null || usage == null) return;
+  fireObserverHook(() => onUsage({ ...(tenant != null ? { tenant } : {}), usage }));
 }
 
 /** Sum of the attempts' usage (input+output). Used as spent in the budget check. An attempt without usage counts as 0. */

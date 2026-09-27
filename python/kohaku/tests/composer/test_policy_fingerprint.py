@@ -82,7 +82,56 @@ class TestPolicyFingerprintCharacterization:
 class TestPolicyFingerprint:
     def test_empty_string_when_nothing_set(self) -> None:
         assert policy_fingerprint(ComposePolicy()) == ""
-        assert policy_fingerprint(ComposePolicy(cacheMode="bypass", allowL2=True, maxRepairAttempts=2)) == ""
+        assert policy_fingerprint(ComposePolicy(cacheMode="bypass", maxRepairAttempts=2)) == ""
+
+    def test_allow_l2_false_or_unset_leaves_the_fingerprint_unchanged(self) -> None:
+        """allowL2's conventional default (False) must fingerprint identically to never touching it --
+        otherwise every existing allowL2-less policy's compose cache is silently invalidated the moment
+        the tierGate row ships (see _fp_tier_gate's ABSENT-key docstring in context.py)."""
+        assert policy_fingerprint(ComposePolicy(allowL2=False)) == ""
+        assert policy_fingerprint(ComposePolicy(allowL2=False, cacheMode="bypass")) == ""
+
+    def test_allow_l2_true_changes_the_fingerprint(self) -> None:
+        """Closes SPEC CMP-DET-002's cache-isolation gap (tierGate)."""
+        off = policy_fingerprint(ComposePolicy(allowL2=False))
+        on = policy_fingerprint(ComposePolicy(allowL2=True))
+        assert on != off
+        assert _HEX16_RE.match(on) is not None
+
+    def test_allow_l2_true_pinned_to_exact_value(self) -> None:
+        """Absolute pin (M-4-style): if this goes red, tierGate's material bytes changed and every
+        allowL2:true/routeTier-bearing caller's compose cache is silently invalidated (fix the code;
+        never re-pin). Cross-language-pinned: tierGate's material touches neither designSystem nor any
+        other field with a Python/TS default divergence, so this is one of the rare inputs where the two
+        implementations' hashes are expected to match byte-for-byte -- see the TS-side pin in
+        packages/composer/test/policy-fingerprint.test.ts."""
+        assert (
+            policy_fingerprint(ComposePolicy(cacheMode="bypass", allowL2=True, maxRepairAttempts=2))
+            == "8c3a51d082be5e63"
+        )
+
+    def test_route_tier_participates_via_its_optional_id(self) -> None:
+        """Port of the TS sibling test: only the optional `id` attribute participates, not the
+        callable's actual routing decisions (unobservable, same as selectComponents.id)."""
+
+        def bare(intent: Intent) -> Any:
+            return "L1"
+
+        def with_id(intent: Intent) -> Any:
+            return "L1"
+
+        with_id.id = "l1-fixed-v1"  # type: ignore[attr-defined]
+
+        def same_id_different_behavior(intent: Intent) -> Any:
+            return "L2"
+
+        same_id_different_behavior.id = "l1-fixed-v1"  # type: ignore[attr-defined]
+
+        bare_fp = policy_fingerprint(ComposePolicy(routeTier=bare))
+        id_fp = policy_fingerprint(ComposePolicy(routeTier=with_id))
+        assert bare_fp != ""  # routeTier being set at all activates the row, even with allowL2 unset
+        assert bare_fp != id_fp
+        assert policy_fingerprint(ComposePolicy(routeTier=same_id_different_behavior)) == id_fp
 
     def test_16_hex_once_a_field_is_set(self) -> None:
         pf = policy_fingerprint(ComposePolicy(outputLanguage="Japanese"))
@@ -183,6 +232,7 @@ class TestPolicyFingerprint:
                 "refConstraint",
                 "effort",
                 "tierLlm",
+                "tierGate",
             ]
         )
 

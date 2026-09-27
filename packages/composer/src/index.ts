@@ -3,6 +3,7 @@ export {
   checkBudget,
   createDeadlineGuard,
   type DeadlineGuard,
+  notifyBudgetUsage,
   sumSpentTokens,
 } from "./budget.js";
 export {
@@ -15,6 +16,7 @@ export {
 } from "./compose.js";
 export { type ComposeStreamInternalEvent, composeStream } from "./compose-stream.js";
 export type {
+  BudgetCheckContext,
   BudgetCheckErrorContext,
   ComposeBudget,
   ComposeContext,

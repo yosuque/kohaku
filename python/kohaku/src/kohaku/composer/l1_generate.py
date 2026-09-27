@@ -30,7 +30,7 @@ from kohaku.spec import (
     validate_spec_structure,
 )
 
-from .budget import ComposeBudget, check_budget, sum_spent_tokens
+from .budget import BudgetCheckContext, ComposeBudget, check_budget, sum_spent_tokens
 from .context import (
     ComposeContext,
     OnBudgetCheckError,
@@ -136,6 +136,7 @@ async def generate_l1(
     *,
     started_at: float | None = None,
     deadline_signal: AbortSignal | None = None,
+    tenant: str | None = None,
 ) -> L1Result:
     """on_draft_partial is the notification target for the in-progress cumulative partial draft (only the
     compose_stream path passes it). When it is passed and the tier's resolved LlmPort
@@ -213,7 +214,13 @@ async def generate_l1(
                 if budget.deadline_ms is not None and started_at is not None
                 else None
             )
-            verdict = check_budget(budget, sum_spent_tokens(attempts), on_budget_check_error, elapsed_ms)
+            verdict = check_budget(
+                budget,
+                BudgetCheckContext(
+                    tier="L1", spent_tokens=sum_spent_tokens(attempts), tenant=tenant, elapsed_ms=elapsed_ms
+                ),
+                on_budget_check_error,
+            )
             if not verdict.allow:
                 return L1Result(
                     ok=False,

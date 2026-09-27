@@ -11,9 +11,9 @@ TS 実装とはワイヤ互換 — canonical JSON がバイト一致するため
 
 **conformance**: TS 側 CLI の黒箱検査(`node cli/bin/kohaku.js conformance --rest`)で
 **MUST 19/19 = CONFORMANT** を通過済み(SHOULD のストリーミング検査を含む。CI の
-`conformance-python` ジョブが毎コミット検査する)。19 は conformance manifest の全 33
-MUST のうち黒箱検査可能なもので、残り 14 件の reference MUST(MCPAPP-* / SBX-*、および
-TS のレンダラー/composer パッケージテストで担保される文書規範 5 件)は
+`conformance-python` ジョブが毎コミット検査する)。19 は conformance manifest の全 34
+MUST のうち黒箱検査可能なもので、残り 15 件の reference MUST(MCPAPP-* / SBX-*、および
+TS のレンダラー/composer パッケージテストで担保される文書規範 6 件)は
 パッケージテスト(この側では pytest)で担保する。
 
 ## セットアップ・検証
@@ -319,6 +319,44 @@ Python の `kohaku.llm.abort` モジュールは既に Web の `AbortSignal`/`Ab
   もその単位に合わせている — `ComposeBudget.deadline_ms` 自体だけはミリ秒のまま(フィールド名と TS の
   意味に一致)。これは呼び出し側からは見えない差異で、ガード内部の `remaining_ms` の計算方法にのみ影響する。
 - タイマーの後始末(`_run_tier_generation` の `finally` で dispose)は TS の `runTierGeneration` と一致。
+
+## Policy as Code とレート制限(TS と対称)
+
+`kohaku.host_core.policy`(環境非依存)+ `kohaku.host_core.policy_node`(`pathlib` を読む唯一の関数
+`load_policy_file` を、TS の `./policy-node` サブパスと同じ理由で切り出したもの——`host_core` の残りを
+import してもファイル I/O は一切引き込まれない): 宣言的な JSON ファイル(`kohaku.spec.policy` の
+`KohakuPolicyFile`。`extra="forbid"` を全体に持つ Pydantic モデル)が、テナントごとの上書き
+(`allowL2`・`budget.dailyTokens`・`rateLimits`・`governance.roles`)を、プロダクト側が与える基本
+`ComposePolicy` の上に重ねる。`create_policy_runtime(file, base_policy_for=None, ledger=None,
+rate_limit_store=None, audit=None)` は `PolicyRuntime`(`policy_for(session)`・`rate_limiter`・
+`roles_for(tenant)`・`policy_id`・`async reload(file, actor=None)`)を返す。`policy_for` を
+`ComposeContext.policyFor` に、`rate_limiter` を `KohakuHostDeps.rate_limiter` に配線する——完全な契約
+(キャッシュキーへの影響、REST の 429 / MCP の構造化 `RATE_LIMITED` エラーの形、`policy.applied` の lineage
+監査イベント)は[ユーザーガイド](../docs/user-guide.ja.md)の「Policy as Code とレート制限」の節を参照。
+`python/examples/sales-api/policy/kohaku.policy.json` は TS サンプルのデモポリシーと内容がバイト単位で
+一致する(`tenant-a: {allowL2: false}` / `tenant-b: {budget: {dailyTokens: 0}}`)。
+
+TS 版との Python 固有の差異が 3 点あるが、いずれもワイヤには現れない:
+
+- **`create_policy_runtime`/`parse_policy` は同期**(TS の `Promise` を返す版とは異なる)。
+  `compute_policy_id`(正規化 JSON の sha256)自体が Python では同期だからで、`load_policy_file`
+  (ファイル読み込み)と `PolicyRuntime.reload` だけが `async` のまま——これは TS 自身の
+  async/sync の分け方とちょうど一致する。
+- **`ComposeBudget.check_with_context` は `check` とは別のフィールド**で、TS の構造的型付けが許す
+  同名シグネチャの拡張(`check(ctx?)` は両方の呼び出し形を受け付ける)ではない——Python には
+  「引数が少ない方がサブタイプ」というルールが無く、`inspect` によるアリティ判定は壊れやすすぎるとして
+  意図的に採用しなかった。基本ポリシーの `check`/`check_with_context` のどちらが元々設定されていても、
+  `compose.budget.dailyTokens` が自分のチェックを重ねる際には*新しい* `check_with_context` 一つに
+  まとめて畳み込まれる(`policy.py` の `_build_effective_budget`)ため、素の `check` フィールドしか
+  設定していなかった基本ポリシーが黙って失われることはない。
+- **MCP のレート制限バケットキーにはセッション id へのフォールバック段階が無い**: TS のキーの連鎖は
+  `principal.id -> sessionId -> "anonymous"` だが、Python は `principal.id -> "anonymous"` のみ。
+  インストールされている `mcp` SDK の `ServerRequestContext`(`host_mcp` の各ハンドラが実際に受け取る
+  もの)には、接続ごとの公開セッション id が無い——それを持つのはより豊富な `Context` クラスだけで、
+  `ServerRunner` はハンドラ向けにそのクラスを構築しない。これは追跡済みの、言語固有のギャップであり
+  (設計判断ではない)、同じ根本原因(SDK のアクセサ不足)により、本ファイルの「構成」の節が
+  `McpErrorInfo.correlation_id`(常にツール呼び出し自身の JSON-RPC リクエスト id であり、接続ごとの
+  セッション id ではない)についてすでに記録しているのと同種のギャップである。
 
 ## 詳細な失敗ログ(`KOHAKU_DEBUG`、TS と対称)
 

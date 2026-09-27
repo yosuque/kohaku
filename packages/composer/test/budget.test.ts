@@ -47,6 +47,9 @@ function makeUsageLlm(objects: unknown[], usages: LlmUsage[]): { llm: LlmPort; c
 
 const BAD = { components: [], events: [] }; // empty components = catalog/structural-validation failure (repair-target invalid)
 
+const L2_TEXT =
+  "<!DOCTYPE html><html><head><title>Sales widget</title></head><body><script>window.kohaku.ready()</script></body></html>";
+
 describe("compose: budget guard perCompose", () => {
   it("on perCompose overage, skips the repair retry and falls to the deterministic fallback", async () => {
     // The first attempt (usage 120) fails validation → the pre-repair budget check has 120 >= 100 → repair is aborted.
@@ -261,6 +264,94 @@ describe("compose: budget guard check hook", () => {
   });
 });
 
+describe("compose: budget guard check(ctx) / onUsage", () => {
+  it("check receives {tenant, tier, spentTokens} matching the call site (L1 then L2)", async () => {
+    const seen: { tenant?: string; tier: "L1" | "L2"; spentTokens: number }[] = [];
+    const llm = new FakeLlm({ objects: [BAD], texts: [L2_TEXT] });
+    const ctx: ComposeContext = makeCtx(llm, {
+      allowL2: true,
+      budget: {
+        check(c) {
+          if (c != null) seen.push({ tenant: c.tenant, tier: c.tier, spentTokens: c.spentTokens });
+          return { allow: true };
+        },
+      },
+    });
+    const { spec } = await compose(GUI_INPUT, ctx, { session: { surface: "web", tenant: "tenant-x" } });
+
+    expect(spec.provenance.tier).toBe("L2");
+    // Called before L1, and before L2 (L1 is invalid on the only attempt, maxRepairAttempts defaults to 1
+    // so there is exactly one repair check too -- see resolveMaxAttempts).
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    expect(seen.every((c) => c.tenant === "tenant-x")).toBe(true);
+    expect(seen.some((c) => c.tier === "L1")).toBe(true);
+    expect(seen.some((c) => c.tier === "L2")).toBe(true);
+  });
+
+  it("a check declared with the old arity () => ... still works unchanged (backward compatible)", async () => {
+    const llm = new FakeLlm({ objects: [goodRawDraft()] });
+    const { spec } = await compose(GUI_INPUT, makeCtx(llm, { budget: { check: () => ({ allow: true }) } }));
+    expect(spec.provenance.tier).toBe("L1");
+    expect(spec.provenance.fallback).toBeUndefined();
+  });
+
+  it("onUsage fires exactly once after a compose that actually generated, with the compose's total usage and tenant", async () => {
+    const { llm } = makeUsageLlm([goodRawDraft()], [{ inputTokens: 30, outputTokens: 70 }]);
+    const calls: { tenant?: string; usage: { inputTokens: number; outputTokens: number } }[] = [];
+    const ctx = makeCtx(llm, {
+      budget: { onUsage: (info) => void calls.push(info) },
+    });
+    await compose(GUI_INPUT, ctx, { session: { surface: "web", tenant: "tenant-y" } });
+
+    expect(calls).toEqual([{ tenant: "tenant-y", usage: { inputTokens: 30, outputTokens: 70 } }]);
+  });
+
+  it("onUsage does not fire on a cache hit (only the miss that actually generated calls it)", async () => {
+    const storage = makeStorage();
+    const calls: unknown[] = [];
+    const policy: ComposeContext["policy"] = { budget: { onUsage: (info) => void calls.push(info) } };
+    const ctx1: ComposeContext = {
+      catalog,
+      semantic: makeSemantic(),
+      storage,
+      llm: new FakeLlm({ objects: [goodRawDraft()] }),
+      policy,
+    };
+    await compose(GUI_INPUT, ctx1);
+    expect(calls).toHaveLength(1);
+
+    const ctx2: ComposeContext = { ...ctx1, llm: new FakeLlm({ objects: [goodRawDraft()] }) };
+    const second = await compose(GUI_INPUT, ctx2);
+    expect(second.trace.cache).toBe("hit");
+    expect(calls).toHaveLength(1); // unchanged -- the cache hit never reached onUsage
+  });
+
+  it("onUsage does not fire when nothing was actually generated (e.g. a zero-budget skip)", async () => {
+    const calls: unknown[] = [];
+    const llm = new FakeLlm({ objects: [goodRawDraft()] });
+    const ctx = makeCtx(llm, {
+      budget: { perCompose: { stopAfterTokens: 0 }, onUsage: (info) => void calls.push(info) },
+    });
+    const { spec } = await compose(GUI_INPUT, ctx);
+
+    expect(spec.provenance.fallback?.reason).toMatch(/budget exceeded/i);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("a throw / rejection from onUsage is swallowed (fail-open) and never surfaces to the caller", async () => {
+    const llm = new FakeLlm({ objects: [goodRawDraft()] });
+    const ctx = makeCtx(llm, {
+      budget: {
+        onUsage: () => {
+          throw new Error("onUsage boom (test)");
+        },
+      },
+    });
+    const { spec } = await compose(GUI_INPUT, ctx);
+    expect(spec.provenance.tier).toBe("L1");
+  });
+});
+
 describe("compose: budget guard backward compatibility", () => {
   it("when budget is unspecified, both the repair loop and fallback behave normally (behavior unchanged)", async () => {
     const llm = new FakeLlm({ objects: [BAD, goodRawDraft()] });
@@ -285,7 +376,7 @@ describe("checkBudget: decision priority and fail-open forwarding (unit)", () =>
           throw new Error("perCompose should not be evaluated when exceeded");
         },
       },
-      150, // spent 150 >= threshold 100
+      { tier: "L1", spentTokens: 150 }, // spent 150 >= threshold 100
     );
 
     expect(verdict.allow).toBe(false);
@@ -302,7 +393,7 @@ describe("checkBudget: decision priority and fail-open forwarding (unit)", () =>
           throw boom;
         },
       },
-      0,
+      { tier: "L1", spentTokens: 0 },
       (error) => {
         received = error;
       },

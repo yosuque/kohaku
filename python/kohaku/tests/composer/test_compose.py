@@ -434,6 +434,138 @@ class TestBudget:
 
         asyncio.run(run())
 
+    def test_check_with_context_receives_tenant_tier_spent_tokens(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            from kohaku.composer import BudgetCheckContext, BudgetVerdict
+
+            storage = FileStoragePort(tmp_path)
+            bad = {"components": [{"id": "root", "type": "no.such", "props": {}}], "events": []}
+            llm = FakeLlm(objects=[bad, bad], texts=[_L2_HTML])
+            seen: list[BudgetCheckContext] = []
+
+            def _check(c: BudgetCheckContext) -> BudgetVerdict:
+                seen.append(c)
+                return BudgetVerdict(allow=True)
+
+            ctx = _ctx(
+                llm,
+                storage,
+                policy=ComposePolicy(allowL2=True, budget=ComposeBudget(check_with_context=_check)),
+            )
+            result = await compose(
+                _INTENT_INPUT, ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-x"))
+            )
+
+            assert result.spec.provenance.tier == "L2"
+            # Called before each L1 attempt (initial + 1 repair) and once before L2.
+            assert len(seen) == 3
+            assert all(c.tenant == "tenant-x" for c in seen)
+            assert sum(1 for c in seen if c.tier == "L1") == 2
+            assert sum(1 for c in seen if c.tier == "L2") == 1
+
+        asyncio.run(run())
+
+    def test_check_with_context_takes_priority_over_check_when_both_are_set(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            from kohaku.composer import BudgetCheckContext, BudgetVerdict
+
+            storage = FileStoragePort(tmp_path)
+            llm = FakeLlm(objects=[_l1_draft()])
+            plain_calls = 0
+
+            def _plain() -> BudgetVerdict:
+                nonlocal plain_calls
+                plain_calls += 1
+                return BudgetVerdict(allow=False, reason="plain check should not run")
+
+            def _with_context(c: BudgetCheckContext) -> BudgetVerdict:
+                return BudgetVerdict(allow=True)
+
+            ctx = _ctx(
+                llm,
+                storage,
+                policy=ComposePolicy(
+                    budget=ComposeBudget(check=_plain, check_with_context=_with_context)
+                ),
+            )
+            result = await compose(_INTENT_INPUT, ctx)
+
+            assert result.spec.provenance.fallback is None
+            assert plain_calls == 0
+
+        asyncio.run(run())
+
+    def test_on_usage_fires_once_after_a_compose_that_actually_generated(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            from kohaku.composer import TokenUsage
+
+            storage = FileStoragePort(tmp_path)
+            llm = FakeLlm(objects=[_l1_draft()])
+            calls: list[tuple[str | None, TokenUsage]] = []
+            ctx = _ctx(
+                llm,
+                storage,
+                policy=ComposePolicy(budget=ComposeBudget(on_usage=lambda t, u: calls.append((t, u)))),
+            )
+            await compose(_INTENT_INPUT, ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-y")))
+
+            assert len(calls) == 1
+            assert calls[0][0] == "tenant-y"
+
+        asyncio.run(run())
+
+    def test_on_usage_does_not_fire_on_a_cache_hit(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            calls: list[Any] = []
+            policy = ComposePolicy(budget=ComposeBudget(on_usage=lambda t, u: calls.append((t, u))))
+
+            ctx1 = _ctx(FakeLlm(objects=[_l1_draft()]), storage, policy=policy)
+            await compose(_INTENT_INPUT, ctx1)
+            assert len(calls) == 1
+
+            ctx2 = _ctx(FakeLlm(objects=[_l1_draft()]), storage, policy=policy)
+            second = await compose(_INTENT_INPUT, ctx2)
+            assert second.trace.cache == "hit"
+            assert len(calls) == 1  # unchanged -- the cache hit never reached on_usage
+
+        asyncio.run(run())
+
+    def test_on_usage_does_not_fire_when_nothing_was_actually_generated(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            calls: list[Any] = []
+            llm = FakeLlm(objects=[_l1_draft()])
+            ctx = _ctx(
+                llm,
+                storage,
+                policy=ComposePolicy(
+                    budget=ComposeBudget(
+                        per_compose_stop_after_tokens=0, on_usage=lambda t, u: calls.append((t, u))
+                    )
+                ),
+            )
+            result = await compose(_INTENT_INPUT, ctx)
+
+            fb = result.spec.provenance.fallback
+            assert fb is not None and "budget exceeded" in fb.reason.lower()
+            assert calls == []
+
+        asyncio.run(run())
+
+    def test_on_usage_throw_is_swallowed_fail_open(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            def _broken(t: str | None, u: Any) -> None:
+                raise RuntimeError("on_usage boom (test)")
+
+            storage = FileStoragePort(tmp_path)
+            llm = FakeLlm(objects=[_l1_draft()])
+            ctx = _ctx(llm, storage, policy=ComposePolicy(budget=ComposeBudget(on_usage=_broken)))
+            result = await compose(_INTENT_INPUT, ctx)
+            assert result.spec.provenance.tier == "L1"
+
+        asyncio.run(run())
+
 
 class TestProvenanceKitStamping:
     """Port of the TS side's "compose: provenance.generatorVersion / kit stamping" describe block
@@ -1005,8 +1137,46 @@ class TestRecompose:
             # Still routed to L2 despite policyFor resolving its own (L1-default) session policy.
             assert result.spec.provenance.tier == "L2"
             assert len([c for c in llm.calls if c.kind == "text"]) == 2
-            # The session policy's generatorVersion survives (only routeTier/allowL2 are overridden).
-            assert result.trace.cacheKey.endswith(":session-policy-v1")
+            # The session policy's generatorVersion survives (only routeTier/allowL2 are overridden). Not
+            # endswith: allowL2=True now also activates policy_fingerprint's tierGate row (Policy as
+            # Code), appending a trailing 7th cacheKey component after generatorVersion.
+            assert ":session-policy-v1:" in result.trace.cacheKey
+
+        asyncio.run(run())
+
+    def test_recompose_never_pins_l2_when_the_resolved_policy_disallows_it(self, tmp_path: Any) -> None:
+        """design.md #70: respect_prev_tier must never override a resolved policy's own allowL2 -- a
+        tenant whose Policy as Code disallows L2 keeps that gate even for an interaction against a Spec
+        that was already L2 under a since-changed policy (mirrors the TS test of the same intent)."""
+
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            # Build a real L2 prev Spec under a permissive policy.
+            l2_ctx = _ctx(
+                FakeLlm(texts=[_L2_HTML]),
+                storage,
+                policy=ComposePolicy(allowL2=True, routeTier=lambda _i: "L2"),
+            )
+            prev = (await compose(_INTENT_INPUT, l2_ctx)).spec
+            assert prev.provenance.tier == "L2"
+
+            # Recompose against a context whose resolved policy disallows L2.
+            llm = FakeLlm(objects=[_l1_draft(), _l1_draft()])
+            ctx = _ctx(llm, storage, policy=ComposePolicy(allowL2=False))
+
+            first, _patch = await recompose(
+                prev, RecomposePatch(params={"fy": 2026}), ctx, respect_prev_tier=True
+            )
+            assert first.spec.provenance.tier == "L1"
+            assert first.spec.provenance.cache == "miss"
+
+            # A second, identical call is a normal L1 cache hit -- never an L2 result smuggled in via
+            # the pin, and the fingerprint is the ordinary allowL2=False one (no override touched it).
+            second, _patch2 = await recompose(
+                prev, RecomposePatch(params={"fy": 2026}), ctx, respect_prev_tier=True
+            )
+            assert second.spec.provenance.tier == "L1"
+            assert second.spec.provenance.cache == "hit"
 
         asyncio.run(run())
 

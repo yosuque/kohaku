@@ -185,11 +185,13 @@ Mount example: `app.route("/api/kohaku", createKohakuRoutes(deps))`. Errors use 
 { "error": { "code": "CAPABILITY_DENIED", "message": "…" } }
 ```
 
-Codes: `BAD_REQUEST` (400) / `INTENT_INVALID` (422) / `CAPABILITY_REQUIRED` (401) / `CAPABILITY_DENIED` (403) / `REF_NOT_FOUND` (404) / `SOURCE_MISMATCH` (404) / `NOT_FOUND` (404) / `PROMOTION_INVALID` (422) / `PROMOTION_NOT_PUBLISHED` (409) / `COMPOSE_FAILED` (500) / `INTERNAL` (500, or 503 when `authz.verify` rejects for an infrastructure reason — message `capability verification unavailable`, see §4.3) / `NOT_IMPLEMENTED` (501). `NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` are for the named control-plane routes (promotions) (§5.4).
+Codes: `BAD_REQUEST` (400) / `INTENT_INVALID` (422) / `CAPABILITY_REQUIRED` (401) / `CAPABILITY_DENIED` (403) / `REF_NOT_FOUND` (404) / `SOURCE_MISMATCH` (404) / `NOT_FOUND` (404) / `PROMOTION_INVALID` (422) / `PROMOTION_NOT_PUBLISHED` (409) / `COMPOSE_FAILED` (500) / `INTERNAL` (500, or 503 when `authz.verify` rejects for an infrastructure reason — message `capability verification unavailable`, see §4.3) / `NOT_IMPLEMENTED` (501) / `RATE_LIMITED` (429, when a rate-limit policy is configured — see the user guide's budget/rate-limit section). `NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` are for the named control-plane routes (promotions) (§5.4).
 
 Since the code set is a wire contract, the types `HostErrorCode` / `ErrorEnvelope` are **defined by `@kohaku-ui/spec-core`** (host-rest keeps the server-side generation helper `errorBody` while re-exporting them for backward compatibility). On the client side, using **`@kohaku-ui/client`** (a typed host client SDK) that handles these with types lets you receive responses like `{spec, capability}` and `{error:{code,message}}` as the discriminable exception `KohakuHostError` (`code: HostErrorCode` / `status` / `requestId`) (avoiding the collapse of codes into a bare string that hand-written fetch produces). For SDK usage, see the user guide §6 "Calling from a client."
 
 `ErrorEnvelope.error` also carries an optional **`status`**, present only on the 409 `PROMOTION_NOT_PUBLISHED` envelope: the promotion state the batch transition stopped at (e.g. `"judge_failed"`), **distinct from the HTTP status code of the response itself**. The client SDK exposes it as `KohakuHostError.promotionStatus` (named apart from `KohakuHostError.status`, which is the HTTP status, to avoid confusing the two).
+
+`ErrorEnvelope.error` also carries an optional **`retryAfterMs`**, present only on the 429 `RATE_LIMITED` envelope (SPEC §6.1, REST-RL-001): the suggested backoff in milliseconds, mirroring the HTTP `Retry-After` header a rate-limiting host also sets. The client SDK exposes it as `KohakuHostError.retryAfterMs`.
 
 **Error-message policy for unexpected failures**: a 500 (`INTERNAL` / `COMPOSE_FAILED`) response, and the 404 `REF_NOT_FOUND` a raw `DomainPort.invoke` failure maps to, never echo the underlying exception's message to the client — it may carry internals (SQL fragments, stack-trace text, downstream-library wording) unsafe to expose — and instead use a fixed, host-authored message; a "typed" error the host's own code produced (`SpecError` / `ComposeError` / `QueryRefError`, or any error carrying a `code`, per `@kohaku-ui/host-core`'s `isTypedHostError`) still has its own message pass through. The original exception always still reaches `onError` (§ above), correlated by the same `requestId` the response carries, so nothing is lost for diagnosis. The MCP Apps profile applies the same policy to its tool-error text.
 
@@ -518,7 +520,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 
 ## 11. conformance
 
-Requirements list (machine-readable): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — 33 MUSTs (the manifest is authoritative for the count and categorization).
+Requirements list (machine-readable): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — 34 MUSTs (the manifest is authoritative for the count and categorization).
 
 ```bash
 node cli/bin/kohaku.js conformance --self                # SPEC-* 9 items (Spec-format self-inspection)

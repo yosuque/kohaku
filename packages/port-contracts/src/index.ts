@@ -9,5 +9,6 @@ export {
   dockerAvailable,
   resolveAdapterBackend,
 } from "./backend.js";
+export { describeRateLimitStorePortContract } from "./rate-limit.js";
 export { describeRevocationStoreContract } from "./revocation.js";
 export { type ContractFixture, describeStoragePortContract, type StorageContractOptions } from "./storage.js";

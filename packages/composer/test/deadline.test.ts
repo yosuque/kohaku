@@ -32,41 +32,45 @@ afterEach(() => {
 
 describe("checkBudget: deadline (unit)", () => {
   it("allows when elapsed is below the deadline", () => {
-    const verdict = checkBudget({ deadlineMs: 1000 }, 0, undefined, 500);
+    const verdict = checkBudget({ deadlineMs: 1000 }, { tier: "L1", spentTokens: 0, elapsedMs: 500 });
     expect(verdict.allow).toBe(true);
   });
 
   it("rejects with a deadline-specific reason once elapsed reaches the deadline", () => {
-    const verdict = checkBudget({ deadlineMs: 1000 }, 0, undefined, 1000);
+    const verdict = checkBudget({ deadlineMs: 1000 }, { tier: "L1", spentTokens: 0, elapsedMs: 1000 });
     expect(verdict.allow).toBe(false);
     expect(verdict.reason).toMatch(/budget exceeded/i);
     expect(verdict.reason).toMatch(/deadline/i);
   });
 
   it("the deadline reason is distinguishable from the token-threshold reason", () => {
-    const tokenVerdict = checkBudget({ perCompose: { stopAfterTokens: 10 } }, 10);
-    const deadlineVerdict = checkBudget({ deadlineMs: 1000 }, 0, undefined, 1000);
+    const tokenVerdict = checkBudget(
+      { perCompose: { stopAfterTokens: 10 } },
+      { tier: "L1", spentTokens: 10 },
+    );
+    const deadlineVerdict = checkBudget(
+      { deadlineMs: 1000 },
+      { tier: "L1", spentTokens: 0, elapsedMs: 1000 },
+    );
     expect(tokenVerdict.reason).not.toEqual(deadlineVerdict.reason);
     expect(tokenVerdict.reason).toMatch(/token threshold/i);
     expect(deadlineVerdict.reason).not.toMatch(/token threshold/i);
   });
 
   it("does not check the deadline when elapsedMs is not supplied (caller opted out of measuring it)", () => {
-    const verdict = checkBudget({ deadlineMs: 0 }, 0, undefined, undefined);
+    const verdict = checkBudget({ deadlineMs: 0 }, { tier: "L1", spentTokens: 0 });
     expect(verdict.allow).toBe(true);
   });
 
   it("does not check the deadline when deadlineMs is unset, regardless of elapsedMs", () => {
-    const verdict = checkBudget({}, 0, undefined, 999_999);
+    const verdict = checkBudget({}, { tier: "L1", spentTokens: 0, elapsedMs: 999_999 });
     expect(verdict.allow).toBe(true);
   });
 
   it("a simultaneous token-threshold overage takes precedence over a deadline overage (perCompose is checked first)", () => {
     const verdict = checkBudget(
       { perCompose: { stopAfterTokens: 10 }, deadlineMs: 1000 },
-      10,
-      undefined,
-      2000,
+      { tier: "L1", spentTokens: 10, elapsedMs: 2000 },
     );
     expect(verdict.allow).toBe(false);
     expect(verdict.reason).toMatch(/token threshold/i);
