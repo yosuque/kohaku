@@ -16,6 +16,10 @@ unchanged for parts that have no static `ComponentDefinition` (e.g. a promoted p
 previously private with no way for a host to register anything beyond the core catalog), plus `getPartVersion`
 for introspection, and `implementWc(def, builder)` is the typed counterpart of `implement` for a `PartBuilder`.
 
-Both `implement` and `implementWc` validate a node's props against the schema by default outside a
-`NODE_ENV=production` build, `console.warn` on a mismatch and render with the raw props (fail-open) rather
-than failing the node; pass `{ validate }` to override either way.
+Both `implement` and `implementWc` parse a node's props against the schema **unconditionally, in every
+environment** (`propsSchema.safeParse` is also what materializes a `.default()`-ed prop the Spec omits, not
+just a validation nicety, so it never skips in production) — on success the component receives the parsed
+value, on failure it receives the raw (unvalidated) props instead (fail-open: a malformed prop degrades the
+part's own display rather than the whole surface). Only the diagnostic — a `console.warn` on a mismatch — is
+gated by environment: by default it fires outside a `NODE_ENV=production` build; pass `{ validate }` to force
+the warning on or off regardless of environment.
