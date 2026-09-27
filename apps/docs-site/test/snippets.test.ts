@@ -19,7 +19,7 @@ const SNIPPETS: { page: string; snippet: string; maxLines: number; nth?: number 
     maxLines: 30,
     nth: 1,
   },
-  { page: "docs/paths/mcp-apps.md", snippet: "snippets/mcp-apps.ts", maxLines: 30 },
+  { page: "docs/paths/mcp-apps.md", snippet: "snippets/minimal-host.ts", maxLines: 30 },
   { page: "docs/paths/full-stack.md", snippet: "snippets/full-stack.ts", maxLines: 30 },
 ];
 

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./app": "./src/entry.ts",
     "./renderer-impls": "./src/renderer-impls/index.ts"
   },
   "scripts": {
