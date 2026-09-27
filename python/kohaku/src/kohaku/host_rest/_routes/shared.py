@@ -37,16 +37,20 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from kohaku.host_core import (
     DEFAULT_CAPABILITY_TTL_SECONDS,
+    ActionGate,
+    OperationIndexEntry,
     PolicyRateLimiterTakeParams,
     TraceContext,
     get_lock,
 )
+from kohaku.host_core import create_action_gate as _host_core_create_action_gate
 from kohaku.host_core import create_allowed_actions as _host_core_create_allowed_actions
+from kohaku.host_core import create_operation_index as _host_core_create_operation_index
 from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.host_core import parse_trace_context as _parse_trace_context
 from kohaku.host_core.keyed_mutex import _locks as _locks
-from kohaku.spec import Principal, SessionContext
+from kohaku.spec import ActionParamIssue, Principal, SessionContext
 
 from ..bodies import MAX_JSON_OBJECT_DEPTH, SessionBody, _json_depth_ok
 from ..deps import HostErrorInfo, KohakuHostDeps
@@ -328,6 +332,25 @@ async def allowed_actions(deps: KohakuHostDeps) -> frozenset[str]:
     return await deps._allowed_actions_fn()
 
 
+async def operation_index(deps: KohakuHostDeps) -> dict[str, OperationIndexEntry]:
+    """Memoized `deps.domain.list_operations()` index (host_core's `create_operation_index`, design.md
+    #62/#63), the governed-action counterpart of `allowed_actions` above (same memoize-on-deps idiom).
+    Shared by `/binding/action` (the `ActionGate`, below) and the compose routes (the `actions` manifest
+    on the response, SPEC §6.1.1) so both consult the exact same index rather than each memoizing its own.
+    """
+    if deps._operation_index_fn is None:
+        deps._operation_index_fn = _host_core_create_operation_index(deps.domain)
+    return await deps._operation_index_fn()
+
+
+def action_gate_for(deps: KohakuHostDeps) -> ActionGate:
+    """Memoized `ActionGate` (host_core's `create_action_gate`, design.md #62/#63), consulted by
+    `POST /binding/action` before `domain.invoke`."""
+    if deps._action_gate is None:
+        deps._action_gate = _host_core_create_action_gate(deps.approvals)
+    return deps._action_gate
+
+
 async def safe_record(
     deps: KohakuHostDeps,
     endpoint: str,
@@ -415,8 +438,17 @@ def _json(body: object, status: int = 200) -> Response:
     return JSONResponse(content=to_jsonable(body), status_code=status)
 
 
-def _error(code: Any, message: str, status: int, request_id: str | None = None) -> Response:
-    return JSONResponse(content=error_body(code, message, request_id), status_code=status)
+def _error(
+    code: Any,
+    message: str,
+    status: int,
+    request_id: str | None = None,
+    issues: list[ActionParamIssue] | None = None,
+    approval: dict[str, str] | None = None,
+) -> Response:
+    return JSONResponse(
+        content=error_body(code, message, request_id, issues=issues, approval=approval), status_code=status
+    )
 
 
 def _rate_limited(retry_after_ms: float | None) -> Response:

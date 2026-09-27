@@ -48,6 +48,11 @@ GOVERNANCE_OPERATION_KINDS: tuple[str, ...] = (
     "fixation.proposals",
     "fixation.approve",
     "fixation.remove",
+    # Governance kind for POST /approvals (design.md #63, SPEC ACT-APR-001 [Draft]): a caller must hold
+    # this to mint an approval token for someone else's pending "approve"-tier action. Deliberately its
+    # own kind (not folded into an existing promotion.*/fixation.* domain) -- approving a governed Action
+    # is an independent authorization surface from the promotion/fixation pipelines.
+    "action.approve",
 )
 
 

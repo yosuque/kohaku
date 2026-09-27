@@ -1,11 +1,13 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
 import type {
+  ActionAuditRecorder,
   ActionEffects,
   FixationSelfHealApi,
   PolicyRateLimiter,
   ViewRecorder,
 } from "@kohaku-ui/host-core";
 import type {
+  ApprovalPort,
   AuthzPort,
   DomainPort,
   FixationRecord,
@@ -185,6 +187,20 @@ export interface KohakuHostDeps {
    * If unset, the response is only `{result}` = fully backward compatible.
    */
   actionEffects?: ActionEffects;
+  /**
+   * Verifies stateless approval tokens for `"approve"`-tier actions (design.md #63; typically
+   * `@kohaku-ui/authz-hmac`'s `createHmacApprovalPort`). Consulted by `POST /binding/action`'s
+   * `ActionGate` and by `POST /approvals` (issuance). **If not wired, an `"approve"`-tier action can
+   * never be allowed** (the gate returns `denied`) and `POST /approvals` responds 501 `NOT_IMPLEMENTED`.
+   */
+  approvals?: ApprovalPort;
+  /**
+   * Audit-recording hooks for governed Actions (design.md #62/#63; typically `@kohaku-ui/lineage`'s
+   * `createActionAuditRecorder`). Called by `POST /binding/action`'s `ActionGate` outcome, fail-open (a
+   * recording failure never blocks the action response, allowed or denied). **If not wired, no
+   * action.* lineage events are recorded** (backward compatible).
+   */
+  actionAuditRecorder?: ActionAuditRecorder;
   /**
    * Observability hook for failure paths (product responsibility; the implementation holds logs/metrics). The
    * composition handlers (/intent/normalize, /compose, /compose/stream, /events, /fixations/approve) call it before

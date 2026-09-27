@@ -1,0 +1,159 @@
+import type { ComposeContext } from "@kohaku-ui/composer";
+import type { ApprovalPort, AuthzPort, DomainPort } from "@kohaku-ui/spec-core";
+import { describe, expect, it, vi } from "vitest";
+import { createKohakuRoutes, type KohakuHostDeps } from "../src/index.js";
+
+const NO_COMPOSE = {} as unknown as ComposeContext;
+
+function allowAuthz(): AuthzPort {
+  return {
+    async issueCapability() {
+      return "cap";
+    },
+    async verify() {
+      return { ok: true, principal: { id: "u1", roles: ["user"] } };
+    },
+  };
+}
+
+function noOpDomain(): DomainPort {
+  return {
+    async listOperations() {
+      return [];
+    },
+    async invoke() {
+      return null;
+    },
+  };
+}
+
+function baseDeps(extra?: Partial<KohakuHostDeps>): KohakuHostDeps {
+  return {
+    compose: NO_COMPOSE,
+    domain: noOpDomain(),
+    authz: allowAuthz(),
+    querySource: "sales",
+    ...extra,
+  };
+}
+
+async function postApprovals(deps: KohakuHostDeps, body: unknown) {
+  const app = createKohakuRoutes(deps);
+  return app.request("/approvals", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+const VALID_BODY = { action: "delete", payloadHash: "sha256:" + "a".repeat(64), requesterId: "requester-1" };
+
+describe("POST /approvals", () => {
+  it("returns 501 NOT_IMPLEMENTED when deps.approvals is not configured", async () => {
+    const res = await postApprovals(baseDeps(), VALID_BODY);
+    expect(res.status).toBe(501);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("NOT_IMPLEMENTED");
+  });
+
+  it("issues a token when authorized and approver != requester", async () => {
+    const issueApproval = vi.fn(
+      async (
+        _input: {
+          action: string;
+          payloadHash: string;
+          requesterId: string;
+          approverId: string;
+          tenant?: string;
+        },
+        _opts?: { ttlSeconds?: number },
+      ) => "kohaku-approval.v1.token",
+    );
+    const approvals: ApprovalPort = { issueApproval, verifyApproval: async () => ({ ok: true }) };
+    const deps = baseDeps({ approvals, auth: async () => ({ id: "approver-1", roles: ["approver"] }) });
+
+    const res = await postApprovals(deps, VALID_BODY);
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { approval: string }).toEqual({ approval: "kohaku-approval.v1.token" });
+
+    expect(issueApproval).toHaveBeenCalledTimes(1);
+    const [input] = issueApproval.mock.calls[0]!;
+    expect(input).toMatchObject({
+      action: "delete",
+      payloadHash: VALID_BODY.payloadHash,
+      requesterId: "requester-1",
+      approverId: "approver-1",
+    });
+  });
+
+  it("rejects a self-approval (approver == requester) with 400, without calling issueApproval", async () => {
+    const issueApproval = vi.fn(async () => "should-not-be-issued");
+    const approvals: ApprovalPort = { issueApproval, verifyApproval: async () => ({ ok: true }) };
+    const deps = baseDeps({
+      approvals,
+      auth: async () => ({ id: "requester-1", roles: ["approver"] }),
+    });
+
+    const res = await postApprovals(deps, VALID_BODY);
+    expect(res.status).toBe(400);
+    expect(issueApproval).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 CAPABILITY_DENIED when authorizeGovernance denies action.approve", async () => {
+    const approvals: ApprovalPort = {
+      issueApproval: async () => "token",
+      verifyApproval: async () => ({ ok: true }),
+    };
+    const deps = baseDeps({
+      approvals,
+      authorizeGovernance: async (_principal, operation) => operation.kind !== "action.approve",
+    });
+
+    const res = await postApprovals(deps, VALID_BODY);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CAPABILITY_DENIED");
+  });
+
+  it("rejects a missing required field with 400 BAD_REQUEST", async () => {
+    const approvals: ApprovalPort = {
+      issueApproval: async () => "token",
+      verifyApproval: async () => ({ ok: true }),
+    };
+    const res = await postApprovals(baseDeps({ approvals }), { action: "delete" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+  });
+
+  it("a thrown issueApproval (e.g. the port's own self-approval guard) maps to 400 with its message", async () => {
+    const approvals: ApprovalPort = {
+      issueApproval: async () => {
+        throw new Error("cannot issue an approval: approverId must differ from requesterId");
+      },
+      verifyApproval: async () => ({ ok: true }),
+    };
+    const deps = baseDeps({ approvals, auth: async () => ({ id: "approver-1", roles: ["approver"] }) });
+    const res = await postApprovals(deps, VALID_BODY);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { message: string } };
+    expect(body.error.message).toContain("approverId must differ from requesterId");
+  });
+
+  it("passes ttlSeconds through when given", async () => {
+    const issueApproval = vi.fn(
+      async (
+        _input: {
+          action: string;
+          payloadHash: string;
+          requesterId: string;
+          approverId: string;
+          tenant?: string;
+        },
+        _opts?: { ttlSeconds?: number },
+      ) => "token",
+    );
+    const approvals: ApprovalPort = { issueApproval, verifyApproval: async () => ({ ok: true }) };
+    const deps = baseDeps({ approvals, auth: async () => ({ id: "approver-1", roles: ["approver"] }) });
+
+    await postApprovals(deps, { ...VALID_BODY, ttlSeconds: 60 });
+    expect(issueApproval.mock.calls[0]![1]).toEqual({ ttlSeconds: 60 });
+  });
+});

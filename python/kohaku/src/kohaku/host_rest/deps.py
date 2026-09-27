@@ -14,8 +14,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from kohaku.composer import ComposeContext
-from kohaku.host_core import AllowedActions, PolicyRateLimiter, TraceContext
+from kohaku.host_core import (
+    ActionAuditRecorder,
+    ActionGate,
+    AllowedActions,
+    OperationIndex,
+    PolicyRateLimiter,
+    TraceContext,
+)
 from kohaku.spec import (
+    ApprovalPort,
     AuthzPort,
     DomainPort,
     FixationRecord,
@@ -256,6 +264,16 @@ class KohakuHostDeps:
     """Usage analytics aggregator. When unwired, GET /analytics/summary is 501 NOT_IMPLEMENTED."""
     action_effects: ActionEffectsHook | None = None
     """Write side-effect declaration (optional). When unspecified, the response is only {result} = fully backward compatible."""
+    approvals: ApprovalPort | None = None
+    """Verifies stateless approval tokens for "approve"-tier actions (design.md #63; typically
+    kohaku_authz_hmac's create_hmac_approval_port). Consulted by POST /binding/action's ActionGate and by
+    POST /approvals (issuance). If not wired, an "approve"-tier action can never be allowed (the gate
+    returns denied) and POST /approvals responds 501 NOT_IMPLEMENTED."""
+    action_audit_recorder: ActionAuditRecorder | None = None
+    """Audit-recording hooks for governed Actions (design.md #62/#63; typically kohaku.lineage's
+    create_action_audit_recorder). Called by POST /binding/action's ActionGate outcome, fail-open (a
+    recording failure never blocks the action response, allowed or denied). If not wired, no action.*
+    lineage events are recorded (backward compatible)."""
     on_error: OnErrorHook | None = None
     """Failure-path observability hook. When unwired, silent (no call is made); a requestId is issued and
     placed on the error envelope / X-Request-Id header regardless of whether this hook is wired (ops)."""
@@ -275,3 +293,11 @@ class KohakuHostDeps:
     _routes.shared.allowed_actions). Not part of the public constructor — built lazily on first capability
     issuance, one per `KohakuHostDeps` instance (list_operations is async and must not be re-awaited on every
     compose)."""
+    _operation_index_fn: OperationIndex | None = field(default=None, init=False, repr=False, compare=False)
+    """Memoized `OperationIndex` closure (host_core's `create_operation_index`, design.md #62/#63; see
+    _routes.shared.operation_index). Not part of the public constructor — built lazily on first use, one
+    per `KohakuHostDeps` instance (list_operations is async and must not be re-awaited on every action
+    invoke / compose)."""
+    _action_gate: ActionGate | None = field(default=None, init=False, repr=False, compare=False)
+    """Memoized `ActionGate` (host_core's `create_action_gate`, design.md #62/#63; see
+    _routes.shared.action_gate_for). Not part of the public constructor."""

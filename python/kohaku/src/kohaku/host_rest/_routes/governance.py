@@ -18,12 +18,14 @@ from kohaku.spec import (
     LineagePageRequest,
 )
 
-from ..bodies import RenderedEvent, parse_telemetry_body
+from ..bodies import RenderedEvent, parse_approval_request_body, parse_telemetry_body
 from ..deps import AnalyticsWindow, KohakuHostDeps
 from ..governance_policy import GovernanceOperation
 from .shared import (
     _error,
+    _get_principal,
     _json,
+    _message,
     _parse_limit,
     _read_json,
     _resolve_tenant,
@@ -184,3 +186,36 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             except BaseException as e:
                 await report_host_error(deps, "telemetry", request_id, e)
         return _json({"ok": True})
+
+    # --- Approval issuance for "approve"-tier governed Actions (design.md #63, SPEC ACT-APR-001 [Draft]) --
+    @router.post("/approvals")
+    async def approvals_route(request: Request) -> Response:
+        denied = await require_governance(deps, request, GovernanceOperation(kind="action.approve"))
+        if denied is not None:
+            return denied
+        if deps.approvals is None:
+            return _error("NOT_IMPLEMENTED", "approvals are not configured for this host", 501)
+        request_id = request_id_of(request, deps)
+        body = parse_approval_request_body(await _read_json(request))
+        if body is None:
+            return _error("BAD_REQUEST", "action, payloadHash, and requesterId are required", 400)
+        approver = await _get_principal(deps, request)
+        # design.md #63: an approver must not be able to approve their own pending action. The
+        # ApprovalPort itself also refuses this (defense in depth), but checking here first gives a
+        # clearer, dedicated message rather than surfacing whatever generic error the port happens to raise.
+        if approver.id == body.requester_id:
+            return _error("BAD_REQUEST", "an approver cannot approve their own request", 400)
+        tenant = await _resolve_tenant(deps, request)
+        try:
+            token = await deps.approvals.issue_approval(
+                action=body.action,
+                payload_hash=body.payload_hash,
+                requester_id=body.requester_id,
+                approver_id=approver.id,
+                tenant=tenant,
+                ttl_seconds=body.ttl_seconds,
+            )
+            return _json({"approval": token})
+        except BaseException as e:
+            await report_host_error(deps, "approvals", request_id, e)
+            return _error("BAD_REQUEST", _message(e), 400, request_id)
