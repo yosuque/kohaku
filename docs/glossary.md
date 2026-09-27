@@ -16,13 +16,15 @@ A newcomer meets around twenty kohaku-specific terms before the [user guide](use
 
 **`createKohakuHost`** — The one-call facade (`@kohaku-ui/host`) that wires the DomainPort you supply together with working defaults for the other three Ports into a REST host. It is the fastest way to stand up kohaku inside your own product once you outgrow the Zero-Port quickstart. See [User guide §6, Step 0](user-guide.md#step-0--server-driven-ui-without-an-llm).
 
-**Design kit** — The CSS-plus-class-vocabulary pair (`DesignSystemGuide.kit`) that L2 free generation writes against, so a generated component follows your product's design system instead of inventing its own styling. See [User guide, "Applying a design system to L2"](user-guide.md#applying-a-design-system-to-l2).
+**Design kit** — The class-name vocabulary a design system declares for L2 free generation (`DesignSystemGuide.kit`, a `DesignKitVocabulary`), so a generated component can follow your product's class names instead of inventing new ones. The vocabulary is only half the picture: the actual CSS is a separate render-side object — renderer-core's built-in `defaultDesignKit`, or a product's own passed to the sandbox. See [User guide, "Applying a design system to L2"](user-guide.md#applying-a-design-system-to-l2).
 
 **Fixation** — Promoting a frequently requested, structurally stable L1 Intent to L0: the structure is pinned and never goes through the LLM again, while its data still updates through pass-by-reference. See [SPEC §1](../spec/SPEC.md#1-overview-and-terminology-normative).
 
 **`generatorVersion`** — An optional trailing component of the Spec cache key that separates generated artifacts by generation across prompt revisions and model changes. Changing a prompt or a model without bumping it would otherwise mix new output into a cache built for the old one. See [SPEC §1](../spec/SPEC.md#1-overview-and-terminology-normative) and [User guide §7](user-guide.md#7-operational-tips).
 
 **Intent / CanonicalIntent / intentHash** — An Intent is the single normalized representation a chat question and a GUI action both reduce to (e.g. `sales.quarterly_summary` plus sorted params). `CanonicalIntent` is its wire form, and `intentHash` (`sha256:` of that form's canonical JSON) anchors the Spec cache key: the same Intent always hashes to the same value, so it produces the same screen. See [SPEC §1](../spec/SPEC.md#1-overview-and-terminology-normative).
+
+**Intent catalog** — The set of Intent definitions a product registers (canonical name, param schema, query mapping) — distinct from the Catalog above, which is a set of UI *components*. See [SPEC §1](../spec/SPEC.md#1-overview-and-terminology-normative).
 
 **`kohaku explain` / DevTools** — Two front ends — a CLI command and a floating panel (`@kohaku-ui/admin-react/devtools`) — over the same `ExplainReport`. Given one `requestId`, either shows why a screen came out the way it did: tier, cache hit or miss, the cache-key breakdown, which generation attempts ran and why they failed, and every lineage event that request produced. See [User guide, "Kohaku DevTools and `kohaku explain`"](user-guide.md#kohaku-devtools-and-kohaku-explain).
 

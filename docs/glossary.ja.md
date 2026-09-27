@@ -16,7 +16,7 @@
 
 **`createKohakuHost`** — あなたが実装する DomainPort と、残り 3 つの Port の動く既定値を組み合わせて REST ホストにする、`@kohaku-ui/host` の one-call ファサードです。Zero-Port quickstart から一歩進んで自分の製品に kohaku を組み込む、最短の経路です。[ユーザーガイド §6 Step 0](user-guide.ja.md#step-0--llm-なしの-server-driven-ui) を参照してください。
 
-**デザインキット** — L2 自由生成が従う CSS とクラス語彙の組(`DesignSystemGuide.kit`)です。これを渡すと、生成される部品が独自のスタイルを発明する代わりに、あなたの製品のデザインシステムに従います。[ユーザーガイド「L2 にデザインシステムを適用する」](user-guide.ja.md#l2-にデザインシステムを適用する) を参照してください。
+**デザインキット** — L2 自由生成が従うクラス名の語彙です(`DesignSystemGuide.kit`。型は `DesignKitVocabulary`)。これを渡すと、生成される部品は独自のクラス名を発明する代わりにこの語彙に従います。この語彙はデザインキットの半分でしかなく、実際の CSS は別の描画側のオブジェクト(renderer-core 組み込みの `defaultDesignKit`、または製品側が sandbox に渡す独自のもの)です。[ユーザーガイド「L2 にデザインシステムを適用する」](user-guide.ja.md#l2-にデザインシステムを適用する) を参照してください。
 
 **固定化(fixation)** — 頻出かつ構造が安定した L1 Intent を L0 に昇格させることです。構造が固定され、以後 LLM を一切通らなくなる一方、データは参照渡しのまま最新に保たれます。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative) を参照してください。
 
@@ -24,7 +24,9 @@
 
 **Intent / CanonicalIntent / intentHash** — チャットの質問も GUI の操作も合流する、単一の正規化された表現が Intent です(例: `sales.quarterly_summary` + ソート済み params)。そのワイヤ形式が `CanonicalIntent` で、`intentHash`(その canonical JSON の `sha256:` 値)が Spec キャッシュキーの軸になります。同じ Intent は常に同じハッシュになるので、同じ画面になります。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative) を参照してください。
 
-**`kohaku explain` / DevTools** — 同じ `ExplainReport` を見るための 2 つの入口(CLI コマンドと、フローティングパネル `@kohaku-ui/admin-react/devtools`)です。`requestId` を 1 つ渡すと、どちらも tier・cache のヒット/ミス・キャッシュキーの内訳・実行された生成試行とその失敗理由・その要求が生んだ lineage イベントの全体を示します。[ユーザーガイド「Kohaku DevTools と `kohaku explain`」](user-guide.ja.md#kohaku-devtools-と-kohaku-explain) を参照してください。
+**Intent カタログ** — 製品が登録する Intent 定義(正規名・param スキーマ・クエリのマッピング)の集合です。上記のカタログ(UI *部品* の集合)とは別物です。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative) を参照してください。
+
+**`kohaku explain` / DevTools** — 同じ `ExplainReport` を見るための 2 つの入口(CLI コマンドと、フローティングパネル `@kohaku-ui/admin-react/devtools`)です。`requestId` を 1 つ渡すと、どちらも tier・cache のヒット/ミス・キャッシュキーの内訳・実行された生成試行とその失敗理由・その要求が生成した lineage イベントの全体を示します。[ユーザーガイド「Kohaku DevTools と `kohaku explain`」](user-guide.ja.md#kohaku-devtools-と-kohaku-explain) を参照してください。
 
 **L0 / L1 / L2(tier ladder)** — Spec が生成される 3 つの経路です。L0 は決定的な経路で、固定テンプレートか固定化済みの構造を使い LLM を通りません。L1 は宣言的合成で、LLM の仕事はカタログから部品を選んで型付き props を埋めることに限られます。L2 はサンドボックス内での自由生成で、カタログで表現できない要求のための経路です。要求は必要な分だけこの段を上がります。[SPEC §4](../spec/SPEC.ja.md#4-合成規約-normative後処理規範は-draft) を参照してください。
 

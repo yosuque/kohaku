@@ -94,6 +94,7 @@ pnpm --filter @kohaku-ui/registry run export-core-catalog           # re-export 
 |---|---|
 | [docs/why-kohaku.md](docs/why-kohaku.md) | Positioning one-pager (the three guarantees, where kohaku sits). Japanese: [docs/why-kohaku.ja.md](docs/why-kohaku.ja.md) |
 | [docs/paths/](docs/paths/mcp-apps.md) | Three persona starts: `mcp-apps.md` / `react-dashboard.md` / `full-stack.md` (+ `.ja.md`). **The first code block of each is a real file under `apps/docs-site/snippets/` — edit the snippet, then paste it into both language pages; `apps/docs-site/test/snippets.test.ts` fails on any mismatch or if it exceeds 30 lines** |
+| [docs/glossary.md](docs/glossary.md) | Plain-language term on-ramp; each entry links to its normative SPEC.md definition. Japanese: [docs/glossary.ja.md](docs/glossary.ja.md) |
 | [docs/design.md](docs/design.md) | Implementation design (the implemented shape, design decision record). Japanese: [docs/design.ja.md](docs/design.ja.md) |
 | [docs/specification.md](docs/specification.md) | Specification (REST API / schema / Port reference). Japanese: [docs/specification.ja.md](docs/specification.ja.md) |
 | [docs/user-guide.md](docs/user-guide.md) | User guide (setup, demos, embedding, operations). Japanese: [docs/user-guide.ja.md](docs/user-guide.ja.md) |
