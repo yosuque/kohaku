@@ -474,7 +474,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 
 ## 11. conformance(適合検査)
 
-要件一覧(機械可読): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — MUST 33 件(件数・区分は manifest を正とする)。
+要件一覧(機械可読): [../spec/conformance/manifest.ts](../spec/conformance/manifest.ts) — MUST 34 件(件数・区分は manifest を正とする)。
 
 ```bash
 node cli/bin/kohaku.js conformance --self                # SPEC-* 9 件(Spec フォーマット自己検査)
