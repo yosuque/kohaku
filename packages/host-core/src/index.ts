@@ -13,6 +13,7 @@ export {
   verifyCapabilitySafely,
   WriteScopeDroppedError,
 } from "./capability.js";
+export { createDailyTokenLedger, type DailyTokenLedger } from "./daily-token-ledger.js";
 export {
   type ConsoleErrorReporter,
   type ConsoleErrorReporterOptions,
