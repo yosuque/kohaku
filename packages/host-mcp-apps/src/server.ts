@@ -485,7 +485,10 @@ function registerComposeTool(ctx: ToolContext): void {
     },
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_compose`, async () => {
-        const call = forCall(ctx, await ctx.principalOf(extra));
+        const principal = await ctx.principalOf(extra);
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        if (rateLimited != null) return rateLimited;
+        const call = forCall(ctx, principal);
         const callCtx: ComposeCallContext = {
           ...requestContextOf(extra),
           locale,
@@ -527,7 +530,10 @@ function registerRenderSnapshotTool(ctx: ToolContext): void {
     },
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, async () => {
-        const call = forCall(ctx, await ctx.principalOf(extra));
+        const principal = await ctx.principalOf(extra);
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        if (rateLimited != null) return rateLimited;
+        const call = forCall(ctx, principal);
         const { spec, html } = await buildSnapshot(
           call,
           { kind: "nl", text: question },
@@ -585,7 +591,10 @@ function registerIntentTools(ctx: ToolContext): void {
       },
       async (args, extra) =>
         safeTool(ctx.deps, tool.name, async () => {
-          const call = forCall(ctx, await ctx.principalOf(extra));
+          const principal = await ctx.principalOf(extra);
+          const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+          if (rateLimited != null) return rateLimited;
+          const call = forCall(ctx, principal);
           // Pull the shared language input out before it reaches the intent params (it must not
           // pollute the canonical intent / intent hash).
           const { locale, ...params } = args as JsonObject & { locale?: string };
@@ -621,6 +630,8 @@ function registerResolveBindingTool(ctx: ToolContext): void {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "resolve");
+        if (rateLimited != null) return rateLimited;
         // Server-side paging/sorting: as on the REST surface, verify the capability against base (with reserved
         // parameters removed), and merge the reserved parameters into domain.invoke (the `_` namespace convention).
         // Unknown `_` keys are rejected as on the REST surface (to prevent changing the data range via unauthorized parameters).
@@ -672,7 +683,10 @@ function registerEventTool(ctx: ToolContext): void {
     },
     async ({ intent, on, payload, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_event`, async () => {
-        const call = forCall(ctx, await ctx.principalOf(extra));
+        const principal = await ctx.principalOf(extra);
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        if (rateLimited != null) return rateLimited;
+        const call = forCall(ctx, principal);
         const session = mcpSession(locale, call.principal);
         // Resolved through host-core's resolveIntent (the "intent" source), not a bare finalizeIntent, so a
         // SemanticPort.validateIntent implementation gets a chance to reject an unknown canonical or invalid
@@ -772,6 +786,8 @@ function registerActionTool(ctx: ToolContext): void {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "action");
+        if (rateLimited != null) return rateLimited;
         // Reject an action name the DomainPort does not expose before even attempting capability verification
         // (see this function's doc comment). Fail-closed on a listOperations() rejection too — every action is
         // "unknown" for this call, and the failure is reported to the observability hook.
@@ -1050,6 +1066,67 @@ function toolError(message: string) {
     // never produces) — see safeTool's doc comment.
     resultType: "complete" as const,
   };
+}
+
+/**
+ * A structured `RATE_LIMITED` tool error (SPEC §6.1, REST-RL-001's MCP counterpart). Unlike the generic
+ * `toolError`, this also carries `structuredContent.error` (spec-core's `HostErrorCode`/`ErrorEnvelope`
+ * wire vocabulary) so a client can identify the failure programmatically rather than by matching the
+ * text message -- the MCP surface has no HTTP status code / `Retry-After` header, so both `code` and
+ * `retryAfterMs` (when the limiter reports one) travel in `structuredContent` instead.
+ */
+function rateLimitToolError(retryAfterMs: number | undefined) {
+  return {
+    content: [{ type: "text" as const, text: "rate limit exceeded" }],
+    isError: true,
+    resultType: "complete" as const,
+    structuredContent: {
+      error: {
+        code: "RATE_LIMITED",
+        message: "rate limit exceeded",
+        ...(retryAfterMs != null ? { retryAfterMs } : {}),
+      },
+    },
+  };
+}
+
+/**
+ * The bucket-key "principal" component for a rate-limit check (this profile has no tenant — see
+ * `McpHostDeps.rateLimiter`'s doc comment, and `PolicyRateLimiterTakeParams.tenant` is always left
+ * undefined here). Every unauthenticated call resolves to the same constant fallback principal
+ * (`McpHostDeps.principal ?? ANONYMOUS`), so keying on `principal.id` alone in that case would put every
+ * anonymous caller into one shared bucket — exactly the failure a per-caller budget exists to prevent.
+ * Prefers the resolved principal's id only when `resolvePrincipal` is wired (a genuine per-call
+ * identity, which can actually differ between callers); otherwise falls back to the MCP transport's
+ * `ServerContext.sessionId` (one per client connection on Streamable HTTP), and only then to the literal
+ * `"anonymous"` (e.g. stdio, which has no per-client session concept).
+ */
+function mcpRateLimitKey(deps: McpHostDeps, principal: Principal, sessionId: string | undefined): string {
+  return deps.resolvePrincipal != null ? principal.id : (sessionId ?? "anonymous");
+}
+
+/**
+ * Checks `deps.rateLimiter` (host-core's `PolicyRateLimiter`, typically `PolicyRuntime.rateLimiter`)
+ * before a tool handler proceeds with its actual work. Returns `null` (proceed) when `deps.rateLimiter`
+ * is unset or the limiter allows; a structured `RATE_LIMITED` tool error otherwise (see
+ * `rateLimitToolError`). Port of the REST profile's `createRateLimitMiddleware` — called inline, as the
+ * first statement after resolving `principal`, at the top of each of the 6 tool handlers below, since
+ * this profile has no per-path middleware layer to mount a single check on (mirroring how the Python
+ * REST mirror calls `check_rate_limit` inline for the same reason). Reuses the principal each handler
+ * already resolved via `ctx.principalOf(extra)` rather than invoking that hook a second time.
+ */
+async function checkMcpRateLimit(
+  deps: McpHostDeps,
+  principal: Principal,
+  sessionId: string | undefined,
+  routeClass: "compose" | "action" | "resolve",
+): Promise<ReturnType<typeof rateLimitToolError> | null> {
+  if (deps.rateLimiter == null) return null;
+  const result = await deps.rateLimiter.take({
+    principal: mcpRateLimitKey(deps, principal, sessionId),
+    routeClass,
+  });
+  return result.allow ? null : rateLimitToolError(result.retryAfterMs);
 }
 
 /**
