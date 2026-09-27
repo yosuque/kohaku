@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from kohaku.lineage import (
+    EvidenceFileEntry,
     EvidenceManifestSigner,
     EvidencePackFile,
     EvidencePackScope,
@@ -25,6 +27,7 @@ from kohaku.lineage import (
     generate_ed25519_keypair,
     import_ed25519_private_key_pkcs8,
     import_ed25519_public_key_raw,
+    is_safe_evidence_file_path,
     sign_bytes,
     sign_manifest,
     verify_bytes,
@@ -87,6 +90,30 @@ def test_keygen_roundtrip() -> None:
     message = b"evidence pack round-trip"
     signature = sign_bytes(message, keypair.private_key)
     assert verify_bytes(message, signature, keypair.public_key) is True
+
+
+# Python's `$` (without re.MULTILINE) matches immediately before a trailing "\n" at the end of the
+# string, unlike JS's `$` (no `m` flag), which anchors strictly to the end -- so `.match()` against a
+# `^...$`-anchored pattern let e.g. "events.jsonl\n" through as if it were "events.jsonl". Fixed by
+# switching every such check in evidence.py to `.fullmatch()`; these lock the fix in.
+def test_is_safe_evidence_file_path_rejects_a_trailing_newline() -> None:
+    assert is_safe_evidence_file_path("events.jsonl\n") is False
+    assert is_safe_evidence_file_path(f"artifacts/{'a' * 64}.html\n") is False
+
+
+def test_evidence_file_entry_rejects_a_path_with_a_trailing_newline() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceFileEntry(path="events.jsonl\n", sha256="a" * 64, bytes=10)
+
+
+def test_evidence_file_entry_rejects_a_sha256_with_a_trailing_newline() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceFileEntry(path="events.jsonl", sha256=f"{'a' * 64}\n", bytes=10)
+
+
+def test_evidence_manifest_signer_rejects_a_key_id_with_a_trailing_newline() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceManifestSigner(keyId="0123456789abcdef\n")
 
 
 class _MemoryReader:

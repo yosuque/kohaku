@@ -74,8 +74,13 @@ EVIDENCE_FILE_PATH_PATTERN: Final = re.compile(
 
 def is_safe_evidence_file_path(path: str) -> bool:
     """Structural re-check of EVIDENCE_FILE_PATH_PATTERN, for a caller (e.g. verify_evidence_pack) that
-    wants to defend against a path reaching it some other way than through this schema."""
-    return EVIDENCE_FILE_PATH_PATTERN.match(path) is not None
+    wants to defend against a path reaching it some other way than through this schema.
+
+    Uses fullmatch, not match: Python's `$` matches immediately before a trailing "\\n" (unlike JS's `$`,
+    which anchors strictly to the end of the string with no `m` flag), so `.match()` against a
+    `^...$`-anchored pattern would let e.g. "events.jsonl\\n" through as if it were "events.jsonl".
+    """
+    return EVIDENCE_FILE_PATH_PATTERN.fullmatch(path) is not None
 
 
 class _EvidenceModel(BaseModel):
@@ -103,7 +108,8 @@ class EvidenceFileEntry(_EvidenceModel):
     @field_validator("sha256")
     @classmethod
     def _check_sha256(cls, v: str) -> str:
-        if not _SHA256_HEX_RE.match(v):
+        # fullmatch, not match -- see is_safe_evidence_file_path's docstring for why.
+        if not _SHA256_HEX_RE.fullmatch(v):
             raise ValueError("sha256 must be 64 lowercase hex characters")
         return v
 
@@ -133,7 +139,8 @@ class EvidenceManifestSigner(_EvidenceModel):
     @field_validator("keyId")
     @classmethod
     def _check_key_id(cls, v: str) -> str:
-        if not _KEY_ID_HEX_RE.match(v):
+        # fullmatch, not match -- see is_safe_evidence_file_path's docstring for why.
+        if not _KEY_ID_HEX_RE.fullmatch(v):
             raise ValueError("keyId must be 16 lowercase hex characters")
         return v
 

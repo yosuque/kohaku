@@ -51,9 +51,23 @@ describe("EvidenceManifestSchema", () => {
     expect(() => EvidenceManifestSchema.parse(manifest)).toThrow();
   });
 
+  // Same trailing-newline regression lock as files[].path above: JS's `$` never matched here, but this
+  // pins the behavior now that Python's mirror needed fullmatch to reject the equivalent case.
+  it("rejects a sha256 with a trailing newline", () => {
+    const manifest = validManifest();
+    manifest.files[0]!.sha256 = `${"a".repeat(64)}\n`;
+    expect(() => EvidenceManifestSchema.parse(manifest)).toThrow();
+  });
+
   it("rejects a malformed keyId", () => {
     const manifest = validManifest();
     manifest.signer.keyId = "too-short";
+    expect(() => EvidenceManifestSchema.parse(manifest)).toThrow();
+  });
+
+  it("rejects a keyId with a trailing newline", () => {
+    const manifest = validManifest();
+    manifest.signer.keyId = "0123456789abcdef\n";
     expect(() => EvidenceManifestSchema.parse(manifest)).toThrow();
   });
 
@@ -73,6 +87,11 @@ describe("EvidenceManifestSchema", () => {
     `artifacts/${"a".repeat(65)}.html`, // one hex character too many
     `artifacts/${"A".repeat(64)}.html`, // uppercase hex
     "artifacts/subdir/aaaa.html",
+    // A trailing newline: JS's `$` (no `m` flag) anchors strictly to the end of the string, unlike
+    // Python's `$`, which also matches immediately before a trailing "\n" -- this case locks in that TS
+    // was never vulnerable to the mismatch Python's is_safe_evidence_file_path had to fix (fullmatch).
+    "events.jsonl\n",
+    `artifacts/${"a".repeat(64)}.html\n`,
   ])("rejects an unsafe files[].path %s", (path) => {
     const manifest = validManifest();
     manifest.files[0]!.path = path;
