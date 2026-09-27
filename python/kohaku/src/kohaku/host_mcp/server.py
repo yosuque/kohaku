@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from kohaku.composer import (
     ComposeResult,
@@ -30,6 +30,7 @@ from kohaku.host_core import (
     IntentSourceIntent,
     IntentSourceNl,
     ParsedInvokableRefOk,
+    PolicyRateLimiterTakeParams,
     TraceContext,
     apply_action_effects,
     is_typed_host_error,
@@ -158,6 +159,30 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
+def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal) -> str:
+    """The bucket-key "principal" component for a rate-limit check (this profile has no tenant -- see
+    `McpHostDeps.rate_limiter`'s doc comment, and `PolicyRateLimiterTakeParams.tenant` is always left
+    `None` here). Every unauthenticated call resolves to the same constant fallback principal
+    (`McpHostDeps.principal` or the built-in `_ANONYMOUS`), so keying on `principal.id` alone in that
+    case would put every anonymous caller into one shared bucket -- exactly the failure a per-caller
+    budget exists to prevent. Prefers the resolved principal's id only when `resolve_principal` is wired
+    (a genuine per-call identity, which can actually differ between callers); otherwise falls back to the
+    literal `"anonymous"`.
+
+    Port note (a documented gap, not a design choice): TS's counterpart (`mcpRateLimitKey`,
+    server.ts) falls back one step further first, to the MCP transport's `ServerContext.sessionId` (one
+    per client connection on Streamable HTTP) -- Python has no equivalent here. The installed `mcp` SDK's
+    `ServerRequestContext` (what every handler in this module actually receives) exposes no public
+    session-id accessor: only the richer `Context` class has a `session_id` property, and
+    `ServerRunner` does not construct that class for handlers (its own doc comment says so). Reaching
+    into `ctx.session`'s private `_connection` attribute to recover one was rejected, the same call this
+    module already made for `_correlation_id_of`/`_trace_context_of` (neither carries a session identity
+    either -- see their doc comments). A Streamable HTTP deployment with multiple concurrent anonymous
+    sessions therefore shares a single "anonymous" bucket in Python, unlike TS.
+    """
+    return principal.id if deps.resolve_principal is not None else "anonymous"
+
+
 def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
     """The per-call correlation id: always the JSON-RPC request id of this tool call, never derived from
     `_meta.traceparent`. Mirrors TS host-mcp-apps' `requestContextOf().requestId` (used directly as the
@@ -282,6 +307,44 @@ def attach_kohaku_to_mcp_server(
             is_error=True,
         )
 
+    def _rate_limit_tool_error(retry_after_ms: float | None) -> mcp_types.CallToolResult:
+        """A structured `RATE_LIMITED` tool error (SPEC §6.1, REST-RL-001's MCP counterpart). Unlike
+        `_tool_error`, this also carries `structured_content["error"]` (spec-core's `HostErrorCode` /
+        `ErrorEnvelope` wire vocabulary) so a client can identify the failure programmatically rather
+        than by matching the text message -- the MCP surface has no HTTP status code / `Retry-After`
+        header, so both `code` and `retryAfterMs` (when the limiter reports one) travel in
+        `structured_content` instead.
+        """
+        error: dict[str, Any] = {"code": "RATE_LIMITED", "message": "rate limit exceeded"}
+        if retry_after_ms is not None:
+            error["retryAfterMs"] = retry_after_ms
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="rate limit exceeded")],
+            is_error=True,
+            structured_content={"error": error},
+        )
+
+    async def _check_mcp_rate_limit(
+        principal: Principal, route_class: Literal["compose", "action", "resolve"]
+    ) -> mcp_types.CallToolResult | None:
+        """Checks `deps.rate_limiter` (host_core's `PolicyRateLimiter`, typically
+        `PolicyRuntime.rate_limiter`) before a tool handler proceeds with its actual work. Returns `None`
+        (proceed) when `deps.rate_limiter` is unset or the limiter allows; a structured `RATE_LIMITED`
+        tool error otherwise (see `_rate_limit_tool_error`). Port of the REST profile's
+        `check_rate_limit` -- called inline, as the first statement after resolving `principal`, at the
+        top of each of the 6 tool handlers below, since this profile has no per-path middleware layer to
+        mount a single check on. Reuses the principal each handler already resolved via
+        `_current_principal(ctx)` rather than invoking `resolve_principal` a second time.
+        """
+        if deps.rate_limiter is None:
+            return None
+        result = await deps.rate_limiter.take(
+            PolicyRateLimiterTakeParams(
+                principal=_mcp_rate_limit_key(deps, principal), routeClass=route_class
+            )
+        )
+        return None if result.allow else _rate_limit_tool_error(result.retryAfterMs)
+
     async def _safe_tool(
         endpoint: str,
         ctx: ServerRequestContext[Any],
@@ -386,6 +449,9 @@ def attach_kohaku_to_mcp_server(
     ) -> mcp_types.CallToolResult:
         async def _run() -> mcp_types.CallToolResult:
             principal = await _current_principal(ctx)
+            rate_limited = await _check_mcp_rate_limit(principal, "compose")
+            if rate_limited is not None:
+                return rate_limited
             return await _compose_and_package(
                 _NlSource(text=_arg_str(args, "question")), _locale_of(args), principal
             )
@@ -429,6 +495,9 @@ def attach_kohaku_to_mcp_server(
         ) -> mcp_types.CallToolResult:
             async def _run() -> mcp_types.CallToolResult:
                 principal = await _current_principal(ctx)
+                rate_limited = await _check_mcp_rate_limit(principal, "compose")
+                if rate_limited is not None:
+                    return rate_limited
                 spec, html = await _build_snapshot(
                     _NlSource(text=_arg_str(args, "question")),
                     deps,
@@ -492,7 +561,9 @@ def attach_kohaku_to_mcp_server(
                     input_schema=_with_locale_input(tool.input_schema, tool.name),
                     _meta=tool_ui_meta(resource_uri=RENDERER_RESOURCE_URI, visibility=["model"]),
                 ),
-                _make_intent_handler(tool, _safe_tool, _compose_and_package, _current_principal),
+                _make_intent_handler(
+                    tool, _safe_tool, _compose_and_package, _current_principal, _check_mcp_rate_limit
+                ),
             )
         )
 
@@ -504,6 +575,9 @@ def attach_kohaku_to_mcp_server(
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
+            rate_limited = await _check_mcp_rate_limit(principal, "resolve")
+            if rate_limited is not None:
+                return rate_limited
             # Server-side paging/sorting: verify the capability against base (reserved params removed) and merge
             # the reserved params into domain.invoke. Unknown `_` keys are rejected. parse_invokable_ref
             # (host_core, shared with REST's /binding/resolve and this module's initial-data preresolution)
@@ -562,6 +636,9 @@ def attach_kohaku_to_mcp_server(
     ) -> mcp_types.CallToolResult:
         async def _run() -> mcp_types.CallToolResult:
             principal = await _current_principal(ctx)
+            rate_limited = await _check_mcp_rate_limit(principal, "compose")
+            if rate_limited is not None:
+                return rate_limited
             intent_arg = cast(JsonObject, args["intent"])
             intent_params = cast(JsonObject, intent_arg["params"])
             payload = cast(JsonObject, args.get("payload", {}))
@@ -659,6 +736,9 @@ def attach_kohaku_to_mcp_server(
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
+            rate_limited = await _check_mcp_rate_limit(principal, "action")
+            if rate_limited is not None:
+                return rate_limited
             action = _arg_str(args, "action")
             capability = _arg_str(args, "capability")
             payload = cast(JsonObject, args.get("payload", {}))
@@ -1152,6 +1232,9 @@ def _make_intent_handler(
     ],
     compose_and_package: Callable[[_ComposeSource, str | None, Principal], Awaitable[mcp_types.CallToolResult]],
     current_principal: Callable[[ServerRequestContext[Any]], Awaitable[Principal]],
+    check_rate_limit: Callable[
+        [Principal, Literal["compose", "action", "resolve"]], Awaitable[mcp_types.CallToolResult | None]
+    ],
 ) -> Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]:
     """Build the handler for an intent tool (avoids late binding of the loop variable tool)."""
 
@@ -1163,6 +1246,9 @@ def _make_intent_handler(
 
         async def _run() -> mcp_types.CallToolResult:
             principal = await current_principal(ctx)
+            rate_limited = await check_rate_limit(principal, "compose")
+            if rate_limited is not None:
+                return rate_limited
             return await compose_and_package(_IntentSource(intent=tool.to_intent(params)), locale, principal)
 
         return await safe_tool(tool.name, ctx, _run)

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from kohaku.composer import ComposeContext, ComposeTrace
-from kohaku.host_core import FixationSelfHealApi, TraceContext
+from kohaku.host_core import FixationSelfHealApi, PolicyRateLimiter, TraceContext
 from kohaku.spec import (
     AuthzPort,
     DomainPort,
@@ -191,6 +191,26 @@ class McpHostDeps:
     """Failure-path observability hook. Silent when unwired. Hook throws are swallowed (observation only)."""
     action_effects: Callable[[str, JsonObject, object], Awaitable[ActionEffects]] | None = None
     """Write side-effect declaration (optional). When unspecified, the response is only `{result}` (backward compatible)."""
+    rate_limiter: PolicyRateLimiter | None = None
+    """Rate limiter for the tool calls (product responsibility; typically host_core's
+    PolicyRuntime.rate_limiter, which resolves the effective RateLimitRule per route_class from a Policy
+    file's rateLimits section -- this profile never resolves a tenant, so tenant is always None here).
+    Checked before `${prefix}_compose` / `${prefix}_render_snapshot` / the intent tools / `${prefix}_event`
+    (route_class "compose"), `${prefix}_action` ("action"), and `${prefix}_resolve_binding` ("resolve").
+
+    The bucket key's "principal" component is the resolved principal's id only when `resolve_principal`
+    is wired (a real per-caller identity); otherwise (the unauthenticated demo path, where every call
+    resolves to the same constant fallback principal) it falls back to the literal string "anonymous" --
+    unlike the TS port, this never falls back to a per-connection session id first: the installed `mcp`
+    SDK's `ServerRequestContext` exposes no public accessor for one (only the richer `Context` class,
+    which `ServerRunner` does not actually construct for handlers, has `session_id`; reaching into
+    `ctx.session`'s private connection attribute was rejected, matching this codebase's existing
+    `_correlation_id_of`/`_trace_context_of` precedent of not carrying a session identity at all) -- a
+    tracked, language-specific gap (not a design choice), see `_mcp_rate_limit_key`'s doc comment.
+
+    On denial, returns a structured tool error whose `structured_content["error"]["code"]` is
+    `"RATE_LIMITED"` (SPEC §6.1, REST-RL-001's MCP counterpart) with a `retryAfterMs` when the limiter
+    reports one. When unwired, no rate limiting occurs (backward compatible)."""
 
 
 @dataclass(frozen=True)
