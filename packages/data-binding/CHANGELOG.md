@@ -1,5 +1,12 @@
 # @kohaku-ui/data-binding
 
+## 0.4.0
+
+### Patch Changes
+
+- Updated dependencies [[`5a07b1a`](https://github.com/yosuque/kohaku/commit/5a07b1adbcb1545bbc35df0c6df9ed54a22fcf29), [`8df82f6`](https://github.com/yosuque/kohaku/commit/8df82f661b601ac986049302d888ee058bcde27d), [`36392f0`](https://github.com/yosuque/kohaku/commit/36392f05d3e4fa8426e6e6ab24c50081cc057595)]:
+  - @kohaku-ui/spec-core@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes
