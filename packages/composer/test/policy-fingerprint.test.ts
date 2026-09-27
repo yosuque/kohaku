@@ -31,7 +31,47 @@ function makeCtx(policy: ComposePolicy): ComposeContext {
 describe("policyFingerprint", () => {
   it("returns the empty string for a policy that sets none of the fingerprinted fields", async () => {
     expect(await policyFingerprint({})).toBe("");
-    expect(await policyFingerprint({ cacheMode: "bypass", allowL2: true, maxRepairAttempts: 2 })).toBe("");
+    expect(await policyFingerprint({ cacheMode: "bypass", maxRepairAttempts: 2 })).toBe("");
+  });
+
+  it("allowL2:false or unspecified leaves the fingerprint unchanged (byte-identical, backward compatible) -- tierGate row", async () => {
+    // A policy that touches allowL2/routeTier not at all, or sets allowL2 to its conventional default
+    // (false), must produce the exact same "" this test pinned before the tierGate row existed --
+    // otherwise every existing allowL2-less policy's compose cache is silently invalidated the moment
+    // this row ships (see fingerprintTierGate's ABSENT-key doc comment in context.ts).
+    expect(await policyFingerprint({ allowL2: false })).toBe("");
+    expect(await policyFingerprint({ allowL2: false, cacheMode: "bypass" })).toBe("");
+  });
+
+  it("allowL2:true changes the fingerprint (tierGate; closes SPEC CMP-DET-002's cache-isolation gap)", async () => {
+    const off = await policyFingerprint({ allowL2: false });
+    const on = await policyFingerprint({ allowL2: true });
+    expect(on).not.toBe(off);
+    expect(on).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("allowL2:true is pinned to an exact fingerprint byte value (M-4-style absolute pin)", async () => {
+    // Absolute pin: if this goes red, tierGate's material bytes changed and every allowL2:true /
+    // routeTier-bearing caller's compose cache is silently invalidated (fix the code; never re-pin).
+    // cacheMode/maxRepairAttempts are not fingerprinted, so their presence does not affect the value --
+    // included only to also pin "an unrelated non-fingerprinted field does not leak into the material".
+    expect(await policyFingerprint({ cacheMode: "bypass", allowL2: true, maxRepairAttempts: 2 })).toBe(
+      "8c3a51d082be5e63",
+    );
+  });
+
+  it("routeTier participates via its optional id (fewShot.id/selectComponents.id's convention); the function's own logic is unobservable", async () => {
+    const bare: ComposePolicy["routeTier"] = () => "L1";
+    const withId: ComposePolicy["routeTier"] = Object.assign(() => "L1" as const, { id: "l1-fixed-v1" });
+    // Different behavior, same id: fingerprints identically (only the id participates).
+    const sameIdDifferentBehavior: ComposePolicy["routeTier"] = Object.assign(() => "L2" as const, {
+      id: "l1-fixed-v1",
+    });
+    const bareFp = await policyFingerprint({ routeTier: bare });
+    const idFp = await policyFingerprint({ routeTier: withId });
+    expect(bareFp).not.toBe(""); // routeTier being set at all already activates the row, even with allowL2 unset
+    expect(bareFp).not.toBe(idFp);
+    expect(await policyFingerprint({ routeTier: sameIdDifferentBehavior })).toBe(idFp);
   });
 
   it('refConstraint: the empty string is preserved when unset or explicitly set to the default "schema" (no cache-key perturbation for existing callers)', async () => {
@@ -274,6 +314,7 @@ describe("policyFingerprint", () => {
         "refConstraint",
         "effort",
         "tierLlm",
+        "tierGate",
       ].sort(),
     );
   });

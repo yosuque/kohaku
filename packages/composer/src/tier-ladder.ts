@@ -286,6 +286,7 @@ async function runL1Stage(run: TierRun): Promise<TierOutcome | null> {
       startedAt: prepared.startedAt,
       deadlineSignal,
       budget,
+      tenant: prepared.tenant,
       onBudgetCheckError: reportBudgetCheckError?.("L1"),
       onDraftPartial,
       l1Schema: prepared.getL1Schema,
@@ -315,11 +316,15 @@ async function runL2Stage(run: TierRun): Promise<TierOutcome> {
   const { intent, refs } = prepared;
 
   // The budget check before L2. Both L2 direct entry (route=L2) and L1(invalid)→L2 promotion are checked
-  // here in one place. spent is the usage consumed at L1 (the accumulation of attempts). When budget is unspecified, do not check and enter the conventional path.
+  // here in one place. spentTokens is the usage consumed at L1 (the accumulation of attempts). When budget is unspecified, do not check and enter the conventional path.
   const elapsedMs = budget?.deadlineMs != null ? Date.now() - prepared.startedAt : undefined;
   const l2Verdict =
     budget != null
-      ? checkBudget(budget, sumSpentTokens(attempts), reportBudgetCheckError?.("L2"), elapsedMs)
+      ? checkBudget(
+          budget,
+          { tenant: prepared.tenant, tier: "L2", spentTokens: sumSpentTokens(attempts), elapsedMs },
+          reportBudgetCheckError?.("L2"),
+        )
       : { allow: true };
   if (!l2Verdict.allow) {
     // Skip L2 due to budget overage. from is "L2" if route=L2, or stays "L1" if suppressing an L1→L2
@@ -338,6 +343,7 @@ async function runL2Stage(run: TierRun): Promise<TierOutcome> {
     startedAt: prepared.startedAt,
     deadlineSignal,
     budget,
+    tenant: prepared.tenant,
     onBudgetCheckError: reportBudgetCheckError?.("L2"),
   });
   attempts.push(...l2.attempts);

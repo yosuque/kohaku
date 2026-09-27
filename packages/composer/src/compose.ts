@@ -11,6 +11,7 @@ import {
   type UISpec,
 } from "@kohaku-ui/spec-core";
 import { assembleSpec, cacheLabelOf, postAndValidate, shouldPersist } from "./assemble.js";
+import { notifyBudgetUsage } from "./budget.js";
 import { COMPOSER_ID } from "./constants.js";
 import type { ComposeContext, ComposeErrorContext, ComposePolicy, FixedSpecSource } from "./context.js";
 import { policyFingerprint, resolveEntryContext, tierLlmFingerprintMaterial } from "./context.js";
@@ -90,6 +91,12 @@ export interface PreparedCompose {
   cacheMode: "default" | "bypass";
   startedAt: number;
   policy: ComposePolicy;
+  /** `opts.session?.tenant`, threaded through for `ComposeBudget.check`/`onUsage`'s `tenant` field
+   * (BudgetCheckContext) — a session-scoped host-supplied budget hook can then read the tenant without
+   * a product needing to close over it separately. Not part of the cache key (SPEC §6.1: `query://` is
+   * tenant-neutral); tenant-scoped cache isolation for the tier gate is `policyFingerprint`'s `tierGate`
+   * row's job, not this field's. */
+  tenant?: string;
   /** The caller's abort signal. generateSpec passes it through to the L1/L2 LLM calls. */
   abort?: AbortSignal;
   /** The Spec on a cache hit (with cache:"hit" applied) + the hit trace. null on miss/bypass. */
@@ -266,6 +273,7 @@ export async function prepareCompose(
     cacheMode,
     startedAt,
     policy,
+    ...(opts.session?.tenant != null ? { tenant: opts.session.tenant } : {}),
     ...(opts.abort != null ? { abort: opts.abort } : {}),
     cached,
     getFixedSpec,
@@ -468,6 +476,10 @@ async function persistAndTrace(
   }
 
   const usage = sumUsage(attempts);
+  // Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
+  // this function at all; a no-attempts fallback has usage:undefined and is excluded by
+  // notifyBudgetUsage's own check) — see ComposeBudget.onUsage's doc.
+  notifyBudgetUsage(prepared.policy.budget, usage, prepared.tenant);
   const trace = buildComposeTrace(prepared, {
     cache: cacheLabel,
     tier: spec.provenance.tier,
