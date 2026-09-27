@@ -14,6 +14,15 @@ export {
   WriteScopeDroppedError,
 } from "./capability.js";
 export {
+  type AnalyzeCatalogImpactOptions,
+  analyzeCatalogImpact,
+  type CatalogDeprecatedUsageEntry,
+  type CatalogFixationIssue,
+  type CatalogImpactReport,
+  type CatalogOriginKitMismatch,
+  type CatalogPublishedPromotionIssue,
+} from "./catalog-impact.js";
+export {
   type ConsoleErrorReporter,
   type ConsoleErrorReporterOptions,
   clientMessageFor,

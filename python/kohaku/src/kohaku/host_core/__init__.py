@@ -25,6 +25,16 @@ from .capability import (
     WriteScopeDroppedError,
     issue_capability_for_spec,
 )
+from .catalog_impact import (
+    CatalogDeprecatedUsageEntry,
+    CatalogDeprecatedUsageFixation,
+    CatalogDeprecatedUsagePromotion,
+    CatalogFixationIssue,
+    CatalogImpactReport,
+    CatalogOriginKitMismatch,
+    CatalogPublishedPromotionIssue,
+    analyze_catalog_impact,
+)
 from .errors import (
     ConsoleErrorReporter,
     ConsoleErrorReporterOptions,
@@ -63,6 +73,13 @@ __all__ = [
     "ActionEffectsResponse",
     "ActionEffectsResult",
     "AllowedActions",
+    "CatalogDeprecatedUsageEntry",
+    "CatalogDeprecatedUsageFixation",
+    "CatalogDeprecatedUsagePromotion",
+    "CatalogFixationIssue",
+    "CatalogImpactReport",
+    "CatalogOriginKitMismatch",
+    "CatalogPublishedPromotionIssue",
     "ComposeFixationContext",
     "ConsoleErrorReporter",
     "ConsoleErrorReporterOptions",
@@ -81,6 +98,7 @@ __all__ = [
     "ResolvedIntent",
     "TraceContext",
     "WriteScopeDroppedError",
+    "analyze_catalog_impact",
     "apply_action_effects",
     "compose_with_fixation",
     "create_allowed_actions",
