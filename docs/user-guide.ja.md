@@ -211,6 +211,8 @@ trash apps/sample-api/.data   # 昇格・固定化・Lineage を初期化(rm の
 
 Web と同一の Spec・同一の描画コードを、MCP Apps 対応ホストに配信できます。ただし**ホストの UI 描画対応状況によって接続と描画の経路が 3 つに分かれます**。
 
+**データファイルからの最速経路:** `npx @kohaku-ui/cli init --mcp --from data.csv --out app` で、REST フロントドアとこの MCP フロントドア(stdio と Streamable HTTP の両サーバー。`@kohaku-ui/mcp-renderer` のビルド済みコアレンダラーに配線済みで、自分でビルドする必要はない)、そして `claude_desktop_config.example.json` を一括生成します。`npm --prefix app run mcp:claude-desktop` が Claude Desktop に登録します(既存の設定は先に `.bak` としてバックアップ)。あとは Claude Desktop を再起動するだけです — 手順は [docs/paths/mcp-apps.ja.md](paths/mcp-apps.ja.md) 参照。この節の残りは、その仕組みの元になっている参照実装(`apps/sample-mcp`)の配線を説明します。
+
 ### ホスト対応表
 
 | ホスト | 接続方式 | 描画 |
@@ -220,7 +222,7 @@ Web と同一の Spec・同一の描画コードを、MCP Apps 対応ホスト�
 | **Claude Code / Codex CLI 等ターミナル** | ローカル stdio / Streamable HTTP | iframe 描画は不可 → `kohaku_render_snapshot` の**自己完結 HTML** で受ける |
 | **mcp-ui レガシーホスト(LibreChat / Smithery / Nanobot 等)** | stdio / Streamable HTTP + `KOHAKU_MCP_LEGACY_UI=1` | SEP-1865 未対応でも、ツール結果に併記される `ui://` UIResource(自己完結スナップショット)を静的描画。**約 1MB/結果**になるため modern ホスト(Claude / ChatGPT)では有効化しないこと |
 
-いずれの経路でも、UI 表示には事前に共有レンダラーをビルドしておきます(iframe 描画も snapshot も同じバンドルを使う)。
+いずれの経路でも、UI 表示には事前に共有レンダラーをビルドしておきます(iframe 描画も snapshot も同じバンドルを使う)。このサンプルは自身の sales ドメインのコンポーネント実装をそのビルドに焼き込んでいます(`apps/sample-mcp/renderer/main.tsx`。`@kohaku-ui/mcp-renderer/boot` の `bootMcpRenderer` を薄く呼ぶだけ)。`kohaku init --mcp` が生成するプロジェクトはここでのビルド手順が一切不要です — `@kohaku-ui/mcp-renderer` のビルド済み・依存ゼロのコアバンドル(`loadRendererHtml`)を直接配線しているためです。
 
 ```bash
 pnpm --filter @kohaku-ui-sample/mcp build:renderer    # 共有レンダラーの self-contained ビルド

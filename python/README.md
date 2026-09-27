@@ -92,7 +92,9 @@ python/
 │  │                       #   registration; the tool-error / safe-tool / error-observability helpers stay
 │  │                       #   here too, mirroring TS's server.ts) + types.py (← types.ts) +
 │  │                       #   initial_data.py (← initial-data.ts) + cache_hints.py (← cache-hints.ts) +
-│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py (unchanged)
+│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py (unchanged) +
+│  │                       #   renderer.py (← @kohaku-ui/mcp-renderer's loadRendererHtml, TS-side only --
+│  │                       #   see "The MCP Apps renderer bundle" below)
 │  └─ tests/
 └─ examples/
    └─ sales-api/           # ← equivalent to apps/sample-api (REST :8790 + MCP stdio / Streamable HTTP :8791)
@@ -171,6 +173,17 @@ this port.
 not), closing a gap this file used to document as TS-only. These fields reach the wire only over a
 2026-07-28+ negotiated connection (the mcp SDK's own result serializer sieves them out for an older protocol
 version), which is why `kohaku/tests/host_mcp`'s cache-hint tests connect at `mode="2026-07-28"` specifically.
+
+**The MCP Apps renderer bundle**: unlike TS (`@kohaku-ui/mcp-renderer`, a package with its own pre-built,
+dependency-free `dist/renderer.html`), the `kohaku-ui` wheel does not bundle a renderer HTML of its own yet
+(a follow-up ticket). `host_mcp.load_default_renderer_html(path: str | None = None)` mirrors the TS
+function's shape for that day: given a `path`, it reads that file (e.g. a copy of
+`@kohaku-ui/mcp-renderer`'s build output, or a product's own MCP Apps renderer build); given none, it
+returns `DEFAULT_RENDERER_PLACEHOLDER_HTML`, a static placeholder explaining that the renderer is not
+bundled yet. `AttachOptions.renderer_html` already accepts either a plain string or a callable, so wiring a
+real bundled asset in later needs no signature change on a caller's side. The sample
+(`examples/sales-api`) does not use this function -- it has its own `make_renderer_html_loader` (below),
+which reads the **TS-side** build output at a fixed repository-relative path and caches successful reads.
 
 The Python sample (`examples/sales-api`) reads the seed JSON directly from the
 repository root's `apps/sample-api/src/domain/seed` (to avoid maintaining the data

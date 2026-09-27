@@ -32,10 +32,16 @@ import { describe, expect, it } from "vitest";
  * on host-rest / host-mcp-apps / composer / semantic-llm / storage-memory / authz-hmac / registry / intents
  * (all strictly earlier), and depends on no renderer -- its position relative to the renderer-react/
  * renderer-wc/admin-react layer is otherwise arbitrary (AGENTS.md notes "host はどの renderer にも依存しない").
+ *
+ * `mcp-renderer` (design.md #56) sits in the very last layer: its `.` entry point has zero dependencies, and
+ * `./boot` depends on renderer-react / renderer-core / data-binding / spec-core, all declared as *optional
+ * peerDependencies* rather than ordinary dependencies (so a REST-only consumer of `.` never installs React).
+ * This test scans `peerDependencies` alongside `dependencies` (see `readPackages`) precisely so that
+ * peer-only edge is still checked against the layer graph, not exempted from it.
  */
 
-// Ordered from the root of the dependency graph outward. Each package must depend (via "dependencies",
-// not "devDependencies") only on packages in a strictly earlier layer.
+// Ordered from the root of the dependency graph outward. Each package must depend (via "dependencies" or
+// "peerDependencies", not "devDependencies") only on packages in a strictly earlier layer.
 const LAYERS: string[][] = [
   ["spec-core", "llm"],
   [
@@ -54,6 +60,7 @@ const LAYERS: string[][] = [
   ["sandbox", "lineage", "evals", "host-rest", "host-mcp-apps", "client", "otel"],
   ["renderer-react", "renderer-wc", "admin-react"],
   ["host"],
+  ["mcp-renderer"],
 ];
 
 const SCOPE = "@kohaku-ui/";
@@ -78,8 +85,17 @@ function readPackages(packagesDir: string): PackageInfo[] {
     } catch {
       continue; // not every workspace directory is guaranteed to have a package.json
     }
-    const pkg = JSON.parse(raw) as { name: string; dependencies?: Record<string, string> };
-    const dependencies = Object.keys(pkg.dependencies ?? {}).filter((d) => d.startsWith(SCOPE));
+    const pkg = JSON.parse(raw) as {
+      name: string;
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+    };
+    // peerDependencies are scanned too (not just dependencies): an optional peer such as mcp-renderer's
+    // `./boot` -> renderer-react is still a real dependency-direction edge, only satisfied by the consumer
+    // instead of installed transitively -- see the class comment above.
+    const dependencies = [
+      ...new Set([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.peerDependencies ?? {})]),
+    ].filter((d) => d.startsWith(SCOPE));
     packages.push({ name: pkg.name, dependencies });
   }
   return packages;

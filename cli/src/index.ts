@@ -144,6 +144,10 @@ program
   .option("--name <name>", "package.json name (default: the output directory's basename)")
   .option("--table <name>", "SQLite table to read (default: the first user table)")
   .option("--no-install", "Skip npm install")
+  .option(
+    "--mcp",
+    "Also generate the MCP front door (stdio + Streamable HTTP servers, for Claude Desktop / claude.ai / ChatGPT)",
+  )
   .action(
     async (opts: {
       from: string;
@@ -152,6 +156,7 @@ program
       name?: string;
       table?: string;
       install: boolean;
+      mcp?: boolean;
     }) => {
       let result: InitResult;
       try {
@@ -186,6 +191,12 @@ program
           "and set a provider key; .env.example documents every variable.",
       );
       console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once, then npm test");
+      if (opts.mcp === true) {
+        console.log(
+          "\nMCP front door generated: npm run mcp (stdio, e.g. for Claude Desktop / Claude Code / Codex CLI) " +
+            "or npm run mcp:http (Streamable HTTP :8788, for claude.ai / ChatGPT).",
+        );
+      }
     },
   );
 

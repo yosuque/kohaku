@@ -30,6 +30,7 @@ from .meta import (
     resource_ui_meta,
     tool_ui_meta,
 )
+from .renderer import DEFAULT_RENDERER_PLACEHOLDER_HTML, load_default_renderer_html
 from .server import attach_kohaku_to_mcp_server
 from .snapshot import inject_snapshot
 from .types import (
@@ -42,6 +43,7 @@ from .types import (
 
 __all__ = [
     "CAPABILITY_META_KEY",
+    "DEFAULT_RENDERER_PLACEHOLDER_HTML",
     "INITIAL_DATA_BUDGET_CHARS",
     "INITIAL_DATA_META_KEY",
     "RENDERER_RESOURCE_URI",
@@ -61,6 +63,7 @@ __all__ = [
     "attach_kohaku_to_mcp_server",
     "inject_snapshot",
     "intent_tools_from_catalog",
+    "load_default_renderer_html",
     "object_schema_to_json_schema",
     "resource_ui_meta",
     "spec_to_text",

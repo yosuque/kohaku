@@ -1459,18 +1459,17 @@ describe("task A: co-embedding initial data in tool-result _meta", () => {
     // First, the constant values must be the literal strings from the spec (defined in packages/host-mcp-apps/src/meta.ts).
     expect(INITIAL_DATA_META_KEY).toBe("kohaku/initialData");
     expect(CAPABILITY_META_KEY).toBe("kohaku/capability");
-    // The renderer (apps/sample-mcp/renderer/host-integration.ts) holds both keys as literals without importing
-    // host-mcp-apps, to respect the dependency direction and avoid single-file bundle bloat. Detect drift from the
-    // definition source by reading the actual source (checking only the constant value would read not a single
-    // character of the renderer-side literal, letting divergence pass green).
+    // The renderer (packages/mcp-renderer/src/boot/host-integration.ts) holds both keys as literals without
+    // importing host-mcp-apps, to respect the dependency direction and avoid single-file bundle bloat. Detect
+    // drift from the definition source by reading the actual source (checking only the constant value would
+    // read not a single character of the renderer-side literal, letting divergence pass green).
     const rendererPath = join(
       dirname(fileURLToPath(import.meta.url)),
       "..",
       "..",
-      "..",
-      "apps",
-      "sample-mcp",
-      "renderer",
+      "mcp-renderer",
+      "src",
+      "boot",
       "host-integration.ts",
     );
     const rendererSrc = readFileSync(rendererPath, "utf8");

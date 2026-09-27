@@ -210,18 +210,16 @@ function summaryView(intent: CanonicalIntent, refs: QueryHandle[]): UISpec {
 }
 `;
 
-export const APP_TEMPLATE = `import { existsSync } from "node:fs";
-import { type ComposeContext, defaultGeneratorVersion } from "@kohaku-ui/composer";
-import { createKohakuHost } from "@kohaku-ui/host";
+export const SERVER_PORTS_TEMPLATE = `import { defaultGeneratorVersion } from "@kohaku-ui/composer";
+import { createKohakuHost, type KohakuHost } from "@kohaku-ui/host";
 import type { LlmPort } from "@kohaku-ui/llm";
 import type { AuthzPort, StoragePort } from "@kohaku-ui/spec-core";
-import type { Hono } from "hono";
 import { DATA_VERSION } from "./dataset.js";
 import { createDomainPort, shapeOf } from "./domain-port.js";
 import { createFixedSpecs } from "./fixed-specs.js";
 import { INTENT_DEFINITIONS, SOURCE } from "./intents.js";
 
-export interface AppDeps {
+export interface PortDeps {
   llm: LlmPort;
   storage?: StoragePort;
   authz?: AuthzPort;
@@ -233,14 +231,13 @@ export interface AppDeps {
  * them with your product's own implementation (the contract is @kohaku-ui/spec-core's ports.ts). The
  * capability secret is resolved from KOHAKU_CAPABILITY_SECRET by createKohakuHost itself (see .env.example);
  * it throws if neither that env var nor \`deps.authz\` is set.
+ *
+ * Kept separate from app.ts (which adds the REST-specific facet-views / health routes) so any other front
+ * door built on the same Ports -- an MCP server (see server/mcp-server.ts if you generated one with
+ * \`--mcp\`), a script, a test -- builds the exact same host without importing Hono routes it does not need.
  */
-export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContext } {
-  // Load .env here too (not just in server/main.ts): this function is also called directly by
-  // test/golden.test.ts and by anyone scripting against the generated project without going through
-  // main.ts, and it must see the same KOHAKU_CAPABILITY_SECRET either way. process.loadEnvFile never
-  // overrides a variable already present in the environment, so calling it more than once is harmless.
-  if (existsSync(".env")) process.loadEnvFile(".env");
-  const { app, compose } = createKohakuHost({
+export function createPorts(deps: PortDeps): KohakuHost {
+  return createKohakuHost({
     domain: createDomainPort(),
     querySource: SOURCE,
     llm: deps.llm,
@@ -260,6 +257,29 @@ export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContex
     // instead of a one-line summary -- useful when a compose falls back and you need to know why.
     debug: process.env["KOHAKU_DEBUG"] === "1",
   });
+}
+`;
+
+export const APP_TEMPLATE = `import { existsSync } from "node:fs";
+import type { ComposeContext } from "@kohaku-ui/composer";
+import type { Hono } from "hono";
+import { DATA_VERSION } from "./dataset.js";
+import { INTENT_DEFINITIONS } from "./intents.js";
+import { createPorts, type PortDeps } from "./ports.js";
+
+export type AppDeps = PortDeps;
+
+/**
+ * The REST front door: server/ports.ts's createPorts builds the host (Ports + compose), and this adds the
+ * two extra routes the generated dashboard uses (facet-views for the selector UI, health for a smoke check).
+ */
+export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContext } {
+  // Load .env here too (not just in server/main.ts): this function is also called directly by
+  // test/golden.test.ts and by anyone scripting against the generated project without going through
+  // main.ts, and it must see the same KOHAKU_CAPABILITY_SECRET either way. process.loadEnvFile never
+  // overrides a variable already present in the environment, so calling it more than once is harmless.
+  if (existsSync(".env")) process.loadEnvFile(".env");
+  const { app, compose } = createPorts(deps);
   // Facet descriptors for the dashboard's selectors, derived from the same Intent definitions (no codegen step).
   app.get("/api/app/facet-views", (c) => c.json({ views: INTENT_DEFINITIONS.map((d) => d.toFacetView()).filter((v) => v.facets.length > 0) }));
   app.get("/api/health", (c) => c.json({ ok: true, llm: { provider: deps.llm.provider, model: deps.llm.modelId }, dataVersion: DATA_VERSION }));
@@ -574,4 +594,313 @@ PORT=8787
 export const GITIGNORE_TEMPLATE = `node_modules/
 dist/
 .env
+`;
+
+/** Appended to GITIGNORE_TEMPLATE when \`kohaku init --mcp\` generates the MCP front door. */
+export const GITIGNORE_MCP_EXTRA = `.kohaku/
+`;
+
+export const MCP_SERVER_TEMPLATE = `import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { attachKohakuMcp } from "@kohaku-ui/host/mcp";
+import { intentToolsFromCatalog } from "@kohaku-ui/host-mcp-apps";
+import { loadRendererHtml } from "@kohaku-ui/mcp-renderer";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { INTENT_DEFINITIONS } from "./intents.js";
+import { createPorts, type PortDeps } from "./ports.js";
+
+/**
+ * Self-contained snapshot HTML (kohaku_render_snapshot, for UI-incapable hosts like Claude Code / Codex
+ * CLI) is saved here, next to this file rather than under process.cwd() -- Claude Desktop launches an MCP
+ * server from an arbitrary working directory, so a cwd-relative path would silently write (or fail to
+ * find) files in the wrong place. Git-ignored (see .gitignore); safe to delete any time.
+ */
+const SNAPSHOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".kohaku", "snapshots");
+
+/**
+ * Attaches the generated project's host (server/ports.ts -- the exact same Ports and compose the REST
+ * front door in server/app.ts uses) to an MCP server, via \`@kohaku-ui/host/mcp\`'s \`attachKohakuMcp\`. "Same
+ * request content -> same Spec -> same rendering" holds across both front doors this way.
+ *
+ * \`rendererHtml\` is \`@kohaku-ui/mcp-renderer\`'s pre-built, dependency-free core renderer bundle -- swap it
+ * for your own build (see that package's README's "./boot" section) once you have product-specific
+ * component implementations to bake in. \`intentTools\` exposes every Intent in server/intents.ts as a typed
+ * MCP tool (e.g. \`sales_summary\` for a project whose data source is named "sales") in addition to the
+ * generic \`kohaku_compose\`.
+ */
+export function attachMcpServer(server: McpServer, deps: PortDeps): void {
+  const host = createPorts(deps);
+  attachKohakuMcp(server, host, {
+    rendererHtml: loadRendererHtml,
+    intentTools: intentToolsFromCatalog(INTENT_DEFINITIONS.map((d) => d.toToolSource())),
+    snapshotWriter: async (fileName, html) => {
+      await mkdir(SNAPSHOT_DIR, { recursive: true });
+      const path = join(SNAPSHOT_DIR, fileName);
+      await writeFile(path, html, "utf8");
+      return path;
+    },
+  });
+}
+`;
+
+export const MCP_STDIO_TEMPLATE = `import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { McpServer } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { attachMcpServer } from "./mcp-server.js";
+
+/**
+ * MCP server (stdio) for terminal / desktop hosts (Claude Desktop, Claude Code, Codex CLI, ...). Registered
+ * with Claude Desktop by \`npm run mcp:claude-desktop\` (see scripts/claude-desktop.mjs); run directly with
+ * \`npm run mcp\`.
+ *
+ * .env is resolved next to this file (not process.cwd()) because Claude Desktop launches MCP servers from
+ * an arbitrary working directory -- a cwd-relative check (server/app.ts's approach) would silently miss it.
+ */
+const ENV_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", ".env");
+if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
+
+const llm = createLlmFromEnv();
+const server = new McpServer({ name: "__NAME__", version: "0.1.0" });
+attachMcpServer(server, { llm });
+
+await server.connect(new StdioServerTransport());
+console.error("__NAME__ MCP server: ready (stdio)");
+`;
+
+export const MCP_HTTP_TEMPLATE = `import { existsSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { attachMcpServer } from "./mcp-server.js";
+
+/**
+ * MCP server (Streamable HTTP) for remote / browser-based hosts (claude.ai, ChatGPT) -- claude.ai and
+ * ChatGPT can only connect through a remote MCP connector, not stdio. Run with \`npm run mcp:http\`
+ * (default :8788, override with PORT). No authentication (a local demo default); put this behind your own
+ * auth (e.g. @kohaku-ui/authz-jwt) before exposing it beyond localhost -- see docs/user-guide.md §6.
+ *
+ * .env is resolved next to this file, the same reasoning as server/mcp.ts.
+ */
+const ENV_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", ".env");
+if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
+
+const llm = createLlmFromEnv();
+const port = Number(process.env["PORT"] ?? 8788);
+
+// Stateless serving (MCP protocol version 2026-07-28 removed protocol-level sessions): a fresh McpServer
+// per exchange, built from the same Ports every time (createPorts / server/ports.ts).
+const mcpHandler = createMcpHandler(() => {
+  const server = new McpServer({ name: "__NAME__", version: "0.1.0" });
+  attachMcpServer(server, { llm });
+  return server;
+});
+const handleMcp = toNodeHandler(mcpHandler);
+
+const httpServer = createHttpServer(async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, mcp-protocol-version");
+  if (req.method === "OPTIONS") {
+    res.writeHead(204).end();
+    return;
+  }
+  try {
+    await handleMcp(req, res);
+  } catch (err) {
+    console.error("[mcp-http] request failed:", err);
+    if (!res.headersSent) res.writeHead(500).end();
+  }
+});
+
+// Bind to 127.0.0.1 by default (local only); override with HOST for LAN/container exposure.
+const host = process.env["HOST"] ?? "127.0.0.1";
+httpServer.listen(port, host, () => {
+  console.log(\`__NAME__ MCP server: ready (Streamable HTTP) at http://\${host}:\${port}/mcp\`);
+});
+`;
+
+/**
+ * Generated verbatim by \`kohaku init --mcp\` (no run-time logic of its own -- it only reads the sibling
+ * claude_desktop_config.example.json this same init run wrote, and \`npm run mcp:claude-desktop\` is the
+ * only thing that ever invokes it). Backs up the user's existing Claude Desktop config to \`.bak\` and merges
+ * in this project's mcpServers entry, or (with --print) just prints the merged result without writing
+ * anything. **The real config is only ever touched by a person explicitly running this script** -- kohaku
+ * init itself never runs it.
+ */
+export const CLAUDE_DESKTOP_SCRIPT_TEMPLATE = `#!/usr/bin/env node
+/**
+ * Registers this project's MCP server with Claude Desktop: merges the entry from
+ * claude_desktop_config.example.json (generated alongside this script by \`kohaku init --mcp\`) into Claude
+ * Desktop's own config file, after backing the existing file up to \`<config>.bak\`.
+ *
+ * Usage:
+ *   npm run mcp:claude-desktop            # back up (if a config already exists) + write
+ *   npm run mcp:claude-desktop -- --print # print the merged result; write nothing
+ *
+ * Restart Claude Desktop afterwards to pick up the change.
+ *
+ * The config file location is auto-detected per OS (see claudeDesktopConfigPath) -- override it with
+ * --config <path> or the KOHAKU_CLAUDE_DESKTOP_CONFIG environment variable if Claude Desktop's config lives
+ * somewhere nonstandard on your machine.
+ */
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const EXAMPLE_CONFIG_PATH = join(PROJECT_ROOT, "claude_desktop_config.example.json");
+
+/**
+ * Claude Desktop's own config file path for the current platform. \`env\`/\`plat\` are injectable (tests pass
+ * a temporary HOME so this never touches a real user's config -- see this project's own
+ * test/claude-desktop.test.ts if you generated one, or the kohaku monorepo's cli/test/init-mcp.test.ts).
+ */
+export function claudeDesktopConfigPath(env = process.env, plat = platform()) {
+  const home = env.HOME ?? homedir();
+  if (plat === "darwin") {
+    return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+  }
+  if (plat === "win32") {
+    return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
+  }
+  return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Claude", "claude_desktop_config.json");
+}
+
+/**
+ * Reads a JSON config file; an absent file reads as {} (nothing to merge with / into yet). A file that
+ * exists but is not valid JSON, is not a JSON object at the top level (e.g. an array or null), or has a
+ * non-object "mcpServers" field, throws instead of guessing -- silently treating a malformed Claude Desktop
+ * config as {} would merge into an empty object and, once written, drop every one of the person's other
+ * registered MCP servers.
+ */
+export function readJsonConfig(path) {
+  if (!existsSync(path)) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    throw new Error(
+      \`\${path} is not valid JSON (\${e instanceof Error ? e.message : String(e)}). Nothing was written -- fix or remove the file and try again.\`,
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      \`\${path} must be a JSON object at the top level. Nothing was written -- fix or remove the file and try again.\`,
+    );
+  }
+  if (
+    "mcpServers" in parsed &&
+    (parsed.mcpServers === null || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers))
+  ) {
+    throw new Error(
+      \`\${path}'s "mcpServers" field must be a JSON object. Nothing was written -- fix or remove the file and try again.\`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Pure merge (no I/O): overlays \`example\`'s mcpServers entries onto \`target\`'s. Every other top-level key
+ * in \`target\`, and every mcpServers entry \`example\` does not declare, is preserved untouched -- this never
+ * clobbers a person's other MCP server registrations. Running this twice with the same \`example\` is a
+ * no-op the second time (the merged result already equals \`example\`'s entries, so re-merging changes
+ * nothing), which is what makes \`npm run mcp:claude-desktop\` safe to run more than once.
+ */
+export function mergeMcpConfig(target, example) {
+  return {
+    ...target,
+    mcpServers: {
+      ...(target.mcpServers ?? {}),
+      ...(example.mcpServers ?? {}),
+    },
+  };
+}
+
+/**
+ * Does the actual read-merge-(print-or-write) work, parameterized over env/plat (see
+ * claudeDesktopConfigPath) so it is directly callable with a temporary HOME from a test, with no child
+ * process and no risk of ever touching a real Claude Desktop config. Returns what happened rather than
+ * just logging it, so a test can assert on configPath / merged / backedUp directly.
+ *
+ * configPathOverride bypasses claudeDesktopConfigPath's own per-OS detection entirely when given (real
+ * users never need it -- the per-OS default is what they want). It exists so a test driving this through a
+ * real subprocess (main(), below) can pin the exact config path independent of the CI host's actual
+ * platform: env/plat alone are not enough there, since a real child process always reports its own real
+ * platform() regardless of what env.HOME is set to.
+ */
+export function syncClaudeDesktopConfig({
+  env = process.env,
+  plat = platform(),
+  printOnly = false,
+  configPathOverride,
+} = {}) {
+  const example = readJsonConfig(EXAMPLE_CONFIG_PATH);
+  const configPath = configPathOverride ?? claudeDesktopConfigPath(env, plat);
+  const merged = mergeMcpConfig(readJsonConfig(configPath), example);
+
+  if (printOnly) {
+    return { configPath, merged, wrote: false, backedUp: false };
+  }
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  const backedUp = existsSync(configPath);
+  if (backedUp) {
+    writeFileSync(\`\${configPath}.bak\`, readFileSync(configPath, "utf8"));
+  }
+  writeFileSync(configPath, \`\${JSON.stringify(merged, null, 2)}\n\`);
+  return { configPath, merged, wrote: true, backedUp };
+}
+
+/**
+ * The value following a literal "--config" in argv, if present (e.g. ["--config", "/tmp/x.json"] -> the
+ * path). Overrides the per-OS default -- mainly useful for tests driving this script as a real subprocess,
+ * where env.HOME alone cannot pin the config path independent of the host's actual platform().
+ */
+function configPathArg(argv) {
+  const i = argv.indexOf("--config");
+  return i === -1 ? undefined : argv[i + 1];
+}
+
+function main() {
+  const printOnly = process.argv.includes("--print");
+  const configPathOverride = configPathArg(process.argv) ?? process.env.KOHAKU_CLAUDE_DESKTOP_CONFIG;
+  let result;
+  try {
+    result = syncClaudeDesktopConfig({ printOnly, configPathOverride });
+  } catch (e) {
+    console.error(\`claude-desktop.mjs: \${e instanceof Error ? e.message : String(e)}\`);
+    process.exitCode = 1;
+    return;
+  }
+  if (printOnly) {
+    console.log(JSON.stringify(result.merged, null, 2));
+    return;
+  }
+  console.log(\`Registered with Claude Desktop: \${result.configPath}\`);
+  console.log("Restart Claude Desktop to pick up the change.");
+}
+
+// Run only when launched directly (npm run mcp:claude-desktop); importing this module (e.g. from a test)
+// has no side effects beyond the pure/read-only exports above. realpathSync matters here: on macOS, the
+// system temp directory is reached through a symlink (/tmp -> /private/tmp, /var -> /private/var), so
+// process.argv[1] (the literal path node was invoked with) and import.meta.url (already resolved through
+// the symlink by the module loader) would otherwise never compare equal, silently skipping main()
+// entirely -- exactly the failure this comment is here to prevent a future edit from reintroducing.
+let isMain = false;
+if (process.argv[1] !== undefined) {
+  try {
+    isMain = import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    isMain = false;
+  }
+}
+if (isMain) main();
 `;
