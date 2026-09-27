@@ -20,18 +20,31 @@ kohaku serves three kinds of readers, and each has a one-page start with its fir
 | **A product team** that wants Server-Driven UI now and LLM composition later (or never) | [Path (b): React dashboard only](paths/react-dashboard.md) | L0 fixed Specs rendered by `@kohaku-ui/renderer-react`, data by reference, no model | [§6 Step 0](#step-0--server-driven-ui-without-an-llm) |
 | **A team putting model-composed UI into production** | [Path (c): Full stack](paths/full-stack.md) | L1 / L2 composition, the promotion pipeline, fixation, the Admin governance plane | [§6 Steps 1–2](#step-1--l1-declarative-synthesis-and-chat), [§7](#7-operational-tips) |
 
-The rest of this guide is the long form: setting up the bundled sample (§2), a tour of its screens (§3), eight demos (§4), MCP hosts (§5), embedding (§6), operations (§7), troubleshooting (§8) and FAQ (§9).
+The rest of this guide is the long form: setting up the bundled sample (§2), a tour of its screens (§3), eight demos (§4), MCP hosts (§5), embedding (§6), operations (§7), troubleshooting (§8) and FAQ (§9). Prefer to start from the concepts rather than from a persona? [§1](#1-what-is-this) below introduces them in three stages, each pointing at the [glossary](glossary.md).
 
 ## 1. What is this
 
 kohaku is a framework that **merges "natural-language questions" and "GUI narrowing operations" into the same normalized Intent**, generates the **same declarative UI Spec**, and renders it with the **same renderer**. A sales-analytics app (API + Web + MCP server) ships with it as a sample.
 
-There are four core things to experience:
+The rest of this section introduces that in three stages, each building on the last. The [glossary](glossary.md) has a short, plain-language definition of every term below; come back to it whenever a word is unfamiliar.
 
-1. Whether you ask via chat or narrow via the GUI, **the same screen** appears (R5)
-2. The UI Spec **carries no data** (pass-by-reference; the LLM never handles numbers)
-3. Requests outside the catalog are **freely generated in a sandbox** (L2) and, after review, are **promoted into official parts** (L1)
-4. Frequently used screens are **fixated** and stop going through the LLM entirely (L0)
+### Stage 1 — Intent, Spec, `$ref`: the first screen
+
+Three concepts get a screen on the page, with or without an LLM. A chat question and a GUI action both normalize into an **Intent** — kohaku's one request format (`sales.quarterly_summary` plus params, for instance). Composing an Intent returns a **UI Spec**: a JSON document describing the screen, not code, and it never carries a single data value — only a `$ref` a component resolves later, directly against your own API. `createKohakuHost` wires this up in one call, and `npx @kohaku-ui/cli init` generates it from a data file with no Port code to write first.
+
+→ Glossary: [Intent, UI Spec, `$ref`](glossary.md#terms). Next: the [Zero-Port quickstart](#zero-port-quickstart-from-your-own-data-no-port-code) puts this on screen in one command.
+
+### Stage 2 — L0 / L1 / L2 and the cache: the same request, the same screen
+
+Once a screen needs the model, a request climbs one of three tiers to get there. **L0** is a fixed template or a pinned structure that never touches the LLM. **L1** is the LLM selecting known catalog parts and filling their typed props. **L2** is free generation in a sandbox, for a request the catalog cannot express yet. Whichever tier answers a request, the result is cached by Intent, so the same request always returns the same Spec — "identical display" (R5) is a cache guarantee, not a hope that the model behaves the same way twice.
+
+→ Glossary: [L0 / L1 / L2](glossary.md#terms). Next: [§3, Walking through the screens](#3-walking-through-the-screens) shows the tiers in the sample's own ProvenanceBadge.
+
+### Stage 3 — Governance: what happens to what the model invents
+
+An L2 artifact is not the end of the story: it is recorded in **lineage**, and once it earns enough use it becomes a **promotion** candidate that a human reviews before it joins the catalog as a native part. A frequent, structurally stable L1 Intent can likewise be **fixated** to L0, so it stops going through the LLM entirely. Every read or write a rendered component performs is scoped by a short-lived **capability** token rather than a standing credential, and `kohaku explain` (or its DevTools panel) turns any `requestId` into the full story of tier, cache and lineage behind one screen.
+
+→ Glossary: [promotion, fixation, lineage, capability](glossary.md#terms). Next: [§4, Demo walkthroughs](#4-demo-walkthroughs-8) walks through promotion and fixation end to end, and [§6, Step 2](#step-2--l2-promotion-and-fixation-complete-form) wires them into your own product.
 
 ## 2. Setup
 
