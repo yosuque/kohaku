@@ -113,7 +113,13 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
 ## 3. 画面の歩き方
 
-> **表示言語について**: デモは**英語が既定**です。ヘッダーの **EN/JA トグル**で **JA** を選ぶと sample-web アプリ全体が切り替わります: ページクローム(ナビ・チャット・管理)、Spec レンダラーのメッセージと書式ロケール(`RendererProvider.messages` / `locale`)、ダッシュボードのファセットラベル(`facet-views.json` に焼き込まれた二言語オーバーレイ)、**そして生成内容そのもの** — トグルはすべての API 呼び出しに `session.locale` を載せ、サーバーがセッションごとの `ComposePolicy` を選択します(JA は `outputLanguage: "Japanese"` と日本語の L0 固定スペックを持ち、`/ja` の generatorVersion トークンでキャッシュが言語別に分離されます)。ダッシュボードはトグルで再 compose され、チャットの既存バブルは生成時の言語のまま残ります(次の質問から新言語)。既知の制限: チャート/表内のデータセル値(地域・チャネル名)は英語のまま(`query://` の結果は不変条件として言語中立)で、DomainPort 由来の列見出し・KPI ラベル・KPI 注記(例:「Total revenue」「Revenue (JPY)」「No target set」)も同様に英語です — これら DomainPort 由来ラベルの二言語化は将来課題です。EN トラフィックから固定化された Spec は JA セッションには配信されません(通常 compose に落ちます)。sample-wc は従来どおり `?lang=ja` でレンダラーメッセージのみ切り替えます。
+> **表示言語について**: デモは**英語が既定**です。ヘッダーの **EN/JA トグル**で **JA** を選ぶと sample-web アプリ全体が切り替わります: ページクローム(ナビ・チャット・管理)、Spec レンダラーのメッセージと書式ロケール(`RendererProvider.messages` / `locale`)、ダッシュボードのファセットラベル(`facet-views.json` に焼き込まれた二言語オーバーレイ)、**そして生成内容そのもの** — トグルはすべての API 呼び出しに `session.locale` を載せ、サーバーがセッションごとの `ComposePolicy` を選択します(JA は `outputLanguage: "Japanese"` と日本語の L0 固定スペックを持ち、`/ja` の generatorVersion トークンでキャッシュが言語別に分離されます)。
+>
+> ダッシュボードはトグルで再 compose され、チャットの既存バブルは生成時の言語のまま残ります(次の質問から新言語)。
+>
+> 既知の制限: チャート/表内のデータセル値(地域・チャネル名)は英語のまま(`query://` の結果は不変条件として言語中立)で、DomainPort 由来の列見出し・KPI ラベル・KPI 注記(例:「Total revenue」「Revenue (JPY)」「No target set」)も同様に英語です — これら DomainPort 由来ラベルの二言語化は将来課題です。
+>
+> EN トラフィックから固定化された Spec は JA セッションには配信されません(通常 compose に落ちます)。sample-wc は従来どおり `?lang=ja` でレンダラーメッセージのみ切り替えます。
 
 ### Dashboard(GUI サーフェス)
 
@@ -310,7 +316,9 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 導入ラダー(設計書 §12「サンプル実装の設計」)に沿って段階導入できます。
 
-**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod`(`@kohaku-ui/host` の `createKohakuHost()` は `@kohaku-ui/host-rest` を包む one-call ファサードです。詳細は後述。その `@kohaku-ui/host/mcp` サブパスを使うには追加で `@kohaku-ui/host-mcp-apps` と `@modelcontextprotocol/server` が要り、どちらも上のコマンドではインストールされない optional peer です——[パス (a)](paths/mcp-apps.ja.md)参照。`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
+**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod`(`@kohaku-ui/host` の `createKohakuHost()` は `@kohaku-ui/host-rest` を包む one-call ファサードです。詳細は後述。その `@kohaku-ui/host/mcp` サブパスを使うには追加で `@kohaku-ui/host-mcp-apps` と `@modelcontextprotocol/server` が要り、どちらも上のコマンドではインストールされない optional peer です——[パス (a)](paths/mcp-apps.ja.md)参照。`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。
+
+逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
 ### Zero-Port quickstart(自分のデータから、Port コードなしで)
 
@@ -320,7 +328,11 @@ npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファ�
 npm run dev                                      # API :8787 + web :5173
 ```
 
-`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
+`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。
+
+`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。
+
+Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
 
 手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。
 
@@ -645,13 +657,17 @@ surface.registerPart(entry.type, entry.version, entry.builder);
 
 `implement` と `implementWc` はどちらも、環境を問わず常に `def.propsSchema.safeParse` をノードの props に対して
 実行する。そのため `.default()` が付いた値を Spec 側が省略していても、後述の診断が有効かどうかに関わらず
-必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。環境によって
+必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。
+
+環境によって
 切り替わるのは**診断だけ**(不一致時の `console.warn`)であり、既定では `NODE_ENV=production` のビルド以外で
 オン、その内側でオフになる——`{ validate: false }` / `{ validate: true }` を渡せば環境に関わらずどちらの向きにも
 上書きできる。`process.env.NODE_ENV` を実際には設定しないビルド(`--define:process.env.NODE_ENV='"production"'`
 を渡さない素の esbuild 呼び出しや、本番モードに切り替えないバンドラ設定)では、この診断はオンのままになる——
 これは React 自身のバンドル済みビルドと同じ慣習であり、稀にしか起きない不一致経路で余分な `console.warn` が
-呼ばれるだけなので、既定として安全側に倒している。型なしの `ImplRegistry.register` や、`registerPart` に生の
+呼ばれるだけなので、既定として安全側に倒している。
+
+型なしの `ImplRegistry.register` や、`registerPart` に生の
 `PartBuilder` を渡す登録も、静的な `ComponentDefinition` を持たない部品(例:承認ドラフトからアーティファクト
 ごとにスキーマが生成される昇格済み部品——`apps/sample-api/src/intents/promoted.ts` を参照)のためにそのまま
 動作し続ける。
@@ -851,7 +867,13 @@ export function buildTheme(mode: "light" | "dark"): ThemeTokens {
 }
 ```
 
-これを `RendererProvider` の `theme`(React)/ `surface.theme`(Web Components)に渡します。色トークン語彙は `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`、および非推奨 alias `color.danger`→negative・予約 `color.focus`→primary です。`color.scrim`(モーダルダイアログの背景幕)も他のトークンと同じく light/dark の実体を持ちますが、sandbox はダイアログ背景幕を描画しないため *L2 生成*語彙(モデルに見せる語彙)には含まれません(既定値の全一覧は design.md §7.2)。独自トークン(語彙外のキー)も自由に足せます(`ThemeTokens` は開いた型)。非色トークン(`font.family.*` / `font.size.*` / `space.*` / `radius.*` / `shadow.*` / `motion.*`)も語彙に含まれ、単位付きの CSS 文字列を取ります(角ばった印象のブランドなら `"radius.md": "4px"` のように指定)。両方の全一覧・既定値・dark の AA 方針は設計書 §7.2 を参照してください。非色トークンは組み込み部品にも反映されます(例: `"radius.md": "2px"` にするとすべてのボタンと入力欄が角ばります)。`L2 SANDBOXED` バッジは `SandboxFrame` の `badge="hidden"` / `context.sandbox.badge` で非表示にできますが、他の方法でサンドボックス化を示せる画面でのみ非表示にしてください。またブランドテーマが `color.warning.surface` / `color.warning.text`(ピルの背景・文字色のペア)を上書きしている場合は、この組み合わせが現状バッジのみで使われている点を踏まえ、両者の可読性を保つようにしてください。
+これを `RendererProvider` の `theme`(React)/ `surface.theme`(Web Components)に渡します。色トークン語彙は `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`、および非推奨 alias `color.danger`→negative・予約 `color.focus`→primary です。
+
+`color.scrim`(モーダルダイアログの背景幕)も他のトークンと同じく light/dark の実体を持ちますが、sandbox はダイアログ背景幕を描画しないため *L2 生成*語彙(モデルに見せる語彙)には含まれません(既定値の全一覧は design.md §7.2)。
+
+独自トークン(語彙外のキー)も自由に足せます(`ThemeTokens` は開いた型)。非色トークン(`font.family.*` / `font.size.*` / `space.*` / `radius.*` / `shadow.*` / `motion.*`)も語彙に含まれ、単位付きの CSS 文字列を取ります(角ばった印象のブランドなら `"radius.md": "4px"` のように指定)。両方の全一覧・既定値・dark の AA 方針は設計書 §7.2 を参照してください。
+
+非色トークンは組み込み部品にも反映されます(例: `"radius.md": "2px"` にするとすべてのボタンと入力欄が角ばります)。`L2 SANDBOXED` バッジは `SandboxFrame` の `badge="hidden"` / `context.sandbox.badge` で非表示にできますが、他の方法でサンドボックス化を示せる画面でのみ非表示にしてください。またブランドテーマが `color.warning.surface` / `color.warning.text`(ピルの背景・文字色のペア)を上書きしている場合は、この組み合わせが現状バッジのみで使われている点を踏まえ、両者の可読性を保つようにしてください。
 
 ## 10. 静的プレイグラウンド
 
