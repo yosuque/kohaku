@@ -47,6 +47,11 @@ FIXATION_EVENT_TYPES: tuple[str, ...] = (
     "intent.unfixated",
 )
 
+# Policy as Code's audit trail (design.md #69). Fired by host_core's PolicyRuntime.reload() only when
+# the effective policy_id actually changes (the dedup rule -- "a byte-identical reload is not
+# audit-worthy" -- lives in host_core, not here).
+POLICY_EVENT_TYPES: tuple[str, ...] = ("policy.applied",)
+
 LineageEventType = Literal[
     "view.composed",
     "view.rendered",
@@ -63,6 +68,7 @@ LineageEventType = Literal[
     "intent.observed",
     "intent.fixated",
     "intent.unfixated",
+    "policy.applied",
 ]
 """Closed vocabulary of Lineage event types."""
 
@@ -116,6 +122,23 @@ class ComponentUsedPayload(TypedDict, total=False):
     sessionId: str
     outcome: Literal["ok", "error"]
     source: Literal["compose", "telemetry"]
+
+
+class PolicyAppliedPayload(TypedDict, total=False):
+    """The policy.applied payload (required: policyId / version / changedPaths / tenants; optional:
+    previousPolicyId / label). Structurally identical to host_core's PolicyAppliedEvent
+    (kohaku/host_core/policy.py) -- duplicated here rather than imported, the same convention every
+    other payload type in this file follows (ViewComposedPayload / ComponentGeneratedPayload etc. are
+    never imported from the package that produces them): a LineageEventRecord.payload shape is a
+    wire/audit concern owned by this module, independent of whichever caller happens to produce
+    matching data today."""
+
+    policyId: str
+    previousPolicyId: str
+    version: int
+    label: str
+    changedPaths: list[str]
+    tenants: list[str]
 
 
 _SYSTEM_ACTOR = LineageActor(kind="system")

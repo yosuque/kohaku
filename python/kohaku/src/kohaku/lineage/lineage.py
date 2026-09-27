@@ -27,7 +27,7 @@ from kohaku.spec import (
     compute_structure_hash,
 )
 
-from .events import COMPONENT_EVENT_TYPES, Clock, make_event, now_iso
+from .events import COMPONENT_EVENT_TYPES, Clock, PolicyAppliedPayload, make_event, now_iso
 
 
 class ComposeTraceLike(Protocol):
@@ -300,6 +300,27 @@ class Lineage:
         if source is not None:
             payload["source"] = source
         await self.record("component.used", payload, None, tenant)
+
+    async def policy_applied(
+        self,
+        event: PolicyAppliedPayload,
+        actor: LineageActor | None = None,
+        tenant: str | None = None,
+    ) -> None:
+        """Records a policy.applied audit event (design.md #69). The caller (host_core's
+        PolicyRuntime's audit callback) is responsible for the dedup rule ("a byte-identical reload is
+        not audit-worthy") -- this method unconditionally records whatever it is given."""
+        payload: dict[str, Any] = {
+            "policyId": event["policyId"],
+            "version": event["version"],
+            "changedPaths": event["changedPaths"],
+            "tenants": event["tenants"],
+        }
+        if event.get("previousPolicyId") is not None:
+            payload["previousPolicyId"] = event["previousPolicyId"]
+        if event.get("label") is not None:
+            payload["label"] = event["label"]
+        await self.record("policy.applied", payload, actor, tenant)
 
     async def explain_view(self, spec_hash: str) -> list[LineageEventRecord]:
         """The audit query for "why this screen was displayed"."""
