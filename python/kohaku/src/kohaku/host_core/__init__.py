@@ -53,6 +53,14 @@ from .intent import (
     resolve_intent,
 )
 from .keyed_mutex import get_lock
+from .rate_limit import (
+    MemoryRateLimitStore,
+    RateLimiter,
+    RateLimiterErrorInfo,
+    RateLimiterTakeParams,
+    create_memory_rate_limit_store,
+    create_rate_limiter,
+)
 from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 from .view_recorder import record_view_fallback
 
@@ -75,9 +83,13 @@ __all__ = [
     "IntentSourceIntent",
     "IntentSourceNl",
     "InvokableRef",
+    "MemoryRateLimitStore",
     "ParsedInvokableRef",
     "ParsedInvokableRefOk",
     "ParsedInvokableRefSourceMismatch",
+    "RateLimiter",
+    "RateLimiterErrorInfo",
+    "RateLimiterTakeParams",
     "ResolvedIntent",
     "TraceContext",
     "WriteScopeDroppedError",
@@ -85,6 +97,8 @@ __all__ = [
     "compose_with_fixation",
     "create_allowed_actions",
     "create_console_error_reporter",
+    "create_memory_rate_limit_store",
+    "create_rate_limiter",
     "fail_open",
     "format_error_chain",
     "get_lock",

@@ -470,6 +470,51 @@ class StoragePort(Protocol):
 
 
 @dataclass(frozen=True)
+class RateLimitRule:
+    """A token-bucket rate-limit rule: `capacity` tokens, refilled continuously at `refill_per_second`.
+    Structurally identical to the Policy-as-Code file's `rateLimits` section shape
+    (kohaku.spec.policy.PolicyRateLimitRule), kept as an independent type here rather than imported
+    from it: this module is the framework-boundary contract and should not depend on any one schema
+    representation of the same shape. Port of TS ports.ts's RateLimitRule."""
+
+    capacity: int
+    refillPerSecond: float
+
+
+@dataclass(frozen=True)
+class RateLimitResult:
+    """Outcome of `RateLimitStore.take`. Port of TS ports.ts's RateLimitResult."""
+
+    allow: bool
+    retryAfterMs: float | None = None
+    """Suggested backoff before retrying, in milliseconds (SPEC §6.1, REST-RL-001). Present only when
+    allow is False."""
+
+
+class RateLimitStore(Protocol):
+    """A token-bucket rate-limit store, keyed by an opaque caller-supplied string (host_core's
+    create_rate_limiter composes it as "tenant:principal:routeClass" — see that function's own doc). A
+    Port reference implementation (host_core's create_memory_rate_limit_store, the in-process default)
+    and future backing-store adapters all implement this same shape. Port of TS ports.ts's
+    RateLimitStore.
+
+    Concurrency contract: like StoragePort, this carries no cross-process locking of its own — a
+    distributed backing store is expected to implement `take` atomically on its own side, not rely on
+    the caller to serialize it.
+    """
+
+    async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+        """Attempts to consume `cost` tokens from the bucket identified by `key`, under `rule`. `now_ms`
+        is the caller-supplied wall-clock time (epoch milliseconds) — the store never reads the clock
+        itself, keeping `take` a pure/deterministic function of its arguments, so a caller can inject a
+        fixed clock in tests.
+
+        On denial, `retryAfterMs` estimates the wait until enough tokens will have refilled for this
+        same request to succeed."""
+        ...
+
+
+@dataclass(frozen=True)
 class CatalogContribution:
     """Contribution of domain-specific components (a diff to the core catalog).
 
