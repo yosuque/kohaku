@@ -37,7 +37,14 @@ from kohaku.spec import (
     parse_spec,
 )
 
-from .budget import ComposeBudget, check_budget, create_deadline_guard, sum_spent_tokens
+from .budget import (
+    BudgetCheckContext,
+    ComposeBudget,
+    check_budget,
+    create_deadline_guard,
+    notify_budget_usage,
+    sum_spent_tokens,
+)
 from .context import (
     BudgetCheckErrorContext,
     ComposeContext,
@@ -117,6 +124,11 @@ class PreparedCompose:
     abort: AbortSignal | None
     cached: tuple[UISpec, ComposeTrace] | None
     """On a cache hit, the Spec (with cache:"hit" applied) + the hit trace. None for miss/bypass."""
+    tenant: str | None = None
+    """opts.session.tenant, threaded through for ComposeBudget.check_with_context/on_usage's `tenant`
+    field (BudgetCheckContext) — not part of the cache key (SPEC §6.1: query:// is tenant-neutral);
+    tenant-scoped cache isolation for the tier gate is policy_fingerprint's tierGate row's job, not this
+    field's."""
     on_draft_partial: OnDraftPartial | None = None
     """Notification target for the in-progress state of L1 generation (the LLM's cumulative partial draft)
     (incremental streaming). Only compose_stream wires it (assigned via replace after prepare_compose); compose()
@@ -300,6 +312,7 @@ async def prepare_compose(
         policy=policy,
         abort=opts.abort,
         cached=cached,
+        tenant=tenant,
     )
 
 
@@ -622,6 +635,10 @@ async def _persist_and_trace(
     fallback_reason = outcome.reason if isinstance(outcome, _TierOutcomeFallback) else None
     model = outcome.model if isinstance(outcome, _TierOutcomeOk) else None
     cancelled = outcome.cancelled if isinstance(outcome, _TierOutcomeFallback) else False
+    # Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
+    # this function at all; a no-attempts fallback has usage=None and is excluded by
+    # notify_budget_usage's own check) — see ComposeBudget.on_usage's doc.
+    notify_budget_usage(prepared.policy.budget, _sum_usage(attempts), prepared.tenant)
     trace = _build_trace(
         prepared,
         tier=spec.provenance.tier,
@@ -797,6 +814,7 @@ async def _run_l1_stage(
             prepared.on_draft_partial,
             started_at=prepared.started_at,
             deadline_signal=deadline_signal,
+            tenant=prepared.tenant,
         )
         attempts.extend(l1.attempts)
         if l1.ok:
@@ -844,9 +862,10 @@ async def _run_l2_stage(
     l2_verdict = (
         check_budget(
             budget,
-            sum_spent_tokens(attempts),
+            BudgetCheckContext(
+                tier="L2", spent_tokens=sum_spent_tokens(attempts), tenant=prepared.tenant, elapsed_ms=elapsed_ms
+            ),
             budget_check_error_reporter_for("L2") if budget_check_error_reporter_for is not None else None,
-            elapsed_ms,
         )
         if budget is not None
         else None
@@ -869,6 +888,7 @@ async def _run_l2_stage(
         budget_check_error_reporter_for("L2") if budget_check_error_reporter_for is not None else None,
         started_at=prepared.started_at,
         deadline_signal=deadline_signal,
+        tenant=prepared.tenant,
     )
     attempts.extend(l2.attempts)
     if l2.ok:

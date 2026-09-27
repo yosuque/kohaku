@@ -1,11 +1,13 @@
 """kohaku.composer — UI Composition Service (port of TS packages/composer)."""
 
 from .budget import (
+    BudgetCheckContext,
     BudgetVerdict,
     ComposeBudget,
     DeadlineGuard,
     check_budget,
     create_deadline_guard,
+    notify_budget_usage,
     sum_spent_tokens,
 )
 from .compose import (
@@ -104,6 +106,7 @@ __all__ = [
     "L2_SYSTEM_PROMPT",
     "PROMPT_REVISION",
     "STANDARD_RULES",
+    "BudgetCheckContext",
     "BudgetCheckErrorContext",
     "BudgetVerdict",
     "ComposeAttempt",
@@ -169,6 +172,7 @@ __all__ = [
     "materialize_fixation",
     "negotiate_spec",
     "normalize_ids",
+    "notify_budget_usage",
     "policy_fingerprint",
     "post_and_validate",
     "post_process",

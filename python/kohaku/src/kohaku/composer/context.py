@@ -104,7 +104,13 @@ class ComposePolicy:
     allowL2: bool = False
     """When False (the default), an L1 failure = the deterministic presentMarkdown fallback Spec"""
     routeTier: Callable[[Intent], Literal["L1", "L2"] | None] | None = None
-    """Routing such as skipping L1 and going straight to L2 depending on the intent"""
+    """Routing such as skipping L1 and going straight to L2 depending on the intent.
+
+    An optional `id` attribute may be set on the callable (Python functions accept arbitrary
+    attributes: `fn.id = "..."`), the same convention as `selectComponents.id`. Together with `allowL2`,
+    it is folded into `policy_fingerprint`'s `tierGate` material (this module's `_fp_tier_gate`) so that
+    a tenant/session policy that actually reaches L2 (or swaps to a different `routeTier`) never shares
+    a cache key with one that cannot (SPEC CMP-DET-002)."""
     ttlSeconds: int | None = None
     generatorVersion: str | None = None
     """Generator version. When given it becomes the 6th component of the cache key; when unset the classic 5-component key is used."""
@@ -251,6 +257,38 @@ def _fp_effort(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | Non
     return {"l1": effort.l1, "l2": effort.l2}
 
 
+def _fp_tier_gate(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+    """Whether `allowL2`/`routeTier` (the "tier gate") diverge from their conventional defaults
+    (`allowL2` False, `routeTier` None) — closes SPEC CMP-DET-002's cache-isolation gap: neither field
+    was part of `policy_fingerprint` before this row existed, so two sessions differing only in
+    `allowL2` could otherwise share a cache entry produced under the more permissive one. Port of TS
+    context.ts's `fingerprintTierGate`; see its docstring for the full ABSENT-key rationale.
+
+    Folded in as an ABSENT key (`UNDEFINED`), not `None`, whenever `allowL2` is not True and `routeTier`
+    is None: this row is new (added after callers already depend on `policy_fingerprint`'s current
+    bytes), so it must reproduce the pre-existing byte layout exactly for every policy that touches
+    neither field — returning `None` here would add `"tierGate": null` to every existing fingerprint
+    and silently invalidate every existing compose cache.
+
+    Once the row does activate, the material records **whether** L2 is reachable and, when a
+    `routeTier` callable is supplied, **which** one — via its optional `id` attribute
+    (`_fp_select_components_id`'s convention: "anonymous" when the callable carries no `id`) — not the
+    callable's actual per-intent routing decisions, which are unobservable here.
+    """
+    allow_l2 = policy.allowL2 is True
+    route_tier = policy.routeTier
+    if not allow_l2 and route_tier is None:
+        return UNDEFINED
+    if route_tier is None:
+        route_tier_id: object = None
+    else:
+        # Nullish, not falsy (same M-4 cross-language-parity rule as _fp_select_components_id): an
+        # empty-string id is a present id, distinct from "no id at all".
+        raw_id = getattr(route_tier, "id", None)
+        route_tier_id = raw_id if raw_id is not None else "anonymous"
+    return {"allowL2": allow_l2, "routeTierId": route_tier_id}
+
+
 def _fp_tier_llm(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
     if tier_llm is None:
         return None
@@ -278,6 +316,7 @@ _FINGERPRINTED: list[
     ("refConstraint", _fp_ref_constraint),
     ("effort", _fp_effort),
     ("tierLlm", _fp_tier_llm),
+    ("tierGate", _fp_tier_gate),
 ]
 """Ordered table of (material key, extractor) driving policy_fingerprint(). One row per
 ComposePolicy field that changes prompt content but was, until now, only enforced by the
@@ -338,10 +377,13 @@ def policy_fingerprint(
     that has ever computed a fingerprint already has those None-as-null bytes baked into its current cache
     key, so leaving them None changes nothing further. It is not the pattern to copy — `_fp_design_system`
     above appears to write a bare field ten times over, but that is historical grandfathering, not a model
-    for a new field. `kit` / `enforceKitClasses` (Task 7b) show the correct shape for a field added *after*
-    callers already depend on this material's bytes: fold to UNDEFINED (an absent key), never None — see
-    the UNDEFINED paragraph above. Any new fingerprinted field must follow `kit`/`enforceKitClasses`, not
-    the other ten.
+    for a new field. `kit` / `enforceKitClasses` (Task 7b) and the top-level `tierGate` row (Policy as
+    Code) show the correct shape for a field added *after* callers already depend on this material's
+    bytes: fold to UNDEFINED (an absent key), never None — see the UNDEFINED paragraph above. Any new
+    fingerprinted field must follow `kit`/`enforceKitClasses`/`tierGate`, not the other ten. Unlike the
+    nested `kit`/`enforceKitClasses` (which live inside `_fp_design_system`'s returned dict), `tierGate`
+    is the first *top-level* row to default to UNDEFINED rather than None — `policy_fingerprint`'s
+    all-default check (below) treats the two identically, mirroring TS's `value == null`.
 
     Note: this is an internal, process-local cache-partitioning hash, not a wire value — it is not required
     to (and in general will not) byte-match the TS implementation's hash for an equivalent policy, since
@@ -349,7 +391,12 @@ def policy_fingerprint(
     empty-string-iff-nothing-set invariant is a cross-language contract.
     """
     material: dict[str, object] = {key: extract(policy, tier_llm) for key, extract in _FINGERPRINTED}
-    if all(v is None for v in material.values()):
+    # `tierGate` (_fp_tier_gate) is the first top-level row whose own default is UNDEFINED (an absent
+    # key) rather than None -- every other row's default is None (see the docstring above for why that
+    # pre-existing convention is safe to keep for them but not for a newly added row). `v is UNDEFINED`
+    # must be treated the same as `v is None` here, mirroring TS's `value == null` (loose equality,
+    # matching both `null` and `undefined`) in the equivalent check in context.ts.
+    if all(v is None or v is UNDEFINED for v in material.values()):
         return ""
     return sha256_hex(canonical_stringify(material))[:16]
 
