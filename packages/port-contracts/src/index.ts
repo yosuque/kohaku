@@ -1,3 +1,4 @@
+export { type ApprovalContractOptions, describeApprovalPortContract } from "./approval.js";
 export {
   type AuthzContractOptions,
   describeAuthzPortContract,
