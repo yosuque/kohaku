@@ -1,0 +1,644 @@
+"""Compliance Evidence Pack (design.md #67).
+
+Port of the TS reference implementation's `packages/lineage/src/evidence/{manifest,source,build,sign,
+artifacts}.ts`. TS keeps those as five separate files; this port deliberately keeps everything in one
+module (an explicit, brief-specified exception to docs/runbooks/python-mirror.md's usual "one TS file
+= one Python module" layout rule, not an oversight).
+
+A pack is a directory of normalized, append-only exports (events.jsonl / approvals.jsonl /
+promotions.jsonl / fixations.jsonl / artifacts/<sha256>.html) plus a manifest.json and a detached
+Ed25519 signature (manifest.sig). The manifest schema is intentionally not part of the wire contract
+(not mirrored into spec/schemas) -- it describes an export format for auditors, not something a host
+and a renderer negotiate.
+
+Ed25519 signing/verification needs the `cryptography` package (the optional `evidence` extra:
+`pip install 'kohaku-ui[evidence]'`). Every function that actually touches key material imports it
+lazily and raises a clear `ImportError` when it is missing, the same lazy-import-and-guard convention
+`kohaku.llm.adapters.anthropic_native` uses for the `anthropic` SDK. Building and reading a pack's
+plain data (manifest / jsonl assembly, schema validation) needs no such dependency.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from kohaku.spec import (
+    MAX_LINEAGE_PAGE_SIZE,
+    FixationRecord,
+    FixationRecordModel,
+    LineageEventRecord,
+    LineageEventRecordModel,
+    LineageFilter,
+    LineagePageRequest,
+    PromotionState,
+    PromotionStateModel,
+    StoragePort,
+    canonical_stringify,
+    sha256_hex,
+)
+
+from .events import Clock, now_iso
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PrivateKey,
+        Ed25519PublicKey,
+    )
+else:
+    Ed25519PrivateKey = Any
+    Ed25519PublicKey = Any
+
+# --- manifest.ts ---
+
+EVIDENCE_PACK_FORMAT: Final = "kohaku-evidence-pack"
+EVIDENCE_PACK_VERSION: Final = 1
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+_KEY_ID_HEX_RE = re.compile(r"^[0-9a-f]{16}$")
+
+
+class _EvidenceModel(BaseModel):
+    """Common config for the evidence-pack models: accept either alias, ignore unknown keys (zod's
+    default "strip" behavior for a plain z.object(), not z.strict())."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
+class EvidenceFileEntry(_EvidenceModel):
+    """One file inside the pack, as recorded for integrity verification."""
+
+    path: str = Field(min_length=1)
+    sha256: str
+    bytes: int = Field(ge=0)
+    records: int | None = Field(default=None, ge=0)
+
+    @field_validator("sha256")
+    @classmethod
+    def _check_sha256(cls, v: str) -> str:
+        if not _SHA256_HEX_RE.match(v):
+            raise ValueError("sha256 must be 64 lowercase hex characters")
+        return v
+
+
+class EvidenceManifestScope(_EvidenceModel):
+    """The export's scope: a time window (mandatory) and an optional tenant restriction."""
+
+    tenant: str | None = None
+    since: str
+    until: str
+
+
+class EvidenceManifestCounts(_EvidenceModel):
+    """Record counts per exported file, for an auditor's at-a-glance summary (see `files` for integrity)."""
+
+    events: int = Field(ge=0)
+    approvals: int = Field(ge=0)
+    promotions: int = Field(ge=0)
+    fixations: int = Field(ge=0)
+    artifacts: int = Field(ge=0)
+
+
+class EvidenceManifestSigner(_EvidenceModel):
+    alg: Literal["Ed25519"] = "Ed25519"
+    keyId: str
+
+    @field_validator("keyId")
+    @classmethod
+    def _check_key_id(cls, v: str) -> str:
+        if not _KEY_ID_HEX_RE.match(v):
+            raise ValueError("keyId must be 16 lowercase hex characters")
+        return v
+
+
+class EvidenceManifest(_EvidenceModel):
+    format: Literal["kohaku-evidence-pack"] = EVIDENCE_PACK_FORMAT
+    version: Literal[1] = EVIDENCE_PACK_VERSION
+    generator: str = Field(min_length=1)
+    generatedAt: str
+    scope: EvidenceManifestScope
+    counts: EvidenceManifestCounts
+    complete: bool
+    files: list[EvidenceFileEntry] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    signer: EvidenceManifestSigner
+
+    def canonical_dict(self) -> dict[str, Any]:
+        """The manifest as a plain JSON-able dict with unset optionals dropped (Python's model_dump
+        would otherwise emit them as explicit `null`, unlike TS's `undefined`-drops-the-key behavior --
+        see canonical_stringify's own cross-language note). This, not `model_dump()` directly, is what
+        `sign_manifest` / `verify_manifest_signature` canonicalize and sign."""
+        return self.model_dump(mode="json", exclude_none=True)
+
+
+# --- artifacts.ts ---
+
+
+@dataclass(frozen=True)
+class ArtifactClaim:
+    """A component artifact's html body found in the lineage log or a promotion snapshot, alongside the
+    hash the source itself claimed for it (if any)."""
+
+    artifact_id: str
+    html: str
+    claimed_sha256: str | None = None
+
+
+def artifact_claim_from_event_payload(type_: str, payload: dict[str, Any]) -> ArtifactClaim | None:
+    """Extracts an ArtifactClaim from a `component.generated` lineage event's payload, if it carries html."""
+    if type_ != "component.generated":
+        return None
+    artifact_id = payload.get("artifactId")
+    html = payload.get("html")
+    if not isinstance(artifact_id, str) or not isinstance(html, str) or html == "":
+        return None
+    claimed = payload.get("artifactSha256")
+    return ArtifactClaim(
+        artifact_id=artifact_id,
+        html=html,
+        claimed_sha256=claimed if isinstance(claimed, str) else None,
+    )
+
+
+def artifact_claim_from_promotion_data(
+    artifact_id: str, data: dict[str, Any]
+) -> ArtifactClaim | None:
+    """Extracts an ArtifactClaim from a PromotionState's `data`, if it carries html -- populated once a
+    candidate is published (candidate_store.py's self-contained published projection)."""
+    html = data.get("html")
+    if not isinstance(html, str) or html == "":
+        return None
+    claimed = data.get("sha256")
+    return ArtifactClaim(
+        artifact_id=artifact_id,
+        html=html,
+        claimed_sha256=claimed if isinstance(claimed, str) else None,
+    )
+
+
+# --- source.ts ---
+
+
+class EvidenceSource(Protocol):
+    """Read-only source `build_evidence_pack` reads from. A plain `StoragePort` already satisfies this
+    structurally (Python duck typing), including its *optional* `page_lineage` method -- checked the
+    same way the rest of this codebase checks it, with `hasattr`, since neither this Protocol nor
+    `StoragePort` declares it as a member (see `kohaku.spec.ports.StoragePort`'s own comment on why)."""
+
+    async def list_lineage(
+        self, filter: LineageFilter | None = None
+    ) -> list[LineageEventRecord]: ...
+
+    async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]: ...
+
+    async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]: ...
+
+
+def create_storage_evidence_source(storage: StoragePort) -> EvidenceSource:
+    """Adapts a local StoragePort into an EvidenceSource. A StoragePort already satisfies EvidenceSource
+    structurally; this identity function exists only for API parity with the TS reference
+    implementation's explicit adapter (source.ts's `createStorageEvidenceSource`)."""
+    return storage
+
+
+# --- build.ts ---
+
+# Note: `intent.migrated` does not exist as a lineage event type in this codebase (see
+# kohaku.lineage.events's LineageEventType -- the fixation family is only `intent.observed` (reserved,
+# never fired) / `intent.fixated` / `intent.unfixated`), so it is not included here.
+EVIDENCE_APPROVAL_EVENT_TYPES: tuple[str, ...] = (
+    "component.reviewed",
+    "component.published",
+    "component.withdrawn",
+    "intent.fixated",
+    "intent.unfixated",
+)
+
+
+@dataclass(frozen=True)
+class EvidencePackScope:
+    since: str
+    until: str
+    tenant: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidencePackFile:
+    path: str
+    content: bytes
+
+
+@dataclass(frozen=True)
+class BuiltEvidencePack:
+    """The pack contents before signing (see `sign_manifest`, which turns this into manifest.sig)."""
+
+    manifest: EvidenceManifest
+    files: list[EvidencePackFile]
+
+
+def _event_wire(event: LineageEventRecord) -> dict[str, Any]:
+    return LineageEventRecordModel.model_validate(event, from_attributes=True).model_dump(
+        mode="json", exclude_none=True
+    )
+
+
+def _promotion_wire(state: PromotionState) -> dict[str, Any]:
+    return PromotionStateModel.model_validate(state, from_attributes=True).model_dump(
+        mode="json", exclude_none=True
+    )
+
+
+def _fixation_wire(record: FixationRecord) -> dict[str, Any]:
+    return FixationRecordModel.model_validate(record, from_attributes=True).model_dump(
+        mode="json", exclude_none=True
+    )
+
+
+def _json_lines(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return ""
+    return "\n".join(canonical_stringify(r) for r in records) + "\n"
+
+
+async def build_evidence_pack(
+    *,
+    source: EvidenceSource,
+    scope: EvidencePackScope,
+    generator: str,
+    signer: EvidenceManifestSigner,
+    allow_incomplete: bool = False,
+    page_size: int | None = None,
+    now: Clock = now_iso,
+) -> BuiltEvidencePack:
+    """Assembles a Compliance Evidence Pack from an EvidenceSource -- normalized lineage events, an
+    approvals index, promotion/fixation snapshots, and the referenced component HTML artifacts -- as an
+    in-memory file set plus its (unsigned) manifest. Signing is a separate step (`sign_manifest`);
+    writing the files to disk is the caller's responsibility.
+    """
+    events: list[LineageEventRecord]
+    complete: bool
+    if hasattr(source, "page_lineage"):
+        events = []
+        cursor: str | None = None
+        while True:
+            page = await source.page_lineage(
+                LineagePageRequest(
+                    tenant=scope.tenant,
+                    since=scope.since,
+                    until=scope.until,
+                    cursor=cursor,
+                    pageSize=page_size,
+                )
+            )
+            events.extend(page.events)
+            if page.nextCursor is None:
+                break
+            cursor = page.nextCursor
+        complete = True
+    else:
+        if not allow_incomplete:
+            raise ValueError(
+                "EvidenceSource has no page_lineage (the backing StoragePort does not implement it); "
+                "pass allow_incomplete=True to fall back to a bounded list_lineage tail window instead "
+                "of failing the export."
+            )
+        events = await source.list_lineage(
+            LineageFilter(
+                tenant=scope.tenant,
+                since=scope.since,
+                until=scope.until,
+                limit=MAX_LINEAGE_PAGE_SIZE,
+            )
+        )
+        complete = False
+
+    approvals = [e for e in events if e.type in EVIDENCE_APPROVAL_EVENT_TYPES]
+    promotions = await source.list_promotion_states(scope.tenant)
+    fixations = await source.list_fixations(scope.tenant)
+
+    warnings: list[str] = []
+    # Keyed by the artifact's *actual* content hash, so the same html reached from two origins (e.g. a
+    # component.generated event and its later published promotion state) is written once.
+    artifacts_by_hash: dict[str, str] = {}
+
+    def consider(claim: ArtifactClaim | None, origin: str) -> None:
+        if claim is None:
+            return
+        actual_sha256 = sha256_hex(claim.html)
+        if actual_sha256 not in artifacts_by_hash:
+            artifacts_by_hash[actual_sha256] = claim.html
+        if claim.claimed_sha256 is not None and claim.claimed_sha256 != actual_sha256:
+            warnings.append(
+                f"artifact {claim.artifact_id}: recorded sha256 {claim.claimed_sha256} does not match "
+                f"sha256 of its own html ({actual_sha256}) [source: {origin}]"
+            )
+
+    for event in events:
+        consider(
+            artifact_claim_from_event_payload(event.type, event.payload), "component.generated"
+        )
+    for state in promotions:
+        consider(
+            artifact_claim_from_promotion_data(state.artifactId, state.data), "promotion state"
+        )
+
+    files: list[EvidencePackFile] = []
+    file_entries: list[EvidenceFileEntry] = []
+
+    def add_text_file(path: str, text: str, records: int | None = None) -> None:
+        content = text.encode("utf-8")
+        files.append(EvidencePackFile(path=path, content=content))
+        file_entries.append(
+            EvidenceFileEntry(
+                path=path, sha256=sha256_hex(text), bytes=len(content), records=records
+            )
+        )
+
+    add_text_file("events.jsonl", _json_lines([_event_wire(e) for e in events]), len(events))
+    add_text_file(
+        "approvals.jsonl", _json_lines([_event_wire(e) for e in approvals]), len(approvals)
+    )
+    add_text_file(
+        "promotions.jsonl", _json_lines([_promotion_wire(p) for p in promotions]), len(promotions)
+    )
+    add_text_file(
+        "fixations.jsonl", _json_lines([_fixation_wire(f) for f in fixations]), len(fixations)
+    )
+
+    # Sorted by hash so file order is deterministic and independent of dict insertion order (needed for
+    # the cross-language golden fixture -- see spec/test/fixtures/evidence-pack/).
+    for h in sorted(artifacts_by_hash):
+        add_text_file(f"artifacts/{h}.html", artifacts_by_hash[h])
+
+    manifest = EvidenceManifest(
+        format=EVIDENCE_PACK_FORMAT,
+        version=EVIDENCE_PACK_VERSION,
+        generator=generator,
+        generatedAt=now(),
+        scope=EvidenceManifestScope(tenant=scope.tenant, since=scope.since, until=scope.until),
+        counts=EvidenceManifestCounts(
+            events=len(events),
+            approvals=len(approvals),
+            promotions=len(promotions),
+            fixations=len(fixations),
+            artifacts=len(artifacts_by_hash),
+        ),
+        complete=complete,
+        files=file_entries,
+        warnings=warnings,
+        signer=signer,
+    )
+
+    return BuiltEvidencePack(manifest=manifest, files=files)
+
+
+# --- sign.ts ---
+
+
+def _require_ed25519() -> Any:
+    """Lazily imports cryptography's Ed25519 module (the `evidence` optional extra), the same
+    lazy-import-and-guard convention `kohaku.llm.adapters.anthropic_native` uses for the `anthropic` SDK."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+    except ImportError as err:
+        raise ImportError(
+            "Evidence pack signing/verification requires the `cryptography` package. "
+            "Run `pip install 'kohaku-ui[evidence]'`."
+        ) from err
+    return ed25519
+
+
+def _require_serialization() -> Any:
+    try:
+        from cryptography.hazmat.primitives import serialization
+    except ImportError as err:
+        raise ImportError(
+            "Evidence pack signing/verification requires the `cryptography` package. "
+            "Run `pip install 'kohaku-ui[evidence]'`."
+        ) from err
+    return serialization
+
+
+@dataclass(frozen=True)
+class Ed25519KeyPair:
+    private_key: Ed25519PrivateKey
+    public_key: Ed25519PublicKey
+
+
+def generate_ed25519_keypair() -> Ed25519KeyPair:
+    """Generates a fresh Ed25519 keypair (kohaku's evidence-pack tooling equivalent of `kohaku evidence keygen`)."""
+    ed25519 = _require_ed25519()
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    return Ed25519KeyPair(private_key=private_key, public_key=private_key.public_key())
+
+
+def export_ed25519_private_key_pkcs8(key: Ed25519PrivateKey) -> bytes:
+    """Exports a private key as PKCS8 DER bytes (PEM-encode this as `-----BEGIN PRIVATE KEY-----`)."""
+    serialization = _require_serialization()
+    return key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+
+def export_ed25519_public_key_spki(key: Ed25519PublicKey) -> bytes:
+    """Exports a public key as SPKI DER bytes (PEM-encode this as `-----BEGIN PUBLIC KEY-----`)."""
+    serialization = _require_serialization()
+    return key.public_bytes(
+        encoding=serialization.Encoding.DER, format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+
+
+def export_ed25519_public_key_raw(key: Ed25519PublicKey) -> bytes:
+    """Exports a public key as raw bytes (the 32-byte Ed25519 point) -- `derive_ed25519_key_id`'s input."""
+    serialization = _require_serialization()
+    return key.public_bytes(
+        encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
+    )
+
+
+def import_ed25519_private_key_pkcs8(pkcs8: bytes) -> Ed25519PrivateKey:
+    """Imports an Ed25519 private key from PKCS8 DER bytes."""
+    serialization = _require_serialization()
+    key = serialization.load_der_private_key(pkcs8, password=None)
+    return cast("Ed25519PrivateKey", key)
+
+
+def import_ed25519_public_key_spki(spki: bytes) -> Ed25519PublicKey:
+    """Imports an Ed25519 public key from SPKI DER bytes."""
+    serialization = _require_serialization()
+    return cast("Ed25519PublicKey", serialization.load_der_public_key(spki))
+
+
+def import_ed25519_public_key_raw(raw: bytes) -> Ed25519PublicKey:
+    """Imports an Ed25519 public key from raw bytes (the 32-byte point) -- used directly by an RFC 8032
+    test vector."""
+    ed25519 = _require_ed25519()
+    return cast("Ed25519PublicKey", ed25519.Ed25519PublicKey.from_public_bytes(raw))
+
+
+def derive_ed25519_key_id(public_key_raw: bytes) -> str:
+    """`manifest.signer.keyId`: the first 16 hex characters of sha256 of the raw public key bytes. Pure
+    stdlib (hashlib) -- unlike the rest of this section, it needs no optional dependency."""
+    return hashlib.sha256(public_key_raw).hexdigest()[:16]
+
+
+def sign_bytes(message: bytes, private_key: Ed25519PrivateKey) -> bytes:
+    """Signs an arbitrary byte message with an Ed25519 private key -- the primitive `sign_manifest` builds on."""
+    signature: bytes = private_key.sign(message)
+    return signature
+
+
+def verify_bytes(message: bytes, signature: bytes, public_key: Ed25519PublicKey) -> bool:
+    """Verifies an arbitrary byte message's Ed25519 signature -- the primitive `verify_manifest_signature`
+    builds on."""
+    from cryptography.exceptions import InvalidSignature
+
+    try:
+        public_key.verify(signature, message)
+        return True
+    except InvalidSignature:
+        return False
+
+
+def sign_manifest(manifest: EvidenceManifest, private_key: Ed25519PrivateKey) -> str:
+    """Signs a manifest's canonical JSON form with an Ed25519 private key. Returns the base64
+    signature -- the exact text manifest.sig holds."""
+    message = canonical_stringify(manifest.canonical_dict()).encode("utf-8")
+    signature = sign_bytes(message, private_key)
+    return base64.b64encode(signature).decode("ascii")
+
+
+def verify_manifest_signature(
+    manifest: EvidenceManifest, signature_base64: str, public_key: Ed25519PublicKey
+) -> bool:
+    """Verifies a manifest's signature (manifest.sig's base64 contents) against an Ed25519 public key."""
+    message = canonical_stringify(manifest.canonical_dict()).encode("utf-8")
+    signature = base64.b64decode(signature_base64.strip())
+    return verify_bytes(message, signature, public_key)
+
+
+class EvidencePackReader(Protocol):
+    """Reads a built pack's contents back for `verify_evidence_pack`. This module has no filesystem
+    access of its own -- the caller supplies this over whatever storage the pack actually lives on."""
+
+    async def read_manifest(self) -> bytes: ...
+
+    async def read_signature(self) -> bytes: ...
+
+    async def read_file(self, path: str) -> bytes: ...
+
+
+@dataclass(frozen=True)
+class VerifyEvidencePackResult:
+    ok: bool
+    manifest: EvidenceManifest | None
+    errors: list[str]
+    mismatches: list[str]
+
+
+def _parse_jsonl(text: str) -> list[Any]:
+    records: list[Any] = []
+    for line in text.split("\n"):
+        if line == "":
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            # Malformed JSONL is reported by the caller as a files[] hash mismatch already (the
+            # content no longer matches what was signed); this cross-check is best-effort only.
+            continue
+    return records
+
+
+def _artifact_claims_from_jsonl_records(path: str, records: list[Any]) -> list[ArtifactClaim]:
+    claims: list[ArtifactClaim] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        claim: ArtifactClaim | None = None
+        if path in ("events.jsonl", "approvals.jsonl"):
+            type_ = record.get("type")
+            payload = record.get("payload")
+            if isinstance(type_, str) and isinstance(payload, dict):
+                claim = artifact_claim_from_event_payload(type_, payload)
+        elif path == "promotions.jsonl":
+            artifact_id = record.get("artifactId")
+            data = record.get("data")
+            if isinstance(artifact_id, str) and isinstance(data, dict):
+                claim = artifact_claim_from_promotion_data(artifact_id, data)
+        if claim is not None:
+            claims.append(claim)
+    return claims
+
+
+async def verify_evidence_pack(
+    reader: EvidencePackReader, public_key: Ed25519PublicKey
+) -> VerifyEvidencePackResult:
+    """Verifies a Compliance Evidence Pack: the manifest matches EvidenceManifest's schema, its signature
+    verifies against `public_key`, every file the manifest lists has the exact hash/size the manifest
+    recorded, and -- as an independent, best-effort cross-check -- every artifact reference found inside
+    the jsonl files actually hashes to the value it claims.
+    """
+    manifest_bytes = await reader.read_manifest()
+    try:
+        parsed = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        return VerifyEvidencePackResult(
+            ok=False, manifest=None, errors=[f"manifest.json is not valid JSON: {e}"], mismatches=[]
+        )
+    try:
+        manifest = EvidenceManifest.model_validate(parsed)
+    except ValidationError as e:
+        return VerifyEvidencePackResult(
+            ok=False,
+            manifest=None,
+            errors=[f"manifest.json does not match EvidenceManifestSchema: {e}"],
+            mismatches=[],
+        )
+
+    errors: list[str] = []
+    mismatches: list[str] = []
+
+    signature_text = (await reader.read_signature()).decode("utf-8").strip()
+    if not verify_manifest_signature(manifest, signature_text, public_key):
+        errors.append("manifest.sig does not verify against the given public key for this manifest")
+
+    for entry in manifest.files:
+        try:
+            content = await reader.read_file(entry.path)
+        except Exception as e:  # noqa: BLE001 - any read failure is reported the same way
+            errors.append(f"{entry.path}: could not be read ({e})")
+            continue
+        if len(content) != entry.bytes:
+            errors.append(
+                f"{entry.path}: is {len(content)} bytes on disk, manifest records {entry.bytes}"
+            )
+        actual_sha256 = hashlib.sha256(content).hexdigest()
+        if actual_sha256 != entry.sha256:
+            errors.append(
+                f"{entry.path}: sha256 on disk is {actual_sha256}, manifest records {entry.sha256}"
+            )
+            continue  # The content is not what was signed; an artifact cross-check would be meaningless.
+        if entry.path.endswith(".jsonl") and len(content) > 0:
+            records = _parse_jsonl(content.decode("utf-8"))
+            for claim in _artifact_claims_from_jsonl_records(entry.path, records):
+                if claim.claimed_sha256 is None:
+                    continue
+                actual = sha256_hex(claim.html)
+                if actual != claim.claimed_sha256:
+                    mismatches.append(
+                        f"{entry.path}: artifact {claim.artifact_id} claims sha256 "
+                        f"{claim.claimed_sha256}, but sha256 of its own html is {actual}"
+                    )
+
+    return VerifyEvidencePackResult(
+        ok=len(errors) == 0, manifest=manifest, errors=errors, mismatches=mismatches
+    )
