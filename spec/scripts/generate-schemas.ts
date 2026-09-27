@@ -20,10 +20,47 @@ import { z } from "zod";
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../schemas");
 mkdirSync(OUT_DIR, { recursive: true });
 
+/**
+ * Counteracts a zod v4 `toJSONSchema({ io: "input" })` heuristic that is too blunt for our case: any node
+ * whose value type transitively contains a `transform` anywhere (`isTransforming`, in zod's
+ * to-json-schema.js) has its own `.default()` value stripped from the generated schema ("examples/defaults
+ * only apply to output type of pipe" — the concern being that a value-changing transform could make a
+ * pre-transform default misleading). spec-core's JsonObjectSchema / JsonValueSchema (json.ts) use
+ * `z.preprocess` for their depth guard specifically so a *different* zod heuristic resolves the schema's
+ * shape through to the real recursive JsonValue definition rather than collapsing it to `{}` -- see
+ * json.ts's `withDepthGuard` doc comment -- but that guard's transform is an identity transform (it only
+ * ever validates depth; it never changes the value), so the "misleading default" concern does not apply to
+ * it, and the stripped `.default()` on a field like a component's `props` (`{}`) or a Spec's `events` (`[]`)
+ * is a false positive. Restores it generically for any `.default()`-wrapped node whose default was stripped,
+ * by recomputing the same value zod's own (unconditional) default-emission would have written before the
+ * heuristic deleted it -- so this self-heals for any current or future JsonValue-typed `.default()`d field,
+ * not just the two known ones, and only ever fires when a real `default` value went missing.
+ *
+ * Rebuilds the object (rather than just assigning `.default`) to put the restored key back in the same
+ * "default first" position zod's own unmodified defaultProcessor would have left it in -- it sets `default`
+ * on an otherwise-empty object before the field's other properties (type / propertyNames /
+ * additionalProperties, merged in later during ref-flattening) are appended, and a plain assignment here
+ * would instead append `default` last, which is byte-different (though not semantically different) from that
+ * original key order in the committed schema files.
+ */
+function restoreDefaultsStrippedByTheDepthGuardsTransform(ctx: {
+  zodSchema: z.core.$ZodTypes;
+  jsonSchema: z.core.JSONSchema.BaseSchema;
+}): void {
+  const def = ctx.zodSchema._zod.def;
+  if (def.type !== "default" || ctx.jsonSchema.default !== undefined) return;
+  const defaultValue = JSON.parse(JSON.stringify(def.defaultValue));
+  const rest = { ...ctx.jsonSchema };
+  for (const key of Object.keys(ctx.jsonSchema)) delete (ctx.jsonSchema as Record<string, unknown>)[key];
+  ctx.jsonSchema.default = defaultValue;
+  Object.assign(ctx.jsonSchema, rest);
+}
+
 const uiSpec = z.toJSONSchema(UISpecSchema, {
   target: "draft-2020-12",
   reused: "inline",
   io: "input",
+  override: restoreDefaultsStrippedByTheDepthGuardsTransform,
 });
 
 writeFileSync(
@@ -47,6 +84,7 @@ const specPatch = z.toJSONSchema(SpecPatchSchema, {
   target: "draft-2020-12",
   reused: "inline",
   io: "input",
+  override: restoreDefaultsStrippedByTheDepthGuardsTransform,
 });
 
 writeFileSync(
@@ -70,6 +108,7 @@ const fixationRecord = z.toJSONSchema(FixationRecordSchema, {
   target: "draft-2020-12",
   reused: "inline",
   io: "input",
+  override: restoreDefaultsStrippedByTheDepthGuardsTransform,
 });
 
 writeFileSync(
@@ -93,6 +132,7 @@ const promotionState = z.toJSONSchema(PromotionStateSchema, {
   target: "draft-2020-12",
   reused: "inline",
   io: "input",
+  override: restoreDefaultsStrippedByTheDepthGuardsTransform,
 });
 
 writeFileSync(
@@ -116,6 +156,7 @@ const lineageEventRecord = z.toJSONSchema(LineageEventRecordSchema, {
   target: "draft-2020-12",
   reused: "inline",
   io: "input",
+  override: restoreDefaultsStrippedByTheDepthGuardsTransform,
 });
 
 writeFileSync(

@@ -99,12 +99,13 @@ function forCall(ctx: ToolContext, principal: Principal): ToolCallContext {
 }
 
 /**
- * Consolidates every tool handler's access to the SDK-supplied per-call abort signal and JSON-RPC request id
+ * Consolidates every tool handler's access to the SDK-supplied per-call abort signal and correlation id
  * into one place, so the 5 tool handlers below read `requestContextOf(extra)` uniformly rather than each
  * reaching into `extra.mcpReq` themselves. Under SDK v2 (`@modelcontextprotocol/server` 2.0.0, paired with
  * protocol version 2026-07-28's removal of protocol-level sessions), a tool handler's second argument is
  * `ServerContext`, which nests the per-request abort signal and JSON-RPC id under `mcpReq`
- * (`extra.mcpReq.signal` / `extra.mcpReq.id`); this function is a thin projection of that shape.
+ * (`extra.mcpReq.signal` / `extra.mcpReq.id`); this function is a thin projection of that shape, plus
+ * `mcpCorrelationId`'s formatting of the two into one id (see its doc comment).
  *
  * Named `abort` (not `signal`) on the returned object so `{ ...requestContextOf(extra), locale, traceContext:
  * traceContextOf(extra) }` is directly a `ComposeCallContext` — every compose-family tool handler builds its
@@ -113,8 +114,24 @@ function forCall(ctx: ToolContext, principal: Principal): ToolCallContext {
 function requestContextOf(extra: ServerContext): { abort: AbortSignal; requestId: string } {
   return {
     abort: extra.mcpReq.signal,
-    requestId: String(extra.mcpReq.id),
+    requestId: mcpCorrelationId(extra),
   };
+}
+
+/**
+ * The compose correlation id for one MCP tool call: `mcp:<sessionId>:<jsonrpc id>` when the transport
+ * carries a session id (Streamable HTTP, where a session can issue many requests and the JSON-RPC id alone
+ * would be ambiguous across sessions), or `mcp:<jsonrpc id>` when it does not (stdio, which has no session
+ * concept at all -- a single stdio connection already scopes JSON-RPC ids uniquely, so no prefix is needed
+ * beyond `mcp:`). This is the value ultimately recorded as ComposeTrace.correlationId / lineage's
+ * view.composed correlationId, so a devtool (`kohaku explain`, admin-react's DevTools) can group every event
+ * belonging to one tool call, and tell which transport session (if any) it came from, from the id alone.
+ *
+ * Kept alongside (not merged into) requestContextOf so a caller that only needs the correlation id (none,
+ * currently, but keeps the two concerns separable) is not forced to also destructure `abort`.
+ */
+function mcpCorrelationId(extra: ServerContext): string {
+  return extra.sessionId != null ? `mcp:${extra.sessionId}:${extra.mcpReq.id}` : `mcp:${extra.mcpReq.id}`;
 }
 
 /**
@@ -204,11 +221,12 @@ function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
  * generation work the caller has already given up on (parity with the REST profile's abort wiring via
  * `c.req.raw.signal`).
  *
- * `requestId`, when passed (the SDK's `extra.mcpReq.id` — the JSON-RPC id of the tool call), is forwarded
- * into composeForTool -> composeWithFixation as both the fixation self-heal correlation id (already
- * threaded through resolveFixatedResult) and, additively, ComposeOptions.correlationId, so a
- * degraded/failed delivery's observer.onError call and ComposeTrace can be tied back to this tool call the
- * same way host-rest ties them back to X-Request-Id.
+ * `requestId`, when passed (`mcpCorrelationId(extra)` — `mcp:<sessionId>:<jsonrpc id>`, or `mcp:<jsonrpc id>`
+ * when the transport carries no session id, e.g. stdio), is forwarded into composeForTool ->
+ * composeWithFixation as both the fixation self-heal correlation id (already threaded through
+ * resolveFixatedResult) and, additively, ComposeOptions.correlationId, so a degraded/failed delivery's
+ * observer.onError call and ComposeTrace can be tied back to this tool call the same way host-rest ties them
+ * back to X-Request-Id.
  *
  * `traceContext` (from `_meta.traceparent` via traceContextOf), when passed, is forwarded the same way as
  * ComposeOptions.traceContext (additive/opt-in, see composeForTool's doc comment).
@@ -236,7 +254,10 @@ async function composeAndAudit(
           trace: result.trace,
           surface: MCP_APP_SURFACE,
         });
-        await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, { surface: MCP_APP_SURFACE });
+        await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, {
+          surface: MCP_APP_SURFACE,
+          ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
+        });
       } else {
         await ctx.deps.onComposed?.(result.spec, result.trace);
       }
@@ -1017,8 +1038,8 @@ function fixationHost(deps: McpHostDeps): hostCore.FixationDeliveryHost {
  * itself never calls the LLM, so it has nothing to cancel) — see composeAndAudit's doc comment for why tool
  * handlers thread the SDK's `extra.mcpReq.signal` through here.
  *
- * `requestId`, when passed (the SDK's `extra.mcpReq.id`, the JSON-RPC id of the tool call), is forwarded to
- * composeWithFixation as the correlation id — see composeAndAudit's doc comment.
+ * `requestId`, when passed (`mcpCorrelationId(extra)` — see its doc comment for the exact format), is
+ * forwarded to composeWithFixation as the correlation id — see composeAndAudit's doc comment.
  *
  * `traceContext` (from `_meta.traceparent`, see traceContextOf), when passed, is forwarded to
  * composeWithFixation the same way, additively (ComposeOptions.traceContext).

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from kohaku.spec import (
+    CacheKeyParts,
     LineageActor,
     LineageEventRecord,
     LineageFilter,
@@ -27,9 +28,17 @@ L2_HTML = "<html><body><script>window.kohaku.ready()</script></body></html>"
 
 @dataclass(frozen=True)
 class FakeTrace:
-    """Minimal implementation of ComposeTraceLike (view_composed references only durationMs)."""
+    """Minimal implementation of ComposeTraceLike. All fields but durationMs default to None/unset so a bare
+    FakeTrace() reproduces the exact pre-U2 payload shape (no correlationId/cacheKey/decision keys)."""
 
     durationMs: float = 10.0
+    correlationId: str | None = None
+    cacheKey: str | None = None
+    cacheKeyParts: CacheKeyParts | None = None
+    attempts: list[Any] | None = None
+    downgrades: list[Any] | None = None
+    coalesced: bool | None = None
+    usage: Any | None = None
 
 
 def l2_spec(cache: str = "miss", *, model: str | None = "test-model") -> UISpec:

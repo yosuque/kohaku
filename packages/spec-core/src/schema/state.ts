@@ -70,38 +70,69 @@ export type VisibleWhen =
   | { not: VisibleWhen };
 
 /**
- * The recursive union of predicate nodes (the bare form without depth validation). The element count of
- * all / any is enforced by MAX_PREDICATE_ITEMS, and the nesting depth is checked by the superRefine on
- * VisibleWhenSchema. strict rejects mixing of compound keys.
+ * The recursive union of predicate nodes (the bare form without depth validation), never exported directly:
+ * parsing an arbitrarily deep value against this schema recurses through zod's own `z.union`/`z.lazy`
+ * machinery one stack frame per nesting level, so an input whose depth has not already been bounded (by
+ * `predicateDepth` + the preprocess below) can overflow the stack before `VisibleWhenSchema`'s own depth
+ * limit gets a chance to reject it -- the same ordering bug as spec-core's JsonObjectSchema (see json.ts's
+ * MAX_JSON_OBJECT_DEPTH doc comment for that incident), here for a chain of `{"not":{"not":...}}` instead.
+ * The element count of all / any is enforced by MAX_PREDICATE_ITEMS; strict rejects mixing of compound keys.
  */
-const PredicateNodeSchema: z.ZodType<VisibleWhen> = z.lazy(() =>
+const RawPredicateNodeSchema: z.ZodType<VisibleWhen> = z.lazy(() =>
   z.union([
     LeafPredicateSchema,
-    z.object({ all: z.array(PredicateNodeSchema).min(1).max(MAX_PREDICATE_ITEMS) }).strict(),
-    z.object({ any: z.array(PredicateNodeSchema).min(1).max(MAX_PREDICATE_ITEMS) }).strict(),
-    z.object({ not: PredicateNodeSchema }).strict(),
+    z.object({ all: z.array(RawPredicateNodeSchema).min(1).max(MAX_PREDICATE_ITEMS) }).strict(),
+    z.object({ any: z.array(RawPredicateNodeSchema).min(1).max(MAX_PREDICATE_ITEMS) }).strict(),
+    z.object({ not: RawPredicateNodeSchema }).strict(),
   ]),
 );
 
-/** The nesting depth of a predicate tree (leaf = 1). */
-function predicateDepth(pred: VisibleWhen): number {
-  if ("all" in pred) return 1 + Math.max(...pred.all.map(predicateDepth));
-  if ("any" in pred) return 1 + Math.max(...pred.any.map(predicateDepth));
-  if ("not" in pred) return 1 + predicateDepth(pred.not);
-  return 1;
+/**
+ * The nesting depth of a predicate-shaped value (a leaf, or anything not recognized as a compound shape,
+ * counts as depth 1), capped at `limit + 1`: recursion stops the instant depth would exceed `limit`, so this
+ * can run safely on an arbitrarily deep -- and not yet schema-validated -- value before `RawPredicateNodeSchema`
+ * ever does (mirrors `exceedsMaxJsonDepth` in json.ts). Takes `unknown` (not `VisibleWhen`) so it can run
+ * ahead of validation; a compound key's array is walked with a plain loop rather than `Math.max(...array)`,
+ * since a raw, not-yet-validated `all`/`any` array is not yet bounded by MAX_PREDICATE_ITEMS and a large
+ * enough one would itself overflow `Math.max`'s argument-spread stack. The returned depth is exact up to
+ * `limit + 1` (accurate for the common near-boundary case, e.g. reporting exactly 9 for a limit of 8) and
+ * only a lower bound beyond that (a payload nested 100000 levels deep is also reported as `limit + 1`) --
+ * enough to always know it exceeds the limit, without ever counting an unbounded input exactly.
+ */
+function predicateDepth(value: unknown, limit: number, depth = 1): number {
+  if (depth > limit) return depth;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return depth;
+  const obj = value as Record<string, unknown>;
+  const children = Array.isArray(obj.all) ? obj.all : Array.isArray(obj.any) ? obj.any : null;
+  if (children != null && children.length > 0) {
+    let max = depth;
+    for (const child of children) {
+      const childDepth = predicateDepth(child, limit, depth + 1);
+      if (childDepth > max) max = childDepth;
+      if (max > limit) break;
+    }
+    return max;
+  }
+  if ("not" in obj) return predicateDepth(obj.not, limit, depth + 1);
+  return depth;
 }
 
 /**
- * The conditional-display predicate schema. The recursive union with nesting-depth upper-bound
- * validation layered on top. The array element count is enforced by .max within the union; the depth is
- * checked here by traversing the whole tree once.
+ * The conditional-display predicate schema. Depth is checked up front (mirrors json.ts's `withDepthGuard`):
+ * `z.preprocess` builds a `ZodPipe` whose depth-checking left side aborts the pipe -- before
+ * `RawPredicateNodeSchema` (the right side) ever runs -- on a reported issue (zod v4's `handlePipeResult`),
+ * and is resolved through to that right side's own shape by `z.toJSONSchema(..., { io: "input" })` (see
+ * json.ts's `withDepthGuard` doc comment for why a `z.preprocess`-shaped guard, specifically, keeps
+ * `spec/schemas/*.schema.json` byte-identical rather than collapsing to `{}`).
  */
-export const VisibleWhenSchema = PredicateNodeSchema.superRefine((pred, ctx) => {
-  const depth = predicateDepth(pred);
+export const VisibleWhenSchema: z.ZodType<VisibleWhen> = z.preprocess((value, ctx) => {
+  const depth = predicateDepth(value, MAX_PREDICATE_DEPTH);
   if (depth > MAX_PREDICATE_DEPTH) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: `visibleWhen is nested too deeply (depth ${depth} > limit ${MAX_PREDICATE_DEPTH})`,
     });
+    return z.NEVER;
   }
-});
+  return value;
+}, RawPredicateNodeSchema);

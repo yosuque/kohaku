@@ -281,6 +281,196 @@ describe("view.fallback の記録(RestViewRecorder)", () => {
     expect(payload["kind"]).toBe("generation");
     expect("sessionId" in payload).toBe(false);
   });
+
+  it("correlationId を渡すと payload に刻む(U2)", async () => {
+    const storage = memoryStorage();
+    const recorder = createViewRecorder(createLineage({ storage }));
+    const spec = negotiatedSpec();
+
+    await recorder.fallback!({
+      spec,
+      reason: spec.provenance.fallback!.reason,
+      kind: "negotiation",
+      surface: "web",
+      correlationId: "req-fallback",
+    });
+
+    const payload = storage.events.find((e) => e.type === "view.fallback")!.payload;
+    expect(payload["correlationId"]).toBe("req-fallback");
+  });
+
+  it("correlationId 省略時は payload に刻まない(U2)", async () => {
+    const storage = memoryStorage();
+    const recorder = createViewRecorder(createLineage({ storage }));
+    const spec = negotiatedSpec();
+
+    await recorder.fallback!({
+      spec,
+      reason: spec.provenance.fallback!.reason,
+      kind: "negotiation",
+      surface: "web",
+    });
+
+    const payload = storage.events.find((e) => e.type === "view.fallback")!.payload;
+    expect("correlationId" in payload).toBe(false);
+  });
+});
+
+describe("explain 用フィールド(correlationId / cacheKeyParts / decision, U2)", () => {
+  const richTrace = {
+    ...trace,
+    correlationId: "req-1",
+    cacheKey: "kohaku:0.2:sha256:aaa:sales@seed-1:-",
+    cacheKeyParts: { intentHash: trace.intent.hash, dataVersion: trace.dataVersion },
+    attempts: [
+      { kind: "l1" as const, ok: false, issues: ["bad output"] },
+      { kind: "l2" as const, ok: true },
+    ],
+    downgrades: [{ id: "sandbox1", from: "sandbox.html", to: "presentMarkdown", reason: "unsupported" }],
+    coalesced: true,
+    usage: { inputTokens: 10, outputTokens: 20 },
+  };
+
+  it("view.composed に correlationId / cacheKey / cacheKeyParts / decision を刻む", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const spec = await l2Spec();
+    await lineage.viewComposed({ spec, trace: richTrace, surface: "web" });
+    const composed = storage.events.find((e) => e.type === "view.composed")!;
+    expect(composed.payload["correlationId"]).toBe("req-1");
+    expect(composed.payload["cacheKey"]).toBe(richTrace.cacheKey);
+    expect(composed.payload["cacheKeyParts"]).toEqual(richTrace.cacheKeyParts);
+    expect(composed.payload["decision"]).toEqual({
+      attempts: [
+        { kind: "l1", ok: false, issues: ["bad output"] },
+        { kind: "l2", ok: true },
+      ],
+      downgrades: richTrace.downgrades,
+      coalesced: true,
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+  });
+
+  it("スローされた例外の issues(生の e.message)は記録せず、errorCode に応じた固定文言だけを刻む(機密漏えい対策)", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const spec = await l2Spec();
+    const sensitiveMessage = "connect ECONNREFUSED https://secret-host.internal/v1?key=abc";
+    await lineage.viewComposed({
+      spec,
+      trace: {
+        ...trace,
+        attempts: [
+          { kind: "l1" as const, ok: false, issues: [sensitiveMessage], errorCode: "PROVIDER" as const },
+        ],
+      },
+      surface: "web",
+    });
+    const composed = storage.events.find((e) => e.type === "view.composed")!;
+    const decision = composed.payload["decision"] as {
+      attempts: Array<{ issues?: string[]; errorCode?: string }>;
+    };
+    // The raw exception text must never reach the recorded payload, in any field.
+    expect(JSON.stringify(composed.payload)).not.toContain("secret-host.internal");
+    expect(JSON.stringify(composed.payload)).not.toContain("ECONNREFUSED");
+    expect(decision.attempts[0]!.errorCode).toBe("PROVIDER");
+    expect(decision.attempts[0]!.issues).toEqual(["The LLM provider call failed."]);
+  });
+
+  it("errorCode が無い attempt(検証失敗)の issues はそのまま記録する(既存の挙動を維持)", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const spec = await l2Spec();
+    await lineage.viewComposed({
+      spec,
+      trace: {
+        ...trace,
+        attempts: [{ kind: "l1" as const, ok: false, issues: ["CATALOG_UNKNOWN_TYPE (t): bad type"] }],
+      },
+      surface: "web",
+    });
+    const composed = storage.events.find((e) => e.type === "view.composed")!;
+    const decision = composed.payload["decision"] as { attempts: Array<{ issues?: string[] }> };
+    expect(decision.attempts[0]!.issues).toEqual(["CATALOG_UNKNOWN_TYPE (t): bad type"]);
+  });
+
+  it("attempts の issues を 5 件・200 字までに切り詰める", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const spec = await l2Spec();
+    const longIssue = "x".repeat(250);
+    await lineage.viewComposed({
+      spec,
+      trace: {
+        ...trace,
+        attempts: [{ kind: "l1" as const, ok: false, issues: [longIssue, "a", "b", "c", "d", "e", "f"] }],
+      },
+      surface: "web",
+    });
+    const composed = storage.events.find((e) => e.type === "view.composed")!;
+    const decision = composed.payload["decision"] as { attempts: Array<{ issues?: string[] }> };
+    expect(decision.attempts[0]!.issues).toHaveLength(5);
+    // 200 characters kept + a trailing ellipsis marker.
+    expect(decision.attempts[0]!.issues![0]!.length).toBe(201);
+  });
+
+  it("attempts / downgrades / coalesced / usage が全て無ければ decision を刻まない(cache hit 等の既存の形を壊さない)", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const spec = await l2Spec();
+    await lineage.viewComposed({ spec, trace, surface: "web" });
+    const composed = storage.events.find((e) => e.type === "view.composed")!;
+    expect("decision" in composed.payload).toBe(false);
+    expect("correlationId" in composed.payload).toBe(false);
+    expect("cacheKey" in composed.payload).toBe(false);
+    expect("cacheKeyParts" in composed.payload).toBe(false);
+  });
+
+  it("component.generated / component.used に correlationId / kit / generatorVersion を刻む(F7 が読む)", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const spec = await l2Spec();
+    const specWithKit: UISpec = {
+      ...spec,
+      provenance: { ...spec.provenance, kit: { id: "default", version: "1" }, generatorVersion: "gen-1" },
+    };
+    await lineage.viewComposed({ spec: specWithKit, trace: richTrace, surface: "web" });
+    const generated = storage.events.find((e) => e.type === "component.generated")!;
+    expect(generated.payload["correlationId"]).toBe("req-1");
+    expect(generated.payload["kit"]).toEqual({ id: "default", version: "1" });
+    expect(generated.payload["generatorVersion"]).toBe("gen-1");
+    const used = storage.events.find((e) => e.type === "component.used")!;
+    expect(used.payload["correlationId"]).toBe("req-1");
+  });
+
+  it("spec.provenance.fallback / generatorVersion / kit を view.composed にそのまま刻む", async () => {
+    const storage = memoryStorage();
+    const lineage = createLineage({ storage });
+    const l1: UISpec = {
+      kohaku: "0.1",
+      intent: { canonical: "sales.custom", params: {}, hash: "sha256:" + "2".repeat(64) },
+      dataVersion: "sales@seed-1",
+      components: [{ id: "root", type: "layout.stack", props: {} }],
+      events: [],
+      provenance: {
+        tier: "L1",
+        composedBy: "composer@0.1.0",
+        cache: "miss",
+        generatorVersion: "gen-1",
+        kit: { id: "default", version: "1" },
+        fallback: { from: "L1", reason: "generation failed", kind: "generation" },
+      },
+    };
+    await lineage.viewComposed({ spec: l1, trace: { ...trace, tier: "L1" }, surface: "web" });
+    const composed = storage.events.find((e) => e.type === "view.composed")!;
+    expect(composed.payload["generatorVersion"]).toBe("gen-1");
+    expect(composed.payload["kit"]).toEqual({ id: "default", version: "1" });
+    expect(composed.payload["fallback"]).toEqual({
+      from: "L1",
+      reason: "generation failed",
+      kind: "generation",
+    });
+  });
 });
 
 function ev(type: string, payload: Record<string, unknown>): LineageEventRecord {

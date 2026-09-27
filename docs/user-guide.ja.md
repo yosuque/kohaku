@@ -295,7 +295,7 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 導入ラダー(設計書 §12「サンプル実装の設計」)に沿って段階導入できます。
 
-**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host-rest @kohaku-ui/registry @kohaku-ui/llm @ai-sdk/anthropic zod`(`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
+**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod`(`@kohaku-ui/host` の `createKohakuHost()` は `@kohaku-ui/host-rest` を包む one-call ファサードです。詳細は後述。その `@kohaku-ui/host/mcp` サブパスを使うには追加で `@kohaku-ui/host-mcp-apps` と `@modelcontextprotocol/server` が要り、どちらも上のコマンドではインストールされない optional peer です——[パス (a)](paths/mcp-apps.ja.md)参照。`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
 ### Zero-Port quickstart(自分のデータから、Port コードなしで)
 
@@ -305,7 +305,7 @@ npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファ�
 npm run dev                                      # API :8787 + web :5173
 ```
 
-`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、`@kohaku-ui/semantic-llm` の既定 SemanticPort、`@kohaku-ui/storage-memory` と `@kohaku-ui/authz-hmac`、Dashboard + Chat の Web アプリ、golden regression テスト。`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、4 つの Port はプロダクト側の責務のままです(設計書 §2)。各ファイルには何を置き換えるべきかが書かれています。
+`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
 
 手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。
 
@@ -319,14 +319,17 @@ npm run dev                                      # API :8787 + web :5173
 npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 ```
 
-生成された `ports.ts` の 4 つの Port を実装します。最初は:
+`createKohakuHost()`(`@kohaku-ui/host`)が既定を用意しない唯一の Port を生成された `ports.ts` に、Intent カタログを `intents.ts` に実装します:
 
-1. **DomainPort**: 集計クエリを `op` として実装(戻りは TabularData 推奨)
-2. **SemanticPort**: `normalize` は GUI 操作の決定的マッピングだけ、`resolveQuery` は Intent → `query://` ハンドル
-3. **AuthzPort**: まず `@kohaku-ui/authz-hmac`(`createHmacAuthzPort(secret)`、サンプルの HMAC capability token)から始める。JWT / OIDC で運用する場合は `@kohaku-ui/authz-jwt` の `createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })` が capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決して、`KohakuHostDeps.auth` / `tenant` フックや MCP の `resolvePrincipal` に渡せるようにする(§7「本番用アダプタ」参照)。
-4. **StoragePort**: 最初はインメモリで十分(`@kohaku-ui/storage-memory` の `createMemoryStoragePort()`。`createFileStoragePort(dataDir)` はデモのファイル永続化)。ホストインスタンスが複数になったら `@kohaku-ui/storage-redis` か `@kohaku-ui/storage-postgres` を使い、Spec キャッシュを共有する(§7)。
+1. **DomainPort**(あなたの責務 — 既定は存在しません): 集計クエリを `op` として実装(戻りは TabularData 推奨)。`createKohakuHost({ domain, ... })` として渡します。
 
-composer の `policy.fixedSpecs` に固定 Spec テンプレート(`apps/sample-api/src/intents/fixed-specs.ts` が見本)を登録すれば、**LLM なしで** renderer-react による Server-Driven UI が動きます。
+残り 3 つの Port には動く既定値があります。既定を超えたら、自分の実装を渡して差し替えてください:
+
+2. **SemanticPort**(既定: `@kohaku-ui/semantic-llm` の `createLlmSemanticPort`。`intents.ts` + `dataVersion` / `describeShape` から組み立てられます): `normalize` は GUI 操作の決定的マッピングだけ、`resolveQuery` は Intent → `query://` ハンドル。自分の実装は `createKohakuHost({ semantic, ... })` として渡します — このとき `intents` / `dataVersion` / `describeShape` は無視されます。
+3. **AuthzPort**(既定: `@kohaku-ui/authz-hmac` の `createHmacAuthzPort(secret)`。`secret` は `capabilitySecret` か環境変数 `KOHAKU_CAPABILITY_SECRET` から解決されます)。JWT / OIDC で運用する場合は代わりに `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })`(`@kohaku-ui/authz-jwt`)を渡してください — capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決して、`KohakuHostDeps.auth` / `tenant` フックや MCP の `resolvePrincipal` に渡せます(§7「本番用アダプタ」参照)。
+4. **StoragePort**(既定: `@kohaku-ui/storage-memory` の `createMemoryStoragePort()`)。ホストインスタンスが複数になったら `storage: createRedisStoragePort(...)` / `createPostgresStoragePort(...)`(`@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres`)を渡し、Spec キャッシュを共有する(§7)。
+
+`createKohakuHost` の `policy.fixedSpecs` オプションに固定 Spec テンプレート(`apps/sample-api/src/intents/fixed-specs.ts` が見本)を登録すれば、**LLM が実際に呼ばれることなく** renderer-react による Server-Driven UI が動きます — `llm` は必須の引数のままです(`createKohakuHost` は既定値を作りません)が、compose する全 Intent が `fixedSpecs` で解決される限り、それが呼び出されることはありません。
 
 ### Step 1 — L1 宣言的合成とチャット
 
@@ -447,7 +450,8 @@ for await (const ev of client.composeStream({ intent: { canonical: "sales.trend"
 
 - **切断されたストリームは正常終了ではなく失敗として扱う**: `done` / `error` イベント(REST-STR-003)より前に接続が切れた場合、`composeStream` の反復は `for await` ループが単に終わるのではなく `KohakuHostError`(`code: "INTERNAL"`)を throw する。
 - **参照渡しバインディング**: `client.binding({ capability })` が `@kohaku-ui/data-binding` の `BindingClient` を SDK 設定(baseUrl / headers)ごと合成する(`createBindingClient` は SDK からも再エクスポート)。
-- **統制系**: `client.catalog()` / `client.lineage()` / `client.telemetry()` / `client.promotions.*` / `client.fixations.*` が型付き。
+- **統制系**: `client.catalog()` / `client.lineage()` / `client.telemetry()` / `client.promotions.*` / `client.fixations.*` が型付き。`client.lineagePages(query)` は `GET /lineage?order=asc` を(ページを返す非同期ジェネレータとして)漏れなく辿る — `lineage()` のテールウィンドウとは異なる。
+- **「なぜこの画面はこうなったのか」**: `compose()` / `sendEvent()` の成功応答(およびストリームの `done` イベント)にはすべて `requestId` が付く — ワイヤーの本文ではなく `X-Request-Id` 応答ヘッダから読み取ったもの。これを `client.explain(requestId)` に渡すと、`lineagePages({correlationId: requestId})` から組み立てた `ExplainReport`(provenance、キャッシュキーの内訳、判断の流れ、capability スコープ、生の lineage イベント)が得られる — 詳しくは後述の「Kohaku DevTools と `kohaku explain`」を参照。
 - **renderer-react の `useSpecStream`** に渡す fetch サンクは `client.composeStreamRequest(req)` で得られる。
 - **SPEC 対象外のルート**(独自の `/health` 等)はエスケープハッチ `client.request(path, init?)`(headers フックは効くが JSON パース・エラー変換はしない)で叩く。
 - サンプルの配線は `apps/sample-web/src/kohaku/client.ts`(SDK を薄く包んで sample 固有の呼び出し形に合わせている)。
@@ -507,6 +511,73 @@ export function GovernancePage() {
 配色を完全に得られます(sample は `apps/sample-web/src/theme/tokens.ts` の `buildTheme(mode)` でこれを行って
 います)。省略するとこの 2 箇所だけはテーマに関わらずパッケージ自身の明るいテーマの既定値のままになります。
 
+### Kohaku DevTools と `kohaku explain`
+
+「なぜこの画面はこうなったのか」— ティア、キャッシュのヒット/ミス、キャッシュキーの個々の内訳、どの L1/L2 の
+試行が走ってなぜ失敗したか、capability negotiation による降格、そのリクエストが生んだ lineage イベント — は
+`requestId` 1 つから答えられる(compose の `X-Request-Id` 応答ヘッダ、または MCP ツール呼び出しの
+`mcp:<sessionId>:<jsonrpc id>` 相関 ID)。方法は 2 通りある。
+
+**CLI から**、動いている任意の REST ホストに対して:
+
+```bash
+node cli/bin/kohaku.js explain <requestId> --rest http://localhost:8787/api/kohaku
+# --json で整形テキストの代わりに生の ExplainReport JSON を出力
+# --header "x-kohaku-tenant:acme"(繰り返し可)でテナント/認証ヘッダを付与
+# --spec spec.json を渡すと capability スコープ(collectCapabilityScopes)も表示される
+```
+
+**フローティングパネルとして**(`@kohaku-ui/admin-react/devtools`。`AdminProvider` / `KohakuAdmin` から切り離された
+別サブパス — 上の依存境界の注意はここにも当てはまる: client / renderer-core / sandbox / spec-core のみ、
+`renderer-react` には決して依存しない):
+
+```tsx
+import { KohakuDevTools, withDevToolsCapture } from "@kohaku-ui/admin-react/devtools";
+import { createKohakuClient } from "@kohaku-ui/client";
+
+// withDevToolsCapture は onResponse をラップし、パネルの「直近のリクエスト」クイックピックを自動的に埋める —
+// アプリがすでに KohakuClient を組み立てている箇所で、クライアント構築時に一度だけ配線すればよい。
+const { config, capture } = withDevToolsCapture({ baseUrl: "/api/kohaku" });
+const client = createKohakuClient(config);
+
+function DevToolsMount() {
+  // デベロッパーツールは決して誤って描画されてはならない: `enabled` は必須かつ明示的にする(
+  // `import.meta.env.DEV` などの dev 限定チェックの裏に置く。apps/sample-web の
+  // src/kohaku/DevToolsMount.tsx がそうしているように、JSX 内のランタイムチェックだけでなく
+  // 動的 import 自体を `if (import.meta.env.DEV)` というリテラルの分岐の中に置き、Vite/Rollup の
+  // デッドコード除去が本番バンドルからモジュールごと落とせるようにする)。
+  return <KohakuDevTools enabled client={client} capture={capture} />;
+}
+```
+
+どちらの経路も同じ純粋関数、`@kohaku-ui/client` の `buildExplainReport(events, spec?)` の上に構築されており、
+これは `client.explain(requestId, {spec?})` から呼ばれる — その実体は `lineagePages({correlationId:
+requestId})`(design.md #53 の forward paging フィルタ)にこの関数を適用しているだけである。専用の `/explain`
+REST ルートは存在しない(design.md #55)。
+
+- **CORS(ブラウザで動くクライアントがクロスオリジンのホストと話す場合)**: `fetch` の `Response.headers` から
+  `X-Request-Id` 応答ヘッダを読むには、ホスト側が `Access-Control-Expose-Headers: X-Request-Id` を送る必要がある
+  — 通常の CORS 応答はクライアント側 JavaScript にカスタムヘッダを既定では公開しない。同一オリジンでの
+  デプロイ(sample の Vite 開発サーバープロキシ、同一オリジンの本番デプロイ)は影響を受けない。
+- **これが入る前に記録されたイベントには `correlationId` が無い**: `view.composed` / `component.generated` /
+  `component.used` / `view.fallback` の `correlationId`(および `view.composed` の `cacheKey` /
+  `cacheKeyParts` / `decision`)は追加フィールドである — 旧バージョンの kohaku が記録したイベントや、forward
+  paging(design.md #53)より前の `StoragePort` を使うホストが記録したイベントにはこれらが一切無く、`kohaku
+  explain` / DevTools はそのリクエスト ID に対して「不完全な結果」ではなく「view.composed イベントが
+  見つからない」と報告する。
+- **リクエスト ID の使い回しは複数件の compose を返しうる**: あなた(またはホストの手前のプロキシ)が発行する
+  `X-Request-Id` はグローバルな一意性を保証されない — `ExplainReport.composes` は複数件のエントリを持つことが
+  あり、CLI・DevTools ともに単一の結果を前提とせず、それぞれを描画する。
+- **`decision` にはプロバイダ自身のエラー文言が一切入らない**: L1/L2 の試行がスローされた例外で失敗した場合
+  (プロバイダ障害・ネットワークエラー・設定ミスなど、`LlmError` や予期しない例外自身の `.message` が
+  ホスト名・URL・アカウント情報を含みうるもの)、`decision.attempts[].issues` には閉じた `errorCode` 語彙
+  (`CONFIG` / `INVALID_OUTPUT` / `PROVIDER` / `ABORTED` / `UNKNOWN`)に応じた固定の非機密文言だけが記録され、
+  例外自身のテキストは決して記録されない。これはスローされた試行にのみ当てはまる — 検証失敗した試行の
+  `issues`(モデル自身の構造的な出力について説明する schema/catalog issue。例: 未知のコンポーネント型)は
+  引き続き実際のメッセージのままで、5 件・各 200 字までに切り詰められる。例外の実際のメッセージが必要な場合は
+  自前の `ComposeObserver.onError` / `KohakuHostDeps.onError` フック(§7 の `KOHAKU_DEBUG` の項目)を使うこと —
+  `/lineage`・`kohaku explain`・DevTools を読む `lineage.read` プリンシパルには決して見えない。
+
 ### 部品を追加する
 
 ```ts
@@ -518,8 +589,57 @@ export const myCard = defineComponent({
   fallback: { type: "presentMarkdown", mapProps: () => ({ markdown: "(非対応)" }) },
 });
 // API 側: resolveCatalog(coreCatalog, { components: [myCard] })
-// Web 側: registry.register("myapp.card", "1.0.0", MyCardComponent)  // useBoundData でデータ取得
 ```
+
+`myCard` は `{type, version, propsSchema}` の単一の情報源である。サーバーと各レンダラーの両方がインポートする
+共有パッケージなどに一度だけ定義し、登録箇所ごとに `"myapp.card"` / `"1.0.0"` を文字列リテラルとして書き直さない。
+そうしないと両者のタイプミスやバージョンのずれが実行時まで検出されない(design.md #68)。
+
+React(`@kohaku-ui/renderer-react`): `implement(def, Component)` は `Component` の `props` を `def.propsSchema`
+から推論するため、`node.props["title"] as string` のようなキャストは不要になる。`ImplRegistry.use(entry)` が
+結果を `def` 自身の type/version で登録する:
+
+```tsx
+import { implement, ImplRegistry, type TypedImplProps } from "@kohaku-ui/renderer-react";
+
+function MyCardComponent({ props }: TypedImplProps<z.infer<typeof myCard.propsSchema>>) {
+  return <div>{props.title}</div>; // props.title: string
+}
+
+const registry = new ImplRegistry().use(implement(myCard, MyCardComponent));
+```
+
+Web Components(`@kohaku-ui/renderer-wc`): `<kohaku-surface>` は公開 API `registerPart(type, version,
+builder)` を持ち、`implementWc(def, builder)` がその型付き版になる:
+
+```ts
+import { implementWc } from "@kohaku-ui/renderer-wc";
+
+const entry = implementWc(myCard, (rt, parent, node, props) => {
+  const el = document.createElement("div");
+  el.textContent = props.title; // props.title: string
+  parent.appendChild(el);
+  return () => el.remove();
+});
+surface.registerPart(entry.type, entry.version, entry.builder);
+```
+
+`registerPart` が既に登録済みの `type`(タイプミス、あるいは意図的な上書きにより、16 個のコアカタログの部品の
+どれかが対象になりやすい)を置き換える場合は、第 4 引数に `{ override: true }` を渡さない限り `console.warn`
+で警告する——コア部品を静かに覆い隠してしまうのは、うっかり失うありがちな原因だからである。
+
+`implement` と `implementWc` はどちらも、環境を問わず常に `def.propsSchema.safeParse` をノードの props に対して
+実行する。そのため `.default()` が付いた値を Spec 側が省略していても、後述の診断が有効かどうかに関わらず
+必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。環境によって
+切り替わるのは**診断だけ**(不一致時の `console.warn`)であり、既定では `NODE_ENV=production` のビルド以外で
+オン、その内側でオフになる——`{ validate: false }` / `{ validate: true }` を渡せば環境に関わらずどちらの向きにも
+上書きできる。`process.env.NODE_ENV` を実際には設定しないビルド(`--define:process.env.NODE_ENV='"production"'`
+を渡さない素の esbuild 呼び出しや、本番モードに切り替えないバンドラ設定)では、この診断はオンのままになる——
+これは React 自身のバンドル済みビルドと同じ慣習であり、稀にしか起きない不一致経路で余分な `console.warn` が
+呼ばれるだけなので、既定として安全側に倒している。型なしの `ImplRegistry.register` や、`registerPart` に生の
+`PartBuilder` を渡す登録も、静的な `ComponentDefinition` を持たない部品(例:承認ドラフトからアーティファクト
+ごとにスキーマが生成される昇格済み部品——`apps/sample-api/src/intents/promoted.ts` を参照)のためにそのまま
+動作し続ける。
 
 検証: `npx @kohaku-ui/cli component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
 
@@ -642,7 +762,7 @@ const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
   - `ComposePolicy.refConstraint: "validate"` は生成スキーマの `data.$ref` をプレーンな文字列に緩和し(修復再試行間だけでなく compose 間でも再利用可能な intent 非依存の文法になる)、代わりに生成後に明示的に集合所属を検証する(`DATA_REF_UNRESOLVED`。既存の修復ループに送り返す)。
   - 実際のモデルに対して `KOHAKU_LLM_PROVIDER=claude KOHAKU_LLM_MODEL=<自分のモデル> ANTHROPIC_API_KEY=<自分のキー> pnpm --filter @kohaku-ui-sample/api run measure-grammar-latency`(`apps/sample-api/scripts/measure-grammar-latency.ts`)を実行してから、自分のデプロイでどちらの逃げ道を有効にする価値があるか決める — このスクリプトは実際の LLM を呼ぶため、意図的に `pnpm test` から除外されている。すべての行が `provenance.cache: "bypass"` になることを期待している — これは比較軸ではなく、LLM 経路が実際に走ったことの確認である。有効な API キーが無いと `claude` プロバイダは起動時に警告を出すだけで決定的フォールバックへ落ちるため、キー未設定はエラーにならず「`tier` 列が `L1` ではなく `L0`/フォールバックになった、明らかに速い実行」として現れる — レイテンシの数値を信じる前に必ず `tier` 列を確認すること。表の読み方(Anthropic の文法キャッシュは 24 時間有効なので、同一 intent の初回/2 回目の呼び出しでは 2 モードを区別できない)はスクリプト自身のヘッダコメントを参照し、トレードオフの全体は [design.ja.md#prompt-caching](design.ja.md#prompt-caching) を参照。
 - **監査**: 「なぜこの画面が出たか」は Admin の Lineage か `GET /api/kohaku/lineage` で specHash / intentHash を辿れます。
-- **`x-request-id` によるログ突合**: マウントされた kohaku ルートのすべての応答は `X-Request-Id` ヘッダを持つ(呼び出し側が送った `x-request-id` リクエストヘッダが存在し正しい形式ならそれをエコーし、なければ新規発番する)。同じ ID はすべてのエラーエンベロープの `error.requestId` にも現れ、`KohakuHostDeps.onError` にも渡されるので、サポートチケットに載るクライアント側の ID・サーバーログ・`onError` フックの記録が追加配線なしで一つの値で揃う。既存の相関 ID 規約がある場合は `KohakuHostDeps.requestId`(TS)/ `request_id`(Python)でこの解決を丸ごと上書きできる。
+- **`x-request-id` によるログ突合**: マウントされた kohaku ルートのすべての応答は `X-Request-Id` ヘッダを持つ(呼び出し側が送った `x-request-id` リクエストヘッダが存在し正しい形式ならそれをエコーし、なければ新規発番する)。同じ ID はすべてのエラーエンベロープの `error.requestId` にも現れ、`KohakuHostDeps.onError` にも渡されるので、サポートチケットに載るクライアント側の ID・サーバーログ・`onError` フックの記録が追加配線なしで一つの値で揃う。既存の相関 ID 規約がある場合は `KohakuHostDeps.requestId`(TS)/ `request_id`(Python)でこの解決を丸ごと上書きできる。同じ ID を `kohaku explain <requestId>` または admin-react の DevTools(§6「Kohaku DevTools と `kohaku explain`」)に渡せば、その compose が生んだ結果を最初から最後まで確認できる — ティア、キャッシュ、キャッシュキーの内訳、判断の流れ、すべての lineage イベント。
 - **`KOHAKU_DEBUG`(詳細な失敗ログ)**: `kohaku init` が生成するプロジェクトは `@kohaku-ui/host-core` の `createConsoleErrorReporter()` を `KohakuHostDeps.onError` と compose observer の `onError` の両方(生成される `app.ts`)に配線する。既定(`KOHAKU_DEBUG` 未設定。生成される `.env.example` を参照)では各失敗を 1 行の要約でログ出力するが、`KOHAKU_DEBUG=1` にすると原因の連鎖(`formatErrorChain` / `format_error_chain`。`Error.cause` / `__cause__` を辿る)とスタックトレースを代わりに出力する。`apps/sample-api` と `python/examples/sales-api` も同じ環境変数を自前のログに配線しており、既定(未設定)の出力は変わらない。`KOHAKU_DEBUG` の有無によらず常に得られるシグナルとして、`observer.onError` の毎回のフォールバック呼び出しに乗る `ComposeErrorContext.failure`(`"transient" | "invalid" | "budget" | "aborted"`)があり、`reason` を文字列解析しなくても provider 障害と検証失敗をプログラムから判別できる — 下のトラブルシューティングの行も参照。
 - **Trace context / OTel**: `host-rest` は受信した `traceparent` / `tracestate` リクエストヘッダ(W3C Trace Context)を、`host-mcp-apps` はツール呼び出しの `_meta.traceparent` / `_meta.tracestate`(MCP 2026-07-28 / SEP-414)を読み取り、両方とも `ComposeOptions.traceContext` へ充填する。`correlationId` と同じ経路で `ComposeTrace` / `ComposeErrorContext` に乗る — 純粋な追加で、呼び出し側がどちらのヘッダも送らなければ no-op。`@kohaku-ui/otel` の `createOtelComposeObserver()` は `ComposeObserver` の呼び出しをスパン(`kohaku.compose`。`gen_ai.*`/`kohaku.*` 属性 — 詳細は [design.ja.md#trace-context-otel](design.ja.md#trace-context-otel))へ変換し、その `traceContext` をスパンの親として復元するので、compose は常に新しいルートトレースを開始するのではなく呼び出し側自身のトレースの子として記録される。**kohaku 自体は exporter も SDK 初期化も一切出荷しない** — それは各自のプロセス自身の責務のまま(プロセス起動時に一度、compose が動く前に登録する通常の `@opentelemetry/sdk-node` / `@opentelemetry/sdk-trace-node` セットアップ)。最小構成の配線例:
 
@@ -724,3 +844,19 @@ export function buildTheme(mode: "light" | "dark"): ThemeTokens {
 ```
 
 これを `RendererProvider` の `theme`(React)/ `surface.theme`(Web Components)に渡します。色トークン語彙は `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`、および非推奨 alias `color.danger`→negative・予約 `color.focus`→primary です。`color.scrim`(モーダルダイアログの背景幕)も他のトークンと同じく light/dark の実体を持ちますが、sandbox はダイアログ背景幕を描画しないため *L2 生成*語彙(モデルに見せる語彙)には含まれません(既定値の全一覧は design.md §7.2)。独自トークン(語彙外のキー)も自由に足せます(`ThemeTokens` は開いた型)。非色トークン(`font.family.*` / `font.size.*` / `space.*` / `radius.*` / `shadow.*` / `motion.*`)も語彙に含まれ、単位付きの CSS 文字列を取ります(角ばった印象のブランドなら `"radius.md": "4px"` のように指定)。両方の全一覧・既定値・dark の AA 方針は設計書 §7.2 を参照してください。非色トークンは組み込み部品にも反映されます(例: `"radius.md": "2px"` にするとすべてのボタンと入力欄が角ばります)。`L2 SANDBOXED` バッジは `SandboxFrame` の `badge="hidden"` / `context.sandbox.badge` で非表示にできますが、他の方法でサンドボックス化を示せる画面でのみ非表示にしてください。またブランドテーマが `color.warning.surface` / `color.warning.text`(ピルの背景・文字色のペア)を上書きしている場合は、この組み合わせが現状バッジのみで使われている点を踏まえ、両者の可読性を保つようにしてください。
+
+## 10. 静的プレイグラウンド
+
+`apps/playground` は、sample-web と同じ UI(`App`。フォークなし)をサーバーレスでビルドし、sample-api 自身のホストをブラウザタブの中でそのまま動かすものです。fetch shim が同一オリジンの `/api/*` 呼び出しをすべて捕まえて、そのタブの中で動く `app.fetch()` に直接渡します。バックエンドはインメモリの `StoragePort`、WebCrypto ベースの `AuthzPort`(`@kohaku-ui/authz-hmac` 本体は `node:crypto` を呼ぶためブラウザでは使えず、別実装にしています。design.md の決定 #57 を参照)、そして実モデルを呼ぶ代わりに記録済みの応答を返す再生専用 LLM(`@kohaku-ui/evals/replay` の `ReplayLlm`)です。ここで行った操作はサーバーに一切届かず、BYO の API キーを求められることも使うこともありません。
+
+現時点で実際に最後まで動くのは、Dashboard の L0 固定 Spec の 4 ビュー(四半期サマリー・KPI 概要・売上明細・目標達成度)だけです。これらは一切 LLM を呼ばないためです。ページ上部のツールバーには `apps/playground/src/scenarios.ts` が定義する L1 / NL / L2 / 昇格 / 固定化のシナリオも並びますが、`apps/playground/fixtures/` に対応するファイルが無い間はすべて無効化され「記録待ち」と表示されます。それでも(例えば Chat で例文ボタンに無い自由入力の質問を送るなど)実際に compose しても画面が壊れることはありません。composer 自身の決定的フォールバックが必ず Spec を返すためですが、ツールバーには「この結果は実生成ではなくフォールバックです」という一行の通知が出ます。
+
+これらの fixture を記録するには、オフラインで一度だけ実際の LLM が必要です(ブラウザから記録することはありません)。`apps/playground/scripts/record-fixtures.ts` はプレイグラウンドと全く同じホスト(同じ seed、同じ固定時刻)を組み立て、`@kohaku-ui/evals` の `FixtureLlm` の record モードを `createLlmFromEnv()` が解決するプロバイダの前段に置いて実行します。例:
+
+```bash
+KOHAKU_LLM_PROVIDER=ollama KOHAKU_LLM_MODEL=gemma4:e4b pnpm --filter @kohaku-ui-sample/playground run record-fixtures
+```
+
+これで `apps/playground/fixtures/<シナリオ id>.json` が書き出されます。プロンプトに関わるファイル(`apps/sample-api/src/design-system.ts`、`apps/sample-api/src/fewshot.ts`、`intents/{catalog,fixed-specs}.ts`、`ports/semantic-port.ts`、あるいは `@kohaku-ui/composer` 自身のプロンプト構築)を変更したときは、影響を受けうるシナリオぶんを録り直してください。古い fixture は派手に失敗するわけではなく、今日のプロンプトに対して昨日の答えを黙って返し続けるだけで、両者が完全にずれた場合にようやく未記録時と同じフォールバックに落ちます。`pnpm vitest run --project playground-drift` は実際に存在する fixture だけを対象に、新しいホストに対して(実 LLM は呼ばず)再生し、記録時に期待した結果が今も出るかを検査します。
+
+プレイグラウンド自体をローカルで動かすには `pnpm --filter @kohaku-ui-sample/playground run dev`(Vite の dev サーバー)、静的サイトの生成は `pnpm --filter @kohaku-ui-sample/playground run build`(Node 専用モジュールが一つでも紛れ込んでいるとビルド自体が失敗します。そのパッケージの `vite/forbid-node-builtins.ts` 参照)。まだどこにも公開はしていません。公開用の GitHub Pages ワークフローは手動の `workflow_dispatch` としてのみ存在し、有効化はまだしていません。

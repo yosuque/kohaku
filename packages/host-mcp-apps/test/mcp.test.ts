@@ -522,6 +522,44 @@ describe("kohaku_event payload / intent.params nesting depth cap (JsonObjectSche
     });
     expect(result.isError).toBeFalsy();
   });
+
+  // Depths from the original recursion-DoS report (spec-core's JsonObjectSchema previously checked depth in a
+  // superRefine that only ran *after* zod had already recursed unbounded through the value -- a payload this
+  // deep overflowed the stack with an uncaught RangeError instead of failing schema validation). The MCP SDK
+  // calls the tool's zod inputSchema itself before ever invoking our registerTool callback, so this exercises
+  // a different call path than host-rest's parseBody-based tests (packages/host-rest/test/json-depth.test.ts)
+  // even though both ultimately rely on the same spec-core fix.
+  it.each([5000, 100_000])(
+    "kohaku_event: a payload nested %i levels deep is a clean isError result, not a thrown/uncaught RangeError",
+    async (depth) => {
+      const client = await connect();
+      const result = await client.callTool({
+        name: "kohaku_event",
+        arguments: {
+          intent: { canonical: "sales.trend", params: {} },
+          on: "c.pointClick",
+          payload: nestedObject(depth),
+        },
+      });
+      expect(result.isError).toBe(true);
+    },
+  );
+
+  it.each([5000, 100_000])(
+    "kohaku_action: a payload nested %i levels deep is a clean isError result, not a thrown/uncaught RangeError",
+    async (depth) => {
+      const client = await connect();
+      const result = await client.callTool({
+        name: "kohaku_action",
+        arguments: {
+          action: "widget.submit",
+          payload: nestedObject(depth),
+          capability: "cap",
+        },
+      });
+      expect(result.isError).toBe(true);
+    },
+  );
 });
 
 describe("correlation id: the tool call's JSON-RPC request id reaches ComposeTrace.correlationId", () => {
@@ -578,12 +616,15 @@ function captureToolHandlers(server: McpServer): Record<string, CapturedToolHand
 }
 
 /** Minimal synthetic `ServerContext` for directly invoking a captured handler (only the fields requestContextOf reads). */
-function fakeServerContext(mcpReq: { signal: AbortSignal; id: string }): Record<string, unknown> {
-  return { mcpReq };
+function fakeServerContext(
+  mcpReq: { signal: AbortSignal; id: string },
+  sessionId?: string,
+): Record<string, unknown> {
+  return { mcpReq, ...(sessionId != null ? { sessionId } : {}) };
 }
 
 describe("requestContextOf: reads the per-call abort signal and JSON-RPC id from ServerContext.mcpReq", () => {
-  it("the compose correlation id comes from ctx.mcpReq.id", async () => {
+  it("the compose correlation id is mcp:<jsonrpc id> when the transport has no session id (e.g. stdio)", async () => {
     let correlationId: string | undefined;
     const server = new McpServer({ name: "kohaku-mcpreq-id", version: "0.1.0" });
     const handlers = captureToolHandlers(server);
@@ -605,7 +646,32 @@ describe("requestContextOf: reads the per-call abort signal and JSON-RPC id from
       { question: "Monthly revenue trend" },
       fakeServerContext({ signal: new AbortController().signal, id: "v2-req-1" }),
     );
-    expect(correlationId).toBe("v2-req-1");
+    expect(correlationId).toBe("mcp:v2-req-1");
+  });
+
+  it("the compose correlation id is mcp:<sessionId>:<jsonrpc id> when the transport carries a session id", async () => {
+    let correlationId: string | undefined;
+    const server = new McpServer({ name: "kohaku-mcpreq-sessionid", version: "0.1.0" });
+    const handlers = captureToolHandlers(server);
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: makeComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        async onComposed(_spec, trace) {
+          correlationId = trace.correlationId;
+        },
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+
+    await handlers["kohaku_compose"]!(
+      { question: "Monthly revenue trend" },
+      fakeServerContext({ signal: new AbortController().signal, id: "v2-req-1" }, "sess-abc"),
+    );
+    expect(correlationId).toBe("mcp:sess-abc:v2-req-1");
   });
 
   it("kohaku_action's synchronous aborted check reads ctx.mcpReq.signal", async () => {
@@ -877,7 +943,8 @@ describe("MCP 2026-07-28: correlation id stays the per-call request id even when
     expect(first.isError).toBeFalsy();
     expect(second.isError).toBeFalsy();
     expect(sentRequestIds).toHaveLength(2);
-    expect(correlationIds).toEqual(sentRequestIds);
+    // InMemoryTransport carries no session id (stdio-shaped), so the format is mcp:<jsonrpc id>.
+    expect(correlationIds).toEqual(sentRequestIds.map((id) => `mcp:${id}`));
     // Same trace, two calls -> different correlation ids (never the shared trace-id).
     expect(correlationIds[0]).not.toBe(correlationIds[1]);
     expect(correlationIds[0]).not.toBe("4bf92f3577b34da6a3ce929d0e0e4736");

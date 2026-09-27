@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import uuid
+import warnings
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -159,7 +162,7 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
-def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal) -> str:
+def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]) -> str:
     """The bucket-key "principal" component for a rate-limit check (this profile has no tenant -- see
     `McpHostDeps.rate_limiter`'s doc comment, and `PolicyRateLimiterTakeParams.tenant` is always left
     `None` here). Every unauthenticated call resolves to the same constant fallback principal
@@ -167,46 +170,121 @@ def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal) -> str:
     case would put every anonymous caller into one shared bucket -- exactly the failure a per-caller
     budget exists to prevent. Prefers the resolved principal's id only when `resolve_principal` is wired
     (a genuine per-call identity, which can actually differ between callers); otherwise falls back to the
-    literal `"anonymous"`.
-
-    Port note (a documented gap, not a design choice): TS's counterpart (`mcpRateLimitKey`,
-    server.ts) falls back one step further first, to the MCP transport's `ServerContext.sessionId` (one
-    per client connection on Streamable HTTP) -- Python has no equivalent here. The installed `mcp` SDK's
-    `ServerRequestContext` (what every handler in this module actually receives) exposes no public
-    session-id accessor: only the richer `Context` class has a `session_id` property, and
-    `ServerRunner` does not construct that class for handlers (its own doc comment says so). Reaching
-    into `ctx.session`'s private `_connection` attribute to recover one was rejected, the same call this
-    module already made for `_correlation_id_of`/`_trace_context_of` (neither carries a session identity
-    either -- see their doc comments). A Streamable HTTP deployment with multiple concurrent anonymous
-    sessions therefore shares a single "anonymous" bucket in Python, unlike TS.
+    per-connection opaque id `_session_correlation_prefix` maintains (below) -- unlike TS's
+    `ServerContext.sessionId`, this is never absent (even stdio gets one stable prefix for its
+    connection's lifetime), so this port has no further "anonymous" fallback beneath it: a shared bucket
+    across *all* anonymous callers is now only possible in the degraded case
+    `_session_correlation_prefix` itself documents (no per-connection anchor reachable at all), which
+    already falls back to a collision-free-but-ungrouped id there.
     """
-    return principal.id if deps.resolve_principal is not None else "anonymous"
+    return principal.id if deps.resolve_principal is not None else _session_correlation_prefix(ctx)
+
+
+# Per-connection opaque id (uuid4 hex), generated once per underlying transport connection and cached for
+# its lifetime. Keyed by object identity via a WeakKeyDictionary, so an entry is dropped automatically once
+# its key object is garbage-collected (the connection ends) rather than leaking indefinitely -- there is no
+# explicit "connection closed" hook to unwire this from. Module-level and process-wide (not per-`deps` /
+# per-attach-call): the key object is unique per connection regardless of which attach call handled it, so a
+# single shared table keyed by that identity is correct and simpler than threading one through every call
+# site.
+#
+# Keyed by `ctx.session._connection`, NOT by `ctx.session` itself: `ServerRequestContext.session` (a
+# `ServerSession`) is a *per-request* wrapper -- the installed `mcp` SDK's `ServerRunner._make_context`
+# constructs a brand new `ServerSession` for every inbound message ("Built once per inbound request", per
+# its own docstring), verified empirically (two calls on the same client connection produced two `ctx.session`
+# objects that compared unequal by identity). Keying by that object would give every call within one
+# connection its own random id -- collision-free, but violating "the same session keeps the same prefix".
+# The object that IS stable for the connection's whole lifetime is the `Connection` each per-request
+# `ServerSession` wraps (`ServerRunner._make_context` passes the same `self.connection` into every
+# `ServerSession(...)` it builds) -- but `ServerSession` exposes no public accessor for it (every property
+# delegates to `self._connection.*` internally; none returns the object itself or a stable id derived from
+# it). Reaching into the private `_connection` attribute is the only way to obtain a genuinely per-connection
+# anchor at all; done defensively via `getattr` below. If a future SDK version renames or removes it, this
+# degrades rather than fails: see `_session_correlation_prefix`'s doc comment.
+_connection_correlation_ids: weakref.WeakKeyDictionary[Any, str] = weakref.WeakKeyDictionary()
+
+# Set the first time `_session_correlation_prefix` cannot find a per-connection anchor, so the degraded-mode
+# warning below fires at most once per process -- not once per call, which on a busy server would otherwise
+# spam a warning (or a log) on every single request.
+_warned_connection_anchor_unavailable = False
+
+
+def _session_correlation_prefix(ctx: ServerRequestContext[Any]) -> str:
+    """The stable opaque id for this call's transport connection (see `_connection_correlation_ids` above).
+
+    Degrades rather than raises when no per-connection anchor object is reachable at all (`session` is
+    unavailable, or the installed `mcp` SDK's `ServerSession` no longer exposes `_connection`): returns a
+    fresh, never-reused uuid4 hex for this one request instead of the (unreachable) per-connection id, and
+    emits a `warnings.warn` the first time this happens in the process (see `_warned_connection_anchor_unavailable`
+    above -- at most once, not once per request). This still guarantees the one thing that actually matters for
+    correctness -- concurrent sessions' correlation ids never collide -- at the cost of the one thing that
+    doesn't affect correctness -- grouping every call from the *same* session under the same prefix, which is
+    lost in this mode. A previous revision raised `RuntimeError` here instead; that was reverted because a
+    future `mcp` SDK release renaming or removing the private `_connection` attribute would then fail every
+    single MCP call in production, which is a far worse outcome than degraded (but still collision-free)
+    correlation ids.
+    """
+    session = ctx.session
+    connection = getattr(session, "_connection", None) if session is not None else None
+    if connection is None:
+        global _warned_connection_anchor_unavailable
+        if not _warned_connection_anchor_unavailable:
+            _warned_connection_anchor_unavailable = True
+            warnings.warn(
+                "kohaku.host_mcp: no per-connection anchor is reachable from ServerRequestContext (session "
+                "is unavailable, or the installed mcp SDK's ServerSession no longer exposes _connection); "
+                "correlation ids will still never collide across sessions, but calls within the same session "
+                "will no longer share a common id prefix (see _session_correlation_prefix's doc comment)",
+                stacklevel=2,
+            )
+        return uuid.uuid4().hex
+    correlation_id = _connection_correlation_ids.get(connection)
+    if correlation_id is None:
+        correlation_id = uuid.uuid4().hex
+        _connection_correlation_ids[connection] = correlation_id
+    return correlation_id
 
 
 def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
-    """The per-call correlation id: always the JSON-RPC request id of this tool call, never derived from
-    `_meta.traceparent`. Mirrors TS host-mcp-apps' `requestContextOf().requestId` (used directly as the
-    correlation id there too, after the removal of the former `correlationIdOf` helper — see that module's
-    history). A W3C trace-id is shared by an entire trace, so deriving the correlation id from it would give
-    every tool call in one conversation the SAME id, making it impossible to tell which call a reported
-    failure belongs to; the JSON-RPC request id is unique per call. Trace correlation (linking this call's
-    OTel span to the caller's own trace) flows separately, only through `_trace_context_of` below /
-    McpErrorInfo.trace_context. Port note: see kohaku.host_core.trace_context's module docstring for why this
-    has no ComposeOptions sink yet, so this id is used only for this profile's own failure-path observability
-    hook (McpErrorInfo.correlation_id below). Fail-open: None when this call's `ctx.request_id` is unset (a
-    notification has none; every request this profile handles does).
+    """The per-call correlation id: `mcp:<sessionId>:<jsonrpc id>`, where `<sessionId>` is a stable opaque id
+    (uuid4 hex) generated once per transport connection (see `_session_correlation_prefix` above) -- never
+    derived from `_meta.traceparent`. Mirrors the shape of TS host-mcp-apps' `mcpCorrelationId(extra)` (see
+    that module's server.ts), though not byte-for-byte: TS reads a real `ServerContext.sessionId` (a public
+    field on `BaseContext`, absent for a session-less transport such as stdio, in which case TS omits the
+    segment entirely: `mcp:<jsonrpc id>`), while this port's `mcp` SDK exposes no equivalent public transport
+    session id to a request handler at all (see `_session_correlation_prefix`'s doc comment for exactly what
+    is and is not reachable). This port instead always includes a generated per-connection id -- covering
+    every transport uniformly, so even a single long-lived stdio connection gets one stable prefix for its
+    lifetime rather than omitting the segment -- rather than trying to detect "is this a session-less
+    transport" and varying the format. Previously (pre-review-follow-up) this always returned the bare
+    `mcp:<jsonrpc id>` form, which let two concurrent Streamable HTTP sessions whose JSON-RPC id counters both
+    started at 1 collide onto the same correlation id.
+
+    A W3C trace-id is shared by an entire trace, so deriving the correlation id from it would give every tool
+    call in one conversation the SAME id, making it impossible to tell which call a reported failure belongs
+    to; the JSON-RPC request id is unique per call. Trace correlation (linking this call's OTel span to the
+    caller's own trace) flows separately, only through `_trace_context_of` below / McpErrorInfo.trace_context.
+
+    This id is now also threaded into ComposeOptions.correlation_id (via `_compose_with_fixation`'s
+    `correlation_id` parameter), not just this profile's own failure-path observability hook
+    (McpErrorInfo.correlation_id below) -- see kohaku.host_core.trace_context's module docstring for the
+    still-missing traceContext half of this parity gap. Fail-open: None when this call's `ctx.request_id` is
+    unset (a notification has none; every request this profile handles does).
     """
-    return str(ctx.request_id) if ctx.request_id is not None else None
+    if ctx.request_id is None:
+        return None
+    return f"mcp:{_session_correlation_prefix(ctx)}:{ctx.request_id}"
 
 
 def _trace_context_of(ctx: ServerRequestContext[Any]) -> TraceContext | None:
     """The `_meta.traceparent` (+ `_meta.tracestate`, when present) as a TraceContext (kohaku.host_core's
     shared parse_trace_context, also used by kohaku.host_rest's `traceparent` request-header counterpart).
     `ctx.meta` is a `RequestParamsMeta` TypedDict (dict access, not attribute access — unlike the mcp SDK's
-    pre-2.x `meta` object). Same parity-gap pointer as `_correlation_id_of` above (see
-    kohaku.host_core.trace_context's module docstring): used only for this profile's own failure-path
-    observability hook (McpErrorInfo.trace_context). Fail-open: None on a missing/malformed traceparent, or no
-    `_meta` on this call."""
+    pre-2.x `meta` object). Unlike `_correlation_id_of` above (which now also reaches
+    ComposeOptions.correlation_id), this trace context still has no ComposeOptions sink -- see
+    kohaku.host_core.trace_context's module docstring's still-open half of this parity gap. Used only for
+    this profile's own failure-path observability hook (McpErrorInfo.trace_context). Fail-open: None on a
+    missing/malformed traceparent, or no `_meta` on this call."""
     meta = ctx.meta
     if meta is None:
         return None
@@ -325,7 +403,9 @@ def attach_kohaku_to_mcp_server(
         )
 
     async def _check_mcp_rate_limit(
-        principal: Principal, route_class: Literal["compose", "action", "resolve"]
+        principal: Principal,
+        route_class: Literal["compose", "action", "resolve"],
+        ctx: ServerRequestContext[Any],
     ) -> mcp_types.CallToolResult | None:
         """Checks `deps.rate_limiter` (host_core's `PolicyRateLimiter`, typically
         `PolicyRuntime.rate_limiter`) before a tool handler proceeds with its actual work. Returns `None`
@@ -334,13 +414,15 @@ def attach_kohaku_to_mcp_server(
         `check_rate_limit` -- called inline, as the first statement after resolving `principal`, at the
         top of each of the 6 tool handlers below, since this profile has no per-path middleware layer to
         mount a single check on. Reuses the principal each handler already resolved via
-        `_current_principal(ctx)` rather than invoking `resolve_principal` a second time.
+        `_current_principal(ctx)` rather than invoking `resolve_principal` a second time. `ctx` is needed
+        only to resolve `_mcp_rate_limit_key`'s per-connection fallback (`_session_correlation_prefix`)
+        when no real principal is wired.
         """
         if deps.rate_limiter is None:
             return None
         result = await deps.rate_limiter.take(
             PolicyRateLimiterTakeParams(
-                principal=_mcp_rate_limit_key(deps, principal), routeClass=route_class
+                principal=_mcp_rate_limit_key(deps, principal, ctx), routeClass=route_class
             )
         )
         return None if result.allow else _rate_limit_tool_error(result.retryAfterMs)
@@ -373,9 +455,12 @@ def attach_kohaku_to_mcp_server(
             return _tool_error(message)
 
     async def _compose_and_package(
-        source: _ComposeSource, locale: str | None, principal: Principal
+        source: _ComposeSource,
+        locale: str | None,
+        principal: Principal,
+        correlation_id: str | None = None,
     ) -> mcp_types.CallToolResult:
-        result = await _compose_with_fixation(source, deps, locale, principal)
+        result = await _compose_with_fixation(source, deps, locale, principal, correlation_id)
         try:
             allowed = await _allowed_actions()
         except Exception as exc:  # noqa: BLE001 — reported, then fail-closed for writes (delivery proceeds)
@@ -449,11 +534,14 @@ def attach_kohaku_to_mcp_server(
     ) -> mcp_types.CallToolResult:
         async def _run() -> mcp_types.CallToolResult:
             principal = await _current_principal(ctx)
-            rate_limited = await _check_mcp_rate_limit(principal, "compose")
+            rate_limited = await _check_mcp_rate_limit(principal, "compose", ctx)
             if rate_limited is not None:
                 return rate_limited
             return await _compose_and_package(
-                _NlSource(text=_arg_str(args, "question")), _locale_of(args), principal
+                _NlSource(text=_arg_str(args, "question")),
+                _locale_of(args),
+                principal,
+                _correlation_id_of(ctx),
             )
 
         return await _safe_tool(f"{prefix}_compose", ctx, _run)
@@ -495,7 +583,7 @@ def attach_kohaku_to_mcp_server(
         ) -> mcp_types.CallToolResult:
             async def _run() -> mcp_types.CallToolResult:
                 principal = await _current_principal(ctx)
-                rate_limited = await _check_mcp_rate_limit(principal, "compose")
+                rate_limited = await _check_mcp_rate_limit(principal, "compose", ctx)
                 if rate_limited is not None:
                     return rate_limited
                 spec, html = await _build_snapshot(
@@ -504,6 +592,7 @@ def attach_kohaku_to_mcp_server(
                     options,
                     principal,
                     _locale_of(args),
+                    _correlation_id_of(ctx),
                 )
                 # The file name is derived from the intent hash (identical displays coalesce into the same file and do not collide).
                 locator = await snapshot_writer(f"snapshot-{spec.intent.hash}.html", html)
@@ -575,7 +664,7 @@ def attach_kohaku_to_mcp_server(
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
-            rate_limited = await _check_mcp_rate_limit(principal, "resolve")
+            rate_limited = await _check_mcp_rate_limit(principal, "resolve", ctx)
             if rate_limited is not None:
                 return rate_limited
             # Server-side paging/sorting: verify the capability against base (reserved params removed) and merge
@@ -636,7 +725,7 @@ def attach_kohaku_to_mcp_server(
     ) -> mcp_types.CallToolResult:
         async def _run() -> mcp_types.CallToolResult:
             principal = await _current_principal(ctx)
-            rate_limited = await _check_mcp_rate_limit(principal, "compose")
+            rate_limited = await _check_mcp_rate_limit(principal, "compose", ctx)
             if rate_limited is not None:
                 return rate_limited
             intent_arg = cast(JsonObject, args["intent"])
@@ -696,7 +785,9 @@ def attach_kohaku_to_mcp_server(
             # latter would resolve it *again* as a directly-specified Intent on the way into
             # `_compose_with_fixation`, calling `SemanticPort.validate_intent` a second time for one request
             # (see `_CanonicalSource`'s doc comment in types.py).
-            return await _compose_and_package(_CanonicalSource(intent=normalized), locale, principal)
+            return await _compose_and_package(
+                _CanonicalSource(intent=normalized), locale, principal, _correlation_id_of(ctx)
+            )
 
         return await _safe_tool(f"{prefix}_event", ctx, _run)
 
@@ -736,7 +827,7 @@ def attach_kohaku_to_mcp_server(
             # Resolved once for this call (see McpHostDeps.resolve_principal's doc comment) — used only as
             # the fallback below when the AuthzPort's verify does not itself return a principal.
             principal = await _current_principal(ctx)
-            rate_limited = await _check_mcp_rate_limit(principal, "action")
+            rate_limited = await _check_mcp_rate_limit(principal, "action", ctx)
             if rate_limited is not None:
                 return rate_limited
             action = _arg_str(args, "action")
@@ -968,6 +1059,7 @@ async def _compose_with_fixation(
     deps: McpHostDeps,
     locale: str | None = None,
     principal: Principal | None = None,
+    correlation_id: str | None = None,
 ) -> ComposeResult:
     # One session per tool call: the caller-provided locale rides SessionContext.locale so NL
     # normalization, the fixation gate, and the compose policy (ComposeContext.policyFor) all see it.
@@ -1000,8 +1092,15 @@ async def _compose_with_fixation(
     # Delegates the fixation shortcut -> staleness check -> self-heal -> normal-compose-fallback sequence to
     # kohaku.host_core (shared with kohaku.host_rest). The MCP profile has a single ComposeContext, so it is
     # passed as both the materialize and (by omission, defaulting to materialize) the normal-compose context.
+    # correlation_id (the caller's _correlation_id_of(ctx), when given) is forwarded to the normal-compose
+    # fallback as ComposeOptions.correlation_id (see compose_with_fixation's own doc comment) -- the fixation
+    # shortcut itself never calls compose(), so a fixation hit has no use for it.
     return await _host_core_compose_with_fixation(
-        intent, session, ComposeFixationContext(materialize=deps.compose), _fixation_host(deps)
+        intent,
+        session,
+        ComposeFixationContext(materialize=deps.compose),
+        _fixation_host(deps),
+        correlation_id=correlation_id,
     )
 
 
@@ -1061,7 +1160,9 @@ async def _audit_compose(deps: McpHostDeps, result: ComposeResult, endpoint: str
     async def _record() -> None:
         if recorder is not None:
             await recorder.composed(spec=result.spec, trace=result.trace, surface="mcp-app")
-            await _host_core_record_view_fallback(recorder, result.spec, surface="mcp-app")
+            await _host_core_record_view_fallback(
+                recorder, result.spec, surface="mcp-app", correlation_id=result.trace.correlationId
+            )
         elif on_composed is not None:
             await on_composed(result.spec, result.trace)
 
@@ -1102,11 +1203,12 @@ async def _build_snapshot(
     options: AttachOptions,
     principal: Principal,
     locale: str | None = None,
+    correlation_id: str | None = None,
 ) -> tuple[UISpec, str]:
     """Assemble the body of the self-contained snapshot HTML. Records audit symmetrically with the compose
     surface, preresolves all bind variants of each data in the Spec via domain.invoke, and embeds them into #kohaku-snapshot.
     """
-    result = await _compose_with_fixation(source, deps, locale, principal)
+    result = await _compose_with_fixation(source, deps, locale, principal, correlation_id)
     # The audit record is fail-open symmetrically with the existing compose (see _audit_compose's doc comment).
     await _audit_compose(deps, result, "render_snapshot")
     # HTML assembly is shared with #6 (legacy UIResource co-emission) via _snapshot_html_for (bounded
@@ -1230,10 +1332,13 @@ def _make_intent_handler(
         [str, ServerRequestContext[Any], Callable[[], Awaitable[mcp_types.CallToolResult]]],
         Awaitable[mcp_types.CallToolResult],
     ],
-    compose_and_package: Callable[[_ComposeSource, str | None, Principal], Awaitable[mcp_types.CallToolResult]],
+    compose_and_package: Callable[
+        [_ComposeSource, str | None, Principal, str | None], Awaitable[mcp_types.CallToolResult]
+    ],
     current_principal: Callable[[ServerRequestContext[Any]], Awaitable[Principal]],
     check_rate_limit: Callable[
-        [Principal, Literal["compose", "action", "resolve"]], Awaitable[mcp_types.CallToolResult | None]
+        [Principal, Literal["compose", "action", "resolve"], ServerRequestContext[Any]],
+        Awaitable[mcp_types.CallToolResult | None],
     ],
 ) -> Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]:
     """Build the handler for an intent tool (avoids late binding of the loop variable tool)."""
@@ -1246,10 +1351,12 @@ def _make_intent_handler(
 
         async def _run() -> mcp_types.CallToolResult:
             principal = await current_principal(ctx)
-            rate_limited = await check_rate_limit(principal, "compose")
+            rate_limited = await check_rate_limit(principal, "compose", ctx)
             if rate_limited is not None:
                 return rate_limited
-            return await compose_and_package(_IntentSource(intent=tool.to_intent(params)), locale, principal)
+            return await compose_and_package(
+                _IntentSource(intent=tool.to_intent(params)), locale, principal, _correlation_id_of(ctx)
+            )
 
         return await safe_tool(tool.name, ctx, _run)
 

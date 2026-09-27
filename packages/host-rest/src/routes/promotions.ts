@@ -11,6 +11,7 @@ import {
   parseBody,
   type RouteContext,
   reportHostError,
+  requestBodyTooDeep,
   requestIdOf,
   resolveTenant,
   tenantScope,
@@ -314,6 +315,11 @@ export function registerPromotionRoutes(app: Hono, ctx: RouteContext): void {
   app.post("/promotions/:artifactId/actions", (c) =>
     promotionTransition(c, "promotion.act", async ({ promotions, artifactId, principal, scope }) => {
       const raw = (await c.req.json().catch(() => null)) as { action?: unknown } | null;
+      // Checked before PromotionActionSchema (or anything else) touches `raw` -- see requestBodyTooDeep's
+      // doc comment in shared.ts (this route reads the body directly rather than through parseBody).
+      if (requestBodyTooDeep(raw)) {
+        return c.json(errorBody("BAD_REQUEST", "request body nesting exceeds the maximum depth"), 400);
+      }
       const parsed = PromotionActionSchema.safeParse(raw?.action);
       if (!parsed.success) return c.json(errorBody("BAD_REQUEST", "action.kind is invalid"), 400);
       const extraKind = extraGovernanceKindFor(parsed.data.kind);

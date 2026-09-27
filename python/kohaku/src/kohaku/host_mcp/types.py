@@ -92,6 +92,7 @@ class ViewRecorderProtocol(Protocol):
         surface: str,
         session_id: str | None = ...,
         tenant: str | None = ...,
+        correlation_id: str | None = ...,
     ) -> None: ...
 
 
@@ -200,13 +201,10 @@ class McpHostDeps:
 
     The bucket key's "principal" component is the resolved principal's id only when `resolve_principal`
     is wired (a real per-caller identity); otherwise (the unauthenticated demo path, where every call
-    resolves to the same constant fallback principal) it falls back to the literal string "anonymous" --
-    unlike the TS port, this never falls back to a per-connection session id first: the installed `mcp`
-    SDK's `ServerRequestContext` exposes no public accessor for one (only the richer `Context` class,
-    which `ServerRunner` does not actually construct for handlers, has `session_id`; reaching into
-    `ctx.session`'s private connection attribute was rejected, matching this codebase's existing
-    `_correlation_id_of`/`_trace_context_of` precedent of not carrying a session identity at all) -- a
-    tracked, language-specific gap (not a design choice), see `_mcp_rate_limit_key`'s doc comment.
+    resolves to the same constant fallback principal) it falls back to `_session_correlation_prefix`'s
+    stable per-connection opaque id (the same anchor U2's MCP correlation-id work established: keyed off
+    `ctx.session`'s private `_connection` attribute, degrading to a fresh collision-free-but-ungrouped id
+    when no per-connection anchor is reachable at all) -- see `_mcp_rate_limit_key`'s doc comment.
 
     On denial, returns a structured tool error whose `structured_content["error"]["code"]` is
     `"RATE_LIMITED"` (SPEC §6.1, REST-RL-001's MCP counterpart) with a `retryAfterMs` when the limiter

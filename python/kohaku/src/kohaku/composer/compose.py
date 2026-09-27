@@ -86,6 +86,14 @@ class ComposeOptions:
     policy decision (recompose's respect_prev_tier routing to L2, for instance) is never silently
     discarded by policyFor overwriting `policy` wholesale — see ComposeContext.with_policy_override,
     which applies this last."""
+    correlation_id: str | None = None
+    """An optional caller-supplied correlation id, threaded unchanged into ComposeTrace.correlationId (the
+    delivered result's trace, hit/miss/fallback/follower alike), so a degraded or failed delivery can be tied
+    back to the request that triggered it. host_rest passes its per-request X-Request-Id; host_mcp passes the
+    tool call's JSON-RPC request id. Purely additive and opt-in: omitting it leaves the field unset and does
+    not otherwise affect compose behavior. Port of TS compose.ts's `ComposeOptions.correlationId` (snake_case
+    here since, unlike ComposeTrace, ComposeOptions is a Python-only call-argument bag, never itself
+    serialized to JSON)."""
 
 
 @dataclass(frozen=True)
@@ -107,6 +115,8 @@ class _TraceBase:
     refs: list[str]
     dataVersion: str
     cacheKey: str
+    cacheKeyParts: CacheKeyParts
+    correlationId: str | None = None
 
 
 @dataclass(frozen=True)
@@ -263,15 +273,18 @@ async def prepare_compose(
     # 3. Cache key (generatorVersion is appended as a trailing component only when given; policyFingerprint
     # is a derived 7th component — see context.py's policy_fingerprint doc — likewise omitted (empty
     # string) whenever the policy touches none of its fingerprinted fields, keeping the key unchanged).
-    key = cache_key(
-        CacheKeyParts(
-            intentHash=intent.hash,
-            dataVersion=refs.dataVersion,
-            catalogFingerprint=ctx.catalog.fingerprint,
-            generatorVersion=policy.generatorVersion,
-            policyFingerprint=policy_fingerprint(policy, tier_llm_fingerprint_material(ctx)),
-        )
+    key_parts = CacheKeyParts(
+        intentHash=intent.hash,
+        dataVersion=refs.dataVersion,
+        catalogFingerprint=ctx.catalog.fingerprint,
+        # cache_key() below falls back to SPEC_VERSION itself when specVersion is omitted, but the
+        # *recorded* key_parts must carry the value it actually used -- otherwise `kohaku explain`/DevTools
+        # show a "-" placeholder for a component that in fact contributed a real segment to the cache key.
+        specVersion=SPEC_VERSION,
+        generatorVersion=policy.generatorVersion,
+        policyFingerprint=policy_fingerprint(policy, tier_llm_fingerprint_material(ctx)),
     )
+    key = cache_key(key_parts)
 
     trace_base = _TraceBase(
         input=to_trace_input(input),
@@ -279,6 +292,8 @@ async def prepare_compose(
         refs=refs.uris,
         dataVersion=refs.dataVersion,
         cacheKey=key,
+        cacheKeyParts=key_parts,
+        correlationId=opts.correlation_id,
     )
 
     # 4. Cache lookup (only when cacheMode==="default")
@@ -293,10 +308,12 @@ async def prepare_compose(
                 refs=refs.uris,
                 dataVersion=refs.dataVersion,
                 cacheKey=key,
+                cacheKeyParts=key_parts,
                 cache="hit",
                 tier=hit.provenance.tier,
                 attempts=[],
                 durationMs=(time.monotonic() - started_at) * 1000,
+                correlationId=trace_base.correlationId,
             )
             cached = (spec, trace)
     cache_label: Literal["miss", "bypass"] = "bypass" if policy.cacheMode == "bypass" else "miss"
@@ -938,6 +955,7 @@ def _build_trace(
         refs=prepared.refs.uris,
         dataVersion=prepared.refs.dataVersion,
         cacheKey=prepared.key,
+        cacheKeyParts=prepared.trace_base.cacheKeyParts,
         cache=prepared.cache_label,
         tier=tier,
         fallback_reason=fallback_reason,
@@ -946,6 +964,7 @@ def _build_trace(
         usage=_sum_usage(attempts),
         durationMs=(time.monotonic() - prepared.started_at) * 1000,
         cancelled=cancelled,
+        correlationId=prepared.trace_base.correlationId,
     )
 
 
@@ -966,6 +985,7 @@ def _build_follower_outcome(shared: GenerateOutcome, prepared: PreparedCompose) 
         refs=prepared.refs.uris,
         dataVersion=prepared.refs.dataVersion,
         cacheKey=prepared.key,
+        cacheKeyParts=prepared.trace_base.cacheKeyParts,
         # Riding along on a normal generation is a hit (synonymous with a cache hit). A fallback keeps the leader's label.
         cache=prepared.cache_label if is_fallback else "hit",
         tier=shared_spec.provenance.tier,
@@ -979,6 +999,9 @@ def _build_follower_outcome(shared: GenerateOutcome, prepared: PreparedCompose) 
         # Propagate cancellation from the leader's trace so followers are equally excluded from lineage
         # recording and the fallback-rate analytics when the leader's generation was aborted.
         cancelled=shared.trace.cancelled,
+        # Each follower keeps its own request's correlation id (not the leader's) -- the leader's generation
+        # is shared, but each waiter is still a distinct request that may need to be traced back separately.
+        correlationId=prepared.trace_base.correlationId,
     )
     return GenerateOutcome(spec=spec, trace=trace)
 

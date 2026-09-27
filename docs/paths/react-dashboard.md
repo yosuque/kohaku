@@ -46,7 +46,7 @@ Mount `<Dashboard />` with `createRoot` as usual. What you just did: the screen 
 
 ## 2. Feed it from a host (data by reference)
 
-Charts and tables carry a `query://` **reference**, never rows. The host that composed the Spec also issues a short-lived capability for exactly those references, and the components fetch through it. Start the bundled sample host (`pnpm dev` in the repository, API on `:8787`) or your own (see [Path (c)](full-stack.md)), then:
+Charts and tables carry a `query://` **reference**, never rows. The host that composed the Spec also issues a short-lived capability for exactly those references, and the components fetch through it. Start the bundled sample host (`pnpm dev` in the repository, API on `:8787`) or your own — the shortest way to stand one up is `@kohaku-ui/host`'s `createKohakuHost()` ([Path (a)](mcp-apps.md) shows it end to end; you only write a `DomainPort` and an Intent catalog), or the full governed setup (L2, promotion, fixation) at [Path (c)](full-stack.md) — then:
 
 ```bash
 npm install @kohaku-ui/client @kohaku-ui/data-binding
@@ -85,7 +85,7 @@ Open the network tab: `POST /compose` returns `{spec, capability}` with **no dat
 
 ## Where this leads
 
-- **Your own L0 screens on your own data**: implement the four Ports (`node cli/bin/kohaku.js scaffold ports` gives you the file) and register your fixed Specs in `policy.fixedSpecs` — [User guide §6, Step 0](../user-guide.md#step-0--server-driven-ui-without-an-llm).
+- **Your own L0 screens on your own data**: `createKohakuHost()` (`@kohaku-ui/host`) only asks you to write a `DomainPort` (`node cli/bin/kohaku.js scaffold ports` gives you the file); register your fixed Specs in its `policy` option — [User guide §6, Step 0](../user-guide.md#step-0--server-driven-ui-without-an-llm).
 - **Events and drill-down**: declare `events` on the Spec (`table1.rowClick → intent.patch`) and pass `onEvent` to `RendererProvider`; the host recomposes — [User guide, Demo 4](../user-guide.md#demo-4--interaction-loop-and-fixation).
 - **Let the model compose within your catalog (L1)**: [Path (c)](full-stack.md).
 - **The same Spec without React**: `@kohaku-ui/renderer-wc`'s `<kohaku-surface>` — [User guide §2](../user-guide.md#demonstrating-the-non-react-renderer-web-components--zero-react).

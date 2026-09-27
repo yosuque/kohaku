@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { kpi, records, shapeOf, summary, targets, trend } from "../src/domain/queries.js";
 import { SalesRepo } from "../src/domain/repo.js";
+import { readSeedFromDisk } from "../src/domain/seed-fs.js";
 import { CHANNEL_LABELS, REGION_LABELS } from "../src/domain/types.js";
 
 // records() server-side paging/sort contract.
 // Also regression-checks that, when the reserved parameters (_limit/_cursor/_sort/_dir) are unspecified, behavior is identical to the default.
 describe("records() server-side paging/sort", () => {
-  const repo = new SalesRepo();
+  const repo = new SalesRepo(readSeedFromDisk());
   const dv = repo.dataVersion();
 
   it("without reserved params applies the default (first limit=100, nextCursor if more)", () => {
@@ -168,7 +169,7 @@ describe("records() server-side paging/sort", () => {
 
 // Display labels / missing values / unit label unification / KPI scope contract.
 describe("display labels, missing values, KPI scope", () => {
-  const repo = new SalesRepo();
+  const repo = new SalesRepo(readSeedFromDisk());
   const regionLabels = Object.values(REGION_LABELS);
   const regionCodes = ["japan", "north_america", "europe", "apac"];
   const channelLabels = Object.values(CHANNEL_LABELS);
@@ -262,7 +263,7 @@ describe("display labels, missing values, KPI scope", () => {
 // summary() metric propagation (regression for a wrong-answer bugfix): the sort and topN slice branch on metric (revenue|units).
 // Before the fix it was always revenue-descending + topN, so a "top 5 by units" request returned the top 5 by revenue.
 describe("summary() metric (the basis for sort and topN)", () => {
-  const repo = new SalesRepo();
+  const repo = new SalesRepo(readSeedFromDisk());
 
   it("metric unspecified / metric=revenue is revenue descending (legacy behavior regression)", () => {
     const def = summary(repo, { fy: 2026, groupBy: "product" }).rows;
@@ -308,7 +309,7 @@ describe("summary() metric (the basis for sort and topN)", () => {
 // trend() metric normalization: symmetric with summary, an unknown value falls back to revenue. Without normalization, r[metric]
 // is undefined -> aggregation becomes NaN. Same semantics as trend in Python's domain.py.
 describe("trend() metric normalization", () => {
-  const repo = new SalesRepo();
+  const repo = new SalesRepo(readSeedFromDisk());
 
   it("metric unspecified / metric=revenue is the revenue series (both column key and cells are revenue)", () => {
     const def = trend(repo, { fy: 2026, granularity: "month" });
@@ -346,7 +347,7 @@ describe("trend() metric normalization", () => {
 // use attainment=null + note (same treatment as kpi's target_attainment; a null table cell renders as blank).
 describe("targets() attainment missing value", () => {
   it("a row with target 0 sets attainment=null and shows the reason in note", () => {
-    const repo = new SalesRepo();
+    const repo = new SalesRepo(readSeedFromDisk());
     // The seed has no target of 0, so synthesize a target-0 row for an (fy, q) not present in the seed to exercise the missing-value path.
     repo.targets.push({ fiscalYear: 2027, quarter: 1, region: "japan", targetRevenue: 0 });
     const t = targets(repo, { fy: 2027, q: 1 });
@@ -357,7 +358,7 @@ describe("targets() attainment missing value", () => {
   });
 
   it("a normal row (target>0) keeps a numeric attainment with note=null (the note column always exists)", () => {
-    const repo = new SalesRepo();
+    const repo = new SalesRepo(readSeedFromDisk());
     const t = targets(repo, { fy: 2026, q: 2 });
     expect(t.columns.map((c) => c.key)).toEqual(["region", "actual", "target", "attainment", "note"]);
     expect(t.rows.length).toBeGreaterThan(0);
@@ -368,7 +369,7 @@ describe("targets() attainment missing value", () => {
   });
 
   it("a region with actual revenue but no target row for the period still appears (target=0, not dropped)", () => {
-    const repo = new SalesRepo();
+    const repo = new SalesRepo(readSeedFromDisk());
     // fy=2027 has no targets at all in the seed (which only covers FY2025/FY2026); push a single actual
     // record so the region has revenue but no matching target row, exercising the union-of-keys population.
     repo.records.push({
@@ -395,7 +396,7 @@ describe("targets() attainment missing value", () => {
 
 // summary() topN clamping (boundaries). Prevents slice from behaving counter-intuitively for negative / 0 / non-numeric values.
 describe("summary() topN clamp", () => {
-  const repo = new SalesRepo();
+  const repo = new SalesRepo(readSeedFromDisk());
 
   it("a valid topN narrows to the top N (product has 6 groups -> topN=2 yields 2)", () => {
     const t = summary(repo, { fy: 2026, groupBy: "product", topN: "2" });

@@ -1,7 +1,12 @@
-import { randomUUID } from "node:crypto";
 import type { TraceContext } from "@kohaku-ui/composer";
 import { errorMessage, notifyHook, parseTraceContext } from "@kohaku-ui/host-core";
-import type { Principal, SessionContext, Surface } from "@kohaku-ui/spec-core";
+import {
+  exceedsMaxJsonDepth,
+  MAX_JSON_OBJECT_DEPTH,
+  type Principal,
+  type SessionContext,
+  type Surface,
+} from "@kohaku-ui/spec-core";
 import type { Context } from "hono";
 import type { z } from "zod";
 import { errorBody } from "../errors.js";
@@ -86,6 +91,28 @@ export function message(e: unknown): string {
 }
 
 /**
+ * Depth cap on a raw request body, checked immediately after JSON.parse and before any zod schema gets a
+ * chance to recurse over it (parseBody below applies it to every schema-validated body; promotions.ts's
+ * generic action route -- whose PromotionActionSchema.safeParse target is a sub-field of the body rather than
+ * the body itself -- applies it directly, to the same effect, since it reads the body without going through
+ * parseBody). This is a second, schema-independent line of defense alongside JsonObjectSchema /
+ * JsonValueSchema's own up-front depth bound (spec-core's json.ts): those protect only the specific fields
+ * declared with one of them, so a body shape a future schema change forgets to route through one of them would
+ * otherwise still reach zod's recursive parse unguarded.
+ *
+ * A few levels looser than MAX_JSON_OBJECT_DEPTH: the body wraps the fields a schema caps at that depth (e.g.
+ * `{ intent: { params: <= MAX_JSON_OBJECT_DEPTH levels> } }`), so a well-formed request nests a handful of
+ * levels deeper than a single capped field before this whole-body check even starts counting from the body's
+ * own root.
+ */
+const MAX_REQUEST_BODY_DEPTH = MAX_JSON_OBJECT_DEPTH + 8;
+
+/** True when the parsed request body itself is nested deeper than MAX_REQUEST_BODY_DEPTH allows. */
+export function requestBodyTooDeep(raw: unknown): boolean {
+  return exceedsMaxJsonDepth(raw, MAX_REQUEST_BODY_DEPTH);
+}
+
+/**
  * JSON parse + schema validation of the request body. On failure, returns BAD_REQUEST 400.
  * Secondary validation (required-field checks, applying defaults for nullish, etc.) is left to the caller.
  * Passing `nullishFallback` safeParses with that value when the JSON is nullish (`?? {}` etc. is specified from the caller side).
@@ -97,6 +124,10 @@ export async function parseBody<S extends z.ZodType>(
   options?: { nullishFallback?: unknown },
 ): Promise<z.infer<S> | Response> {
   let raw: unknown = await c.req.json().catch(() => null);
+  // Checked before the schema ever sees `raw` -- see requestBodyTooDeep's doc comment.
+  if (requestBodyTooDeep(raw)) {
+    return c.json(errorBody("BAD_REQUEST", "request body nesting exceeds the maximum depth"), 400);
+  }
   if (options != null && "nullishFallback" in options) {
     raw = raw ?? options.nullishFallback;
   }
@@ -132,8 +163,9 @@ const REQUEST_ID_VAR = "kohakuRequestId";
 
 /**
  * Resolves (and memoizes) the per-request correlation id (ops). Default behavior: the inbound
- * `x-request-id` request header when present and well-formed, otherwise a fresh `randomUUID()`. A product can
- * override entirely via `deps.requestId`. Always returns a value (unlike the old onError-gated newRequestId):
+ * `x-request-id` request header when present and well-formed, otherwise a fresh
+ * `globalThis.crypto.randomUUID()`. A product can override entirely via `deps.requestId`. Always returns a
+ * value (unlike the old onError-gated newRequestId):
  * the id is used for the `X-Request-Id` response header on every response, not only on failures.
  *
  * Memoized on the Hono Context's own variable bag (`c.set`/`c.get`), not the raw Request object: a
@@ -149,7 +181,7 @@ export function requestIdOf(c: Context, deps: KohakuHostDeps): string {
   const id =
     deps.requestId != null
       ? deps.requestId(c)
-      : (sanitizeInboundRequestId(c.req.header("x-request-id")) ?? randomUUID());
+      : (sanitizeInboundRequestId(c.req.header("x-request-id")) ?? globalThis.crypto.randomUUID());
   c.set(REQUEST_ID_VAR, id);
   return id;
 }

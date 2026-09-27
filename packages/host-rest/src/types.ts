@@ -138,7 +138,7 @@ export interface KohakuHostDeps {
    * and reused for the `X-Request-Id` response header, every error envelope's `error.requestId`, and the
    * `onError` observability hook, so a single id ties together everything logged about one request.
    * Default when omitted: the inbound `x-request-id` request header when present and well-formed (trimmed,
-   * at most 128 characters, printable ASCII only), otherwise a fresh `randomUUID()`. A malformed inbound
+   * at most 128 characters, printable ASCII only), otherwise a fresh `globalThis.crypto.randomUUID()`. A malformed inbound
    * header (too long, non-ASCII, empty after trimming) is discarded and replaced the same way as a missing one.
    */
   requestId?: (c: Context) => string;

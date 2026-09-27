@@ -16,6 +16,7 @@
     "@kohaku-ui/client": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
     "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/host": "workspace:^",
     "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@kohaku-ui/host-rest": "workspace:^",
     "@kohaku-ui/intents": "workspace:^",

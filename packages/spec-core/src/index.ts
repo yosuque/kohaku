@@ -120,6 +120,7 @@ export {
   IntentSchema,
 } from "./schema/intent.js";
 export {
+  exceedsMaxJsonDepth,
   type JsonObject,
   JsonObjectSchema,
   type JsonValue,

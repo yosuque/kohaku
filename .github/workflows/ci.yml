@@ -341,3 +341,27 @@ jobs:
         with:
           name: docs-site
           path: apps/docs-site/dist/
+      # The static playground (U5) in strict mode (forbidNodeBuiltins' default), the same build a Pages
+      # deploy would run — proves it stays Node-dependency-free and buildable on every push, independent of
+      # whether Pages is ever actually enabled (see pages.yml, workflow_dispatch-only and not wired up yet).
+      - name: Playground build (strict mode — must have zero Node-only imports)
+        run: pnpm --filter @kohaku-ui-sample/playground run build
+  # Replays whatever fixtures/*.json the playground actually ships against a real host (no LLM) — see
+  # apps/playground/test/drift/fixtures-drift.test.ts's own doc comment. Not required for a PR: today every
+  # requiresFixtures scenario is still "awaiting recording" (real-LLM recording is postponed, per
+  # reports/u5-3.md), and once fixtures do exist, a prompt-building change elsewhere in the repo could make
+  # this fail without that change's own PR having touched anything under apps/playground — visible, but not
+  # blocking, until fixtures are actually recorded and this suite's failure modes are better understood.
+  playground-drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm vitest run --project playground-drift

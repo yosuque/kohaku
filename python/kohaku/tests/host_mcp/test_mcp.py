@@ -9,8 +9,11 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+import pytest
 
 from kohaku.host_mcp import (
     CAPABILITY_META_KEY,
@@ -232,6 +235,116 @@ class TestComposeTool:
                 assert denied.is_error is True
 
         asyncio.run(run())
+
+
+class TestMcpCorrelationId:
+    """U2 + review follow-up: ComposeTrace.correlationId is populated for MCP tool calls as
+    `mcp:<sessionId>:<jsonrpc id>`, where `<sessionId>` is a stable opaque id (uuid4 hex) generated once per
+    transport session (`_session_correlation_prefix` in server.py) -- this SDK's ServerRequestContext exposes
+    no public transport session id the way TS's ServerContext.sessionId does, so a generated per-session id
+    is used instead of a real one; see `_correlation_id_of`'s doc comment for the full rationale, including
+    why this always includes a session segment (even for a single-session stdio-shaped connection) rather
+    than TS's own session-less `mcp:<jsonrpc id>` form."""
+
+    def test_correlation_id_reaches_the_compose_trace_with_the_mcp_prefix(self, tmp_path: Path) -> None:
+        correlation_ids: list[str | None] = []
+
+        async def _on_composed(spec: Any, trace: Any) -> None:
+            correlation_ids.append(trace.correlationId)
+
+        async def run() -> None:
+            deps = _deps(tmp_path, on_composed=_on_composed)
+            async with connect(deps, _OPTIONS) as client:
+                await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                await client.call_tool("kohaku_compose", {"question": "Monthly sales trend take 2"})
+
+        asyncio.run(run())
+        assert len(correlation_ids) == 2
+        for cid in correlation_ids:
+            assert cid is not None
+            assert cid.startswith("mcp:")
+        # Different calls -> different correlation ids (each carries its own JSON-RPC request id).
+        assert correlation_ids[0] != correlation_ids[1]
+
+    def test_two_concurrent_sessions_never_collide_even_with_the_same_jsonrpc_id(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: before the review follow-up, _correlation_id_of always returned the bare
+        `mcp:<jsonrpc id>` form, so two independent sessions whose JSON-RPC id counters both start at the
+        same value (the common case: a fresh client's first call) collided onto the identical correlation
+        id, and `kohaku explain`/DevTools would mix their lineage events together."""
+        session_a_ids: list[str | None] = []
+        session_b_ids: list[str | None] = []
+
+        async def _on_composed_a(spec: Any, trace: Any) -> None:
+            session_a_ids.append(trace.correlationId)
+
+        async def _on_composed_b(spec: Any, trace: Any) -> None:
+            session_b_ids.append(trace.correlationId)
+
+        async def run() -> None:
+            # Two independent connect() calls = two independent Server/Client pairs = two distinct
+            # ServerSession objects, each with its own JSON-RPC id counter (both typically starting at the
+            # same first value for a fresh client).
+            deps_a = _deps(tmp_path, on_composed=_on_composed_a)
+            deps_b = _deps(tmp_path, on_composed=_on_composed_b)
+            async with connect(deps_a, _OPTIONS) as client_a, connect(deps_b, _OPTIONS) as client_b:
+                await client_a.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                await client_b.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                # A second call on session A: the session prefix must stay the same as A's first call.
+                await client_a.call_tool("kohaku_compose", {"question": "Monthly sales trend take 2"})
+
+        asyncio.run(run())
+        assert len(session_a_ids) == 2
+        assert len(session_b_ids) == 1
+        a1, a2 = session_a_ids
+        (b1,) = session_b_ids
+        assert a1 is not None
+        assert a2 is not None
+        assert b1 is not None
+        # Same session -> same "mcp:<sessionId>:" prefix (everything up to, but not including, the trailing
+        # jsonrpc id segment).
+        prefix_a1 = a1.rsplit(":", 1)[0]
+        prefix_a2 = a2.rsplit(":", 1)[0]
+        assert prefix_a1 == prefix_a2
+        # Different sessions -> different correlation ids outright, even though each session's first call
+        # commonly reuses the same JSON-RPC id (both fresh clients start their own counter from the same
+        # value) -- the session prefix is what tells them apart.
+        assert a1 != b1
+        prefix_b1 = b1.rsplit(":", 1)[0]
+        assert prefix_a1 != prefix_b1
+
+    def test_session_correlation_prefix_degrades_instead_of_raising_when_no_connection_anchor_is_reachable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`_session_correlation_prefix` must never raise when it cannot find a per-connection anchor object
+        at all (session missing, or the installed mcp SDK's ServerSession no longer exposes `_connection`) --
+        a future mcp SDK release renaming/removing that private attribute would otherwise fail every MCP call
+        in production. Instead it returns a fresh id per call (still collision-free across sessions, just no
+        longer grouped by session) and warns exactly once per process, not once per call."""
+        import kohaku.host_mcp.server as server_module
+        from kohaku.host_mcp.server import _session_correlation_prefix
+
+        monkeypatch.setattr(server_module, "_warned_connection_anchor_unavailable", False)
+
+        class _FakeCtxNoSession:
+            session = None
+
+        class _SessionWithoutConnectionAttr:
+            pass
+
+        class _FakeCtxSessionWithoutConnection:
+            session = _SessionWithoutConnectionAttr()
+
+        with pytest.warns(UserWarning, match="no per-connection anchor is reachable"):
+            id_1 = _session_correlation_prefix(cast(Any, _FakeCtxNoSession()))
+        # A second occurrence (a different fake context shape entirely) must not warn again.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            id_2 = _session_correlation_prefix(cast(Any, _FakeCtxSessionWithoutConnection()))
+
+        assert id_1 != id_2
+        assert server_module._warned_connection_anchor_unavailable is True
 
 
 class TestResultType:
@@ -1173,6 +1286,55 @@ class TestEventActionPayloadDepthCap:
                 assert "nesting exceeds the maximum depth (32)" in result.content[0].text  # type: ignore[union-attr]
 
         asyncio.run(run())
+
+    def test_event_and_action_payloads_at_200_levels_are_rejected_without_crashing(
+        self, tmp_path: Path
+    ) -> None:
+        """A depth well past MAX_JSON_OBJECT_DEPTH (32) but still one the reference mcp Python client SDK can
+        itself serialize (its own pydantic-core model_dump refuses a payload nested much past ~250-300 levels
+        with a ValueError("Circular reference detected (depth exceeded)") of its own -- probed directly, not
+        asserted here, since it is the client's behavior, not this package's). server.py's _json_depth_ok
+        bounds its own recursion to MAX_JSON_OBJECT_DEPTH + 1 stack frames regardless of the input's actual
+        depth (it stops descending the instant depth exceeds the limit), so -- unlike TS's pre-fix
+        JsonObjectSchema, which let zod recurse the full depth before ever checking it -- this was never at
+        risk of the same uncaught RangeError-equivalent; test_json_depth_ok_bounds_its_own_recursion below
+        confirms that directly at the report's original depths (5000 / 100000), independent of any transport."""
+
+        async def run() -> None:
+            async with connect(_deps(tmp_path), _OPTIONS) as client:
+                composed = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
+                capability = _capability_of(composed)
+                event_result = await client.call_tool(
+                    "kohaku_event",
+                    {
+                        "intent": {"canonical": "sales.trend", "params": {}},
+                        "on": "c.pointClick",
+                        "payload": _nested_object(200),
+                    },
+                )
+                assert event_result.is_error
+                assert "nesting exceeds the maximum depth (32)" in event_result.content[0].text  # type: ignore[union-attr]
+
+                action_result = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": _nested_object(200), "capability": capability},
+                )
+                assert action_result.is_error
+                assert "nesting exceeds the maximum depth (32)" in action_result.content[0].text  # type: ignore[union-attr]
+
+        asyncio.run(run())
+
+
+def test_json_depth_ok_bounds_its_own_recursion() -> None:
+    """Direct, transport-independent pin on server.py's _json_depth_ok at the original report's depths (5000 /
+    100000): it must return False (rejected) without raising, confirming its recursion truly stays bounded to
+    MAX_JSON_OBJECT_DEPTH + 1 stack frames no matter how deep the input actually is."""
+    from kohaku.host_mcp.server import MAX_JSON_OBJECT_DEPTH, _json_depth_ok
+
+    for depth in (5000, 100_000):
+        assert _json_depth_ok(_nested_object(depth), MAX_JSON_OBJECT_DEPTH) is False
 
 
 def test_no_lingering_script_marker_regex() -> None:

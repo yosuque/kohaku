@@ -5,8 +5,9 @@ import { type ServerType, serve } from "@hono/node-server";
 import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { loadPolicyFile } from "@kohaku-ui/host-core/policy-node";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
 import type { KohakuPolicyFile } from "@kohaku-ui/spec-core";
-import { createJwtRequestIdentity } from "./app/request-identity.js";
+import { createJwtRequestIdentity } from "./app/request-identity-jwt.js";
 import { createGracefulShutdownHandler, shutdownGraceMs } from "./app/shutdown.js";
 import { createApp } from "./app.js";
 import { createPortsFromEnv } from "./ports/from-env.js";
@@ -105,6 +106,13 @@ async function main(): Promise<void> {
     storage: ports.storage,
     authz: ports.authz,
     ...(policyFile != null ? { policyFile } : {}),
+    // Pre-delivery L2 smoke validation (jsdom / node:vm), the OTel wrap, and verbose (KOHAKU_DEBUG) error
+    // logging: all three are Node/env-specific concerns app-core.ts no longer decides on its own (see
+    // AppDeps.l2Smoke / AppDeps.otel / AppDeps.debug's doc comments) — this is the one place that still
+    // reads process.env and constructs the real jsdom-backed checker.
+    l2Smoke: createL2Smoke(),
+    otel: process.env["KOHAKU_OTEL"] === "1",
+    debug: process.env["KOHAKU_DEBUG"] === "1",
     ...(ports.identity != null ? { identity: createJwtRequestIdentity(ports.identity) } : {}),
     // The demo bump-data-version route is on by default for the header-based demo identity (ports.identity
     // == null, i.e. KOHAKU_AUTHZ=hmac) and off by default under JWT; KOHAKU_DEMO_ADMIN_ROUTES=1 opts back in

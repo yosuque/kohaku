@@ -1,8 +1,10 @@
+import { type DevToolsCapture, withDevToolsCapture } from "@kohaku-ui/admin-react/devtools";
 import {
   type ComposeRequest,
   type ComposeView,
   createKohakuClient,
   hostErrorFromResponse,
+  type KohakuClientConfig,
   type NormalizeResult,
 } from "@kohaku-ui/client";
 import type { JsonObject } from "@kohaku-ui/spec-core";
@@ -11,6 +13,21 @@ import { roleHeader } from "./role.js";
 import { tenantHeader } from "./tenant.js";
 
 export type { ComposeView, NormalizeResult };
+
+const baseConfig: KohakuClientConfig = {
+  baseUrl: "/api/kohaku",
+  headers: () => ({ ...tenantHeader(), ...roleHeader() }),
+};
+
+// Kohaku DevTools capture is wired only in dev builds (import.meta.env.DEV) -- withDevToolsCapture's
+// onResponse wrapper itself is cheap, but there is no reason to carry its ring buffer (or DevToolsMount's own
+// import of @kohaku-ui/admin-react/devtools) into a production bundle for a devtool nobody mounts there.
+// Built once, alongside `client` below, so both share the same capture store (a second call would create an
+// independent, unpopulated one).
+const devTools = import.meta.env.DEV ? withDevToolsCapture(baseConfig) : undefined;
+
+/** Feeds KohakuDevTools' "recent requests" quick-pick list (see DevToolsMount.tsx). undefined in production. */
+export const devToolsCapture: DevToolsCapture | undefined = devTools?.capture;
 
 /**
  * Singleton of the typed host client SDK (@kohaku-ui/client). Hand-written fetch to the REST host is abolished and
@@ -21,10 +38,7 @@ export type { ComposeView, NormalizeResult };
  */
 // Exported for AdminPage, which hands it to @kohaku-ui/admin-react's KohakuAdmin (the package's tabs call
 // client.promotions / client.fixations / client.analytics directly; it never reads a module-level singleton).
-export const client = createKohakuClient({
-  baseUrl: "/api/kohaku",
-  headers: () => ({ ...tenantHeader(), ...roleHeader() }),
-});
+export const client = createKohakuClient(devTools?.config ?? baseConfig);
 
 /**
  * Low-level fetch for routes outside SPEC (sample-specific /api/health, /api/kohaku/admin/bump-data-version).

@@ -212,18 +212,21 @@ class TestBucketKey:
 
         asyncio.run(run())
 
-    def test_falls_back_to_the_literal_anonymous_when_resolve_principal_is_unset(
+    def test_falls_back_to_a_stable_per_connection_id_when_resolve_principal_is_unset(
         self, tmp_path: Path
     ) -> None:
-        """Unlike the TS port, Python has no further sessionId fallback step (see
-        _mcp_rate_limit_key's doc comment for the documented SDK-accessor gap this reflects) --
-        the constant fallback principal id ("mcp-user") is never used as the bucket key either way."""
+        """When resolve_principal is unset, the constant fallback principal id ("mcp-user") is never
+        used as the bucket key (every anonymous caller would otherwise share one bucket) -- instead it
+        falls back to _session_correlation_prefix's stable per-connection opaque id (the same anchor
+        U2's MCP correlation-id work established), which two calls on the *same* connection share."""
 
         async def run() -> None:
             limiter = _StubRateLimiter(RateLimitResult(allow=True))
             deps = _base_deps(tmp_path, rate_limiter=limiter)
             async with connect(deps, _OPTIONS) as client:
                 await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
-            assert limiter.calls[0].principal == "anonymous"
+                await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+            assert limiter.calls[0].principal != "mcp-user"
+            assert limiter.calls[0].principal == limiter.calls[1].principal
 
         asyncio.run(run())

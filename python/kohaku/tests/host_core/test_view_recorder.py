@@ -59,6 +59,7 @@ class _FakeRecorder:
         surface: str,
         session_id: str | None = None,
         tenant: str | None = None,
+        correlation_id: str | None = None,
     ) -> None:
         self.calls.append(
             {
@@ -68,6 +69,7 @@ class _FakeRecorder:
                 "surface": surface,
                 "session_id": session_id,
                 "tenant": tenant,
+                "correlation_id": correlation_id,
             }
         )
 
@@ -111,6 +113,34 @@ def test_a_fallback_with_no_kind_defaults_to_generation_compatible_with_older_re
         await record_view_fallback(recorder, _spec(fallback), surface="mcp-app")
         assert len(recorder.calls) == 1
         assert recorder.calls[0]["kind"] == "generation"
+
+    asyncio.run(run())
+
+
+def test_correlation_id_is_forwarded_when_given_u2() -> None:
+    recorder = _FakeRecorder()
+    fallback = ProvenanceFallback.model_validate(
+        {"from": "L1", "reason": "llm failure", "kind": "generation"}
+    )
+
+    async def run() -> None:
+        await record_view_fallback(
+            recorder, _spec(fallback), surface="web", correlation_id="req-1"
+        )
+        assert recorder.calls[0]["correlation_id"] == "req-1"
+
+    asyncio.run(run())
+
+
+def test_correlation_id_is_none_when_not_given_u2() -> None:
+    recorder = _FakeRecorder()
+    fallback = ProvenanceFallback.model_validate(
+        {"from": "L1", "reason": "llm failure", "kind": "generation"}
+    )
+
+    async def run() -> None:
+        await record_view_fallback(recorder, _spec(fallback), surface="web")
+        assert recorder.calls[0]["correlation_id"] is None
 
     asyncio.run(run())
 

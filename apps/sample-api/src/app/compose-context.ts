@@ -8,7 +8,6 @@ import {
 import { formatErrorChain, type PolicyRuntime } from "@kohaku-ui/host-core";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { createOtelComposeObserver } from "@kohaku-ui/otel";
-import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
 import type { FixationRecord, SemanticPort, SessionContext, StoragePort } from "@kohaku-ui/spec-core";
 import { SALES_DESIGN_SYSTEM } from "../design-system.js";
 import { createFixationFewShot } from "../fewshot.js";
@@ -54,16 +53,19 @@ export function admitFixationForLocale(_fixation: FixationRecord, session: Sessi
 /**
  * The language-neutral, tenant-neutral half of the compose policy: every function-shaped
  * `ComposePolicy` field this demo sets (design.md #69 — none of these are expressible in the
- * Policy-as-Code schema, so they always come from code). Called once per `createApp` (app.ts), both as
- * `createComposeContext`'s own `shared` fallback and as `createPolicyRuntime`'s `basePolicyFor` (returning
- * the *same* object on every call — see `PolicyRuntime.policyFor`'s memoization doc comment — regardless
- * of tenant, since none of these fields vary by tenant in this demo; only the policy file introduces
- * tenant variance, layered on top of exactly this object by `PolicyRuntime.policyFor`).
+ * Policy-as-Code schema, so they always come from code). Called once per `createApp` (app-core.ts), both
+ * as `createComposeContext`'s own `shared` fallback and as `createPolicyRuntime`'s `basePolicyFor`
+ * (returning the *same* object on every call — see `PolicyRuntime.policyFor`'s memoization doc comment —
+ * regardless of tenant, since none of these fields vary by tenant in this demo; only the policy file
+ * introduces tenant variance, layered on top of exactly this object by `PolicyRuntime.policyFor`).
+ *
+ * `l2Smoke` is injected rather than constructed here (this file used to call `createL2Smoke()`
+ * unconditionally) so this module never has to import `@kohaku-ui/sandbox/smoke` itself — `app-core.ts`'s
+ * `AppDeps.l2Smoke` is where the doc comment on *why* this is optional lives.
  */
-export function sharedComposePolicy(): Pick<
-  ComposePolicy,
-  "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget"
-> {
+export function sharedComposePolicy(
+  l2Smoke?: ComposePolicy["l2Smoke"],
+): Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget"> {
   return {
     allowL2: true,
     // Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
@@ -71,7 +73,8 @@ export function sharedComposePolicy(): Pick<
     budget: { deadlineMs: composeDeadlineMs() },
     // Pre-delivery smoke validation of L2-generated HTML. After passing static lint, it runs in jsdom and sends
     // back to repair any output that does not reach ready() due to a runtime TypeError (crushing the client's boot-timeout blank screen before delivery).
-    l2Smoke: createL2Smoke(),
+    // Only when injected (see the l2Smoke param doc above) — undefined is a valid ComposePolicy.l2Smoke (no smoke check).
+    l2Smoke,
     // Free-form requests (sales.custom) skip L1 and go directly to L2
     routeTier: (intent) => (intent.canonical === "sales.custom" ? "L2" : undefined),
     // Applying the design system to L2 free generation: presents the token vocabulary + style rules in the prompt,
@@ -102,8 +105,15 @@ export function createComposeContext(args: {
   llm: LlmPort;
   shared: Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget">;
   policyRuntime?: PolicyRuntime;
+  /** Wraps the console observer with `@kohaku-ui/otel`'s OTel observer. Default false. See app-core.ts's
+   * `AppDeps.otel` doc comment for why this is a plain boolean rather than a `process.env` read. */
+  otel?: boolean;
+  /** Verbose error-chain + stack trace logging on the observer's failure path (KOHAKU_DEBUG=1 at the
+   * process entry point). Default false. See app-core.ts's `AppDeps.debug` doc comment for why this is a
+   * plain boolean rather than a `process.env` read. */
+  debug?: boolean;
 }): ComposeContext {
-  const { registry, semantic, storage, llm, shared, policyRuntime } = args;
+  const { registry, semantic, storage, llm, shared, policyRuntime, otel = false, debug = false } = args;
   /**
    * The EN/JA function-shaped overrides (layered on top of `shared` — or, when `policyRuntime` is wired,
    * on top of `policyRuntime.policyFor`'s result — by `policyForSession` below), selected per request via
@@ -174,21 +184,24 @@ export function createComposeContext(args: {
     // Observability of the compose failure path (the demo is console-based). Logs L1/L2 deterministic fallback
     // degradation (the Spec is delivered but generation failed) and hard failure (Spec not delivered). Because of the
     // fire-and-forget contract (the composer side catches the throw), it does not affect compose's result or existing behavior.
-    observer: composeObserver(),
+    observer: composeObserver(otel, debug),
   };
 }
 
 /**
  * The demo's console-based compose observer, optionally combined with @kohaku-ui/otel's OTel observer via
- * composer's composeObservers when `KOHAKU_OTEL=1` (opt-in; unset/any other value is a complete no-op --
- * this function returns the exact same object it always has, not merely an equivalent one, so default
- * behavior is provably unchanged). This package intentionally does NOT initialize an OTel SDK / exporter
- * (see docs/user-guide.md's "Trace context / OTel" section) -- with KOHAKU_OTEL=1 but no TracerProvider
- * registered by the host process, createOtelComposeObserver's tracer is a no-op (spans are created and
- * discarded), which is a harmless, fully-supported configuration.
+ * composer's composeObservers when `otelEnabled` is true. This package intentionally does NOT initialize an
+ * OTel SDK / exporter (see docs/user-guide.md's "Trace context / OTel" section) -- with otel enabled but no
+ * TracerProvider registered by the host process, createOtelComposeObserver's tracer is a no-op (spans are
+ * created and discarded), which is a harmless, fully-supported configuration.
+ *
+ * `otelEnabled` and `debug` used to be this function's own `process.env.KOHAKU_OTEL === "1"` /
+ * `process.env.KOHAKU_DEBUG === "1"` reads; they are now plain parameters (app-core.ts's `AppDeps.otel` /
+ * `AppDeps.debug`, set from `process.env` only by index.ts, the actual Node entry point) so this file never
+ * references `process` — index.ts still passes the exact same env-derived values, so behavior for the REST
+ * server is unchanged.
  */
-function composeObserver(): ComposeObserver {
-  const debug = process.env["KOHAKU_DEBUG"] === "1";
+function composeObserver(otelEnabled: boolean, debug: boolean): ComposeObserver {
   const consoleObserver: ComposeObserver = {
     onError: (errCtx, error) => {
       const intentLabel = errCtx.intent != null ? `(intent=${errCtx.intent.canonical})` : "";
@@ -214,6 +227,6 @@ function composeObserver(): ComposeObserver {
       }
     },
   };
-  if (process.env.KOHAKU_OTEL !== "1") return consoleObserver;
+  if (!otelEnabled) return consoleObserver;
   return composeObservers(consoleObserver, createOtelComposeObserver());
 }

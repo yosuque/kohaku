@@ -28,11 +28,26 @@ export function createHostDeps(args: {
   fixations: Fixations;
   identity: RequestIdentity;
   /** Rate limiter for the compose-family routes (Policy as Code, design.md #69 — optional, wired from
-   * app.ts's PolicyRuntime.rateLimiter when a policy file is loaded). When unwired, no rate limiting
+   * app-core.ts's PolicyRuntime.rateLimiter when a policy file is loaded). When unwired, no rate limiting
    * occurs (backward compatible) — see KohakuHostDeps.rateLimiter's own doc comment. */
   rateLimiter?: PolicyRateLimiter;
+  /** Verbose `onError` logging (the full cause chain + stack trace) below. Default false. Passed in rather
+   * than read from `process.env.KOHAKU_DEBUG` directly (a concurrent branch, T0-2, originally did that
+   * here) — see `app-core.ts`'s `AppDeps.debug` doc comment for why this file must stay env-neutral. */
+  debug?: boolean;
 }): KohakuHostDeps {
-  const { composeCtx, domain, authz, storage, lineage, promotions, fixations, identity, rateLimiter } = args;
+  const {
+    composeCtx,
+    domain,
+    authz,
+    storage,
+    lineage,
+    promotions,
+    fixations,
+    identity,
+    rateLimiter,
+    debug = false,
+  } = args;
   return {
     compose: composeCtx,
     domain,
@@ -71,10 +86,11 @@ export function createHostDeps(args: {
     // Observability hook for the failure path (the demo is console-based). When wired, a requestId is issued that
     // matches error.requestId in the error response, letting you correlate logs with the client's error.
     // Failures that are "swallowed while the response stays successful", such as a recorder (lineage recording) failure, also reach here.
-    // KOHAKU_DEBUG=1 prints the full cause chain (host-core's formatErrorChain) plus the stack trace instead
-    // of the one-line summary below — see docs/user-guide.md's troubleshooting section.
+    // debug (AppDeps.debug, KOHAKU_DEBUG=1 at the process entry point) prints the full cause chain
+    // (host-core's formatErrorChain) plus the stack trace instead of the one-line summary below — see
+    // docs/user-guide.md's troubleshooting section.
     onError: ({ endpoint, requestId, error }) => {
-      if (process.env["KOHAKU_DEBUG"] === "1") {
+      if (debug) {
         console.error(
           `[host-rest] A failure occurred in ${endpoint} (requestId=${requestId}): ${formatErrorChain(error)}`,
         );

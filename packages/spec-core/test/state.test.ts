@@ -104,6 +104,53 @@ describe("VisibleWhen predicate schema", () => {
     expect(VisibleWhenSchema.safeParse(nest(MAX_PREDICATE_DEPTH + 1)).success).toBe(false);
   });
 
+  it("the over-limit error message reports the actual depth for a near-boundary input", () => {
+    let p: VisibleWhen = { ref: "$state.tab", eq: "a" };
+    for (let d = 1; d < MAX_PREDICATE_DEPTH + 1; d++) p = { not: p };
+    const result = VisibleWhenSchema.safeParse(p);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toBe(
+        `visibleWhen is nested too deeply (depth ${MAX_PREDICATE_DEPTH + 1} > limit ${MAX_PREDICATE_DEPTH})`,
+      );
+    }
+  });
+
+  // Depths from the JSON-depth recursion-DoS fix's follow-up (packages/spec-core/test/json-depth.test.ts):
+  // before this fix, VisibleWhenSchema checked depth in a superRefine that only ran *after* zod had already
+  // recursed the full depth through the "not" chain's z.lazy union, so a payload nested this deep overflowed
+  // the stack (RangeError) before the depth check ever ran.
+  it.each([5000, 100_000])(
+    "a chain of %i nested `not`s is rejected with a ZodError, not a thrown RangeError",
+    (depth) => {
+      let p: VisibleWhen = { ref: "$state.tab", eq: "a" };
+      for (let d = 1; d < depth; d++) p = { not: p };
+      let result: ReturnType<typeof VisibleWhenSchema.safeParse> | undefined;
+      expect(() => {
+        result = VisibleWhenSchema.safeParse(p);
+      }).not.toThrow();
+      expect(result?.success).toBe(false);
+    },
+  );
+
+  it.each([5000, 100_000])(
+    "safeParseSpec: a component's visibleWhen nested %i levels deep does not throw a RangeError",
+    (depth) => {
+      let visibleWhen: VisibleWhen = { ref: "$state.tab", eq: "a" };
+      for (let d = 1; d < depth; d++) visibleWhen = { not: visibleWhen };
+      let result: ReturnType<typeof safeParseSpec> | undefined;
+      expect(() => {
+        result = safeParseSpec(
+          specInput({
+            state: { tab: "a" },
+            components: [{ id: "root", type: "layout.stack", props: {}, visibleWhen }],
+          }),
+        );
+      }).not.toThrow();
+      expect(result?.ok).toBe(false);
+    },
+  );
+
   it("rejected when the number of all / any elements exceeds the limit", () => {
     const leaf = { ref: "$state.tab", eq: "a" } as const;
     const ok = { all: Array.from({ length: MAX_PREDICATE_ITEMS }, () => leaf) };
