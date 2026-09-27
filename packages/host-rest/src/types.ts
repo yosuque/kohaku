@@ -1,5 +1,10 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
-import type { ActionEffects, FixationSelfHealApi, ViewRecorder } from "@kohaku-ui/host-core";
+import type {
+  ActionEffects,
+  FixationSelfHealApi,
+  PolicyRateLimiter,
+  ViewRecorder,
+} from "@kohaku-ui/host-core";
 import type {
   AuthzPort,
   DomainPort,
@@ -204,4 +209,16 @@ export interface KohakuHostDeps {
     operation: { kind: string; artifactId?: string; intentHash?: string },
     tenant?: string,
   ) => boolean | Promise<boolean>;
+  /**
+   * Rate limiter for the compose-family routes (product responsibility; typically host-core's
+   * `PolicyRuntime.rateLimiter`, which resolves the effective `RateLimitRule` per tenant/routeClass
+   * from a Policy file's `rateLimits` section -- see that type's own doc). When set, a middleware
+   * checks it before `POST /compose` / `/compose/stream` / `/events` (routeClass `"compose"`),
+   * `POST /binding/action` (`"action"`), and `GET /binding/resolve` (`"resolve"`); governance/
+   * control-plane routes (`/lineage`, `/telemetry`, `/promotions*`, `/fixations*`) are never subject to
+   * it. On denial, returns 429 with the error envelope's `code: RATE_LIMITED` (SPEC §6.1, REST-RL-001)
+   * and, when the limiter reports a `retryAfterMs`, an HTTP `Retry-After` header (seconds, rounded up).
+   * **If not wired, no rate limiting occurs (backward compatible).**
+   */
+  rateLimiter?: PolicyRateLimiter;
 }

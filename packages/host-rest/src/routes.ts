@@ -11,6 +11,7 @@ import { registerComposeRoutes } from "./routes/compose.js";
 import { registerFixationRoutes } from "./routes/fixations.js";
 import { registerGovernanceRoutes } from "./routes/governance.js";
 import { registerPromotionRoutes } from "./routes/promotions.js";
+import { createRateLimitMiddleware } from "./routes/rate-limit.js";
 import { ANONYMOUS, type RouteContext, requestIdOf, resolveTenant } from "./routes/shared.js";
 import type { KohakuHostDeps } from "./types.js";
 
@@ -131,6 +132,15 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
     requireGovernance,
     withPromotionLock: (tenant, fn) => promotionMutex(tenant ?? "", fn),
   };
+
+  // Rate limiting (deps.rateLimiter; SPEC §6.1, REST-RL-001), mounted only on these specific
+  // compose-family paths -- never on "*" -- so governance/control-plane routes are excluded by
+  // construction. A no-op per-path when deps.rateLimiter is unset (see rate-limit.ts's own doc).
+  app.use("/compose", createRateLimitMiddleware(ctx, "compose"));
+  app.use("/compose/stream", createRateLimitMiddleware(ctx, "compose"));
+  app.use("/events", createRateLimitMiddleware(ctx, "compose"));
+  app.use("/binding/action", createRateLimitMiddleware(ctx, "action"));
+  app.use("/binding/resolve", createRateLimitMiddleware(ctx, "resolve"));
 
   registerComposeRoutes(app, ctx);
   registerBindingRoutes(app, ctx);

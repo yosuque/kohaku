@@ -8,6 +8,7 @@ export {
   type GovernanceOperationKind,
   type GovernancePattern,
   type GovernancePolicy,
+  governancePolicyFromRoles,
 } from "./governance-policy.js";
 export {
   type ComponentDraftInput,

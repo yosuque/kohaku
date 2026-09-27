@@ -140,3 +140,29 @@ function matchesPattern(pattern: string, kind: string): boolean {
   }
   return pattern === kind;
 }
+
+/**
+ * Builds a `GovernanceEvaluator` from a per-tenant roles resolver (host-core's
+ * `PolicyRuntime.rolesFor`, or any function of that same shape) instead of a static
+ * `GovernancePolicy.roles` map -- so a role's grants can change per tenant (a Policy file's
+ * `governance.roles` section, `@kohaku-ui/spec-core`'s `KohakuPolicyFileSchema`) and reflect a
+ * `PolicyRuntime.reload()` on the very next call, unlike `createGovernancePolicy`, which bakes
+ * `policy.roles` in once at construction time.
+ *
+ * `rolesFor` is resolved fresh on every evaluation (not memoized here): delegates to
+ * `createGovernancePolicy` for the actual matching so the two evaluators never drift in behavior.
+ * `rolesFor`'s patterns stay plain strings (host-core must not depend on `GovernancePattern`, which is
+ * derived from this package's own `GovernanceOperationKind` -- see `PolicyRuntime.rolesFor`'s own doc
+ * comment); an unrecognized pattern already fails `matchesPattern`'s structural check (deny-by-default),
+ * so no validation is needed at this boundary either.
+ */
+export function governancePolicyFromRoles(
+  rolesFor: (tenant?: string) => Record<string, readonly string[]>,
+): GovernanceEvaluator {
+  return (principal, operation, tenant) =>
+    createGovernancePolicy({ roles: rolesFor(tenant) as Record<string, readonly GovernancePattern[]> })(
+      principal,
+      operation,
+      tenant,
+    );
+}
