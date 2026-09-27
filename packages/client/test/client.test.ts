@@ -749,6 +749,48 @@ describe("@kohaku-ui/client composeStream(SSE)", () => {
     };
     await expect(iterate()).rejects.toSatisfy((e: unknown) => isKohakuHostError(e) && e.code === "INTERNAL");
   });
+
+  it("threads the actions manifest through from the event: spec payload (design.md #62/#64)", async () => {
+    const transport: Transport = () =>
+      Promise.resolve(
+        new Response(
+          sseStream([
+            "event: spec\n",
+            'data: {"spec":{"id":"s"},"capability":"cap","final":true,"actions":{"annotate":{"tier":"confirm"}}}\n\n',
+            "event: done\n",
+            'data: {"specHash":"h","tier":"L0","cache":"hit"}\n\n',
+          ]),
+          { status: 200 },
+        ),
+      );
+    const client = createKohakuClient({ baseUrl: "/api/kohaku", transport });
+    const events = await collect(client.composeStream({ intent: { canonical: "sales.trend", params: {} } }));
+    expect(events[0]!.kind).toBe("spec");
+    if (events[0]!.kind === "spec") {
+      expect(events[0]!.actions).toEqual({ annotate: { tier: "confirm" } });
+    }
+  });
+
+  it("omits actions when the event: spec payload does not carry it (backward compatible)", async () => {
+    const transport: Transport = () =>
+      Promise.resolve(
+        new Response(
+          sseStream([
+            "event: spec\n",
+            'data: {"spec":{"id":"s"},"capability":"cap","final":true}\n\n',
+            "event: done\n",
+            'data: {"specHash":"h","tier":"L0","cache":"hit"}\n\n',
+          ]),
+          { status: 200 },
+        ),
+      );
+    const client = createKohakuClient({ baseUrl: "/api/kohaku", transport });
+    const events = await collect(client.composeStream({ intent: { canonical: "sales.trend", params: {} } }));
+    expect(events[0]!.kind).toBe("spec");
+    if (events[0]!.kind === "spec") {
+      expect(events[0]!.actions).toBeUndefined();
+    }
+  });
 });
 
 // --- Unit tests for SSE framing (readComposeStream) ------------------------------

@@ -48,6 +48,8 @@ export {
 export { globalTransport, type Transport } from "./transport.js";
 // Request / response types
 export type {
+  ActionManifest,
+  ActionManifestEntry,
   AnalyticsSummaryView,
   CatalogResponse,
   ComponentDraft,

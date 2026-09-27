@@ -81,7 +81,15 @@ export async function runRestSuite(target: RestTarget): Promise<ConformanceResul
     await tryCheck("REST-CMP-001", async () => {
       const res = await post("/compose", { intent: target.composeIntent });
       if (res.status !== 200) return `status ${res.status}`;
-      const json = (await res.json()) as { spec: unknown; capability?: string };
+      // `actions?` (design.md #62/#64) is additive and optional: a conformant host is free to omit it
+      // (no write actions declared) or include it, and this check does not assert on its presence/shape
+      // -- it exists in the type only so this response-shape annotation stays honest about the full wire
+      // contract, not because the field is validated here.
+      const json = (await res.json()) as {
+        spec: unknown;
+        capability?: string;
+        actions?: Record<string, { tier: string; paramsSchema?: unknown; confirmMessage?: string }>;
+      };
       spec = parseSpec(json.spec); // throws if non-conformant
       capability = json.capability ?? "";
       return capability.length > 0 || "no capability";
@@ -337,7 +345,13 @@ export async function runRestSuite(target: RestTarget): Promise<ConformanceResul
       if (streamUnavailable) return streamSkip;
       const first = streamEvents[0];
       if (first == null || first.event !== "spec") return "the first event is not event: spec";
-      const payload = JSON.parse(first.data) as { spec: unknown; capability?: string; final?: unknown };
+      // `actions?` (design.md #62/#64): same additive/optional, not-asserted-on field as REST-CMP-001 above.
+      const payload = JSON.parse(first.data) as {
+        spec: unknown;
+        capability?: string;
+        final?: unknown;
+        actions?: Record<string, { tier: string; paramsSchema?: unknown; confirmMessage?: string }>;
+      };
       parseSpec(payload.spec); // §2-conformant (throws if non-conformant)
       if (typeof payload.final !== "boolean") return "final is not a boolean";
       return (payload.capability != null && payload.capability.length > 0) || "no capability";

@@ -17,6 +17,7 @@ import type { KohakuHostDeps } from "../types.js";
 import { ComposeBodySchema, EventsBodySchema } from "./schemas.js";
 import {
   errorReporterFor,
+  operationIndex,
   parseBody,
   type RestCallContext,
   type RouteContext,
@@ -164,6 +165,33 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
 }
 
 /**
+ * The Action manifest for `spec` (design.md #62/#64, SPEC §6.1/§6.1.1), computed from the host's
+ * `OperationIndex` (memoized via `operationIndex`, shared with `/binding/action`'s `ActionGate` -- both
+ * consult the exact same index). Placed alongside `capability` in the compose response, outside the Spec
+ * itself, so it never affects `specHash` / the cache key. `undefined` (never `{}`) when the Spec declares
+ * no write actions, so every existing response shape (a read-only Spec) is byte-identical to before this
+ * field existed once JSON-serialized (the key is simply absent).
+ *
+ * Fail-open on a rejected `operationIndex` (e.g. `listOperations()` itself throwing, or a descriptor's
+ * `paramsSchema` failing validation): reported to the observability hook and treated as "no manifest this
+ * time" rather than failing the whole compose response, the same fail-open posture
+ * `issueSpecCapabilitySafely` already takes for capability issuance under the identical failure.
+ */
+async function actionsFor(
+  deps: KohakuHostDeps,
+  spec: UISpec,
+  call: Pick<RestCallContext, "endpoint" | "requestId">,
+): Promise<hostCore.ActionManifest | undefined> {
+  try {
+    const index = await operationIndex(deps);
+    return hostCore.buildActionManifest(spec, index);
+  } catch (e) {
+    await reportHostError(deps, call.endpoint, call.requestId, e);
+    return undefined;
+  }
+}
+
+/**
  * Shared preamble of /compose and /compose/stream: body parse/validation -> principal/session resolution ->
  * Intent resolution. Returns a Response on request errors (400 for parse/required-field, 422 INTENT_INVALID).
  * Kept strictly to the synchronous pre-stream portion: both endpoints must fail before any SSE starts,
@@ -248,7 +276,8 @@ async function deliverComposed(
       },
       report,
     );
-    return c.json({ spec: result.spec, capability });
+    const actions = await actionsFor(deps, result.spec, call);
+    return c.json({ spec: result.spec, capability, ...(actions != null ? { actions } : {}) });
   } catch (e) {
     await report(e);
     const clientMessage = hostCore.clientMessageFor(e, COMPOSE_FAILED_MESSAGE);
@@ -299,9 +328,15 @@ async function deliverComposedStream(
       const fixated = await resolveFixatedForRest(intent, session, deps, call);
       if (fixated != null) {
         const capability = await issueSpecCapability(fixated.spec, principal, deps, call);
+        const actions = await actionsFor(deps, fixated.spec, call);
         await stream.writeSSE({
           event: "spec",
-          data: JSON.stringify({ spec: fixated.spec, capability, final: true }),
+          data: JSON.stringify({
+            spec: fixated.spec,
+            capability,
+            final: true,
+            ...(actions != null ? { actions } : {}),
+          }),
         });
         await finishStream(deps, stream, fixated, session, call);
         return;
@@ -336,9 +371,15 @@ async function deliverComposedStream(
           capability ??= ev.final
             ? await issueSpecCapability(ev.spec, principal, deps, call)
             : await hostCore.issueCapabilityForRefs(deps.authz, principal, ev.refs, capabilityTtl(deps));
+          const actions = await actionsFor(deps, ev.spec, call);
           await stream.writeSSE({
             event: "spec",
-            data: JSON.stringify({ spec: ev.spec, capability, final: ev.final }),
+            data: JSON.stringify({
+              spec: ev.spec,
+              capability,
+              final: ev.final,
+              ...(actions != null ? { actions } : {}),
+            }),
           });
         } else if (ev.kind === "patch") {
           await stream.writeSSE({ event: "patch", data: JSON.stringify({ patch: ev.patch }) });

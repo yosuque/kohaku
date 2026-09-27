@@ -23,12 +23,14 @@ from kohaku.composer import ComposeOptions, ComposeResult, IntentComposeInput, c
 from kohaku.composer.compose_stream import StreamPatchEvent, StreamSpecEvent
 from kohaku.composer.fixation import FixationCheck
 from kohaku.host_core import (
+    ActionManifestEntry,
     ComposeFixationContext,
     FixationDeliveryHost,
     FixationTarget,
     IntentSourceGui,
     IntentSourceIntent,
     IntentSourceNl,
+    build_action_manifest,
     is_typed_host_error,
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
@@ -55,6 +57,7 @@ from kohaku.spec import (
 from ..bodies import ComposeBody, parse_compose_body, parse_events_body
 from ..deps import KohakuHostDeps
 from ..errors import error_body
+from ..serialize import to_jsonable
 from .shared import (
     _DEFAULT_CAPABILITY_TTL,
     _error,
@@ -67,6 +70,7 @@ from .shared import (
     _resolve_tenant,
     allowed_actions,
     check_rate_limit,
+    operation_index,
     report_host_error,
     request_id_of,
     safe_record,
@@ -156,6 +160,27 @@ async def issue_capability_for_refs(
         if deps.capability_ttl_seconds is not None
         else _DEFAULT_CAPABILITY_TTL,
     )
+
+
+async def _actions_for(
+    deps: KohakuHostDeps, spec: UISpec, endpoint: str, request_id: str
+) -> dict[str, ActionManifestEntry] | None:
+    """The Action manifest for `spec` (design.md #62/#64, SPEC §6.1/§6.1.1), computed from the host's
+    OperationIndex (memoized via shared.operation_index, shared with /binding/action's ActionGate -- both
+    consult the exact same index). Placed alongside `capability` in the compose response, outside the Spec
+    itself, so it never affects specHash / the cache key.
+
+    Fail-open on a rejected operation_index (e.g. list_operations() itself raising, or a descriptor's
+    params_schema failing validation): reported to the observability hook and treated as "no manifest this
+    time" rather than failing the whole compose response, the same fail-open posture
+    issue_capability_for_spec already takes for capability issuance under the identical failure.
+    """
+    try:
+        index = await operation_index(deps)
+        return build_action_manifest(spec, index)
+    except Exception as e:  # noqa: BLE001 — reported, then treated as "no manifest" (delivery still proceeds)
+        await report_host_error(deps, endpoint, request_id, e)
+        return None
 
 
 # --- Client-disconnect abort propagation --------------------------------
@@ -449,10 +474,15 @@ async def _compose_stream_body(
             capability = await issue_capability_for_spec(
                 result.spec, principal, deps, "compose/stream", request_id
             )
-            yield _sse(
-                "spec",
-                {"spec": result.spec.to_wire(), "capability": capability, "final": True},
-            )
+            actions = await _actions_for(deps, result.spec, "compose/stream", request_id)
+            spec_payload: dict[str, Any] = {
+                "spec": result.spec.to_wire(),
+                "capability": capability,
+                "final": True,
+            }
+            if actions is not None:
+                spec_payload["actions"] = to_jsonable(actions)
+            yield _sse("spec", spec_payload)
             yield _sse("done", await _finish_stream_record(deps, result, session, request_id))
             return
 
@@ -489,10 +519,15 @@ async def _compose_stream_body(
                         if ev.final
                         else await issue_capability_for_refs(principal, list(ev.refs), deps)
                     )
-                yield _sse(
-                    "spec",
-                    {"spec": ev.spec.to_wire(), "capability": capability_ref, "final": ev.final},
-                )
+                ev_actions = await _actions_for(deps, ev.spec, "compose/stream", request_id)
+                ev_spec_payload: dict[str, Any] = {
+                    "spec": ev.spec.to_wire(),
+                    "capability": capability_ref,
+                    "final": ev.final,
+                }
+                if ev_actions is not None:
+                    ev_spec_payload["actions"] = to_jsonable(ev_actions)
+                yield _sse("spec", ev_spec_payload)
             elif isinstance(ev, StreamPatchEvent):
                 yield _sse("patch", {"patch": ev.patch.to_wire()})
             else:
@@ -567,7 +602,11 @@ async def _deliver_composed(
             # view.fallback counts. The fallback body is still returned as usual.
             if not result.trace.cancelled:
                 await safe_record(deps, endpoint, request_id, _rec)
-            return _json({"spec": result.spec.to_wire(), "capability": capability})
+            actions = await _actions_for(deps, result.spec, endpoint, request_id)
+            response: dict[str, Any] = {"spec": result.spec.to_wire(), "capability": capability}
+            if actions is not None:
+                response["actions"] = actions
+            return _json(response)
     except BaseException as e:
         await report_host_error(deps, endpoint, request_id, e, trace_context=trace_context_of(request))
         # An arbitrary exception's message never reaches the client (it may leak internals); a typed host

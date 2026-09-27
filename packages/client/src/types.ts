@@ -1,11 +1,34 @@
 import type {
+  ActionTier,
   CanonicalIntent,
   JsonObject,
+  JsonValue,
   SchemaSuggestion,
   SemanticInput,
   SuggestedEvent,
   UISpec,
 } from "@kohaku-ui/spec-core";
+
+/**
+ * One entry of the Governed Actions manifest (design.md #62/#64, SPEC §6.1/§6.1.1 [Draft]): the wire shape
+ * of `actions[name]` on a compose response. Structurally mirrors host-core's `ActionManifestEntry` --
+ * duplicated here rather than imported, since `@kohaku-ui/client` does not depend on
+ * `@kohaku-ui/host-core` (see AGENTS.md's dependency direction; `host-rest` is a devDependency-only test
+ * counterpart, and the same applies transitively to `host-core`).
+ */
+export interface ActionManifestEntry {
+  tier: ActionTier;
+  /** The action's raw params schema (the same value `OperationDescriptor.paramsSchema` declared), when present. */
+  paramsSchema?: JsonValue;
+  confirmMessage?: string;
+}
+
+/**
+ * `{ [actionName]: ActionManifestEntry }`, keyed by exactly the write actions the Spec declares that the
+ * host also recognizes as a `DomainPort` operation (SPEC §5 A1). Carried alongside a compose response,
+ * outside the Spec itself, so it never affects `specHash` / the cache key.
+ */
+export type ActionManifest = Record<string, ActionManifestEntry>;
 
 /** Session info (surface / sessionId / locale). Maps onto the `session` field of each REST body. */
 export interface SessionArg {
@@ -32,6 +55,11 @@ export interface ComposeRequest {
 export interface ComposeView {
   spec: UISpec;
   capability: string;
+  /**
+   * The Governed Actions manifest (design.md #62/#64, SPEC §6.1/§6.1.1 [Draft]), present only when the
+   * Spec declares at least one write action the host also recognizes as a real `DomainPort` operation.
+   */
+  actions?: ActionManifest;
   /**
    * The response's `X-Request-Id` header, read by the client (not part of the REST wire body -- host-rest
    * stamps it as a response header on every request, success or failure). Pass this to
