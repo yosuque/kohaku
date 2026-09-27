@@ -521,8 +521,48 @@ export const myCard = defineComponent({
   fallback: { type: "presentMarkdown", mapProps: () => ({ markdown: "(unsupported)" }) },
 });
 // API side: resolveCatalog(coreCatalog, { components: [myCard] })
-// Web side: registry.register("myapp.card", "1.0.0", MyCardComponent)  // fetch data with useBoundData
 ```
+
+`myCard` is the single source of truth for `{type, version, propsSchema}` — define it once (e.g. in a shared
+package your server and every renderer both import) rather than re-typing `"myapp.card"` / `"1.0.0"` as string
+literals at each registration site; a typo or version drift between them would otherwise go undetected until
+runtime (design.md #68).
+
+React (`@kohaku-ui/renderer-react`): `implement(def, Component)` infers `Component`'s `props` from
+`def.propsSchema`, so `node.props["title"] as string` casts are unnecessary, and `ImplRegistry.use(entry)`
+registers the result under `def`'s own type/version:
+
+```tsx
+import { implement, ImplRegistry, type TypedImplProps } from "@kohaku-ui/renderer-react";
+
+function MyCardComponent({ props }: TypedImplProps<z.infer<typeof myCard.propsSchema>>) {
+  return <div>{props.title}</div>; // props.title: string
+}
+
+const registry = new ImplRegistry().use(implement(myCard, MyCardComponent));
+```
+
+Web Components (`@kohaku-ui/renderer-wc`): `<kohaku-surface>` exposes a public `registerPart(type, version,
+builder)`, and `implementWc(def, builder)` is its typed counterpart:
+
+```ts
+import { implementWc } from "@kohaku-ui/renderer-wc";
+
+const entry = implementWc(myCard, (rt, parent, node, props) => {
+  const el = document.createElement("div");
+  el.textContent = props.title; // props.title: string
+  parent.appendChild(el);
+  return () => el.remove();
+});
+surface.registerPart(entry.type, entry.version, entry.builder);
+```
+
+Both `implement` and `implementWc` validate the node's `props` against `def.propsSchema` by default outside a
+`NODE_ENV=production` build (`console.warn` on a mismatch, without failing the node — pass `{ validate: false }`
+/ `{ validate: true }` to override either way). The untyped `ImplRegistry.register` / a plain `PartBuilder`
+registered via `registerPart` both keep working unchanged for a part that has no static `ComponentDefinition`
+(e.g. a promoted part whose schema is generated per-artifact from the approval draft — see
+`apps/sample-api/src/intents/promoted.ts`).
 
 Validation: `npx @kohaku-ui/cli component validate <definition.json>`. The minimal definition.json that passes validation (`type` is a dot-separated identifier, `version` is semver, `propsSchema` is a JSON Schema of `type: "object"`, and `capabilities.data` requires one of `none | optional | required`):
 

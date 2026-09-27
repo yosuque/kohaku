@@ -518,8 +518,47 @@ export const myCard = defineComponent({
   fallback: { type: "presentMarkdown", mapProps: () => ({ markdown: "(非対応)" }) },
 });
 // API 側: resolveCatalog(coreCatalog, { components: [myCard] })
-// Web 側: registry.register("myapp.card", "1.0.0", MyCardComponent)  // useBoundData でデータ取得
 ```
+
+`myCard` は `{type, version, propsSchema}` の単一の情報源である。サーバーと各レンダラーの両方がインポートする
+共有パッケージなどに一度だけ定義し、登録箇所ごとに `"myapp.card"` / `"1.0.0"` を文字列リテラルとして書き直さない。
+そうしないと両者のタイプミスやバージョンのずれが実行時まで検出されない(design.md #68)。
+
+React(`@kohaku-ui/renderer-react`): `implement(def, Component)` は `Component` の `props` を `def.propsSchema`
+から推論するため、`node.props["title"] as string` のようなキャストは不要になる。`ImplRegistry.use(entry)` が
+結果を `def` 自身の type/version で登録する:
+
+```tsx
+import { implement, ImplRegistry, type TypedImplProps } from "@kohaku-ui/renderer-react";
+
+function MyCardComponent({ props }: TypedImplProps<z.infer<typeof myCard.propsSchema>>) {
+  return <div>{props.title}</div>; // props.title: string
+}
+
+const registry = new ImplRegistry().use(implement(myCard, MyCardComponent));
+```
+
+Web Components(`@kohaku-ui/renderer-wc`): `<kohaku-surface>` は公開 API `registerPart(type, version,
+builder)` を持ち、`implementWc(def, builder)` がその型付き版になる:
+
+```ts
+import { implementWc } from "@kohaku-ui/renderer-wc";
+
+const entry = implementWc(myCard, (rt, parent, node, props) => {
+  const el = document.createElement("div");
+  el.textContent = props.title; // props.title: string
+  parent.appendChild(el);
+  return () => el.remove();
+});
+surface.registerPart(entry.type, entry.version, entry.builder);
+```
+
+`implement` と `implementWc` はどちらも、既定では `NODE_ENV=production` のビルド以外でノードの `props` を
+`def.propsSchema` に照らして検証する(不一致は `console.warn` するだけでノードを失敗させない。
+`{ validate: false }` / `{ validate: true }` でどちらの向きにも上書きできる)。型なしの `ImplRegistry.register`
+や、`registerPart` に生の `PartBuilder` を渡す登録も、静的な `ComponentDefinition` を持たない部品(例:承認
+ドラフトからアーティファクトごとにスキーマが生成される昇格済み部品——`apps/sample-api/src/intents/promoted.ts`
+を参照)のためにそのまま動作し続ける。
 
 検証: `npx @kohaku-ui/cli component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
 
