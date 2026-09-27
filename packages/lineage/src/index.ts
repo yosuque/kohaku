@@ -55,6 +55,7 @@ export {
   type PromotionJudgeContext,
   PromotionNotPublishedError,
   PromotionNotRejectedError,
+  type PromotionOrigin,
   type PromotionPolicy,
   type Promotions,
   type WithdrawOptions,

@@ -60,6 +60,7 @@ export type {
   NormalizeResult,
   PromotionAction,
   PromotionCandidateView,
+  PromotionOriginView,
   PromotionPreviewView,
   PromotionReconcileSummaryView,
   SchemaSuggestionView,
