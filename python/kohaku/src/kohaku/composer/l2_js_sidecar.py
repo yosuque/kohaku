@@ -143,7 +143,10 @@ class L2JsSidecar:
             if not isinstance(issues, list) or not all(isinstance(x, str) for x in issues):
                 raise ValueError("issues is not an array of strings")
             return issues
-        except (json.JSONDecodeError, KeyError, ValueError, UnicodeDecodeError) as e:
+        # RecursionError: CPython's json decoder recurses per nesting level, so a pathologically deep sidecar
+        # response raises this instead of JSONDecodeError -- fail open (no issues reported) the same way as
+        # any other malformed result, rather than letting it escape as an unhandled exception.
+        except (json.JSONDecodeError, KeyError, ValueError, UnicodeDecodeError, RecursionError) as e:
             self._warn(f"failed to interpret the verification result ({e})")
             return []
 

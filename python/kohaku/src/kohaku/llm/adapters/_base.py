@@ -83,10 +83,14 @@ def extract_json(text: str) -> str:
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     body = (fenced.group(1) if fenced is not None else text).strip()
     # First try parsing the whole thing directly. In the normal case where the model output only JSON as instructed, this settles it here.
+    # RecursionError: CPython's json decoder recurses per nesting level, so a pathologically deep (but
+    # otherwise well-formed) model output raises this instead of JSONDecodeError -- caught the same way here
+    # (fall through to the extraction heuristic below), rather than escaping as an unhandled exception (see
+    # kohaku.host_rest._routes.shared._read_json for the same reasoning on the HTTP-request-body side).
     try:
         json.loads(body)
         return body
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         pass
     # Fallback when text is mixed in before/after. Use whichever of `{` and `[` appears earlier as the start,
     # and slice up to the last position of the corresponding closing bracket (handles both objects and arrays).
@@ -151,17 +155,29 @@ def parse_partial_json(text: str) -> Any | None:
     # The normal case where the whole thing is directly valid settles here (e.g. the final increment after completion).
     try:
         return json.loads(stripped)
+    except RecursionError:
+        # CPython's json decoder recurses per nesting level, so a pathologically deep partial output raises
+        # this instead of JSONDecodeError. Returned as "no partial for this increment" immediately, *not*
+        # falling through to the shrinking-prefix loop below: that loop's own doc comment assumes "partial is
+        # a small JSON, so brute force is sufficient" -- a shrunk prefix of a pathologically deep structure is
+        # still pathologically deep, so the loop would run its full O(n) close_open_structures scan at up to
+        # n positions (O(n^2) total) against a large adversarial input instead of the small one it was sized
+        # for, trading an uncaught crash for a multi-second hang instead of actually fixing anything.
+        return None
     except json.JSONDecodeError:
         pass
     # Shrinking from the end, look for the "longest prefix that becomes valid once closing brackets are added".
-    # partial is a small JSON, so brute force is sufficient (conflating also bounds the frequency).
+    # partial is a small JSON, so brute force is sufficient (conflating also bounds the frequency). A
+    # RecursionError here (unlike the first attempt above) is caught rather than bailing out entirely: `text`
+    # already parsed shallowly enough to reach this loop without one, so it is not the deeply-nested case the
+    # early return above exists for, and skipping just this one candidate keeps the search going.
     for end in range(len(stripped), 0, -1):
         completed = close_open_structures(stripped[:end])
         if completed is None:
             continue
         try:
             return json.loads(completed)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             continue
     return None
 
@@ -193,7 +209,10 @@ def parse_native_text(schema: SchemaInput, text: str, config: LlmConfig) -> Any:
     """
     try:
         obj = json.loads(text)
-    except json.JSONDecodeError as err:
+    except (json.JSONDecodeError, RecursionError) as err:
+        # RecursionError: see extract_json's comment above -- a pathologically deep structured-output payload
+        # raises this instead of JSONDecodeError, and must fail the same INVALID_OUTPUT way rather than
+        # escaping this call as an unhandled exception.
         raise LlmError(
             "INVALID_OUTPUT",
             "structured output is not valid JSON",
@@ -494,7 +513,8 @@ class StructuredLlmBase:
             text = extract_json(result.text)
             try:
                 obj = json.loads(text)
-            except json.JSONDecodeError as err:
+            except (json.JSONDecodeError, RecursionError) as err:
+                # RecursionError: see extract_json's comment above.
                 raise LlmError(
                     "INVALID_OUTPUT",
                     "prompt-mode output is not valid JSON",
