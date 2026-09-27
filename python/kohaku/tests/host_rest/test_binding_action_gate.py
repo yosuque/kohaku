@@ -188,6 +188,18 @@ class TestTierApprove:
         res = _post_action(harness, {"action": "delete", "payload": {}, "approval": "some-token"}, token)
         assert res.status_code == 403
 
+    def test_without_an_approval_port_configured_and_no_token_either_still_denies_with_a_clear_reason(
+        self, tmp_path: Path
+    ) -> None:
+        domain = _EchoDomain(OperationDescriptor(name="delete", description="d", tier="approve"))
+        harness = build_harness(tmp_path, domain=domain)
+        token = harness.issue([Scope(kind="write", ref="delete")])
+        res = _post_action(harness, {"action": "delete", "payload": {}}, token)
+        assert res.status_code == 403
+        body = res.json()
+        assert body["error"]["code"] == "APPROVAL_REQUIRED"
+        assert body["error"]["message"] == "no ApprovalPort is configured for this host"
+
     def test_with_a_valid_token_invokes_the_domain_and_records_approved(self, tmp_path: Path) -> None:
         domain = _EchoDomain(OperationDescriptor(name="delete", description="d", tier="approve"))
 

@@ -57,8 +57,10 @@ class ActionGateApprovalRequired:
 
 @dataclass(frozen=True)
 class ActionGateDenied:
-    """Tier "approve" and an approval token *was* presented, but it did not verify (wrong binding, expired,
-    already used, self-approval, or no ApprovalPort is configured at all). Distinguished from
+    """Tier "approve" and either (a) no ApprovalPort is configured for this host at all -- checked first,
+    unconditionally, whether or not a token was presented, since no token could ever verify and no
+    POST /approvals (or MCP equivalent) could ever mint one -- or (b) a token *was* presented but did not
+    verify (wrong binding, expired, already used, self-approval). Distinguished from
     ActionGateApprovalRequired so the caller can record a distinct audit event (action.denied vs
     action.approvalRequested) even though both map to the same 403 APPROVAL_REQUIRED wire response."""
 
@@ -121,15 +123,19 @@ class ActionGate:
             )
 
         # tier == "approve"
-        if req.approval is None:
-            return ActionGateApprovalRequired(
-                tier=tier, payloadHash=payload_hash, requestId=str(uuid.uuid4())
-            )
         if self._approvals is None:
+            # Checked before whether a token was even presented: with no ApprovalPort at all, no token
+            # this client could ever supply would verify, and POST /approvals (REST) / the equivalent
+            # MCP path can never mint one either -- so this fails
+            # closed unconditionally rather than teasing a retry via ActionGateApprovalRequired.
             return ActionGateDenied(
                 payloadHash=payload_hash,
                 requestId=str(uuid.uuid4()),
                 reason="no ApprovalPort is configured for this host",
+            )
+        if req.approval is None:
+            return ActionGateApprovalRequired(
+                tier=tier, payloadHash=payload_hash, requestId=str(uuid.uuid4())
             )
         verdict = await self._approvals.verify_approval(
             req.approval,

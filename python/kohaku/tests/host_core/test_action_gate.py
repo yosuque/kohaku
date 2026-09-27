@@ -139,6 +139,20 @@ def test_approve_with_no_approval_port_configured_is_denied() -> None:
     asyncio.run(run())
 
 
+def test_approve_with_no_approval_port_configured_is_denied_even_without_a_token() -> None:
+    # No ApprovalPort at all is checked unconditionally, before whether a token was even presented: no
+    # token this client could ever supply would verify, and POST /approvals (or the MCP equivalent) can
+    # never mint one either, so approvalRequired (which implies "retry with a token") would mislead.
+    gate = create_action_gate()
+
+    async def run() -> None:
+        result = await gate.check(ActionGateRequest(descriptor=APPROVE, payload={}, requester_id="u1"))
+        assert result.kind == "denied"
+        assert result.reason == "no ApprovalPort is configured for this host"
+
+    asyncio.run(run())
+
+
 def test_approve_allows_and_surfaces_the_grant_on_success() -> None:
     grant = ApprovalGrant(
         action="delete",

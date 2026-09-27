@@ -108,6 +108,18 @@ describe("createActionGate: tier 'approve'", () => {
     expect(result.kind).toBe("denied");
   });
 
+  it("returns denied (not approvalRequired) with no ApprovalPort configured and no token presented either", async () => {
+    // No ApprovalPort at all is checked unconditionally, before whether a token was even presented: no
+    // token this client could ever supply would verify, and POST /approvals (or the MCP equivalent) can
+    // never mint one either, so `approvalRequired` (which implies "retry with a token") would mislead.
+    const gate = createActionGate();
+    const result = await gate.check({ descriptor: APPROVE, payload: {}, requesterId: "u1" });
+    expect(result.kind).toBe("denied");
+    if (result.kind === "denied") {
+      expect(result.reason).toBe("no ApprovalPort is configured for this host");
+    }
+  });
+
   it("allows and surfaces the grant when the approval verifies", async () => {
     const grant = {
       action: "delete",

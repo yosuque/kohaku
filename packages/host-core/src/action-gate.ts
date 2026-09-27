@@ -60,8 +60,10 @@ export interface ActionGateApprovalRequired {
 }
 
 /**
- * Tier `"approve"` and an `approval` token *was* presented, but it did not verify (wrong binding,
- * expired, already used, self-approval, or no `ApprovalPort` is configured at all). Distinguished from
+ * Tier `"approve"` and either (a) no `ApprovalPort` is configured for this host at all — checked first,
+ * unconditionally, whether or not a token was presented, since no token could ever verify and no
+ * `POST /approvals` (or MCP equivalent) could ever mint one — or (b) a token *was* presented but did not
+ * verify (wrong binding, expired, already used, self-approval). Distinguished from
  * `ActionGateApprovalRequired` so the caller can record a distinct audit event (`action.denied` vs
  * `action.approvalRequested`) even though both map to the same 403 `APPROVAL_REQUIRED` wire response.
  */
@@ -111,10 +113,11 @@ export function createActionGate(options: ActionGateOptions = {}) {
       }
 
       // tier === "approve"
-      if (req.approval == null) {
-        return { kind: "approvalRequired", tier, payloadHash, requestId: globalThis.crypto.randomUUID() };
-      }
       if (approvals == null) {
+        // Checked before whether a token was even presented: with no ApprovalPort at all, no token this
+        // client could ever supply would verify, and POST /approvals (REST) / the equivalent MCP path
+        // can never mint one either — so this fails closed
+        // unconditionally rather than teasing a retry via `approvalRequired`.
         return {
           kind: "denied",
           tier,
@@ -122,6 +125,9 @@ export function createActionGate(options: ActionGateOptions = {}) {
           requestId: globalThis.crypto.randomUUID(),
           reason: "no ApprovalPort is configured for this host",
         };
+      }
+      if (req.approval == null) {
+        return { kind: "approvalRequired", tier, payloadHash, requestId: globalThis.crypto.randomUUID() };
       }
       const verdict = await approvals.verifyApproval(req.approval, {
         action: req.descriptor.name,

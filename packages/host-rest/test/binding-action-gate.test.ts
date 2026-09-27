@@ -191,6 +191,16 @@ describe("POST /binding/action: tier approve (ACT-APR-001)", () => {
     expect(res.status).toBe(403);
   });
 
+  it("without an ApprovalPort configured and no token presented either, still 403 denied with a clear reason (not 'requires an approval token')", async () => {
+    const domain = domainWith({ name: "delete", description: "d", tier: "approve" });
+    const deps = baseDeps({ domain });
+    const res = await postAction(deps, { action: "delete", payload: {} });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("APPROVAL_REQUIRED");
+    expect(body.error.message).toBe("no ApprovalPort is configured for this host");
+  });
+
   it("with a valid approval token, invokes the domain and passes the correct binding to verifyApproval", async () => {
     const domain = domainWith({ name: "delete", description: "d", tier: "approve" });
     const verify = vi.fn(
