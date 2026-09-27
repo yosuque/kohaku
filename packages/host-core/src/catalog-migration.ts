@@ -128,6 +128,20 @@ async function computePlanHash(
 }
 
 /**
+ * Recomputes `plan.planHash` from the plan's own `rewrites` / `steps` / `blocked` and compares it against
+ * the stored value — detects a hand-edited or otherwise corrupted plan (e.g. a `plan.json` round-tripped
+ * through an external tool that altered a step's `pinnedSpec` without updating its `afterStructureHash`,
+ * or `planHash` itself) before `applyCatalogMigration` ever calls `Fixations.replace`. This is a narrower,
+ * cheaper check than re-running `planCatalogMigration` from scratch (it does not need a `catalogFor` or
+ * `storage`, so it is available to `apply` even though `apply`'s own options carry neither) — it does not
+ * (and cannot, without recomposing) detect that the *catalog itself* has since changed; the per-step TOCTOU
+ * guard `applyCatalogMigration` already runs against live storage is what catches that.
+ */
+export async function verifyCatalogMigrationPlan(plan: CatalogMigrationPlan): Promise<boolean> {
+  return (await computePlanHash(plan.rewrites, plan.steps, plan.blocked)) === plan.planHash;
+}
+
+/**
  * Surveys every tenant's fixations for uses of a deprecated-with-replacement catalog type, rewrites them,
  * and revalidates the result. Read-only: nothing is written to storage. See the module doc for the
  * plan/apply split.

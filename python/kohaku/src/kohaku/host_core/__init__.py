@@ -44,6 +44,7 @@ from .catalog_migration import (
     CatalogMigrationStep,
     apply_catalog_migration,
     plan_catalog_migration,
+    verify_catalog_migration_plan,
 )
 from .errors import (
     ConsoleErrorReporter,
@@ -133,4 +134,5 @@ __all__ = [
     "resolve_fixated_result",
     "resolve_intent",
     "settle_fixation",
+    "verify_catalog_migration_plan",
 ]

@@ -113,6 +113,13 @@ def _compute_plan_hash(
     return f"sha256:{sha256_hex(canonical_stringify(material))}"
 
 
+def verify_catalog_migration_plan(plan: CatalogMigrationPlan) -> bool:
+    """Recomputes plan.planHash from the plan's own rewrites/steps/blocked and compares it against the
+    stored value -- detects a hand-edited or otherwise corrupted plan before apply_catalog_migration ever
+    calls Fixations.replace. Port of TS's verifyCatalogMigrationPlan."""
+    return _compute_plan_hash(plan.rewrites, plan.steps, plan.blocked) == plan.planHash
+
+
 async def plan_catalog_migration(
     *,
     storage: StoragePort,

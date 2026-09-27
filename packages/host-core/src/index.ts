@@ -33,6 +33,7 @@ export {
   type CatalogMigrationStep,
   type PlanCatalogMigrationOptions,
   planCatalogMigration,
+  verifyCatalogMigrationPlan,
 } from "./catalog-migration.js";
 export {
   type ConsoleErrorReporter,

@@ -716,6 +716,15 @@ importers:
       '@kohaku-ui/evals':
         specifier: workspace:^
         version: link:../packages/evals
+      '@kohaku-ui/host-core':
+        specifier: workspace:^
+        version: link:../packages/host-core
+      '@kohaku-ui/lineage':
+        specifier: workspace:^
+        version: link:../packages/lineage
+      '@kohaku-ui/registry':
+        specifier: workspace:^
+        version: link:../packages/registry
       '@kohaku-ui/sandbox':
         specifier: workspace:^
         version: link:../packages/sandbox
@@ -725,6 +734,9 @@ importers:
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../packages/spec-core
+      '@kohaku-ui/storage-memory':
+        specifier: workspace:^
+        version: link:../packages/storage-memory
       commander:
         specifier: 'catalog:'
         version: 15.0.0
@@ -738,18 +750,9 @@ importers:
       '@kohaku-ui/host-rest':
         specifier: workspace:^
         version: link:../packages/host-rest
-      '@kohaku-ui/lineage':
-        specifier: workspace:^
-        version: link:../packages/lineage
       '@kohaku-ui/llm':
         specifier: workspace:^
         version: link:../packages/llm
-      '@kohaku-ui/registry':
-        specifier: workspace:^
-        version: link:../packages/registry
-      '@kohaku-ui/storage-memory':
-        specifier: workspace:^
-        version: link:../packages/storage-memory
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.2

@@ -7,6 +7,7 @@ import {
   type CatalogMigrationFixationReplacer,
   type CatalogMigrationPlan,
   planCatalogMigration,
+  verifyCatalogMigrationPlan,
 } from "../src/catalog-migration.js";
 
 const INTENT_HASH_CLEAN = "sha256:" + "1".repeat(64);
@@ -233,6 +234,49 @@ describe("planCatalogMigration", () => {
     });
     expect(plan.steps).toHaveLength(1);
     expect(plan.steps[0]!.tenant).toBe("acme");
+  });
+});
+
+describe("verifyCatalogMigrationPlan", () => {
+  it("a freshly computed plan verifies", async () => {
+    const catalog = migrationCatalog();
+    const plan = await planCatalogMigration({
+      storage: stubStorage([cleanFixation()]),
+      catalogFor: () => catalog,
+    });
+    expect(await verifyCatalogMigrationPlan(plan)).toBe(true);
+  });
+
+  it("a plan whose planHash was hand-edited fails verification", async () => {
+    const catalog = migrationCatalog();
+    const plan = await planCatalogMigration({
+      storage: stubStorage([cleanFixation()]),
+      catalogFor: () => catalog,
+    });
+    expect(await verifyCatalogMigrationPlan({ ...plan, planHash: "sha256:tampered" })).toBe(false);
+  });
+
+  it("a plan whose step content was hand-edited (without updating planHash) fails verification", async () => {
+    const catalog = migrationCatalog();
+    const plan = await planCatalogMigration({
+      storage: stubStorage([cleanFixation()]),
+      catalogFor: () => catalog,
+    });
+    const tampered: CatalogMigrationPlan = {
+      ...plan,
+      steps: plan.steps.map((s) => ({ ...s, afterStructureHash: "sha256:tampered" })),
+    };
+    expect(await verifyCatalogMigrationPlan(tampered)).toBe(false);
+  });
+
+  it("surviving a round-trip through JSON.stringify/parse (as migrate apply reads plan.json) still verifies", async () => {
+    const catalog = migrationCatalog();
+    const plan = await planCatalogMigration({
+      storage: stubStorage([cleanFixation()]),
+      catalogFor: () => catalog,
+    });
+    const roundTripped = JSON.parse(JSON.stringify(plan)) as CatalogMigrationPlan;
+    expect(await verifyCatalogMigrationPlan(roundTripped)).toBe(true);
   });
 });
 

@@ -12,6 +12,7 @@ from kohaku.host_core import (
     CatalogMigrationPlan,
     apply_catalog_migration,
     plan_catalog_migration,
+    verify_catalog_migration_plan,
 )
 from kohaku.registry import (
     CapabilityDecl,
@@ -326,6 +327,45 @@ def test_sweeps_every_tenant_tagging_steps_and_blocked() -> None:
     plan = asyncio.run(run())
     assert len(plan.steps) == 1
     assert plan.steps[0].tenant == "acme"
+
+
+# --- verify_catalog_migration_plan ---
+
+
+def test_a_freshly_computed_plan_verifies() -> None:
+    catalog = _migration_catalog()
+    storage = _StubStorage({None: [_clean_fixation()]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    plan = asyncio.run(run())
+    assert verify_catalog_migration_plan(plan) is True
+
+
+def test_a_plan_whose_plan_hash_was_hand_edited_fails_verification() -> None:
+    catalog = _migration_catalog()
+    storage = _StubStorage({None: [_clean_fixation()]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    plan = asyncio.run(run())
+    tampered = replace(plan, planHash="sha256:tampered")
+    assert verify_catalog_migration_plan(tampered) is False
+
+
+def test_a_plan_whose_step_content_was_hand_edited_fails_verification() -> None:
+    catalog = _no_extra_fields_catalog()
+    storage = _StubStorage({None: [_clean_fixation()]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    plan = asyncio.run(run())
+    tampered_steps = [replace(s, afterStructureHash="sha256:tampered") for s in plan.steps]
+    tampered = replace(plan, steps=tampered_steps)
+    assert verify_catalog_migration_plan(tampered) is False
 
 
 # --- apply_catalog_migration ---
