@@ -84,11 +84,14 @@
 
 ### 3.1 ComponentDefinition [Normative]
 
-`{ type, version(semver), description, propsSchema(JSON Schema), capabilities { events, data: none|optional|required, children, editable? }, implementation { kind: native | sandbox-template }, fallback?, golden? }`
+`{ type, version(semver), description, propsSchema(JSON Schema), capabilities { events, data: none|optional|required, children, editable? }, implementation { kind: native | sandbox-template }, fallback?, golden?, deprecated? }`
 
 - props は JSON 表現可能でなければならない(MUST。日時等は文字列で表す)。
 - `description` は LLM の選択ガイダンスとして生成プロンプトに転写される(SHOULD は具体的に)。
 - **型名の命名規約**: コア型の `type` は `<namespace>.<name>`(例: `layout.stack`、`control.select`)を原則とする。`present*` 系(`presentList` / `presentMetric` / `presentChart` / `presentForm` / `presentSpreadsheet` / `presentMarkdown`)は例外で、v0.1 でワイヤ契約を固定した当時のフラットな camelCase 名をそのまま維持している — 今からリネームすると命名整理では済まずワイヤ契約とカタログフィンガープリントが変わってしまう(破壊的変更)ため。新規のコア型・プロダクト拡張は名前空間付きの名前を使うべき(SHOULD)。
+- **`deprecated?`**(MAY)は部品が代替されたことを示す: `{ reason, since?, replacedBy?: { type, version? }, sunset? }`。deprecated な部品は既にそれを参照している既存の Spec の検証を通し続けなければならない(MUST — deprecated 化は今後の生成対象を変えるのであって、既に描画済みのものを変えるのではない)が、L1 生成の語彙からは除外すべき(SHOULD。§4)。`replacedBy` が存在する場合、同じ解決済みカタログ内の別エントリに解決できなければならない — `type` が一致し、`version` を指定した場合はそれと厳密に一致すること(MUST)。ホストは `GET /catalog`(§6.1)でこのフィールドを公開してよい(MAY)。deprecated でない部品ではこのフィールド自体を省略する(明示的な不在値としては送らない)。
+
+リファレンス実装は、加えて `fallback` の隣に TS のみ・ワイヤ非対応の `migrateProps(props)` フックを持ち、deprecated な部品の props を `replacedBy` の形へ書き換える。関数であるためシリアライズされることは無く、ワイヤ上の規範的な意味は持たない(design.md #65 参照)。
 
 ### 3.2 Surface capability negotiation(capability 交渉)とフォールバック [Draft]
 
@@ -96,7 +99,7 @@
 
 ### 3.3 federated 配信 [Draft]
 
-カタログ = コア ⊕ プロダクト寄与 ⊕ 昇格分。既存 type の上書きは semver 上昇時のみ(MUST)。カタログ指紋(`type@version` ソート結合のハッシュ。sandbox-template 分は `#fnv1a64(html)` を付加)はキャッシュキー成分。
+カタログ = コア ⊕ プロダクト寄与 ⊕ 昇格分。既存 type の上書きは semver 上昇時のみ(MUST)。カタログ指紋(`type@version` ソート結合のハッシュ。sandbox-template 分は `#fnv1a64(html)` を、`deprecated` を持つエントリはさらに `!deprecated` を付加)はキャッシュキー成分。部品を deprecated にするとそのカタログの指紋(ひいてはコンポーズキャッシュキー)が変わるが、他のエントリの識別子文字列 — ひいては指紋への寄与分 — は変わらない。
 
 ## 4. 合成規約 [Normative(後処理規範は Draft)]
 
@@ -309,6 +312,7 @@ MUST 要件をすべて満たす実装を conformant とする。SHOULD 違反�
   - 検証不通過なら固定化を配信せず(**stale**)、固定化を自己修復として無効化(`intent.unfixated` を `actor: {kind:"system"}`・`reason: "stale"` で記録)して通常 compose にフォールバックする。無効化の失敗は配信を止めない(固定化が残り毎回 revalidate 失敗→フォールバックの縮退運転)。
   - カタログ指紋の判定(fresh / revalidated)を通過した固定化でも、配信前に**解決済み参照 URI の集合**を突合する。固定化 Spec が表す参照 URI 集合(`refVersions` のキー集合。`refVersions` を持たない旧レコードは pin 済み部品の `data.$ref` の集合)が現行 Intent の `resolveQuery` 解決結果の URI 集合と一致しない(URI の追加・削除・差し替え)場合は **stale** とし、同様に固定化を無効化して通常 compose にフォールバックする。カタログ指紋は部品の型/props 由来で query 写像に非依存なため、同一 Intent でもコード改版・semantic 層の変更で参照集合がドリフトすると fresh / revalidated では捕捉できない。ドリフトしたまま配信すると参照単位の版突合(`refVersions` / SPEC-DATA-002)が壊れる(削除された参照は常時 STALE 表示、追加された参照は対応部品が無いまま鮮度表示される)ため安全側に倒す。
   - fresh 経路の Spec/trace は現行と同一(`REST-CMP-002` 等の決定性検査に影響しない)。
+- **カタログ移行**(design.md #65): `replacedBy` を伴う `deprecated`(§3.1)なカタログエントリは、それを参照する固定化に対しても検証を通し続ける(deprecated であること自体は上記の陳腐化検出における **stale** を意味しない)が、ホストはそのエントリの `sunset` 日付より前にそうした固定化を置き換え先へ移行すべきである(SHOULD)。`sunset` を過ぎたら、ホストはそのエントリをカタログから完全に削除してよく(MAY)、その時点で残る参照はすべて **stale** となり(再検証が `UNKNOWN_TYPE` で失敗する)、上記と同様に自己修復される。移行による書き換えは `intent.fixated` ではなく `intent.migrated` として記録される — 固定化の識別子(`intentHash`)とテナントは変わらず、変わるのは pin 済み構造と `structureHash` のみ。参照実装の `Fixations.replace` は、人間の承認者を actor として、payload `{intentHash, structureHash, approver, planId?}` で記録し、移行が計画された時点から固定化が動いていないことを(TOCTOU で)保証する。`kohaku migrate plan`/`apply` CLI が、deprecated かつ置き換え先を持つ型を参照するすべての固定化に対してこれを一括で駆動する。
 
 ---
 
@@ -327,3 +331,4 @@ MUST 要件をすべて満たす実装を conformant とする。SHOULD 違反�
 11. 双方向バインディング契約 [Draft] (A1): `data.bind: { <param>: { $state, values[] } }` と純関数 `resolveBoundRef` / `enumerateBindVariants`、軽量コントロール部品 `control.select`(change → state.set)を追加。`$ref` は初期 `$state` 値で埋めた初期 variant の正準 URI。ホストは compose 時に `values` の直積 variant を read スコープで列挙発行し(`issueCapabilityForSpec`)、クライアントは compose 往復なしで effective ref を再解決する。additive で、bind 未使用の 0.2 Spec は valid のまま(§2.3 / §5)。L1 生成には開放しない(generation:excluded)。
 12. `StoragePort` の並行性契約を明文化: 同一 (tenant, key) の read-modify-write を直列化するのは**ホスト**の責務である(プロセス単位の single-writer が前提。同一バッキングストアに対する複数インスタンス同時実行は対象外)。この契約のもとで特定の 1 レースだけを狭める additive なフックを 2 つ追加した — `putFixation` の任意 `options?: { ifPresent? }`(キーが既に存在しない限り書き込みを no-op にする。自己修復の `refreshFingerprint` が他の書き手が削除済みの固定化を復活させないために使う)と `FixationRecord.revision?`(プロセス内で単調増加する per-write トークンで、`fixatedAt` の ms 精度タイムスタンプより粒度が細かい。`invalidate` の TOCTOU ガードは存在すればこちらを優先し、無ければ `fixatedAt` にフォールバックする)。いずれも optional・additive で、これらを持たない旧 `StoragePort` 実装・固定化レコードの挙動は不変。
 13. `provenance` に任意フィールドを 2 つ追加(いずれも MAY。7 番の `generatorVersion` キャッシュキー成分と対をなす): `generatorVersion`(合成時点で有効だったホストの生成器 identity)と `kit`(`{id, version}`。生成されたマークアップが書かれた対象の design kit)。いずれも対応する `ComposePolicy` フィールドが設定されているときにのみ composer が刻み、tier を問わず(L0 含む)刻まれ、キャッシュヒット時は(サーフェスの現在の kit ではなく)合成時点の値のまま保たれ、L1→L0 固定化をまたいでも(`pinnedSpec.provenance` からの spread により)引き継がれる。いずれも `policyFingerprint` やキャッシュキー自体には関与しない(provenance は `computeStructureHash` から除外されるため固定化の構造安定性判定に影響しない。`computeSpecHash` は新規合成 Spec でのみ変化する)。**SPEC-KIT-001**(SHOULD)により、design kit のスタイルシートを注入する surface は `provenance.kit` との版不一致を、無スタイルのまま黙って描画するのではなく検出できる — 参照実装の sandbox(`mountSandbox` の `provenanceKit` 突合)は fail-open で検査する(不一致はテレメトリ通知のみで描画は止めない)。
+14. カタログ移行契約(design.md #65): `ComponentDefinition.deprecated?`(§3.1: `{reason, since?, replacedBy?: {type, version?}, sunset?}`)は部品が置き換えられたことを示す — 生成はその部品を提示しなくなる(`selectGenerationTypes`)が、既に固定化された Spec の検証は通り続け、カタログ指紋はそうしたエントリごとに `!deprecated` サフィックスを畳み込む(§3.3)。`FIXATION_EVENT_TYPES` に `intent.migrated`(§8)が追加され、移行が固定化の `pinnedSpec` をその場で書き換える際に `Fixations.replace` が記録する。いずれも additive: deprecated なエントリを持たないカタログと `intent.migrated` イベントを持たない固定化ストアは、この項目が存在する前とバイト同一である。

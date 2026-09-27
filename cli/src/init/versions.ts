@@ -18,4 +18,6 @@ export const EXTERNAL_VERSIONS: Record<string, string> = {
   vitest: "^5.0.1",
   "@ai-sdk/anthropic": "^4.0.58",
   "@ai-sdk/openai-compatible": "^3.0.53",
+  "@modelcontextprotocol/server": "^2.0.0",
+  "@modelcontextprotocol/node": "^2.0.0",
 };

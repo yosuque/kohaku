@@ -248,7 +248,7 @@ The response of `POST /binding/action` is `{result, invalidates?, refVersions?}`
 
 | Route | Authorization | Description |
 |---|---|---|
-| `GET /catalog` | — (public read) | `{ components: [{type, version, description, capabilities, implementation, propsSchema(JSON Schema)}], catalogVersion }` |
+| `GET /catalog` | — (public read) | `{ components: [{type, version, description, capabilities, implementation, propsSchema(JSON Schema), deprecated?}], catalogVersion }`. `deprecated` (design.md #65) is `{reason, since?, replacedBy?: {type, version?}, sunset?}`, present only on a superseded part |
 | `GET /lineage?type=&intentHash=&artifactId=&specHash=&correlationId=&since=&until=&limit=` | `authorizeGovernance` (when wired) | `{ events: LineageEventRecord[] }`. `since` / `until` are ISO8601 (same normalization / boundary interpretation as `/analytics/summary`), `limit` defaults to 200 (`DEFAULT_LINEAGE_LIMIT`) and is capped at 1000. `correlationId` matches the payload field by exact equality, the same way `intentHash` / `artifactId` / `specHash` do. Additionally accepts `order=asc&cursor=&pageSize=` for exhaustive forward paging (below) |
 | `GET /analytics/summary?since=&until=&limit=` | `authorizeGovernance` (when wired; `analytics.read`) | `{ window, summary }`. An overview summary aggregated from lineage's raw event stream (below). **A reference-implementation-level extension** (outside the required set of §11) |
 | `POST /telemetry` | `authorizeGovernance` (when wired) | `{ events: [{kind:"rendered", specHash,…} \| {kind:"componentUsed", artifactId, outcome}] }` → `{ok}` |
@@ -513,6 +513,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 | `component.schemaSuggested` | artifactId, suggestion (`{draft, events, confidence, model, extractorId, extractorVersion, suggestedAt}`) | Recorded with a **model actor** right after `component.nominated`, when the host's `suggestSchema` hook (advisory schema extraction) is wired and succeeds |
 | `component.schemaEdited` | artifactId, reviewer, extractorId, extractorVersion, changed (`DraftFieldChange[]`), unchanged (`DraftDiffField[]`), acknowledged (boolean) | Recorded with a **user actor** on the `approve` path, next to `component.schemaProposed`, when the approved candidate carried a `component.schemaSuggested`. `changed` lists the fields where the reviewer's submitted draft diverges from the suggestion (empty = approved as-is); `unchanged` lists the rest. `acknowledged` mirrors the approve request's `acknowledgedSuggestion` (a missing request field is recorded as `false`) — recorded for audit only, never enforced |
 | `intent.fixated` / `intent.unfixated` | intentHash, canonical, structureHash, approver | fixations |
+| `intent.migrated` | intentHash, structureHash, approver, planId? | `Fixations.replace` (design.md #65): a catalog migration rewrote a fixation's `pinnedSpec` in place (deprecated part → its `replacedBy`). Unlike `intent.fixated`, the fixation's identity (`intentHash`/tenant) is unchanged; only the pinned structure and `structureHash` are. `planId` correlates to the `kohaku migrate plan` output that produced the rewrite, when driven via the CLI |
 | `intent.observed` | — | A reservation in the type catalog (not recorded in v0.1) |
 
 ## 11. conformance

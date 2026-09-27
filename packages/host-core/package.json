@@ -14,13 +14,13 @@
   "dependencies": {
     "@kohaku-ui/spec-core": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
-    "@kohaku-ui/data-binding": "workspace:^"
+    "@kohaku-ui/data-binding": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^"
   },
   "peerDependencies": {
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@kohaku-ui/registry": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",
     "@types/node": "catalog:",
     "typescript": "catalog:",

@@ -80,12 +80,11 @@ describe("buildEvidencePack", () => {
         type: "intent.fixated",
         payload: { intentHash: "h1" },
       }),
-      // Not (yet) a member of LineageEventType -- see EVIDENCE_APPROVAL_EVENT_TYPES's doc comment
-      // (introduced by the parallel F7 catalog-migration branch, not merged at the time of writing).
+      // intent.migrated (F7's catalog migration, design.md #65) is a real LineageEventType member.
       event({
         id: "5",
         ts: "2026-01-09T00:00:00.000Z",
-        type: "intent.migrated" as LineageEventRecord["type"],
+        type: "intent.migrated",
         payload: { intentHash: "h1" },
       }),
     ];

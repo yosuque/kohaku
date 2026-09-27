@@ -36,11 +36,18 @@ export const COMPONENT_EVENT_TYPES = [
   "component.withdrawn",
 ] as const;
 
-// intent.fixated / intent.unfixated are fired by the fixations service. intent.observed is an
-// **intentionally reserved type** that is not fired in v0.1 (docs/specification.md §10 "reservation in the
-// type catalog"). It remains in the type catalog as room to later introduce Intent observation (recording
-// frequently-used Intents).
-export const FIXATION_EVENT_TYPES = ["intent.observed", "intent.fixated", "intent.unfixated"] as const;
+// intent.fixated / intent.unfixated / intent.migrated are fired by the fixations service. intent.observed
+// is an **intentionally reserved type** that is not fired in v0.1 (docs/specification.md §10 "reservation
+// in the type catalog"). It remains in the type catalog as room to later introduce Intent observation
+// (recording frequently-used Intents). intent.migrated (design.md #65) is fired by Fixations.replace when
+// a catalog migration rewrites a fixated Spec's components in place (structureHash changes, intentHash and
+// the fixation's identity do not) — see fixation/service.ts's `replace`.
+export const FIXATION_EVENT_TYPES = [
+  "intent.observed",
+  "intent.fixated",
+  "intent.unfixated",
+  "intent.migrated",
+] as const;
 
 export type LineageEventType =
   | (typeof VIEW_EVENT_TYPES)[number]

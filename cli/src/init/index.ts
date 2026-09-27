@@ -4,7 +4,12 @@ import { basename, extname, join, resolve } from "node:path";
 import { writeScaffold } from "../commands.js";
 import { type DatasetProfile, inferProfile, normalizeRows, slugify } from "./infer.js";
 import { readDataFile } from "./readers.js";
-import { type ProjectFile, renderEnvFile, renderProjectFiles } from "./render.js";
+import {
+  type ProjectFile,
+  renderClaudeDesktopConfigExample,
+  renderEnvFile,
+  renderProjectFiles,
+} from "./render.js";
 
 export interface InitOptions {
   from: string;
@@ -13,6 +18,11 @@ export interface InitOptions {
   name?: string;
   table?: string;
   install?: boolean;
+  /**
+   * Also generates the MCP front door (server/mcp-server.ts, server/mcp.ts stdio, server/mcp-http.ts
+   * Streamable HTTP), on top of the REST front door that is always generated. Default false.
+   */
+  mcp?: boolean;
   /**
    * Generates the value written to the generated project's `.env` as `KOHAKU_CAPABILITY_SECRET`.
    * Default: a fresh cryptographically random secret (`randomBytes(32).toString("base64url")`). Overridable
@@ -110,12 +120,27 @@ export async function initProject(options: InitOptions, io: InitIo = {}): Promis
   const sourceName = options.source ?? basename(options.from, extname(options.from));
   const profile = inferProfile(sourceName, dataset);
   const rows = normalizeRows(dataset, profile);
-  const files = renderProjectFiles(profile, rows, { name });
+  const files = renderProjectFiles(profile, rows, { name, mcp: options.mcp === true });
   // `.env` carries a real, randomly generated secret (unlike `.env.example`'s empty placeholder) so the
   // generated project runs immediately; it is added here rather than in renderProjectFiles so that
   // function -- and its own tests -- stay free of randomness.
   const envFile: ProjectFile = { path: ".env", content: renderEnvFile((options.secret ?? defaultSecret)()) };
-  const written = writeScaffold([...files, envFile].map((f) => [join(outDir, f.path), f.content] as const));
+  // Like .env above, kept out of renderProjectFiles because it needs this run's actual outDir/execPath
+  // (an absolute-path config only meaningful for this one install -- Claude Desktop has no shell PATH of
+  // its own, so the paths it launches must already be absolute).
+  const extraFiles: ProjectFile[] =
+    options.mcp === true
+      ? [
+          envFile,
+          {
+            path: "claude_desktop_config.example.json",
+            content: renderClaudeDesktopConfigExample({ name, outDir, execPath: process.execPath }),
+          },
+        ]
+      : [envFile];
+  const written = writeScaffold(
+    [...files, ...extraFiles].map((f) => [join(outDir, f.path), f.content] as const),
+  );
   let installed = false;
   if (options.install !== false) {
     const code = await (io.run ?? defaultRun)("npm", ["install", "--no-audit", "--no-fund"], outDir);

@@ -5,6 +5,7 @@ import {
   type PromotionState,
   sha256Hex,
 } from "@kohaku-ui/spec-core";
+import type { LineageEventType } from "../events.js";
 import { artifactClaimFromEventPayload, artifactClaimFromPromotionData } from "./artifacts.js";
 import {
   EVIDENCE_PACK_FORMAT,
@@ -20,13 +21,11 @@ import type { EvidenceSource } from "./source.js";
  * lineage log. This is a filtered *index* into `events.jsonl`, not a separate record shape: each line
  * is the same normalized `LineageEventRecord` as the full log.
  *
- * `intent.migrated` is listed as a plain string rather than a typed `LineageEventType` member: it is
- * introduced by the parallel catalog-migration branch (F7), not yet merged at the time this list was
- * written, so `@kohaku-ui/lineage`'s own `LineageEventType` union does not carry it yet. Once that
- * branch lands, this stays correct as-is (the type will widen to include it); nothing here needs to
- * change.
+ * Typed as `readonly LineageEventType[]` (not a bare `string[]`) so a typo or a retired event type is
+ * caught at compile time; `intent.migrated` (design.md #65, F7's catalog migration) is a real member of
+ * that union.
  */
-export const EVIDENCE_APPROVAL_EVENT_TYPES: readonly string[] = [
+export const EVIDENCE_APPROVAL_EVENT_TYPES: readonly LineageEventType[] = [
   "component.reviewed",
   "component.published",
   "component.withdrawn",
@@ -166,7 +165,13 @@ export async function buildEvidencePack(options: BuildEvidencePackOptions): Prom
     complete = false;
   }
 
-  const approvals = events.filter((e) => EVIDENCE_APPROVAL_EVENT_TYPES.includes(e.type));
+  // e.type is LineageEventRecord["type"] (spec-core's untyped wire string, not lineage's own narrower
+  // LineageEventType), so the containment check itself widens back to `readonly string[]` -- the point
+  // of typing the constant's own literal declaration above is compile-time typo-checking, not narrowing
+  // this runtime membership test (which must still accept whatever string the wire actually carries).
+  const approvals = events.filter((e) =>
+    (EVIDENCE_APPROVAL_EVENT_TYPES as readonly string[]).includes(e.type),
+  );
   const promotions = await source.listPromotionStates(scope.tenant);
   const fixations = await source.listFixations(scope.tenant);
 

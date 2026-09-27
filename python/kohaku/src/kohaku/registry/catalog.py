@@ -38,9 +38,12 @@ class ResolvedCatalog:
         self._by_type = by_type
         self.fingerprint = catalog_fingerprint(
             [
-                (d.type, d.version, d.implementation.html)
-                if d.implementation.kind == "sandbox-template"
-                else (d.type, d.version)
+                (
+                    d.type,
+                    d.version,
+                    d.implementation.html if d.implementation.kind == "sandbox-template" else None,
+                    d.deprecated is not None,
+                )
                 for d in by_type.values()
             ]
         )
@@ -84,6 +87,21 @@ def resolve_catalog(core: Catalog, *contributions: Catalog) -> ResolvedCatalog:
                     f" does not upgrade existing @{existing.version}"
                 )
             by_type[definition.type] = definition
+
+    for definition in by_type.values():
+        replaced_by = definition.deprecated.replacedBy if definition.deprecated is not None else None
+        if replaced_by is None:
+            continue
+        target = by_type.get(replaced_by.type)
+        label = f"{replaced_by.type}@{replaced_by.version}" if replaced_by.version is not None else replaced_by.type
+        if target is None:
+            raise CatalogConflictError(f'"{definition.type}" deprecated.replacedBy "{label}" does not resolve in the catalog')
+        if replaced_by.version is not None and target.version != replaced_by.version:
+            raise CatalogConflictError(
+                f'"{definition.type}" deprecated.replacedBy "{label}" does not resolve:'
+                f' catalog has "{replaced_by.type}"@{target.version}'
+            )
+
     return ResolvedCatalog(by_type)
 
 

@@ -27,11 +27,14 @@ from .props_schema import (
     props_schema_from_json_schema,
 )
 from .semver_util import Semver, compare, gt, is_valid, parse_semver, satisfies
+from .staged import StagedCatalogOptions, staged_catalog_for
 from .types import (
     CapabilityDecl,
     CatalogIssue,
     CatalogIssueCode,
     ComponentDefinition,
+    DeprecationDecl,
+    DeprecationReplacedBy,
     FallbackDecl,
     GoldenFixtureRef,
     ImplementationDecl,
@@ -47,6 +50,8 @@ __all__ = [
     "CapabilityDecl",
     "ComponentDefinition",
     "ComponentDefinitionError",
+    "DeprecationDecl",
+    "DeprecationReplacedBy",
     "Downgrade",
     "FallbackDecl",
     "GeneratedDraft",
@@ -59,6 +64,7 @@ __all__ = [
     "PropsValidationError",
     "ResolvedCatalog",
     "Semver",
+    "StagedCatalogOptions",
     "SurfaceCapabilities",
     "ValidateAgainstCatalogResult",
     "build_generation_schema",
@@ -75,6 +81,7 @@ __all__ = [
     "resolve_catalog",
     "satisfies",
     "select_generation_types",
+    "staged_catalog_for",
     "strip_nulls",
     "to_generation_props_schema",
 ]

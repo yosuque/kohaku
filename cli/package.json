@@ -15,7 +15,9 @@
     "@kohaku-ui/client": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
     "@kohaku-ui/evals": "workspace:^",
+    "@kohaku-ui/host-core": "workspace:^",
     "@kohaku-ui/lineage": "workspace:^",
+    "@kohaku-ui/registry": "workspace:^",
     "@kohaku-ui/sandbox": "workspace:^",
     "@kohaku-ui/spec": "workspace:^",
     "@kohaku-ui/spec-core": "workspace:^",
@@ -27,7 +29,6 @@
   "devDependencies": {
     "@kohaku-ui/host-rest": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",
-    "@kohaku-ui/registry": "workspace:^",
     "@types/node": "catalog:",
     "@types/semver": "catalog:",
     "hono": "catalog:",

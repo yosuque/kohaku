@@ -17,6 +17,7 @@
     "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@kohaku-ui/lineage": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/mcp-renderer": "workspace:^",
     "@kohaku-ui/renderer-core": "workspace:^",
     "@kohaku-ui/renderer-react": "workspace:^",
     "@kohaku-ui/spec-core": "workspace:^",

@@ -60,11 +60,13 @@ export type {
   NormalizeResult,
   PromotionAction,
   PromotionCandidateView,
+  PromotionOriginView,
   PromotionPreviewView,
   PromotionReconcileSummaryView,
   SchemaSuggestionView,
   SendEventRequest,
   SerializedComponentDef,
+  SerializedDeprecation,
   SessionArg,
   SuggestedEventView,
 } from "./types.js";

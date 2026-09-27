@@ -377,6 +377,78 @@ class Fixations:
             if_present=True,
         )
 
+    async def replace(
+        self,
+        intent_hash: str,
+        pinned_spec: UISpec,
+        *,
+        approver: Principal,
+        tenant: str | None = None,
+        guard: dict[str, Any] | None = None,
+        plan_id: str | None = None,
+    ) -> FixationRecord | None:
+        """Rewrites a fixation's pinned_spec in place, for host_core's apply_catalog_migration (design.md
+        #65). Port of TS's Fixations.replace (fixation/service.ts).
+
+        The intent_hash and tenant are unchanged (the fixation's identity); structure_hash is recomputed
+        from pinned_spec (never trusted from the caller, matching fixate's own behavior), a fresh revision
+        is stamped, and the catalog fingerprint is re-stamped from catalog_for (same as fixate) so the fast
+        path reflects the post-migration catalog. Returns None without writing anything when the fixation is
+        absent or `guard` does not match the current record (TOCTOU: the plan was built against a fixation
+        that has since moved on).
+
+        guard, in addition to invalidate's ifRevision / ifFixatedAt / ifCatalogFingerprint, accepts
+        ifStructureHash: a migration plan is built from a specific pinned_spec structure, so
+        apply_catalog_migration additionally guards on the structure it actually planned against having
+        stayed unchanged.
+
+        On success, records intent.migrated (actor: the approver) rather than intent.fixated -- a distinct
+        audit event so a migration-driven rewrite is never conflated with a fresh human fixation.
+        """
+        existing = await self._get_validated_fixation(intent_hash, tenant)
+        if existing is None:
+            return None
+        if guard is not None:
+            if_revision = guard.get("ifRevision")
+            if if_revision is not None:
+                if existing.revision != if_revision:
+                    return None
+            else:
+                if_fixated_at = guard.get("ifFixatedAt")
+                if if_fixated_at is not None and existing.fixatedAt != if_fixated_at:
+                    return None
+            if_fingerprint = guard.get("ifCatalogFingerprint")
+            if if_fingerprint is not None and existing.catalogFingerprint != if_fingerprint:
+                return None
+            if_structure_hash = guard.get("ifStructureHash")
+            if if_structure_hash is not None and existing.structureHash != if_structure_hash:
+                return None
+        record = dataclasses.replace(
+            existing,
+            pinnedSpec=pinned_spec,
+            structureHash=compute_structure_hash(pinned_spec),
+            fixatedAt=self._clock(),
+            revision=_generate_revision(),
+            approver=approver,
+            catalogFingerprint=(
+                self._catalog_for(tenant).fingerprint if self._catalog_for is not None else existing.catalogFingerprint
+            ),
+        )
+        # if_present=True guards the same race refresh_fingerprint's own write does (a concurrent unfixate
+        # between this method's get and put must not resurrect the fixation from this stale in-memory copy).
+        await self._storage.put_fixation(record, if_present=True)
+        payload: dict[str, Any] = {
+            "intentHash": intent_hash,
+            "structureHash": record.structureHash,
+            "approver": approver.id,
+        }
+        if plan_id is not None:
+            payload["planId"] = plan_id
+        await self._lineage.record(
+            "intent.migrated", payload, LineageActor(kind="user", id=approver.id), tenant
+        )
+        return record
+
 
 def create_fixations(
     *,

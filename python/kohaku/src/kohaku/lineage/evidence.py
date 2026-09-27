@@ -44,7 +44,7 @@ from kohaku.spec import (
     sha256_hex,
 )
 
-from .events import Clock, now_iso
+from .events import Clock, LineageEventType, now_iso
 
 if TYPE_CHECKING:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -236,11 +236,10 @@ def create_storage_evidence_source(storage: StoragePort) -> EvidenceSource:
 
 # --- build.ts ---
 
-# `intent.migrated` is listed as a plain string rather than a member of kohaku.lineage.events's typed
-# LineageEventType: it is introduced by the parallel catalog-migration branch (F7), not yet merged at
-# the time this list was written, so that type does not carry it yet. Once that branch lands, this
-# stays correct as-is (the type will widen to include it); nothing here needs to change.
-EVIDENCE_APPROVAL_EVENT_TYPES: tuple[str, ...] = (
+# Typed as tuple[LineageEventType, ...] (not a bare str tuple) so a typo or a retired event type is
+# caught by mypy; `intent.migrated` (design.md #65, F7's catalog migration) is a real member of that
+# type.
+EVIDENCE_APPROVAL_EVENT_TYPES: tuple[LineageEventType, ...] = (
     "component.reviewed",
     "component.published",
     "component.withdrawn",
