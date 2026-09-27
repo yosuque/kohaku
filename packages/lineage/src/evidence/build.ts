@@ -20,10 +20,11 @@ import type { EvidenceSource } from "./source.js";
  * lineage log. This is a filtered *index* into `events.jsonl`, not a separate record shape: each line
  * is the same normalized `LineageEventRecord` as the full log.
  *
- * Note: `intent.migrated` does not exist as a lineage event type in this codebase (see
- * `@kohaku-ui/lineage`'s `LineageEventType` -- the fixation family is only `intent.observed`
- * (reserved, never fired) / `intent.fixated` / `intent.unfixated`), so it is not included here. If a
- * future change introduces it, add it to this list.
+ * `intent.migrated` is listed as a plain string rather than a typed `LineageEventType` member: it is
+ * introduced by the parallel catalog-migration branch (F7), not yet merged at the time this list was
+ * written, so `@kohaku-ui/lineage`'s own `LineageEventType` union does not carry it yet. Once that
+ * branch lands, this stays correct as-is (the type will widen to include it); nothing here needs to
+ * change.
  */
 export const EVIDENCE_APPROVAL_EVENT_TYPES: readonly string[] = [
   "component.reviewed",
@@ -31,6 +32,7 @@ export const EVIDENCE_APPROVAL_EVENT_TYPES: readonly string[] = [
   "component.withdrawn",
   "intent.fixated",
   "intent.unfixated",
+  "intent.migrated",
 ];
 
 export interface EvidencePackScope {

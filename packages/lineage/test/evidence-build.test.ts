@@ -80,6 +80,14 @@ describe("buildEvidencePack", () => {
         type: "intent.fixated",
         payload: { intentHash: "h1" },
       }),
+      // Not (yet) a member of LineageEventType -- see EVIDENCE_APPROVAL_EVENT_TYPES's doc comment
+      // (introduced by the parallel F7 catalog-migration branch, not merged at the time of writing).
+      event({
+        id: "5",
+        ts: "2026-01-09T00:00:00.000Z",
+        type: "intent.migrated" as LineageEventRecord["type"],
+        payload: { intentHash: "h1" },
+      }),
     ];
     const realSha = await sha256Hex("<div>hello</div>");
     events[1]!.payload["artifactSha256"] = realSha;
@@ -109,8 +117,8 @@ describe("buildEvidencePack", () => {
     expect(result.manifest.complete).toBe(true);
     expect(result.manifest.generatedAt).toBe("2026-02-01T00:00:00.000Z");
     expect(result.manifest.counts).toEqual({
-      events: 4,
-      approvals: 2, // component.reviewed + intent.fixated
+      events: 5,
+      approvals: 3, // component.reviewed + intent.fixated + intent.migrated
       promotions: 1,
       fixations: 1,
       artifacts: 1,
@@ -130,14 +138,14 @@ describe("buildEvidencePack", () => {
     expect(textDecoder.decode(artifactFile.content)).toBe("<div>hello</div>");
 
     const eventsText = textDecoder.decode(result.files.find((f) => f.path === "events.jsonl")!.content);
-    expect(eventsText.trim().split("\n")).toHaveLength(4);
+    expect(eventsText.trim().split("\n")).toHaveLength(5);
 
     const approvalsText = textDecoder.decode(result.files.find((f) => f.path === "approvals.jsonl")!.content);
     const approvalTypes = approvalsText
       .trim()
       .split("\n")
       .map((line: string) => (JSON.parse(line) as LineageEventRecord).type);
-    expect(approvalTypes.sort()).toEqual(["component.reviewed", "intent.fixated"]);
+    expect(approvalTypes.sort()).toEqual(["component.reviewed", "intent.fixated", "intent.migrated"]);
     for (const type of approvalTypes) expect(EVIDENCE_APPROVAL_EVENT_TYPES).toContain(type);
 
     // Every file entry's recorded hash/size matches its actual bytes (independent of sign.ts's own checks).

@@ -209,15 +209,17 @@ def create_storage_evidence_source(storage: StoragePort) -> EvidenceSource:
 
 # --- build.ts ---
 
-# Note: `intent.migrated` does not exist as a lineage event type in this codebase (see
-# kohaku.lineage.events's LineageEventType -- the fixation family is only `intent.observed` (reserved,
-# never fired) / `intent.fixated` / `intent.unfixated`), so it is not included here.
+# `intent.migrated` is listed as a plain string rather than a member of kohaku.lineage.events's typed
+# LineageEventType: it is introduced by the parallel catalog-migration branch (F7), not yet merged at
+# the time this list was written, so that type does not carry it yet. Once that branch lands, this
+# stays correct as-is (the type will widen to include it); nothing here needs to change.
 EVIDENCE_APPROVAL_EVENT_TYPES: tuple[str, ...] = (
     "component.reviewed",
     "component.published",
     "component.withdrawn",
     "intent.fixated",
     "intent.unfixated",
+    "intent.migrated",
 )
 
 

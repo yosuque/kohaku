@@ -126,6 +126,10 @@ def test_build_evidence_pack_and_verify_roundtrip(tmp_path: Path) -> None:
         )
         await seed(storage, "component.reviewed", {"artifactId": "a1", "decision": "approve"})
         await seed(storage, "intent.fixated", {"intentHash": "h1"})
+        # Not (yet) a member of kohaku.lineage.events's LineageEventType -- see
+        # EVIDENCE_APPROVAL_EVENT_TYPES's doc comment (introduced by the parallel F7 catalog-migration
+        # branch, not merged at the time of writing).
+        await seed(storage, "intent.migrated", {"intentHash": "h1"})
         await storage.put_promotion_state(
             PromotionState(
                 artifactId="a1", status="published", updatedAt="2026-07-17T00:00:00Z", data={}
@@ -142,8 +146,8 @@ def test_build_evidence_pack_and_verify_roundtrip(tmp_path: Path) -> None:
         )
 
         assert pack.manifest.complete is True
-        assert pack.manifest.counts.events == 3
-        assert pack.manifest.counts.approvals == 2
+        assert pack.manifest.counts.events == 4
+        assert pack.manifest.counts.approvals == 3
         assert pack.manifest.counts.promotions == 1
         assert pack.manifest.counts.artifacts == 1
         assert pack.manifest.warnings == []
