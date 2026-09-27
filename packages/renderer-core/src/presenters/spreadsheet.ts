@@ -1,5 +1,7 @@
 import type { ResolveOptions } from "@kohaku-ui/data-binding";
-import type { ComponentNode, JsonObject, JsonValue, TabularColumn } from "@kohaku-ui/spec-core";
+import type { ComponentNode, JsonObject, JsonValue, TabularColumn, UISpec } from "@kohaku-ui/spec-core";
+import { type ActionManifest, preflightAction } from "../control/action-manifest.js";
+import { resolveInvokeTarget } from "../control/invoke.js";
 import type { SizingTokens } from "../theme.js";
 
 /** Local sort state (column + ascending/descending). */
@@ -279,6 +281,16 @@ export type CellEditPlan =
  * derived via effectiveRows, so both callers computing effectiveRows themselves first and passing
  * that in would just recompute the same thing — passing rows + copy keeps this the single place that
  * does so), which cell (`rowIndex` + `col`), and the just-typed raw text.
+ *
+ * `spec` / `node` / `actionManifest` (all optional; omitting `spec` or `node` skips the check, backward
+ * compatible) enable a governed-action pre-check (design.md #62): the cellEdit's fully-resolved invoke
+ * target is computed via `resolveInvokeTarget` (the same resolution `runInvokeTarget` itself would use)
+ * and checked with `preflightAction` *before* the optimistic working-copy commit below — so a value the
+ * server would reject (e.g. a `maxLength` violation) is caught while the cell is still in edit mode, the
+ * same aria-invalid UX `coerceCellInput`'s own failure already gives, rather than surfacing only after an
+ * optimistic commit + async round trip. Only the "invalid" outcome is acted on here — "confirm" / "approve"
+ * tiers still commit optimistically and are gated later, when the resolved runtime is actually dispatched
+ * through `runInvokeTarget` (a synchronous cell-commit decision has no room for an async confirm dialog).
  */
 export function planCellEdit(args: {
   rows: JsonObject[];
@@ -286,8 +298,11 @@ export function planCellEdit(args: {
   rowIndex: number;
   col: TabularColumn;
   raw: string;
+  spec?: UISpec;
+  node?: ComponentNode;
+  actionManifest?: ActionManifest;
 }): CellEditPlan {
-  const { rows, copy, rowIndex, col, raw } = args;
+  const { rows, copy, rowIndex, col, raw, spec, node, actionManifest } = args;
   const coercion = coerceCellInput(raw, col);
   if (!coercion.ok) return { kind: "invalid" };
 
@@ -297,11 +312,22 @@ export function planCellEdit(args: {
   const previousValue = row[col.key] ?? null;
   if (coercion.value === previousValue) return { kind: "close" };
 
-  const nextCopy = commitCellEdit(copy, rows, rowIndex, col.key, coercion.value);
   const runtime: SpreadsheetCellEditRuntime = {
     row,
     value: { column: col.key, value: coercion.value, previousValue, rowIndex },
   };
+
+  if (spec != null && node != null) {
+    const target = resolveInvokeTarget(spec, node, "cellEdit", runtime as unknown as JsonObject, {
+      hasBinding: true,
+    });
+    if (target.kind === "invoke") {
+      const preflight = preflightAction(actionManifest, target.action, target.payload);
+      if (preflight.kind === "invalid") return { kind: "invalid" };
+    }
+  }
+
+  const nextCopy = commitCellEdit(copy, rows, rowIndex, col.key, coercion.value);
   return { kind: "commit", copy: nextCopy, runtime };
 }
 

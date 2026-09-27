@@ -1,6 +1,7 @@
-import type { JsonObject, TabularColumn } from "@kohaku-ui/spec-core";
+import type { ComponentNode, JsonObject, TabularColumn, UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import {
+  type ActionManifest,
   applyLocalView,
   cellDraft,
   coerceCellInput,
@@ -336,5 +337,108 @@ describe("planCellEdit", () => {
     expect(plan.kind).toBe("commit");
     if (plan.kind !== "commit") throw new Error("expected commit");
     expect(plan.runtime.value.previousValue).toBeNull();
+  });
+});
+
+describe("planCellEdit: governed-action pre-check (design.md #62)", () => {
+  const rows: JsonObject[] = [{ region: "japan", revenue: 1 }];
+
+  // A realistic single-field write payload template ("$value.value" extracts the edited value, mirroring
+  // presentForm's own single-field convention, e.g. payload.note = "$value.note"), so the resolved
+  // invoke-target payload actually has a "value" key a paramsSchema can be written against.
+  function makeSpec(): UISpec {
+    return {
+      events: [{ on: "sheet.cellEdit", emit: "action.invoke", payload: { value: "$value.value" } }],
+    } as unknown as UISpec;
+  }
+  function makeNode(props: Record<string, unknown> = { action: "annotate" }): ComponentNode {
+    return { id: "sheet", type: "presentSpreadsheet", props } as unknown as ComponentNode;
+  }
+
+  it("without spec/node, the pre-check is skipped (backward compatible)", () => {
+    const manifest: ActionManifest = { annotate: { tier: "auto" } };
+    const plan = planCellEdit({
+      rows,
+      copy: undefined,
+      rowIndex: 0,
+      col: strCol,
+      raw: "kyoto",
+      actionManifest: manifest,
+    });
+    expect(plan.kind).toBe("commit");
+  });
+
+  it("a cellEdit that would fail the action's paramsSchema plans 'invalid', without committing", () => {
+    const schema = {
+      type: "object" as const,
+      properties: { value: { type: "string" as const, maxLength: 3 } },
+    };
+    const manifest: ActionManifest = { annotate: { tier: "auto", paramsSchema: schema } };
+    const plan = planCellEdit({
+      rows,
+      copy: undefined,
+      rowIndex: 0,
+      col: strCol,
+      raw: "way too long",
+      spec: makeSpec(),
+      node: makeNode(),
+      actionManifest: manifest,
+    });
+    expect(plan).toEqual({ kind: "invalid" });
+  });
+
+  it("a cellEdit that passes the action's paramsSchema still plans 'commit'", () => {
+    const schema = {
+      type: "object" as const,
+      properties: { value: { type: "string" as const, maxLength: 30 } },
+    };
+    const manifest: ActionManifest = { annotate: { tier: "auto", paramsSchema: schema } };
+    const plan = planCellEdit({
+      rows,
+      copy: undefined,
+      rowIndex: 0,
+      col: strCol,
+      raw: "kyoto",
+      spec: makeSpec(),
+      node: makeNode(),
+      actionManifest: manifest,
+    });
+    expect(plan.kind).toBe("commit");
+  });
+
+  it("a confirm/approve tier is not pre-checked here (still plans 'commit' — gated later by runInvokeTarget)", () => {
+    const manifest: ActionManifest = { annotate: { tier: "confirm" } };
+    const plan = planCellEdit({
+      rows,
+      copy: undefined,
+      rowIndex: 0,
+      col: strCol,
+      raw: "kyoto",
+      spec: makeSpec(),
+      node: makeNode(),
+      actionManifest: manifest,
+    });
+    expect(plan.kind).toBe("commit");
+  });
+
+  it("an undeclared cellEdit binding (resolveInvokeTarget -> forward) skips the check silently", () => {
+    const emptySpec = { events: [] } as unknown as UISpec;
+    const manifest: ActionManifest = {
+      annotate: {
+        tier: "auto",
+        paramsSchema: { type: "object", properties: { value: { type: "string", maxLength: 3 } } },
+      },
+    };
+    const plan = planCellEdit({
+      rows,
+      copy: undefined,
+      rowIndex: 0,
+      col: strCol,
+      raw: "way too long",
+      spec: emptySpec,
+      node: makeNode(),
+      actionManifest: manifest,
+    });
+    expect(plan.kind).toBe("commit");
   });
 });

@@ -5,6 +5,14 @@
 
 // a11y / theme
 export { FOCUSABLE_SELECTOR, isActivationKey, visuallyHiddenStyle } from "./a11y.js";
+// Governed actions (design.md #62/#63/#64): client-side preflight against the compose-issued manifest
+export {
+  type ActionManifest,
+  type ActionManifestEntry,
+  type PreflightActionResult,
+  preflightAction,
+  summarizeActionForModel,
+} from "./control/action-manifest.js";
 // Event governance / write decisions / row templates
 export {
   type EmitResolution,
