@@ -36,6 +36,7 @@ from .catalog_impact import (
     analyze_catalog_impact,
 )
 from .catalog_migration import (
+    CatalogMigrationApplyBlocked,
     CatalogMigrationApplyResult,
     CatalogMigrationBlocked,
     CatalogMigrationFixationReplacer,
@@ -89,6 +90,7 @@ __all__ = [
     "CatalogDeprecatedUsagePromotion",
     "CatalogFixationIssue",
     "CatalogImpactReport",
+    "CatalogMigrationApplyBlocked",
     "CatalogMigrationApplyResult",
     "CatalogMigrationBlocked",
     "CatalogMigrationFixationReplacer",

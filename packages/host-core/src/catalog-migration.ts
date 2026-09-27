@@ -26,9 +26,15 @@ import {
  * - `applyCatalogMigration` commits a previously computed plan's `steps` through a host-supplied
  *   fixation-replace surface (structurally `@kohaku-ui/lineage`'s `Fixations.replace` — see
  *   `CatalogMigrationFixationReplacer`'s doc for why this is a structural interface rather than an import;
- *   host-core must not depend on lineage). Each step's `beforeStructureHash` / `beforeRevision` become a
- *   TOCTOU guard, so a fixation that moved on (re-approved, unfixated, or already migrated by a concurrent
- *   `apply`) since the plan was built is skipped rather than clobbered.
+ *   host-core must not depend on lineage). Each step's `beforeStructureHash` / `beforeRevision` /
+ *   `beforeFixatedAt` / `beforeCatalogFingerprint` become a TOCTOU guard on the *fixation*, so a fixation
+ *   that moved on (re-approved, unfixated, or already migrated by a concurrent `apply`) since the plan was
+ *   built is skipped rather than clobbered. Independently, each step is also checked against the *catalog*
+ *   itself (`ApplyCatalogMigrationOptions.catalogFor`, required): its `targetCatalogFingerprint` must match
+ *   the live catalog's fingerprint, and the rewritten `pinnedSpec` is re-`validate`d against it unconditionally
+ *   (not only on a fingerprint mismatch — a propsSchema tightened without a version bump changes neither
+ *   fingerprint nor structureHash) before anything is written; either failing reports the step in `blocked`
+ *   with `reason: "catalog-drift"` instead of applying it.
  */
 
 export interface CatalogMigrationRewrite {
@@ -45,6 +51,22 @@ export interface CatalogMigrationStep {
   beforeStructureHash: string;
   beforeRevision?: string;
   beforeFixatedAt: string;
+  /**
+   * The fixation record's own `catalogFingerprint` field as observed while planning (absent for a legacy
+   * fixation that predates the field). Passed to `Fixations.replace` as `guard.ifCatalogFingerprint` —
+   * refuses the write if the fixation's own recorded fingerprint moved (e.g. a concurrent self-heal
+   * re-stamp) since planning. Distinct from `targetCatalogFingerprint` below, which guards the *catalog's*
+   * own fingerprint rather than this fixation record's.
+   */
+  beforeCatalogFingerprint?: string;
+  /**
+   * The tenant's catalog fingerprint as observed while planning (`catalogFor(tenant).fingerprint`).
+   * `applyCatalogMigration` re-resolves the live catalog for this step's tenant and refuses to write the
+   * step (reporting it in the apply result's `blocked`) if the live fingerprint differs — the catalog
+   * itself may have changed (a part added/removed/further deprecated) since the plan was computed, and a
+   * plan is not automatically safe to apply just because each individual fixation hasn't moved.
+   */
+  targetCatalogFingerprint: string;
   /** The rewritten Spec: matching nodes' type/version/props replaced, already revalidated against the target catalog. */
   pinnedSpec: UISpec;
   afterStructureHash: string;
@@ -116,6 +138,7 @@ async function computePlanHash(
         intentHash: s.intentHash,
         tenant: s.tenant,
         beforeStructureHash: s.beforeStructureHash,
+        targetCatalogFingerprint: s.targetCatalogFingerprint,
         afterStructureHash: s.afterStructureHash,
         rewrittenNodeIds: [...s.rewrittenNodeIds].sort(),
       }))
@@ -204,6 +227,10 @@ export async function planCatalogMigration(
         beforeStructureHash: fixation.structureHash,
         ...(fixation.revision != null ? { beforeRevision: fixation.revision } : {}),
         beforeFixatedAt: fixation.fixatedAt,
+        ...(fixation.catalogFingerprint != null
+          ? { beforeCatalogFingerprint: fixation.catalogFingerprint }
+          : {}),
+        targetCatalogFingerprint: catalog.fingerprint,
         pinnedSpec: newPinnedSpec,
         afterStructureHash: await computeStructureHash(newPinnedSpec),
         rewrittenNodeIds,
@@ -228,7 +255,12 @@ export interface CatalogMigrationFixationReplacer {
     options: {
       approver: Principal;
       tenant?: string;
-      guard?: { ifRevision?: string; ifFixatedAt?: string; ifStructureHash?: string };
+      guard?: {
+        ifRevision?: string;
+        ifFixatedAt?: string;
+        ifStructureHash?: string;
+        ifCatalogFingerprint?: string;
+      };
       planId?: string;
     },
   ): Promise<FixationRecord | null>;
@@ -238,6 +270,32 @@ export interface ApplyCatalogMigrationOptions {
   plan: CatalogMigrationPlan;
   fixations: CatalogMigrationFixationReplacer;
   approver: Principal;
+  /**
+   * Resolves the *live* catalog per tenant, checked against each step's `targetCatalogFingerprint` before
+   * anything is written. Required (not optional) so a stale `plan.json` can never be applied blind against
+   * a catalog that has since diverged from what the plan assumed — a plan is a point-in-time computation,
+   * not a guarantee that stays valid until someone gets around to applying it.
+   */
+  catalogFor: (tenant?: string) => ResolvedCatalog;
+}
+
+export interface CatalogMigrationApplyBlocked {
+  intentHash: string;
+  tenant?: string;
+  reason: "catalog-drift";
+  /** The live catalog's fingerprint actually observed at apply time (compare against the plan's own `steps[].targetCatalogFingerprint`). */
+  observedCatalogFingerprint: string;
+  /**
+   * Issues from re-validating `pinnedSpec` against the live catalog (`ResolvedCatalog.validate`), formatted
+   * as `materializeFixation` formats them. Empty when only the fingerprint differed but the pinnedSpec
+   * still happens to validate against the live catalog — still refused, since the plan was computed against
+   * a catalog that is no longer the one being applied against, not because this specific rewrite is known
+   * to be broken. Non-empty catches a case fingerprint comparison alone cannot: a part's propsSchema
+   * tightened in place without a version bump does not change the catalog fingerprint at all (the
+   * fingerprint is derived from `type@version`, not props content), so this check runs unconditionally,
+   * never only when the fingerprint already differed.
+   */
+  issues: string[];
 }
 
 export interface CatalogMigrationApplyResult {
@@ -248,23 +306,48 @@ export interface CatalogMigrationApplyResult {
    * `null` for either cause without distinguishing them, so neither does this).
    */
   skipped: { intentHash: string; tenant?: string }[];
+  /**
+   * A planned step refused because the *catalog* (not the fixation) moved since planning — see
+   * `CatalogMigrationApplyBlocked`. Nothing is written for a blocked step; `Fixations.replace` is never
+   * called for it.
+   */
+  blocked: CatalogMigrationApplyBlocked[];
 }
 
 /**
- * Commits a plan's `steps` (never `blocked` — those need a person to resolve the revalidation failure
+ * Commits a plan's `steps` (never `plan.blocked` — those need a person to resolve the revalidation failure
  * first, typically by re-planning after fixing the part's `migrateProps` or its propsSchema). Each
  * `Fixations.replace` call is independently guarded by that step's own `beforeStructureHash` /
- * `beforeRevision` / `beforeFixatedAt`, so applying a plan is safe to run even if some fixations changed
- * underneath it since planning — those are reported in `skipped`, not applied over.
+ * `beforeRevision` / `beforeFixatedAt` / `beforeCatalogFingerprint`, so applying a plan is safe to run even
+ * if some fixations changed underneath it since planning — those are reported in `skipped`, not applied
+ * over. Before that per-fixation guard is even reached, each step is independently re-checked against the
+ * *live* catalog (fingerprint match, then a full re-`validate`) — a step whose target catalog has drifted
+ * since planning is reported in `blocked` instead, and nothing is written for it.
  */
 export async function applyCatalogMigration(
   options: ApplyCatalogMigrationOptions,
 ): Promise<CatalogMigrationApplyResult> {
-  const { plan, fixations, approver } = options;
+  const { plan, fixations, approver, catalogFor } = options;
   const applied: CatalogMigrationApplyResult["applied"] = [];
   const skipped: CatalogMigrationApplyResult["skipped"] = [];
+  const blocked: CatalogMigrationApplyResult["blocked"] = [];
 
   for (const step of plan.steps) {
+    const catalog = catalogFor(step.tenant);
+    // Always re-validate, not only on a fingerprint mismatch: a propsSchema tightened in place under the
+    // same type@version never changes the fingerprint at all, so validation is the only thing that catches it.
+    const { issues } = catalog.validate(step.pinnedSpec.components, step.pinnedSpec.events);
+    if (catalog.fingerprint !== step.targetCatalogFingerprint || issues.length > 0) {
+      blocked.push({
+        intentHash: step.intentHash,
+        ...(step.tenant != null ? { tenant: step.tenant } : {}),
+        reason: "catalog-drift",
+        observedCatalogFingerprint: catalog.fingerprint,
+        issues: issues.map((i) => `${i.componentId}: ${i.message}`),
+      });
+      continue;
+    }
+
     const result = await fixations.replace(step.intentHash, step.pinnedSpec, {
       approver,
       ...(step.tenant != null ? { tenant: step.tenant } : {}),
@@ -272,6 +355,9 @@ export async function applyCatalogMigration(
         ...(step.beforeRevision != null ? { ifRevision: step.beforeRevision } : {}),
         ifFixatedAt: step.beforeFixatedAt,
         ifStructureHash: step.beforeStructureHash,
+        ...(step.beforeCatalogFingerprint != null
+          ? { ifCatalogFingerprint: step.beforeCatalogFingerprint }
+          : {}),
       },
       planId: plan.planHash,
     });
@@ -282,5 +368,5 @@ export async function applyCatalogMigration(
     }
   }
 
-  return { applied, skipped };
+  return { applied, skipped, blocked };
 }

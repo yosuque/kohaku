@@ -628,10 +628,10 @@ npx @kohaku-ui/cli migrate plan --data-dir ./.data --catalog ./catalog.ts --out 
 # plan.json を確認: rewrites / steps(適用可能)/ blocked(手動対応が必要 -- 例: 書き換え後に props の形が
 # 合わない)。そのうえで、--data-dir を共有するホストプロセスを止めてから(ファイルバックエンドの
 # StoragePort は同時書き込みに対して安全ではありません):
-npx @kohaku-ui/cli migrate apply --plan plan.json --approver you@example.com --data-dir ./.data
+npx @kohaku-ui/cli migrate apply --plan plan.json --approver you@example.com --data-dir ./.data --catalog ./catalog.ts
 ```
 
-`--catalog` は default export が `(tenant?: string) => ResolvedCatalog` である ESM モジュールを指します -- ホストの `ComposeContext.catalogFor` と同じ形なので、たいてい同じモジュール(またはその薄い re-export)を指せます。
+`--catalog`(`plan` / `apply` の両方で必須)は default export が `(tenant?: string) => ResolvedCatalog` である ESM モジュールを指します -- ホストの `ComposeContext.catalogFor` と同じ形なので、たいてい同じモジュール(またはその薄い re-export)を指せます。`apply` はこのカタログを再解決し、書き込む前に計画が記録した内容と突き合わせます: 計画からカタログが移行してしまっているステップ(部品の追加/削除/さらなる deprecated 化、あるいはバージョンを上げずにその場で `propsSchema` が厳しくなっただけでも)は適用されず拒否・報告されます。したがって `apply` の直前に `plan` を再実行するか、両方を全く同じカタログのスナップショットに向けるのが安全な既定運用です。
 
 #### カタログのバージョンを段階的に適用する
 

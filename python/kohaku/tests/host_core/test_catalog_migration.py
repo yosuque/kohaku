@@ -55,6 +55,7 @@ def _fixation(
     structureHash: str = "before-hash",
     revision: str | None = None,
     tenant: str | None = None,
+    catalogFingerprint: str | None = None,
 ) -> FixationRecord:
     return FixationRecord(
         intentHash=intent_hash,
@@ -65,6 +66,7 @@ def _fixation(
         approver=Principal(id="admin"),
         revision=revision,
         tenant=tenant,
+        catalogFingerprint=catalogFingerprint,
     )
 
 
@@ -169,6 +171,7 @@ def _clean_fixation() -> FixationRecord:
         ),
         structureHash="clean-before",
         revision="rev-clean",
+        catalogFingerprint="fp-clean-before",
     )
 
 
@@ -305,6 +308,50 @@ def test_plan_hash_is_deterministic_and_reacts_to_content_changes() -> None:
     assert c.planHash != a.planHash
 
 
+def test_plan_hash_changes_when_only_the_catalogs_fingerprint_differs() -> None:
+    async def run(catalog: ResolvedCatalog) -> CatalogMigrationPlan:
+        return await plan_catalog_migration(
+            storage=_StubStorage({None: [_clean_fixation()]}), catalog_for=lambda _t: catalog
+        )
+
+    a = asyncio.run(run(_no_extra_fields_catalog()))
+    b = asyncio.run(run(_no_extra_fields_catalog_with_extra_component()))
+    assert a.steps[0].rewrittenNodeIds == b.steps[0].rewrittenNodeIds
+    assert a.steps[0].targetCatalogFingerprint != b.steps[0].targetCatalogFingerprint
+    assert a.planHash != b.planHash
+
+
+def test_records_target_and_before_catalog_fingerprint_on_each_step() -> None:
+    catalog = _no_extra_fields_catalog()
+    storage = _StubStorage({None: [_clean_fixation()]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    plan = asyncio.run(run())
+    step = plan.steps[0]
+    assert step.targetCatalogFingerprint == catalog.fingerprint
+    assert step.beforeCatalogFingerprint == "fp-clean-before"
+
+
+def test_omits_before_catalog_fingerprint_for_a_legacy_fixation() -> None:
+    catalog = _no_extra_fields_catalog()
+    legacy = _fixation(
+        INTENT_HASH_CLEAN,
+        _fixed_spec(
+            INTENT_HASH_CLEAN,
+            [{"id": "kpi1", "type": OLD_CLEAN_TYPE, "props": {"label": "Revenue"}, "data": {"$ref": "query://sales/revenue"}}],
+        ),
+    )
+    storage = _StubStorage({None: [legacy]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    plan = asyncio.run(run())
+    assert plan.steps[0].beforeCatalogFingerprint is None
+
+
 def test_sweeps_every_tenant_tagging_steps_and_blocked() -> None:
     new_type_no_extra_fields = define_component(
         ComponentDefinition(
@@ -417,6 +464,57 @@ def _no_extra_fields_catalog() -> ResolvedCatalog:
     return resolve_catalog(core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def()]))
 
 
+def _no_extra_fields_catalog_with_extra_component() -> ResolvedCatalog:
+    """Same rewrite-relevant content as _no_extra_fields_catalog() (so a rewritten pinnedSpec still
+    validates cleanly), but with one extra, otherwise-irrelevant component -- a different overall
+    fingerprint (for drift tests that want the fingerprint to be the *only* thing that changed)."""
+    new_type_no_extra_fields = define_component(
+        ComponentDefinition(
+            type=NEW_TYPE,
+            version="2.0.0",
+            description="new kpi card (label only)",
+            propsSchema=PropsSchema(
+                {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+            ),
+            capabilities=CapabilityDecl(events=[], data="required", children="none"),
+        )
+    )
+    extra = define_component(
+        ComponentDefinition(
+            type="sales.unrelatedWidget",
+            version="1.0.0",
+            description="unrelated to the migration; present only to change the catalog fingerprint",
+            propsSchema=PropsSchema({"type": "object", "properties": {}}),
+            capabilities=CapabilityDecl(events=[], data="none", children="none"),
+        )
+    )
+    return resolve_catalog(
+        core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def(), extra])
+    )
+
+
+def _no_extra_fields_catalog_tightened() -> ResolvedCatalog:
+    """Same type@version as _no_extra_fields_catalog() (so the fingerprint is IDENTICAL), but NEW_TYPE's
+    propsSchema additionally requires `currencyCode` -- an in-place propsSchema tightening a fingerprint
+    comparison alone cannot catch."""
+    tightened = define_component(
+        ComponentDefinition(
+            type=NEW_TYPE,
+            version="2.0.0",
+            description="new kpi card (label only)",
+            propsSchema=PropsSchema(
+                {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}, "currencyCode": {"type": "string"}},
+                    "required": ["label", "currencyCode"],
+                }
+            ),
+            capabilities=CapabilityDecl(events=[], data="required", children="none"),
+        )
+    )
+    return resolve_catalog(core_catalog(), Catalog(components=[tightened, _old_clean_type_def()]))
+
+
 def _build_plan() -> CatalogMigrationPlan:
     catalog = _no_extra_fields_catalog()
     storage = _StubStorage({None: [_clean_fixation()]})
@@ -435,7 +533,9 @@ def test_apply_calls_replace_with_guard_and_plan_hash() -> None:
     replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
 
     async def run() -> CatalogMigrationApplyResult:
-        return await apply_catalog_migration(plan=plan, fixations=replacer, approver=APPROVER)
+        return await apply_catalog_migration(
+            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: _no_extra_fields_catalog()
+        )
 
     result = asyncio.run(run())
     calls = replacer.calls  # type: ignore[attr-defined]
@@ -448,9 +548,11 @@ def test_apply_calls_replace_with_guard_and_plan_hash() -> None:
         "ifFixatedAt": "2026-01-01T00:00:00Z",
         "ifStructureHash": "clean-before",
         "ifRevision": "rev-clean",
+        "ifCatalogFingerprint": "fp-clean-before",
     }
     assert result.applied == [{"intentHash": INTENT_HASH_CLEAN, "tenant": None}]
     assert result.skipped == []
+    assert result.blocked == []
 
 
 def test_apply_reports_a_guard_mismatch_as_skipped() -> None:
@@ -458,14 +560,17 @@ def test_apply_reports_a_guard_mismatch_as_skipped() -> None:
     replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for={INTENT_HASH_CLEAN}, calls=[])
 
     async def run() -> CatalogMigrationApplyResult:
-        return await apply_catalog_migration(plan=plan, fixations=replacer, approver=APPROVER)
+        return await apply_catalog_migration(
+            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: _no_extra_fields_catalog()
+        )
 
     result = asyncio.run(run())
     assert result.applied == []
     assert result.skipped == [{"intentHash": INTENT_HASH_CLEAN, "tenant": None}]
+    assert result.blocked == []
 
 
-def test_apply_never_calls_replace_for_a_blocked_step() -> None:
+def test_apply_never_calls_replace_for_a_step_already_in_plan_blocked() -> None:
     catalog = _migration_catalog()  # NEW_TYPE here requires `format`, so the clean fixation is blocked too
     storage = _StubStorage({None: [_blocked_fixation()]})
 
@@ -477,9 +582,75 @@ def test_apply_never_calls_replace_for_a_blocked_step() -> None:
     replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
 
     async def run_apply() -> CatalogMigrationApplyResult:
-        return await apply_catalog_migration(plan=plan, fixations=replacer, approver=APPROVER)
+        return await apply_catalog_migration(
+            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: catalog
+        )
 
     result = asyncio.run(run_apply())
     assert replacer.calls == []  # type: ignore[attr-defined]
     assert result.applied == []
     assert result.skipped == []
+    assert result.blocked == []
+
+
+# --- apply_catalog_migration: catalog drift (the catalog changed between plan and apply) ---
+
+
+def test_apply_refuses_a_step_when_the_live_catalogs_fingerprint_differs_from_the_plans_target() -> None:
+    plan = _build_plan()
+    drifted_catalog = _no_extra_fields_catalog_with_extra_component()
+    replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
+
+    async def run() -> CatalogMigrationApplyResult:
+        return await apply_catalog_migration(
+            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: drifted_catalog
+        )
+
+    result = asyncio.run(run())
+    assert replacer.calls == []  # type: ignore[attr-defined]
+    assert result.applied == []
+    assert result.skipped == []
+    assert len(result.blocked) == 1
+    entry = result.blocked[0]
+    assert entry.intentHash == INTENT_HASH_CLEAN
+    assert entry.reason == "catalog-drift"
+    assert entry.observedCatalogFingerprint == drifted_catalog.fingerprint
+    assert entry.issues == []
+
+
+def test_apply_refuses_a_step_whose_pinned_spec_fails_revalidation_even_though_the_fingerprint_is_unchanged() -> None:
+    plan = _build_plan()
+    tightened_catalog = _no_extra_fields_catalog_tightened()
+    # Sanity: this is exactly the case fingerprint comparison alone cannot catch.
+    assert tightened_catalog.fingerprint == plan.steps[0].targetCatalogFingerprint
+    replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
+
+    async def run() -> CatalogMigrationApplyResult:
+        return await apply_catalog_migration(
+            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: tightened_catalog
+        )
+
+    result = asyncio.run(run())
+    assert replacer.calls == []  # type: ignore[attr-defined]
+    assert result.applied == []
+    assert len(result.blocked) == 1
+    entry = result.blocked[0]
+    assert entry.intentHash == INTENT_HASH_CLEAN
+    assert entry.reason == "catalog-drift"
+    assert entry.observedCatalogFingerprint == tightened_catalog.fingerprint
+    assert len(entry.issues) > 0
+    assert "kpi1:" in entry.issues[0]
+
+
+def test_apply_applies_cleanly_when_the_live_catalog_matches_the_plans_target_exactly() -> None:
+    plan = _build_plan()
+    replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
+
+    async def run() -> CatalogMigrationApplyResult:
+        return await apply_catalog_migration(
+            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: _no_extra_fields_catalog()
+        )
+
+    result = asyncio.run(run())
+    assert result.blocked == []
+    assert result.applied == [{"intentHash": INTENT_HASH_CLEAN, "tenant": None}]

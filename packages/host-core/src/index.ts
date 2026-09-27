@@ -25,6 +25,7 @@ export {
 export {
   type ApplyCatalogMigrationOptions,
   applyCatalogMigration,
+  type CatalogMigrationApplyBlocked,
   type CatalogMigrationApplyResult,
   type CatalogMigrationBlocked,
   type CatalogMigrationFixationReplacer,

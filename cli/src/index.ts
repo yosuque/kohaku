@@ -355,11 +355,17 @@ migrate
     "--data-dir <dir>",
     "StoragePort data directory (must match the one --plan was computed against)",
   )
-  .action(async (opts: { plan: string; approver: string; dataDir: string }) => {
+  .requiredOption(
+    "--catalog <module>",
+    "Path to the *live* catalog module (same contract as `plan`'s --catalog). Every step is refused " +
+      "(reported as blocked, nothing written) if this catalog has drifted from the one the plan targeted",
+  )
+  .action(async (opts: { plan: string; approver: string; dataDir: string; catalog: string }) => {
     const options: MigrateApplyOptions = {
       dataDir: opts.dataDir,
       planPath: opts.plan,
       approver: opts.approver,
+      catalogModule: opts.catalog,
     };
     let result: Awaited<ReturnType<typeof migrateApply>>;
     try {
@@ -368,15 +374,23 @@ migrate
       program.error(e instanceof Error ? e.message : String(e));
       return;
     }
-    console.log(`Applied ${result.applied.length}, skipped ${result.skipped.length}`);
+    console.log(
+      `Applied ${result.applied.length}, skipped ${result.skipped.length}, blocked ${result.blocked.length}`,
+    );
     for (const a of result.applied)
       console.log(`  applied: ${a.intentHash}${a.tenant != null ? ` (tenant: ${a.tenant})` : ""}`);
     for (const s of result.skipped) {
       console.log(
-        `  skipped: ${s.intentHash}${s.tenant != null ? ` (tenant: ${s.tenant})` : ""} (changed since the plan was computed)`,
+        `  skipped: ${s.intentHash}${s.tenant != null ? ` (tenant: ${s.tenant})` : ""} (fixation changed since the plan was computed)`,
       );
     }
-    if (result.skipped.length > 0) process.exitCode = 1;
+    for (const b of result.blocked) {
+      console.log(
+        `  blocked: ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""} (catalog drift — ` +
+          `live fingerprint ${b.observedCatalogFingerprint}${b.issues.length > 0 ? `; ${b.issues.join("; ")}` : ""})`,
+      );
+    }
+    if (result.skipped.length > 0 || result.blocked.length > 0) process.exitCode = 1;
   });
 
 await program.parseAsync();

@@ -635,12 +635,16 @@ npx @kohaku-ui/cli migrate plan --data-dir ./.data --catalog ./catalog.ts --out 
 # Inspect plan.json: rewrites / steps (ready to apply) / blocked (needs manual attention — e.g. an
 # incompatible props shape after the rewrite). Then, with any host process sharing --data-dir stopped
 # (the file-backed StoragePort is not safe for concurrent writers):
-npx @kohaku-ui/cli migrate apply --plan plan.json --approver you@example.com --data-dir ./.data
+npx @kohaku-ui/cli migrate apply --plan plan.json --approver you@example.com --data-dir ./.data --catalog ./catalog.ts
 ```
 
-`--catalog` points at an ESM module whose default export is `(tenant?: string) => ResolvedCatalog` — the
-same shape your host's `ComposeContext.catalogFor` already takes, so it's usually the same module (or a
-thin re-export of it).
+`--catalog` (required on both `plan` and `apply`) points at an ESM module whose default export is
+`(tenant?: string) => ResolvedCatalog` — the same shape your host's `ComposeContext.catalogFor` already
+takes, so it's usually the same module (or a thin re-export of it). `apply` re-resolves this catalog and
+checks it against what the plan recorded before writing anything: a step whose target catalog has drifted
+since planning (a part added/removed/further deprecated, or even just a part's `propsSchema` tightened in
+place without a version bump) is refused and reported instead of applied, so re-running `plan` right before
+`apply` — or pointing both at the exact same catalog snapshot — is the safe default.
 
 #### Rolling out a catalog version gradually
 

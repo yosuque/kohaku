@@ -4,6 +4,11 @@
  * "a part was deprecated in my catalog; rewrite every fixated Spec that still uses it onto its
  * replacement."
  *
+ * `apply` requires `--catalog` too (the same option `plan` takes): a plan computed against catalog X is
+ * not automatically still safe to commit if the catalog has since moved on to Y — `applyCatalogMigration`
+ * re-resolves the live catalog per step's tenant and refuses (reports in the result's `blocked`) any step
+ * whose target has drifted, rather than trusting the plan blindly.
+ *
  * IMPORTANT (documented again in index.ts's --help text): `apply` writes through
  * @kohaku-ui/storage-memory's createFileStoragePort, which loads its snapshot into memory once at
  * construction and is not safe to run concurrently with a live host process sharing the same data
@@ -75,14 +80,21 @@ export interface MigrateApplyOptions {
   dataDir: string;
   planPath: string;
   approver: string;
+  /** Same contract as MigratePlanOptions.catalogModule — MUST resolve the *live* catalog, checked against
+   * each step's recorded target fingerprint before anything is written (see applyCatalogMigration's doc). */
+  catalogModule: string;
 }
 
 /**
  * `kohaku migrate apply`: loads a previously written plan.json, verifies its `planHash` against its own
  * `rewrites`/`steps`/`blocked` content (catching a hand-edited or otherwise corrupted plan file before a
- * single `Fixations.replace` call is made), then commits its `steps` — each independently TOCTOU-guarded
- * against the live fixation by `applyCatalogMigration` itself, so a fixation that moved on since planning
- * is skipped rather than clobbered.
+ * single `Fixations.replace` call is made), then commits its `steps` — each independently checked against
+ * the *live* catalog (fingerprint match + full re-validation; a step whose target has drifted since
+ * planning is refused, reported in the result's `blocked`, and never even reaches `Fixations.replace`) and
+ * TOCTOU-guarded against the live *fixation* by `applyCatalogMigration` itself, so a fixation that moved on
+ * since planning is skipped rather than clobbered. `createFixations` is wired with the same `catalogFor`,
+ * so a successful `replace` re-stamps the fixation's `catalogFingerprint` to the current catalog's — the
+ * next serve takes the fast (`fresh`) path instead of an unnecessary revalidation.
  */
 export async function migrateApply(options: MigrateApplyOptions): Promise<CatalogMigrationApplyResult> {
   if (!existsSync(options.planPath)) {
@@ -95,8 +107,9 @@ export async function migrateApply(options: MigrateApplyOptions): Promise<Catalo
         "was it hand-edited? Re-run `kohaku migrate plan` and apply the fresh output.",
     );
   }
+  const catalogFor = await loadCatalogFor(options.catalogModule);
   const storage = createFileStoragePort(options.dataDir);
   const lineage = createLineage({ storage });
-  const fixations = createFixations({ lineage, storage });
-  return applyCatalogMigration({ plan, fixations, approver: { id: options.approver } });
+  const fixations = createFixations({ lineage, storage, catalogFor });
+  return applyCatalogMigration({ plan, fixations, approver: { id: options.approver }, catalogFor });
 }

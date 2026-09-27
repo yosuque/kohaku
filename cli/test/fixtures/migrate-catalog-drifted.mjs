@@ -1,10 +1,8 @@
-// Fixture catalog module for cli/test/migrate.test.ts's `kohaku migrate plan/apply` coverage.
-// Contract (see migrate.ts's loadCatalogFor): the default export is `(tenant?: string) => ResolvedCatalog`.
-//
-// Builds propsSchema from a JSON Schema via propsSchemaFromJsonSchema instead of importing zod directly —
-// zod is not resolvable from this file's own location (a plain fixture outside any package's dependency
-// tree; see migrate-catalog-drifted.mjs, its sibling, for why the two need genuinely distinct schemas
-// rather than reusing a core component's).
+// Sibling of migrate-catalog.mjs, simulating the catalog having moved on between `migrate plan` and
+// `migrate apply`: sales.kpiCardNew's propsSchema is tightened (an added required `currencyCode`) without
+// bumping its version — so the catalog fingerprint (type@version only, never props content) is IDENTICAL
+// to migrate-catalog.mjs's, which is exactly the drift a fingerprint comparison alone cannot catch (see
+// applyCatalogMigration's unconditional re-`validate`). sales.legacyList is unchanged.
 import { coreCatalog, defineComponent, propsSchemaFromJsonSchema, resolveCatalog } from "@kohaku-ui/registry";
 
 const replacement = defineComponent({
@@ -13,8 +11,8 @@ const replacement = defineComponent({
   description: "replacement kpi card",
   propsSchema: propsSchemaFromJsonSchema({
     type: "object",
-    properties: { label: { type: "string" } },
-    required: ["label"],
+    properties: { label: { type: "string" }, currencyCode: { type: "string" } },
+    required: ["label", "currencyCode"],
   }),
   capabilities: { events: [], data: "required", children: "none" },
 });

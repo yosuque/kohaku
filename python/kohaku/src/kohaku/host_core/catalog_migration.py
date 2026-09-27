@@ -15,8 +15,14 @@ Two-phase, mirroring the promotion pipeline's own separation of "compute what wo
 - apply_catalog_migration commits a previously computed plan's `steps` through a host-supplied
   fixation-replace surface (structurally kohaku.lineage's Fixations.replace -- see
   CatalogMigrationFixationReplacer's doc for why this is a structural Protocol rather than an import;
-  host_core must not depend on lineage). Each step's before-structure-hash / before-revision become a
-  TOCTOU guard, so a fixation that moved on since the plan was built is skipped rather than clobbered.
+  host_core must not depend on lineage). Each step's before-structure-hash / before-revision /
+  before-fixated-at / before-catalog-fingerprint become a TOCTOU guard on the *fixation*, so a fixation
+  that moved on since the plan was built is skipped rather than clobbered. Independently, each step is
+  also checked against the *catalog* itself (a required catalog_for): its target_catalog_fingerprint must
+  match the live catalog's fingerprint, and the rewritten pinned_spec is re-validated against it
+  unconditionally (not only on a fingerprint mismatch -- a propsSchema tightened without a version bump
+  changes neither the fingerprint nor structure_hash) before anything is written; either failing reports
+  the step in `blocked` with reason "catalog-drift" instead of applying it.
 """
 
 from __future__ import annotations
@@ -51,11 +57,20 @@ class CatalogMigrationStep:
     intentHash: str
     beforeStructureHash: str
     beforeFixatedAt: str
+    targetCatalogFingerprint: str
+    """The tenant's catalog fingerprint as observed while planning (catalog_for(tenant).fingerprint).
+    apply_catalog_migration re-resolves the live catalog for this step's tenant and refuses to write the
+    step (reporting it in blocked) if the live fingerprint differs."""
     pinnedSpec: UISpec
     afterStructureHash: str
     rewrittenNodeIds: list[str]
     tenant: str | None = None
     beforeRevision: str | None = None
+    beforeCatalogFingerprint: str | None = None
+    """The fixation record's own catalogFingerprint field as observed while planning (None for a legacy
+    fixation that predates the field). Passed to Fixations.replace as guard["ifCatalogFingerprint"] --
+    distinct from targetCatalogFingerprint, which guards the *catalog's* fingerprint rather than this
+    fixation record's."""
 
 
 @dataclass(frozen=True)
@@ -95,6 +110,7 @@ def _compute_plan_hash(
                     "intentHash": s.intentHash,
                     "tenant": s.tenant,
                     "beforeStructureHash": s.beforeStructureHash,
+                    "targetCatalogFingerprint": s.targetCatalogFingerprint,
                     "afterStructureHash": s.afterStructureHash,
                     "rewrittenNodeIds": sorted(s.rewrittenNodeIds),
                 }
@@ -198,6 +214,8 @@ async def plan_catalog_migration(
                     beforeStructureHash=fixation.structureHash,
                     beforeRevision=fixation.revision,
                     beforeFixatedAt=fixation.fixatedAt,
+                    beforeCatalogFingerprint=fixation.catalogFingerprint,
+                    targetCatalogFingerprint=catalog.fingerprint,
                     pinnedSpec=new_pinned_spec,
                     afterStructureHash=compute_structure_hash(new_pinned_spec),
                     rewrittenNodeIds=rewritten_node_ids,
@@ -228,9 +246,27 @@ class CatalogMigrationFixationReplacer(Protocol):
 
 
 @dataclass(frozen=True)
+class CatalogMigrationApplyBlocked:
+    intentHash: str
+    observedCatalogFingerprint: str
+    """The live catalog's fingerprint actually observed at apply time (compare against the plan's own
+    step.targetCatalogFingerprint)."""
+    issues: list[str]
+    """Issues from re-validating pinnedSpec against the live catalog. Empty when only the fingerprint
+    differed but the pinnedSpec still happens to validate against the live catalog -- still refused, since
+    the plan was computed against a catalog that is no longer the one being applied against. Non-empty
+    catches a case fingerprint comparison alone cannot: a part's propsSchema tightened in place without a
+    version bump does not change the catalog fingerprint at all, so this check runs unconditionally, never
+    only when the fingerprint already differed."""
+    tenant: str | None = None
+    reason: str = "catalog-drift"
+
+
+@dataclass(frozen=True)
 class CatalogMigrationApplyResult:
     applied: list[dict[str, str | None]] = field(default_factory=list)
     skipped: list[dict[str, str | None]] = field(default_factory=list)
+    blocked: list[CatalogMigrationApplyBlocked] = field(default_factory=list)
 
 
 async def apply_catalog_migration(
@@ -238,18 +274,49 @@ async def apply_catalog_migration(
     plan: CatalogMigrationPlan,
     fixations: CatalogMigrationFixationReplacer,
     approver: Principal,
+    catalog_for: Any,
 ) -> CatalogMigrationApplyResult:
-    """Commits a plan's `steps` (never `blocked`). Each replace call is independently guarded by that
-    step's own before-structure-hash / before-revision / before-fixated-at, so applying a plan is safe to
-    run even if some fixations changed underneath it since planning -- those are reported in `skipped`."""
+    """Commits a plan's `steps` (never `plan.blocked`). Each replace call is independently guarded by that
+    step's own before-structure-hash / before-revision / before-fixated-at / before-catalog-fingerprint, so
+    applying a plan is safe to run even if some fixations changed underneath it since planning -- those are
+    reported in `skipped`. Before that per-fixation guard is even reached, each step is independently
+    re-checked against the *live* catalog (fingerprint match, then a full re-validate) -- a step whose
+    target catalog has drifted since planning is reported in `blocked` instead, and nothing is written for
+    it.
+
+    `catalog_for` is `Callable[[str | None], ResolvedCatalog]` (sync), typed `Any` for the same reason as
+    plan_catalog_migration's own parameter.
+    """
     applied: list[dict[str, str | None]] = []
     skipped: list[dict[str, str | None]] = []
+    blocked: list[CatalogMigrationApplyBlocked] = []
 
     for step in plan.steps:
+        catalog: ResolvedCatalog = catalog_for(step.tenant)
+        # Always re-validate, not only on a fingerprint mismatch: a propsSchema tightened in place under
+        # the same type@version never changes the fingerprint at all, so validation is the only thing that
+        # catches it.
+        result = catalog.validate(
+            [c.to_wire() for c in step.pinnedSpec.components],
+            [e.to_wire() for e in step.pinnedSpec.events],
+        )
+        if catalog.fingerprint != step.targetCatalogFingerprint or len(result.issues) > 0:
+            blocked.append(
+                CatalogMigrationApplyBlocked(
+                    intentHash=step.intentHash,
+                    tenant=step.tenant,
+                    observedCatalogFingerprint=catalog.fingerprint,
+                    issues=[f"{i.componentId}: {i.message}" for i in result.issues],
+                )
+            )
+            continue
+
         guard: dict[str, Any] = {"ifFixatedAt": step.beforeFixatedAt, "ifStructureHash": step.beforeStructureHash}
         if step.beforeRevision is not None:
             guard["ifRevision"] = step.beforeRevision
-        result = await fixations.replace(
+        if step.beforeCatalogFingerprint is not None:
+            guard["ifCatalogFingerprint"] = step.beforeCatalogFingerprint
+        replace_result = await fixations.replace(
             step.intentHash,
             step.pinnedSpec,
             approver=approver,
@@ -258,9 +325,9 @@ async def apply_catalog_migration(
             plan_id=plan.planHash,
         )
         entry = {"intentHash": step.intentHash, "tenant": step.tenant}
-        if result is None:
+        if replace_result is None:
             skipped.append(entry)
         else:
             applied.append(entry)
 
-    return CatalogMigrationApplyResult(applied=applied, skipped=skipped)
+    return CatalogMigrationApplyResult(applied=applied, skipped=skipped, blocked=blocked)

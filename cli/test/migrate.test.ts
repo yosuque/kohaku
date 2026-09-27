@@ -21,6 +21,7 @@ function tmp(): string {
 }
 
 const CATALOG_MODULE = join(import.meta.dirname, "fixtures/migrate-catalog.mjs");
+const DRIFTED_CATALOG_MODULE = join(import.meta.dirname, "fixtures/migrate-catalog-drifted.mjs");
 const INTENT_HASH = "sha256:" + "1".repeat(64);
 
 function pinnedSpec(): UISpec {
@@ -28,7 +29,14 @@ function pinnedSpec(): UISpec {
     kohaku: "0.1",
     intent: { canonical: "sales.trend", params: {}, hash: INTENT_HASH },
     dataVersion: "v1",
-    components: [{ id: "list1", type: "sales.legacyList", props: {}, data: { $ref: "query://sales/list" } }],
+    components: [
+      {
+        id: "list1",
+        type: "sales.legacyList",
+        props: { label: "Revenue" },
+        data: { $ref: "query://sales/list" },
+      },
+    ],
     events: [],
     provenance: { tier: "L0", composedBy: "fixture", cache: "fixated" },
   };
@@ -56,11 +64,12 @@ describe("kohaku migrate plan", () => {
 
     expect(written).toBe(outPath);
     expect(existsSync(outPath)).toBe(true);
-    expect(plan.rewrites).toEqual([{ from: "sales.legacyList", to: { type: "presentList" } }]);
+    expect(plan.rewrites).toEqual([{ from: "sales.legacyList", to: { type: "sales.kpiCardNew" } }]);
     expect(plan.blocked).toEqual([]);
     expect(plan.steps).toHaveLength(1);
     expect(plan.steps[0]!.intentHash).toBe(INTENT_HASH);
-    expect(plan.steps[0]!.pinnedSpec.components[0]!.type).toBe("presentList");
+    expect(plan.steps[0]!.pinnedSpec.components[0]!.type).toBe("sales.kpiCardNew");
+    expect(plan.steps[0]!.targetCatalogFingerprint).toBeTruthy();
 
     const onDisk = JSON.parse(readFileSync(outPath, "utf8"));
     expect(onDisk.planHash).toBe(plan.planHash);
@@ -88,22 +97,34 @@ describe("kohaku migrate plan", () => {
 });
 
 describe("kohaku migrate apply", () => {
-  it("applies a plan's steps, rewriting the persisted fixation and recording intent.migrated", async () => {
+  it("applies a plan's steps, rewriting the persisted fixation, stamping the live catalogFingerprint, and recording intent.migrated", async () => {
     const dataDir = tmp();
     await seedFixation(dataDir);
     const planPath = join(tmp(), "plan.json");
     await migratePlan({ dataDir, catalogModule: CATALOG_MODULE, outPath: planPath });
 
-    const result = await migrateApply({ dataDir, planPath, approver: "reviewer-1" });
+    const result = await migrateApply({
+      dataDir,
+      planPath,
+      approver: "reviewer-1",
+      catalogModule: CATALOG_MODULE,
+    });
     expect(result.applied).toEqual([{ intentHash: INTENT_HASH }]);
     expect(result.skipped).toEqual([]);
+    expect(result.blocked).toEqual([]);
 
     // Re-read from a fresh StoragePort instance (a separate process would do exactly this).
     const storage = createFileStoragePort(dataDir);
     const fixation = await storage.getFixation(INTENT_HASH);
     expect(fixation).not.toBeNull();
-    expect(fixation!.pinnedSpec.components[0]!.type).toBe("presentList");
+    expect(fixation!.pinnedSpec.components[0]!.type).toBe("sales.kpiCardNew");
     expect(fixation!.approver.id).toBe("reviewer-1");
+
+    // The fixation's own catalogFingerprint is re-stamped to the live catalog's — proving the *next* serve
+    // takes materializeFixation's fast ("fresh") path (fixation.catalogFingerprint === ctx.catalog.fingerprint)
+    // instead of an unnecessary revalidation, rather than actually driving a full compose here.
+    const catalogFor = (await import(CATALOG_MODULE)).default;
+    expect(fixation!.catalogFingerprint).toBe(catalogFor().fingerprint);
 
     const events = await storage.listLineage({ type: ["intent.migrated"] });
     expect(events).toHaveLength(1);
@@ -120,9 +141,9 @@ describe("kohaku migrate apply", () => {
     tampered.planHash = "sha256:tampered";
     writeFileSync(planPath, JSON.stringify(tampered));
 
-    await expect(migrateApply({ dataDir, planPath, approver: "reviewer-1" })).rejects.toThrow(
-      /integrity check/,
-    );
+    await expect(
+      migrateApply({ dataDir, planPath, approver: "reviewer-1", catalogModule: CATALOG_MODULE }),
+    ).rejects.toThrow(/integrity check/);
   });
 
   it("reports a step as skipped (not applied) when the fixation changed since the plan was computed", async () => {
@@ -137,15 +158,58 @@ describe("kohaku migrate apply", () => {
     await fixations.unfixate(INTENT_HASH, { id: "someone-else" });
     await fixations.fixate({ pinnedSpec: pinnedSpec(), approver: { id: "someone-else" } });
 
-    const result = await migrateApply({ dataDir, planPath, approver: "reviewer-1" });
+    const result = await migrateApply({
+      dataDir,
+      planPath,
+      approver: "reviewer-1",
+      catalogModule: CATALOG_MODULE,
+    });
     expect(result.applied).toEqual([]);
     expect(result.skipped).toEqual([{ intentHash: INTENT_HASH }]);
+  });
+
+  it("refuses a step and writes nothing when the catalog drifted since planning (a propsSchema tightened without a version bump — the fingerprint alone would miss this)", async () => {
+    const dataDir = tmp();
+    await seedFixation(dataDir);
+    const planPath = join(tmp(), "plan.json");
+    await migratePlan({ dataDir, catalogModule: CATALOG_MODULE, outPath: planPath });
+
+    // Sanity: migrate-catalog-drifted.mjs really does share the same fingerprint (same type@version) —
+    // otherwise this test would just be re-testing the (already-covered) fingerprint-mismatch path.
+    const stableFingerprint = (await import(CATALOG_MODULE)).default().fingerprint;
+    const driftedFingerprint = (await import(DRIFTED_CATALOG_MODULE)).default().fingerprint;
+    expect(driftedFingerprint).toBe(stableFingerprint);
+
+    const result = await migrateApply({
+      dataDir,
+      planPath,
+      approver: "reviewer-1",
+      catalogModule: DRIFTED_CATALOG_MODULE,
+    });
+    expect(result.applied).toEqual([]);
+    expect(result.skipped).toEqual([]);
+    expect(result.blocked).toHaveLength(1);
+    expect(result.blocked[0]!.intentHash).toBe(INTENT_HASH);
+    expect(result.blocked[0]!.reason).toBe("catalog-drift");
+    expect(result.blocked[0]!.issues.length).toBeGreaterThan(0);
+
+    // Nothing was written: the fixation is untouched (still the pre-migration type, no intent.migrated).
+    const storage = createFileStoragePort(dataDir);
+    const fixation = await storage.getFixation(INTENT_HASH);
+    expect(fixation!.pinnedSpec.components[0]!.type).toBe("sales.legacyList");
+    const events = await storage.listLineage({ type: ["intent.migrated"] });
+    expect(events).toEqual([]);
   });
 
   it("fails with a clear error when --plan does not exist", async () => {
     const dataDir = tmp();
     await expect(
-      migrateApply({ dataDir, planPath: join(tmp(), "missing-plan.json"), approver: "reviewer-1" }),
+      migrateApply({
+        dataDir,
+        planPath: join(tmp(), "missing-plan.json"),
+        approver: "reviewer-1",
+        catalogModule: CATALOG_MODULE,
+      }),
     ).rejects.toThrow(/not found/);
   });
 });
