@@ -1,28 +1,5 @@
 # @kohaku-ui/storage-memory
 
-## 0.4.0
-
-### Minor Changes
-
-- [#52](https://github.com/yosuque/kohaku/pull/52) [`eb67e28`](https://github.com/yosuque/kohaku/commit/eb67e28455ab36683e61eaa03d4b9edf8def8a5d) Thanks [@yosuque](https://github.com/yosuque)! - Add Node-free subpaths for use in a browser host (the static playground, U5): `@kohaku-ui/storage-memory/memory`
-  re-exports `createMemoryStoragePort` (and `MAX_SPEC_CACHE_ENTRIES`) without `createFileStoragePort`'s
-  `node:fs`/`node:path`/`node:crypto` dependency; `@kohaku-ui/evals/judge` re-exports `createJudge` and the
-  `SchemaExtractor` pieces without `FixtureLlm`'s `node:fs`/`node:path`; `@kohaku-ui/evals/replay` adds a new
-  `ReplayLlm` (a replay-only `LlmPort` with no filesystem access, looking up a recorded response by the same
-  key function as `FixtureLlm` — also newly shared as `fixtureKeyOf`/`objectFixtureKey`/`textFixtureKey`).
-  All three existing top-level `"."` exports are unchanged.
-
-- [#47](https://github.com/yosuque/kohaku/pull/47) [`36392f0`](https://github.com/yosuque/kohaku/commit/36392f05d3e4fa8426e6e6ab24c50081cc057595) Thanks [@yosuque](https://github.com/yosuque)! - Add `LineageFilter.correlationId` (payload equality) and forward (append-order) paging over the lineage
-  log, exposed as the optional `StoragePort.pageLineage` method (implemented by all four reference storage
-  adapters), `GET /lineage?order=asc&cursor=&pageSize=` on the REST profile, and `KohakuClient.lineagePages()`
-  on the client SDK. Both additions are backward compatible: a request that omits the new query parameters,
-  and a `StoragePort` that does not implement `pageLineage`, behave exactly as before.
-
-### Patch Changes
-
-- Updated dependencies [[`5a07b1a`](https://github.com/yosuque/kohaku/commit/5a07b1adbcb1545bbc35df0c6df9ed54a22fcf29), [`8df82f6`](https://github.com/yosuque/kohaku/commit/8df82f661b601ac986049302d888ee058bcde27d), [`36392f0`](https://github.com/yosuque/kohaku/commit/36392f05d3e4fa8426e6e6ab24c50081cc057595)]:
-  - @kohaku-ui/spec-core@0.4.0
-
 ## 0.3.0
 
 ### Minor Changes
