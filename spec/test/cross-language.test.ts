@@ -15,6 +15,11 @@ import {
   decodeSeqCursor,
   encodeSeqCursor,
   type FixationRecord,
+  type LineageEventRecord,
+  type LineagePage,
+  type LineagePageRequest,
+  type PromotionState,
+  pageLineageArray,
   parseSpec,
   sha256Hex,
 } from "@kohaku-ui/spec-core";
@@ -28,6 +33,17 @@ import {
   designSystemPromptFragment,
 } from "../../packages/composer/src/design-system.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
+// Relative (not "@kohaku-ui/lineage") import, same reasoning as generate-cross-language-fixtures.ts's
+// own lineage import.
+import {
+  buildEvidencePack,
+  type EvidenceManifest,
+  type EvidenceSource,
+  importEd25519PrivateKeyPkcs8,
+  importEd25519PublicKeyRaw,
+  signManifest,
+  verifyManifestSignature,
+} from "../../packages/lineage/src/index.js";
 
 /**
  * Cross-language golden (TS side). Pins that the TS implementation reproduces the fixture
@@ -57,6 +73,26 @@ interface Fixture {
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
+
+// The Compliance Evidence Pack golden lives in its own directory (a store + a manifest + a detached
+// signature -- see generate-cross-language-fixtures.ts's own comment), not inside the single
+// cross-language-canonical.json above.
+const evidencePackDir = join(dirname(fixturePath), "evidence-pack");
+interface EvidencePackStore {
+  scope: { tenant?: string; since: string; until: string };
+  generator: string;
+  generatedAt: string;
+  events: LineageEventRecord[];
+  promotions: PromotionState[];
+  fixations: FixationRecord[];
+}
+const evidenceStore = JSON.parse(
+  readFileSync(join(evidencePackDir, "store.json"), "utf8"),
+) as EvidencePackStore;
+const evidenceManifestFixture = JSON.parse(
+  readFileSync(join(evidencePackDir, "manifest.json"), "utf8"),
+) as EvidenceManifest;
+const evidenceSignatureFixture = readFileSync(join(evidencePackDir, "manifest.sig"), "utf8").trim();
 
 describe("cross-language golden (byte compatibility of canonical JSON / hash)", () => {
   it("canonicalStringify + sha256Hex reproduces the fixture", async () => {
@@ -146,5 +182,69 @@ describe("cross-language golden (prompt fragments)", () => {
 
   it("PROMPT_REVISION reproduces the fixture (catches an accidental, unbumped prompt change)", () => {
     expect(PROMPT_REVISION).toBe(fixture.promptFragments.promptRevision);
+  });
+});
+
+describe("cross-language golden (Compliance Evidence Pack, design.md #67)", () => {
+  const ED25519_PKCS8_PREFIX = "302e020100300506032b657004220420";
+  // Same RFC 8032 §7.1 TEST 1 vector packages/lineage/test/evidence-sign.test.ts and
+  // python/kohaku/tests/lineage/test_evidence.py independently pin (a well-known, publicly verifiable
+  // vector, not a fixture-specific secret).
+  const RFC8032_TEST1_SECRET_KEY_SEED = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+  const RFC8032_TEST1_PUBLIC_KEY = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+
+  function hexToBytes(hex: string): Uint8Array {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return bytes;
+  }
+
+  function evidenceSourceFromStore(store: EvidencePackStore): EvidenceSource {
+    return {
+      async listLineage(filter) {
+        return store.events.filter((e) => {
+          if (filter.tenant != null && e.tenant !== filter.tenant) return false;
+          if (filter.since != null && e.ts < filter.since) return false;
+          if (filter.until != null && e.ts > filter.until) return false;
+          return true;
+        });
+      },
+      async pageLineage(req: LineagePageRequest): Promise<LineagePage> {
+        return pageLineageArray(store.events, req);
+      },
+      async listPromotionStates(tenant) {
+        return tenant == null ? store.promotions : store.promotions.filter((p) => p.tenant === tenant);
+      },
+      async listFixations(tenant) {
+        return tenant == null ? store.fixations : store.fixations.filter((f) => f.tenant === tenant);
+      },
+    };
+  }
+
+  it("buildEvidencePack reproduces the fixture manifest byte-for-byte", async () => {
+    const rebuilt = await buildEvidencePack({
+      source: evidenceSourceFromStore(evidenceStore),
+      scope: evidenceStore.scope,
+      generator: evidenceStore.generator,
+      signer: evidenceManifestFixture.signer,
+      now: () => new Date(evidenceStore.generatedAt),
+    });
+    expect(rebuilt.manifest).toEqual(evidenceManifestFixture);
+    expect(canonicalStringify(rebuilt.manifest)).toBe(canonicalStringify(evidenceManifestFixture));
+  });
+
+  it("signManifest reproduces the fixture's signature bytes (Ed25519 is deterministic)", async () => {
+    const privateKey = await importEd25519PrivateKeyPkcs8(
+      hexToBytes(ED25519_PKCS8_PREFIX + RFC8032_TEST1_SECRET_KEY_SEED),
+    );
+    const signature = await signManifest(evidenceManifestFixture, privateKey);
+    expect(signature).toBe(evidenceSignatureFixture);
+  });
+
+  it("the fixture's signature verifies against the RFC 8032 TEST 1 public key", async () => {
+    const publicKey = await importEd25519PublicKeyRaw(hexToBytes(RFC8032_TEST1_PUBLIC_KEY));
+    expect(await verifyManifestSignature(evidenceManifestFixture, evidenceSignatureFixture, publicKey)).toBe(
+      true,
+    );
   });
 });

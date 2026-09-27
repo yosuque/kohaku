@@ -25,6 +25,11 @@ import {
   encodeSeqCursor,
   type FixationRecord,
   type JsonObject,
+  type LineageEventRecord,
+  type LineagePage,
+  type LineagePageRequest,
+  type PromotionState,
+  pageLineageArray,
   parseSpec,
   sha256Hex,
 } from "@kohaku-ui/spec-core";
@@ -43,6 +48,18 @@ import {
   designSystemPromptFragment,
 } from "../../packages/composer/src/design-system.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
+// Relative rather than "@kohaku-ui/lineage": spec does not declare a dependency on lineage either
+// (same reasoning as the composer / registry imports below). Everything reached here (build.ts,
+// sign.ts) imports nothing outside spec-core, which this script already depends on directly.
+import {
+  buildEvidencePack,
+  deriveEd25519KeyId,
+  type EvidenceSource,
+  importEd25519PrivateKeyPkcs8,
+  importEd25519PublicKeyRaw,
+  signManifest,
+  verifyManifestSignature,
+} from "../../packages/lineage/src/index.js";
 // Relative (not "@kohaku-ui/registry") import: the spec package deliberately does not declare
 // @kohaku-ui/registry as a dependency (this generator is its only consumer of the catalog's
 // fallback.mapProps functions), so this reaches the source file directly rather than adding a
@@ -177,6 +194,40 @@ const CACHE_KEY_CASES: CacheKeyParts[] = [
   { intentHash: "sha256:aaa", dataVersion: "v1", catalogFingerprint: "cat1", policyFingerprint: "" },
 ];
 
+// Pins the Compliance Evidence Pack (design.md #67) byte-for-byte across languages: canonical-JSON
+// serialization of events.jsonl/approvals.jsonl/promotions.jsonl/fixations.jsonl, artifact extraction
+// and hash-mismatch warning wording, manifest assembly, and the Ed25519 signature itself (deterministic,
+// so a matching keypair + message always produces the identical signature in any correct
+// implementation). Signed with RFC 8032 Section 7.1 TEST 1's keypair -- the same well-known, publicly
+// verifiable vector packages/lineage/test/evidence-sign.test.ts and
+// python/kohaku/tests/lineage/test_evidence.py independently pin -- rather than a fixture-specific
+// secret, so nothing sensitive is committed and the vector's provenance is checkable by anyone.
+const EVIDENCE_ED25519_PKCS8_PREFIX = "302e020100300506032b657004220420";
+const EVIDENCE_RFC8032_TEST1_SECRET_KEY_SEED =
+  "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+const EVIDENCE_RFC8032_TEST1_PUBLIC_KEY = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+const EVIDENCE_TENANT = "tenant-acme";
+const EVIDENCE_SCOPE = {
+  tenant: EVIDENCE_TENANT,
+  since: "2026-06-01T00:00:00.000Z",
+  until: "2026-06-30T23:59:59.999Z",
+};
+const EVIDENCE_GENERATOR = "kohaku-evidence-fixture/1";
+const EVIDENCE_GENERATED_AT = "2026-06-15T00:00:00.000Z";
+const EVIDENCE_ARTIFACT_A_HTML = "<div>Q3 Sales Summary</div>";
+const EVIDENCE_ARTIFACT_B_HTML = "<div>Regional Breakdown</div>";
+// Deliberately wrong (pins the exact warning-message wording across languages -- see build.ts's
+// `warnings.push` / evidence.py's matching f-string; a fixture whose html hash happened to be correct
+// everywhere would never exercise that code path at all).
+const EVIDENCE_WRONG_ARTIFACT_A_SHA256 = "0".repeat(64);
+
 async function main(): Promise<void> {
   const canonical = CANONICAL_VALUES.map((value) => {
     const text = canonicalStringify(value);
@@ -273,6 +324,130 @@ async function main(): Promise<void> {
     jsonl: exportDistillationDataset({ fixations: [distillationRecord], golden: [exampleSpec] }),
   };
 
+  // Compliance Evidence Pack golden (design.md #67; see the EVIDENCE_* constants' comments above).
+  // Reuses distillationRecord (above) as the pack's one fixation, so the fixture does not carry a
+  // second full UISpec merely to have "a" fixation.
+  const evidenceEvents: LineageEventRecord[] = [
+    {
+      id: "eev-1",
+      ts: "2026-06-01T00:00:00.000Z",
+      actor: { kind: "system" },
+      type: "view.composed",
+      payload: { tier: "L1", cache: "miss" },
+      tenant: EVIDENCE_TENANT,
+    },
+    {
+      id: "eev-2",
+      ts: "2026-06-02T00:00:00.000Z",
+      actor: { kind: "model", model: "test-model" },
+      type: "component.generated",
+      payload: {
+        artifactId: "artifact-a",
+        artifactSha256: EVIDENCE_WRONG_ARTIFACT_A_SHA256,
+        html: EVIDENCE_ARTIFACT_A_HTML,
+      },
+      tenant: EVIDENCE_TENANT,
+    },
+    {
+      id: "eev-3",
+      ts: "2026-06-03T00:00:00.000Z",
+      actor: { kind: "user", id: "reviewer-1" },
+      type: "component.reviewed",
+      payload: { artifactId: "artifact-a", decision: "approve" },
+      tenant: EVIDENCE_TENANT,
+    },
+    {
+      id: "eev-4",
+      ts: "2026-06-04T00:00:00.000Z",
+      actor: { kind: "system" },
+      type: "intent.fixated",
+      payload: { intentHash: exampleSpec.intent.hash },
+      tenant: EVIDENCE_TENANT,
+    },
+    {
+      id: "eev-5",
+      ts: "2026-06-05T00:00:00.000Z",
+      actor: { kind: "user", id: "reviewer-1" },
+      type: "intent.unfixated",
+      payload: { intentHash: `sha256:${"9".repeat(64)}` },
+      tenant: EVIDENCE_TENANT,
+    },
+  ];
+  const evidenceArtifactBSha256 = await sha256Hex(EVIDENCE_ARTIFACT_B_HTML);
+  const evidencePromotions: PromotionState[] = [
+    {
+      artifactId: "artifact-b",
+      status: "published",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+      data: { html: EVIDENCE_ARTIFACT_B_HTML, sha256: evidenceArtifactBSha256 },
+      tenant: EVIDENCE_TENANT,
+    },
+  ];
+  const evidenceFixations: FixationRecord[] = [distillationRecord];
+
+  const evidenceSource: EvidenceSource = {
+    async listLineage(filter) {
+      // Never actually exercised (pageLineage below is always present, so buildEvidencePack prefers
+      // it), but implemented for real rather than stubbed so this object stays an honest EvidenceSource.
+      return evidenceEvents.filter((e) => {
+        if (filter.tenant != null && e.tenant !== filter.tenant) return false;
+        if (filter.since != null && e.ts < filter.since) return false;
+        if (filter.until != null && e.ts > filter.until) return false;
+        return true;
+      });
+    },
+    async pageLineage(req: LineagePageRequest): Promise<LineagePage> {
+      return pageLineageArray(evidenceEvents, req);
+    },
+    async listPromotionStates(tenant) {
+      return tenant == null ? evidencePromotions : evidencePromotions.filter((p) => p.tenant === tenant);
+    },
+    async listFixations(tenant) {
+      return tenant == null ? evidenceFixations : evidenceFixations.filter((f) => f.tenant === tenant);
+    },
+  };
+
+  const evidencePrivateKey = await importEd25519PrivateKeyPkcs8(
+    hexToBytes(EVIDENCE_ED25519_PKCS8_PREFIX + EVIDENCE_RFC8032_TEST1_SECRET_KEY_SEED),
+  );
+  const evidencePublicKeyRaw = hexToBytes(EVIDENCE_RFC8032_TEST1_PUBLIC_KEY);
+  const evidenceKeyId = await deriveEd25519KeyId(evidencePublicKeyRaw);
+
+  const builtEvidencePack = await buildEvidencePack({
+    source: evidenceSource,
+    scope: EVIDENCE_SCOPE,
+    generator: EVIDENCE_GENERATOR,
+    signer: { alg: "Ed25519", keyId: evidenceKeyId },
+    now: () => new Date(EVIDENCE_GENERATED_AT),
+  });
+  const evidenceSignature = await signManifest(builtEvidencePack.manifest, evidencePrivateKey);
+
+  // Self-check before writing: a regression in signManifest/verifyManifestSignature must not silently
+  // produce a fixture the golden tests would then both (wrongly) agree on.
+  const evidencePublicKey = await importEd25519PublicKeyRaw(evidencePublicKeyRaw);
+  if (!(await verifyManifestSignature(builtEvidencePack.manifest, evidenceSignature, evidencePublicKey))) {
+    throw new Error(
+      "generate-cross-language-fixtures: evidence pack self-check failed (signature does not verify)",
+    );
+  }
+
+  const evidencePackStore = {
+    scope: EVIDENCE_SCOPE,
+    generator: EVIDENCE_GENERATOR,
+    generatedAt: EVIDENCE_GENERATED_AT,
+    events: evidenceEvents,
+    promotions: evidencePromotions,
+    fixations: evidenceFixations,
+  };
+  const evidencePackDir = join(OUT_DIR, "evidence-pack");
+  mkdirSync(evidencePackDir, { recursive: true });
+  writeFileSync(join(evidencePackDir, "store.json"), `${JSON.stringify(evidencePackStore, null, 2)}\n`);
+  writeFileSync(
+    join(evidencePackDir, "manifest.json"),
+    `${JSON.stringify(builtEvidencePack.manifest, null, 2)}\n`,
+  );
+  writeFileSync(join(evidencePackDir, "manifest.sig"), `${evidenceSignature}\n`);
+
   // Pins that the sandbox DOM allowlist (packages/spec-core/src/schema/sandbox-dom.ts) has not drifted from
   // its Python mirror (python/kohaku/src/kohaku/spec/sandbox_dom.py). Sorted so the fixture diff is stable.
   const sandboxDom = {
@@ -301,6 +476,9 @@ async function main(): Promise<void> {
   );
   console.log(
     `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
+  );
+  console.log(
+    `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,
   );
 }
 

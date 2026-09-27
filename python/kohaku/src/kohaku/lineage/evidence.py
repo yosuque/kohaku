@@ -134,7 +134,7 @@ class EvidenceManifest(_EvidenceModel):
         would otherwise emit them as explicit `null`, unlike TS's `undefined`-drops-the-key behavior --
         see canonical_stringify's own cross-language note). This, not `model_dump()` directly, is what
         `sign_manifest` / `verify_manifest_signature` canonicalize and sign."""
-        return self.model_dump(mode="json", exclude_none=True)
+        return self.model_dump(mode="json", exclude_none=True, by_alias=True)
 
 
 # --- artifacts.ts ---
@@ -243,20 +243,27 @@ class BuiltEvidencePack:
 
 
 def _event_wire(event: LineageEventRecord) -> dict[str, Any]:
+    # by_alias=True: pinnedSpec (via FixationRecordModel below) and any nested UISpec field can carry a
+    # pydantic alias (e.g. DataRef.ref's alias "$ref") that model_dump would otherwise emit under the
+    # Python attribute name instead of the wire key -- a real cross-language byte mismatch this event's
+    # own payload doesn't happen to carry, but the three _*_wire helpers share this call shape on purpose.
     return LineageEventRecordModel.model_validate(event, from_attributes=True).model_dump(
-        mode="json", exclude_none=True
+        mode="json", exclude_none=True, by_alias=True
     )
 
 
 def _promotion_wire(state: PromotionState) -> dict[str, Any]:
     return PromotionStateModel.model_validate(state, from_attributes=True).model_dump(
-        mode="json", exclude_none=True
+        mode="json", exclude_none=True, by_alias=True
     )
 
 
 def _fixation_wire(record: FixationRecord) -> dict[str, Any]:
+    # pinnedSpec is a full UISpec, whose data-binding nodes use aliased fields (DataRef.ref -> "$ref");
+    # without by_alias=True those would serialize as "ref", a real cross-language byte mismatch caught by
+    # spec/test/fixtures/evidence-pack/'s golden.
     return FixationRecordModel.model_validate(record, from_attributes=True).model_dump(
-        mode="json", exclude_none=True
+        mode="json", exclude_none=True, by_alias=True
     )
 
 
