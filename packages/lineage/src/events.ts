@@ -42,10 +42,19 @@ export const COMPONENT_EVENT_TYPES = [
 // frequently-used Intents).
 export const FIXATION_EVENT_TYPES = ["intent.observed", "intent.fixated", "intent.unfixated"] as const;
 
+/**
+ * Policy as Code's audit trail (design.md #69). Fired by host-core's `PolicyRuntime.reload()` only
+ * when the effective policyId actually changes (the dedup rule -- "a byte-identical reload is not
+ * audit-worthy" -- lives in host-core, not here; this event type exists purely to record the ones
+ * that already passed that check).
+ */
+export const POLICY_EVENT_TYPES = ["policy.applied"] as const;
+
 export type LineageEventType =
   | (typeof VIEW_EVENT_TYPES)[number]
   | (typeof COMPONENT_EVENT_TYPES)[number]
-  | (typeof FIXATION_EVENT_TYPES)[number];
+  | (typeof FIXATION_EVENT_TYPES)[number]
+  | (typeof POLICY_EVENT_TYPES)[number];
 
 export interface ViewComposedPayload {
   specHash: string;
@@ -104,6 +113,24 @@ export interface ComponentSchemaEditedPayload {
   extractorVersion: string;
   changed: DraftFieldChange[];
   unchanged: DraftDiffField[];
+}
+
+/**
+ * Payload of `policy.applied` (design.md #69). Structurally identical to host-core's
+ * `PolicyAppliedEvent` (packages/host-core/src/policy.ts) -- duplicated here rather than imported, the
+ * same convention every other payload type in this file follows (`ViewComposedPayload` /
+ * `ComponentGeneratedPayload` etc. are never imported from the package that produces them, even where
+ * lineage's dependency direction would allow it): a `LineageEventRecord.payload` shape is a wire/audit
+ * concern owned by this file, kept independent of whichever caller happens to produce matching data
+ * today.
+ */
+export interface PolicyAppliedPayload {
+  policyId: string;
+  previousPolicyId?: string;
+  version: number;
+  label?: string;
+  changedPaths: string[];
+  tenants: string[];
 }
 
 export type ActorKind = LineageEventRecord["actor"];

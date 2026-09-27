@@ -13,6 +13,8 @@ export {
   FIXATION_EVENT_TYPES,
   type LineageEventType,
   makeEvent,
+  POLICY_EVENT_TYPES,
+  type PolicyAppliedPayload,
   VIEW_EVENT_TYPES,
   type ViewComposedPayload,
 } from "./events.js";
