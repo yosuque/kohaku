@@ -76,6 +76,13 @@ class PolicyBudget(_PolicyModel):
 
     perCompose: PolicyPerComposeBudget | None = None
     deadlineMs: int | None = Field(default=None, gt=0)
+    # Soft limit under concurrency (design.md #69): the host_core ledger's check reads the day's
+    # running total and on_usage records into it only after a compose completes, with no reservation
+    # step in between -- N composes in flight at once for the same tenant can all observe the same
+    # pre-usage total and all pass, before any of them records. The overshoot is bounded by
+    # (concurrent in-flight generations) x (the per-compose token ceiling); set perCompose above to
+    # bound that ceiling. See host_core/policy.py's _create_daily_tokens_check docstring for the
+    # enforcement side and the TS schema's matching comment (packages/spec-core/src/schema/policy.ts).
     dailyTokens: int | None = Field(default=None, ge=0)
 
 

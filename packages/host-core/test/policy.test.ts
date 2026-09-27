@@ -151,6 +151,34 @@ describe("createPolicyRuntime: budget (perCompose/deadlineMs/dailyTokens)", () =
     expect(ledger.spent("t1")).toBe(7);
   });
 
+  it("dailyTokens is a soft limit: N in-flight composes can all pass check() before any of them records, overshooting by up to N x the per-compose ceiling (design.md #69 -- check() must stay side-effect-free, so it cannot reserve a slice of the budget)", async () => {
+    const ledger = createDailyTokenLedger(() => 0);
+    const stopAfterTokens = 1000;
+    const runtime = await createPolicyRuntime({
+      file: makeFile({
+        defaults: { compose: { budget: { dailyTokens: 1, perCompose: { stopAfterTokens } } } },
+      }),
+      ledger,
+    });
+    const budget = runtime.policyFor({ surface: "web", tenant: "t1" }).budget;
+    const concurrentGenerations = 3;
+
+    // All N in-flight generations call check() while the ledger still reads 0 spent -- none of
+    // them has recorded usage yet, so every one of them is allowed, even though a single dailyTokens
+    // threshold of 1 would deny every generation after the very first if they ran one at a time.
+    const verdicts = Array.from({ length: concurrentGenerations }, () => budget?.check?.());
+    expect(verdicts.every((v) => v?.allow === true)).toBe(true);
+
+    // Only once each "completes" does onUsage record -- up to the per-compose ceiling each.
+    for (let i = 0; i < concurrentGenerations; i++) {
+      await budget?.onUsage?.({ tenant: "t1", usage: { inputTokens: stopAfterTokens, outputTokens: 0 } });
+    }
+
+    const overshoot = ledger.spent("t1") - 1; // dailyTokens threshold was 1
+    expect(overshoot).toBeGreaterThan(0);
+    expect(overshoot).toBeLessThanOrEqual(concurrentGenerations * stopAfterTokens);
+  });
+
   it("a base check's denial wins outright over the dailyTokens check (combineChecks short-circuits)", async () => {
     const ledger = createDailyTokenLedger(() => 0); // way under the 1,000,000 threshold below
     const runtime = await createPolicyRuntime({

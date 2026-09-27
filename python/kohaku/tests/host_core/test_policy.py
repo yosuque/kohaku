@@ -187,6 +187,38 @@ class TestBudget:
         assert len(base_calls) == 1
         assert ledger.spent("t1") == 7
 
+    def test_daily_tokens_is_a_soft_limit_under_concurrency(self) -> None:
+        """design.md #69: check_with_context() must stay side-effect-free, so it cannot reserve a
+        slice of the budget -- N in-flight composes for one tenant can all observe the same
+        pre-usage spent() value and all pass, before any of them calls on_usage. The overshoot is
+        bounded by (concurrent in-flight generations) x (the per-compose token ceiling); mirrors the
+        TS test of the same intent."""
+        ledger = create_daily_token_ledger(now=lambda: 0)
+        stop_after_tokens = 1000
+        runtime = create_policy_runtime(
+            make_file(
+                defaults={"compose": {"budget": {"dailyTokens": 1, "perCompose": {"stopAfterTokens": stop_after_tokens}}}}
+            ),
+            ledger=ledger,
+        )
+        budget = runtime.policy_for(SessionContext(surface="web", tenant="t1")).budget
+        assert budget is not None and budget.check_with_context is not None and budget.on_usage is not None
+        concurrent_generations = 3
+
+        # All N in-flight generations call check_with_context() while the ledger still reads 0
+        # spent -- none of them has recorded usage yet, so every one is allowed, even though a
+        # dailyTokens threshold of 1 would deny every generation after the first if run serially.
+        verdicts = [budget.check_with_context(_ctx()) for _ in range(concurrent_generations)]
+        assert all(v.allow for v in verdicts)
+
+        # Only once each "completes" does on_usage record -- up to the per-compose ceiling each.
+        for _ in range(concurrent_generations):
+            budget.on_usage("t1", TokenUsage(inputTokens=stop_after_tokens, outputTokens=0))
+
+        overshoot = ledger.spent("t1") - 1  # dailyTokens threshold was 1
+        assert overshoot > 0
+        assert overshoot <= concurrent_generations * stop_after_tokens
+
     def test_base_check_denial_wins_over_daily_tokens(self) -> None:
         ledger = create_daily_token_ledger(now=lambda: 0)
         runtime = create_policy_runtime(

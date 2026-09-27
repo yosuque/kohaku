@@ -119,6 +119,18 @@ def _resolve_section(file: KohakuPolicyFile, tenant: str | None) -> PolicySectio
 def _create_daily_tokens_check(
     ledger: DailyTokenLedger, tenant: str | None, daily_tokens: int
 ) -> Callable[[], BudgetVerdict]:
+    """Soft limit under concurrency, by design (design.md #69): this check is read-only (`ledger.spent`)
+    and the paired `_create_daily_tokens_on_usage` writes (`ledger.record`) only after a compose actually
+    completes -- there is no reservation step between the two, because a budget check must stay
+    synchronous and side-effect-free (kohaku.composer calls it before starting generation and must be
+    able to call it cheaply and repeatedly). N composes for the same tenant in flight at once can
+    therefore all read the same `spent()` value and all pass, before any of them has recorded its own
+    usage -- the day's total can overshoot `daily_tokens` by at most `(concurrent in-flight
+    generations) x (the per-compose token ceiling)`. Set `compose.budget.perCompose.stopAfterTokens` to
+    bound that ceiling (and so the worst-case overshoot) if the effective daily cap needs to be tighter
+    under load; see kohaku.spec.policy's `PolicyBudget.dailyTokens` comment and the TS mirror
+    (packages/host-core/src/policy.ts's `createDailyTokensBudgetHooks`) for the same note, and
+    test_policy.py's `test_daily_tokens_is_a_soft_limit_under_concurrency` for a worked example."""
     key = tenant or ""
 
     def check() -> BudgetVerdict:

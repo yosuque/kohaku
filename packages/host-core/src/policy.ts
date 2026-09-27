@@ -119,7 +119,21 @@ function combineOnUsage(
   };
 }
 
-/** Builds the `check`/`onUsage` pair enforcing `dailyTokens` against `ledger`, keyed by `tenant ?? ""`. */
+/**
+ * Builds the `check`/`onUsage` pair enforcing `dailyTokens` against `ledger`, keyed by `tenant ?? ""`.
+ *
+ * **This is a soft limit under concurrency, by design (design.md #69)**: `check` is read-only (reads
+ * `ledger.spent(key)`) and `onUsage` writes (`ledger.record`) only after a compose actually completes --
+ * there is no reservation step between the two, because `ComposeBudget.check` is a synchronous,
+ * side-effect-free contract (composer calls it before starting generation and must be able to call it
+ * cheaply and repeatedly). N composes for the same tenant in flight at once can therefore all read the
+ * same `spent()` value and all pass `check`, before any of them has recorded its own usage -- the
+ * day's total can overshoot `dailyTokens` by at most `(concurrent in-flight generations) x (the
+ * per-compose token ceiling)`. A deployment that needs a tighter effective cap under concurrent load
+ * should also set `compose.budget.perCompose.stopAfterTokens`, which bounds that per-generation
+ * ceiling (see the doc comment on `PolicyBudgetSchema.dailyTokens`, spec-core's schema/policy.ts, and
+ * the test at test/policy.test.ts's "dailyTokens is a soft limit" for a worked example of the bound).
+ */
 function createDailyTokensBudgetHooks(
   ledger: DailyTokenLedger,
   tenant: string | undefined,

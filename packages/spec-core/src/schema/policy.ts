@@ -40,6 +40,15 @@ const PolicyBudgetSchema = z.strictObject({
    * boundary or persisted usage; the policy runtime (host-core's `createPolicyRuntime`, using the
    * daily-token ledger) wires this value into a `check`/`onUsage` pair that enforces it, rather than
    * this schema or `ComposeBudget` knowing about calendar days directly.
+   *
+   * **Soft limit under concurrency (design.md #69)**: `check` reads the ledger's current total and
+   * `onUsage` records into it only after a compose completes, with no reservation step in between --
+   * `ComposeBudget.check` must stay synchronous and side-effect-free, so it cannot reserve a slice of
+   * the budget on the caller's behalf. N composes in flight at once for the same tenant can therefore
+   * all observe the same pre-usage total and all pass `check`, before any of them calls `onUsage` --
+   * the day's total can overshoot `dailyTokens` by at most `(concurrent in-flight generations) x (the
+   * per-compose token ceiling)`. Set `perCompose.stopAfterTokens` to bound that ceiling (and so the
+   * worst-case overshoot) if the effective daily cap needs to be tighter under load.
    */
   dailyTokens: z.number().int().nonnegative().optional(),
 });
