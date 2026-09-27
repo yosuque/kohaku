@@ -26,6 +26,7 @@ from .events import (
 )
 from .evidence import (
     EVIDENCE_APPROVAL_EVENT_TYPES,
+    EVIDENCE_FILE_PATH_PATTERN,
     EVIDENCE_PACK_FORMAT,
     EVIDENCE_PACK_VERSION,
     ArtifactClaim,
@@ -53,6 +54,7 @@ from .evidence import (
     import_ed25519_private_key_pkcs8,
     import_ed25519_public_key_raw,
     import_ed25519_public_key_spki,
+    is_safe_evidence_file_path,
     sign_bytes,
     sign_manifest,
     verify_bytes,
@@ -124,6 +126,7 @@ __all__ = [
     "DEFAULT_FIXATION_POLICY",
     "DEFAULT_PROMOTION_POLICY",
     "EVIDENCE_APPROVAL_EVENT_TYPES",
+    "EVIDENCE_FILE_PATH_PATTERN",
     "EVIDENCE_PACK_FORMAT",
     "EVIDENCE_PACK_VERSION",
     "FIXATION_EVENT_TYPES",
@@ -212,6 +215,7 @@ __all__ = [
     "import_ed25519_private_key_pkcs8",
     "import_ed25519_public_key_raw",
     "import_ed25519_public_key_spki",
+    "is_safe_evidence_file_path",
     "is_terminal",
     "make_event",
     "may_have_projection",

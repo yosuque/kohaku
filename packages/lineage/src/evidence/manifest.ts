@@ -11,10 +11,30 @@ import { z } from "zod";
 export const EVIDENCE_PACK_FORMAT = "kohaku-evidence-pack";
 export const EVIDENCE_PACK_VERSION = 1;
 
+/**
+ * The only shapes `manifest.files[].path` may take: one of the four fixed jsonl filenames, or an
+ * artifact keyed by its own sha256. Deliberately closed (no wildcard subdirectories, no `..`, no
+ * absolute path, no backslash) because this string ultimately drives a filesystem read
+ * (`verifyEvidencePack` / the CLI's directory reader) over data from a manifest a verifier is, by
+ * definition, not yet sure it can trust -- path traversal / an absolute path must be rejected at parse
+ * time, not left to whatever the reader happens to do with it.
+ */
+export const EVIDENCE_FILE_PATH_PATTERN =
+  /^(?:events|approvals|promotions|fixations)\.jsonl$|^artifacts\/[0-9a-f]{64}\.html$/;
+
+/** Structural re-check of `EVIDENCE_FILE_PATH_PATTERN`, for a caller (e.g. `verifyEvidencePack`) that
+ * wants to defend against a `path` reaching it some other way than through this schema. */
+export function isSafeEvidenceFilePath(path: string): boolean {
+  return EVIDENCE_FILE_PATH_PATTERN.test(path);
+}
+
 /** One file inside the pack, as recorded for integrity verification. */
 export const EvidenceFileEntrySchema = z.object({
-  /** Path relative to the pack directory, e.g. "events.jsonl" or "artifacts/<sha256>.html". */
-  path: z.string().min(1),
+  /** Path relative to the pack directory: "events.jsonl" / "approvals.jsonl" / "promotions.jsonl" /
+   * "fixations.jsonl" / "artifacts/<sha256>.html" -- see `EVIDENCE_FILE_PATH_PATTERN`. */
+  path: z
+    .string()
+    .regex(EVIDENCE_FILE_PATH_PATTERN, "must be a fixed jsonl filename or artifacts/<sha256>.html"),
   /** sha256 of the file's exact on-disk bytes (hex, lowercase). */
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   bytes: z.number().int().nonnegative(),

@@ -112,6 +112,9 @@ class _MemoryReader:
                 return f.content
         raise FileNotFoundError(path)
 
+    async def list_files(self) -> list[str]:
+        return ["manifest.json", "manifest.sig", *(f.path for f in self._files)]
+
 
 def test_build_evidence_pack_and_verify_roundtrip(tmp_path: Path) -> None:
     async def run() -> None:
@@ -312,6 +315,9 @@ def test_verify_fails_cleanly_on_invalid_manifest_json() -> None:
                 return b""
 
             async def read_file(self, path: str) -> bytes:
+                raise AssertionError("not reached")
+
+            async def list_files(self) -> list[str]:
                 raise AssertionError("not reached")
 
         result = await verify_evidence_pack(_BadReader(), keypair.public_key)

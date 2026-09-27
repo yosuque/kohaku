@@ -63,6 +63,20 @@ EVIDENCE_PACK_VERSION: Final = 1
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _KEY_ID_HEX_RE = re.compile(r"^[0-9a-f]{16}$")
 
+# The only shapes manifest.files[].path may take: one of the four fixed jsonl filenames, or an artifact
+# keyed by its own sha256. Deliberately closed (no wildcard subdirectories, no "..", no absolute path, no
+# backslash) because this string ultimately drives a filesystem read (verify_evidence_pack / a caller's
+# reader) over data from a manifest a verifier is, by definition, not yet sure it can trust.
+EVIDENCE_FILE_PATH_PATTERN: Final = re.compile(
+    r"^(?:events|approvals|promotions|fixations)\.jsonl$|^artifacts/[0-9a-f]{64}\.html$"
+)
+
+
+def is_safe_evidence_file_path(path: str) -> bool:
+    """Structural re-check of EVIDENCE_FILE_PATH_PATTERN, for a caller (e.g. verify_evidence_pack) that
+    wants to defend against a path reaching it some other way than through this schema."""
+    return EVIDENCE_FILE_PATH_PATTERN.match(path) is not None
+
 
 class _EvidenceModel(BaseModel):
     """Common config for the evidence-pack models: accept either alias, ignore unknown keys (zod's
@@ -78,6 +92,13 @@ class EvidenceFileEntry(_EvidenceModel):
     sha256: str
     bytes: int = Field(ge=0)
     records: int | None = Field(default=None, ge=0)
+
+    @field_validator("path")
+    @classmethod
+    def _check_path(cls, v: str) -> str:
+        if not is_safe_evidence_file_path(v):
+            raise ValueError("path must be a fixed jsonl filename or artifacts/<sha256>.html")
+        return v
 
     @field_validator("sha256")
     @classmethod
@@ -544,6 +565,14 @@ class EvidencePackReader(Protocol):
 
     async def read_file(self, path: str) -> bytes: ...
 
+    async def list_files(self) -> list[str]:
+        """Every path physically present in the pack, relative to the pack root, in the same string
+        form as manifest.files[].path (plus "manifest.json" / "manifest.sig" themselves). Used by
+        verify_evidence_pack to catch a file smuggled into an otherwise-valid pack that the (signed)
+        manifest never lists -- a signature over the manifest alone cannot detect an *addition* to the
+        pack directory, only a change to something the manifest already references."""
+        ...
+
 
 @dataclass(frozen=True)
 class VerifyEvidencePackResult:
@@ -592,9 +621,14 @@ async def verify_evidence_pack(
     reader: EvidencePackReader, public_key: Ed25519PublicKey
 ) -> VerifyEvidencePackResult:
     """Verifies a Compliance Evidence Pack: the manifest matches EvidenceManifest's schema, its signature
-    verifies against `public_key`, every file the manifest lists has the exact hash/size the manifest
-    recorded, and -- as an independent, best-effort cross-check -- every artifact reference found inside
-    the jsonl files actually hashes to the value it claims.
+    verifies against `public_key`, the pack directory contains no file the manifest does not list, every
+    file the manifest lists has the exact hash/size the manifest recorded, and -- as an independent,
+    best-effort cross-check -- every artifact reference found inside the jsonl files actually hashes to
+    the value it claims.
+
+    Fails closed on a bad signature: once the signature does not verify, nothing else about the manifest
+    can be trusted (including the very files[] list that drives every other check), so this returns
+    immediately without reading a single other file from `reader`.
     """
     manifest_bytes = await reader.read_manifest()
     try:
@@ -613,14 +647,35 @@ async def verify_evidence_pack(
             mismatches=[],
         )
 
+    signature_text = (await reader.read_signature()).decode("utf-8").strip()
+    if not verify_manifest_signature(manifest, signature_text, public_key):
+        return VerifyEvidencePackResult(
+            ok=False,
+            manifest=manifest,
+            errors=["manifest.sig does not verify against the given public key for this manifest"],
+            mismatches=[],
+        )
+
     errors: list[str] = []
     mismatches: list[str] = []
 
-    signature_text = (await reader.read_signature()).decode("utf-8").strip()
-    if not verify_manifest_signature(manifest, signature_text, public_key):
-        errors.append("manifest.sig does not verify against the given public key for this manifest")
+    # The manifest is now signature-verified, so its own files list is trustworthy -- but the pack
+    # directory itself might still carry a file that list never mentions (smuggled in after signing,
+    # since a signature over the manifest cannot itself notice an addition to the directory).
+    listed_paths = {entry.path for entry in manifest.files}
+    actual_paths = await reader.list_files()
+    unexpected = [p for p in actual_paths if p not in ("manifest.json", "manifest.sig") and p not in listed_paths]
+    if unexpected:
+        errors.append(f"unexpected file(s) present in the pack but not listed in the manifest: {', '.join(unexpected)}")
 
     for entry in manifest.files:
+        # Defense in depth: EvidenceFileEntry already constrains `path` to a closed set of safe shapes,
+        # so this should never actually fail for a manifest that parsed -- but the read that follows
+        # drives a filesystem access from data this function does not otherwise re-validate, so the
+        # check is repeated here rather than relying solely on the schema continuing to enforce it.
+        if not is_safe_evidence_file_path(entry.path):
+            errors.append(f"{entry.path}: not a safe evidence-pack path, refusing to read it")
+            continue
         try:
             content = await reader.read_file(entry.path)
         except Exception as e:  # noqa: BLE001 - any read failure is reported the same way

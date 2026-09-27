@@ -1,6 +1,6 @@
 import { canonicalStringify, type LineageEventRecord, type PromotionState } from "@kohaku-ui/spec-core";
 import { artifactClaimFromEventPayload, artifactClaimFromPromotionData } from "./artifacts.js";
-import { type EvidenceManifest, EvidenceManifestSchema } from "./manifest.js";
+import { type EvidenceManifest, EvidenceManifestSchema, isSafeEvidenceFilePath } from "./manifest.js";
 
 /**
  * Opaque handles for WebCrypto Ed25519 key material. Kept untyped/structural (`object`, not the DOM
@@ -170,6 +170,14 @@ export interface EvidencePackReader {
   readSignature(): Promise<Uint8Array>;
   /** Raw bytes of a file listed in the manifest's `files[]`, addressed by its recorded `path`. */
   readFile(path: string): Promise<Uint8Array>;
+  /**
+   * Every path physically present in the pack, relative to the pack root, in the same string form as
+   * `manifest.files[].path` (plus `"manifest.json"` / `"manifest.sig"` themselves). Used by
+   * `verifyEvidencePack` to catch a file smuggled into an otherwise-valid pack that the (signed)
+   * manifest never lists -- a signature over the manifest alone cannot detect an *addition* to the
+   * pack directory, only a change to something the manifest already references.
+   */
+  listFiles(): Promise<string[]>;
 }
 
 export interface VerifyEvidencePackResult {
@@ -235,11 +243,15 @@ function artifactClaimsFromJsonlRecords(
 
 /**
  * Verifies a Compliance Evidence Pack (design.md #67): the manifest matches `EvidenceManifestSchema`,
- * its signature verifies against `publicKey`, every file the manifest lists has the exact hash/size the
- * manifest recorded, and -- as an independent, best-effort cross-check -- every artifact reference found
- * inside the jsonl files actually hashes to the value it claims. A single altered byte anywhere the
- * manifest covers changes that file's hash (or, for manifest.json itself, the signed value), so either
- * check catches it.
+ * its signature verifies against `publicKey`, the pack directory contains no file the manifest does not
+ * list, every file the manifest lists has the exact hash/size the manifest recorded, and -- as an
+ * independent, best-effort cross-check -- every artifact reference found inside the jsonl files
+ * actually hashes to the value it claims. A single altered byte anywhere the manifest covers changes
+ * that file's hash (or, for manifest.json itself, the signed value), so either check catches it.
+ *
+ * Fails closed on a bad signature: once the signature does not verify, nothing else about the manifest
+ * can be trusted (including the very `files[]` list that drives every other check), so this returns
+ * immediately without reading a single other file from `reader`.
  */
 export async function verifyEvidencePack(
   reader: EvidencePackReader,
@@ -266,16 +278,43 @@ export async function verifyEvidencePack(
     };
   }
 
-  const errors: string[] = [];
-  const mismatches: string[] = [];
-
   const signatureText = decoder.decode(await reader.readSignature()).trim();
   const signatureOk = await verifyManifestSignature(manifest, signatureText, publicKey);
   if (!signatureOk) {
-    errors.push("manifest.sig does not verify against the given public key for this manifest");
+    return {
+      ok: false,
+      manifest,
+      errors: ["manifest.sig does not verify against the given public key for this manifest"],
+      mismatches: [],
+    };
+  }
+
+  const errors: string[] = [];
+  const mismatches: string[] = [];
+
+  // The manifest is now signature-verified, so its own files[] list is trustworthy -- but the pack
+  // directory itself might still carry a file that list never mentions (smuggled in after signing,
+  // since a signature over the manifest cannot itself notice an addition to the directory).
+  const listedPaths = new Set(manifest.files.map((f) => f.path));
+  const actualPaths = await reader.listFiles();
+  const unexpected = actualPaths.filter(
+    (p) => p !== "manifest.json" && p !== "manifest.sig" && !listedPaths.has(p),
+  );
+  if (unexpected.length > 0) {
+    errors.push(
+      `unexpected file(s) present in the pack but not listed in the manifest: ${unexpected.join(", ")}`,
+    );
   }
 
   for (const entry of manifest.files) {
+    // Defense in depth: EvidenceFileEntrySchema already constrains `path` to a closed set of safe
+    // shapes, so this should never actually fail for a manifest that parsed -- but the read that
+    // follows drives a filesystem access from data this function does not otherwise re-validate, so
+    // the check is repeated here rather than relying solely on the schema continuing to enforce it.
+    if (!isSafeEvidenceFilePath(entry.path)) {
+      errors.push(`${entry.path}: not a safe evidence-pack path, refusing to read it`);
+      continue;
+    }
     let content: Uint8Array;
     try {
       content = await reader.readFile(entry.path);

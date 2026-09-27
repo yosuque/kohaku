@@ -3,6 +3,7 @@ import {
   EVIDENCE_PACK_FORMAT,
   EVIDENCE_PACK_VERSION,
   EvidenceManifestSchema,
+  isSafeEvidenceFilePath,
 } from "../../src/evidence/manifest.js";
 
 function validManifest() {
@@ -54,5 +55,38 @@ describe("EvidenceManifestSchema", () => {
     const manifest = validManifest();
     manifest.signer.keyId = "too-short";
     expect(() => EvidenceManifestSchema.parse(manifest)).toThrow();
+  });
+
+  // A files[].path ultimately drives a filesystem read (verifyEvidencePack / the CLI's directory
+  // reader) over data from a manifest a verifier does not yet trust -- the schema is the first line of
+  // defense against path traversal / an absolute path / an arbitrary filename.
+  it.each([
+    "../../../etc/passwd",
+    "/etc/passwd",
+    "artifacts/../../../etc/passwd",
+    "artifacts\\..\\..\\etc\\passwd",
+    "events.jsonl/../../../etc/passwd",
+    "",
+    "events.json", // close to a real name, but not one of the four exact filenames
+    "artifacts/not-a-hash.html",
+    `artifacts/${"a".repeat(63)}.html`, // one hex character short
+    `artifacts/${"a".repeat(65)}.html`, // one hex character too many
+    `artifacts/${"A".repeat(64)}.html`, // uppercase hex
+    "artifacts/subdir/aaaa.html",
+  ])("rejects an unsafe files[].path %s", (path) => {
+    const manifest = validManifest();
+    manifest.files[0]!.path = path;
+    expect(() => EvidenceManifestSchema.parse(manifest)).toThrow();
+    expect(isSafeEvidenceFilePath(path)).toBe(false);
+  });
+
+  it.each([
+    "events.jsonl",
+    "approvals.jsonl",
+    "promotions.jsonl",
+    "fixations.jsonl",
+    `artifacts/${"a".repeat(64)}.html`,
+  ])("accepts the safe files[].path %s", (path) => {
+    expect(isSafeEvidenceFilePath(path)).toBe(true);
   });
 });

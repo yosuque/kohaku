@@ -4,7 +4,16 @@
  * transport, the same pattern as explain.test.ts), and verify detects tampering.
  */
 
-import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ComposeContext } from "@kohaku-ui/composer";
@@ -176,6 +185,66 @@ describe("kohaku evidence export --data-dir / verify", () => {
     await expect(
       runEvidenceVerify(outDir, join(tmp("kohaku-evidence-nope-"), "missing.pem")),
     ).rejects.toThrow(/Cannot read --public-key/);
+  });
+});
+
+describe("kohaku evidence verify (security hardening)", () => {
+  async function exportedPack(): Promise<{ outDir: string; publicKeyPath: string }> {
+    const dataDir = tmp("kohaku-evidence-data-");
+    const storage = createFileStoragePort(dataDir);
+    await storage.appendLineage({
+      id: "e1",
+      ts: "2026-06-01T00:00:00.000Z",
+      actor: { kind: "system" },
+      type: "view.composed",
+      payload: { tier: "L1" },
+    });
+    const { privateKeyPath, publicKeyPath } = await keyPaths();
+    const outDir = tmp("kohaku-evidence-out-");
+    await runEvidenceExport({
+      dataDir,
+      since: "2026-01-01T00:00:00.000Z",
+      until: "2026-12-31T23:59:59.999Z",
+      privateKeyPath,
+      outDir,
+    });
+    return { outDir, publicKeyPath };
+  }
+
+  it("refuses to follow a symlink planted at a listed path inside the pack", async () => {
+    const { outDir, publicKeyPath } = await exportedPack();
+    const secret = join(tmp("kohaku-evidence-secret-"), "secret.txt");
+    writeFileSync(secret, "not part of the pack");
+    const eventsPath = join(outDir, "events.jsonl");
+    rmSync(eventsPath);
+    symlinkSync(secret, eventsPath);
+
+    const result = await runEvidenceVerify(outDir, publicKeyPath);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("events.jsonl") && e.includes("symlink"))).toBe(true);
+  });
+
+  it("rejects a manifest whose files[].path is a traversal attempt, without reading any file", async () => {
+    const { outDir, publicKeyPath } = await exportedPack();
+    const manifestPath = join(outDir, "manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.files[0].path = "../../../etc/passwd";
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    const result = await runEvidenceVerify(outDir, publicKeyPath);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("EvidenceManifestSchema"))).toBe(true);
+  });
+
+  it("fails when an extra, unlisted file is smuggled into the pack directory", async () => {
+    const { outDir, publicKeyPath } = await exportedPack();
+    const extraPath = join(outDir, "artifacts", `${"b".repeat(64)}.html`);
+    mkdirSync(join(outDir, "artifacts"), { recursive: true });
+    writeFileSync(extraPath, "<div>not part of the manifest</div>");
+
+    const result = await runEvidenceVerify(outDir, publicKeyPath);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("unexpected file"))).toBe(true);
   });
 });
 

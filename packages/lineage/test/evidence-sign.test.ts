@@ -135,6 +135,9 @@ function memoryReader(
       if (file == null) throw new Error(`no such file in pack: ${path}`);
       return file.content;
     },
+    async listFiles() {
+      return ["manifest.json", "manifest.sig", ...files.map((f) => f.path)];
+    },
   };
 }
 
@@ -182,6 +185,64 @@ describe("signManifest / verifyEvidencePack", () => {
     );
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.includes("manifest.sig"))).toBe(true);
+  });
+
+  it("reads no other file at all once the signature fails to verify (fails closed)", async () => {
+    const { pack, manifestJson, signatureBase64 } = await buildSignedPack();
+    const otherKeyPair = await generateEd25519KeyPair();
+    const readFileCalls: string[] = [];
+    let listFilesCalls = 0;
+    const spyReader: EvidencePackReader = {
+      async readManifest() {
+        return encoder.encode(manifestJson);
+      },
+      async readSignature() {
+        return encoder.encode(signatureBase64);
+      },
+      async readFile(path) {
+        readFileCalls.push(path);
+        const file = pack.files.find((f) => f.path === path);
+        if (file == null) throw new Error(`no such file in pack: ${path}`);
+        return file.content;
+      },
+      async listFiles() {
+        listFilesCalls++;
+        return ["manifest.json", "manifest.sig", ...pack.files.map((f) => f.path)];
+      },
+    };
+    const result = await verifyEvidencePack(spyReader, otherKeyPair.publicKey);
+    expect(result.ok).toBe(false);
+    expect(readFileCalls).toEqual([]);
+    expect(listFilesCalls).toBe(0);
+  });
+
+  it("fails when the pack directory contains a file the manifest does not list", async () => {
+    const { pack, manifestJson, signatureBase64, publicKey } = await buildSignedPack();
+    const reader: EvidencePackReader = {
+      async readManifest() {
+        return encoder.encode(manifestJson);
+      },
+      async readSignature() {
+        return encoder.encode(signatureBase64);
+      },
+      async readFile(path) {
+        const file = pack.files.find((f) => f.path === path);
+        if (file == null) throw new Error(`no such file in pack: ${path}`);
+        return file.content;
+      },
+      async listFiles() {
+        // A file smuggled into the pack directory after signing, at an otherwise-valid-looking path.
+        return [
+          "manifest.json",
+          "manifest.sig",
+          ...pack.files.map((f) => f.path),
+          `artifacts/${"b".repeat(64)}.html`,
+        ];
+      },
+    };
+    const result = await verifyEvidencePack(reader, publicKey);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("unexpected file") && e.includes("b".repeat(64)))).toBe(true);
   });
 
   it("fails when a single byte of the (always non-empty) manifest is tampered with after signing", async () => {
@@ -310,6 +371,9 @@ describe("signManifest / verifyEvidencePack", () => {
         return encoder.encode("");
       },
       async readFile() {
+        throw new Error("not reached");
+      },
+      async listFiles() {
         throw new Error("not reached");
       },
     };
