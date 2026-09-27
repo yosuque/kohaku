@@ -59,3 +59,33 @@ def test_day_boundary_is_utc_not_local_time() -> None:
     ledger.record("tenant-a", 100)
     clock = datetime(2026, 1, 2, 1, 0, 0, tzinfo=UTC).timestamp() * 1000
     assert ledger.spent("tenant-a") == 0
+
+
+def test_bounds_memory_with_max_entries_evicting_the_least_recently_touched_entry_first() -> None:
+    ledger = create_daily_token_ledger(now=lambda: _DAY1_START, max_entries=2)
+    ledger.record("a", 1)
+    ledger.record("b", 2)  # at capacity
+    ledger.record("a", 10)  # touch a again -- LRU order becomes [b, a]
+    ledger.record("c", 3)  # c is new: evicts the LRU entry (b), not a
+
+    assert ledger.spent("a") == 11  # untouched by eviction: 1 + 10
+    assert ledger.spent("b") == 0  # evicted -- recording again would start a fresh entry
+    assert ledger.spent("c") == 3
+
+
+def test_prunes_entries_from_a_previous_utc_day_on_rollover() -> None:
+    """So they never compete with today's keys for max_entries -- mirrors the TS test of the same
+    intent."""
+    clock = _DAY1_START
+    ledger = create_daily_token_ledger(now=lambda: clock, max_entries=2)
+    ledger.record("day1-a", 100)
+    ledger.record("day1-b", 200)  # at capacity, both from day 1
+
+    clock = _DAY2_START
+    ledger.record("day2-x", 5)  # first day-2 call: day 1's entries are pruned before this is added
+    ledger.record("day2-y", 7)  # a second brand-new key for day 2 -- must not evict day2-x
+
+    assert ledger.spent("day2-x") == 5  # survived: day 1's entries did not occupy its slot
+    assert ledger.spent("day2-y") == 7
+    assert ledger.spent("day1-a") == 0
+    assert ledger.spent("day1-b") == 0

@@ -21,6 +21,12 @@ class _Bucket:
     last_refill_ms: float
 
 
+DEFAULT_MAX_MEMORY_ENTRIES = 10_000
+"""A sensible default cap on the number of distinct buckets/ledger entries an in-process, dict-backed
+store keeps at once -- see MemoryRateLimitStore/DailyTokenLedger's max_entries (matches the TS port's
+DEFAULT_MAX_MEMORY_ENTRIES)."""
+
+
 class MemoryRateLimitStore:
     """A pure in-process token-bucket RateLimitStore (the Zero-Port default, and the reference
     implementation this module's own tests exercise). Mirrors kohaku.storage's file-backed port in
@@ -29,26 +35,40 @@ class MemoryRateLimitStore:
     the same RateLimitStore protocol instead.
 
     A key's bucket starts full (rule.capacity tokens) on first use, refills continuously at
-    rule.refillPerSecond (capped at rule.capacity), and never actively expires -- a key that stops being
-    used simply stops accumulating history beyond rule.capacity, so the map does grow with the number of
-    distinct keys ever seen. A product with unboundedly many keys (e.g. one bucket per anonymous IP)
-    should prefer a backing store with its own eviction instead.
+    rule.refillPerSecond (capped at rule.capacity), and never actively expires on its own -- a key that
+    stops being used would otherwise keep its bucket forever, so the dict would grow with the number of
+    distinct keys ever seen (unbounded for a product with unboundedly many keys, e.g. one bucket per
+    anonymous IP or per rotated header value). max_entries (default DEFAULT_MAX_MEMORY_ENTRIES) bounds
+    that growth with LRU eviction: a plain dict iterates in insertion order (Python 3.7+), and every
+    take() call deletes then re-inserts the accessed key, so the first key in iteration order is always
+    the least-recently-used one -- evicted only when a brand-new key would otherwise push the dict over
+    the cap. A rate limit is only as strong as the identity it keys on: see docs/user-guide.md's
+    Policy-as-Code section for why an unauthenticated caller that can vary its own tenant/principal
+    header can just as easily rotate through buckets as it can exhaust this cap.
 
     Structurally satisfies kohaku.spec.RateLimitStore (a Protocol) without inheriting from it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_entries: int = DEFAULT_MAX_MEMORY_ENTRIES) -> None:
+        self._max_entries = max_entries
         self._buckets: dict[str, _Bucket] = {}
 
     async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
-        bucket = self._buckets.get(key)
-        if bucket is None:
-            bucket = _Bucket(tokens=rule.capacity, last_refill_ms=now_ms)
-            self._buckets[key] = bucket
+        existing = self._buckets.get(key)
+        if existing is not None:
+            del self._buckets[key]  # reinsert below to mark as most-recently-used
+            elapsed_seconds = max(0.0, now_ms - existing.last_refill_ms) / 1000
+            bucket = _Bucket(
+                tokens=min(rule.capacity, existing.tokens + elapsed_seconds * rule.refillPerSecond),
+                last_refill_ms=now_ms,
+            )
         else:
-            elapsed_seconds = max(0.0, now_ms - bucket.last_refill_ms) / 1000
-            bucket.tokens = min(rule.capacity, bucket.tokens + elapsed_seconds * rule.refillPerSecond)
-            bucket.last_refill_ms = now_ms
+            bucket = _Bucket(tokens=rule.capacity, last_refill_ms=now_ms)
+            if len(self._buckets) >= self._max_entries:
+                oldest_key = next(iter(self._buckets), None)
+                if oldest_key is not None:
+                    del self._buckets[oldest_key]
+        self._buckets[key] = bucket
 
         if bucket.tokens >= cost:
             bucket.tokens -= cost
@@ -57,9 +77,9 @@ class MemoryRateLimitStore:
         return RateLimitResult(allow=False, retryAfterMs=math.ceil((shortfall / rule.refillPerSecond) * 1000))
 
 
-def create_memory_rate_limit_store() -> RateLimitStore:
+def create_memory_rate_limit_store(max_entries: int = DEFAULT_MAX_MEMORY_ENTRIES) -> RateLimitStore:
     """Factory matching TS's createMemoryRateLimitStore naming (kohaku's other create_* port factories)."""
-    return MemoryRateLimitStore()
+    return MemoryRateLimitStore(max_entries)
 
 
 @dataclass(frozen=True)

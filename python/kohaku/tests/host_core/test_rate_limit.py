@@ -75,6 +75,26 @@ def test_zero_capacity_rule_denies_from_the_first_call() -> None:
     asyncio.run(run())
 
 
+def test_bounds_memory_with_max_entries_evicting_the_least_recently_used_bucket_first() -> None:
+    """Mirrors the TS test of the same intent."""
+
+    async def run() -> None:
+        store = create_memory_rate_limit_store(max_entries=2)
+        rule = RateLimitRule(capacity=1, refillPerSecond=0.001)  # negligible refill (now_ms stays 0)
+
+        await store.take("a", 1, rule, 0)  # a's bucket: drained to 0 tokens
+        await store.take("b", 1, rule, 0)  # b's bucket: drained to 0 tokens -- at capacity (2)
+        await store.take("a", 1, rule, 0)  # touch a (still 0 tokens) -- LRU order becomes [b, a]
+        await store.take("c", 1, rule, 0)  # c is new: evicts the LRU entry (b), not a
+
+        # "a" is still the same drained bucket (never evicted) -- denied, not reset to a fresh one.
+        assert (await store.take("a", 1, rule, 0)).allow is False
+        # "b" was evicted earlier, so revisiting it now allocates a fresh, full bucket.
+        assert (await store.take("b", 1, rule, 0)).allow is True
+
+    asyncio.run(run())
+
+
 _RULE = RateLimitRule(capacity=1, refillPerSecond=1)
 
 

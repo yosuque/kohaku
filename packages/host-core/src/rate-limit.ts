@@ -7,6 +7,19 @@ interface Bucket {
   lastRefillMs: number;
 }
 
+/** A sensible default cap on the number of distinct buckets/ledger entries an in-process, Map-backed store keeps at once — see `createMemoryRateLimitStore`/`createDailyTokenLedger`'s `maxEntries`. */
+export const DEFAULT_MAX_MEMORY_ENTRIES = 10_000;
+
+export interface CreateMemoryRateLimitStoreOptions {
+  /**
+   * Caps the number of distinct buckets kept at once. Once the cap is reached, adding a bucket for a
+   * new key evicts the least-recently-used one first (an existing key's own bucket is never evicted by
+   * this, only reordered to most-recently-used on every `take`). Default `DEFAULT_MAX_MEMORY_ENTRIES`
+   * (10,000). See the function's own doc for why this bound exists.
+   */
+  maxEntries?: number;
+}
+
 /**
  * A pure in-process token-bucket `RateLimitStore` (the Zero-Port default, and the reference
  * implementation `@kohaku-ui/port-contracts`' `describeRateLimitStorePortContract` exercises).
@@ -15,24 +28,39 @@ interface Bucket {
  * needs a shared backing store (Redis, etc.) implementing the same `RateLimitStore` contract instead.
  *
  * A key's bucket starts full (`rule.capacity` tokens) on first use, refills continuously at
- * `rule.refillPerSecond` (capped at `rule.capacity`), and never actively expires — a key that stops
- * being used simply stops accumulating history beyond `rule.capacity`, so the map does grow with the
- * number of distinct keys ever seen. A product with unboundedly many keys (e.g. one bucket per
- * anonymous IP) should prefer a backing store with its own eviction instead.
+ * `rule.refillPerSecond` (capped at `rule.capacity`), and never actively expires on its own — a key
+ * that stops being used would otherwise keep its bucket forever, so the map would grow with the number
+ * of distinct keys ever seen (unbounded for a product with unboundedly many keys, e.g. one bucket per
+ * anonymous IP or per rotated header value). `maxEntries` (default `DEFAULT_MAX_MEMORY_ENTRIES`) bounds
+ * that growth with LRU eviction: a `Map` iterates in insertion order, and every `take` call deletes then
+ * re-inserts the accessed key, so the first key in iteration order is always the least-recently-used
+ * one — evicted only when a brand-new key would otherwise push the map over the cap. A rate limit is
+ * only as strong as the identity it keys on: see docs/user-guide.md's Policy-as-Code section for why an
+ * unauthenticated caller that can vary its own tenant/principal header can just as easily rotate through
+ * buckets as it can exhaust this cap.
  */
-export function createMemoryRateLimitStore(): RateLimitStore {
+export function createMemoryRateLimitStore(options: CreateMemoryRateLimitStoreOptions = {}): RateLimitStore {
+  const maxEntries = options.maxEntries ?? DEFAULT_MAX_MEMORY_ENTRIES;
   const buckets = new Map<string, Bucket>();
   return {
     async take(key, cost, rule, nowMs) {
-      let bucket = buckets.get(key);
-      if (bucket == null) {
-        bucket = { tokens: rule.capacity, lastRefillMs: nowMs };
-        buckets.set(key, bucket);
+      const existing = buckets.get(key);
+      let bucket: Bucket;
+      if (existing != null) {
+        buckets.delete(key); // reinsert below to mark as most-recently-used
+        const elapsedSeconds = Math.max(0, nowMs - existing.lastRefillMs) / 1000;
+        bucket = {
+          tokens: Math.min(rule.capacity, existing.tokens + elapsedSeconds * rule.refillPerSecond),
+          lastRefillMs: nowMs,
+        };
       } else {
-        const elapsedSeconds = Math.max(0, nowMs - bucket.lastRefillMs) / 1000;
-        bucket.tokens = Math.min(rule.capacity, bucket.tokens + elapsedSeconds * rule.refillPerSecond);
-        bucket.lastRefillMs = nowMs;
+        bucket = { tokens: rule.capacity, lastRefillMs: nowMs };
+        if (buckets.size >= maxEntries) {
+          const oldestKey = buckets.keys().next().value;
+          if (oldestKey !== undefined) buckets.delete(oldestKey);
+        }
       }
+      buckets.set(key, bucket);
       if (bucket.tokens >= cost) {
         bucket.tokens -= cost;
         return { allow: true };

@@ -13,7 +13,11 @@ export {
   verifyCapabilitySafely,
   WriteScopeDroppedError,
 } from "./capability.js";
-export { createDailyTokenLedger, type DailyTokenLedger } from "./daily-token-ledger.js";
+export {
+  type CreateDailyTokenLedgerOptions,
+  createDailyTokenLedger,
+  type DailyTokenLedger,
+} from "./daily-token-ledger.js";
 export {
   type ConsoleErrorReporter,
   type ConsoleErrorReporterOptions,
@@ -45,8 +49,10 @@ export {
   parsePolicy,
 } from "./policy.js";
 export {
+  type CreateMemoryRateLimitStoreOptions,
   createMemoryRateLimitStore,
   createRateLimiter,
+  DEFAULT_MAX_MEMORY_ENTRIES,
   type RateLimiter,
   type RateLimiterErrorInfo,
   type RateLimiterTakeParams,

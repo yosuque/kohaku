@@ -55,6 +55,21 @@ describe("createMemoryRateLimitStore", () => {
     const rule = { capacity: 0, refillPerSecond: 1 };
     expect((await store.take("k", 1, rule, 0)).allow).toBe(false);
   });
+
+  it("bounds memory with maxEntries, evicting the least-recently-used bucket first", async () => {
+    const store = createMemoryRateLimitStore({ maxEntries: 2 });
+    const rule = { capacity: 1, refillPerSecond: 0.001 }; // negligible refill at these timestamps (nowMs stays 0)
+
+    await store.take("a", 1, rule, 0); // a's bucket: drained to 0 tokens
+    await store.take("b", 1, rule, 0); // b's bucket: drained to 0 tokens -- map is now at capacity (2)
+    await store.take("a", 1, rule, 0); // touch a (still 0 tokens, still denies) -- LRU order becomes [b, a]
+    await store.take("c", 1, rule, 0); // c is new: evicts the LRU entry (b), not a; map is now {a, c}
+
+    // "a" is still the same drained bucket (never evicted) -- denied, not reset to a fresh one.
+    expect((await store.take("a", 1, rule, 0)).allow).toBe(false);
+    // "b" was evicted earlier, so revisiting it now allocates a fresh, full bucket.
+    expect((await store.take("b", 1, rule, 0)).allow).toBe(true);
+  });
 });
 
 describe("createRateLimiter", () => {

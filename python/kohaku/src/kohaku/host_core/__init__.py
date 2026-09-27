@@ -65,6 +65,7 @@ from .policy import (
 )
 from .policy_node import load_policy_file
 from .rate_limit import (
+    DEFAULT_MAX_MEMORY_ENTRIES,
     MemoryRateLimitStore,
     RateLimiter,
     RateLimiterErrorInfo,
@@ -77,6 +78,7 @@ from .view_recorder import record_view_fallback
 
 __all__ = [
     "DEFAULT_CAPABILITY_TTL_SECONDS",
+    "DEFAULT_MAX_MEMORY_ENTRIES",
     "TRACEPARENT_RE",
     "ActionEffectsHook",
     "ActionEffectsResponse",

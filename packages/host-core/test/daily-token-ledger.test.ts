@@ -54,4 +54,32 @@ describe("createDailyTokenLedger", () => {
     clock = Date.parse("2026-01-02T01:00:00.000Z");
     expect(ledger.spent("tenant-a")).toBe(0);
   });
+
+  it("bounds memory with maxEntries, evicting the least-recently-touched entry first", () => {
+    const ledger = createDailyTokenLedger(() => DAY1_START, { maxEntries: 2 });
+    ledger.record("a", 1);
+    ledger.record("b", 2); // at capacity
+    ledger.record("a", 10); // touch a again -- LRU order becomes [b, a]
+    ledger.record("c", 3); // c is new: evicts the LRU entry (b), not a
+
+    expect(ledger.spent("a")).toBe(11); // untouched by eviction: 1 + 10
+    expect(ledger.spent("b")).toBe(0); // evicted -- recording again would start a fresh entry
+    expect(ledger.spent("c")).toBe(3);
+  });
+
+  it("prunes entries from a previous UTC day on rollover, so they never compete with today's keys for maxEntries", () => {
+    let clock = DAY1_START;
+    const ledger = createDailyTokenLedger(() => clock, { maxEntries: 2 });
+    ledger.record("day1-a", 100);
+    ledger.record("day1-b", 200); // at capacity, both from day 1
+
+    clock = DAY2_START;
+    ledger.record("day2-x", 5); // first day-2 call: day 1's entries are pruned before this is added
+    ledger.record("day2-y", 7); // a second brand-new key for day 2 -- must not evict day2-x
+
+    expect(ledger.spent("day2-x")).toBe(5); // survived: day 1's entries did not occupy its slot
+    expect(ledger.spent("day2-y")).toBe(7);
+    expect(ledger.spent("day1-a")).toBe(0);
+    expect(ledger.spent("day1-b")).toBe(0);
+  });
 });
