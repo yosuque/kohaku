@@ -745,6 +745,10 @@ export const CLAUDE_DESKTOP_SCRIPT_TEMPLATE = `#!/usr/bin/env node
  *   npm run mcp:claude-desktop -- --print # print the merged result; write nothing
  *
  * Restart Claude Desktop afterwards to pick up the change.
+ *
+ * The config file location is auto-detected per OS (see claudeDesktopConfigPath) -- override it with
+ * --config <path> or the KOHAKU_CLAUDE_DESKTOP_CONFIG environment variable if Claude Desktop's config lives
+ * somewhere nonstandard on your machine.
  */
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -825,10 +829,21 @@ export function mergeMcpConfig(target, example) {
  * claudeDesktopConfigPath) so it is directly callable with a temporary HOME from a test, with no child
  * process and no risk of ever touching a real Claude Desktop config. Returns what happened rather than
  * just logging it, so a test can assert on configPath / merged / backedUp directly.
+ *
+ * configPathOverride bypasses claudeDesktopConfigPath's own per-OS detection entirely when given (real
+ * users never need it -- the per-OS default is what they want). It exists so a test driving this through a
+ * real subprocess (main(), below) can pin the exact config path independent of the CI host's actual
+ * platform: env/plat alone are not enough there, since a real child process always reports its own real
+ * platform() regardless of what env.HOME is set to.
  */
-export function syncClaudeDesktopConfig({ env = process.env, plat = platform(), printOnly = false } = {}) {
+export function syncClaudeDesktopConfig({
+  env = process.env,
+  plat = platform(),
+  printOnly = false,
+  configPathOverride,
+} = {}) {
   const example = readJsonConfig(EXAMPLE_CONFIG_PATH);
-  const configPath = claudeDesktopConfigPath(env, plat);
+  const configPath = configPathOverride ?? claudeDesktopConfigPath(env, plat);
   const merged = mergeMcpConfig(readJsonConfig(configPath), example);
 
   if (printOnly) {
@@ -844,11 +859,22 @@ export function syncClaudeDesktopConfig({ env = process.env, plat = platform(), 
   return { configPath, merged, wrote: true, backedUp };
 }
 
+/**
+ * The value following a literal "--config" in argv, if present (e.g. ["--config", "/tmp/x.json"] -> the
+ * path). Overrides the per-OS default -- mainly useful for tests driving this script as a real subprocess,
+ * where env.HOME alone cannot pin the config path independent of the host's actual platform().
+ */
+function configPathArg(argv) {
+  const i = argv.indexOf("--config");
+  return i === -1 ? undefined : argv[i + 1];
+}
+
 function main() {
   const printOnly = process.argv.includes("--print");
+  const configPathOverride = configPathArg(process.argv) ?? process.env.KOHAKU_CLAUDE_DESKTOP_CONFIG;
   let result;
   try {
-    result = syncClaudeDesktopConfig({ printOnly });
+    result = syncClaudeDesktopConfig({ printOnly, configPathOverride });
   } catch (e) {
     console.error(\`claude-desktop.mjs: \${e instanceof Error ? e.message : String(e)}\`);
     process.exitCode = 1;

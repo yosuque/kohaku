@@ -149,6 +149,7 @@ describe("kohaku init --mcp: Claude Desktop config", () => {
       env?: Record<string, string | undefined>;
       plat?: string;
       printOnly?: boolean;
+      configPathOverride?: string;
     }): {
       configPath: string;
       merged: { mcpServers: Record<string, unknown>; [key: string]: unknown };
@@ -166,6 +167,36 @@ describe("kohaku init --mcp: Claude Desktop config", () => {
       const scriptModule = (await import(scriptUrl)) as unknown as ClaudeDesktopScriptModule;
       return { scriptModule, out };
     }
+
+    it("claudeDesktopConfigPath resolves a different, platform-shaped path per OS", async () => {
+      const { scriptModule } = await generate();
+      const fakeHome = tmp("kohaku-claude-home-");
+      const darwinPath = scriptModule.claudeDesktopConfigPath({ HOME: fakeHome }, "darwin");
+      const linuxPath = scriptModule.claudeDesktopConfigPath({ HOME: fakeHome }, "linux");
+      const win32Path = scriptModule.claudeDesktopConfigPath({ HOME: fakeHome }, "win32");
+
+      expect(darwinPath).toBe(
+        join(fakeHome, "Library", "Application Support", "Claude", "claude_desktop_config.json"),
+      );
+      expect(linuxPath).toBe(join(fakeHome, ".config", "Claude", "claude_desktop_config.json"));
+      expect(win32Path).toBe(join(fakeHome, "AppData", "Roaming", "Claude", "claude_desktop_config.json"));
+      // All three differ -- this per-OS branching is exactly what caused the original CI bug (a test that
+      // wrote a fixture at one platform's shape passed on that OS and silently no-op'd on every other).
+      expect(new Set([darwinPath, linuxPath, win32Path]).size).toBe(3);
+    });
+
+    it("claudeDesktopConfigPath respects XDG_CONFIG_HOME (linux) and APPDATA (win32) overrides", async () => {
+      const { scriptModule } = await generate();
+      const fakeHome = tmp("kohaku-claude-home-");
+      const xdgConfigHome = tmp("kohaku-xdg-config-");
+      const appData = tmp("kohaku-appdata-");
+      expect(
+        scriptModule.claudeDesktopConfigPath({ HOME: fakeHome, XDG_CONFIG_HOME: xdgConfigHome }, "linux"),
+      ).toBe(join(xdgConfigHome, "Claude", "claude_desktop_config.json"));
+      expect(scriptModule.claudeDesktopConfigPath({ HOME: fakeHome, APPDATA: appData }, "win32")).toBe(
+        join(appData, "Claude", "claude_desktop_config.json"),
+      );
+    });
 
     it("--print (printOnly) computes the merge but writes nothing", async () => {
       const { scriptModule } = await generate();
@@ -240,28 +271,45 @@ describe("kohaku init --mcp: Claude Desktop config", () => {
     it("running as a real subprocess (node scripts/claude-desktop.mjs --print) also works", async () => {
       const { out } = await generate();
       const fakeHome = tmp("kohaku-claude-home-");
+      // Strip XDG_CONFIG_HOME/APPDATA from the inherited environment: on a CI runner that happens to have
+      // either set, claudeDesktopConfigPath's own per-OS resolution would otherwise use that ambient
+      // (real, outside-the-sandbox) value instead of falling back to env.HOME -- this test's whole point is
+      // that nothing here ever reaches outside fakeHome, on any platform.
+      const env: Record<string, string | undefined> = { ...process.env, HOME: fakeHome };
+      delete env.XDG_CONFIG_HOME;
+      delete env.APPDATA;
       const result = spawnSync(process.execPath, [join(out, "scripts", "claude-desktop.mjs"), "--print"], {
-        env: { ...process.env, HOME: fakeHome },
+        env,
         encoding: "utf8",
       });
       expect(result.status, `stderr: ${result.stderr}`).toBe(0);
       const printed = JSON.parse(result.stdout);
       expect(printed.mcpServers["sales-mcp-app"]).toBeDefined();
-      expect(existsSync(fakeHome + "/Library")).toBe(false);
+      // printOnly never writes regardless of the resolved path, but confirm no directory materialized under
+      // fakeHome for any of the three platform shapes claudeDesktopConfigPath could have picked.
+      expect(existsSync(join(fakeHome, "Library"))).toBe(false);
+      expect(existsSync(join(fakeHome, ".config"))).toBe(false);
+      expect(existsSync(join(fakeHome, "AppData"))).toBe(false);
     });
 
     // A malformed *existing* config must abort rather than being silently treated as {} -- guessing a merge
     // target there would drop every one of the person's other registered MCP servers once written. Driven
     // through a real subprocess (not just importing syncClaudeDesktopConfig) so "exit code" and "stderr" are
     // the actual CLI-user-visible behavior, not just the exported function's own throw.
+    //
+    // The config path is pinned via KOHAKU_CLAUDE_DESKTOP_CONFIG (unit-level: configPathOverride) rather than
+    // via claudeDesktopConfigPath's own per-OS detection -- a real subprocess always reports its own real
+    // platform() regardless of what env.HOME is set to, so a test that instead wrote the broken file at (say)
+    // the macOS-shaped path under a fake HOME would silently pass on macOS and silently no-op ("no config
+    // found" -> a fresh one written successfully, exit 0) on Linux/Windows CI.
     describe.each([
       ["invalid JSON", "{ not valid json"],
       ["a JSON array at the top level", "[]"],
       ["JSON null at the top level", "null"],
       ["a non-object mcpServers field", JSON.stringify({ mcpServers: "not an object" })],
     ])("existing config is %s", (_label, brokenContent) => {
-      function writeBrokenConfig(scriptModule: ClaudeDesktopScriptModule, fakeHome: string): string {
-        const configPath = scriptModule.claudeDesktopConfigPath({ HOME: fakeHome }, "darwin");
+      function writeBrokenConfig(fakeHome: string): string {
+        const configPath = join(fakeHome, "claude_desktop_config.json");
         mkdirSync(dirname(configPath), { recursive: true });
         writeFileSync(configPath, brokenContent);
         return configPath;
@@ -269,21 +317,20 @@ describe("kohaku init --mcp: Claude Desktop config", () => {
 
       it("syncClaudeDesktopConfig throws, naming the file, instead of guessing {}", async () => {
         const { scriptModule } = await generate();
-        const fakeHome = tmp("kohaku-claude-home-");
-        const configPath = writeBrokenConfig(scriptModule, fakeHome);
-        expect(() =>
-          scriptModule.syncClaudeDesktopConfig({ env: { HOME: fakeHome }, plat: "darwin" }),
-        ).toThrow(configPath);
+        const configPath = writeBrokenConfig(tmp("kohaku-claude-home-"));
+        expect(() => scriptModule.syncClaudeDesktopConfig({ configPathOverride: configPath })).toThrow(
+          configPath,
+        );
       });
 
       it("the real CLI (node scripts/claude-desktop.mjs) exits non-zero, names the file, and writes/backs up nothing", async () => {
-        const { scriptModule, out } = await generate();
+        const { out } = await generate();
         const fakeHome = tmp("kohaku-claude-home-");
-        const configPath = writeBrokenConfig(scriptModule, fakeHome);
+        const configPath = writeBrokenConfig(fakeHome);
         const before = readFileSync(configPath, "utf8");
 
         const result = spawnSync(process.execPath, [join(out, "scripts", "claude-desktop.mjs")], {
-          env: { ...process.env, HOME: fakeHome },
+          env: { ...process.env, HOME: fakeHome, KOHAKU_CLAUDE_DESKTOP_CONFIG: configPath },
           encoding: "utf8",
         });
 
