@@ -11,6 +11,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
+from .action_params import ActionTier
 from .intent import IntentInput
 from .models import (
     FixationRecordModel,
@@ -81,8 +82,17 @@ class OperationDescriptor:
     name: str
     description: str
     paramsSchema: Any = None
-    """JSON Schema (doubles as the semantic-layer document in the LLM prompt)."""
+    """JSON Schema (doubles as the semantic-layer document in the LLM prompt). When reachable as a write
+    action, validated at attach time against kohaku's own JSON Schema subset (design.md #62;
+    `kohaku.spec.action_params.assert_valid_action_params_schema`) and per invoke against the actual
+    payload (`validate_action_params`) before `DomainPort.invoke` ever runs."""
     resultShape: DataShape | None = None
+    tier: ActionTier | None = None
+    """Governance tier for invoking this action (design.md #62/#63). None is equivalent to "auto" (no
+    confirm/approval gate -- the pre-existing, ungated invoke behavior)."""
+    confirmMessage: str | None = None
+    """Human-readable message a "confirm"-tier gate should show the user before setting
+    `confirmed: true`. Ignored for other tiers."""
 
 
 @dataclass(frozen=True)
@@ -194,6 +204,86 @@ class AuthzPort(Protocol):
     ) -> str: ...
 
     async def verify(self, token: str, req: VerifyRequest) -> VerifyResult: ...
+
+
+DEFAULT_APPROVAL_TTL_SECONDS: int = 300
+"""Default lifetime (seconds) of an approval token when the issuer is given no explicit TTL
+(design.md #63). Deliberately much shorter than host_core's DEFAULT_CAPABILITY_TTL_SECONDS: an approval
+token authorizes one specific human decision about one specific payload, not a session's worth of reads.
+Port of TS ports.ts's DEFAULT_APPROVAL_TTL_SECONDS."""
+
+
+@dataclass(frozen=True)
+class ApprovalGrant:
+    """The claims a stateless bound approval token carries (design.md #63). Port of TS ports.ts's
+    ApprovalGrant. An `ApprovalPort.verify_approval` that accepts a token MUST have checked every one of
+    these against the request it was presented for before returning `ok=True` -- this is what a caller
+    receives back on success, not what it inspects itself."""
+
+    action: str
+    payloadHash: str
+    approverId: str
+    """The principal id of whoever approved. MUST differ from requesterId (design.md #63)."""
+    requesterId: str
+    """The principal id of whoever will invoke (or already attempted to invoke) the action."""
+    exp: int
+    """Expiry, epoch seconds."""
+    jti: str
+    """Unique id for this grant, consumed by an ApprovalStore when single-use enforcement is configured."""
+    tenant: str | None = None
+
+
+@dataclass(frozen=True)
+class ApprovalVerifyResult:
+    ok: bool
+    grant: ApprovalGrant | None = None
+    reason: str | None = None
+
+
+class ApprovalPort(Protocol):
+    """Issuance and verification of stateless, short-lived approval tokens for "approve"-tier actions
+    (design.md #63). Structurally parallel to AuthzPort, but a distinct port: an approval authorizes one
+    human decision about one exact payload, not a read/write scope over a Spec's lifetime, and a concrete
+    token format MUST NOT be interchangeable with a capability token. Port of TS ports.ts's ApprovalPort.
+    """
+
+    async def issue_approval(
+        self,
+        *,
+        action: str,
+        payload_hash: str,
+        requester_id: str,
+        approver_id: str,
+        tenant: str | None = None,
+        ttl_seconds: int | None = None,
+    ) -> str:
+        """Issue a token bound to (action, payload_hash, requester_id, tenant). approver_id MUST differ
+        from requester_id -- an implementation MUST reject issuing a self-approval (design.md #63) rather
+        than leave that check to the caller. Default TTL DEFAULT_APPROVAL_TTL_SECONDS."""
+        ...
+
+    async def verify_approval(
+        self, token: str, *, action: str, payload_hash: str, requester_id: str, tenant: str | None = None
+    ) -> ApprovalVerifyResult:
+        """Verify `token` against the exact (action, payload_hash, requester_id, tenant) it is presented
+        for. A denial (expired, malformed, wrong binding, already consumed) is a normal outcome and MUST
+        be reported as `ok=False`, never raised. MUST raise only on an infrastructure failure it cannot
+        itself classify as allow/deny (e.g. an ApprovalStore outage) -- such a raised call is fail-closed:
+        the caller MUST treat it as a denial."""
+        ...
+
+
+class ApprovalStore(Protocol):
+    """Optional persistence for single-use enforcement of approval tokens. Port of TS ports.ts's
+    ApprovalStore. When an ApprovalPort is configured with one, verify_approval MUST call `consume`
+    exactly once per verification attempt and deny (`ok=False`) when it returns False (already consumed)
+    or raises (store failure -- fail-closed). An ApprovalPort given no store keeps a token usable
+    repeatedly until it expires."""
+
+    async def consume(self, jti: str, expires_at: int) -> bool:
+        """Atomically mark `jti` as consumed until `expires_at` (epoch seconds) if it was not already;
+        return True on first consumption, False if `jti` was already consumed (a replay attempt)."""
+        ...
 
 
 @dataclass(frozen=True)

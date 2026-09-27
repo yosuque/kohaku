@@ -3,9 +3,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exportDistillationDataset } from "@kohaku-ui/evals";
 import {
+  type ActionParamIssue,
+  type ActionParamsSchema,
   ALLOWED_ATTRS,
   ALLOWED_STYLE_PROPS,
   ALLOWED_TAGS,
+  actionPayloadHash,
   type CacheKeyParts,
   cacheKey,
   canonicalStringify,
@@ -15,6 +18,7 @@ import {
   decodeSeqCursor,
   encodeSeqCursor,
   type FixationRecord,
+  type JsonObject,
   type LineageEventRecord,
   type LineagePage,
   type LineagePageRequest,
@@ -22,6 +26,7 @@ import {
   pageLineageArray,
   parseSpec,
   sha256Hex,
+  validateActionParams,
 } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 // Relative (not "@kohaku-ui/composer") import: spec does not declare composer as a dependency, same
@@ -62,6 +67,12 @@ interface Fixture {
   spec: { file: string; specHash: string; structureHash: string };
   cacheKey: { parts: CacheKeyParts; key: string }[];
   lineageCursor: { seq: number; cursor: string }[];
+  actionParams: {
+    schema: ActionParamsSchema;
+    payload: JsonObject;
+    issues: ActionParamIssue[];
+    payloadHash: string;
+  }[];
   sandboxDom: { tags: string[]; attrs: string[]; styleProps: string[] };
   distillation: { jsonl: string };
   promptFragments: {
@@ -128,6 +139,13 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     for (const c of fixture.lineageCursor) {
       expect(encodeSeqCursor(c.seq)).toBe(c.cursor);
       expect(decodeSeqCursor(c.cursor)).toBe(c.seq);
+    }
+  });
+
+  it("validateActionParams / actionPayloadHash reproduce the fixture (design.md #62/#63)", async () => {
+    for (const c of fixture.actionParams) {
+      expect(validateActionParams(c.schema, c.payload)).toEqual(c.issues);
+      expect(await actionPayloadHash(c.payload)).toBe(c.payloadHash);
     }
   });
 

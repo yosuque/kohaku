@@ -133,7 +133,7 @@ function validateValue(
         report("maxLength", `expected at most ${schema.maxLength} characters`);
       }
       if (schema.enum !== undefined && !schema.enum.includes(value)) {
-        report("enum", `expected one of ${JSON.stringify(schema.enum)}`);
+        report("enum", `expected one of ${canonicalStringify(schema.enum)}`);
       }
       return;
     }
@@ -153,7 +153,7 @@ function validateValue(
         report("maximum", `expected at most ${schema.maximum}`);
       }
       if (schema.enum !== undefined && !schema.enum.includes(value)) {
-        report("enum", `expected one of ${JSON.stringify(schema.enum)}`);
+        report("enum", `expected one of ${canonicalStringify(schema.enum)}`);
       }
       return;
     }
@@ -163,7 +163,7 @@ function validateValue(
         return;
       }
       if (schema.enum !== undefined && !schema.enum.includes(value)) {
-        report("enum", `expected one of ${JSON.stringify(schema.enum)}`);
+        report("enum", `expected one of ${canonicalStringify(schema.enum)}`);
       }
       return;
     }
