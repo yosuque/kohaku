@@ -1,0 +1,37 @@
+{
+  "name": "@kohaku-ui-sample/playground",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:audit": "KOHAKU_PLAYGROUND_AUDIT=1 vite build",
+    "typecheck": "tsc --noEmit",
+    "record-fixtures": "tsx scripts/record-fixtures.ts"
+  },
+  "dependencies": {
+    "@kohaku-ui-sample/api": "workspace:^",
+    "@kohaku-ui-sample/web": "workspace:^",
+    "@kohaku-ui/evals": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
+    "@kohaku-ui/spec-core": "workspace:^",
+    "@kohaku-ui/storage-memory": "workspace:^",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "react-router-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@kohaku-ui/port-contracts": "workspace:^",
+    "@kohaku-ui/sandbox": "workspace:^",
+    "@testing-library/react": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "jsdom": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,13 +1,17 @@
-import type { JwtIdentityResolver, ResolvedIdentity } from "@kohaku-ui/authz-jwt";
-import { JwtIdentityError } from "@kohaku-ui/authz-jwt";
-import { errorBody, type KohakuHostDeps } from "@kohaku-ui/host-rest";
-import type { Context, MiddlewareHandler } from "hono";
+import type { KohakuHostDeps } from "@kohaku-ui/host-rest";
+import type { MiddlewareHandler } from "hono";
 
 /**
  * REST-only request → principal/tenant resolution (Hono middleware + host-rest's `auth`/`tenant` hooks).
  * Kept apart from `../ports/from-env.ts` (which only selects the StoragePort/AuthzPort adapter and has no
  * business importing hono / host-rest) so that sample-mcp, which imports `from-env.ts`'s adapter-selection
  * exports via the package's `./ports/from-env` subpath, never pulls in the REST framework.
+ *
+ * The JWT scheme (`createJwtRequestIdentity`) lives in the sibling `request-identity-jwt.ts` instead of
+ * here, so this file — which `app.ts` imports unconditionally for `createHeaderIdentity` — has no
+ * `@kohaku-ui/authz-jwt` import: `app.ts` is also the `./browser` export's entry point, and JWT
+ * verification (an env/secret-store-backed Node concern) has no business reaching a browser bundle.
+ * index.ts imports `request-identity-jwt.ts` directly, only when it actually needs it.
  */
 
 /** How the REST host turns a request into a principal and a tenant. */
@@ -33,31 +37,5 @@ export function createHeaderIdentity(): RequestIdentity {
     // fixation) is separated per tenant. query:// is tenant-neutral and does not mix tenant into the cache key (an invariant).
     // Full-fledged tenant isolation (RLS, etc.) is a product responsibility (specification.md §4.4 / §7).
     tenant: (c) => c.req.header("x-kohaku-tenant") || undefined,
-  };
-}
-
-const IDENTITY_VAR = "kohakuIdentity";
-
-/**
- * JWT scheme: the middleware verifies the bearer token once per request and stores the identity on the
- * context; the hooks read it back. A missing or invalid token is a 401 with the standard error envelope
- * (CAPABILITY_DENIED — the SPEC §6.1 code set has no separate "unauthenticated" code, and the envelope is
- * what clients already parse). Principal / roles / tenant then all come from the token, never from headers.
- */
-export function createJwtRequestIdentity(identity: JwtIdentityResolver): RequestIdentity {
-  const read = (c: Context): ResolvedIdentity | undefined =>
-    c.get(IDENTITY_VAR) as ResolvedIdentity | undefined;
-  return {
-    middleware: async (c, next) => {
-      try {
-        c.set(IDENTITY_VAR, await identity.fromAuthorizationHeader(c.req.header("authorization")));
-      } catch (e) {
-        const reason = e instanceof JwtIdentityError ? e.code : "INVALID_TOKEN";
-        return c.json(errorBody("CAPABILITY_DENIED", `authentication required (${reason})`), 401);
-      }
-      await next();
-    },
-    auth: async (c) => read(c)?.principal ?? null,
-    tenant: (c) => read(c)?.tenant,
   };
 }

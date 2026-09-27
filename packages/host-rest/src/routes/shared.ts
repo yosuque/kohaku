@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { TraceContext } from "@kohaku-ui/composer";
 import { errorMessage, notifyHook, parseTraceContext } from "@kohaku-ui/host-core";
 import {
@@ -164,8 +163,9 @@ const REQUEST_ID_VAR = "kohakuRequestId";
 
 /**
  * Resolves (and memoizes) the per-request correlation id (ops). Default behavior: the inbound
- * `x-request-id` request header when present and well-formed, otherwise a fresh `randomUUID()`. A product can
- * override entirely via `deps.requestId`. Always returns a value (unlike the old onError-gated newRequestId):
+ * `x-request-id` request header when present and well-formed, otherwise a fresh
+ * `globalThis.crypto.randomUUID()`. A product can override entirely via `deps.requestId`. Always returns a
+ * value (unlike the old onError-gated newRequestId):
  * the id is used for the `X-Request-Id` response header on every response, not only on failures.
  *
  * Memoized on the Hono Context's own variable bag (`c.set`/`c.get`), not the raw Request object: a
@@ -181,7 +181,7 @@ export function requestIdOf(c: Context, deps: KohakuHostDeps): string {
   const id =
     deps.requestId != null
       ? deps.requestId(c)
-      : (sanitizeInboundRequestId(c.req.header("x-request-id")) ?? randomUUID());
+      : (sanitizeInboundRequestId(c.req.header("x-request-id")) ?? globalThis.crypto.randomUUID());
   c.set(REQUEST_ID_VAR, id);
   return id;
 }
