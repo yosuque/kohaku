@@ -1,0 +1,320 @@
+import { describe, expect, it } from "vitest";
+import { buildEvidencePack } from "../src/evidence/build.js";
+import {
+  deriveEd25519KeyId,
+  type EvidencePackReader,
+  exportEd25519PrivateKeyPkcs8,
+  exportEd25519PublicKeyRaw,
+  exportEd25519PublicKeySpki,
+  generateEd25519KeyPair,
+  importEd25519PrivateKeyPkcs8,
+  importEd25519PublicKeyRaw,
+  importEd25519PublicKeySpki,
+  signBytes,
+  signManifest,
+  verifyBytes,
+  verifyEvidencePack,
+  verifyManifestSignature,
+} from "../src/evidence/sign.js";
+import type { EvidenceSource } from "../src/evidence/source.js";
+
+// lineage carries no DOM lib / @types/node dependency; reach TextEncoder structurally, the same idiom
+// src/evidence/sign.ts itself uses.
+const runtime = globalThis as unknown as { TextEncoder: new () => { encode(input: string): Uint8Array } };
+const encoder = new runtime.TextEncoder();
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// PKCS8 DER for an Ed25519 private key is a fixed 16-byte prefix followed by the raw 32-byte seed --
+// there are no algorithm parameters to vary, so this constant plus the seed is the whole encoding.
+const ED25519_PKCS8_PREFIX = "302e020100300506032b657004220420";
+
+/**
+ * RFC 8032 §7.1, TEST 1 -- the canonical Ed25519 test vector (empty message). Independently
+ * cross-checked (not just transcribed): importing this SECRET_KEY_SEED via WebCrypto's pkcs8 import
+ * and deriving its public key (via a JWK export) reproduces PUBLIC_KEY exactly, and signing the empty
+ * message with it reproduces SIGNATURE exactly.
+ */
+const RFC8032_TEST1 = {
+  secretKeySeed: "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+  publicKey: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+  signature:
+    "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+};
+
+describe("Ed25519 primitives against RFC 8032 §7.1 TEST 1", () => {
+  it("verifies the canonical (secret key, empty message, signature) triple", async () => {
+    const publicKey = await importEd25519PublicKeyRaw(hexToBytes(RFC8032_TEST1.publicKey));
+    const ok = await verifyBytes(new Uint8Array(0), hexToBytes(RFC8032_TEST1.signature), publicKey);
+    expect(ok).toBe(true);
+  });
+
+  it("reproduces the canonical signature when signing with the matching private key", async () => {
+    const pkcs8 = hexToBytes(ED25519_PKCS8_PREFIX + RFC8032_TEST1.secretKeySeed);
+    const privateKey = await importEd25519PrivateKeyPkcs8(pkcs8);
+    const signature = await signBytes(new Uint8Array(0), privateKey);
+    expect(bytesToHex(signature)).toBe(RFC8032_TEST1.signature);
+  });
+
+  it("fails verification when a single signature byte is flipped", async () => {
+    const publicKey = await importEd25519PublicKeyRaw(hexToBytes(RFC8032_TEST1.publicKey));
+    const tampered = hexToBytes(RFC8032_TEST1.signature);
+    tampered[0] ^= 0x01;
+    const ok = await verifyBytes(new Uint8Array(0), tampered, publicKey);
+    expect(ok).toBe(false);
+  });
+});
+
+describe("keygen / PEM material round-trip", () => {
+  it("signs and verifies through exported-and-reimported raw/pkcs8/spki key material", async () => {
+    const keyPair = await generateEd25519KeyPair();
+    const privatePkcs8 = await exportEd25519PrivateKeyPkcs8(keyPair.privateKey);
+    const publicSpki = await exportEd25519PublicKeySpki(keyPair.publicKey);
+    const publicRaw = await exportEd25519PublicKeyRaw(keyPair.publicKey);
+
+    const reimportedPrivate = await importEd25519PrivateKeyPkcs8(privatePkcs8);
+    const reimportedPublicSpki = await importEd25519PublicKeySpki(publicSpki);
+    const reimportedPublicRaw = await importEd25519PublicKeyRaw(publicRaw);
+
+    const message = encoder.encode("evidence pack round-trip");
+    const signature = await signBytes(message, reimportedPrivate);
+    expect(await verifyBytes(message, signature, reimportedPublicSpki)).toBe(true);
+    expect(await verifyBytes(message, signature, reimportedPublicRaw)).toBe(true);
+  });
+
+  it("derives a stable 16-hex-character keyId from the raw public key", async () => {
+    const keyPair = await generateEd25519KeyPair();
+    const publicRaw = await exportEd25519PublicKeyRaw(keyPair.publicKey);
+    const keyId = await deriveEd25519KeyId(publicRaw);
+    expect(keyId).toMatch(/^[0-9a-f]{16}$/);
+    expect(await deriveEd25519KeyId(publicRaw)).toBe(keyId); // deterministic
+  });
+});
+
+function emptySource(): EvidenceSource {
+  return {
+    async listLineage() {
+      return [];
+    },
+    async pageLineage() {
+      return { events: [] };
+    },
+    async listPromotionStates() {
+      return [];
+    },
+    async listFixations() {
+      return [];
+    },
+  };
+}
+
+/** An in-memory EvidencePackReader over a BuiltEvidencePack, for verifyEvidencePack tests that don't
+ * need a real filesystem. */
+function memoryReader(
+  files: readonly { path: string; content: Uint8Array }[],
+  manifestJson: string,
+  signatureBase64: string,
+): EvidencePackReader {
+  return {
+    async readManifest() {
+      return encoder.encode(manifestJson);
+    },
+    async readSignature() {
+      return encoder.encode(signatureBase64);
+    },
+    async readFile(path) {
+      const file = files.find((f) => f.path === path);
+      if (file == null) throw new Error(`no such file in pack: ${path}`);
+      return file.content;
+    },
+  };
+}
+
+describe("signManifest / verifyEvidencePack", () => {
+  async function buildSignedPack() {
+    const keyPair = await generateEd25519KeyPair();
+    const publicRaw = await exportEd25519PublicKeyRaw(keyPair.publicKey);
+    const keyId = await deriveEd25519KeyId(publicRaw);
+
+    const pack = await buildEvidencePack({
+      source: emptySource(),
+      scope: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-31T23:59:59.999Z" },
+      generator: "test-generator/1",
+      signer: { alg: "Ed25519", keyId },
+      now: () => new Date("2026-02-01T00:00:00.000Z"),
+    });
+
+    const signatureBase64 = await signManifest(pack.manifest, keyPair.privateKey);
+    const manifestJson = JSON.stringify(pack.manifest);
+    return { pack, manifestJson, signatureBase64, publicKey: keyPair.publicKey };
+  }
+
+  it("verifies a freshly built and signed pack", async () => {
+    const { pack, manifestJson, signatureBase64, publicKey } = await buildSignedPack();
+    const result = await verifyEvidencePack(
+      memoryReader(pack.files, manifestJson, signatureBase64),
+      publicKey,
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.mismatches).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("also verifies manifest signature directly (verifyManifestSignature)", async () => {
+    const { pack, signatureBase64, publicKey } = await buildSignedPack();
+    expect(await verifyManifestSignature(pack.manifest, signatureBase64, publicKey)).toBe(true);
+  });
+
+  it("fails when the wrong public key is used", async () => {
+    const { pack, manifestJson, signatureBase64 } = await buildSignedPack();
+    const otherKeyPair = await generateEd25519KeyPair();
+    const result = await verifyEvidencePack(
+      memoryReader(pack.files, manifestJson, signatureBase64),
+      otherKeyPair.publicKey,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("manifest.sig"))).toBe(true);
+  });
+
+  it("fails when a single byte of the (always non-empty) manifest is tampered with after signing", async () => {
+    // This fixture's scope has no events/promotions/fixations/artifacts, so every jsonl file is 0
+    // bytes; the manifest itself is the one pack file guaranteed non-empty, so it stands in for "any
+    // byte of the signed pack" here. The next test tampers a jsonl file's bytes instead.
+    const { manifestJson, signatureBase64, publicKey } = await buildSignedPack();
+    const tamperedManifestJson = manifestJson.replace('"complete":true', '"complete":false');
+    const result = await verifyEvidencePack(
+      memoryReader([], tamperedManifestJson, signatureBase64),
+      publicKey,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("manifest.sig"))).toBe(true);
+  });
+
+  it("fails when a file's bytes no longer match the manifest's recorded hash, even with a valid manifest signature", async () => {
+    const html = "<div>tamper target</div>";
+    const source: EvidenceSource = {
+      async listLineage() {
+        return [];
+      },
+      async pageLineage() {
+        return {
+          events: [
+            {
+              id: "1",
+              ts: "2026-01-05T00:00:00.000Z",
+              actor: { kind: "system" },
+              type: "component.generated",
+              payload: { artifactId: "a1", html, artifactSha256: "placeholder" },
+            },
+          ],
+        };
+      },
+      async listPromotionStates() {
+        return [];
+      },
+      async listFixations() {
+        return [];
+      },
+    };
+    const keyPair = await generateEd25519KeyPair();
+    const publicRaw = await exportEd25519PublicKeyRaw(keyPair.publicKey);
+    const keyId = await deriveEd25519KeyId(publicRaw);
+    const pack = await buildEvidencePack({
+      source,
+      scope: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-31T23:59:59.999Z" },
+      generator: "test-generator/1",
+      signer: { alg: "Ed25519", keyId },
+    });
+    const signatureBase64 = await signManifest(pack.manifest, keyPair.privateKey);
+    const manifestJson = JSON.stringify(pack.manifest);
+
+    // Flip one byte in the events.jsonl content on disk, *after* signing -- the manifest (and its
+    // signature) is unchanged, but the file no longer matches manifest.files[].sha256/bytes.
+    const tamperedFiles = pack.files.map((f) => {
+      if (f.path !== "events.jsonl") return f;
+      const content = new Uint8Array(f.content);
+      content[0] = content[0]! ^ 0xff;
+      return { path: f.path, content };
+    });
+
+    const result = await verifyEvidencePack(
+      memoryReader(tamperedFiles, manifestJson, signatureBase64),
+      keyPair.publicKey,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("events.jsonl") && e.includes("sha256"))).toBe(true);
+  });
+
+  it("reports an artifactSha256/html mismatch as a non-fatal 'mismatches' entry, not a failure", async () => {
+    const html = "<div>hello</div>";
+    const source: EvidenceSource = {
+      async listLineage() {
+        return [];
+      },
+      async pageLineage() {
+        return {
+          events: [
+            {
+              id: "1",
+              ts: "2026-01-05T00:00:00.000Z",
+              actor: { kind: "system" },
+              type: "component.generated",
+              payload: { artifactId: "a1", html, artifactSha256: "not-the-real-hash" },
+            },
+          ],
+        };
+      },
+      async listPromotionStates() {
+        return [];
+      },
+      async listFixations() {
+        return [];
+      },
+    };
+    const keyPair = await generateEd25519KeyPair();
+    const publicRaw = await exportEd25519PublicKeyRaw(keyPair.publicKey);
+    const keyId = await deriveEd25519KeyId(publicRaw);
+    const pack = await buildEvidencePack({
+      source,
+      scope: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-31T23:59:59.999Z" },
+      generator: "test-generator/1",
+      signer: { alg: "Ed25519", keyId },
+    });
+    const signatureBase64 = await signManifest(pack.manifest, keyPair.privateKey);
+    const manifestJson = JSON.stringify(pack.manifest);
+
+    const result = await verifyEvidencePack(
+      memoryReader(pack.files, manifestJson, signatureBase64),
+      keyPair.publicKey,
+    );
+    expect(result.ok).toBe(true);
+    expect(result.mismatches).toHaveLength(1);
+    expect(result.mismatches[0]).toContain("a1");
+  });
+
+  it("fails cleanly on a manifest that is not valid JSON", async () => {
+    const keyPair = await generateEd25519KeyPair();
+    const reader: EvidencePackReader = {
+      async readManifest() {
+        return encoder.encode("{not json");
+      },
+      async readSignature() {
+        return encoder.encode("");
+      },
+      async readFile() {
+        throw new Error("not reached");
+      },
+    };
+    const result = await verifyEvidencePack(reader, keyPair.publicKey);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]).toContain("not valid JSON");
+  });
+});

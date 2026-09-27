@@ -5,6 +5,7 @@ import {
   type PromotionState,
   sha256Hex,
 } from "@kohaku-ui/spec-core";
+import { artifactClaimFromEventPayload, artifactClaimFromPromotionData } from "./artifacts.js";
 import {
   EVIDENCE_PACK_FORMAT,
   EVIDENCE_PACK_VERSION,
@@ -101,28 +102,12 @@ function collectArtifactCandidates(
 ): ArtifactCandidate[] {
   const candidates: ArtifactCandidate[] = [];
   for (const event of events) {
-    if (event.type !== "component.generated") continue;
-    const html = event.payload["html"];
-    const artifactId = event.payload["artifactId"];
-    if (typeof html !== "string" || html.length === 0 || typeof artifactId !== "string") continue;
-    const claimedSha256 = event.payload["artifactSha256"];
-    candidates.push({
-      artifactId,
-      html,
-      ...(typeof claimedSha256 === "string" ? { claimedSha256 } : {}),
-      origin: "component.generated",
-    });
+    const claim = artifactClaimFromEventPayload(event.type, event.payload);
+    if (claim != null) candidates.push({ ...claim, origin: "component.generated" });
   }
   for (const state of promotions) {
-    const html = state.data["html"];
-    if (typeof html !== "string" || html.length === 0) continue;
-    const claimedSha256 = state.data["sha256"];
-    candidates.push({
-      artifactId: state.artifactId,
-      html,
-      ...(typeof claimedSha256 === "string" ? { claimedSha256 } : {}),
-      origin: "promotion state",
-    });
+    const claim = artifactClaimFromPromotionData(state.artifactId, state.data);
+    if (claim != null) candidates.push({ ...claim, origin: "promotion state" });
   }
   return candidates;
 }
