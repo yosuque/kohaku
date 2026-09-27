@@ -770,10 +770,37 @@ export function claudeDesktopConfigPath(env = process.env, plat = platform()) {
   return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Claude", "claude_desktop_config.json");
 }
 
-/** Reads a JSON config file; an absent file reads as {} (nothing to merge with / into yet). */
+/**
+ * Reads a JSON config file; an absent file reads as {} (nothing to merge with / into yet). A file that
+ * exists but is not valid JSON, is not a JSON object at the top level (e.g. an array or null), or has a
+ * non-object "mcpServers" field, throws instead of guessing -- silently treating a malformed Claude Desktop
+ * config as {} would merge into an empty object and, once written, drop every one of the person's other
+ * registered MCP servers.
+ */
 export function readJsonConfig(path) {
   if (!existsSync(path)) return {};
-  return JSON.parse(readFileSync(path, "utf8"));
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    throw new Error(
+      \`\${path} is not valid JSON (\${e instanceof Error ? e.message : String(e)}). Nothing was written -- fix or remove the file and try again.\`,
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      \`\${path} must be a JSON object at the top level. Nothing was written -- fix or remove the file and try again.\`,
+    );
+  }
+  if (
+    "mcpServers" in parsed &&
+    (parsed.mcpServers === null || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers))
+  ) {
+    throw new Error(
+      \`\${path}'s "mcpServers" field must be a JSON object. Nothing was written -- fix or remove the file and try again.\`,
+    );
+  }
+  return parsed;
 }
 
 /**
@@ -819,7 +846,14 @@ export function syncClaudeDesktopConfig({ env = process.env, plat = platform(), 
 
 function main() {
   const printOnly = process.argv.includes("--print");
-  const result = syncClaudeDesktopConfig({ printOnly });
+  let result;
+  try {
+    result = syncClaudeDesktopConfig({ printOnly });
+  } catch (e) {
+    console.error(\`claude-desktop.mjs: \${e instanceof Error ? e.message : String(e)}\`);
+    process.exitCode = 1;
+    return;
+  }
   if (printOnly) {
     console.log(JSON.stringify(result.merged, null, 2));
     return;

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { initProject } from "../src/init/index.js";
@@ -207,8 +207,6 @@ describe("kohaku init --mcp: Claude Desktop config", () => {
       const { scriptModule } = await generate();
       const fakeHome = tmp("kohaku-claude-home-");
       const configPath = scriptModule.claudeDesktopConfigPath({ HOME: fakeHome }, "darwin");
-      const { mkdirSync, writeFileSync } = await import("node:fs");
-      const { dirname } = await import("node:path");
       mkdirSync(dirname(configPath), { recursive: true });
       writeFileSync(
         configPath,
@@ -250,6 +248,50 @@ describe("kohaku init --mcp: Claude Desktop config", () => {
       const printed = JSON.parse(result.stdout);
       expect(printed.mcpServers["sales-mcp-app"]).toBeDefined();
       expect(existsSync(fakeHome + "/Library")).toBe(false);
+    });
+
+    // A malformed *existing* config must abort rather than being silently treated as {} -- guessing a merge
+    // target there would drop every one of the person's other registered MCP servers once written. Driven
+    // through a real subprocess (not just importing syncClaudeDesktopConfig) so "exit code" and "stderr" are
+    // the actual CLI-user-visible behavior, not just the exported function's own throw.
+    describe.each([
+      ["invalid JSON", "{ not valid json"],
+      ["a JSON array at the top level", "[]"],
+      ["JSON null at the top level", "null"],
+      ["a non-object mcpServers field", JSON.stringify({ mcpServers: "not an object" })],
+    ])("existing config is %s", (_label, brokenContent) => {
+      function writeBrokenConfig(scriptModule: ClaudeDesktopScriptModule, fakeHome: string): string {
+        const configPath = scriptModule.claudeDesktopConfigPath({ HOME: fakeHome }, "darwin");
+        mkdirSync(dirname(configPath), { recursive: true });
+        writeFileSync(configPath, brokenContent);
+        return configPath;
+      }
+
+      it("syncClaudeDesktopConfig throws, naming the file, instead of guessing {}", async () => {
+        const { scriptModule } = await generate();
+        const fakeHome = tmp("kohaku-claude-home-");
+        const configPath = writeBrokenConfig(scriptModule, fakeHome);
+        expect(() =>
+          scriptModule.syncClaudeDesktopConfig({ env: { HOME: fakeHome }, plat: "darwin" }),
+        ).toThrow(configPath);
+      });
+
+      it("the real CLI (node scripts/claude-desktop.mjs) exits non-zero, names the file, and writes/backs up nothing", async () => {
+        const { scriptModule, out } = await generate();
+        const fakeHome = tmp("kohaku-claude-home-");
+        const configPath = writeBrokenConfig(scriptModule, fakeHome);
+        const before = readFileSync(configPath, "utf8");
+
+        const result = spawnSync(process.execPath, [join(out, "scripts", "claude-desktop.mjs")], {
+          env: { ...process.env, HOME: fakeHome },
+          encoding: "utf8",
+        });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(configPath);
+        expect(readFileSync(configPath, "utf8")).toBe(before);
+        expect(existsSync(`${configPath}.bak`)).toBe(false);
+      });
     });
   });
 });
