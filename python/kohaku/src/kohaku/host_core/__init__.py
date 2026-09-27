@@ -108,6 +108,7 @@ from .rate_limit import (
     create_memory_rate_limit_store,
     create_rate_limiter,
 )
+from .serialize import to_jsonable
 from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 from .view_recorder import record_view_fallback
 
@@ -201,5 +202,6 @@ __all__ = [
     "resolve_fixated_result",
     "resolve_intent",
     "settle_fixation",
+    "to_jsonable",
     "verify_catalog_migration_plan",
 ]

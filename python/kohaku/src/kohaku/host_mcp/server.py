@@ -27,6 +27,8 @@ from kohaku.composer import (
 )
 from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
+    ActionGateRequest,
+    ActionGateResult,
     ComposeFixationContext,
     FixationDeliveryHost,
     IntentSourceGui,
@@ -36,13 +38,17 @@ from kohaku.host_core import (
     PolicyRateLimiterTakeParams,
     TraceContext,
     apply_action_effects,
+    build_action_manifest,
     is_typed_host_error,
     parse_invokable_ref,
     parse_trace_context,
+    to_jsonable,
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
 from kohaku.host_core import compose_with_fixation as _host_core_compose_with_fixation
+from kohaku.host_core import create_action_gate as _host_core_create_action_gate
 from kohaku.host_core import create_allowed_actions as _host_core_create_allowed_actions
+from kohaku.host_core import create_operation_index as _host_core_create_operation_index
 from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import get_lock as _get_lock
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
@@ -50,6 +56,7 @@ from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
 from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.spec import (
+    ActionParamIssue,
     AuthzPort,
     IntentInput,
     InvocationContext,
@@ -69,6 +76,7 @@ from .fallback import spec_to_text
 from .initial_data import _preresolve_initial_data, _resolve_refs_bounded
 from .intent_tools import IntentToolDef
 from .meta import (
+    ACTIONS_META_KEY,
     CAPABILITY_META_KEY,
     INITIAL_DATA_META_KEY,
     RENDERER_RESOURCE_URI,
@@ -372,6 +380,15 @@ def attach_kohaku_to_mcp_server(
     # is frozen, so the cache lives here as a closure variable (unlike host_rest's per-deps field).
     _allowed_actions = _host_core_create_allowed_actions(deps.domain)
 
+    # Memoized deps.domain.list_operations() index (host_core's create_operation_index, design.md #62/#64),
+    # a second independent memoized reader of the same DomainPort method as `_allowed_actions` above (shared
+    # with the REST profile, whose `operation_index`/`action_gate_for` are the same two readers kept on
+    # per-deps fields rather than closures — see that module's shared.py). Consulted by both the actions
+    # manifest (`_compose_and_package`) and `${prefix}_action`'s ActionGate below.
+    _operation_index = _host_core_create_operation_index(deps.domain)
+    # One ActionGate per attach call, shared by every `${prefix}_action` invoke (design.md #62/#63).
+    _action_gate = _host_core_create_action_gate(deps.approvals)
+
     def _tool_error(message: str) -> mcp_types.CallToolResult:
         """Turn a tool-handler failure into a structured tool error (isError) rather than an RPC exception.
 
@@ -401,6 +418,157 @@ def attach_kohaku_to_mcp_server(
             is_error=True,
             structured_content={"error": error},
         )
+
+    def _action_params_invalid_tool_error(
+        issues: list[ActionParamIssue],
+    ) -> mcp_types.CallToolResult:
+        """A structured `ACTION_PARAMS_INVALID` tool error (design.md #62, REST's 422 counterpart). The
+        MCP surface has no HTTP status code, so `code` and `issues` both travel in `structured_content`."""
+        return mcp_types.CallToolResult(
+            content=[
+                mcp_types.TextContent(type="text", text="action parameters failed validation")
+            ],
+            is_error=True,
+            structured_content={
+                "error": {
+                    "code": "ACTION_PARAMS_INVALID",
+                    "message": "action parameters failed validation",
+                    "issues": [
+                        {"path": i.path, "code": i.code, "message": i.message} for i in issues
+                    ],
+                }
+            },
+        )
+
+    def _approval_required_tool_error(
+        message: str,
+        *,
+        request_id: str,
+        action: str,
+        tier: Literal["confirm", "approve"],
+        payload_hash: str,
+    ) -> mcp_types.CallToolResult:
+        """A structured `APPROVAL_REQUIRED` tool error (design.md #62/#63, REST's 403 counterpart). Used for
+        both the ActionGate's "approvalRequired" outcome (nothing presented yet) and its "denied" outcome (a
+        presented approval token did not verify) -- both map to the same wire shape, distinguished only by
+        which audit event the caller records around this call."""
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text=message)],
+            is_error=True,
+            structured_content={
+                "error": {
+                    "code": "APPROVAL_REQUIRED",
+                    "message": message,
+                    "approval": {
+                        "requestId": request_id,
+                        "action": action,
+                        "tier": tier,
+                        "payloadHash": payload_hash,
+                    },
+                }
+            },
+        )
+
+    async def _handle_action_gate_result(
+        gate_result: ActionGateResult,
+        *,
+        action: str,
+        payload: JsonObject,
+        principal: Principal,
+        correlation_id: str | None,
+    ) -> mcp_types.CallToolResult | None:
+        """Maps one ActionGate.check outcome onto the MCP tool response + audit trail (design.md #62/#63),
+        symmetric with the REST profile's `_handle_action_gate_result` (host_rest/_routes/binding.py). Returns
+        the CallToolResult to send back (invalid / approvalRequired / denied), or None when the gate allowed
+        the invoke and the caller should proceed to domain.invoke. Audit recording is always fail-open
+        (host_core's fail_open): a recording failure must never turn an otherwise-successful allow, or an
+        otherwise-correct denial, into an internal tool error. This profile never resolves a tenant, so
+        `tenant` is always None on every recorded event (mirrors `rate_limiter`'s doc comment)."""
+
+        async def _report_audit(exc: BaseException) -> None:
+            await _report_mcp_error(deps, f"{prefix}_action.audit", exc)
+
+        if gate_result.kind == "invalid":
+            return _action_params_invalid_tool_error(gate_result.issues)
+
+        if gate_result.kind == "approvalRequired":
+
+            async def _record_approval_requested() -> None:
+                if deps.action_audit_recorder is None:
+                    return
+                await deps.action_audit_recorder.approval_requested(
+                    action=action,
+                    payload_hash=gate_result.payloadHash,
+                    tier=gate_result.tier,
+                    request_id=gate_result.requestId,
+                    payload=payload,
+                    principal=principal,
+                    tenant=None,
+                    correlation_id=correlation_id,
+                )
+
+            await _host_core_fail_open(_record_approval_requested, _report_audit)
+            message = (
+                "this action requires confirmation (confirmed: true)"
+                if gate_result.tier == "confirm"
+                else "this action requires an approval token"
+            )
+            return _approval_required_tool_error(
+                message,
+                request_id=gate_result.requestId,
+                action=action,
+                tier=gate_result.tier,
+                payload_hash=gate_result.payloadHash,
+            )
+
+        if gate_result.kind == "denied":
+
+            async def _record_denied() -> None:
+                if deps.action_audit_recorder is None:
+                    return
+                await deps.action_audit_recorder.denied(
+                    action=action,
+                    payload_hash=gate_result.payloadHash,
+                    tier=gate_result.tier,
+                    reason=gate_result.reason,
+                    principal=principal,
+                    tenant=None,
+                    correlation_id=correlation_id,
+                )
+
+            await _host_core_fail_open(_record_denied, _report_audit)
+            return _approval_required_tool_error(
+                gate_result.reason,
+                request_id=gate_result.requestId,
+                action=action,
+                tier=gate_result.tier,
+                payload_hash=gate_result.payloadHash,
+            )
+
+        # gate_result.kind == "allow"
+        async def _record_allow() -> None:
+            if deps.action_audit_recorder is None:
+                return
+            await deps.action_audit_recorder.invoked(
+                action=action,
+                payload_hash=gate_result.payloadHash,
+                tier=gate_result.tier,
+                principal=principal,
+                tenant=None,
+                correlation_id=correlation_id,
+            )
+            if gate_result.grant is not None:
+                await deps.action_audit_recorder.approved(
+                    action=action,
+                    payload_hash=gate_result.payloadHash,
+                    grant=gate_result.grant,
+                    principal=principal,
+                    tenant=None,
+                    correlation_id=correlation_id,
+                )
+
+        await _host_core_fail_open(_record_allow, _report_audit)
+        return None
 
     async def _check_mcp_rate_limit(
         principal: Principal,
@@ -476,6 +644,17 @@ def attach_kohaku_to_mcp_server(
         )
         for action in dropped:
             await _report_mcp_error(deps, "compose.capability", _WriteScopeDroppedError(action))
+        # Governed Actions manifest (design.md #62/#64), co-embedded in _meta alongside the capability below.
+        # Fail-open on a rejected operation_index (e.g. list_operations() itself raising) -- a manifest failure
+        # must never turn an otherwise-successful compose into a tool error; the response is just missing the
+        # manifest, and the widget's own preflightAction degrades to "no local check" the same way it already
+        # does for a Spec with no declared actions.
+        try:
+            index = await _operation_index()
+            actions = build_action_manifest(result.spec, index)
+        except Exception as exc:  # noqa: BLE001 — reported, then fail-open (manifest omitted)
+            await _report_mcp_error(deps, "compose.actions", exc)
+            actions = None
         await _audit_compose(deps, result, "compose")
         # Preresolve the initial data on the server side and co-embed it in the tool result's _meta.
         # _meta does not enter the model's context and is transferred only to the widget.
@@ -490,6 +669,7 @@ def attach_kohaku_to_mcp_server(
             **tool_ui_meta(resource_uri=RENDERER_RESOURCE_URI),
             INITIAL_DATA_META_KEY: {ref: td.to_wire() for ref, td in initial_data.items()},
             CAPABILITY_META_KEY: capability,
+            **({ACTIONS_META_KEY: to_jsonable(actions)} if actions is not None else {}),
         }
         # content[0] is always the text fallback (MCPAPP-FBK-001). The legacy UIResource is placed after.
         content: list[Any] = [
@@ -833,6 +1013,10 @@ def attach_kohaku_to_mcp_server(
             action = _arg_str(args, "action")
             capability = _arg_str(args, "capability")
             payload = cast(JsonObject, args.get("payload", {}))
+            confirmed_arg = args.get("confirmed")
+            confirmed = confirmed_arg if isinstance(confirmed_arg, bool) else None
+            approval_arg = args.get("approval")
+            approval = approval_arg if isinstance(approval_arg, str) else None
             # Mirrors TS's JsonObjectSchema on kohaku_action's payload (validated there at the SDK's own
             # input-schema layer, before the handler ever runs) — the Python mcp SDK's tool schemas are JSON
             # Schema hints only (no runtime validator wired in), so the depth cap is enforced here instead.
@@ -859,11 +1043,43 @@ def attach_kohaku_to_mcp_server(
             verdict = await deps.authz.verify(capability, VerifyRequest(kind="write", ref=action))
             if not verdict.ok:
                 return _tool_error(f"capability denied: {verdict.reason or ''}")
+            resolved_principal = verdict.principal or principal
+            # Governed actions (design.md #62/#63): validate params and enforce the action's tier before
+            # domain.invoke ever runs, symmetric with the REST surface's /binding/action. An action absent
+            # from the DomainPort's own operation index (should not normally happen once `action in allowed`
+            # above already passed) is let through ungated, matching the pre-existing (pre-F2) behavior for a
+            # host whose index and DomainPort momentarily disagree. Unlike `_allowed_actions()` above, a
+            # rejected `_operation_index()` here is NOT swallowed (an invalid paramsSchema is a configuration
+            # bug that should surface loudly for a governed action) -- it propagates to `_safe_tool`'s own
+            # except branch, symmetric with the REST/TS profiles.
+            index = await _operation_index()
+            entry = index.get(action)
+            if entry is not None:
+                gate_result = await _action_gate.check(
+                    ActionGateRequest(
+                        descriptor=entry.descriptor,
+                        params_schema=entry.params_schema,
+                        payload=payload,
+                        confirmed=confirmed,
+                        approval=approval,
+                        requester_id=resolved_principal.id,
+                        tenant=None,
+                    )
+                )
+                gated = await _handle_action_gate_result(
+                    gate_result,
+                    action=action,
+                    payload=payload,
+                    principal=resolved_principal,
+                    correlation_id=_correlation_id_of(ctx),
+                )
+                if gated is not None:
+                    return gated
             result = await deps.domain.invoke(
                 action,
                 payload,
                 InvocationContext(
-                    principal=verdict.principal or principal, capability=capability
+                    principal=resolved_principal, capability=capability
                 ),
             )
             # Side-effect declaration (optional): put the refs the write invalidates and the per-ref new versions
@@ -901,6 +1117,8 @@ def attach_kohaku_to_mcp_server(
                         "action": {"type": "string"},
                         "payload": {"type": "object", "default": {}},
                         "capability": {"type": "string"},
+                        "confirmed": {"type": "boolean"},
+                        "approval": {"type": "string", "maxLength": 4096},
                     },
                     "required": ["action", "capability"],
                 },

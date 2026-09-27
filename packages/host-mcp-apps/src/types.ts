@@ -1,12 +1,16 @@
 import type { ComposeContext, ComposeTrace } from "@kohaku-ui/composer";
 import type {
+  ActionAuditRecorder,
   ActionEffects,
+  ActionGate,
   FixationDeliveryHost,
   FixationSelfHealApi,
+  OperationIndex,
   PolicyRateLimiter,
   ViewRecorder,
 } from "@kohaku-ui/host-core";
 import type {
+  ApprovalPort,
   AuthzPort,
   CanonicalIntent,
   DomainPort,
@@ -135,6 +139,24 @@ export interface McpHostDeps {
    * domain.invoke; the side-effect "declaration" is separated out here).
    */
   actionEffects?: ActionEffects;
+  /**
+   * Verifies stateless approval tokens for `"approve"`-tier actions (design.md #63; typically
+   * `@kohaku-ui/authz-hmac`'s `createHmacApprovalPort`), symmetric with the REST profile's
+   * `KohakuHostDeps.approvals`. Consulted by `${prefix}_action`'s `ActionGate`. **If not wired, an
+   * `"approve"`-tier action can never be allowed** (the gate returns `denied`). This profile exposes no
+   * `POST /approvals`-equivalent tool of its own (design.md #63 scopes approval issuance to the REST
+   * governance plane); a deployment that also mounts the REST profile shares one `ApprovalPort` instance
+   * across both.
+   */
+  approvals?: ApprovalPort;
+  /**
+   * Audit-recording hooks for governed Actions (design.md #62/#63; typically `@kohaku-ui/lineage`'s
+   * `createActionAuditRecorder`), symmetric with the REST profile's `KohakuHostDeps.actionAuditRecorder`.
+   * Called by `${prefix}_action`'s `ActionGate` outcome, fail-open (a recording failure never blocks the
+   * tool response, allowed or denied). **If not wired, no action.* lineage events are recorded**
+   * (backward compatible).
+   */
+  actionAuditRecorder?: ActionAuditRecorder;
   /**
    * Rate limiter for the tool calls (product responsibility; typically host_core's
    * PolicyRuntime.rateLimiter, which resolves the effective RateLimitRule per routeClass from a Policy
@@ -279,6 +301,10 @@ export interface ToolContext {
   getRendererHtml: () => Promise<string>;
   fixationHost: FixationDeliveryHost;
   allowedActions: () => Promise<ReadonlySet<string>>;
+  /** Governed actions (design.md #62/#63): the same OperationIndex the REST profile memoizes per deps,
+   * built here once per attach (mirrors `allowedActions`' own once-per-attach lifetime). */
+  operationIndex: OperationIndex;
+  actionGate: ActionGate;
   tasks: TaskStore;
 }
 

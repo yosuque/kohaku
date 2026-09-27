@@ -1187,6 +1187,204 @@ class TestActionWritePath:
         asyncio.run(run())
 
 
+NOTE_SCHEMA = {"type": "object", "properties": {"note": {"type": "string", "maxLength": 5}}}
+"""Same literal as TS's governedDomain (packages/host-mcp-apps/test/mcp.test.ts, task D)."""
+
+
+def governed_spec_builder(intent_arg: Intent, handles: list[Any]) -> UISpec:
+    """A fixed Spec declaring two write actions (annotate + publish), for task D's governed-action tests.
+    Port of TS's governedComposeCtx fixed Spec."""
+    return UISpec.model_validate(
+        {
+            "kohaku": "0.1",
+            "intent": intent_arg.to_wire(),
+            "dataVersion": "x",
+            "components": [
+                {"id": "root", "type": "layout.stack", "props": {}, "children": ["f", "p"]},
+                {"id": "f", "type": "presentForm", "props": {"action": "annotate"}},
+                {"id": "p", "type": "presentForm", "props": {"action": "publish"}},
+            ],
+            "events": [
+                {"on": "f.submit", "emit": "action.invoke", "payload": {}},
+                {"on": "p.submit", "emit": "action.invoke", "payload": {}},
+            ],
+            "provenance": {"tier": "L0", "composedBy": "test", "cache": "miss"},
+        }
+    )
+
+
+class TestGovernedActions:
+    """Task D: governed actions on kohaku_action + kohaku/actions manifest (design.md #62/#63/#64).
+
+    pytest-ification of TS packages/host-mcp-apps/test/mcp.test.ts's "task D" describe block.
+    """
+
+    class GovernedDomain:
+        """annotate is tier "confirm" with NOTE_SCHEMA; publish has no tier (= "auto")."""
+
+        def __init__(self) -> None:
+            self.invocations: list[tuple[str, Any]] = []
+
+        async def list_operations(self) -> list[Any]:
+            return [
+                OperationDescriptor(
+                    name="annotate", description="d", tier="confirm", paramsSchema=NOTE_SCHEMA
+                ),
+                OperationDescriptor(name="publish", description="d"),
+            ]
+
+        async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+            self.invocations.append((op, args))
+            return {"ok": True, "op": op, "args": args}
+
+    def _governed_deps(
+        self, tmp_path: Path, **overrides: Any
+    ) -> tuple[McpHostDeps, TestGovernedActions.GovernedDomain]:
+        domain = self.GovernedDomain()
+        deps = _deps(
+            tmp_path,
+            compose=make_compose_ctx(tmp_path, builder=governed_spec_builder),
+            domain=domain,
+            **overrides,
+        )
+        return deps, domain
+
+    def test_compose_co_embeds_actions_manifest(self, tmp_path: Path) -> None:
+        """kohaku_compose co-embeds _meta['kohaku/actions'] for every declared write action present in the
+        operation index."""
+
+        async def run() -> None:
+            deps, _ = self._governed_deps(tmp_path)
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                meta = composed.meta
+                assert meta is not None
+                assert meta["kohaku/actions"] == {
+                    "annotate": {"tier": "confirm", "paramsSchema": NOTE_SCHEMA},
+                    "publish": {"tier": "auto"},
+                }
+
+        asyncio.run(run())
+
+    def test_without_confirmed_returns_approval_required(self, tmp_path: Path) -> None:
+        """Without confirmed: true, kohaku_action returns a structured APPROVAL_REQUIRED error."""
+
+        async def run() -> None:
+            deps, domain = self._governed_deps(tmp_path)
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                capability = _capability_of(composed)
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": {"note": "hi"}, "capability": capability},
+                )
+                assert result.is_error is True
+                sc = result.structured_content
+                assert sc is not None
+                error = cast(dict[str, Any], sc["error"])
+                assert error["code"] == "APPROVAL_REQUIRED"
+                assert error["approval"]["action"] == "annotate"
+                assert error["approval"]["tier"] == "confirm"
+                assert len(domain.invocations) == 0
+
+        asyncio.run(run())
+
+    def test_with_confirmed_invokes_domain(self, tmp_path: Path) -> None:
+        """With confirmed: true, kohaku_action invokes the domain."""
+
+        async def run() -> None:
+            deps, domain = self._governed_deps(tmp_path)
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                capability = _capability_of(composed)
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {
+                        "action": "annotate",
+                        "payload": {"note": "hi"},
+                        "capability": capability,
+                        "confirmed": True,
+                    },
+                )
+                assert not result.is_error
+                assert len(domain.invocations) == 1
+
+        asyncio.run(run())
+
+    def test_invalid_params_returns_action_params_invalid(self, tmp_path: Path) -> None:
+        """Invalid params return a structured ACTION_PARAMS_INVALID error, without invoking the domain."""
+
+        async def run() -> None:
+            deps, domain = self._governed_deps(tmp_path)
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                capability = _capability_of(composed)
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {
+                        "action": "annotate",
+                        "payload": {"note": "way too long"},
+                        "capability": capability,
+                        "confirmed": True,
+                    },
+                )
+                assert result.is_error is True
+                sc = result.structured_content
+                assert sc is not None
+                error = cast(dict[str, Any], sc["error"])
+                assert error["code"] == "ACTION_PARAMS_INVALID"
+                assert error["issues"] == [
+                    {"path": "note", "code": "maxLength", "message": "expected at most 5 characters"}
+                ]
+                assert len(domain.invocations) == 0
+
+        asyncio.run(run())
+
+    def test_action_audit_recorder_records_fail_open(self, tmp_path: Path) -> None:
+        """Records action.approvalRequested / action.invoked via action_audit_recorder (fail-open)."""
+
+        async def run() -> None:
+            invoked: list[Any] = []
+            approval_requested: list[Any] = []
+
+            class Recorder:
+                async def invoked(self, **kwargs: Any) -> None:
+                    invoked.append(kwargs)
+
+                async def denied(self, **kwargs: Any) -> None:
+                    pass
+
+                async def approval_requested(self, **kwargs: Any) -> None:
+                    approval_requested.append(kwargs)
+
+                async def approved(self, **kwargs: Any) -> None:
+                    pass
+
+            deps, _ = self._governed_deps(tmp_path, action_audit_recorder=Recorder())
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                capability = _capability_of(composed)
+
+                await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": {"note": "hi"}, "capability": capability},
+                )
+                assert len(approval_requested) == 1
+
+                await client.call_tool(
+                    "kohaku_action",
+                    {
+                        "action": "annotate",
+                        "payload": {"note": "hi"},
+                        "capability": capability,
+                        "confirmed": True,
+                    },
+                )
+                assert len(invoked) == 1
+
+        asyncio.run(run())
+
+
 class TestEventTool:
     def test_event_recomposes_via_gui_action(self, tmp_path: Path) -> None:
         """Recomposes a component event as an Intent delta and returns UI + initial data."""

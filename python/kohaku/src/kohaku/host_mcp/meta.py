@@ -40,6 +40,14 @@ the model's context and is transferred only to the widget, so moving the token h
 way INITIAL_DATA_META_KEY already does for bulk data. The renderer (apps/sample-mcp/renderer/host-integration.ts)
 reads this key's literal string directly (it does not import host-mcp-apps; the match is guaranteed by a TS test)."""
 
+ACTIONS_META_KEY = "kohaku/actions"
+"""The key that co-embeds the Governed Actions manifest (design.md #62/#64, SPEC §6.1/§6.1.1 [Draft]) into a
+compose-family tool result's `_meta`, alongside CAPABILITY_META_KEY. Placed in `_meta` rather than
+`structuredContent` for the same reason as the capability token: `paramsSchema` / `confirmMessage` are
+operational detail for the widget's own gate (`preflightAction`), not something that needs to enter the model's
+context. Present only when the composed Spec declares at least one write action the host also recognizes as a
+real DomainPort operation (mirrors the REST profile's `actions` being absent rather than an empty object)."""
+
 ToolVisibility = Literal["model", "app"]
 
 

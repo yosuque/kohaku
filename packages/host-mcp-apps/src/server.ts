@@ -1,6 +1,7 @@
 import type { ComposeResult, TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
+  type ActionParamIssue,
   canonicalStringify,
   type JsonObject,
   JsonObjectSchema,
@@ -24,6 +25,7 @@ import { RENDERER_RESOURCE_CACHE_HINT } from "./cache-hints.js";
 import { specToText } from "./fallback.js";
 import { preresolveInitialData } from "./initial-data.js";
 import {
+  ACTIONS_META_KEY,
   CAPABILITY_META_KEY,
   INITIAL_DATA_META_KEY,
   RENDERER_RESOURCE_URI,
@@ -280,6 +282,7 @@ async function composeAndPackage(
 ) {
   // The compose → capability → audit-record (fail-open) order is intentional; do not reorder.
   let capability!: string;
+  let actions: hostCore.ActionManifest | undefined;
   const result = await composeAndAudit(ctx, input, "compose", {
     ...callCtx,
     afterCompose: async (composed) => {
@@ -302,6 +305,18 @@ async function composeAndPackage(
         (e) => reportMcpError(ctx.deps, "compose.capability", e),
         undefined,
       );
+      // The Governed Actions manifest (design.md #62/#64), co-embedded in _meta alongside capability
+      // (ACTIONS_META_KEY). Fail-open on a rejected operationIndex, the same posture
+      // issueSpecCapabilitySafely takes just above for the identical failure (listOperations() itself
+      // rejecting, or a descriptor's paramsSchema failing validation): report it and treat as "no
+      // manifest this time" rather than failing the whole tool call.
+      try {
+        const index = await ctx.operationIndex();
+        actions = hostCore.buildActionManifest(composed.spec, index);
+      } catch (e) {
+        await reportMcpError(ctx.deps, "compose.actions", e);
+        actions = undefined;
+      }
     },
   });
   onComposeResult?.(result);
@@ -347,6 +362,7 @@ async function composeAndPackage(
       ...toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI }),
       [INITIAL_DATA_META_KEY]: initialData,
       [CAPABILITY_META_KEY]: capability,
+      ...(actions != null ? { [ACTIONS_META_KEY]: actions } : {}),
     },
   };
 }
@@ -779,6 +795,94 @@ const MAX_ACTION_PAYLOAD_BYTES = 64 * 1024;
  * uses — host-core's `createAllowedActions`), and `payload` is capped at `MAX_ACTION_PAYLOAD_BYTES`.
  * Full argument-shape validation via `OperationDescriptor.paramsSchema` is a follow-up.
  */
+/**
+ * Maps one `ActionGate.check` outcome onto the MCP tool result + audit trail (design.md #62/#63; mirrors
+ * the REST profile's `handleActionGateResult`, packages/host-rest/src/routes/binding.ts). Returns the
+ * structured tool error to return as-is (`invalid` / `approvalRequired` / `denied`), or `null` when the
+ * gate allowed the invoke and the caller should proceed to `domain.invoke`. Audit recording is always
+ * fail-open (`hostCore.failOpen`): a recording failure must never turn an otherwise-successful allow, or
+ * an otherwise-correct denial, into an unhandled tool failure. This profile performs no tenant
+ * resolution, so no `tenant` is ever passed to the recorder (mirrors every other recorder call in this file).
+ */
+async function handleActionGateResult(
+  deps: McpHostDeps,
+  gateResult: hostCore.ActionGateResult,
+  args: {
+    action: string;
+    payload: JsonObject;
+    principal: Principal;
+    endpoint: string;
+    correlationId: string;
+  },
+): Promise<ReturnType<typeof toolError> | null> {
+  const { action, payload, principal, endpoint, correlationId } = args;
+  const auditReport = (e: unknown): Promise<void> => reportMcpError(deps, `${endpoint}.audit`, e);
+
+  if (gateResult.kind === "invalid") {
+    return actionParamsInvalidToolError(gateResult.issues);
+  }
+
+  if (gateResult.kind === "approvalRequired") {
+    await hostCore.failOpen(async () => {
+      await deps.actionAuditRecorder?.approvalRequested({
+        action,
+        payloadHash: gateResult.payloadHash,
+        tier: gateResult.tier,
+        requestId: gateResult.requestId,
+        payload,
+        principal,
+        correlationId,
+      });
+    }, auditReport);
+    return approvalRequiredToolError(
+      gateResult.tier === "confirm"
+        ? "this action requires confirmation (confirmed: true)"
+        : "this action requires an approval token",
+      { requestId: gateResult.requestId, action, tier: gateResult.tier, payloadHash: gateResult.payloadHash },
+    );
+  }
+
+  if (gateResult.kind === "denied") {
+    await hostCore.failOpen(async () => {
+      await deps.actionAuditRecorder?.denied({
+        action,
+        payloadHash: gateResult.payloadHash,
+        tier: gateResult.tier,
+        reason: gateResult.reason,
+        principal,
+        correlationId,
+      });
+    }, auditReport);
+    return approvalRequiredToolError(gateResult.reason, {
+      requestId: gateResult.requestId,
+      action,
+      tier: gateResult.tier,
+      payloadHash: gateResult.payloadHash,
+    });
+  }
+
+  // gateResult.kind === "allow"
+  await hostCore.failOpen(async () => {
+    await deps.actionAuditRecorder?.invoked({
+      action,
+      payloadHash: gateResult.payloadHash,
+      tier: gateResult.tier,
+      principal,
+      correlationId,
+    });
+    if (gateResult.grant != null) {
+      await deps.actionAuditRecorder?.approved({
+        action,
+        payloadHash: gateResult.payloadHash,
+        grant: gateResult.grant,
+        principal,
+        correlationId,
+      });
+    }
+  }, auditReport);
+  return null;
+}
+
 function registerActionTool(ctx: ToolContext): void {
   ctx.server.registerTool(
     `${ctx.prefix}_action`,
@@ -791,17 +895,22 @@ function registerActionTool(ctx: ToolContext): void {
         // does, for the same reason (canonicalStringify / persistence downstream of an unbounded payload).
         payload: JsonObjectSchema.default({}),
         capability: z.string(),
+        // Governed actions (design.md #62/#63, SPEC ACT-CNF-001/ACT-APR-001): symmetric with the REST
+        // surface's ActionBodySchema.confirmed/.approval.
+        confirmed: z.boolean().optional(),
+        approval: z.string().max(4096).optional(),
       }),
       // This tool executes a write rather than opening an iframe view, so it has no resourceUri (same as resolve_binding).
       _meta: toolUiMeta({ visibility: ["app"] }),
     },
-    async ({ action, payload, capability }, extra) =>
+    async ({ action, payload, capability, confirmed, approval }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_action`, async () => {
         // DomainPort.invoke carries no cancellation primitive (unlike the compose path's L1/L2 LLM calls), so
         // there is nothing to propagate the abort signal into once the write is under way — but a call already
         // cancelled by the time it reaches the handler must not still perform the write (a client that has
         // given up should not have its abandoned request silently take effect).
-        if (requestContextOf(extra).abort.aborted) {
+        const { abort, requestId } = requestContextOf(extra);
+        if (abort.aborted) {
           return toolError("cancelled");
         }
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
@@ -835,8 +944,36 @@ function registerActionTool(ctx: ToolContext): void {
         if (!verdict.ok) {
           return toolError(`capability denied: ${verdict.reason ?? ""}`);
         }
+        const resolvedPrincipal = verdict.principal ?? principal;
+
+        // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
+        // domain.invoke ever runs. An action absent from the DomainPort's own operation index (should not
+        // normally happen once `allowed.has(action)` above already passed) is let through ungated,
+        // matching the pre-existing (pre-F2) behavior for a host whose index and DomainPort momentarily
+        // disagree.
+        const index = await ctx.operationIndex();
+        const entry = index.get(action);
+        if (entry != null) {
+          const gateResult = await ctx.actionGate.check({
+            descriptor: entry.descriptor,
+            paramsSchema: entry.paramsSchema,
+            payload: payload as JsonObject,
+            confirmed,
+            approval,
+            requesterId: resolvedPrincipal.id,
+          });
+          const gated = await handleActionGateResult(ctx.deps, gateResult, {
+            action,
+            payload: payload as JsonObject,
+            principal: resolvedPrincipal,
+            endpoint: `${ctx.prefix}_action`,
+            correlationId: requestId,
+          });
+          if (gated != null) return gated;
+        }
+
         const result = await ctx.deps.domain.invoke(action, payload as JsonObject, {
-          principal: verdict.principal ?? principal,
+          principal: resolvedPrincipal,
           capability,
         });
         // The write is already committed; a side-effect-declaration failure is fail-open — see host-core's applyActionEffects.
@@ -900,6 +1037,8 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
     getRendererHtml,
     fixationHost: fixationHost(deps),
     allowedActions: hostCore.createAllowedActions(deps.domain),
+    operationIndex: hostCore.createOperationIndex(deps.domain),
+    actionGate: hostCore.createActionGate({ approvals: deps.approvals }),
     tasks: createTaskStore(),
   };
   taskStoresByServer.set(server, ctx.tasks);
@@ -1108,6 +1247,44 @@ function rateLimitToolError(retryAfterMs: number | undefined) {
         ...(retryAfterMs != null ? { retryAfterMs } : {}),
       },
     },
+  };
+}
+
+/**
+ * A structured `ACTION_PARAMS_INVALID` tool error (SPEC §6.1, ACT-PRM-001's MCP counterpart), the
+ * `${prefix}_action` equivalent of the REST profile's 422 response: the payload failed
+ * `validateActionParams` against the action's declared `paramsSchema`. `structuredContent.error.issues`
+ * carries the exact array `validateActionParams` returned, so a client can identify the failing
+ * field(s) programmatically rather than by parsing the text message.
+ */
+function actionParamsInvalidToolError(issues: ActionParamIssue[]) {
+  return {
+    content: [{ type: "text" as const, text: "action parameters failed validation" }],
+    isError: true,
+    resultType: "complete" as const,
+    structuredContent: {
+      error: { code: "ACTION_PARAMS_INVALID", message: "action parameters failed validation", issues },
+    },
+  };
+}
+
+/**
+ * A structured `APPROVAL_REQUIRED` tool error (SPEC §6.1, ACT-APR-001's MCP counterpart), the
+ * `${prefix}_action` equivalent of the REST profile's 403 response: the action's tier gate was not
+ * satisfied, either because nothing was presented yet (`approvalRequired`) or a presented approval token
+ * did not verify (`denied`) -- both map to this same structured error, distinguished only by `message`
+ * and, upstream, by which `action.*` lineage event was recorded for the attempt (see
+ * `handleActionGateResult` below).
+ */
+function approvalRequiredToolError(
+  message: string,
+  approval: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string },
+) {
+  return {
+    content: [{ type: "text" as const, text: message }],
+    isError: true,
+    resultType: "complete" as const,
+    structuredContent: { error: { code: "APPROVAL_REQUIRED", message, approval } },
   };
 }
 

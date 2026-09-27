@@ -37,6 +37,17 @@ export const INITIAL_DATA_META_KEY = "kohaku/initialData";
  */
 export const CAPABILITY_META_KEY = "kohaku/capability";
 
+/**
+ * The key for co-embedding the Governed Actions manifest (design.md #62/#64, SPEC §6.1/§6.1.1 [Draft]) in
+ * a compose-family tool result's `_meta`, alongside `CAPABILITY_META_KEY`. Placed in `_meta` rather than
+ * `structuredContent` for the same reason as the capability token: `paramsSchema` / `confirmMessage` are
+ * operational detail for the widget's own gate (`preflightAction`), not something that needs to enter the
+ * model's context. Present only when the composed Spec declares at least one write action the host also
+ * recognizes as a real `DomainPort` operation (mirrors the REST profile's `actions?` being absent rather
+ * than an empty object).
+ */
+export const ACTIONS_META_KEY = "kohaku/actions";
+
 export type ToolVisibility = "model" | "app";
 
 /**
