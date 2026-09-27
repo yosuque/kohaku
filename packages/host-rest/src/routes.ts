@@ -163,6 +163,8 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
       capabilities: def.capabilities,
       implementation: def.implementation ?? { kind: "native" },
       propsSchema: cachedPropsJsonSchema(def),
+      // MAY per SPEC §3.1; omitted (JSON.stringify drops the undefined value) when the part isn't deprecated.
+      deprecated: def.deprecated,
     }));
     return c.json({ components: defs, catalogVersion: catalog.fingerprint });
   });

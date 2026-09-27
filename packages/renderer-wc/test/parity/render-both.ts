@@ -48,6 +48,10 @@ export interface ParityContext {
   renderSandbox?: (node: ComponentNode, spec: UISpec, theme: ThemeTokens) => ReactNode;
   /** L2 (sandbox.html) delegation, WC side (context.sandbox: the bridge + optional policy). */
   sandbox?: SurfaceContext["sandbox"];
+  /** AI-generation disclosure (design.md #66) -- React's SpecView prop / WC's <kohaku-surface> attribute.
+   * Not part of RendererContextValue/SurfaceContext (it is orthogonal to the renderer context), so it is
+   * applied directly rather than threaded through toReactCtx/toWcCtx. */
+  disclosure?: "off" | "attributes" | "label";
   /**
    * Overrides the React impl registry (default: `createCoreRegistry()`). Used by custom-part parity tests
    * (design.md #68) that register a product-specific part via `implement`/`ImplRegistry.use` on top of the
@@ -114,7 +118,10 @@ export async function renderReact(
       createElement(RendererProvider, {
         value: toReactCtx(ctx, onEvent),
         // biome-ignore lint/correctness/noChildrenProp: required by RendererProvider's named `children` prop type (see comment above).
-        children: createElement(SpecView, { spec }),
+        children: createElement(SpecView, {
+          spec,
+          ...(ctx.disclosure != null ? { disclosure: ctx.disclosure } : {}),
+        }),
       }),
       { container },
     );
@@ -140,6 +147,7 @@ export async function renderWc(
   document.body.appendChild(surface);
   ctx.registerParts?.(surface);
   surface.context = toWcCtx(ctx, onEvent);
+  if (ctx.disclosure != null) surface.disclosure = ctx.disclosure;
   surface.spec = spec;
   await tick();
   const shadowRoot = surface.shadowRoot!.querySelector(".kohaku-root") as HTMLElement;

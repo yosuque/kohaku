@@ -4,7 +4,7 @@
 // CHART_CORPUS lives here (rather than in chart.test.ts) so a11y.test.ts can iterate the same golden Specs.
 
 import type { BindingClient } from "@kohaku-ui/data-binding";
-import { parseSpec, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
+import { type Provenance, parseSpec, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
 
 const INTENT = { canonical: "parity.corpus", params: {}, hash: "sha256:" + "0".repeat(64) } as const;
 const PROVENANCE = { tier: "L0", composedBy: "parity", cache: "hit" } as const;
@@ -330,6 +330,36 @@ export const CHART_CORPUS: Record<string, UISpec> = {
   area: chartSpec({ kind: "area", x: "region", y: "revenue" }),
   "pie(table fallback)": chartSpec({ kind: "pie", x: "region", y: "revenue" }),
   "scatter(table fallback)": chartSpec({ kind: "scatter", x: "region", y: "revenue" }),
+};
+
+function disclosureSpec(provenance: Provenance): UISpec {
+  return parseSpec({
+    kohaku: "0.1",
+    intent: INTENT,
+    dataVersion: "v1",
+    components: [{ id: "root", type: "text.heading", props: { level: 2, text: "Disclosure corpus" } }],
+    events: [],
+    provenance,
+  });
+}
+
+/** Provenance-shape corpus for the AI-generation disclosure feature (design.md #66, deriveDisclosure) --
+ * see parity/disclosure.test.ts. Content is irrelevant here (a single heading); only provenance varies. */
+export const DISCLOSURE_CORPUS: Record<string, UISpec> = {
+  "ai-generated (tier L1)": disclosureSpec({ tier: "L1", composedBy: "parity", cache: "miss" }),
+  "ai-generated (tier L2)": disclosureSpec({ tier: "L2", composedBy: "parity", cache: "hit" }),
+  "ai-assisted-reviewed (tier L0, cache fixated)": disclosureSpec({
+    tier: "L0",
+    composedBy: "parity",
+    cache: "fixated",
+  }),
+  "none (tier L0, cache miss)": disclosureSpec({ tier: "L0", composedBy: "parity", cache: "miss" }),
+  "none (fallback overrides tier L2)": disclosureSpec({
+    tier: "L2",
+    composedBy: "parity",
+    cache: "hit",
+    fallback: { from: "sandbox1:sandbox.html", reason: "capability negotiation" },
+  }),
 };
 
 export { BIND_REF, REF };

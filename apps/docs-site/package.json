@@ -19,6 +19,7 @@
     "@kohaku-ui/host": "workspace:^",
     "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@kohaku-ui/host-rest": "workspace:^",
+    "@kohaku-ui/mcp-renderer": "workspace:^",
     "@kohaku-ui/intents": "workspace:^",
     "@kohaku-ui/lineage": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",

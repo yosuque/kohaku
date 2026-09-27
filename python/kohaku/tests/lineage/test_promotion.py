@@ -63,6 +63,9 @@ async def _seed_generated(
     request: str | None = "r",
     sha256: str | None = None,
     ref: str | None = None,
+    kit: dict[str, str] | None = None,
+    generator_version: str | None = None,
+    model: str | None = None,
 ) -> None:
     payload: dict[str, Any] = {"artifactId": artifact_id}
     if request is not None:
@@ -73,6 +76,12 @@ async def _seed_generated(
         payload["artifactSha256"] = sha256
     if ref is not None:
         payload["ref"] = ref
+    if kit is not None:
+        payload["kit"] = kit
+    if generator_version is not None:
+        payload["generatorVersion"] = generator_version
+    if model is not None:
+        payload["model"] = model
     await seed(
         storage, "component.generated", payload, tenant=tenant, actor=LineageActor(kind="model")
     )
@@ -148,6 +157,56 @@ def test_candidate_exposes_preview_material(tmp_path: Path) -> None:
         assert listed[0].html == "<html>preview</html>"
         assert listed[0].sha256 == "c" * 64
         assert listed[0].ref == "query://sales/trend?metric=revenue"
+
+    asyncio.run(run())
+
+
+def test_candidate_exposes_origin_from_component_generated(tmp_path: Path) -> None:
+    """F-1: kit/generatorVersion/model recorded on component.generated surface as candidate.origin,
+    and are persisted to data['origin'] (kept across every transition, unlike html/sha256/ref which are
+    publish-only, #9)."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+        )
+        await _seed_generated(
+            storage, "a1", kit={"id": "default", "version": "1.0.0"}, generator_version="l2-2026-09"
+        )
+
+        candidate = await promotions.get("a1")
+        assert candidate is not None
+        assert candidate.origin == {"kit": {"id": "default", "version": "1.0.0"}, "generatorVersion": "l2-2026-09"}
+
+        await promotions.act("a1", Nominate(by=REVIEWER), REVIEWER)
+        persisted = await storage.get_promotion_state("a1")
+        assert persisted is not None
+        assert persisted.data["origin"] == {
+            "kit": {"id": "default", "version": "1.0.0"},
+            "generatorVersion": "l2-2026-09",
+        }
+        # html is NOT copied at nominate time (#9 remains publish-only): origin and the projection follow
+        # independent rules.
+        assert "html" not in persisted.data
+
+    asyncio.run(run())
+
+
+def test_candidate_origin_is_none_without_kit_or_generator_version(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=False),
+        )
+        await _seed_generated(storage, "a1")
+        candidate = await promotions.get("a1")
+        assert candidate is not None
+        assert candidate.origin is None
 
     asyncio.run(run())
 

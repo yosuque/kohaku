@@ -85,6 +85,14 @@ function PromotionCardImpl(props: PromotionCardProps): ReactNode {
             judge: {candidate.verdict.pass ? "PASS" : "FAIL"}({candidate.verdict.score})
           </span>
         )}
+        {candidate.origin?.kit != null && (
+          <span style={{ fontSize: 12, color: V.muted }}>
+            {t.promotions.generatedWith(
+              `${candidate.origin.kit.id}@${candidate.origin.kit.version}`,
+              candidate.origin.generatorVersion,
+            )}
+          </span>
+        )}
       </div>
       {isChangesRequested && (
         <div

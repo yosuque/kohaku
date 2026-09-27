@@ -20,18 +20,31 @@ kohaku の読者は 3 種類で、それぞれに最初のコードが 30 行以
 | Server-Driven UI を今すぐ、LLM 合成は後で(あるいは使わない)**プロダクトチーム** | [パス (b): React ダッシュボードだけ](paths/react-dashboard.ja.md) | `@kohaku-ui/renderer-react` で描画する L0 固定 Spec、参照渡しのデータ、モデルなし | [§6 Step 0](#step-0--llm-なしの-server-driven-ui) |
 | モデルが合成した UI を**本番に載せるチーム** | [パス (c): フル構成](paths/full-stack.ja.md) | L1 / L2 合成、昇格パイプライン、固定化、Admin 統制面 | [§6 Step 1–2](#step-1--l1-宣言的合成とチャット)、[§7](#7-運用の勘どころ) |
 
-このガイドの残りは長編です: 同梱サンプルのセットアップ(§2)、画面の歩き方(§3)、デモ 8 本(§4)、MCP ホスト(§5)、組み込み(§6)、運用(§7)、トラブルシューティング(§8)、FAQ(§9)。
+このガイドの残りは長編です: 同梱サンプルのセットアップ(§2)、画面の歩き方(§3)、デモ 8 本(§4)、MCP ホスト(§5)、組み込み(§6)、運用(§7)、トラブルシューティング(§8)、FAQ(§9)。ペルソナではなく概念から入りたいなら、下の[§1](#1-これは何か)が 3 段階で概念を導入します。各段階から[用語集](glossary.ja.md)にリンクしています。
 
 ## 1. これは何か
 
 kohaku は「自然言語の質問」と「GUI の絞り込み操作」を**同じ正規化 Intent に合流**させ、**同じ宣言的 UI Spec** を生成して、**同じレンダラー**で描画するフレームワークです。サンプルとして売上分析アプリ(API + Web + MCP サーバー)が同梱されています。
 
-体験できる核心は 4 つ:
+以下では、これを 3 段階に分けて説明します。各段階に出てくる用語の短い定義は[用語集](glossary.ja.md)にあるので、見慣れない語が出てきたら参照してください。
 
-1. チャットで聞いても GUI で絞り込んでも**同一の画面**が出る(R5)
-2. UI Spec には**データが載らない**(参照渡し。LLM は数値を扱わない)
-3. カタログ外の要求は**サンドボックス**で自由生成され(L2)、レビューを通って**正式な部品に昇格**する(L1)
-4. 頻出の画面は**固定化**され LLM を一切通らなくなる(L0)
+### 段階 1 — Intent・Spec・`$ref`: 最初の画面が出るまで
+
+LLM の有無にかかわらず、3 つの概念だけで画面が 1 枚出せます。チャットの質問も GUI の操作も、**Intent** という 1 つの要求形式に正規化されます(例: `sales.quarterly_summary` + params)。Intent を compose すると **UI Spec** が返ります。これは画面の構造を表す JSON 文書であってコードではなく、データの値は一切載らず、後で部品が自分の API に対して解決する `$ref` だけが載ります。この一式は `createKohakuHost` の 1 回の呼び出しで配線でき、`npx @kohaku-ui/cli init` を使えばデータファイルから生成できて、最初に書く Port コードもありません。
+
+→ 用語集: [Intent・UI Spec・`$ref`](glossary.ja.md#用語)。次に読む: [Zero-Port quickstart](#zero-port-quickstart自分のデータからport-コードなしで) で、1 コマンドから画面が出るところを確認できます。
+
+### 段階 2 — L0 / L1 / L2 とキャッシュ: 同じ要求は同じ画面になる
+
+画面がモデルを必要とする段になると、要求は 3 つの tier のいずれかを経て画面にたどり着きます。**L0** は固定テンプレートか固定化済みの構造で、LLM を一切通りません。**L1** は LLM がカタログの既知の部品を選び、型付きの props を埋めるだけです。**L2** はカタログでまだ表現できない要求のための、サンドボックス内の自由生成です。どの tier が答えても結果は Intent 単位でキャッシュされるため、同じ要求は常に同じ Spec を返します — 「同一表示」(R5)は、モデルが毎回同じ振る舞いをすることへの期待ではなく、キャッシュによる保証です。
+
+→ 用語集: [L0 / L1 / L2](glossary.ja.md#用語)。次に読む: [§3 画面の歩き方](#3-画面の歩き方)では、この tier がサンプル自身の ProvenanceBadge に表示されるところを見られます。
+
+### 段階 3 — ガバナンス: モデルが発明したものはどうなるか
+
+L2 で生成されたアーティファクトはそこで終わりではありません。**lineage** に記録され、十分使われると**昇格**候補になり、人間がレビューしてからカタログにネイティブな部品として加わります。頻出かつ構造が安定した L1 Intent も同様に L0 へ**固定化**でき、以後 LLM を一切通らなくなります。描画された部品が行うすべての読み書きは、常設の認証情報ではなく短命の **capability** トークンで絞り込まれ、`kohaku explain`(またはその DevTools パネル)を使えば、1 つの `requestId` から tier・cache・lineage の全体像がたどれます。
+
+→ 用語集: [昇格・固定化・lineage・capability](glossary.ja.md#用語)。次に読む: [§4 デモウォークスルー](#4-デモウォークスルー8-本)で昇格と固定化を一通り体験でき、[§6 Step 2](#step-2--l2昇格固定化完全形)で自分のプロダクトに配線します。
 
 ## 2. セットアップ
 
@@ -100,7 +113,13 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
 ## 3. 画面の歩き方
 
-> **表示言語について**: デモは**英語が既定**です。ヘッダーの **EN/JA トグル**で **JA** を選ぶと sample-web アプリ全体が切り替わります: ページクローム(ナビ・チャット・管理)、Spec レンダラーのメッセージと書式ロケール(`RendererProvider.messages` / `locale`)、ダッシュボードのファセットラベル(`facet-views.json` に焼き込まれた二言語オーバーレイ)、**そして生成内容そのもの** — トグルはすべての API 呼び出しに `session.locale` を載せ、サーバーがセッションごとの `ComposePolicy` を選択します(JA は `outputLanguage: "Japanese"` と日本語の L0 固定スペックを持ち、`/ja` の generatorVersion トークンでキャッシュが言語別に分離されます)。ダッシュボードはトグルで再 compose され、チャットの既存バブルは生成時の言語のまま残ります(次の質問から新言語)。既知の制限: チャート/表内のデータセル値(地域・チャネル名)は英語のまま(`query://` の結果は不変条件として言語中立)で、DomainPort 由来の列見出し・KPI ラベル・KPI 注記(例:「Total revenue」「Revenue (JPY)」「No target set」)も同様に英語です — これら DomainPort 由来ラベルの二言語化は将来課題です。EN トラフィックから固定化された Spec は JA セッションには配信されません(通常 compose に落ちます)。sample-wc は従来どおり `?lang=ja` でレンダラーメッセージのみ切り替えます。
+> **表示言語について**: デモは**英語が既定**です。ヘッダーの **EN/JA トグル**で **JA** を選ぶと sample-web アプリ全体が切り替わります: ページクローム(ナビ・チャット・管理)、Spec レンダラーのメッセージと書式ロケール(`RendererProvider.messages` / `locale`)、ダッシュボードのファセットラベル(`facet-views.json` に焼き込まれた二言語オーバーレイ)、**そして生成内容そのもの** — トグルはすべての API 呼び出しに `session.locale` を載せ、サーバーがセッションごとの `ComposePolicy` を選択します(JA は `outputLanguage: "Japanese"` と日本語の L0 固定スペックを持ち、`/ja` の generatorVersion トークンでキャッシュが言語別に分離されます)。
+>
+> ダッシュボードはトグルで再 compose され、チャットの既存バブルは生成時の言語のまま残ります(次の質問から新言語)。
+>
+> 既知の制限: チャート/表内のデータセル値(地域・チャネル名)は英語のまま(`query://` の結果は不変条件として言語中立)で、DomainPort 由来の列見出し・KPI ラベル・KPI 注記(例:「Total revenue」「Revenue (JPY)」「No target set」)も同様に英語です — これら DomainPort 由来ラベルの二言語化は将来課題です。
+>
+> EN トラフィックから固定化された Spec は JA セッションには配信されません(通常 compose に落ちます)。sample-wc は従来どおり `?lang=ja` でレンダラーメッセージのみ切り替えます。
 
 ### Dashboard(GUI サーフェス)
 
@@ -211,6 +230,8 @@ trash apps/sample-api/.data   # 昇格・固定化・Lineage を初期化(rm の
 
 Web と同一の Spec・同一の描画コードを、MCP Apps 対応ホストに配信できます。ただし**ホストの UI 描画対応状況によって接続と描画の経路が 3 つに分かれます**。
 
+**データファイルからの最速経路:** `npx @kohaku-ui/cli init --mcp --from data.csv --out app` で、REST フロントドアとこの MCP フロントドア(stdio と Streamable HTTP の両サーバー。`@kohaku-ui/mcp-renderer` のビルド済みコアレンダラーに配線済みで、自分でビルドする必要はない)、そして `claude_desktop_config.example.json` を一括生成します。`npm --prefix app run mcp:claude-desktop` が Claude Desktop に登録します(既存の設定は先に `.bak` としてバックアップ)。あとは Claude Desktop を再起動するだけです — 手順は [docs/paths/mcp-apps.ja.md](paths/mcp-apps.ja.md) 参照。この節の残りは、その仕組みの元になっている参照実装(`apps/sample-mcp`)の配線を説明します。
+
 ### ホスト対応表
 
 | ホスト | 接続方式 | 描画 |
@@ -220,7 +241,7 @@ Web と同一の Spec・同一の描画コードを、MCP Apps 対応ホスト�
 | **Claude Code / Codex CLI 等ターミナル** | ローカル stdio / Streamable HTTP | iframe 描画は不可 → `kohaku_render_snapshot` の**自己完結 HTML** で受ける |
 | **mcp-ui レガシーホスト(LibreChat / Smithery / Nanobot 等)** | stdio / Streamable HTTP + `KOHAKU_MCP_LEGACY_UI=1` | SEP-1865 未対応でも、ツール結果に併記される `ui://` UIResource(自己完結スナップショット)を静的描画。**約 1MB/結果**になるため modern ホスト(Claude / ChatGPT)では有効化しないこと |
 
-いずれの経路でも、UI 表示には事前に共有レンダラーをビルドしておきます(iframe 描画も snapshot も同じバンドルを使う)。
+いずれの経路でも、UI 表示には事前に共有レンダラーをビルドしておきます(iframe 描画も snapshot も同じバンドルを使う)。このサンプルは自身の sales ドメインのコンポーネント実装をそのビルドに焼き込んでいます(`apps/sample-mcp/renderer/main.tsx`。`@kohaku-ui/mcp-renderer/boot` の `bootMcpRenderer` を薄く呼ぶだけ)。`kohaku init --mcp` が生成するプロジェクトはここでのビルド手順が一切不要です — `@kohaku-ui/mcp-renderer` のビルド済み・依存ゼロのコアバンドル(`loadRendererHtml`)を直接配線しているためです。
 
 ```bash
 pnpm --filter @kohaku-ui-sample/mcp build:renderer    # 共有レンダラーの self-contained ビルド
@@ -295,7 +316,9 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 導入ラダー(設計書 §12「サンプル実装の設計」)に沿って段階導入できます。
 
-**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod`(`@kohaku-ui/host` の `createKohakuHost()` は `@kohaku-ui/host-rest` を包む one-call ファサードです。詳細は後述。その `@kohaku-ui/host/mcp` サブパスを使うには追加で `@kohaku-ui/host-mcp-apps` と `@modelcontextprotocol/server` が要り、どちらも上のコマンドではインストールされない optional peer です——[パス (a)](paths/mcp-apps.ja.md)参照。`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
+**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod`(`@kohaku-ui/host` の `createKohakuHost()` は `@kohaku-ui/host-rest` を包む one-call ファサードです。詳細は後述。その `@kohaku-ui/host/mcp` サブパスを使うには追加で `@kohaku-ui/host-mcp-apps` と `@modelcontextprotocol/server` が要り、どちらも上のコマンドではインストールされない optional peer です——[パス (a)](paths/mcp-apps.ja.md)参照。`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。
+
+逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
 ### Zero-Port quickstart(自分のデータから、Port コードなしで)
 
@@ -305,7 +328,11 @@ npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファ�
 npm run dev                                      # API :8787 + web :5173
 ```
 
-`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
+`init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。
+
+`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。
+
+Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
 
 手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。
 
@@ -630,13 +657,17 @@ surface.registerPart(entry.type, entry.version, entry.builder);
 
 `implement` と `implementWc` はどちらも、環境を問わず常に `def.propsSchema.safeParse` をノードの props に対して
 実行する。そのため `.default()` が付いた値を Spec 側が省略していても、後述の診断が有効かどうかに関わらず
-必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。環境によって
+必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。
+
+環境によって
 切り替わるのは**診断だけ**(不一致時の `console.warn`)であり、既定では `NODE_ENV=production` のビルド以外で
 オン、その内側でオフになる——`{ validate: false }` / `{ validate: true }` を渡せば環境に関わらずどちらの向きにも
 上書きできる。`process.env.NODE_ENV` を実際には設定しないビルド(`--define:process.env.NODE_ENV='"production"'`
 を渡さない素の esbuild 呼び出しや、本番モードに切り替えないバンドラ設定)では、この診断はオンのままになる——
 これは React 自身のバンドル済みビルドと同じ慣習であり、稀にしか起きない不一致経路で余分な `console.warn` が
-呼ばれるだけなので、既定として安全側に倒している。型なしの `ImplRegistry.register` や、`registerPart` に生の
+呼ばれるだけなので、既定として安全側に倒している。
+
+型なしの `ImplRegistry.register` や、`registerPart` に生の
 `PartBuilder` を渡す登録も、静的な `ComponentDefinition` を持たない部品(例:承認ドラフトからアーティファクト
 ごとにスキーマが生成される昇格済み部品——`apps/sample-api/src/intents/promoted.ts` を参照)のためにそのまま
 動作し続ける。
@@ -656,6 +687,49 @@ surface.registerPart(entry.type, entry.version, entry.builder);
   "capabilities": { "events": [], "data": "required", "children": "none" }
 }
 ```
+
+### 部品を deprecated にして移行する
+
+部品を削除する代わりに `deprecated`(何に置き換わるかを添えて)を付けます。既にそれを使って固定化(fixate)された Spec の検証は通り続けますが、L1 生成はその部品を提示しなくなり、カタログ指紋が変わってコンポーズキャッシュがきれいに分離されます(design.md #65):
+
+```ts
+export const myCard = defineComponent({
+  type: "myapp.card", version: "1.0.0",
+  // … description / propsSchema / capabilities は従来どおり …
+  deprecated: { reason: "myapp.cardV2 に置き換え", replacedBy: { type: "myapp.cardV2" } },
+  migrateProps: (props) => ({ title: props.title }), // TS のみ: `kohaku migrate` が props を書き換える際に使う
+});
+```
+
+deprecated な部品をまだ使っている固定化(L0)済みの Spec を、置き換え先へ一括で書き換えるには `migrate` CLI を使います(plan は読み取り専用、apply が実際に適用する 2 段階):
+
+```bash
+npx @kohaku-ui/cli migrate plan --data-dir ./.data --catalog ./catalog.ts --out plan.json
+# plan.json を確認: rewrites / steps(適用可能)/ blocked(手動対応が必要 -- 例: 書き換え後に props の形が
+# 合わない)。そのうえで、--data-dir を共有するホストプロセスを止めてから(ファイルバックエンドの
+# StoragePort は同時書き込みに対して安全ではありません):
+npx @kohaku-ui/cli migrate apply --plan plan.json --approver you@example.com --data-dir ./.data --catalog ./catalog.ts
+```
+
+`--catalog`(`plan` / `apply` の両方で必須)は default export が `(tenant?: string) => ResolvedCatalog` である ESM モジュールを指します -- ホストの `ComposeContext.catalogFor` と同じ形なので、たいてい同じモジュール(またはその薄い re-export)を指せます。`apply` はこのカタログを再解決し、書き込む前に計画が記録した内容と突き合わせます: 計画からカタログが移行してしまっているステップ(部品の追加/削除/さらなる deprecated 化、あるいはバージョンを上げずにその場で `propsSchema` が厳しくなっただけでも)は適用されず拒否・報告されます。したがって `apply` の直前に `plan` を再実行するか、両方を全く同じカタログのスナップショットに向けるのが安全な既定運用です。
+
+#### カタログのバージョンを段階的に適用する
+
+移行後のカタログを、全テナントに切り替える前にカナリアとして先行適用したい場合、`catalogFor` を一気に切り替える代わりに `stagedCatalogFor` で 2 つのカタログをラップします:
+
+```ts
+import { resolveCatalog, stagedCatalogFor } from "@kohaku-ui/registry";
+
+const ROLLOUT_TENANTS = new Set(["acme"]); // 確信が持てるにつれてこのリストを広げる
+
+const catalogFor = stagedCatalogFor({
+  stable: resolveCatalog(coreCatalog, myContribution),          // 移行前
+  next: resolveCatalog(coreCatalog, myMigratedContribution),    // 移行後(myCard を deprecated 化)
+  inRollout: (tenant) => ROLLOUT_TENANTS.has(tenant),
+});
+```
+
+テナント無指定のトラフィック(テナントが一切解決されない場合)は常に `stable` になるため、カナリア展開の影響を受けることはありません -- `inRollout` はそのケースでは呼ばれすらしません。`stagedCatalogFor` はあくまで与えられた 2 つのカタログのどちらかを選ぶだけで、テナントごとの昇格済みコンポーネント寄与をそれ自体でマージすることはありません。テナントごとに昇格も行うプロダクトは、この選択の**後に**その重ね合わせを行います -- `apps/sample-api/src/app.ts` の `buildCatalog` がそうしているように、`stable` / `next` をテナントごとに `resolveCatalog(coreCatalog, ..., promotedEntries)` から組み立てるか、この関数の戻り値をプロダクト側の昇格マージでラップしてください(段階適用をしない場合と同じやり方です)。
 
 ### Golden 回帰を始める
 
@@ -764,6 +838,12 @@ const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
   - `ComposePolicy.refConstraint: "validate"` は生成スキーマの `data.$ref` をプレーンな文字列に緩和し(修復再試行間だけでなく compose 間でも再利用可能な intent 非依存の文法になる)、代わりに生成後に明示的に集合所属を検証する(`DATA_REF_UNRESOLVED`。既存の修復ループに送り返す)。
   - 実際のモデルに対して `KOHAKU_LLM_PROVIDER=claude KOHAKU_LLM_MODEL=<自分のモデル> ANTHROPIC_API_KEY=<自分のキー> pnpm --filter @kohaku-ui-sample/api run measure-grammar-latency`(`apps/sample-api/scripts/measure-grammar-latency.ts`)を実行してから、自分のデプロイでどちらの逃げ道を有効にする価値があるか決める — このスクリプトは実際の LLM を呼ぶため、意図的に `pnpm test` から除外されている。すべての行が `provenance.cache: "bypass"` になることを期待している — これは比較軸ではなく、LLM 経路が実際に走ったことの確認である。有効な API キーが無いと `claude` プロバイダは起動時に警告を出すだけで決定的フォールバックへ落ちるため、キー未設定はエラーにならず「`tier` 列が `L1` ではなく `L0`/フォールバックになった、明らかに速い実行」として現れる — レイテンシの数値を信じる前に必ず `tier` 列を確認すること。表の読み方(Anthropic の文法キャッシュは 24 時間有効なので、同一 intent の初回/2 回目の呼び出しでは 2 モードを区別できない)はスクリプト自身のヘッダコメントを参照し、トレードオフの全体は [design.ja.md#prompt-caching](design.ja.md#prompt-caching) を参照。
 - **監査**: 「なぜこの画面が出たか」は Admin の Lineage か `GET /api/kohaku/lineage` で specHash / intentHash を辿れます。
+- **Compliance Evidence Pack と AI 生成であることの表示**: `kohaku evidence`(`@kohaku-ui/lineage` の `evidence` モジュールが土台)は、正規化した lineage / promotion / fixation のレコードと参照先の部品アーティファクトをまとめたディレクトリを組み立て、Ed25519 で署名する — 監査者やコンプライアンス担当に渡すためのものです。**これは法的助言ではありません。** この証跡が特定の法域の透明性義務(例えば EU AI Act 第 50 条が定める、コンテンツが AI によって生成・改変されたことを自然人に開示する義務)をどの程度・どのように満たす助けになるかは、あなた自身のデプロイ・利用者・法務判断に依存します。このパックはあくまで証拠となる生データ(どの tier がどの画面を合成したか、いつ人がレビュー・固定化したか、アーティファクトの中身そのもの)であり、コンプライアンス認証書ではありません。kohaku は特定の規制への準拠を主張するものではありません。
+  - **鍵ペアの生成**: `node cli/bin/kohaku.js evidence keygen --out-dir <dir> [--force]` は `evidence-private-key.pem`(パーミッション 0600 — 秘密として扱い、コミットせず、`StoragePort` のデータディレクトリの下にも置かないこと)と `evidence-public-key.pem` を書き出し、導出した `keyId` を表示します。どちらかのファイルが既に存在する場合は上書きを拒否します(いずれも OS レベルの排他フラグ付きで作成するため、並行実行によるチェックの競合も起きません)。`--force` を付けた場合のみ両ファイルを上書きし、`keyId` も新しくなります。
+  - **パックのエクスポート**: `node cli/bin/kohaku.js evidence export (--data-dir <dir> | --rest <baseUrl> [--header k:v]) [--tenant <id>] --since <iso8601> --until <iso8601> --private-key <pem> --out <dir> [--allow-incomplete]`。`--data-dir` はローカルの `StoragePort` データディレクトリを直接読む(完全なエクスポート)。`--rest` は既存の `KohakuClient` の REST 面から読む代わりに — `GET /fixations` のレスポンスには完全な `FixationRecord` を再構成するのに十分なフィールドが無いため — `fixations.jsonl` を空のままにし、その旨の警告を manifest に記録**した上で manifest 全体を `complete: false` にする**。`complete` だけを見る監査者が(`warnings` を突き合わせずに)このパックを完全だと誤解しないようにするため。fixation レコードも含めた完全なエクスポートが必要なときはホスト自身のデータディレクトリに対して `--data-dir` を使うこと。`--allow-incomplete` は、裏側の `StoragePort` が `pageLineage` を持たない場合(`order=asc` に 501 を返すホスト)にのみ指定する — 生成される manifest は `complete: false` になり、イベントを黙って落とすのではなく不完全であることを明示する。**`--tenant` は `scope.tenant` にラベルを付けるだけで、`--rest` エクスポートのスコープそのものを決めるわけではない** — 実際のスコープはリクエストヘッダが持つ値そのものである。そのため `--rest` モードでは、`--tenant` は同時に渡す `--header x-kohaku-tenant:<id>`(ヘッダ名は大文字小文字を区別しない)と同じ値でなければならず、値が食い違えば拒否される。`--tenant` を省略した場合はヘッダの値から manifest のテナントラベルを導出する(`x-kohaku-tenant` は `apps/sample-api` の `request-identity.ts` による慣習であり、プロトコルレベルの保証ではない — 別の構成のホストではこのヘッダが一切効かない場合もあるので、結果として付く `scope.tenant` ラベルはその前提で扱うこと)。
+  - **パックの検証**: `node cli/bin/kohaku.js evidence verify <dir> --public-key <pem>` は manifest をスキーマ・署名・列挙された全ファイルのハッシュに照らして検証し、埋め込まれた各アーティファクトのハッシュも独立に再計算する。終了コードは 0 = 正当、1 = 不正(改ざん・破損)、2 = 使い方の誤り(パスの誤り・フラグの矛盾)。改ざんされた、あるいは悪意あるパックディレクトリに対しても堅牢になるよう強化されている: `manifest.files[].path` はパース時点で 4 つの固定 `*.jsonl` ファイル名か `artifacts/<sha256>.html` のいずれかの形しか許されない(`..`・絶対パス・バックスラッシュはパースの時点で弾かれる)。署名そのものの検証に失敗した瞬間、他のファイルを一切読まずに検証を打ち切る。列挙されたパスにシンボリックリンクが仕込まれていても辿らず拒否する。そして `manifest.files` に列挙されていないファイル(`manifest.json` / `manifest.sig` 自体を除く)がパックディレクトリに存在すると、想定外のファイルとして検証を失敗させる。
+  - **画面上での AI 生成表示**(既定 off): `SpecView` の `disclosure` prop(renderer-react)、または `<kohaku-surface>` の `disclosure` 属性(renderer-wc)— `"off"`(既定。DOM は変わらない)、`"attributes"`(機械可読の `data-kohaku-disclosure` / `data-kohaku-tier` / `data-digital-source-type` のみで、見える文言は無い)、`"label"`(同じ属性に加えて、見える形でローカライズされたラベルを表示。自分のロケール・文言に合わせるには `RendererMessages.disclosureAiGenerated` / `disclosureAiReviewed` を上書きする)。表示レベルは常に `spec.provenance` から導出され、wire には一切載らない — 導出規則の詳細は [design.ja.md #66](design.ja.md) を参照。
+  - **PII の注意**: Intent の `params`、そして `sales.custom` のような自由文の Intent の場合はリクエスト文字列そのものに、エンドユーザーが入力した内容(氏名、口座番号、何であれ)が含まれ得ます。この文字列は現時点でも lineage ログにそのまま流れ込んでおり、evidence pack はそれを `events.jsonl` / `approvals.jsonl` にそのままエクスポートするだけで、それ自体が新たな PII 露出を生むわけではありません。組織外に共有する前に、自分の Intent カタログの `params` の形状や自由文フィールドを確認してください — この機能はどのフィールドも秘匿・ハッシュ化・その他の加工を代わりに行いません(PII の秘匿化は v1 では明示的に対象外です。[design.ja.md #67](design.ja.md) を参照)。
 - **`x-request-id` によるログ突合**: マウントされた kohaku ルートのすべての応答は `X-Request-Id` ヘッダを持つ(呼び出し側が送った `x-request-id` リクエストヘッダが存在し正しい形式ならそれをエコーし、なければ新規発番する)。同じ ID はすべてのエラーエンベロープの `error.requestId` にも現れ、`KohakuHostDeps.onError` にも渡されるので、サポートチケットに載るクライアント側の ID・サーバーログ・`onError` フックの記録が追加配線なしで一つの値で揃う。既存の相関 ID 規約がある場合は `KohakuHostDeps.requestId`(TS)/ `request_id`(Python)でこの解決を丸ごと上書きできる。同じ ID を `kohaku explain <requestId>` または admin-react の DevTools(§6「Kohaku DevTools と `kohaku explain`」)に渡せば、その compose が生んだ結果を最初から最後まで確認できる — ティア、キャッシュ、キャッシュキーの内訳、判断の流れ、すべての lineage イベント。
 - **`KOHAKU_DEBUG`(詳細な失敗ログ)**: `kohaku init` が生成するプロジェクトは `@kohaku-ui/host-core` の `createConsoleErrorReporter()` を `KohakuHostDeps.onError` と compose observer の `onError` の両方(生成される `app.ts`)に配線する。既定(`KOHAKU_DEBUG` 未設定。生成される `.env.example` を参照)では各失敗を 1 行の要約でログ出力するが、`KOHAKU_DEBUG=1` にすると原因の連鎖(`formatErrorChain` / `format_error_chain`。`Error.cause` / `__cause__` を辿る)とスタックトレースを代わりに出力する。`apps/sample-api` と `python/examples/sales-api` も同じ環境変数を自前のログに配線しており、既定(未設定)の出力は変わらない。`KOHAKU_DEBUG` の有無によらず常に得られるシグナルとして、`observer.onError` の毎回のフォールバック呼び出しに乗る `ComposeErrorContext.failure`(`"transient" | "invalid" | "budget" | "aborted"`)があり、`reason` を文字列解析しなくても provider 障害と検証失敗をプログラムから判別できる — 下のトラブルシューティングの行も参照。
 - **Trace context / OTel**: `host-rest` は受信した `traceparent` / `tracestate` リクエストヘッダ(W3C Trace Context)を、`host-mcp-apps` はツール呼び出しの `_meta.traceparent` / `_meta.tracestate`(MCP 2026-07-28 / SEP-414)を読み取り、両方とも `ComposeOptions.traceContext` へ充填する。`correlationId` と同じ経路で `ComposeTrace` / `ComposeErrorContext` に乗る — 純粋な追加で、呼び出し側がどちらのヘッダも送らなければ no-op。`@kohaku-ui/otel` の `createOtelComposeObserver()` は `ComposeObserver` の呼び出しをスパン(`kohaku.compose`。`gen_ai.*`/`kohaku.*` 属性 — 詳細は [design.ja.md#trace-context-otel](design.ja.md#trace-context-otel))へ変換し、その `traceContext` をスパンの親として復元するので、compose は常に新しいルートトレースを開始するのではなく呼び出し側自身のトレースの子として記録される。**kohaku 自体は exporter も SDK 初期化も一切出荷しない** — それは各自のプロセス自身の責務のまま(プロセス起動時に一度、compose が動く前に登録する通常の `@opentelemetry/sdk-node` / `@opentelemetry/sdk-trace-node` セットアップ)。最小構成の配線例:
@@ -845,7 +925,13 @@ export function buildTheme(mode: "light" | "dark"): ThemeTokens {
 }
 ```
 
-これを `RendererProvider` の `theme`(React)/ `surface.theme`(Web Components)に渡します。色トークン語彙は `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`、および非推奨 alias `color.danger`→negative・予約 `color.focus`→primary です。`color.scrim`(モーダルダイアログの背景幕)も他のトークンと同じく light/dark の実体を持ちますが、sandbox はダイアログ背景幕を描画しないため *L2 生成*語彙(モデルに見せる語彙)には含まれません(既定値の全一覧は design.md §7.2)。独自トークン(語彙外のキー)も自由に足せます(`ThemeTokens` は開いた型)。非色トークン(`font.family.*` / `font.size.*` / `space.*` / `radius.*` / `shadow.*` / `motion.*`)も語彙に含まれ、単位付きの CSS 文字列を取ります(角ばった印象のブランドなら `"radius.md": "4px"` のように指定)。両方の全一覧・既定値・dark の AA 方針は設計書 §7.2 を参照してください。非色トークンは組み込み部品にも反映されます(例: `"radius.md": "2px"` にするとすべてのボタンと入力欄が角ばります)。`L2 SANDBOXED` バッジは `SandboxFrame` の `badge="hidden"` / `context.sandbox.badge` で非表示にできますが、他の方法でサンドボックス化を示せる画面でのみ非表示にしてください。またブランドテーマが `color.warning.surface` / `color.warning.text`(ピルの背景・文字色のペア)を上書きしている場合は、この組み合わせが現状バッジのみで使われている点を踏まえ、両者の可読性を保つようにしてください。
+これを `RendererProvider` の `theme`(React)/ `surface.theme`(Web Components)に渡します。色トークン語彙は `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`、および非推奨 alias `color.danger`→negative・予約 `color.focus`→primary です。
+
+`color.scrim`(モーダルダイアログの背景幕)も他のトークンと同じく light/dark の実体を持ちますが、sandbox はダイアログ背景幕を描画しないため *L2 生成*語彙(モデルに見せる語彙)には含まれません(既定値の全一覧は design.md §7.2)。
+
+独自トークン(語彙外のキー)も自由に足せます(`ThemeTokens` は開いた型)。非色トークン(`font.family.*` / `font.size.*` / `space.*` / `radius.*` / `shadow.*` / `motion.*`)も語彙に含まれ、単位付きの CSS 文字列を取ります(角ばった印象のブランドなら `"radius.md": "4px"` のように指定)。両方の全一覧・既定値・dark の AA 方針は設計書 §7.2 を参照してください。
+
+非色トークンは組み込み部品にも反映されます(例: `"radius.md": "2px"` にするとすべてのボタンと入力欄が角ばります)。`L2 SANDBOXED` バッジは `SandboxFrame` の `badge="hidden"` / `context.sandbox.badge` で非表示にできますが、他の方法でサンドボックス化を示せる画面でのみ非表示にしてください。またブランドテーマが `color.warning.surface` / `color.warning.text`(ピルの背景・文字色のペア)を上書きしている場合は、この組み合わせが現状バッジのみで使われている点を踏まえ、両者の可読性を保つようにしてください。
 
 ## 10. 静的プレイグラウンド
 

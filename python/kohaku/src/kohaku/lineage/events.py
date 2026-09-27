@@ -39,12 +39,15 @@ COMPONENT_EVENT_TYPES: tuple[str, ...] = (
     "component.withdrawn",
 )
 
-# intent.fixated / intent.unfixated are fired by the fixations service. intent.observed is a
-# **deliberately reserved type** not fired in v0.1 (docs/specification.md §10 "reservation in the type catalog").
+# intent.fixated / intent.unfixated / intent.migrated are fired by the fixations service. intent.observed
+# is a **deliberately reserved type** not fired in v0.1 (docs/specification.md §10 "reservation in the type
+# catalog"). intent.migrated (design.md #65) is fired by Fixations.replace when a catalog migration
+# rewrites a fixated Spec's components in place.
 FIXATION_EVENT_TYPES: tuple[str, ...] = (
     "intent.observed",
     "intent.fixated",
     "intent.unfixated",
+    "intent.migrated",
 )
 
 # Policy as Code's audit trail (design.md #69). Fired by host_core's PolicyRuntime.reload() only when
@@ -68,6 +71,7 @@ LineageEventType = Literal[
     "intent.observed",
     "intent.fixated",
     "intent.unfixated",
+    "intent.migrated",
     "policy.applied",
 ]
 """Closed vocabulary of Lineage event types."""

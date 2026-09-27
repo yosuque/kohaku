@@ -221,6 +221,18 @@ function auditEventFor(
   }
 }
 
+/**
+ * Generation provenance carried from the candidate's `component.generated` lineage event (F-1): which
+ * design kit and generator revision produced it, and (when known) which model. Read by the migration
+ * planner (host-core's catalog-migration.ts / analyzeCatalogImpact) to flag a published candidate whose
+ * `origin.kit` no longer matches the catalog's current kit.
+ */
+export interface PromotionOrigin {
+  kit?: { id: string; version: string };
+  generatorVersion?: string;
+  model?: string;
+}
+
 export interface PromotionCandidate {
   artifactId: string;
   status: PromotionStatus;
@@ -237,6 +249,9 @@ export interface PromotionCandidate {
   draft?: ComponentDraft;
   /** Machine-extracted registration proposal (advisory; persisted on the snapshot as data.suggestion). */
   suggestion?: SchemaSuggestion;
+  /** See PromotionOrigin. Kept across every transition once captured (unlike html/sha256/ref, which are
+   * only copied onto the snapshot at publish time — origin is provenance, not a projection). */
+  origin?: PromotionOrigin;
   updatedAt: string;
 }
 

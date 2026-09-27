@@ -83,13 +83,17 @@ python/
 │  │  │                    #   (← view-recorder.ts)+ binding_ref.py(← binding-ref.ts)+
 │  │  │                    #   capability.py(← capability.ts)+ fixation.py(← fixation.ts)+
 │  │  │                    #   keyed_mutex.py(← keyed-mutex.ts)+ trace_context.py
-│  │  │                    #   (← trace-context.ts)+ errors.py(← errors.ts)
+│  │  │                    #   (← trace-context.ts)+ errors.py(← errors.ts)+ catalog_impact.py
+│  │  │                    #   (← catalog-impact.ts)+ catalog_migration.py(← catalog-migration.ts、
+│  │  │                    #   design.md #65)
 │  │  ├─ host_rest/        # ← packages/host-rest(FastAPI。SPEC §6.1)
 │  │  └─ host_mcp/         # ← packages/host-mcp-apps(MCP Apps プロファイル): server.py(attach・
 │  │                       #   ツール登録。tool-error / safe-tool / エラー可観測性ヘルパも TS の server.ts
 │  │                       #   と同様ここに残す)+ types.py(← types.ts)+ initial_data.py
 │  │                       #   (← initial-data.ts)+ cache_hints.py(← cache-hints.ts)+
-│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py(変更なし)
+│  │                       #   intent_tools.py / meta.py / fallback.py / snapshot.py(変更なし)+
+│  │                       #   renderer.py(← @kohaku-ui/mcp-renderer の loadRendererHtml。TS 側限定 —
+│  │                       #   下記「MCP Apps レンダラーバンドル」参照)
 │  └─ tests/
 └─ examples/
    └─ sales-api/           # ← apps/sample-api 相当(REST :8790 + MCP stdio / Streamable HTTP :8791)
@@ -163,6 +167,8 @@ compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_i
 配線上に現れるのは 2026-07-28 以降でネゴシエートした接続に限られる(mcp SDK 自身の結果シリアライザが古いプロ
 トコルバージョンではそれらを篩い落とす)ため、`kohaku/tests/host_mcp` のキャッシュヒントテストは
 `mode="2026-07-28"` で接続している。
+
+**MCP Apps レンダラーバンドル**: TS(`@kohaku-ui/mcp-renderer`。ビルド済み・依存ゼロの `dist/renderer.html` を自身で持つパッケージ)とは異なり、`kohaku-ui` wheel はまだ自前のレンダラー HTML を同梱していない(後続チケット)。`host_mcp.load_default_renderer_html(path: str | None = None)` は、それが実現する日に備えて TS 側の関数の形を踏襲する: `path` を渡せばそのファイルを読み(例えば `@kohaku-ui/mcp-renderer` のビルド成果物のコピーや、プロダクト自身の MCP Apps レンダラービルド)、渡さなければ `DEFAULT_RENDERER_PLACEHOLDER_HTML`(レンダラーがまだ同梱されていないことを説明する静的なプレースホルダ)を返す。`AttachOptions.renderer_html` はすでに文字列・呼び出し可能オブジェクトのどちらも受け付けるので、後で実際に同梱したバンドルへ切り替えても呼び出し側のシグネチャは変わらない。サンプル(`examples/sales-api`)はこの関数を使っていない — 独自の `make_renderer_html_loader`(下記)を持ち、こちらは **TS 側**のビルド成果物を固定のリポジトリ相対パスから読み、成功した読み込みだけキャッシュする。
 
 Python サンプル(`examples/sales-api`)はシード JSON をリポジトリルートの `apps/sample-api/src/domain/seed` から直読みする(データ二重管理を避けるため)。したがって `python/` サブツリー単独ではなく**フル monorepo チェックアウト**が前提。
 
@@ -408,6 +414,14 @@ failed catalog/structure validation」という文言とは別物にし、この
   返ってきたオブジェクトの検証は、退避前の元のスキーマに対して行われる。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
+- **`ComponentDefinition.deprecated` に `migrateProps` 相当が無い**(design.md #65):
+  TS の `migrateProps(props)` は `fallback` の隣に付く関数であるため
+  `core-catalog.json` へは決して export されず、`fallback.mapProps` のように
+  手で移植する先の Python 側フィールドも存在しない。そのため
+  `host_core.catalog_migration` の `plan_catalog_migration` は、Python 側では
+  deprecated なノードの `type`/`version` のみを書き換える。置き換え先のスキーマに
+  合わせて props の形を変える必要がある書き換えは(TS で `migrateProps` を宣言しなかった
+  カタログと同じ結果として)`steps` ではなく `blocked` に入る。
 - **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`)は未移植**。TS 側
   (`packages/host-mcp-apps/src/tasks.ts`)では、リクエストがオプトインし、かつ
   `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と

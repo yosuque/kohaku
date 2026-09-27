@@ -8,6 +8,12 @@ description = "Workspace root of the kohaku Python implementation (not distribut
 requires-python = ">=3.12"
 dependencies = ["kohaku-ui"]
 
+# Not distributed (package = false below) -- this is only so `uv sync --extra evidence` can install
+# the same optional dependency into this workspace's shared venv for local dev/test, matching
+# kohaku/pyproject.toml's own `evidence` extra (the one that actually ships to end users).
+[project.optional-dependencies]
+evidence = ["cryptography>=43"]
+
 [tool.uv]
 package = false
 

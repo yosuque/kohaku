@@ -31,6 +31,31 @@ export interface GoldenFixtureRef {
   fixture: string;
 }
 
+/** What a part is being replaced by, when it carries a DeprecationDecl. */
+export interface DeprecationReplacedBy {
+  type: string;
+  /** Required version of the replacement. When omitted, any version currently in the resolved catalog satisfies it. */
+  version?: string;
+}
+
+/**
+ * Marks a component as deprecated. A deprecated part drops out of the L1 generation vocabulary
+ * (selectGenerationTypes / buildGenerationSchema) but keeps validating existing Specs that already
+ * reference it — deprecating a part changes what gets *generated* from here on, not what already
+ * renders. It also perturbs the catalog fingerprint (see fingerprint.ts), so composing against a
+ * catalog where a part just became deprecated invalidates the compose cache for that catalog.
+ */
+export interface DeprecationDecl {
+  /** Human-readable reason, surfaced to catalog consumers (e.g. a migration-planning UI). */
+  reason: string;
+  /** ISO date the part was marked deprecated. */
+  since?: string;
+  /** The part (and optionally pinned version) that should be used instead. Must resolve within the merged catalog — see resolveCatalog. */
+  replacedBy?: DeprecationReplacedBy;
+  /** ISO date after which the part is planned for removal from the catalog. */
+  sunset?: string;
+}
+
 /* zod 4's ZodObject has a default generic argument, so it can be used without type arguments */
 export interface ComponentDefinition<P extends z.ZodObject = z.ZodObject> {
   type: string;
@@ -42,6 +67,15 @@ export interface ComponentDefinition<P extends z.ZodObject = z.ZodObject> {
   capabilities: CapabilityDecl;
   implementation?: ImplementationDecl;
   fallback?: FallbackDecl;
+  /**
+   * TS-only migration hook: rewrites props from this part's shape into replacedBy's shape (used by
+   * host-core's planCatalogMigration). A function value can't survive JSON export — never emitted by
+   * export-core-catalog and never present in the wire /catalog response; a Python catalog contribution
+   * has no equivalent field.
+   */
+  migrateProps?: (props: JsonObject) => JsonObject;
+  /** Present once a part is superseded. See DeprecationDecl. */
+  deprecated?: DeprecationDecl;
   golden?: GoldenFixtureRef[];
   examples?: { intent: string; props: JsonObject }[];
   /**

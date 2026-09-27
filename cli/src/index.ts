@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { basename } from "node:path";
 import type { ExplainReport } from "@kohaku-ui/client";
+import type { VerifyEvidencePackResult } from "@kohaku-ui/lineage";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
 import { Command } from "commander";
 import {
@@ -18,7 +19,15 @@ import {
   scaffoldPorts,
   validateComponentFile,
 } from "./commands.js";
+import {
+  type EvidenceExportResult,
+  type EvidenceKeygenResult,
+  runEvidenceExport,
+  runEvidenceKeygen,
+  runEvidenceVerify,
+} from "./evidence/index.js";
 import { type InitResult, initProject } from "./init/index.js";
+import { type MigrateApplyOptions, type MigratePlanOptions, migrateApply, migratePlan } from "./migrate.js";
 import { CLI_VERSION } from "./version.js";
 
 /** Reads stdin to completion and returns it as a string (the smoke-l2 sidecar's one-request-one-process contract). */
@@ -143,6 +152,10 @@ program
   .option("--name <name>", "package.json name (default: the output directory's basename)")
   .option("--table <name>", "SQLite table to read (default: the first user table)")
   .option("--no-install", "Skip npm install")
+  .option(
+    "--mcp",
+    "Also generate the MCP front door (stdio + Streamable HTTP servers, for Claude Desktop / claude.ai / ChatGPT)",
+  )
   .action(
     async (opts: {
       from: string;
@@ -151,6 +164,7 @@ program
       name?: string;
       table?: string;
       install: boolean;
+      mcp?: boolean;
     }) => {
       let result: InitResult;
       try {
@@ -185,6 +199,12 @@ program
           "and set a provider key; .env.example documents every variable.",
       );
       console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once, then npm test");
+      if (opts.mcp === true) {
+        console.log(
+          "\nMCP front door generated: npm run mcp (stdio, e.g. for Claude Desktop / Claude Code / Codex CLI) " +
+            "or npm run mcp:http (Streamable HTTP :8788, for claude.ai / ChatGPT).",
+        );
+      }
     },
   );
 
@@ -285,6 +305,240 @@ dataset
     console.log(
       `Wrote ${result.fixations + result.golden} record(s) (fixations=${result.fixations}, golden=${result.golden}, skipped=${result.skipped}) to ${result.outPath}`,
     );
+  });
+
+const evidence = program
+  .command("evidence")
+  .description(
+    "Operations on Compliance Evidence Packs (design.md #67) -- see docs/user-guide.md for the EU AI Act " +
+      "Article 50 disclosure-evidence context (not legal advice)",
+  );
+
+evidence
+  .command("keygen")
+  .description("Generate a fresh Ed25519 keypair for signing/verifying evidence packs")
+  .requiredOption(
+    "--out-dir <dir>",
+    "Output directory for the generated key files (mode 0600 on the private key)",
+  )
+  .option(
+    "--force",
+    "Overwrite an existing key file (permanently invalidates every pack signed with the old key)",
+  )
+  .action(async (opts: { outDir: string; force?: boolean }) => {
+    let result: EvidenceKeygenResult;
+    try {
+      result = await runEvidenceKeygen(opts.outDir, { force: opts.force === true });
+    } catch (e) {
+      program.error(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    console.log(`Generated ${result.privateKeyPath} (mode 0600)`);
+    console.log(`Generated ${result.publicKeyPath}`);
+    console.log(`keyId: ${result.keyId}`);
+  });
+
+evidence
+  .command("export")
+  .description(
+    "Assemble and sign a Compliance Evidence Pack from a local StoragePort data directory or a REST host",
+  )
+  .option("--data-dir <dir>", "Read from a local StoragePort data directory (mutually exclusive with --rest)")
+  .option("--rest <baseUrl>", "Read over REST from a running host (mutually exclusive with --data-dir)")
+  .option(
+    "--header <name:value>",
+    "Extra REST request header, e.g. tenant or auth (repeatable; --rest only)",
+    (value: string, prev: string[]) => [...prev, value],
+    [] as string[],
+  )
+  .option(
+    "--tenant <id>",
+    "Restrict the export to this tenant. In --rest mode this must match the x-kohaku-tenant --header " +
+      "(the header is what actually scopes the request); omit --tenant to have it derived from the header",
+  )
+  .requiredOption("--since <iso8601>", "Inclusive lower bound of the exported lineage window")
+  .requiredOption("--until <iso8601>", "Inclusive upper bound of the exported lineage window")
+  .requiredOption("--private-key <pem>", "Path to a PEM-encoded Ed25519 private key (PKCS8)")
+  .requiredOption("--out <dir>", "Output directory for the pack")
+  .option(
+    "--allow-incomplete",
+    "Fall back to a bounded lineage read (and mark the pack incomplete) when exhaustive paging is unsupported",
+  )
+  .action(
+    async (opts: {
+      dataDir?: string;
+      rest?: string;
+      header: string[];
+      tenant?: string;
+      since: string;
+      until: string;
+      privateKey: string;
+      out: string;
+      allowIncomplete?: boolean;
+    }) => {
+      let result: EvidenceExportResult;
+      try {
+        result = await runEvidenceExport({
+          ...(opts.dataDir != null ? { dataDir: opts.dataDir } : {}),
+          ...(opts.rest != null ? { rest: opts.rest } : {}),
+          headers: opts.header,
+          ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
+          since: opts.since,
+          until: opts.until,
+          privateKeyPath: opts.privateKey,
+          outDir: opts.out,
+          allowIncomplete: opts.allowIncomplete === true,
+        });
+      } catch (e) {
+        program.error(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      const c = result.manifest.counts;
+      console.log(`Wrote evidence pack to ${result.outDir}`);
+      console.log(
+        `  events=${c.events} approvals=${c.approvals} promotions=${c.promotions} fixations=${c.fixations} artifacts=${c.artifacts}` +
+          (result.manifest.complete ? "" : " (incomplete)"),
+      );
+      if (result.manifest.warnings.length > 0) {
+        console.log("  warnings:");
+        for (const w of result.manifest.warnings) console.log(`    - ${w}`);
+      }
+    },
+  );
+
+evidence
+  .command("verify")
+  .argument("<dir>", "Evidence pack directory")
+  .description("Verify a Compliance Evidence Pack's signature and file integrity")
+  .requiredOption("--public-key <pem>", "Path to a PEM-encoded Ed25519 public key (SPKI)")
+  .action(async (dir: string, opts: { publicKey: string }) => {
+    // Exit codes: 0 = valid, 1 = invalid, 2 = usage error (bad --public-key, missing/malformed pack
+    // directory) -- program.error() is not used here since its default exit code (1) would collide
+    // with "invalid".
+    let result: VerifyEvidencePackResult;
+    try {
+      result = await runEvidenceVerify(dir, opts.publicKey);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exitCode = 2;
+      return;
+    }
+    if (result.ok) {
+      console.log("OK: the evidence pack is valid.");
+    } else {
+      console.log("INVALID:");
+      for (const err of result.errors) console.log(`  - ${err}`);
+    }
+    if (result.mismatches.length > 0) {
+      console.log("Non-fatal artifact mismatches:");
+      for (const m of result.mismatches) console.log(`  - ${m}`);
+    }
+    process.exitCode = result.ok ? 0 : 1;
+  });
+
+const migrate = program
+  .command("migrate")
+  .description("Catalog migration: rewrite fixated Specs off a deprecated part (design.md #65)");
+
+migrate
+  .command("plan")
+  .description("Compute (read-only) a rewrite plan for every deprecated-with-replacement catalog type")
+  .requiredOption(
+    "--data-dir <dir>",
+    "StoragePort data directory (fixations.json / promotions.json / lineage.jsonl)",
+  )
+  .requiredOption(
+    "--catalog <module>",
+    'Path to an ESM module whose default (or named "catalogFor") export is (tenant?: string) => ResolvedCatalog',
+  )
+  .option(
+    "--tenant <id>",
+    "Restrict planning to this tenant's fixations (default: the tenant-neutral sweep only)",
+  )
+  .requiredOption("--out <path>", "Output plan JSON file path")
+  .action(async (opts: { dataDir: string; catalog: string; tenant?: string; out: string }) => {
+    const options: MigratePlanOptions = {
+      dataDir: opts.dataDir,
+      catalogModule: opts.catalog,
+      outPath: opts.out,
+      ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
+    };
+    let result: Awaited<ReturnType<typeof migratePlan>>;
+    try {
+      result = await migratePlan(options);
+    } catch (e) {
+      program.error(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    const { plan } = result;
+    console.log(`Wrote ${result.outPath} (planHash: ${plan.planHash})`);
+    console.log(
+      `  rewrites: ${plan.rewrites.map((r) => `${r.from} -> ${r.to.type}`).join(", ") || "(none)"}`,
+    );
+    console.log(`  steps: ${plan.steps.length} fixation(s) ready to apply`);
+    if (plan.blocked.length > 0) {
+      console.log(
+        `  blocked: ${plan.blocked.length} fixation(s) failed revalidation and need manual attention:`,
+      );
+      for (const b of plan.blocked) {
+        console.log(
+          `    - ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""}: ${b.issues.join("; ")}`,
+        );
+      }
+    }
+  });
+
+migrate
+  .command("apply")
+  .description(
+    "Commit a previously computed plan's steps. IMPORTANT: stop any host process sharing --data-dir " +
+      "first — apply writes through a file-backed StoragePort that is not safe for concurrent writers.",
+  )
+  .requiredOption("--plan <path>", "Plan JSON file produced by `migrate plan`")
+  .requiredOption(
+    "--approver <id>",
+    "Principal id recorded as the approver on each intent.migrated audit event",
+  )
+  .requiredOption(
+    "--data-dir <dir>",
+    "StoragePort data directory (must match the one --plan was computed against)",
+  )
+  .requiredOption(
+    "--catalog <module>",
+    "Path to the *live* catalog module (same contract as `plan`'s --catalog). Every step is refused " +
+      "(reported as blocked, nothing written) if this catalog has drifted from the one the plan targeted",
+  )
+  .action(async (opts: { plan: string; approver: string; dataDir: string; catalog: string }) => {
+    const options: MigrateApplyOptions = {
+      dataDir: opts.dataDir,
+      planPath: opts.plan,
+      approver: opts.approver,
+      catalogModule: opts.catalog,
+    };
+    let result: Awaited<ReturnType<typeof migrateApply>>;
+    try {
+      result = await migrateApply(options);
+    } catch (e) {
+      program.error(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    console.log(
+      `Applied ${result.applied.length}, skipped ${result.skipped.length}, blocked ${result.blocked.length}`,
+    );
+    for (const a of result.applied)
+      console.log(`  applied: ${a.intentHash}${a.tenant != null ? ` (tenant: ${a.tenant})` : ""}`);
+    for (const s of result.skipped) {
+      console.log(
+        `  skipped: ${s.intentHash}${s.tenant != null ? ` (tenant: ${s.tenant})` : ""} (fixation changed since the plan was computed)`,
+      );
+    }
+    for (const b of result.blocked) {
+      console.log(
+        `  blocked: ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""} (catalog drift — ` +
+          `live fingerprint ${b.observedCatalogFingerprint}${b.issues.length > 0 ? `; ${b.issues.join("; ")}` : ""})`,
+      );
+    }
+    if (result.skipped.length > 0 || result.blocked.length > 0) process.exitCode = 1;
   });
 
 await program.parseAsync();

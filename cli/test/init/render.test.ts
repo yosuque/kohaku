@@ -224,6 +224,7 @@ describe("renderProjectFiles", () => {
         "server/fixed-specs.ts",
         "server/intents.ts",
         "server/main.ts",
+        "server/ports.ts",
         "test/golden.test.ts",
         "test/golden/summary.json",
         "tsconfig.json",

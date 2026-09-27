@@ -1,0 +1,175 @@
+{
+  "scope": {
+    "tenant": "tenant-acme",
+    "since": "2026-06-01T00:00:00.000Z",
+    "until": "2026-06-30T23:59:59.999Z"
+  },
+  "generator": "kohaku-evidence-fixture/1",
+  "generatedAt": "2026-06-15T00:00:00.000Z",
+  "events": [
+    {
+      "id": "eev-1",
+      "ts": "2026-06-01T00:00:00.000Z",
+      "actor": {
+        "kind": "system"
+      },
+      "type": "view.composed",
+      "payload": {
+        "tier": "L1",
+        "cache": "miss"
+      },
+      "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-2",
+      "ts": "2026-06-02T00:00:00.000Z",
+      "actor": {
+        "kind": "model",
+        "model": "test-model"
+      },
+      "type": "component.generated",
+      "payload": {
+        "artifactId": "artifact-a",
+        "artifactSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "html": "<div>Q3 Sales Summary</div>"
+      },
+      "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-3",
+      "ts": "2026-06-03T00:00:00.000Z",
+      "actor": {
+        "kind": "user",
+        "id": "reviewer-1"
+      },
+      "type": "component.reviewed",
+      "payload": {
+        "artifactId": "artifact-a",
+        "decision": "approve"
+      },
+      "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-4",
+      "ts": "2026-06-04T00:00:00.000Z",
+      "actor": {
+        "kind": "system"
+      },
+      "type": "intent.fixated",
+      "payload": {
+        "intentHash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5"
+      },
+      "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-5",
+      "ts": "2026-06-05T00:00:00.000Z",
+      "actor": {
+        "kind": "user",
+        "id": "reviewer-1"
+      },
+      "type": "intent.unfixated",
+      "payload": {
+        "intentHash": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      },
+      "tenant": "tenant-acme"
+    }
+  ],
+  "promotions": [
+    {
+      "artifactId": "artifact-b",
+      "status": "published",
+      "updatedAt": "2026-06-06T00:00:00.000Z",
+      "data": {
+        "html": "<div>Regional Breakdown</div>",
+        "sha256": "f62e7cccbcdff1d36072c8385e47a5ccb73d3f633d0bb1a69d7e5cd1d4fbd77a"
+      },
+      "tenant": "tenant-acme"
+    }
+  ],
+  "fixations": [
+    {
+      "intentHash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5",
+      "canonical": "sales.quarterly_summary",
+      "structureHash": "sha256:1e5581591f5d5373b5e78fbcc8c768194c620ad2201241fa931ca1aedfb90694",
+      "pinnedSpec": {
+        "kohaku": "0.2",
+        "intent": {
+          "canonical": "sales.quarterly_summary",
+          "params": {
+            "fiscalYear": 2026,
+            "groupBy": "region",
+            "quarter": 3
+          },
+          "hash": "sha256:13ea0aa388f2425c7fef6dc5dab22f96fe0f7ff1178066142497eafea6bbced5"
+        },
+        "dataVersion": "ledger@2026-06-10T03:12:00Z",
+        "components": [
+          {
+            "id": "root",
+            "type": "layout.stack",
+            "props": {
+              "direction": "vertical"
+            },
+            "children": [
+              "title",
+              "chart1",
+              "table1"
+            ]
+          },
+          {
+            "id": "title",
+            "type": "text.heading",
+            "props": {
+              "level": 2,
+              "text": "FY2026 Q3 Sales (by Region)"
+            }
+          },
+          {
+            "id": "chart1",
+            "type": "presentChart",
+            "props": {
+              "kind": "bar",
+              "x": "region",
+              "y": "revenue"
+            },
+            "data": {
+              "$ref": "query://ledger/sales_summary?fy=2026&groupBy=region&q=3"
+            }
+          },
+          {
+            "id": "table1",
+            "type": "presentSpreadsheet",
+            "props": {
+              "editable": false
+            },
+            "data": {
+              "$ref": "query://ledger/sales_summary?fy=2026&groupBy=region&q=3"
+            }
+          }
+        ],
+        "events": [
+          {
+            "on": "table1.rowClick",
+            "emit": "intent.patch",
+            "payload": {
+              "drilldown": "$row.region"
+            }
+          }
+        ],
+        "provenance": {
+          "tier": "L1",
+          "composedBy": "composer@0.1.0",
+          "model": "claude-fable-5",
+          "cache": "hit"
+        }
+      },
+      "fixatedAt": "2026-06-10T03:12:00Z",
+      "approver": {
+        "id": "qa-lead"
+      },
+      "tenant": "tenant-acme",
+      "catalogFingerprint": "catalog@2026-06-10"
+    }
+  ]
+}

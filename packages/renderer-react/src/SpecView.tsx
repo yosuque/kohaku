@@ -1,4 +1,8 @@
-import { renderFailureNoticeStyle } from "@kohaku-ui/renderer-core";
+import {
+  deriveDisclosure,
+  disclosureDomAttributes,
+  renderFailureNoticeStyle,
+} from "@kohaku-ui/renderer-core";
 import {
   type ComponentNode,
   evaluateVisibleWhen,
@@ -8,6 +12,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import { memo, type ReactNode, useMemo, ViewTransition } from "react";
 import { resolveRowProps, SpecProvider, useMessages, useRenderer, useSizing, useToken } from "./context.js";
+import { KohakuDisclosureLabel } from "./disclosure.js";
 import { NodeErrorBoundary } from "./node-error-boundary.js";
 import { SpecStateProvider, useRowContext, useSpecStateSelector } from "./spec-state.js";
 
@@ -42,6 +47,16 @@ export interface SpecViewProps {
    * try/catch and falls through to a plain commit when the browser has no such API).
    */
   enableViewTransitions?: boolean;
+  /**
+   * AI-generation disclosure (design.md #66). Default `"off"`: SpecView renders exactly as before, with
+   * no wrapper element at all — DOM output stays byte-identical to the pre-disclosure renderer (verified
+   * by the React/WC parity corpus, which never passes this prop). `"attributes"` wraps the rendered tree
+   * in a `<div>` carrying `data-kohaku-disclosure` / `data-kohaku-tier` / `data-digital-source-type`
+   * (derived from `spec.provenance` via `deriveDisclosure`), with no visible content added.
+   * `"label"` does the same and additionally mounts `<KohakuDisclosureLabel>` as a visible sibling
+   * before the tree.
+   */
+  disclosure?: "off" | "attributes" | "label";
 }
 
 /**
@@ -53,16 +68,28 @@ export interface SpecViewProps {
  * wrapped by) the optional ViewTransition boundary so that a swap's cross-fade never discards
  * client-local $state — only the rendered DOM subtree remounts.
  */
-export function SpecView({ spec, enableViewTransitions = false }: SpecViewProps): ReactNode {
+export function SpecView({
+  spec,
+  enableViewTransitions = false,
+  disclosure = "off",
+}: SpecViewProps): ReactNode {
+  const tree = enableViewTransitions ? (
+    <ViewTransition key={transitionKeyFor(spec)}>
+      <SpecTree spec={spec} />
+    </ViewTransition>
+  ) : (
+    <SpecTree spec={spec} />
+  );
   return (
     <SpecProvider spec={spec}>
       <SpecStateProvider spec={spec}>
-        {enableViewTransitions ? (
-          <ViewTransition key={transitionKeyFor(spec)}>
-            <SpecTree spec={spec} />
-          </ViewTransition>
+        {disclosure === "off" ? (
+          tree
         ) : (
-          <SpecTree spec={spec} />
+          <div {...disclosureDomAttributes(deriveDisclosure(spec.provenance))}>
+            {disclosure === "label" && <KohakuDisclosureLabel />}
+            {tree}
+          </div>
         )}
       </SpecStateProvider>
     </SpecProvider>

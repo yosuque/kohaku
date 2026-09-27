@@ -250,7 +250,7 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 
 | ルート | 認可 | 内容 |
 |---|---|---|
-| `GET /catalog` | —(公開読み取り) | `{ components: [{type, version, description, capabilities, implementation, propsSchema(JSON Schema)}], catalogVersion }` |
+| `GET /catalog` | —(公開読み取り) | `{ components: [{type, version, description, capabilities, implementation, propsSchema(JSON Schema), deprecated?}], catalogVersion }`。`deprecated`(design.md #65)は `{reason, since?, replacedBy?: {type, version?}, sunset?}` で、置き換えられた部品にのみ存在する |
 | `GET /lineage?type=&intentHash=&artifactId=&specHash=&correlationId=&since=&until=&limit=` | `authorizeGovernance`(配線時) | `{ events: LineageEventRecord[] }`。`since` / `until` は ISO8601(`/analytics/summary` と同一の正規化・境界解釈)、`limit` は既定 200(`DEFAULT_LINEAGE_LIMIT`)、上限 1000。`correlationId` は `intentHash` / `artifactId` / `specHash` と同様、payload フィールドの完全一致で絞り込む。加えて、網羅的な forward paging(下記)用に `order=asc&cursor=&pageSize=` を受け付ける |
 | `GET /analytics/summary?since=&until=&limit=` | `authorizeGovernance`(配線時。`analytics.read`) | `{ window, summary }`。lineage の生イベント列を集計した俯瞰サマリ(下記)。**参照実装レベルの拡張**(本書 §11 の必須集合外) |
 | `POST /telemetry` | `authorizeGovernance`(配線時) | `{ events: [{kind:"rendered", specHash,…} \| {kind:"componentUsed", artifactId, outcome}] }` → `{ok}` |
@@ -470,6 +470,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `component.schemaSuggested` | artifactId, suggestion(`{draft, events, confidence, model, extractorId, extractorVersion, suggestedAt}`) | `component.nominated` の直後に **model actor** で記録される。ホストの `suggestSchema` フック(助言的なスキーマ抽出)が配線されていて成功した場合のみ |
 | `component.schemaEdited` | artifactId, reviewer, extractorId, extractorVersion, changed(`DraftFieldChange[]`), unchanged(`DraftDiffField[]`), acknowledged(boolean) | `approve` 経路で `component.schemaProposed` の直後に **user actor** で記録される。承認された候補が `component.schemaSuggested` を持っていた場合のみ。`changed` はレビュアーが提出した draft が提案と食い違うフィールドの一覧(空 = そのまま承認)、`unchanged` は残りのフィールド。`acknowledged` は approve リクエストの `acknowledgedSuggestion` をそのまま写す(未指定は `false` として記録)— 監査目的のみで強制はしない |
 | `intent.fixated` / `intent.unfixated` | intentHash, canonical, structureHash, approver | fixations |
+| `intent.migrated` | intentHash, structureHash, approver, planId? | `Fixations.replace`(design.md #65): カタログ移行が固定化の `pinnedSpec` をその場で書き換えた(deprecated な部品 → その `replacedBy`)。`intent.fixated` と異なり、固定化の識別子(`intentHash`/テナント)は変わらず、変わるのは pin 済み構造と `structureHash` のみ。`planId` は CLI 経由で駆動した場合、書き換えを生んだ `kohaku migrate plan` の出力に対応する |
 | `intent.observed` | — | 型カタログ上の予約(v0.1 では記録されない) |
 
 ## 11. conformance(適合検査)

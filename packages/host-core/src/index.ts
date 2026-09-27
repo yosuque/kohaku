@@ -14,6 +14,29 @@ export {
   WriteScopeDroppedError,
 } from "./capability.js";
 export {
+  type AnalyzeCatalogImpactOptions,
+  analyzeCatalogImpact,
+  type CatalogDeprecatedUsageEntry,
+  type CatalogFixationIssue,
+  type CatalogImpactReport,
+  type CatalogOriginKitMismatch,
+  type CatalogPublishedPromotionIssue,
+} from "./catalog-impact.js";
+export {
+  type ApplyCatalogMigrationOptions,
+  applyCatalogMigration,
+  type CatalogMigrationApplyBlocked,
+  type CatalogMigrationApplyResult,
+  type CatalogMigrationBlocked,
+  type CatalogMigrationFixationReplacer,
+  type CatalogMigrationPlan,
+  type CatalogMigrationRewrite,
+  type CatalogMigrationStep,
+  type PlanCatalogMigrationOptions,
+  planCatalogMigration,
+  verifyCatalogMigrationPlan,
+} from "./catalog-migration.js";
+export {
   type CreateDailyTokenLedgerOptions,
   createDailyTokenLedger,
   type DailyTokenLedger,

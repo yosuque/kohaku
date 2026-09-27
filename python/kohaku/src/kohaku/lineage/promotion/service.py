@@ -145,6 +145,11 @@ class PromotionCandidate:
     ref: str | None = None
     verdict: dict[str, Any] | None = None
     draft: ComponentDraft | None = None
+    origin: dict[str, Any] | None = None
+    """F-1: generation provenance (kit / generatorVersion / model) read from the candidate's
+    component.generated payload. Kept across every transition once captured (unlike html/sha256/ref,
+    which are only copied onto the snapshot at publish time — origin is provenance, not a projection).
+    Port of TS's PromotionOrigin (kept as a loose dict here, matching this port's wire-shaped style)."""
 
 
 @dataclass(frozen=True)
@@ -275,6 +280,21 @@ def _usage_index_key(tenant: str | None, artifact_id: str) -> str:
     return json.dumps([tenant, artifact_id], separators=(",", ":"))
 
 
+def _origin_from_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """F-1: extracts {kit, generatorVersion, model} from a component.generated payload. Returns None
+    rather than {} when none of the three are present (port of TS candidate-store.ts's originFromPayload)."""
+    if payload is None:
+        return None
+    origin: dict[str, Any] = {}
+    if payload.get("kit") is not None:
+        origin["kit"] = payload["kit"]
+    if payload.get("generatorVersion") is not None:
+        origin["generatorVersion"] = payload["generatorVersion"]
+    if payload.get("model") is not None:
+        origin["model"] = payload["model"]
+    return origin if len(origin) > 0 else None
+
+
 def _index_latest_generated(events: list[LineageEventRecord]) -> dict[str, LineageEventRecord]:
     """Reduce a set of lineage events (typically component.generated) to, per (tenant, artifact_id) key (see
     `_usage_index_key`), the single event with the greatest `ts` (port of TS's indexLatestGenerated, usage.ts).
@@ -396,6 +416,10 @@ class Promotions:
         draft_wire = state.data.get("draft") if state is not None else None
         state_data: dict[str, Any] = state.data if state is not None else {}
         payload_data: dict[str, Any] = payload if payload is not None else {}
+        # F-1: prefer the freshly-scanned component.generated payload; fall back to what was already
+        # persisted (state.data["origin"]) once the generated event ages out of the scan window — the
+        # same pattern `request` above uses, so origin survives indefinitely once captured.
+        origin = _origin_from_payload(payload) or state_data.get("origin")
         return PromotionCandidate(
             artifactId=artifact_id,
             status=cast("PromotionStatus", state.status) if state is not None else "in_use",
@@ -410,6 +434,7 @@ class Promotions:
             draft=(
                 component_draft_from_wire(draft_wire) if isinstance(draft_wire, dict) else None
             ),
+            origin=origin,
             updatedAt=state.updatedAt if state is not None else generated[0].ts,
         )
 
@@ -425,6 +450,12 @@ class Promotions:
             data["draft"] = candidate.draft.to_wire()
         if candidate.request is not None:
             data["request"] = candidate.request
+        # F-1: generation provenance (kit / generatorVersion / model), captured once from the candidate's
+        # component.generated event and kept across every transition (unlike html/sha256/ref below, which
+        # are a publish-time projection) — read by the migration planner to flag a published component
+        # whose kit no longer matches the catalog's current one.
+        if candidate.origin is not None:
+            data["origin"] = candidate.origin
         # Self-contained published projection (#9): once the candidate reaches published, duplicate what
         # reconcile needs to rebuild the projection (html/sha256/ref/componentType) directly onto the snapshot.
         # Without this, reconcile depends on the component.generated lineage event surviving indefinitely — a

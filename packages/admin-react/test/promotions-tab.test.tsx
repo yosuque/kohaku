@@ -203,6 +203,21 @@ describe("PromotionsTab", () => {
     ]);
   });
 
+  it("shows kit/generatorVersion (F-1 origin) when the candidate carries it, and nothing when it doesn't", async () => {
+    const withOrigin = candidate({
+      artifactId: "sales.customViz1@2",
+      origin: { kit: { id: "default", version: "1.0.0" }, generatorVersion: "l2-2026-09" },
+    });
+    renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
+      handlers: {
+        "GET /promotions": () => jsonResponse({ candidates: [withOrigin, candidate()] }),
+      },
+    });
+    expect(await screen.findByText(m.promotions.generatedWith("default@1.0.0", "l2-2026-09"))).toBeDefined();
+    // The other candidate in the same list has no `origin` and must not render the label at all.
+    expect(screen.getAllByText(/^kit:/).length).toBe(1);
+  });
+
   it("shows the sales empty-all copy keyed off promotionMinUses when there are no candidates", async () => {
     renderInAdmin(<PromotionsTab defaults={SALES_DEFAULTS} />, {
       handlers: {
