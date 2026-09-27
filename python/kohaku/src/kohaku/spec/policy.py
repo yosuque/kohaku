@@ -15,19 +15,18 @@ hand-edited, so a typo'd key should fail loudly at load time rather than be sile
 `kohaku.spec.models`'s wire models, which are `extra="ignore"` to mirror zod's default (strip)
 behavior for the Renderer<->host wire protocol.
 
-**Known simplification vs. the TS port**: zod's `.optional()` accepts a missing key but rejects an
-explicit JSON `null`; the fields below (plain `X | None = None`) accept both. None of the hand-written
-examples under spec/examples/policy exercise an explicit `null`, so this does not affect the
-accept/reject parity this module's tests establish against packages/spec-core/test and
-spec/test/policy-examples.test.ts -- but a policy file that did pass an explicit `null` for one of
-these fields would part ways between the two languages (accepted here, rejected there).
+**Explicit JSON `null` is rejected, matching the TS port**: zod's `.optional()` accepts a missing key but
+rejects an explicit `null` (none of this schema's fields are `.nullable()` on the TS side). Pydantic's
+plain `X | None = None` fields would otherwise silently accept `null` too, since `None` is a valid value
+for that type -- `_PolicyModel._reject_explicit_null` (below) is what makes "the key is present but
+null" fail loudly instead, for every model in this file (they all subclass `_PolicyModel`).
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .canonical_json import canonical_stringify, sha256_hex
 
@@ -41,6 +40,21 @@ class _PolicyModel(BaseModel):
     """Shared config: every object in a policy file is closed (extra="forbid") -- see module docstring."""
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_explicit_null(cls, data: Any) -> Any:
+        """Rejects a key present with an explicit `null` value, mirroring zod's `.optional()` (accepts a
+        missing key, rejects `null` unless `.nullable()` is also chained -- see the module docstring).
+        Runs before field validation, on the raw (alias-keyed) input dict, so it also catches `"$schema":
+        null` on `KohakuPolicyFile` before `populate_by_name` resolution."""
+        if isinstance(data, dict):
+            null_keys = sorted(key for key, value in data.items() if value is None)
+            if null_keys:
+                raise ValueError(
+                    f"explicit null is not accepted for {', '.join(null_keys)} (omit the key instead)"
+                )
+        return data
 
 
 class PolicyEffort(_PolicyModel):
