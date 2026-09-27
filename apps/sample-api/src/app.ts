@@ -1,13 +1,19 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
 import { createJudge, type SchemaExtractor } from "@kohaku-ui/evals";
+import {
+  createDailyTokenLedger,
+  createMemoryRateLimitStore,
+  createPolicyRuntime,
+  type PolicyRuntime,
+} from "@kohaku-ui/host-core";
 import { createKohakuRoutes, errorBody } from "@kohaku-ui/host-rest";
 import { createFixations, createLineage, type Fixations, type Lineage } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { coreCatalog, type ResolvedCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import type { AuthzPort, DomainPort, Principal, StoragePort } from "@kohaku-ui/spec-core";
+import type { AuthzPort, DomainPort, KohakuPolicyFile, Principal, StoragePort } from "@kohaku-ui/spec-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { createComposeContext } from "./app/compose-context.js";
+import { createComposeContext, sharedComposePolicy } from "./app/compose-context.js";
 
 // Re-exported for consumers outside the REST host (sample-mcp's fixation language gate).
 export { admitFixationForLocale, languageOf, type OutputLang } from "./app/compose-context.js";
@@ -65,6 +71,14 @@ export interface AppDeps {
    * behind the demo header can bump" behavior is preserved for local development).
    */
   demoAdminRoutes?: boolean;
+  /**
+   * Policy as Code (design.md #69/#70 — optional, off by default). When set, a `PolicyRuntime` is built
+   * (host-core's `createPolicyRuntime`) and layered onto the compose policy (allowL2/budget/etc., per
+   * tenant), the compose-family REST routes' rate limiter, and lineage's `policy.applied` audit event.
+   * When unset, behavior is unchanged from before Policy as Code existed (no rate limiting, no per-tenant
+   * allowL2/budget override, byte-identical compose policy/fingerprint for every existing test).
+   */
+  policyFile?: KohakuPolicyFile;
 }
 
 export interface SampleApp {
@@ -85,6 +99,12 @@ export interface SampleApp {
    * staleness detection (invalidate / refreshFingerprint) just like the REST side.
    */
   fixations: Fixations;
+  /**
+   * The Policy as Code runtime (design.md #69/#70), when `AppDeps.policyFile` was set. Exposed so a
+   * caller (e.g. an admin console, or a test verifying "changing the policy changes the fingerprint") can
+   * `reload()` it directly. `undefined` when `AppDeps.policyFile` was not set (backward compatible).
+   */
+  policyRuntime?: PolicyRuntime;
   /**
    * Flips the readiness flag GET /api/health reports (ops; graceful shutdown). index.ts calls this with
    * `true` on SIGINT/SIGTERM so a load balancer polling /api/health stops routing new traffic to this
@@ -127,15 +147,44 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
 
   const domain = createSalesDomainPort(repo);
 
+  // --- Lineage (built ahead of composeCtx: Policy as Code's audit event, below, needs it) ---------
+  const lineage = createLineage({ storage: deps.storage });
+
+  // --- Policy as Code (design.md #69/#70 — optional, off by default; see AppDeps.policyFile) ------
+  // `shared` is built exactly once and passed to both createPolicyRuntime (as basePolicyFor, ignoring
+  // its tenant argument — shared never varies by tenant; only the policy file introduces tenant variance)
+  // and createComposeContext (as the base policyFor falls back to when policyRuntime is unset) — the
+  // *same* object both times, so createPolicyRuntime's per-tenant memoization sees a stable base identity
+  // (see PolicyRuntime.policyFor's doc comment) rather than a fresh l2Smoke/routeTier closure per call.
+  const shared = sharedComposePolicy();
+  const policyRuntime: PolicyRuntime | undefined =
+    deps.policyFile != null
+      ? await createPolicyRuntime({
+          file: deps.policyFile,
+          basePolicyFor: () => shared,
+          ledger: createDailyTokenLedger(),
+          rateLimitStore: createMemoryRateLimitStore(),
+          // Records policy.applied (lineage, task 9) on every effective change. actor is reload()'s own
+          // free-string label (an operator id, "system", …); mapped onto lineage's typed Actor shape as a
+          // "system" actor carrying that label as its id (a policy reload is an operational/config action,
+          // never a "model"-kind actor, and this demo has no principal-typed caller for it). Tenant-neutral
+          // (omitted): the event's own `tenants` field already carries the affected roster, and the change
+          // itself is cross-tenant by nature (a whole file swap), not scoped to one tenant's own timeline.
+          audit: (event, actor) =>
+            lineage.policyApplied(event, actor != null ? { kind: "system", id: actor } : undefined),
+        })
+      : undefined;
+
   const composeCtx = createComposeContext({
     registry,
     semantic,
     storage: deps.storage,
     llm: deps.llm,
+    shared,
+    ...(policyRuntime != null ? { policyRuntime } : {}),
   });
 
-  // --- Lineage / promotion / fixation ---------------------------------------
-  const lineage = createLineage({ storage: deps.storage });
+  // --- Promotion / fixation --------------------------------------------------
   const judge = createJudge({ llm: deps.llm, passScore: 0.5 });
 
   const promotions = createPromotionPipeline({
@@ -177,6 +226,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     promotions,
     fixations,
     identity,
+    ...(policyRuntime != null ? { rateLimiter: policyRuntime.rateLimiter } : {}),
   });
 
   const app = new Hono();
@@ -273,6 +323,7 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
     domain,
     lineage,
     fixations,
+    ...(policyRuntime != null ? { policyRuntime } : {}),
     setShuttingDown: (value) => {
       shuttingDown = value;
     },

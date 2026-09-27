@@ -1,5 +1,5 @@
 import type { ComposeContext } from "@kohaku-ui/composer";
-import { formatErrorChain } from "@kohaku-ui/host-core";
+import { formatErrorChain, type PolicyRateLimiter } from "@kohaku-ui/host-core";
 import { createGovernancePolicy, type KohakuHostDeps } from "@kohaku-ui/host-rest";
 import {
   createViewRecorder,
@@ -27,8 +27,12 @@ export function createHostDeps(args: {
   promotions: Promotions;
   fixations: Fixations;
   identity: RequestIdentity;
+  /** Rate limiter for the compose-family routes (Policy as Code, design.md #69 — optional, wired from
+   * app.ts's PolicyRuntime.rateLimiter when a policy file is loaded). When unwired, no rate limiting
+   * occurs (backward compatible) — see KohakuHostDeps.rateLimiter's own doc comment. */
+  rateLimiter?: PolicyRateLimiter;
 }): KohakuHostDeps {
-  const { composeCtx, domain, authz, storage, lineage, promotions, fixations, identity } = args;
+  const { composeCtx, domain, authz, storage, lineage, promotions, fixations, identity, rateLimiter } = args;
   return {
     compose: composeCtx,
     domain,
@@ -91,5 +95,6 @@ export function createHostDeps(args: {
     // Side-effect declaration of the write loop (annotate). The implementation is consolidated in action-effects.ts's
     // salesActionEffects and shared with the MCP side (sample-mcp's setup.ts) (not duplicated).
     actionEffects: salesActionEffects,
+    rateLimiter,
   };
 }

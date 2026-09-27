@@ -3,7 +3,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { type ServerType, serve } from "@hono/node-server";
 import { createSchemaExtractor } from "@kohaku-ui/evals";
+import { loadPolicyFile } from "@kohaku-ui/host-core/policy-node";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
+import type { KohakuPolicyFile } from "@kohaku-ui/spec-core";
 import { createJwtRequestIdentity } from "./app/request-identity.js";
 import { createGracefulShutdownHandler, shutdownGraceMs } from "./app/shutdown.js";
 import { createApp } from "./app.js";
@@ -41,6 +43,24 @@ export function schemaSuggestTimeoutMs(env: NodeJS.ProcessEnv = process.env): nu
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SCHEMA_SUGGEST_TIMEOUT_MS;
 }
 
+/**
+ * Loads the Policy as Code file (design.md #69/#70) `createApp` layers onto the compose policy / rate
+ * limiter / lineage audit — see `AppDeps.policyFile`'s doc comment. `KOHAKU_POLICY_FILE` overrides the
+ * path (default: the bundled `policy/kohaku.policy.json`, demonstrating tenant-a's allowL2=false and
+ * tenant-b's zero daily budget out of the box); the literal value `"0"` opts out entirely (no policy file
+ * at all, matching KOHAKU_PROMOTION_SCHEMA_SUGGEST=0's off-switch convention) — `createApp` behaves
+ * exactly as it did before Policy as Code existed in that case. Returns `undefined` only for that
+ * explicit opt-out; a missing/malformed file otherwise propagates so the caller can fail startup fast
+ * (the same "fail clearly at startup, not on the first request" rule as `ports.ready()` below).
+ */
+async function loadedPolicyFile(env: NodeJS.ProcessEnv = process.env): Promise<KohakuPolicyFile | undefined> {
+  const raw = env["KOHAKU_POLICY_FILE"];
+  if (raw === "0") return undefined;
+  const path = raw != null && raw !== "" ? raw : join(APP_DIR, "../policy/kohaku.policy.json");
+  const { file } = await loadPolicyFile(path);
+  return file;
+}
+
 async function main(): Promise<void> {
   // Read .env from the repository root (if absent, environment variables only)
   for (const envPath of [join(REPO_ROOT, ".env"), join(APP_DIR, "../.env")]) {
@@ -69,11 +89,22 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  let policyFile: KohakuPolicyFile | undefined;
+  try {
+    policyFile = await loadedPolicyFile();
+  } catch (error) {
+    console.error(
+      `kohaku sample-api: failed to load the policy file: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
+
   // createApp is async because it performs startup reconcile (snapshot authority -> projection).
   const { app, repo, setShuttingDown } = await createApp({
     llm,
     storage: ports.storage,
     authz: ports.authz,
+    ...(policyFile != null ? { policyFile } : {}),
     ...(ports.identity != null ? { identity: createJwtRequestIdentity(ports.identity) } : {}),
     // The demo bump-data-version route is on by default for the header-based demo identity (ports.identity
     // == null, i.e. KOHAKU_AUTHZ=hmac) and off by default under JWT; KOHAKU_DEMO_ADMIN_ROUTES=1 opts back in

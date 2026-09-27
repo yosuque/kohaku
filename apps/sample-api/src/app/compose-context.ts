@@ -5,7 +5,7 @@ import {
   composeObservers,
   defaultGeneratorVersion,
 } from "@kohaku-ui/composer";
-import { formatErrorChain } from "@kohaku-ui/host-core";
+import { formatErrorChain, type PolicyRuntime } from "@kohaku-ui/host-core";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { createOtelComposeObserver } from "@kohaku-ui/otel";
 import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
@@ -52,17 +52,19 @@ export function admitFixationForLocale(_fixation: FixationRecord, session: Sessi
 }
 
 /**
- * Assembles the ComposeContext.
- * `catalog` is kept as a getter and always returns the latest base catalog even after reconcile.
+ * The language-neutral, tenant-neutral half of the compose policy: every function-shaped
+ * `ComposePolicy` field this demo sets (design.md #69 — none of these are expressible in the
+ * Policy-as-Code schema, so they always come from code). Called once per `createApp` (app.ts), both as
+ * `createComposeContext`'s own `shared` fallback and as `createPolicyRuntime`'s `basePolicyFor` (returning
+ * the *same* object on every call — see `PolicyRuntime.policyFor`'s memoization doc comment — regardless
+ * of tenant, since none of these fields vary by tenant in this demo; only the policy file introduces
+ * tenant variance, layered on top of exactly this object by `PolicyRuntime.policyFor`).
  */
-export function createComposeContext(args: {
-  registry: PromotedRegistry;
-  semantic: SemanticPort;
-  storage: StoragePort;
-  llm: LlmPort;
-}): ComposeContext {
-  const { registry, semantic, storage, llm } = args;
-  const shared: Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget"> = {
+export function sharedComposePolicy(): Pick<
+  ComposePolicy,
+  "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget"
+> {
+  return {
     allowL2: true,
     // Compose-wide deadline (a safety valve, not a cost cap): bounds one whole compose call and downgrades
     // to the deterministic fallback on expiry rather than hanging indefinitely behind a slow/hung LLM call.
@@ -77,18 +79,53 @@ export function createComposeContext(args: {
     // Since the values are injected by the sandbox at render time, generated output stays theme-independent (SPEC-ENV-003).
     designSystem: SALES_DESIGN_SYSTEM,
   };
+}
+
+/**
+ * Assembles the ComposeContext.
+ * `catalog` is kept as a getter and always returns the latest base catalog even after reconcile.
+ *
+ * `policyRuntime` (Policy as Code, design.md #69 — optional, off by default) layers a declarative policy
+ * file's per-tenant overrides (`allowL2`, `budget`, etc.) onto `shared` (`sharedComposePolicy()` above),
+ * via `PolicyRuntime.policyFor` — its `basePolicyFor` (wired in app.ts) is exactly `shared`, the very same
+ * object passed here, so `createPolicyRuntime`'s per-tenant memoization sees a stable base identity. The
+ * language-specific function-shaped fields (`fixedSpecs`/`generatorVersion`/`outputLanguage`/`fewShot`,
+ * none of which the policy file's schema can express — see design.md #69) are layered back on top by
+ * `policyForSession` below, after the runtime's own layering, so a runtime reload can never touch them.
+ * When `policyRuntime` is unset, `policyForSession` is byte-identical to this function's
+ * pre-Policy-as-Code shape (same `{...shared, ...langOverrides(lang)}` result).
+ */
+export function createComposeContext(args: {
+  registry: PromotedRegistry;
+  semantic: SemanticPort;
+  storage: StoragePort;
+  llm: LlmPort;
+  shared: Pick<ComposePolicy, "allowL2" | "l2Smoke" | "routeTier" | "designSystem" | "budget">;
+  policyRuntime?: PolicyRuntime;
+}): ComposeContext {
+  const { registry, semantic, storage, llm, shared, policyRuntime } = args;
   /**
-   * The EN/JA policy pair (selected per request by policyFor via session.locale).
-   * EN is the historical default policy verbatim — its generatorVersion string, few-shot wiring, and
-   * fixed specs are byte-identical to the single-policy era, so existing caches and goldens are untouched.
-   * JA varies the prompt (outputLanguage + JA fixed specs), so its generatorVersion carries the "/ja"
-   * token (the ComposePolicy contract: prompt-content changes must bump/vary generatorVersion — the
-   * cache key itself has no language segment). JA omits fewShot: fixated few-shot examples are EN
-   * specs and would bias JA generation toward English labels.
+   * The EN/JA function-shaped overrides (layered on top of `shared` — or, when `policyRuntime` is wired,
+   * on top of `policyRuntime.policyFor`'s result — by `policyForSession` below), selected per request via
+   * session.locale. EN is the historical default policy verbatim — its generatorVersion string, few-shot
+   * wiring, and fixed specs are byte-identical to the single-policy era, so existing caches and goldens
+   * are untouched. JA varies the prompt (outputLanguage + JA fixed specs), so its generatorVersion carries
+   * the "/ja" token (the ComposePolicy contract: prompt-content changes must bump/vary generatorVersion —
+   * the cache key itself has no language segment). JA omits fewShot: fixated few-shot examples are EN
+   * specs and would bias JA generation toward English labels. None of these fields are expressible in the
+   * Policy-as-Code schema (design.md #69), so they always come from here, never from a policy file.
    */
-  const policyByLang: Record<OutputLang, ComposePolicy> = {
-    en: {
-      ...shared,
+  function langOverrides(
+    lang: OutputLang,
+  ): Pick<ComposePolicy, "fixedSpecs" | "generatorVersion" | "outputLanguage" | "fewShot"> {
+    if (lang === "ja") {
+      return {
+        fixedSpecs: createFixedSpecs("ja"),
+        outputLanguage: "Japanese",
+        generatorVersion: `${defaultGeneratorVersion(llm)}/ds3/ja`,
+      };
+    }
+    return {
       // Standard views are L0 fixed Specs (do not pass through the LLM). "App UI = the solidified form of L1".
       fixedSpecs: createFixedSpecs(),
       // Mix the generator version into the cache key. A prompt revision (PROMPT_REVISION) or model change separates
@@ -99,14 +136,21 @@ export function createComposeContext(args: {
       // Deterministic (canonical match first -> the first 2 in intentHash ascending order). While there are 0 fixations
       // it returns an empty array and the generation prompt is byte-identical to the previous version (models increase gradually).
       fewShot: createFixationFewShot(storage),
-    },
-    ja: {
-      ...shared,
-      fixedSpecs: createFixedSpecs("ja"),
-      outputLanguage: "Japanese",
-      generatorVersion: `${defaultGeneratorVersion(llm)}/ds3/ja`,
-    },
-  };
+    };
+  }
+
+  /**
+   * The effective ComposePolicy for one session: the tenant's Policy-as-Code overrides (when
+   * `policyRuntime` is wired — allowL2/budget/etc., layered onto `shared`) plus this session's language
+   * overrides on top (fixedSpecs/generatorVersion/outputLanguage/fewShot — always from code, never from
+   * the policy file). Byte-identical to the pre-Policy-as-Code shape when `policyRuntime` is unset.
+   */
+  function policyForSession(session?: SessionContext): ComposePolicy {
+    const lang = languageOf(session?.locale);
+    const base = policyRuntime != null ? policyRuntime.policyFor(session) : shared;
+    return { ...base, ...langOverrides(lang) };
+  }
+
   return {
     // Backward-compatibility field for the single (tenant-neutral) catalog path. Since compose preferentially uses
     // catalogFor it is rarely referenced in practice, but the getter always returns the latest base catalog (preventing drift after reconcile).
@@ -120,11 +164,13 @@ export function createComposeContext(args: {
     storage,
     llm,
     // The default policy for direct consumers that do not resolve a session (scripts, direct
-    // compose calls) — EN. The MCP host resolves a per-tool-call session (locale argument) via policyFor.
-    policy: policyByLang.en,
-    // Per-session policy resolution: session.locale selects the language pair above (deterministic;
+    // compose calls) — EN, tenant-neutral. The MCP host resolves a per-tool-call session (locale
+    // argument) via policyFor.
+    policy: policyForSession(undefined),
+    // Per-session policy resolution: session.locale selects the language overrides above, and
+    // session.tenant (when policyRuntime is wired) selects the Policy-as-Code overrides (deterministic;
     // the JA policy's own generatorVersion carries the prompt-content variation, per the policyFor contract).
-    policyFor: (session) => policyByLang[languageOf(session?.locale)],
+    policyFor: policyForSession,
     // Observability of the compose failure path (the demo is console-based). Logs L1/L2 deterministic fallback
     // degradation (the Spec is delivered but generation failed) and hard failure (Spec not delivered). Because of the
     // fire-and-forget contract (the composer side catches the throw), it does not affect compose's result or existing behavior.
