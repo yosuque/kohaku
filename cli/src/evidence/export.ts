@@ -83,8 +83,12 @@ export async function runEvidenceExport(opts: EvidenceExportOptions): Promise<Ev
   // A structural REST limitation (see rest-source.ts), not a build-time data-quality issue -- appended
   // after buildEvidencePack rather than threaded through it, since it applies to the source, not the
   // records buildEvidencePack itself inspects. Recorded before signing, so it is part of what is signed.
+  // `complete` is forced to false alongside the warning: buildEvidencePack's own `complete` flag only
+  // tracks lineage-paging exhaustiveness (§EvidenceManifestSchema), so without this a REST export whose
+  // fixations.jsonl is structurally empty would otherwise sign a manifest claiming to be `complete: true`.
   if (restFixationsWarning != null) {
     pack.manifest.warnings.push(restFixationsWarning);
+    pack.manifest.complete = false;
   }
 
   const signature = await signManifest(pack.manifest, privateKey);

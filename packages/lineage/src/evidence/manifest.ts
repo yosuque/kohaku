@@ -81,10 +81,14 @@ export const EvidenceManifestSchema = z.object({
   scope: EvidenceManifestScopeSchema,
   counts: EvidenceManifestCountsSchema,
   /**
-   * False when the export is known not to be exhaustive over `scope` (e.g. the StoragePort backing
-   * the source has no `pageLineage`, and the caller passed `allowIncomplete` to fall back to a bounded
-   * tail window instead of failing outright). An auditor MUST treat an incomplete pack as a partial
-   * record, not as proof of the absence of events outside what it contains.
+   * False when the export is known not to be exhaustive over `scope`, for any reason -- not only that
+   * the StoragePort backing the source has no `pageLineage` and the caller passed `allowIncomplete` to
+   * fall back to a bounded tail window instead of failing outright (`buildEvidencePack`'s own concern),
+   * but also a structural limitation of the source itself, e.g. a REST-sourced export whose
+   * `fixations.jsonl` is left empty because `GET /fixations` cannot supply a full `FixationRecord` (the
+   * CLI sets this alongside the corresponding `warnings` entry in that case). An auditor MUST treat an
+   * incomplete pack as a partial record, not as proof of the absence of events/records outside what it
+   * contains.
    */
   complete: z.boolean(),
   files: z.array(EvidenceFileEntrySchema),

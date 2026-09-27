@@ -145,6 +145,12 @@ class EvidenceManifest(_EvidenceModel):
     generatedAt: str
     scope: EvidenceManifestScope
     counts: EvidenceManifestCounts
+    # False whenever the export is known not to be exhaustive over `scope`, for any reason -- not just a
+    # StoragePort with no page_lineage (build_evidence_pack's own concern, gated by allow_incomplete),
+    # but also a structural limitation of the source itself (e.g. a REST-sourced export whose
+    # fixations.jsonl cannot be fully reconstructed; see the TS CLI's export.ts, which sets this
+    # alongside the corresponding warnings entry -- there is no Python CLI equivalent). An auditor MUST
+    # treat an incomplete pack as a partial record, not as proof of the absence of records outside it.
     complete: bool
     files: list[EvidenceFileEntry] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

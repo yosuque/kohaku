@@ -375,6 +375,10 @@ describe("kohaku evidence export --rest (in-process host-rest app)", () => {
     expect(result.manifest.counts.promotions).toBe(1);
     expect(result.manifest.counts.fixations).toBe(0);
     expect(result.manifest.warnings.some((w) => w.includes("fixations.jsonl is empty"))).toBe(true);
+    // A REST export's fixations.jsonl is structurally partial (see rest-source.ts), so `complete` must
+    // say so even though lineage paging itself was exhaustive -- an auditor reading only `complete`
+    // (without cross-referencing `warnings`) must not be told this pack is whole.
+    expect(result.manifest.complete).toBe(false);
 
     const verifyResult = await runEvidenceVerify(outDir, publicKeyPath);
     expect(verifyResult.ok).toBe(true);
