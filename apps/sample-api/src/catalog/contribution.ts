@@ -1,28 +1,13 @@
-import { type ComponentDefinition, defineComponent } from "@kohaku-ui/registry";
+import type { ComponentDefinition } from "@kohaku-ui/registry";
 import type { CatalogContribution } from "@kohaku-ui/spec-core";
-import { z } from "zod";
+import { salesKpiCard } from "@kohaku-ui-sample/parts";
 
 /**
- * Contribution of sales-domain-specific components (a CatalogContribution).
- * Delivered via a federated merge with the core catalog.
+ * Contribution of sales-domain-specific components (a CatalogContribution), delivered via a federated merge
+ * with the core catalog. The component definitions themselves live in @kohaku-ui-sample/parts (single
+ * source shared with sample-web / sample-mcp's renderer — see docs/user-guide.md's "Adding a part" and
+ * design.md #68); this module only wraps them for the catalog merge.
  */
-export const salesKpiCard = defineComponent({
-  type: "sales.kpiCard",
-  version: "1.0.0",
-  description:
-    "Card display of a single KPI. The data reference is one row of {label, value, format, note} " +
-    "(format: currency|percent|number). Use it to highlight a summary or attainment.",
-  propsSchema: z.object({
-    /** Specify only when you want to override the data row's label */
-    label: z.string().optional(),
-  }),
-  capabilities: { events: [], data: "required", children: "none" },
-  fallback: {
-    type: "presentMarkdown",
-    mapProps: () => ({ markdown: "(The KPI card is not available on this surface)" }),
-  },
-});
-
 export const salesContribution: CatalogContribution<ComponentDefinition> = {
   components: [salesKpiCard],
 };

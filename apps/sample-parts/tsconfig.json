@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "comment": "Component definitions only (registry + zod): no DOM lib, no @types/node — this package stays consumable by both server (sample-api) and browser (sample-web, sample-mcp's renderer) code.",
+  "include": ["src", "test"]
+}

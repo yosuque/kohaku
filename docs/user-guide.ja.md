@@ -589,8 +589,57 @@ export const myCard = defineComponent({
   fallback: { type: "presentMarkdown", mapProps: () => ({ markdown: "(非対応)" }) },
 });
 // API 側: resolveCatalog(coreCatalog, { components: [myCard] })
-// Web 側: registry.register("myapp.card", "1.0.0", MyCardComponent)  // useBoundData でデータ取得
 ```
+
+`myCard` は `{type, version, propsSchema}` の単一の情報源である。サーバーと各レンダラーの両方がインポートする
+共有パッケージなどに一度だけ定義し、登録箇所ごとに `"myapp.card"` / `"1.0.0"` を文字列リテラルとして書き直さない。
+そうしないと両者のタイプミスやバージョンのずれが実行時まで検出されない(design.md #68)。
+
+React(`@kohaku-ui/renderer-react`): `implement(def, Component)` は `Component` の `props` を `def.propsSchema`
+から推論するため、`node.props["title"] as string` のようなキャストは不要になる。`ImplRegistry.use(entry)` が
+結果を `def` 自身の type/version で登録する:
+
+```tsx
+import { implement, ImplRegistry, type TypedImplProps } from "@kohaku-ui/renderer-react";
+
+function MyCardComponent({ props }: TypedImplProps<z.infer<typeof myCard.propsSchema>>) {
+  return <div>{props.title}</div>; // props.title: string
+}
+
+const registry = new ImplRegistry().use(implement(myCard, MyCardComponent));
+```
+
+Web Components(`@kohaku-ui/renderer-wc`): `<kohaku-surface>` は公開 API `registerPart(type, version,
+builder)` を持ち、`implementWc(def, builder)` がその型付き版になる:
+
+```ts
+import { implementWc } from "@kohaku-ui/renderer-wc";
+
+const entry = implementWc(myCard, (rt, parent, node, props) => {
+  const el = document.createElement("div");
+  el.textContent = props.title; // props.title: string
+  parent.appendChild(el);
+  return () => el.remove();
+});
+surface.registerPart(entry.type, entry.version, entry.builder);
+```
+
+`registerPart` が既に登録済みの `type`(タイプミス、あるいは意図的な上書きにより、16 個のコアカタログの部品の
+どれかが対象になりやすい)を置き換える場合は、第 4 引数に `{ override: true }` を渡さない限り `console.warn`
+で警告する——コア部品を静かに覆い隠してしまうのは、うっかり失うありがちな原因だからである。
+
+`implement` と `implementWc` はどちらも、環境を問わず常に `def.propsSchema.safeParse` をノードの props に対して
+実行する。そのため `.default()` が付いた値を Spec 側が省略していても、後述の診断が有効かどうかに関わらず
+必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。環境によって
+切り替わるのは**診断だけ**(不一致時の `console.warn`)であり、既定では `NODE_ENV=production` のビルド以外で
+オン、その内側でオフになる——`{ validate: false }` / `{ validate: true }` を渡せば環境に関わらずどちらの向きにも
+上書きできる。`process.env.NODE_ENV` を実際には設定しないビルド(`--define:process.env.NODE_ENV='"production"'`
+を渡さない素の esbuild 呼び出しや、本番モードに切り替えないバンドラ設定)では、この診断はオンのままになる——
+これは React 自身のバンドル済みビルドと同じ慣習であり、稀にしか起きない不一致経路で余分な `console.warn` が
+呼ばれるだけなので、既定として安全側に倒している。型なしの `ImplRegistry.register` や、`registerPart` に生の
+`PartBuilder` を渡す登録も、静的な `ComponentDefinition` を持たない部品(例:承認ドラフトからアーティファクト
+ごとにスキーマが生成される昇格済み部品——`apps/sample-api/src/intents/promoted.ts` を参照)のためにそのまま
+動作し続ける。
 
 検証: `npx @kohaku-ui/cli component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
 

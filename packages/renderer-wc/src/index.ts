@@ -4,6 +4,7 @@
 
 // UI message type and defaults (the single source of truth is renderer-core). Used to override context.messages.
 export { DEFAULT_MESSAGES, type RendererMessages } from "@kohaku-ui/renderer-core";
+export { implementWc, type PartEntry, type TypedPartBuilder } from "./implement.js";
 export { defineKohakuSurface, KOHAKU_EVENT, KohakuSurface } from "./kohaku-surface.js";
 export { createCoreRenderRegistry } from "./registry.js";
 export type {
