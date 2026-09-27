@@ -27,6 +27,7 @@ GUI 操作(Web)  ─┼→ 正規化 Intent → Composition ─┼─ 外部チ�
 |---|---|---|
 | [docs/why-kohaku.ja.md](docs/why-kohaku.ja.md) | **なぜ kohaku か** — 3 つの保証(同一表示 / 参照渡し / 昇格パイプライン)と、プロンプト→UI ツールやエージェント UI プロトコルに対する位置付け | 導入を検討する人 |
 | [docs/paths/](docs/paths/mcp-apps.ja.md) | **1 ページで始める 3 本の入口** — (a) [MCP Apps だけ](docs/paths/mcp-apps.ja.md)、(b) [React ダッシュボードだけ](docs/paths/react-dashboard.ja.md)、(c) [フル構成](docs/paths/full-stack.ja.md)。それぞれ最初のコードは 30 行以内 | 自分に合う入口を選ぶ人 |
+| [docs/glossary.ja.md](docs/glossary.ja.md) | **用語集** — ドキュメントで使われる kohaku 固有の用語を平易に定義し、それぞれ規範的な定義へリンク | 読みながら用語を調べたい人 |
 | [docs/user-guide.ja.md](docs/user-guide.ja.md) | **ユーザーガイド** — セットアップ・画面の歩き方・デモ 8 本・自プロダクトへの組み込み・運用・FAQ | まず動かしたい人 / 組み込む人 |
 | [docs/design.ja.md](docs/design.ja.md) | **実装設計書** — アーキテクチャ・合成パイプライン・サンドボックス・昇格・設計判断記録 | 拡張・保守する開発者 |
 | [docs/specification.ja.md](docs/specification.ja.md) | **仕様書** — UI Spec / REST API / Port / 部品カタログ / ブリッジプロトコル / 環境変数のリファレンス | 実装に対して書く開発者 |

@@ -33,6 +33,7 @@ export const SIDEBAR_EN: SidebarGroup[] = [
   {
     text: "Guides",
     items: [
+      { text: "Glossary", link: "/docs/glossary" },
       { text: "User guide", link: "/docs/user-guide" },
       { text: "Implementation design", link: "/docs/design" },
       { text: "Specification", link: "/docs/specification" },
@@ -67,6 +68,7 @@ export const SIDEBAR_JA: SidebarGroup[] = [
   {
     text: "ガイド",
     items: [
+      { text: "用語集", link: "/ja/docs/glossary" },
       { text: "ユーザーガイド", link: "/ja/docs/user-guide" },
       { text: "実装設計書", link: "/ja/docs/design" },
       { text: "仕様書", link: "/ja/docs/specification" },
