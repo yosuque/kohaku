@@ -1,6 +1,14 @@
 // Schemas
 
 export { collectWriteActions, resolveWriteActionName } from "./action-name.js";
+export {
+  type ActionParamIssue,
+  ActionParamsSchemaError,
+  type ActionTier,
+  actionPayloadHash,
+  assertValidActionParamsSchema,
+  validateActionParams,
+} from "./action-params.js";
 export { enumerateBindVariants, resolveBoundRef } from "./bind.js";
 export {
   type CacheKeyParts,
@@ -54,6 +62,10 @@ export {
   safeParseSpec,
 } from "./parse.js";
 export type {
+  ApprovalGrant,
+  ApprovalPort,
+  ApprovalStore,
+  ApprovalVerifyResult,
   AuthzPort,
   CapabilityRevocationStore,
   CatalogContribution,
@@ -89,7 +101,11 @@ export type {
   VerifyResult,
 } from "./ports.js";
 // Ports
-export { DEFAULT_CAPABILITY_TTL_SECONDS, normalizeTenant } from "./ports.js";
+export {
+  DEFAULT_APPROVAL_TTL_SECONDS,
+  DEFAULT_CAPABILITY_TTL_SECONDS,
+  normalizeTenant,
+} from "./ports.js";
 export { collectStateRefs, evaluateVisibleWhen } from "./predicate.js";
 export {
   formatQueryRef,
@@ -100,6 +116,10 @@ export {
 // Error envelope of the REST profile (SPEC §6.1) (a wire contract shared by host-rest / client).
 export type { ErrorEnvelope, HostErrorCode } from "./rest-errors.js";
 export { GOVERNANCE_ERROR_DISCRIMINATORS, PROMOTION_ERROR_DISCRIMINATORS } from "./rest-errors.js";
+export {
+  type ActionParamsSchema,
+  ActionParamsSchemaSchema,
+} from "./schema/action-params.js";
 export {
   type BindParam,
   BindParamSchema,

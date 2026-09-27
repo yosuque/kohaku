@@ -1,3 +1,4 @@
+import type { ActionTier } from "./action-params.js";
 import type { IntentInput } from "./intent.js";
 import type { CanonicalIntent } from "./schema/intent.js";
 import type { JsonObject, JsonValue } from "./schema/json.js";
@@ -52,9 +53,26 @@ export interface QueryHandle {
 export interface OperationDescriptor {
   name: string;
   description: string;
-  /** JSON Schema (doubles as the semantic-layer document in the LLM prompt). */
+  /**
+   * JSON Schema (doubles as the semantic-layer document in the LLM prompt). When this operation is
+   * reachable as a write action (SPEC §5 A1), a value here is additionally validated at attach time
+   * against kohaku's own JSON Schema subset (design.md #62; `schema/action-params.ts`'s
+   * `ActionParamsSchemaSchema`, enforced by host-core's `createOperationIndex`) and, per invoke, against
+   * the actual payload (`validateActionParams`) before `DomainPort.invoke` ever runs.
+   */
   paramsSchema?: JsonValue;
   resultShape?: DataShape;
+  /**
+   * Governance tier for invoking this action (design.md #62/#63). Default `"auto"` when omitted (no
+   * confirm/approval gate — the pre-existing, ungated invoke behavior).
+   */
+  tier?: ActionTier;
+  /**
+   * Human-readable message a `"confirm"`-tier gate should show the user before setting `confirmed:
+   * true` (renderer-core's `preflightAction` / the default `globalThis.confirm` hook). Ignored for
+   * other tiers.
+   */
+  confirmMessage?: string;
 }
 
 export interface InvocationContext {
@@ -190,6 +208,88 @@ export interface CapabilityRevocationStore {
 export type RevokeCapabilityResult =
   | { ok: true; alreadyExpired?: true }
   | { ok: false; code: "MALFORMED" | "INVALID_SIGNATURE" | "NO_JTI" | "STORE_ERROR"; reason: string };
+
+/**
+ * Default lifetime (seconds) of an approval token when the issuer is given no explicit TTL
+ * (design.md #63). Deliberately much shorter than `DEFAULT_CAPABILITY_TTL_SECONDS`: an approval token
+ * authorizes one specific human decision about one specific payload, not a session's worth of reads.
+ */
+export const DEFAULT_APPROVAL_TTL_SECONDS = 300;
+
+/**
+ * The claims a stateless bound approval token carries (design.md #63). An `ApprovalPort.verifyApproval`
+ * that accepts a token MUST have checked every one of these against the request it was presented for
+ * (action name, payload hash, requester identity, tenant, expiry) before returning `{ ok: true }` —
+ * this type is what a caller receives back on success, not what it is expected to inspect itself.
+ */
+export interface ApprovalGrant {
+  action: string;
+  payloadHash: string;
+  /** The principal id of whoever approved. MUST differ from `requesterId` (design.md #63). */
+  approverId: string;
+  /** The principal id of whoever will invoke (or already attempted to invoke) the action. */
+  requesterId: string;
+  tenant?: string;
+  /** Expiry, epoch seconds. */
+  exp: number;
+  /** Unique id for this grant, consumed by an `ApprovalStore` when single-use enforcement is configured. */
+  jti: string;
+}
+
+export interface ApprovalVerifyResult {
+  ok: boolean;
+  grant?: ApprovalGrant;
+  reason?: string;
+}
+
+/**
+ * Issuance and verification of stateless, short-lived approval tokens for `"approve"`-tier actions
+ * (design.md #63). Structurally parallel to `AuthzPort` (issue / verify, fail-open denial vs.
+ * fail-closed infrastructure failure), but a distinct port: an approval authorizes one human decision
+ * about one exact payload, not a read/write scope over a Spec's lifetime, and a concrete token format
+ * MUST NOT be interchangeable with a capability token (see `authz-hmac`'s `"kohaku-approval.v1."`
+ * prefix, which keeps the two token domains from being replayed against each other).
+ */
+export interface ApprovalPort {
+  /**
+   * Issues a token bound to `(action, payloadHash, requesterId, tenant)`. `approverId` MUST differ from
+   * `requesterId` — an implementation MUST reject issuing a self-approval (design.md #63) rather than
+   * leave that check to the caller. Default TTL `DEFAULT_APPROVAL_TTL_SECONDS`.
+   */
+  issueApproval(
+    input: { action: string; payloadHash: string; requesterId: string; approverId: string; tenant?: string },
+    opts?: { ttlSeconds?: number },
+  ): Promise<string>;
+  /**
+   * Verifies `token` against the exact `(action, payloadHash, requesterId, tenant)` it is being
+   * presented for. A denial (expired, malformed, wrong binding, already consumed) is a normal, expected
+   * outcome and MUST be reported as `{ ok: false, reason }`, never thrown. `verifyApproval` MUST throw
+   * only on an infrastructure failure it cannot itself classify as allow/deny (e.g. an `ApprovalStore`
+   * outage) — such a thrown `verifyApproval` is fail-closed: the caller MUST treat it as a denial.
+   */
+  verifyApproval(
+    token: string,
+    req: { action: string; payloadHash: string; requesterId: string; tenant?: string },
+  ): Promise<ApprovalVerifyResult>;
+}
+
+/**
+ * Optional persistence for single-use enforcement of approval tokens, mirroring
+ * `CapabilityRevocationStore`'s role for capability tokens. When an `ApprovalPort` is configured with
+ * one, `verifyApproval` MUST call `consume` exactly once per verification attempt and deny (`{ ok:
+ * false }`) when it returns `false` (already consumed) or throws (store failure — fail-closed, per
+ * `ApprovalPort.verifyApproval`'s own contract). An `ApprovalPort` given no store keeps a token usable
+ * repeatedly until it expires (the caller's choice, e.g. for a demo/dev environment).
+ */
+export interface ApprovalStore {
+  /**
+   * Atomically marks `jti` as consumed until `expiresAt` (epoch seconds) if it was not already; returns
+   * `true` on first consumption, `false` if `jti` was already consumed (a replay attempt). The store MAY
+   * drop the entry after `expiresAt`.
+   */
+  consume(jti: string, expiresAt: number): Promise<boolean>;
+  close?(): Promise<void>;
+}
 
 /** The persistence record for a lineage event (the strict schema is owned by @kohaku-ui/lineage). */
 export interface LineageEventRecord {

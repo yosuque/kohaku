@@ -25,7 +25,15 @@ export type HostErrorCode =
   | "PROMOTION_NOT_PUBLISHED"
   // Rate limiting (SPEC §6.1, REST-RL-001): a host MAY enforce a rate limit; when it does, an
   // over-limit request MUST use this code with HTTP 429.
-  | "RATE_LIMITED";
+  | "RATE_LIMITED"
+  // Governed actions (SPEC §6.1, ACT-PRM-001): the invoke payload failed `validateActionParams`
+  // against the action's `paramsSchema`. MUST be reported with HTTP 422, before `DomainPort.invoke`
+  // ever runs.
+  | "ACTION_PARAMS_INVALID"
+  // Governed actions (SPEC §6.1, ACT-APR-001): the action's tier requires a same-request `confirmed:
+  // true` (tier "confirm") or a valid unused approval token bound to this exact invocation (tier
+  // "approve"), and neither was satisfied. MUST be reported with HTTP 403.
+  | "APPROVAL_REQUIRED";
 
 /**
  * Discriminators of the governance-plane errors thrown by the promotion / fixation services
@@ -78,5 +86,21 @@ export interface ErrorEnvelope {
      * profile's structured tool error, §6.2) and by callers without access to response headers.
      */
     retryAfterMs?: number;
+    /**
+     * Per-field validation problems. Present only on the 422 ACTION_PARAMS_INVALID envelope (SPEC
+     * §6.1, ACT-PRM-001) — the exact array `validateActionParams` (spec-core's `action-params.ts`)
+     * returned for the rejected payload.
+     */
+    issues?: { path: string; code: string; message: string }[];
+    /**
+     * The pending-approval descriptor. Present only on the 403 APPROVAL_REQUIRED envelope (SPEC §6.1,
+     * ACT-APR-001) for a `"confirm"` or `"approve"` tier action that was invoked without satisfying its
+     * gate. `requestId` is a fresh, opaque identifier for this specific approval request (distinct from
+     * `error.requestId` above, which correlates the *error response itself* to server logs) — a client
+     * surfaces it to an approver-facing flow (e.g. queried back via `GET /lineage?type=action.
+     * approvalRequested`) or simply re-sends it as-is once it has a token, since the gate itself does
+     * not persist any request state keyed by this id.
+     */
+    approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
   };
 }
