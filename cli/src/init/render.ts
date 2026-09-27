@@ -8,10 +8,14 @@ import {
   DOMAIN_PORT_TEMPLATE,
   ENV_EXAMPLE_TEMPLATE,
   FIXED_SPECS_TEMPLATE,
+  GITIGNORE_MCP_EXTRA,
   GITIGNORE_TEMPLATE,
   GOLDEN_TEST_TEMPLATE_INIT,
   INDEX_HTML_TEMPLATE,
   MAIN_TEMPLATE,
+  MCP_HTTP_TEMPLATE,
+  MCP_SERVER_TEMPLATE,
+  MCP_STDIO_TEMPLATE,
   SERVER_PORTS_TEMPLATE,
   TSCONFIG_TEMPLATE,
   VITE_CONFIG_TEMPLATE,
@@ -217,7 +221,16 @@ export function renderFixedSpecs(profile: DatasetProfile): string {
   return FIXED_SPECS_TEMPLATE.replaceAll("__SOURCE__", profile.source);
 }
 
-export function renderPackageJson(name: string, profile: DatasetProfile): string {
+export interface RenderPackageJsonOptions {
+  /** Adds the MCP front door's dependencies and scripts (kohaku init --mcp). Default false. */
+  mcp?: boolean;
+}
+
+export function renderPackageJson(
+  name: string,
+  profile: DatasetProfile,
+  options: RenderPackageJsonOptions = {},
+): string {
   const dependencies: Record<string, string> = {};
   for (const pkg of KOHAKU_RUNTIME) dependencies[`@kohaku-ui/${pkg}`] = `^${CLI_VERSION}`;
   for (const pkg of [
@@ -230,6 +243,12 @@ export function renderPackageJson(name: string, profile: DatasetProfile): string
     "@ai-sdk/openai-compatible",
   ])
     dependencies[pkg] = EXTERNAL_VERSIONS[pkg]!;
+  if (options.mcp === true) {
+    dependencies["@kohaku-ui/host-mcp-apps"] = `^${CLI_VERSION}`;
+    dependencies["@kohaku-ui/mcp-renderer"] = `^${CLI_VERSION}`;
+    dependencies["@modelcontextprotocol/server"] = EXTERNAL_VERSIONS["@modelcontextprotocol/server"]!;
+    dependencies["@modelcontextprotocol/node"] = EXTERNAL_VERSIONS["@modelcontextprotocol/node"]!;
+  }
   const devDependencies: Record<string, string> = {};
   for (const pkg of [
     "@types/node",
@@ -254,6 +273,7 @@ export function renderPackageJson(name: string, profile: DatasetProfile): string
         "dev:web": "vite",
         typecheck: "tsc --noEmit",
         test: "vitest run",
+        ...(options.mcp === true ? { mcp: "tsx server/mcp.ts", "mcp:http": "tsx server/mcp-http.ts" } : {}),
       },
       engines: { node: ">=22" },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
@@ -336,19 +356,27 @@ KOHAKU_CAPABILITY_SECRET=${secret}
 `;
 }
 
+export interface RenderProjectFilesOptions {
+  name: string;
+  /** Adds the MCP front door (server/mcp{,-server,-http}.ts) and its dependencies/scripts. Default false. */
+  mcp?: boolean;
+}
+
 export function renderProjectFiles(
   profile: DatasetProfile,
   rows: Row[],
-  options: { name: string },
+  options: RenderProjectFilesOptions,
 ): ProjectFile[] {
+  const mcp = options.mcp === true;
+  const nameReplaced = (template: string): string => template.replaceAll("__NAME__", options.name);
   return [
-    { path: "package.json", content: renderPackageJson(options.name, profile) },
+    { path: "package.json", content: renderPackageJson(options.name, profile, { mcp }) },
     { path: "tsconfig.json", content: TSCONFIG_TEMPLATE },
     { path: "vite.config.ts", content: VITE_CONFIG_TEMPLATE },
     { path: "index.html", content: INDEX_HTML_TEMPLATE.replaceAll("__NAME__", options.name) },
     { path: "dev.mjs", content: DEV_SCRIPT_TEMPLATE },
     { path: ".env.example", content: ENV_EXAMPLE_TEMPLATE },
-    { path: ".gitignore", content: GITIGNORE_TEMPLATE },
+    { path: ".gitignore", content: mcp ? GITIGNORE_TEMPLATE + GITIGNORE_MCP_EXTRA : GITIGNORE_TEMPLATE },
     { path: "README.md", content: renderReadme(profile) },
     { path: `data/${profile.source}.json`, content: `${JSON.stringify(rows)}\n` },
     { path: "server/dataset.ts", content: renderDataset(profile) },
@@ -357,6 +385,13 @@ export function renderProjectFiles(
     { path: "server/fixed-specs.ts", content: renderFixedSpecs(profile) },
     { path: "server/ports.ts", content: SERVER_PORTS_TEMPLATE },
     { path: "server/app.ts", content: APP_TEMPLATE },
+    ...(mcp
+      ? [
+          { path: "server/mcp-server.ts", content: MCP_SERVER_TEMPLATE },
+          { path: "server/mcp.ts", content: nameReplaced(MCP_STDIO_TEMPLATE) },
+          { path: "server/mcp-http.ts", content: nameReplaced(MCP_HTTP_TEMPLATE) },
+        ]
+      : []),
     { path: "server/main.ts", content: MAIN_TEMPLATE },
     { path: "web/main.tsx", content: WEB_MAIN_TEMPLATE },
     { path: "test/golden.test.ts", content: GOLDEN_TEST_TEMPLATE_INIT },

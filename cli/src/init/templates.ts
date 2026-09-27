@@ -595,3 +595,133 @@ export const GITIGNORE_TEMPLATE = `node_modules/
 dist/
 .env
 `;
+
+/** Appended to GITIGNORE_TEMPLATE when \`kohaku init --mcp\` generates the MCP front door. */
+export const GITIGNORE_MCP_EXTRA = `.kohaku/
+`;
+
+export const MCP_SERVER_TEMPLATE = `import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { attachKohakuMcp } from "@kohaku-ui/host/mcp";
+import { intentToolsFromCatalog } from "@kohaku-ui/host-mcp-apps";
+import { loadRendererHtml } from "@kohaku-ui/mcp-renderer";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { INTENT_DEFINITIONS } from "./intents.js";
+import { createPorts, type PortDeps } from "./ports.js";
+
+/**
+ * Self-contained snapshot HTML (kohaku_render_snapshot, for UI-incapable hosts like Claude Code / Codex
+ * CLI) is saved here, next to this file rather than under process.cwd() -- Claude Desktop launches an MCP
+ * server from an arbitrary working directory, so a cwd-relative path would silently write (or fail to
+ * find) files in the wrong place. Git-ignored (see .gitignore); safe to delete any time.
+ */
+const SNAPSHOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".kohaku", "snapshots");
+
+/**
+ * Attaches the generated project's host (server/ports.ts -- the exact same Ports and compose the REST
+ * front door in server/app.ts uses) to an MCP server, via \`@kohaku-ui/host/mcp\`'s \`attachKohakuMcp\`. "Same
+ * request content -> same Spec -> same rendering" holds across both front doors this way.
+ *
+ * \`rendererHtml\` is \`@kohaku-ui/mcp-renderer\`'s pre-built, dependency-free core renderer bundle -- swap it
+ * for your own build (see that package's README's "./boot" section) once you have product-specific
+ * component implementations to bake in. \`intentTools\` exposes every Intent in server/intents.ts as a typed
+ * MCP tool (e.g. \`sales_summary\` for a project whose data source is named "sales") in addition to the
+ * generic \`kohaku_compose\`.
+ */
+export function attachMcpServer(server: McpServer, deps: PortDeps): void {
+  const host = createPorts(deps);
+  attachKohakuMcp(server, host, {
+    rendererHtml: loadRendererHtml,
+    intentTools: intentToolsFromCatalog(INTENT_DEFINITIONS.map((d) => d.toToolSource())),
+    snapshotWriter: async (fileName, html) => {
+      await mkdir(SNAPSHOT_DIR, { recursive: true });
+      const path = join(SNAPSHOT_DIR, fileName);
+      await writeFile(path, html, "utf8");
+      return path;
+    },
+  });
+}
+`;
+
+export const MCP_STDIO_TEMPLATE = `import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { McpServer } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { attachMcpServer } from "./mcp-server.js";
+
+/**
+ * MCP server (stdio) for terminal / desktop hosts (Claude Desktop, Claude Code, Codex CLI, ...). Registered
+ * with Claude Desktop by \`npm run mcp:claude-desktop\` (see scripts/claude-desktop.mjs); run directly with
+ * \`npm run mcp\`.
+ *
+ * .env is resolved next to this file (not process.cwd()) because Claude Desktop launches MCP servers from
+ * an arbitrary working directory -- a cwd-relative check (server/app.ts's approach) would silently miss it.
+ */
+const ENV_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", ".env");
+if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
+
+const llm = createLlmFromEnv();
+const server = new McpServer({ name: "__NAME__", version: "0.1.0" });
+attachMcpServer(server, { llm });
+
+await server.connect(new StdioServerTransport());
+console.error("__NAME__ MCP server: ready (stdio)");
+`;
+
+export const MCP_HTTP_TEMPLATE = `import { existsSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { attachMcpServer } from "./mcp-server.js";
+
+/**
+ * MCP server (Streamable HTTP) for remote / browser-based hosts (claude.ai, ChatGPT) -- claude.ai and
+ * ChatGPT can only connect through a remote MCP connector, not stdio. Run with \`npm run mcp:http\`
+ * (default :8788, override with PORT). No authentication (a local demo default); put this behind your own
+ * auth (e.g. @kohaku-ui/authz-jwt) before exposing it beyond localhost -- see docs/user-guide.md §6.
+ *
+ * .env is resolved next to this file, the same reasoning as server/mcp.ts.
+ */
+const ENV_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", ".env");
+if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
+
+const llm = createLlmFromEnv();
+const port = Number(process.env["PORT"] ?? 8788);
+
+// Stateless serving (MCP protocol version 2026-07-28 removed protocol-level sessions): a fresh McpServer
+// per exchange, built from the same Ports every time (createPorts / server/ports.ts).
+const mcpHandler = createMcpHandler(() => {
+  const server = new McpServer({ name: "__NAME__", version: "0.1.0" });
+  attachMcpServer(server, { llm });
+  return server;
+});
+const handleMcp = toNodeHandler(mcpHandler);
+
+const httpServer = createHttpServer(async (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, mcp-protocol-version");
+  if (req.method === "OPTIONS") {
+    res.writeHead(204).end();
+    return;
+  }
+  try {
+    await handleMcp(req, res);
+  } catch (err) {
+    console.error("[mcp-http] request failed:", err);
+    if (!res.headersSent) res.writeHead(500).end();
+  }
+});
+
+// Bind to 127.0.0.1 by default (local only); override with HOST for LAN/container exposure.
+const host = process.env["HOST"] ?? "127.0.0.1";
+httpServer.listen(port, host, () => {
+  console.log(\`__NAME__ MCP server: ready (Streamable HTTP) at http://\${host}:\${port}/mcp\`);
+});
+`;

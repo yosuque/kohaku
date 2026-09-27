@@ -14,6 +14,11 @@ export interface InitOptions {
   table?: string;
   install?: boolean;
   /**
+   * Also generates the MCP front door (server/mcp-server.ts, server/mcp.ts stdio, server/mcp-http.ts
+   * Streamable HTTP), on top of the REST front door that is always generated. Default false.
+   */
+  mcp?: boolean;
+  /**
    * Generates the value written to the generated project's `.env` as `KOHAKU_CAPABILITY_SECRET`.
    * Default: a fresh cryptographically random secret (`randomBytes(32).toString("base64url")`). Overridable
    * so callers -- tests, in particular, which need deterministic output -- can inject a fixed value.
@@ -110,7 +115,7 @@ export async function initProject(options: InitOptions, io: InitIo = {}): Promis
   const sourceName = options.source ?? basename(options.from, extname(options.from));
   const profile = inferProfile(sourceName, dataset);
   const rows = normalizeRows(dataset, profile);
-  const files = renderProjectFiles(profile, rows, { name });
+  const files = renderProjectFiles(profile, rows, { name, mcp: options.mcp === true });
   // `.env` carries a real, randomly generated secret (unlike `.env.example`'s empty placeholder) so the
   // generated project runs immediately; it is added here rather than in renderProjectFiles so that
   // function -- and its own tests -- stay free of randomness.
