@@ -43,6 +43,8 @@ export class SalesRepo {
    * and durability of the state is a non-goal, so they are distinguished.
    */
   private bumpCount = 0;
+  /** The "approve"-tier write demo's counter (design.md #62/#63). Like bumpCount, in-memory only and non-persistent. */
+  publishCount = 0;
 
   constructor(seed: SalesSeedInput) {
     this.products = seed.products;
@@ -65,6 +67,12 @@ export class SalesRepo {
   /** The demo's write: adds one note and advances the data version (= simulating that the displayed data was updated). */
   annotate(note: string): string {
     this.notes.push(note);
+    return this.bump();
+  }
+
+  /** The demo's "approve"-tier write (design.md #62/#63): counts a publish and advances the data version. */
+  publish(): string {
+    this.publishCount++;
     return this.bump();
   }
 

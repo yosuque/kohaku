@@ -73,6 +73,7 @@ from kohaku.lineage import Fixations as FixationsApi
 from kohaku.llm import LlmPort
 from kohaku.registry import Catalog, ResolvedCatalog, core_catalog, resolve_catalog
 from kohaku.spec import (
+    ApprovalPort,
     AuthzPort,
     FixationRecord,
     Intent,
@@ -172,16 +173,30 @@ def _compose_deadline_ms(env: Mapping[str, str] | None = None) -> int:
     return parsed if parsed is not None and parsed > 0 else _DEFAULT_COMPOSE_DEADLINE_MS
 
 
+#: annotate's params schema (design.md #62): kohaku's own closed JSON Schema subset. `note` is required and
+#: capped at 500 characters; `refs` (the invalidation-target $ref array action_effects reads) is
+#: deliberately left undeclared rather than `additionalProperties: false` -- validate_action_params only
+#: checks properties it knows about unless additionalProperties is explicitly closed, so `refs` passes
+#: through unexamined.
+_ANNOTATE_PARAMS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"note": {"type": "string", "maxLength": 500}},
+    "required": ["note"],
+}
+
+
 class SalesDomainPort:
-    """DomainPort: 5 sales-aggregation operations (= query://sales/{op}) + 1 demo write operation (annotate)."""
+    """DomainPort: 5 sales-aggregation operations (= query://sales/{op}) + 2 demo write operations
+    (annotate: tier "confirm", publish: tier "approve" -- design.md #62/#63's governed-actions demo)."""
 
     def __init__(self, repo: SalesRepo) -> None:
         self._repo = repo
 
     async def list_operations(self) -> list[OperationDescriptor]:
-        # annotate is special-cased in invoke() below rather than OPERATIONS (it is a write, not a query://
-        # read), but it must still be listed here: hosts restrict capability write scopes to the action names
-        # list_operations() enumerates, dropping any action.invoke the composed UI declares that is not listed.
+        # annotate/publish are special-cased in invoke() below rather than OPERATIONS (they are writes, not
+        # query:// reads), but they must still be listed here: hosts restrict capability write scopes to
+        # the action names list_operations() enumerates, dropping any action.invoke the composed UI
+        # declares that is not listed.
         return [
             OperationDescriptor(
                 name=name,
@@ -193,7 +208,18 @@ class SalesDomainPort:
             OperationDescriptor(
                 name="annotate",
                 description="sales annotate (write): appends a review note and advances the data version",
-            )
+                paramsSchema=_ANNOTATE_PARAMS_SCHEMA,
+                tier="confirm",
+                confirmMessage="Save this note? It will be visible to everyone viewing these records.",
+            ),
+            OperationDescriptor(
+                name="publish",
+                description=(
+                    "sales publish (write, demo only): marks the current sales report as published"
+                    " and advances the data version"
+                ),
+                tier="approve",
+            ),
         ]
 
     async def invoke(self, op: str, args: JsonObject, ctx: InvocationContext) -> object:
@@ -206,6 +232,15 @@ class SalesDomainPort:
                 "note": note_str,
                 "dataVersion": self._repo.annotate(note_str),
                 "notes": len(self._repo.notes),
+            }
+        # Demo of the "approve" tier (design.md #62/#63): a governance-gated write with no further side
+        # effect declared beyond the version bump itself (out of scope: this demo does not add a distinct
+        # approver-facing UI -- see the "publish" button's own doc comment in fixed_specs.py).
+        if op == "publish":
+            return {
+                "ok": True,
+                "dataVersion": self._repo.publish(),
+                "published": self._repo.publish_count,
             }
         operation = OPERATIONS.get(op)
         if operation is None:
@@ -244,6 +279,7 @@ async def create_app(
     seed_dir: Path | None = None,
     prefix: str = "/api/kohaku",
     policy_file: KohakuPolicyFile | None = None,
+    approvals: ApprovalPort | None = None,
 ) -> SalesApp:
     """Assembles the FastAPI app by converging all packages (equivalent to app.ts's createApp).
 
@@ -254,6 +290,12 @@ async def create_app(
     (allowL2/budget/etc., per tenant), KohakuHostDeps.rate_limiter, and lineage's policy.applied audit
     event. When unset, behavior is unchanged from before Policy as Code existed. Mirrors TS sample-api's
     AppDeps.policyFile.
+
+    approvals (design.md #62/#63 -- optional): verifies approval tokens for the demo's "approve"-tier
+    action ("publish", SalesDomainPort above). Unset by default: an "approve"-tier action can then never
+    be allowed (the gate returns denied), unchanged from before governed actions existed. __main__.py wires
+    a real one (create_hmac_approval_port, reusing the same capability secret as the AuthzPort) for the
+    running demo; mirrors TS sample-api's AppDeps.approvals.
     """
     try:
         from fastapi import FastAPI, Header
@@ -681,6 +723,7 @@ async def create_app(
         tenant=_demo_tenant,
         authorize_governance=create_governance_policy(_GOVERNANCE_POLICY),
         rate_limiter=policy_runtime.rate_limiter if policy_runtime is not None else None,
+        approvals=approvals,
     )
 
     app = FastAPI(title="kohaku sample sales API (Python)")

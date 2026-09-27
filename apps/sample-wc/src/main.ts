@@ -89,6 +89,10 @@ function applyView(view: ComposeView, intent: IntentArg): void {
     theme: buildTheme(themeMode),
     ...(RENDER_JA ? { messages: JA_MESSAGES } : {}),
     onEvent: handleEvent,
+    // Governed actions (design.md #62/#64): the compose-issued manifest drives runInvokeTarget's
+    // client-side preflightAction check before a write round trip (a "confirm"-tier action pops
+    // globalThis.confirm via tree.ts's own default; "approve" has no default and stays gated).
+    ...(view.actions != null ? { actionManifest: view.actions } : {}),
   };
   surface.spec = view.spec;
   const p = view.spec.provenance;

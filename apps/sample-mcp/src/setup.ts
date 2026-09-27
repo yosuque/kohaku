@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHmacApprovalPort } from "@kohaku-ui/authz-hmac";
 import type { JwtIdentityResolver } from "@kohaku-ui/authz-jwt";
 import {
   attachKohakuToMcpServer,
@@ -24,7 +25,7 @@ import {
 import { createViewRecorder } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import type { AuthzPort, StoragePort } from "@kohaku-ui/spec-core";
+import type { ApprovalPort, AuthzPort, StoragePort } from "@kohaku-ui/spec-core";
 import { admitFixationForLocale, createApp } from "@kohaku-ui-sample/api";
 // Reuse sample-api's side-effect declarations (via the package's exports subpath)
 import { salesActionEffects } from "@kohaku-ui-sample/api/action-effects";
@@ -33,6 +34,7 @@ import { salesActionEffects } from "@kohaku-ui-sample/api/action-effects";
 // (when both are env-derived) shares a single connection between storage and the revocation store the same
 // way sample-api's own index.ts does.
 import {
+  capabilitySecretFromEnv,
   createAuthzFromEnv,
   createPortsFromEnv,
   createStorageFromEnv,
@@ -128,6 +130,12 @@ export interface KohakuMcpSetupOptions {
   storage?: StoragePort;
   /** Override the AuthzPort (tests / a caller that already built one). Built from env (KOHAKU_AUTHZ) when omitted. */
   authz?: AuthzPort;
+  /**
+   * Override the ApprovalPort (design.md #62/#63; tests / a caller that already built one). Built from
+   * env (`createHmacApprovalPort(capabilitySecretFromEnv(process.env))`, sharing the same
+   * KOHAKU_CAPABILITY_SECRET as the AuthzPort) when omitted.
+   */
+  approvals?: ApprovalPort;
   /**
    * Per-tool-call principal resolution (e.g. from the HTTP request's own bearer token under KOHAKU_AUTHZ=jwt).
    * Forwarded verbatim to `attachKohakuToMcpServer`'s `McpHostDeps.resolvePrincipal` — see its doc comment for
@@ -336,6 +344,13 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
         // Side-effect declarations for writes (kohaku_action). Shares the same salesActionEffects as the REST side (app.ts),
         // making "annotate's data-version progression → invalidation of currently-displayed references" work symmetrically on the MCP side too.
         actionEffects: salesActionEffects,
+        // Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish") needs an
+        // ApprovalPort to ever be allowed on the MCP profile too (symmetric with app-core.ts's own
+        // wiring). options.approvals when given (tests); otherwise built from env, reusing the same
+        // KOHAKU_CAPABILITY_SECRET as the AuthzPort (capabilitySecretFromEnv) -- see that function's doc
+        // comment for why sharing the secret is by design. No ApprovalStore (single-use enforcement is
+        // optional per design.md #63; out of scope for this demo).
+        approvals: options.approvals ?? createHmacApprovalPort(capabilitySecretFromEnv(process.env)),
         // Per-tool-call principal resolution: options.resolvePrincipal when given, else this setup's own
         // default built from the env-derived identity resolver under KOHAKU_AUTHZ=jwt (see this function's
         // `resolvePrincipal` local above). Left unwired (every call runs as the anonymous principal — see

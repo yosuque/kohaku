@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { type ServerType, serve } from "@hono/node-server";
+import { createHmacApprovalPort } from "@kohaku-ui/authz-hmac";
 import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { loadPolicyFile } from "@kohaku-ui/host-core/policy-node";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
@@ -10,7 +11,7 @@ import type { KohakuPolicyFile } from "@kohaku-ui/spec-core";
 import { createJwtRequestIdentity } from "./app/request-identity-jwt.js";
 import { createGracefulShutdownHandler, shutdownGraceMs } from "./app/shutdown.js";
 import { createApp } from "./app.js";
-import { createPortsFromEnv } from "./ports/from-env.js";
+import { capabilitySecretFromEnv, createPortsFromEnv } from "./ports/from-env.js";
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(APP_DIR, "../../..");
@@ -125,6 +126,13 @@ async function main(): Promise<void> {
     ...(schemaSuggestEnabled()
       ? { schemaExtractor: createSchemaExtractor({ llm, timeoutMs: schemaSuggestTimeoutMs() }) }
       : {}),
+    // Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish",
+    // apps/sample-api/src/domain/port.ts) needs an ApprovalPort to ever be allowed. Reuses the same
+    // KOHAKU_CAPABILITY_SECRET as the AuthzPort (capabilitySecretFromEnv) -- see that function's doc
+    // comment for why sharing the secret is by design (the "kohaku-approval.v1." prefix already
+    // separates the token domains) -- with no ApprovalStore (single-use enforcement is optional per
+    // design.md #63; out of scope for this demo).
+    approvals: createHmacApprovalPort(capabilitySecretFromEnv(process.env)),
   });
 
   const port = Number(process.env["PORT"] ?? 8787);

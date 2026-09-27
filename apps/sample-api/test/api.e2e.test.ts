@@ -1,7 +1,7 @@
-import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
+import { createHmacApprovalPort, createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { FixationRecord, SpecPatch, TabularData, UISpec } from "@kohaku-ui/spec-core";
-import { applyPatch, parseSpec } from "@kohaku-ui/spec-core";
+import { actionPayloadHash, applyPatch, parseSpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 
@@ -35,7 +35,10 @@ async function makeTestApp(objects: unknown[] = []) {
   const llm = new FakeLlm({ objects });
   const storage = makeMemoryStorage();
   const authz = createHmacAuthzPort("test-secret");
-  return { ...(await createApp({ llm, storage, authz })), llm };
+  // Governed actions (design.md #62/#63): wired by default so every test exercises the same shape the
+  // real demo does (index.ts wires createHmacApprovalPort the same way, off the same secret).
+  const approvals = createHmacApprovalPort("test-secret");
+  return { ...(await createApp({ llm, storage, authz, approvals })), llm };
 }
 
 function makeMemoryStorage() {
@@ -193,7 +196,13 @@ describe("sample-api E2E", () => {
     const res = await app.request("/api/kohaku/binding/action", {
       method: "POST",
       headers: { authorization: `Bearer ${cap}`, "content-type": "application/json" },
-      body: JSON.stringify({ action: "annotate", payload: { note: "test note", refs: [SUMMARY_REF] } }),
+      body: JSON.stringify({
+        action: "annotate",
+        payload: { note: "test note", refs: [SUMMARY_REF] },
+        // annotate is tier "confirm" (design.md #62/#63): the demo's DomainPort requires a same-request
+        // confirmed: true before invoking (see apps/sample-api/src/domain/port.ts).
+        confirmed: true,
+      }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -249,6 +258,7 @@ describe("sample-api E2E", () => {
       body: JSON.stringify({
         action: "annotate",
         payload: { note: "North America needs review", refs: [tableRef] },
+        confirmed: true,
       }),
     });
     expect(writeRes.status).toBe(200);
@@ -280,6 +290,115 @@ describe("sample-api E2E", () => {
     const pagedData = (await pagedRes.json()) as TabularData;
     expect(pagedData.rows).toHaveLength(10);
     expect(pagedData.nextCursor).toBeDefined();
+  });
+
+  it("governed actions: annotate (tier confirm) rejects without confirmed:true, then succeeds with it (design.md #62/#63)", async () => {
+    const { app } = await makeTestApp();
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability({ id: "demo-user", roles: ["user"] }, [
+      { kind: "write", ref: "annotate" },
+    ]);
+    const noConfirm = await app.request("/api/kohaku/binding/action", {
+      method: "POST",
+      headers: { authorization: `Bearer ${cap}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "annotate", payload: { note: "test note" } }),
+    });
+    expect(noConfirm.status).toBe(403);
+    const noConfirmBody = (await noConfirm.json()) as {
+      error: { code: string; approval: { action: string; tier: string } };
+    };
+    expect(noConfirmBody.error.code).toBe("APPROVAL_REQUIRED");
+    expect(noConfirmBody.error.approval).toMatchObject({ action: "annotate", tier: "confirm" });
+
+    const confirmed = await app.request("/api/kohaku/binding/action", {
+      method: "POST",
+      headers: { authorization: `Bearer ${cap}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "annotate", payload: { note: "test note" }, confirmed: true }),
+    });
+    expect(confirmed.status).toBe(200);
+  });
+
+  it("governed actions: annotate rejects a note over 500 characters with 422 ACTION_PARAMS_INVALID, before invoking (design.md #62)", async () => {
+    const { app } = await makeTestApp();
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability({ id: "demo-user", roles: ["user"] }, [
+      { kind: "write", ref: "annotate" },
+    ]);
+    const res = await app.request("/api/kohaku/binding/action", {
+      method: "POST",
+      headers: { authorization: `Bearer ${cap}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "annotate", payload: { note: "x".repeat(501) }, confirmed: true }),
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: { code: string; issues: { path: string; code: string }[] } };
+    expect(body.error.code).toBe("ACTION_PARAMS_INVALID");
+    expect(body.error.issues).toEqual([{ path: "note", code: "maxLength", message: expect.any(String) }]);
+  });
+
+  it("governed actions: publish (tier approve) requires a bound approval token issued to a different principal (design.md #62/#63)", async () => {
+    const { app } = await makeTestApp();
+    const authz = createHmacAuthzPort("test-secret");
+    // The requester's capability, distinct from the approver identity used below.
+    const requesterCap = await authz.issueCapability({ id: "demo-user", roles: ["user"] }, [
+      { kind: "write", ref: "publish" },
+    ]);
+    const payload = {};
+
+    const noApproval = await app.request("/api/kohaku/binding/action", {
+      method: "POST",
+      headers: { authorization: `Bearer ${requesterCap}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "publish", payload }),
+    });
+    expect(noApproval.status).toBe(403);
+    const noApprovalBody = (await noApproval.json()) as {
+      error: { code: string; approval: { action: string; tier: string; payloadHash: string } };
+    };
+    expect(noApprovalBody.error.code).toBe("APPROVAL_REQUIRED");
+    expect(noApprovalBody.error.approval).toMatchObject({ action: "publish", tier: "approve" });
+
+    // Self-approval rejection itself is already proven at the host-rest layer
+    // (packages/host-rest/test/approvals.test.ts) — this demo's own governance RBAC (host-deps.ts's
+    // authorizeGovernance) only grants action.approve to "admin", and this identity scheme derives a
+    // principal's id from its role (demo-${role}), so there is no role combination here that is both
+    // "admin" (able to call POST /approvals) and "demo-user" (the requester) at once to re-demonstrate it
+    // through this E2E path specifically.
+
+    // The default header identity resolves no x-kohaku-role header to "admin" (id "demo-admin"), distinct
+    // from the "demo-user" requester above, and the demo's governance RBAC grants admin every operation
+    // kind (including action.approve) — see apps/sample-api/src/app/host-deps.ts's authorizeGovernance.
+    const approveRes = await app.request("/api/kohaku/approvals", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "publish",
+        payloadHash: await actionPayloadHash(payload),
+        requesterId: "demo-user",
+      }),
+    });
+    expect(approveRes.status).toBe(200);
+    const { approval } = (await approveRes.json()) as { approval: string };
+    expect(approval.startsWith("kohaku-approval.v1.")).toBe(true);
+
+    const approved = await app.request("/api/kohaku/binding/action", {
+      method: "POST",
+      headers: { authorization: `Bearer ${requesterCap}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "publish", payload, approval }),
+    });
+    expect(approved.status).toBe(200);
+    const approvedBody = (await approved.json()) as { result: { ok: boolean; published: number } };
+    expect(approvedBody.result.ok).toBe(true);
+    expect(approvedBody.result.published).toBe(1);
+
+    // This demo wires no ApprovalStore (single-use enforcement is optional per design.md #63), so the
+    // same token verifies again for a second invoke of the identical (action, payload, requester) triple
+    // — a product that wants single-use tokens configures an ApprovalStore (packages/authz-hmac's
+    // createMemoryApprovalStore or its own), which this demo intentionally does not (out of scope).
+    const replay = await app.request("/api/kohaku/binding/action", {
+      method: "POST",
+      headers: { authorization: `Bearer ${requesterCap}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "publish", payload, approval }),
+    });
+    expect(replay.status).toBe(200);
   });
 
   it("the second compose of the same Intent is a cache hit", async () => {

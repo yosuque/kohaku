@@ -143,6 +143,20 @@ function createRevocationsFromEnv(env: NodeJS.ProcessEnv): RevocationsFromEnv {
 }
 
 /**
+ * Resolves `KOHAKU_CAPABILITY_SECRET` (default `"dev-secret-change-me"`, a file/hmac demo convenience
+ * only). An empty or whitespace-only value is treated exactly like an unset one (falls back to the fixed
+ * default) rather than being passed through as a literal near-empty secret -- `.trim()` here only decides
+ * *whether* the env value counts as set, the value returned is still the untrimmed original. Shared by
+ * `buildAuthzFromEnv` (the capability token itself, hmac or jwt) and `index.ts` (design.md #62/#63's
+ * approval-token port, `createHmacApprovalPort` -- the `"kohaku-approval.v1."` prefix already separates its
+ * domain from the capability token's, so reusing the same secret is by design, not a shortcut).
+ */
+export function capabilitySecretFromEnv(env: NodeJS.ProcessEnv): string {
+  const raw = env["KOHAKU_CAPABILITY_SECRET"];
+  return raw != null && raw.trim() !== "" ? raw : "dev-secret-change-me";
+}
+
+/**
  * Builds the AuthzPort itself (hmac / jwt) against an already-built revocation store. Shared by
  * `createAuthzFromEnv` (its own, independently-connected revocation store) and `createPortsFromEnv` (a
  * revocation store sharing one connection with the StoragePort) so the hmac/jwt selection logic -- and the
@@ -152,14 +166,7 @@ function buildAuthzFromEnv(
   env: NodeJS.ProcessEnv,
   revocations: CapabilityRevocationStore,
 ): { kind: AuthzKind; authz: AuthzPort; identity?: JwtIdentityResolver } {
-  // An empty or whitespace-only value is treated exactly like an unset one (falls back to the fixed
-  // default) rather than being passed through as a literal near-empty secret -- `.trim()` here only
-  // decides *whether* the env value counts as set, the value used below is still the untrimmed original.
-  const rawCapabilitySecret = env["KOHAKU_CAPABILITY_SECRET"];
-  const capabilitySecret =
-    rawCapabilitySecret != null && rawCapabilitySecret.trim() !== ""
-      ? rawCapabilitySecret
-      : "dev-secret-change-me";
+  const capabilitySecret = capabilitySecretFromEnv(env);
   const kind = (env["KOHAKU_AUTHZ"] ?? "hmac") as AuthzKind;
   // The fixed fallback above is a file/hmac demo convenience only. Once either storage or authz leaves
   // the single-process, header-based demo shape -- a shared redis/postgres backend, or JWT-verified

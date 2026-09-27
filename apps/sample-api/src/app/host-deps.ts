@@ -8,7 +8,7 @@ import {
   type Promotions,
   summarizeLineage,
 } from "@kohaku-ui/lineage";
-import type { AuthzPort, DomainPort, StoragePort } from "@kohaku-ui/spec-core";
+import type { ApprovalPort, AuthzPort, DomainPort, StoragePort } from "@kohaku-ui/spec-core";
 import { salesActionEffects } from "../action-effects.js";
 import { admitFixationForLocale } from "./compose-context.js";
 import type { RequestIdentity } from "./request-identity.js";
@@ -35,6 +35,9 @@ export function createHostDeps(args: {
    * than read from `process.env.KOHAKU_DEBUG` directly (a concurrent branch, T0-2, originally did that
    * here) — see `app-core.ts`'s `AppDeps.debug` doc comment for why this file must stay env-neutral. */
   debug?: boolean;
+  /** Governed actions (design.md #62/#63): verifies approval tokens for "approve"-tier actions. Passed
+   * through from `app-core.ts`'s `AppDeps.approvals` — see that field's own doc comment. */
+  approvals?: ApprovalPort;
 }): KohakuHostDeps {
   const {
     composeCtx,
@@ -47,6 +50,7 @@ export function createHostDeps(args: {
     identity,
     rateLimiter,
     debug = false,
+    approvals,
   } = args;
   return {
     compose: composeCtx,
@@ -112,5 +116,6 @@ export function createHostDeps(args: {
     // salesActionEffects and shared with the MCP side (sample-mcp's setup.ts) (not duplicated).
     actionEffects: salesActionEffects,
     rateLimiter,
+    approvals,
   };
 }

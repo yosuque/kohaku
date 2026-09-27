@@ -1,5 +1,6 @@
 import { createBindingClient } from "@kohaku-ui/data-binding";
 import {
+  type ActionManifest,
   type ImplRegistry,
   type RendererContextValue,
   RendererProvider,
@@ -32,6 +33,13 @@ export function SpecSurface(props: {
   renderSandbox?: (node: ComponentNode, spec: UISpec, theme: ThemeTokens) => ReactNode;
   /** Demo pass-through for SpecView's opt-in enableViewTransitions prop. Default off (see SpecView.tsx). */
   enableViewTransitions?: boolean;
+  /**
+   * The compose-issued Action manifest (design.md #62/#64, `ComposeView.actions`), for
+   * `useInvokeAction`'s client-side `preflightAction` check before the write round trip (a "confirm"-tier
+   * action pops `globalThis.confirm` via renderer-react's own default; an "approve"-tier action has no
+   * default here — see RendererContextValue.requestApproval's own doc comment — and stays gated).
+   */
+  actionManifest?: ActionManifest;
 }): ReactNode {
   // Compose the default theme + brand diff according to the theme mode (light/dark) and inject it into the Renderer.
   // Both the Web and chat surfaces pull the same theme, so the display matches regardless of mode.
@@ -95,9 +103,20 @@ export function SpecSurface(props: {
       ...(lang === "ja" ? { messages: JA_MESSAGES } : {}),
       ...(props.onEvent != null ? { onEvent: props.onEvent } : {}),
       ...(props.onActionResult != null ? { onActionResult: props.onActionResult } : {}),
+      ...(props.actionManifest != null ? { actionManifest: props.actionManifest } : {}),
       renderSandbox: props.renderSandbox ?? renderSandbox,
     }),
-    [impls, binding, theme, lang, props.onEvent, props.onActionResult, props.renderSandbox, renderSandbox],
+    [
+      impls,
+      binding,
+      theme,
+      lang,
+      props.onEvent,
+      props.onActionResult,
+      props.actionManifest,
+      props.renderSandbox,
+      renderSandbox,
+    ],
   );
 
   return (
