@@ -567,9 +567,41 @@ def verify_manifest_signature(
     return verify_bytes(message, signature, public_key)
 
 
+# Hard caps verify_evidence_pack enforces before reading, independent of what any particular reader's
+# size() reports -- a legitimately-signed manifest should never need a file this large, and refusing
+# outright is simpler and safer than trying to stream-hash an arbitrarily large one.
+_MAX_MANIFEST_JSON_BYTES: Final = 16 * 1024 * 1024  # 16 MiB
+_MAX_MANIFEST_SIG_BYTES: Final = 1 * 1024 * 1024  # 1 MiB (a base64 Ed25519 signature is ~88 bytes)
+_MAX_FILE_BYTES: Final = 64 * 1024 * 1024  # 64 MiB
+
+
+async def _try_size(reader: EvidencePackReader, path: str) -> int | None:
+    """reader.size(path) if the reader implements it (see EvidencePackReader's docstring), tolerating a
+    reader that doesn't (returns None) or one whose size() raises for this path (also None -- the
+    subsequent read surfaces its own error)."""
+    if not hasattr(reader, "size"):
+        return None
+    try:
+        # reader.size is not a declared EvidencePackReader member (see its doc comment), so mypy only
+        # knows about it via the hasattr narrowing above, as an untyped (Any) attribute -- cast documents
+        # the actual contract (an optional `async def size(self, path: str) -> int`) at the one call site.
+        return cast(int, await reader.size(path))
+    except Exception:  # noqa: BLE001 - any failure here just means "unknown", not a verify failure
+        return None
+
+
 class EvidencePackReader(Protocol):
     """Reads a built pack's contents back for `verify_evidence_pack`. This module has no filesystem
-    access of its own -- the caller supplies this over whatever storage the pack actually lives on."""
+    access of its own -- the caller supplies this over whatever storage the pack actually lives on.
+
+    `size` (the byte size of "manifest.json" / "manifest.sig" / a files[] entry's path, without reading
+    its content) is a *genuinely optional* extension, like `EvidenceSource.page_lineage` above -- and for
+    the same reason, deliberately **not** declared as a member of this Protocol (TS's counterpart is a
+    real optional interface field, `size?()`; Python has no equivalent that would not force every
+    existing reader, including test doubles, to grow a new method). `verify_evidence_pack` checks for it
+    with a plain `hasattr(reader, "size")` probe, the same convention `kohaku.spec.ports.StoragePort`
+    documents for `page_lineage`. A reader that omits it still gets the same hash/size cross-check, just
+    after the (potentially large) read rather than before it."""
 
     async def read_manifest(self) -> bytes: ...
 
@@ -584,6 +616,8 @@ class EvidencePackReader(Protocol):
         manifest never lists -- a signature over the manifest alone cannot detect an *addition* to the
         pack directory, only a change to something the manifest already references."""
         ...
+
+    # async def size(self, path: str) -> int: ...  # see the docstring above for why this stays commented out
 
 
 @dataclass(frozen=True)
@@ -642,6 +676,17 @@ async def verify_evidence_pack(
     can be trusted (including the very files[] list that drives every other check), so this returns
     immediately without reading a single other file from `reader`.
     """
+    manifest_size = await _try_size(reader, "manifest.json")
+    if manifest_size is not None and manifest_size > _MAX_MANIFEST_JSON_BYTES:
+        return VerifyEvidencePackResult(
+            ok=False,
+            manifest=None,
+            errors=[
+                f"manifest.json is {manifest_size} bytes, exceeding the {_MAX_MANIFEST_JSON_BYTES}-byte "
+                "cap; refusing to read it"
+            ],
+            mismatches=[],
+        )
     manifest_bytes = await reader.read_manifest()
     try:
         parsed = json.loads(manifest_bytes.decode("utf-8"))
@@ -659,6 +704,17 @@ async def verify_evidence_pack(
             mismatches=[],
         )
 
+    signature_size = await _try_size(reader, "manifest.sig")
+    if signature_size is not None and signature_size > _MAX_MANIFEST_SIG_BYTES:
+        return VerifyEvidencePackResult(
+            ok=False,
+            manifest=manifest,
+            errors=[
+                f"manifest.sig is {signature_size} bytes, exceeding the {_MAX_MANIFEST_SIG_BYTES}-byte "
+                "cap; refusing to read it"
+            ],
+            mismatches=[],
+        )
     signature_text = (await reader.read_signature()).decode("utf-8").strip()
     if not verify_manifest_signature(manifest, signature_text, public_key):
         return VerifyEvidencePackResult(
@@ -687,6 +743,20 @@ async def verify_evidence_pack(
         # check is repeated here rather than relying solely on the schema continuing to enforce it.
         if not is_safe_evidence_file_path(entry.path):
             errors.append(f"{entry.path}: not a safe evidence-pack path, refusing to read it")
+            continue
+        # Bounded reads: refuse before ever calling read_file, rather than buffering an oversized or
+        # size-mismatched file into memory only to discover the mismatch afterward (see
+        # EvidencePackReader's `size` doc comment). The manifest's own entry.bytes cap applies even
+        # without a size() reader; the on-disk-size-vs-entry.bytes check additionally needs one.
+        if entry.bytes > _MAX_FILE_BYTES:
+            errors.append(
+                f"{entry.path}: manifest records {entry.bytes} bytes, exceeding the "
+                f"{_MAX_FILE_BYTES}-byte cap; refusing to read it"
+            )
+            continue
+        actual_size = await _try_size(reader, entry.path)
+        if actual_size is not None and actual_size != entry.bytes:
+            errors.append(f"{entry.path}: is {actual_size} bytes on disk, manifest records {entry.bytes}")
             continue
         try:
             content = await reader.read_file(entry.path)

@@ -245,6 +245,83 @@ describe("signManifest / verifyEvidencePack", () => {
     expect(result.errors.some((e) => e.includes("unexpected file") && e.includes("b".repeat(64)))).toBe(true);
   });
 
+  it("refuses to read a files[] entry whose manifest-recorded size exceeds the hard cap, without ever calling readFile", async () => {
+    const keyPair = await generateEd25519KeyPair();
+    const publicRaw = await exportEd25519PublicKeyRaw(keyPair.publicKey);
+    const keyId = await deriveEd25519KeyId(publicRaw);
+    const pack = await buildEvidencePack({
+      source: emptySource(),
+      scope: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-31T23:59:59.999Z" },
+      generator: "test-generator/1",
+      signer: { alg: "Ed25519", keyId },
+      now: () => new Date("2026-02-01T00:00:00.000Z"),
+    });
+    const entry = pack.manifest.files.find((f) => f.path === "events.jsonl");
+    if (entry == null) throw new Error("test fixture assumption broken: events.jsonl entry missing");
+    // A manifest that (rightly signed or not) declares an implausible size for a file -- verify must
+    // refuse before ever reading it, not after buffering ~100MiB into memory to find out.
+    entry.bytes = 100 * 1024 * 1024;
+    const signatureBase64 = await signManifest(pack.manifest, keyPair.privateKey);
+    const manifestJson = JSON.stringify(pack.manifest);
+
+    const readFileCalls: string[] = [];
+    const reader: EvidencePackReader = {
+      async readManifest() {
+        return encoder.encode(manifestJson);
+      },
+      async readSignature() {
+        return encoder.encode(signatureBase64);
+      },
+      async readFile(path) {
+        readFileCalls.push(path);
+        const file = pack.files.find((f) => f.path === path);
+        if (file == null) throw new Error(`no such file in pack: ${path}`);
+        return file.content;
+      },
+      async listFiles() {
+        return ["manifest.json", "manifest.sig", ...pack.files.map((f) => f.path)];
+      },
+    };
+    const result = await verifyEvidencePack(reader, keyPair.publicKey);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("events.jsonl") && e.includes("cap"))).toBe(true);
+    // The oversized entry itself is never read (the other, untouched entries still are -- only this
+    // one file's declared size was implausible).
+    expect(readFileCalls.includes("events.jsonl")).toBe(false);
+  });
+
+  it("refuses to read a files[] entry whose on-disk size (via reader.size) differs from the manifest's recorded bytes, without reading it", async () => {
+    const { pack, manifestJson, signatureBase64, publicKey } = await buildSignedPack();
+    const targetPath = "events.jsonl";
+    const readFileCalls: string[] = [];
+    const reader: EvidencePackReader = {
+      async readManifest() {
+        return encoder.encode(manifestJson);
+      },
+      async readSignature() {
+        return encoder.encode(signatureBase64);
+      },
+      async readFile(path) {
+        readFileCalls.push(path);
+        const file = pack.files.find((f) => f.path === path);
+        if (file == null) throw new Error(`no such file in pack: ${path}`);
+        return file.content;
+      },
+      async listFiles() {
+        return ["manifest.json", "manifest.sig", ...pack.files.map((f) => f.path)];
+      },
+      // Simulates a file swapped on disk for something far larger than the (0-byte, empty-scope)
+      // manifest ever recorded for it -- verify must catch this from the stat alone, without reading.
+      async size(path) {
+        return path === targetPath ? 10 * 1024 * 1024 : 0;
+      },
+    };
+    const result = await verifyEvidencePack(reader, publicKey);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes(targetPath) && e.includes("on disk"))).toBe(true);
+    expect(readFileCalls.includes(targetPath)).toBe(false);
+  });
+
   it("fails when a single byte of the (always non-empty) manifest is tampered with after signing", async () => {
     // This fixture's scope has no events/promotions/fixations/artifacts, so every jsonl file is 0
     // bytes; the manifest itself is the one pack file guaranteed non-empty, so it stands in for "any

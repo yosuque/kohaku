@@ -178,6 +178,34 @@ export interface EvidencePackReader {
    * pack directory, only a change to something the manifest already references.
    */
   listFiles(): Promise<string[]>;
+  /**
+   * Optional: the byte size of `"manifest.json"`, `"manifest.sig"`, or a `files[]` entry's `path`,
+   * without reading its content. When implemented, `verifyEvidencePack` checks it against the expected
+   * size (a fixed cap for the two fixed filenames, or the signed manifest's own recorded `bytes` for a
+   * `files[]` entry) *before* ever calling `readManifest`/`readSignature`/`readFile` for that path --
+   * bounding how much of an untrusted pack's oversized or size-mismatched content this function will
+   * buffer into memory. A reader that omits this still gets the same hash/size cross-check, just after
+   * the (potentially large) read.
+   */
+  size?(path: string): Promise<number>;
+}
+
+/** Hard caps `verifyEvidencePack` enforces before reading, independent of what any particular reader's
+ * `size()` reports -- a legitimately-signed manifest should never need a file this large, and refusing
+ * outright is simpler and safer than trying to stream-hash an arbitrarily large one. */
+const MAX_MANIFEST_JSON_BYTES = 16 * 1024 * 1024; // 16 MiB
+const MAX_MANIFEST_SIG_BYTES = 1 * 1024 * 1024; // 1 MiB (a base64 Ed25519 signature is ~88 bytes)
+const MAX_FILE_BYTES = 64 * 1024 * 1024; // 64 MiB
+
+/** `reader.size?.(path)`, tolerating a reader that doesn't implement it (returns undefined) or one whose
+ * `size()` throws for this path (also undefined -- the subsequent read will surface its own error). */
+async function trySize(reader: EvidencePackReader, path: string): Promise<number | undefined> {
+  if (reader.size == null) return undefined;
+  try {
+    return await reader.size(path);
+  } catch {
+    return undefined;
+  }
 }
 
 export interface VerifyEvidencePackResult {
@@ -257,6 +285,16 @@ export async function verifyEvidencePack(
   reader: EvidencePackReader,
   publicKey: Ed25519PublicKey,
 ): Promise<VerifyEvidencePackResult> {
+  const manifestSize = await trySize(reader, "manifest.json");
+  if (manifestSize != null && manifestSize > MAX_MANIFEST_JSON_BYTES) {
+    return {
+      ok: false,
+      errors: [
+        `manifest.json is ${manifestSize} bytes, exceeding the ${MAX_MANIFEST_JSON_BYTES}-byte cap; refusing to read it`,
+      ],
+      mismatches: [],
+    };
+  }
   const manifestBytes = await reader.readManifest();
   let manifest: EvidenceManifest;
   try {
@@ -278,6 +316,17 @@ export async function verifyEvidencePack(
     };
   }
 
+  const signatureSize = await trySize(reader, "manifest.sig");
+  if (signatureSize != null && signatureSize > MAX_MANIFEST_SIG_BYTES) {
+    return {
+      ok: false,
+      manifest,
+      errors: [
+        `manifest.sig is ${signatureSize} bytes, exceeding the ${MAX_MANIFEST_SIG_BYTES}-byte cap; refusing to read it`,
+      ],
+      mismatches: [],
+    };
+  }
   const signatureText = decoder.decode(await reader.readSignature()).trim();
   const signatureOk = await verifyManifestSignature(manifest, signatureText, publicKey);
   if (!signatureOk) {
@@ -313,6 +362,21 @@ export async function verifyEvidencePack(
     // the check is repeated here rather than relying solely on the schema continuing to enforce it.
     if (!isSafeEvidenceFilePath(entry.path)) {
       errors.push(`${entry.path}: not a safe evidence-pack path, refusing to read it`);
+      continue;
+    }
+    // Bounded reads: refuse before ever calling readFile, rather than buffering an oversized or
+    // size-mismatched file into memory only to discover the mismatch afterward (see EvidencePackReader's
+    // `size` doc comment). The manifest's own `entry.bytes` cap applies even without a `size()` reader;
+    // the on-disk-size-vs-`entry.bytes` check additionally needs one.
+    if (entry.bytes > MAX_FILE_BYTES) {
+      errors.push(
+        `${entry.path}: manifest records ${entry.bytes} bytes, exceeding the ${MAX_FILE_BYTES}-byte cap; refusing to read it`,
+      );
+      continue;
+    }
+    const actualSize = await trySize(reader, entry.path);
+    if (actualSize != null && actualSize !== entry.bytes) {
+      errors.push(`${entry.path}: is ${actualSize} bytes on disk, manifest records ${entry.bytes}`);
       continue;
     }
     let content: Uint8Array;

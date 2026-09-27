@@ -251,6 +251,20 @@ describe("kohaku evidence verify (security hardening)", () => {
     expect(result.errors.some((e) => e.includes("events.jsonl") && e.includes("symlink"))).toBe(true);
   });
 
+  it("refuses a file whose on-disk size differs from the manifest's recorded bytes, without buffering it (bounded reads)", async () => {
+    const { outDir, publicKeyPath } = await exportedPack();
+    const eventsPath = join(outDir, "events.jsonl");
+    const originalSize = statSync(eventsPath).size;
+    // A file swapped on disk for something much larger than what the (signed) manifest recorded --
+    // verify must catch this from a stat, not by reading the whole thing into memory first.
+    writeFileSync(eventsPath, "x".repeat(5 * 1024 * 1024));
+    expect(statSync(eventsPath).size).not.toBe(originalSize);
+
+    const result = await runEvidenceVerify(outDir, publicKeyPath);
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((e) => e.includes("events.jsonl") && e.includes("on disk"))).toBe(true);
+  });
+
   it("rejects a manifest whose files[].path is a traversal attempt, without reading any file", async () => {
     const { outDir, publicKeyPath } = await exportedPack();
     const manifestPath = join(outDir, "manifest.json");

@@ -277,6 +277,101 @@ def test_verify_fails_when_a_pack_file_byte_is_tampered_with(tmp_path: Path) -> 
     asyncio.run(run())
 
 
+def test_verify_refuses_a_files_entry_whose_manifest_recorded_size_exceeds_the_hard_cap(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await seed(storage, "view.composed", {"tier": "L1"})
+        keypair = generate_ed25519_keypair()
+        key_id = derive_ed25519_key_id(export_ed25519_public_key_raw(keypair.public_key))
+        pack = await build_evidence_pack(
+            source=create_storage_evidence_source(storage),
+            scope=_SCOPE,
+            generator="pytest/1",
+            signer=EvidenceManifestSigner(keyId=key_id),
+        )
+        entry = next(f for f in pack.manifest.files if f.path == "events.jsonl")
+        # A manifest that (rightly signed or not) declares an implausible size for a file -- verify must
+        # refuse before ever reading it, not after buffering ~100MiB into memory to find out.
+        entry.bytes = 100 * 1024 * 1024
+        signature = sign_manifest(pack.manifest, keypair.private_key)
+        manifest_json = pack.manifest.model_dump_json()
+
+        read_file_calls: list[str] = []
+
+        class _SpyReader:
+            async def read_manifest(self) -> bytes:
+                return manifest_json.encode("utf-8")
+
+            async def read_signature(self) -> bytes:
+                return signature.encode("utf-8")
+
+            async def read_file(self, path: str) -> bytes:
+                read_file_calls.append(path)
+                for f in pack.files:
+                    if f.path == path:
+                        return f.content
+                raise FileNotFoundError(path)
+
+            async def list_files(self) -> list[str]:
+                return ["manifest.json", "manifest.sig", *(f.path for f in pack.files)]
+
+        result = await verify_evidence_pack(_SpyReader(), keypair.public_key)
+        assert result.ok is False
+        assert any("events.jsonl" in e and "cap" in e for e in result.errors)
+        # The oversized entry itself is never read (the other, untouched entries still are).
+        assert "events.jsonl" not in read_file_calls
+
+    asyncio.run(run())
+
+
+def test_verify_refuses_a_files_entry_whose_on_disk_size_differs_via_size(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await seed(storage, "view.composed", {"tier": "L1"})
+        keypair = generate_ed25519_keypair()
+        key_id = derive_ed25519_key_id(export_ed25519_public_key_raw(keypair.public_key))
+        pack = await build_evidence_pack(
+            source=create_storage_evidence_source(storage),
+            scope=_SCOPE,
+            generator="pytest/1",
+            signer=EvidenceManifestSigner(keyId=key_id),
+        )
+        signature = sign_manifest(pack.manifest, keypair.private_key)
+        manifest_json = pack.manifest.model_dump_json()
+        target_path = "events.jsonl"
+        read_file_calls: list[str] = []
+
+        class _SpyReader:
+            async def read_manifest(self) -> bytes:
+                return manifest_json.encode("utf-8")
+
+            async def read_signature(self) -> bytes:
+                return signature.encode("utf-8")
+
+            async def read_file(self, path: str) -> bytes:
+                read_file_calls.append(path)
+                for f in pack.files:
+                    if f.path == path:
+                        return f.content
+                raise FileNotFoundError(path)
+
+            async def list_files(self) -> list[str]:
+                return ["manifest.json", "manifest.sig", *(f.path for f in pack.files)]
+
+            async def size(self, path: str) -> int:
+                # Simulates a file swapped on disk for something far larger than the manifest recorded.
+                return 10 * 1024 * 1024 if path == target_path else 0
+
+        result = await verify_evidence_pack(_SpyReader(), keypair.public_key)
+        assert result.ok is False
+        assert any(target_path in e and "on disk" in e for e in result.errors)
+        assert target_path not in read_file_calls
+
+    asyncio.run(run())
+
+
 def test_verify_fails_with_the_wrong_public_key(tmp_path: Path) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)

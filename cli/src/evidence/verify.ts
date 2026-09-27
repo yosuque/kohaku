@@ -1,4 +1,4 @@
-import { type Dirent, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { type Dirent, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
   type EvidencePackReader,
@@ -8,31 +8,44 @@ import {
 import { importPublicKeyPem } from "./keys.js";
 
 /**
- * Reads `relativePath` inside `rootReal` (`rootReal` must already be `realpathSync`-resolved), refusing
- * anything that is not a plain regular file physically inside it. `relativePath` ultimately comes from
- * `manifest.files[].path` -- data inside a manifest a verifier is, by definition, not yet sure it can
- * trust -- so this closes both path traversal (`..`, an absolute path) and a symlink escape, even though
- * `EvidenceFileEntrySchema` (and `verifyEvidencePack`'s own re-check) already constrain the path's
- * string shape: this function does not rely on either of those continuing to hold.
+ * Resolves `relativePath` inside `rootReal` (`rootReal` must already be `realpathSync`-resolved),
+ * refusing anything that is not a plain regular file physically inside it, and returns its real,
+ * fully-resolved path. `relativePath` ultimately comes from `manifest.files[].path` -- data inside a
+ * manifest a verifier is, by definition, not yet sure it can trust -- so this closes both path traversal
+ * (`..`, an absolute path) and a symlink escape, even though `EvidenceFileEntrySchema` (and
+ * `verifyEvidencePack`'s own re-check) already constrain the path's string shape: this function does not
+ * rely on either of those continuing to hold. Shared by `safeReadFile` and `safeStatSize` so a size check
+ * and the read it may precede are guaranteed to resolve to the exact same on-disk target.
  */
-function safeReadFile(rootReal: string, relativePath: string): Uint8Array {
+function resolveSafePath(rootReal: string, relativePath: string): string {
   const target = resolve(rootReal, relativePath);
   if (target !== rootReal && !target.startsWith(rootReal + sep)) {
-    throw new Error(`refusing to read "${relativePath}": escapes the pack directory`);
+    throw new Error(`refusing to access "${relativePath}": escapes the pack directory`);
   }
   // lstat (not stat): a symlink at the leaf position is refused outright, regardless of where it
   // points -- a legitimate evidence pack is a plain export directory and should never contain one.
   const lstat = lstatSync(target);
   if (lstat.isSymbolicLink()) {
-    throw new Error(`refusing to read "${relativePath}": it is a symlink`);
+    throw new Error(`refusing to access "${relativePath}": it is a symlink`);
   }
   // realpath additionally resolves a symlinked *intermediate* directory component (e.g. "artifacts"
   // itself being a symlink), which lstat on the leaf alone cannot detect.
   const realTarget = realpathSync(target);
   if (realTarget !== rootReal && !realTarget.startsWith(rootReal + sep)) {
-    throw new Error(`refusing to read "${relativePath}": resolves outside the pack directory`);
+    throw new Error(`refusing to access "${relativePath}": resolves outside the pack directory`);
   }
-  return new Uint8Array(readFileSync(realTarget));
+  return realTarget;
+}
+
+function safeReadFile(rootReal: string, relativePath: string): Uint8Array {
+  return new Uint8Array(readFileSync(resolveSafePath(rootReal, relativePath)));
+}
+
+/** The on-disk byte size of `relativePath`, without reading its content -- `EvidencePackReader.size`'s
+ * implementation, so `verifyEvidencePack` can refuse an oversized or size-mismatched file before this
+ * module ever buffers it into memory via `safeReadFile`. */
+function safeStatSize(rootReal: string, relativePath: string): number {
+  return statSync(resolveSafePath(rootReal, relativePath)).size;
 }
 
 /** Lists every regular file (and, deliberately, every symlink -- so one shows up as an "unexpected
@@ -79,6 +92,9 @@ function directoryReader(dir: string): EvidencePackReader {
     },
     async listFiles() {
       return listFilesRecursive(rootReal, rootReal);
+    },
+    async size(path: string) {
+      return safeStatSize(rootReal, path);
     },
   };
 }
