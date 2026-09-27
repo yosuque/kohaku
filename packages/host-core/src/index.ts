@@ -1,4 +1,5 @@
 export { createKeyedMutex, type KeyedMutex } from "@kohaku-ui/spec-core";
+export type { ActionAuditRecorder } from "./action-audit.js";
 export { type ActionEffects, type ActionEffectsResponse, applyActionEffects } from "./action-effects.js";
 export {
   type ActionGate,

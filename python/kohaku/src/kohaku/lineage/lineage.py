@@ -30,6 +30,10 @@ from kohaku.spec import (
 
 from .events import (
     COMPONENT_EVENT_TYPES,
+    ActionApprovalRequestedPayload,
+    ActionApprovedPayload,
+    ActionDeniedPayload,
+    ActionInvokedPayload,
     Clock,
     PolicyAppliedPayload,
     ViewComposedDecision,
@@ -491,6 +495,77 @@ class Lineage:
         if event.get("label") is not None:
             payload["label"] = event["label"]
         await self.record("policy.applied", payload, actor, tenant)
+
+    async def action_invoked(
+        self,
+        event: ActionInvokedPayload,
+        actor: LineageActor | None = None,
+        tenant: str | None = None,
+    ) -> None:
+        """Records action.invoked (design.md #62/#63) -- the ActionGate returned "allow"."""
+        payload: dict[str, Any] = {
+            "action": event["action"],
+            "payloadHash": event["payloadHash"],
+            "tier": event["tier"],
+        }
+        if event.get("correlationId") is not None:
+            payload["correlationId"] = event["correlationId"]
+        await self.record("action.invoked", payload, actor, tenant)
+
+    async def action_denied(
+        self,
+        event: ActionDeniedPayload,
+        actor: LineageActor | None = None,
+        tenant: str | None = None,
+    ) -> None:
+        """Records action.denied (design.md #63) -- a presented approval token did not verify."""
+        payload: dict[str, Any] = {
+            "action": event["action"],
+            "payloadHash": event["payloadHash"],
+            "tier": event["tier"],
+            "reason": event["reason"],
+        }
+        if event.get("correlationId") is not None:
+            payload["correlationId"] = event["correlationId"]
+        await self.record("action.denied", payload, actor, tenant)
+
+    async def action_approval_requested(
+        self,
+        event: ActionApprovalRequestedPayload,
+        actor: LineageActor | None = None,
+        tenant: str | None = None,
+    ) -> None:
+        """Records action.approvalRequested (design.md #63) -- nothing was presented yet. The caller
+        (create_action_audit_recorder) is responsible for whether event["payload"] is populated (its own
+        record_payload option); this method records unconditionally whatever it is given."""
+        payload: dict[str, Any] = {
+            "action": event["action"],
+            "payloadHash": event["payloadHash"],
+            "tier": event["tier"],
+            "requestId": event["requestId"],
+        }
+        if event.get("payload") is not None:
+            payload["payload"] = event["payload"]
+        if event.get("correlationId") is not None:
+            payload["correlationId"] = event["correlationId"]
+        await self.record("action.approvalRequested", payload, actor, tenant)
+
+    async def action_approved(
+        self,
+        event: ActionApprovedPayload,
+        actor: LineageActor | None = None,
+        tenant: str | None = None,
+    ) -> None:
+        """Records action.approved (design.md #63) -- a presented approval grant was successfully consumed."""
+        payload: dict[str, Any] = {
+            "action": event["action"],
+            "payloadHash": event["payloadHash"],
+            "approverId": event["approverId"],
+            "requesterId": event["requesterId"],
+        }
+        if event.get("correlationId") is not None:
+            payload["correlationId"] = event["correlationId"]
+        await self.record("action.approved", payload, actor, tenant)
 
     async def explain_view(self, spec_hash: str) -> list[LineageEventRecord]:
         """The audit query for "why this screen was displayed"."""

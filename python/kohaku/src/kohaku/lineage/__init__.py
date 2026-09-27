@@ -12,10 +12,15 @@ from .analytics import (
     summarize_lineage,
 )
 from .events import (
+    ACTION_EVENT_TYPES,
     COMPONENT_EVENT_TYPES,
     FIXATION_EVENT_TYPES,
     POLICY_EVENT_TYPES,
     VIEW_EVENT_TYPES,
+    ActionApprovalRequestedPayload,
+    ActionApprovedPayload,
+    ActionDeniedPayload,
+    ActionInvokedPayload,
     ActorKind,
     Clock,
     ComponentGeneratedPayload,
@@ -121,9 +126,15 @@ from .promotion import (
     query_template_from_wire,
     transition,
 )
-from .recorder import ViewRecorder, create_view_recorder
+from .recorder import (
+    ActionAuditRecorder,
+    ViewRecorder,
+    create_action_audit_recorder,
+    create_view_recorder,
+)
 
 __all__ = [
+    "ACTION_EVENT_TYPES",
     "COMPONENT_EVENT_TYPES",
     "DEFAULT_FIXATION_POLICY",
     "DEFAULT_PROMOTION_POLICY",
@@ -134,6 +145,11 @@ __all__ = [
     "FIXATION_EVENT_TYPES",
     "POLICY_EVENT_TYPES",
     "VIEW_EVENT_TYPES",
+    "ActionApprovalRequestedPayload",
+    "ActionApprovedPayload",
+    "ActionAuditRecorder",
+    "ActionDeniedPayload",
+    "ActionInvokedPayload",
     "ActorKind",
     "ArtifactClaim",
     "ArtifactNotFoundError",
@@ -206,6 +222,7 @@ __all__ = [
     "artifact_id_of",
     "build_evidence_pack",
     "component_draft_from_wire",
+    "create_action_audit_recorder",
     "create_fixations",
     "create_lineage",
     "create_promotions",

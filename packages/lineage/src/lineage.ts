@@ -11,6 +11,10 @@ import {
 } from "@kohaku-ui/spec-core";
 import { ulid } from "ulid";
 import {
+  type ActionApprovalRequestedPayload,
+  type ActionApprovedPayload,
+  type ActionDeniedPayload,
+  type ActionInvokedPayload,
   type ActorKind,
   COMPONENT_EVENT_TYPES,
   type ComponentUsedPayload,
@@ -175,6 +179,23 @@ export interface Lineage {
    * not audit-worthy") -- this method unconditionally records whatever event it is given.
    */
   policyApplied(event: PolicyAppliedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
+
+  /** Records `action.invoked` (design.md #62/#63) -- the ActionGate returned `allow`. */
+  actionInvoked(event: ActionInvokedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
+  /** Records `action.denied` (design.md #63) -- a presented approval token did not verify. */
+  actionDenied(event: ActionDeniedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
+  /**
+   * Records `action.approvalRequested` (design.md #63) -- nothing was presented yet. The caller
+   * (`createActionAuditRecorder`) is responsible for whether `event.payload` is populated (its own
+   * `recordPayload` option); this method records unconditionally whatever it is given.
+   */
+  actionApprovalRequested(
+    event: ActionApprovalRequestedPayload,
+    actor?: ActorKind,
+    tenant?: string,
+  ): Promise<void>;
+  /** Records `action.approved` (design.md #63) -- a presented approval grant was successfully consumed. */
+  actionApproved(event: ActionApprovedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
 
   /** Audit query for "why was this view shown" */
   explainView(specHash: string): Promise<LineageEventRecord[]>;
@@ -383,6 +404,66 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
           ...(event.label != null ? { label: event.label } : {}),
           changedPaths: event.changedPaths,
           tenants: event.tenants,
+        },
+        actor,
+        tenant,
+      );
+    },
+
+    async actionInvoked(event, actor, tenant) {
+      await record(
+        "action.invoked",
+        {
+          action: event.action,
+          payloadHash: event.payloadHash,
+          tier: event.tier,
+          ...(event.correlationId != null ? { correlationId: event.correlationId } : {}),
+        },
+        actor,
+        tenant,
+      );
+    },
+
+    async actionDenied(event, actor, tenant) {
+      await record(
+        "action.denied",
+        {
+          action: event.action,
+          payloadHash: event.payloadHash,
+          tier: event.tier,
+          reason: event.reason,
+          ...(event.correlationId != null ? { correlationId: event.correlationId } : {}),
+        },
+        actor,
+        tenant,
+      );
+    },
+
+    async actionApprovalRequested(event, actor, tenant) {
+      await record(
+        "action.approvalRequested",
+        {
+          action: event.action,
+          payloadHash: event.payloadHash,
+          tier: event.tier,
+          requestId: event.requestId,
+          ...(event.payload != null ? { payload: event.payload } : {}),
+          ...(event.correlationId != null ? { correlationId: event.correlationId } : {}),
+        },
+        actor,
+        tenant,
+      );
+    },
+
+    async actionApproved(event, actor, tenant) {
+      await record(
+        "action.approved",
+        {
+          action: event.action,
+          payloadHash: event.payloadHash,
+          approverId: event.approverId,
+          requesterId: event.requesterId,
+          ...(event.correlationId != null ? { correlationId: event.correlationId } : {}),
         },
         actor,
         tenant,

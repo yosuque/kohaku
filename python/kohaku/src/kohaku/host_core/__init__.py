@@ -6,6 +6,7 @@ source of truth for the fixation (L1->L0) delivery + staleness self-healing sequ
 a composed Spec, and fail-open observability-hook helpers.
 """
 
+from .action_audit import ActionAuditRecorder
 from .action_effects import (
     ActionEffectsHook,
     ActionEffectsResponse,
@@ -114,6 +115,7 @@ __all__ = [
     "DEFAULT_CAPABILITY_TTL_SECONDS",
     "DEFAULT_MAX_MEMORY_ENTRIES",
     "TRACEPARENT_RE",
+    "ActionAuditRecorder",
     "ActionEffectsHook",
     "ActionEffectsResponse",
     "ActionEffectsResult",
