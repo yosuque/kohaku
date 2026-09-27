@@ -434,6 +434,88 @@ class TestInvokeAction:
         assert ei.value.code == "RESOLVE_FAILED"
 
 
+class TestInvokeActionGovernedErrors:
+    """Governed-action error mapping (design.md #62/#63), pytest version of TS's "invokeAction:
+    governed-action error mapping" describe block."""
+
+    def test_422_action_params_invalid_carries_issues(self) -> None:
+        body = {
+            "error": {
+                "code": "ACTION_PARAMS_INVALID",
+                "message": "action parameters failed validation",
+                "issues": [{"path": "note", "code": "maxLength", "message": "expected at most 5 characters"}],
+            }
+        }
+        client = create_binding_client(
+            BindingClientConfig(
+                fetcher=_const_fetcher(200, _DATA), action_fetcher=_const_action_fetcher(422, body)
+            )
+        )
+        with pytest.raises(BindingError) as ei:
+            asyncio.run(client.invoke_action("annotate", {"note": "way too long"}))
+        assert ei.value.code == "ACTION_PARAMS_INVALID"
+        assert ei.value.issues is not None
+        assert [(i.path, i.code, i.message) for i in ei.value.issues] == [
+            ("note", "maxLength", "expected at most 5 characters")
+        ]
+
+    def test_403_approval_required_carries_approval_descriptor(self) -> None:
+        body = {
+            "error": {
+                "code": "APPROVAL_REQUIRED",
+                "message": "this action requires confirmation (confirmed: true)",
+                "approval": {
+                    "requestId": "r1",
+                    "action": "annotate",
+                    "tier": "confirm",
+                    "payloadHash": "sha256:x",
+                },
+            }
+        }
+        client = create_binding_client(
+            BindingClientConfig(
+                fetcher=_const_fetcher(200, _DATA), action_fetcher=_const_action_fetcher(403, body)
+            )
+        )
+        with pytest.raises(BindingError) as ei:
+            asyncio.run(client.invoke_action("annotate", {"note": "hi"}))
+        assert ei.value.code == "APPROVAL_REQUIRED"
+        assert ei.value.approval is not None
+        assert ei.value.approval.requestId == "r1"
+        assert ei.value.approval.action == "annotate"
+        assert ei.value.approval.tier == "confirm"
+        assert ei.value.approval.payloadHash == "sha256:x"
+
+    def test_plain_403_without_envelope_falls_back_to_unauthorized(self) -> None:
+        client = create_binding_client(
+            BindingClientConfig(
+                fetcher=_const_fetcher(200, _DATA),
+                action_fetcher=_const_action_fetcher(403, {"error": {"code": "CAPABILITY_DENIED"}}),
+            )
+        )
+        with pytest.raises(BindingError) as ei:
+            asyncio.run(client.invoke_action("annotate", {"note": "hi"}))
+        assert ei.value.code == "UNAUTHORIZED"
+
+    def test_confirmed_and_approval_are_forwarded_to_action_fetcher(self) -> None:
+        seen: dict[str, Any] = {}
+
+        async def action_fetcher(_a: str, _p: Any, init: FetchInit) -> FetchResponseLike:
+            seen["confirmed"] = init.confirmed
+            seen["approval"] = init.approval
+            return FetchResponseLike(status=200, body={"result": {"ok": True}})
+
+        client = create_binding_client(
+            BindingClientConfig(fetcher=_const_fetcher(200, _DATA), action_fetcher=action_fetcher)
+        )
+        asyncio.run(
+            client.invoke_action(
+                "annotate", {"note": "hi"}, ActionOptions(confirmed=True, approval="tok")
+            )
+        )
+        assert seen == {"confirmed": True, "approval": "tok"}
+
+
 class TestBindVariantVersionSkip:
     """Client-derived bind variants skip reconciliation (working with resolve_bound_ref).
 

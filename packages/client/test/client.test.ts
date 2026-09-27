@@ -537,6 +537,43 @@ describe("@kohaku-ui/client error code discrimination (KohakuHostError)", () => 
     const err = hostErrorFromResponse(400, { error: { code: "BAD_REQUEST", message: "bad" } });
     expect(err.promotionStatus).toBeUndefined();
   });
+
+  it("a 422 ACTION_PARAMS_INVALID envelope's error.issues is exposed as issues", () => {
+    const err = hostErrorFromResponse(422, {
+      error: {
+        code: "ACTION_PARAMS_INVALID",
+        message: "action parameters failed validation",
+        issues: [{ path: "note", code: "maxLength", message: "expected at most 5 characters" }],
+      },
+    });
+    expect(err.code).toBe("ACTION_PARAMS_INVALID");
+    expect(err.issues).toEqual([
+      { path: "note", code: "maxLength", message: "expected at most 5 characters" },
+    ]);
+  });
+
+  it("a 403 APPROVAL_REQUIRED envelope's error.approval is exposed as approval", () => {
+    const err = hostErrorFromResponse(403, {
+      error: {
+        code: "APPROVAL_REQUIRED",
+        message: "this action requires an approval token",
+        approval: { requestId: "r1", action: "publish", tier: "approve", payloadHash: "sha256:x" },
+      },
+    });
+    expect(err.code).toBe("APPROVAL_REQUIRED");
+    expect(err.approval).toEqual({
+      requestId: "r1",
+      action: "publish",
+      tier: "approve",
+      payloadHash: "sha256:x",
+    });
+  });
+
+  it("an envelope without error.issues/error.approval leaves both undefined", () => {
+    const err = hostErrorFromResponse(400, { error: { code: "BAD_REQUEST", message: "bad" } });
+    expect(err.issues).toBeUndefined();
+    expect(err.approval).toBeUndefined();
+  });
 });
 
 describe("@kohaku-ui/client headers hook (tenant propagation)", () => {

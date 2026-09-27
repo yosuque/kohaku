@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from kohaku.spec import (
+    ActionParamIssue,
+    ApprovalRequiredInfo,
     JsonObject,
     JsonValue,
     QueryRef,
@@ -53,6 +55,12 @@ class FetchInit:
 
     capability: str | None = None
     signal: AbortSignalLike | None = None
+    confirmed: bool | None = None
+    """Sibling field of the wire body (design.md #62/#63), meaningful only to action_fetcher (mirrors
+    POST /binding/action's `{action, payload, confirmed?, approval?}` shape). Always None for fetcher
+    (the read path has no tier gate)."""
+    approval: str | None = None
+    """Sibling field of the wire body, meaningful only to action_fetcher. See `confirmed`'s doc comment."""
 
 
 # Function for swapping out the default HTTP fetcher (for tests and the MCP bridge).
@@ -94,6 +102,13 @@ class ActionOptions:
 
     signal: AbortSignalLike | None = None
     """Per-request cancellation. Propagated to action_fetcher's init.signal (symmetric with fetcher)."""
+    confirmed: bool | None = None
+    """Confirms a "confirm"-tier action (design.md #62/#63). Ignored (harmless) for "auto" / "approve"
+    tiers. Without it, a "confirm"-tier invoke fails with APPROVAL_REQUIRED."""
+    approval: str | None = None
+    """A bound, short-lived approval token for an "approve"-tier action (design.md #63; obtained out of
+    band, e.g. via the host's POST /approvals). Ignored (harmless) for "auto" / "confirm" tiers. Without
+    it, an "approve"-tier invoke fails with APPROVAL_REQUIRED."""
 
 
 @dataclass(frozen=True)
@@ -243,8 +258,26 @@ class BindingClient:
         if self._action_fetcher is None:
             raise BindingError("RESOLVE_FAILED", "action fetcher is not configured")
         resp = await self._action_fetcher(
-            action, payload, FetchInit(capability=self._capability(), signal=o.signal)
+            action,
+            payload,
+            FetchInit(
+                capability=self._capability(), signal=o.signal, confirmed=o.confirmed, approval=o.approval
+            ),
         )
+        # Governed actions (design.md #62/#63): a 422/403 carrying the host's structured envelope maps to
+        # its own BindingErrorCode (distinct from the generic UNAUTHORIZED/RESOLVE_FAILED below) so a
+        # caller can drive an "invalid" / "awaiting_approval" phase without string-matching the message. A
+        # 422/403 without that envelope shape (a non-conformant host, or a 403 that is a genuine
+        # capability denial) falls through to the generic mapping.
+        envelope = _action_error_envelope(resp.body)
+        if resp.status == 422 and envelope is not None and envelope.code == "ACTION_PARAMS_INVALID":
+            raise BindingError(
+                "ACTION_PARAMS_INVALID", envelope.message, status=resp.status, issues=envelope.issues
+            )
+        if resp.status == 403 and envelope is not None and envelope.code == "APPROVAL_REQUIRED":
+            raise BindingError(
+                "APPROVAL_REQUIRED", envelope.message, status=resp.status, approval=envelope.approval
+            )
         if resp.status in (401, 403):
             raise BindingError("UNAUTHORIZED", f'action "{action}" denied', status=resp.status)
         if resp.status < 200 or resp.status >= 300:
@@ -295,6 +328,67 @@ def _reserved_from_options(opts: ResolveOptions) -> dict[str, str]:
         reserved["_sort"] = opts.sort.key
         reserved["_dir"] = opts.sort.dir
     return reserved
+
+
+@dataclass(frozen=True)
+class _ActionErrorEnvelope:
+    code: str
+    message: str
+    issues: list[ActionParamIssue] | None = None
+    approval: ApprovalRequiredInfo | None = None
+
+
+def _action_error_envelope(body: Any) -> _ActionErrorEnvelope | None:
+    """Extracts `{code, message, issues?, approval?}` from a `/binding/action` error response body shaped
+    `{error: {...}}` (host_rest's error envelope), or None for a non-conformant / empty body. message
+    falls back to code so callers never construct a BindingError with an empty message."""
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    if not isinstance(code, str):
+        return None
+    message = error.get("message")
+    if not isinstance(message, str):
+        message = code
+
+    issues: list[ActionParamIssue] | None = None
+    raw_issues = error.get("issues")
+    if isinstance(raw_issues, list):
+        issues = [
+            ActionParamIssue(path=i["path"], code=i["code"], message=i["message"])
+            for i in raw_issues
+            if isinstance(i, dict)
+            and isinstance(i.get("path"), str)
+            and isinstance(i.get("code"), str)
+            and isinstance(i.get("message"), str)
+        ]
+
+    approval: ApprovalRequiredInfo | None = None
+    raw_approval = error.get("approval")
+    if isinstance(raw_approval, dict):
+        request_id, action, tier, payload_hash = (
+            raw_approval.get("requestId"),
+            raw_approval.get("action"),
+            raw_approval.get("tier"),
+            raw_approval.get("payloadHash"),
+        )
+        if (
+            isinstance(request_id, str)
+            and isinstance(action, str)
+            and tier in ("confirm", "approve")
+            and isinstance(payload_hash, str)
+        ):
+            approval = ApprovalRequiredInfo(
+                requestId=request_id,
+                action=action,
+                tier=cast('Literal["confirm", "approve"]', tier),
+                payloadHash=payload_hash,
+            )
+
+    return _ActionErrorEnvelope(code=code, message=message, issues=issues, approval=approval)
 
 
 def _parse_action_result(body: Any) -> ActionResult:
@@ -373,10 +467,15 @@ def create_httpx_action_fetcher(
         }
         if init.capability is not None:
             hdrs["Authorization"] = f"Bearer {init.capability}"
+        body: dict[str, Any] = {"action": action, "payload": payload}
+        if init.confirmed is not None:
+            body["confirmed"] = init.confirmed
+        if init.approval is not None:
+            body["approval"] = init.approval
         async with httpx.AsyncClient(transport=transport, timeout=timeout_s) as http:
             res = await http.post(
                 f"{base_url}/binding/action",
-                json={"action": action, "payload": payload},
+                json=body,
                 headers=hdrs,
             )
         return FetchResponseLike(status=res.status_code, body=_safe_json(res))
