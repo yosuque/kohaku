@@ -20,8 +20,20 @@
  * with console.log("[kohaku] …"), traceable in Claude Desktop's Developer Mode (Cmd+Option+I).
  */
 
-import { type BindingClient, createBindingClient, splitReservedParams } from "@kohaku-ui/data-binding";
-import { defaultDarkTheme, defaultLightTheme, themeFromHostStyles } from "@kohaku-ui/renderer-core";
+import {
+  type BindingClient,
+  BindingError,
+  createBindingClient,
+  splitReservedParams,
+} from "@kohaku-ui/data-binding";
+import {
+  type ActionManifest,
+  type ActionPhase,
+  defaultDarkTheme,
+  defaultLightTheme,
+  summarizeActionForModel,
+  themeFromHostStyles,
+} from "@kohaku-ui/renderer-core";
 import { type ImplRegistry, RendererProvider, SpecView, type SurfaceEvent } from "@kohaku-ui/renderer-react";
 import { createCoreRegistry } from "@kohaku-ui/renderer-react/core";
 import { parseSpec, specToText, type TabularData, type ThemeTokens, type UISpec } from "@kohaku-ui/spec-core";
@@ -84,6 +96,10 @@ interface ViewState {
    * The fetcher looks it up by ref.raw and deletes it once used (consume-once). It is a Map for in-place consumption.
    */
   initialData?: Map<string, TabularData>;
+  /** The Governed Actions manifest (design.md #62/#64), co-embedded in the tool-result's _meta alongside
+   * capability, when the Spec declares at least one write action. Threaded to RendererProvider.actionManifest
+   * for the widget's own preflightAction check (see createBridgeController's actionFetcher). */
+  actions?: ActionManifest;
 }
 
 /** Embedded snapshot. The keys of data are the raw of the effective ref (paired with the host's buildSnapshot). */
@@ -267,7 +283,18 @@ function Root(props: {
 
   return (
     <RendererProvider
-      value={{ impls: props.impls, binding: controller.makeBinding(view), theme, onEvent: handleEvent }}
+      value={{
+        impls: props.impls,
+        binding: controller.makeBinding(view),
+        theme,
+        onEvent: handleEvent,
+        // Governed actions (design.md #62/#63): the compose-issued manifest drives a local preflightAction
+        // check (see actionFetcher below); confirm defaults to renderer-react's own globalThis.confirm
+        // fallback (unset here). requestApproval has no default here either -- an "approve"-tier action
+        // gracefully stays gated (phase "awaitingApproval") until a product wires its own approver-facing
+        // flow (out of scope: this MCP widget has no approval-request UI of its own).
+        ...(view.actions != null ? { actionManifest: view.actions } : {}),
+      }}
     >
       {dm?.available() ? (
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
@@ -434,10 +461,23 @@ function createBridgeController(app: App, openai: OpenAiWidgetApi | undefined): 
             );
           }
         },
-        // Wire writes (presentForm submit / action.button) to the app-only tool kohaku_action.
-        actionFetcher: async (action, payload) => {
+        // Wire writes (presentForm submit / action.button) to the app-only tool kohaku_action. init.confirmed /
+        // init.approval (design.md #62/#63) are set by runInvokeTarget once its local preflightAction check
+        // (against RendererProvider.actionManifest, wired from view.actions above) or a confirm/requestApproval
+        // hook has been satisfied -- forwarded here verbatim as sibling fields of the tool call's arguments,
+        // mirroring POST /binding/action's `{action, payload, confirmed?, approval?}` wire shape.
+        actionFetcher: async (action, payload, init) => {
           const result = await app.callServerTool(
-            { name: "kohaku_action", arguments: { action, payload, capability: view.capability } },
+            {
+              name: "kohaku_action",
+              arguments: {
+                action,
+                payload,
+                capability: view.capability,
+                ...(init.confirmed != null ? { confirmed: init.confirmed } : {}),
+                ...(init.approval != null ? { approval: init.approval } : {}),
+              },
+            },
             { timeout: SERVER_TOOL_TIMEOUT_MS, resetTimeoutOnProgress: false },
           );
           if (result.isError === true) {
@@ -445,12 +485,56 @@ function createBridgeController(app: App, openai: OpenAiWidgetApi | undefined): 
             const text = (result.content as { text?: string }[] | undefined)
               ?.map((c) => c.text ?? "")
               .join("");
+            // Governed actions (design.md #62/#63): kohaku_action's structured tool error carries the same
+            // {error:{code, message, issues?, approval?}} envelope as the REST profile (see host-mcp-apps'
+            // actionParamsInvalidToolError / approvalRequiredToolError). Recognizing ACTION_PARAMS_INVALID /
+            // APPROVAL_REQUIRED here and throwing a BindingError (rather than a plain Error) lets
+            // runInvokeTarget map it onto the same "invalid" / "awaitingApproval" phases a REST-backed
+            // renderer already gets, instead of a generic "failed" — and, since the structured detail is
+            // available right here, also lets the model be told *why* (never the submitted payload values,
+            // via summarizeActionForModel) before the throw propagates.
+            const structuredError = (
+              result.structuredContent as
+                | {
+                    error?: {
+                      code?: string;
+                      message?: string;
+                      issues?: { path: string; code: string; message: string }[];
+                      approval?: {
+                        requestId: string;
+                        action: string;
+                        tier: "confirm" | "approve";
+                        payloadHash: string;
+                      };
+                    };
+                  }
+                | undefined
+            )?.error;
+            if (structuredError?.code === "ACTION_PARAMS_INVALID") {
+              const phase: ActionPhase = { phase: "invalid", issues: structuredError.issues ?? [] };
+              pushModelContext(summarizeActionForModel(action, phase));
+              throw new BindingError("ACTION_PARAMS_INVALID", structuredError.message ?? text ?? "", {
+                issues: structuredError.issues,
+              });
+            }
+            if (structuredError?.code === "APPROVAL_REQUIRED") {
+              const phase: ActionPhase = {
+                phase: "awaitingApproval",
+                tier: structuredError.approval?.tier ?? "confirm",
+                message: structuredError.message ?? text ?? "",
+              };
+              pushModelContext(summarizeActionForModel(action, phase));
+              throw new BindingError("APPROVAL_REQUIRED", structuredError.message ?? text ?? "", {
+                approval: structuredError.approval,
+              });
+            }
+            pushModelContext(summarizeActionForModel(action, { phase: "failed", message: text ?? "" }));
             throw new Error(`Write operation "${action}" failed: ${text ?? ""}`);
           }
           // Writes (app-only tools) are also invisible to the model, so feed back only the fact of execution
           // (if the immediately following re-resolution updates the view, that summary overwrites this).
           pushModelContext(
-            `The user performed the write operation "${action}" (the result is already reflected in the display).`,
+            summarizeActionForModel(action, { phase: "succeeded", result: result.structuredContent }),
           );
           // structuredContent is { result, invalidates?, refVersions? } (parseActionResult reads it as-is).
           return { status: 200, body: result.structuredContent as unknown };
@@ -484,7 +568,7 @@ function createBridgeController(app: App, openai: OpenAiWidgetApi | undefined): 
           const next = extracted.view;
           setView(next);
           // Also save the re-composed view to widgetState (remount restore tracks the latest display).
-          persistView(openai, { spec: next.spec, capability: next.capability });
+          persistView(openai, { spec: next.spec, capability: next.capability, actions: next.actions });
           void app.sendSizeChanged({ height: document.documentElement.scrollHeight + 24 });
           // Re-composition (app-only tool) is invisible to the model, so feed back a summary of the current view.
           pushModelContext(
@@ -556,7 +640,7 @@ function createViewChannel(openai: OpenAiWidgetApi | undefined): ViewChannel {
     applyView: (view) => {
       viewApplied = true;
       // Save the current view to widgetState (only actually acts on ChatGPT; for remount restore).
-      persistView(openai, { spec: view.spec, capability: view.capability });
+      persistView(openai, { spec: view.spec, capability: view.capability, actions: view.actions });
       if (setViewExternal != null) setViewExternal(view);
       else initialView = view;
     },
@@ -604,7 +688,7 @@ function setupRecovery(app: App, views: ViewChannel): { start(): void } {
     }
     const view = extracted.view;
     console.log(
-      `[kohaku] applied ${source}: intent=${view.spec.intent.canonical} components=${view.spec.components.length} initialData=${view.initialData?.size ?? 0}`,
+      `[kohaku] applied ${source}: intent=${view.spec.intent.canonical} components=${view.spec.components.length} initialData=${view.initialData?.size ?? 0} actions=${view.actions != null ? Object.keys(view.actions).length : 0}`,
     );
     views.applyView(view);
     void app.sendSizeChanged({ height: document.documentElement.scrollHeight + 24 });
@@ -742,7 +826,7 @@ async function bootBridge(impls: ImplRegistry, container: HTMLElement): Promise<
   const restored = readPersistedView(openai);
   if (restored != null) {
     console.log("[kohaku] restored the previous view from widgetState");
-    views.applyView({ spec: restored.spec, capability: restored.capability });
+    views.applyView({ spec: restored.spec, capability: restored.capability, actions: restored.actions });
   }
 
   await app.connect();

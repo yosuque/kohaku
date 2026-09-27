@@ -29,7 +29,16 @@ export const KOHAKU_EVENT = "kohaku-event";
  * this set: they are read live from `#context` at call time (see `#dispatchForward` and the wrapper
  * closures built in `#render`), so reassigning one of them mid-lifecycle must not force a full rebuild.
  */
-const REBUILD_KEYS = new Set<keyof SurfaceContext>(["binding", "theme", "locale", "messages", "sandbox"]);
+const REBUILD_KEYS = new Set<keyof SurfaceContext>([
+  "binding",
+  "theme",
+  "locale",
+  "messages",
+  "sandbox",
+  "actionManifest",
+  "confirm",
+  "requestApproval",
+]);
 
 /** Every property <kohaku-surface> exposes as a plain instance accessor (used by #upgradeProperty). */
 const UPGRADE_PROPS = [
@@ -42,6 +51,9 @@ const UPGRADE_PROPS = [
   "onEvent",
   "onNodeError",
   "onActionResult",
+  "actionManifest",
+  "confirm",
+  "requestApproval",
   "sandbox",
   "disclosure",
 ] as const;
@@ -183,6 +195,15 @@ export class KohakuSurface extends HTMLElement {
   set onActionResult(v: SurfaceContext["onActionResult"]) {
     this.#patchContext({ onActionResult: v });
   }
+  set actionManifest(v: SurfaceContext["actionManifest"]) {
+    this.#patchContext({ actionManifest: v });
+  }
+  set confirm(v: SurfaceContext["confirm"]) {
+    this.#patchContext({ confirm: v });
+  }
+  set requestApproval(v: SurfaceContext["requestApproval"]) {
+    this.#patchContext({ requestApproval: v });
+  }
   set sandbox(v: SurfaceContext["sandbox"]) {
     this.#patchContext({ sandbox: v });
   }
@@ -284,6 +305,9 @@ export class KohakuSurface extends HTMLElement {
       // just one of these callbacks does not go through #render again, so RenderRuntime's own onNodeError/
       // onActionResult fields (baked in once here) must forward through a stable indirection instead of
       // holding a stale reference to whatever callback existed when the tree was last built.
+      // actionManifest / confirm / requestApproval are *not* wrapped: all three are in REBUILD_KEYS, so any
+      // change already goes through a fresh #render, matching binding/theme/sandbox's own treatment as
+      // tree-scoped data rather than a live-read callback.
       ctx: {
         ...this.#context,
         onNodeError: (args) => this.#context.onNodeError?.(args),

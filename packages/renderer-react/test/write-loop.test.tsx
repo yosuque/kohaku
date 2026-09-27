@@ -1,8 +1,9 @@
 import type { ActionResult, BindingClient, ResolveOptions } from "@kohaku-ui/data-binding";
 import { BindingError } from "@kohaku-ui/data-binding";
+import type { ActionManifest } from "@kohaku-ui/renderer-core";
 import { parseSpec, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCoreRegistry } from "../src/core/index.js";
 import { type RendererContextValue, RendererProvider, SpecView } from "../src/index.js";
 
@@ -210,5 +211,146 @@ describe("useInvokeAction (write loop)", () => {
     // No success/failure message appears (state is idle)
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+/** A Spec with a single actionButton (action.button) wired to action.invoke. */
+function actionButtonSpec(action = "annotate"): UISpec {
+  return parseSpec({
+    kohaku: "0.1",
+    intent: INTENT,
+    dataVersion: "v1",
+    components: [
+      { id: "root", type: "layout.stack", props: {}, children: ["b1"] },
+      { id: "b1", type: "action.button", props: { action, label: "Go" } },
+    ],
+    events: [{ on: "b1.press", emit: "action.invoke", payload: { note: "hi" } }],
+    provenance: PROVENANCE,
+  });
+}
+
+describe("useInvokeAction: governed actions (design.md #62/#63)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a locally-invalid payload (per actionManifest) never calls binding.invokeAction", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = {
+      annotate: {
+        tier: "auto",
+        paramsSchema: { type: "object", properties: { note: { type: "string", maxLength: 1 } } },
+      },
+    };
+    const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+    fireEvent.click(container.querySelector('[data-kohaku="b1"]') as HTMLButtonElement);
+    await waitFor(() => expect(container.querySelector('[data-kohaku="b1"]')).not.toBeNull());
+    expect(invokeAction).not.toHaveBeenCalled();
+  });
+
+  it("tier confirm with no host confirm hook defaults to globalThis.confirm — accepted", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "confirm" } };
+    const confirmSpy = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirmSpy);
+    const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+    fireEvent.click(container.querySelector('[data-kohaku="b1"]') as HTMLButtonElement);
+    await waitFor(() => expect(invokeAction).toHaveBeenCalled());
+    expect(confirmSpy).toHaveBeenCalledWith('Proceed with "annotate"?');
+    expect(invokeAction).toHaveBeenCalledWith(
+      "annotate",
+      { note: "hi" },
+      { confirmed: true, approval: undefined },
+    );
+  });
+
+  it("tier confirm with no host confirm hook defaults to globalThis.confirm — declined", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "confirm" } };
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => false),
+    );
+    const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+    fireEvent.click(container.querySelector('[data-kohaku="b1"]') as HTMLButtonElement);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(invokeAction).not.toHaveBeenCalled();
+  });
+
+  it("a host-supplied confirm hook takes priority over globalThis.confirm", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "confirm", confirmMessage: "Sure?" } };
+    const globalConfirm = vi.fn(() => true);
+    vi.stubGlobal("confirm", globalConfirm);
+    const confirm = vi.fn(async () => true);
+    const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest, confirm });
+    fireEvent.click(container.querySelector('[data-kohaku="b1"]') as HTMLButtonElement);
+    await waitFor(() => expect(invokeAction).toHaveBeenCalled());
+    expect(confirm).toHaveBeenCalledWith({ action: "annotate", message: "Sure?" });
+    expect(globalConfirm).not.toHaveBeenCalled();
+  });
+
+  it("tier approve invokes with the requestApproval hook's token", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "approve" } };
+    const requestApproval = vi.fn(async () => "kohaku-approval.v1.tok");
+    const { container } = renderSpec(actionButtonSpec(), {
+      binding,
+      actionManifest: manifest,
+      requestApproval,
+    });
+    fireEvent.click(container.querySelector('[data-kohaku="b1"]') as HTMLButtonElement);
+    await waitFor(() => expect(invokeAction).toHaveBeenCalled());
+    expect(requestApproval).toHaveBeenCalledWith({ action: "annotate", payload: { note: "hi" } });
+    expect(invokeAction).toHaveBeenCalledWith(
+      "annotate",
+      { note: "hi" },
+      { confirmed: undefined, approval: "kohaku-approval.v1.tok" },
+    );
+  });
+
+  it("tier approve with no requestApproval hook never calls binding.invokeAction (no browser-native default)", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+    const binding: BindingClient = {
+      resolve: async () => {
+        throw new Error("not used in these tests");
+      },
+      invokeAction,
+    };
+    const manifest: ActionManifest = { annotate: { tier: "approve" } };
+    const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+    fireEvent.click(container.querySelector('[data-kohaku="b1"]') as HTMLButtonElement);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(invokeAction).not.toHaveBeenCalled();
   });
 });

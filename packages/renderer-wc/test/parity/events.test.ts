@@ -3,9 +3,10 @@
 // binding call sequence / action results / DOM appearance via visibleWhen. Both are driven by the same interactions and matched.
 
 import type { ActionResult, BindingClient, ResolveOptions } from "@kohaku-ui/data-binding";
+import type { ActionManifest } from "@kohaku-ui/renderer-core";
 import { type JsonObject, parseSpec, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
 import { fireEvent } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type ActionResultArg,
   cleanupPair,
@@ -72,6 +73,13 @@ interface Scenario {
   steps: Step[];
   /** Additional observations such as DOM appearance (visibleWhen, etc.). */
   probe?: (root: ParentNode) => unknown;
+  /** Governed actions (design.md #62/#63/#64) -- the compose-issued manifest + confirm/requestApproval hooks. */
+  actionManifest?: ActionManifest;
+  confirm?: (args: { action: string; message?: string }) => boolean | Promise<boolean>;
+  requestApproval?: (args: {
+    action: string;
+    payload: JsonObject;
+  }) => string | undefined | Promise<string | undefined>;
 }
 
 type Step =
@@ -128,6 +136,9 @@ async function runReact(sc: Scenario): Promise<{ obs: Obs; probe: unknown }> {
       binding: () => recordingBinding(obs, sc),
       onActionResult: (a: ActionResultArg) =>
         obs.actionResults.push({ componentId: a.componentId, action: a.action, phase: a.phase }),
+      ...(sc.actionManifest != null ? { actionManifest: sc.actionManifest } : {}),
+      ...(sc.confirm != null ? { confirm: sc.confirm } : {}),
+      ...(sc.requestApproval != null ? { requestApproval: sc.requestApproval } : {}),
     },
     (e) => obs.events.push(e),
   );
@@ -144,6 +155,9 @@ async function runWc(sc: Scenario): Promise<{ obs: Obs; probe: unknown }> {
       binding: () => recordingBinding(obs, sc),
       onActionResult: (a: ActionResultArg) =>
         obs.actionResults.push({ componentId: a.componentId, action: a.action, phase: a.phase }),
+      ...(sc.actionManifest != null ? { actionManifest: sc.actionManifest } : {}),
+      ...(sc.confirm != null ? { confirm: sc.confirm } : {}),
+      ...(sc.requestApproval != null ? { requestApproval: sc.requestApproval } : {}),
     },
     (e) => obs.events.push(e),
   );
@@ -325,6 +339,62 @@ describe("event behavior parity (control + A1 have identical external observatio
     // Since submit is action.invoke, it does not flow to onEvent (governance).
     expect(react.obs.events).toEqual([]);
     expect(wc.obs.events).toEqual([]);
+  });
+
+  it("governed actions: a locally-invalid payload never invokes, identically in both (design.md #62)", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        components: [{ id: "root", type: "action.button", props: { action: "annotate", label: "Go" } }],
+        events: [{ on: "root.press", emit: "action.invoke", payload: { note: "way too long" } }],
+      }),
+      actionManifest: {
+        annotate: {
+          tier: "auto",
+          paramsSchema: { type: "object", properties: { note: { type: "string", maxLength: 3 } } },
+        },
+      },
+      steps: [{ act: "click", sel: '[data-kohaku="root"]' }],
+    };
+    const { react, wc } = await bothObserve(sc);
+    expect(react.obs.invokes).toEqual([]);
+    expect(wc.obs.invokes).toEqual(react.obs.invokes);
+  });
+
+  it("governed actions: tier confirm defaults to globalThis.confirm identically in both (design.md #62/#63)", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        components: [{ id: "root", type: "action.button", props: { action: "annotate", label: "Go" } }],
+        events: [{ on: "root.press", emit: "action.invoke", payload: { note: "hi" } }],
+      }),
+      actionManifest: { annotate: { tier: "confirm" } },
+      steps: [{ act: "click", sel: '[data-kohaku="root"]' }],
+    };
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
+    try {
+      const { react, wc } = await bothObserve(sc);
+      expect(react.obs.invokes).toEqual([{ action: "annotate", payload: { note: "hi" } }]);
+      expect(wc.obs.invokes).toEqual(react.obs.invokes);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("governed actions: tier approve invokes with the requestApproval hook's token, identically in both (design.md #63)", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        components: [{ id: "root", type: "action.button", props: { action: "publish", label: "Go" } }],
+        events: [{ on: "root.press", emit: "action.invoke", payload: {} }],
+      }),
+      actionManifest: { publish: { tier: "approve" } },
+      requestApproval: async () => "kohaku-approval.v1.tok",
+      steps: [{ act: "click", sel: '[data-kohaku="root"]' }],
+    };
+    const { react, wc } = await bothObserve(sc);
+    expect(react.obs.invokes).toEqual([{ action: "publish", payload: {} }]);
+    expect(wc.obs.invokes).toEqual(react.obs.invokes);
   });
 
   it("cellEdit (intent.*): forwards an identical { value: { column, value, previousValue, rowIndex } } payload in both", async () => {

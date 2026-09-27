@@ -1,3 +1,12 @@
+// Governed actions (design.md #62/#63/#64): re-exported from renderer-core (the framework-free source
+// of truth) so a consumer does not need to reach into @kohaku-ui/renderer-core directly for these.
+export {
+  type ActionManifest,
+  type ActionManifestEntry,
+  type PreflightActionResult,
+  preflightAction,
+  summarizeActionForModel,
+} from "@kohaku-ui/renderer-core";
 export {
   type ComponentImpl,
   type ImplEntry,

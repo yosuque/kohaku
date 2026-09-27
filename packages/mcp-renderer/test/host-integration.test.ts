@@ -2,6 +2,7 @@
  * Pure-logic checks for boot/host-integration.ts.
  * Pins the reading/writing of widgetState (ChatGPT-specific) and the displayMode toggle decision without a DOM.
  */
+import type { ActionManifest } from "@kohaku-ui/renderer-core";
 import type { UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -85,6 +86,46 @@ describe("persistView (widgetState save)", () => {
     const view = readPersistedView(openai);
     expect(view?.capability).toBe("cap:rt");
     expect(view?.spec.components).toHaveLength(2);
+  });
+
+  it("saves the Governed Actions manifest alongside spec/capability when present (design.md #62/#64)", () => {
+    const saved: unknown[] = [];
+    const openai: OpenAiWidgetApi = { setWidgetState: (s) => saved.push(s) };
+    const spec = { ...WIRE_SPEC } as unknown as UISpec;
+    const actions: ActionManifest = { annotate: { tier: "confirm" } };
+    persistView(openai, { spec, capability: "cap:y", actions });
+    expect(saved[0]).toEqual({ kohaku: 1, spec, capability: "cap:y", actions });
+  });
+
+  it("actions round-trips through save then restore", () => {
+    let state: unknown;
+    const openai: OpenAiWidgetApi = {
+      setWidgetState: (s) => {
+        state = s;
+      },
+      get widgetState() {
+        return state;
+      },
+    };
+    const actions: ActionManifest = { publish: { tier: "approve" } };
+    persistView(openai, { spec: WIRE_SPEC as unknown as UISpec, capability: "cap:rt", actions });
+    const view = readPersistedView(openai);
+    expect(view?.actions).toEqual(actions);
+  });
+
+  it("a restored view with no persisted actions leaves the field absent", () => {
+    let state: unknown;
+    const openai: OpenAiWidgetApi = {
+      setWidgetState: (s) => {
+        state = s;
+      },
+      get widgetState() {
+        return state;
+      },
+    };
+    persistView(openai, { spec: WIRE_SPEC as unknown as UISpec, capability: "cap:rt" });
+    const view = readPersistedView(openai);
+    expect(view != null && "actions" in view).toBe(false);
   });
 });
 

@@ -4,12 +4,15 @@
  * readInitialData (the tool-result's _meta co-embedded initial data), and recoveryBlockReason without a DOM — the characterization
  * net for decomposing main.tsx's bootBridge.
  */
+import type { ActionManifest } from "@kohaku-ui/renderer-core";
 import type { TabularData } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import {
+  ACTIONS_META_KEY,
   CAPABILITY_META_KEY,
   extractSpecView,
   INITIAL_DATA_META_KEY,
+  readActionManifest,
   readInitialData,
   recoveryBlockReason,
 } from "../src/boot/host-integration.js";
@@ -57,6 +60,27 @@ describe("extractSpecView (spec/capability extraction from a tool result)", () =
     expect(extracted.ok).toBe(true);
     if (!extracted.ok) return;
     expect("initialData" in extracted.view).toBe(false);
+  });
+
+  it("extracts the Governed Actions manifest from _meta[kohaku/actions] (design.md #62/#64)", () => {
+    const actions: ActionManifest = { annotate: { tier: "confirm", confirmMessage: "Sure?" } };
+    const extracted = extractSpecView({
+      structuredContent: { spec: WIRE_SPEC },
+      _meta: { [CAPABILITY_META_KEY]: "cap-1", [ACTIONS_META_KEY]: actions },
+    });
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    expect(extracted.view.actions).toEqual(actions);
+  });
+
+  it("omits actions when _meta carries none (a read-only Spec)", () => {
+    const extracted = extractSpecView({
+      structuredContent: { spec: WIRE_SPEC },
+      _meta: { [CAPABILITY_META_KEY]: "cap-1" },
+    });
+    expect(extracted.ok).toBe(true);
+    if (!extracted.ok) return;
+    expect("actions" in extracted.view).toBe(false);
   });
 
   it("reports 'missing' with which half is absent (spec missing)", () => {
@@ -114,6 +138,21 @@ describe("readInitialData (_meta co-embedded initial data)", () => {
     const map = readInitialData({ _meta: { [INITIAL_DATA_META_KEY]: { "query://a": TABULAR } } });
     expect(map?.size).toBe(1);
     expect(map?.get("query://a")).toEqual(TABULAR);
+  });
+});
+
+describe("readActionManifest (_meta co-embedded Governed Actions manifest)", () => {
+  it("returns undefined when _meta is absent or carries no manifest", () => {
+    expect(readActionManifest({})).toBeUndefined();
+    expect(readActionManifest({ _meta: {} })).toBeUndefined();
+  });
+
+  it("returns the embedded manifest as-is", () => {
+    const actions: ActionManifest = {
+      annotate: { tier: "confirm" },
+      publish: { tier: "approve", paramsSchema: { type: "object" } },
+    };
+    expect(readActionManifest({ _meta: { [ACTIONS_META_KEY]: actions } })).toEqual(actions);
   });
 });
 

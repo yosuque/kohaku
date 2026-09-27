@@ -38,4 +38,5 @@ export const JA_MESSAGES: RendererMessages = {
   sandboxBridgeMissing: (type) => `L2 部品(${type})の描画にはサンドボックスブリッジの注入が必要です`,
   disclosureAiGenerated: "AIが生成したコンテンツ",
   disclosureAiReviewed: "AI生成後に人がレビューしたコンテンツ",
+  actionConfirmDefault: (action) => `「${action}」を実行しますか?`,
 };

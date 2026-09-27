@@ -1,9 +1,23 @@
 import { type ActionPhase, resolveInvokeTarget, runInvokeTarget } from "@kohaku-ui/renderer-core";
 import type { ComponentNode, JsonObject } from "@kohaku-ui/spec-core";
 import { useState } from "react";
-import { useEmitEvent, useRenderer, useSpec } from "./context.js";
+import { useEmitEvent, useMessages, useRenderer, useSpec } from "./context.js";
 import { useDataInvalidation } from "./data-invalidation.js";
 import { useRowContext } from "./spec-state.js";
+
+/**
+ * The default "confirm"-tier hook (design.md #62/#63) used when the host does not supply its own via
+ * `RendererContextValue.confirm`: `globalThis.confirm` (the native browser dialog). Declines (returns
+ * `false`) when `confirm` is unavailable in this environment (e.g. SSR) rather than throwing — the same
+ * fail-safe posture as an explicitly declining host hook.
+ */
+function defaultConfirmHook(
+  messages: { actionConfirmDefault: (action: string) => string },
+  args: { action: string; message?: string },
+): boolean {
+  if (typeof globalThis.confirm !== "function") return false;
+  return globalThis.confirm(args.message ?? messages.actionConfirmDefault(args.action));
+}
 
 // Progress state of a write (action.invoke). The framework-free source of truth is renderer-core;
 // the public API (ActionPhase in index.ts) is kept unchanged via this re-export.
@@ -25,7 +39,8 @@ export interface UseInvokeActionResult {
  */
 export function useInvokeAction(node: ComponentNode): UseInvokeActionResult {
   const emit = useEmitEvent(node);
-  const { binding, onActionResult } = useRenderer();
+  const { binding, onActionResult, actionManifest, confirm, requestApproval } = useRenderer();
+  const messages = useMessages();
   const spec = useSpec();
   const bus = useDataInvalidation();
   const row = useRowContext();
@@ -43,9 +58,24 @@ export function useInvokeAction(node: ComponentNode): UseInvokeActionResult {
     }
 
     // binding is non-null at the point target.kind === "invoke" (resolveInvokeTarget has already checked hasBinding).
-    // The pending → invokeAction → succeeded/failed phase → bus.publish → onActionResult sequence has
-    // renderer-core's runInvokeTarget as the single source of truth (shared with renderer-wc).
-    await runInvokeTarget(target, { binding: binding!, bus, onActionResult }, node.id, setState);
+    // The preflightAction → (confirm/requestApproval hook) → pending → invokeAction →
+    // succeeded/failed/invalid/awaitingApproval phase → bus.publish → onActionResult sequence has
+    // renderer-core's runInvokeTarget as the single source of truth (shared with renderer-wc). `confirm`
+    // defaults to `globalThis.confirm` (defaultConfirmHook) when the host does not supply its own;
+    // `requestApproval` has no default (design.md #63 — no browser-native equivalent exists).
+    await runInvokeTarget(
+      target,
+      {
+        binding: binding!,
+        bus,
+        onActionResult,
+        actionManifest,
+        confirm: confirm ?? ((args) => defaultConfirmHook(messages, args)),
+        requestApproval,
+      },
+      node.id,
+      setState,
+    );
   };
 
   return { state, invoke };
