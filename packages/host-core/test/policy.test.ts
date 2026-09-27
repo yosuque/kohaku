@@ -1,0 +1,287 @@
+import type { ComposePolicy } from "@kohaku-ui/composer";
+import type { KohakuPolicyFile, RateLimitStore } from "@kohaku-ui/spec-core";
+import { describe, expect, it } from "vitest";
+import { createDailyTokenLedger } from "../src/daily-token-ledger.js";
+import { createPolicyRuntime, type PolicyAppliedEvent, parsePolicy } from "../src/policy.js";
+
+function makeFile(overrides: Partial<KohakuPolicyFile> = {}): KohakuPolicyFile {
+  return { version: 1, defaults: {}, ...overrides };
+}
+
+describe("parsePolicy", () => {
+  it("validates and computes a policyId for well-formed input", async () => {
+    const parsed = await parsePolicy({ version: 1, defaults: { compose: { allowL2: true } } });
+    expect(parsed.file.defaults.compose?.allowL2).toBe(true);
+    expect(parsed.policyId).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("throws on invalid input (unknown key)", async () => {
+    await expect(parsePolicy({ version: 1, defaults: {}, bogus: true })).rejects.toThrow();
+  });
+});
+
+describe("createPolicyRuntime: policyFor", () => {
+  it("layers the policy file's compose section onto the base policy, keeping the base's function-shaped fields", async () => {
+    const routeTier = () => "L2" as const;
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { allowL2: true, outputLanguage: "Japanese" } } }),
+      basePolicyFor: () => ({ routeTier }),
+    });
+    const policy = runtime.policyFor();
+    expect(policy.allowL2).toBe(true);
+    expect(policy.outputLanguage).toBe("Japanese");
+    expect(policy.routeTier).toBe(routeTier); // untouched function-shaped field
+  });
+
+  it("a tenant's section overrides defaults for that tenant only", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile({
+        defaults: { compose: { allowL2: true } },
+        tenants: { "tenant-a": { compose: { allowL2: false } } },
+      }),
+    });
+    expect(runtime.policyFor({ surface: "web", tenant: "tenant-a" }).allowL2).toBe(false);
+    expect(runtime.policyFor({ surface: "web", tenant: "tenant-b" }).allowL2).toBe(true);
+    expect(runtime.policyFor().allowL2).toBe(true); // no tenant = defaults
+  });
+
+  it("a data field the policy file never sets falls back to the base policy's own value", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile(),
+      basePolicyFor: () => ({ allowL2: true, maxRepairAttempts: 3 }),
+    });
+    const policy = runtime.policyFor();
+    expect(policy.allowL2).toBe(true);
+    expect(policy.maxRepairAttempts).toBe(3);
+  });
+
+  it("is memoized per (tenant, base policy object): the same inputs return the identical object", async () => {
+    const base: ComposePolicy = { allowL2: true };
+    const runtime = await createPolicyRuntime({ file: makeFile(), basePolicyFor: () => base });
+    const first = runtime.policyFor({ surface: "web", tenant: "t1" });
+    const second = runtime.policyFor({ surface: "web", tenant: "t1" });
+    expect(second).toBe(first);
+  });
+
+  it("recomputes when basePolicyFor returns a different object for the same tenant", async () => {
+    let base: ComposePolicy = { allowL2: true };
+    const runtime = await createPolicyRuntime({ file: makeFile(), basePolicyFor: () => base });
+    const first = runtime.policyFor();
+    base = { allowL2: true }; // a new object, same shape
+    const second = runtime.policyFor();
+    expect(second).not.toBe(first);
+    expect(second).toEqual(first);
+  });
+
+  it("recomputes after reload even if basePolicyFor keeps returning the same object", async () => {
+    const base: ComposePolicy = {};
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { allowL2: false } } }),
+      basePolicyFor: () => base,
+    });
+    const before = runtime.policyFor();
+    expect(before.allowL2).toBe(false);
+    await runtime.reload(makeFile({ defaults: { compose: { allowL2: true } } }));
+    const after = runtime.policyFor();
+    expect(after).not.toBe(before);
+    expect(after.allowL2).toBe(true);
+  });
+});
+
+describe("createPolicyRuntime: budget (perCompose/deadlineMs/dailyTokens)", () => {
+  it("perCompose/deadlineMs from the policy file override the base policy's own", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile({
+        defaults: { compose: { budget: { perCompose: { stopAfterTokens: 10 }, deadlineMs: 5000 } } },
+      }),
+      basePolicyFor: () => ({ budget: { perCompose: { stopAfterTokens: 999 }, deadlineMs: 999 } }),
+    });
+    const budget = runtime.policyFor().budget;
+    expect(budget?.perCompose).toEqual({ stopAfterTokens: 10 });
+    expect(budget?.deadlineMs).toBe(5000);
+  });
+
+  it("perCompose/deadlineMs fall back to the base policy's own when the file leaves budget unset", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile(),
+      basePolicyFor: () => ({ budget: { perCompose: { stopAfterTokens: 999 }, deadlineMs: 999 } }),
+    });
+    const budget = runtime.policyFor().budget;
+    expect(budget?.perCompose).toEqual({ stopAfterTokens: 999 });
+    expect(budget?.deadlineMs).toBe(999);
+  });
+
+  it("dailyTokens denies once the ledger's spent total for the tenant reaches the threshold", async () => {
+    const ledger = createDailyTokenLedger(() => 0);
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { budget: { dailyTokens: 100 } } } }),
+      ledger,
+    });
+    const check = runtime.policyFor({ surface: "web", tenant: "t1" }).budget?.check;
+    expect(check).toBeDefined();
+    expect(check?.()).toEqual({ allow: true });
+    ledger.record("t1", 100);
+    const verdict = check?.();
+    expect(verdict?.allow).toBe(false);
+    expect(verdict?.reason).toMatch(/daily token threshold/i);
+  });
+
+  it("dailyTokens is scoped per tenant (t1 exceeding does not affect t2)", async () => {
+    const ledger = createDailyTokenLedger(() => 0);
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { budget: { dailyTokens: 10 } } } }),
+      ledger,
+    });
+    ledger.record("t1", 10);
+    expect(runtime.policyFor({ surface: "web", tenant: "t1" }).budget?.check?.().allow).toBe(false);
+    expect(runtime.policyFor({ surface: "web", tenant: "t2" }).budget?.check?.().allow).toBe(true);
+  });
+
+  it("onUsage records into the ledger, combined with (not replacing) the base policy's own onUsage", async () => {
+    const ledger = createDailyTokenLedger(() => 0);
+    const baseCalls: unknown[] = [];
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { budget: { dailyTokens: 1000 } } } }),
+      basePolicyFor: () => ({ budget: { onUsage: (info) => void baseCalls.push(info) } }),
+      ledger,
+    });
+    const onUsage = runtime.policyFor({ surface: "web", tenant: "t1" }).budget?.onUsage;
+    await onUsage?.({ tenant: "t1", usage: { inputTokens: 3, outputTokens: 4 } });
+    expect(baseCalls).toHaveLength(1);
+    expect(ledger.spent("t1")).toBe(7);
+  });
+
+  it("a base check's denial wins outright over the dailyTokens check (combineChecks short-circuits)", async () => {
+    const ledger = createDailyTokenLedger(() => 0); // way under the 1,000,000 threshold below
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { budget: { dailyTokens: 1_000_000 } } } }),
+      basePolicyFor: () => ({
+        budget: { check: () => ({ allow: false, reason: "base says no" }) },
+      }),
+      ledger,
+    });
+    const verdict = runtime.policyFor({ surface: "web", tenant: "t1" }).budget?.check?.();
+    expect(verdict).toEqual({ allow: false, reason: "base says no" });
+  });
+
+  it("budget is left unset when neither the file nor the base policy set anything", async () => {
+    const runtime = await createPolicyRuntime({ file: makeFile() });
+    expect(runtime.policyFor().budget).toBeUndefined();
+  });
+});
+
+describe("createPolicyRuntime: rolesFor", () => {
+  it("merges defaults and the tenant's own roles", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile({
+        defaults: { governance: { roles: { admin: ["*"] } } },
+        tenants: { "tenant-a": { governance: { roles: { viewer: ["lineage.read"] } } } },
+      }),
+    });
+    expect(runtime.rolesFor("tenant-a")).toEqual({ admin: ["*"], viewer: ["lineage.read"] });
+    expect(runtime.rolesFor("tenant-b")).toEqual({ admin: ["*"] });
+  });
+
+  it("is {} when neither defaults nor the tenant declare governance", async () => {
+    const runtime = await createPolicyRuntime({ file: makeFile() });
+    expect(runtime.rolesFor()).toEqual({});
+  });
+});
+
+describe("createPolicyRuntime: rateLimiter", () => {
+  it("always allows when no RateLimitStore is supplied", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { rateLimits: { compose: { capacity: 1, refillPerSecond: 1 } } } }),
+    });
+    expect(await runtime.rateLimiter.take({ routeClass: "compose" })).toEqual({ allow: true });
+    expect(await runtime.rateLimiter.take({ routeClass: "compose" })).toEqual({ allow: true }); // still allows: no store
+  });
+
+  it("always allows when the routeClass has no configured rule", async () => {
+    const store: RateLimitStore = { take: async () => ({ allow: false }) };
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { rateLimits: { compose: { capacity: 1, refillPerSecond: 1 } } } }),
+      rateLimitStore: store,
+    });
+    expect(await runtime.rateLimiter.take({ routeClass: "action" })).toEqual({ allow: true });
+  });
+
+  it("enforces the tenant's effective rule via the store, keyed by tenant/principal/routeClass", async () => {
+    const calls: unknown[] = [];
+    const store: RateLimitStore = {
+      take: async (key, cost, rule, nowMs) => {
+        calls.push({ key, cost, rule, nowMs });
+        return { allow: true };
+      },
+    };
+    const runtime = await createPolicyRuntime({
+      file: makeFile({
+        defaults: { rateLimits: { compose: { capacity: 5, refillPerSecond: 1 } } },
+        tenants: { "tenant-a": { rateLimits: { compose: { capacity: 1, refillPerSecond: 2 } } } },
+      }),
+      rateLimitStore: store,
+    });
+    await runtime.rateLimiter.take({ tenant: "tenant-a", principal: "p1", routeClass: "compose" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ key: "tenant-a:p1:compose", rule: { capacity: 1, refillPerSecond: 2 } });
+  });
+});
+
+describe("createPolicyRuntime: reload", () => {
+  it("is a no-op (no audit call) when the new file is byte-identical", async () => {
+    const events: PolicyAppliedEvent[] = [];
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { allowL2: true } } }),
+      audit: (e) => void events.push(e),
+    });
+    await runtime.reload(makeFile({ defaults: { compose: { allowL2: true } } }));
+    expect(events).toHaveLength(0);
+  });
+
+  it("fires audit with the new/previous policyId, version, label, changedPaths, and tenants", async () => {
+    const events: Array<{ event: PolicyAppliedEvent; actor: string | undefined }> = [];
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ label: "v1", defaults: { compose: { allowL2: false } } }),
+      audit: (event, actor) => void events.push({ event, actor }),
+    });
+    const previousPolicyId = runtime.policyId;
+
+    await runtime.reload(
+      makeFile({
+        label: "v2",
+        defaults: { compose: { allowL2: true } },
+        tenants: { "tenant-a": { compose: { allowL2: false } } },
+      }),
+      "alice",
+    );
+
+    expect(events).toHaveLength(1);
+    const { event, actor } = events[0]!;
+    expect(actor).toBe("alice");
+    expect(event.previousPolicyId).toBe(previousPolicyId);
+    expect(event.policyId).toBe(runtime.policyId);
+    expect(event.policyId).not.toBe(previousPolicyId);
+    expect(event.version).toBe(1);
+    expect(event.label).toBe("v2");
+    expect(event.tenants).toEqual(["tenant-a"]);
+    expect(event.changedPaths.sort()).toEqual(["label", "defaults.compose.allowL2", "tenants"].sort());
+  });
+
+  it("policyId reflects the current file (live getter)", async () => {
+    const runtime = await createPolicyRuntime({ file: makeFile() });
+    const before = runtime.policyId;
+    await runtime.reload(makeFile({ label: "changed" }));
+    expect(runtime.policyId).not.toBe(before);
+  });
+
+  it("the first reload's previousPolicyId is the constructor file's policyId, not undefined", async () => {
+    const events: PolicyAppliedEvent[] = [];
+    const runtime = await createPolicyRuntime({
+      file: makeFile(),
+      audit: (e) => void events.push(e),
+    });
+    const initialPolicyId = runtime.policyId;
+    await runtime.reload(makeFile({ label: "new" }));
+    expect(events[0]?.previousPolicyId).toBe(initialPolicyId);
+  });
+});

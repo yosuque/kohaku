@@ -35,6 +35,16 @@ export {
 } from "./fixation.js";
 export { type IntentSource, resolveIntent } from "./intent.js";
 export {
+  type CreatePolicyRuntimeOptions,
+  createPolicyRuntime,
+  type ParsedPolicy,
+  type PolicyAppliedEvent,
+  type PolicyRateLimiter,
+  type PolicyRateLimiterTakeParams,
+  type PolicyRuntime,
+  parsePolicy,
+} from "./policy.js";
+export {
   createMemoryRateLimitStore,
   createRateLimiter,
   type RateLimiter,
