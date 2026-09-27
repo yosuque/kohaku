@@ -51,3 +51,11 @@ The Python port (`python/kohaku`) mirrors the full surface (`kohaku.spec.action_
 `kohaku.host_core.action_gate`/`action_audit`, `POST /approvals`, the MCP action-tool gate), and
 `apps/sample-api` / `python/examples/sales-api` demonstrate both tiers end to end (`annotate`: confirm,
 `publish`: approve) — see the [user guide](../docs/user-guide.md)'s "Governed actions: tiers" section.
+
+**Behavior changes to check when upgrading.** (1) `POST /binding/action` and the MCP action tool now
+reject, before `DomainPort.invoke` runs, any action that is not in the DomainPort's own
+`listOperations()` — previously such an action was invoked ungated. It is rejected with the same response
+as a missing write scope and recorded as `action.denied`. A product whose `listOperations()` omits an
+operation it still expects to be invoked must declare it. (2) `validateActionParams` rejects a payload
+property named `__proto__`, `constructor` or `prototype` at any depth (issue code `unsafeKey`), whatever
+the schema's `additionalProperties` says.
