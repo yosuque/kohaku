@@ -55,6 +55,9 @@ export const EvidenceManifestSchema = z.object({
   version: z.literal(EVIDENCE_PACK_VERSION),
   /** Identity of whatever produced this pack (e.g. "kohaku-cli/0.3.0"). Free-form, not parsed. */
   generator: z.string().min(1),
+  /** When the export itself ran (canonical ISO 8601; clock-injected -- see build.ts's `now` option),
+   * distinct from `scope.since`/`scope.until`, which bound the exported data, not the export moment. */
+  generatedAt: z.string(),
   scope: EvidenceManifestScopeSchema,
   counts: EvidenceManifestCountsSchema,
   /**

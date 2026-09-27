@@ -10,6 +10,7 @@ function validManifest() {
     format: EVIDENCE_PACK_FORMAT,
     version: EVIDENCE_PACK_VERSION,
     generator: "kohaku-cli/0.3.0",
+    generatedAt: "2026-02-01T00:00:00.000Z",
     scope: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-31T23:59:59.999Z" },
     counts: { events: 1, approvals: 0, promotions: 0, fixations: 0, artifacts: 0 },
     complete: true,
