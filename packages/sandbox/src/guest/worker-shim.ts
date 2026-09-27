@@ -176,7 +176,19 @@ export function workerShimMain(config: WorkerShimConfig): void {
 
   // ---------------------------------------------------------------------------------------------------
   // selector engine: tag / #id / .class / [attr=value], descendant (space) and child (>) combinators only
+  //
+  // Both the attribute-token regex and the compound-selector tokenizer used to be backtracking-prone
+  // (CodeQL js/polynomial-redos): `\[[^\]]+\]` re-tries every start position with O(remaining length)
+  // backtracking when fed many repeated "[" with no closing "]", and `\s*(>)\s*|\s+` does the same for many
+  // repeated spaces with no ">". `[^\]]` is now `[^\[\]]` (a run of attribute-token content can no longer
+  // itself contain "[", so a bracket immediately following another bracket fails to extend the match at all
+  // instead of backtracking through it), and the split-based tokenizer is replaced by a single-pass
+  // character walk (tokenizeSelector) that cannot backtrack by construction. SELECTOR_LENGTH_LIMIT caps the
+  // whole selector's length as defense in depth on top of both fixes, independent of proving any particular
+  // input pattern is safe.
   // ---------------------------------------------------------------------------------------------------
+  const SELECTOR_LENGTH_LIMIT = 1024;
+
   interface SimpleSelector {
     tag: string | null;
     id: string | null;
@@ -186,7 +198,7 @@ export function workerShimMain(config: WorkerShimConfig): void {
 
   function parseSimpleSelector(part: string): SimpleSelector {
     const sel: SimpleSelector = { tag: null, id: null, classes: [], attr: null };
-    const re = /(^[a-zA-Z][a-zA-Z0-9-]*)|(#[\w-]+)|(\.[\w-]+)|(\[[^\]]+\])/g;
+    const re = /(^[a-zA-Z][a-zA-Z0-9-]*)|(#[\w-]+)|(\.[\w-]+)|(\[[^[\]]+\])/g;
     let m: RegExpExecArray | null;
     // biome-ignore lint/suspicious/noAssignInExpressions: idiomatic assign-and-test regex exec loop.
     while ((m = re.exec(part)) != null) {
@@ -232,16 +244,45 @@ export function workerShimMain(config: WorkerShimConfig): void {
     return true;
   }
 
-  /** A parsed compound selector: a chain of simple selectors joined by descendant (null) or child (">") combinators. */
+  /**
+   * Splits a trimmed compound selector into simple-selector-text tokens and standalone ">" markers,
+   * treating any run of whitespace (and the boundary around a ">") as a separator. A single-pass character
+   * walk rather than a regex split -- see the section comment above for why: it cannot backtrack, so it is
+   * linear in the input length regardless of shape (many repeated spaces, an unclosed "[", etc.).
+   */
+  function tokenizeSelector(trimmed: string): string[] {
+    const tokens: string[] = [];
+    let current = "";
+    for (let i = 0; i < trimmed.length; i++) {
+      const ch = trimmed[i]!;
+      if (ch === ">") {
+        if (current !== "") {
+          tokens.push(current);
+          current = "";
+        }
+        tokens.push(">");
+      } else if (/\s/.test(ch)) {
+        if (current !== "") {
+          tokens.push(current);
+          current = "";
+        }
+      } else {
+        current += ch;
+      }
+    }
+    if (current !== "") tokens.push(current);
+    return tokens;
+  }
+
+  /**
+   * A parsed compound selector: a chain of simple selectors joined by descendant (null) or child (">")
+   * combinators. A selector longer than SELECTOR_LENGTH_LIMIT parses to an empty chain (matchesChain/
+   * queryAll/queryFirst all treat that as "no match" -- see their own empty-chain handling) rather than
+   * running the tokenizer/parseSimpleSelector regex over unbounded attacker-controlled input.
+   */
   function parseSelector(selector: string): { sel: SimpleSelector; combinator: ">" | null }[] {
-    // NB: the regex has a capturing group only on the ">" branch, so a plain whitespace split leaves
-    // `undefined` holes in the result (per String.prototype.split's handling of non-participating capture
-    // groups) — those must be dropped, not just empty strings, or they corrupt the chain (parseSimpleSelector
-    // would stringify `undefined` into the literal tag name "undefined").
-    const tokens = selector
-      .trim()
-      .split(/\s*(>)\s*|\s+/)
-      .filter((t): t is string => typeof t === "string" && t !== "");
+    if (selector.length > SELECTOR_LENGTH_LIMIT) return [];
+    const tokens = tokenizeSelector(selector.trim());
     const chain: { sel: SimpleSelector; combinator: ">" | null }[] = [];
     let pendingCombinator: ">" | null = null;
     for (const tok of tokens) {
@@ -263,6 +304,10 @@ export function workerShimMain(config: WorkerShimConfig): void {
   }
 
   function matchesChain(node: VNode, chain: { sel: SimpleSelector; combinator: ">" | null }[]): boolean {
+    // An empty chain (an empty/whitespace-only selector, or one over SELECTOR_LENGTH_LIMIT) never matches --
+    // guards el.matches/el.closest, which (unlike queryAll/queryFirst) call this directly with no
+    // length check of their own.
+    if (chain.length === 0) return false;
     let idx = chain.length - 1;
     if (!matchesSimple(node, chain[idx]!.sel)) return false;
     let current: VNode | null = node;

@@ -1,6 +1,6 @@
 # Runbook: kohaku のリリース
 
-これは、常に足並みを揃えて動く 28 個の `@kohaku-ui/*` npm パッケージと `kohaku-ui` PyPI 配布物
+これは、常に足並みを揃えて動く 29 個の `@kohaku-ui/*` npm パッケージと `kohaku-ui` PyPI 配布物
 ([.changeset/README.md](../../.changeset/README.md) 参照)をカット・公開する手順です。コントリビュータ向け
 の短い版は [CONTRIBUTING.ja.md §11](../../CONTRIBUTING.ja.md) を参照してください。本 runbook はリリースを
 実行する人向けの運用詳細です。
@@ -55,7 +55,7 @@ changeset 付き PR ──merge──▶ main push ──▶ .github/workflows/v
 - [ ] **GitHub → Settings → Environments**: 既存の `pypi` environment はそのままで良い(任意で同じ `main` +
   `v*` ポリシーを付けても良い——build ステップはドライランでも `main` から走ります)。PyPI 側にコード変更は
   不要です。
-- [ ] **npmjs.com、以下の 28 パッケージそれぞれ**: Settings → Publishing access → Trusted publisher →
+- [ ] **npmjs.com、以下の 29 パッケージそれぞれ**: Settings → Publishing access → Trusted publisher →
   GitHub Actions で、次を設定する:
   - Organization or user: `yosuque`
   - Repository: `kohaku`
@@ -64,9 +64,9 @@ changeset 付き PR ──merge──▶ main push ──▶ .github/workflows/v
 
   対象パッケージ: `@kohaku-ui/admin-react`, `authz-hmac`, `authz-jwt`, `cli`, `client`, `composer`,
   `data-binding`, `evals`, `host`, `host-a2ui`, `host-core`, `host-mcp-apps`, `host-rest`, `intents`,
-  `lineage`, `llm`, `otel`, `registry`, `renderer-core`, `renderer-react`, `renderer-wc`, `sandbox`,
+  `lineage`, `llm`, `mcp-renderer`, `otel`, `registry`, `renderer-core`, `renderer-react`, `renderer-wc`, `sandbox`,
   `semantic-llm`, `spec`, `spec-core`, `storage-memory`, `storage-postgres`, `storage-redis`。
-  `release.yml` の `npm` ジョブは、何かを公開する前に(ドライランでも実公開でも)この 28 件全てをプローブし、
+  `release.yml` の `npm` ジョブは、何かを公開する前に(ドライランでも実公開でも)この 29 件全てをプローブし、
   未登録のものを列挙します(§4 参照)。(`@kohaku-ui/port-contracts` は private のためここには現れません。)
   一度も公開されていないパッケージには Settings ページがまだ無いため、先にブートストラップしてください
   (下記「新規パッケージの初回公開」)。
@@ -106,8 +106,8 @@ provenance 付きで公開し、`latest` になります。ワークフロー外
 changeset 付きの PR が `main` にマージされると、`version.yml` が `chore(release): version packages` という
 タイトルの PR を作成・更新します。他の PR と同様にマージ前にレビューしてください:
 
-- 28 パッケージのマニフェスト全てが同じバージョンに上がっている(fixed グループ)。
-- 28 件の `CHANGELOG.md` それぞれに新しい `## <version>` 節が追加されている。
+- 29 パッケージのマニフェスト全てが同じバージョンに上がっている(fixed グループ)。
+- 29 件の `CHANGELOG.md` それぞれに新しい `## <version>` 節が追加されている。
 - `python/kohaku/pyproject.toml` と `python/kohaku/src/kohaku/__init__.py` が同じバージョンに上がっている
   ——Python 側がバージョンを保持する 2 箇所であり、`release.yml` の `verify` ジョブが後でタグとの一致を
   検査します。`python/uv.lock` の `kohaku-ui` エントリも同時に上がります(lock が古いと CI の
@@ -127,7 +127,7 @@ changeset 付きの PR が `main` にマージされると、`version.yml` が `
   前に手で編集して文言を直すことも可能。
 - [ ] ドライランが緑であること: `main` から `gh workflow run release.yml -f dry_run=true` を実行する
   (ドライランでは `tag` 入力を付けない——実行を開始したブランチをそのまま検証します)。これは npm ジョブの
-  Trusted Publisher プローブも実行し、28 パッケージ全てが `ok` と報告されなければなりません。
+  Trusted Publisher プローブも実行し、29 パッケージ全てが `ok` と報告されなければなりません。
 - [ ] `node scripts/npm-bootstrap.mjs` が 0 で終了すること(npm に存在しない公開対象パッケージが無いこと)。
   列挙された場合は先にブートストラップする(§2「新規パッケージの初回公開」)。
 - [ ] 自動化されたカバレッジでは拾えない、このバージョン固有の手動確認を済ませていること(例: `records` の
@@ -147,7 +147,7 @@ gh release edit vX.Y.Z --draft=false
 これにより GitHub が下書きの target コミットにタグ `vX.Y.Z` を作成し、`release: published` を発火させ、
 `release.yml` が実際に(このトリガーでは `dry_run` は暗黙に `false`)動き出します。実行を見守ってください:
 `verify` がタグ付きツリー上でバージョン一致・typecheck・テスト・pack-smoke を再検証し、続いて `npm` ジョブが
-OIDC trusted publishing + provenance で 28 パッケージを公開し、`pypi` ジョブが wheel/sdist を公開します。
+OIDC trusted publishing + provenance で 29 パッケージを公開し、`pypi` ジョブが wheel/sdist を公開します。
 `summary` ジョブのステップサマリには、その実行で実際に公開されたパッケージの一覧、npm パッケージページ・
 PyPI プロジェクトページ・GitHub Release へのリンクが載ります。
 
@@ -172,10 +172,10 @@ npm view @kohaku-ui/<pkg> versions
 
 単一の「取り消し」操作はありません。必要に応じて:
 
-- **npm**: 28 パッケージ全てに対する `npm deprecate @kohaku-ui/<pkg>@<version> "<reason>"` が通常の対処法
+- **npm**: 29 パッケージ全てに対する `npm deprecate @kohaku-ui/<pkg>@<version> "<reason>"` が通常の対処法
   です——インストールしようとする人に警告を出しつつ、既にそのバージョンに固定している人を壊しません。
   `npm unpublish` は公開から 72 時間以内で、かつ他の何もそのバージョンに依存していない場合のみ可能です。
-  28 パッケージが相互依存する以上、新バージョンへの依存が広がった後は実質使えないと考えてください。
+  29 パッケージが相互依存する以上、新バージョンへの依存が広がった後は実質使えないと考えてください。
 - **PyPI**: リリースを yank する(pypi.org → 対象プロジェクト → 対象バージョン → "Yank")。yank された
   リリースは正確なバージョン指定でのインストールは可能なままですが、既定の依存解決からは外れます。
 - **GitHub**: リリースノートを編集して事情を書く。タグは残す——タグは実際に何がビルド・公開されたかの

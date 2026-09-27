@@ -39,8 +39,9 @@
  * intentional — this script is a gate, and partial credit is not useful for a gate.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -532,17 +533,22 @@ function checkCli(consumerDir) {
 // type-checks, passes its golden test twice (generate, then assert) and serves the L0 view without an LLM.
 // ---------------------------------------------------------------------------------------------------------
 
-function checkInit(packages, tmpRoot, consumerDir) {
-  const bin = join(consumerDir, "node_modules", ".bin", "kohaku");
-  if (!existsSync(bin)) {
-    log("  @kohaku-ui/cli is not part of this smoke run's package set -- skipping the init check");
-    return false;
-  }
-  const appDir = join(tmpRoot, "init-app");
-  const fixture = join(REPO_ROOT, "scripts", "fixtures", "init-smoke.csv");
-  runOrFail(bin, ["init", "--from", fixture, "--out", appDir, "--no-install"], { cwd: tmpRoot });
-
-  // Point every @kohaku-ui/* dependency at the freshly packed tarball instead of the registry.
+/**
+ * Points every @kohaku-ui/* dependency (direct AND transitive, via `overrides`) of a `kohaku init`-generated
+ * project at the tarballs this run just packed, instead of the public registry. Shared by checkInit and
+ * checkInitMcp -- both generate a project and then need it to install and run against the packed artifacts
+ * end-to-end rather than a mix of packed-and-published code.
+ *
+ * A generated project's own package.json only lists the runtime packages it imports directly (e.g.
+ * @kohaku-ui/host) -- but that package's OWN dependencies (e.g. host -> host-rest -> host-core) are not
+ * rewritten by the per-manifest loop below at all, so npm would otherwise resolve them against the public
+ * registry's already-published versions instead of the tarball this run just built (the exact "stale
+ * published dependency" bug this function exists to close -- see the module header). `overrides` forces
+ * every @kohaku-ui/* package, wherever it appears in the dependency tree, onto the tarball this run just
+ * packed; its entries are spread last so they always win over any pre-existing project-level override on a
+ * key collision.
+ */
+function pointGeneratedProjectAtPackedTarballs(appDir, packages) {
   const manifestPath = join(appDir, "package.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const byName = new Map(packages.map((p) => [p.packedName, p.tarball]));
@@ -555,25 +561,24 @@ function checkInit(packages, tmpRoot, consumerDir) {
       else if (name.startsWith("@kohaku-ui/")) fail(`init smoke: generated project depends on ${name}, which is not in the packed set`);
     }
   }
-  // A generated project's own package.json only lists the runtime packages it imports directly (e.g.
-  // @kohaku-ui/host-rest) -- but that package's OWN dependencies (e.g. host-rest -> host-core) are not
-  // rewritten by the loop above at all, so npm would otherwise resolve them against the real npm
-  // registry instead of the tarball this run just packed. That is exactly the gap this step exists to
-  // close (see the module header): a bug surfaced here on the first real run --
-  // host-rest's packed manifest depends on host-core as "^0.1.0" (its current unreleased workspace
-  // version), and npm silently resolved that against the registry's already-published 0.1.0 -- an
-  // older release that predates `errorMessage`/`notifyHook` -- instead of the freshly built local
-  // dist. `overrides` forces every @kohaku-ui/* package, wherever it appears in the dependency tree,
-  // onto the tarball this run just packed, so this step actually exercises the packed artifacts
-  // end-to-end rather than a mix of packed-and-published code.
-  // Packed-tarball entries are spread last so they always win over any pre-existing project-level
-  // override on a key collision -- the whole point of this block is that the packed tarball must be
-  // the one that resolves, even if a future template ever adds its own `overrides` entry.
   manifest.overrides = {
     ...(manifest.overrides ?? {}),
     ...Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`])),
   };
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+}
+
+function checkInit(packages, tmpRoot, consumerDir) {
+  const bin = join(consumerDir, "node_modules", ".bin", "kohaku");
+  if (!existsSync(bin)) {
+    log("  @kohaku-ui/cli is not part of this smoke run's package set -- skipping the init check");
+    return false;
+  }
+  const appDir = join(tmpRoot, "init-app");
+  const fixture = join(REPO_ROOT, "scripts", "fixtures", "init-smoke.csv");
+  runOrFail(bin, ["init", "--from", fixture, "--out", appDir, "--no-install"], { cwd: tmpRoot });
+
+  pointGeneratedProjectAtPackedTarballs(appDir, packages);
 
   runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: appDir });
   runOrFail("npx", ["tsc", "--noEmit"], { cwd: appDir });
@@ -615,6 +620,248 @@ console.log("L0 summary composed without an LLM: " + body.spec.components.length
   );
   runOrFail("npx", ["tsx", script], { cwd: appDir });
   log("  L0 summary view composes with a FakeLlm (no provider configured)");
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Step 7e: `kohaku init --mcp` end to end -- the empty-directory-to-widget path the whole brief exists for.
+// Generates a project with --mcp, installs from the packed tarballs, type-checks, then:
+//  (a) spawns the generated stdio server (server/mcp.ts via the generated node_modules/tsx, exactly how
+//      Claude Desktop would launch it -- see claude_desktop_config.example.json) with NO LLM provider env
+//      vars at all, connects `@modelcontextprotocol/client`'s StdioClientTransport, and confirms tools/list
+//      has kohaku_compose plus a generated *_summary tool, resources/read on ui://kohaku/renderer.html
+//      carries the core-build marker, and calling the summary tool composes an L0 spec (no LLM needed);
+//  (b) starts the generated Streamable HTTP server (server/mcp-http.ts) on a free port and confirms it
+//      answers `initialize`;
+//  (c) runs the generated scripts/claude-desktop.mjs --print against a fake HOME, proving it never touches
+//      a real Claude Desktop config while still producing the expected merged output.
+// ---------------------------------------------------------------------------------------------------------
+
+/** Finds an unused TCP port by binding to port 0 and reading back what the OS assigned. */
+function getFreePort() {
+  return new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const port = server.address().port;
+      server.close(() => resolvePort(port));
+    });
+  });
+}
+
+/**
+ * Spawns a long-running server (not spawnSync -- this one must keep running while we talk to it), retries
+ * `probe()` until it resolves or `timeoutMs` elapses, then always tears the child down. `probe` gets no
+ * arguments; it is expected to close over whatever URL/port it needs. Rejects (rather than calling fail()
+ * directly) so the caller can attach a specific, contextualized failure message.
+ */
+async function withBackgroundServer(cmd, args, opts, probe, timeoutMs = 15_000) {
+  const child = spawn(cmd, args, { cwd: opts.cwd, env: opts.env ?? process.env, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (d) => {
+    stdout += String(d);
+  });
+  child.stderr?.on("data", (d) => {
+    stderr += String(d);
+  });
+  const exited = new Promise((resolveExit) => child.on("exit", (code) => resolveExit(code)));
+  try {
+    const deadline = Date.now() + timeoutMs;
+    let lastError;
+    for (;;) {
+      if (child.exitCode !== null) {
+        throw new Error(`server exited early (code ${child.exitCode})\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`);
+      }
+      try {
+        return await probe();
+      } catch (err) {
+        lastError = err;
+      }
+      if (Date.now() > deadline) {
+        throw new Error(
+          `timed out waiting for the server to respond: ${lastError}\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  } finally {
+    child.kill();
+    await Promise.race([exited, new Promise((r) => setTimeout(r, 2000))]);
+  }
+}
+
+async function checkInitMcp(packages, tmpRoot, consumerDir, workspaceYaml) {
+  const bin = join(consumerDir, "node_modules", ".bin", "kohaku");
+  if (!existsSync(bin)) {
+    log("  @kohaku-ui/cli is not part of this smoke run's package set -- skipping the init --mcp check");
+    return false;
+  }
+  if (!packages.some((p) => p.packedName === "@kohaku-ui/mcp-renderer")) {
+    log("  @kohaku-ui/mcp-renderer is not part of this smoke run's package set -- skipping the init --mcp check");
+    return false;
+  }
+
+  const appDir = join(tmpRoot, "init-mcp-app");
+  const fixture = join(REPO_ROOT, "scripts", "fixtures", "init-smoke.csv");
+  runOrFail(bin, ["init", "--from", fixture, "--out", appDir, "--no-install", "--mcp"], { cwd: tmpRoot });
+
+  pointGeneratedProjectAtPackedTarballs(appDir, packages);
+  runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: appDir });
+  runOrFail("npx", ["tsc", "--noEmit"], { cwd: appDir });
+  log("  generated MCP project type-checks");
+
+  const tsxCli = join(appDir, "node_modules", "tsx", "dist", "cli.mjs");
+
+  // --- (a) stdio: tools/list, resources/read, and an L0 compose, with no LLM provider env vars ---
+  // @modelcontextprotocol/client is not a dependency of the generated project (it is a client library; the
+  // project only ever plays the server role), so it is installed into its own throwaway directory rather
+  // than appDir -- the two processes (this check's client, the spawned server) never share node_modules.
+  const mcpClientDir = join(tmpRoot, "init-mcp-client");
+  mkdirSync(mcpClientDir, { recursive: true });
+  const clientVersion = readCatalogVersion(workspaceYaml, "@modelcontextprotocol/client") ?? "^2.0.0";
+  writeFileSync(
+    join(mcpClientDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "kohaku-pack-smoke-init-mcp-client",
+        type: "module",
+        private: true,
+        dependencies: { "@modelcontextprotocol/client": clientVersion },
+      },
+      null,
+      2,
+    ),
+  );
+  runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: mcpClientDir });
+
+  const stdioScript = join(mcpClientDir, "check-stdio.generated.mjs");
+  writeFileSync(
+    stdioScript,
+    `
+import { Client } from "@modelcontextprotocol/client";
+import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+
+// Deliberately no LLM provider env vars (not even inherited ones) -- the deterministic L0 path (tools/list,
+// resources/read, and the summary intent tool) must work without one: createLlmFromEnv defaults to
+// provider "claude" with no key and only fails once generateObject is actually called. Starting from
+// getDefaultEnvironment() (rather than {}) keeps the baseline (PATH etc.) the spawned tsx process needs.
+const env = getDefaultEnvironment();
+for (const key of [
+  "KOHAKU_LLM_PROVIDER",
+  "KOHAKU_LLM_MODEL",
+  "KOHAKU_LLM_API_KEY",
+  "KOHAKU_LLM_BASE_URL",
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+]) {
+  delete env[key];
+}
+
+const transport = new StdioClientTransport({
+  command: ${JSON.stringify(process.execPath)},
+  args: [${JSON.stringify(tsxCli)}, ${JSON.stringify(join(appDir, "server", "mcp.ts"))}],
+  cwd: ${JSON.stringify(appDir)},
+  env,
+});
+const client = new Client({ name: "kohaku-pack-smoke", version: "0.1.0" }, { versionNegotiation: { mode: "auto" } });
+await client.connect(transport);
+try {
+  const { tools } = await client.listTools();
+  const names = tools.map((t) => t.name);
+  if (!names.includes("kohaku_compose")) {
+    throw new Error("tools/list is missing kohaku_compose: " + names.join(", "));
+  }
+  const summaryTool = names.find((n) => n.endsWith("_summary"));
+  if (summaryTool == null) {
+    throw new Error("tools/list has no generated *_summary tool: " + names.join(", "));
+  }
+
+  const read = await client.readResource({ uri: "ui://kohaku/renderer.html" });
+  const html = read.contents[0]?.text ?? "";
+  if (!html.includes('<meta name="kohaku-renderer" content="core"')) {
+    throw new Error("resources/read ui://kohaku/renderer.html is missing the core-build marker");
+  }
+
+  const result = await client.callTool({ name: summaryTool, arguments: {} });
+  if (result.isError === true) {
+    throw new Error("the summary tool call failed: " + JSON.stringify(result.content));
+  }
+  const tier = result.structuredContent?.spec?.provenance?.tier;
+  if (tier !== "L0") {
+    throw new Error("the summary tool did not return an L0 spec (tier=" + tier + ")");
+  }
+  console.log("ok");
+} finally {
+  await client.close();
+}
+`,
+  );
+  runOrFail("node", [stdioScript], { cwd: mcpClientDir });
+  log(
+    "  stdio MCP server: tools/list has kohaku_compose + a *_summary tool, resources/read has the core marker, the summary tool composes L0 with no LLM env vars",
+  );
+
+  // --- (b) Streamable HTTP: answers `initialize` on a free port ---
+  const port = await getFreePort();
+  const httpEnv = { ...process.env, PORT: String(port) };
+  for (const key of ["KOHAKU_LLM_PROVIDER", "KOHAKU_LLM_MODEL", "KOHAKU_LLM_API_KEY", "KOHAKU_LLM_BASE_URL"]) {
+    delete httpEnv[key];
+  }
+  try {
+    await withBackgroundServer(
+      process.execPath,
+      [tsxCli, join(appDir, "server", "mcp-http.ts")],
+      { cwd: appDir, env: httpEnv },
+      async () => {
+        const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2026-07-28",
+              capabilities: {},
+              clientInfo: { name: "kohaku-pack-smoke", version: "0.1.0" },
+            },
+          }),
+        });
+        const text = await res.text();
+        if (!res.ok) throw new Error(`initialize returned ${res.status}: ${text.slice(0, 300)}`);
+        if (!text.includes("serverInfo") && !text.includes("protocolVersion")) {
+          throw new Error(`initialize response did not look like an MCP result: ${text.slice(0, 300)}`);
+        }
+      },
+    );
+  } catch (err) {
+    fail(`generated project's mcp-http server did not answer initialize on :${port}`, String(err));
+  }
+  log(`  Streamable HTTP MCP server: answers initialize on a free port (:${port})`);
+
+  // --- (c) scripts/claude-desktop.mjs --print against a fake HOME (never a real Claude Desktop config) ---
+  const fakeHome = join(tmpRoot, "init-mcp-fake-home");
+  mkdirSync(fakeHome, { recursive: true });
+  const printResult = runOrFail("node", [join(appDir, "scripts", "claude-desktop.mjs"), "--print"], {
+    cwd: appDir,
+    env: { ...process.env, HOME: fakeHome },
+  });
+  let printed;
+  try {
+    printed = JSON.parse(printResult.stdout);
+  } catch {
+    fail("scripts/claude-desktop.mjs --print did not print valid JSON", printResult.stdout);
+  }
+  if (Object.keys(printed.mcpServers ?? {}).length === 0) {
+    fail("scripts/claude-desktop.mjs --print produced no mcpServers entry", printResult.stdout);
+  }
+  if (existsSync(join(fakeHome, "Library"))) {
+    fail("scripts/claude-desktop.mjs --print wrote into the fake HOME (it must only print, never write)");
+  }
+  log("  scripts/claude-desktop.mjs --print: prints the mcpServers entry, writes nothing, under a fake HOME");
+
   return true;
 }
 
@@ -762,6 +1009,111 @@ console.log("ok");
     );
   }
   log('  "@kohaku-ui/host/mcp" imports successfully once @kohaku-ui/host-mcp-apps + the MCP SDK are installed alongside it');
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Step 7d: @kohaku-ui/mcp-renderer's "." entry needs zero dependencies (mirroring checkHostWithoutMcpSdk's
+// (b) above), and its tarball carries a real pre-built dist/renderer.html, not a stub. "./boot" itself is
+// already exercised by the shared consumer's steps 5/6 (its optional peers -- renderer-react, renderer-core,
+// data-binding, spec-core, @modelcontextprotocol/ext-apps, react, react-dom -- flow into that consumer
+// automatically: collectExternalPeers unions every packed package's own peerDependencies, mcp-renderer
+// included, and its @kohaku-ui/* peers are already among the packed tarballs installConsumer adds to
+// `dependencies`), so this step only needs to prove the zero-dependency claim of "." in isolation.
+// ---------------------------------------------------------------------------------------------------------
+
+const MCP_RENDERER_HTML_MIN_BYTES = 100 * 1024;
+
+function checkMcpRendererBundle(packages, tmpRoot) {
+  const pkg = packages.find((p) => p.packedName === "@kohaku-ui/mcp-renderer");
+  if (pkg == null) {
+    log("  @kohaku-ui/mcp-renderer is not part of this smoke run's package set -- skipping this check");
+    return false;
+  }
+
+  // --- dist/renderer.html is present and large enough to be a real single-file build, not an empty stub ---
+  const rendererHtml = run("tar", ["-xOzf", pkg.tarball, "package/dist/renderer.html"]);
+  if (rendererHtml.status !== 0) {
+    fail(
+      "@kohaku-ui/mcp-renderer: could not extract package/dist/renderer.html from the tarball -- did `pnpm run build`'s vite step run?",
+      rendererHtml.stderr,
+    );
+  }
+  const rendererHtmlBytes = Buffer.byteLength(rendererHtml.stdout, "utf8");
+  if (rendererHtmlBytes <= MCP_RENDERER_HTML_MIN_BYTES) {
+    fail(
+      `@kohaku-ui/mcp-renderer: packed dist/renderer.html is only ${rendererHtmlBytes} bytes (expected > ${MCP_RENDERER_HTML_MIN_BYTES}, a single-file React bundle with inlined JS/CSS) -- looks like a stub, not a real build`,
+    );
+  }
+  // Vite's HTML transform self-closes the tag (`... content="core" />`), so this checks the stable prefix
+  // rather than the exact literal (matching packages/mcp-renderer/test/built-html.test.ts's tolerant regex).
+  if (!rendererHtml.stdout.includes('<meta name="kohaku-renderer" content="core"')) {
+    fail('@kohaku-ui/mcp-renderer: packed dist/renderer.html is missing the <meta name="kohaku-renderer" content="core"> marker');
+  }
+  log(`  packed dist/renderer.html is a real build (${rendererHtmlBytes} bytes > ${MCP_RENDERER_HTML_MIN_BYTES}, core marker present)`);
+
+  // --- "." needs zero dependencies: a standalone install of only this package, no peers at all ---
+  const localOverrides = Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`]));
+  const zeroDepDir = join(tmpRoot, "mcp-renderer-zero-dep");
+  mkdirSync(zeroDepDir, { recursive: true });
+  writeFileSync(
+    join(zeroDepDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "kohaku-pack-smoke-mcp-renderer-zero-dep",
+        type: "module",
+        private: true,
+        // Deliberately none of "./boot"'s optional peers here -- proves "." truly needs nothing beyond
+        // this one package, the whole point of shipping a pre-built bundle instead of React source.
+        dependencies: { [pkg.packedName]: `file:${pkg.tarball}` },
+        overrides: localOverrides,
+      },
+      null,
+      2,
+    ),
+  );
+  runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: zeroDepDir });
+  for (const optionalPeer of [
+    "@kohaku-ui/renderer-react",
+    "@kohaku-ui/renderer-core",
+    "@kohaku-ui/data-binding",
+    "@kohaku-ui/spec-core",
+    "@modelcontextprotocol/ext-apps",
+    "react",
+    "react-dom",
+  ]) {
+    if (existsSync(join(zeroDepDir, "node_modules", ...optionalPeer.split("/")))) {
+      fail(
+        `a zero-dep "npm install @kohaku-ui/mcp-renderer" pulled in ${optionalPeer} anyway (expected it to stay an uninstalled optional peer)`,
+      );
+    }
+  }
+  log("  a zero-dep install pulls in none of \"./boot\"'s optional peers");
+
+  const zeroDepScript = join(zeroDepDir, "check-mcp-renderer-import.generated.mjs");
+  writeFileSync(
+    zeroDepScript,
+    `
+const mod = await import("@kohaku-ui/mcp-renderer");
+if (typeof mod.loadRendererHtml !== "function") {
+  throw new Error("loadRendererHtml is not exported: " + JSON.stringify(Object.keys(mod)));
+}
+const html = await mod.loadRendererHtml();
+if (typeof html !== "string" || !html.includes("kohaku-renderer")) {
+  throw new Error("loadRendererHtml() did not resolve to the built renderer HTML");
+}
+console.log("ok");
+`,
+  );
+  const zeroDepResult = run("node", [zeroDepScript], { cwd: zeroDepDir });
+  if (zeroDepResult.status !== 0) {
+    fail(
+      'importing @kohaku-ui/mcp-renderer\'s "." entry and calling loadRendererHtml() failed with zero extra dependencies installed',
+      `--- stdout ---\n${zeroDepResult.stdout}\n--- stderr ---\n${zeroDepResult.stderr}`,
+    );
+  }
+  log('  "." imports and loadRendererHtml() resolves with zero extra dependencies installed');
 
   return true;
 }
@@ -932,7 +1284,7 @@ function checkPublintAndAttw(packages) {
 // Main
 // ---------------------------------------------------------------------------------------------------------
 
-function main() {
+async function main() {
   const workspaceYaml = readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8");
 
   step(1, "discover publishable packages");
@@ -979,6 +1331,12 @@ function main() {
   step("7c", "@kohaku-ui/host's \".\" entry needs no MCP SDK (static + a standalone install)");
   const hostNoMcpChecked = checkHostWithoutMcpSdk(packages, tmpRoot);
 
+  step("7d", "@kohaku-ui/mcp-renderer's \".\" entry is zero-dependency and ships a real dist/renderer.html");
+  const mcpRendererChecked = checkMcpRendererBundle(packages, tmpRoot);
+
+  step("7e", "kohaku init --mcp end to end (stdio tools/list + resources/read + L0 compose, Streamable HTTP initialize, claude-desktop.mjs --print)");
+  const initMcpChecked = await checkInitMcp(packages, tmpRoot, consumerDir, workspaceYaml);
+
   step(8, "sandbox guest contract check (buildWorkerShimJs evaluated in node:vm)");
   const sandboxChecked = checkSandboxGuestContract(packages, consumerDir);
 
@@ -996,12 +1354,14 @@ function main() {
   console.log(`[pack-smoke]   CLI check: ${cliChecked ? "ran" : "skipped (cli not in this package set)"}`);
   console.log(`[pack-smoke]   init smoke: ${initChecked ? "ran" : "skipped"}`);
   console.log(`[pack-smoke]   @kohaku-ui/host without the MCP SDK: ${hostNoMcpChecked ? "ran" : "skipped (host not in this package set)"}`);
+  console.log(`[pack-smoke]   @kohaku-ui/mcp-renderer zero-dep "." + dist/renderer.html size: ${mcpRendererChecked ? "ran" : "skipped (mcp-renderer not in this package set)"}`);
+  console.log(`[pack-smoke]   init --mcp end to end: ${initMcpChecked ? "ran" : "skipped"}`);
   console.log(`[pack-smoke]   sandbox guest contract check: ${sandboxChecked ? "ran" : "skipped (sandbox not in this package set)"}`);
   console.log(`[pack-smoke]   publint/attw: ${anySkipped ? "ran, with some tools skipped (no network access to fetch them)" : "ran fully"}`);
 }
 
 try {
-  main();
+  await main();
 } catch (err) {
   fail("unexpected error", err && err.stack ? err.stack : String(err));
 }

@@ -180,6 +180,49 @@ describe("workerShimMain (evaluable in a bare vm context — no document/locatio
     expect(w.run("document.body.querySelector('li').closest('#root') != null")).toBe(true);
   });
 
+  // Regression for CodeQL js/polynomial-redos alerts on the selector engine's attribute-token regex
+  // (backtracking on many repeated "[" with no closing "]") and its former split-based tokenizer
+  // (backtracking on many repeated spaces with no ">"). Both are exercised well under
+  // SELECTOR_LENGTH_LIMIT (1024) so this pins the fixed regex/tokenizer's own linear-time behavior, not
+  // just the length cap's fast path (covered separately below).
+  it("selector parsing on adversarial-but-under-the-cap input (many '[' / many spaces) completes quickly", async () => {
+    const w = await bootWorker(CONFIG);
+    w.run('document.body.innerHTML = "<div id=\\"root\\"></div>";');
+
+    // 1000 "[" with no closing "]" anywhere: the attribute-token regex never matches at any position (with
+    // either the old or the fixed pattern -- this is pre-existing, preserved behavior, not new), so
+    // parseSimpleSelector extracts no constraints at all and the resulting all-null SimpleSelector matches
+    // every element (here: just the one <div>). The point of this assertion is the timing, not the count --
+    // it pins that the *fixed* regex reaches that same (weird but pre-existing) result in linear time.
+    const manyBrackets = JSON.stringify("[".repeat(1000));
+    const start1 = Date.now();
+    expect(w.run(`document.body.querySelectorAll(${manyBrackets}).length`)).toBe(1);
+    expect(Date.now() - start1).toBeLessThan(200);
+
+    // A huge gap of whitespace between two real simple selectors -- exercises the tokenizer's
+    // whitespace-collapsing loop, not just .trim() (which only strips the leading/trailing ends).
+    const bigGapSelector = JSON.stringify(`div${" ".repeat(1000)}span`);
+    const start2 = Date.now();
+    expect(w.run(`document.body.querySelectorAll(${bigGapSelector}).length`)).toBe(0);
+    expect(Date.now() - start2).toBeLessThan(200);
+  });
+
+  it("selectors over SELECTOR_LENGTH_LIMIT return no match immediately instead of being parsed", async () => {
+    const w = await bootWorker(CONFIG);
+    w.run('document.body.innerHTML = "<div id=\\"root\\"></div>";');
+
+    const manyBrackets = JSON.stringify("[".repeat(100_000));
+    const start1 = Date.now();
+    expect(w.run(`document.body.querySelectorAll(${manyBrackets}).length`)).toBe(0);
+    expect(Date.now() - start1).toBeLessThan(200);
+
+    const manySpaces = JSON.stringify(" ".repeat(100_000));
+    const start2 = Date.now();
+    expect(w.run(`document.body.querySelector(${manySpaces}) === null`)).toBe(true);
+    expect(w.run(`document.body.querySelector('#root').matches(${manySpaces})`)).toBe(false);
+    expect(Date.now() - start2).toBeLessThan(200);
+  });
+
   it("event bubbling: a child dispatches, both child and ancestor listeners fire in order, stopPropagation halts it", async () => {
     const w = await bootWorker(CONFIG);
     w.run(

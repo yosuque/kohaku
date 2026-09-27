@@ -1,5 +1,5 @@
 /**
- * Pure-logic checks for renderer/host-integration.ts.
+ * Pure-logic checks for boot/host-integration.ts.
  * Pins the reading/writing of widgetState (ChatGPT-specific) and the displayMode toggle decision without a DOM.
  */
 import type { UISpec } from "@kohaku-ui/spec-core";
@@ -11,7 +11,7 @@ import {
   persistView,
   readPersistedView,
   resolveHostTheme,
-} from "../renderer/host-integration.js";
+} from "../src/boot/host-integration.js";
 
 /** Minimal valid Spec that passes parseSpec (wire form). intent.hash must be in `sha256:<hex64>` format. */
 const WIRE_SPEC = {

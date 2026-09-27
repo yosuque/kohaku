@@ -44,6 +44,7 @@ const PUBLISHED_DIRS = [
     "intents",
     "lineage",
     "llm",
+    "mcp-renderer",
     "otel",
     "registry",
     "renderer-core",
