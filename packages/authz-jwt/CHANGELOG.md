@@ -1,5 +1,13 @@
 # @kohaku-ui/authz-jwt
 
+## 0.4.0
+
+### Patch Changes
+
+- Updated dependencies [[`cc17b7b`](https://github.com/yosuque/kohaku/commit/cc17b7bc3c96e49b1b74197ac20cd7a3d8ee0b47), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`5d167cb`](https://github.com/yosuque/kohaku/commit/5d167cb386cc1f91102644f8a99bd5b5c2949ce0)]:
+  - @kohaku-ui/spec-core@0.4.0
+  - @kohaku-ui/authz-hmac@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

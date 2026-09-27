@@ -1,5 +1,122 @@
 # @kohaku-ui/renderer-react
 
+## 0.4.0
+
+### Minor Changes
+
+- [#60](https://github.com/yosuque/kohaku/pull/60) [`5f1bbbd`](https://github.com/yosuque/kohaku/commit/5f1bbbd09fe1edb984a7b0f5a0c5212c3da628ea) Thanks [@yosuque](https://github.com/yosuque)! - Adds a Compliance Evidence Pack export (`@kohaku-ui/lineage`'s new `evidence` module; `kohaku evidence
+  keygen`/`export`/`verify`) and opt-in AI-generation disclosure for both renderers (design.md [#66](https://github.com/yosuque/kohaku/issues/66)/[#67](https://github.com/yosuque/kohaku/issues/67)).
+  
+  **Evidence Pack** (`@kohaku-ui/lineage`): `buildEvidencePack` assembles a normalized, Ed25519-signed
+  export of the lineage log (`events.jsonl`), a governance-decision index (`approvals.jsonl`:
+  `component.reviewed`/`published`/`withdrawn`, `intent.fixated`/`unfixated`), promotion/fixation
+  snapshots, and the referenced component HTML artifacts, plus `manifest.json` and a detached signature
+  (`manifest.sig`). `EvidenceManifestSchema` is new but deliberately not part of `spec/schemas` — it
+  describes an export format for auditors, not a wire type. Ed25519 signing uses `globalThis.crypto.subtle`
+  (no new runtime dependency for TS); an artifact whose recorded hash does not match its own content is
+  still exported, recorded as a non-fatal warning rather than aborting the export.
+  
+  **CLI** (`@kohaku-ui/cli`): `kohaku evidence keygen --out-dir <dir>` generates an Ed25519 keypair (private
+  key file mode 0600). `kohaku evidence export (--data-dir <dir> | --rest <baseUrl> [--header k:v])
+  [--tenant <id>] --since --until --private-key <pem> --out <dir> [--allow-incomplete]` builds and signs a
+  pack from a local `StoragePort` data directory or, over REST, from the existing `KohakuClient` surface
+  (`lineagePages`/`promotions.list`/`fixations.list`) — the REST source leaves `fixations.jsonl` empty with
+  a recorded warning, since `GET /fixations` does not expose enough fields to reconstruct a full
+  `FixationRecord`. `kohaku evidence verify <dir> --public-key <pem>` checks the manifest schema, the
+  signature, and every file's hash/size, and reports an independent artifact-hash cross-check as non-fatal
+  `mismatches`; exit code 0 valid / 1 invalid / 2 usage error. `@kohaku-ui/lineage` and
+  `@kohaku-ui/storage-memory` move from `cli`'s devDependencies to dependencies.
+  
+  **AI-generation disclosure** (`@kohaku-ui/renderer-core`, `@kohaku-ui/renderer-react`,
+  `@kohaku-ui/renderer-wc`): `deriveDisclosure(provenance)` (renderer-core) derives a disclosure level
+  (`"ai-generated"` for tier L1/L2, `"ai-assisted-reviewed"` for a fixated tier-L0 Spec, `"none"` otherwise
+  — never encoded on the wire) and the corresponding `data-kohaku-disclosure`/`data-kohaku-tier`/
+  `data-digital-source-type` (IPTC Digital Source Type) attributes. `SpecView` gains a `disclosure?: "off" |
+  "attributes" | "label"` prop (renderer-react; also exports `useDisclosure`/`KohakuDisclosureLabel`), and
+  `<kohaku-surface>` gains a matching `disclosure` attribute (renderer-wc, applied to the host element,
+  with the visible label — `"label"` mode only — inside the shadow root). Both default to `"off"`: existing
+  DOM output is unchanged unless a host opts in.
+  
+  See [docs/user-guide.md](../docs/user-guide.md)'s "Compliance Evidence Pack and AI-generation disclosure"
+  section for usage, EU AI Act Article 50 context (not legal advice), and a PII caution for exported Intent
+  `params`/request text.
+
+- [#62](https://github.com/yosuque/kohaku/pull/62) [`cc17b7b`](https://github.com/yosuque/kohaku/commit/cc17b7bc3c96e49b1b74197ac20cd7a3d8ee0b47) Thanks [@yosuque](https://github.com/yosuque)! - Add Governed Actions: Human-In-The-Loop tiers for `DomainPort` write operations (design.md [#62](https://github.com/yosuque/kohaku/issues/62)/[#63](https://github.com/yosuque/kohaku/issues/63)/[#64](https://github.com/yosuque/kohaku/issues/64);
+  SPEC §5's ACT-PRM-001/ACT-APR-001/ACT-CNF-001, LIN-ACT-001, §6.2's MCPAPP-ACT-001).
+  
+  An operation may declare `tier` (`"auto"` (default) / `"confirm"` / `"approve"`) and `paramsSchema`
+  (kohaku's own closed JSON Schema subset — `type`, `properties`, `required`,
+  `additionalProperties: false`, `enum`, `minimum`/`maximum`, `minLength`/`maxLength`, `items`, `maxItems`,
+  `x-message`; deliberately no `pattern`, to avoid both ReDoS and a JS/Python regex-dialect mismatch).
+  `spec-core`'s `validateActionParams`/`assertValidActionParamsSchema` (env-neutral, dependency-free, pinned
+  byte-for-byte against the Python port via the cross-language golden) enforces the schema before
+  `DomainPort.invoke` ever runs, on every write surface alike: REST's `POST /binding/action`, MCP's
+  `${prefix}_action`, and the client-side `preflightAction` check `renderer-core` runs before either.
+  
+  `"approve"`-tier actions are gated by a new stateless, short-lived HMAC-signed `ApprovalPort`
+  (`@kohaku-ui/authz-hmac`'s `createHmacApprovalPort`, `"kohaku-approval.v1."`-prefixed tokens, 300s default
+  TTL) bound to `(action, payloadHash, requesterId, tenant)`; self-approval is refused at issuance, and a
+  verification failure the host cannot classify is treated as a denial (fail-closed). An optional
+  `ApprovalStore` adds single-use enforcement. REST gains `POST /approvals` (mints a token as an authorized
+  approver, governance kind `action.approve`) and both the REST body and the MCP action tool's input gain
+  optional `confirmed`/`approval` fields; a gate failure is `422 ACTION_PARAMS_INVALID` / `403
+  APPROVAL_REQUIRED` on REST (with `error.issues`/`error.approval`) and the MCP structured-tool-error
+  equivalent.
+  
+  A compose response optionally carries an **Action manifest** (REST's `actions?` on
+  `/compose`/`/events`/`event: spec`; MCP's `_meta["kohaku/actions"]`) mapping each governed action name to
+  `{tier, paramsSchema?, confirmMessage?}` — placed outside the `UISpec` itself, next to the capability, so
+  it never affects `specHash` or the cache key. `renderer-core`'s `preflightAction` consults it client-side
+  before a write round-trip; `renderer-react`/`renderer-wc`/`mcp-renderer` thread `confirm`/`requestApproval`
+  hooks through (`renderer-react` ships a `globalThis.confirm`-backed default for the `"confirm"` tier; there
+  is no framework-neutral default for `"approve"`, so that tier stays gated until a product wires its own
+  hook). `@kohaku-ui/client`/`@kohaku-ui/data-binding` gain typed `ACTION_PARAMS_INVALID`/`APPROVAL_REQUIRED`
+  error codes and `confirmed`/`approval` request options. A host that records action outcomes to lineage does
+  so under a distinct `action.*` event family (`action.invoked`/`action.denied`/`action.approvalRequested`/
+  `action.approved`), carrying `payloadHash` but never the payload's own field values.
+  
+  The Python port (`python/kohaku`) mirrors the full surface (`kohaku.spec.action_params`,
+  `kohaku.host_core.action_gate`/`action_audit`, `POST /approvals`, the MCP action-tool gate), and
+  `apps/sample-api` / `python/examples/sales-api` demonstrate both tiers end to end (`annotate`: confirm,
+  `publish`: approve) — see the [user guide](../docs/user-guide.md)'s "Governed actions: tiers" section.
+  
+  **Behavior changes to check when upgrading.** (1) `POST /binding/action` and the MCP action tool now
+  reject, before `DomainPort.invoke` runs, any action that is not in the DomainPort's own
+  `listOperations()` — previously such an action was invoked ungated. It is rejected with the same response
+  as a missing write scope and recorded as `action.denied`. A product whose `listOperations()` omits an
+  operation it still expects to be invoked must declare it. (2) `validateActionParams` rejects a payload
+  property named `__proto__`, `constructor` or `prototype` at any depth (issue code `unsafeKey`), whatever
+  the schema's `additionalProperties` says.
+
+- [#54](https://github.com/yosuque/kohaku/pull/54) [`bd2d484`](https://github.com/yosuque/kohaku/commit/bd2d484826bec86c78dcb720502740494a672ea8) Thanks [@yosuque](https://github.com/yosuque)! - Adds a typed way to register a product-specific part, so its `{type, version, propsSchema}` can live in one
+  `ComponentDefinition` instead of being re-typed as string literals at the registration call site (design.md
+  [#68](https://github.com/yosuque/kohaku/issues/68)).
+  
+  `@kohaku-ui/renderer-react`: `implement(def, Component)` wraps a component whose props are inferred from
+  `def.propsSchema` (`z.infer`) — no `node.props["x"] as T` cast needed — and returns an entry consumed by the
+  new `ImplRegistry.use(entry)`. The existing `register(type, version, component)` / `ImplProps` keep working
+  unchanged for parts that have no static `ComponentDefinition` (e.g. a promoted part's per-artifact schema).
+  
+  `@kohaku-ui/renderer-wc`: `<kohaku-surface>` gains a public `registerPart(type, version, builder)` (it was
+  previously private with no way for a host to register anything beyond the core catalog), plus `getPartVersion`
+  for introspection, and `implementWc(def, builder)` is the typed counterpart of `implement` for a `PartBuilder`.
+  
+  Both `implement` and `implementWc` parse a node's props against the schema **unconditionally, in every
+  environment** (`propsSchema.safeParse` is also what materializes a `.default()`-ed prop the Spec omits, not
+  just a validation nicety, so it never skips in production) — on success the component receives the parsed
+  value, on failure it receives the raw (unvalidated) props instead (fail-open: a malformed prop degrades the
+  part's own display rather than the whole surface). Only the diagnostic — a `console.warn` on a mismatch — is
+  gated by environment: by default it fires outside a `NODE_ENV=production` build; pass `{ validate }` to force
+  the warning on or off regardless of environment.
+
+### Patch Changes
+
+- Updated dependencies [[`fcd4eb7`](https://github.com/yosuque/kohaku/commit/fcd4eb7c8c6608030d4f9045648a305fa2e5992f), [`5f1bbbd`](https://github.com/yosuque/kohaku/commit/5f1bbbd09fe1edb984a7b0f5a0c5212c3da628ea), [`cc17b7b`](https://github.com/yosuque/kohaku/commit/cc17b7bc3c96e49b1b74197ac20cd7a3d8ee0b47), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`730e625`](https://github.com/yosuque/kohaku/commit/730e62584b249056078792f6f646019cb225b049), [`5d167cb`](https://github.com/yosuque/kohaku/commit/5d167cb386cc1f91102644f8a99bd5b5c2949ce0)]:
+  - @kohaku-ui/registry@0.4.0
+  - @kohaku-ui/renderer-core@0.4.0
+  - @kohaku-ui/spec-core@0.4.0
+  - @kohaku-ui/data-binding@0.4.0
+
 ## 0.3.0
 
 ### Patch Changes
