@@ -187,8 +187,20 @@ export class KohakuSurface extends HTMLElement {
    * `version` is not itself consulted by any negotiation path yet. Call before assigning `spec` when
    * possible; if a Spec is already mounted, this rebuilds it so the newly registered part renders
    * immediately instead of only taking effect on the next Spec swap.
+   *
+   * `#registry` starts seeded with the 16 core-catalog parts (`createCoreRenderRegistry`), so registering
+   * an already-taken `type` — most easily a core one, by typo or intentional override — silently replaces
+   * it. That is sometimes exactly what a product wants (replacing a core part with its own), but silent
+   * shadowing of a core part is also an easy way to lose one by accident, so replacing any existing entry
+   * warns via `console.warn` unless the caller opts in explicitly with `{ override: true }`.
    */
-  registerPart(type: string, version: string, builder: PartBuilder): void {
+  registerPart(type: string, version: string, builder: PartBuilder, options?: { override?: boolean }): void {
+    if (this.#registry.has(type) && options?.override !== true) {
+      console.warn(
+        `[kohaku] registerPart("${type}", ...) replaces an existing part. ` +
+          "Pass { override: true } if that is intentional.",
+      );
+    }
     this.#registry.set(type, builder);
     this.#partVersions.set(type, version);
     if (this.#spec != null) this.#render();

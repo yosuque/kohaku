@@ -557,6 +557,10 @@ const entry = implementWc(myCard, (rt, parent, node, props) => {
 surface.registerPart(entry.type, entry.version, entry.builder);
 ```
 
+`registerPart` replacing an already-registered `type` (most easily one of the 16 core-catalog parts, by typo
+or an intentional override) warns via `console.warn` unless you pass `{ override: true }` as a 4th argument —
+silent shadowing of a core part is an easy way to lose it by accident.
+
 Both `implement` and `implementWc` always run `def.propsSchema.safeParse` on the node's props — in every
 environment — so a `.default()`-ed value the Spec omits is materialized regardless of whether the diagnostic
 below is on; on a mismatch, the raw (unvalidated) props are used instead of failing the node. Only the

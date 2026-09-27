@@ -553,6 +553,10 @@ const entry = implementWc(myCard, (rt, parent, node, props) => {
 surface.registerPart(entry.type, entry.version, entry.builder);
 ```
 
+`registerPart` が既に登録済みの `type`(タイプミス、あるいは意図的な上書きにより、16 個のコアカタログの部品の
+どれかが対象になりやすい)を置き換える場合は、第 4 引数に `{ override: true }` を渡さない限り `console.warn`
+で警告する——コア部品を静かに覆い隠してしまうのは、うっかり失うありがちな原因だからである。
+
 `implement` と `implementWc` はどちらも、環境を問わず常に `def.propsSchema.safeParse` をノードの props に対して
 実行する。そのため `.default()` が付いた値を Spec 側が省略していても、後述の診断が有効かどうかに関わらず
 必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。環境によって

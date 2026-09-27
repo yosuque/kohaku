@@ -123,4 +123,30 @@ describe("registerPart / implementWc", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("warns when replacing an already-registered part (e.g. a core one) unless { override: true }", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const surface = document.createElement("kohaku-surface") as KohakuSurface;
+      document.body.appendChild(surface);
+      const entry = implementWc(badgeDef, badgeBuilder);
+
+      // "presentMarkdown" is seeded by createCoreRenderRegistry() — replacing it without { override: true }
+      // warns (silent shadowing of a core part is an easy way to lose it by accident).
+      surface.registerPart("presentMarkdown", entry.version, entry.builder);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain("presentMarkdown");
+      warn.mockClear();
+
+      // { override: true } silences the warning for an intentional replacement.
+      surface.registerPart("presentMarkdown", entry.version, entry.builder, { override: true });
+      expect(warn).not.toHaveBeenCalled();
+
+      // A brand-new type never warns (nothing is being replaced).
+      surface.registerPart(entry.type, entry.version, entry.builder);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
