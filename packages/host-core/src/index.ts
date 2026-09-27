@@ -23,6 +23,18 @@ export {
   type CatalogPublishedPromotionIssue,
 } from "./catalog-impact.js";
 export {
+  type ApplyCatalogMigrationOptions,
+  applyCatalogMigration,
+  type CatalogMigrationApplyResult,
+  type CatalogMigrationBlocked,
+  type CatalogMigrationFixationReplacer,
+  type CatalogMigrationPlan,
+  type CatalogMigrationRewrite,
+  type CatalogMigrationStep,
+  type PlanCatalogMigrationOptions,
+  planCatalogMigration,
+} from "./catalog-migration.js";
+export {
   type ConsoleErrorReporter,
   type ConsoleErrorReporterOptions,
   clientMessageFor,

@@ -273,6 +273,9 @@ export function summarizeLineage(
       case "intent.unfixated":
         fixations.unfixated++;
         break;
+      // intent.migrated (design.md #65) is intentionally ignored here: a migration-driven rewrite of a
+      // fixation's pinnedSpec is neither a fresh fixation nor a removal, and has no counter of its own in
+      // LineageSummary. It falls through to default like intent.observed (reserved, never fired).
       default:
         break;
     }

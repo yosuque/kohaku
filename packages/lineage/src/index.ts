@@ -24,6 +24,7 @@ export {
   type Fixations,
   FixationUnsupportedError,
   type InvalidateOptions,
+  type ReplaceOptions,
 } from "./fixation/service.js";
 export {
   artifactIdOf,
