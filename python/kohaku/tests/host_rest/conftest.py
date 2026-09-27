@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from kohaku.composer import ComposeContext
+from kohaku.host_core import PolicyRateLimiter
 from kohaku.host_rest import (
     KohakuHostDeps,
     attach_kohaku_routes,
@@ -192,6 +193,7 @@ def build_harness(
     auth: AuthHook | None = None,
     action_effects: ActionEffectsHook | None = None,
     max_body_bytes: int | None = None,
+    rate_limiter: PolicyRateLimiter | None = None,
 ) -> Harness:
     storage = FileStoragePort(tmp_path)
     catalog = resolve_catalog(core_catalog())
@@ -226,6 +228,7 @@ def build_harness(
         auth=auth,
         action_effects=action_effects,
         max_body_bytes=max_body_bytes,
+        rate_limiter=rate_limiter,
     )
     app = FastAPI()
     attach_kohaku_routes(app, deps)

@@ -22,6 +22,7 @@ from .governance_policy import (
     GovernanceOperation,
     GovernancePolicy,
     create_governance_policy,
+    governance_policy_from_roles,
 )
 from .routes import attach_kohaku_routes
 
@@ -43,4 +44,5 @@ __all__ = [
     "attach_kohaku_routes",
     "create_governance_policy",
     "error_body",
+    "governance_policy_from_roles",
 ]

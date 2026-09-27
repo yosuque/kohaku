@@ -122,3 +122,26 @@ def _matches_pattern(pattern: str, kind: str) -> bool:
         domain = pattern[:-2]  # the domain with ".*" removed
         return kind.startswith(f"{domain}.")
     return pattern == kind
+
+
+def governance_policy_from_roles(
+    roles_for: Callable[[str | None], dict[str, list[str]]],
+) -> GovernanceEvaluator:
+    """Builds a GovernanceEvaluator from a per-tenant roles resolver (host_core's
+    PolicyRuntime.roles_for, or any function of that same shape) instead of a static
+    GovernancePolicy.roles map -- so a role's grants can change per tenant (a Policy file's
+    governance.roles section, kohaku.spec.policy) and reflect a PolicyRuntime.reload() on the very
+    next call, unlike create_governance_policy, which bakes policy.roles in once at construction time.
+
+    roles_for is resolved fresh on every evaluation (not memoized here): delegates to
+    create_governance_policy for the actual matching so the two evaluators never drift in behavior.
+    """
+
+    def evaluate(
+        principal: Principal, operation: GovernanceOperation, tenant: str | None = None
+    ) -> bool:
+        return create_governance_policy(GovernancePolicy(roles=roles_for(tenant)))(
+            principal, operation, tenant
+        )
+
+    return evaluate

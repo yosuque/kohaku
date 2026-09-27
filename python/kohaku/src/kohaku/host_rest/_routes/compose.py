@@ -66,6 +66,7 @@ from .shared import (
     _read_json,
     _resolve_tenant,
     allowed_actions,
+    check_rate_limit,
     report_host_error,
     request_id_of,
     safe_record,
@@ -677,7 +678,11 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         if body is None or (body.input is None and body.intent is None):
             return _error("BAD_REQUEST", "either input or intent is required", 400)
         principal = await _get_principal(deps, request)
-        session = to_session(body.session, principal, await _resolve_tenant(deps, request))
+        tenant = await _resolve_tenant(deps, request)
+        rate_limited = await check_rate_limit(deps, principal, tenant, "compose")
+        if rate_limited is not None:
+            return rate_limited
+        session = to_session(body.session, principal, tenant)
         try:
             intent = await resolve_intent_from_body(body, session, deps)
         except BaseException as e:
@@ -693,7 +698,11 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         if body is None or (body.input is None and body.intent is None):
             return _error("BAD_REQUEST", "either input or intent is required", 400)
         principal = await _get_principal(deps, request)
-        session = to_session(body.session, principal, await _resolve_tenant(deps, request))
+        tenant = await _resolve_tenant(deps, request)
+        rate_limited = await check_rate_limit(deps, principal, tenant, "compose")
+        if rate_limited is not None:
+            return rate_limited
+        session = to_session(body.session, principal, tenant)
         try:
             intent = await resolve_intent_from_body(body, session, deps)
         except BaseException as e:
@@ -716,7 +725,11 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         if "." not in body.event.on:
             return _error("BAD_REQUEST", 'event.on must be "<componentId>.<event>"', 400)
         principal = await _get_principal(deps, request)
-        session = to_session(body.session, principal, await _resolve_tenant(deps, request))
+        tenant = await _resolve_tenant(deps, request)
+        rate_limited = await check_rate_limit(deps, principal, tenant, "compose")
+        if rate_limited is not None:
+            return rate_limited
+        session = to_session(body.session, principal, tenant)
         try:
             # Resolved through host-core's resolve_intent (the "intent" source), not a bare finalize_intent, so
             # a SemanticPort.validate_intent implementation gets a chance to reject an unknown canonical or
