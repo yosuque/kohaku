@@ -46,6 +46,7 @@ export {
   toPropsJsonSchema,
 } from "./json-schema.js";
 export { type Downgrade, negotiate } from "./negotiate.js";
+export { type StagedCatalogOptions, stagedCatalogFor } from "./staged.js";
 export type {
   CapabilityDecl,
   CatalogIssue,

@@ -608,6 +608,49 @@ export const myCard = defineComponent({
 }
 ```
 
+### 部品を deprecated にして移行する
+
+部品を削除する代わりに `deprecated`(何に置き換わるかを添えて)を付けます。既にそれを使って固定化(fixate)された Spec の検証は通り続けますが、L1 生成はその部品を提示しなくなり、カタログ指紋が変わってコンポーズキャッシュがきれいに分離されます(design.md #65):
+
+```ts
+export const myCard = defineComponent({
+  type: "myapp.card", version: "1.0.0",
+  // … description / propsSchema / capabilities は従来どおり …
+  deprecated: { reason: "myapp.cardV2 に置き換え", replacedBy: { type: "myapp.cardV2" } },
+  migrateProps: (props) => ({ title: props.title }), // TS のみ: `kohaku migrate` が props を書き換える際に使う
+});
+```
+
+deprecated な部品をまだ使っている固定化(L0)済みの Spec を、置き換え先へ一括で書き換えるには `migrate` CLI を使います(plan は読み取り専用、apply が実際に適用する 2 段階):
+
+```bash
+npx @kohaku-ui/cli migrate plan --data-dir ./.data --catalog ./catalog.ts --out plan.json
+# plan.json を確認: rewrites / steps(適用可能)/ blocked(手動対応が必要 -- 例: 書き換え後に props の形が
+# 合わない)。そのうえで、--data-dir を共有するホストプロセスを止めてから(ファイルバックエンドの
+# StoragePort は同時書き込みに対して安全ではありません):
+npx @kohaku-ui/cli migrate apply --plan plan.json --approver you@example.com --data-dir ./.data
+```
+
+`--catalog` は default export が `(tenant?: string) => ResolvedCatalog` である ESM モジュールを指します -- ホストの `ComposeContext.catalogFor` と同じ形なので、たいてい同じモジュール(またはその薄い re-export)を指せます。
+
+#### カタログのバージョンを段階的に適用する
+
+移行後のカタログを、全テナントに切り替える前にカナリアとして先行適用したい場合、`catalogFor` を一気に切り替える代わりに `stagedCatalogFor` で 2 つのカタログをラップします:
+
+```ts
+import { resolveCatalog, stagedCatalogFor } from "@kohaku-ui/registry";
+
+const ROLLOUT_TENANTS = new Set(["acme"]); // 確信が持てるにつれてこのリストを広げる
+
+const catalogFor = stagedCatalogFor({
+  stable: resolveCatalog(coreCatalog, myContribution),          // 移行前
+  next: resolveCatalog(coreCatalog, myMigratedContribution),    // 移行後(myCard を deprecated 化)
+  inRollout: (tenant) => ROLLOUT_TENANTS.has(tenant),
+});
+```
+
+テナント無指定のトラフィック(テナントが一切解決されない場合)は常に `stable` になるため、カナリア展開の影響を受けることはありません -- `inRollout` はそのケースでは呼ばれすらしません。`stagedCatalogFor` はあくまで与えられた 2 つのカタログのどちらかを選ぶだけで、テナントごとの昇格済みコンポーネント寄与をそれ自体でマージすることはありません。テナントごとに昇格も行うプロダクトは、この選択の**後に**その重ね合わせを行います -- `apps/sample-api/src/app.ts` の `buildCatalog` がそうしているように、`stable` / `next` をテナントごとに `resolveCatalog(coreCatalog, ..., promotedEntries)` から組み立てるか、この関数の戻り値をプロダクト側の昇格マージでラップしてください(段階適用をしない場合と同じやり方です)。
+
 ### Golden 回帰を始める
 
 入力 Intent → 生成 Spec の「構造」を回帰として固定します。雛形を生成:
