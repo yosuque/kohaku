@@ -7,6 +7,7 @@
 
 import type { BindingClient } from "@kohaku-ui/data-binding";
 import {
+  type ImplRegistry,
   type RendererContextValue,
   RendererProvider,
   SpecView,
@@ -51,11 +52,22 @@ export interface ParityContext {
    * Not part of RendererContextValue/SurfaceContext (it is orthogonal to the renderer context), so it is
    * applied directly rather than threaded through toReactCtx/toWcCtx. */
   disclosure?: "off" | "attributes" | "label";
+  /**
+   * Overrides the React impl registry (default: `createCoreRegistry()`). Used by custom-part parity tests
+   * (design.md #68) that register a product-specific part via `implement`/`ImplRegistry.use` on top of the
+   * core catalog, so both renderers are asked to draw a type neither one implements out of the box.
+   */
+  impls?: () => ImplRegistry;
+  /**
+   * Registers product-specific parts on the WC surface before its Spec is assigned, mirroring `impls` on
+   * the React side (design.md #68's `<kohaku-surface>.registerPart` / `implementWc`).
+   */
+  registerParts?: (surface: KohakuSurface) => void;
 }
 
 function toReactCtx(ctx: ParityContext, onEvent?: (e: SurfaceEvent) => void): RendererContextValue {
   return {
-    impls: createCoreRegistry(),
+    impls: ctx.impls?.() ?? createCoreRegistry(),
     theme: ctx.theme ?? {},
     ...(ctx.binding != null ? { binding: ctx.binding() } : {}),
     ...(ctx.locale != null ? { locale: ctx.locale } : {}),
@@ -133,6 +145,7 @@ export async function renderWc(
 ): Promise<{ surface: KohakuSurface; rootEl: Element }> {
   const surface = document.createElement("kohaku-surface") as KohakuSurface;
   document.body.appendChild(surface);
+  ctx.registerParts?.(surface);
   surface.context = toWcCtx(ctx, onEvent);
   if (ctx.disclosure != null) surface.disclosure = ctx.disclosure;
   surface.spec = spec;

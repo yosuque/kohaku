@@ -3,7 +3,7 @@ import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
-import { createJwtRequestIdentity } from "../src/app/request-identity.js";
+import { createJwtRequestIdentity } from "../src/app/request-identity-jwt.js";
 import { createApp } from "../src/app.js";
 
 const SECRET = "test-secret-at-least-32-bytes-long-000";

@@ -7,6 +7,7 @@
     ".": "./src/app.ts",
     "./action-effects": "./src/action-effects.ts",
     "./app/shutdown": "./src/app/shutdown.ts",
+    "./browser": "./src/browser.ts",
     "./ports/from-env": "./src/ports/from-env.ts"
   },
   "scripts": {
@@ -18,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@kohaku-ui-sample/parts": "workspace:^",
     "@kohaku-ui/authz-hmac": "workspace:^",
     "@kohaku-ui/authz-jwt": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",

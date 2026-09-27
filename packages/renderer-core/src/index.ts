@@ -25,6 +25,8 @@ export {
 export { resolveRowProps, substituteRow } from "./control/row-template.js";
 export { boundStateKey, normalizeSelectOptions, type SelectOption } from "./control/select-options.js";
 export { type DesignKit, defaultDesignKit, PARTS_STATE_CSS } from "./design-kit.js";
+// Development-mode check (shared by renderer-react's `implement` / renderer-wc's `implementWc`)
+export { isDevEnvironment } from "./dev-mode.js";
 // AI-generation disclosure (design.md #66)
 export {
   type DigitalSourceType,

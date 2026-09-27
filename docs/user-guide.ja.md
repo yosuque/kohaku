@@ -589,8 +589,57 @@ export const myCard = defineComponent({
   fallback: { type: "presentMarkdown", mapProps: () => ({ markdown: "(非対応)" }) },
 });
 // API 側: resolveCatalog(coreCatalog, { components: [myCard] })
-// Web 側: registry.register("myapp.card", "1.0.0", MyCardComponent)  // useBoundData でデータ取得
 ```
+
+`myCard` は `{type, version, propsSchema}` の単一の情報源である。サーバーと各レンダラーの両方がインポートする
+共有パッケージなどに一度だけ定義し、登録箇所ごとに `"myapp.card"` / `"1.0.0"` を文字列リテラルとして書き直さない。
+そうしないと両者のタイプミスやバージョンのずれが実行時まで検出されない(design.md #68)。
+
+React(`@kohaku-ui/renderer-react`): `implement(def, Component)` は `Component` の `props` を `def.propsSchema`
+から推論するため、`node.props["title"] as string` のようなキャストは不要になる。`ImplRegistry.use(entry)` が
+結果を `def` 自身の type/version で登録する:
+
+```tsx
+import { implement, ImplRegistry, type TypedImplProps } from "@kohaku-ui/renderer-react";
+
+function MyCardComponent({ props }: TypedImplProps<z.infer<typeof myCard.propsSchema>>) {
+  return <div>{props.title}</div>; // props.title: string
+}
+
+const registry = new ImplRegistry().use(implement(myCard, MyCardComponent));
+```
+
+Web Components(`@kohaku-ui/renderer-wc`): `<kohaku-surface>` は公開 API `registerPart(type, version,
+builder)` を持ち、`implementWc(def, builder)` がその型付き版になる:
+
+```ts
+import { implementWc } from "@kohaku-ui/renderer-wc";
+
+const entry = implementWc(myCard, (rt, parent, node, props) => {
+  const el = document.createElement("div");
+  el.textContent = props.title; // props.title: string
+  parent.appendChild(el);
+  return () => el.remove();
+});
+surface.registerPart(entry.type, entry.version, entry.builder);
+```
+
+`registerPart` が既に登録済みの `type`(タイプミス、あるいは意図的な上書きにより、16 個のコアカタログの部品の
+どれかが対象になりやすい)を置き換える場合は、第 4 引数に `{ override: true }` を渡さない限り `console.warn`
+で警告する——コア部品を静かに覆い隠してしまうのは、うっかり失うありがちな原因だからである。
+
+`implement` と `implementWc` はどちらも、環境を問わず常に `def.propsSchema.safeParse` をノードの props に対して
+実行する。そのため `.default()` が付いた値を Spec 側が省略していても、後述の診断が有効かどうかに関わらず
+必ず補完される。不一致の場合はノードを失敗させる代わりに、生の(検証前の)props をそのまま使う。環境によって
+切り替わるのは**診断だけ**(不一致時の `console.warn`)であり、既定では `NODE_ENV=production` のビルド以外で
+オン、その内側でオフになる——`{ validate: false }` / `{ validate: true }` を渡せば環境に関わらずどちらの向きにも
+上書きできる。`process.env.NODE_ENV` を実際には設定しないビルド(`--define:process.env.NODE_ENV='"production"'`
+を渡さない素の esbuild 呼び出しや、本番モードに切り替えないバンドラ設定)では、この診断はオンのままになる——
+これは React 自身のバンドル済みビルドと同じ慣習であり、稀にしか起きない不一致経路で余分な `console.warn` が
+呼ばれるだけなので、既定として安全側に倒している。型なしの `ImplRegistry.register` や、`registerPart` に生の
+`PartBuilder` を渡す登録も、静的な `ComponentDefinition` を持たない部品(例:承認ドラフトからアーティファクト
+ごとにスキーマが生成される昇格済み部品——`apps/sample-api/src/intents/promoted.ts` を参照)のためにそのまま
+動作し続ける。
 
 検証: `npx @kohaku-ui/cli component validate <definition.json>`。検証が通る最小の definition.json(`type` はドット区切り識別子、`version` は semver、`propsSchema` は `type: "object"` の JSON Schema、`capabilities.data` は `none | optional | required` が必須):
 
@@ -794,3 +843,19 @@ export function buildTheme(mode: "light" | "dark"): ThemeTokens {
 ```
 
 これを `RendererProvider` の `theme`(React)/ `surface.theme`(Web Components)に渡します。色トークン語彙は `color.background` / `color.surface` / `color.text` / `color.muted` / `color.primary` / `color.on-primary` / `color.positive[.surface/.text/.border]` / `color.negative[.surface/.text/.border]` / `color.warning.*` / `color.info.*` / `color.scrim` / `chart.axis` / `chart.palette`、および非推奨 alias `color.danger`→negative・予約 `color.focus`→primary です。`color.scrim`(モーダルダイアログの背景幕)も他のトークンと同じく light/dark の実体を持ちますが、sandbox はダイアログ背景幕を描画しないため *L2 生成*語彙(モデルに見せる語彙)には含まれません(既定値の全一覧は design.md §7.2)。独自トークン(語彙外のキー)も自由に足せます(`ThemeTokens` は開いた型)。非色トークン(`font.family.*` / `font.size.*` / `space.*` / `radius.*` / `shadow.*` / `motion.*`)も語彙に含まれ、単位付きの CSS 文字列を取ります(角ばった印象のブランドなら `"radius.md": "4px"` のように指定)。両方の全一覧・既定値・dark の AA 方針は設計書 §7.2 を参照してください。非色トークンは組み込み部品にも反映されます(例: `"radius.md": "2px"` にするとすべてのボタンと入力欄が角ばります)。`L2 SANDBOXED` バッジは `SandboxFrame` の `badge="hidden"` / `context.sandbox.badge` で非表示にできますが、他の方法でサンドボックス化を示せる画面でのみ非表示にしてください。またブランドテーマが `color.warning.surface` / `color.warning.text`(ピルの背景・文字色のペア)を上書きしている場合は、この組み合わせが現状バッジのみで使われている点を踏まえ、両者の可読性を保つようにしてください。
+
+## 10. 静的プレイグラウンド
+
+`apps/playground` は、sample-web と同じ UI(`App`。フォークなし)をサーバーレスでビルドし、sample-api 自身のホストをブラウザタブの中でそのまま動かすものです。fetch shim が同一オリジンの `/api/*` 呼び出しをすべて捕まえて、そのタブの中で動く `app.fetch()` に直接渡します。バックエンドはインメモリの `StoragePort`、WebCrypto ベースの `AuthzPort`(`@kohaku-ui/authz-hmac` 本体は `node:crypto` を呼ぶためブラウザでは使えず、別実装にしています。design.md の決定 #57 を参照)、そして実モデルを呼ぶ代わりに記録済みの応答を返す再生専用 LLM(`@kohaku-ui/evals/replay` の `ReplayLlm`)です。ここで行った操作はサーバーに一切届かず、BYO の API キーを求められることも使うこともありません。
+
+現時点で実際に最後まで動くのは、Dashboard の L0 固定 Spec の 4 ビュー(四半期サマリー・KPI 概要・売上明細・目標達成度)だけです。これらは一切 LLM を呼ばないためです。ページ上部のツールバーには `apps/playground/src/scenarios.ts` が定義する L1 / NL / L2 / 昇格 / 固定化のシナリオも並びますが、`apps/playground/fixtures/` に対応するファイルが無い間はすべて無効化され「記録待ち」と表示されます。それでも(例えば Chat で例文ボタンに無い自由入力の質問を送るなど)実際に compose しても画面が壊れることはありません。composer 自身の決定的フォールバックが必ず Spec を返すためですが、ツールバーには「この結果は実生成ではなくフォールバックです」という一行の通知が出ます。
+
+これらの fixture を記録するには、オフラインで一度だけ実際の LLM が必要です(ブラウザから記録することはありません)。`apps/playground/scripts/record-fixtures.ts` はプレイグラウンドと全く同じホスト(同じ seed、同じ固定時刻)を組み立て、`@kohaku-ui/evals` の `FixtureLlm` の record モードを `createLlmFromEnv()` が解決するプロバイダの前段に置いて実行します。例:
+
+```bash
+KOHAKU_LLM_PROVIDER=ollama KOHAKU_LLM_MODEL=gemma4:e4b pnpm --filter @kohaku-ui-sample/playground run record-fixtures
+```
+
+これで `apps/playground/fixtures/<シナリオ id>.json` が書き出されます。プロンプトに関わるファイル(`apps/sample-api/src/design-system.ts`、`apps/sample-api/src/fewshot.ts`、`intents/{catalog,fixed-specs}.ts`、`ports/semantic-port.ts`、あるいは `@kohaku-ui/composer` 自身のプロンプト構築)を変更したときは、影響を受けうるシナリオぶんを録り直してください。古い fixture は派手に失敗するわけではなく、今日のプロンプトに対して昨日の答えを黙って返し続けるだけで、両者が完全にずれた場合にようやく未記録時と同じフォールバックに落ちます。`pnpm vitest run --project playground-drift` は実際に存在する fixture だけを対象に、新しいホストに対して(実 LLM は呼ばず)再生し、記録時に期待した結果が今も出るかを検査します。
+
+プレイグラウンド自体をローカルで動かすには `pnpm --filter @kohaku-ui-sample/playground run dev`(Vite の dev サーバー)、静的サイトの生成は `pnpm --filter @kohaku-ui-sample/playground run build`(Node 専用モジュールが一つでも紛れ込んでいるとビルド自体が失敗します。そのパッケージの `vite/forbid-node-builtins.ts` 参照)。まだどこにも公開はしていません。公開用の GitHub Pages ワークフローは手動の `workflow_dispatch` としてのみ存在し、有効化はまだしていません。

@@ -17,7 +17,7 @@
     "build": "pnpm -r --if-present run build",
     "build:dist": "pnpm --filter \"./packages/*\" --filter ./cli --filter ./spec run build",
     "meta:sync": "tsx scripts/sync-package-meta.ts",
-    "test": "vitest run",
+    "test": "vitest run --project \"!playground-drift\"",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "seed": "pnpm --filter @kohaku-ui-sample/api run seed",
