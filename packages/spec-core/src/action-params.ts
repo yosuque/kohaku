@@ -28,12 +28,27 @@ export interface ActionParamIssue {
   path: string;
   /**
    * A stable machine-readable discriminator: `"type"`, `"required"`, `"additionalProperties"`,
-   * `"enum"`, `"minimum"`, `"maximum"`, `"minLength"`, `"maxLength"`, or `"maxItems"`.
+   * `"enum"`, `"minimum"`, `"maximum"`, `"minLength"`, `"maxLength"`, `"maxItems"`, or `"unsafeKey"`.
    */
   code: string;
   /** Client-safe explanation (or the schema author's own `x-message` override). */
   message: string;
 }
+
+/**
+ * Object-key names that are always rejected as a payload property, at any nesting depth, regardless of
+ * the schema's own `additionalProperties` setting. `__proto__` (and, on some engines, `constructor` /
+ * `prototype`) resolve through the prototype chain rather than the object's own properties when read
+ * with a plain `obj[key]` / `key in obj`, which can otherwise let a value silently bypass both schema
+ * lookup (`properties[key]` resolves to an inherited `Object.prototype` member instead of `undefined`,
+ * so it is treated as "no schema for this property" without the `additionalProperties: false` check ever
+ * firing) and type validation (the inherited value is not an `ActionParamsSchema`, so `validateValue`'s
+ * `switch (schema.type)` matches nothing and reports no issue at all). This check runs independently of
+ * that lookup bug being fixed (`Object.hasOwn` throughout, below) as defense in depth: a payload that
+ * reaches this validator is expected to end up as literal DomainPort.invoke arguments, which may later be
+ * merged or spread by code this validator has no visibility into.
+ */
+const UNSAFE_PROPERTY_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
 
 function joinPath(base: string, key: string): string {
   return base === "" ? key : `${base}.${key}`;
@@ -79,7 +94,10 @@ function validateValue(
       }
       const obj = value as JsonObject;
       for (const key of schema.required ?? []) {
-        if (!(key in obj)) {
+        // Object.hasOwn (not `in`): `in` also matches an inherited Object.prototype member (e.g.
+        // "constructor", "toString"), which would report a required field of that name as present even
+        // when the payload never actually carried it.
+        if (!Object.hasOwn(obj, key)) {
           issues.push({
             path: joinPath(path, key),
             code: "required",
@@ -88,9 +106,23 @@ function validateValue(
         }
       }
       const props = schema.properties ?? {};
-      for (const [key, val] of Object.entries(obj)) {
-        const propSchema = props[key];
+      for (const key of Object.keys(obj)) {
         const propPath = joinPath(path, key);
+        if (UNSAFE_PROPERTY_KEYS.has(key)) {
+          issues.push({
+            path: propPath,
+            code: "unsafeKey",
+            message: messageOverride ?? `the property name "${key}" is not allowed`,
+          });
+          continue;
+        }
+        // Object.hasOwn (not a plain `props[key]`): `properties` is a plain object, so bracket access
+        // for a key like "constructor" or "toString" resolves through the prototype chain to an
+        // inherited Object.prototype member instead of `undefined` -- a truthy, non-ActionParamsSchema
+        // value that would otherwise both skip the additionalProperties check below (propSchema is
+        // "defined") and validate against nothing (its `.type` is undefined, so `validateValue`'s switch
+        // matches no case and silently reports no issue).
+        const propSchema = Object.hasOwn(props, key) ? props[key] : undefined;
         if (propSchema === undefined) {
           if (schema.additionalProperties === false) {
             issues.push({
@@ -101,7 +133,7 @@ function validateValue(
           }
           continue;
         }
-        validateValue(propSchema, val, propPath, issues);
+        validateValue(propSchema, obj[key], propPath, issues);
       }
       return;
     }

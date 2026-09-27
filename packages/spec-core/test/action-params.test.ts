@@ -111,6 +111,85 @@ describe("validateActionParams", () => {
       { path: "flag", code: "type", message: 'expected a boolean at "flag"' },
     ]);
   });
+
+  describe("prototype-pollution-shaped keys", () => {
+    // A plain object literal like `{ __proto__: {...} }` sets the object's prototype rather than
+    // creating an own property, so it does not exercise the bug this guards against. JSON.parse is what
+    // an attacker's request body actually goes through (host-rest / host-mcp-apps both parse JSON before
+    // ever handing a payload to validateActionParams), and it creates a genuine own data property named
+    // "__proto__" -- the same shape a real request would produce.
+    const openSchema: ActionParamsSchema = { type: "object", properties: { amount: { type: "number" } } };
+
+    it("rejects an own __proto__ key even though additionalProperties is not false", () => {
+      const payload = JSON.parse('{"amount":10,"__proto__":{"polluted":true}}');
+      expect(validateActionParams(openSchema, payload)).toEqual([
+        { path: "__proto__", code: "unsafeKey", message: 'the property name "__proto__" is not allowed' },
+      ]);
+    });
+
+    it("rejects an own constructor key, not the inherited Object constructor as a schema", () => {
+      const payload = JSON.parse('{"amount":10,"constructor":{"polluted":true}}');
+      expect(validateActionParams(openSchema, payload)).toEqual([
+        {
+          path: "constructor",
+          code: "unsafeKey",
+          message: 'the property name "constructor" is not allowed',
+        },
+      ]);
+    });
+
+    it("rejects an own prototype key", () => {
+      const payload = JSON.parse('{"amount":10,"prototype":{"polluted":true}}');
+      expect(validateActionParams(openSchema, payload)).toEqual([
+        { path: "prototype", code: "unsafeKey", message: 'the property name "prototype" is not allowed' },
+      ]);
+    });
+
+    it("still validates the rest of the payload alongside an unsafe key", () => {
+      const payload = JSON.parse('{"amount":"not a number","__proto__":{}}');
+      const issues = validateActionParams(openSchema, payload);
+      expect(issues).toContainEqual({
+        path: "__proto__",
+        code: "unsafeKey",
+        message: 'the property name "__proto__" is not allowed',
+      });
+      expect(issues).toContainEqual({
+        path: "amount",
+        code: "type",
+        message: 'expected a number at "amount"',
+      });
+    });
+
+    it("reports a required property literally named 'constructor' as missing (Object.hasOwn, not `in`)", () => {
+      const schema: ActionParamsSchema = { type: "object", required: ["constructor"] };
+      expect(validateActionParams(schema, {})).toEqual([
+        { path: "constructor", code: "required", message: 'missing required property "constructor"' },
+      ]);
+    });
+
+    it("does not mistake toString/hasOwnProperty for a declared property (no phantom pass-through)", () => {
+      // Neither key is in UNSAFE_PROPERTY_KEYS, but neither is declared in `properties` either -- with
+      // additionalProperties: false, both must still be flagged rather than silently accepted via
+      // Object.prototype's own inherited members resolving through `props[key]`.
+      const strictSchema: ActionParamsSchema = {
+        type: "object",
+        properties: { amount: { type: "number" } },
+        additionalProperties: false,
+      };
+      const payload = JSON.parse('{"amount":1,"toString":1,"hasOwnProperty":1}');
+      const issues = validateActionParams(strictSchema, payload);
+      expect(issues).toContainEqual({
+        path: "toString",
+        code: "additionalProperties",
+        message: 'unexpected property "toString"',
+      });
+      expect(issues).toContainEqual({
+        path: "hasOwnProperty",
+        code: "additionalProperties",
+        message: 'unexpected property "hasOwnProperty"',
+      });
+    });
+  });
 });
 
 describe("assertValidActionParamsSchema", () => {

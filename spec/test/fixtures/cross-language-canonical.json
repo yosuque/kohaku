@@ -628,6 +628,77 @@
         }
       ],
       "payloadHash": "sha256:400128d845395b554d317ff26537f8bd69e7da1035ba0b6f41d409308a822a46"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          }
+        }
+      },
+      "payload": {
+        "amount": 10,
+        "__proto__": {
+          "polluted": true
+        }
+      },
+      "issues": [
+        {
+          "path": "__proto__",
+          "code": "unsafeKey",
+          "message": "the property name \"__proto__\" is not allowed"
+        }
+      ],
+      "payloadHash": "sha256:08a8466c8b7b85c5509a6e798340cfee6a97e809d913075b35859d215cdc8b37"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          }
+        }
+      },
+      "payload": {
+        "amount": 10,
+        "constructor": {
+          "polluted": true
+        }
+      },
+      "issues": [
+        {
+          "path": "constructor",
+          "code": "unsafeKey",
+          "message": "the property name \"constructor\" is not allowed"
+        }
+      ],
+      "payloadHash": "sha256:ead5758c1b295206d4a09396cd79c5a0fbab98c05a7dca28b2349b5d32f717de"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false
+      },
+      "payload": {
+        "amount": 10,
+        "toString": 1
+      },
+      "issues": [
+        {
+          "path": "toString",
+          "code": "additionalProperties",
+          "message": "unexpected property \"toString\""
+        }
+      ],
+      "payloadHash": "sha256:d45820cda1eac507d4c8f38a9e29ccb5856a38dc51d147e0dea1613b10ffc6f5"
     }
   ],
   "sandboxDom": {

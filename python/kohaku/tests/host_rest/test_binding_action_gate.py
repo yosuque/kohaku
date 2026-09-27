@@ -104,6 +104,30 @@ class TestParamsValidation:
         ]
         assert domain.invoke_calls == []
 
+    def test_rejects_a_constructor_key_in_the_payload_with_422(self, tmp_path: Path) -> None:
+        # Regression test for a prototype-chain lookup bug in validate_action_params (TS-side; Python
+        # dicts have no prototype chain, so this is a cross-language-parity test, not a fix for a
+        # Python-specific bug). "constructor" (rather than "__proto__") to match the TS mirror of this
+        # test exactly -- Python's own JSON body parsing has no reason to special-case either key, so
+        # both would behave identically here.
+        domain = _EchoDomain(
+            OperationDescriptor(name="annotate", description="d", paramsSchema=NOTE_SCHEMA)
+        )
+        harness = build_harness(tmp_path, domain=domain)
+        token = harness.issue([Scope(kind="write", ref="annotate")])
+        res = _post_action(
+            harness,
+            {"action": "annotate", "payload": {"note": "hi", "constructor": {"polluted": True}}},
+            token,
+        )
+        assert res.status_code == 422
+        body = res.json()
+        assert body["error"]["code"] == "ACTION_PARAMS_INVALID"
+        assert body["error"]["issues"] == [
+            {"path": "constructor", "code": "unsafeKey", "message": 'the property name "constructor" is not allowed'}
+        ]
+        assert domain.invoke_calls == []
+
 
 class TestTierConfirm:
     def test_without_confirmed_returns_403(self, tmp_path: Path) -> None:

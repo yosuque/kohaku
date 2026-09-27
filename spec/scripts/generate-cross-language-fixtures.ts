@@ -281,6 +281,31 @@ const ACTION_PARAMS_CASES: { schema: ActionParamsSchema; payload: JsonObject }[]
     },
     payload: { note: "abcd" },
   },
+  // Prototype-pollution-shaped keys (the review finding this golden section was extended for): a plain
+  // object literal with a `__proto__:` key sets the prototype rather than creating an own property (a
+  // JS-source-only quirk), so this is built via JSON.parse to match the own-property shape a real
+  // request body actually has once parsed off the wire -- the same shape both languages' hosts see.
+  {
+    schema: { type: "object", properties: { amount: { type: "number" } } },
+    payload: JSON.parse('{"amount":10,"__proto__":{"polluted":true}}') as JsonObject,
+  },
+  {
+    schema: { type: "object", properties: { amount: { type: "number" } } },
+    payload: JSON.parse('{"amount":10,"constructor":{"polluted":true}}') as JsonObject,
+  },
+  // "toString" is not in the hard-rejected set (unlike __proto__/constructor/prototype above), but
+  // without Object.hasOwn-based property lookup it would previously resolve `properties["toString"]` to
+  // the inherited Object.prototype.toString function instead of undefined, silently skipping both the
+  // additionalProperties check below and real validation. This pins that it now correctly reports
+  // additionalProperties, the same as any other undeclared key would.
+  {
+    schema: {
+      type: "object",
+      properties: { amount: { type: "number" } },
+      additionalProperties: false,
+    },
+    payload: JSON.parse('{"amount":10,"toString":1}') as JsonObject,
+  },
 ];
 
 // Pins the Compliance Evidence Pack (design.md #67) byte-for-byte across languages: canonical-JSON

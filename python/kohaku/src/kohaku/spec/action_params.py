@@ -78,6 +78,14 @@ _ALLOWED_KEYWORDS: frozenset[str] = frozenset(
 )
 _ALLOWED_TYPES: frozenset[str] = frozenset({"object", "array", "string", "number", "integer", "boolean"})
 
+# Object-key names that are always rejected as a payload property, at any nesting depth, regardless of
+# the schema's own additionalProperties setting. Python dicts have no prototype chain, so `key not in
+# value` / `properties.get(key)` are not vulnerable to the TS lookup bug this guards against there
+# (bracket access on a plain object resolving through Object.prototype for "__proto__" / "constructor" /
+# etc.) -- this set exists purely for cross-language parity, so the same payload produces the same issues
+# array in both languages (pinned by the cross-language golden).
+_UNSAFE_PROPERTY_KEYS: frozenset[str] = frozenset({"__proto__", "constructor", "prototype"})
+
 
 @dataclass(frozen=True)
 class ActionParamIssue:
@@ -90,7 +98,7 @@ class ActionParamIssue:
     pinned by the cross-language golden."""
     code: str
     """A stable machine-readable discriminator: "type", "required", "additionalProperties", "enum",
-    "minimum", "maximum", "minLength", "maxLength", or "maxItems"."""
+    "minimum", "maximum", "minLength", "maxLength", "maxItems", or "unsafeKey"."""
     message: str
     """Client-safe explanation (or the schema author's own `x-message` override)."""
 
@@ -157,6 +165,15 @@ def _validate_value(
         additional_properties = schema.get("additionalProperties")
         for key, val in value.items():
             prop_path = _join_path(path, key)
+            if key in _UNSAFE_PROPERTY_KEYS:
+                issues.append(
+                    ActionParamIssue(
+                        path=prop_path,
+                        code="unsafeKey",
+                        message=message_override or f'the property name "{key}" is not allowed',
+                    )
+                )
+                continue
             prop_schema = properties.get(key)
             if prop_schema is None:
                 if additional_properties is False:

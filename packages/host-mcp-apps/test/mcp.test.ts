@@ -2394,6 +2394,38 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
+  it("rejects a constructor key in the payload with a structured ACTION_PARAMS_INVALID error, without invoking the domain", async () => {
+    // Regression test for a prototype-chain lookup bug in validateActionParams (spec-core). Uses
+    // "constructor" rather than "__proto__": the tool input schema's JsonObjectSchema (spec-core, backed
+    // by zod's z.record) already strips an incoming "__proto__" key on its own (zod 4's own
+    // prototype-pollution guard) before this ever reaches the action gate, but does not strip
+    // "constructor" / "prototype" / "toString" -- those reach validateActionParams as genuine own
+    // properties, the same shape a real attacker payload would have.
+    const { client, domain } = await connectGoverned();
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    const result = await client.callTool({
+      name: "kohaku_action",
+      arguments: {
+        action: "annotate",
+        payload: { note: "hi", constructor: { polluted: true } },
+        capability,
+        confirmed: true,
+      },
+    });
+    expect(result.isError).toBe(true);
+    const sc = result.structuredContent as { error?: { code?: string; issues?: unknown[] } };
+    expect(sc.error?.code).toBe("ACTION_PARAMS_INVALID");
+    expect(sc.error?.issues).toEqual([
+      { path: "constructor", code: "unsafeKey", message: 'the property name "constructor" is not allowed' },
+    ]);
+    expect(domain.invocations).toHaveLength(0);
+    await client.close();
+  });
+
   it("records action.approvalRequested / action.invoked via actionAuditRecorder (fail-open)", async () => {
     const invoked: unknown[] = [];
     const approvalRequested: unknown[] = [];

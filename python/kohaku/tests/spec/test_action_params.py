@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from kohaku.spec import JsonObject
 from kohaku.spec.action_params import (
     ActionParamsSchema,
     ActionParamsSchemaError,
@@ -162,3 +163,41 @@ def test_action_payload_hash_differs_for_a_different_payload() -> None:
     a = action_payload_hash({"note": "hi"})
     b = action_payload_hash({"note": "bye"})
     assert a != b
+
+
+OPEN_SCHEMA: ActionParamsSchema = {"type": "object", "properties": {"amount": {"type": "number"}}}
+
+
+def test_rejects_a_proto_key_even_though_additional_properties_is_not_false() -> None:
+    # Python dicts have no prototype chain (unlike the TS lookup bug this parity check guards against),
+    # so this is purely a cross-language-parity assertion: the same payload produces the same issue in
+    # both languages.
+    payload: JsonObject = {"amount": 10, "__proto__": {"polluted": True}}
+    issues = validate_action_params(OPEN_SCHEMA, payload)
+    assert [(i.path, i.code, i.message) for i in issues] == [
+        ("__proto__", "unsafeKey", 'the property name "__proto__" is not allowed')
+    ]
+
+
+def test_rejects_a_constructor_key() -> None:
+    payload: JsonObject = {"amount": 10, "constructor": {"polluted": True}}
+    issues = validate_action_params(OPEN_SCHEMA, payload)
+    assert [(i.path, i.code, i.message) for i in issues] == [
+        ("constructor", "unsafeKey", 'the property name "constructor" is not allowed')
+    ]
+
+
+def test_rejects_a_prototype_key() -> None:
+    payload: JsonObject = {"amount": 10, "prototype": {"polluted": True}}
+    issues = validate_action_params(OPEN_SCHEMA, payload)
+    assert [(i.path, i.code, i.message) for i in issues] == [
+        ("prototype", "unsafeKey", 'the property name "prototype" is not allowed')
+    ]
+
+
+def test_still_validates_the_rest_of_the_payload_alongside_an_unsafe_key() -> None:
+    payload: JsonObject = {"amount": "not a number", "__proto__": {}}
+    issues = validate_action_params(OPEN_SCHEMA, payload)
+    triples = [(i.path, i.code, i.message) for i in issues]
+    assert ("__proto__", "unsafeKey", 'the property name "__proto__" is not allowed') in triples
+    assert ("amount", "type", 'expected a number at "amount"') in triples

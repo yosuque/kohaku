@@ -94,6 +94,30 @@ describe("POST /binding/action: params validation (ACT-PRM-001)", () => {
     ]);
     expect((domain as unknown as { invokeCalls: unknown[] }).invokeCalls).toHaveLength(0);
   });
+
+  it("rejects a constructor key in the payload with 422 ACTION_PARAMS_INVALID, without invoking the domain", async () => {
+    // Regression test for a prototype-chain lookup bug in validateActionParams (spec-core). Uses
+    // "constructor" rather than "__proto__": the request body's JsonObjectSchema (spec-core, backed by
+    // zod's z.record) already strips an incoming "__proto__" key on its own before this ever reaches the
+    // action gate (zod 4's own prototype-pollution guard), but does not strip "constructor" / "prototype"
+    // / "toString" -- those reach validateActionParams as genuine own properties of the parsed payload,
+    // the same shape a real attacker payload would have.
+    const domain = domainWith({ name: "annotate", description: "d", paramsSchema: NOTE_SCHEMA });
+    const deps = baseDeps({ domain });
+    const app = createKohakuRoutes(deps);
+    const res = await app.request("/binding/action", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer cap" },
+      body: '{"action":"annotate","payload":{"note":"hi","constructor":{"polluted":true}}}',
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: { code: string; issues: unknown } };
+    expect(body.error.code).toBe("ACTION_PARAMS_INVALID");
+    expect(body.error.issues).toEqual([
+      { path: "constructor", code: "unsafeKey", message: 'the property name "constructor" is not allowed' },
+    ]);
+    expect((domain as unknown as { invokeCalls: unknown[] }).invokeCalls).toHaveLength(0);
+  });
 });
 
 describe("POST /binding/action: tier confirm (ACT-APR-001/ACT-CNF-001)", () => {
