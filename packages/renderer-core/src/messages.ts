@@ -69,6 +69,10 @@ export interface RendererMessages {
   sandboxArtifactMissing: string;
   /** L2 sandbox chrome: notice text when the host did not inject the sandbox bridge. type is the component's declared type */
   sandboxBridgeMissing: (type: string) => string;
+  /** AI-generation disclosure label (design.md #66) shown when `deriveDisclosure` returns "ai-generated" (tier L1/L2) */
+  disclosureAiGenerated: string;
+  /** AI-generation disclosure label shown when `deriveDisclosure` returns "ai-assisted-reviewed" (tier L0, cache "fixated") */
+  disclosureAiReviewed: string;
 }
 
 /** Default English strings. The default value of RendererMessages. */
@@ -104,4 +108,6 @@ export const DEFAULT_MESSAGES: RendererMessages = {
   sandboxArtifactMissing: "No sandbox artifact (inline HTML is required)",
   sandboxBridgeMissing: (type) =>
     `Rendering the L2 component (${type}) requires injecting the sandbox bridge`,
+  disclosureAiGenerated: "AI-generated content",
+  disclosureAiReviewed: "AI-assisted, human-reviewed content",
 };
