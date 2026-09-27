@@ -725,3 +725,111 @@ httpServer.listen(port, host, () => {
   console.log(\`__NAME__ MCP server: ready (Streamable HTTP) at http://\${host}:\${port}/mcp\`);
 });
 `;
+
+/**
+ * Generated verbatim by \`kohaku init --mcp\` (no run-time logic of its own -- it only reads the sibling
+ * claude_desktop_config.example.json this same init run wrote, and \`npm run mcp:claude-desktop\` is the
+ * only thing that ever invokes it). Backs up the user's existing Claude Desktop config to \`.bak\` and merges
+ * in this project's mcpServers entry, or (with --print) just prints the merged result without writing
+ * anything. **The real config is only ever touched by a person explicitly running this script** -- kohaku
+ * init itself never runs it.
+ */
+export const CLAUDE_DESKTOP_SCRIPT_TEMPLATE = `#!/usr/bin/env node
+/**
+ * Registers this project's MCP server with Claude Desktop: merges the entry from
+ * claude_desktop_config.example.json (generated alongside this script by \`kohaku init --mcp\`) into Claude
+ * Desktop's own config file, after backing the existing file up to \`<config>.bak\`.
+ *
+ * Usage:
+ *   npm run mcp:claude-desktop            # back up (if a config already exists) + write
+ *   npm run mcp:claude-desktop -- --print # print the merged result; write nothing
+ *
+ * Restart Claude Desktop afterwards to pick up the change.
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const EXAMPLE_CONFIG_PATH = join(PROJECT_ROOT, "claude_desktop_config.example.json");
+
+/**
+ * Claude Desktop's own config file path for the current platform. \`env\`/\`plat\` are injectable (tests pass
+ * a temporary HOME so this never touches a real user's config -- see this project's own
+ * test/claude-desktop.test.ts if you generated one, or the kohaku monorepo's cli/test/init-mcp.test.ts).
+ */
+export function claudeDesktopConfigPath(env = process.env, plat = platform()) {
+  const home = env.HOME ?? homedir();
+  if (plat === "darwin") {
+    return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+  }
+  if (plat === "win32") {
+    return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
+  }
+  return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Claude", "claude_desktop_config.json");
+}
+
+/** Reads a JSON config file; an absent file reads as {} (nothing to merge with / into yet). */
+export function readJsonConfig(path) {
+  if (!existsSync(path)) return {};
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+/**
+ * Pure merge (no I/O): overlays \`example\`'s mcpServers entries onto \`target\`'s. Every other top-level key
+ * in \`target\`, and every mcpServers entry \`example\` does not declare, is preserved untouched -- this never
+ * clobbers a person's other MCP server registrations. Running this twice with the same \`example\` is a
+ * no-op the second time (the merged result already equals \`example\`'s entries, so re-merging changes
+ * nothing), which is what makes \`npm run mcp:claude-desktop\` safe to run more than once.
+ */
+export function mergeMcpConfig(target, example) {
+  return {
+    ...target,
+    mcpServers: {
+      ...(target.mcpServers ?? {}),
+      ...(example.mcpServers ?? {}),
+    },
+  };
+}
+
+/**
+ * Does the actual read-merge-(print-or-write) work, parameterized over env/plat (see
+ * claudeDesktopConfigPath) so it is directly callable with a temporary HOME from a test, with no child
+ * process and no risk of ever touching a real Claude Desktop config. Returns what happened rather than
+ * just logging it, so a test can assert on configPath / merged / backedUp directly.
+ */
+export function syncClaudeDesktopConfig({ env = process.env, plat = platform(), printOnly = false } = {}) {
+  const example = readJsonConfig(EXAMPLE_CONFIG_PATH);
+  const configPath = claudeDesktopConfigPath(env, plat);
+  const merged = mergeMcpConfig(readJsonConfig(configPath), example);
+
+  if (printOnly) {
+    return { configPath, merged, wrote: false, backedUp: false };
+  }
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  const backedUp = existsSync(configPath);
+  if (backedUp) {
+    writeFileSync(\`\${configPath}.bak\`, readFileSync(configPath, "utf8"));
+  }
+  writeFileSync(configPath, \`\${JSON.stringify(merged, null, 2)}\n\`);
+  return { configPath, merged, wrote: true, backedUp };
+}
+
+function main() {
+  const printOnly = process.argv.includes("--print");
+  const result = syncClaudeDesktopConfig({ printOnly });
+  if (printOnly) {
+    console.log(JSON.stringify(result.merged, null, 2));
+    return;
+  }
+  console.log(\`Registered with Claude Desktop: \${result.configPath}\`);
+  console.log("Restart Claude Desktop to pick up the change.");
+}
+
+// Run only when launched directly (npm run mcp:claude-desktop); importing this module (e.g. from a test)
+// has no side effects beyond the pure/read-only exports above.
+const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isMain) main();
+`;

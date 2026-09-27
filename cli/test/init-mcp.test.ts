@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { initProject } from "../src/init/index.js";
 
@@ -115,5 +116,118 @@ describe("kohaku init --mcp", () => {
     }
     expect(pkg.scripts["mcp"]).toBeUndefined();
     expect(readFileSync(join(out, ".gitignore"), "utf8")).not.toContain(".kohaku/");
+  });
+});
+
+describe("kohaku init --mcp: Claude Desktop config", () => {
+  it("generates claude_desktop_config.example.json with absolute paths (Claude Desktop has no shell PATH)", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false, mcp: true, name: "sales-mcp-app" }, noRun);
+    const configPath = join(out, "claude_desktop_config.example.json");
+    expect(existsSync(configPath)).toBe(true);
+    const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+      mcpServers: Record<string, { command: string; args: string[] }>;
+    };
+    const entry = config.mcpServers["sales-mcp-app"];
+    expect(entry).toBeDefined();
+    expect(entry!.command).toBe(process.execPath);
+    expect(entry!.args).toHaveLength(2);
+    expect(entry!.args[0]).toBe(join(out, "node_modules", "tsx", "dist", "cli.mjs"));
+    expect(entry!.args[1]).toBe(join(out, "server", "mcp.ts"));
+  });
+
+  it("does not generate claude_desktop_config.example.json without --mcp", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    expect(existsSync(join(out, "claude_desktop_config.example.json"))).toBe(false);
+  });
+
+  /** The subset of scripts/claude-desktop.mjs's exports these tests call (a plain generated .mjs, no .d.ts). */
+  interface ClaudeDesktopScriptModule {
+    syncClaudeDesktopConfig(options: {
+      env?: Record<string, string | undefined>;
+      plat?: string;
+      printOnly?: boolean;
+    }): {
+      configPath: string;
+      merged: { mcpServers: Record<string, unknown>; [key: string]: unknown };
+      wrote: boolean;
+      backedUp: boolean;
+    };
+    claudeDesktopConfigPath(env: Record<string, string | undefined>, plat: string): string;
+  }
+
+  describe("scripts/claude-desktop.mjs (imported directly, never touching a real Claude Desktop config)", () => {
+    async function generate(): Promise<{ scriptModule: ClaudeDesktopScriptModule; out: string }> {
+      const out = join(tmp(), "app");
+      await initProject({ from: FIXTURE, out, install: false, mcp: true, name: "sales-mcp-app" }, noRun);
+      const scriptUrl = pathToFileURL(join(out, "scripts", "claude-desktop.mjs")).href;
+      const scriptModule = (await import(scriptUrl)) as unknown as ClaudeDesktopScriptModule;
+      return { scriptModule, out };
+    }
+
+    it("--print (printOnly) computes the merge but writes nothing", async () => {
+      const { scriptModule } = await generate();
+      const fakeHome = tmp("kohaku-claude-home-");
+      const result = scriptModule.syncClaudeDesktopConfig({
+        env: { HOME: fakeHome },
+        plat: "darwin",
+        printOnly: true,
+      });
+      expect(result.wrote).toBe(false);
+      expect(result.merged.mcpServers["sales-mcp-app"]).toBeDefined();
+      expect(existsSync(result.configPath)).toBe(false);
+    });
+
+    it("first run writes the config with no .bak (nothing existed yet); a second run backs up and is idempotent", async () => {
+      const { scriptModule } = await generate();
+      const fakeHome = tmp("kohaku-claude-home-");
+
+      const first = scriptModule.syncClaudeDesktopConfig({ env: { HOME: fakeHome }, plat: "darwin" });
+      expect(first.wrote).toBe(true);
+      expect(first.backedUp).toBe(false);
+      expect(existsSync(first.configPath)).toBe(true);
+      expect(existsSync(`${first.configPath}.bak`)).toBe(false);
+      const afterFirst = readFileSync(first.configPath, "utf8");
+
+      const second = scriptModule.syncClaudeDesktopConfig({ env: { HOME: fakeHome }, plat: "darwin" });
+      expect(second.wrote).toBe(true);
+      expect(second.backedUp).toBe(true);
+      expect(existsSync(`${second.configPath}.bak`)).toBe(true);
+      // The backup captures exactly what was there before this second run (= the first run's output).
+      expect(readFileSync(`${second.configPath}.bak`, "utf8")).toBe(afterFirst);
+      // Running it twice converges to the same result -- re-merging the same example changes nothing.
+      const afterSecond = readFileSync(second.configPath, "utf8");
+      expect(afterSecond).toBe(afterFirst);
+      expect(second.merged).toEqual(first.merged);
+    });
+
+    it("preserves a pre-existing config's unrelated keys and other mcpServers entries", async () => {
+      const { scriptModule } = await generate();
+      const fakeHome = tmp("kohaku-claude-home-");
+      const configPath = scriptModule.claudeDesktopConfigPath({ HOME: fakeHome }, "darwin");
+      const { mkdirSync, writeFileSync } = await import("node:fs");
+      const { dirname } = await import("node:path");
+      mkdirSync(dirname(configPath), { recursive: true });
+      writeFileSync(
+        configPath,
+        JSON.stringify(
+          {
+            someOtherTopLevelSetting: true,
+            mcpServers: { "someone-elses-server": { command: "/usr/bin/other", args: [] } },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const result = scriptModule.syncClaudeDesktopConfig({ env: { HOME: fakeHome }, plat: "darwin" });
+      expect(result.merged.someOtherTopLevelSetting).toBe(true);
+      expect(result.merged.mcpServers["someone-elses-server"]).toEqual({
+        command: "/usr/bin/other",
+        args: [],
+      });
+      expect(result.merged.mcpServers["sales-mcp-app"]).toBeDefined();
+    });
   });
 });
