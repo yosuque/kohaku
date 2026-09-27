@@ -1069,6 +1069,23 @@ describe("recompose: respectPrevTier", () => {
     // appending a trailing 7th cacheKey component after generatorVersion.
     expect(result.trace.cacheKey).toContain(":session-policy-v1:");
   });
+
+  it("with allowL2:false, respectPrevTier never pins the L2 path even when prev was L2 (design.md #70: a resolved policy's own allowL2 always wins over this pin)", async () => {
+    const good = goodRawDraft("query://sales/summary?fy=2026&groupBy=region&q=4");
+    const llm = new FakeLlm({ objects: [good, good] });
+    const ctx = makeCtx(llm, { allowL2: false });
+
+    const first = await recompose(prevL2, { params: { quarter: 4 } }, ctx, { respectPrevTier: true });
+    expect(first.result.spec.provenance.tier).toBe("L1");
+    expect(first.result.spec.provenance.cache).toBe("miss");
+    expect(llm.calls[0]!.kind).toBe("object");
+
+    // A second, identical call is a normal L1 cache hit — never an L2 result smuggled in via the pin,
+    // and the fingerprint is the ordinary allowL2:false one (no override touched it).
+    const second = await recompose(prevL2, { params: { quarter: 4 } }, ctx, { respectPrevTier: true });
+    expect(second.result.spec.provenance.tier).toBe("L1");
+    expect(second.result.spec.provenance.cache).toBe("hit");
+  });
 });
 
 const L2_TEXT =

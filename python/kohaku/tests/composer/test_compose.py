@@ -1144,6 +1144,42 @@ class TestRecompose:
 
         asyncio.run(run())
 
+    def test_recompose_never_pins_l2_when_the_resolved_policy_disallows_it(self, tmp_path: Any) -> None:
+        """design.md #70: respect_prev_tier must never override a resolved policy's own allowL2 -- a
+        tenant whose Policy as Code disallows L2 keeps that gate even for an interaction against a Spec
+        that was already L2 under a since-changed policy (mirrors the TS test of the same intent)."""
+
+        async def run() -> None:
+            storage = FileStoragePort(tmp_path)
+            # Build a real L2 prev Spec under a permissive policy.
+            l2_ctx = _ctx(
+                FakeLlm(texts=[_L2_HTML]),
+                storage,
+                policy=ComposePolicy(allowL2=True, routeTier=lambda _i: "L2"),
+            )
+            prev = (await compose(_INTENT_INPUT, l2_ctx)).spec
+            assert prev.provenance.tier == "L2"
+
+            # Recompose against a context whose resolved policy disallows L2.
+            llm = FakeLlm(objects=[_l1_draft(), _l1_draft()])
+            ctx = _ctx(llm, storage, policy=ComposePolicy(allowL2=False))
+
+            first, _patch = await recompose(
+                prev, RecomposePatch(params={"fy": 2026}), ctx, respect_prev_tier=True
+            )
+            assert first.spec.provenance.tier == "L1"
+            assert first.spec.provenance.cache == "miss"
+
+            # A second, identical call is a normal L1 cache hit -- never an L2 result smuggled in via
+            # the pin, and the fingerprint is the ordinary allowL2=False one (no override touched it).
+            second, _patch2 = await recompose(
+                prev, RecomposePatch(params={"fy": 2026}), ctx, respect_prev_tier=True
+            )
+            assert second.spec.provenance.tier == "L1"
+            assert second.spec.provenance.cache == "hit"
+
+        asyncio.run(run())
+
 
 class _ThrowingGetStorage(FileStoragePort):
     """A FileStoragePort whose get_spec_cache always raises (simulates a cache-backend outage)."""

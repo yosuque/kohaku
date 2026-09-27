@@ -1093,18 +1093,39 @@ async def recompose(
 
     When respect_prev_tier=True and the previous Spec is L2, pin the differential update to the L2 path too
     (to prevent a screen that succeeded at L2 from dropping to L1 on every params change and being swapped for a different UI).
+
+    **Never overrides a resolved policy's own allowL2 (design.md #70)**: the pin is applied only when the
+    session's *current* effective policy (after with_session_policy + opts.policy_override, before this
+    pin's own override -- see the canRespectL2 check below) already allows L2. A tenant whose Policy as
+    Code disallows L2 must have that gate hold even for an interaction against a Spec that was already L2
+    under a since-changed policy (a policy reload, or the same prev Spec somehow reaching a different
+    tenant's session) -- otherwise a param tweak on an existing L2 view would silently smuggle a fresh L2
+    generation past a governance decision, defeating the same cache-isolation guarantee CMP-DET-002 exists
+    to provide.
     """
     intent = IntentInput(
         canonical=patch.canonical if patch.canonical is not None else prev.intent.canonical,
         params={**prev.intent.params, **patch.params},
     )
     opts = opts or ComposeOptions()
+    # Peek at the resolved policy (session + any caller-supplied policy_override, but not yet this pin's
+    # own routeTier/allowL2 override) to decide whether the pin below may even apply. Cheap and pure (no
+    # I/O) -- the same chain runs again inside compose() for the real thing.
+    resolved_policy = (
+        ctx.with_tenant_catalog(opts.session.tenant if opts.session is not None else None)
+        .with_session_policy(opts.session)
+        .with_policy_override(opts.policy_override)
+        .policy
+    ) or ComposePolicy()
+    can_respect_l2 = (
+        respect_prev_tier and prev.provenance.tier == "L2" and resolved_policy.allowL2
+    )
     # The L2 pin is passed as a policy_override rather than folded into ctx up front, so that it
     # survives ComposeContext.with_policy_override's placement after with_session_policy even when
     # ctx.policyFor is wired (a session policy resolved from scratch would otherwise silently discard
     # this override).
     compose_opts = opts
-    if respect_prev_tier and prev.provenance.tier == "L2":
+    if can_respect_l2:
         compose_opts = replace(
             opts,
             policy_override={

@@ -548,6 +548,15 @@ export async function recompose(
      * When true and the previous Spec is L2 (free generation), fix the differential update to the L2 path too.
      * Prevents a screen established at L2 from dropping to L1 on every params change and being swapped for a different UI.
      * Default false (follows ctx.policy.routeTier / defaults to L1).
+     *
+     * **Never overrides a resolved policy's own `allowL2` (design.md #70)**: this pin is only applied
+     * when the session's *current* effective policy (after `withSessionPolicy` + `opts.policyOverride`,
+     * before this pin's own override — see the `canRespectL2` check below) already allows L2. A tenant
+     * whose Policy as Code disallows L2 must have that gate hold even for an interaction against a Spec
+     * that was already L2 under a since-changed policy (a policy `reload()`, or the same `prev` Spec
+     * somehow reaching a different tenant's session) — otherwise a param tweak on an existing L2 view
+     * would silently smuggle a fresh L2 generation past a governance decision, defeating the same
+     * cache-isolation guarantee CMP-DET-002 exists to provide.
      */
     respectPrevTier?: boolean;
   } = {},
@@ -556,13 +565,19 @@ export async function recompose(
     canonical: patch.canonical ?? prev.intent.canonical,
     params: { ...prev.intent.params, ...patch.params },
   };
+  // Peek at the resolved policy (session + any caller-supplied policyOverride, but not yet this pin's
+  // own routeTier/allowL2 override) to decide whether the pin below may even apply. Cheap and pure
+  // (no I/O) — resolveEntryContext is called again inside compose() for the real thing.
+  const canRespectL2 =
+    opts.respectPrevTier === true &&
+    prev.provenance.tier === "L2" &&
+    (resolveEntryContext(ctx, opts).policy.allowL2 ?? false);
   // The L2 pin is passed as a policyOverride rather than folded into ctx up front, so that it survives
   // resolveEntryContext's withSessionPolicy step even when ctx.policyFor is wired (a session policy
   // resolved from scratch would otherwise silently discard this override — see resolveEntryContext).
-  const composeOpts =
-    opts.respectPrevTier === true && prev.provenance.tier === "L2"
-      ? { ...opts, policyOverride: { ...opts.policyOverride, routeTier: () => "L2" as const, allowL2: true } }
-      : opts;
+  const composeOpts = canRespectL2
+    ? { ...opts, policyOverride: { ...opts.policyOverride, routeTier: () => "L2" as const, allowL2: true } }
+    : opts;
   const result = await compose({ kind: "intent", intent }, ctx, composeOpts);
   return { result, patch: diffSpec(prev, result.spec) };
 }
