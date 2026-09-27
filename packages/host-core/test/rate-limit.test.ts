@@ -79,6 +79,23 @@ describe("createRateLimiter", () => {
     ).toBe(true);
   });
 
+  it("does not collide across a delimiter-ambiguous (tenant, principal) pair (JSON-encoded key, not a plain colon join)", async () => {
+    const keys: string[] = [];
+    const store: RateLimitStore = {
+      take: async (key) => {
+        keys.push(key);
+        return { allow: true };
+      },
+    };
+    const limiter = createRateLimiter(store, undefined, () => 0);
+    // A plain "${tenant}:${principal}:${routeClass}" join would collide these two: both render to
+    // "a:b:c:compose".
+    await limiter.take({ tenant: "a:b", principal: "c", routeClass: "compose", rule: RULE });
+    await limiter.take({ tenant: "a", principal: "b:c", routeClass: "compose", rule: RULE });
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+
   it("an anonymous caller (no tenant/principal) still separates by routeClass", async () => {
     const limiter = createRateLimiter(createMemoryRateLimitStore(), undefined, () => 0);
     expect((await limiter.take({ routeClass: "compose", rule: RULE })).allow).toBe(true);

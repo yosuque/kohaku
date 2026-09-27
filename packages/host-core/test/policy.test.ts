@@ -251,7 +251,10 @@ describe("createPolicyRuntime: rateLimiter", () => {
     });
     await runtime.rateLimiter.take({ tenant: "tenant-a", principal: "p1", routeClass: "compose" });
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ key: "tenant-a:p1:compose", rule: { capacity: 1, refillPerSecond: 2 } });
+    expect(calls[0]).toMatchObject({
+      key: JSON.stringify(["tenant-a", "p1", "compose"]),
+      rule: { capacity: 1, refillPerSecond: 2 },
+    });
   });
 
   it("onRateLimitError is wired through to createRateLimiter: a throwing store still allows the request, and the hook is called", async () => {

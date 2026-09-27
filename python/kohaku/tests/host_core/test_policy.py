@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Literal
 
 import pytest
@@ -302,7 +303,7 @@ class TestRateLimiter:
                 PolicyRateLimiterTakeParams(tenant="tenant-a", principal="p1", routeClass="compose")
             )
             assert len(store.calls) == 1
-            assert store.calls[0]["key"] == "tenant-a:p1:compose"
+            assert store.calls[0]["key"] == json.dumps(["tenant-a", "p1", "compose"], separators=(",", ":"))
             assert store.calls[0]["rule"] == RateLimitRule(capacity=1, refillPerSecond=2)
 
         asyncio.run(run())

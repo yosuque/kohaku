@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import time
 from collections.abc import Callable
@@ -103,7 +104,9 @@ class RateLimiter:
         self._now = now
 
     async def take(self, params: RateLimiterTakeParams) -> RateLimitResult:
-        key = f"{params.tenant or ''}:{params.principal or ''}:{params.routeClass}"
+        key = json.dumps(
+            [params.tenant or "", params.principal or "", params.routeClass], separators=(",", ":")
+        )
         try:
             return await self._store.take(key, params.cost, params.rule, self._now())
         except Exception as e:  # noqa: BLE001 — a rate-limit store outage must fail open, never break the request
@@ -130,11 +133,22 @@ def create_rate_limiter(
     on_error: Callable[[RateLimiterErrorInfo], object] | None = None,
     now: Callable[[], float] = _default_now_ms,
 ) -> RateLimiter:
-    """Builds a RateLimiter over a RateLimitStore, keying each bucket by
-    "{tenant}:{principal}:{routeClass}" (tenant/principal default to the empty string when unset, so an
+    """Builds a RateLimiter over a RateLimitStore, keying each bucket by the canonical JSON array
+    [tenant, principal, routeClass] (tenant/principal default to the empty string when unset, so an
     anonymous caller still gets its own bucket per tenant/routeClass rather than colliding with every
     other anonymous caller across route classes -- the MCP profile's "no tenant, no principal" case
     still separates compose from action this way).
+
+    Not a delimiter-joined string (e.g. f"{tenant}:{principal}:{routeClass}"): a plain colon join
+    collides whenever a component itself contains the delimiter -- (tenant="a:b", principal="c") and
+    (tenant="a", principal="b:c") would both join to "a:b:c:<routeClass>" and share a bucket, letting one
+    caller's usage count against (or be undercounted against) another's. json.dumps(...,
+    separators=(",", ":")) escapes any '"'/':'/control character inside a component, so two distinct
+    triples can never encode to the same string; the separators argument drops the whitespace json.dumps
+    adds by default, matching the TS port's JSON.stringify (which never adds whitespace) byte-for-byte --
+    not that cross-language key equality itself matters (each language's in-process RateLimitStore never
+    shares state with the other's), just that a divergent encoding isn't left as a subtle trap for a
+    future shared backing store.
 
     Fail-open on a store error: the request is allowed through (RateLimitResult(allow=True)), and the
     error is reported via on_error (silent, fire-and-forget, if unwired -- the same notify_hook

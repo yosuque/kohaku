@@ -69,11 +69,22 @@ export interface RateLimiterErrorInfo {
 }
 
 /**
- * Builds a `RateLimiter` over a `RateLimitStore`, keying each bucket by
- * `"${tenant}:${principal}:${routeClass}"` (tenant/principal default to the empty string when unset,
- * so an anonymous caller still gets its own bucket per tenant/routeClass rather than colliding with
- * every other anonymous caller across route classes — the MCP profile's "no tenant, no principal"
- * case, task 11, still separates `compose` from `action` this way).
+ * Builds a `RateLimiter` over a `RateLimitStore`, keying each bucket by the canonical JSON array
+ * `[tenant, principal, routeClass]` (tenant/principal default to the empty string when unset, so an
+ * anonymous caller still gets its own bucket per tenant/routeClass rather than colliding with every
+ * other anonymous caller across route classes — the MCP profile's "no tenant, no principal" case, task
+ * 11, still separates `compose` from `action` this way).
+ *
+ * **Not a delimiter-joined string** (e.g. `` `${tenant}:${principal}:${routeClass}` ``): a plain colon
+ * join collides whenever a component itself contains the delimiter — `(tenant: "a:b", principal: "c")`
+ * and `(tenant: "a", principal: "b:c")` would both join to `"a:b:c:<routeClass>"` and share a bucket,
+ * letting one caller's usage count against (or be undercounted against) another's. `JSON.stringify`
+ * escapes any `"`/`:`/control character inside a component, so two distinct triples can never encode to
+ * the same string; the Python port uses `json.dumps(..., separators=(",", ":"))` for a byte-identical
+ * encoding (both drop the whitespace `json.dumps` adds by default, matching `JSON.stringify`'s own
+ * no-whitespace output) — not that cross-language key equality itself matters (each language's
+ * in-process `RateLimitStore` never shares state with the other's), just that a divergent encoding isn't
+ * left as a subtle trap for a future shared backing store.
  *
  * **Fail-open** on a store error: the request is allowed through (`{ allow: true }`), and the error is
  * reported via `onError` (silent, fire-and-forget, if unwired — the same `notifyHook` convention as
@@ -87,7 +98,7 @@ export function createRateLimiter(
 ): RateLimiter {
   return {
     async take({ tenant, principal, routeClass, rule, cost = 1 }): Promise<RateLimitResult> {
-      const key = `${tenant ?? ""}:${principal ?? ""}:${routeClass}`;
+      const key = JSON.stringify([tenant ?? "", principal ?? "", routeClass]);
       try {
         return await store.take(key, cost, rule, now());
       } catch (error) {

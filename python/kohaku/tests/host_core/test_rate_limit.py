@@ -100,6 +100,29 @@ def test_rate_limiter_keys_buckets_by_tenant_principal_route_class() -> None:
     asyncio.run(run())
 
 
+def test_does_not_collide_across_a_delimiter_ambiguous_tenant_principal_pair() -> None:
+    """A plain f"{tenant}:{principal}:{routeClass}" join would collide these two: both render to
+    "a:b:c:compose". Mirrors the TS test of the same intent."""
+
+    class _RecordingKeyStore:
+        def __init__(self) -> None:
+            self.keys: list[str] = []
+
+        async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+            self.keys.append(key)
+            return RateLimitResult(allow=True)
+
+    async def run() -> None:
+        store = _RecordingKeyStore()
+        limiter = create_rate_limiter(store, now=lambda: 0)
+        await limiter.take(RateLimiterTakeParams(tenant="a:b", principal="c", routeClass="compose", rule=_RULE))
+        await limiter.take(RateLimiterTakeParams(tenant="a", principal="b:c", routeClass="compose", rule=_RULE))
+        assert len(store.keys) == 2
+        assert store.keys[0] != store.keys[1]
+
+    asyncio.run(run())
+
+
 def test_anonymous_caller_still_separates_by_route_class() -> None:
     async def run() -> None:
         limiter = create_rate_limiter(create_memory_rate_limit_store(), now=lambda: 0)
