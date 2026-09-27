@@ -25,6 +25,8 @@ export {
 export { resolveRowProps, substituteRow } from "./control/row-template.js";
 export { boundStateKey, normalizeSelectOptions, type SelectOption } from "./control/select-options.js";
 export { type DesignKit, defaultDesignKit, PARTS_STATE_CSS } from "./design-kit.js";
+// Development-mode check (shared by renderer-react's `implement` / renderer-wc's `implementWc`)
+export { isDevEnvironment } from "./dev-mode.js";
 // Messages
 export { DEFAULT_LOCALE, DEFAULT_MESSAGES, type RendererMessages } from "./messages.js";
 export { type ActionButtonTokens, actionButtonStyle } from "./presenters/action-button.js";

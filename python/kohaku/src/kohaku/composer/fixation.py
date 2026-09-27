@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from kohaku.spec import (
+    CacheKeyParts,
     FixationRecord,
     Intent,
     QueryHandle,
@@ -145,6 +146,10 @@ async def materialize_fixation(
         refs=[h.uri for h in handles],
         dataVersion=spec.dataVersion,
         cacheKey=f"fixated:{intent.hash}",
+        # A fixation delivery never runs prepare_compose's cache-key computation (it short-circuits before
+        # it), so there is no real generatorVersion/policyFingerprint to report here -- intentHash/dataVersion
+        # are the only components that are actually meaningful for a fixated trace (port of TS fixation.ts).
+        cacheKeyParts=CacheKeyParts(intentHash=intent.hash, dataVersion=spec.dataVersion),
         # Distinguish a fixation short-circuit from a normal cache hit (consistent with provenance.cache="fixated").
         cache="fixated",
         tier="L0",

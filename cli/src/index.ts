@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { basename } from "node:path";
+import type { ExplainReport } from "@kohaku-ui/client";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
 import { Command } from "commander";
 import {
   type ExportDatasetResult,
   exportDataset,
+  formatExplainReport,
   formatReport,
   parseSmokeL2Input,
+  runExplain,
   runRestConformance,
   runSelfConformance,
   runSmokeL2,
@@ -58,6 +61,41 @@ program
     console.log(formatReport(report));
     process.exitCode = report.pass ? 0 : 1;
   });
+
+program
+  .command("explain")
+  .argument(
+    "<requestId>",
+    "Request id to explain (a compose's X-Request-Id, or an MCP tool call's mcp:... correlation id)",
+  )
+  .description(
+    "Explain why a compose came out the way it did (tier, cache, cache-key breakdown, decision flow, related lineage events)",
+  )
+  .requiredOption("--rest <baseUrl>", "REST host base URL (e.g. http://localhost:8787/api/kohaku)")
+  .option(
+    "--header <name:value>",
+    "Extra request header, e.g. tenant or auth (repeatable)",
+    (value: string, prev: string[]) => [...prev, value],
+    [] as string[],
+  )
+  .option("--json", "Output the raw ExplainReport JSON instead of formatted text")
+  .option("--spec <file>", "Path to a UISpec JSON file; adds capability scopes to the report")
+  .action(
+    async (requestId: string, opts: { rest: string; header: string[]; json?: boolean; spec?: string }) => {
+      let report: ExplainReport;
+      try {
+        report = await runExplain(requestId, {
+          rest: opts.rest,
+          headers: opts.header,
+          ...(opts.spec != null ? { specPath: opts.spec } : {}),
+        });
+      } catch (e) {
+        program.error(e instanceof Error ? e.message : String(e));
+        return;
+      }
+      console.log(opts.json === true ? JSON.stringify(report, null, 2) : formatExplainReport(report));
+    },
+  );
 
 program
   .command("scaffold")

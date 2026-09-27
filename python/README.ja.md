@@ -128,19 +128,37 @@ compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_i
 し、各ハンドラはリクエストスコープの contextvar を読む代わりに自身専用の `ServerRequestContext` を受け取る。
 全ツール結果はすでに `result_type: "complete"` を実の宣言済み pydantic フィールドとして持つ(2.x の
 `CallToolResult` 他の `Result` サブクラスが直接宣言している — TS は自身の SDK バージョン事情で引き続き明示的
-にスタンプしているのとは異なり、事後のスタンプ処理は不要)。失敗経路の観測フック(`McpErrorInfo.correlation_id`)
-に渡す相関 id は**常にツール呼び出し自身の JSON-RPC リクエスト id であり、`_meta.traceparent`(SEP-414)からは
-決して導出しない** — TS と同じルールである。W3C の trace-id は 1 つのトレース全体で共有されるため、そこから相関
-id を導出すると 1 会話内の全ツール呼び出しが同じ id に潰れてしまう。この id が到達するのは今のところ
-`McpErrorInfo.correlation_id` のみで、`compose_with_fixation` / `ComposeOptions` にはまだ相関 id パラメータが
-無い(その修正には `host_core`/`composer` に触る必要がありスコープ外)ため、TS の対応物が
-`ComposeTrace.correlationId` にも到達するのとは異なる。ツール呼び出しの `_meta.traceparent`
-(+ `_meta.tracestate`)は、整形式であれば別途 `TraceContext`(`kohaku.host_core.trace_context`。TS の
-`packages/host-core/src/trace-context.ts` をそのまま移植したもの — 全ゼロの trace-id/parent-id の拒否や
-`tracestate` の W3C 推奨 512 文字上限も含む。`host_rest` は同等の `traceparent` / `tracestate` リクエストヘッダ
-を読む)として解析され、同じ理由で `McpErrorInfo.trace_context` / `HostErrorInfo.trace_context` にのみ現れ
-`ComposeTrace` へは到達しない。トレースの相関はこの `TraceContext` だけが担い、相関 id がその役目を兼ねることは
-無い。OTel SDK 自体(スパン生成・エクスポート、`@kohaku-ui/otel`)は TS のみで、この移植の対象外である。さらに
+にスタンプしているのとは異なり、事後のスタンプ処理は不要)。compose の相関 id(`_correlation_id_of`、U2)は
+`mcp:<sessionId>:<jsonrpc id>` — `_meta.traceparent`(SEP-414)からは**決して導出しない** — TS と同じ
+ルールである。W3C の trace-id は 1 つのトレース全体で共有されるため、そこから相関 id を導出すると 1 会話内の
+全ツール呼び出しが同じ id に潰れてしまう。TS の `mcpCorrelationId(extra)` は実際のトランスポートセッション id
+が取得できる場合にそれを読む(`ServerContext.sessionId`)が、セッションという概念の無いトランスポート(stdio)
+ではセッション部分をまるごと省略する(`mcp:<jsonrpc id>`)。この移植が使う `mcp` SDK はリクエストハンドラに
+公開のトランスポートセッション id を一切露出しない——`ServerRequestContext.session` 自体が(接続ごとではなく)
+**リクエストごとに**新規構築される `ServerSession` ラッパーである(実測で確認済み: 同一接続上の 2 回の
+呼び出しが、id が異なる 2 つの `ctx.session` オブジェクトを生成した)ため、接続ごとに安定したアンカーは
+このラッパーの非公開属性 `_connection` 経由でしか到達できない。`_session_correlation_prefix` はそのオブジェクト
+をキーにして `WeakKeyDictionary` を引き、接続ごとに uuid4 hex を 1 回だけ生成して接続の寿命の間キャッシュする
+(接続がガベージコレクトされると自動的に破棄される)。そのようなアンカーが一切到達できない場合(session が
+無い、または将来の `mcp` SDK がこの非公開属性を改名・削除した場合)は、失敗ではなく劣化を選ぶ: 各呼び出しは
+接続ごとに共有される id の代わりに、その呼び出し限りの使い捨て id を毎回新しく受け取る——同時セッション同士が
+衝突しないという保証は保たれ、失われるのは同一セッションのグルーピングだけである——そして `warnings.warn` が
+呼び出しのたびにではなくプロセスにつき 1 回だけ発火してこの劣化を知らせる(非公開属性への到達が唯一の安定した
+アンカーを得る手段だった経緯、および当初のリビジョンがここで送出していた `RuntimeError` をレビュー後に書き
+直した理由——private 属性が改名・削除されただけで本番の全 MCP 呼び出しが失敗するのは、この劣化よりずっと悪い
+結果になるため——を含む詳細は、同関数自身の doc comment を参照)。TS と異なり、Python はこのセグメントを
+トランスポートによらず(stdio でも)一律に含める——フォーマットを
+トランスポートごとに出し分けるのではなく。この id は現在、失敗経路の観測フック(`McpErrorInfo.correlation_id`)
+に加えて、`ComposeOptions.correlation_id` / `ComposeTrace.correlationId` にも(`compose_with_fixation` の
+`correlation_id` パラメータ経由で)到達するようになり、TS と一致する。ツール呼び出しの `_meta.traceparent`
+(+ `_meta.tracestate`)は、整形式であれば別途 `TraceContext`
+(`kohaku.host_core.trace_context`。TS の `packages/host-core/src/trace-context.ts` をそのまま移植したもの —
+全ゼロの trace-id/parent-id の拒否や `tracestate` の W3C 推奨 512 文字上限も含む。`host_rest` は同等の
+`traceparent` / `tracestate` リクエストヘッダを読む)として解析され、同じ理由で `McpErrorInfo.trace_context` /
+`HostErrorInfo.trace_context` にのみ現れ `ComposeTrace` へは到達しない — 上の相関 id とは異なり、この移植の
+`ComposeOptions.trace_context` にはまだシンクが一切無い、依然として残る別のギャップである。トレースの相関は
+この `TraceContext` だけが担い、相関 id がその役目を兼ねることは無い。OTel SDK 自体(スパン生成・エクスポート、
+`@kohaku-ui/otel`)は TS のみで、この移植の対象外である。さらに
 `host_mcp` は `tools/list`・`resources/list`・**そして `resources/read` にも** `ttl_ms`/`cache_scope`
 (SEP-2549)を設定する — `mcp` 2.x の `ReadResourceResult` が `CacheableResult` を基底クラスとして得た(1.x で
 は持っていなかった)ことで、本ファイルがかつて TS のみと記していたギャップが解消された。これらのフィールドが
@@ -153,6 +171,16 @@ id を導出すると 1 会話内の全ツール呼び出しが同じ id に潰�
 Python サンプル(`examples/sales-api`)はシード JSON をリポジトリルートの `apps/sample-api/src/domain/seed` から直読みする(データ二重管理を避けるため)。したがって `python/` サブツリー単独ではなく**フル monorepo チェックアウト**が前提。
 
 **`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。任意の forward-paging 拡張 `page_lineage`(design.md #53)も実装しており、呼び出し側では `put_promotion_states` が使う「`isinstance` と `runtime_checkable` Protocol」の仕組みではなく、単純な `hasattr(storage, "page_lineage")` プローブで確認する — 理由は `kohaku.spec.ports.StoragePort` の `page_lineage` に付けたコメントを参照。
+
+**`kohaku explain` / DevTools(U2、design.md #54/#55)**: `ComposeTrace.cacheKeyParts`(`cache_key()` 呼び出し
+そのものの部品。TS とバイト単位で一致)と、上で述べた相関 id は、`kohaku.lineage` の `view.composed` /
+`component.generated` / `component.used` / `view.fallback` の payload(`correlationId`、`cacheKey`、
+`cacheKeyParts`、`generatorVersion`、`kit`、`fallback`、`decision`)にも到達するようになった。これは TS の
+`packages/lineage/src/lineage.ts` とフィールド単位で一致する。`kohaku explain <requestId>` と admin-react の
+DevTools 自体は TS のみである(`cli` と `@kohaku-ui/client` は Python に移植されていない —
+[docs/runbooks/python-mirror.md](../docs/runbooks/python-mirror.md) の「Python に移植しないもの」一覧を参照)
+が、どちらも Python がホストする REST ホストに対してそのまま動作する: 単に `GET /lineage?correlationId=` を
+読むだけの、言語固有のワイヤー形状を持たない普通の REST クライアントだからである。
 
 ## クロス言語互換の守り方
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SalesRepo } from "../src/domain/repo.js";
+import { readSeedFromDisk } from "../src/domain/seed-fs.js";
 import { fiscalYearOf, quarterOf } from "../src/domain/types.js";
 
 // Invariant: fiscalYearOf/quarterOf (the single source scripts/generate-seed.ts and
@@ -9,7 +10,7 @@ import { fiscalYearOf, quarterOf } from "../src/domain/types.js";
 // rather than via fiscalYearOf — see that file's fiscalMonth doc — so this test is the only place the
 // two directions are checked against each other).
 describe("fiscalYearOf / quarterOf against the seed (576 records)", () => {
-  const repo = new SalesRepo();
+  const repo = new SalesRepo(readSeedFromDisk());
 
   it("the seed has the expected row count (2 fiscal years x 12 months x 4 regions x 6 products)", () => {
     expect(repo.records).toHaveLength(576);

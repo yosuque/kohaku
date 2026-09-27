@@ -20,7 +20,8 @@
     "recharts": "catalog:"
   },
   "peerDependencies": {
-    "react": "^19.0.0"
+    "react": "^19.0.0",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@testing-library/react": "catalog:",
@@ -30,7 +31,8 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "catalog:"
   },
   "license": "Apache-2.0",
   "homepage": "https://github.com/yosuque/kohaku/tree/main/packages/renderer-react#readme",

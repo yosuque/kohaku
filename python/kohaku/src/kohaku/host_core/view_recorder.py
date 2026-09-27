@@ -29,6 +29,7 @@ class _FallbackRecorder(Protocol):
         surface: Surface,
         session_id: str | None = ...,
         tenant: str | None = ...,
+        correlation_id: str | None = ...,
     ) -> None: ...
 
 
@@ -39,6 +40,7 @@ async def record_view_fallback(
     surface: Surface,
     session_id: str | None = None,
     tenant: str | None = None,
+    correlation_id: str | None = None,
 ) -> None:
     """Records view.fallback when the spec includes a fallback (deterministic downgrade on L1/L2 generation
     failure / component downgrade via capability negotiation). The judgment source is `spec.provenance.fallback`,
@@ -49,6 +51,10 @@ async def record_view_fallback(
     Shared by both host profiles (REST's record_fallback_if_any and the MCP profile's `_audit_compose`) so the
     fallback-detection rule lives in exactly one place instead of two independently-drifting copies. No-op
     when `recorder` is None (matching both hosts' existing "recording is optional" contract).
+
+    correlation_id, when given, is forwarded unchanged to the recorder's own correlation_id (port of TS
+    host-core's recordViewFallback -- see its doc comment), so a devtool can find this view.fallback event via
+    the `/lineage?correlationId=` filter alongside the request's other events.
     """
     fallback = spec.provenance.fallback
     if fallback is None:
@@ -62,4 +68,5 @@ async def record_view_fallback(
         surface=surface,
         session_id=session_id,
         tenant=tenant,
+        correlation_id=correlation_id,
     )

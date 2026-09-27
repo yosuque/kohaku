@@ -58,8 +58,10 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
 
   // Standard request-body size cap (a product may still layer its own bodyLimit in front of the mount point;
   // this is a bundled floor so a host that forgets to is not left fully unbounded). Rejects before the body
-  // is buffered/JSON-parsed, ahead of routes/schemas.ts's structural validation (the depth cap on
-  // JsonObjectSchema guards against a small-but-deeply-nested payload this size cap alone would not catch).
+  // is buffered/JSON-parsed, ahead of the two depth defenses this size cap alone would not catch (a small
+  // payload can still be nested arbitrarily deep): routes/shared.ts's parseBody checks the whole parsed body
+  // before any zod schema touches it, and routes/schemas.ts's JsonObjectSchema / JsonValueSchema fields carry
+  // their own up-front depth cap (both bound the same non-recursive way -- see spec-core's json.ts).
   app.use(
     "*",
     bodyLimit({

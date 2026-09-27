@@ -170,7 +170,8 @@ async def generate_l2(
             html = extract_html_document(result.text)
         except Exception as e:  # noqa: BLE001 — LLM-call failures branch by kind
             last_error = e
-            attempts.append(ComposeAttempt(kind="l2", ok=False, issues=[str(e)]))
+            error_code = e.code if isinstance(e, LlmError) else "UNKNOWN"
+            attempts.append(ComposeAttempt(kind="l2", ok=False, issues=[str(e)], errorCode=error_code))
             if isinstance(e, LlmError) and e.code == "ABORTED":
                 # deadline_signal fires only from budget.py's create_deadline_guard, never from the caller's
                 # own AbortSignal — see generate_l1's identical branch for the full rationale.

@@ -57,6 +57,9 @@ export interface ViewRecorder {
     tenant?: string;
     /** Precomputed hash. If passed, the recorder implementation does not re-hash the Spec. If unset, computed internally (backward compatible). */
     specHash?: string;
+    /** The compose trace's correlation id (ComposeTrace.correlationId), so a devtool can find this
+     * view.fallback event via the `/lineage?correlationId=` filter alongside the request's other events. */
+    correlationId?: string;
   }): Promise<void>;
 }
 
@@ -94,7 +97,14 @@ export async function recordComposedResult(
 export async function recordViewFallback(
   recorder: ViewRecorder | undefined,
   spec: UISpec,
-  meta: { surface: Surface; sessionId?: string; tenant?: string; specHash?: string },
+  meta: {
+    surface: Surface;
+    sessionId?: string;
+    tenant?: string;
+    specHash?: string;
+    /** Forwarded unchanged to ViewRecorder.fallback's own correlationId (see its doc comment). */
+    correlationId?: string;
+  },
 ): Promise<void> {
   const fallback = spec.provenance.fallback;
   if (fallback == null) return;
@@ -106,5 +116,6 @@ export async function recordViewFallback(
     ...(meta.specHash != null ? { specHash: meta.specHash } : {}),
     ...(meta.sessionId != null ? { sessionId: meta.sessionId } : {}),
     ...(meta.tenant != null ? { tenant: meta.tenant } : {}),
+    ...(meta.correlationId != null ? { correlationId: meta.correlationId } : {}),
   });
 }

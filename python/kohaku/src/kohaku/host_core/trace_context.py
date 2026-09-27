@@ -5,13 +5,17 @@ propagation conventions for `_meta` keys") so both profiles validate identically
 
 **Canonical port note (parity gap, deliberately not papered over -- every other reference to this gap in
 kohaku.host_core / kohaku.host_mcp / kohaku.host_rest is a one-line pointer back to this docstring; update
-here, not there):** unlike the TS reference implementation, this Python port's ComposeOptions
-(kohaku.composer) carries no `trace_context` parameter at all yet -- nor, in fact, a `correlation_id` one
-either (kohaku.host_core.compose_with_fixation's signature has neither; TS's composeWithFixation has both).
-There is therefore no sink to thread a parsed TraceContext into ComposeTrace / ComposeErrorContext the way
-TS does. Adding that sink touches kohaku.composer AND kohaku.host_core.compose_with_fixation's signature --
-a larger, separate change than a docstring fix. Until that lands, `parse_trace_context`'s result is used
-only by each profile's own local failure-path observability hook (`HostErrorInfo.trace_context` /
+here, not there):** as of U2, `ComposeOptions.correlation_id` (kohaku.composer) and
+`kohaku.host_core.compose_with_fixation`'s `correlation_id` parameter now exist and reach
+`ComposeTrace.correlationId` -- host_rest passes its per-request X-Request-Id, host_mcp passes
+`_correlation_id_of(ctx)` (`mcp:<sessionId>:<jsonrpc id>` / `mcp:<jsonrpc id>` -- see that function's own
+docstring for host_mcp's session-id parity gap, separate from this one). **`trace_context` is still
+missing**, though: unlike the TS reference implementation (`ComposeOptions.traceContext`,
+`composeWithFixation`'s `traceContext` parameter), this Python port has no sink at all yet to thread a parsed
+TraceContext into ComposeTrace / ComposeErrorContext. Adding it touches kohaku.composer AND
+kohaku.host_core.compose_with_fixation's signature the same way correlation_id's sink did -- a similarly
+-shaped, still not yet done, change. Until that lands, `parse_trace_context`'s result is used only by each
+profile's own local failure-path observability hook (`HostErrorInfo.trace_context` /
 `McpErrorInfo.trace_context`) -- still valuable (correlates a caller's own OTel trace with kohaku's own
 error reports) even though it does not yet reach ComposeTrace. The OTel SDK itself (span creation / export)
 is entirely out of scope for the Python port.

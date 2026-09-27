@@ -1,4 +1,5 @@
 import { type AdminMessages, defaultAdminMessages } from "@kohaku-ui/admin-react";
+import { type DevToolsMessages, defaultDevToolsMessages } from "@kohaku-ui/admin-react/devtools";
 import { getLang, type Lang, useLang } from "./lang.js";
 
 /**
@@ -86,6 +87,9 @@ export interface UIStrings {
       pastePlaceholder: string;
     };
   };
+  /** Kohaku DevTools' own dictionary (`@kohaku-ui/admin-react/devtools`'s `DevToolsMessages`), mounted only
+   * in dev builds (see DevToolsMount.tsx). No sample-only additions, unlike `admin` above. */
+  devtools: DevToolsMessages;
 }
 
 const EN: UIStrings = {
@@ -167,6 +171,7 @@ const EN: UIStrings = {
         "Paste a generated L2 artifact (from the Promotion Review (L2→L1) tab's generated HTML) to preview it with the current theme and kit",
     },
   },
+  devtools: { ...defaultDevToolsMessages },
 };
 
 const JA: UIStrings = {
@@ -368,6 +373,63 @@ const JA: UIStrings = {
       pastePlaceholder:
         "生成された L2 アーティファクト(昇格レビュー(L2→L1)タブの生成 HTML)を貼り付けると、現在のテーマとキットでプレビューします",
     },
+  },
+  devtools: {
+    title: "Kohaku DevTools",
+    requestIdLabel: "リクエスト ID",
+    explainButton: "explain",
+    loading: "読み込み中…",
+    notFound: "このリクエスト ID に該当する view.composed イベントが見つかりません。",
+    fetchFailed: (message) => `explain レポートの取得に失敗しました: ${message}`,
+    recentRequestsLabel: "直近のリクエスト",
+    panels: {
+      specTree: "Spec",
+      provenance: "Provenance",
+      cacheKey: "キャッシュキー",
+      decision: "判断の流れ",
+      scopes: "スコープ",
+      lineage: "Lineage",
+    },
+    provenance: {
+      tierCacheLabel: "ティア / キャッシュ",
+      modelLabel: "モデル",
+      generatorVersionLabel: "generatorVersion",
+      designKitLabel: "デザインキット",
+      fallbackLabel: (kind) => `フォールバック(${kind})`,
+      empty: "このリクエスト ID に該当する compose が見つかりません。",
+    },
+    cacheKey: {
+      keyLabel: "キャッシュキー",
+      specVersionLabel: "specVersion",
+      intentHashLabel: "intentHash",
+      dataVersionLabel: "dataVersion",
+      catalogFingerprintLabel: "catalogFingerprint",
+      generatorVersionLabel: "generatorVersion",
+      policyFingerprintLabel: "policyFingerprint",
+      empty:
+        "この compose にはキャッシュキーが記録されていません(correlationId 対応より前の記録、または L0 固定化)。",
+    },
+    decision: {
+      attemptOk: "成功",
+      attemptFailed: "失敗",
+      downgradeLabel: (id, from, to) => `降格: ${id} ${from} → ${to}`,
+      coalescedLabel: "single-flight で他の compose に相乗りしました",
+      usageLabel: (input, output) => `入力 ${input} / 出力 ${output} トークン`,
+      empty:
+        "判断データが記録されていません(キャッシュヒットまたは L0 固定 Spec には判断すべきことがありません)。",
+    },
+    scopes: {
+      empty: "この Spec は capability スコープを宣言していません。",
+      noSpec: "Spec を渡すと capability スコープが表示されます。",
+    },
+    lineage: {
+      empty: "このリクエスト ID に該当する lineage イベントが見つかりません。",
+      payloadSummary: "payload",
+    },
+    specTree: {
+      empty: "Spec を渡すとコンポーネントツリーが表示されます。",
+    },
+    composeIndex: (index, total) => `compose ${index} / ${total}(リクエスト ID の再利用)`,
   },
 };
 

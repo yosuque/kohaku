@@ -1,35 +1,29 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Product, SalesRecord, SalesTarget } from "./types.js";
 
-const SEED_DIR = join(dirname(fileURLToPath(import.meta.url)), "seed");
 /**
- * A human-readable seed-version label. The mechanical identity of the content is guaranteed by seed/meta.json's
- * contentHash, so this constant only represents a "meaningful version name". Even if you forget to update it, a content
- * change is picked up by the contentHash below.
+ * The seed data a `SalesRepo` is built from. Node's default (`createDefaultRepo` in `app.ts`, behind a
+ * dynamic import of `seed-fs.ts`) derives this from disk via `readFileSync`; a host with no filesystem
+ * (the static playground, U5) builds it from a bundled JSON asset instead and passes it to `SalesRepo`'s
+ * constructor directly.
  */
-const SEED_VERSION = "seed-20260610.1";
-
-/** The contentHash of seed/meta.json (the machine-derived version info written by generate-seed). null if unreadable. */
-function readSeedContentHash(): string | null {
-  try {
-    const meta = JSON.parse(readFileSync(join(SEED_DIR, "meta.json"), "utf8")) as {
-      contentHash?: unknown;
-    };
-    return typeof meta.contentHash === "string" && meta.contentHash !== "" ? meta.contentHash : null;
-  } catch {
-    // If meta.json is not generated (an old seed) or corrupted, fall back to the constant only (backward compatible).
-    return null;
-  }
+export interface SalesSeedInput {
+  products: Product[];
+  records: SalesRecord[];
+  targets: SalesTarget[];
+  /**
+   * The version tag mixed into `dataVersion()` (see the class doc). `seed-fs.ts`'s `readSeedFromDisk`
+   * derives this from `SEED_VERSION` + a shortened content hash of `seed/meta.json`; a caller supplying its
+   * own seed data is responsible for choosing a stable tag itself (e.g. a fixed string is fine when the
+   * seed never changes at runtime, as in the playground).
+   */
+  seedTag: string;
 }
 
 /**
- * In-memory repository of sales data.
+ * In-memory repository of sales data (browser-safe: no filesystem access — see `seed-fs.ts` for the Node
+ * default that reads real seed data from disk, wired in behind a dynamic import by `app.ts`'s
+ * `createDefaultRepo` when no seed is supplied).
  * dataVersion is composed of the seed-version tag + the bump count, and becomes a component of the cache key.
- * The seed-version tag is the SEED_VERSION constant plus a shortened content hash of seed/meta.json, so even if you
- * forget to update the constant, dataVersion changes when the content changes, and an old Spec is not kept being
- * served under the same cache key. If meta.json is absent, the constant only (backward compatible).
  * bump simulates a data update (for the cache-invalidation demo).
  */
 export class SalesRepo {
@@ -50,15 +44,11 @@ export class SalesRepo {
    */
   private bumpCount = 0;
 
-  constructor() {
-    this.products = load("products.json");
-    this.records = load("sales-records.json");
-    this.targets = load("sales-targets.json");
-    const contentHash = readSeedContentHash();
-    // dataVersion is assumed to contain no ':' (paging-cursor splitting and cache key), so we append only the 12 hex
-    // digits with the "sha256:" scheme stripped to the version tag.
-    const hashPart = contentHash != null ? `+${contentHash.replace(/^sha256:/, "").slice(0, 12)}` : "";
-    this.seedTag = `${SEED_VERSION}${hashPart}`;
+  constructor(seed: SalesSeedInput) {
+    this.products = seed.products;
+    this.records = seed.records;
+    this.targets = seed.targets;
+    this.seedTag = seed.seedTag;
     this.productNames = new Map(this.products.map((p) => [p.id, p.name]));
   }
 
@@ -80,15 +70,5 @@ export class SalesRepo {
 
   productName(id: string): string {
     return this.productNames.get(id) ?? id;
-  }
-}
-
-function load<T>(file: string): T {
-  try {
-    return JSON.parse(readFileSync(join(SEED_DIR, file), "utf8")) as T;
-  } catch (e) {
-    throw new Error(
-      `Cannot read seed data ${file}. Run \`pnpm seed\` first (${e instanceof Error ? e.message : e})`,
-    );
   }
 }

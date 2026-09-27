@@ -132,20 +132,40 @@ for the full picture): `host_mcp` runs on the `mcp` 2.x SDK (`kohaku-ui[mcp]` fl
 decorators mcp 1.x used, and every handler receives its own `ServerRequestContext` rather than reading a
 request-scoped contextvar). Every tool result already carries `result_type: "complete"` as a real declared
 pydantic field (2.x's `CallToolResult` and other `Result` subclasses declare it directly — no post-hoc
-stamping needed, unlike TS which still stamps it explicitly for its own SDK-version reasons). The correlation
-id fed to the failure-path observability hook (`McpErrorInfo.correlation_id`) is **always the tool call's own
-JSON-RPC request id — never derived from `_meta.traceparent`** (SEP-414), the same rule TS enforces: a W3C
-trace-id is shared by an entire trace, so deriving the correlation id from it would collapse every tool call
-in one conversation onto the same id. This id reaches only `McpErrorInfo.correlation_id` today, since
-`compose_with_fixation` / `ComposeOptions` carry no correlation-id parameter yet (`host_core`/`composer` are
-out of scope for that fix), whereas TS's equivalent additionally reaches `ComposeTrace.correlationId`. A tool
-call's `_meta.traceparent` (+ `_meta.tracestate`), when well-formed, is separately parsed as a `TraceContext`
+stamping needed, unlike TS which still stamps it explicitly for its own SDK-version reasons). The compose
+correlation id (`_correlation_id_of`, U2) is `mcp:<sessionId>:<jsonrpc id>` — **never** derived from
+`_meta.traceparent` (SEP-414), the same rule TS enforces: a W3C trace-id is shared by an entire trace, so
+deriving the correlation id from it would collapse every tool call in one conversation onto the same id. TS's
+`mcpCorrelationId(extra)` reads a real transport session id when one is available (`ServerContext.sessionId`),
+omitting the session segment entirely (`mcp:<jsonrpc id>`) for a session-less transport (stdio). This port's
+`mcp` SDK exposes no public transport session id to a request handler at all — `ServerRequestContext.session`
+is itself a fresh `ServerSession` wrapper the SDK constructs *per request*, not per connection (verified
+empirically: two calls on the same connection produce two `ctx.session` objects that differ by identity), so
+a stable per-connection anchor is reachable only via that wrapper's private `_connection` attribute.
+`_session_correlation_prefix` keys a `WeakKeyDictionary` by that object, generating a uuid4 hex once per
+connection and caching it for the connection's lifetime (evicted automatically once the connection is
+garbage-collected). If no such anchor is reachable at all (session missing, or a future `mcp` SDK release
+renaming/removing the private attribute), it degrades rather than fails: each call gets its own fresh,
+never-reused id instead of the shared per-connection one — concurrent sessions still never collide, only
+same-session grouping is lost — and a `warnings.warn` fires once per process, not once per call, to surface
+the degradation (see that function's own doc comment for the full account, including why reaching into a
+private attribute was the only way to get a genuinely stable anchor at all, and why an earlier revision's
+hard `RuntimeError` here was reworked after review: a renamed/removed private attribute failing every single
+MCP call in production is worse than the degradation this replaces it with). Unlike TS, Python includes the
+connection segment for every transport uniformly (even a single long-lived stdio
+connection gets one stable prefix) rather than varying the format by transport. This id now reaches
+`ComposeOptions.correlation_id` / `ComposeTrace.correlationId` (via `compose_with_fixation`'s
+`correlation_id` parameter) in addition to the failure-path observability hook
+(`McpErrorInfo.correlation_id`), matching TS. A tool call's `_meta.traceparent`
+(+ `_meta.tracestate`), when well-formed, is separately parsed as a `TraceContext`
 (`kohaku.host_core.trace_context`, a straight port of TS's `packages/host-core/src/trace-context.ts` —
 including rejecting an all-zero trace-id/parent-id and capping `tracestate` at the W3C-recommended 512
 characters; `host_rest` reads the equivalent `traceparent` / `tracestate` request headers) and surfaces the
 same way — only on `McpErrorInfo.trace_context` / `HostErrorInfo.trace_context`, never on `ComposeTrace` — for
-the same reason. Trace correlation is this `TraceContext`'s job alone; it never doubles as the correlation id.
-The OTel SDK itself (span creation/export, `@kohaku-ui/otel`) is TS-only; out of scope for this port.
+the same reason: unlike the correlation id above, this port's `ComposeOptions.trace_context` still has no sink
+at all, a still-open, separate gap. Trace correlation is this `TraceContext`'s job alone; it never doubles as
+the correlation id. The OTel SDK itself (span creation/export, `@kohaku-ui/otel`) is TS-only; out of scope for
+this port.
 `host_mcp` also sets `ttl_ms`/`cache_scope` (SEP-2549) on `tools/list`, `resources/list`, **and
 `resources/read`** — `mcp` 2.x's `ReadResourceResult` gained `CacheableResult` as a base class (1.x's did
 not), closing a gap this file used to document as TS-only. These fields reach the wire only over a
@@ -182,6 +202,16 @@ forward-paging extension `page_lineage` (design.md #53), checked at call sites w
 `hasattr(storage, "page_lineage")` probe rather than the `isinstance`-against-a-`runtime_checkable`-Protocol
 mechanism `put_promotion_states` uses — see `kohaku.spec.ports.StoragePort`'s comment on `page_lineage` for
 why.
+
+**`kohaku explain` / DevTools (U2, design.md #54/#55)**: `ComposeTrace.cacheKeyParts` (the `cache_key()`
+call's own components, matching TS byte-for-byte) and the same correlation id described above now also reach
+`kohaku.lineage`'s `view.composed` / `component.generated` / `component.used` / `view.fallback` payloads
+(`correlationId`, `cacheKey`, `cacheKeyParts`, `generatorVersion`, `kit`, `fallback`, `decision`), mirroring
+TS's `packages/lineage/src/lineage.ts` field-for-field. `kohaku explain <requestId>` and admin-react's DevTools
+themselves are TS-only (`cli` and `@kohaku-ui/client` have no Python port — see
+[docs/runbooks/python-mirror.md](../docs/runbooks/python-mirror.md)'s "not ported to Python" list), but they
+work identically against a Python-hosted REST host: both are plain REST clients reading `GET
+/lineage?correlationId=`, with no language-specific wire shape.
 
 ## How cross-language compatibility is preserved
 

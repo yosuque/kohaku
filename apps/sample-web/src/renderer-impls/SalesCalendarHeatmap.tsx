@@ -1,7 +1,9 @@
 import { formatNumber } from "@kohaku-ui/renderer-core";
-import { type ImplProps, useBoundData, useLocale, useToken } from "@kohaku-ui/renderer-react";
+import { type TypedImplProps, useBoundData, useLocale, useToken } from "@kohaku-ui/renderer-react";
 import { DataStateNotice } from "@kohaku-ui/renderer-react/core";
+import type { salesCalendarHeatmap } from "@kohaku-ui-sample/parts";
 import type { ReactNode } from "react";
+import type { z } from "zod";
 
 /**
  * Short month names for the heatmap column headers, in fiscal-year order (Apr–Mar, index 0-11) — matching
@@ -42,7 +44,10 @@ function fiscalColumnOf(calMonth: number): number {
  * (promotion = coming under governance. A sample of how replacing it with a native implementation is a human development task).
  * Data: turns the monthly trend {month, revenue} into a year x month heatmap.
  */
-export function SalesCalendarHeatmap({ node }: ImplProps): ReactNode {
+export function SalesCalendarHeatmap({
+  node,
+  props,
+}: TypedImplProps<z.infer<typeof salesCalendarHeatmap.propsSchema>>): ReactNode {
   const state = useBoundData(node);
   const locale = useLocale();
   const accent = String(useToken("color.primary", "#4f46e5"));
@@ -98,8 +103,8 @@ export function SalesCalendarHeatmap({ node }: ImplProps): ReactNode {
 
   return (
     <div data-kohaku={node.id} style={{ width: "100%", overflowX: "auto" }}>
-      {(node.props["title"] as string | undefined) != null && (
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{String(node.props["title"])}</div>
+      {props.title != null && (
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{props.title}</div>
       )}
       <table style={{ borderCollapse: "separate", borderSpacing: 4 }}>
         <thead>

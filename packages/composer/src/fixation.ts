@@ -130,6 +130,10 @@ export async function materializeFixation(
     refs: handles.map((h) => h.uri),
     dataVersion: spec.dataVersion,
     cacheKey: `fixated:${intent.hash}`,
+    // A fixation delivery never ran prepareCompose's cache-key computation (it short-circuits before it),
+    // so there is no real generatorVersion/policyFingerprint to report here -- intentHash/dataVersion are
+    // the only components that are actually meaningful for a fixated trace.
+    cacheKeyParts: { intentHash: intent.hash, dataVersion: spec.dataVersion },
     // Distinguish a fixation short-circuit from a normal cache hit (consistent with provenance.cache="fixated").
     cache: "fixated",
     tier: "L0",

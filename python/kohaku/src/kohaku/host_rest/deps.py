@@ -90,6 +90,7 @@ class ViewRecorderProtocol(Protocol):
         surface: Surface,
         session_id: str | None = ...,
         tenant: str | None = ...,
+        correlation_id: str | None = ...,
     ) -> None: ...
 
 
