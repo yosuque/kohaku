@@ -4,6 +4,8 @@ import {
   type DataInvalidationBus,
   DEFAULT_LOCALE,
   DEFAULT_MESSAGES,
+  deriveDisclosure,
+  disclosureDomAttributes,
   PARTS_STATE_CSS,
   type RendererMessages,
   type SpecStateStore,
@@ -41,7 +43,11 @@ const UPGRADE_PROPS = [
   "onNodeError",
   "onActionResult",
   "sandbox",
+  "disclosure",
 ] as const;
+
+/** `disclosure` attribute values (design.md #66); anything else (including absence) behaves as `"off"`. */
+type DisclosureMode = "off" | "attributes" | "label";
 
 /**
  * The single host element <kohaku-surface> (Shadow DOM). It builds the entire UI Spec tree into one shadow root
@@ -64,6 +70,17 @@ export class KohakuSurface extends HTMLElement {
   #bus: DataInvalidationBus = createDataInvalidationBus();
   #teardown: Teardown = noop;
 
+  // AI-generation disclosure (design.md #66). Unlike the properties above, `disclosure` is attribute-backed
+  // (`static observedAttributes` + `attributeChangedCallback`) rather than a plain instance accessor: it is
+  // a simple serializable enum, well suited to `<kohaku-surface disclosure="label">` markup, unlike
+  // spec/context/binding/theme which need real object identity. #disclosureLabelEl is the shadow-root
+  // element `#applyDisclosure` creates on demand for `disclosure="label"`; null in every other mode.
+  #disclosureLabelEl: HTMLElement | null = null;
+
+  static get observedAttributes(): string[] {
+    return ["disclosure"];
+  }
+
   constructor() {
     super();
     const shadow = this.attachShadow({ mode: "open" });
@@ -85,9 +102,24 @@ export class KohakuSurface extends HTMLElement {
     // forever, so its setter logic (patchContext / re-render) would never fire again once the element is
     // upgraded. Re-apply each such value through its accessor exactly once, here, at upgrade time
     // (connectedCallback always fires after the class is defined). A no-op for an element created after
-    // define() (no own-property was ever set).
+    // define() (no own-property was ever set). "disclosure" is listed last so, if it was pre-assigned
+    // alongside "spec", #render() (triggered by spec's own upgrade) already sees the right value.
     for (const prop of UPGRADE_PROPS) this.#upgradeProperty(prop);
     if (this.#spec != null) this.#render();
+  }
+
+  attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null): void {
+    if (name === "disclosure" && oldValue !== newValue) this.#applyDisclosure();
+  }
+
+  /** `"off"` (default) | `"attributes"` | `"label"` (design.md #66). Reflects the `disclosure` attribute. */
+  get disclosure(): DisclosureMode {
+    const v = this.getAttribute("disclosure");
+    return v === "attributes" || v === "label" ? v : "off";
+  }
+  set disclosure(v: DisclosureMode) {
+    if (v === "off") this.removeAttribute("disclosure");
+    else this.setAttribute("disclosure", v);
   }
 
   disconnectedCallback(): void {
@@ -177,7 +209,10 @@ export class KohakuSurface extends HTMLElement {
     this.#root.replaceChildren();
 
     const spec = this.#spec;
-    if (spec == null) return;
+    if (spec == null) {
+      this.#applyDisclosure();
+      return;
+    }
 
     const theme: ThemeTokens = this.#context.theme ?? {};
     const messages: RendererMessages = { ...DEFAULT_MESSAGES, ...(this.#context.messages ?? {}) };
@@ -218,12 +253,59 @@ export class KohakuSurface extends HTMLElement {
     });
 
     this.#teardown = mountTree(rt, this.#root, ROOT_COMPONENT_ID);
+    this.#applyDisclosure();
   }
 
   #dispatchForward(event: SurfaceEvent): void {
     // composed so it crosses the shadow boundary and reaches the host page. Flows to both paths regardless of whether a sink exists.
     this.dispatchEvent(new CustomEvent(KOHAKU_EVENT, { detail: event, bubbles: true, composed: true }));
     this.#context.onEvent?.(event);
+  }
+
+  /**
+   * Applies (or clears) AI-generation disclosure (design.md #66): the `data-kohaku-disclosure` /
+   * `data-kohaku-tier` / `data-digital-source-type` attributes go on the *host* element itself (`this`),
+   * not inside the shadow root -- unlike renderer-react's SpecView, which has no host element of its own
+   * to mark and so wraps the tree in an internal `<div>` instead. The visible label (`disclosure="label"`
+   * only) is a shadow-root element, since that is what is actually displayed. Called from `#render()`
+   * (spec/context changes) and from `attributeChangedCallback` (the `disclosure` attribute changing on
+   * its own, with no other change to re-render for).
+   */
+  #applyDisclosure(): void {
+    const mode = this.disclosure;
+    if (mode === "off" || this.#spec == null) {
+      this.removeAttribute("data-kohaku-disclosure");
+      this.removeAttribute("data-kohaku-tier");
+      this.removeAttribute("data-digital-source-type");
+      this.#disclosureLabelEl?.remove();
+      this.#disclosureLabelEl = null;
+      return;
+    }
+
+    const disclosure = deriveDisclosure(this.#spec.provenance);
+    const attrs = disclosureDomAttributes(disclosure);
+    this.setAttribute("data-kohaku-disclosure", attrs["data-kohaku-disclosure"]);
+    this.setAttribute("data-kohaku-tier", attrs["data-kohaku-tier"]);
+    if (attrs["data-digital-source-type"] != null) {
+      this.setAttribute("data-digital-source-type", attrs["data-digital-source-type"]);
+    } else {
+      this.removeAttribute("data-digital-source-type");
+    }
+
+    if (mode === "label" && disclosure.level !== "none") {
+      const messages: RendererMessages = { ...DEFAULT_MESSAGES, ...(this.#context.messages ?? {}) };
+      const text =
+        disclosure.level === "ai-generated" ? messages.disclosureAiGenerated : messages.disclosureAiReviewed;
+      if (this.#disclosureLabelEl == null) {
+        this.#disclosureLabelEl = document.createElement("div");
+        this.#disclosureLabelEl.setAttribute("data-kohaku-disclosure-label", "");
+        this.shadowRoot!.insertBefore(this.#disclosureLabelEl, this.#root);
+      }
+      this.#disclosureLabelEl.textContent = text;
+    } else {
+      this.#disclosureLabelEl?.remove();
+      this.#disclosureLabelEl = null;
+    }
   }
 }
 
