@@ -40,11 +40,13 @@ export interface BuildGenerationOptions {
 /**
  * Determines the component types that actually appear in the generation vocabulary (the single source
  * that keeps buildGenerationSchema and the prompt in agreement on the vocabulary).
- * Finalized in this order: exclude generation:"excluded" → narrow by includeTypes → union guardrails →
- * fall back on zero matches.
+ * Finalized in this order: exclude generation:"excluded" and deprecated parts → narrow by includeTypes →
+ * union guardrails → fall back on zero matches.
  */
 export function selectGenerationTypes(catalog: ResolvedCatalog, includeTypes?: readonly string[]): string[] {
-  const listed = catalog.list().filter((def) => def.generation !== "excluded");
+  // A deprecated part keeps validating Specs that already reference it (validateAgainstCatalog does not
+  // consult `deprecated`) but drops out of what L1 generation is allowed to produce from here on.
+  const listed = catalog.list().filter((def) => def.generation !== "excluded" && def.deprecated == null);
   if (includeTypes == null) return listed.map((def) => def.type);
   // If none of the specified types exists in the catalog, fall back to all of them (avoids an empty vocabulary).
   const requested = listed.filter((def) => includeTypes.includes(def.type));

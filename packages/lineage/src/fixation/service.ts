@@ -102,6 +102,28 @@ export interface InvalidateOptions extends TenantScope {
   guard?: { ifCatalogFingerprint?: string; ifFixatedAt?: string; ifRevision?: string };
 }
 
+/** Options for Fixations.replace (design.md #65's catalog migration). */
+export interface ReplaceOptions extends TenantScope {
+  /** The human who approved applying the migration plan to this fixation. */
+  approver: Principal;
+  /**
+   * TOCTOU guard: replace only if the current fixation still matches what host-core's
+   * `planCatalogMigration` observed when it built the plan. Same `ifRevision` / `ifFixatedAt` /
+   * `ifCatalogFingerprint` semantics as `InvalidateOptions.guard`, plus `ifStructureHash` — a migration
+   * plan is built from a specific pinnedSpec structure, so `applyCatalogMigration` additionally guards on
+   * the structure it actually planned against having stayed unchanged (unlike a plain staleness
+   * invalidation, which only cares that *some* fixation is still there to delete).
+   */
+  guard?: {
+    ifCatalogFingerprint?: string;
+    ifFixatedAt?: string;
+    ifRevision?: string;
+    ifStructureHash?: string;
+  };
+  /** The migration plan's `planHash` (host-core's CatalogMigrationPlan), recorded on intent.migrated for audit traceability. */
+  planId?: string;
+}
+
 export interface Fixations {
   /** Extract fixation candidates from frequently-used Intents (L1). scope.tenant narrows the aggregation and already-fixated check. */
   proposals(scope?: TenantScope): Promise<FixationProposal[]>;
@@ -136,6 +158,18 @@ export interface Fixations {
    * resolves state staleness, it is not a governance decision).
    */
   refreshFingerprint(intentHash: string, catalogFingerprint: string, scope?: TenantScope): Promise<void>;
+  /**
+   * Rewrites a fixation's pinnedSpec in place, for host-core's `applyCatalogMigration` (design.md #65). The
+   * intentHash and tenant are unchanged (the fixation's identity); structureHash is recomputed from
+   * `pinnedSpec` (never trusted from the caller, matching `fixate`'s own behavior), a fresh `revision` is
+   * stamped, and the catalog fingerprint is re-stamped from `catalogFor` (same as `fixate`) so the fast path
+   * reflects the post-migration catalog. Returns `null` without writing anything when the fixation is
+   * absent or `options.guard` does not match the current record (TOCTOU: the plan was built against a
+   * fixation that has since moved on — see `ReplaceOptions.guard`). On success, records `intent.migrated`
+   * (actor: the approver) rather than `intent.fixated` — a distinct audit event so a migration-driven
+   * rewrite is never conflated with a fresh human fixation.
+   */
+  replace(intentHash: string, pinnedSpec: UISpec, options: ReplaceOptions): Promise<FixationRecord | null>;
 }
 
 /**
@@ -395,6 +429,48 @@ export function createFixations(opts: {
       // still exists on disk (a StoragePort that ignores the option keeps the old unconditional-write
       // behavior, so this is a strict hardening, not a required contract change).
       await opts.storage.putFixation({ ...existing, catalogFingerprint }, { ifPresent: true });
+    },
+
+    async replace(intentHash, pinnedSpec, options) {
+      const { approver, tenant, guard, planId } = options;
+      const existing = await getValidatedFixation(intentHash, tenant);
+      if (existing == null) return null;
+      // Same TOCTOU shape as invalidate's guard, plus ifStructureHash (see ReplaceOptions.guard's doc).
+      if (guard?.ifRevision != null) {
+        if (existing.revision !== guard.ifRevision) return null;
+      } else if (guard?.ifFixatedAt != null && existing.fixatedAt !== guard.ifFixatedAt) {
+        return null;
+      }
+      if (guard?.ifCatalogFingerprint != null && existing.catalogFingerprint !== guard.ifCatalogFingerprint) {
+        return null;
+      }
+      if (guard?.ifStructureHash != null && existing.structureHash !== guard.ifStructureHash) {
+        return null;
+      }
+      const record: FixationRecord = {
+        ...existing,
+        pinnedSpec,
+        structureHash: await computeStructureHash(pinnedSpec),
+        fixatedAt: now().toISOString(),
+        revision: generateRevision(),
+        approver,
+        ...(opts.catalogFor != null ? { catalogFingerprint: opts.catalogFor(tenant).fingerprint } : {}),
+      };
+      // ifPresent: true guards the same race refreshFingerprint's own write does (a concurrent unfixate
+      // between this function's get and put must not resurrect the fixation from this stale in-memory copy).
+      await opts.storage.putFixation(record, { ifPresent: true });
+      await opts.lineage.record(
+        "intent.migrated",
+        {
+          intentHash,
+          structureHash: record.structureHash,
+          approver: approver.id,
+          ...(planId != null ? { planId } : {}),
+        },
+        { kind: "user", id: approver.id },
+        tenant,
+      );
+      return record;
     },
   };
 }

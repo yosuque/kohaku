@@ -95,6 +95,8 @@ export interface AdminMessages {
     usesSessions: (uses: number, sessions: number) => string;
     changesRequestedBanner: string;
     generatedHtml: (kb: string) => string;
+    /** F-1: shown when the candidate's origin (kit / generatorVersion) is known. kit is "id@version" or "—". */
+    generatedWith: (kit: string, generatorVersion?: string) => string;
     descriptionFieldLabel: string;
     schemaDetailsSummary: string;
     paramsJsonSchemaLabel: string;
@@ -220,6 +222,8 @@ export const defaultAdminMessages: AdminMessages = {
     changesRequestedBanner:
       'Changes have been requested (sent back). Fix the draft and use "Resubmit and approve" to return it to candidate, rejoining the judge → human approval → publish chain.',
     generatedHtml: (kb) => `Generated HTML source (${kb} KB)`,
+    generatedWith: (kit, generatorVersion) =>
+      generatorVersion != null ? `kit: ${kit} · generator: ${generatorVersion}` : `kit: ${kit}`,
     descriptionFieldLabel: "description (selection guidance for the LLM)",
     schemaDetailsSummary: "Schema and data wiring (details)",
     paramsJsonSchemaLabel:

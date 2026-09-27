@@ -24,6 +24,8 @@ from ..props_schema import PropsSchema
 from ..types import (
     CapabilityDecl,
     ComponentDefinition,
+    DeprecationDecl,
+    DeprecationReplacedBy,
     FallbackDecl,
     ImplementationDecl,
 )
@@ -82,6 +84,20 @@ def _build_definition(entry: dict[str, Any]) -> ComponentDefinition:
             )
         fallback = FallbackDecl(type=fallback_type, map_props=map_props)
     impl = entry.get("implementation") or {"kind": "native"}
+    deprecated_entry = entry.get("deprecated")
+    deprecated: DeprecationDecl | None = None
+    if deprecated_entry is not None:
+        replaced_by_entry = deprecated_entry.get("replacedBy")
+        deprecated = DeprecationDecl(
+            reason=deprecated_entry["reason"],
+            since=deprecated_entry.get("since"),
+            replacedBy=(
+                DeprecationReplacedBy(type=replaced_by_entry["type"], version=replaced_by_entry.get("version"))
+                if replaced_by_entry is not None
+                else None
+            ),
+            sunset=deprecated_entry.get("sunset"),
+        )
     return define_component(
         ComponentDefinition(
             type=type_,
@@ -98,6 +114,7 @@ def _build_definition(entry: dict[str, Any]) -> ComponentDefinition:
             implementation=ImplementationDecl(kind=impl["kind"], html=impl.get("html")),
             fallback=fallback,
             generation=entry.get("generation", "allowed"),
+            deprecated=deprecated,
         )
     )
 

@@ -26,6 +26,21 @@ export function defineComponent<P extends z.ZodObject>(def: ComponentDefinition<
   if (def.description.trim().length === 0) {
     throw new ComponentDefinitionError(def.type, "description is required (used in LLM prompt)");
   }
+  if (def.deprecated != null) {
+    if (def.deprecated.reason.trim().length === 0) {
+      throw new ComponentDefinitionError(def.type, "deprecated.reason is required");
+    }
+    if (def.deprecated.replacedBy?.type === def.type) {
+      throw new ComponentDefinitionError(def.type, "deprecated.replacedBy cannot reference itself");
+    }
+    const replacedVersion = def.deprecated.replacedBy?.version;
+    if (replacedVersion != null && semver.valid(replacedVersion) == null) {
+      throw new ComponentDefinitionError(
+        def.type,
+        `deprecated.replacedBy.version "${replacedVersion}" is not valid semver`,
+      );
+    }
+  }
   try {
     z.toJSONSchema(def.propsSchema, {
       target: "draft-2020-12",

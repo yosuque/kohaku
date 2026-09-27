@@ -7,12 +7,34 @@ import {
 import { GENERATED_SCAN_WINDOW } from "../constants.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import type { ComponentDraft, PromotionStatus } from "./machine.js";
-import { notifyPromotionError, type PromotionCandidate, type PromotionErrorContext } from "./service.js";
+import {
+  notifyPromotionError,
+  type PromotionCandidate,
+  type PromotionErrorContext,
+  type PromotionOrigin,
+} from "./service.js";
 import type { SchemaSuggestion } from "./suggestion.js";
 import type { createUsageIndex } from "./usage.js";
 import { indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
 
 type UsageIndex = ReturnType<typeof createUsageIndex>;
+
+/**
+ * F-1: extracts PromotionOrigin (kit / generatorVersion / model) from a `component.generated` payload.
+ * Returns undefined rather than `{}` when none of the three are present, so loadCandidate's
+ * payload-or-stored-fallback (below) can tell "nothing on this payload" apart from "an empty origin".
+ */
+function originFromPayload(payload: Record<string, unknown> | undefined): PromotionOrigin | undefined {
+  if (payload == null) return undefined;
+  const origin: PromotionOrigin = {
+    ...(payload["kit"] != null ? { kit: payload["kit"] as { id: string; version: string } } : {}),
+    ...(payload["generatorVersion"] != null
+      ? { generatorVersion: payload["generatorVersion"] as string }
+      : {}),
+    ...(payload["model"] != null ? { model: payload["model"] as string } : {}),
+  };
+  return Object.keys(origin).length > 0 ? origin : undefined;
+}
 
 /**
  * Read/projection side of the promotion pipeline, split out of createPromotions (a God-factory split):
@@ -137,6 +159,10 @@ export function createCandidateStore(opts: {
     const snapshotHtml = state?.data["html"] as string | undefined;
     if (payload == null && snapshotHtml == null) return null;
     usageStats ??= await usage.forArtifact(artifactId, tenant);
+    // F-1: prefer the freshly-scanned component.generated payload; fall back to what was already
+    // persisted (state.data.origin) once the generated event ages out of GENERATED_SCAN_WINDOW — the
+    // same pattern `request` above uses, so origin survives indefinitely once captured.
+    const origin = originFromPayload(payload) ?? (state?.data["origin"] as PromotionOrigin | undefined);
     return {
       artifactId,
       status: (state?.status as PromotionStatus | undefined) ?? "in_use",
@@ -153,6 +179,7 @@ export function createCandidateStore(opts: {
       ...(state?.data["suggestion"] != null
         ? { suggestion: state.data["suggestion"] as unknown as SchemaSuggestion }
         : {}),
+      ...(origin != null ? { origin } : {}),
       updatedAt: state?.updatedAt ?? generated[0]?.ts ?? new Date(0).toISOString(),
     };
   }
@@ -175,6 +202,11 @@ export function createCandidateStore(opts: {
         // at nomination, so the approval UI can still prefill after a changes_requested round-trip.
         ...(candidate.suggestion != null ? { suggestion: candidate.suggestion } : {}),
         ...(candidate.request != null ? { request: candidate.request } : {}),
+        // F-1: generation provenance (kit / generatorVersion / model), captured once from the candidate's
+        // component.generated event and kept across every transition (unlike html/sha256/ref below, which
+        // are a publish-time projection) — read by the migration planner to flag a published component
+        // whose kit no longer matches the catalog's current one.
+        ...(candidate.origin != null ? { origin: candidate.origin } : {}),
         // Self-contained published projection (#9): once the candidate reaches published, duplicate what
         // `reconcile` needs to rebuild the projection (html/sha256/ref/componentType) directly onto the
         // snapshot. Without this, reconcile depends on the `component.generated` lineage event surviving

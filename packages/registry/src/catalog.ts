@@ -55,11 +55,29 @@ export function resolveCatalog(core: Catalog, ...contributions: Catalog[]): Reso
     }
   }
 
+  for (const def of byType.values()) {
+    const replacedBy = def.deprecated?.replacedBy;
+    if (replacedBy == null) continue;
+    const target = byType.get(replacedBy.type);
+    const label = replacedBy.version != null ? `${replacedBy.type}@${replacedBy.version}` : replacedBy.type;
+    if (target == null) {
+      throw new CatalogConflictError(
+        `"${def.type}" deprecated.replacedBy "${label}" does not resolve in the catalog`,
+      );
+    }
+    if (replacedBy.version != null && target.version !== replacedBy.version) {
+      throw new CatalogConflictError(
+        `"${def.type}" deprecated.replacedBy "${label}" does not resolve: catalog has "${replacedBy.type}"@${target.version}`,
+      );
+    }
+  }
+
   const fingerprint = catalogFingerprint(
     [...byType.values()].map((d) => ({
       type: d.type,
       version: d.version,
       implementation: d.implementation,
+      deprecated: d.deprecated != null,
     })),
   );
 

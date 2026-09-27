@@ -53,10 +53,12 @@ def select_generation_types(
 ) -> list[str]:
     """Determine the component types that actually appear in the generation vocabulary (the single source that keeps the schema and prompt vocabularies aligned).
 
-    Decided in the order: exclude generation:"excluded" -> narrow by include_types -> guardrail union ->
-    zero-count fallback.
+    Decided in the order: exclude generation:"excluded" and deprecated parts -> narrow by include_types ->
+    guardrail union -> zero-count fallback.
     """
-    listed = [d for d in catalog.list() if d.generation != "excluded"]
+    # A deprecated part keeps validating Specs that already reference it (catalog.validate does not
+    # consult `deprecated`) but drops out of what L1 generation is allowed to produce from here on.
+    listed = [d for d in catalog.list() if d.generation != "excluded" and d.deprecated is None]
     if include_types is None:
         return [d.type for d in listed]
     # If none of the specified types exist in the catalog, fall back to all (to avoid an empty vocabulary).

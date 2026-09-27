@@ -71,6 +71,46 @@ class GoldenFixtureRef:
 
 
 @dataclass(frozen=True)
+class DeprecationReplacedBy:
+    """What a part is being replaced by, when it carries a DeprecationDecl."""
+
+    type: str
+    version: str | None = None
+    """Required version of the replacement. When None, any version currently in the resolved catalog satisfies it."""
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"type": self.type}
+        if self.version is not None:
+            out["version"] = self.version
+        return out
+
+
+@dataclass(frozen=True)
+class DeprecationDecl:
+    """Marks a component as deprecated (Port of TS types.ts DeprecationDecl).
+
+    A deprecated part drops out of the L1 generation vocabulary (select_generation_types /
+    build_generation_schema) but keeps validating existing Specs that already reference it. It also
+    perturbs the catalog fingerprint (see fingerprint.py).
+    """
+
+    reason: str
+    since: str | None = None
+    replacedBy: DeprecationReplacedBy | None = None
+    sunset: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"reason": self.reason}
+        if self.since is not None:
+            out["since"] = self.since
+        if self.replacedBy is not None:
+            out["replacedBy"] = self.replacedBy.to_wire()
+        if self.sunset is not None:
+            out["sunset"] = self.sunset
+        return out
+
+
+@dataclass(frozen=True)
 class ComponentDefinition:
     """A component definition. In TS propsSchema is zod, but in Python it holds a PropsSchema with the JSON
     Schema as source of truth (with a zod-strip-semantics validator)."""
@@ -89,6 +129,9 @@ class ComponentDefinition:
     """Whether to include in the L1 generation vocabulary. "excluded" removes it from the generation
     vocabulary and prompt enumeration, so the LLM structurally cannot output that part (used for
     runtime-only parts like ui.loading)."""
+    deprecated: DeprecationDecl | None = None
+    """Present once a part is superseded. TS's migrateProps has no Python counterpart: it is a
+    function and neither exported to JSON nor hand-ported (only fallback.mapProps is)."""
 
 
 @dataclass(frozen=True)

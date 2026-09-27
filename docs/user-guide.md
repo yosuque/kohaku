@@ -664,6 +664,64 @@ Validation: `npx @kohaku-ui/cli component validate <definition.json>`. The minim
 }
 ```
 
+### Deprecating a part and migrating off it
+
+Mark a part `deprecated` (naming what replaces it) instead of deleting it outright: validation of Specs
+already fixated on it still passes, but L1 generation stops offering it, and the catalog fingerprint
+changes so the compose cache separates cleanly (design.md #65):
+
+```ts
+export const myCard = defineComponent({
+  type: "myapp.card", version: "1.0.0",
+  // … description / propsSchema / capabilities as before …
+  deprecated: { reason: "superseded by myapp.cardV2", replacedBy: { type: "myapp.cardV2" } },
+  migrateProps: (props) => ({ title: props.title }), // TS-only: rewrites props for `kohaku migrate`
+});
+```
+
+Rewrite every fixated (L0) Spec still using the deprecated part onto its replacement with the `migrate` CLI
+(two steps — plan is read-only, apply commits it):
+
+```bash
+npx @kohaku-ui/cli migrate plan --data-dir ./.data --catalog ./catalog.ts --out plan.json
+# Inspect plan.json: rewrites / steps (ready to apply) / blocked (needs manual attention — e.g. an
+# incompatible props shape after the rewrite). Then, with any host process sharing --data-dir stopped
+# (the file-backed StoragePort is not safe for concurrent writers):
+npx @kohaku-ui/cli migrate apply --plan plan.json --approver you@example.com --data-dir ./.data --catalog ./catalog.ts
+```
+
+`--catalog` (required on both `plan` and `apply`) points at an ESM module whose default export is
+`(tenant?: string) => ResolvedCatalog` — the same shape your host's `ComposeContext.catalogFor` already
+takes, so it's usually the same module (or a thin re-export of it). `apply` re-resolves this catalog and
+checks it against what the plan recorded before writing anything: a step whose target catalog has drifted
+since planning (a part added/removed/further deprecated, or even just a part's `propsSchema` tightened in
+place without a version bump) is refused and reported instead of applied, so re-running `plan` right before
+`apply` — or pointing both at the exact same catalog snapshot — is the safe default.
+
+#### Rolling out a catalog version gradually
+
+To stage a migrated catalog behind a canary before flipping every tenant over, wrap your two catalog
+versions with `stagedCatalogFor` instead of switching `catalogFor` all at once:
+
+```ts
+import { resolveCatalog, stagedCatalogFor } from "@kohaku-ui/registry";
+
+const ROLLOUT_TENANTS = new Set(["acme"]); // grow this list as confidence builds
+
+const catalogFor = stagedCatalogFor({
+  stable: resolveCatalog(coreCatalog, myContribution),          // pre-migration
+  next: resolveCatalog(coreCatalog, myMigratedContribution),    // post-migration (myCard deprecated)
+  inRollout: (tenant) => ROLLOUT_TENANTS.has(tenant),
+});
+```
+
+Tenant-neutral traffic (no tenant resolved at all) always gets `stable`, so a canary rollout can never
+affect it — `inRollout` is never even called for it. `stagedCatalogFor` only chooses between the two
+catalogs you give it; it does not merge in a per-tenant promoted-component contribution itself. A product
+that also promotes components per tenant applies that layering *after* this choice — build `stable` /
+`next` from `resolveCatalog(coreCatalog, ..., promotedEntries)` per tenant, the way `apps/sample-api/src/app.ts`'s
+`buildCatalog` does, the same way you already would without staging.
+
 ### Getting started with golden regression
 
 Fix the "structure" of input Intent → generated Spec as a regression. Generate a template:
