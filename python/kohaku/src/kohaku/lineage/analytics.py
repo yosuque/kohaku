@@ -186,6 +186,8 @@ def summarize_lineage(
             fixations["fixated"] += 1
         elif e.type == "intent.unfixated":
             fixations["unfixated"] += 1
+        # intent.migrated (design.md #65) is intentionally ignored here: a migration-driven rewrite of a
+        # fixation's pinnedSpec is neither a fresh fixation nor a removal, and has no counter of its own.
 
     durations.sort()
     denom = composed + fallback_total

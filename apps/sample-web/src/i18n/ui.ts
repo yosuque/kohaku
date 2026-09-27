@@ -336,6 +336,8 @@ const JA: UIStrings = {
       changesRequestedBanner:
         "修正依頼(差し戻し)されています。ドラフトを修正して「再提出して承認」で candidate に戻すと、judge → 人手承認 → publish の連鎖に再合流します。",
       generatedHtml: (kb) => `生成 HTML ソース(${kb} KB)`,
+      generatedWith: (kit, generatorVersion) =>
+        generatorVersion != null ? `kit: ${kit} · generator: ${generatorVersion}` : `kit: ${kit}`,
       descriptionFieldLabel: "description(LLM の選定ガイダンス)",
       schemaDetailsSummary: "スキーマとデータ配線(詳細)",
       paramsJsonSchemaLabel: "paramsJsonSchema(props / intent params の JSON Schema。空 = プロダクト既定)",

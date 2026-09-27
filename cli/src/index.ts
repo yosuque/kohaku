@@ -19,6 +19,7 @@ import {
   validateComponentFile,
 } from "./commands.js";
 import { type InitResult, initProject } from "./init/index.js";
+import { type MigrateApplyOptions, type MigratePlanOptions, migrateApply, migratePlan } from "./migrate.js";
 import { CLI_VERSION } from "./version.js";
 
 /** Reads stdin to completion and returns it as a string (the smoke-l2 sidecar's one-request-one-process contract). */
@@ -296,6 +297,111 @@ dataset
     console.log(
       `Wrote ${result.fixations + result.golden} record(s) (fixations=${result.fixations}, golden=${result.golden}, skipped=${result.skipped}) to ${result.outPath}`,
     );
+  });
+
+const migrate = program
+  .command("migrate")
+  .description("Catalog migration: rewrite fixated Specs off a deprecated part (design.md #65)");
+
+migrate
+  .command("plan")
+  .description("Compute (read-only) a rewrite plan for every deprecated-with-replacement catalog type")
+  .requiredOption(
+    "--data-dir <dir>",
+    "StoragePort data directory (fixations.json / promotions.json / lineage.jsonl)",
+  )
+  .requiredOption(
+    "--catalog <module>",
+    'Path to an ESM module whose default (or named "catalogFor") export is (tenant?: string) => ResolvedCatalog',
+  )
+  .option(
+    "--tenant <id>",
+    "Restrict planning to this tenant's fixations (default: the tenant-neutral sweep only)",
+  )
+  .requiredOption("--out <path>", "Output plan JSON file path")
+  .action(async (opts: { dataDir: string; catalog: string; tenant?: string; out: string }) => {
+    const options: MigratePlanOptions = {
+      dataDir: opts.dataDir,
+      catalogModule: opts.catalog,
+      outPath: opts.out,
+      ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
+    };
+    let result: Awaited<ReturnType<typeof migratePlan>>;
+    try {
+      result = await migratePlan(options);
+    } catch (e) {
+      program.error(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    const { plan } = result;
+    console.log(`Wrote ${result.outPath} (planHash: ${plan.planHash})`);
+    console.log(
+      `  rewrites: ${plan.rewrites.map((r) => `${r.from} -> ${r.to.type}`).join(", ") || "(none)"}`,
+    );
+    console.log(`  steps: ${plan.steps.length} fixation(s) ready to apply`);
+    if (plan.blocked.length > 0) {
+      console.log(
+        `  blocked: ${plan.blocked.length} fixation(s) failed revalidation and need manual attention:`,
+      );
+      for (const b of plan.blocked) {
+        console.log(
+          `    - ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""}: ${b.issues.join("; ")}`,
+        );
+      }
+    }
+  });
+
+migrate
+  .command("apply")
+  .description(
+    "Commit a previously computed plan's steps. IMPORTANT: stop any host process sharing --data-dir " +
+      "first — apply writes through a file-backed StoragePort that is not safe for concurrent writers.",
+  )
+  .requiredOption("--plan <path>", "Plan JSON file produced by `migrate plan`")
+  .requiredOption(
+    "--approver <id>",
+    "Principal id recorded as the approver on each intent.migrated audit event",
+  )
+  .requiredOption(
+    "--data-dir <dir>",
+    "StoragePort data directory (must match the one --plan was computed against)",
+  )
+  .requiredOption(
+    "--catalog <module>",
+    "Path to the *live* catalog module (same contract as `plan`'s --catalog). Every step is refused " +
+      "(reported as blocked, nothing written) if this catalog has drifted from the one the plan targeted",
+  )
+  .action(async (opts: { plan: string; approver: string; dataDir: string; catalog: string }) => {
+    const options: MigrateApplyOptions = {
+      dataDir: opts.dataDir,
+      planPath: opts.plan,
+      approver: opts.approver,
+      catalogModule: opts.catalog,
+    };
+    let result: Awaited<ReturnType<typeof migrateApply>>;
+    try {
+      result = await migrateApply(options);
+    } catch (e) {
+      program.error(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    console.log(
+      `Applied ${result.applied.length}, skipped ${result.skipped.length}, blocked ${result.blocked.length}`,
+    );
+    for (const a of result.applied)
+      console.log(`  applied: ${a.intentHash}${a.tenant != null ? ` (tenant: ${a.tenant})` : ""}`);
+    for (const s of result.skipped) {
+      console.log(
+        `  skipped: ${s.intentHash}${s.tenant != null ? ` (tenant: ${s.tenant})` : ""} (fixation changed since the plan was computed)`,
+      );
+    }
+    for (const b of result.blocked) {
+      console.log(
+        `  blocked: ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""} (catalog drift — ` +
+          `live fingerprint ${b.observedCatalogFingerprint}${b.issues.length > 0 ? `; ${b.issues.join("; ")}` : ""})`,
+      );
+    }
+    if (result.skipped.length > 0 || result.blocked.length > 0) process.exitCode = 1;
   });
 
 await program.parseAsync();

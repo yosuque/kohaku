@@ -62,6 +62,14 @@ export interface SendEventRequest {
   session?: SessionArg;
 }
 
+/** Wire shape of ComponentDefinition.deprecated (see SPEC §3.1). */
+export interface SerializedDeprecation {
+  reason: string;
+  since?: string;
+  replacedBy?: { type: string; version?: string };
+  sunset?: string;
+}
+
 /** Serialized form of a ComponentDefinition returned by GET /catalog (one entry). */
 export interface SerializedComponentDef {
   type: string;
@@ -70,6 +78,8 @@ export interface SerializedComponentDef {
   capabilities?: string[];
   implementation: { kind: string } & Record<string, unknown>;
   propsSchema: unknown;
+  /** Present only once the part is deprecated (MAY, SPEC §3.1). */
+  deprecated?: SerializedDeprecation;
 }
 
 /** Response of GET /catalog. */
@@ -109,6 +119,17 @@ export type SuggestedEventView = SuggestedEvent;
 export type SchemaSuggestionView = SchemaSuggestion;
 
 /**
+ * View shape of PromotionCandidate.origin (F-1): the design kit / generator revision / model that produced
+ * the candidate, read from its `component.generated` lineage event. Structurally matches
+ * `@kohaku-ui/lineage`'s `PromotionOrigin` (not imported, same reason as SchemaSuggestionView above).
+ */
+export interface PromotionOriginView {
+  kit?: { id: string; version: string };
+  generatorVersion?: string;
+  model?: string;
+}
+
+/**
  * View shape of a promotion candidate (element of GET/POST /promotions… responses). A loose copy holding only
  * the fields the admin UI (sample-web AdminPage) actually reads, so it does not depend on lineage's internal candidate type.
  */
@@ -121,6 +142,8 @@ export interface PromotionCandidateView {
   sessions: number;
   verdict?: { pass: boolean; score: number };
   suggestion?: SchemaSuggestionView;
+  /** Present once the candidate's component.generated event carried kit/generatorVersion/model (F-1). */
+  origin?: PromotionOriginView;
   updatedAt: string;
 }
 

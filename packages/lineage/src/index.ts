@@ -24,6 +24,7 @@ export {
   type Fixations,
   FixationUnsupportedError,
   type InvalidateOptions,
+  type ReplaceOptions,
 } from "./fixation/service.js";
 export {
   artifactIdOf,
@@ -55,6 +56,7 @@ export {
   type PromotionJudgeContext,
   PromotionNotPublishedError,
   PromotionNotRejectedError,
+  type PromotionOrigin,
   type PromotionPolicy,
   type Promotions,
   type WithdrawOptions,
