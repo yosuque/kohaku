@@ -21,6 +21,8 @@ pnpm docs:build              # documentation site generated from docs/ (apps/doc
 node cli/bin/kohaku.js conformance --self                                    # spec self-check
 node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku  # REST black-box check
 node cli/bin/kohaku.js init --from <data.csv> --out <dir>   # Zero-Port quickstart project
+node cli/bin/kohaku.js init --mcp --from <data.csv> --out <dir>   # same, plus a stdio + Streamable HTTP MCP front door and a Claude Desktop config
+pnpm --filter @kohaku-ui/mcp-renderer run build       # tsc + the core-only single-file renderer build (dist/renderer.html)
 pnpm --filter @kohaku-ui-sample/mcp build:renderer   # single-file build of the shared renderer for MCP
 pnpm --filter @kohaku-ui-sample/mcp start:http       # MCP over Streamable HTTP for external chat (claude.ai/ChatGPT) (:8788, unauthenticated demo)
 pnpm --filter @kohaku-ui/spec run generate-schemas   # regenerate spec/schemas after changing spec-core Zod (CI checks for drift)

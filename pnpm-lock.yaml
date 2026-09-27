@@ -358,6 +358,9 @@ importers:
       '@kohaku-ui/llm':
         specifier: workspace:^
         version: link:../../packages/llm
+      '@kohaku-ui/mcp-renderer':
+        specifier: workspace:^
+        version: link:../../packages/mcp-renderer
       '@kohaku-ui/registry':
         specifier: workspace:^
         version: link:../../packages/registry
