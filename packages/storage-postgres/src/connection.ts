@@ -1,8 +1,9 @@
 import { Pool, type PoolClient } from "pg";
 import {
   DEFAULT_SCHEMA,
+  lineageCorrelationDdl,
   POSTGRES_SCHEMA_VERSION,
-  postgresSchemaSql,
+  postgresBaseSchemaSql,
   qualifiedTable,
   quoteIdentifier,
 } from "./schema.js";
@@ -19,6 +20,11 @@ const DEFAULT_STATEMENT_TIMEOUT_MS = 10000;
  * process's transaction started, and validated the catalog, just before the first process committed
  * its own DDL) -- see `migrateSchema`'s retry-once. */
 const RETRYABLE_DDL_SQLSTATES = new Set(["23505", "42P07"]);
+
+/** `lock_timeout` for the migration transaction: a `ready()` that cannot get a table lock quickly (a
+ * long-running lineage query holds a conflicting one) fails fast instead of queueing behind it -- a
+ * queued ACCESS EXCLUSIVE / SHARE request blocks every later reader and writer of the table. */
+const MIGRATION_LOCK_TIMEOUT_MS = 5000;
 
 export interface CreatePostgresPoolOptions {
   /** A `pg` connection string. Mutually exclusive with `pool`. */
@@ -158,8 +164,12 @@ async function runMigration(pool: Pool, schema: string): Promise<void> {
     // released automatically at COMMIT/ROLLBACK). `hashtext` folds the lock name to a single int4,
     // implicitly widened to the bigint `pg_advisory_xact_lock(bigint)` overload expects.
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`kohaku:schema:${schema}`]);
+    // After the advisory lock on purpose: waiting for another migrator is expected, waiting for a table
+    // lock behind live traffic is not. `SET LOCAL` reverts at COMMIT/ROLLBACK, so it never leaks into the pool.
+    await client.query(`SET LOCAL lock_timeout = ${MIGRATION_LOCK_TIMEOUT_MS}`);
     await client.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schema)}`);
-    await client.query(postgresSchemaSql(schema));
+    await client.query(postgresBaseSchemaSql(schema));
+    await migrateLineageCorrelation(client, schema);
     await ensureSchemaVersion(client, schema);
     await client.query("COMMIT");
   } catch (error) {
@@ -168,6 +178,27 @@ async function runMigration(pool: Pool, schema: string): Promise<void> {
   } finally {
     client.release();
   }
+}
+
+/**
+ * Adds `kohaku_lineage.correlation_id` and its index only when the catalog says they are missing (see
+ * `lineageCorrelationDdl` for why the `IF NOT EXISTS` forms alone are not enough): on an up-to-date
+ * database a start takes no lock on the lineage table beyond what the base script's own
+ * `CREATE INDEX IF NOT EXISTS` statements need.
+ */
+async function migrateLineageCorrelation(client: PoolClient, schema: string): Promise<void> {
+  const ddl = lineageCorrelationDdl(schema);
+  const column = await client.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = $1 AND table_name = 'kohaku_lineage' AND column_name = $2`,
+    [schema, ddl.columnName],
+  );
+  if (column.rowCount === 0) await client.query(ddl.addColumnSql);
+  const index = await client.query(`SELECT 1 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2`, [
+    schema,
+    ddl.indexName,
+  ]);
+  if (index.rowCount === 0) await client.query(ddl.createIndexSql);
 }
 
 async function ensureSchemaVersion(client: PoolClient, schema: string): Promise<void> {

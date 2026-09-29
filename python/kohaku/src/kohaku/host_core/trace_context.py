@@ -5,7 +5,7 @@ propagation conventions for `_meta` keys") so both profiles validate identically
 
 **Canonical port note (parity gap, deliberately not papered over -- every other reference to this gap in
 kohaku.host_core / kohaku.host_mcp / kohaku.host_rest is a one-line pointer back to this docstring; update
-here, not there):** as of U2, `ComposeOptions.correlation_id` (kohaku.composer) and
+here, not there):** now, `ComposeOptions.correlation_id` (kohaku.composer) and
 `kohaku.host_core.compose_with_fixation`'s `correlation_id` parameter now exist and reach
 `ComposeTrace.correlationId` -- host_rest passes its per-request X-Request-Id, host_mcp passes
 `_correlation_id_of(ctx)` (`mcp:<sessionId>:<jsonrpc id>` / `mcp:<jsonrpc id>` -- see that function's own

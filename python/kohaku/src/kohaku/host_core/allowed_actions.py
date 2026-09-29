@@ -8,6 +8,8 @@ from collections.abc import Awaitable, Callable
 
 from kohaku.spec import DomainPort
 
+from .operation_index import OperationIndex
+
 AllowedActions = Callable[[], Awaitable[frozenset[str]]]
 """A memoized accessor for the write-action names a DomainPort actually exposes."""
 
@@ -22,9 +24,6 @@ def create_allowed_actions(
     - REST/MCP capability issuance (host_core's `issue_capability_for_spec`'s `allowed_actions` option) drops a
       Spec-declared write scope whose action is not a DomainPort operation, hardening against a
       hallucinated/injected `action.invoke` action name becoming a bearer write scope.
-    - The MCP `${prefix}_action` tool additionally rejects an unknown action name outright, before even
-      attempting capability verification (defense in depth for a host that does not respect the tool's
-      app-only visibility hint).
 
     On rejection nothing is cached, so the next call retries against the DomainPort, and the rejection
     propagates to the caller — each call site decides its own fail-open/fail-closed response and reports it
@@ -48,5 +47,21 @@ def create_allowed_actions(
             raise
         cached = frozenset(op.name for op in ops)
         return cached
+
+    return allowed_actions
+
+
+def allowed_actions_from_index(index: OperationIndex) -> AllowedActions:
+    """An `AllowedActions` derived from an already-built `OperationIndex` (the keys of its by-name mapping)
+    instead of a second, independently memoized `list_operations()` call -- a host that already keeps an
+    index for its action gate uses this so the capability write-scope filter and the gate can never disagree
+    about which actions exist. Every declared operation counts, including one whose `paramsSchema` failed
+    validation (that operation alone is unusable; its write scope is unaffected), so a bad schema never
+    changes the set. It inherits the index's one failure mode: `list_operations()` raising rejects here too,
+    and callers treat that as `create_allowed_actions`'s own rejection (fail-closed for write scopes). Port of TS
+    `allowedActionsFromIndex`."""
+
+    async def allowed_actions() -> frozenset[str]:
+        return frozenset((await index()).keys())
 
     return allowed_actions

@@ -703,9 +703,13 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         body = parse_compose_body(await _read_json(request))
         if body is None or body.input is None:
             return _error("BAD_REQUEST", "input (NLQuery | GuiAction) is required", 400)
-        session = to_session(
-            body.session, await _get_principal(deps, request), await _resolve_tenant(deps, request)
-        )
+        principal = await _get_principal(deps, request)
+        tenant = await _resolve_tenant(deps, request)
+        # Rate limited under the "compose" class: for an NL question this calls the SemanticPort's LLM.
+        rate_limited = await check_rate_limit(deps, principal, tenant, "compose", request_id)
+        if rate_limited is not None:
+            return rate_limited
+        session = to_session(body.session, principal, tenant)
         try:
             intent = await resolve_semantic_input(body.input, session, deps)
             source = "llm" if body.input.kind == "nl" else "deterministic"
@@ -725,7 +729,7 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return _error("BAD_REQUEST", "either input or intent is required", 400)
         principal = await _get_principal(deps, request)
         tenant = await _resolve_tenant(deps, request)
-        rate_limited = await check_rate_limit(deps, principal, tenant, "compose")
+        rate_limited = await check_rate_limit(deps, principal, tenant, "compose", request_id)
         if rate_limited is not None:
             return rate_limited
         session = to_session(body.session, principal, tenant)
@@ -745,7 +749,7 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return _error("BAD_REQUEST", "either input or intent is required", 400)
         principal = await _get_principal(deps, request)
         tenant = await _resolve_tenant(deps, request)
-        rate_limited = await check_rate_limit(deps, principal, tenant, "compose")
+        rate_limited = await check_rate_limit(deps, principal, tenant, "compose", request_id)
         if rate_limited is not None:
             return rate_limited
         session = to_session(body.session, principal, tenant)
@@ -772,7 +776,7 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return _error("BAD_REQUEST", 'event.on must be "<componentId>.<event>"', 400)
         principal = await _get_principal(deps, request)
         tenant = await _resolve_tenant(deps, request)
-        rate_limited = await check_rate_limit(deps, principal, tenant, "compose")
+        rate_limited = await check_rate_limit(deps, principal, tenant, "compose", request_id)
         if rate_limited is not None:
             return rate_limited
         session = to_session(body.session, principal, tenant)

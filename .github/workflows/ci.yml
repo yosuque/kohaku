@@ -341,15 +341,15 @@ jobs:
         with:
           name: docs-site
           path: apps/docs-site/dist/
-      # The static playground (U5) in strict mode (forbidNodeBuiltins' default), the same build a Pages
+      # The static playground (design.md decision 57) in strict mode (forbidNodeBuiltins' default), the same build a Pages
       # deploy would run — proves it stays Node-dependency-free and buildable on every push, independent of
       # whether Pages is ever actually enabled (see pages.yml, workflow_dispatch-only and not wired up yet).
       - name: Playground build (strict mode — must have zero Node-only imports)
         run: pnpm --filter @kohaku-ui-sample/playground run build
   # Replays whatever fixtures/*.json the playground actually ships against a real host (no LLM) — see
   # apps/playground/test/drift/fixtures-drift.test.ts's own doc comment. Not required for a PR: today every
-  # requiresFixtures scenario is still "awaiting recording" (real-LLM recording is postponed, per
-  # reports/u5-3.md), and once fixtures do exist, a prompt-building change elsewhere in the repo could make
+  # requiresFixtures scenario is still "awaiting recording" (real-LLM recording has not been done; see
+  # docs/user-guide.md §10), and once fixtures do exist, a prompt-building change elsewhere in the repo could make
   # this fail without that change's own PR having touched anything under apps/playground — visible, but not
   # blocking, until fixtures are actually recorded and this suite's failure modes are better understood.
   playground-drift:

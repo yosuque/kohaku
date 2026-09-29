@@ -353,6 +353,26 @@ describe("verifyCatalogMigrationPlan", () => {
     expect(await verifyCatalogMigrationPlan(tampered)).toBe(false);
   });
 
+  it("a plan whose step pinnedSpec alone was hand-edited (hashes untouched) fails verification", async () => {
+    const catalog = migrationCatalog();
+    const plan = await planCatalogMigration({
+      storage: stubStorage([cleanFixation()]),
+      catalogFor: () => catalog,
+    });
+    // planHash's material excludes pinnedSpec, so only the per-step structure-hash recomputation can see this.
+    const tampered: CatalogMigrationPlan = {
+      ...plan,
+      steps: plan.steps.map((s) => ({
+        ...s,
+        pinnedSpec: {
+          ...s.pinnedSpec,
+          components: s.pinnedSpec.components.map((node) => ({ ...node, type: "tampered.part" })),
+        },
+      })),
+    };
+    expect(await verifyCatalogMigrationPlan(tampered)).toBe(false);
+  });
+
   it("surviving a round-trip through JSON.stringify/parse (as migrate apply reads plan.json) still verifies", async () => {
     const catalog = migrationCatalog();
     const plan = await planCatalogMigration({

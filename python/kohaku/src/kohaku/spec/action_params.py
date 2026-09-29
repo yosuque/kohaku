@@ -111,6 +111,42 @@ def _join_index(base: str, index: int) -> str:
     return f"{base}[{index}]"
 
 
+def _code_point_length(value: str) -> int:
+    # `minLength` / `maxLength` count Unicode code points (SPEC ACT-PRM-001) -- what Python's len() already
+    # counts; the TS mirror has to count code points explicitly since JS string length is UTF-16 code units.
+    return len(value)
+
+
+def find_unsafe_action_param_keys(payload: JsonObject) -> list[ActionParamIssue]:
+    """Scan the whole `payload` -- dicts and lists, at any depth, whether or not any schema declares those
+    properties -- for a key named `__proto__` / `constructor` / `prototype`, reporting each as an
+    `"unsafeKey"` issue. Port of TS `findUnsafeActionParamKeys`: the host-core gate runs it on every action
+    payload before (and independently of) any params-schema validation. A flagged key's own value is not
+    descended into."""
+    issues: list[ActionParamIssue] = []
+    _scan_unsafe_keys(payload, "", issues)
+    return issues
+
+
+def _scan_unsafe_keys(value: JsonValue, path: str, issues: list[ActionParamIssue]) -> None:
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _scan_unsafe_keys(item, _join_index(path, index), issues)
+        return
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        key_path = _join_path(path, key)
+        if key in _UNSAFE_PROPERTY_KEYS:
+            issues.append(
+                ActionParamIssue(
+                    path=key_path, code="unsafeKey", message=f'the property name "{key}" is not allowed'
+                )
+            )
+            continue
+        _scan_unsafe_keys(item, key_path, issues)
+
+
 def _is_number(value: object) -> bool:
     # bool is a subclass of int in Python; JS typeof true !== "number", so it must be excluded here.
     return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -206,10 +242,10 @@ def _validate_value(
             report("type", f'expected a string at "{path or "(root)"}"')
             return
         min_length = schema.get("minLength")
-        if min_length is not None and len(value) < min_length:
+        if min_length is not None and _code_point_length(value) < min_length:
             report("minLength", f"expected at least {min_length} characters")
         max_length = schema.get("maxLength")
-        if max_length is not None and len(value) > max_length:
+        if max_length is not None and _code_point_length(value) > max_length:
             report("maxLength", f"expected at most {max_length} characters")
         enum = schema.get("enum")
         if enum is not None and value not in enum:
@@ -311,5 +347,6 @@ __all__ = [
     "ActionTier",
     "action_payload_hash",
     "assert_valid_action_params_schema",
+    "find_unsafe_action_param_keys",
     "validate_action_params",
 ]

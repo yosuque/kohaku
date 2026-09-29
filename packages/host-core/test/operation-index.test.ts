@@ -1,7 +1,7 @@
 import type { DomainPort } from "@kohaku-ui/spec-core";
 import { ActionParamsSchemaError } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { createOperationIndex } from "../src/operation-index.js";
+import { createOperationIndex, validateOperationIndex } from "../src/operation-index.js";
 
 const NOTE_SCHEMA = {
   type: "object",
@@ -36,17 +36,62 @@ describe("createOperationIndex", () => {
     expect(a.get("publish")?.paramsSchema).toBeUndefined();
   });
 
-  it("throws ActionParamsSchemaError when an operation's paramsSchema uses a disallowed keyword", async () => {
+  it("confines a bad paramsSchema to its own operation: kept in the index with schemaError set", async () => {
     const domain: DomainPort = {
       async listOperations() {
-        return [{ name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a+$" } }];
+        return [
+          { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a+$" } },
+          { name: "publish", description: "d", paramsSchema: NOTE_SCHEMA },
+        ];
       },
       async invoke() {
         return null;
       },
     };
-    const index = createOperationIndex(domain);
-    await expect(index()).rejects.toThrow(ActionParamsSchemaError);
+    const index = await createOperationIndex(domain)();
+    expect([...index.keys()]).toEqual(["annotate", "publish"]);
+    expect(index.get("annotate")?.schemaError).toBeInstanceOf(ActionParamsSchemaError);
+    expect(index.get("annotate")?.paramsSchema).toBeUndefined();
+    expect(index.get("publish")?.schemaError).toBeUndefined();
+    expect(index.get("publish")?.paramsSchema).toEqual(NOTE_SCHEMA);
+  });
+
+  describe("validateOperationIndex", () => {
+    it("reports each operation's schema error and a build failure, and never rejects", async () => {
+      const bad = { type: "string", pattern: "x" };
+      const seen: unknown[] = [];
+      await validateOperationIndex(
+        createOperationIndex({
+          async listOperations() {
+            return [
+              { name: "a", description: "d", paramsSchema: bad },
+              { name: "b", description: "d", paramsSchema: bad },
+              { name: "c", description: "d" },
+            ];
+          },
+          async invoke() {
+            return null;
+          },
+        }),
+        (e) => void seen.push(e),
+      );
+      expect(seen).toHaveLength(2);
+      expect(seen.every((e) => e instanceof ActionParamsSchemaError)).toBe(true);
+
+      const failing: unknown[] = [];
+      await validateOperationIndex(
+        createOperationIndex({
+          async listOperations() {
+            throw new Error("down");
+          },
+          async invoke() {
+            return null;
+          },
+        }),
+        (e) => void failing.push(e),
+      );
+      expect(failing).toHaveLength(1);
+    });
   });
 
   it("propagates a listOperations() rejection to the caller and notifies the optional onError hook", async () => {

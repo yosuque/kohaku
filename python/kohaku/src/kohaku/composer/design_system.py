@@ -94,13 +94,13 @@ class DesignKitVocabulary:
     version: str
     """Must equal the render-side kit's version."""
     classes: Mapping[str, str]
-    """Kit class name → usage description. `Mapping`, not `dict` (n-9): `frozen=True` only stops
+    """Kit class name → usage description. `Mapping`, not `dict`: `frozen=True` only stops
     reassigning the field itself, not mutating a `dict` value through it, so a plain `dict` field here
     would let `DEFAULT_KIT_VOCABULARY.classes["x"] = "y"` silently corrupt the shared default vocabulary
     every compose call in the process reads. `DEFAULT_KIT_VOCABULARY` below wraps its own literal in
     `MappingProxyType` to close that hole at runtime, not just in the type checker; a caller may still pass
     a plain `dict` (it satisfies `Mapping` structurally). Presented **sorted by name** (not insertion order)
-    in the L2 prompt (Task 8/m-15): Python dict iteration keeps insertion order while JS's own key ordering
+    in the L2 prompt: Python dict iteration keeps insertion order while JS's own key ordering
     treats integer-like keys (e.g. a product kit's "2col") specially (they sort numerically-first, ahead of
     every non-numeric key, regardless of declaration order), so the two languages could otherwise emit
     different design_kit_prompt_fragment bytes for the identical vocabulary content. Sorting output makes
@@ -297,7 +297,7 @@ DEFAULT_KIT_VOCABULARY = DesignKitVocabulary(
 )
 """The built-in kit vocabulary (pairs with renderer-core's defaultDesignKit; same content and
 character-for-character description text as TS's DEFAULT_KIT_VOCABULARY — a cross-language string
-contract). `classes`' declaration order here is otherwise arbitrary (Task 8/m-15):
+contract). `classes`' declaration order here is otherwise arbitrary:
 design_kit_prompt_fragment presents them sorted by name, not in this dict's insertion order."""
 
 
@@ -306,14 +306,14 @@ def design_kit_prompt_fragment(kit: DesignKitVocabulary) -> str:
     designKitPromptFragment). build_l2_prompt_static inserts it right after the design-system section, only
     when design_system.kit is set.
 
-    **Empty-input guard (Task 8/m-14):** a section whose backing list is empty is omitted entirely (its
+    **Empty-input guard:** a section whose backing list is empty is omitted entirely (its
     header line included) rather than emitted with nothing after it — an empty `classes` used to leave a
     dangling "- Component classes:" heading, and empty `utilities`/`namespaces` used to leave a
     self-contradicting "…exist: " / "…names): " line trailing on a colon. This guard fires only for
     genuinely empty input; the built-in `DEFAULT_KIT_VOCABULARY` has all three non-empty, so its own
     fragment is unchanged.
 
-    **No skeleton fallback (Task 8/m-14, revised in review):** the "Skeleton of a well-formed widget body"
+    **No skeleton fallback:** the "Skeleton of a well-formed widget body"
     section is shown iff `kit.skeleton` is itself set — there is no fallback to the built-in
     `DEFAULT_KIT_SKELETON` for some other kit that merely "looks like" the built-in one. An earlier version
     of this guard fell back to `DEFAULT_KIT_SKELETON` when `kit is DEFAULT_KIT_VOCABULARY` (reference
@@ -332,7 +332,7 @@ def design_kit_prompt_fragment(kit: DesignKitVocabulary) -> str:
         "- The host injects a base stylesheet: body already has the font, text color, background and line-height; headings are scaled; :focus-visible rings are provided. Do not restate these",
         "- Prefer the kit classes below for common blocks; use the utilities for layout and spacing; write custom CSS only for what they do not cover, and then only with var(--kohaku-*) tokens",
     ]
-    # Sorted by name, not dict.items()' insertion order (m-15): see DesignKitVocabulary.classes' own
+    # Sorted by name, not dict.items()' insertion order: see DesignKitVocabulary.classes' own
     # docstring for why insertion order is not a cross-language-safe contract.
     class_names = sorted(kit.classes)
     if class_names:
@@ -363,7 +363,7 @@ class DesignSystemGuide:
     tokens: Mapping[str, str] | None = None
     """Token vocabulary (token name → usage description). Merged into the default vocabulary — used both to
     override descriptions and to add custom tokens. **Do not write values here** (the values live in the
-    render-side theme). `Mapping`, not `dict` (n-9) — the same practice as `DesignKitVocabulary.classes`
+    render-side theme). `Mapping`, not `dict` — the same practice as `DesignKitVocabulary.classes`
     above, so the two frozen dataclasses in this module agree on how they type a string-to-string vocabulary
     field; a plain `dict` still satisfies `Mapping` structurally, so existing callers are unaffected."""
     guidelines: list[str] | None = None

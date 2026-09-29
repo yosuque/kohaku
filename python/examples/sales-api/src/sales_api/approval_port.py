@@ -1,12 +1,13 @@
 """ApprovalPort implementation (port of TS: packages/authz-hmac/src/hmac-approval-port.ts).
 
 A homegrown HMAC-SHA256 approval token (design.md #63), structurally parallel to `authz_port.py`'s
-capability token but in its own signing domain (`APPROVAL_TOKEN_PREFIX`), so an approval token and a
-capability token can never be confused for one another even when signed with the same secret.
+capability token but in its own signing domain, so an approval token and a capability token can never be
+confused for one another even when signed with the same secret: the MAC key is derived from the secret under
+`APPROVAL_KEY_LABEL`, and the MAC input covers `APPROVAL_TOKEN_PREFIX` as well as the payload.
 
 Wire compatibility: JSON has no separators (equivalent to TS's JSON.stringify) with key order
 action/payloadHash/approverId/requesterId/tenant/exp/jti, base64url has no padding, and the signature is
-HMAC-SHA256 over the payload string itself (not the prefix). It can be cross-verified with a TS host.
+HMAC-SHA256 (under the derived key) over prefix + payload. It can be cross-verified with a TS host.
 """
 
 from __future__ import annotations
@@ -19,14 +20,20 @@ import secrets
 import time
 from collections.abc import Callable
 
-from kohaku.spec import ApprovalGrant, ApprovalStore, ApprovalVerifyResult
+from kohaku.spec import ApprovalGrant, ApprovalIssueError, ApprovalStore, ApprovalVerifyResult
 
-APPROVAL_TOKEN_PREFIX = "kohaku-approval.v1."
-"""Domain-separation prefix (design.md #63) -- see the TS counterpart's own doc comment for why this
-alone (independent of the HMAC domain separation that already follows from signing a different message)
-is enough to keep this token kind from being confused with authz_port.py's capability tokens."""
+APPROVAL_TOKEN_PREFIX = "kohaku-approval.v2."
+"""Token-kind prefix (design.md #63). It is part of the MAC input, and the version bump rejects every v1
+token (whose MAC covered the payload only, under the raw secret). See the TS counterpart's doc comment."""
+
+APPROVAL_KEY_LABEL = "kohaku-approval-v2"
+"""Label the approval MAC key is derived under: HMAC(secret, APPROVAL_KEY_LABEL)."""
 
 DEFAULT_APPROVAL_TTL_SECONDS = 300
+
+DEFAULT_MAX_APPROVAL_TTL_SECONDS = 3600
+"""Default upper bound on any approval lifetime this port grants, whatever TTL the caller asks for. Without
+an ApprovalStore an approval is replayable until it expires, so the bound is the replay window."""
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -37,6 +44,16 @@ def _b64url_encode(data: bytes) -> str:
 def _b64url_decode(s: str) -> bytes:
     """Decodes base64url, adding back the padding."""
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _claims_well_formed(claims: dict[str, object]) -> bool:
+    exp = claims.get("exp")
+    return (
+        all(isinstance(claims.get(k), str) for k in ("action", "payloadHash", "approverId", "requesterId", "jti"))
+        and isinstance(claims.get("tenant"), (str, type(None)))
+        and isinstance(exp, (int, float))
+        and not isinstance(exp, bool)
+    )
 
 
 class MemoryApprovalStore:
@@ -77,16 +94,19 @@ class HmacApprovalPort:
         secret: str,
         *,
         ttl_seconds: int | None = None,
+        max_ttl_seconds: int | None = None,
         store: ApprovalStore | None = None,
         now: Callable[[], float] | None = None,
     ) -> None:
-        self._secret = secret.encode("utf-8")
+        self._max_ttl = max_ttl_seconds if max_ttl_seconds is not None else DEFAULT_MAX_APPROVAL_TTL_SECONDS
+        self._key = hmac.new(secret.encode("utf-8"), APPROVAL_KEY_LABEL.encode("utf-8"), hashlib.sha256).digest()
         self._default_ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_APPROVAL_TTL_SECONDS
         self._store = store
         self._now = now if now is not None else time.time
 
     def _sign(self, payload: str) -> str:
-        digest = hmac.new(self._secret, payload.encode("utf-8"), hashlib.sha256).digest()
+        message = (APPROVAL_TOKEN_PREFIX + payload).encode("utf-8")
+        digest = hmac.new(self._key, message, hashlib.sha256).digest()
         return _b64url_encode(digest)
 
     async def issue_approval(
@@ -101,14 +121,15 @@ class HmacApprovalPort:
     ) -> str:
         if approver_id == requester_id:
             # design.md #63: reject issuing a self-approval rather than leave the check to the caller.
-            raise ValueError("cannot issue an approval: approverId must differ from requesterId")
+            raise ApprovalIssueError("cannot issue an approval: approverId must differ from requesterId")
         claims = {
             "action": action,
             "payloadHash": payload_hash,
             "approverId": approver_id,
             "requesterId": requester_id,
             "tenant": tenant,
-            "exp": int(self._now()) + (ttl_seconds if ttl_seconds is not None else self._default_ttl),
+            "exp": int(self._now())
+            + min(ttl_seconds if ttl_seconds is not None else self._default_ttl, self._max_ttl),
             "jti": secrets.token_urlsafe(16),
         }
         payload = _b64url_encode(
@@ -128,7 +149,8 @@ class HmacApprovalPort:
         payload = rest[:dot]
         signature = rest[dot + 1 :]
 
-        if not hmac.compare_digest(signature, self._sign(payload)):
+        # Compare bytes: compare_digest on two str raises TypeError for a non-ASCII value.
+        if not hmac.compare_digest(signature.encode("utf-8"), self._sign(payload).encode("utf-8")):
             return ApprovalVerifyResult(ok=False, reason="invalid signature")
 
         try:
@@ -138,9 +160,11 @@ class HmacApprovalPort:
         if not isinstance(claims, dict):
             return ApprovalVerifyResult(ok=False, reason="malformed payload")
 
-        exp = claims.get("exp")
-        if not isinstance(exp, (int, float)) or isinstance(exp, bool):
+        # Every claim is type-checked before use (a correctly signed payload is still untrusted input); a
+        # malformed one is a denial, never an exception.
+        if not _claims_well_formed(claims):
             return ApprovalVerifyResult(ok=False, reason="malformed payload")
+        exp = claims["exp"]
         if exp <= self._now():  # expired means exp <= now (matches TS's isExpired boundary)
             return ApprovalVerifyResult(ok=False, reason="approval expired")
 
@@ -189,14 +213,18 @@ def create_hmac_approval_port(
     secret: str = "dev-secret-change-me",
     *,
     ttl_seconds: int | None = None,
+    max_ttl_seconds: int | None = None,
     store: ApprovalStore | None = None,
     now: Callable[[], float] | None = None,
 ) -> HmacApprovalPort:
-    return HmacApprovalPort(secret, ttl_seconds=ttl_seconds, store=store, now=now)
+    return HmacApprovalPort(
+        secret, ttl_seconds=ttl_seconds, max_ttl_seconds=max_ttl_seconds, store=store, now=now
+    )
 
 
 __all__ = [
     "DEFAULT_APPROVAL_TTL_SECONDS",
+    "DEFAULT_MAX_APPROVAL_TTL_SECONDS",
     "HmacApprovalPort",
     "MemoryApprovalStore",
     "create_hmac_approval_port",

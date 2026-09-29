@@ -1148,8 +1148,8 @@ class TestActionWritePath:
         )
 
     def test_unlisted_action_has_no_write_scope(self, tmp_path: Path) -> None:
-        """An action not listed by DomainPort.list_operations gets no write scope, and kohaku_action itself
-        rejects it as unknown (isError), and on_error is notified (endpoint compose.capability)."""
+        """An action not listed by DomainPort.list_operations gets no write scope, and kohaku_action rejects
+        it as capability-denied (isError), and on_error is notified (endpoint compose.capability)."""
 
         async def run() -> None:
             seen: list[McpErrorInfo] = []
@@ -1180,9 +1180,8 @@ class TestActionWritePath:
                     },
                 )
                 assert result.is_error is True
-                # The kohaku_action handler's own allowed-actions check (the same DomainPort.list_operations()
-                # source that dropped the write scope above) rejects the action before capability verification.
-                assert "unknown action" in result.content[0].text  # type: ignore[union-attr]
+                # The capability was issued without the dropped write scope, so its verify denies the action.
+                assert "capability denied" in result.content[0].text  # type: ignore[union-attr]
 
         asyncio.run(run())
 
@@ -1340,41 +1339,17 @@ class TestGovernedActions:
 
         asyncio.run(run())
 
-    class FlakyDomain:
-        """listOperations() declares "annotate" on its 1st call (allowed_actions(), during compose's
-        capability issuance) and nothing from the 2nd call onward (operation_index(), moments later in the
-        same compose) -- reproducing the "index and DomainPort momentarily disagree" case
-        ACT-PRM-001's undeclared-action fail-closed check guards against. Port of TS's flakyDomain."""
-
-        def __init__(self) -> None:
-            self.calls = 0
-            self.invocations: list[tuple[str, Any]] = []
-
-        async def list_operations(self) -> list[Any]:
-            self.calls += 1
-            if self.calls == 1:
-                return [OperationDescriptor(name="annotate", description="d", tier="confirm")]
-            return []
-
-        async def invoke(self, op: str, args: Any, ctx: Any) -> object:
-            self.invocations.append((op, args))
-            return {"ok": True, "op": op, "args": args}
-
     def test_rejects_undeclared_action_fail_closed(self, tmp_path: Path) -> None:
-        """An action absent from the operation index is rejected even when allowed_actions() (memoized
-        separately, from an earlier snapshot) still has it -- fail-closed."""
+        """An action absent from the operation index is rejected even when its capability verifies --
+        fail-closed. "cap:ghost" verifies for a write to "ghost" in this suite's SimpleAuthz (prefix match)
+        although the DomainPort never declared it: the shape of an index/DomainPort disagreement."""
 
         async def run() -> None:
-            domain = self.FlakyDomain()
-            deps = _deps(
-                tmp_path, compose=make_compose_ctx(tmp_path, builder=governed_spec_builder), domain=domain
-            )
+            deps, domain = self._governed_deps(tmp_path)
             async with connect(deps, _OPTIONS) as client:
-                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
-                capability = _capability_of(composed)
                 result = await client.call_tool(
                     "kohaku_action",
-                    {"action": "annotate", "payload": {}, "capability": capability, "confirmed": True},
+                    {"action": "ghost", "payload": {}, "capability": "cap:ghost", "confirmed": True},
                 )
                 assert result.is_error is True
                 assert (
@@ -1387,8 +1362,9 @@ class TestGovernedActions:
         asyncio.run(run())
 
     def test_records_action_denied_for_undeclared_action(self, tmp_path: Path) -> None:
+        """MCP audits an undeclared action as action.denied, exactly as REST does (MCPAPP-ACT-001)."""
+
         async def run() -> None:
-            domain = self.FlakyDomain()
             denied: list[Any] = []
 
             class Recorder:
@@ -1404,30 +1380,139 @@ class TestGovernedActions:
                 async def approved(self, **kwargs: Any) -> None:
                     pass
 
+            deps, _ = self._governed_deps(tmp_path, action_audit_recorder=Recorder())
+            async with connect(deps, _OPTIONS) as client:
+                await client.call_tool(
+                    "kohaku_action",
+                    {"action": "ghost", "payload": {"note": "x"}, "capability": "cap:ghost", "confirmed": True},
+                )
+                assert len(denied) == 1
+                assert denied[0]["action"] == "ghost"
+                assert denied[0]["tier"] == "auto"
+                assert denied[0]["reason"] == "action is not a declared DomainPort operation"
+                assert denied[0]["payload_hash"].startswith("sha256:")
+                assert denied[0]["principal"].id == "mcp-user"
+
+        asyncio.run(run())
+
+    def test_undeclared_action_is_still_rejected_when_the_audit_recorder_raises(self, tmp_path: Path) -> None:
+        """Recording is fail-open: a raising recorder is reported through on_error, the call still fails
+        closed."""
+
+        async def run() -> None:
+            seen: list[McpErrorInfo] = []
+
+            class Recorder:
+                async def invoked(self, **kwargs: Any) -> None:
+                    pass
+
+                async def denied(self, **kwargs: Any) -> None:
+                    raise RuntimeError("audit sink down")
+
+                async def approval_requested(self, **kwargs: Any) -> None:
+                    pass
+
+                async def approved(self, **kwargs: Any) -> None:
+                    pass
+
+            deps, domain = self._governed_deps(
+                tmp_path, action_audit_recorder=Recorder(), on_error=seen.append
+            )
+            async with connect(deps, _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_action", {"action": "ghost", "payload": {}, "capability": "cap:ghost"}
+                )
+                assert result.is_error is True
+                assert any(info.endpoint == "kohaku_action.audit" for info in seen)
+                assert domain.invocations == []
+
+        asyncio.run(run())
+
+    def test_reports_an_invalid_params_schema_through_on_error_at_attach(self, tmp_path: Path) -> None:
+        """attach_kohaku_to_mcp_server validates the operation index in the background (it runs inside this
+        test's event loop), reporting a paramsSchema outside the closed subset at endpoint
+        "attach.operationIndex" instead of only at the first invoke."""
+
+        class BadSchemaDomain:
+            async def list_operations(self) -> list[Any]:
+                return [
+                    OperationDescriptor(
+                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                    )
+                ]
+
+            async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                return {"ok": True}
+
+        async def run() -> None:
+            seen: list[McpErrorInfo] = []
             deps = _deps(
                 tmp_path,
                 compose=make_compose_ctx(tmp_path, builder=governed_spec_builder),
-                domain=domain,
-                action_audit_recorder=Recorder(),
+                domain=BadSchemaDomain(),
+                on_error=seen.append,
+            )
+            async with connect(deps, _OPTIONS):
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                attach_errors = [info for info in seen if info.endpoint == "attach.operationIndex"]
+                assert len(attach_errors) == 1
+                assert 'operation "annotate" has an invalid paramsSchema' in str(attach_errors[0].error)
+
+        asyncio.run(run())
+
+    def test_a_bad_params_schema_breaks_only_that_operation(self, tmp_path: Path) -> None:
+        """A bad paramsSchema on one operation leaves its write scope intact and the other operation
+        invocable; the broken one fails closed (tool error + on_error report)."""
+
+        invocations: list[str] = []
+
+        class TwoOpDomain:
+            async def list_operations(self) -> list[Any]:
+                return [
+                    OperationDescriptor(
+                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                    ),
+                    OperationDescriptor(name="publish", description="d"),
+                ]
+
+            async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                invocations.append(op)
+                return {"ok": True, "op": op}
+
+        async def run() -> None:
+            seen: list[McpErrorInfo] = []
+            deps = _deps(
+                tmp_path,
+                compose=make_compose_ctx(tmp_path, builder=governed_spec_builder),
+                domain=TwoOpDomain(),
+                on_error=seen.append,
             )
             async with connect(deps, _OPTIONS) as client:
                 composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
                 capability = _capability_of(composed)
-                await client.call_tool(
+                assert "annotate" in capability
+                assert "publish" in capability
+                broken = await client.call_tool(
                     "kohaku_action",
                     {"action": "annotate", "payload": {}, "capability": capability, "confirmed": True},
                 )
-                assert len(denied) == 1
-                assert denied[0]["action"] == "annotate"
-                assert denied[0]["tier"] == "auto"
-                assert denied[0]["reason"] == "action is not a declared DomainPort operation"
+                assert broken.is_error is True
+                assert broken.content[0].text == "action parameter schema unavailable"  # type: ignore[union-attr]
+                assert any(info.endpoint == "kohaku_action.operationIndex" for info in seen)
+                ok = await client.call_tool(
+                    "kohaku_action", {"action": "publish", "payload": {}, "capability": capability}
+                )
+                assert not ok.is_error
+                assert invocations == ["publish"]
 
         asyncio.run(run())
 
     def test_rejects_a2ui_forward_action(self, tmp_path: Path) -> None:
         """"a2ui.forward" (host_a2ui's A2UI_FORWARD_ACTION) must never be a real registered operation
-        (decision #60, F3) -- a GovernedDomain that never declares it rejects it via the earlier
-        allowed_actions() check ("unknown action")."""
+        (decision #60, F3) -- a GovernedDomain that never declares it rejects it: the compose-issued
+        capability carries no write scope for it, so capability verification denies it before the operation
+        index is consulted."""
 
         async def run() -> None:
             deps, domain = self._governed_deps(tmp_path)

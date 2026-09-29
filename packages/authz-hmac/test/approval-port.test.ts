@@ -1,4 +1,5 @@
-import type { ApprovalStore } from "@kohaku-ui/spec-core";
+import { createHmac } from "node:crypto";
+import { ApprovalIssueError, type ApprovalStore } from "@kohaku-ui/spec-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHmacApprovalPort, createHmacAuthzPort, createMemoryApprovalStore } from "../src/index.js";
 
@@ -29,6 +30,18 @@ describe("createHmacApprovalPort issuance", () => {
         approverId: "same-person",
       }),
     ).rejects.toThrow(/approverId must differ from requesterId/);
+  });
+
+  it("rejects a self-approval with an ApprovalIssueError (the client-caused error contract)", async () => {
+    const approvals = createHmacApprovalPort("test-secret");
+    await expect(
+      approvals.issueApproval({
+        action: REQ.action,
+        payloadHash: REQ.payloadHash,
+        requesterId: "same-person",
+        approverId: "same-person",
+      }),
+    ).rejects.toBeInstanceOf(ApprovalIssueError);
   });
 });
 
@@ -120,6 +133,60 @@ describe("createHmacApprovalPort expiry", () => {
     expect(result).toEqual({ ok: false, reason: "approval expired" });
   });
 
+  it("clamps a requested TTL above maxTtlSeconds (default 3600) down to the maximum", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const approvals = createHmacApprovalPort("test-secret");
+    const token = await approvals.issueApproval(
+      {
+        action: REQ.action,
+        payloadHash: REQ.payloadHash,
+        requesterId: REQ.requesterId,
+        approverId: "approver-1",
+      },
+      { ttlSeconds: 86400 },
+    );
+
+    vi.setSystemTime(new Date("2026-01-01T00:59:59.000Z"));
+    expect((await approvals.verifyApproval(token, REQ)).ok).toBe(true);
+    vi.setSystemTime(new Date("2026-01-01T01:00:00.000Z"));
+    expect(await approvals.verifyApproval(token, REQ)).toEqual({ ok: false, reason: "approval expired" });
+  });
+
+  it("honors a custom maxTtlSeconds, and never lengthens a shorter requested TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const approvals = createHmacApprovalPort("test-secret", { maxTtlSeconds: 60 });
+    const input = {
+      action: REQ.action,
+      payloadHash: REQ.payloadHash,
+      requesterId: REQ.requesterId,
+      approverId: "approver-1",
+    };
+    const clamped = await approvals.issueApproval(input, { ttlSeconds: 600 });
+    const short = await approvals.issueApproval(input, { ttlSeconds: 10 });
+
+    vi.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
+    expect((await approvals.verifyApproval(short, REQ)).ok).toBe(false);
+    expect((await approvals.verifyApproval(clamped, REQ)).ok).toBe(true);
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    expect((await approvals.verifyApproval(clamped, REQ)).ok).toBe(false);
+  });
+
+  it("also caps a configured default ttlSeconds that exceeds maxTtlSeconds", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const approvals = createHmacApprovalPort("test-secret", { ttlSeconds: 500, maxTtlSeconds: 30 });
+    const token = await approvals.issueApproval({
+      action: REQ.action,
+      payloadHash: REQ.payloadHash,
+      requesterId: REQ.requesterId,
+      approverId: "approver-1",
+    });
+    vi.setSystemTime(new Date("2026-01-01T00:00:30.000Z"));
+    expect((await approvals.verifyApproval(token, REQ)).ok).toBe(false);
+  });
+
   it("uses the default TTL (DEFAULT_APPROVAL_TTL_SECONDS = 300) when none is given", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
@@ -140,9 +207,20 @@ describe("createHmacApprovalPort expiry", () => {
 });
 
 describe("createHmacApprovalPort domain separation from capability tokens", () => {
+  const SECRET = "test-secret";
+
+  async function issueApproval() {
+    return createHmacApprovalPort(SECRET).issueApproval({
+      action: REQ.action,
+      payloadHash: REQ.payloadHash,
+      requesterId: REQ.requesterId,
+      approverId: "approver-1",
+    });
+  }
+
   it("rejects a capability token presented as an approval token", async () => {
-    const authz = createHmacAuthzPort("test-secret");
-    const approvals = createHmacApprovalPort("test-secret");
+    const authz = createHmacAuthzPort(SECRET);
+    const approvals = createHmacApprovalPort(SECRET);
     const cap = await authz.issueCapability({ id: "u" }, [{ kind: "write", ref: "annotate" }]);
 
     const result = await approvals.verifyApproval(cap, REQ);
@@ -150,17 +228,119 @@ describe("createHmacApprovalPort domain separation from capability tokens", () =
   });
 
   it("rejects an approval token presented as a capability", async () => {
-    const authz = createHmacAuthzPort("test-secret");
-    const approvals = createHmacApprovalPort("test-secret");
-    const token = await approvals.issueApproval({
-      action: REQ.action,
-      payloadHash: REQ.payloadHash,
-      requesterId: REQ.requesterId,
-      approverId: "approver-1",
-    });
+    const authz = createHmacAuthzPort(SECRET);
+    const token = await issueApproval();
 
     const result = await authz.verify(token, { kind: "write", ref: "annotate" });
     expect(result.ok).toBe(false);
+  });
+
+  it("rejects an approval token with its prefix stripped (signature does not verify under the capability key)", async () => {
+    const authz = createHmacAuthzPort(SECRET);
+    const token = await issueApproval();
+    const stripped = token.slice(token.indexOf(".", token.indexOf(".") + 1) + 1);
+    expect(stripped.startsWith("kohaku-approval")).toBe(false);
+
+    const verified = await authz.verify(stripped, { kind: "write", ref: "annotate" });
+    expect(verified).toEqual({ ok: false, reason: "invalid signature" });
+    const revoked = await authz.revokeCapability(stripped);
+    expect(revoked).toMatchObject({ ok: false, code: "INVALID_SIGNATURE" });
+  });
+
+  it("rejects a capability token with the approval prefix prepended (signature does not verify under the approval key)", async () => {
+    const authz = createHmacAuthzPort(SECRET);
+    const approvals = createHmacApprovalPort(SECRET);
+    const cap = await authz.issueCapability({ id: "u" }, [{ kind: "write", ref: "annotate" }]);
+
+    const result = await approvals.verifyApproval(`kohaku-approval.v2.${cap}`, REQ);
+    expect(result).toEqual({ ok: false, reason: "invalid signature" });
+  });
+
+  it("rejects a v1 token (its MAC covered the payload only, under the raw secret)", async () => {
+    const claims = {
+      action: REQ.action,
+      payloadHash: REQ.payloadHash,
+      approverId: "approver-1",
+      requesterId: REQ.requesterId,
+      exp: Math.floor(Date.now() / 1000) + 300,
+      jti: "jti-v1",
+    };
+    const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+    const signature = createHmac("sha256", SECRET).update(payload).digest("base64url");
+    const v1 = `kohaku-approval.v1.${payload}.${signature}`;
+
+    const result = await createHmacApprovalPort(SECRET).verifyApproval(v1, REQ);
+    expect(result).toEqual({ ok: false, reason: "not an approval token" });
+  });
+
+  it("rejects a token whose prefix was swapped to another version (the prefix is part of the MAC input)", async () => {
+    const token = await issueApproval();
+    const relabelled = token.replace("kohaku-approval.v2.", "kohaku-approval.v3.");
+    const result = await createHmacApprovalPort(SECRET).verifyApproval(relabelled, REQ);
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("token claim validation (a correctly signed but malformed payload is a denial, never a throw)", () => {
+  const SECRET = "test-secret";
+  const approvalKey = createHmac("sha256", SECRET).update("kohaku-approval-v2").digest();
+
+  function forgeApproval(claims: unknown): string {
+    const prefix = "kohaku-approval.v2.";
+    const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+    const sig = createHmac("sha256", approvalKey).update(prefix).update(payload).digest("base64url");
+    return `${prefix}${payload}.${sig}`;
+  }
+
+  function forgeCapability(claims: unknown): string {
+    const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+    return `${payload}.${createHmac("sha256", SECRET).update(payload).digest("base64url")}`;
+  }
+
+  const validApproval = {
+    action: REQ.action,
+    payloadHash: REQ.payloadHash,
+    approverId: "approver-1",
+    requesterId: REQ.requesterId,
+    exp: Math.floor(Date.now() / 1000) + 300,
+    jti: "j",
+  };
+
+  it("approval: sanity, the forging helper produces a token the port accepts", async () => {
+    const result = await createHmacApprovalPort(SECRET).verifyApproval(forgeApproval(validApproval), REQ);
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    ["null payload", null],
+    ["array payload", []],
+    ["numeric action", { ...validApproval, action: 7 }],
+    ["missing payloadHash", { ...validApproval, payloadHash: undefined }],
+    ["object requesterId", { ...validApproval, requesterId: {} }],
+    ["string exp", { ...validApproval, exp: "9999999999" }],
+    ["missing jti", { ...validApproval, jti: undefined }],
+    ["numeric tenant", { ...validApproval, tenant: 5 }],
+  ])("approval: %s -> denied as malformed", async (_name, claims) => {
+    const result = await createHmacApprovalPort(SECRET).verifyApproval(forgeApproval(claims), REQ);
+    expect(result).toEqual({ ok: false, reason: "malformed payload" });
+  });
+
+  it.each([
+    ["null payload", null],
+    ["scopes not an array", { sub: "u", scopes: "write", exp: 9999999999 }],
+    ["scopes missing", { sub: "u", exp: 9999999999 }],
+    ["scope entry not an object", { sub: "u", scopes: [null], exp: 9999999999 }],
+    ["string exp", { sub: "u", scopes: [], exp: "9999999999" }],
+    ["numeric sub", { sub: 1, scopes: [], exp: 9999999999 }],
+    ["numeric jti", { sub: "u", scopes: [], exp: 9999999999, jti: 1 }],
+  ])("capability: %s -> denied as malformed", async (_name, claims) => {
+    const authz = createHmacAuthzPort(SECRET);
+    const token = forgeCapability(claims);
+    expect(await authz.verify(token, { kind: "write", ref: "annotate" })).toEqual({
+      ok: false,
+      reason: "malformed payload",
+    });
+    expect(await authz.revokeCapability(token)).toMatchObject({ ok: false, code: "MALFORMED" });
   });
 });
 

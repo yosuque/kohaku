@@ -1,9 +1,22 @@
+import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import type { ReactNode } from "react";
 import { useAdmin } from "../context.js";
 import { useLineage } from "../hooks.js";
 import { V } from "../theme.js";
-import { TIER_COLOR } from "../tiers.js";
+import { lineageTierCell } from "../tiers.js";
 import { card, smallButton } from "../ui.js";
+
+function LineageTierTd(props: { event: LineageEventRecord }): ReactNode {
+  const cell = lineageTierCell(props.event);
+  return (
+    <td
+      style={{ padding: "5px 8px", color: cell?.color || V.subtle, fontWeight: 700 }}
+      data-kohaku-tier-kind={cell == null ? undefined : cell.gate ? "gate" : "composition"}
+    >
+      {cell?.text ?? ""}
+    </td>
+  );
+}
 
 /** The audit timeline (GET /lineage, newest first): type / tier / cache / canonical / short intent hash / surface. */
 export function LineageTab(): ReactNode {
@@ -32,15 +45,7 @@ export function LineageTab(): ReactNode {
                 {e.ts.slice(11, 19)}
               </td>
               <td style={{ padding: "5px 8px", fontWeight: 600 }}>{e.type}</td>
-              <td
-                style={{
-                  padding: "5px 8px",
-                  color: TIER_COLOR[String(e.payload["tier"])] ?? V.subtle,
-                  fontWeight: 700,
-                }}
-              >
-                {String(e.payload["tier"] ?? "")}
-              </td>
+              <LineageTierTd event={e} />
               <td style={{ padding: "5px 8px" }}>{String(e.payload["cache"] ?? "")}</td>
               <td style={{ padding: "5px 8px" }}>
                 {String(

@@ -155,7 +155,7 @@ class ViewComposedDecision(TypedDict, total=False):
 
 class ViewComposedPayload(TypedDict, total=False):
     """The view.composed payload (required: specHash / intentHash / canonical / dataVersion /
-    tier / cache / surface; optional: sessionId / model / durationMs / artifactId / U2's explain-facing
+    tier / cache / surface; optional: sessionId / model / durationMs / artifactId / the explain-facing
     fields below)."""
 
     specHash: str
@@ -172,7 +172,7 @@ class ViewComposedPayload(TypedDict, total=False):
     correlationId: str
     """The caller-supplied correlation id (the compose trace's correlationId), so a devtool can find every
     lineage event belonging to one request via the `/lineage?correlationId=` filter. Unset for a compose
-    whose caller passed none, and always unset for an event recorded before this field existed (LQ/U2)."""
+    whose caller passed none, and always unset for an event recorded before this field existed."""
     cacheKey: str
     """The Spec cache key this compose resolved to (opaque; see cacheKeyParts for its breakdown)."""
     cacheKeyParts: dict[str, Any]
@@ -191,7 +191,7 @@ class ViewComposedPayload(TypedDict, total=False):
 
 class ComponentGeneratedPayload(TypedDict, total=False):
     """The component.generated payload (required: artifactId / artifactSha256 / intentHash /
-    canonical / specHash; optional: model / request / html / ref / U2's correlationId, kit, generatorVersion)."""
+    canonical / specHash; optional: model / request / html / ref / correlationId, kit, generatorVersion)."""
 
     artifactId: str
     artifactSha256: str

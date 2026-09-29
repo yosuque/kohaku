@@ -20,7 +20,7 @@ from kohaku.llm import LlmPort, create_llm_from_env
 from kohaku.storage import FileStoragePort
 
 from .app import create_app
-from .approval_port import create_hmac_approval_port
+from .approval_port import MemoryApprovalStore, create_hmac_approval_port
 from .authz_port import create_hmac_authz_port
 from .fake_llm import create_deterministic_fake_llm
 
@@ -49,11 +49,11 @@ def main() -> None:
     authz = create_hmac_authz_port(capability_secret)
     # Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish",
     # sales_api/app.py's SalesDomainPort) needs an ApprovalPort to ever be allowed. Reuses the same
-    # KOHAKU_CAPABILITY_SECRET as the AuthzPort -- the "kohaku-approval.v1." prefix already separates the
-    # token domains, so sharing the secret is by design, not a shortcut (see approval_port.py's own doc
-    # comment). No ApprovalStore (single-use enforcement is optional per design.md #63; out of scope for
-    # this demo).
-    approvals = create_hmac_approval_port(capability_secret)
+    # KOHAKU_CAPABILITY_SECRET as the AuthzPort -- the approval MAC key is derived from it under its own
+    # label, so the token domains stay separate and sharing the secret is by design, not a shortcut (see
+    # approval_port.py's own doc comment). With an in-process ApprovalStore so an approval is single-use
+    # (design.md #63; without one a token stays replayable until it expires).
+    approvals = create_hmac_approval_port(capability_secret, store=MemoryApprovalStore())
     # create_app is async because it performs startup reconcile (snapshot authority -> projection). The app is
     # assembled in a separate event loop before uvicorn.run (reconcile is only storage read/write and independent of uvicorn).
     sales = asyncio.run(create_app(llm=llm, storage=storage, authz=authz, approvals=approvals))

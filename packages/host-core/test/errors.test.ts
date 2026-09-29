@@ -165,6 +165,13 @@ describe("createConsoleErrorReporter", () => {
     expect(lines).toEqual(["[kohaku] /compose (request r1): boom"]);
   });
 
+  it("mcp(): logs a one-line summary that carries no request id", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    reporter.mcp({ endpoint: "kohaku_compose", error: new Error("boom") });
+    expect(lines).toEqual(["[kohaku] mcp kohaku_compose: boom"]);
+  });
+
   it("debug:true logs the full cause chain and the stack trace, as separate lines", () => {
     const { lines, log } = captureLines();
     const reporter = createConsoleErrorReporter({ debug: true, log });
@@ -189,6 +196,23 @@ describe("createConsoleErrorReporter", () => {
     reporter.compose(ctx, undefined);
     expect(lines).toEqual([
       "[kohaku] compose fallback: L1 constrained generation failed catalog/structure validation",
+    ]);
+  });
+
+  it("compose(): the correlation id, tier and intent are in the prefix when the context carries them", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    const ctx: ComposeErrorContext = {
+      phase: "fallback",
+      input: { kind: "intent" },
+      tier: "L1",
+      intent: { canonical: "sales.overview", params: {}, hash: "sha256:x" },
+      correlationId: "req-42",
+      reason: "generation failed",
+    };
+    reporter.compose(ctx, undefined);
+    expect(lines).toEqual([
+      "[kohaku] compose fallback (correlation req-42, tier L1, intent sales.overview): generation failed",
     ]);
   });
 

@@ -22,6 +22,7 @@ import {
 import {
   type EvidenceExportResult,
   type EvidenceKeygenResult,
+  EvidenceUsageError,
   runEvidenceExport,
   runEvidenceKeygen,
   runEvidenceVerify,
@@ -201,8 +202,10 @@ program
       console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once, then npm test");
       if (opts.mcp === true) {
         console.log(
-          "\nMCP front door generated: npm run mcp (stdio, e.g. for Claude Desktop / Claude Code / Codex CLI) " +
-            "or npm run mcp:http (Streamable HTTP :8788, for claude.ai / ChatGPT).",
+          "\nMCP front door generated. To use it from Claude Desktop, run: npm run mcp:claude-desktop " +
+            "(then restart Claude Desktop). `npm run mcp` (stdio) is the command Claude Desktop / Claude Code / " +
+            "Codex CLI launch themselves -- you do not run it by hand. `npm run mcp:http` starts a Streamable HTTP " +
+            "server on :8788 for claude.ai / ChatGPT.",
         );
       }
     },
@@ -344,7 +347,12 @@ evidence
     "Assemble and sign a Compliance Evidence Pack from a local StoragePort data directory or a REST host",
   )
   .option("--data-dir <dir>", "Read from a local StoragePort data directory (mutually exclusive with --rest)")
-  .option("--rest <baseUrl>", "Read over REST from a running host (mutually exclusive with --data-dir)")
+  .option(
+    "--rest <baseUrl>",
+    "Read over REST from a running host (mutually exclusive with --data-dir). The pack is ALWAYS " +
+      "incomplete (complete: false, fixations.jsonl empty) by design: GET /fixations cannot supply full " +
+      "fixation records. Use --data-dir (or a direct StoragePort) for a complete pack",
+  )
   .option(
     "--header <name:value>",
     "Extra REST request header, e.g. tenant or auth (repeatable; --rest only)",
@@ -356,8 +364,16 @@ evidence
     "Restrict the export to this tenant. In --rest mode this must match the x-kohaku-tenant --header " +
       "(the header is what actually scopes the request); omit --tenant to have it derived from the header",
   )
-  .requiredOption("--since <iso8601>", "Inclusive lower bound of the exported lineage window")
-  .requiredOption("--until <iso8601>", "Inclusive upper bound of the exported lineage window")
+  .requiredOption(
+    "--since <iso8601>",
+    "Inclusive lower bound of the exported lineage window: a date (YYYY-MM-DD, start of that UTC day) " +
+      "or a timestamp with a Z / ±hh:mm offset",
+  )
+  .requiredOption(
+    "--until <iso8601>",
+    "Inclusive upper bound of the exported lineage window: a date (YYYY-MM-DD, which INCLUDES that whole " +
+      "UTC day) or a timestamp with a Z / ±hh:mm offset",
+  )
   .requiredOption("--private-key <pem>", "Path to a PEM-encoded Ed25519 private key (PKCS8)")
   .requiredOption("--out <dir>", "Output directory for the pack")
   .option(
@@ -390,7 +406,10 @@ evidence
           allowIncomplete: opts.allowIncomplete === true,
         });
       } catch (e) {
-        program.error(e instanceof Error ? e.message : String(e));
+        // A bad --since / --until is a usage error (exit 2, like `evidence verify`); anything else is 1.
+        program.error(e instanceof Error ? e.message : String(e), {
+          exitCode: e instanceof EvidenceUsageError ? 2 : 1,
+        });
         return;
       }
       const c = result.manifest.counts;

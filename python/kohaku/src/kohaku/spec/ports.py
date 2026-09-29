@@ -233,6 +233,22 @@ class ApprovalGrant:
     tenant: str | None = None
 
 
+APPROVAL_ISSUE_ERROR_CODE: str = "APPROVAL_ISSUE_REJECTED"
+"""The `code` an ApprovalIssueError carries. A host (and a custom ApprovalPort, which need not import the
+class) discriminates the client-caused failure structurally by this string. Port of TS ports.ts's
+APPROVAL_ISSUE_ERROR_CODE."""
+
+
+class ApprovalIssueError(ValueError):
+    """Raised by `ApprovalPort.issue_approval` when it refuses a request for a reason the caller caused and
+    can fix (e.g. self-approval). Its message is safe to show a client as-is; `POST /approvals` maps
+    exactly this to 400. Any other exception from `issue_approval` is an infrastructure failure, reported
+    to the observability hook and surfaced to the client as a fixed-text 500. Port of TS ports.ts's
+    ApprovalIssueError."""
+
+    code: str = APPROVAL_ISSUE_ERROR_CODE
+
+
 @dataclass(frozen=True)
 class ApprovalVerifyResult:
     ok: bool
@@ -259,7 +275,14 @@ class ApprovalPort(Protocol):
     ) -> str:
         """Issue a token bound to (action, payload_hash, requester_id, tenant). approver_id MUST differ
         from requester_id -- an implementation MUST reject issuing a self-approval (design.md #63) rather
-        than leave that check to the caller. Default TTL DEFAULT_APPROVAL_TTL_SECONDS."""
+        than leave that check to the caller. Default TTL DEFAULT_APPROVAL_TTL_SECONDS.
+
+        Error contract: a rejection the caller caused (self-approval, an unacceptable request) MUST be
+        raised as an ApprovalIssueError (or an exception whose `code` is APPROVAL_ISSUE_ERROR_CODE); the
+        host reports its message to the client as a 400. Any other raised exception is treated as an
+        infrastructure failure: it reaches the observability hook and the client only sees a fixed 500
+        message. An implementation SHOULD bound the lifetime it grants (`ttl_seconds` is caller-supplied),
+        since a stateless token without an ApprovalStore is replayable until it expires."""
         ...
 
     async def verify_approval(
@@ -313,9 +336,10 @@ class LineageFilter:
     intentHash: str | None = None
     correlationId: str | None = None
     """Filter by the `correlationId` payload field (exact equality; port of TS ports.ts's
-    LineageFilter.correlationId, design.md #53). No writer in this repository stamps `correlationId` onto a
-    payload yet -- it exists so a product's own instrumentation can correlate lineage events sharing an
-    application-defined identifier."""
+    LineageFilter.correlationId, design.md #53). The `view.*` / `action.*` records the REST and MCP hosts
+    write carry the correlation id of the request that produced them, so one request's events can be pulled
+    together; a product's own instrumentation may stamp the same field with an application-defined
+    identifier. Rows stored before 0.4.0 have none and never match."""
     since: str | None = None
     """Only events at or after this time (ts >= since, inclusive). Assumes canonical ISO8601 form."""
     until: str | None = None
@@ -352,7 +376,9 @@ class LineagePage:
     events: list[LineageEventRecord]
     """In append order (oldest first within the page), matching the request's filters."""
     nextCursor: str | None = None
-    """Opaque cursor for the next page. None on the last page (nothing further to read)."""
+    """Opaque cursor for the next page. None on the last page (nothing further to read). A page may hold
+    fewer than `pageSize` events, even none, and still carry a `nextCursor` (an adapter bounds the work of
+    one call); a caller keeps following `nextCursor` until it is None, whatever the page holds."""
 
 
 @dataclass(frozen=True)
@@ -583,7 +609,8 @@ class RateLimitResult:
 
 class RateLimitStore(Protocol):
     """A token-bucket rate-limit store, keyed by an opaque caller-supplied string (host_core's
-    create_rate_limiter composes it as "tenant:principal:routeClass" — see that function's own doc). A
+    create_rate_limiter composes it as the canonical JSON array [tenant, principal, routeClass] — see
+    that function's own doc). A
     Port reference implementation (host_core's create_memory_rate_limit_store, the in-process default)
     and future backing-store adapters all implement this same shape. Port of TS ports.ts's
     RateLimitStore.
@@ -591,6 +618,11 @@ class RateLimitStore(Protocol):
     Concurrency contract: like StoragePort, this carries no cross-process locking of its own — a
     distributed backing store is expected to implement `take` atomically on its own side, not rely on
     the caller to serialize it.
+
+    Latency contract: `take` runs on the request path. host_core's create_rate_limiter bounds it with a
+    timeout (default 250 ms, `timeout_ms`) and, on a raise or a timeout, fails open (the request is
+    allowed and the failure is reported via `on_error`); an implementation should therefore answer well
+    inside that bound and must not rely on a slow call being awaited to completion.
     """
 
     async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:

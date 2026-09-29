@@ -64,6 +64,30 @@ describe("registerPart / implementWc", () => {
     expect(el.textContent).toBe("Shipped");
   });
 
+  it("parses a props object once and warns once across rebuilds of the same Spec", async () => {
+    vi.stubEnv("NODE_ENV", "test");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const parse = vi.spyOn(badgeDef.propsSchema, "safeParse");
+    try {
+      const surface = document.createElement("kohaku-surface") as KohakuSurface;
+      document.body.appendChild(surface);
+      const spec = badgeSpec({}); // missing required `label`
+      const first = implementWc(badgeDef, badgeBuilder);
+      surface.registerPart(first.type, first.version, first.builder);
+      surface.spec = spec;
+      await tick();
+      // Re-registering forces a rebuild of the already-mounted Spec, whose node.props object is unchanged.
+      surface.registerPart(first.type, first.version, first.builder, { override: true });
+      await tick();
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      parse.mockRestore();
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("warns and falls back to raw (unvalidated) props on a schema mismatch, outside production", async () => {
     vi.stubEnv("NODE_ENV", "test");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

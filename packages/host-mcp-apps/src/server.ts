@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type { ComposeResult, TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
   type ActionParamIssue,
-  actionPayloadHash,
+  type ApprovalRequiredInfo,
   canonicalStringify,
   type JsonObject,
   JsonObjectSchema,
@@ -121,20 +122,33 @@ function requestContextOf(extra: ServerContext): { abort: AbortSignal; requestId
   };
 }
 
+/** The correlation id already minted for a call's `ServerContext`, so every reader within one call sees the same id (see `mcpCorrelationId`). */
+const correlationIdsByCall = new WeakMap<ServerContext, string>();
+
 /**
- * The compose correlation id for one MCP tool call: `mcp:<sessionId>:<jsonrpc id>` when the transport
- * carries a session id (Streamable HTTP, where a session can issue many requests and the JSON-RPC id alone
- * would be ambiguous across sessions), or `mcp:<jsonrpc id>` when it does not (stdio, which has no session
- * concept at all -- a single stdio connection already scopes JSON-RPC ids uniquely, so no prefix is needed
- * beyond `mcp:`). This is the value ultimately recorded as ComposeTrace.correlationId / lineage's
- * view.composed correlationId, so a devtool (`kohaku explain`, admin-react's DevTools) can group every event
- * belonging to one tool call, and tell which transport session (if any) it came from, from the id alone.
+ * The compose correlation id for one MCP tool call: `mcp:<prefix>:<jsonrpc id>`, where `<prefix>` is the
+ * transport's session id when it carries one, else a fresh UUID minted for this call. JSON-RPC ids restart
+ * at 0/1 for every client, and the stateless Streamable HTTP serving both shipped servers use (and stdio,
+ * across restarts) carries no session id, so the bare JSON-RPC id would match unrelated calls from
+ * different clients -- `kohaku explain mcp:1` would then merge their events. The per-call UUID keeps every
+ * id unique at the cost of not grouping the calls of one client (nothing on such a transport identifies
+ * one), like the Python port's degraded mode. This is the value ultimately recorded as
+ * ComposeTrace.correlationId / lineage's view.composed correlationId, so a devtool (`kohaku explain`,
+ * admin-react's DevTools) can group every event belonging to one tool call from the id alone.
+ *
+ * Memoized per `ServerContext` (one per call): the id is read for the compose pipeline, the rate-limit
+ * observer and the action audit within the same call, and they must all agree.
  *
  * Kept alongside (not merged into) requestContextOf so a caller that only needs the correlation id (none,
  * currently, but keeps the two concerns separable) is not forced to also destructure `abort`.
  */
 function mcpCorrelationId(extra: ServerContext): string {
-  return extra.sessionId != null ? `mcp:${extra.sessionId}:${extra.mcpReq.id}` : `mcp:${extra.mcpReq.id}`;
+  let id = correlationIdsByCall.get(extra);
+  if (id == null) {
+    id = `mcp:${extra.sessionId ?? randomUUID()}:${extra.mcpReq.id}`;
+    correlationIdsByCall.set(extra, id);
+  }
+  return id;
 }
 
 /**
@@ -224,8 +238,8 @@ function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
  * generation work the caller has already given up on (parity with the REST profile's abort wiring via
  * `c.req.raw.signal`).
  *
- * `requestId`, when passed (`mcpCorrelationId(extra)` — `mcp:<sessionId>:<jsonrpc id>`, or `mcp:<jsonrpc id>`
- * when the transport carries no session id, e.g. stdio), is forwarded into composeForTool ->
+ * `requestId`, when passed (`mcpCorrelationId(extra)` — `mcp:<sessionId or per-call uuid>:<jsonrpc id>`),
+ * is forwarded into composeForTool ->
  * composeWithFixation as both the fixation self-heal correlation id (already threaded through
  * resolveFixatedResult) and, additively, ComposeOptions.correlationId, so a degraded/failed delivery's
  * observer.onError call and ComposeTrace can be tied back to this tool call the same way host-rest ties them
@@ -524,7 +538,7 @@ function registerComposeTool(ctx: ToolContext): void {
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_compose`, async () => {
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
         const call = forCall(ctx, principal);
         const callCtx: ComposeCallContext = {
@@ -569,7 +583,7 @@ function registerRenderSnapshotTool(ctx: ToolContext): void {
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, async () => {
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
         const call = forCall(ctx, principal);
         const { spec, html } = await buildSnapshot(
@@ -630,7 +644,7 @@ function registerIntentTools(ctx: ToolContext): void {
       async (args, extra) =>
         safeTool(ctx.deps, tool.name, async () => {
           const principal = await ctx.principalOf(extra);
-          const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+          const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
           if (rateLimited != null) return rateLimited;
           const call = forCall(ctx, principal);
           // Pull the shared language input out before it reaches the intent params (it must not
@@ -668,7 +682,7 @@ function registerResolveBindingTool(ctx: ToolContext): void {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "resolve");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "resolve");
         if (rateLimited != null) return rateLimited;
         // Server-side paging/sorting: as on the REST surface, verify the capability against base (with reserved
         // parameters removed), and merge the reserved parameters into domain.invoke (the `_` namespace convention).
@@ -722,7 +736,7 @@ function registerEventTool(ctx: ToolContext): void {
     async ({ intent, on, payload, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_event`, async () => {
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
         const call = forCall(ctx, principal);
         const session = mcpSession(locale, call.principal);
@@ -776,42 +790,20 @@ function registerEventTool(ctx: ToolContext): void {
 }
 
 /**
- * Upper bound (canonical-JSON, UTF-8 bytes) on a `${prefix}_action` payload. `OperationDescriptor.paramsSchema`
- * validation itself is a follow-up (no JSON Schema validator such as Ajv is wired into this repo yet) — this
- * is a coarse defense-in-depth cap against an oversized write, not a shape check.
+ * Upper bound (canonical-JSON, UTF-8 bytes) on a `${prefix}_action` payload — a coarse defense-in-depth cap
+ * against an oversized write, applied before the payload reaches the `ActionGate` (which then validates it
+ * against the action's `paramsSchema`, ACT-PRM-001).
  */
 const MAX_ACTION_PAYLOAD_BYTES = 64 * 1024;
 
 /**
- * An action name absent from the DomainPort's own operation index is not a declared operation at all --
- * it must never reach `domain.invoke` (fail-closed), on the same footing as a capability that lacks the
- * needed write scope (this reuses that exact response shape: a plain tool error, no structured error
- * code -- symmetric with REST's identical reuse of 403 CAPABILITY_DENIED).
- */
-const UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation";
-
-/**
- * Registers `${prefix}_action` (app-only): direct write path (presentForm submit / action.button).
- * Symmetric with the REST surface's /binding/action. Callable only from the iframe (widget) (visibility ["app"]).
- * On hosts where ext-apps' app-originated tools/call is broken it may fail, but that failure surfaces in
- * useInvokeAction's failed display (the initial display is separately guaranteed by the _meta co-embedded data).
- *
- * Since the compose-issued capability now rides `_meta` rather than model-visible `structuredContent` (see
- * CAPABILITY_META_KEY), a host that still forwards `_meta` to the model, or a prompt-injected instruction that
- * otherwise obtains a capability, could still try to drive this tool with an arbitrary action/payload. Two
- * checks add defense in depth on top of the existing capability `verify`: `action` must be one of the
- * DomainPort's `listOperations()` names (the same source `issueCapabilityForSpec`'s write-scope filter already
- * uses — host-core's `createAllowedActions`), and `payload` is capped at `MAX_ACTION_PAYLOAD_BYTES`.
- * Full argument-shape validation via `OperationDescriptor.paramsSchema` is a follow-up.
- */
-/**
- * Maps one `ActionGate.check` outcome onto the MCP tool result + audit trail (design.md #62/#63; mirrors
- * the REST profile's `handleActionGateResult`, packages/host-rest/src/routes/binding.ts). Returns the
- * structured tool error to return as-is (`invalid` / `approvalRequired` / `denied`), or `null` when the
- * gate allowed the invoke and the caller should proceed to `domain.invoke`. Audit recording is always
- * fail-open (`hostCore.failOpen`): a recording failure must never turn an otherwise-successful allow, or
- * an otherwise-correct denial, into an unhandled tool failure. This profile performs no tenant
- * resolution, so no `tenant` is ever passed to the recorder (mirrors every other recorder call in this file).
+ * Maps one `ActionGate.check` outcome onto the MCP tool result (design.md #62/#63; the REST profile's
+ * `handleActionGateResult`, packages/host-rest/src/routes/binding.ts, is its wire-mapping counterpart). The
+ * audit trail and the client-visible messages are host-core's `recordActionGateResult`, shared with REST;
+ * this keeps only the tool-error mapping. Returns the structured tool error to return as-is (`invalid` /
+ * `approvalRequired` / `denied`), or `null` when the gate allowed the invoke and the caller should proceed to
+ * `domain.invoke`. This profile performs no tenant resolution, so no `tenant` is ever passed to the recorder
+ * (mirrors every other recorder call in this file).
  */
 async function handleActionGateResult(
   deps: McpHostDeps,
@@ -825,73 +817,41 @@ async function handleActionGateResult(
   },
 ): Promise<ReturnType<typeof toolError> | null> {
   const { action, payload, principal, endpoint, correlationId } = args;
-  const auditReport = (e: unknown): Promise<void> => reportMcpError(deps, `${endpoint}.audit`, e);
-
-  if (gateResult.kind === "invalid") {
-    return actionParamsInvalidToolError(gateResult.issues);
+  const outcome = await hostCore.recordActionGateResult(gateResult, {
+    recorder: deps.actionAuditRecorder,
+    action,
+    payload,
+    principal,
+    correlationId,
+    report: (e) => reportMcpError(deps, `${endpoint}.audit`, e),
+  });
+  switch (outcome.kind) {
+    case "invalid":
+      return actionParamsInvalidToolError(outcome.issues);
+    case "approvalRequired":
+      return approvalRequiredToolError(outcome.message, outcome.approval);
+    case "proceed":
+      return null;
   }
-
-  if (gateResult.kind === "approvalRequired") {
-    await hostCore.failOpen(async () => {
-      await deps.actionAuditRecorder?.approvalRequested({
-        action,
-        payloadHash: gateResult.payloadHash,
-        tier: gateResult.tier,
-        requestId: gateResult.requestId,
-        payload,
-        principal,
-        correlationId,
-      });
-    }, auditReport);
-    return approvalRequiredToolError(
-      gateResult.tier === "confirm"
-        ? "this action requires confirmation (confirmed: true)"
-        : "this action requires an approval token",
-      { requestId: gateResult.requestId, action, tier: gateResult.tier, payloadHash: gateResult.payloadHash },
-    );
-  }
-
-  if (gateResult.kind === "denied") {
-    await hostCore.failOpen(async () => {
-      await deps.actionAuditRecorder?.denied({
-        action,
-        payloadHash: gateResult.payloadHash,
-        tier: gateResult.tier,
-        reason: gateResult.reason,
-        principal,
-        correlationId,
-      });
-    }, auditReport);
-    return approvalRequiredToolError(gateResult.reason, {
-      requestId: gateResult.requestId,
-      action,
-      tier: gateResult.tier,
-      payloadHash: gateResult.payloadHash,
-    });
-  }
-
-  // gateResult.kind === "allow"
-  await hostCore.failOpen(async () => {
-    await deps.actionAuditRecorder?.invoked({
-      action,
-      payloadHash: gateResult.payloadHash,
-      tier: gateResult.tier,
-      principal,
-      correlationId,
-    });
-    if (gateResult.grant != null) {
-      await deps.actionAuditRecorder?.approved({
-        action,
-        payloadHash: gateResult.payloadHash,
-        grant: gateResult.grant,
-        principal,
-        correlationId,
-      });
-    }
-  }, auditReport);
-  return null;
 }
 
+/**
+ * Registers `${prefix}_action` (app-only): direct write path (presentForm submit / action.button).
+ * Symmetric with the REST surface's /binding/action (SPEC MCPAPP-ACT-001). Callable only from the iframe
+ * (widget) (visibility ["app"]). On hosts where ext-apps' app-originated tools/call is broken it may fail,
+ * but that failure surfaces in useInvokeAction's failed display (the initial display is separately
+ * guaranteed by the _meta co-embedded data).
+ *
+ * Since the compose-issued capability now rides `_meta` rather than model-visible `structuredContent` (see
+ * CAPABILITY_META_KEY), a host that still forwards `_meta` to the model, or a prompt-injected instruction that
+ * otherwise obtains a capability, could still try to drive this tool with an arbitrary action/payload. The
+ * checks layered on top of capability `verify`, in order: `payload` is capped at `MAX_ACTION_PAYLOAD_BYTES`;
+ * the capability must verify for a write scope on `action`; `action` must be in the DomainPort's operation
+ * index (a name absent from it is recorded as `action.denied` and rejected, exactly as REST does, never
+ * invoked ungated); and the `ActionGate` then validates `payload` against the action's `paramsSchema` and
+ * enforces its tier via the tool's `confirmed` / `approval` arguments (design.md #62/#63, ACT-PRM-001 /
+ * ACT-APR-001).
+ */
 function registerActionTool(ctx: ToolContext): void {
   ctx.server.registerTool(
     `${ctx.prefix}_action`,
@@ -925,21 +885,8 @@ function registerActionTool(ctx: ToolContext): void {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "action");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "action");
         if (rateLimited != null) return rateLimited;
-        // Reject an action name the DomainPort does not expose before even attempting capability verification
-        // (see this function's doc comment). Fail-closed on a listOperations() rejection too — every action is
-        // "unknown" for this call, and the failure is reported to the observability hook.
-        let allowed: ReadonlySet<string>;
-        try {
-          allowed = await ctx.allowedActions();
-        } catch (e) {
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.allowedActions`, e);
-          allowed = new Set();
-        }
-        if (!allowed.has(action)) {
-          return toolError("unknown action");
-        }
         const payloadBytes = new TextEncoder().encode(canonicalStringify(payload)).length;
         if (payloadBytes > MAX_ACTION_PAYLOAD_BYTES) {
           return toolError(`payload exceeds the maximum size (${MAX_ACTION_PAYLOAD_BYTES} bytes)`);
@@ -957,26 +904,36 @@ function registerActionTool(ctx: ToolContext): void {
 
         // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
         // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
-        // because the index and DomainPort momentarily disagree, or (should not normally happen once
-        // `allowed.has(action)` above already passed) because the name was never a real operation to
-        // begin with -- is rejected here rather than let through ungated (fail-closed; ACT-PRM-001).
-        const index = await ctx.operationIndex();
+        // because the index and DomainPort momentarily disagree, or because the name was never a real
+        // operation to begin with (a capability verifying for it is the only way to get this far) -- is
+        // rejected here and audited exactly as REST does, rather than let through ungated (fail-closed;
+        // ACT-PRM-001, MCPAPP-ACT-001). A rejected operation index (listOperations() itself failing) is
+        // likewise fail-closed for this call, and a declared operation whose paramsSchema failed validation
+        // is fail-closed for that operation alone.
+        let index: Awaited<ReturnType<typeof ctx.operationIndex>>;
+        try {
+          index = await ctx.operationIndex();
+        } catch (e) {
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e);
+          return toolError("operation index unavailable");
+        }
         const entry = index.get(action);
+        if (entry != null && entry.schemaError != null) {
+          // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
+          // this operation alone (REST's 500 counterpart), reported to the observability hook.
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError);
+          return toolError("action parameter schema unavailable");
+        }
         if (entry == null) {
-          await hostCore.failOpen(
-            async () => {
-              await ctx.deps.actionAuditRecorder?.denied({
-                action,
-                payloadHash: await actionPayloadHash(payload as JsonObject),
-                tier: "auto",
-                reason: UNDECLARED_ACTION_MESSAGE,
-                principal: resolvedPrincipal,
-                correlationId: requestId,
-              });
-            },
-            (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
-          );
-          return toolError(`capability denied: ${UNDECLARED_ACTION_MESSAGE}`);
+          await hostCore.recordUndeclaredActionDenial({
+            recorder: ctx.deps.actionAuditRecorder,
+            action,
+            payload: payload as JsonObject,
+            principal: resolvedPrincipal,
+            correlationId: requestId,
+            report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
+          });
+          return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
         }
         const gateResult = await ctx.actionGate.check({
           descriptor: entry.descriptor,
@@ -1032,6 +989,7 @@ function registerActionTool(ctx: ToolContext): void {
 export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, options: AttachOptions): void {
   const prefix = options.toolPrefix ?? "kohaku";
   const fallbackPrincipal = deps.principal ?? ANONYMOUS;
+  warnUnkeyedRateLimiter(deps);
 
   // Resolves the principal for one tool call — see McpHostDeps.resolvePrincipal's doc comment for the full
   // fallback order and rationale. A throw from deps.resolvePrincipal is deliberately NOT caught here: it
@@ -1051,6 +1009,17 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
   // principalOf, unlike the old attach-time `principal` field it replaces, is resolved per tool call (see
   // McpHostDeps.resolvePrincipal's doc comment) — each handler calls it once, inside its own safeTool body,
   // and builds a ToolCallContext (via forCall) to carry the resolved value through the compose pipeline.
+  // One memoized operation index per attach; the allowed-action set (capability write-scope filter) is derived
+  // from it rather than from a second, independently memoized `listOperations()` call, so the two can never
+  // disagree about which actions exist.
+  const operationIndex = hostCore.createOperationIndex(deps.domain);
+  // Validate every operation's `paramsSchema` now rather than at the first invoke: `attachKohakuToMcpServer`
+  // is synchronous, so this is kicked off here and a failure (listOperations() rejecting, or a schema outside
+  // kohaku's closed subset) is reported through `onError`. A bad schema confines the failure to its own
+  // operation; a rejected listOperations() is not memoized, so a later call retries.
+  void hostCore.validateOperationIndex(operationIndex, (e) =>
+    reportMcpError(deps, "attach.operationIndex", e),
+  );
   const ctx: ToolContext = {
     server,
     deps,
@@ -1059,8 +1028,8 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
     principalOf,
     getRendererHtml,
     fixationHost: fixationHost(deps),
-    allowedActions: hostCore.createAllowedActions(deps.domain),
-    operationIndex: hostCore.createOperationIndex(deps.domain),
+    allowedActions: hostCore.allowedActionsFromIndex(operationIndex),
+    operationIndex,
     actionGate: hostCore.createActionGate({ approvals: deps.approvals }),
     tasks: createTaskStore(),
   };
@@ -1299,10 +1268,7 @@ function actionParamsInvalidToolError(issues: ActionParamIssue[]) {
  * and, upstream, by which `action.*` lineage event was recorded for the attempt (see
  * `handleActionGateResult` below).
  */
-function approvalRequiredToolError(
-  message: string,
-  approval: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string },
-) {
+function approvalRequiredToolError(message: string, approval: ApprovalRequiredInfo) {
   return {
     content: [{ type: "text" as const, text: message }],
     isError: true,
@@ -1317,37 +1283,73 @@ function approvalRequiredToolError(
  * undefined here). Every unauthenticated call resolves to the same constant fallback principal
  * (`McpHostDeps.principal ?? ANONYMOUS`), so keying on `principal.id` alone in that case would put every
  * anonymous caller into one shared bucket — exactly the failure a per-caller budget exists to prevent.
- * Prefers the resolved principal's id only when `resolvePrincipal` is wired (a genuine per-call
- * identity, which can actually differ between callers); otherwise falls back to the MCP transport's
- * `ServerContext.sessionId` (one per client connection on Streamable HTTP), and only then to the literal
- * `"anonymous"` (e.g. stdio, which has no per-client session concept).
+ * In order: `deps.rateLimitKey(extra)` when wired (a product keying by transport identity, e.g. a client
+ * IP or an API-key id taken from the request); else the resolved principal's id when `resolvePrincipal`
+ * is wired (a genuine per-call identity, which can actually differ between callers); else
+ * `ServerContext.sessionId`; else the literal `"anonymous"`. **On the stateless Streamable HTTP serving
+ * (SDK 2.0 `createMcpHandler`) and stdio no session id exists, so without `rateLimitKey` or
+ * `resolvePrincipal` every caller lands in the one `"anonymous"` bucket** — `attachKohakuToMcpServer`
+ * warns once about that configuration.
  */
-function mcpRateLimitKey(deps: McpHostDeps, principal: Principal, sessionId: string | undefined): string {
-  return deps.resolvePrincipal != null ? principal.id : (sessionId ?? "anonymous");
+async function mcpRateLimitKey(
+  deps: McpHostDeps,
+  principal: Principal,
+  extra: ServerContext,
+): Promise<string> {
+  if (deps.rateLimitKey != null) return deps.rateLimitKey(extra);
+  if (deps.resolvePrincipal != null) return principal.id;
+  return extra.sessionId ?? "anonymous";
 }
 
 /**
  * Checks `deps.rateLimiter` (host-core's `PolicyRateLimiter`, typically `PolicyRuntime.rateLimiter`)
  * before a tool handler proceeds with its actual work. Returns `null` (proceed) when `deps.rateLimiter`
  * is unset or the limiter allows; a structured `RATE_LIMITED` tool error otherwise (see
- * `rateLimitToolError`). Port of the REST profile's `createRateLimitMiddleware` — called inline, as the
- * first statement after resolving `principal`, at the top of each of the 6 tool handlers below, since
- * this profile has no per-path middleware layer to mount a single check on (mirroring how the Python
- * REST mirror calls `check_rate_limit` inline for the same reason). Reuses the principal each handler
- * already resolved via `ctx.principalOf(extra)` rather than invoking that hook a second time.
+ * `rateLimitToolError`), after notifying `deps.onRateLimited` (fire-and-forget). Port of the REST
+ * profile's `createRateLimitMiddleware` — called inline, as the first statement after resolving
+ * `principal`, at the top of each of the 6 tool handlers below, since this profile has no per-path
+ * middleware layer to mount a single check on (mirroring how the Python REST mirror calls
+ * `check_rate_limit` inline for the same reason). Reuses the principal each handler already resolved via
+ * `ctx.principalOf(extra)` rather than invoking that hook a second time. A throw from
+ * `deps.rateLimitKey` propagates into the handler's `safeTool`, failing the call closed like a throw from
+ * `resolvePrincipal`.
  */
 async function checkMcpRateLimit(
   deps: McpHostDeps,
   principal: Principal,
-  sessionId: string | undefined,
+  extra: ServerContext,
   routeClass: "compose" | "action" | "resolve",
 ): Promise<ReturnType<typeof rateLimitToolError> | null> {
   if (deps.rateLimiter == null) return null;
-  const result = await deps.rateLimiter.take({
-    principal: mcpRateLimitKey(deps, principal, sessionId),
+  const key = await mcpRateLimitKey(deps, principal, extra);
+  const result = await deps.rateLimiter.take({ principal: key, routeClass });
+  if (result.allow) return null;
+  void hostCore.notifyHook(deps.onRateLimited, {
+    principal: key,
     routeClass,
+    requestId: mcpCorrelationId(extra),
   });
-  return result.allow ? null : rateLimitToolError(result.retryAfterMs);
+  return rateLimitToolError(result.retryAfterMs);
+}
+
+/** Set once `warnUnkeyedRateLimiter` has fired, so a per-request `attach` (stateless HTTP) warns once per process, not once per request. */
+let warnedUnkeyedRateLimiter = false;
+
+/**
+ * One-time startup warning for a `rateLimiter` wired without a per-caller key (neither `resolvePrincipal`
+ * nor `rateLimitKey`): on a transport with no session id (stateless Streamable HTTP, stdio) every caller
+ * then shares one bucket. Not an error — stdio, a single-user deployment, or a deliberately global limit
+ * is a valid configuration — so it warns rather than throws.
+ */
+function warnUnkeyedRateLimiter(deps: McpHostDeps): void {
+  if (warnedUnkeyedRateLimiter) return;
+  if (deps.rateLimiter == null || deps.resolvePrincipal != null || deps.rateLimitKey != null) return;
+  warnedUnkeyedRateLimiter = true;
+  console.warn(
+    "[kohaku] McpHostDeps.rateLimiter is wired without resolvePrincipal or rateLimitKey. On a transport with no " +
+      "session id (stateless Streamable HTTP, stdio) every caller shares one rate-limit bucket. " +
+      "Wire deps.rateLimitKey (or deps.resolvePrincipal) to key the limit per caller.",
+  );
 }
 
 /**

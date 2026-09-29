@@ -1,4 +1,4 @@
-import type { ApprovalPort } from "@kohaku-ui/spec-core";
+import { APPROVAL_ISSUE_ERROR_CODE, type ApprovalPort } from "@kohaku-ui/spec-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContractFixture } from "./storage.js";
 
@@ -73,7 +73,7 @@ export function describeApprovalPortContract<P extends ApprovalPort = ApprovalPo
           requesterId: "same-person",
           approverId: "same-person",
         }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: APPROVAL_ISSUE_ERROR_CODE });
     });
 
     it("does not verify against a different action, payload hash, requester, or tenant", async () => {

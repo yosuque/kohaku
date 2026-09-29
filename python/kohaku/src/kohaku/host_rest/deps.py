@@ -20,6 +20,7 @@ from kohaku.host_core import (
     AllowedActions,
     OperationIndex,
     PolicyRateLimiter,
+    RateLimitedInfo,
     TraceContext,
 )
 from kohaku.spec import (
@@ -268,7 +269,8 @@ class KohakuHostDeps:
     """Verifies stateless approval tokens for "approve"-tier actions (design.md #63; typically
     kohaku_authz_hmac's create_hmac_approval_port). Consulted by POST /binding/action's ActionGate and by
     POST /approvals (issuance). If not wired, an "approve"-tier action can never be allowed (the gate
-    returns denied) and POST /approvals responds 501 NOT_IMPLEMENTED."""
+    returns denied) and POST /approvals responds 501 NOT_IMPLEMENTED. Issuing additionally requires
+    authorize_governance: without it POST /approvals also responds 501 (SPEC ACT-APR-001 (e))."""
     action_audit_recorder: ActionAuditRecorder | None = None
     """Audit-recording hooks for governed Actions (design.md #62/#63; typically kohaku.lineage's
     create_action_audit_recorder). Called by POST /binding/action's ActionGate outcome, fail-open (a
@@ -278,16 +280,25 @@ class KohakuHostDeps:
     """Failure-path observability hook. When unwired, silent (no call is made); a requestId is issued and
     placed on the error envelope / X-Request-Id header regardless of whether this hook is wired (ops)."""
     authorize_governance: AuthorizeGovernanceHook | None = None
-    """Governance/audit plane authorization hook. When unwired, allowed without authorization by default (backward compatible)."""
+    """Governance/audit plane authorization hook. When unwired, allowed without authorization by default (backward compatible).
+    The one exception is POST /approvals (operation kind "action.approve"): it fails closed with 501 when this
+    hook is not wired, because otherwise any authenticated principal could approve."""
     rate_limiter: PolicyRateLimiter | None = None
     """Rate limiter for the compose-family routes (product responsibility; typically host_core's
     PolicyRuntime.rate_limiter, which resolves the effective RateLimitRule per tenant/route_class from
-    a Policy file's rateLimits section). Checked before POST /compose, /compose/stream, /events
-    (route_class "compose"), POST /binding/action ("action"), and GET /binding/resolve ("resolve");
-    governance/control-plane routes are never subject to it. On denial, returns 429 with the error
-    envelope's code: RATE_LIMITED (SPEC §6.1, REST-RL-001) and, when the limiter reports a
-    retry_after_ms, an HTTP Retry-After header (seconds, rounded up). When unwired, no rate limiting
-    occurs (backward compatible)."""
+    a Policy file's rateLimits section). Checked before POST /intent/normalize, /compose,
+    /compose/stream, /events (route_class "compose"), POST /binding/action ("action"), and GET
+    /binding/resolve ("resolve"); governance/control-plane routes are never subject to it.
+    /intent/normalize shares the "compose" class because, for a natural-language question, it calls the
+    SemanticPort's LLM and so spends tokens just like a compose does (those normalization tokens are not
+    counted by the policy file's compose.budget.dailyTokens, which only counts generation). On denial,
+    returns 429 with the error envelope's code: RATE_LIMITED (SPEC §6.1, REST-RL-001) -- carrying the
+    request's requestId -- and, when the limiter reports a retry_after_ms, an HTTP Retry-After header
+    (seconds, rounded up). When unwired, no rate limiting occurs (backward compatible)."""
+    on_rate_limited: Callable[[RateLimitedInfo], object] | None = None
+    """Observer called (fire-and-forget: never awaited, a raise is swallowed) each time rate_limiter denies
+    a request, with the tenant, principal and route class the limit was keyed on and the request's
+    requestId (the same value as the 429 response's X-Request-Id header and error.requestId)."""
     _allowed_actions_fn: AllowedActions | None = field(default=None, init=False, repr=False, compare=False)
     """Memoized `AllowedActions` closure (host_core's `create_allowed_actions`, write-scope hardening; see
     _routes.shared.allowed_actions). Not part of the public constructor — built lazily on first capability

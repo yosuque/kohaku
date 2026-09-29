@@ -76,7 +76,9 @@ python/
 │  │  ├─ composer/         # ← packages/composer (L0/L1/L2 / single-flight / repair loop; unlike TS,
 │  │  │                    #   the tier ladder + single-flight + result assembly are not split out of
 │  │  │                    #   compose.py into separate modules — same behavior, coarser file layout)
-│  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation)
+│  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation);
+│  │  │                    #   evidence.py = the whole Compliance Evidence Pack module
+│  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
 │  │  ├─ evals/            # ← packages/evals (judge / golden / FixtureLlm / distillation dataset export)
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
 │  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
@@ -140,7 +142,7 @@ correlation id (`_correlation_id_of`, U2) is `mcp:<sessionId>:<jsonrpc id>` — 
 `_meta.traceparent` (SEP-414), the same rule TS enforces: a W3C trace-id is shared by an entire trace, so
 deriving the correlation id from it would collapse every tool call in one conversation onto the same id. TS's
 `mcpCorrelationId(extra)` reads a real transport session id when one is available (`ServerContext.sessionId`),
-omitting the session segment entirely (`mcp:<jsonrpc id>`) for a session-less transport (stdio). This port's
+using a fresh per-call UUID in place of the session segment (`mcp:<uuid>:<jsonrpc id>`) for a session-less transport (stdio, stateless Streamable HTTP). This port's
 `mcp` SDK exposes no public transport session id to a request handler at all — `ServerRequestContext.session`
 is itself a fresh `ServerSession` wrapper the SDK constructs *per request*, not per connection (verified
 empirically: two calls on the same connection produce two `ctx.session` objects that differ by identity), so
@@ -266,6 +268,47 @@ field — this keeps output byte-identical to the TS side, whose `undefined` key
 `kohaku dataset export` (`cli/bin/kohaku.js`) is the ready-made file-based entry point and works
 against either language's fixations, since the wire shape is identical.
 
+## Compliance Evidence Pack (symmetric with TS)
+
+`kohaku.lineage` ports the TS `evidence` module (design.md #67) into one file,
+`kohaku/lineage/evidence.py`: it assembles a signed directory of normalized lineage / approval /
+promotion / fixation records plus the referenced component artifacts, for an auditor. Building a pack
+needs nothing extra; Ed25519 signing and verification need the optional `evidence` extra (installs
+`cryptography`):
+
+```bash
+pip install 'kohaku-ui[evidence]'
+```
+
+```python
+from kohaku.lineage import (
+    EvidenceManifestSigner, EvidencePackScope, build_evidence_pack, create_storage_evidence_source,
+    derive_ed25519_key_id, export_ed25519_public_key_raw, generate_ed25519_keypair,
+    sign_manifest, verify_evidence_pack,
+)
+
+keypair = generate_ed25519_keypair()  # or import_ed25519_private_key_pkcs8(...)
+key_id = derive_ed25519_key_id(export_ed25519_public_key_raw(keypair.public_key))
+pack = await build_evidence_pack(  # raises ValueError if any file would exceed the 64 MiB cap
+    source=create_storage_evidence_source(storage),  # any StoragePort
+    scope=EvidencePackScope(since="2026-09-01T00:00:00.000Z", until="2026-09-30T23:59:59.999Z"),
+    generator="my-service/1.0",
+    signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
+)
+signature = sign_manifest(pack.manifest, keypair.private_key)  # the text of manifest.sig
+# Write pack.files, json.dumps(pack.manifest.canonical_dict()) as manifest.json and the signature
+# as manifest.sig, then check them later with verify_evidence_pack(reader, public_key).
+```
+
+`verify_evidence_pack(reader, public_key)` takes an `EvidencePackReader` (you supply the file access) and
+checks the signature over the raw `manifest.json` value, the manifest's shape, every listed file's hash
+and size, and that no unlisted file is present. Python has no CLI counterpart: `kohaku evidence
+keygen|export|verify` is the TS side's `cli/bin/kohaku.js`, and its packs verify here (and vice versa).
+`spec/test/fixtures/evidence-pack/` is the cross-language golden — `store.json` (the source records),
+`manifest.json` and `manifest.sig` (RFC 8032 §7.1 TEST 1 key) — which both languages must reproduce
+byte-for-byte (`tests/spec/test_cross_language_golden.py`). See the [user guide](../docs/user-guide.md)'s
+evidence section for the pack contents, the window and size rules, and the REST limitation.
+
 ## Opt-in prompt caching / `refConstraint` (symmetric with TS)
 
 Two independent, opt-in escape hatches for the trade-off between kohaku's schema-level
@@ -387,14 +430,15 @@ Three Python-specific divergences from the TS port, none of them wire-visible:
   entirely into a *new* `check_with_context` once `compose.budget.dailyTokens` layers its own check on top
   (`policy.py`'s `_build_effective_budget`), so a base policy that only ever set the plain `check` field is
   never silently dropped.
-- **The MCP rate-limit bucket key has no session-id fallback step**: TS's key chain is
-  `principal.id -> sessionId -> "anonymous"`; Python's is `principal.id -> "anonymous"` only. The installed
-  `mcp` SDK's `ServerRequestContext` (what every `host_mcp` handler actually receives) exposes no public
-  per-connection session id — only the richer `Context` class has one, and `ServerRunner` does not
-  construct that class for handlers. This is a tracked, language-specific gap (not a design choice), the
-  same kind of gap this file's "Structure" section already documents for `McpErrorInfo.correlation_id`
-  (always the tool call's own JSON-RPC request id, never a per-connection session id) for the same
-  underlying SDK-accessor reason.
+- **The MCP rate-limit bucket key falls back to a per-connection id, not the transport session id**: TS's
+  key chain is `rateLimitKey -> principal.id -> sessionId -> "anonymous"`; Python's is
+  `rate_limit_key -> principal.id -> _session_correlation_prefix` (the opaque id it generates once per
+  connection). The installed `mcp` SDK's `ServerRequestContext` (what every `host_mcp` handler actually
+  receives) exposes no public per-connection session id — only the richer `Context` class has one, and
+  `ServerRunner` does not construct that class for handlers — so Python keys on its own per-connection id
+  instead. Either way an unkeyed limiter is only per-connection (Python) or one shared bucket (TS on
+  stateless HTTP / stdio): wire `rate_limit_key` / `resolve_principal` for a per-caller limit;
+  `attach_kohaku_to_mcp_server` warns once when a `rate_limiter` has neither.
 
 ## Governed actions (symmetric with TS)
 
@@ -418,7 +462,7 @@ in the same request) and `"approve"` (a bound `ApprovalPort.verify_approval` tok
 `action.approved`; fail-open — a recorder failure never blocks the write).
 
 The stateless HMAC `ApprovalPort` reference implementation (`HmacApprovalPort` /
-`create_hmac_approval_port` / `MemoryApprovalStore`, the `"kohaku-approval.v1."`-prefixed token TS's
+`create_hmac_approval_port` / `MemoryApprovalStore`, the `"kohaku-approval.v2."`-prefixed token TS's
 `packages/authz-hmac` package ships) lives in `python/examples/sales-api/src/sales_api/approval_port.py`
 rather than in the shared `kohaku` library — the same place `sales_api/authz_port.py` already keeps the
 HMAC `AuthzPort`/capability-token counterpart, since this port has no standalone-package boundary on the

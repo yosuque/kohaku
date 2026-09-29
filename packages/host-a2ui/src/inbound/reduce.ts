@@ -38,7 +38,8 @@ function isJsonObjectValue(value: JsonValue | undefined): value is JsonObject {
 /**
  * Upserts an incoming `components` array onto an existing map (id match replaces, matching the "A2UI has no
  * component-delete message, updateComponents is upsert-only" fact this profile's outbound side already
- * relies on). Rejects a *duplicate id within the same incoming array* — two components both claiming, say,
+ * relies on). Copy-on-write by default; with `inPlace` the caller vouches that `base` is private to it (see
+ * {@link ReduceOptions}) and the upsert mutates it instead, so folding many messages is not O(messages × components). Rejects a *duplicate id within the same incoming array* — two components both claiming, say,
  * `id: "root"` in one message is a malformed message, not a legal "last one wins" upsert.
  *
  * **Security**: also rejects a reserved id (see {@link RESERVED_OBJECT_KEYS}) and stores the result on a
@@ -50,6 +51,7 @@ function isJsonObjectValue(value: JsonValue | undefined): value is JsonObject {
 function upsertComponents(
   base: Record<string, A2uiComponent>,
   incoming: readonly A2uiComponent[],
+  inPlace: boolean,
 ): Record<string, A2uiComponent> {
   const seen = new Set<string>();
   for (const c of incoming) {
@@ -63,9 +65,15 @@ function upsertComponents(
     }
     seen.add(c.id);
   }
+  const next = inPlace ? base : copyComponents(base);
+  for (const c of incoming) next[c.id] = c;
+  return next;
+}
+
+/** A shallow copy of a components map onto a fresh prototype-less object (see `upsertComponents`'s security note). */
+export function copyComponents(base: Record<string, A2uiComponent>): Record<string, A2uiComponent> {
   const next: Record<string, A2uiComponent> = Object.create(null) as Record<string, A2uiComponent>;
   for (const key of Object.keys(base)) next[key] = base[key] as A2uiComponent;
-  for (const c of incoming) next[c.id] = c;
   return next;
 }
 
@@ -208,6 +216,16 @@ export function surfaceIdOf(message: InboundA2uiMessage): string {
   return message.deleteSurface.surfaceId;
 }
 
+export interface ReduceOptions {
+  /**
+   * The caller guarantees `state.components` is not shared with any other live `SurfaceState` (for example
+   * a private copy made once per `ingest()` call via {@link copyComponents}, then threaded through every
+   * message of that call), so `updateComponents` may upsert into it in place instead of copying the whole
+   * map per message. Default `false`: `state` is never mutated.
+   */
+  inPlaceComponents?: boolean;
+}
+
 /**
  * Folds one inbound message onto the current state of the one surface it targets. `state` is `undefined`
  * when the surface does not exist yet (legal only for `createSurface`); the return value is `undefined`
@@ -225,7 +243,9 @@ export function surfaceIdOf(message: InboundA2uiMessage): string {
 export function reduceSurfaceMessage(
   state: SurfaceState | undefined,
   message: InboundA2uiMessage,
+  options?: ReduceOptions,
 ): SurfaceState | undefined {
+  const inPlace = options?.inPlaceComponents === true;
   if ("createSurface" in message) {
     const body = message.createSurface;
     if (state != null) {
@@ -238,11 +258,12 @@ export function reduceSurfaceMessage(
       surfaceId: body.surfaceId,
       ...(body.catalogId != null ? { catalogId: body.catalogId } : {}),
       sendDataModel: body.sendDataModel ?? false,
-      components: {},
+      components: Object.create(null) as Record<string, A2uiComponent>,
       dataModel: {},
     };
     if ("components" in body && body.components != null) {
-      next = { ...next, components: upsertComponents(next.components, body.components) };
+      // `next.components` was created just above, so it is always private to this call.
+      next = { ...next, components: upsertComponents(next.components, body.components, true) };
     }
     if ("dataModel" in body && body.dataModel != null) {
       next = { ...next, dataModel: body.dataModel };
@@ -257,7 +278,7 @@ export function reduceSurfaceMessage(
         `updateComponents targets unknown surface "${body.surfaceId}" (createSurface must come first)`,
       );
     }
-    return { ...state, components: upsertComponents(state.components, body.components) };
+    return { ...state, components: upsertComponents(state.components, body.components, inPlace) };
   }
 
   if ("updateDataModel" in message) {
@@ -283,8 +304,9 @@ export function reduceSurfaceMessage(
 }
 
 /**
- * Folds one inbound message onto a registry of surfaces (`surfaceId -> SurfaceState`), the shape
- * `createA2uiIngest` (`ingest.ts`) accumulates across calls. Returns a new map (the input is never mutated).
+ * Folds one inbound message onto a registry of surfaces (`surfaceId -> SurfaceState`). Returns a new map
+ * (the input is never mutated); each call copies the whole map, which is why `createA2uiIngest` folds a
+ * batch with {@link reduceSurfaceMessage} directly instead.
  */
 export function reduceSurfaces(
   surfaces: ReadonlyMap<string, SurfaceState>,

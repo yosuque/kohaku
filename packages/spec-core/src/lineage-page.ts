@@ -61,7 +61,8 @@ export function encodeSeqCursor(seq: number): string {
 }
 
 /** Decodes a cursor produced by `encodeSeqCursor`. Throws `LineageCursorError` for anything else
- * (malformed base64url, invalid JSON, wrong shape, an unsupported `v`, or a non-finite `seq`). */
+ * (malformed base64url, invalid JSON, wrong shape, an unsupported `v`, or a `seq` that is not a
+ * non-negative safe integer — every real seq is a list index / line number / bigserial / INCR counter). */
 export function decodeSeqCursor(cursor: string): number {
   let raw: string;
   try {
@@ -80,9 +81,10 @@ export function decodeSeqCursor(cursor: string): number {
     parsed === null ||
     (parsed as { v?: unknown }).v !== 1 ||
     typeof (parsed as { seq?: unknown }).seq !== "number" ||
-    !Number.isFinite((parsed as { seq: number }).seq)
+    !Number.isSafeInteger((parsed as { seq: number }).seq) ||
+    (parsed as { seq: number }).seq < 0
   ) {
-    throw new LineageCursorError(cursor, 'expected {"v":1,"seq":<number>}');
+    throw new LineageCursorError(cursor, 'expected {"v":1,"seq":<non-negative integer>}');
   }
   return (parsed as SeqCursor).seq;
 }

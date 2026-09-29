@@ -85,7 +85,7 @@ export function Dashboard() {
 
 ## この先
 
-- **自分のデータで自分の L0 画面**: `createKohakuHost()`(`@kohaku-ui/host`)が要求するのは `DomainPort` だけ(`node cli/bin/kohaku.js scaffold ports` がファイルを生成)。固定 Spec はその `policy` オプションに登録する — [ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
+- **自分のデータで自分の L0 画面**: `createKohakuHost()`(`@kohaku-ui/host`)が要求するのは `DomainPort` だけ(`npx @kohaku-ui/cli scaffold ports` がファイルを生成。このリポジトリの中では `node cli/bin/kohaku.js scaffold ports`)。固定 Spec はその `policy` オプションに登録する — [ユーザーガイド §6 Step 0](../user-guide.ja.md#step-0--llm-なしの-server-driven-ui)。
 - **イベントとドリルダウン**: Spec に `events`(`table1.rowClick → intent.patch`)を宣言し、`RendererProvider` に `onEvent` を渡すとホストが再合成する — [ユーザーガイド デモ 4](../user-guide.ja.md#デモ-4--インタラクションループと固定化)。
 - **カタログの範囲内でモデルに合成させる(L1)**: [パス (c)](full-stack.ja.md)。
 - **React なしで同じ Spec を**: `@kohaku-ui/renderer-wc` の `<kohaku-surface>` — [ユーザーガイド §2](../user-guide.ja.md#非-react-レンダラーの実演web-components--react-ゼロ)。

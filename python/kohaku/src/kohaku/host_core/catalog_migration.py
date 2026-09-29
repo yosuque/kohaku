@@ -130,10 +130,16 @@ def _compute_plan_hash(
 
 
 def verify_catalog_migration_plan(plan: CatalogMigrationPlan) -> bool:
-    """Recomputes plan.planHash from the plan's own rewrites/steps/blocked and compares it against the
-    stored value -- detects a hand-edited or otherwise corrupted plan before apply_catalog_migration ever
-    calls Fixations.replace. Port of TS's verifyCatalogMigrationPlan."""
-    return _compute_plan_hash(plan.rewrites, plan.steps, plan.blocked) == plan.planHash
+    """Checks a plan's integrity before apply_catalog_migration ever calls Fixations.replace, on two levels:
+    plan.planHash is recomputed from the plan's own rewrites/steps/blocked (its material excludes each
+    step's full pinnedSpec, so this level alone cannot see a pinnedSpec edit), and each step's
+    compute_structure_hash(pinnedSpec) is recomputed and must equal that step's afterStructureHash (which
+    catches a pinnedSpec whose components/events/state were altered while its hashes were left alone; an
+    edit to the envelope fields compute_structure_hash excludes -- provenance, dataVersion -- is not
+    detectable). Port of TS's verifyCatalogMigrationPlan."""
+    if _compute_plan_hash(plan.rewrites, plan.steps, plan.blocked) != plan.planHash:
+        return False
+    return all(compute_structure_hash(s.pinnedSpec) == s.afterStructureHash for s in plan.steps)
 
 
 async def plan_catalog_migration(

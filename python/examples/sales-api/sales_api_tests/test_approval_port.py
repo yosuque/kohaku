@@ -7,14 +7,21 @@ from capability tokens, expiry, and single-use enforcement via MemoryApprovalSto
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
+import time
 
 import pytest
 
-from kohaku.spec import ApprovalVerifyResult, Principal, Scope, VerifyRequest
+from kohaku.spec import ApprovalIssueError, ApprovalVerifyResult, Principal, Scope, VerifyRequest
 from sales_api.approval_port import (
+    APPROVAL_TOKEN_PREFIX,
     DEFAULT_APPROVAL_TTL_SECONDS,
+    DEFAULT_MAX_APPROVAL_TTL_SECONDS,
     HmacApprovalPort,
     MemoryApprovalStore,
+    _b64url_encode,
     create_hmac_approval_port,
 )
 from sales_api.authz_port import create_hmac_authz_port
@@ -66,7 +73,7 @@ class TestIssuance:
     def test_rejects_issuing_a_self_approval(self) -> None:
         async def run() -> None:
             approvals = create_hmac_approval_port("test-secret")
-            with pytest.raises(ValueError, match="approverId must differ from requesterId"):
+            with pytest.raises(ApprovalIssueError, match="approverId must differ from requesterId"):
                 await _issue(approvals, requester_id="same-person", approver_id="same-person")
 
         asyncio.run(run())
@@ -143,6 +150,34 @@ class TestBindingChecks:
         asyncio.run(run())
 
 
+class TestMaxTtl:
+    def test_a_requested_ttl_above_the_default_maximum_is_clamped_to_it(self) -> None:
+        async def run() -> None:
+            clock = {"t": 1_000_000.0}
+            approvals = create_hmac_approval_port("test-secret", now=lambda: clock["t"])
+            token = await _issue(approvals, ttl_seconds=86_400)
+            clock["t"] += DEFAULT_MAX_APPROVAL_TTL_SECONDS - 1
+            assert (await _verify(approvals, token)).ok is True
+            clock["t"] += 1
+            assert (await _verify(approvals, token)).reason == "approval expired"
+
+        asyncio.run(run())
+
+    def test_a_custom_maximum_applies_and_a_shorter_request_is_never_lengthened(self) -> None:
+        async def run() -> None:
+            clock = {"t": 1_000_000.0}
+            approvals = create_hmac_approval_port("test-secret", max_ttl_seconds=60, now=lambda: clock["t"])
+            clamped = await _issue(approvals, ttl_seconds=600)
+            short = await _issue(approvals, ttl_seconds=10)
+            clock["t"] += 10
+            assert (await _verify(approvals, short)).ok is False
+            assert (await _verify(approvals, clamped)).ok is True
+            clock["t"] += 50
+            assert (await _verify(approvals, clamped)).ok is False
+
+        asyncio.run(run())
+
+
 class TestExpiry:
     def test_rejects_an_expired_approval(self) -> None:
         async def run() -> None:
@@ -188,6 +223,101 @@ class TestDomainSeparation:
             token = await _issue(approvals)
             result = await authz.verify(token, VerifyRequest(kind="write", ref="annotate"))
             assert result.ok is False
+
+        asyncio.run(run())
+
+
+    def test_rejects_an_approval_token_with_its_prefix_stripped(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret")
+            token = await _issue(create_hmac_approval_port("test-secret"))
+            stripped = token[len(APPROVAL_TOKEN_PREFIX) :]
+            result = await authz.verify(stripped, VerifyRequest(kind="write", ref="annotate"))
+            assert result.ok is False
+            assert result.reason == "invalid signature"
+
+        asyncio.run(run())
+
+    def test_rejects_a_capability_token_with_the_approval_prefix_prepended(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret")
+            approvals = create_hmac_approval_port("test-secret")
+            cap = await authz.issue_capability(Principal(id="u"), [Scope(kind="write", ref="annotate")])
+            result = await _verify(approvals, APPROVAL_TOKEN_PREFIX + cap)
+            assert (result.ok, result.reason) == (False, "invalid signature")
+
+        asyncio.run(run())
+
+    def test_rejects_a_v1_token(self) -> None:
+        async def run() -> None:
+            claims = {
+                "action": ACTION,
+                "payloadHash": PAYLOAD_HASH,
+                "approverId": APPROVER_ID,
+                "requesterId": REQUESTER_ID,
+                "exp": int(time.time()) + 300,
+                "jti": "jti-v1",
+            }
+            payload = _b64url_encode(json.dumps(claims, separators=(",", ":")).encode("utf-8"))
+            sig = _b64url_encode(hmac.new(b"test-secret", payload.encode("utf-8"), hashlib.sha256).digest())
+            result = await _verify(create_hmac_approval_port("test-secret"), f"kohaku-approval.v1.{payload}.{sig}")
+            assert (result.ok, result.reason) == (False, "not an approval token")
+
+        asyncio.run(run())
+
+
+def _forge(secret: str, claims: object) -> str:
+    """A correctly signed v2 token carrying arbitrary claims (what a holder of the shared secret could mint)."""
+    key = hmac.new(secret.encode("utf-8"), b"kohaku-approval-v2", hashlib.sha256).digest()
+    payload = _b64url_encode(json.dumps(claims, separators=(",", ":")).encode("utf-8"))
+    sig = _b64url_encode(hmac.new(key, (APPROVAL_TOKEN_PREFIX + payload).encode("utf-8"), hashlib.sha256).digest())
+    return f"{APPROVAL_TOKEN_PREFIX}{payload}.{sig}"
+
+
+class TestMalformedTokens:
+    def test_non_ascii_tampered_signature_is_denied_not_raised(self) -> None:
+        async def run() -> None:
+            approvals = create_hmac_approval_port("test-secret")
+            token = await _issue(approvals)
+            tampered = token[: token.rfind(".") + 1] + "sig\u00e9\u3042"
+            result = await _verify(approvals, tampered)
+            assert (result.ok, result.reason) == (False, "invalid signature")
+
+        asyncio.run(run())
+
+    @pytest.mark.parametrize(
+        "mutation",
+        [
+            {"action": 7},
+            {"payloadHash": None},
+            {"requesterId": {}},
+            {"approverId": ["a"]},
+            {"exp": "9999999999"},
+            {"exp": True},
+            {"jti": None},
+            {"tenant": 5},
+        ],
+    )
+    def test_a_correctly_signed_but_malformed_claim_is_denied(self, mutation: dict[str, object]) -> None:
+        async def run() -> None:
+            claims: dict[str, object] = {
+                "action": ACTION,
+                "payloadHash": PAYLOAD_HASH,
+                "approverId": APPROVER_ID,
+                "requesterId": REQUESTER_ID,
+                "exp": int(time.time()) + 300,
+                "jti": "j",
+            }
+            claims.update(mutation)
+            result = await _verify(create_hmac_approval_port("test-secret"), _forge("test-secret", claims))
+            assert (result.ok, result.reason) == (False, "malformed payload")
+
+        asyncio.run(run())
+
+    def test_a_non_object_payload_is_denied(self) -> None:
+        async def run() -> None:
+            result = await _verify(create_hmac_approval_port("test-secret"), _forge("test-secret", None))
+            assert (result.ok, result.reason) == (False, "malformed payload")
 
         asyncio.run(run())
 

@@ -35,10 +35,35 @@ describe("EvidenceManifestSchema", () => {
     expect(result.version).toBe(1);
   });
 
-  it("defaults warnings to an empty array when omitted", () => {
+  it("requires warnings (no silent default for a required field)", () => {
     const { warnings, ...rest } = validManifest();
-    const result = EvidenceManifestSchema.parse(rest);
-    expect(result.warnings).toEqual([]);
+    expect(() => EvidenceManifestSchema.parse(rest)).toThrow();
+  });
+
+  it("rejects an unknown top-level key", () => {
+    expect(() =>
+      EvidenceManifestSchema.parse({ ...validManifest(), injected: "approved by legal" }),
+    ).toThrow();
+  });
+
+  it("rejects an unknown key inside a nested object", () => {
+    const manifest = validManifest();
+    expect(() =>
+      EvidenceManifestSchema.parse({ ...manifest, scope: { ...manifest.scope, extra: 1 } }),
+    ).toThrow();
+    expect(() =>
+      EvidenceManifestSchema.parse({ ...manifest, signer: { ...manifest.signer, note: "x" } }),
+    ).toThrow();
+    expect(() =>
+      EvidenceManifestSchema.parse({ ...manifest, files: [{ ...manifest.files[0]!, extra: true }] }),
+    ).toThrow();
+  });
+
+  it("rejects a string where a number is required (no coercion)", () => {
+    const manifest = validManifest();
+    expect(() =>
+      EvidenceManifestSchema.parse({ ...manifest, files: [{ ...manifest.files[0]!, bytes: "10" }] }),
+    ).toThrow();
   });
 
   it("rejects an unknown format literal", () => {

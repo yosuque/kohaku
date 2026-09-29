@@ -60,4 +60,28 @@ describe("LineageTab", () => {
     expect(rows[0]!.textContent).toContain("#abcdef01");
     expect(rows[1]!.textContent).toContain("view.composed");
   });
+
+  it("shows an action event's gate tier as gate:<tier>, apart from the L0/L1/L2 composition tier", async () => {
+    const events = [
+      {
+        id: "1",
+        ts: "2026-01-01T09:00:00Z",
+        type: "view.composed",
+        actor: { kind: "model" },
+        payload: { tier: "L1", cache: "miss", canonical: "sales.trend" },
+      },
+      {
+        id: "2",
+        ts: "2026-01-01T09:00:01Z",
+        type: "action.approvalRequested",
+        actor: { kind: "user" },
+        payload: { tier: "approve", action: "annotate", payloadHash: "sha256:abc" },
+      },
+    ];
+    renderInAdmin(<LineageTab />, { handlers: { "GET /lineage": () => jsonResponse({ events }) } });
+    await screen.findByText("action.approvalRequested");
+    expect(screen.getByText("gate:approve").getAttribute("data-kohaku-tier-kind")).toBe("gate");
+    expect(screen.getByText("L1").getAttribute("data-kohaku-tier-kind")).toBe("composition");
+    expect(screen.queryByText("approve")).toBeNull();
+  });
 });

@@ -1,6 +1,7 @@
 import type { DomainPort } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { createAllowedActions } from "../src/allowed-actions.js";
+import { allowedActionsFromIndex, createAllowedActions } from "../src/allowed-actions.js";
+import { createOperationIndex } from "../src/operation-index.js";
 
 describe("createAllowedActions", () => {
   it("memoizes listOperations() across calls", async () => {
@@ -62,5 +63,47 @@ describe("createAllowedActions", () => {
     const retried = await allowedActions();
     expect(calls).toBe(2);
     expect([...retried]).toEqual(["annotate"]);
+  });
+});
+
+describe("allowedActionsFromIndex", () => {
+  const domainOf = (ops: string[], counter: { calls: number }): DomainPort => ({
+    async listOperations() {
+      counter.calls++;
+      return ops.map((name) => ({ name, description: "d" }));
+    },
+    async invoke() {
+      return null;
+    },
+  });
+
+  it("yields the index's action names without a second listOperations() call", async () => {
+    const counter = { calls: 0 };
+    const index = createOperationIndex(domainOf(["annotate", "publish"], counter));
+    const allowed = allowedActionsFromIndex(index);
+    expect([...(await allowed())]).toEqual(["annotate", "publish"]);
+    await index();
+    await allowed();
+    expect(counter.calls).toBe(1);
+  });
+
+  it("keeps an operation whose paramsSchema is invalid (a bad schema never changes the set), and propagates a listOperations() rejection", async () => {
+    let fail = true;
+    const domain: DomainPort = {
+      async listOperations() {
+        if (fail) throw new Error("down");
+        return [
+          { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "x" } as never },
+          { name: "publish", description: "d" },
+        ];
+      },
+      async invoke() {
+        return null;
+      },
+    };
+    const allowed = allowedActionsFromIndex(createOperationIndex(domain));
+    await expect(allowed()).rejects.toThrow("down");
+    fail = false;
+    expect([...(await allowed())]).toEqual(["annotate", "publish"]);
   });
 });

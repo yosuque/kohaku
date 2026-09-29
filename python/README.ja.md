@@ -74,7 +74,9 @@ python/
 │  │  ├─ composer/         # ← packages/composer(L0/L1/L2・single-flight・修復ループ。TS と異なり
 │  │  │                    #   tier ladder・single-flight・結果組み立てを compose.py から別モジュール
 │  │  │                    #   に分割していない — 挙動は同一で、ファイル構成が粗いだけ)
-│  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)
+│  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)。
+│  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
+│  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
 │  │  ├─ evals/            # ← packages/evals(judge / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
 │  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
@@ -135,7 +137,7 @@ compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_i
 ルールである。W3C の trace-id は 1 つのトレース全体で共有されるため、そこから相関 id を導出すると 1 会話内の
 全ツール呼び出しが同じ id に潰れてしまう。TS の `mcpCorrelationId(extra)` は実際のトランスポートセッション id
 が取得できる場合にそれを読む(`ServerContext.sessionId`)が、セッションという概念の無いトランスポート(stdio)
-ではセッション部分をまるごと省略する(`mcp:<jsonrpc id>`)。この移植が使う `mcp` SDK はリクエストハンドラに
+ではセッション部分の代わりに呼び出しごとの新しい UUID を使う(`mcp:<uuid>:<jsonrpc id>`)。この移植が使う `mcp` SDK はリクエストハンドラに
 公開のトランスポートセッション id を一切露出しない——`ServerRequestContext.session` 自体が(接続ごとではなく)
 **リクエストごとに**新規構築される `ServerSession` ラッパーである(実測で確認済み: 同一接続上の 2 回の
 呼び出しが、id が異なる 2 つの `ctx.session` オブジェクトを生成した)ため、接続ごとに安定したアンカーは
@@ -232,6 +234,48 @@ meta}`。`"fixation"` 行では、レコードが持っていれば `meta` に `
 ため。Python 側に対応する CLI は無く、TS 側の `kohaku dataset export`(`cli/bin/kohaku.js`)
 がファイルベースの既製エントリポイントとして使える(ワイヤ形式が同一なのでどちらの言語の
 fixation に対しても動く)。
+
+## Compliance Evidence Pack(TS と対称)
+
+`kohaku.lineage` は TS の `evidence` モジュール(design.md #67)を 1 ファイル
+`kohaku/lineage/evidence.py` に移植しています。正規化した lineage / 承認 / promotion / fixation の
+レコードと参照先の部品アーティファクトを、監査者に渡すための署名付きディレクトリにまとめます。
+パックの組み立てに追加依存は要りません。Ed25519 の署名と検証にはオプションの `evidence` extra
+(`cryptography` が入る)が必要です。
+
+```bash
+pip install 'kohaku-ui[evidence]'
+```
+
+```python
+from kohaku.lineage import (
+    EvidenceManifestSigner, EvidencePackScope, build_evidence_pack, create_storage_evidence_source,
+    derive_ed25519_key_id, export_ed25519_public_key_raw, generate_ed25519_keypair,
+    sign_manifest, verify_evidence_pack,
+)
+
+keypair = generate_ed25519_keypair()  # または import_ed25519_private_key_pkcs8(...)
+key_id = derive_ed25519_key_id(export_ed25519_public_key_raw(keypair.public_key))
+pack = await build_evidence_pack(  # 1 ファイルでも 64 MiB の上限を超えるなら ValueError
+    source=create_storage_evidence_source(storage),  # 任意の StoragePort
+    scope=EvidencePackScope(since="2026-09-01T00:00:00.000Z", until="2026-09-30T23:59:59.999Z"),
+    generator="my-service/1.0",
+    signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
+)
+signature = sign_manifest(pack.manifest, keypair.private_key)  # manifest.sig の中身
+# pack.files、manifest.json(json.dumps(pack.manifest.canonical_dict()))、署名(manifest.sig)を
+# 書き出し、後で verify_evidence_pack(reader, public_key) で検証する。
+```
+
+`verify_evidence_pack(reader, public_key)` は `EvidencePackReader`(ファイルの読み出しは呼び出し側が
+用意する)を受け取り、`manifest.json` の生の値に対する署名、manifest の形、列挙された全ファイルの
+ハッシュとサイズ、列挙されていないファイルが無いことを検査します。Python 側に対応する CLI は
+無く、`kohaku evidence keygen|export|verify` は TS 側の `cli/bin/kohaku.js` です。そのパックはこちらでも
+検証でき、逆も同様です。`spec/test/fixtures/evidence-pack/` が言語間の golden で、`store.json`
+(元のレコード)、`manifest.json`、`manifest.sig`(RFC 8032 §7.1 TEST 1 の鍵)から成り、両言語が
+バイト単位で再現しなければなりません(`tests/spec/test_cross_language_golden.py`)。パックの中身・期間
+とサイズのルール・REST の制約は [ユーザーガイド](../docs/user-guide.ja.md)の evidence の節を参照
+してください。
 
 ## opt-in のプロンプトキャッシュ / `refConstraint`(TS と対称)
 
@@ -349,14 +393,15 @@ TS 版との Python 固有の差異が 3 点あるが、いずれもワイヤに
   `compose.budget.dailyTokens` が自分のチェックを重ねる際には*新しい* `check_with_context` 一つに
   まとめて畳み込まれる(`policy.py` の `_build_effective_budget`)ため、素の `check` フィールドしか
   設定していなかった基本ポリシーが黙って失われることはない。
-- **MCP のレート制限バケットキーにはセッション id へのフォールバック段階が無い**: TS のキーの連鎖は
-  `principal.id -> sessionId -> "anonymous"` だが、Python は `principal.id -> "anonymous"` のみ。
+- **MCP のレート制限バケットキーは、トランスポートのセッション id ではなく接続ごとの id にフォールバックする**:
+  TS のキーの連鎖は `rateLimitKey -> principal.id -> sessionId -> "anonymous"`、Python は
+  `rate_limit_key -> principal.id -> _session_correlation_prefix`(接続ごとに 1 回生成する不透明 id)。
   インストールされている `mcp` SDK の `ServerRequestContext`(`host_mcp` の各ハンドラが実際に受け取る
   もの)には、接続ごとの公開セッション id が無い——それを持つのはより豊富な `Context` クラスだけで、
-  `ServerRunner` はハンドラ向けにそのクラスを構築しない。これは追跡済みの、言語固有のギャップであり
-  (設計判断ではない)、同じ根本原因(SDK のアクセサ不足)により、本ファイルの「構成」の節が
-  `McpErrorInfo.correlation_id`(常にツール呼び出し自身の JSON-RPC リクエスト id であり、接続ごとの
-  セッション id ではない)についてすでに記録しているのと同種のギャップである。
+  `ServerRunner` はハンドラ向けにそのクラスを構築しない——ため、Python は自前の接続ごとの id をキーにする。
+  いずれにせよ、キー未指定のリミッタは接続ごと(Python)か、単一の共有バケット(TS のステートレス HTTP /
+  stdio)にしかならない: 呼び出し元ごとの制限には `rate_limit_key` / `resolve_principal` を配線すること。
+  `rate_limiter` がどちらも持たない場合、`attach_kohaku_to_mcp_server` は 1 度だけ警告する。
 
 ## 統制された Action(TS と対称)
 
@@ -381,7 +426,7 @@ canonical-JSON sha256 である。`packages/spec-core/src/action-params.ts` に�
 `action.approvalRequested` / `action.approved`。fail-open — recorder の失敗が書き込みを止めることは無い)。
 
 ステートレスな HMAC `ApprovalPort` の参照実装(`HmacApprovalPort` / `create_hmac_approval_port` /
-`MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v1."` prefix の
+`MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v2."` prefix の
 トークン)は、共有の `kohaku` ライブラリではなく
 `python/examples/sales-api/src/sales_api/approval_port.py` に置かれている — `sales_api/authz_port.py`
 がすでに HMAC `AuthzPort`/capability トークン対を置いているのと同じ場所である。これは、この port が

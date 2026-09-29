@@ -7,6 +7,7 @@ export { createMemoryApprovalStore } from "./approval-store.js";
 export {
   createHmacApprovalPort,
   DEFAULT_APPROVAL_TTL_SECONDS,
+  DEFAULT_MAX_APPROVAL_TTL_SECONDS,
   type HmacApprovalOptions,
 } from "./hmac-approval-port.js";
 export {

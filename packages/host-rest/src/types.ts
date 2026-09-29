@@ -4,6 +4,7 @@ import type {
   ActionEffects,
   FixationSelfHealApi,
   PolicyRateLimiter,
+  RateLimitedInfo,
   ViewRecorder,
 } from "@kohaku-ui/host-core";
 import type {
@@ -191,7 +192,8 @@ export interface KohakuHostDeps {
    * Verifies stateless approval tokens for `"approve"`-tier actions (design.md #63; typically
    * `@kohaku-ui/authz-hmac`'s `createHmacApprovalPort`). Consulted by `POST /binding/action`'s
    * `ActionGate` and by `POST /approvals` (issuance). **If not wired, an `"approve"`-tier action can
-   * never be allowed** (the gate returns `denied`) and `POST /approvals` responds 501 `NOT_IMPLEMENTED`.
+   * never be allowed** (the gate returns `denied`) and `POST /approvals` responds 501 `NOT_IMPLEMENTED`. Issuing additionally requires
+   * `authorizeGovernance` (below): without it `POST /approvals` also responds 501 (SPEC ACT-APR-001 (e)).
    */
   approvals?: ApprovalPort;
   /**
@@ -219,6 +221,8 @@ export interface KohakuHostDeps {
    * **If not wired, it is allowed without authorization (backward compatible). Governance-plane
    * authorization is a product responsibility, and since it becomes authorization-less when not wired, in
    * production either wiring this hook or protecting it with external middleware (a reverse proxy, etc.) is mandatory.**
+   * The one exception is `POST /approvals` (`operation.kind` `"action.approve"`): it fails closed with 501
+   * when this hook is not wired, because otherwise any authenticated principal could approve.
    */
   authorizeGovernance?: (
     principal: Principal,
@@ -235,6 +239,18 @@ export interface KohakuHostDeps {
    * it. On denial, returns 429 with the error envelope's `code: RATE_LIMITED` (SPEC §6.1, REST-RL-001)
    * and, when the limiter reports a `retryAfterMs`, an HTTP `Retry-After` header (seconds, rounded up).
    * **If not wired, no rate limiting occurs (backward compatible).**
+   *
+   * `POST /intent/normalize` is limited under the `"compose"` route class too: for a natural-language
+   * question it calls the SemanticPort's LLM, so it spends tokens just like a compose does. (Those
+   * normalization tokens are not counted by the policy file's `compose.budget.dailyTokens`, which only
+   * counts generation.)
    */
   rateLimiter?: PolicyRateLimiter;
+  /**
+   * Observer called (fire-and-forget: never awaited, a throw is swallowed) each time `rateLimiter` denies
+   * a request, with the tenant, principal and route class the limit was keyed on and the request's
+   * `requestId` (the same value as the 429 response's `X-Request-Id` header and `error.requestId`). Lets a
+   * host count / alert on throttling, which is otherwise visible only to the client as a 429.
+   */
+  onRateLimited?: (info: RateLimitedInfo) => void | Promise<void>;
 }

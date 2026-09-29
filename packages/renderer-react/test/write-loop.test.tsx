@@ -339,8 +339,10 @@ describe("useInvokeAction: governed actions (design.md #62/#63)", () => {
     );
   });
 
-  it("tier approve with no requestApproval hook never calls binding.invokeAction (no browser-native default)", async () => {
-    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+  it("tier approve with no requestApproval hook still asks the server once, without an approval token", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => {
+      throw new BindingError("APPROVAL_REQUIRED", "this action requires an approval token", { status: 403 });
+    });
     const binding: BindingClient = {
       resolve: async () => {
         throw new Error("not used in these tests");
@@ -348,9 +350,21 @@ describe("useInvokeAction: governed actions (design.md #62/#63)", () => {
       invokeAction,
     };
     const manifest: ActionManifest = { annotate: { tier: "approve" } };
-    const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+    const onActionResult = vi.fn();
+    const { container } = renderSpec(actionButtonSpec(), {
+      binding,
+      actionManifest: manifest,
+      onActionResult,
+    });
     fireEvent.click(container.querySelector('[data-kohaku="b1"]') as HTMLButtonElement);
+    await waitFor(() => expect(invokeAction).toHaveBeenCalledTimes(1));
+    expect(invokeAction).toHaveBeenCalledWith(
+      "annotate",
+      { note: "hi" },
+      { confirmed: undefined, approval: undefined },
+    );
+    // Awaiting approval is not a completed write: no completion notification.
     await new Promise((r) => setTimeout(r, 0));
-    expect(invokeAction).not.toHaveBeenCalled();
+    expect(onActionResult).not.toHaveBeenCalled();
   });
 });

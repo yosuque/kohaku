@@ -1,5 +1,6 @@
 import {
   type ActionParamIssue,
+  type ApprovalRequiredInfo,
   canonicalStringify,
   type JsonValue,
   type TabularData,
@@ -226,6 +227,9 @@ export function createBindingClient(config: BindingClientConfig): BindingClient 
         if (status === 404) {
           throw new BindingError("REF_NOT_FOUND", `no data source for ${ref.raw}`, { status });
         }
+        if (status === 429) {
+          throw rateLimitedError(`binding resolve rate limited for ${ref.raw}`, status, body);
+        }
         if (status < 200 || status >= 300) {
           throw new BindingError("RESOLVE_FAILED", `binding resolve failed (${status}) for ${ref.raw}`, {
             status,
@@ -320,6 +324,9 @@ export function createBindingClient(config: BindingClientConfig): BindingClient 
           approval: envelope.approval,
         });
       }
+      if (status === 429) {
+        throw rateLimitedError(`action "${action}" rate limited`, status, body);
+      }
       if (status === 401 || status === 403) {
         throw new BindingError("UNAUTHORIZED", `action "${action}" denied`, { status });
       }
@@ -352,7 +359,7 @@ function actionErrorEnvelope(body: unknown): {
   code: string;
   message: string;
   issues?: ActionParamIssue[];
-  approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+  approval?: ApprovalRequiredInfo;
 } | null {
   const error = (
     body as { error?: { code?: unknown; message?: unknown; issues?: unknown; approval?: unknown } } | null
@@ -362,10 +369,21 @@ function actionErrorEnvelope(body: unknown): {
     code: error.code,
     message: typeof error.message === "string" ? error.message : error.code,
     issues: error.issues as ActionParamIssue[] | undefined,
-    approval: error.approval as
-      | { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string }
-      | undefined,
+    approval: error.approval as ApprovalRequiredInfo | undefined,
   };
+}
+
+/**
+ * A RATE_LIMITED BindingError for a 429 response, carrying the envelope's `error.retryAfterMs` (SPEC §6.1,
+ * REST-RL-001) when the host sent one. A 429 without a conformant envelope still maps to RATE_LIMITED,
+ * just without a retry hint.
+ */
+function rateLimitedError(message: string, status: number, body: unknown): BindingError {
+  const retryAfterMs = (body as { error?: { retryAfterMs?: unknown } } | null)?.error?.retryAfterMs;
+  return new BindingError("RATE_LIMITED", message, {
+    status,
+    ...(typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) ? { retryAfterMs } : {}),
+  });
 }
 
 /**

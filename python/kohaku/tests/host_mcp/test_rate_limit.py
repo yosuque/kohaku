@@ -10,12 +10,13 @@ structured tool error), not PolicyRuntime's own rate-limit resolution logic (cov
 from __future__ import annotations
 
 import asyncio
+import warnings
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from kohaku.host_core import PolicyRateLimiter, PolicyRateLimiterTakeParams
+from kohaku.host_core import PolicyRateLimiter, PolicyRateLimiterTakeParams, RateLimitedInfo
 from kohaku.host_mcp import AttachOptions, McpHostDeps
 from kohaku.spec import OperationDescriptor, Principal, RateLimitResult
 
@@ -230,3 +231,116 @@ class TestBucketKey:
             assert limiter.calls[0].principal == limiter.calls[1].principal
 
         asyncio.run(run())
+
+
+class TestRateLimitKeyHook:
+    def test_keys_the_bucket_by_rate_limit_key_taking_precedence_over_resolve_principal(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            limiter = _StubRateLimiter(RateLimitResult(allow=True))
+
+            async def rate_limit_key(ctx: Any) -> str:
+                return f"ip:{(ctx.meta or {}).get('ip', 'unknown')}"
+
+            deps = _base_deps(
+                tmp_path,
+                rate_limiter=limiter,
+                resolve_principal=lambda _ctx: Principal(id="principal-id"),
+                rate_limit_key=rate_limit_key,
+            )
+            async with connect(deps, _OPTIONS) as client:
+                await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}, meta=request_meta(ip="10.0.0.1")
+                )
+                await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}, meta=request_meta(ip="10.0.0.2")
+                )
+            assert [c.principal for c in limiter.calls] == ["ip:10.0.0.1", "ip:10.0.0.2"]
+
+        asyncio.run(run())
+
+    def test_a_raising_rate_limit_key_is_fail_closed(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            limiter = _StubRateLimiter(RateLimitResult(allow=True))
+            errors: list[Any] = []
+
+            def rate_limit_key(_ctx: Any) -> str:
+                raise RuntimeError("key lookup down")
+
+            deps = _base_deps(
+                tmp_path, rate_limiter=limiter, rate_limit_key=rate_limit_key, on_error=errors.append
+            )
+            async with connect(deps, _OPTIONS) as client:
+                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+            assert result.is_error is True
+            assert limiter.calls == []
+            assert len(errors) == 1
+            assert errors[0].endpoint == "kohaku_compose"
+
+        asyncio.run(run())
+
+
+class TestOnRateLimited:
+    def test_is_notified_on_denial_with_the_bucket_key_and_correlation_id_and_not_on_an_allowed_call(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            seen: list[RateLimitedInfo] = []
+            denied_deps = _base_deps(
+                tmp_path,
+                rate_limiter=_StubRateLimiter(RateLimitResult(allow=False, retryAfterMs=1000)),
+                rate_limit_key=lambda _ctx: "client-7",
+                on_rate_limited=seen.append,
+            )
+            async with connect(denied_deps, _OPTIONS) as client:
+                await client.call_tool(
+                    "kohaku_action", {"action": "annotate", "payload": {}, "capability": "cap"}
+                )
+            assert len(seen) == 1
+            assert seen[0].principal == "client-7"
+            assert seen[0].routeClass == "action"
+            assert seen[0].requestId.startswith("mcp:")
+
+            allowed_seen: list[RateLimitedInfo] = []
+            allowed_deps = _base_deps(
+                tmp_path,
+                rate_limiter=_StubRateLimiter(RateLimitResult(allow=True)),
+                on_rate_limited=allowed_seen.append,
+            )
+            async with connect(allowed_deps, _OPTIONS) as client:
+                await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+            assert allowed_seen == []
+
+        asyncio.run(run())
+
+
+class TestUnkeyedLimiterWarning:
+    def test_warns_once_per_process_when_the_limiter_has_neither_resolve_principal_nor_rate_limit_key(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kohaku.host_mcp import server as server_module
+
+        monkeypatch.setattr(server_module, "_warned_unkeyed_rate_limiter", False)
+        limiter = _StubRateLimiter(RateLimitResult(allow=True))
+        with pytest.warns(UserWarning, match="rate_limit_key"):
+            server_module._warn_unkeyed_rate_limiter(_base_deps(tmp_path, rate_limiter=limiter))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            server_module._warn_unkeyed_rate_limiter(_base_deps(tmp_path, rate_limiter=limiter))  # second: silent
+
+    def test_stays_silent_when_the_limiter_is_keyed_or_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from kohaku.host_mcp import server as server_module
+
+        limiter = _StubRateLimiter(RateLimitResult(allow=True))
+        for overrides in (
+            {"rate_limiter": limiter, "resolve_principal": lambda _ctx: Principal(id="u")},
+            {"rate_limiter": limiter, "rate_limit_key": lambda _ctx: "k"},
+            {},
+        ):
+            monkeypatch.setattr(server_module, "_warned_unkeyed_rate_limiter", False)
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                server_module._warn_unkeyed_rate_limiter(_base_deps(tmp_path, **overrides))

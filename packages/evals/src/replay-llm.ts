@@ -33,8 +33,8 @@ export type ReplayFixtureEntry = ReplayFixtureValue & { key: string };
 /**
  * A fixture set: either a `Record<key, response>` (e.g. `JSON.parse`d straight from a bundled fixture
  * asset keyed by fixtureKeyOf), or an array of `{ key, ...response }` entries (equivalent, just easier to
- * hand-write or diff — see reports/u5-2.md for how u5-3's recording step is expected to produce either
- * shape).
+ * hand-write or diff — the playground's `record-fixtures.ts` script, docs/user-guide.md §10, produces
+ * either shape).
  */
 export type ReplayFixtures = ReplayFixtureEntry[] | Record<string, ReplayFixtureValue>;
 
@@ -54,7 +54,7 @@ function toFixtureMap(fixtures: ReplayFixtures): Map<string, ReplayFixtureValue>
  * response by the exact same key function FixtureLlm uses (`fixture-key.ts`'s `objectFixtureKey` /
  * `textFixtureKey`), so a fixture recorded via `FixtureLlm({ record: true, live })`'s `<key>.json` files
  * replays here unchanged once bundled into a `ReplayFixtures` set. Intended for the static playground
- * (U5), where there is no server to record against and no filesystem to read from at runtime.
+ * (`apps/playground`, design.md decision 57), where there is no server to record against and no filesystem to read from at runtime.
  *
  * Does not implement `streamObject` (optional on LlmPort) — a caller falls back to `generateObject`
  * (behaviorally equivalent, no partials), matching FixtureLlm's own behavior.

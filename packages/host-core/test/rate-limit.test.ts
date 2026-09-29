@@ -1,6 +1,10 @@
 import type { RateLimitStore } from "@kohaku-ui/spec-core";
-import { describe, expect, it } from "vitest";
-import { createMemoryRateLimitStore, createRateLimiter } from "../src/rate-limit.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createMemoryRateLimitStore,
+  createRateLimiter,
+  DEFAULT_RATE_LIMIT_TIMEOUT_MS,
+} from "../src/rate-limit.js";
 
 describe("createMemoryRateLimitStore", () => {
   it("allows up to capacity, then denies", async () => {
@@ -153,6 +157,89 @@ describe("createRateLimiter", () => {
       take: () => Promise.reject(new Error("boom")),
     };
     const limiter = createRateLimiter(brokenStore, undefined, () => 0);
+    await expect(limiter.take({ routeClass: "compose", rule: RULE })).resolves.toEqual({ allow: true });
+  });
+
+  describe("store timeout", () => {
+    const hungStore: RateLimitStore = { take: () => new Promise(() => {}) };
+
+    it("fails open and reports a timeout error when the store never answers, after the default timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        const reported: unknown[] = [];
+        const limiter = createRateLimiter(
+          hungStore,
+          (info) => void reported.push(info),
+          () => 0,
+        );
+        const pending = limiter.take({ tenant: "t1", principal: "p1", routeClass: "compose", rule: RULE });
+        let settled = false;
+        void pending.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(DEFAULT_RATE_LIMIT_TIMEOUT_MS - 1);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(pending).resolves.toEqual({ allow: true });
+        expect(reported).toHaveLength(1);
+        expect((reported[0] as { error: Error }).error.message).toMatch(/did not respond within 250ms/);
+        expect(reported[0]).toMatchObject({ tenant: "t1", principal: "p1", routeClass: "compose" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("honors a custom timeoutMs", async () => {
+      vi.useFakeTimers();
+      try {
+        const limiter = createRateLimiter(hungStore, undefined, () => 0, { timeoutMs: 20 });
+        const pending = limiter.take({ routeClass: "compose", rule: RULE });
+        await vi.advanceTimersByTimeAsync(20);
+        await expect(pending).resolves.toEqual({ allow: true });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a store that answers in time is unaffected, and the timer is cleared", async () => {
+      vi.useFakeTimers();
+      try {
+        const limiter = createRateLimiter(createMemoryRateLimitStore(), undefined, () => 0);
+        await expect(limiter.take({ routeClass: "compose", rule: RULE })).resolves.toEqual({ allow: true });
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("timeoutMs: 0 disables the timeout", async () => {
+      vi.useFakeTimers();
+      try {
+        let release: (() => void) | undefined;
+        const slowStore: RateLimitStore = {
+          take: () =>
+            new Promise((resolve) => {
+              release = () => resolve({ allow: false, retryAfterMs: 5 });
+            }),
+        };
+        const limiter = createRateLimiter(slowStore, undefined, () => 0, { timeoutMs: 0 });
+        const pending = limiter.take({ routeClass: "compose", rule: RULE });
+        await vi.advanceTimersByTimeAsync(60_000);
+        release?.();
+        await expect(pending).resolves.toEqual({ allow: false, retryAfterMs: 5 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("does not await onError: a hung error hook cannot delay the (fail-open) response", async () => {
+    const brokenStore: RateLimitStore = { take: () => Promise.reject(new Error("boom")) };
+    const limiter = createRateLimiter(
+      brokenStore,
+      () => new Promise<void>(() => {}),
+      () => 0,
+    );
     await expect(limiter.take({ routeClass: "compose", rule: RULE })).resolves.toEqual({ allow: true });
   });
 

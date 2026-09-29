@@ -27,6 +27,8 @@ from kohaku.composer import (
 )
 from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
+    UNDECLARED_ACTION_MESSAGE,
+    ActionAuditContext,
     ActionGateRequest,
     ActionGateResult,
     ComposeFixationContext,
@@ -36,25 +38,30 @@ from kohaku.host_core import (
     IntentSourceNl,
     ParsedInvokableRefOk,
     PolicyRateLimiterTakeParams,
+    RateLimitedInfo,
     TraceContext,
     apply_action_effects,
     build_action_manifest,
     is_typed_host_error,
     parse_invokable_ref,
     parse_trace_context,
+    record_action_gate_result,
+    record_undeclared_action_denial,
     to_jsonable,
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
+from kohaku.host_core import allowed_actions_from_index as _host_core_allowed_actions_from_index
 from kohaku.host_core import compose_with_fixation as _host_core_compose_with_fixation
 from kohaku.host_core import create_action_gate as _host_core_create_action_gate
-from kohaku.host_core import create_allowed_actions as _host_core_create_allowed_actions
 from kohaku.host_core import create_operation_index as _host_core_create_operation_index
 from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import get_lock as _get_lock
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
 from kohaku.host_core import notify_hook as _host_core_notify_hook
+from kohaku.host_core import notify_hook_nowait as _host_core_notify_hook_nowait
 from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
 from kohaku.host_core import resolve_intent as _host_core_resolve_intent
+from kohaku.host_core import start_operation_index_validation as _host_core_start_index_validation
 from kohaku.spec import (
     ActionParamIssue,
     AuthzPort,
@@ -66,7 +73,6 @@ from kohaku.spec import (
     TabularData,
     UISpec,
     VerifyRequest,
-    action_payload_hash,
     canonical_stringify,
     enumerate_bind_variants,
 )
@@ -111,10 +117,10 @@ _MCP_MISSING_MESSAGE = (
 
 _ANONYMOUS = Principal(id="mcp-user", roles=["user"])
 
-# Upper bound (canonical-JSON, UTF-8 bytes) on a `${prefix}_action` payload. Full argument-shape validation via
-# OperationDescriptor.paramsSchema is a follow-up (no JSON Schema validator is wired into this repo yet) — this
-# is a coarse defense-in-depth cap against an oversized write, not a shape check. Matches TS's
-# MAX_ACTION_PAYLOAD_BYTES (packages/host-mcp-apps/src/server.ts).
+# Upper bound (canonical-JSON, UTF-8 bytes) on a `${prefix}_action` payload — a coarse defense-in-depth cap
+# against an oversized write, applied before the payload reaches the ActionGate (which then validates it
+# against the action's paramsSchema, ACT-PRM-001). Matches TS's MAX_ACTION_PAYLOAD_BYTES
+# (packages/host-mcp-apps/src/server.ts).
 MAX_ACTION_PAYLOAD_BYTES = 64 * 1024
 
 # Upper bound on a JsonObject's nesting depth (the object itself = depth 1). Mirrors
@@ -151,11 +157,6 @@ def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 
 # TOOL_INTERNAL_ERROR_MESSAGE (server.ts).
 _TOOL_INTERNAL_ERROR_MESSAGE = "internal error; see the observability hook (on_error) for details"
 
-# An action name absent from the DomainPort's own operation index is not a declared operation at all -- it
-# must never reach domain.invoke (fail-closed), on the same footing as a capability that lacks the needed
-# write scope (this reuses that exact response shape: a plain tool error, no structured error code).
-_UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation"
-
 # Shared optional `locale` input for every UI-producing tool (compose / render_snapshot / intent
 # tools / event). The calling LLM sets it to the user's language so the composed UI (fixed-spec
 # titles, generated labels, L2 widget text) comes out localized — it maps onto the compose
@@ -176,14 +177,16 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
-def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]) -> str:
+async def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]) -> str:
     """The bucket-key "principal" component for a rate-limit check (this profile has no tenant -- see
     `McpHostDeps.rate_limiter`'s doc comment, and `PolicyRateLimiterTakeParams.tenant` is always left
     `None` here). Every unauthenticated call resolves to the same constant fallback principal
     (`McpHostDeps.principal` or the built-in `_ANONYMOUS`), so keying on `principal.id` alone in that
     case would put every anonymous caller into one shared bucket -- exactly the failure a per-caller
-    budget exists to prevent. Prefers the resolved principal's id only when `resolve_principal` is wired
-    (a genuine per-call identity, which can actually differ between callers); otherwise falls back to the
+    budget exists to prevent. In order: `deps.rate_limit_key(ctx)` when wired (a product keying by a
+    transport identity, e.g. a client IP or an API-key id read from the request); else the resolved
+    principal's id when `resolve_principal` is wired (a genuine per-call identity, which can actually
+    differ between callers); otherwise falls back to the
     per-connection opaque id `_session_correlation_prefix` maintains (below) -- unlike TS's
     `ServerContext.sessionId`, this is never absent (even stdio gets one stable prefix for its
     connection's lifetime), so this port has no further "anonymous" fallback beneath it: a shared bucket
@@ -191,7 +194,36 @@ def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal, ctx: ServerRequ
     `_session_correlation_prefix` itself documents (no per-connection anchor reachable at all), which
     already falls back to a collision-free-but-ungrouped id there.
     """
+    if deps.rate_limit_key is not None:
+        key = deps.rate_limit_key(ctx)
+        if inspect.isawaitable(key):
+            return await key
+        return key
     return principal.id if deps.resolve_principal is not None else _session_correlation_prefix(ctx)
+
+
+# Set once `_warn_unkeyed_rate_limiter` has fired, so a per-request attach warns once per process.
+_warned_unkeyed_rate_limiter = False
+
+
+def _warn_unkeyed_rate_limiter(deps: McpHostDeps) -> None:
+    """One-time startup warning for a `rate_limiter` wired without a per-caller key (neither
+    `resolve_principal` nor `rate_limit_key`): the bucket is then keyed per transport connection, which a
+    caller can shed by opening a new one (and, if no per-connection anchor is reachable at all, per call).
+    Not an error -- stdio, a single-user deployment, or a deliberately per-connection limit is a valid
+    configuration -- so it warns rather than raises. Port of TS `warnUnkeyedRateLimiter`."""
+    global _warned_unkeyed_rate_limiter
+    if _warned_unkeyed_rate_limiter:
+        return
+    if deps.rate_limiter is None or deps.resolve_principal is not None or deps.rate_limit_key is not None:
+        return
+    _warned_unkeyed_rate_limiter = True
+    warnings.warn(
+        "kohaku.host_mcp: McpHostDeps.rate_limiter is wired without resolve_principal or rate_limit_key, so "
+        "the rate-limit bucket is keyed per transport connection (which a caller can shed by reconnecting). "
+        "Wire deps.rate_limit_key (or deps.resolve_principal) to key the limit per caller.",
+        stacklevel=3,
+    )
 
 
 # Per-connection opaque id (uuid4 hex), generated once per underlying transport connection and cached for
@@ -373,6 +405,7 @@ def attach_kohaku_to_mcp_server(
 
     prefix = options.tool_prefix if options.tool_prefix is not None else "kohaku"
     fallback_principal = deps.principal if deps.principal is not None else _ANONYMOUS
+    _warn_unkeyed_rate_limiter(deps)
 
     async def _current_principal(ctx: ServerRequestContext[Any]) -> Principal:
         """Resolves the principal for THIS tool call (see `McpHostDeps.resolve_principal`'s doc comment for the
@@ -380,18 +413,22 @@ def attach_kohaku_to_mcp_server(
         never memoized across calls, since a shared `Server` (see `sales_api.mcp_http`) serves every session."""
         return await _principal_of(deps, fallback_principal, ctx)
 
-    # Memoized deps.domain.list_operations() names (write-scope hardening; see _issue_capability). Built once
-    # per attach call (host_core's create_allowed_actions, shared with the REST profile so both agree on how
-    # a DomainPort's list_operations() names are cached and retried) rather than stored on deps — McpHostDeps
-    # is frozen, so the cache lives here as a closure variable (unlike host_rest's per-deps field).
-    _allowed_actions = _host_core_create_allowed_actions(deps.domain)
-
     # Memoized deps.domain.list_operations() index (host_core's create_operation_index, design.md #62/#64),
-    # a second independent memoized reader of the same DomainPort method as `_allowed_actions` above (shared
-    # with the REST profile, whose `operation_index`/`action_gate_for` are the same two readers kept on
-    # per-deps fields rather than closures — see that module's shared.py). Consulted by both the actions
-    # manifest (`_compose_and_package`) and `${prefix}_action`'s ActionGate below.
+    # consulted by the actions manifest (`_compose_and_package`) and `${prefix}_action`'s ActionGate below. Kept
+    # here as a closure variable rather than on deps — McpHostDeps is frozen (unlike host_rest's per-deps field).
     _operation_index = _host_core_create_operation_index(deps.domain)
+    # The allowed-action set (write-scope hardening; see _issue_capability) is derived from that same index
+    # rather than from a second, independently memoized list_operations() call, so the capability filter and the
+    # gate can never disagree about which actions exist.
+    _allowed_actions = _host_core_allowed_actions_from_index(_operation_index)
+    # Validate every operation's paramsSchema now rather than at the first invoke: a failure (list_operations()
+    # raising, or a schema outside kohaku's closed subset) is reported through on_error (endpoint
+    # "attach.operationIndex"). Needs a running event loop (attach itself is synchronous): without one the
+    # index is built lazily by the first request that needs it.
+    _host_core_start_index_validation(
+        _operation_index,
+        lambda exc: _report_mcp_error(deps, "attach.operationIndex", exc),
+    )
     # One ActionGate per attach call, shared by every `${prefix}_action` invoke (design.md #62/#63).
     _action_gate = _host_core_create_action_gate(deps.approvals)
 
@@ -483,97 +520,35 @@ def attach_kohaku_to_mcp_server(
         principal: Principal,
         correlation_id: str | None,
     ) -> mcp_types.CallToolResult | None:
-        """Maps one ActionGate.check outcome onto the MCP tool response + audit trail (design.md #62/#63),
-        symmetric with the REST profile's `_handle_action_gate_result` (host_rest/_routes/binding.py). Returns
-        the CallToolResult to send back (invalid / approvalRequired / denied), or None when the gate allowed
-        the invoke and the caller should proceed to domain.invoke. Audit recording is always fail-open
-        (host_core's fail_open): a recording failure must never turn an otherwise-successful allow, or an
-        otherwise-correct denial, into an internal tool error. This profile never resolves a tenant, so
-        `tenant` is always None on every recorded event (mirrors `rate_limiter`'s doc comment)."""
-
-        async def _report_audit(exc: BaseException) -> None:
-            await _report_mcp_error(deps, f"{prefix}_action.audit", exc)
-
-        if gate_result.kind == "invalid":
-            return _action_params_invalid_tool_error(gate_result.issues)
-
-        if gate_result.kind == "approvalRequired":
-
-            async def _record_approval_requested() -> None:
-                if deps.action_audit_recorder is None:
-                    return
-                await deps.action_audit_recorder.approval_requested(
-                    action=action,
-                    payload_hash=gate_result.payloadHash,
-                    tier=gate_result.tier,
-                    request_id=gate_result.requestId,
-                    payload=payload,
-                    principal=principal,
-                    tenant=None,
-                    correlation_id=correlation_id,
-                )
-
-            await _host_core_fail_open(_record_approval_requested, _report_audit)
-            message = (
-                "this action requires confirmation (confirmed: true)"
-                if gate_result.tier == "confirm"
-                else "this action requires an approval token"
-            )
-            return _approval_required_tool_error(
-                message,
-                request_id=gate_result.requestId,
+        """Maps one ActionGate.check outcome onto the MCP tool response (design.md #62/#63), the wire-mapping
+        counterpart of the REST profile's `_handle_action_gate_result` (host_rest/_routes/binding.py). The
+        audit trail and the client-visible messages are host_core's `record_action_gate_result` (shared with
+        REST); this keeps only the tool-error mapping. Returns the CallToolResult to send back (invalid /
+        approvalRequired / denied), or None when the gate allowed the invoke and the caller should proceed to
+        domain.invoke. This profile never resolves a tenant, so `tenant` is always None on every recorded
+        event (mirrors `rate_limiter`'s doc comment)."""
+        outcome = await record_action_gate_result(
+            gate_result,
+            ActionAuditContext(
+                recorder=deps.action_audit_recorder,
                 action=action,
-                tier=gate_result.tier,
-                payload_hash=gate_result.payloadHash,
-            )
-
-        if gate_result.kind == "denied":
-
-            async def _record_denied() -> None:
-                if deps.action_audit_recorder is None:
-                    return
-                await deps.action_audit_recorder.denied(
-                    action=action,
-                    payload_hash=gate_result.payloadHash,
-                    tier=gate_result.tier,
-                    reason=gate_result.reason,
-                    principal=principal,
-                    tenant=None,
-                    correlation_id=correlation_id,
-                )
-
-            await _host_core_fail_open(_record_denied, _report_audit)
-            return _approval_required_tool_error(
-                gate_result.reason,
-                request_id=gate_result.requestId,
-                action=action,
-                tier=gate_result.tier,
-                payload_hash=gate_result.payloadHash,
-            )
-
-        # gate_result.kind == "allow"
-        async def _record_allow() -> None:
-            if deps.action_audit_recorder is None:
-                return
-            await deps.action_audit_recorder.invoked(
-                action=action,
-                payload_hash=gate_result.payloadHash,
-                tier=gate_result.tier,
+                payload=payload,
                 principal=principal,
                 tenant=None,
                 correlation_id=correlation_id,
+                report=lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
+            ),
+        )
+        if outcome.kind == "invalid":
+            return _action_params_invalid_tool_error(outcome.issues)
+        if outcome.kind == "approvalRequired":
+            return _approval_required_tool_error(
+                outcome.message,
+                request_id=outcome.approval.requestId,
+                action=outcome.approval.action,
+                tier=outcome.approval.tier,
+                payload_hash=outcome.approval.payloadHash,
             )
-            if gate_result.grant is not None:
-                await deps.action_audit_recorder.approved(
-                    action=action,
-                    payload_hash=gate_result.payloadHash,
-                    grant=gate_result.grant,
-                    principal=principal,
-                    tenant=None,
-                    correlation_id=correlation_id,
-                )
-
-        await _host_core_fail_open(_record_allow, _report_audit)
         return None
 
     async def _check_mcp_rate_limit(
@@ -584,22 +559,31 @@ def attach_kohaku_to_mcp_server(
         """Checks `deps.rate_limiter` (host_core's `PolicyRateLimiter`, typically
         `PolicyRuntime.rate_limiter`) before a tool handler proceeds with its actual work. Returns `None`
         (proceed) when `deps.rate_limiter` is unset or the limiter allows; a structured `RATE_LIMITED`
-        tool error otherwise (see `_rate_limit_tool_error`). Port of the REST profile's
+        tool error otherwise (see `_rate_limit_tool_error`), after notifying `deps.on_rate_limited`
+        (fire-and-forget). Port of the REST profile's
         `check_rate_limit` -- called inline, as the first statement after resolving `principal`, at the
         top of each of the 6 tool handlers below, since this profile has no per-path middleware layer to
         mount a single check on. Reuses the principal each handler already resolved via
-        `_current_principal(ctx)` rather than invoking `resolve_principal` a second time. `ctx` is needed
-        only to resolve `_mcp_rate_limit_key`'s per-connection fallback (`_session_correlation_prefix`)
-        when no real principal is wired.
+        `_current_principal(ctx)` rather than invoking `resolve_principal` a second time. `ctx` is
+        needed to resolve `_mcp_rate_limit_key` (`deps.rate_limit_key`, or the per-connection fallback
+        `_session_correlation_prefix` when no real principal is wired). A raise from `deps.rate_limit_key`
+        propagates into the handler's `_safe_tool`, failing the call closed like `resolve_principal`.
         """
         if deps.rate_limiter is None:
             return None
-        result = await deps.rate_limiter.take(
-            PolicyRateLimiterTakeParams(
-                principal=_mcp_rate_limit_key(deps, principal, ctx), routeClass=route_class
-            )
+        key = await _mcp_rate_limit_key(deps, principal, ctx)
+        result = await deps.rate_limiter.take(PolicyRateLimiterTakeParams(principal=key, routeClass=route_class))
+        if result.allow:
+            return None
+        _host_core_notify_hook_nowait(
+            deps.on_rate_limited,
+            RateLimitedInfo(
+                routeClass=route_class,
+                requestId=_correlation_id_of(ctx) or f"mcp:{uuid.uuid4().hex}",
+                principal=key,
+            ),
         )
-        return None if result.allow else _rate_limit_tool_error(result.retryAfterMs)
+        return _rate_limit_tool_error(result.retryAfterMs)
 
     async def _safe_tool(
         endpoint: str,
@@ -1028,18 +1012,6 @@ def attach_kohaku_to_mcp_server(
             # Schema hints only (no runtime validator wired in), so the depth cap is enforced here instead.
             if not _json_depth_ok(payload):
                 return _tool_error(f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})")
-            # Reject an action name the DomainPort does not expose before even attempting capability
-            # verification (defense in depth for a host that does not honor this tool's app-only visibility
-            # hint, or a prompt-injected instruction — see CAPABILITY_META_KEY's doc comment). Fail-closed on
-            # a list_operations() rejection too — every action is "unknown" for this call, and the failure is
-            # reported to the observability hook.
-            try:
-                allowed = await _allowed_actions()
-            except Exception as exc:  # noqa: BLE001 — fail-closed (deny every action), reported below
-                await _report_mcp_error(deps, f"{prefix}_action.allowedActions", exc)
-                allowed = frozenset()
-            if action not in allowed:
-                return _tool_error("unknown action")
             payload_bytes = len(canonical_stringify(payload).encode("utf-8"))
             if payload_bytes > MAX_ACTION_PAYLOAD_BYTES:
                 return _tool_error(
@@ -1053,33 +1025,35 @@ def attach_kohaku_to_mcp_server(
             # Governed actions (design.md #62/#63): validate params and enforce the action's tier before
             # domain.invoke ever runs, symmetric with the REST surface's /binding/action. An action absent
             # from the DomainPort's own operation index -- whether because the index and DomainPort
-            # momentarily disagree, or (should not normally happen once `action in allowed` above already
-            # passed) because the name was never a real operation to begin with -- is rejected here rather
-            # than let through ungated (fail-closed; ACT-PRM-001). Unlike `_allowed_actions()` above, a
-            # rejected `_operation_index()` here is NOT swallowed (an invalid paramsSchema is a configuration
-            # bug that should surface loudly for a governed action) -- it propagates to `_safe_tool`'s own
-            # except branch, symmetric with the REST/TS profiles.
-            index = await _operation_index()
+            # momentarily disagree, or because the name was never a real operation (a capability verifying
+            # for it is the only way to get this far) -- is rejected here and audited exactly as REST does,
+            # rather than let through ungated (fail-closed; ACT-PRM-001, MCPAPP-ACT-001). A rejected
+            # operation index (list_operations() raising) is likewise fail-closed for this call, and a declared
+            # operation whose paramsSchema failed validation is fail-closed for that operation alone.
+            try:
+                index = await _operation_index()
+            except Exception as exc:  # noqa: BLE001 — fail-closed for this call, reported below
+                await _report_mcp_error(deps, f"{prefix}_action.operationIndex", exc)
+                return _tool_error("operation index unavailable")
             entry = index.get(action)
+            if entry is not None and entry.schema_error is not None:
+                # A declared operation whose paramsSchema failed validation must never be invoked: fail closed
+                # for this operation alone (REST's 500 counterpart), reported to the observability hook.
+                await _report_mcp_error(deps, f"{prefix}_action.operationIndex", entry.schema_error)
+                return _tool_error("action parameter schema unavailable")
             if entry is None:
-
-                async def _record_undeclared() -> None:
-                    if deps.action_audit_recorder is None:
-                        return
-                    await deps.action_audit_recorder.denied(
+                await record_undeclared_action_denial(
+                    ActionAuditContext(
+                        recorder=deps.action_audit_recorder,
                         action=action,
-                        payload_hash=action_payload_hash(payload),
-                        tier="auto",
-                        reason=_UNDECLARED_ACTION_MESSAGE,
+                        payload=payload,
                         principal=resolved_principal,
+                        tenant=None,
                         correlation_id=_correlation_id_of(ctx),
+                        report=lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
                     )
-
-                await _host_core_fail_open(
-                    _record_undeclared,
-                    lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
                 )
-                return _tool_error(f"capability denied: {_UNDECLARED_ACTION_MESSAGE}")
+                return _tool_error(f"capability denied: {UNDECLARED_ACTION_MESSAGE}")
             gate_result = await _action_gate.check(
                 ActionGateRequest(
                     descriptor=entry.descriptor,

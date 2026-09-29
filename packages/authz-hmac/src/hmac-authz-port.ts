@@ -54,6 +54,25 @@ interface HmacClaims {
   jti?: string;
 }
 
+function isHmacClaims(value: unknown): value is HmacClaims {
+  if (typeof value !== "object" || value === null) return false;
+  const c = value as Record<string, unknown>;
+  return (
+    typeof c.sub === "string" &&
+    typeof c.exp === "number" &&
+    Number.isFinite(c.exp) &&
+    (c.jti === undefined || typeof c.jti === "string") &&
+    Array.isArray(c.scopes) &&
+    c.scopes.every(
+      (scope) =>
+        typeof scope === "object" &&
+        scope !== null &&
+        typeof (scope as Record<string, unknown>).kind === "string" &&
+        typeof (scope as Record<string, unknown>).ref === "string",
+    )
+  );
+}
+
 /**
  * A homegrown HMAC-SHA256 capability token (on-behalf-of: the host acts under the user's delegated authority).
  * A structure whose contents are transparent, prioritizing didactic value: base64url(payload).base64url(hmac)
@@ -81,12 +100,17 @@ export function createHmacAuthzPort(secret: string, options: HmacAuthzOptions = 
       return { ok: false, reason: "invalid signature" };
     }
 
+    let parsed: unknown;
     try {
-      const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as HmacClaims;
-      return { ok: true, claims };
+      parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     } catch {
       return { ok: false, reason: "malformed payload" };
     }
+    // The secret may be shared with another token kind (an approval token signs under a key derived from
+    // it), so a correctly signed payload is still type-checked before use; a malformed one is a denial,
+    // never an exception.
+    if (!isHmacClaims(parsed)) return { ok: false, reason: "malformed payload" };
+    return { ok: true, claims: parsed };
   }
 
   /**

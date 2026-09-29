@@ -99,7 +99,10 @@ describe("reserved parameters / base-ref verification of GET /binding/resolve", 
     const { deps, verifiedRefs, invokeCalls } = harness();
     const res = await get(deps, "query://other/records?fy=2026");
     expect(res.status).toBe(404);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("SOURCE_MISMATCH");
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("SOURCE_MISMATCH");
+    // The message names the source this host serves, so a wrong `querySource` / Intent `source` is diagnosable.
+    expect(body.error.message).toBe(`unknown query source "other" (this host serves "${deps.querySource}")`);
     expect(verifiedRefs).toHaveLength(0);
     expect(invokeCalls).toHaveLength(0);
   });

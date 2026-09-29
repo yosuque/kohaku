@@ -87,7 +87,7 @@ class ComposeTraceLike(Protocol):
     Declared as a read-only property so a frozen dataclass (a test's FakeTrace, etc.) can also satisfy it.
 
     correlationId / cacheKey / cacheKeyParts / attempts / downgrades / coalesced / usage are all optional
-    additions (U2) read by view_composed's explain-facing payload fields -- see its doc comment on each
+    additions read by view_composed's explain-facing payload fields -- see its doc comment on each
     corresponding TypedDict key in events.py. A trace that lacks them (or returns None) gets the exact same
     view.composed / component.generated / component.used payload shape as before they existed.
     """

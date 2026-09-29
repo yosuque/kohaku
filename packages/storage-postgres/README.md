@@ -81,6 +81,19 @@ Schema version 1 (`POSTGRES_SCHEMA_VERSION`) is the first version this package's
 
 Once your schema matches the above, `ready()`'s first post-upgrade run records `kohaku_schema_meta.version = 1` and every subsequent `ready()` call verifies against it. **`ready()` also verifies, at that same first-stamp moment, that `kohaku_lineage` already carries a unique constraint/index on `id`** (step 2 above) — a pre-existing table that skipped step 2 fails `ready()` outright, pointing back at this section, rather than surfacing later as an opaque `ON CONFLICT` runtime error from the first `appendLineage` call. It does not re-verify this on every subsequent call (a schema already stamped at version 1 is trusted from then on), and it does not check steps 1, 3 or 4 at all — those still need to be applied by hand before upgrading, per the checklist above.
 
+## Upgrading to 0.4.x
+
+0.4.0 added `kohaku_lineage.correlation_id` (backing `LineageFilter.correlationId`) and its `(correlation_id, seq)` index, with no `POSTGRES_SCHEMA_VERSION` bump. The first `ready()` on an upgraded database adds the column (`ALTER TABLE`, an ACCESS EXCLUSIVE lock) and builds the index (`CREATE INDEX`, a SHARE lock that blocks writes for as long as the build takes). Later starts check the catalog first and issue no DDL for them. The migration transaction runs with `SET LOCAL lock_timeout = 5000`, so a start that cannot get the lock within five seconds fails instead of queueing behind live traffic (a queued lock request blocks every later reader and writer of the table); the failed `ready()` is not cached and can be retried.
+
+On a large `kohaku_lineage`, do the upgrade by hand before rolling out 0.4.x, building the index without blocking writes (the column is a metadata-only change and is quick once it has the lock):
+
+```sql
+ALTER TABLE kohaku_lineage ADD COLUMN IF NOT EXISTS correlation_id text NULL;
+CREATE INDEX CONCURRENTLY IF NOT EXISTS public_kohaku_lineage_correlation_id_idx ON kohaku_lineage (correlation_id, seq);
+```
+
+Replace `public` (the index-name prefix) and the unqualified table name with your schema; the index name must be `<schema>_kohaku_lineage_correlation_id_idx` (schema lower-cased, anything outside `[a-z0-9_]` replaced by `_`) so `ready()` finds it and skips the build. `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block. Rows written before the column existed keep `correlation_id` NULL and never match a `correlationId` filter.
+
 ## Capability revocation
 
 `createPostgresRevocationStore({ connectionString | pool, schema, migrate, ... })` is a PostgreSQL-backed `CapabilityRevocationStore` (`@kohaku-ui/spec-core`'s `ports.ts`) — pass it as `revocations` to `@kohaku-ui/authz-hmac`'s `createHmacAuthzPort` or `@kohaku-ui/authz-jwt`'s `createJwtAuthzPort` so revocation is shared across every instance behind a load balancer, instead of the default in-memory store's per-process deny list. It shares `postgresSchemaSql` and the whole connection lifecycle described in "Production" above (timeouts, the pool `error` listener, the versioned migration) with `createPostgresStoragePort`, so `ready()` migrates the same schema that port does (harmless when both are used against the same database: `CREATE TABLE IF NOT EXISTS`).

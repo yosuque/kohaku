@@ -174,16 +174,18 @@ function label(text: string, width = 20): string {
 /**
  * Formats an ExplainReport as human-readable text: `kohaku explain`'s default output (the non-`--json`
  * path). Renders provenance, the cache-key breakdown, the decision flow, capability scopes (when present),
- * and the raw lineage events -- in that order, matching the brief's "tier, cache, cache-key breakdown,
- * decision flow, related lineage events" acceptance criterion.
+ * and the raw lineage events -- in that order, matching the documented order of "tier, cache, cache-key breakdown,
+ * decision flow, related lineage events" (docs/user-guide.md, "Kohaku DevTools and `kohaku explain`").
  */
 export function formatExplainReport(report: ExplainReport): string {
   const lines: string[] = [];
   if (report.composes.length === 0) {
     lines.push("No view.composed event found for this requestId.");
     lines.push(
-      "(Events recorded before correlationId support shipped -- LQ/U2 -- have none and will never match; " +
-        "see docs/user-guide.md's DevTools section.)",
+      "Check that the host has a lineage recorder wired (createKohakuHost does by default; a hand-built " +
+        "createKohakuRoutes host needs `recorder`), and that this is the requestId of a compose response. " +
+        "Events recorded before correlationId support shipped have none and will never match; " +
+        "see docs/user-guide.md's DevTools section.",
     );
   }
   report.composes.forEach((c, i) => {

@@ -1,5 +1,5 @@
 name: Deploy Pages
-# Manual only: neither Pages itself nor a scheduled/push trigger is enabled yet (see reports/u5-3.md).
+# Manual only: neither Pages itself nor a scheduled/push trigger is enabled yet (see docs/user-guide.md §10).
 # Approving this file does not deploy anything on its own — someone still has to dispatch it, and Pages
 # still has to be turned on in the repo's own Settings first.
 on:

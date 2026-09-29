@@ -7,7 +7,7 @@ import type {
   JsonObject,
   OperationDescriptor,
 } from "@kohaku-ui/spec-core";
-import { actionPayloadHash, validateActionParams } from "@kohaku-ui/spec-core";
+import { actionPayloadHash, findUnsafeActionParamKeys, validateActionParams } from "@kohaku-ui/spec-core";
 
 export interface ActionGateOptions {
   /** Consulted for `"approve"`-tier actions. Omitted = an `"approve"`-tier action can never be allowed. */
@@ -87,7 +87,7 @@ export type ActionGateResult =
  * invoke of every action for a given host attach; it carries no per-action state itself (an
  * `ApprovalPort`, if configured, owns whatever state single-use enforcement needs).
  *
- * Order of checks (params before tier) is deliberate: a payload that is invalid on its own terms should
+ * Order of checks (payload key safety, then params, then tier) is deliberate: a payload that is invalid on its own terms should
  * never demand a confirmation or an approval for it.
  */
 export function createActionGate(options: ActionGateOptions = {}) {
@@ -95,6 +95,11 @@ export function createActionGate(options: ActionGateOptions = {}) {
 
   return {
     async check(req: ActionGateRequest): Promise<ActionGateResult> {
+      // Whole-payload unsafe-key scan first, independent of any schema: an action with no `paramsSchema`, an
+      // undeclared property under `additionalProperties`, or an array with no `items` would otherwise let a
+      // `__proto__` / `constructor` / `prototype` key through to `DomainPort.invoke`.
+      const unsafeKeys = findUnsafeActionParamKeys(req.payload);
+      if (unsafeKeys.length > 0) return { kind: "invalid", issues: unsafeKeys };
       if (req.paramsSchema != null) {
         const issues = validateActionParams(req.paramsSchema, req.payload);
         if (issues.length > 0) return { kind: "invalid", issues };

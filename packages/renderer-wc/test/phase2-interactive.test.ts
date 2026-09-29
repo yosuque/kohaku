@@ -1,4 +1,5 @@
 import type { ActionResult, BindingClient, ResolveOptions } from "@kohaku-ui/data-binding";
+import { BindingError } from "@kohaku-ui/data-binding";
 import type { ActionManifest } from "@kohaku-ui/renderer-core";
 import type { TabularData } from "@kohaku-ui/spec-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -485,8 +486,10 @@ describe("Phase 2: governed actions on action.button (design.md #62/#63)", () =>
     );
   });
 
-  it("tier approve with no requestApproval hook never calls binding.invokeAction (no browser-native default)", async () => {
-    const invokeAction = vi.fn(async (): Promise<ActionResult> => ({ result: { ok: true } }));
+  it("tier approve with no requestApproval hook still asks the server once, without an approval token", async () => {
+    const invokeAction = vi.fn(async (): Promise<ActionResult> => {
+      throw new BindingError("APPROVAL_REQUIRED", "this action requires an approval token", { status: 403 });
+    });
     const binding: BindingClient = {
       resolve: async () => {
         throw new Error("not used in these tests");
@@ -497,7 +500,12 @@ describe("Phase 2: governed actions on action.button (design.md #62/#63)", () =>
     const surface = mount(actionButtonSpec(), { binding, actionManifest: manifest });
     (byKohaku(surface, "b1") as HTMLButtonElement).click();
     await tick();
-    expect(invokeAction).not.toHaveBeenCalled();
+    expect(invokeAction).toHaveBeenCalledTimes(1);
+    expect(invokeAction).toHaveBeenCalledWith(
+      "annotate",
+      { note: "hi" },
+      { confirmed: undefined, approval: undefined },
+    );
   });
 });
 

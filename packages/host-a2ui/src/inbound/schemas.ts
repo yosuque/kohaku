@@ -123,6 +123,14 @@ export const A2uiComponentSchema: z.ZodType<A2uiComponent> = z
     }
   });
 
+/**
+ * Cap on the `components` array of a single `createSurface` / `updateComponents` message. A schema-valid
+ * message otherwise has no upper bound on it, and every element costs validation and folding work before any
+ * per-surface bound (`createA2uiIngest`'s `maxComponentsPerSurface`) can look at the result. Larger surfaces
+ * are sent as several messages.
+ */
+export const MAX_COMPONENTS_PER_MESSAGE = 2000;
+
 /** `createSurface` (v0.9.1): surfaceId + catalogId required, matching `types.ts`'s `A2uiCreateSurface`. */
 export const A2uiCreateSurfaceV091Schema = z.strictObject({
   surfaceId: z.string().min(1),
@@ -142,7 +150,7 @@ export const A2uiCreateSurfaceV091Schema = z.strictObject({
 export const A2uiCreateSurfaceV1Schema = z.strictObject({
   surfaceId: z.string().min(1),
   catalogId: z.string().min(1).optional(),
-  components: z.array(A2uiComponentSchema).min(1).optional(),
+  components: z.array(A2uiComponentSchema).min(1).max(MAX_COMPONENTS_PER_MESSAGE).optional(),
   dataModel: JsonObjectSchema.optional(),
   sendDataModel: z.boolean().optional(),
 });
@@ -150,7 +158,7 @@ export const A2uiCreateSurfaceV1Schema = z.strictObject({
 /** `updateComponents`: unchanged between v0.9.1 and v1.0 (both require surfaceId + components). */
 export const A2uiUpdateComponentsSchema = z.strictObject({
   surfaceId: z.string().min(1),
-  components: z.array(A2uiComponentSchema),
+  components: z.array(A2uiComponentSchema).max(MAX_COMPONENTS_PER_MESSAGE),
 });
 
 /**

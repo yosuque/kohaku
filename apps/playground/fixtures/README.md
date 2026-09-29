@@ -1,6 +1,6 @@
 # Playground fixtures
 
-Empty today — recording fixtures with a real LLM is postponed (see `reports/u5-3.md`; `scripts/record-fixtures.ts`
+Empty today — recording fixtures with a real LLM is postponed (see `docs/user-guide.md` §10; `scripts/record-fixtures.ts`
 is written but has never been run). This directory is where `record-fixtures.ts` writes its output, and
 `src/host/fixtures.ts` reads it back at build time via Vite's `import.meta.glob`, so a recorded scenario
 becomes available with no code change once its file lands here.

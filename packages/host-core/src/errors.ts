@@ -120,6 +120,11 @@ export interface ConsoleErrorReporterOptions {
 export interface ConsoleErrorReporter {
   /** Matches `KohakuHostDeps.onError` (host-rest) verbatim — pass as `onError` directly. */
   host: (info: { endpoint: string; requestId: string; error: unknown }) => void;
+  /**
+   * Matches `McpHostDeps.onError` (host-mcp-apps) verbatim — pass as `onError` directly. The MCP profile has no
+   * error envelope, so no request id is printed.
+   */
+  mcp: (info: { endpoint: string; error: unknown }) => void;
   /** Matches `ComposeObserver.onError` (composer) verbatim — pass as `observer.onError` directly. */
   compose: (ctx: ComposeErrorContext, error: unknown) => void;
 }
@@ -148,11 +153,22 @@ export function createConsoleErrorReporter(options: ConsoleErrorReporterOptions 
     host: (info) => {
       writeLine(`[kohaku] ${info.endpoint} (request ${info.requestId})`, info.error);
     },
+    mcp: (info) => {
+      writeLine(`[kohaku] mcp ${info.endpoint}`, info.error);
+    },
     compose: (ctx, error) => {
       // A "fallback"/"cancelled" phase carries no thrown exception (error is undefined for most failure
       // kinds) — the failure is described by ctx.reason instead. "hard"/"cache" always carry the causing
       // exception in `error`. See ComposeErrorContext's own doc for the full phase/field contract.
-      writeLine(`[kohaku] compose ${ctx.phase}`, error ?? ctx.reason ?? "unknown failure");
+      // The correlation id (the request/tool-call id the host threaded into ComposeOptions.correlationId),
+      // tier and intent are what let an operator grep this line back to the request that triggered it.
+      const details = [
+        ctx.correlationId != null ? `correlation ${ctx.correlationId}` : undefined,
+        ctx.tier != null ? `tier ${ctx.tier}` : undefined,
+        ctx.intent != null ? `intent ${ctx.intent.canonical}` : undefined,
+      ].filter((part): part is string => part !== undefined);
+      const suffix = details.length > 0 ? ` (${details.join(", ")})` : "";
+      writeLine(`[kohaku] compose ${ctx.phase}${suffix}`, error ?? ctx.reason ?? "unknown failure");
     },
   };
 }

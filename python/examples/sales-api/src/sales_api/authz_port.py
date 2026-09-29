@@ -68,7 +68,8 @@ class HmacAuthzPort:
 
         # The signature is verified against the received payload string itself (not re-serialized).
         # This allows verifying externally (TS) issued tokens too, preserving interoperability.
-        if not hmac.compare_digest(signature, self._sign(payload)):
+        # Compare bytes: compare_digest on two str raises TypeError for a non-ASCII value.
+        if not hmac.compare_digest(signature.encode("utf-8"), self._sign(payload).encode("utf-8")):
             return VerifyResult(ok=False, reason="invalid signature")
 
         try:
@@ -84,8 +85,12 @@ class HmacAuthzPort:
         if exp < int(self._now()):
             return VerifyResult(ok=False, reason="capability expired")
 
+        # Claim types are checked before use (the secret may be shared with another token kind), so a
+        # malformed payload is a denial rather than being coerced.
         scopes = claims.get("scopes")
-        scope_list = scopes if isinstance(scopes, list) else []
+        if not isinstance(scopes, list) or not isinstance(claims.get("sub"), str):
+            return VerifyResult(ok=False, reason="malformed payload")
+        scope_list = scopes
         # Scope matching is exact (a prefix match would let ?region=us permit ?region=usa).
         granted = any(
             isinstance(s, dict) and s.get("kind") == req.kind and s.get("ref") == req.ref
@@ -94,8 +99,7 @@ class HmacAuthzPort:
         if not granted:
             return VerifyResult(ok=False, reason=f"scope does not cover {req.kind}:{req.ref}")
 
-        sub = claims.get("sub")
-        return VerifyResult(ok=True, principal=Principal(id=sub if isinstance(sub, str) else ""))
+        return VerifyResult(ok=True, principal=Principal(id=claims["sub"]))
 
 
 def create_hmac_authz_port(

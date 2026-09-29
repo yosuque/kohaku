@@ -18,6 +18,7 @@ import {
   decodeSeqCursor,
   encodeSeqCursor,
   type FixationRecord,
+  findUnsafeActionParamKeys,
   type JsonObject,
   type LineageEventRecord,
   type LineagePage,
@@ -43,6 +44,7 @@ import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/p
 import {
   buildEvidencePack,
   type EvidenceManifest,
+  EvidenceManifestSchema,
   type EvidenceSource,
   importEd25519PrivateKeyPkcs8,
   importEd25519PublicKeyRaw,
@@ -73,6 +75,7 @@ interface Fixture {
     issues: ActionParamIssue[];
     payloadHash: string;
   }[];
+  actionPayloadScan: { payload: JsonObject; issues: ActionParamIssue[] }[];
   sandboxDom: { tags: string[]; attrs: string[]; styleProps: string[] };
   distillation: { jsonl: string };
   promptFragments: {
@@ -146,6 +149,13 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     for (const c of fixture.actionParams) {
       expect(validateActionParams(c.schema, c.payload)).toEqual(c.issues);
       expect(await actionPayloadHash(c.payload)).toBe(c.payloadHash);
+    }
+  });
+
+  it("findUnsafeActionParamKeys reproduces the fixture (design.md #62)", () => {
+    expect(fixture.actionPayloadScan.length).toBeGreaterThan(0);
+    for (const c of fixture.actionPayloadScan) {
+      expect(findUnsafeActionParamKeys(c.payload)).toEqual(c.issues);
     }
   });
 
@@ -264,5 +274,41 @@ describe("cross-language golden (Compliance Evidence Pack, design.md #67)", () =
     expect(await verifyManifestSignature(evidenceManifestFixture, evidenceSignatureFixture, publicKey)).toBe(
       true,
     );
+  });
+
+  // The verifier checks the signature over the raw manifest.json value, so each of these edits (which
+  // a lax schema parse would drop, default or coerce away) must break it. The Python golden test runs
+  // the identical four cases against the same fixture.
+  describe("the fixture's signature covers the raw manifest.json value", () => {
+    const tampers: Record<string, (m: Record<string, any>) => void> = {
+      "an unknown top-level key": (m) => {
+        m.injected = "approved by legal";
+      },
+      "an unknown key inside scope": (m) => {
+        m.scope.approvedBy = "legal";
+      },
+      "a removed key": (m) => {
+        delete m.warnings;
+      },
+      "a retyped value": (m) => {
+        m.counts.events = String(m.counts.events);
+      },
+    };
+
+    it("accepts the raw fixture under the strict schema and its signature", async () => {
+      const publicKey = await importEd25519PublicKeyRaw(hexToBytes(RFC8032_TEST1_PUBLIC_KEY));
+      const raw: unknown = JSON.parse(JSON.stringify(evidenceManifestFixture));
+      expect(EvidenceManifestSchema.safeParse(raw).success).toBe(true);
+      expect(await verifyManifestSignature(raw, evidenceSignatureFixture, publicKey)).toBe(true);
+    });
+
+    for (const [name, tamper] of Object.entries(tampers)) {
+      it(`fails verification with ${name}`, async () => {
+        const publicKey = await importEd25519PublicKeyRaw(hexToBytes(RFC8032_TEST1_PUBLIC_KEY));
+        const raw = JSON.parse(JSON.stringify(evidenceManifestFixture)) as Record<string, any>;
+        tamper(raw);
+        expect(await verifyManifestSignature(raw, evidenceSignatureFixture, publicKey)).toBe(false);
+      });
+    }
   });
 });

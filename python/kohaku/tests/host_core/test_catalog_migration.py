@@ -415,6 +415,33 @@ def test_a_plan_whose_step_content_was_hand_edited_fails_verification() -> None:
     assert verify_catalog_migration_plan(tampered) is False
 
 
+def test_a_plan_whose_step_pinned_spec_alone_was_hand_edited_fails_verification() -> None:
+    catalog = _no_extra_fields_catalog()
+    storage = _StubStorage({None: [_clean_fixation()]})
+
+    async def run() -> CatalogMigrationPlan:
+        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog)
+
+    plan = asyncio.run(run())
+    # plan_hash's material excludes pinnedSpec, so only the per-step structure-hash recomputation sees this.
+    tampered_steps = [
+        replace(
+            s,
+            pinnedSpec=s.pinnedSpec.model_copy(
+                update={
+                    "components": [
+                        node.model_copy(update={"type": "tampered.part"}) for node in s.pinnedSpec.components
+                    ]
+                }
+            ),
+        )
+        for s in plan.steps
+    ]
+    tampered = replace(plan, steps=tampered_steps)
+    assert tampered.planHash == plan.planHash
+    assert verify_catalog_migration_plan(tampered) is False
+
+
 # --- apply_catalog_migration ---
 
 

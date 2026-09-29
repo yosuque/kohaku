@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from kohaku.host_core import (
+    DEFAULT_RATE_LIMIT_TIMEOUT_MS,
     RateLimiterErrorInfo,
     RateLimiterTakeParams,
     create_memory_rate_limit_store,
@@ -202,5 +203,64 @@ def test_uses_the_injected_clock_not_the_real_one() -> None:
 
         clock = 1000  # 1 second later per the injected clock -> exactly 1 token refilled
         assert (await limiter.take(RateLimiterTakeParams(routeClass="compose", rule=_RULE))).allow is True
+
+    asyncio.run(run())
+
+
+class _HungStore:
+    async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+        await asyncio.Event().wait()  # never resolves
+        raise AssertionError("unreachable")
+
+
+def test_fails_open_and_reports_a_timeout_when_the_store_never_answers() -> None:
+    async def run() -> None:
+        reported: list[RateLimiterErrorInfo] = []
+        limiter = create_rate_limiter(
+            _HungStore(), on_error=lambda info: reported.append(info), now=lambda: 0, timeout_ms=20
+        )
+        result = await limiter.take(RateLimiterTakeParams(tenant="t1", principal="p1", routeClass="compose", rule=_RULE))
+        assert result == RateLimitResult(allow=True)
+        assert len(reported) == 1
+        assert isinstance(reported[0].error, TimeoutError)
+        assert "did not respond within 20ms" in str(reported[0].error)
+        assert (reported[0].tenant, reported[0].principal, reported[0].routeClass) == ("t1", "p1", "compose")
+
+    asyncio.run(run())
+
+
+def test_default_timeout_is_250_ms() -> None:
+    assert DEFAULT_RATE_LIMIT_TIMEOUT_MS == 250
+
+
+def test_a_non_positive_timeout_disables_the_timeout() -> None:
+    async def run() -> None:
+        release = asyncio.Event()
+
+        class _SlowStore:
+            async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+                await release.wait()
+                return RateLimitResult(allow=False, retryAfterMs=5)
+
+        limiter = create_rate_limiter(_SlowStore(), now=lambda: 0, timeout_ms=0)
+        pending = asyncio.ensure_future(limiter.take(RateLimiterTakeParams(routeClass="compose", rule=_RULE)))
+        await asyncio.sleep(0.05)
+        assert not pending.done()
+        release.set()
+        assert await pending == RateLimitResult(allow=False, retryAfterMs=5)
+
+    asyncio.run(run())
+
+
+def test_does_not_await_on_error_so_a_hung_hook_cannot_delay_the_fail_open_response() -> None:
+    async def run() -> None:
+        async def hung_hook(info: RateLimiterErrorInfo) -> None:
+            await asyncio.Event().wait()
+
+        limiter = create_rate_limiter(_BrokenStore(), on_error=hung_hook, now=lambda: 0)
+        result = await asyncio.wait_for(
+            limiter.take(RateLimiterTakeParams(routeClass="compose", rule=_RULE)), timeout=1
+        )
+        assert result == RateLimitResult(allow=True)
 
     asyncio.run(run())

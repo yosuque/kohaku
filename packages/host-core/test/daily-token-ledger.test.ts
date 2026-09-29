@@ -67,6 +67,17 @@ describe("createDailyTokenLedger", () => {
     expect(ledger.spent("c")).toBe(3);
   });
 
+  it("spent() counts as a touch: a key that is only ever read is not the LRU victim", () => {
+    const ledger = createDailyTokenLedger(() => DAY1_START, { maxEntries: 2 });
+    ledger.record("over-budget", 500); // a tenant past its budget: from now on only read, never recorded
+    ledger.record("busy", 1); // at capacity
+    expect(ledger.spent("over-budget")).toBe(500); // read -> most-recently-used, LRU order becomes [busy, over-budget]
+    ledger.record("newcomer", 1); // evicts the LRU entry: busy, not the over-budget tenant
+
+    expect(ledger.spent("over-budget")).toBe(500); // spend not reset
+    expect(ledger.spent("busy")).toBe(0);
+  });
+
   it("prunes entries from a previous UTC day on rollover, so they never compete with today's keys for maxEntries", () => {
     let clock = DAY1_START;
     const ledger = createDailyTokenLedger(() => clock, { maxEntries: 2 });

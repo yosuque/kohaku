@@ -30,7 +30,7 @@ from kohaku.lineage import (
     Unpublish,
     Withdraw,
 )
-from kohaku.spec import GuiAction, Intent, IntentInput, NLQuery, Principal
+from kohaku.spec import GuiAction, Intent, IntentInput, NLQuery, Principal, json_depth_ok
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,12 +53,6 @@ def _as_bounded_str(value: Any, max_len: int) -> str | None:
     return value if isinstance(value, str) and len(value) <= max_len else None
 
 
-# Upper bound on a JsonObject's nesting depth (the object itself = depth 1). Mirrors
-# packages/spec-core/src/schema/json.ts's JsonObjectSchema depth cap: guards the recursive canonical-JSON
-# serialization (cache-key / spec-hash computation) and lineage persistence downstream of request bodies
-# (params / payload fields) against a pathologically deep but otherwise well-formed JSON payload.
-MAX_JSON_OBJECT_DEPTH = 32
-
 # Upper bound (characters) on a client-supplied sessionId. Mirrors TS routes/schemas.ts's SessionSchema
 # sessionId.max(128): bounds a client-controlled string flowing into lineage records / recorder keys.
 MAX_SESSION_ID_LEN = 128
@@ -73,27 +67,12 @@ MAX_SHORT_STRING_LEN = 64
 MAX_HASH_ID_LEN = 128
 
 
-def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 1) -> bool:
-    """True while `value`'s nesting stays within `limit` (the object/array itself = depth 1). Only
-    descending into a dict/list counts toward depth — a scalar leaf never does, since it cannot nest any
-    further. Mirrors spec-core/schema/json.ts's exceedsMaxJsonDepth (inverted: True = not exceeded)."""
-    if isinstance(value, dict):
-        if depth > limit:
-            return False
-        return all(_json_depth_ok(v, limit, depth + 1) for v in value.values())
-    if isinstance(value, list):
-        if depth > limit:
-            return False
-        return all(_json_depth_ok(v, limit, depth + 1) for v in value)
-    return True
-
-
 def _as_json_object(value: Any) -> dict[str, Any] | None:
-    """A JsonObject: a dict whose nesting depth stays within MAX_JSON_OBJECT_DEPTH. None (reject) if not a
+    """A JsonObject: a dict whose nesting depth stays within kohaku.spec's MAX_JSON_OBJECT_DEPTH. None (reject) if not a
     dict or too deeply nested. Use this (rather than bare _as_dict) for any params/payload field that flows
     into canonicalStringify / lineage persistence downstream."""
     data = _as_dict(value)
-    if data is None or not _json_depth_ok(data):
+    if data is None or not json_depth_ok(data):
         return None
     return data
 
@@ -179,7 +158,7 @@ def parse_semantic_input(raw: Any) -> NLQuery | GuiAction | None:
             current_dict = _as_dict(current_raw)
             if current_dict is None:
                 return None
-            if not _json_depth_ok(current_dict.get("params", {})):
+            if not json_depth_ok(current_dict.get("params", {})):
                 return None
             try:
                 current = Intent.model_validate(current_dict)

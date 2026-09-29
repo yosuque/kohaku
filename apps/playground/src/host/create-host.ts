@@ -9,7 +9,7 @@ import { PLAYGROUND_SEED } from "./seed.js";
  * Fixed clock for the NL-normalization prompt (see `AppDeps.now`'s doc comment on `@kohaku-ui-sample/api`):
  * ReplayLlm looks up a recorded response by the exact prompt text, so the playground must always compose
  * as of this same instant, on every load, or the derived "this quarter"/"FY2026" text drifts from what a
- * fixture was recorded against. u5-3 records fixtures against this same value.
+ * fixture was recorded against. `record-fixtures.ts` records fixtures against this same value.
  */
 export const PLAYGROUND_NOW = (): Date => new Date("2026-09-01T00:00:00Z");
 

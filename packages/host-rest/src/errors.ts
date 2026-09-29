@@ -1,4 +1,9 @@
-import type { ErrorEnvelope, HostErrorCode } from "@kohaku-ui/spec-core";
+import type {
+  ActionParamIssue,
+  ApprovalRequiredInfo,
+  ErrorEnvelope,
+  HostErrorCode,
+} from "@kohaku-ui/spec-core";
 
 /**
  * The REST plane's error envelope (the list of codes canonicalized in spec §6.1).
@@ -15,9 +20,9 @@ export function errorBody(
   requestId?: string,
   retryAfterMs?: number,
   /** Present only on ACTION_PARAMS_INVALID (SPEC §6.1, ACT-PRM-001) -- validateActionParams's issues. */
-  issues?: { path: string; code: string; message: string }[],
+  issues?: ActionParamIssue[],
   /** Present only on APPROVAL_REQUIRED (SPEC §6.1, ACT-APR-001). */
-  approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string },
+  approval?: ApprovalRequiredInfo,
 ): ErrorEnvelope {
   return {
     error: {

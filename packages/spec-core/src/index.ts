@@ -1,5 +1,6 @@
 // Schemas
 
+export type { ActionManifest, ActionManifestEntry } from "./action-manifest.js";
 export { collectWriteActions, resolveWriteActionName } from "./action-name.js";
 export {
   type ActionParamIssue,
@@ -7,6 +8,7 @@ export {
   type ActionTier,
   actionPayloadHash,
   assertValidActionParamsSchema,
+  findUnsafeActionParamKeys,
   validateActionParams,
 } from "./action-params.js";
 export { enumerateBindVariants, resolveBoundRef } from "./bind.js";
@@ -34,6 +36,7 @@ export {
   type IntentInput,
   normalizeIntent,
 } from "./intent.js";
+export { parseIso8601 } from "./iso8601.js";
 // In-process keyed mutex (a shared primitive: host locks and the reference StoragePort's per-file serialization)
 export { createKeyedMutex, type KeyedMutex } from "./keyed-mutex.js";
 // Lineage filter/limit primitives shared by every StoragePort implementation and port-contracts
@@ -102,6 +105,8 @@ export type {
 } from "./ports.js";
 // Ports
 export {
+  APPROVAL_ISSUE_ERROR_CODE,
+  ApprovalIssueError,
   DEFAULT_APPROVAL_TTL_SECONDS,
   DEFAULT_CAPABILITY_TTL_SECONDS,
   normalizeTenant,
@@ -114,7 +119,7 @@ export {
   QueryRefError,
 } from "./query-ref.js";
 // Error envelope of the REST profile (SPEC §6.1) (a wire contract shared by host-rest / client).
-export type { ErrorEnvelope, HostErrorCode } from "./rest-errors.js";
+export type { ApprovalRequiredInfo, ErrorEnvelope, HostErrorCode } from "./rest-errors.js";
 export { GOVERNANCE_ERROR_DISCRIMINATORS, PROMOTION_ERROR_DISCRIMINATORS } from "./rest-errors.js";
 export {
   type ActionParamsSchema,

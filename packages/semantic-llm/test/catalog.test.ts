@@ -86,6 +86,19 @@ describe("createIntentCatalog", () => {
       });
     });
 
+    it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+      "reports %s as an unknown key (an Object.prototype name is not a declared param)",
+      (key) => {
+        const catalog = createIntentCatalog([summary]);
+        // JSON.parse so `__proto__` is an own property, as on a real parsed body.
+        const params = JSON.parse(`{"region":"japan","${key}":1}`);
+        expect(catalog.validateParams("sales.summary", params)).toEqual({
+          ok: false,
+          issues: [{ path: key, message: `unknown param "${key}"` }],
+        });
+      },
+    );
+
     it("reports both an unknown key and an invalid value together", () => {
       const catalog = createIntentCatalog([summary]);
       const result = catalog.validateParams("sales.summary", { region: "mars", bogus: 1 });

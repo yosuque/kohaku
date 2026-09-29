@@ -55,6 +55,15 @@ describe("encodeSeqCursor / decodeSeqCursor", () => {
     // seq is not a number.
     expect(() => decodeSeqCursor(toBase64UrlJson({ v: 1, seq: "1" }))).toThrow(LineageCursorError);
   });
+
+  it("rejects a seq that is fractional, negative or not a safe integer (it would rewind or duplicate a page)", () => {
+    for (const seq of [0.5, -1, -0.5, 2 ** 53, 1e300]) {
+      expect(() => decodeSeqCursor(toBase64UrlJson({ v: 1, seq }))).toThrow(LineageCursorError);
+    }
+    // JSON cannot carry NaN / Infinity: they serialize to null, which is not a number either.
+    expect(() => decodeSeqCursor(toBase64UrlJson({ v: 1, seq: Number.NaN }))).toThrow(LineageCursorError);
+    expect(decodeSeqCursor(encodeSeqCursor(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
+  });
 });
 
 describe("pageLineageArray", () => {

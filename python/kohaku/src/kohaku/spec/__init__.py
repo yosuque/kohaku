@@ -11,6 +11,7 @@ from .action_params import (
     ActionTier,
     action_payload_hash,
     assert_valid_action_params_schema,
+    find_unsafe_action_param_keys,
     validate_action_params,
 )
 from .bind import enumerate_bind_variants, resolve_bound_ref
@@ -51,6 +52,7 @@ from .lineage_page import (
 )
 from .models import (
     ACCEPTED_SPEC_VERSIONS,
+    MAX_JSON_OBJECT_DEPTH,
     MAX_PREDICATE_DEPTH,
     MAX_PREDICATE_ITEMS,
     SANDBOX_HTML_TYPE,
@@ -76,6 +78,7 @@ from .models import (
     SpecPatch,
     UISpec,
     VisibleWhen,
+    json_depth_ok,
     predicate_depth,
 )
 from .parse import (
@@ -105,8 +108,10 @@ from .policy import (
     merge_policy_sections,
 )
 from .ports import (
+    APPROVAL_ISSUE_ERROR_CODE,
     DEFAULT_APPROVAL_TTL_SECONDS,
     ApprovalGrant,
+    ApprovalIssueError,
     ApprovalPort,
     ApprovalStore,
     ApprovalVerifyResult,
@@ -184,6 +189,7 @@ __all__ = [
     "ALLOWED_STYLE_PROPS",
     "ALLOWED_TAGS",
     "ALWAYS_DENIED_ATTRS",
+    "APPROVAL_ISSUE_ERROR_CODE",
     "DEFAULT_APPROVAL_TTL_SECONDS",
     "DEFAULT_LINEAGE_PAGE_SIZE",
     "DEFAULT_MAX_DOM_DEPTH",
@@ -193,6 +199,7 @@ __all__ = [
     "KOHAKU_POLICY_FILE_VERSION",
     "MAX_BIND_VARIANTS",
     "MAX_LINEAGE_PAGE_SIZE",
+    "MAX_JSON_OBJECT_DEPTH",
     "MAX_PREDICATE_DEPTH",
     "MAX_PREDICATE_ITEMS",
     "ROOT_COMPONENT_ID",
@@ -207,6 +214,7 @@ __all__ = [
     "AllPredicate",
     "AnyPredicate",
     "ApprovalGrant",
+    "ApprovalIssueError",
     "ApprovalPort",
     "ApprovalRequiredInfo",
     "ApprovalStore",
@@ -313,6 +321,7 @@ __all__ = [
     "encode_seq_cursor",
     "enumerate_bind_variants",
     "evaluate_visible_when",
+    "find_unsafe_action_param_keys",
     "finalize_intent",
     "format_query_ref",
     "has_errors",
@@ -325,6 +334,7 @@ __all__ = [
     "merge_policy_sections",
     "normalize_intent",
     "normalize_json_value",
+    "json_depth_ok",
     "order_components",
     "page_lineage_events",
     "parse_patch",

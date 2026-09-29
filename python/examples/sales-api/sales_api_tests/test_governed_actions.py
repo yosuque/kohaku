@@ -103,7 +103,7 @@ class TestPublishGovernance:
         )
         assert approve_res.status_code == 200
         approval = approve_res.json()["approval"]
-        assert approval.startswith("kohaku-approval.v1.")
+        assert approval.startswith("kohaku-approval.v2.")
 
         approved = client.post(
             "/api/kohaku/binding/action",

@@ -632,7 +632,8 @@ console.log("L0 summary composed without an LLM: " + body.spec.components.length
 //      has kohaku_compose plus a generated *_summary tool, resources/read on ui://kohaku/renderer.html
 //      carries the core-build marker, and calling the summary tool composes an L0 spec (no LLM needed);
 //  (b) starts the generated Streamable HTTP server (server/mcp-http.ts) on a free port and confirms it
-//      answers `initialize`;
+//      answers `initialize`, refuses a foreign Origin with 403, and serves a repeated tool call from the
+//      Spec cache (the host is built once per process, not once per exchange);
 //  (c) runs the generated scripts/claude-desktop.mjs --print against a fake HOME, proving it never touches
 //      a real Claude Desktop config while still producing the expected merged output.
 // ---------------------------------------------------------------------------------------------------------
@@ -803,7 +804,34 @@ try {
     "  stdio MCP server: tools/list has kohaku_compose + a *_summary tool, resources/read has the core marker, the summary tool composes L0 with no LLM env vars",
   );
 
-  // --- (b) Streamable HTTP: answers `initialize` on a free port ---
+  // --- (b) Streamable HTTP: answers `initialize` on a free port, refuses foreign Origins, and shares one host ---
+  const httpScript = join(mcpClientDir, "check-http.generated.mjs");
+  writeFileSync(
+    httpScript,
+    `
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+
+const client = new Client({ name: "kohaku-pack-smoke", version: "0.1.0" }, { versionNegotiation: { mode: "auto" } });
+await client.connect(new StreamableHTTPClientTransport(new URL(process.argv[2])));
+try {
+  const { tools } = await client.listTools();
+  const summaryTool = tools.map((t) => t.name).find((n) => n.endsWith("_summary"));
+  if (summaryTool == null) throw new Error("tools/list has no generated *_summary tool");
+  const caches = [];
+  for (let i = 0; i < 2; i += 1) {
+    const result = await client.callTool({ name: summaryTool, arguments: {} });
+    if (result.isError === true) throw new Error("the summary tool call failed: " + JSON.stringify(result.content));
+    caches.push(result.structuredContent?.spec?.provenance?.cache);
+  }
+  if (caches[1] !== "hit") {
+    throw new Error("the second identical call was not a Spec cache hit (caches: " + caches.join(", ") + ")");
+  }
+  console.log("ok");
+} finally {
+  await client.close();
+}
+`,
+  );
   const port = await getFreePort();
   const httpEnv = { ...process.env, PORT: String(port) };
   for (const key of ["KOHAKU_LLM_PROVIDER", "KOHAKU_LLM_MODEL", "KOHAKU_LLM_API_KEY", "KOHAKU_LLM_BASE_URL"]) {
@@ -834,12 +862,41 @@ try {
         if (!text.includes("serverInfo") && !text.includes("protocolVersion")) {
           throw new Error(`initialize response did not look like an MCP result: ${text.slice(0, 300)}`);
         }
+
+        // A browser page is not allowed to drive the server (DNS rebinding / CSRF): a foreign Origin or Host is
+        // refused, while a client that sends no Origin (the request above) is not.
+        const listBody = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
+        const badOrigin = await fetch(`http://127.0.0.1:${port}/mcp`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            origin: "http://evil.example",
+          },
+          body: listBody,
+        });
+        if (badOrigin.status !== 403) throw new Error(`a foreign Origin got ${badOrigin.status}, expected 403`);
+        const preflight = await fetch(`http://127.0.0.1:${port}/mcp`, {
+          method: "OPTIONS",
+          headers: { origin: "http://evil.example", "access-control-request-method": "POST" },
+        });
+        if (preflight.status !== 403) throw new Error(`a foreign-Origin preflight got ${preflight.status}, expected 403`);
+
+        // The host is built once per process, so the second identical call is served from the Spec cache. If the
+        // host were rebuilt per exchange, both calls would report a miss.
+        const twice = spawnSync(process.execPath, [httpScript, `http://127.0.0.1:${port}/mcp`], {
+          cwd: mcpClientDir,
+          encoding: "utf8",
+        });
+        if (twice.status !== 0) throw new Error(`the repeated-call check failed:\n${twice.stdout}\n${twice.stderr}`);
       },
     );
   } catch (err) {
     fail(`generated project's mcp-http server did not answer initialize on :${port}`, String(err));
   }
-  log(`  Streamable HTTP MCP server: answers initialize on a free port (:${port})`);
+  log(
+    `  Streamable HTTP MCP server: answers initialize on a free port (:${port}), refuses a foreign Origin (403), and the second identical call is a Spec cache hit`,
+  );
 
   // --- (c) scripts/claude-desktop.mjs --print against a fake HOME (never a real Claude Desktop config) ---
   const fakeHome = join(tmpRoot, "init-mcp-fake-home");

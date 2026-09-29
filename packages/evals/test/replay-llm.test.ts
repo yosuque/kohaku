@@ -44,7 +44,7 @@ describe("ReplayLlm: shares FixtureLlm's key function", () => {
     await recorder.generateObject(req);
 
     // Read back the exact file FixtureLlm just wrote (filename = key) and bundle it into a Record, the
-    // shape a fixture-recording step (u5-3) would produce for the browser.
+    // shape the playground's fixture-recording script would produce for the browser.
     const fileName = readdirSync(dir)[0]!;
     const key = basename(fileName, ".json");
     const recorded = JSON.parse(readFileSync(join(dir, fileName), "utf8")) as { object: unknown };

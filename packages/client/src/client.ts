@@ -226,7 +226,8 @@ export interface KohakuClient {
   lineage(query?: LineageQuery, opts?: RequestOptions): Promise<LineageEventRecord[]>;
   /**
    * Walks the whole lineage log exhaustively via GET /lineage?order=asc (design.md #53), yielding one
-   * page's events per iteration until the host reports no further page (`nextCursor` absent) -- unlike
+   * page's events per iteration (a page may be short or empty) until the host reports no further page
+   * (`nextCursor` absent) -- unlike
    * `lineage()` (a tail window bounded by `limit`), this covers every matching event, in append order.
    * Requires the host's storage to implement `StoragePort.pageLineage`; an unsupported backend rejects the
    * first page with a `KohakuHostError` (501 `NOT_IMPLEMENTED`).
@@ -555,6 +556,11 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
         );
         yield page.events ?? [];
         if (page.nextCursor == null) return;
+        if (page.nextCursor === cursor) {
+          throw new Error(
+            "GET /lineage returned the same nextCursor it was given; refusing to page forever (a host must advance the cursor)",
+          );
+        }
         cursor = page.nextCursor;
       }
     },

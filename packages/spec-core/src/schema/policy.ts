@@ -49,6 +49,11 @@ const PolicyBudgetSchema = z.strictObject({
    * the day's total can overshoot `dailyTokens` by at most `(concurrent in-flight generations) x (the
    * per-compose token ceiling)`. Set `perCompose.stopAfterTokens` to bound that ceiling (and so the
    * worst-case overshoot) if the effective daily cap needs to be tighter under load.
+   *
+   * The ledger behind it is in-process (host-core's `DailyTokenLedger`), so the limit applies per host
+   * instance, not across a multi-instance deployment. Only generation attempts spend it: the tokens an
+   * NL question's Intent normalization spends (`POST /intent/normalize`, the SemanticPort's LLM) are not
+   * counted.
    */
   dailyTokens: z.number().int().nonnegative().optional(),
 });
@@ -157,8 +162,8 @@ export function mergePolicySections(base: PolicySection, override: PolicySection
  * therefore already-normalized-by-Zod) file, matching the `sha256:<hex>` shape of `computeIntentHash`/
  * `computeSpecHash` (intent.ts / cache-key.ts). Two files that parse to the same value (whitespace,
  * key order) get the same `policyId`; any actual content change gets a different one. Used by the
- * `policy.applied` audit event (lineage, task 9) to detect "did the effective policy actually change"
- * across a `reload`.
+ * `policy.applied` audit event (lineage) to detect "did the effective policy actually change" across
+ * a `reload`.
  */
 export async function computePolicyId(file: KohakuPolicyFile): Promise<string> {
   const hex = await sha256Hex(canonicalStringify(file));

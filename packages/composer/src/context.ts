@@ -530,7 +530,7 @@ export type { ResolvedRefs } from "./refs.js";
  * fewShot / selectComponents are functions (their actual behavior cannot be inspected), so only their
  * optional `id` participates (default `"anonymous"` when unset — not required, so existing callers that
  * never set `id` see no change in the fingerprint they already had). designSystem folds in a fixed pick of
- * fields — `tokens`, `guidelines`, `enforceTokenColors` — plus two design-kit fields added by Task 7b:
+ * fields — `tokens`, `guidelines`, `enforceTokenColors` — plus two design-kit fields:
  * `kit` folds in the whole object whenever set (a different `id`, `version`, `classes`, `utilities`,
  * `namespaces` or `skeleton` all separate the cache, matching `designKitPromptFragment`'s effect on the L2
  * prompt), and `enforceKitClasses` folds in **only when explicitly `false`** — the same non-default-only
@@ -569,7 +569,7 @@ export type { ResolvedRefs } from "./refs.js";
  * its current cache key, so leaving them `null` changes nothing further. **It is not the pattern to copy**
  * — `fingerprintDesignSystem` below appears to write `?? null` ten times over, but that is historical
  * grandfathering, not a model for a new field. `designSystem.kit` / `designSystem.enforceKitClasses`
- * (Task 7b) and the top-level `tierGate` row (`fingerprintTierGate`, Policy as Code) show the correct
+ * and the top-level `tierGate` row (`fingerprintTierGate`, Policy as Code) show the correct
  * shape for a field added *after* callers already depend on this material's bytes: fold to `undefined`
  * (an absent key), never `null` — see the ABSENT-key paragraph on their own extractor below.
  * **Any new fingerprinted field must follow `kit`/`enforceKitClasses`/`tierGate`, not the other
@@ -601,14 +601,13 @@ function fingerprintDesignSystem(policy: ComposePolicy): unknown {
     // policyFingerprint's own doc comment above for why the three keys above it get away
     // with `null` instead.
     //
-    // `kit.classes` is folded in as-is below. Until Task 8/m-15, `designKitPromptFragment`
-    // iterated `Object.entries(kit.classes)` in insertion order, so two vocabularies differing
+    // `kit.classes` is folded in as-is below. `designKitPromptFragment` used to
+    // iterate `Object.entries(kit.classes)` in insertion order, so two vocabularies differing
     // only in that insertion order emitted different L2 prompt bytes even though
     // canonicalStringify's sortDeep (packages/spec-core/src/canonical-json.ts) sorts object
     // keys before hashing and so would otherwise hash two such vocabularies identically — hence
     // a `classesOrder` array (which sortDeep does not reorder) used to be carried here to force
-    // the cache key to separate on that difference too. Task 8/m-15 made
-    // `designKitPromptFragment` present classes **sorted by name** instead, so the prompt
+    // the cache key to separate on that difference too. `designKitPromptFragment` now presents classes **sorted by name** instead, so the prompt
     // itself is now a pure function of `kit.classes`' *content*, not its insertion order —
     // `classesOrder` no longer corresponds to anything the prompt bytes depend on, so it was
     // removed (its own regression test, "two kits differing only in the insertion order of

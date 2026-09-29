@@ -181,6 +181,67 @@ describe("createPostgresPool: ready() migration transaction", () => {
     expect(connect).toHaveBeenCalledTimes(2); // the raced attempt, then the retry
   });
 
+  describe("lineage correlation_id migration", () => {
+    /** A fake client whose catalog answers say whether the column / index already exist. */
+    function catalogClient(existing: { column: boolean; index: boolean }) {
+      const statements: string[] = [];
+      const client = {
+        query: vi.fn(async (sql: string) => {
+          statements.push(sql);
+          if (sql.includes("information_schema.columns")) {
+            return existing.column ? { rows: [{ "?column?": 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+          }
+          if (sql.includes("pg_indexes")) {
+            return existing.index ? { rows: [{ "?column?": 1 }], rowCount: 1 } : { rows: [], rowCount: 0 };
+          }
+          if (sql.includes("pg_index")) return { rows: [{ ok: true }], rowCount: 1 };
+          return { rows: [], rowCount: 0 };
+        }),
+        release: vi.fn(),
+      };
+      return { client, statements };
+    }
+
+    async function migrate(existing: { column: boolean; index: boolean }): Promise<string[]> {
+      const { client, statements } = catalogClient(existing);
+      const injected = injectedPool({ connect: vi.fn().mockResolvedValue(client) });
+      await createPostgresPool({ pool: injected, schema: "corr_test" }).ready();
+      return statements;
+    }
+
+    it("issues no ALTER TABLE and no correlation index DDL when both already exist", async () => {
+      const statements = await migrate({ column: true, index: true });
+      expect(statements.some((sql) => sql.includes("ADD COLUMN"))).toBe(false);
+      expect(statements.some((sql) => sql.includes("correlation_id_idx"))).toBe(false);
+    });
+
+    it("adds the column and the index when the catalog says they are missing", async () => {
+      const statements = await migrate({ column: false, index: false });
+      expect(statements).toContain(
+        'ALTER TABLE "corr_test"."kohaku_lineage" ADD COLUMN IF NOT EXISTS correlation_id text NULL',
+      );
+      expect(statements).toContain(
+        'CREATE INDEX IF NOT EXISTS corr_test_kohaku_lineage_correlation_id_idx ON "corr_test"."kohaku_lineage" (correlation_id, seq)',
+      );
+    });
+
+    it("creates only the index when the column is there but the index is not", async () => {
+      const statements = await migrate({ column: true, index: false });
+      expect(statements.some((sql) => sql.includes("ADD COLUMN"))).toBe(false);
+      expect(statements.some((sql) => sql.includes("correlation_id_idx"))).toBe(true);
+    });
+
+    it("bounds table-lock waits with a transaction-local lock_timeout, set after the advisory lock", async () => {
+      const statements = await migrate({ column: true, index: true });
+      const advisory = statements.findIndex((sql) => sql.includes("pg_advisory_xact_lock"));
+      const timeout = statements.indexOf("SET LOCAL lock_timeout = 5000");
+      const firstDdl = statements.findIndex((sql) => sql.startsWith("CREATE SCHEMA"));
+      expect(advisory).toBeGreaterThanOrEqual(0);
+      expect(timeout).toBeGreaterThan(advisory);
+      expect(timeout).toBeLessThan(firstDdl);
+    });
+  });
+
   it("does not check out a connection when migrate: false", async () => {
     const connect = vi.fn();
     const injected = injectedPool({ connect });

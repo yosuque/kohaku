@@ -89,3 +89,14 @@ def test_prunes_entries_from_a_previous_utc_day_on_rollover() -> None:
     assert ledger.spent("day2-y") == 7
     assert ledger.spent("day1-a") == 0
     assert ledger.spent("day1-b") == 0
+
+
+def test_spent_counts_as_a_touch_so_a_key_that_is_only_ever_read_is_not_the_lru_victim() -> None:
+    ledger = create_daily_token_ledger(now=lambda: _DAY1_START, max_entries=2)
+    ledger.record("over-budget", 500)  # a tenant past its budget: from now on only read, never recorded
+    ledger.record("busy", 1)  # at capacity
+    assert ledger.spent("over-budget") == 500  # read -> most-recently-used, LRU order becomes [busy, over-budget]
+    ledger.record("newcomer", 1)  # evicts the LRU entry: busy, not the over-budget tenant
+
+    assert ledger.spent("over-budget") == 500  # spend not reset
+    assert ledger.spent("busy") == 0

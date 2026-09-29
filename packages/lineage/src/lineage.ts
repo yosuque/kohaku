@@ -35,7 +35,7 @@ import { tenantField } from "./tenant-scope.js";
  * and this decoupling lets any caller build its own trace-shaped object without a hard dependency).
  *
  * correlationId / cacheKey / cacheKeyParts / attempts / downgrades / coalesced / usage are all optional
- * additions (U2): a caller that builds a ComposeTraceLike without them (or a pre-existing test fixture) gets
+ * additions: a caller that builds a ComposeTraceLike without them (or a pre-existing test fixture) gets
  * the exact same view.composed / component.generated / component.used payload shape as before they existed
  * -- see viewComposed's payload construction, which omits each corresponding key when its trace field is
  * unset.
@@ -180,7 +180,10 @@ export interface Lineage {
    */
   policyApplied(event: PolicyAppliedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
 
-  /** Records `action.invoked` (design.md #62/#63) -- the ActionGate returned `allow`. */
+  /**
+   * Records `action.invoked` (design.md #62/#63) -- the ActionGate returned `allow`. Recorded before
+   * `DomainPort.invoke` runs, so it does not imply the write succeeded.
+   */
   actionInvoked(event: ActionInvokedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
   /** Records `action.denied` (design.md #63) -- a presented approval token did not verify. */
   actionDenied(event: ActionDeniedPayload, actor?: ActorKind, tenant?: string): Promise<void>;

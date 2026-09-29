@@ -60,7 +60,9 @@ export const POLICY_EVENT_TYPES = ["policy.applied"] as const;
 /**
  * Governed Actions' audit trail (design.md #62/#63). Fired by `createActionAuditRecorder`'s adapter
  * (recorder.ts), driven by host-core's `ActionGate` outcome for every invoke attempt:
- * - `action.invoked` — the gate returned `allow` (params validated, tier satisfied).
+ * - `action.invoked` — the gate returned `allow` (params validated, tier satisfied). Recorded before
+ *   `DomainPort.invoke` runs: "allowed by the gate", not "the write succeeded" (an approval token is
+ *   already consumed by then).
  * - `action.denied` — tier `"approve"` and a token *was* presented but did not verify (or no
  *   `ApprovalPort` is configured at all).
  * - `action.approvalRequested` — nothing was presented yet (`"confirm"` without `confirmed: true`, or
@@ -144,7 +146,7 @@ export interface ViewComposedPayload {
   artifactId?: string;
   /** The caller-supplied correlation id (the compose trace's correlationId), so a devtool can find every
    * lineage event belonging to one request via the `/lineage?correlationId=` filter. Unset for a compose
-   * whose caller passed none, and always unset for an event recorded before this field existed (LQ/U2). */
+   * whose caller passed none, and always unset for an event recorded before this field existed. */
   correlationId?: string;
   /** The Spec cache key this compose resolved to (opaque; see cacheKeyParts for its breakdown). */
   cacheKey?: string;

@@ -152,7 +152,12 @@ describe("rate-limit middleware: denial", () => {
     expect(res.headers.get("Retry-After")).toBe("3"); // ceil(2500/1000)
     const body = await res.json();
     expect(body).toEqual({
-      error: { code: "RATE_LIMITED", message: "rate limit exceeded", retryAfterMs: 2500 },
+      error: {
+        code: "RATE_LIMITED",
+        message: "rate limit exceeded",
+        requestId: res.headers.get("X-Request-Id"),
+        retryAfterMs: 2500,
+      },
     });
   });
 
@@ -190,11 +195,78 @@ describe("rate-limit middleware: denial", () => {
     expect(calls[0]?.routeClass).toBe("resolve");
   });
 
+  it("denies POST /intent/normalize under the 'compose' route class (it calls the SemanticPort's LLM)", async () => {
+    const { limiter, calls } = stubRateLimiter({ allow: false, retryAfterMs: 1000 });
+    const app = createKohakuRoutes(baseDeps({ rateLimiter: limiter }));
+    const res = await app.request("/intent/normalize", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: { kind: "nl", text: "revenue by month" } }),
+    });
+    expect(res.status).toBe(429);
+    expect(calls[0]?.routeClass).toBe("compose");
+  });
+
   it("does not apply to governance routes (GET /lineage) even when the limiter always denies", async () => {
     const { limiter } = stubRateLimiter({ allow: false, retryAfterMs: 1000 });
     const app = createKohakuRoutes(baseDeps({ rateLimiter: limiter }));
     const res = await app.request("/lineage");
     expect(res.status).not.toBe(429);
+  });
+});
+
+describe("rate-limit middleware: observability", () => {
+  const composeRequest = {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-request-id": "req-rl-1" },
+    body: JSON.stringify({ intent: { canonical: "sales.trend", params: {} } }),
+  };
+
+  it("carries the request id in the 429 envelope and notifies onRateLimited with it", async () => {
+    const { limiter } = stubRateLimiter({ allow: false, retryAfterMs: 1000 });
+    const seen: unknown[] = [];
+    const app = createKohakuRoutes(
+      baseDeps({
+        rateLimiter: limiter,
+        tenant: () => "tenant-a",
+        auth: async () => ({ id: "alice", roles: ["user"] }),
+        onRateLimited: (info) => void seen.push(info),
+      }),
+    );
+    const res = await app.request("/compose", composeRequest);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("X-Request-Id")).toBe("req-rl-1");
+    expect(((await res.json()) as { error: { requestId?: string } }).error.requestId).toBe("req-rl-1");
+    expect(seen).toEqual([
+      { tenant: "tenant-a", principal: "alice", routeClass: "compose", requestId: "req-rl-1" },
+    ]);
+  });
+
+  it("does not call onRateLimited for an allowed request", async () => {
+    const { limiter } = stubRateLimiter({ allow: true });
+    const seen: unknown[] = [];
+    const app = createKohakuRoutes(
+      baseDeps({ rateLimiter: limiter, onRateLimited: (i) => void seen.push(i) }),
+    );
+    expect((await app.request("/compose", composeRequest)).status).toBe(200);
+    expect(seen).toEqual([]);
+  });
+
+  it("never awaits onRateLimited: a hung or throwing observer cannot delay or break the 429", async () => {
+    const { limiter } = stubRateLimiter({ allow: false });
+    const hung = createKohakuRoutes(
+      baseDeps({ rateLimiter: limiter, onRateLimited: () => new Promise<void>(() => {}) }),
+    );
+    expect((await hung.request("/compose", composeRequest)).status).toBe(429);
+    const throwing = createKohakuRoutes(
+      baseDeps({
+        rateLimiter: limiter,
+        onRateLimited: () => {
+          throw new Error("observer down");
+        },
+      }),
+    );
+    expect((await throwing.request("/compose", composeRequest)).status).toBe(429);
   });
 });
 
