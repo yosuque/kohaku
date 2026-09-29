@@ -5,6 +5,7 @@ import {
   type ActionParamIssue,
   type ApprovalRequiredInfo,
   canonicalStringify,
+  type DomainPort,
   type JsonObject,
   JsonObjectSchema,
   type Principal,
@@ -1004,6 +1005,44 @@ function registerActionTool(ctx: ToolContext): void {
 }
 
 /**
+ * The operation index (and its one-time validation) shared by every attach over the same `DomainPort`.
+ * Keyed by the DomainPort, not by `deps`: a stateless HTTP transport re-attaches on every exchange with a
+ * freshly built deps object around one long-lived DomainPort, and a per-attach index would call
+ * `listOperations()` again and re-report a bad `paramsSchema` to `onError` on every request. The validation
+ * (design.md decision 62: every operation's `paramsSchema` checked at startup rather than at the first invoke)
+ * is kicked off by the first attach and reported through that attach's `onError`; a rejected
+ * `listOperations()` is not memoized (see createOperationIndex), so it re-arms validation and a later attach
+ * retries. Trade-off: the operation list is fixed for the DomainPort's lifetime, which matches the
+ * "static at startup" posture of the tool list itself.
+ */
+const operationIndexesByDomain = new WeakMap<
+  DomainPort,
+  { index: hostCore.OperationIndex; validated: boolean }
+>();
+
+function sharedOperationIndex(deps: McpHostDeps): hostCore.OperationIndex {
+  let shared = operationIndexesByDomain.get(deps.domain);
+  if (shared == null) {
+    shared = { index: hostCore.createOperationIndex(deps.domain), validated: false };
+    operationIndexesByDomain.set(deps.domain, shared);
+  }
+  if (!shared.validated) {
+    const entry = shared;
+    entry.validated = true;
+    // `attachKohakuToMcpServer` is synchronous, so validation is kicked off here and a failure
+    // (listOperations() rejecting, or a schema outside kohaku's closed subset) is reported through `onError`.
+    // A bad schema confines the failure to its own operation.
+    void hostCore.validateOperationIndex(entry.index, (e) =>
+      reportMcpError(deps, "attach.operationIndex", e),
+    );
+    entry.index().catch(() => {
+      entry.validated = false;
+    });
+  }
+  return shared.index;
+}
+
+/**
  * The MCP Apps profile of the Kohaku Protocol (SEP-1865).
  * - kohaku_compose (model-visible): NL → the same Composition Service → Spec + text fallback
  * - kohaku_resolve_binding / kohaku_event (app-only): callable only from the iframe.
@@ -1037,17 +1076,10 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
   // principalOf, unlike the old attach-time `principal` field it replaces, is resolved per tool call (see
   // McpHostDeps.resolvePrincipal's doc comment) — each handler calls it once, inside its own safeTool body,
   // and builds a ToolCallContext (via forCall) to carry the resolved value through the compose pipeline.
-  // One memoized operation index per attach; the allowed-action set (capability write-scope filter) is derived
-  // from it rather than from a second, independently memoized `listOperations()` call, so the two can never
-  // disagree about which actions exist.
-  const operationIndex = hostCore.createOperationIndex(deps.domain);
-  // Validate every operation's `paramsSchema` now rather than at the first invoke: `attachKohakuToMcpServer`
-  // is synchronous, so this is kicked off here and a failure (listOperations() rejecting, or a schema outside
-  // kohaku's closed subset) is reported through `onError`. A bad schema confines the failure to its own
-  // operation; a rejected listOperations() is not memoized, so a later call retries.
-  void hostCore.validateOperationIndex(operationIndex, (e) =>
-    reportMcpError(deps, "attach.operationIndex", e),
-  );
+  // One memoized operation index per DomainPort (see sharedOperationIndex); the allowed-action set (capability
+  // write-scope filter) is derived from it rather than from a second, independently memoized `listOperations()`
+  // call, so the two can never disagree about which actions exist.
+  const operationIndex = sharedOperationIndex(deps);
   const ctx: ToolContext = {
     server,
     deps,

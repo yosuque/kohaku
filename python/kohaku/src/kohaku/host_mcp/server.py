@@ -66,6 +66,7 @@ from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.host_core import start_operation_index_validation as _host_core_start_index_validation
 from kohaku.spec import (
     ActionParamIssue,
+    ActionParamsSchemaError,
     AuthzPort,
     IntentInput,
     InvocationContext,
@@ -309,6 +310,50 @@ def _bounded_correlation_segment(raw: str) -> str:
     return "h" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:32]
 
 
+class _SharedOperationIndex:
+    """The operation index for one DomainPort plus whether its one-time validation has been started."""
+
+    __slots__ = ("index", "validated")
+
+    def __init__(self, index: Any) -> None:
+        self.index = index
+        self.validated = False
+
+
+_operation_indexes_by_domain: weakref.WeakKeyDictionary[Any, _SharedOperationIndex] = weakref.WeakKeyDictionary()
+
+
+def _shared_operation_index(deps: McpHostDeps) -> Any:
+    """The operation index (and its one-time validation) shared by every attach over the same DomainPort.
+
+    Keyed by the DomainPort, not by `deps`: a host that re-attaches per request builds a fresh deps object
+    around one long-lived DomainPort, and a per-attach index would call `list_operations()` again and re-report
+    a bad `paramsSchema` to `on_error` on every request (design.md #62: validated once, at startup). Mirrors TS
+    host-mcp-apps' `sharedOperationIndex`. A DomainPort that cannot be weakly referenced or hashed just gets a
+    per-attach index, as before. Validation needs a running event loop (attach itself is synchronous): without
+    one it is not started and a later attach retries; a rejected `list_operations()` is not memoized, so a
+    later attach retries that too.
+    """
+    try:
+        shared = _operation_indexes_by_domain.get(deps.domain)
+        if shared is None:
+            shared = _SharedOperationIndex(_host_core_create_operation_index(deps.domain))
+            _operation_indexes_by_domain[deps.domain] = shared
+    except TypeError:
+        shared = _SharedOperationIndex(_host_core_create_operation_index(deps.domain))
+    if not shared.validated:
+        entry = shared
+
+        async def _report(exc: BaseException) -> None:
+            if not isinstance(exc, ActionParamsSchemaError):
+                # list_operations() itself failed (not memoized): re-arm so a later attach retries.
+                entry.validated = False
+            await _report_mcp_error(deps, "attach.operationIndex", exc)
+
+        entry.validated = _host_core_start_index_validation(entry.index, _report) is not None
+    return shared.index
+
+
 def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
     """The per-call correlation id: `mcp:<sessionId>:<jsonrpc id>`, where `<sessionId>` is a stable opaque id
     (uuid4 hex) generated once per transport connection (see `_session_correlation_prefix` above) -- never
@@ -432,21 +477,14 @@ def attach_kohaku_to_mcp_server(
         return await _principal_of(deps, fallback_principal, ctx)
 
     # Memoized deps.domain.list_operations() index (host_core's create_operation_index, design.md #62/#64),
-    # consulted by the actions manifest (`_compose_and_package`) and `${prefix}_action`'s ActionGate below. Kept
-    # here as a closure variable rather than on deps — McpHostDeps is frozen (unlike host_rest's per-deps field).
-    _operation_index = _host_core_create_operation_index(deps.domain)
+    # consulted by the actions manifest (`_compose_and_package`) and `${prefix}_action`'s ActionGate below. Shared
+    # by every attach over the same DomainPort (see `_shared_operation_index`); kept out of deps because
+    # McpHostDeps is frozen (unlike host_rest's per-deps field).
+    _operation_index = _shared_operation_index(deps)
     # The allowed-action set (write-scope hardening; see _issue_capability) is derived from that same index
     # rather than from a second, independently memoized list_operations() call, so the capability filter and the
     # gate can never disagree about which actions exist.
     _allowed_actions = _host_core_allowed_actions_from_index(_operation_index)
-    # Validate every operation's paramsSchema now rather than at the first invoke: a failure (list_operations()
-    # raising, or a schema outside kohaku's closed subset) is reported through on_error (endpoint
-    # "attach.operationIndex"). Needs a running event loop (attach itself is synchronous): without one the
-    # index is built lazily by the first request that needs it.
-    _host_core_start_index_validation(
-        _operation_index,
-        lambda exc: _report_mcp_error(deps, "attach.operationIndex", exc),
-    )
     # One ActionGate per attach call, shared by every `${prefix}_action` invoke (design.md #62/#63).
     _action_gate = _host_core_create_action_gate(deps.approvals)
 

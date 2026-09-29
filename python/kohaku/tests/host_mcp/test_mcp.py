@@ -1508,6 +1508,39 @@ class TestGovernedActions:
 
         asyncio.run(run())
 
+    def test_attaches_over_the_same_domain_share_one_operation_index(self, tmp_path: Path) -> None:
+        """A host that re-attaches per request builds fresh deps around one DomainPort: list_operations() runs
+        once and a bad paramsSchema is reported once (mirrors TS sharedOperationIndex)."""
+
+        list_calls = 0
+
+        class BadSchemaDomain:
+            async def list_operations(self) -> list[Any]:
+                nonlocal list_calls
+                list_calls += 1
+                return [
+                    OperationDescriptor(
+                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                    )
+                ]
+
+            async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                return {"ok": True}
+
+        async def run() -> None:
+            seen: list[McpErrorInfo] = []
+            domain = BadSchemaDomain()
+            compose = make_compose_ctx(tmp_path, builder=governed_spec_builder)
+            for _ in range(2):
+                deps = _deps(tmp_path, compose=compose, domain=domain, on_error=seen.append)
+                async with connect(deps, _OPTIONS):
+                    for _ in range(5):
+                        await asyncio.sleep(0)
+            assert list_calls == 1
+            assert len([i for i in seen if i.endpoint == "attach.operationIndex"]) == 1
+
+        asyncio.run(run())
+
     def test_a_bad_params_schema_breaks_only_that_operation(self, tmp_path: Path) -> None:
         """A bad paramsSchema on one operation leaves its write scope intact and the other operation
         invocable; the broken one fails closed (tool error + on_error report)."""

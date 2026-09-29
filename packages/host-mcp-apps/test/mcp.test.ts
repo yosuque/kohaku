@@ -2612,6 +2612,31 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
+  it("attaches over the same DomainPort share one operation index: listOperations once, a bad schema reported once (stateless HTTP re-attaches per exchange)", async () => {
+    const seen: { endpoint: string; error: unknown }[] = [];
+    let listCalls = 0;
+    const sharedDomain: DomainPort = {
+      async listOperations() {
+        listCalls++;
+        return [
+          { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a$" } as never },
+        ];
+      },
+      async invoke() {
+        return { ok: true };
+      },
+    };
+    const first = await connectGoverned({ domain: sharedDomain, onError: (info) => void seen.push(info) });
+    await vi.waitFor(() => expect(seen.some((s) => s.endpoint === "attach.operationIndex")).toBe(true));
+    // A second attach builds a fresh deps object (as a per-request HTTP attach does) around the same DomainPort.
+    const second = await connectGoverned({ domain: sharedDomain, onError: (info) => void seen.push(info) });
+    await second.client.callTool({ name: "kohaku_compose", arguments: { question: "Annotation form" } });
+    expect(listCalls).toBe(1);
+    expect(seen.filter((s) => s.endpoint === "attach.operationIndex")).toHaveLength(1);
+    await first.client.close();
+    await second.client.close();
+  });
+
   it("a bad paramsSchema on one operation breaks only that operation: its write scope survives, the other operation still invokes", async () => {
     const invocations: string[] = [];
     const twoOpDomain: DomainPort = {
