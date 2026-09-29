@@ -203,8 +203,6 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
 
   // --- Approval issuance for "approve"-tier governed Actions (design.md #63, SPEC ACT-APR-001 [Draft]) ---
   app.post("/approvals", async (c) => {
-    const denied = await requireGovernance(c, { kind: "action.approve" });
-    if (denied != null) return denied;
     if (deps.approvals == null) {
       return c.json(errorBody("NOT_IMPLEMENTED", "approvals are not configured for this host"), 501);
     }
@@ -221,6 +219,10 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
       "action, payloadHash, and requesterId are required",
     );
     if (body instanceof Response) return body;
+    // The body is parsed before authorizing so the hook can scope the grant to the action being approved
+    // (`operation.action`): a role that may approve one action is not thereby an approver of every action.
+    const denied = await requireGovernance(c, { kind: "action.approve", action: body.action });
+    if (denied != null) return denied;
     const approver = await getPrincipal(c);
     // design.md #63: an approver must not be able to approve their own pending action. The ApprovalPort
     // itself also refuses this (defense in depth), but checking here first gives a clearer, dedicated
