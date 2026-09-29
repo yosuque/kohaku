@@ -270,4 +270,51 @@ describe("buildEvidencePack", () => {
       expect(file.content.byteLength).toBe(0);
     }
   });
+
+  it("fails fast, naming the file and telling the caller to narrow the window, when a file exceeds the per-file cap", async () => {
+    const events = [1, 2, 3].map((n) =>
+      event({ id: `e${n}`, ts: `2026-01-0${n}T00:00:00.000Z`, type: "view.composed", payload: { n } }),
+    );
+    const build = (maxFileBytes: number) =>
+      buildEvidencePack({
+        source: fakeSource({ events }),
+        scope: SCOPE,
+        generator: "test-generator/1",
+        signer: SIGNER,
+        maxFileBytes,
+      });
+
+    await expect(build(50)).rejects.toThrow(
+      /events\.jsonl would be \d+ bytes, over the 50-byte per-file cap/,
+    );
+    await expect(build(50)).rejects.toThrow(/narrow the export window/);
+    // Exactly at the cap is fine: the limit is inclusive, matching verifyEvidencePack's `> cap` refusal.
+    const size = (await build(1_000_000)).files.find((f) => f.path === "events.jsonl")!.content.byteLength;
+    await expect(build(size)).resolves.toBeDefined();
+    await expect(build(size - 1)).rejects.toThrow(/events\.jsonl would be/);
+  });
+
+  it("hashes the encoded bytes, not the text (non-ASCII content)", async () => {
+    const html = "<div>売上サマリー \u{1F4C8}</div>";
+    const result = await buildEvidencePack({
+      source: fakeSource({
+        events: [
+          event({
+            id: "e1",
+            ts: "2026-01-05T00:00:00.000Z",
+            type: "component.generated",
+            payload: { artifactId: "a1", html },
+          }),
+        ],
+      }),
+      scope: SCOPE,
+      generator: "test-generator/1",
+      signer: SIGNER,
+    });
+    for (const entry of result.manifest.files) {
+      const file = result.files.find((f) => f.path === entry.path)!;
+      expect(entry.sha256).toBe(await sha256Hex(textDecoder.decode(file.content)));
+      expect(entry.bytes).toBe(file.content.byteLength);
+    }
+  });
 });

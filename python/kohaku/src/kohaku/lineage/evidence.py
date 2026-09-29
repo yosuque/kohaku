@@ -60,6 +60,11 @@ else:
 EVIDENCE_PACK_FORMAT: Final = "kohaku-evidence-pack"
 EVIDENCE_PACK_VERSION: Final = 1
 
+# The largest single pack file build_evidence_pack will emit and verify_evidence_pack will read. One
+# constant shared by both sides, so a pack that builds always verifies; an export whose window is too
+# large fails at build time with a message to narrow it.
+MAX_EVIDENCE_FILE_BYTES: Final = 64 * 1024 * 1024  # 64 MiB
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _KEY_ID_HEX_RE = re.compile(r"^[0-9a-f]{16}$")
 
@@ -339,11 +344,16 @@ async def build_evidence_pack(
     allow_incomplete: bool = False,
     page_size: int | None = None,
     now: Clock = now_iso,
+    max_file_bytes: int = MAX_EVIDENCE_FILE_BYTES,
 ) -> BuiltEvidencePack:
     """Assembles a Compliance Evidence Pack from an EvidenceSource -- normalized lineage events, an
     approvals index, promotion/fixation snapshots, and the referenced component HTML artifacts -- as an
     in-memory file set plus its (unsigned) manifest. Signing is a separate step (`sign_manifest`);
     writing the files to disk is the caller's responsibility.
+
+    `max_file_bytes` is the largest single pack file to emit (default MAX_EVIDENCE_FILE_BYTES, the same cap
+    verify_evidence_pack enforces, so a pack that builds always verifies); a file over it raises
+    ValueError telling the caller to narrow the window. Lowered only by tests.
     """
     events: list[LineageEventRecord]
     complete: bool
@@ -417,10 +427,19 @@ async def build_evidence_pack(
 
     def add_text_file(path: str, text: str, records: int | None = None) -> None:
         content = text.encode("utf-8")
+        if len(content) > max_file_bytes:
+            raise ValueError(
+                f"{path} would be {len(content)} bytes, over the {max_file_bytes}-byte per-file cap "
+                "that evidence verification enforces, so a pack containing it could not be verified; "
+                "narrow the export window (since / until) or scope (tenant) and export again"
+            )
         files.append(EvidencePackFile(path=path, content=content))
         file_entries.append(
             EvidenceFileEntry(
-                path=path, sha256=sha256_hex(text), bytes=len(content), records=records
+                path=path,
+                sha256=hashlib.sha256(content).hexdigest(),
+                bytes=len(content),
+                records=records,
             )
         )
 
@@ -603,7 +622,7 @@ def verify_manifest_signature(
 # outright is simpler and safer than trying to stream-hash an arbitrarily large one.
 _MAX_MANIFEST_JSON_BYTES: Final = 16 * 1024 * 1024  # 16 MiB
 _MAX_MANIFEST_SIG_BYTES: Final = 1 * 1024 * 1024  # 1 MiB (a base64 Ed25519 signature is ~88 bytes)
-_MAX_FILE_BYTES: Final = 64 * 1024 * 1024  # 64 MiB
+_MAX_FILE_BYTES: Final = MAX_EVIDENCE_FILE_BYTES  # shared with build_evidence_pack
 
 
 async def _try_size(reader: EvidencePackReader, path: str) -> int | None:

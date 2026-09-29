@@ -216,6 +216,36 @@ def test_build_evidence_pack_records_artifact_hash_mismatch_as_warning(tmp_path:
     asyncio.run(run())
 
 
+def test_build_evidence_pack_fails_fast_when_a_file_exceeds_the_per_file_cap(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        for _ in range(3):
+            await seed(storage, "view.composed", {"tier": "L1"})
+
+        async def build(max_file_bytes: int) -> Any:
+            return await build_evidence_pack(
+                source=create_storage_evidence_source(storage),
+                scope=_SCOPE,
+                generator="pytest/1",
+                signer=_SIGNER,
+                max_file_bytes=max_file_bytes,
+            )
+
+        with pytest.raises(ValueError, match=r"events\.jsonl would be \d+ bytes, over the 50-byte"):
+            await build(50)
+        with pytest.raises(ValueError, match="narrow the export window"):
+            await build(50)
+        size = next(f for f in (await build(1_000_000)).files if f.path == "events.jsonl")
+        # Exactly at the cap is fine (inclusive, matching verify's `> cap` refusal); one under is not.
+        await build(len(size.content))
+        with pytest.raises(ValueError, match="events.jsonl would be"):
+            await build(len(size.content) - 1)
+
+    asyncio.run(run())
+
+
 def test_build_evidence_pack_requires_allow_incomplete_without_page_lineage(tmp_path: Path) -> None:
     class _NoPageLineageSource:
         async def list_lineage(self, filter: Any = None) -> list[Any]:
