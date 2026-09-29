@@ -495,6 +495,57 @@ async function main(): Promise<void> {
       payload: { intentHash: `sha256:${"9".repeat(64)}` },
       tenant: EVIDENCE_TENANT,
     },
+    // Governed-action and policy decisions (design.md #62/#63/#69): everything but action.invoked is an
+    // approval-index member, so the golden pins that membership (and action.invoked's exclusion) in both
+    // languages.
+    {
+      id: "eev-6",
+      ts: "2026-06-07T00:00:00.000Z",
+      actor: { kind: "user", id: "operator-1" },
+      type: "action.approvalRequested",
+      payload: {
+        action: "annotate",
+        payloadHash: `sha256:${"a".repeat(64)}`,
+        tier: "approve",
+        requestId: "req-1",
+      },
+      tenant: EVIDENCE_TENANT,
+    },
+    {
+      id: "eev-7",
+      ts: "2026-06-08T00:00:00.000Z",
+      actor: { kind: "user", id: "reviewer-1" },
+      type: "action.approved",
+      payload: {
+        action: "annotate",
+        payloadHash: `sha256:${"a".repeat(64)}`,
+        approverId: "reviewer-1",
+        requesterId: "operator-1",
+      },
+      tenant: EVIDENCE_TENANT,
+    },
+    {
+      id: "eev-8",
+      ts: "2026-06-09T00:00:00.000Z",
+      actor: { kind: "user", id: "operator-1" },
+      type: "action.invoked",
+      payload: { action: "annotate", payloadHash: `sha256:${"a".repeat(64)}`, tier: "approve" },
+      tenant: EVIDENCE_TENANT,
+    },
+    {
+      id: "eev-9",
+      ts: "2026-06-10T00:00:00.000Z",
+      actor: { kind: "system" },
+      type: "policy.applied",
+      payload: {
+        policyId: "policy-2",
+        previousPolicyId: "policy-1",
+        version: 2,
+        changedPaths: ["actions.annotate.tier"],
+        tenants: [EVIDENCE_TENANT],
+      },
+      tenant: EVIDENCE_TENANT,
+    },
   ];
   const evidenceArtifactBSha256 = await sha256Hex(EVIDENCE_ARTIFACT_B_HTML);
   const evidencePromotions: PromotionState[] = [

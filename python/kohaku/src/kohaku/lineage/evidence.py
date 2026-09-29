@@ -60,6 +60,11 @@ else:
 EVIDENCE_PACK_FORMAT: Final = "kohaku-evidence-pack"
 EVIDENCE_PACK_VERSION: Final = 1
 
+# The largest single pack file build_evidence_pack will emit and verify_evidence_pack will read. One
+# constant shared by both sides, so a pack that builds always verifies; an export whose window is too
+# large fails at build time with a message to narrow it.
+MAX_EVIDENCE_FILE_BYTES: Final = 64 * 1024 * 1024  # 64 MiB
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _KEY_ID_HEX_RE = re.compile(r"^[0-9a-f]{16}$")
 
@@ -83,11 +88,33 @@ def is_safe_evidence_file_path(path: str) -> bool:
     return EVIDENCE_FILE_PATH_PATTERN.fullmatch(path) is not None
 
 
-class _EvidenceModel(BaseModel):
-    """Common config for the evidence-pack models: accept either alias, ignore unknown keys (zod's
-    default "strip" behavior for a plain z.object(), not z.strict())."""
+def _find_json_null(value: Any, path: str = "$") -> str | None:
+    """The path of the first JSON null inside `value`, or None. No manifest field is nullable, and TS's
+    `.optional()` accepts an absent key but not an explicit null; the Python models' `X | None = None`
+    fields cannot tell the two apart, so verify_evidence_pack rejects a null on the wire up front."""
+    if value is None:
+        return path
+    if isinstance(value, dict):
+        for k, v in value.items():
+            found = _find_json_null(v, f"{path}.{k}")
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for i, v in enumerate(value):
+            found = _find_json_null(v, f"{path}[{i}]")
+            if found is not None:
+                return found
+    return None
 
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+class _EvidenceModel(BaseModel):
+    """Common config for the evidence-pack models: reject unknown keys and coercion, and give no
+    required field a default -- the mirror of the TS schemas' `.strict()` (manifest.ts), so both
+    languages accept exactly the same manifests. verify_evidence_pack checks the signature over the raw
+    manifest.json value before validating it here; strictness keeps the *accepted set* identical, it is
+    not what protects the signed bytes."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", strict=True)
 
 
 class EvidenceFileEntry(_EvidenceModel):
@@ -133,7 +160,7 @@ class EvidenceManifestCounts(_EvidenceModel):
 
 
 class EvidenceManifestSigner(_EvidenceModel):
-    alg: Literal["Ed25519"] = "Ed25519"
+    alg: Literal["Ed25519"]
     keyId: str
 
     @field_validator("keyId")
@@ -146,8 +173,8 @@ class EvidenceManifestSigner(_EvidenceModel):
 
 
 class EvidenceManifest(_EvidenceModel):
-    format: Literal["kohaku-evidence-pack"] = EVIDENCE_PACK_FORMAT
-    version: Literal[1] = EVIDENCE_PACK_VERSION
+    format: Literal["kohaku-evidence-pack"]
+    version: Literal[1]
     generator: str = Field(min_length=1)
     generatedAt: str
     scope: EvidenceManifestScope
@@ -159,8 +186,8 @@ class EvidenceManifest(_EvidenceModel):
     # alongside the corresponding warnings entry -- there is no Python CLI equivalent). An auditor MUST
     # treat an incomplete pack as a partial record, not as proof of the absence of records outside it.
     complete: bool
-    files: list[EvidenceFileEntry] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
+    files: list[EvidenceFileEntry]
+    warnings: list[str]
     signer: EvidenceManifestSigner
 
     def canonical_dict(self) -> dict[str, Any]:
@@ -244,8 +271,10 @@ def create_storage_evidence_source(storage: StoragePort) -> EvidenceSource:
 # --- build.ts ---
 
 # Typed as tuple[LineageEventType, ...] (not a bare str tuple) so a typo or a retired event type is
-# caught by mypy; `intent.migrated` (design.md #65, F7's catalog migration) is a real member of that
-# type.
+# caught by mypy; `intent.migrated` (design.md #65, catalog migration) is a real member of that type.
+# The governed-action decision points (design.md #62/#63) and `policy.applied` (design.md #69) belong here
+# too; `action.invoked` is deliberately absent (an allowed invoke, not a decision) and stays in
+# events.jsonl only.
 EVIDENCE_APPROVAL_EVENT_TYPES: tuple[LineageEventType, ...] = (
     "component.reviewed",
     "component.published",
@@ -253,6 +282,10 @@ EVIDENCE_APPROVAL_EVENT_TYPES: tuple[LineageEventType, ...] = (
     "intent.fixated",
     "intent.unfixated",
     "intent.migrated",
+    "action.approvalRequested",
+    "action.approved",
+    "action.denied",
+    "policy.applied",
 )
 
 
@@ -317,11 +350,16 @@ async def build_evidence_pack(
     allow_incomplete: bool = False,
     page_size: int | None = None,
     now: Clock = now_iso,
+    max_file_bytes: int = MAX_EVIDENCE_FILE_BYTES,
 ) -> BuiltEvidencePack:
     """Assembles a Compliance Evidence Pack from an EvidenceSource -- normalized lineage events, an
     approvals index, promotion/fixation snapshots, and the referenced component HTML artifacts -- as an
     in-memory file set plus its (unsigned) manifest. Signing is a separate step (`sign_manifest`);
     writing the files to disk is the caller's responsibility.
+
+    `max_file_bytes` is the largest single pack file to emit (default MAX_EVIDENCE_FILE_BYTES, the same cap
+    verify_evidence_pack enforces, so a pack that builds always verifies); a file over it raises
+    ValueError telling the caller to narrow the window. Lowered only by tests.
     """
     events: list[LineageEventRecord]
     complete: bool
@@ -341,6 +379,11 @@ async def build_evidence_pack(
             events.extend(page.events)
             if page.nextCursor is None:
                 break
+            if page.nextCursor == cursor:
+                raise ValueError(
+                    "EvidenceSource.page_lineage returned the same nextCursor it was given; refusing "
+                    "to page forever (a StoragePort must advance the cursor)"
+                )
             cursor = page.nextCursor
         complete = True
     else:
@@ -395,10 +438,19 @@ async def build_evidence_pack(
 
     def add_text_file(path: str, text: str, records: int | None = None) -> None:
         content = text.encode("utf-8")
+        if len(content) > max_file_bytes:
+            raise ValueError(
+                f"{path} would be {len(content)} bytes, over the {max_file_bytes}-byte per-file cap "
+                "that evidence verification enforces, so a pack containing it could not be verified; "
+                "narrow the export window (since / until) or scope (tenant) and export again"
+            )
         files.append(EvidencePackFile(path=path, content=content))
         file_entries.append(
             EvidenceFileEntry(
-                path=path, sha256=sha256_hex(text), bytes=len(content), records=records
+                path=path,
+                sha256=hashlib.sha256(content).hexdigest(),
+                bytes=len(content),
+                records=records,
             )
         )
 
@@ -559,11 +611,20 @@ def sign_manifest(manifest: EvidenceManifest, private_key: Ed25519PrivateKey) ->
 
 
 def verify_manifest_signature(
-    manifest: EvidenceManifest, signature_base64: str, public_key: Ed25519PublicKey
+    manifest: EvidenceManifest | dict[str, Any], signature_base64: str, public_key: Ed25519PublicKey
 ) -> bool:
-    """Verifies a manifest's signature (manifest.sig's base64 contents) against an Ed25519 public key."""
-    message = canonical_stringify(manifest.canonical_dict()).encode("utf-8")
-    signature = base64.b64decode(signature_base64.strip())
+    """Verifies a manifest's signature (manifest.sig's base64 contents) against an Ed25519 public key.
+
+    `manifest` is an EvidenceManifest or, as verify_evidence_pack passes it, the raw `json.loads` result
+    of manifest.json: the signed value is the raw JSON, so a schema-parsed copy (which could drop or
+    default fields) must not stand in for it. A malformed signature is a failed verification, not a raise.
+    """
+    value = manifest.canonical_dict() if isinstance(manifest, EvidenceManifest) else manifest
+    message = canonical_stringify(value).encode("utf-8")
+    try:
+        signature = base64.b64decode(signature_base64.strip())
+    except ValueError:
+        return False
     return verify_bytes(message, signature, public_key)
 
 
@@ -572,7 +633,7 @@ def verify_manifest_signature(
 # outright is simpler and safer than trying to stream-hash an arbitrarily large one.
 _MAX_MANIFEST_JSON_BYTES: Final = 16 * 1024 * 1024  # 16 MiB
 _MAX_MANIFEST_SIG_BYTES: Final = 1 * 1024 * 1024  # 1 MiB (a base64 Ed25519 signature is ~88 bytes)
-_MAX_FILE_BYTES: Final = 64 * 1024 * 1024  # 64 MiB
+_MAX_FILE_BYTES: Final = MAX_EVIDENCE_FILE_BYTES  # shared with build_evidence_pack
 
 
 async def _try_size(reader: EvidencePackReader, path: str) -> int | None:
@@ -628,18 +689,20 @@ class VerifyEvidencePackResult:
     mismatches: list[str]
 
 
-def _parse_jsonl(text: str) -> list[Any]:
+def _parse_jsonl(text: str) -> tuple[list[Any], list[int]]:
+    """Parses a jsonl file's non-empty lines. The second element is the 1-based numbers of lines that are
+    not valid JSON: this only ever runs on content whose hash already matched the signed manifest, so an
+    unparseable line is a defect in what the exporter signed, not something a hash check has caught."""
     records: list[Any] = []
-    for line in text.split("\n"):
+    bad_lines: list[int] = []
+    for number, line in enumerate(text.split("\n"), start=1):
         if line == "":
             continue
         try:
             records.append(json.loads(line))
         except json.JSONDecodeError:
-            # Malformed JSONL is reported by the caller as a files[] hash mismatch already (the
-            # content no longer matches what was signed); this cross-check is best-effort only.
-            continue
-    return records
+            bad_lines.append(number)
+    return records, bad_lines
 
 
 def _artifact_claims_from_jsonl_records(path: str, records: list[Any]) -> list[ArtifactClaim]:
@@ -666,8 +729,8 @@ def _artifact_claims_from_jsonl_records(path: str, records: list[Any]) -> list[A
 async def verify_evidence_pack(
     reader: EvidencePackReader, public_key: Ed25519PublicKey
 ) -> VerifyEvidencePackResult:
-    """Verifies a Compliance Evidence Pack: the manifest matches EvidenceManifest's schema, its signature
-    verifies against `public_key`, the pack directory contains no file the manifest does not list, every
+    """Verifies a Compliance Evidence Pack: the manifest's signature verifies against `public_key` over
+    the raw manifest.json value, the manifest then matches EvidenceManifest's schema, the pack directory contains no file the manifest does not list, every
     file the manifest lists has the exact hash/size the manifest recorded, and -- as an independent,
     best-effort cross-check -- every artifact reference found inside the jsonl files actually hashes to
     the value it claims.
@@ -689,26 +752,17 @@ async def verify_evidence_pack(
         )
     manifest_bytes = await reader.read_manifest()
     try:
-        parsed = json.loads(manifest_bytes.decode("utf-8"))
+        raw = json.loads(manifest_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
         return VerifyEvidencePackResult(
             ok=False, manifest=None, errors=[f"manifest.json is not valid JSON: {e}"], mismatches=[]
-        )
-    try:
-        manifest = EvidenceManifest.model_validate(parsed)
-    except ValidationError as e:
-        return VerifyEvidencePackResult(
-            ok=False,
-            manifest=None,
-            errors=[f"manifest.json does not match EvidenceManifestSchema: {e}"],
-            mismatches=[],
         )
 
     signature_size = await _try_size(reader, "manifest.sig")
     if signature_size is not None and signature_size > _MAX_MANIFEST_SIG_BYTES:
         return VerifyEvidencePackResult(
             ok=False,
-            manifest=manifest,
+            manifest=None,
             errors=[
                 f"manifest.sig is {signature_size} bytes, exceeding the {_MAX_MANIFEST_SIG_BYTES}-byte "
                 "cap; refusing to read it"
@@ -716,11 +770,33 @@ async def verify_evidence_pack(
             mismatches=[],
         )
     signature_text = (await reader.read_signature()).decode("utf-8").strip()
-    if not verify_manifest_signature(manifest, signature_text, public_key):
+    # The signature is checked over the raw parsed JSON, before schema validation: the model is not the
+    # signed value (a lax parse would drop unknown keys and default missing ones, and still verify).
+    if not verify_manifest_signature(raw, signature_text, public_key):
         return VerifyEvidencePackResult(
             ok=False,
-            manifest=manifest,
+            manifest=None,
             errors=["manifest.sig does not verify against the given public key for this manifest"],
+            mismatches=[],
+        )
+    null_path = _find_json_null(raw)
+    if null_path is not None:
+        return VerifyEvidencePackResult(
+            ok=False,
+            manifest=None,
+            errors=[
+                "manifest.json does not match EvidenceManifestSchema: "
+                f"null is not allowed (at {null_path})"
+            ],
+            mismatches=[],
+        )
+    try:
+        manifest = EvidenceManifest.model_validate(raw)
+    except ValidationError as e:
+        return VerifyEvidencePackResult(
+            ok=False,
+            manifest=None,
+            errors=[f"manifest.json does not match EvidenceManifestSchema: {e}"],
             mismatches=[],
         )
 
@@ -774,7 +850,12 @@ async def verify_evidence_pack(
             )
             continue  # The content is not what was signed; an artifact cross-check would be meaningless.
         if entry.path.endswith(".jsonl") and len(content) > 0:
-            records = _parse_jsonl(content.decode("utf-8"))
+            records, bad_lines = _parse_jsonl(content.decode("utf-8", errors="replace"))
+            if bad_lines:
+                errors.append(
+                    f"{entry.path}: unparseable JSON on line(s) "
+                    f"{', '.join(str(n) for n in bad_lines)} of the signed content"
+                )
             for claim in _artifact_claims_from_jsonl_records(entry.path, records):
                 if claim.claimed_sha256 is None:
                     continue

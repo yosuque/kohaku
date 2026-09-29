@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildEvidencePack } from "../src/evidence/build.js";
+import type { EvidenceManifest } from "../src/evidence/manifest.js";
 import {
   deriveEd25519KeyId,
   type EvidencePackReader,
@@ -10,6 +11,7 @@ import {
   importEd25519PrivateKeyPkcs8,
   importEd25519PublicKeyRaw,
   importEd25519PublicKeySpki,
+  sha256HexBytes,
   signBytes,
   signManifest,
   verifyBytes,
@@ -436,6 +438,110 @@ describe("signManifest / verifyEvidencePack", () => {
     expect(result.ok).toBe(true);
     expect(result.mismatches).toHaveLength(1);
     expect(result.mismatches[0]).toContain("a1");
+  });
+
+  // The signature covers the raw manifest.json value: a lax schema parse (zod strips unknown keys)
+  // must not let unsigned content ride along under a valid signature.
+  describe("tampering with manifest.json content the schema would otherwise ignore or coerce", () => {
+    async function verifyWithManifest(mutate: (manifest: Record<string, unknown>) => void) {
+      const { pack, manifestJson, signatureBase64, publicKey } = await buildSignedPack();
+      const manifest = JSON.parse(manifestJson) as Record<string, unknown>;
+      mutate(manifest);
+      return verifyEvidencePack(
+        memoryReader(pack.files, JSON.stringify(manifest), signatureBase64),
+        publicKey,
+      );
+    }
+
+    it("fails on an unknown top-level key", async () => {
+      const result = await verifyWithManifest((m) => {
+        m.injected = "approved by legal";
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errors.some((e) => e.includes("manifest.sig"))).toBe(true);
+    });
+
+    it("fails on an unknown key nested inside scope", async () => {
+      const result = await verifyWithManifest((m) => {
+        (m.scope as Record<string, unknown>).approvedBy = "legal";
+      });
+      expect(result.ok).toBe(false);
+      expect(result.errors.some((e) => e.includes("manifest.sig"))).toBe(true);
+    });
+
+    it("fails when a key is removed", async () => {
+      const result = await verifyWithManifest((m) => {
+        delete m.warnings;
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("fails when a value is retyped (a number replaced by a numeric string)", async () => {
+      const result = await verifyWithManifest((m) => {
+        const counts = m.counts as Record<string, unknown>;
+        counts.events = String(counts.events);
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("rejects a validly signed manifest that carries an unknown key, on shape", async () => {
+      const keyPair = await generateEd25519KeyPair();
+      const keyId = await deriveEd25519KeyId(await exportEd25519PublicKeyRaw(keyPair.publicKey));
+      const pack = await buildEvidencePack({
+        source: emptySource(),
+        scope: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-31T23:59:59.999Z" },
+        generator: "test-generator/1",
+        signer: { alg: "Ed25519", keyId },
+      });
+      const withExtra = { ...pack.manifest, injected: "x" } as unknown as EvidenceManifest;
+      const signatureBase64 = await signManifest(withExtra, keyPair.privateKey);
+      const result = await verifyEvidencePack(
+        memoryReader(pack.files, JSON.stringify(withExtra), signatureBase64),
+        keyPair.publicKey,
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors[0]).toContain("EvidenceManifestSchema");
+    });
+
+    it("treats a malformed (non-base64) signature as a failed verification, not a throw", async () => {
+      const { pack, manifestJson, publicKey } = await buildSignedPack();
+      const result = await verifyEvidencePack(
+        memoryReader(pack.files, manifestJson, "!!!not base64!!!"),
+        publicKey,
+      );
+      expect(result.ok).toBe(false);
+      expect(result.errors.some((e) => e.includes("manifest.sig"))).toBe(true);
+    });
+  });
+
+  it("reports an unparseable line inside correctly hashed, signed jsonl content", async () => {
+    const { pack, keyPair } = await (async () => {
+      const keyPair = await generateEd25519KeyPair();
+      const keyId = await deriveEd25519KeyId(await exportEd25519PublicKeyRaw(keyPair.publicKey));
+      const pack = await buildEvidencePack({
+        source: emptySource(),
+        scope: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-31T23:59:59.999Z" },
+        generator: "test-generator/1",
+        signer: { alg: "Ed25519", keyId },
+      });
+      return { pack, keyPair };
+    })();
+    // The exporter signed a file whose second line is not JSON: the hash matches, so only the content
+    // scan can notice it.
+    const content = encoder.encode('{"ok":true}\nnot json at all\n');
+    const files = pack.files.map((f) => (f.path === "events.jsonl" ? { path: f.path, content } : f));
+    const entry = pack.manifest.files.find((f) => f.path === "events.jsonl")!;
+    entry.sha256 = await sha256HexBytes(content);
+    entry.bytes = content.byteLength;
+    const signatureBase64 = await signManifest(pack.manifest, keyPair.privateKey);
+    const result = await verifyEvidencePack(
+      memoryReader(files, JSON.stringify(pack.manifest), signatureBase64),
+      keyPair.publicKey,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors).toEqual([
+      expect.stringMatching(/events\.jsonl: unparseable JSON on line\(s\) 2\b/),
+    ]);
   });
 
   it("fails cleanly on a manifest that is not valid JSON", async () => {

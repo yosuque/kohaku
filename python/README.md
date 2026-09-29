@@ -76,7 +76,9 @@ python/
 │  │  ├─ composer/         # ← packages/composer (L0/L1/L2 / single-flight / repair loop; unlike TS,
 │  │  │                    #   the tier ladder + single-flight + result assembly are not split out of
 │  │  │                    #   compose.py into separate modules — same behavior, coarser file layout)
-│  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation)
+│  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation);
+│  │  │                    #   evidence.py = the whole Compliance Evidence Pack module
+│  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
 │  │  ├─ evals/            # ← packages/evals (judge / golden / FixtureLlm / distillation dataset export)
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
 │  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
@@ -265,6 +267,47 @@ field — this keeps output byte-identical to the TS side, whose `undefined` key
 `JSON.stringify` the same way. There is no Python CLI counterpart; the TS side's
 `kohaku dataset export` (`cli/bin/kohaku.js`) is the ready-made file-based entry point and works
 against either language's fixations, since the wire shape is identical.
+
+## Compliance Evidence Pack (symmetric with TS)
+
+`kohaku.lineage` ports the TS `evidence` module (design.md #67) into one file,
+`kohaku/lineage/evidence.py`: it assembles a signed directory of normalized lineage / approval /
+promotion / fixation records plus the referenced component artifacts, for an auditor. Building a pack
+needs nothing extra; Ed25519 signing and verification need the optional `evidence` extra (installs
+`cryptography`):
+
+```bash
+pip install 'kohaku-ui[evidence]'
+```
+
+```python
+from kohaku.lineage import (
+    EvidenceManifestSigner, EvidencePackScope, build_evidence_pack, create_storage_evidence_source,
+    derive_ed25519_key_id, export_ed25519_public_key_raw, generate_ed25519_keypair,
+    sign_manifest, verify_evidence_pack,
+)
+
+keypair = generate_ed25519_keypair()  # or import_ed25519_private_key_pkcs8(...)
+key_id = derive_ed25519_key_id(export_ed25519_public_key_raw(keypair.public_key))
+pack = await build_evidence_pack(  # raises ValueError if any file would exceed the 64 MiB cap
+    source=create_storage_evidence_source(storage),  # any StoragePort
+    scope=EvidencePackScope(since="2026-09-01T00:00:00.000Z", until="2026-09-30T23:59:59.999Z"),
+    generator="my-service/1.0",
+    signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
+)
+signature = sign_manifest(pack.manifest, keypair.private_key)  # the text of manifest.sig
+# Write pack.files, json.dumps(pack.manifest.canonical_dict()) as manifest.json and the signature
+# as manifest.sig, then check them later with verify_evidence_pack(reader, public_key).
+```
+
+`verify_evidence_pack(reader, public_key)` takes an `EvidencePackReader` (you supply the file access) and
+checks the signature over the raw `manifest.json` value, the manifest's shape, every listed file's hash
+and size, and that no unlisted file is present. Python has no CLI counterpart: `kohaku evidence
+keygen|export|verify` is the TS side's `cli/bin/kohaku.js`, and its packs verify here (and vice versa).
+`spec/test/fixtures/evidence-pack/` is the cross-language golden — `store.json` (the source records),
+`manifest.json` and `manifest.sig` (RFC 8032 §7.1 TEST 1 key) — which both languages must reproduce
+byte-for-byte (`tests/spec/test_cross_language_golden.py`). See the [user guide](../docs/user-guide.md)'s
+evidence section for the pack contents, the window and size rules, and the REST limitation.
 
 ## Opt-in prompt caching / `refConstraint` (symmetric with TS)
 

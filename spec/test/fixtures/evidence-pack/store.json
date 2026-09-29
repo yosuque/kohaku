@@ -73,6 +73,73 @@
         "intentHash": "sha256:9999999999999999999999999999999999999999999999999999999999999999"
       },
       "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-6",
+      "ts": "2026-06-07T00:00:00.000Z",
+      "actor": {
+        "kind": "user",
+        "id": "operator-1"
+      },
+      "type": "action.approvalRequested",
+      "payload": {
+        "action": "annotate",
+        "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tier": "approve",
+        "requestId": "req-1"
+      },
+      "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-7",
+      "ts": "2026-06-08T00:00:00.000Z",
+      "actor": {
+        "kind": "user",
+        "id": "reviewer-1"
+      },
+      "type": "action.approved",
+      "payload": {
+        "action": "annotate",
+        "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "approverId": "reviewer-1",
+        "requesterId": "operator-1"
+      },
+      "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-8",
+      "ts": "2026-06-09T00:00:00.000Z",
+      "actor": {
+        "kind": "user",
+        "id": "operator-1"
+      },
+      "type": "action.invoked",
+      "payload": {
+        "action": "annotate",
+        "payloadHash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "tier": "approve"
+      },
+      "tenant": "tenant-acme"
+    },
+    {
+      "id": "eev-9",
+      "ts": "2026-06-10T00:00:00.000Z",
+      "actor": {
+        "kind": "system"
+      },
+      "type": "policy.applied",
+      "payload": {
+        "policyId": "policy-2",
+        "previousPolicyId": "policy-1",
+        "version": 2,
+        "changedPaths": [
+          "actions.annotate.tier"
+        ],
+        "tenants": [
+          "tenant-acme"
+        ]
+      },
+      "tenant": "tenant-acme"
     }
   ],
   "promotions": [

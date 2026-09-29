@@ -34,6 +34,7 @@ export {
   type IntentInput,
   normalizeIntent,
 } from "./intent.js";
+export { parseIso8601 } from "./iso8601.js";
 // In-process keyed mutex (a shared primitive: host locks and the reference StoragePort's per-file serialization)
 export { createKeyedMutex, type KeyedMutex } from "./keyed-mutex.js";
 // Lineage filter/limit primitives shared by every StoragePort implementation and port-contracts

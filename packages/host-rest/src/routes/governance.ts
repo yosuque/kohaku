@@ -1,5 +1,5 @@
 import type { LineageFilter, LineagePageRequest, Surface } from "@kohaku-ui/spec-core";
-import { APPROVAL_ISSUE_ERROR_CODE, LineageCursorError } from "@kohaku-ui/spec-core";
+import { APPROVAL_ISSUE_ERROR_CODE, LineageCursorError, parseIso8601 } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import { ApprovalRequestBodySchema, TelemetryBodySchema } from "./schemas.js";
@@ -249,22 +249,6 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
       return c.json(errorBody("INTERNAL", APPROVAL_INTERNAL_ERROR_MESSAGE, requestId), 500);
     }
   });
-}
-
-/**
- * ISO8601 validation + canonicalization of since / until. Date.parse broadly accepts non-ISO forms like
- * "July 9, 2026" and interprets them in the local TZ, making them environment-dependent, so restrict the format to
- * ISO8601 (extended notation). Values with a time require a timezone (Z / ±hh:mm) (an unspecified one is
- * non-deterministic under local interpretation). Date-only is interpreted as UTC (ES spec), which is deterministic.
- * The return value is ISO8601 canonical form. null if invalid.
- */
-const ISO8601_PATTERN =
-  /^\d{4}-\d{2}-\d{2}(?:[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:[Zz]|[+-]\d{2}:\d{2}))?$/;
-function parseIso8601(raw: string): string | null {
-  if (!ISO8601_PATTERN.test(raw)) return null;
-  const ms = Date.parse(raw);
-  if (Number.isNaN(ms)) return null;
-  return new Date(ms).toISOString();
 }
 
 /**

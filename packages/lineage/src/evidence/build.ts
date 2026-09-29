@@ -13,7 +13,9 @@ import {
   type EvidenceFileEntry,
   type EvidenceManifest,
   type EvidenceManifestSigner,
+  MAX_EVIDENCE_FILE_BYTES,
 } from "./manifest.js";
+import { sha256HexBytes } from "./sign.js";
 import type { EvidenceSource } from "./source.js";
 
 /**
@@ -22,8 +24,11 @@ import type { EvidenceSource } from "./source.js";
  * is the same normalized `LineageEventRecord` as the full log.
  *
  * Typed as `readonly LineageEventType[]` (not a bare `string[]`) so a typo or a retired event type is
- * caught at compile time; `intent.migrated` (design.md #65, F7's catalog migration) is a real member of
- * that union.
+ * caught at compile time; `intent.migrated` (design.md #65, catalog migration) is a real member of
+ * that union. The governed-action decision points (design.md #62/#63: an approval was requested,
+ * granted, or denied) and the policy-change record (`policy.applied`, design.md #69) belong here too:
+ * they are the approvals an auditor asks for. `action.invoked` is deliberately absent -- it records that
+ * an allowed invoke happened, not a decision -- and stays in `events.jsonl` only.
  */
 export const EVIDENCE_APPROVAL_EVENT_TYPES: readonly LineageEventType[] = [
   "component.reviewed",
@@ -32,6 +37,10 @@ export const EVIDENCE_APPROVAL_EVENT_TYPES: readonly LineageEventType[] = [
   "intent.fixated",
   "intent.unfixated",
   "intent.migrated",
+  "action.approvalRequested",
+  "action.approved",
+  "action.denied",
+  "policy.applied",
 ];
 
 export interface EvidencePackScope {
@@ -64,6 +73,12 @@ export interface BuildEvidencePackOptions {
   pageSize?: number;
   /** Clock injection (tests, and the cross-language golden fixture, need a fixed `generatedAt`). */
   now?: () => Date;
+  /**
+   * Largest single pack file to emit (default `MAX_EVIDENCE_FILE_BYTES`, the same cap
+   * `verifyEvidencePack` enforces, so a pack that builds always verifies). A file over it fails the
+   * export with an error telling the caller to narrow the window. Lowered only by tests.
+   */
+  maxFileBytes?: number;
 }
 
 /** One file to be written into the pack directory, keyed by its path relative to the pack root. */
@@ -129,6 +144,7 @@ export async function buildEvidencePack(options: BuildEvidencePackOptions): Prom
     allowIncomplete = false,
     pageSize,
     now = () => new Date(),
+    maxFileBytes = MAX_EVIDENCE_FILE_BYTES,
   } = options;
 
   let events: LineageEventRecord[];
@@ -146,6 +162,12 @@ export async function buildEvidencePack(options: BuildEvidencePackOptions): Prom
       });
       events.push(...page.events);
       if (page.nextCursor == null) break;
+      if (page.nextCursor === cursor) {
+        throw new Error(
+          "EvidenceSource.pageLineage returned the same nextCursor it was given; refusing to page " +
+            "forever (a StoragePort must advance the cursor)",
+        );
+      }
       cursor = page.nextCursor;
     }
     complete = true;
@@ -195,7 +217,14 @@ export async function buildEvidencePack(options: BuildEvidencePackOptions): Prom
 
   async function addTextFile(path: string, text: string, records?: number): Promise<void> {
     const content = encoder.encode(text);
-    const sha256 = await sha256Hex(text);
+    if (content.byteLength > maxFileBytes) {
+      throw new Error(
+        `${path} would be ${content.byteLength} bytes, over the ${maxFileBytes}-byte per-file cap that ` +
+          "evidence verification enforces, so a pack containing it could not be verified; narrow the " +
+          "export window (since / until) or scope (tenant) and export again",
+      );
+    }
+    const sha256 = await sha256HexBytes(content);
     files.push({ path, content });
     fileEntries.push({ path, sha256, bytes: content.byteLength, ...(records != null ? { records } : {}) });
   }

@@ -727,6 +727,20 @@ describe("@kohaku-ui/client lineagePages (design.md #53)", () => {
     expect(pages).toEqual([["e0", "e2"]]);
   });
 
+  it("throws instead of looping forever when the host returns the cursor it was just given", async () => {
+    const storage = stubStorage({
+      async pageLineage() {
+        return { events: [pagingEvent("e0", "2026-01-01T00:00:00Z")], nextCursor: "stuck" };
+      },
+    });
+    const client = makeClient({ compose: composeCtx(storage) });
+    await expect(async () => {
+      for await (const _page of client.lineagePages()) {
+        // no-op: the second page repeats the cursor and must throw
+      }
+    }).rejects.toThrow(/same nextCursor/);
+  });
+
   it("rejects with a KohakuHostError (501 NOT_IMPLEMENTED) when the storage backend has no pageLineage", async () => {
     const client = makeClient({ compose: composeCtx(stubStorage()) });
     await expect(async () => {

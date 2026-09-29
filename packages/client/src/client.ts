@@ -556,6 +556,11 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
         );
         yield page.events ?? [];
         if (page.nextCursor == null) return;
+        if (page.nextCursor === cursor) {
+          throw new Error(
+            "GET /lineage returned the same nextCursor it was given; refusing to page forever (a host must advance the cursor)",
+          );
+        }
         cursor = page.nextCursor;
       }
     },
