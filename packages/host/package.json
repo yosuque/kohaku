@@ -19,6 +19,7 @@
     "@kohaku-ui/host-core": "workspace:^",
     "@kohaku-ui/host-rest": "workspace:^",
     "@kohaku-ui/intents": "workspace:^",
+    "@kohaku-ui/lineage": "workspace:^",
     "@kohaku-ui/llm": "workspace:^",
     "@kohaku-ui/registry": "workspace:^",
     "@kohaku-ui/semantic-llm": "workspace:^",

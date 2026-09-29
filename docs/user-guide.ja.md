@@ -343,7 +343,7 @@ npm run dev                                      # API :8787 + web :5173
 
 `init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。
 
-Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
+Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`server/ports.ts` の `createKohakuHost` に `fallbackIntent`(カタログ内の、`request` パラメータを取る Intent 名)を渡すと範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
 
 手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。
 
@@ -364,7 +364,7 @@ npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 残り 3 つの Port には動く既定値があります。既定を超えたら、自分の実装を渡して差し替えてください:
 
 2. **SemanticPort**(既定: `@kohaku-ui/semantic-llm` の `createLlmSemanticPort`。`intents.ts` + `dataVersion` / `describeShape` から組み立てられます): `normalize` は GUI 操作の決定的マッピングだけ、`resolveQuery` は Intent → `query://` ハンドル。自分の実装は `createKohakuHost({ semantic, ... })` として渡します — このとき `intents` / `dataVersion` / `describeShape` は無視されます。
-3. **AuthzPort**(既定: `@kohaku-ui/authz-hmac` の `createHmacAuthzPort(secret)`。`secret` は `capabilitySecret` か環境変数 `KOHAKU_CAPABILITY_SECRET` から解決されます)。JWT / OIDC で運用する場合は代わりに `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })`(`@kohaku-ui/authz-jwt`)を渡してください — capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決して、`KohakuHostDeps.auth` / `tenant` フックや MCP の `resolvePrincipal` に渡せます(§7「本番用アダプタ」参照)。
+3. **AuthzPort**(既定: `@kohaku-ui/authz-hmac` の `createHmacAuthzPort(secret)`。`secret` は `capabilitySecret` か環境変数 `KOHAKU_CAPABILITY_SECRET` から解決されます)。JWT / OIDC で運用する場合は代わりに `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })`(`@kohaku-ui/authz-jwt`)を渡してください — capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決します。`KohakuHostDeps.auth` / `tenant` フックは `createKohakuHost({ routes: { auth, tenant } })` として、MCP の `resolvePrincipal` は `attachKohakuMcp(server, host, { deps: { resolvePrincipal }, ... })` として渡せます(§7「本番用アダプタ」参照)。`routes` は他の `KohakuHostDeps` のフィールド(`approvals`、`actionAuditRecorder`、`rateLimiter`、`authorizeGovernance` など)も受け付けます。`recorder`(ファサード自身のストレージに対する lineage)と `onError` はファサードがすでに配線します。
 4. **StoragePort**(既定: `@kohaku-ui/storage-memory` の `createMemoryStoragePort()`)。ホストインスタンスが複数になったら `storage: createRedisStoragePort(...)` / `createPostgresStoragePort(...)`(`@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres`)を渡し、Spec キャッシュを共有する(§7)。
 
 `createKohakuHost` の `policy.fixedSpecs` オプションに固定 Spec テンプレート(`apps/sample-api/src/intents/fixed-specs.ts` が見本)を登録すれば、**LLM が実際に呼ばれることなく** renderer-react による Server-Driven UI が動きます — `llm` は必須の引数のままです(`createKohakuHost` は既定値を作りません)が、compose する全 Intent が `fixedSpecs` で解決される限り、それが呼び出されることはありません。

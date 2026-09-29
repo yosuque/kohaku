@@ -120,6 +120,11 @@ export interface ConsoleErrorReporterOptions {
 export interface ConsoleErrorReporter {
   /** Matches `KohakuHostDeps.onError` (host-rest) verbatim — pass as `onError` directly. */
   host: (info: { endpoint: string; requestId: string; error: unknown }) => void;
+  /**
+   * Matches `McpHostDeps.onError` (host-mcp-apps) verbatim — pass as `onError` directly. The MCP profile has no
+   * error envelope, so no request id is printed.
+   */
+  mcp: (info: { endpoint: string; error: unknown }) => void;
   /** Matches `ComposeObserver.onError` (composer) verbatim — pass as `observer.onError` directly. */
   compose: (ctx: ComposeErrorContext, error: unknown) => void;
 }
@@ -147,6 +152,9 @@ export function createConsoleErrorReporter(options: ConsoleErrorReporterOptions 
   return {
     host: (info) => {
       writeLine(`[kohaku] ${info.endpoint} (request ${info.requestId})`, info.error);
+    },
+    mcp: (info) => {
+      writeLine(`[kohaku] mcp ${info.endpoint}`, info.error);
     },
     compose: (ctx, error) => {
       // A "fallback"/"cancelled" phase carries no thrown exception (error is undefined for most failure

@@ -165,6 +165,13 @@ describe("createConsoleErrorReporter", () => {
     expect(lines).toEqual(["[kohaku] /compose (request r1): boom"]);
   });
 
+  it("mcp(): logs a one-line summary that carries no request id", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    reporter.mcp({ endpoint: "kohaku_compose", error: new Error("boom") });
+    expect(lines).toEqual(["[kohaku] mcp kohaku_compose: boom"]);
+  });
+
   it("debug:true logs the full cause chain and the stack trace, as separate lines", () => {
     const { lines, log } = captureLines();
     const reporter = createConsoleErrorReporter({ debug: true, log });

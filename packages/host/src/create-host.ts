@@ -5,9 +5,15 @@ import type { QueryRef } from "@kohaku-ui/data-binding";
 import { createConsoleErrorReporter } from "@kohaku-ui/host-core";
 import { createKohakuRoutes, type KohakuHostDeps } from "@kohaku-ui/host-rest";
 import type { IntentDef } from "@kohaku-ui/intents";
+import { createLineage, createViewRecorder, type Lineage } from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { coreCatalog, type ResolvedCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import { createIntentCatalog, createLlmSemanticPort, type IntentCatalogLike } from "@kohaku-ui/semantic-llm";
+import {
+  createIntentCatalog,
+  createLlmSemanticPort,
+  type IntentCatalogLike,
+  type LlmSemanticPortOptions,
+} from "@kohaku-ui/semantic-llm";
 import type {
   AuthzPort,
   DataShape,
@@ -43,6 +49,16 @@ export interface CreateKohakuHostOptions {
   dataVersion?: (handle: QueryHandle) => Promise<string> | string;
   /** Optional, passed through to the default SemanticPort (see `LlmSemanticPortOptions.describeShape`). Ignored when `semantic` is supplied. */
   describeShape?: (ref: QueryRef) => DataShape | null;
+  /**
+   * Optional, passed through to the default SemanticPort (see `LlmSemanticPortOptions.fallbackIntent`): the
+   * Intent served when a question maps to nothing in the catalog. Ignored when `semantic` is supplied.
+   */
+  fallbackIntent?: LlmSemanticPortOptions["fallbackIntent"];
+  /**
+   * Optional, passed through to the default SemanticPort (see `LlmSemanticPortOptions.rules`): product-specific
+   * deterministic rules consulted before the LLM. Ignored when `semantic` is supplied.
+   */
+  rules?: LlmSemanticPortOptions["rules"];
 
   /** Default: `createMemoryStoragePort()`. */
   storage?: StoragePort;
@@ -62,6 +78,23 @@ export interface CreateKohakuHostOptions {
   capabilitySecret?: string;
   /** Overrides the REST profile's `KohakuHostDeps.onError`. Default: `createConsoleErrorReporter({ debug }).host`. */
   onError?: KohakuHostDeps["onError"];
+  /**
+   * The View Lineage recorder handed to the REST profile (and, through `attachKohakuMcp`, to the MCP profile).
+   * Default: `createViewRecorder(createLineage({ storage }))` over the facade's own `storage`, so every compose
+   * is recorded and `kohaku explain` / DevTools / evidence have something to read. Pass your own recorder to
+   * replace it, or `false` to record nothing.
+   */
+  recorder?: KohakuHostDeps["recorder"] | false;
+  /**
+   * Every other `KohakuHostDeps` field, passed through to `createKohakuRoutes` unchanged: `auth` / `tenant`
+   * (JWT and multi-tenant resolution), `approvals` / `actionAuditRecorder` / `actionEffects` (governed
+   * Actions), `rateLimiter`, `authorizeGovernance`, `promotions` / `fixations`, ... The fields this facade
+   * owns (`compose`, `domain`, `authz`, `querySource`) and the ones it has a dedicated option for (`onError`,
+   * `recorder`) are excluded so there is exactly one way to set each.
+   */
+  routes?: Partial<
+    Omit<KohakuHostDeps, "compose" | "domain" | "authz" | "querySource" | "onError" | "recorder">
+  >;
   /** Verbose mode for the default console error reporter (see `createConsoleErrorReporter`'s `debug` option). Default false. */
   debug?: boolean;
   /**
@@ -85,6 +118,16 @@ export interface KohakuHost {
   ports: { storage: StoragePort; authz: AuthzPort; semantic: SemanticPort; domain: DomainPort };
   /** The allowed source for `query://<source>/...` references, as given to `createKohakuHost`. Also consumed by `@kohaku-ui/host/mcp`'s `attachKohakuMcp`. */
   querySource: string;
+  /**
+   * The View Lineage service over `ports.storage` (the one the default `recorder` writes into); pass it to
+   * `createActionAuditRecorder` / `createFixations` / `summarizeLineage` when wiring `routes`. Always present, even
+   * when `recorder` is overridden or disabled.
+   */
+  lineage: Lineage;
+  /** The ViewRecorder in effect (the default lineage one, yours, or undefined when disabled). `attachKohakuMcp` wires it into the MCP profile too. */
+  recorder: KohakuHostDeps["recorder"];
+  /** The console error reporter's debug flag as given to `createKohakuHost`; `attachKohakuMcp` reuses it for the MCP profile's default `onError`. */
+  debug: boolean;
 }
 
 function resolveIntentCatalog(intents: IntentDef[] | IntentCatalogLike): IntentCatalogLike {
@@ -109,6 +152,8 @@ function resolveSemantic(options: CreateKohakuHostOptions): SemanticPort {
     catalog: resolveIntentCatalog(options.intents),
     dataVersion: options.dataVersion,
     ...(options.describeShape != null ? { describeShape: options.describeShape } : {}),
+    ...(options.fallbackIntent != null ? { fallbackIntent: options.fallbackIntent } : {}),
+    ...(options.rules != null ? { rules: options.rules } : {}),
   });
 }
 
@@ -143,7 +188,9 @@ function resolveAuthz(options: CreateKohakuHostOptions): AuthzPort {
  *
  * `createConsoleErrorReporter({ debug })` is wired into both the REST profile's `onError` and the compose
  * observer's `onError` by default, so failures are visible on stderr out of the box; pass your own `onError`
- * to replace the REST-facing half once you have real logging/metrics.
+ * to replace the REST-facing half once you have real logging/metrics. A View Lineage recorder over `storage` is
+ * wired by default too (see `recorder`), and `routes` passes every remaining `KohakuHostDeps` field (`auth`,
+ * `tenant`, `approvals`, `rateLimiter`, ...) through to `createKohakuRoutes`.
  *
  * `kohaku init` and `kohaku scaffold ports` both build on this (see design.md #52). For MCP, see the
  * `@kohaku-ui/host/mcp` subpath (`attachKohakuMcp`) -- kept separate so a REST-only consumer never needs
@@ -154,7 +201,10 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
   const authz = resolveAuthz(options);
   const semantic = resolveSemantic(options);
   const catalog = options.catalog ?? resolveCatalog(coreCatalog);
-  const errorReporter = createConsoleErrorReporter({ debug: options.debug ?? false });
+  const debug = options.debug ?? false;
+  const errorReporter = createConsoleErrorReporter({ debug });
+  const lineage = createLineage({ storage });
+  const recorder = options.recorder === false ? undefined : (options.recorder ?? createViewRecorder(lineage));
 
   const compose: ComposeContext = {
     catalog,
@@ -169,11 +219,13 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
   app.route(
     options.basePath ?? DEFAULT_BASE_PATH,
     createKohakuRoutes({
+      ...options.routes,
       compose,
       domain: options.domain,
       authz,
       querySource: options.querySource,
       onError: options.onError ?? errorReporter.host,
+      ...(recorder != null ? { recorder } : {}),
     }),
   );
 
@@ -182,5 +234,8 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
     compose,
     ports: { storage, authz, semantic, domain: options.domain },
     querySource: options.querySource,
+    lineage,
+    recorder,
+    debug,
   };
 }
