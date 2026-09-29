@@ -981,6 +981,9 @@ importers:
       '@kohaku-ui/host-rest':
         specifier: workspace:^
         version: link:../host-rest
+      '@kohaku-ui/lineage':
+        specifier: workspace:^
+        version: link:../lineage
       '@kohaku-ui/llm':
         specifier: workspace:^
         version: link:../llm

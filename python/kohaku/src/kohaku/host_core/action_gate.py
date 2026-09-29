@@ -23,6 +23,9 @@ from kohaku.spec import (
     validate_action_params,
 )
 
+NO_APPROVAL_PORT_REASON = "no ApprovalPort is configured for this host"
+"""The ActionGateDenied.reason of a host with no ApprovalPort at all (fixed text, safe to show a client)."""
+
 
 @dataclass(frozen=True)
 class ActionGateAllow:
@@ -37,7 +40,8 @@ class ActionGateAllow:
 
 @dataclass(frozen=True)
 class ActionGateInvalid:
-    """The payload failed validate_action_params against the action's schema. Maps to 422 ACTION_PARAMS_INVALID."""
+    """The payload carried a prototype-polluting key (an `unsafeKey` issue, SPEC ACT-PRM-001) or failed
+    validate_action_params against the action's schema. Maps to 422 ACTION_PARAMS_INVALID."""
 
     issues: list[ActionParamIssue]
     kind: Literal["invalid"] = "invalid"
@@ -60,7 +64,7 @@ class ActionGateApprovalRequired:
 class ActionGateDenied:
     """Tier "approve" and either (a) no ApprovalPort is configured for this host at all -- checked first,
     unconditionally, whether or not a token was presented, since no token could ever verify and no
-    POST /approvals (or MCP equivalent) could ever mint one -- or (b) a token *was* presented but did not
+    POST /approvals could ever mint one -- or (b) a token *was* presented but did not
     verify (wrong binding, expired, already used, self-approval). Distinguished from
     ActionGateApprovalRequired so the caller can record a distinct audit event (action.denied vs
     action.approvalRequested) even though both map to the same 403 APPROVAL_REQUIRED wire response."""
@@ -108,9 +112,9 @@ class ActionGate:
         # Whole-payload unsafe-key scan first, independent of any schema: an action with no params schema, an
         # undeclared property under additionalProperties, or a list with no `items` would otherwise let a
         # `__proto__` / `constructor` / `prototype` key through to DomainPort.invoke.
-        unsafe_keys = find_unsafe_action_param_keys(req.payload)
-        if unsafe_keys:
-            return ActionGateInvalid(issues=unsafe_keys)
+        unsafe_key_issues = find_unsafe_action_param_keys(req.payload)
+        if unsafe_key_issues:
+            return ActionGateInvalid(issues=unsafe_key_issues)
         if req.params_schema is not None:
             issues = validate_action_params(req.params_schema, req.payload)
             if issues:
@@ -132,13 +136,12 @@ class ActionGate:
         # tier == "approve"
         if self._approvals is None:
             # Checked before whether a token was even presented: with no ApprovalPort at all, no token
-            # this client could ever supply would verify, and POST /approvals (REST) / the equivalent
-            # MCP path can never mint one either -- so this fails
-            # closed unconditionally rather than teasing a retry via ActionGateApprovalRequired.
+            # this client could ever supply would verify, and POST /approvals can never mint one either --
+            # so this fails closed unconditionally rather than teasing a retry via ActionGateApprovalRequired.
             return ActionGateDenied(
                 payloadHash=payload_hash,
                 requestId=str(uuid.uuid4()),
-                reason="no ApprovalPort is configured for this host",
+                reason=NO_APPROVAL_PORT_REASON,
             )
         if req.approval is None:
             return ActionGateApprovalRequired(

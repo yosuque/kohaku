@@ -424,4 +424,13 @@ describe("createMemoryApprovalStore", () => {
     // A fresh jti still consumes fine after the sweep (unrelated to the expired one).
     expect(await store.consume("jti-2", 1100)).toBe(true);
   });
+
+  it("keeps exact expiry semantics for a jti even when the throttled sweep has not run yet", async () => {
+    let now = 1000;
+    const store = createMemoryApprovalStore(() => now);
+    expect(await store.consume("jti-1", 1000.5)).toBe(true); // sweeps once at t=1000
+    now = 1000.75; // inside the sweep interval: no sweep runs, but jti-1 has already expired
+    expect(await store.consume("jti-1", 1100)).toBe(true);
+    expect(await store.consume("jti-1", 1100)).toBe(false); // now live again, so a replay is refused
+  });
 });

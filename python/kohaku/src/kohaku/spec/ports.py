@@ -299,8 +299,10 @@ class ApprovalPort(Protocol):
 class ApprovalStore(Protocol):
     """Optional persistence for single-use enforcement of approval tokens. Port of TS ports.ts's
     ApprovalStore. When an ApprovalPort is configured with one, verify_approval MUST call `consume`
-    exactly once per verification attempt and deny (`ok=False`) when it returns False (already consumed)
-    or raises (store failure -- fail-closed). An ApprovalPort given no store keeps a token usable
+    exactly once per verification attempt and deny (`ok=False`) when it returns False (already consumed).
+    A `consume` that raises (store failure) is an infrastructure failure verify_approval cannot classify:
+    it propagates the exception, and the host treats a raised verify_approval as a denial (fail-closed, per
+    ApprovalPort.verify_approval's own contract). An ApprovalPort given no store keeps a token usable
     repeatedly until it expires."""
 
     async def consume(self, jti: str, expires_at: int) -> bool:

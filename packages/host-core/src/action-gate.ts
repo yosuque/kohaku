@@ -9,6 +9,9 @@ import type {
 } from "@kohaku-ui/spec-core";
 import { actionPayloadHash, findUnsafeActionParamKeys, validateActionParams } from "@kohaku-ui/spec-core";
 
+/** The `ActionGateDenied.reason` of a host with no `ApprovalPort` at all (fixed text, safe to show a client). */
+export const NO_APPROVAL_PORT_REASON = "no ApprovalPort is configured for this host";
+
 export interface ActionGateOptions {
   /** Consulted for `"approve"`-tier actions. Omitted = an `"approve"`-tier action can never be allowed. */
   approvals?: ApprovalPort;
@@ -39,7 +42,10 @@ export interface ActionGateAllow {
   grant?: ApprovalGrant;
 }
 
-/** The payload failed `validateActionParams` against the action's schema. Maps to 422 `ACTION_PARAMS_INVALID`. */
+/**
+ * The payload carried a prototype-polluting key (`unsafeKey` issue, SPEC ACT-PRM-001) or failed
+ * `validateActionParams` against the action's schema. Maps to 422 `ACTION_PARAMS_INVALID`.
+ */
 export interface ActionGateInvalid {
   kind: "invalid";
   issues: ActionParamIssue[];
@@ -62,7 +68,7 @@ export interface ActionGateApprovalRequired {
 /**
  * Tier `"approve"` and either (a) no `ApprovalPort` is configured for this host at all — checked first,
  * unconditionally, whether or not a token was presented, since no token could ever verify and no
- * `POST /approvals` (or MCP equivalent) could ever mint one — or (b) a token *was* presented but did not
+ * `POST /approvals` could ever mint one — or (b) a token *was* presented but did not
  * verify (wrong binding, expired, already used, self-approval). Distinguished from
  * `ActionGateApprovalRequired` so the caller can record a distinct audit event (`action.denied` vs
  * `action.approvalRequested`) even though both map to the same 403 `APPROVAL_REQUIRED` wire response.
@@ -98,8 +104,8 @@ export function createActionGate(options: ActionGateOptions = {}) {
       // Whole-payload unsafe-key scan first, independent of any schema: an action with no `paramsSchema`, an
       // undeclared property under `additionalProperties`, or an array with no `items` would otherwise let a
       // `__proto__` / `constructor` / `prototype` key through to `DomainPort.invoke`.
-      const unsafeKeys = findUnsafeActionParamKeys(req.payload);
-      if (unsafeKeys.length > 0) return { kind: "invalid", issues: unsafeKeys };
+      const unsafeKeyIssues = findUnsafeActionParamKeys(req.payload);
+      if (unsafeKeyIssues.length > 0) return { kind: "invalid", issues: unsafeKeyIssues };
       if (req.paramsSchema != null) {
         const issues = validateActionParams(req.paramsSchema, req.payload);
         if (issues.length > 0) return { kind: "invalid", issues };
@@ -120,15 +126,14 @@ export function createActionGate(options: ActionGateOptions = {}) {
       // tier === "approve"
       if (approvals == null) {
         // Checked before whether a token was even presented: with no ApprovalPort at all, no token this
-        // client could ever supply would verify, and POST /approvals (REST) / the equivalent MCP path
-        // can never mint one either — so this fails closed
+        // client could ever supply would verify, and POST /approvals can never mint one either — so this fails closed
         // unconditionally rather than teasing a retry via `approvalRequired`.
         return {
           kind: "denied",
           tier,
           payloadHash,
           requestId: globalThis.crypto.randomUUID(),
-          reason: "no ApprovalPort is configured for this host",
+          reason: NO_APPROVAL_PORT_REASON,
         };
       }
       if (req.approval == null) {

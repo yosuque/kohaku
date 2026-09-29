@@ -7,8 +7,11 @@ import asyncio
 from typing import Any
 
 from kohaku.host_core import (
+    ACTION_GATE_UNAVAILABLE_MESSAGE,
+    APPROVAL_TOKEN_REJECTED_MESSAGE,
     APPROVAL_TOKEN_REQUIRED_MESSAGE,
     CONFIRMATION_REQUIRED_MESSAGE,
+    NO_APPROVAL_PORT_REASON,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
     ActionGateAllow,
@@ -16,6 +19,7 @@ from kohaku.host_core import (
     ActionGateDenied,
     ActionGateInvalid,
     record_action_gate_result,
+    record_action_gate_unavailable_denial,
     record_undeclared_action_denial,
 )
 from kohaku.spec import ActionParamIssue, ApprovalGrant, ApprovalRequiredInfo, Principal
@@ -25,11 +29,14 @@ HASH = "sha256:" + "a" * 64
 
 
 class _Recorder:
-    def __init__(self, *, fail_denied: bool = False) -> None:
+    def __init__(self, *, fail_denied: bool = False, fail_invoked: bool = False) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self._fail_denied = fail_denied
+        self._fail_invoked = fail_invoked
 
     async def invoked(self, **kwargs: Any) -> None:
+        if self._fail_invoked:
+            raise RuntimeError("sink down")
         self.calls.append(("invoked", kwargs))
 
     async def denied(self, **kwargs: Any) -> None:
@@ -103,15 +110,23 @@ def test_approval_required_approve_uses_the_approval_token_message() -> None:
     assert outcome.message == APPROVAL_TOKEN_REQUIRED_MESSAGE
 
 
-def test_denied_records_action_denied_and_returns_the_reason() -> None:
+def test_denied_records_the_detailed_reason_but_returns_a_fixed_client_message() -> None:
     recorder = _Recorder()
-    gate = ActionGateDenied(payloadHash=HASH, requestId="r3", reason="approval expired")
+    reason = "approval is bound to a different requester"
+    gate = ActionGateDenied(payloadHash=HASH, requestId="r3", reason=reason)
     outcome = asyncio.run(record_action_gate_result(gate, _ctx(recorder)))
     assert outcome.kind == "approvalRequired"
-    assert outcome.message == "approval expired"
+    assert outcome.message == APPROVAL_TOKEN_REJECTED_MESSAGE
     assert outcome.approval.tier == "approve"
     assert [name for name, _ in recorder.calls] == ["denied"]
-    assert recorder.calls[0][1]["reason"] == "approval expired"
+    assert recorder.calls[0][1]["reason"] == reason
+
+
+def test_denied_by_a_host_with_no_approval_port_keeps_its_fixed_diagnosis() -> None:
+    gate = ActionGateDenied(payloadHash=HASH, requestId="r5", reason=NO_APPROVAL_PORT_REASON)
+    outcome = asyncio.run(record_action_gate_result(gate, _ctx(_Recorder())))
+    assert outcome.kind == "approvalRequired"
+    assert outcome.message == NO_APPROVAL_PORT_REASON
 
 
 def test_allow_records_invoked_and_approved_when_a_grant_was_consumed() -> None:
@@ -147,6 +162,22 @@ def test_recording_is_fail_open() -> None:
     assert len(reported) == 1
 
 
+def test_a_failing_invoked_write_does_not_drop_the_approved_record() -> None:
+    reported: list[BaseException] = []
+    recorder = _Recorder(fail_invoked=True)
+    grant = ApprovalGrant(
+        action="annotate", payloadHash=HASH, approverId="boss", requesterId="u1", exp=4102444800, jti="j1"
+    )
+    outcome = asyncio.run(
+        record_action_gate_result(
+            ActionGateAllow(tier="approve", payloadHash=HASH, grant=grant), _ctx(recorder, reported)
+        )
+    )
+    assert outcome.kind == "proceed"
+    assert [name for name, _ in recorder.calls] == ["approved"]
+    assert len(reported) == 1
+
+
 def test_with_no_recorder_the_outcome_is_still_returned() -> None:
     outcome = asyncio.run(
         record_action_gate_result(ActionGateAllow(tier="auto", payloadHash=HASH), _ctx(None))
@@ -170,4 +201,22 @@ def test_undeclared_denial_records_action_denied_with_tier_auto() -> None:
 def test_undeclared_denial_is_fail_open() -> None:
     reported: list[BaseException] = []
     asyncio.run(record_undeclared_action_denial(_ctx(_Recorder(fail_denied=True), reported)))
+    assert len(reported) == 1
+
+
+def test_unavailable_denial_records_action_denied_with_the_fixed_reason_and_defaults_to_tier_auto() -> None:
+    recorder = _Recorder()
+    asyncio.run(record_action_gate_unavailable_denial(_ctx(recorder, tenant="t1")))
+    assert len(recorder.calls) == 1
+    name, kwargs = recorder.calls[0]
+    assert name == "denied"
+    assert kwargs["tier"] == "auto"
+    assert kwargs["reason"] == ACTION_GATE_UNAVAILABLE_MESSAGE
+    assert kwargs["tenant"] == "t1"
+
+
+def test_unavailable_denial_carries_the_descriptor_tier_and_is_fail_open() -> None:
+    reported: list[BaseException] = []
+    recorder = _Recorder(fail_denied=True)
+    asyncio.run(record_action_gate_unavailable_denial(_ctx(recorder, reported), tier="approve"))
     assert len(reported) == 1

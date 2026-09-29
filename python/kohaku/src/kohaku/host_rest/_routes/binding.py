@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from kohaku.host_core import (
+    ACTION_GATE_UNAVAILABLE_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
     ActionGateRequest,
@@ -18,9 +19,11 @@ from kohaku.host_core import (
     apply_action_effects,
     parse_invokable_ref,
     record_action_gate_result,
+    record_action_gate_unavailable_denial,
     record_undeclared_action_denial,
 )
 from kohaku.spec import (
+    ActionTier,
     InvocationContext,
     JsonObject,
     Principal,
@@ -52,6 +55,8 @@ from .shared import (
 # reaches the observability hook (on_error) via report_host_error.
 _REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable"
 
+# Client message when a declared operation's paramsSchema failed validation: that operation is never invoked.
+_ACTION_DECLARATION_INVALID_MESSAGE = "action is not available on this host"
 
 
 def _resolve_principal(deps: KohakuHostDeps, verdict: VerifyResult) -> Principal | Response:
@@ -214,39 +219,52 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         # domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
         # because the index and DomainPort momentarily disagree, or because the name was never a real
         # operation to begin with -- is rejected here rather than let through ungated (fail-closed;
-        # ACT-PRM-001).
-        index = await operation_index(deps)
+        # ACT-PRM-001). A gate that cannot decide at all (index unreadable, ApprovalPort outage) is a
+        # denial too (ACT-APR-001).
+        audit_context = ActionAuditContext(
+            recorder=deps.action_audit_recorder,
+            action=body.action,
+            payload=payload,
+            principal=principal,
+            tenant=tenant,
+            correlation_id=request_id,
+            report=lambda e: report_host_error(deps, "binding/action.audit", request_id, e),
+        )
+
+        async def _gate_unavailable(e: BaseException, tier: ActionTier | None = None) -> Response:
+            await report_host_error(deps, "binding/action", request_id, e)
+            await record_action_gate_unavailable_denial(audit_context, tier=tier)
+            return _error("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, 503, request_id)
+
+        try:
+            index = await operation_index(deps)
+        except Exception as e:
+            return await _gate_unavailable(e)
         entry = index.get(body.action)
         if entry is None:
-            await record_undeclared_action_denial(
-                ActionAuditContext(
-                    recorder=deps.action_audit_recorder,
-                    action=body.action,
-                    payload=payload,
-                    principal=principal,
-                    tenant=tenant,
-                    correlation_id=request_id,
-                    report=lambda e: report_host_error(deps, "binding/action.audit", request_id, e),
-                )
-            )
+            await record_undeclared_action_denial(audit_context)
             return _error("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE, 403)
 
-        # A declared operation whose paramsSchema failed validation must never be invoked: fail closed (raised,
-        # so the app's exception handling answers 500 -- the TS route's outcome too).
+        # A declared operation whose paramsSchema failed validation must never be invoked: fail closed (500
+        # envelope -- the TS route's outcome too).
         if entry.schema_error is not None:
-            raise entry.schema_error
+            await report_host_error(deps, "binding/action", request_id, entry.schema_error)
+            return _error("INTERNAL", _ACTION_DECLARATION_INVALID_MESSAGE, 500, request_id)
         gate = action_gate_for(deps)
-        gate_result = await gate.check(
-            ActionGateRequest(
-                descriptor=entry.descriptor,
-                params_schema=entry.params_schema,
-                payload=payload,
-                confirmed=body.confirmed,
-                approval=body.approval,
-                requester_id=principal.id,
-                tenant=tenant,
+        try:
+            gate_result = await gate.check(
+                ActionGateRequest(
+                    descriptor=entry.descriptor,
+                    params_schema=entry.params_schema,
+                    payload=payload,
+                    confirmed=body.confirmed,
+                    approval=body.approval,
+                    requester_id=principal.id,
+                    tenant=tenant,
+                )
             )
-        )
+        except Exception as e:
+            return await _gate_unavailable(e, entry.descriptor.tier or "auto")
         gated = await _handle_action_gate_result(
             deps,
             gate_result,

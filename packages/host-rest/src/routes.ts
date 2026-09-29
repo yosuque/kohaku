@@ -4,6 +4,7 @@ import { cachedPropsJsonSchema } from "@kohaku-ui/registry";
 import type { Principal } from "@kohaku-ui/spec-core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { HTTPException } from "hono/http-exception";
 import { errorBody } from "./errors.js";
 import type { GovernanceOperation } from "./governance-policy.js";
 import { registerBindingRoutes } from "./routes/binding.js";
@@ -14,6 +15,7 @@ import { registerPromotionRoutes } from "./routes/promotions.js";
 import { createRateLimitMiddleware } from "./routes/rate-limit.js";
 import {
   ANONYMOUS,
+  memoizePrincipal,
   operationIndex,
   type RouteContext,
   reportHostError,
@@ -41,6 +43,9 @@ export type {
  */
 const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 
+/** Client message for an error no route handled (see the `app.onError` backstop in createKohakuRoutes). */
+const UNHANDLED_ERROR_MESSAGE = "internal error";
+
 /**
  * The REST profile of the Kohaku Protocol (a group of Hono routes).
  * Usage: app.route("/api/kohaku", createKohakuRoutes(deps))
@@ -62,6 +67,16 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
     const requestId = requestIdOf(c, deps);
     await next();
     c.res.headers.set("X-Request-Id", requestId);
+  });
+
+  // Backstop for anything a route lets escape (a rejecting Port call outside a route's own try/catch): answer
+  // with the SPEC §6.1 error envelope and the request's id, and report it to the observability hook, rather
+  // than Hono's bare text/plain 500. The raw error text never reaches the client.
+  app.onError(async (e, c) => {
+    if (e instanceof HTTPException) return e.getResponse();
+    const requestId = requestIdOf(c, deps);
+    await reportHostError(deps, "unhandled", requestId, e);
+    return c.json(errorBody("INTERNAL", UNHANDLED_ERROR_MESSAGE, requestId), 500);
   });
 
   // Standard request-body size cap (a product may still layer its own bodyLimit in front of the mount point;
@@ -97,7 +112,9 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
         "In production, wiring deps.auth to real authentication is mandatory.",
     );
   }
-  const getPrincipal = async (c: Context): Promise<Principal> => (await deps.auth?.(c)) ?? ANONYMOUS;
+  const getPrincipal = memoizePrincipal(
+    async (c: Context): Promise<Principal> => (await deps.auth?.(c)) ?? ANONYMOUS,
+  );
 
   /**
    * Governance/audit-plane authorization. If deps.authorizeGovernance is wired, it is checked, and on rejection

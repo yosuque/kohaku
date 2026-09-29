@@ -10,6 +10,7 @@ import {
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import {
+  type ApprovalPort,
   type AuthzPort,
   computeStructureHash,
   type DomainPort,
@@ -471,6 +472,70 @@ describe("@kohaku-ui/client binding() factory and request() URL joining", () => 
     await client.request("https://other-host.example/status"); // absolute -> used as-is
 
     expect(seenUrls).toEqual(["/api/kohakuhealth", "/other/health", "https://other-host.example/status"]);
+  });
+});
+
+describe("@kohaku-ui/client approvals.issue (POST /approvals)", () => {
+  const request = {
+    action: "delete",
+    payloadHash: `sha256:${"a".repeat(64)}`,
+    requesterId: "requester-1",
+  };
+
+  it("returns the typed { approval } token and sends the bound fields (ttlSeconds only when given)", async () => {
+    const issueApproval = vi.fn(
+      async (_input: Parameters<ApprovalPort["issueApproval"]>[0], _opts?: { ttlSeconds?: number }) =>
+        "kohaku-approval.v2.token",
+    );
+    const approvals: ApprovalPort = { issueApproval, verifyApproval: async () => ({ ok: true }) };
+    const client = makeClient({
+      approvals,
+      auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+      authorizeGovernance: async () => true,
+    });
+
+    const result = await client.approvals.issue({ ...request, ttlSeconds: 60 });
+    expect(result).toEqual({ approval: "kohaku-approval.v2.token" });
+    expect(issueApproval).toHaveBeenCalledWith({ ...request, approverId: "approver-1" }, { ttlSeconds: 60 });
+
+    await client.approvals.issue(request);
+    expect(issueApproval.mock.calls[1]![1]).toBeUndefined();
+  });
+
+  it("a self-approval surfaces as KohakuHostError BAD_REQUEST (400)", async () => {
+    const approvals: ApprovalPort = {
+      issueApproval: async () => "token",
+      verifyApproval: async () => ({ ok: true }),
+    };
+    const client = makeClient({
+      approvals,
+      auth: async () => ({ id: "requester-1", roles: ["approver"] }),
+      authorizeGovernance: async () => true,
+    });
+    await expect(client.approvals.issue(request)).rejects.toSatisfy(
+      (e: unknown) => isKohakuHostError(e) && e.code === "BAD_REQUEST" && e.status === 400,
+    );
+  });
+
+  it("a host without an ApprovalPort answers NOT_IMPLEMENTED (501)", async () => {
+    const client = makeClient({ authorizeGovernance: async () => true });
+    await expect(client.approvals.issue(request)).rejects.toSatisfy(
+      (e: unknown) => isKohakuHostError(e) && e.code === "NOT_IMPLEMENTED" && e.status === 501,
+    );
+  });
+
+  it("an approver the authorizeGovernance hook refuses for this action gets CAPABILITY_DENIED (403)", async () => {
+    const approvals: ApprovalPort = {
+      issueApproval: async () => "token",
+      verifyApproval: async () => ({ ok: true }),
+    };
+    const client = makeClient({
+      approvals,
+      authorizeGovernance: async (_principal, operation) => operation.action !== "delete",
+    });
+    await expect(client.approvals.issue(request)).rejects.toSatisfy(
+      (e: unknown) => isKohakuHostError(e) && e.code === "CAPABILITY_DENIED" && e.status === 403,
+    );
   });
 });
 

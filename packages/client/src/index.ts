@@ -15,6 +15,7 @@ export type { ErrorEnvelope, HostErrorCode } from "@kohaku-ui/spec-core";
 export {
   type AnalyticsClient,
   type AnalyticsSummaryQuery,
+  type ApprovalsClient,
   createKohakuClient,
   type FixationsClient,
   type KohakuClient,
@@ -51,6 +52,8 @@ export type {
   ActionManifest,
   ActionManifestEntry,
   AnalyticsSummaryView,
+  ApprovalIssueRequest,
+  ApprovalIssueResult,
   CatalogResponse,
   ComponentDraft,
   ComposeRequest,

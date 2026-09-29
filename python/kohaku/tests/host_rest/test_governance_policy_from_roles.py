@@ -51,3 +51,13 @@ def test_role_union_across_multiple_roles_is_allowed_if_any_matches() -> None:
         evaluate(_principal("viewer", "approver"), GovernanceOperation(kind="promotion.approve"), None)
         is True
     )
+
+
+def test_forwards_tenant_of_so_a_principal_bound_to_another_tenant_is_denied() -> None:
+    evaluate = governance_policy_from_roles(
+        lambda _tenant: {"admin": ["*"]},
+        tenant_of=lambda p: "tenant-a" if p.id == "u-admin" else None,
+    )
+    op = GovernanceOperation(kind="promotion.approve")
+    assert evaluate(_principal("admin"), op, "tenant-a") is True
+    assert evaluate(_principal("admin"), op, "tenant-b") is False

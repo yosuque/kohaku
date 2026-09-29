@@ -44,4 +44,12 @@ describe("governancePolicyFromRoles", () => {
     }));
     expect(evaluate(principal("viewer", "approver"), { kind: "promotion.approve" })).toBe(true);
   });
+
+  it("forwards options.tenantOf: a principal bound to another tenant is denied despite holding the role there", () => {
+    const evaluate = governancePolicyFromRoles(() => ({ admin: ["*"] }), {
+      tenantOf: (p) => (p.id === "u-admin" ? "tenant-a" : undefined),
+    });
+    expect(evaluate(principal("admin"), { kind: "promotion.approve" }, "tenant-a")).toBe(true);
+    expect(evaluate(principal("admin"), { kind: "promotion.approve" }, "tenant-b")).toBe(false);
+  });
 });

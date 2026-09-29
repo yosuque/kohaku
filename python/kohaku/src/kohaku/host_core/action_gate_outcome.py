@@ -14,6 +14,7 @@ from typing import Literal
 
 from kohaku.spec import (
     ActionParamIssue,
+    ActionTier,
     ApprovalRequiredInfo,
     JsonObject,
     Principal,
@@ -21,7 +22,7 @@ from kohaku.spec import (
 )
 
 from .action_audit import ActionAuditRecorder
-from .action_gate import ActionGateResult
+from .action_gate import NO_APPROVAL_PORT_REASON, ActionGateResult
 from .errors import fail_open
 
 UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation"
@@ -35,6 +36,17 @@ CONFIRMATION_REQUIRED_MESSAGE = "this action requires confirmation (confirmed: t
 
 APPROVAL_TOKEN_REQUIRED_MESSAGE = "this action requires an approval token"
 """Client-visible message for an "approve"-tier action invoked without an approval token."""
+
+APPROVAL_TOKEN_REJECTED_MESSAGE = "approval token was rejected"
+"""Client-visible message when an "approve"-tier token was presented but the ApprovalPort did not accept it.
+Fixed on purpose: the port's own reason (which binding mismatched -- requester, tenant, payload -- or a
+product-specific store message) tells a caller how to probe for a valid token, so it reaches only the
+`action.denied` audit event, never the wire."""
+
+ACTION_GATE_UNAVAILABLE_MESSAGE = "action gate unavailable"
+"""Client-visible message when the action gate could not reach a decision at all (the operation index or the
+ApprovalPort raised). The invoke is refused (fail-closed; SPEC ACT-APR-001); the underlying error reaches the
+host's observability hook only."""
 
 
 @dataclass(frozen=True)
@@ -85,8 +97,8 @@ type ActionGateOutcome = ActionGateInvalidOutcome | ActionGateApprovalRequiredOu
 async def record_action_gate_result(
     gate_result: ActionGateResult, ctx: ActionAuditContext
 ) -> ActionGateOutcome:
-    """The audit trail for one `ActionGate.check` outcome (design.md #62/#63; SPEC LIN-ACT-001): "invalid"
-    records nothing, "approvalRequired" records `action.approvalRequested`, "denied" records `action.denied`,
+    """Audits one `ActionGate.check` outcome and maps it onto the client-visible `ActionGateOutcome`
+    (design.md #62/#63; SPEC LIN-ACT-001): "invalid" records nothing, "approvalRequired" records `action.approvalRequested`, "denied" records `action.denied`,
     and "allow" records `action.invoked` (plus `action.approved` when a grant was consumed). Recording is
     always fail-open (`fail_open`): a recording failure must never turn an otherwise-successful allow, or an
     otherwise-correct denial, into an unhandled failure. Port of TS `recordActionGateResult`."""
@@ -142,8 +154,14 @@ async def record_action_gate_result(
             )
 
         await fail_open(_record_denied, ctx.report)
+        # Only the "no ApprovalPort configured" reason is a fixed, client-safe diagnosis; any other reason
+        # came from the ApprovalPort itself and stays in the audit event above.
         return ActionGateApprovalRequiredOutcome(
-            message=gate_result.reason,
+            message=(
+                NO_APPROVAL_PORT_REASON
+                if gate_result.reason == NO_APPROVAL_PORT_REASON
+                else APPROVAL_TOKEN_REJECTED_MESSAGE
+            ),
             approval=ApprovalRequiredInfo(
                 requestId=gate_result.requestId,
                 action=ctx.action,
@@ -153,7 +171,9 @@ async def record_action_gate_result(
         )
 
     # gate_result.kind == "allow"
-    async def _record_allow() -> None:
+    # Each event has its own fail-open: a failed `invoked` write must not drop the `approved` record of a
+    # grant that was already consumed.
+    async def _record_invoked() -> None:
         if recorder is None:
             return
         await recorder.invoked(
@@ -164,17 +184,24 @@ async def record_action_gate_result(
             tenant=ctx.tenant,
             correlation_id=ctx.correlation_id,
         )
-        if gate_result.grant is not None:
+
+    await fail_open(_record_invoked, ctx.report)
+    grant = gate_result.grant
+    if grant is not None:
+
+        async def _record_approved() -> None:
+            if recorder is None:
+                return
             await recorder.approved(
                 action=ctx.action,
                 payload_hash=gate_result.payloadHash,
-                grant=gate_result.grant,
+                grant=grant,
                 principal=ctx.principal,
                 tenant=ctx.tenant,
                 correlation_id=ctx.correlation_id,
             )
 
-    await fail_open(_record_allow, ctx.report)
+        await fail_open(_record_approved, ctx.report)
     return ActionGateProceedOutcome()
 
 
@@ -202,7 +229,35 @@ async def record_undeclared_action_denial(ctx: ActionAuditContext) -> None:
     await fail_open(_record, ctx.report)
 
 
+async def record_action_gate_unavailable_denial(
+    ctx: ActionAuditContext, *, tier: ActionTier | None = None
+) -> None:
+    """Records `action.denied` for an invoke the host refused because the gate could not decide (the
+    operation index or the ApprovalPort raised): fail-closed, so the attempt is audited as a denial with the
+    fixed `ACTION_GATE_UNAVAILABLE_MESSAGE` reason (the underlying error goes to the observability hook
+    instead). `tier` is the descriptor's tier when the index was readable, "auto" otherwise. Fail-open like
+    the other recorders in this module. Port of TS `recordActionGateUnavailableDenial`."""
+    recorder = ctx.recorder
+
+    async def _record() -> None:
+        if recorder is None:
+            return
+        await recorder.denied(
+            action=ctx.action,
+            payload_hash=action_payload_hash(ctx.payload),
+            tier=tier if tier is not None else "auto",
+            reason=ACTION_GATE_UNAVAILABLE_MESSAGE,
+            principal=ctx.principal,
+            tenant=ctx.tenant,
+            correlation_id=ctx.correlation_id,
+        )
+
+    await fail_open(_record, ctx.report)
+
+
 __all__ = [
+    "ACTION_GATE_UNAVAILABLE_MESSAGE",
+    "APPROVAL_TOKEN_REJECTED_MESSAGE",
     "APPROVAL_TOKEN_REQUIRED_MESSAGE",
     "CONFIRMATION_REQUIRED_MESSAGE",
     "UNDECLARED_ACTION_MESSAGE",
@@ -212,5 +267,6 @@ __all__ = [
     "ActionGateOutcome",
     "ActionGateProceedOutcome",
     "record_action_gate_result",
+    "record_action_gate_unavailable_denial",
     "record_undeclared_action_denial",
 ]

@@ -78,6 +78,12 @@ export interface GovernanceOperation {
   kind: GovernanceOperationKind;
   artifactId?: string;
   intentHash?: string;
+  /**
+   * The governed Action a `action.approve` operation would approve (the `POST /approvals` body's `action`), so an
+   * `authorizeGovernance` hook can scope who may approve which action. Set only for that kind. The bundled
+   * `createGovernancePolicy` is role-based and ignores it; a product hook that needs per-action approvers reads it.
+   */
+  action?: string;
 }
 
 /**
@@ -109,7 +115,7 @@ export interface GovernancePolicy {
  */
 export type GovernanceEvaluator = (
   principal: Principal,
-  operation: { kind: string; artifactId?: string; intentHash?: string },
+  operation: { kind: string; artifactId?: string; intentHash?: string; action?: string },
   tenant?: string,
 ) => boolean;
 
@@ -162,14 +168,19 @@ function matchesPattern(pattern: string, kind: string): boolean {
  * derived from this package's own `GovernanceOperationKind` -- see `PolicyRuntime.rolesFor`'s own doc
  * comment); an unrecognized pattern already fails `matchesPattern`'s structural check (deny-by-default),
  * so no validation is needed at this boundary either.
+ *
+ * `options.tenantOf` is forwarded to `createGovernancePolicy`: without it, a per-tenant role grant is resolved
+ * against the tenant the *request* names, so a principal holding the role in tenant A could be granted through
+ * tenant B's table. With it, `tenantOf(principal)` must equal the resolved tenant before any role is consulted.
  */
 export function governancePolicyFromRoles(
   rolesFor: (tenant?: string) => Record<string, readonly string[]>,
+  options: { tenantOf?: GovernancePolicy["tenantOf"] } = {},
 ): GovernanceEvaluator {
+  const { tenantOf } = options;
   return (principal, operation, tenant) =>
-    createGovernancePolicy({ roles: rolesFor(tenant) as Record<string, readonly GovernancePattern[]> })(
-      principal,
-      operation,
-      tenant,
-    );
+    createGovernancePolicy({
+      roles: rolesFor(tenant) as Record<string, readonly GovernancePattern[]>,
+      ...(tenantOf != null ? { tenantOf } : {}),
+    })(principal, operation, tenant);
 }

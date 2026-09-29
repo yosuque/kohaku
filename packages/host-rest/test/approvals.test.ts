@@ -142,6 +142,38 @@ describe("POST /approvals", () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("CAPABILITY_DENIED");
   });
 
+  it("passes the action being approved to authorizeGovernance so approvers can be scoped per action", async () => {
+    const issueApproval = vi.fn(async () => "token");
+    const approvals: ApprovalPort = { issueApproval, verifyApproval: async () => ({ ok: true }) };
+    const authorizeGovernance = vi.fn(async (_p: unknown, operation: { kind: string; action?: string }) => {
+      return operation.kind === "action.approve" && operation.action === "delete";
+    });
+    const deps = baseDeps({
+      approvals,
+      authorizeGovernance,
+      auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+    });
+
+    const allowed = await postApprovals(deps, VALID_BODY);
+    expect(allowed.status).toBe(200);
+    expect(authorizeGovernance.mock.calls[0]![1]).toEqual({ kind: "action.approve", action: "delete" });
+
+    const denied = await postApprovals(deps, { ...VALID_BODY, action: "purge" });
+    expect(denied.status).toBe(403);
+    expect(issueApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consult authorizeGovernance for a body that fails validation (400 first)", async () => {
+    const approvals: ApprovalPort = {
+      issueApproval: async () => "token",
+      verifyApproval: async () => ({ ok: true }),
+    };
+    const authorizeGovernance = vi.fn(async () => true);
+    const res = await postApprovals(baseDeps({ approvals, authorizeGovernance }), { action: "delete" });
+    expect(res.status).toBe(400);
+    expect(authorizeGovernance).not.toHaveBeenCalled();
+  });
+
   it("rejects a missing required field with 400 BAD_REQUEST", async () => {
     const approvals: ApprovalPort = {
       issueApproval: async () => "token",

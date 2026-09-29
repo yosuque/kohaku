@@ -1,15 +1,25 @@
 import {
+  ACTION_GATE_UNAVAILABLE_MESSAGE,
   type ActionGateResult,
   applyActionEffects,
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
   type ParsedInvokableRef,
   parseInvokableRef,
   recordActionGateResult,
+  recordActionGateUnavailableDenial,
   recordUndeclaredActionDenial,
   UNDECLARED_ACTION_MESSAGE,
   verifyCapabilitySafely,
 } from "@kohaku-ui/host-core";
-import type { JsonObject, Principal, VerifyRequest, VerifyResult } from "@kohaku-ui/spec-core";
+import {
+  type ActionParamIssue,
+  type ActionTier,
+  findUnsafeActionParamKeys,
+  type JsonObject,
+  type Principal,
+  type VerifyRequest,
+  type VerifyResult,
+} from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { KohakuHostDeps } from "../types.js";
@@ -33,6 +43,23 @@ import {
  * fixed message; the original error still reaches the observability hook (onError) via reportHostError.
  */
 const REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable";
+
+/** Client message when a declared operation's `paramsSchema` failed validation: that operation is never invoked. */
+const ACTION_DECLARATION_INVALID_MESSAGE = "action is not available on this host";
+
+/**
+ * The unsafe-key issues (SPEC ACT-PRM-001) of the request body's raw `payload`. The gate scans the *parsed*
+ * payload, but `JsonObjectSchema` (zod's record) silently strips an own `__proto__` key while parsing, so the
+ * gate alone would never see it; `JSON.parse` keeps it as an own property, so the raw body is scanned here
+ * and the result is fed to the same 422 path the gate takes. Empty when the body has no object `payload`.
+ * Bounded: `parseBody` already rejected a body nested beyond the maximum request depth.
+ */
+async function rawPayloadUnsafeKeyIssues(c: Context): Promise<ActionParamIssue[]> {
+  const raw: unknown = await c.req.json().catch(() => null);
+  const payload = (raw as { payload?: unknown } | null)?.payload;
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return [];
+  return findUnsafeActionParamKeys(payload as JsonObject);
+}
 
 /**
  * Calls `authz.verify` via host-core's `verifyCapabilitySafely` (shared with the MCP profile), and maps its
@@ -165,33 +192,58 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
     // because the index and DomainPort momentarily disagree, or because the name was never a real
     // operation to begin with -- is rejected here rather than let through ungated (fail-closed; ACT-PRM-001).
-    const index = await operationIndex(deps);
+    // A gate that cannot decide at all (index unreadable, ApprovalPort outage) is a denial too (ACT-APR-001).
+    const auditContext = {
+      recorder: deps.actionAuditRecorder,
+      action: body.action,
+      payload,
+      principal,
+      tenant,
+      correlationId: requestId,
+      report: (e: unknown) => reportHostError(deps, "binding/action.audit", requestId, e),
+    };
+    const gateUnavailable = async (e: unknown, tier?: ActionTier): Promise<Response> => {
+      await reportHostError(deps, "binding/action", requestId, e);
+      await recordActionGateUnavailableDenial({ ...auditContext, ...(tier != null ? { tier } : {}) });
+      return c.json(errorBody("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, requestId), 503);
+    };
+    let index: Awaited<ReturnType<typeof operationIndex>>;
+    try {
+      index = await operationIndex(deps);
+    } catch (e) {
+      return gateUnavailable(e);
+    }
     const entry = index.get(body.action);
     if (entry == null) {
-      await recordUndeclaredActionDenial({
-        recorder: deps.actionAuditRecorder,
-        action: body.action,
-        payload,
-        principal,
-        tenant,
-        correlationId: requestId,
-        report: (e) => reportHostError(deps, "binding/action.audit", requestId, e),
-      });
+      await recordUndeclaredActionDenial(auditContext);
       return c.json(errorBody("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE), 403);
     }
     // A declared operation whose paramsSchema failed validation must never be invoked: fail closed (500), the
     // same outcome a schema error had before the index confined it to one operation.
-    if (entry.schemaError != null) throw entry.schemaError;
+    if (entry.schemaError != null) {
+      await reportHostError(deps, "binding/action", requestId, entry.schemaError);
+      return c.json(errorBody("INTERNAL", ACTION_DECLARATION_INVALID_MESSAGE, requestId), 500);
+    }
     const gate = actionGateFor(deps);
-    const gateResult = await gate.check({
-      descriptor: entry.descriptor,
-      paramsSchema: entry.paramsSchema,
-      payload,
-      confirmed: body.confirmed,
-      approval: body.approval,
-      requesterId: principal.id,
-      tenant,
-    });
+    const rawUnsafeKeyIssues = await rawPayloadUnsafeKeyIssues(c);
+    let gateResult: ActionGateResult;
+    if (rawUnsafeKeyIssues.length > 0) {
+      gateResult = { kind: "invalid", issues: rawUnsafeKeyIssues };
+    } else {
+      try {
+        gateResult = await gate.check({
+          descriptor: entry.descriptor,
+          paramsSchema: entry.paramsSchema,
+          payload,
+          confirmed: body.confirmed,
+          approval: body.approval,
+          requesterId: principal.id,
+          tenant,
+        });
+      } catch (e) {
+        return gateUnavailable(e, entry.descriptor.tier ?? "auto");
+      }
+    }
     const gated = await handleActionGateResult(deps, c, gateResult, {
       action: body.action,
       payload,
