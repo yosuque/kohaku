@@ -55,7 +55,7 @@ catalog:
   "@testcontainers/redis": ^12.1.0
   "@testcontainers/postgresql": ^12.1.0
   vitepress: 1.6.4
-  mermaid: ^11.17.2
+  mermaid: ^12.0.0
 
 # Each entry below bypasses the release-age supply-chain gate for one AI SDK package because it was pinned
 # in the catalog (or pulled in transitively by a catalog entry) shortly after its own release, so the gate's
