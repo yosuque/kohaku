@@ -87,6 +87,43 @@ describe("kohaku init --mcp", () => {
     expect(src).toContain("snapshots");
   });
 
+  it("server/mcp-http.ts builds the host once at module scope, not once per MCP exchange", async () => {
+    // A host built inside the per-request McpServer factory would start every call with empty in-memory
+    // storage (no Spec cache, fixation or lineage), so an L1 view would be regenerated on each call.
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
+    const http = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
+    expect(http.match(/createPorts\(/g)).toHaveLength(1);
+    const factory = http.slice(http.indexOf("createMcpHandler(() =>"), http.indexOf("const handleMcp"));
+    expect(factory).toContain("attachMcpServer(server, host)");
+    expect(factory).not.toContain("createPorts");
+    // attachMcpServer takes the host instead of building one itself.
+    const mcpServer = readFileSync(join(out, "server/mcp-server.ts"), "utf8");
+    expect(mcpServer).toContain("host: KohakuHost");
+    expect(mcpServer).not.toContain("createPorts(");
+    // stdio is one process = one host, so it builds it inline.
+    expect(readFileSync(join(out, "server/mcp.ts"), "utf8")).toContain(
+      "attachMcpServer(server, createPorts({ llm }))",
+    );
+  });
+
+  it("server/mcp-http.ts validates Host and Origin, caps the body, and closes the handler with the server", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
+    const http = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
+    expect(http).toContain("hostHeaderValidation(");
+    expect(http).toContain("originValidation(");
+    expect(http).toContain("KOHAKU_MCP_ALLOWED_HOSTS");
+    expect(http).toContain("KOHAKU_MCP_ALLOWED_ORIGINS");
+    // Validation runs before anything else touches the request.
+    expect(http.indexOf("validateHost(req, res)")).toBeLessThan(http.indexOf("handleMcp(req, res"));
+    expect(http.indexOf("validateOrigin(req, res)")).toBeLessThan(http.indexOf("handleMcp(req, res"));
+    // Never a wildcard CORS origin: only a validated Origin is echoed back.
+    expect(http).not.toMatch(/Access-Control-Allow-Origin",\s*"\*"/);
+    expect(http).toContain("MAX_BODY_BYTES = 4 * 1024 * 1024");
+    expect(http).toMatch(/httpServer\.on\("close", \(\) => \{\s*void mcpHandler\.close\(\);/);
+  });
+
   it("server/mcp-server.ts exposes the generated Intent catalog as typed MCP tools", async () => {
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
