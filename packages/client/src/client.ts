@@ -6,6 +6,8 @@ import { type ComposeStreamEvent, readComposeStream, toComposeStreamEvent } from
 import { globalTransport, type Transport } from "./transport.js";
 import type {
   AnalyticsSummaryView,
+  ApprovalIssueRequest,
+  ApprovalIssueResult,
   CatalogResponse,
   ComponentDraft,
   ComposeRequest,
@@ -200,6 +202,19 @@ export interface AnalyticsClient {
   summary(query?: AnalyticsSummaryQuery, opts?: RequestOptions): Promise<AnalyticsSummaryView>;
 }
 
+/** Approver-side surface for `"approve"`-tier governed Actions (SPEC ACT-APR-001 [Draft]), typed. */
+export interface ApprovalsClient {
+  /**
+   * Mints an approval token bound to `(action, payloadHash, requesterId, tenant)` (POST /approvals). The
+   * caller is the approver: their own principal id becomes `approverId`, so a self-approval is refused (400
+   * `BAD_REQUEST`). Also throws 403 `CAPABILITY_DENIED` when the host's `authorizeGovernance` does not
+   * authorize this approver for `req.action`, and 501 `NOT_IMPLEMENTED` on a host with no `ApprovalPort` or
+   * no `authorizeGovernance` hook. Recompute `actionPayloadHash` from the payload shown to the approver before
+   * calling (the descriptor's `payloadHash` alone is not something an approver can read).
+   */
+  issue(req: ApprovalIssueRequest, opts?: RequestOptions): Promise<ApprovalIssueResult>;
+}
+
 /** Typed host client (typed wrapper over every route in REST profile §6.1). */
 export interface KohakuClient {
   /** POST /compose (`{intent}` or `{input}` → `{spec, capability}`). */
@@ -252,6 +267,8 @@ export interface KohakuClient {
   fixations: FixationsClient;
   /** Read-only surface for the usage-analytics aggregate summary. */
   analytics: AnalyticsClient;
+  /** Approver-side surface for `"approve"`-tier governed Actions (POST /approvals). */
+  approvals: ApprovalsClient;
   /**
    * Composes a client for reference-passing data binding (GET /binding/resolve, POST /binding/action).
    * baseUrl and headers are inherited from the SDK config. Pass the capability obtained from the /compose response.
@@ -446,6 +463,21 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
     },
   };
 
+  const approvals: ApprovalsClient = {
+    async issue(req, opts) {
+      return post<ApprovalIssueResult>(
+        "/approvals",
+        {
+          action: req.action,
+          payloadHash: req.payloadHash,
+          requesterId: req.requesterId,
+          ...(req.ttlSeconds != null ? { ttlSeconds: req.ttlSeconds } : {}),
+        },
+        opts,
+      );
+    },
+  };
+
   /** POST that additionally stamps the response's X-Request-Id onto the parsed ComposeView (compose / sendEvent share this). */
   const postCompose = async (path: string, body: unknown, opts?: RequestOptions): Promise<ComposeView> => {
     const init: RequestInit = {
@@ -577,6 +609,7 @@ export function createKohakuClient(config: KohakuClientConfig): KohakuClient {
     promotions,
     fixations,
     analytics,
+    approvals,
     binding(bindingConfig = {}) {
       return createBindingClient({
         baseUrl,

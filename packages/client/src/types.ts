@@ -1,6 +1,7 @@
 import type {
   ActionManifest,
   ActionManifestEntry,
+  ApprovalRequiredInfo,
   CanonicalIntent,
   JsonObject,
   SchemaSuggestion,
@@ -12,6 +13,23 @@ import type {
 // The wire types live in spec-core (shared with host-core and renderer-core); re-exported so existing
 // `@kohaku-ui/client` import sites keep working.
 export type { ActionManifest, ActionManifestEntry };
+
+/**
+ * Request for POST /approvals (`ApprovalsClient.issue`; SPEC ACT-APR-001 [Draft]). `action` and `payloadHash` are
+ * the same fields of the requester's 403 `APPROVAL_REQUIRED` descriptor ({@link ApprovalRequiredInfo}); the
+ * descriptor carries no requester, so `requesterId` is the requester's principal id (the actor of their
+ * `action.approvalRequested` lineage record).
+ */
+export interface ApprovalIssueRequest extends Pick<ApprovalRequiredInfo, "action" | "payloadHash"> {
+  requesterId: string;
+  /** Requested lifetime in seconds (positive integer, at most 86400); the host's `ApprovalPort` may clamp it. */
+  ttlSeconds?: number;
+}
+
+/** Response of POST /approvals: the bound approval token, presented as `approval` on the requester's retry. */
+export interface ApprovalIssueResult {
+  approval: string;
+}
 
 /** Session info (surface / sessionId / locale). Maps onto the `session` field of each REST body. */
 export interface SessionArg {
