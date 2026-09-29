@@ -45,8 +45,10 @@ The reference implementation is published to npm as `@kohaku-ui/*` (all packages
 PyPI as `kohaku-ui` (the distribution name; it still imports as `kohaku`).
 
 ```bash
-# a REST host + the React renderer
-npm install @kohaku-ui/host-rest @kohaku-ui/renderer-react @kohaku-ui/composer @kohaku-ui/spec-core zod
+# a REST host (the one-call facade: in-memory storage, HMAC capabilities and an LLM-backed SemanticPort by default) + the React renderer
+npm install @kohaku-ui/host @kohaku-ui/renderer-react @kohaku-ui/spec-core zod
+# or wire every Port yourself on the bare REST profile instead of the facade
+# npm install @kohaku-ui/host-rest @kohaku-ui/renderer-react @kohaku-ui/composer @kohaku-ui/spec-core zod
 
 # check any implementation against the protocol, without installing anything permanently
 npx @kohaku-ui/cli conformance --rest http://localhost:8787/api/kohaku
@@ -123,6 +125,8 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `packages/evals` | Golden Spec regression, LLM-as-Judge, FixtureLlm |
 | `packages/host-core` | Framework-free shared host core (fixation delivery + self-healing, capability issuance, error-hook helpers). Consumed identically by host-rest and host-mcp-apps, the same relationship renderer-core has with renderer-react / renderer-wc |
 | `packages/host-rest` / `host-mcp-apps` | REST / MCP Apps (SEP-1865) profiles |
+| `packages/host` | The one-call facade: `createKohakuHost()` wires the default Ports (in-memory storage, HMAC capabilities, the LLM-backed SemanticPort) into host-rest; MCP is the separate `@kohaku-ui/host/mcp` subpath |
+| `packages/mcp-renderer` | The shared MCP Apps renderer bundle: `loadRendererHtml()` returns the pre-built, dependency-free single-file HTML; `./boot` rebuilds it with a product's own component implementations |
 | `packages/otel` | Thin, opt-in OpenTelemetry layer (`createOtelComposeObserver`, combined via composer's `composeObservers`). Depends only on composer (peer: `@opentelemetry/api`); ships no exporter/SDK setup |
 | `packages/host-a2ui` | A2UI-compatible profile skeleton (UISpec/SpecPatch → A2UI messages; an independent leaf on spec-core only) [Draft] |
 | `packages/client` | Typed host client SDK (depends only on spec-core + data-binding; independent of host-rest) |
@@ -134,7 +138,9 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `apps/sample-web` | Sample: Dashboard (GUI) / Chat (NLUI) / Admin (governance) |
 | `apps/sample-wc` | Sample: rendering the same Spec with the React-free `<kohaku-surface>` (proof of renderer independence) |
 | `apps/sample-mcp` | Sample: MCP server for external chat + the shared renderer |
-| `cli/` | `kohaku conformance / scaffold / init / component validate` |
+| `apps/sample-parts` | Sample: the sales-domain product-specific component definitions (`defineComponent`), the single source shared by sample-api, sample-web and sample-mcp |
+| `apps/playground` | Sample: a static, server-free build of sample-web that runs the sample-api host inside the browser tab and replays recorded LLM responses |
+| `cli/` | `kohaku conformance / scaffold / init / explain / evidence / migrate / dataset / component validate` |
 | `python/` | **Python reference implementation** — a wire-compatible full port of the TS `packages/*` (spec / registry / composer / lineage / host-rest / host-mcp) + the sales-api sample. Conformance CONFORMANT. Details in [python/README.md](python/README.md) |
 
 ## Development
