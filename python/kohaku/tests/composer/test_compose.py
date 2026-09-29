@@ -1253,6 +1253,32 @@ class TestSpecCacheFailOpen:
 
         asyncio.run(run())
 
+    def test_cache_failure_closed_still_charges_spent_tokens_before_the_put_raises(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            from kohaku.composer import TokenUsage
+
+            storage = _ThrowingPutStorage(tmp_path)
+            llm = FakeLlm(objects=[_l1_draft()])
+            calls: list[tuple[str | None, TokenUsage]] = []
+            ctx = _ctx(
+                llm,
+                storage,
+                policy=ComposePolicy(
+                    cacheFailure="closed",
+                    budget=ComposeBudget(on_usage=lambda t, u: calls.append((t, u))),
+                ),
+            )
+
+            with pytest.raises(RuntimeError, match="cache backend unavailable"):
+                await compose(
+                    _INTENT_INPUT, ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-y"))
+                )
+
+            assert len(calls) == 1
+            assert calls[0][0] == "tenant-y"
+
+        asyncio.run(run())
+
 
 class TestSemanticFailedCauseEnrichment:
     """Port of TS's "SEMANTIC_FAILED includes a typed cause's own message" tests (compose.test.ts)."""

@@ -51,7 +51,9 @@ export function createMemoryRateLimitStore(options: CreateMemoryRateLimitStoreOp
         const elapsedSeconds = Math.max(0, nowMs - existing.lastRefillMs) / 1000;
         bucket = {
           tokens: Math.min(rule.capacity, existing.tokens + elapsedSeconds * rule.refillPerSecond),
-          lastRefillMs: nowMs,
+          // Monotonic: a caller whose clock went backwards must not rewind the stored time, or the next
+          // take (with a correct clock) would refill for the whole rewound span a second time.
+          lastRefillMs: Math.max(existing.lastRefillMs, nowMs),
         };
       } else {
         bucket = { tokens: rule.capacity, lastRefillMs: nowMs };
@@ -110,7 +112,7 @@ export interface RateLimiterErrorInfo {
 }
 
 /**
- * Builds a `RateLimiter` over a `RateLimitStore`, keying each bucket by the canonical JSON array
+ * Builds a `RateLimiter` over a `RateLimitStore`, keying each bucket by the `JSON.stringify` of the array
  * `[tenant, principal, routeClass]` (tenant/principal default to the empty string when unset, so an
  * anonymous caller still gets its own bucket per tenant/routeClass rather than colliding with every
  * other anonymous caller across route classes — the MCP profile's "no tenant, no principal" case still
@@ -119,11 +121,13 @@ export interface RateLimiterErrorInfo {
  * **Not a delimiter-joined string** (e.g. `` `${tenant}:${principal}:${routeClass}` ``): a plain colon
  * join collides whenever a component itself contains the delimiter — `(tenant: "a:b", principal: "c")`
  * and `(tenant: "a", principal: "b:c")` would both join to `"a:b:c:<routeClass>"` and share a bucket,
- * letting one caller's usage count against (or be undercounted against) another's. `JSON.stringify`
- * escapes any `"`/`:`/control character inside a component, so two distinct triples can never encode to
- * the same string; the Python port uses `json.dumps(..., separators=(",", ":"))` for a byte-identical
- * encoding (both drop the whitespace `json.dumps` adds by default, matching `JSON.stringify`'s own
- * no-whitespace output) — not that cross-language key equality itself matters (each language's
+ * letting one caller's usage count against (or be undercounted against) another's. Every element is a
+ * quoted string in a JSON array, and `JSON.stringify` escapes any `"` / `\` / control character inside
+ * it, so two distinct triples can never encode to the same string (a `:` inside a component is not
+ * escaped, and does not need to be). The Python port uses `json.dumps(..., separators=(",", ":"),
+ * ensure_ascii=False)` for a byte-identical encoding (no whitespace, and non-ASCII characters kept
+ * literally as `JSON.stringify` does rather than `\uXXXX`-escaped) — not that cross-language key
+ * equality itself matters (each language's
  * in-process `RateLimitStore` never shares state with the other's), just that a divergent encoding isn't
  * left as a subtle trap for a future shared backing store.
  *

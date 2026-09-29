@@ -569,8 +569,8 @@ export interface RateLimitResult {
 
 /**
  * A token-bucket rate-limit store, keyed by an opaque caller-supplied string (host-core's
- * `createRateLimiter` composes it as the canonical JSON array `[tenant, principal, routeClass]` — see that
- * function's own doc).
+ * `createRateLimiter` composes it as the `JSON.stringify` of the array `[tenant, principal, routeClass]` — see
+ * that function's own doc).
  * A Port reference implementation (host-core's `createMemoryRateLimitStore`, the in-process default)
  * and future backing-store adapters (Redis, etc.) all implement this same shape, verified against
  * `@kohaku-ui/port-contracts`' `describeRateLimitStorePortContract`.
@@ -588,6 +588,10 @@ export interface RateLimitStore {
    *
    * On denial, `retryAfterMs` estimates the wait until enough tokens will have refilled for this same
    * request to succeed.
+   *
+   * `nowMs` comes from each caller's own clock, so callers of one distributed store can disagree. The
+   * store must not let that skew over-refill a bucket: keep the stored last-refill time monotonic (never
+   * move it backwards to a smaller `nowMs`) or use the backing store's own clock instead.
    */
   take(key: string, cost: number, rule: RateLimitRule, nowMs: number): Promise<RateLimitResult>;
 }
