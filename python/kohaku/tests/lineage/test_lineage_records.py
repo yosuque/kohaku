@@ -340,7 +340,7 @@ def test_generated_recorded_per_tenant_globex_uses_only_own(tmp_path: Path) -> N
     asyncio.run(run())
 
 
-# --- U2: explain-facing fields (correlationId / cacheKeyParts / decision) --------------------------------
+# --- explain-facing fields (correlationId / cacheKeyParts / decision) --------------------------------
 
 RICH_TRACE = FakeTrace(
     durationMs=10.0,

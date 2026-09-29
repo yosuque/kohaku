@@ -130,7 +130,7 @@ export type SuggestedEventView = SuggestedEvent;
 export type SchemaSuggestionView = SchemaSuggestion;
 
 /**
- * View shape of PromotionCandidate.origin (F-1): the design kit / generator revision / model that produced
+ * View shape of PromotionCandidate.origin (generation provenance): the design kit / generator revision / model that produced
  * the candidate, read from its `component.generated` lineage event. Structurally matches
  * `@kohaku-ui/lineage`'s `PromotionOrigin` (not imported, same reason as SchemaSuggestionView above).
  */
@@ -153,7 +153,7 @@ export interface PromotionCandidateView {
   sessions: number;
   verdict?: { pass: boolean; score: number };
   suggestion?: SchemaSuggestionView;
-  /** Present once the candidate's component.generated event carried kit/generatorVersion/model (F-1). */
+  /** Present once the candidate's component.generated event carried kit/generatorVersion/model. */
   origin?: PromotionOriginView;
   updatedAt: string;
 }

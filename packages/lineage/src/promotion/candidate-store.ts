@@ -20,7 +20,7 @@ import { indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
 type UsageIndex = ReturnType<typeof createUsageIndex>;
 
 /**
- * F-1: extracts PromotionOrigin (kit / generatorVersion / model) from a `component.generated` payload.
+ * Extracts PromotionOrigin (kit / generatorVersion / model) from a `component.generated` payload.
  * Returns undefined rather than `{}` when none of the three are present, so loadCandidate's
  * payload-or-stored-fallback (below) can tell "nothing on this payload" apart from "an empty origin".
  */
@@ -159,7 +159,7 @@ export function createCandidateStore(opts: {
     const snapshotHtml = state?.data["html"] as string | undefined;
     if (payload == null && snapshotHtml == null) return null;
     usageStats ??= await usage.forArtifact(artifactId, tenant);
-    // F-1: prefer the freshly-scanned component.generated payload; fall back to what was already
+    // Generation provenance: prefer the freshly-scanned component.generated payload; fall back to what was already
     // persisted (state.data.origin) once the generated event ages out of GENERATED_SCAN_WINDOW — the
     // same pattern `request` above uses, so origin survives indefinitely once captured.
     const origin = originFromPayload(payload) ?? (state?.data["origin"] as PromotionOrigin | undefined);
@@ -202,7 +202,7 @@ export function createCandidateStore(opts: {
         // at nomination, so the approval UI can still prefill after a changes_requested round-trip.
         ...(candidate.suggestion != null ? { suggestion: candidate.suggestion } : {}),
         ...(candidate.request != null ? { request: candidate.request } : {}),
-        // F-1: generation provenance (kit / generatorVersion / model), captured once from the candidate's
+        // Generation provenance (kit / generatorVersion / model), captured once from the candidate's
         // component.generated event and kept across every transition (unlike html/sha256/ref below, which
         // are a publish-time projection) — read by the migration planner to flag a published component
         // whose kit no longer matches the catalog's current one.

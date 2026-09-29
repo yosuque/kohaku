@@ -238,7 +238,7 @@ class TestComposeTool:
 
 
 class TestMcpCorrelationId:
-    """U2 + review follow-up: ComposeTrace.correlationId is populated for MCP tool calls as
+    """ComposeTrace.correlationId is populated for MCP tool calls as
     `mcp:<sessionId>:<jsonrpc id>`, where `<sessionId>` is a stable opaque id (uuid4 hex) generated once per
     transport session (`_session_correlation_prefix` in server.py) -- this SDK's ServerRequestContext exposes
     no public transport session id the way TS's ServerContext.sessionId does, so a generated per-session id
@@ -1510,7 +1510,7 @@ class TestGovernedActions:
 
     def test_rejects_a2ui_forward_action(self, tmp_path: Path) -> None:
         """"a2ui.forward" (host_a2ui's A2UI_FORWARD_ACTION) must never be a real registered operation
-        (decision #60, F3) -- a GovernedDomain that never declares it rejects it: the compose-issued
+        (decision #60) -- a GovernedDomain that never declares it rejects it: the compose-issued
         capability carries no write scope for it, so capability verification denies it before the operation
         index is consulted."""
 

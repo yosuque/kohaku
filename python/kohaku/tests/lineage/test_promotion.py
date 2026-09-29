@@ -162,7 +162,7 @@ def test_candidate_exposes_preview_material(tmp_path: Path) -> None:
 
 
 def test_candidate_exposes_origin_from_component_generated(tmp_path: Path) -> None:
-    """F-1: kit/generatorVersion/model recorded on component.generated surface as candidate.origin,
+    """kit/generatorVersion/model recorded on component.generated surface as candidate.origin,
     and are persisted to data['origin'] (kept across every transition, unlike html/sha256/ref which are
     publish-only, #9)."""
 

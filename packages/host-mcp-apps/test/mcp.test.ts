@@ -2588,7 +2588,7 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
-  it("rejects the A2UI inbound forwarding sentinel -- it must never be a real registered operation (F3)", async () => {
+  it("rejects the A2UI inbound forwarding sentinel -- it must never be a real registered operation (design.md decision 60)", async () => {
     // "a2ui.forward" is host-a2ui's A2UI_FORWARD_ACTION (packages/host-a2ui/src/inbound/from-a2ui.ts):
     // decision #60 requires it is never registered as a real DomainPort operation, so a governedDomain()
     // that (correctly) never declares it must reject it -- here the compose-issued capability carries no

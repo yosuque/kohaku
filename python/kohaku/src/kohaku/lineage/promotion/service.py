@@ -146,7 +146,7 @@ class PromotionCandidate:
     verdict: dict[str, Any] | None = None
     draft: ComponentDraft | None = None
     origin: dict[str, Any] | None = None
-    """F-1: generation provenance (kit / generatorVersion / model) read from the candidate's
+    """Generation provenance (kit / generatorVersion / model) read from the candidate's
     component.generated payload. Kept across every transition once captured (unlike html/sha256/ref,
     which are only copied onto the snapshot at publish time — origin is provenance, not a projection).
     Port of TS's PromotionOrigin (kept as a loose dict here, matching this port's wire-shaped style)."""
@@ -281,7 +281,7 @@ def _usage_index_key(tenant: str | None, artifact_id: str) -> str:
 
 
 def _origin_from_payload(payload: dict[str, Any] | None) -> dict[str, Any] | None:
-    """F-1: extracts {kit, generatorVersion, model} from a component.generated payload. Returns None
+    """Extracts {kit, generatorVersion, model} from a component.generated payload. Returns None
     rather than {} when none of the three are present (port of TS candidate-store.ts's originFromPayload)."""
     if payload is None:
         return None
@@ -416,7 +416,7 @@ class Promotions:
         draft_wire = state.data.get("draft") if state is not None else None
         state_data: dict[str, Any] = state.data if state is not None else {}
         payload_data: dict[str, Any] = payload if payload is not None else {}
-        # F-1: prefer the freshly-scanned component.generated payload; fall back to what was already
+        # Generation provenance: prefer the freshly-scanned component.generated payload; fall back to what was already
         # persisted (state.data["origin"]) once the generated event ages out of the scan window — the
         # same pattern `request` above uses, so origin survives indefinitely once captured.
         origin = _origin_from_payload(payload) or state_data.get("origin")
@@ -450,7 +450,7 @@ class Promotions:
             data["draft"] = candidate.draft.to_wire()
         if candidate.request is not None:
             data["request"] = candidate.request
-        # F-1: generation provenance (kit / generatorVersion / model), captured once from the candidate's
+        # Generation provenance (kit / generatorVersion / model), captured once from the candidate's
         # component.generated event and kept across every transition (unlike html/sha256/ref below, which
         # are a publish-time projection) — read by the migration planner to flag a published component
         # whose kit no longer matches the catalog's current one.

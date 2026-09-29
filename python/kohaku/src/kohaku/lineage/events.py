@@ -205,11 +205,11 @@ class ComponentGeneratedPayload(TypedDict, total=False):
     correlationId: str
     """The compose trace's correlation id (see ViewComposedPayload.correlationId's doc comment)."""
     kit: dict[str, str]
-    """The design kit the generated markup was written against (spec.provenance.kit.to_wire()). Read by F7
-    (the promotion review) to show which kit a candidate component was generated against."""
+    """The design kit the generated markup was written against (spec.provenance.kit.to_wire()). Read by the
+    promotion review UI (admin-react Promotions) to show which kit a candidate component was generated against."""
     generatorVersion: str
     """The host's generator identity in effect at generation time (spec.provenance.generatorVersion). Read
-    by F7 alongside `kit` above."""
+    by the promotion review UI alongside `kit` above."""
 
 
 class ComponentUsedPayload(TypedDict, total=False):

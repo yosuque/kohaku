@@ -191,11 +191,11 @@ async function recordTelemetry(
 }
 
 /**
- * Tenant isolation of promotion-review telemetry (fix F1-1). Two tenants use the same artifactId
+ * Tenant isolation of promotion-review telemetry. Two tenants use the same artifactId
  * (derived from content sha256, unique across tenants), and this verifies that one tenant's actual-render
  * telemetry does not leak into the other's judge input on approve.
  */
-describe("promotion review telemetry tenant isolation (F1-1)", () => {
+describe("promotion review telemetry tenant isolation", () => {
   it("even when the same artifactId is used in two tenants, the judge at approve time carries only that tenant's telemetry", async () => {
     const dataDir = tmpDir("kohaku-judge-tel-multi-");
     const storage = createFileStoragePort(dataDir);

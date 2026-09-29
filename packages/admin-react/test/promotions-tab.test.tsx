@@ -203,7 +203,7 @@ describe("PromotionsTab", () => {
     ]);
   });
 
-  it("shows kit/generatorVersion (F-1 origin) when the candidate carries it, and nothing when it doesn't", async () => {
+  it("shows kit/generatorVersion (origin) when the candidate carries it, and nothing when it doesn't", async () => {
     const withOrigin = candidate({
       artifactId: "sales.customViz1@2",
       origin: { kit: { id: "default", version: "1.0.0" }, generatorVersion: "l2-2026-09" },
