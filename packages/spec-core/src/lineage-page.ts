@@ -20,6 +20,18 @@ export const DEFAULT_LINEAGE_PAGE_SIZE = 500;
 /** The upper bound `LineagePageRequest.pageSize` is clamped to (an oversized request is truncated, not rejected). */
 export const MAX_LINEAGE_PAGE_SIZE = 1000;
 
+/**
+ * The effective page size for a `LineagePageRequest.pageSize`: `DEFAULT_LINEAGE_PAGE_SIZE` when omitted
+ * (or not a number), otherwise floored to an integer and clamped to `[1, MAX_LINEAGE_PAGE_SIZE]`. The
+ * floor at 1 means a page always advances its own cursor; the integer floor keeps a fractional request
+ * (`2.5`) from reaching a SQL `LIMIT` or a count comparison as a non-integer. Every adapter's
+ * `pageLineage` calls this instead of clamping on its own.
+ */
+export function clampLineagePageSize(pageSize?: number): number {
+  if (pageSize == null || Number.isNaN(pageSize)) return DEFAULT_LINEAGE_PAGE_SIZE;
+  return Math.max(1, Math.min(Math.floor(pageSize), MAX_LINEAGE_PAGE_SIZE));
+}
+
 /** Thrown by `decodeSeqCursor` when a cursor string is not one this codec produced. */
 export class LineageCursorError extends Error {
   constructor(cursor: string, reason: string) {
@@ -98,7 +110,7 @@ export function decodeSeqCursor(cursor: string): number {
  *
  * Scans forward from `req.cursor` (or the start), applying every `LineageFilter` predicate `req` carries
  * via `matchesLineageFilter`, and collects up to `pageSize` matches (default `DEFAULT_LINEAGE_PAGE_SIZE`,
- * clamped to `MAX_LINEAGE_PAGE_SIZE`; also floored at 1 so a `pageSize` of 0 or less can never produce a
+ * clamped to `MAX_LINEAGE_PAGE_SIZE` by `clampLineagePageSize`; also floored at 1 so a `pageSize` of 0 or less can never produce a
  * page whose `nextCursor` fails to advance, which would otherwise strand a caller looping via
  * `nextCursor` on the same cursor forever). `nextCursor` is set to the last returned event's own `seq`
  * only when at least one further match exists beyond the page (detected by scanning one match past
@@ -108,7 +120,7 @@ export function pageLineageArray(
   events: readonly LineageEventRecord[],
   req: LineagePageRequest,
 ): LineagePage {
-  const pageSize = Math.max(1, Math.min(req.pageSize ?? DEFAULT_LINEAGE_PAGE_SIZE, MAX_LINEAGE_PAGE_SIZE));
+  const pageSize = clampLineagePageSize(req.pageSize);
   const afterSeq = req.cursor != null ? decodeSeqCursor(req.cursor) : 0;
   // `req` carries every LineageFilter predicate except `limit` (LineagePageRequest's definition), so it
   // is passed to matchesLineageFilter as-is; the extra `cursor` / `pageSize` fields are simply ignored by it.

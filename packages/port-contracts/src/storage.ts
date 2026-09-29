@@ -276,6 +276,13 @@ export function describeStoragePortContract(
         expect(page.nextCursor).toBeUndefined();
       });
 
+      it("floors a fractional pageSize to an integer", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        const page = await port.pageLineage({ pageSize: 2.5 });
+        expect(page.events).toHaveLength(2);
+        expect(page.nextCursor).toBeDefined();
+      });
+
       it("throws for a malformed cursor instead of restarting or skipping silently", async () => {
         if (port.pageLineage == null) return; // optional extension not implemented
         await expect(port.pageLineage({ cursor: "not-a-real-cursor" })).rejects.toThrow();

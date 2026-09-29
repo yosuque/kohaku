@@ -1,10 +1,9 @@
 import {
-  DEFAULT_LINEAGE_PAGE_SIZE,
+  clampLineagePageSize,
   decodeSeqCursor,
   encodeSeqCursor,
   type FixationRecord,
   type LineageEventRecord,
-  MAX_LINEAGE_PAGE_SIZE,
   normalizeTenant,
   type PromotionState,
   type StoragePort,
@@ -125,10 +124,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
     },
     async pageLineage(req) {
       await ready();
-      const pageSize = Math.max(
-        1,
-        Math.min(req.pageSize ?? DEFAULT_LINEAGE_PAGE_SIZE, MAX_LINEAGE_PAGE_SIZE),
-      );
+      const pageSize = clampLineagePageSize(req.pageSize);
       // Malformed cursor throws before issuing any query (same contract as pageLineageArray / readLineagePage).
       const afterSeq = req.cursor != null ? decodeSeqCursor(req.cursor) : 0;
       const where: string[] = [];

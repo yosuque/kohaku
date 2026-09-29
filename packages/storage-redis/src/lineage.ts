@@ -6,12 +6,11 @@ import type {
 } from "@kohaku-ui/spec-core";
 import {
   applyLineageLimit,
+  clampLineagePageSize,
   DEFAULT_LINEAGE_LIMIT,
-  DEFAULT_LINEAGE_PAGE_SIZE,
   decodeSeqCursor,
   encodeSeqCursor,
   LINEAGE_PAYLOAD_INDEX_FIELDS,
-  MAX_LINEAGE_PAGE_SIZE,
   matchesLineageFilter,
   normalizeTenant,
 } from "@kohaku-ui/spec-core";
@@ -401,9 +400,9 @@ export const LINEAGE_PAGE_MAX_SCAN_CHUNKS = 20;
  * on either), or `by-seq` when there is none (no indexable predicate, or a multi-value `type` union).
  * Stops the moment one match past `pageSize` is found (proof a next page exists, without reading
  * further than necessary), the scanned set is exhausted, or `maxScanChunks` chunks have been read (see
- * `LINEAGE_PAGE_MAX_SCAN_CHUNKS`). `pageSize` defaults to `DEFAULT_LINEAGE_PAGE_SIZE` and is clamped to
- * `MAX_LINEAGE_PAGE_SIZE` (floored at 1, for the same reason `pageLineageArray` floors it: a page must
- * always advance its own cursor). A malformed `req.cursor` propagates as `decodeSeqCursor`'s thrown
+ * `LINEAGE_PAGE_MAX_SCAN_CHUNKS`). `pageSize` goes through `clampLineagePageSize` (default, integer floor,
+ * clamp to `MAX_LINEAGE_PAGE_SIZE`, minimum 1 so a page always advances its own cursor). A malformed
+ * `req.cursor` propagates as `decodeSeqCursor`'s thrown
  * `LineageCursorError`, before any Redis command is issued.
  */
 export async function readLineagePage(
@@ -412,7 +411,7 @@ export async function readLineagePage(
   req: LineagePageRequest,
   maxScanChunks: number = LINEAGE_PAGE_MAX_SCAN_CHUNKS,
 ): Promise<LineagePage> {
-  const pageSize = Math.max(1, Math.min(req.pageSize ?? DEFAULT_LINEAGE_PAGE_SIZE, MAX_LINEAGE_PAGE_SIZE));
+  const pageSize = clampLineagePageSize(req.pageSize);
   let cursorSeq = req.cursor != null ? decodeSeqCursor(req.cursor) : 0;
   // `type: []` matches nothing (see `readLineage`); the by-seq fallback below would still find that out,
   // but only after scanning, so answer it up front.
