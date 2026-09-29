@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import time
@@ -10,7 +11,7 @@ from dataclasses import dataclass
 
 from kohaku.spec import RateLimitResult, RateLimitRule, RateLimitStore
 
-from .errors import notify_hook
+from .errors import notify_hook_nowait
 
 
 @dataclass
@@ -110,6 +111,11 @@ class RateLimiterTakeParams:
     """Tokens to consume for this call."""
 
 
+DEFAULT_RATE_LIMIT_TIMEOUT_MS = 250
+"""Default `create_rate_limiter` timeout_ms: how long `RateLimiter.take` waits for the backing store before
+failing open (matches the TS port's DEFAULT_RATE_LIMIT_TIMEOUT_MS)."""
+
+
 class RateLimiter:
     """Built by create_rate_limiter; see that function's doc for the full contract."""
 
@@ -118,25 +124,38 @@ class RateLimiter:
         store: RateLimitStore,
         on_error: Callable[[RateLimiterErrorInfo], object] | None,
         now: Callable[[], float],
+        timeout_ms: float = DEFAULT_RATE_LIMIT_TIMEOUT_MS,
     ) -> None:
         self._store = store
         self._on_error = on_error
         self._now = now
+        self._timeout_s: float | None = timeout_ms / 1000 if math.isfinite(timeout_ms) and timeout_ms > 0 else None
 
     async def take(self, params: RateLimiterTakeParams) -> RateLimitResult:
         key = json.dumps(
             [params.tenant or "", params.principal or "", params.routeClass], separators=(",", ":")
         )
         try:
-            return await self._store.take(key, params.cost, params.rule, self._now())
-        except Exception as e:  # noqa: BLE001 — a rate-limit store outage must fail open, never break the request
-            await notify_hook(
-                self._on_error,
-                RateLimiterErrorInfo(
-                    error=e, tenant=params.tenant, principal=params.principal, routeClass=params.routeClass
-                ),
+            # wait_for cancels the store call on timeout; a hung store must not stall the request.
+            return await asyncio.wait_for(
+                self._store.take(key, params.cost, params.rule, self._now()), self._timeout_s
             )
-            return RateLimitResult(allow=True)
+        except TimeoutError as e:
+            error: BaseException = TimeoutError(
+                f"RateLimitStore.take did not respond within {self._timeout_s * 1000:g}ms"
+                if self._timeout_s is not None
+                else str(e)
+            )
+        except Exception as e:  # noqa: BLE001 — a rate-limit store outage must fail open, never break the request
+            error = e
+        # Fire-and-forget: a slow observer must not delay the (fail-open) response either.
+        notify_hook_nowait(
+            self._on_error,
+            RateLimiterErrorInfo(
+                error=error, tenant=params.tenant, principal=params.principal, routeClass=params.routeClass
+            ),
+        )
+        return RateLimitResult(allow=True)
 
 
 def _default_now_ms() -> float:
@@ -152,6 +171,7 @@ def create_rate_limiter(
     store: RateLimitStore,
     on_error: Callable[[RateLimiterErrorInfo], object] | None = None,
     now: Callable[[], float] = _default_now_ms,
+    timeout_ms: float = DEFAULT_RATE_LIMIT_TIMEOUT_MS,
 ) -> RateLimiter:
     """Builds a RateLimiter over a RateLimitStore, keying each bucket by the canonical JSON array
     [tenant, principal, routeClass] (tenant/principal default to the empty string when unset, so an
@@ -170,9 +190,12 @@ def create_rate_limiter(
     shares state with the other's), just that a divergent encoding isn't left as a subtle trap for a
     future shared backing store.
 
-    Fail-open on a store error: the request is allowed through (RateLimitResult(allow=True)), and the
-    error is reported via on_error (silent, fire-and-forget, if unwired -- the same notify_hook
-    convention as ComposeObserver's hooks) rather than left unobserved or turned into a hard failure. A
-    rate limiter outage must never itself become a reason no request can be served.
+    Fail-open on a store error *or* a store that does not answer within `timeout_ms` (default
+    DEFAULT_RATE_LIMIT_TIMEOUT_MS; a non-finite or non-positive value disables the timeout): the request is
+    allowed through (RateLimitResult(allow=True)), and the failure is reported via on_error (silent if
+    unwired -- the same notify_hook convention as ComposeObserver's hooks) rather than left unobserved or
+    turned into a hard failure. on_error is fire-and-forget: it is invoked but never awaited, so a slow
+    observer cannot delay the request either. A rate limiter outage must never itself become a reason no
+    request can be served.
     """
-    return RateLimiter(store, on_error, now)
+    return RateLimiter(store, on_error, now, timeout_ms)

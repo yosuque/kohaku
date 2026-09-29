@@ -527,7 +527,8 @@ export interface RateLimitResult {
 
 /**
  * A token-bucket rate-limit store, keyed by an opaque caller-supplied string (host-core's
- * `createRateLimiter` composes it as `"tenant:principal:routeClass"` — see that function's own doc).
+ * `createRateLimiter` composes it as the canonical JSON array `[tenant, principal, routeClass]` — see that
+ * function's own doc).
  * A Port reference implementation (host-core's `createMemoryRateLimitStore`, the in-process default)
  * and future backing-store adapters (Redis, etc.) all implement this same shape, verified against
  * `@kohaku-ui/port-contracts`' `describeRateLimitStorePortContract`.

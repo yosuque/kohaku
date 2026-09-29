@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import sys
 import traceback
@@ -49,6 +50,38 @@ async def notify_hook[I](hook: Callable[[I], object] | None, info: I) -> None:
     except BaseException:
         # A failure of the observation-only hook must not propagate.
         pass
+
+
+# Strong references to in-flight fire-and-forget hook tasks (an asyncio task with no other reference can be
+# garbage-collected mid-flight); each task removes itself when done.
+_pending_hook_tasks: set[asyncio.Future[None]] = set()
+
+
+def notify_hook_nowait[I](hook: Callable[[I], object] | None, info: I) -> None:
+    """Fire-and-forget counterpart of `notify_hook`: invokes the hook immediately (a synchronous hook has run
+    by the time this returns) but never awaits an awaitable result -- that is scheduled on the running event
+    loop, so a slow or hung async observer cannot delay the caller. A failure of the hook (a synchronous raise
+    or an awaited failure) is swallowed, as in `notify_hook`. Port of TS host-core's `void notifyHook(...)`
+    call convention for hooks documented as fire-and-forget (e.g. the rate limiter's `onError`).
+    """
+    if hook is None:
+        return
+    try:
+        result = hook(info)
+    except Exception:
+        return  # A failure of the observation-only hook must not propagate.
+    if not inspect.isawaitable(result):
+        return
+
+    async def _drain() -> None:
+        try:
+            await result
+        except Exception:
+            pass  # A failure of the observation-only hook must not propagate.
+
+    task = asyncio.ensure_future(_drain())
+    _pending_hook_tasks.add(task)
+    task.add_done_callback(_pending_hook_tasks.discard)
 
 
 async def fail_open(
@@ -173,6 +206,14 @@ def create_console_error_reporter(
         # -- the failure is described by ctx.reason instead. "hard"/"cache" always carry the causing
         # exception in `error`. See ComposeErrorContext's own doc for the full phase/field contract.
         detail: object = error if error is not None else (ctx.reason if ctx.reason is not None else "unknown failure")
-        _write_line(f"[kohaku] compose {ctx.phase}", detail)
+        # Tier and intent are what let an operator tell which generation this line is about. (Unlike the TS
+        # port, Python's ComposeErrorContext carries no correlation id, so none is printed.)
+        parts = [
+            f"tier {ctx.tier}" if ctx.tier is not None else None,
+            f"intent {ctx.intent.canonical}" if ctx.intent is not None else None,
+        ]
+        details = [part for part in parts if part is not None]
+        suffix = f" ({', '.join(details)})" if details else ""
+        _write_line(f"[kohaku] compose {ctx.phase}{suffix}", detail)
 
     return ConsoleErrorReporter(host=_host, compose=_compose)
