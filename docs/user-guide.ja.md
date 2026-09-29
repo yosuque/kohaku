@@ -319,7 +319,7 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 ### カスタム部品(L2)の非対称
 
 - **カスタム部品の「作成」(L2 自由生成)も MCP から起こせます**: MCP ホストに「**Show me sales as a calendar heatmap**」(日本語「売上をカレンダーヒートマップで見せて」でも同様)のように頼むと `kohaku_compose`(または `kohaku_render_snapshot`)が呼ばれ、Web の Chat と同じ NL 正規化で `sales.custom` → L2 に入ります。利用イベントは同じ lineage ストアに追記されます(永続化共有)が、API サーバーが集計するのは自身の起動時に読み込んだ lineage + 自プロセスのイベントです — MCP 側の利用が昇格カウンタに見えるのは API サーバーの再起動後です。再起動後は MCP と Web で 1 回ずつでもデモ閾値(2 回)に到達し、Admin の昇格レビューに候補が並びます(以降はデモ 3 の手順 3〜4 と同じ)。
-- **ただしカスタム部品の表示には非対称があります**: 共有レンダラー(`apps/sample-mcp/renderer/main.tsx`)はコア部品の実装だけを登録し、sandbox レンダラー(`renderSandbox`)も注入していません。そのため MCP 面では L2 生成部品は「sandbox レンダラーの注入が必要」という通知に、寄与部品・昇格部品(`sales.kpiCard` / `sales.calendarHeatmap`)は「未実装の部品タイプ」という通知になります(sample-mcp は `SurfaceCapabilities` を宣言していないため、fallback へのサーバー側降格〈negotiate〉も走りません)。カスタム部品の完全な表示(sandbox iframe・ネイティブ実装)は Web サーフェスで確認してください。
+- **ただしカスタム部品の表示には非対称があります**: 共有レンダラー(`apps/sample-mcp/renderer/main.tsx`)はコア部品に加えてサンプル自身の sales ドメイン実装(`registerSalesImpls`。そのため `sales.kpiCard` / `sales.calendarHeatmap` は描画されます)を登録しますが、sandbox レンダラー(`renderSandbox`)は注入していません。そのため MCP 面では L2 生成部品は「sandbox レンダラーの注入が必要」という通知に、実装がそのレンダラービルドに焼き込まれていない寄与部品・昇格部品は「未実装の部品タイプ」という通知になります(sample-mcp は `SurfaceCapabilities` を宣言していないため、fallback へのサーバー側降格〈negotiate〉も走りません)。カスタム部品の完全な表示(sandbox iframe・ネイティブ実装)は Web サーフェスで確認してください。
 
 ## 6. 自分のプロダクトに組み込む
 
@@ -553,13 +553,16 @@ export function GovernancePage() {
 
 「なぜこの画面はこうなったのか」— ティア、キャッシュのヒット/ミス、キャッシュキーの個々の内訳、どの L1/L2 の
 試行が走ってなぜ失敗したか、capability negotiation による降格、そのリクエストが生んだ lineage イベント — は
-`requestId` 1 つから答えられる(compose の `X-Request-Id` 応答ヘッダ、または MCP ツール呼び出しの
-`mcp:<sessionId>:<jsonrpc id>` 相関 ID)。方法は 2 通りある。
+`requestId` 1 つから答えられる(compose の `X-Request-Id` 応答ヘッダ、または MCP ツール呼び出しの相関 ID:
+`mcp:<sessionId>:<jsonrpc id>`、セッションの無い stdio では `mcp:<jsonrpc id>`、トランスポートが何も与えない場合は
+呼び出しごとの ID)。方法は 2 通りある。どちらも **lineage を記録する**ホストが前提で(`createKohakuHost` は既定で
+recorder を配線する。`createKohakuRoutes` を手で組んだホストは `recorder` の設定が要る)、CLI の場合は読み出し先となる
+**稼働中の REST ホスト**も必要になる:
 
 **CLI から**、動いている任意の REST ホストに対して:
 
 ```bash
-node cli/bin/kohaku.js explain <requestId> --rest http://localhost:8787/api/kohaku
+npx @kohaku-ui/cli explain <requestId> --rest http://localhost:8787/api/kohaku   # このリポジトリの中では: node cli/bin/kohaku.js explain …
 # --json で整形テキストの代わりに生の ExplainReport JSON を出力
 # --header "x-kohaku-tenant:acme"(繰り返し可)でテナント/認証ヘッダを付与
 # --spec spec.json を渡すと capability スコープ(collectCapabilityScopes)も表示される
