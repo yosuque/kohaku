@@ -512,7 +512,7 @@ async def create_app(
                 "[compose] compose failed (Spec not delivered)%s: %s", intent_label, error
             )
 
-    # L2 verification JS sidecar (Task #39). In an environment where Node is co-located, it reuses TS's verification
+    # L2 verification JS sidecar. In an environment where Node is co-located, it reuses TS's verification
     # logic (<script> syntax check + jsdom smoke) over the CLI, resolving the known Python-only differences
     # (L2_SCRIPT_SYNTAX skipped / smoke not bundled). Disabled with env KOHAKU_L2_JS=off. If unavailable (Node not
     # co-located), it is left unwired = the legacy behavior.
@@ -569,7 +569,7 @@ async def create_app(
     if policy_file is not None:
 
         async def _audit_policy_applied(event: PolicyAppliedEvent, actor: str | None) -> None:
-            # Records policy.applied (lineage, task 9) on every effective change. actor is reload()'s own
+            # Records policy.applied (lineage, design.md decision 69) on every effective change. actor is reload()'s own
             # free-string label (an operator id, "system", ...); mapped onto lineage's typed LineageActor
             # shape as a "system" actor carrying that label as its id (a policy reload is an
             # operational/config action, never a "model"-kind actor, and this demo has no

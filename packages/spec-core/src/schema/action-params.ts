@@ -16,7 +16,7 @@ import { z } from "zod";
  *
  * `z.strictObject` rejects any key outside this list, so parsing a `paramsSchema` against
  * `ActionParamsSchemaSchema` *is* the "unknown keyword -> exception" check (design.md #62); host-core's
- * `createOperationIndex` (task 4) runs this parse once per operation at attach time, not per request.
+ * `createOperationIndex` runs this parse once per operation at attach time, not per request.
  *
  * This is a meta-schema (validates the *shape of a schema*), not a Zod schema for a wire value that
  * itself needs `spec/schemas` generation — `paramsSchema` travels inside the additive `actions` map of

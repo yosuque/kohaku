@@ -3,7 +3,7 @@
  * `App` itself already takes no Router prop and renders no `<BrowserRouter>` of its own (see `App.tsx`) —
  * it uses `<Routes>`/`<Route>`/`<NavLink>`, which work under any react-router-dom router — so the only thing
  * a host adds around it is its own Router choice (this package's own `main.tsx` wraps it in
- * `BrowserRouter`; the static playground, U5, wraps the same `App` in `HashRouter`, since a `BrowserRouter`
+ * `BrowserRouter`; the static playground (apps/playground) wraps the same `App` in `HashRouter`, since a `BrowserRouter`
  * on GitHub Pages 404s on a deep-linked path with no server-side rewrite to fall back to `index.html`).
  *
  * Also re-exports the role/tenant module-level state (`role.ts`/`tenant.ts`): a host that wants to reset the

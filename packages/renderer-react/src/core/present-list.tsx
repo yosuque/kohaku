@@ -26,7 +26,7 @@ export function PresentList({ node, children }: ImplProps): ReactNode {
   const muted = String(useToken("color.muted"));
 
   // Unset gap defaulted to "sm" (8px) before tokenization; gapFor's own default is "md" (16px), so the
-  // "sm" default is preserved explicitly here to keep the existing look unchanged (see task-13-report.md).
+  // "sm" default is preserved explicitly here to keep the existing look unchanged.
   const gap = gapFor(sizing, (node.props["gap"] as string | undefined) ?? "sm");
   const maxItems = node.props["maxItems"] as number | undefined;
   const emptyText = String(node.props["emptyText"] ?? "(No data)");

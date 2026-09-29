@@ -2,7 +2,7 @@
 
 Port of packages/host-mcp-apps/src/types.ts (Python's `IntentToolDef` lives in `intent_tools.py`, an earlier
 extraction, rather than here — `AttachOptions.intent_tools` still references it). Split out of `server.py`
-(mechanical file-layout split, Task 6): `attach_kohaku_to_mcp_server` itself, the MCP-cache-hint constants, and
+(a mechanical file-layout split): `attach_kohaku_to_mcp_server` itself, the MCP-cache-hint constants, and
 the initial-data preresolution helpers stay in their own respective modules (`server.py`, `cache_hints.py`,
 `initial_data.py`).
 """
@@ -222,7 +222,7 @@ class McpHostDeps:
     The bucket key's "principal" component is the resolved principal's id only when `resolve_principal`
     is wired (a real per-caller identity); otherwise (the unauthenticated demo path, where every call
     resolves to the same constant fallback principal) it falls back to `_session_correlation_prefix`'s
-    stable per-connection opaque id (the same anchor U2's MCP correlation-id work established: keyed off
+    stable per-connection opaque id (the same anchor the MCP correlation-id support established: keyed off
     `ctx.session`'s private `_connection` attribute, degrading to a fresh collision-free-but-ungrouped id
     when no per-connection anchor is reachable at all) -- see `_mcp_rate_limit_key`'s doc comment.
 

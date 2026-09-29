@@ -157,7 +157,7 @@ export function mergePolicySections(base: PolicySection, override: PolicySection
  * therefore already-normalized-by-Zod) file, matching the `sha256:<hex>` shape of `computeIntentHash`/
  * `computeSpecHash` (intent.ts / cache-key.ts). Two files that parse to the same value (whitespace,
  * key order) get the same `policyId`; any actual content change gets a different one. Used by the
- * `policy.applied` audit event (lineage, task 9) to detect "did the effective policy actually change"
+ * `policy.applied` audit event (lineage) to detect "did the effective policy actually change"
  * across a `reload`.
  */
 export async function computePolicyId(file: KohakuPolicyFile): Promise<string> {

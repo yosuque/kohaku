@@ -32,8 +32,7 @@ export function createHostDeps(args: {
    * occurs (backward compatible) — see KohakuHostDeps.rateLimiter's own doc comment. */
   rateLimiter?: PolicyRateLimiter;
   /** Verbose `onError` logging (the full cause chain + stack trace) below. Default false. Passed in rather
-   * than read from `process.env.KOHAKU_DEBUG` directly (a concurrent branch, T0-2, originally did that
-   * here) — see `app-core.ts`'s `AppDeps.debug` doc comment for why this file must stay env-neutral. */
+   * than read from `process.env.KOHAKU_DEBUG` directly — see `app-core.ts`'s `AppDeps.debug` doc comment for why this file must stay env-neutral. */
   debug?: boolean;
   /** Governed actions (design.md #62/#63): verifies approval tokens for "approve"-tier actions. Passed
    * through from `app-core.ts`'s `AppDeps.approvals` — see that field's own doc comment. */

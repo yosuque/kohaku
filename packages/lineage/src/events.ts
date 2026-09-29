@@ -146,7 +146,7 @@ export interface ViewComposedPayload {
   artifactId?: string;
   /** The caller-supplied correlation id (the compose trace's correlationId), so a devtool can find every
    * lineage event belonging to one request via the `/lineage?correlationId=` filter. Unset for a compose
-   * whose caller passed none, and always unset for an event recorded before this field existed (LQ/U2). */
+   * whose caller passed none, and always unset for an event recorded before this field existed. */
   correlationId?: string;
   /** The Spec cache key this compose resolved to (opaque; see cacheKeyParts for its breakdown). */
   cacheKey?: string;

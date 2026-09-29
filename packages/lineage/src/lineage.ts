@@ -35,7 +35,7 @@ import { tenantField } from "./tenant-scope.js";
  * and this decoupling lets any caller build its own trace-shaped object without a hard dependency).
  *
  * correlationId / cacheKey / cacheKeyParts / attempts / downgrades / coalesced / usage are all optional
- * additions (U2): a caller that builds a ComposeTraceLike without them (or a pre-existing test fixture) gets
+ * additions: a caller that builds a ComposeTraceLike without them (or a pre-existing test fixture) gets
  * the exact same view.composed / component.generated / component.used payload shape as before they existed
  * -- see viewComposed's payload construction, which omits each corresponding key when its trace field is
  * unset.

@@ -109,7 +109,7 @@ export interface CreateA2uiIngestOptions {
   cachePolicy?: "first-wins" | "latest-wins";
   /**
    * The authenticated caller's identity (from the host's own auth, never taken from message payloads — see
-   * the F3 brief). Folded into the default Intent's canonical name and into `generatorVersion`
+   * design.md decision 60). Folded into the default Intent's canonical name and into `generatorVersion`
    * (`a2ui-ingest/<agentId>`), so two different agents never share a cache entry or a fixation even if they
    * happen to send identically-shaped surfaces.
    */
@@ -207,7 +207,7 @@ function buildCacheKey(
   return tenant != null ? `${base}:${tenant}` : base;
 }
 
-/** See the F3 brief (§5) / the package README's "governance proxy" section for the design this implements. */
+/** See design.md decisions 58-60 / the package README's "governance proxy" section for the design this implements. */
 export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
   let surfaces = new Map<string, SurfaceState>();
   const latestBySurface = new Map<string, { outcome: A2uiIngestOutcome; tenant: string | undefined }>();

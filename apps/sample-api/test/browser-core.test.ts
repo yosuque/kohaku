@@ -8,12 +8,12 @@ import { createApp, SalesRepo, type SalesSeedInput } from "../src/browser.js";
 import { fiscalYearOf, quarterOf } from "../src/domain/types.js";
 
 /**
- * Exercises the exact entry point the static playground (U5) uses: `../src/browser.js` (the `./browser`
+ * Exercises the exact entry point the static playground (apps/playground) uses: `../src/browser.js` (the `./browser`
  * package export), with an injected seed (no disk read), no l2Smoke (no jsdom/node:vm dependency reachable
  * here), and a fixed `now` (as the playground must, so a ReplayLlm fixture's key — derived from the NL
  * normalization prompt text — matches what was recorded). None of this file's imports come from `app.ts`'s
  * Node-only default path (`createDefaultRepo`'s dynamic import of `domain/seed-fs.js`) or from
- * `@kohaku-ui/authz-jwt` — see reports/u5-2.md for how that is verified at the bundler level instead.
+ * `@kohaku-ui/authz-jwt` — the playground's strict build (design.md decision 57) verifies that at the bundler level instead.
  */
 
 const FIXED_NOW = new Date("2026-11-15T00:00:00Z");

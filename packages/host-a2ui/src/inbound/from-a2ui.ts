@@ -16,7 +16,7 @@ import { A2uiIngestError, getAtPointer, getRootComponent, type SurfaceState } fr
  * Converts an accumulated `SurfaceState` (a third-party A2UI agent's surface, or kohaku's own re-ingested
  * output) into a kohaku `UISpec`. This is the counterpart of `toA2ui`, but not its exact inverse: a
  * genuinely third-party surface carries no `KohakuSidecar`, so most of the mapping below is the best-effort,
- * potentially-lossy reconstruction described in the F3 brief (`§4`), not a lossless replay. **No LLM is ever
+ * potentially-lossy reconstruction described in design.md decisions 58-59, not a lossless replay. **No LLM is ever
  * called here** — every unrepresentable case is handled deterministically (a fixed placeholder, or a thrown
  * error), never regenerated.
  */
@@ -49,7 +49,7 @@ export interface A2uiIngestLoss {
 export const A2UI_FORWARD_ACTION = "a2ui.forward";
 
 export interface FromA2uiOptions {
-  /** The Spec's Intent (already resolved/hashed by the caller — see `createA2uiIngest`, task 5). */
+  /** The Spec's Intent (already resolved/hashed by the caller — see `createA2uiIngest`). */
   intent: CanonicalIntent;
   /** The Spec's dataVersion (already derived by the caller). */
   dataVersion: string;
@@ -258,7 +258,7 @@ function resolveChildren(node: A2uiComponent): ChildrenResolution {
 /**
  * Maps a firing component's `action` onto a kohaku `EventBinding` pushed onto `ctx.events`, so the ingested
  * Spec is genuinely interactive in kohaku's own renderer (not just visually reconstructed) and a later
- * interaction can be routed back to the original agent via `toA2uiClientAction` (task 6). Only `action.event`
+ * interaction can be routed back to the original agent via `toA2uiClientAction`. Only `action.event`
  * produces one: `emit: "action.invoke"` is the closest existing kohaku emit kind to "an opaque client
  * interaction the server/agent should hear about" (the same kind kohaku's own outbound `action.button`
  * fixtures use — see `to-a2ui.ts`'s test suite). A `functionCall` action is client-local by A2UI's own

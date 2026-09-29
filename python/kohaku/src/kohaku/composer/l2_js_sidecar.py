@@ -1,4 +1,4 @@
-"""L2 verification JS sidecar (Task #39).
+"""L2 verification JS sidecar.
 
 Because Python has no JS runtime, the two checks of L2-generated HTML —
 - L2_SCRIPT_SYNTAX (<script> JS syntax check; TS implements it inline via new Function)

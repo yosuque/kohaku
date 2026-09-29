@@ -1200,7 +1200,7 @@ def _assemble_spec(
 ) -> UISpec:
     """Port of assemble.ts's assembleSpec. `generator_version`/`kit` mirror TS's stamping of
     ComposePolicy.generatorVersion / designSystem.kit onto provenance whenever the caller passes them,
-    regardless of tier — see compose.ts's assembleSpec doc for why (Task 3, M-1/M-2)."""
+    regardless of tier — see compose.ts's assembleSpec doc for why."""
     wire: dict[str, Any] = {
         "kohaku": SPEC_VERSION,
         "intent": intent.to_wire(),

@@ -42,7 +42,7 @@ function load<T>(file: string): T {
  * `import()` behind a variable specifier was tried first and abandoned — it broke Vite/Vitest's SSR module
  * resolution). `app-core.ts` never imports this file at all, so a bundler building for the browser through
  * the `./browser` export (`browser.ts` → `app-core.ts`, never `app.ts`) cannot reach `node:fs` even
- * statically, and a host that always supplies its own seed (the static playground, U5) never triggers it.
+ * statically, and a host that always supplies its own seed (the static playground, apps/playground) never triggers it.
  */
 export function readSeedFromDisk(): SalesSeedInput {
   const products = load<Product[]>("products.json");

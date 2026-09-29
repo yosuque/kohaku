@@ -14,7 +14,7 @@ import { buildTheme } from "../theme/tokens.js";
 import { salesPromotionDefaults } from "./admin/promotion-defaults.js";
 
 /**
- * The Gallery tab (n-16) is dev/admin-only tooling — its hand-written showcase artifact
+ * The Gallery tab is dev/admin-only tooling — its hand-written showcase artifact
  * (gallery-showcase.ts) has no reason to reach production users. It is loaded via React.lazy, and the
  * dynamic import itself sits behind a literal `if (import.meta.env.DEV)` statement rather than only a
  * runtime check inside JSX: Vite replaces `import.meta.env.DEV` with the literal `false` at build time,

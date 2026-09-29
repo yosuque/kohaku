@@ -1,6 +1,6 @@
 """MCP 2026-07-28 (SEP-2549) response-caching hints for this profile's cacheable results.
 
-Split out of server.py (mechanical file-layout split, Task 6) — mirrors packages/host-mcp-apps/src/cache-hints.ts
+Split out of server.py (a mechanical file-layout split) — mirrors packages/host-mcp-apps/src/cache-hints.ts
 in spirit, though Python's mcp SDK has no per-server `cacheHints` constructor option to wire these into the way
 TS's `defaultMcpListCacheHints()` does (see this module's callers in server.py's `_list_tools` / `_list_resources`
 / `_read_resource`, which stamp these values directly onto each result instead).

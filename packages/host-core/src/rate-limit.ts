@@ -100,8 +100,8 @@ export interface RateLimiterErrorInfo {
  * Builds a `RateLimiter` over a `RateLimitStore`, keying each bucket by the canonical JSON array
  * `[tenant, principal, routeClass]` (tenant/principal default to the empty string when unset, so an
  * anonymous caller still gets its own bucket per tenant/routeClass rather than colliding with every
- * other anonymous caller across route classes — the MCP profile's "no tenant, no principal" case, task
- * 11, still separates `compose` from `action` this way).
+ * other anonymous caller across route classes — the MCP profile's "no tenant, no principal" case,
+ * still separates `compose` from `action` this way).
  *
  * **Not a delimiter-joined string** (e.g. `` `${tenant}:${principal}:${routeClass}` ``): a plain colon
  * join collides whenever a component itself contains the delimiter — `(tenant: "a:b", principal: "c")`

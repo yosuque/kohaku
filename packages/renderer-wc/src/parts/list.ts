@@ -19,7 +19,7 @@ import { dataStateNotice, mountBoundPart, tokenStr } from "./kit.js";
 export const presentList: PartBuilder = (rt, parent, node) => {
   const itemClickable = hasDeclaredEvent(rt.spec, node.id, "itemClick");
   // Unset gap defaults to "sm" (matching the pre-tokenization default; gapFor's own default is "md"
-  // (16px), which would silently double the gap for an unset prop — see task-14-brief addendum 3).
+  // (16px), which would silently double the gap for an unset prop).
   const gap = gapFor(rt.sizing, (node.props["gap"] as string | undefined) ?? "sm");
   const maxItems = node.props["maxItems"] as number | undefined;
   const emptyText = String(node.props["emptyText"] ?? "(No data)");

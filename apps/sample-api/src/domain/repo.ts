@@ -3,7 +3,7 @@ import type { Product, SalesRecord, SalesTarget } from "./types.js";
 /**
  * The seed data a `SalesRepo` is built from. Node's default (`createDefaultRepo` in `app.ts`, behind a
  * dynamic import of `seed-fs.ts`) derives this from disk via `readFileSync`; a host with no filesystem
- * (the static playground, U5) builds it from a bundled JSON asset instead and passes it to `SalesRepo`'s
+ * (the static playground, apps/playground) builds it from a bundled JSON asset instead and passes it to `SalesRepo`'s
  * constructor directly.
  */
 export interface SalesSeedInput {

@@ -45,8 +45,8 @@ export interface ExplainDecision {
 /**
  * One view.composed event's explain-facing fields, extracted from its lineage payload (see
  * @kohaku-ui/lineage's ViewComposedPayload). Every field but the always-present ones (eventId / ts /
- * intentHash / canonical / specHash / tier / cache) is only ever present on an event recorded after U2
- * shipped -- an older event (or a host with no correlationId wiring) simply omits it here too.
+ * intentHash / canonical / specHash / tier / cache) is only ever present on an event recorded after correlation-id
+ * / explain support shipped -- an older event (or a host with no correlationId wiring) simply omits it here too.
  */
 export interface ExplainCompose {
   eventId: string;
