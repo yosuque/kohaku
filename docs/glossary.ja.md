@@ -10,17 +10,27 @@
 
 **導入ラダー** — 既存の製品に kohaku を組み込む段階的な道筋です。Zero-Port quickstart から始め、Step 0(LLM なしの Server-Driven UI)、Step 1(L1 宣言的合成)、Step 2(L2・昇格・固定化)と進みます。次の段に進んでも、それまでの段は動き続けます。[ユーザーガイド §6](user-guide.ja.md#6-自分のプロダクトに組み込む) を参照してください。
 
+**承認(approval)トークン** — `"approve"` tier の統制された Actionを実行可能にする、短命で用途が 1 つに決まったトークンです。第二の principal(承認者。依頼者本人は不可)が `POST /approvals` で発行します。トークンは特定の action・ペイロードのハッシュ・依頼者・テナントに束縛され、既定では 5 分で失効し、単回使用にもできます。capability トークンとは別のトークンドメインなので、どちらも相手として使い回せません。[SPEC §5](../spec/SPEC.ja.md#5-セキュリティ-normative)(ACT-APR-001)、[仕様 §4.7](specification.ja.md#47-任意の統制-portapprovalport--approvalstore--ratelimitstore) を参照してください。
+
 **capability(トークン)** — compose の応答が Spec とともに返す bearer トークンです。どの `data.$ref` を読めるか、どの宣言済みの書き込み(`action.invoke`)を呼べるかを期限付きで絞り込むので、部品は LLM に認証情報を持たせることなく自分のデータを読み書きできます。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative)、[SPEC §5 セキュリティ](../spec/SPEC.ja.md#5-セキュリティ-normative) を参照してください。
 
-**カタログ / catalogFingerprint** — カタログは、ホストが描画できる型付き UI 部品(`ComponentDefinition`)の集合で、コア部品・製品側の寄与部品・昇格済み部品を合わせたものです。`catalogFingerprint` は `type@version` の一覧をソートしてハッシュ化した値で、Spec キャッシュキーの一部になります。そのため新しい部品を publish しても、古いカタログでキャッシュされた Spec とは混ざりません。後述の *Intent カタログ*(登録済み Intent の集合)とは別物です。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative) を参照してください。
+**カタログ / catalogFingerprint** — カタログは、ホストが描画できる型付き UI 部品(`ComponentDefinition`)の集合で、コア部品・製品側の寄与部品・昇格済み部品を合わせたものです。`catalogFingerprint` は `type@version` の一覧をソートしてハッシュ化した値で、Spec キャッシュキーの一部になります。そのため新しい部品を publish しても、古いカタログでキャッシュされた Spec とは混ざりません。deprecated な部品はそのエントリに `!deprecated` サフィックスが付くので、部品の deprecated 化でも指紋は変わります。後述の *Intent カタログ*(登録済み Intent の集合)とは別物です。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative)、[§3.3](../spec/SPEC.ja.md#33-federated-配信-draft) を参照してください。
+
+**カタログの deprecated 化と移行** — 部品を置き換え済みとして印を付けること(`ComponentDefinition.deprecated`。任意で `replacedBy` を指定)です。生成はその部品を提示しなくなる一方、すでにその部品で固定化された Spec は検証に通り続けます。別途の「計画してから適用する」ステップ(`kohaku migrate plan` / `apply`)で、それらの固定化を置き換え先の部品に書き換えるので、固定化が古い構造を黙って持ち続けることはありません。[SPEC §3.1](../spec/SPEC.ja.md#31-componentdefinition-normative)、[ユーザーガイド「部品を deprecated にして移行する」](user-guide.ja.md#部品を-deprecated-にして移行する) を参照してください。
 
 **`createKohakuHost`** — あなたが実装する DomainPort と、残り 3 つの Port の動く既定値を組み合わせて REST ホストにする、`@kohaku-ui/host` の one-call ファサードです。Zero-Port quickstart から一歩進んで自分の製品に kohaku を組み込む、最短の経路です。[ユーザーガイド §6 Step 0](user-guide.ja.md#step-0--llm-なしの-server-driven-ui) を参照してください。
 
 **デザインキット** — L2 自由生成が従うクラス名の語彙です(`DesignSystemGuide.kit`。型は `DesignKitVocabulary`)。これを渡すと、生成される部品は独自のクラス名を発明する代わりにこの語彙に従います。この語彙はデザインキットの半分でしかなく、実際の CSS は別の描画側のオブジェクト(renderer-core 組み込みの `defaultDesignKit`、または製品側が sandbox に渡す独自のもの)です。[ユーザーガイド「L2 にデザインシステムを適用する」](user-guide.ja.md#l2-にデザインシステムを適用する) を参照してください。
 
+**開示(disclosure。AI 生成の開示)** — 画面のどこまでをモデルが作ったかを示すために、レンダラーが表示できるラベルです。L1/L2 は `ai-generated`、人が承認した固定化は `ai-assisted-reviewed`、決定的な出力やフォールバックは表示なしです。描画時に `provenance`(`tier` / `cache` / `fallback`)から導出し、Spec のフィールドには決してならないので、ペイロードを作った側が古い値を残したり偽ったりできません。[SPEC §7.1](../spec/SPEC.ja.md#71-レンダラー適合チェックリスト-normative-reference)(SPEC-DISC-001)を参照してください。
+
+**エビデンスパック(evidence pack)** — レビュアーや監査人向けの、署名付きの監査証跡エクスポートです。lineage イベント・承認・昇格・固定化・生成された成果物をまとめたディレクトリに、マニフェストと分離 Ed25519 署名が付き、`kohaku evidence verify` で検証できます。Lineage の上に作られたエクスポート形式であり、ワイヤ上の型ではありません。[ユーザーガイド §7](user-guide.ja.md#7-運用の勘どころ)、design.md の決定 67 を参照してください。
+
 **固定化(fixation)** — 頻出かつ構造が安定した L1 Intent を L0 に昇格させることです。構造が固定され、以後 LLM を一切通らなくなる一方、データは参照渡しのまま最新に保たれます。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative) を参照してください。
 
 **`generatorVersion`** — Spec キャッシュキーの末尾に付く任意の要素で、プロンプトの改訂やモデルの変更をまたいで生成物を世代ごとに分けます。これを上げずにプロンプトやモデルだけを変えると、新しい出力が旧世代用のキャッシュに混ざってしまいます。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative)、[ユーザーガイド §7](user-guide.ja.md#7-運用の勘どころ) を参照してください。
+
+**統制された Action / action tier** — `DomainPort` の操作がゲートの背後に置いた書き込み操作(`action.invoke`)です。**action tier** は `"auto"`(ゲートなし。既定)、`"confirm"`(呼び出し側が `confirmed: true` を送る必要がある)、`"approve"`(先に第二の principal が承認トークンを発行する必要がある)のいずれかです。任意の `paramsSchema` が `DomainPort.invoke` を呼ぶ前にペイロードを検証し、すべての結果は `action.*` の lineage イベントに残ります。**この tier は L0 / L1 / L2(tier ladder) とは無関係**です。後者は Spec がどう作られたかを表し、書き込みがどう認可されるかは表しません。[SPEC §5](../spec/SPEC.ja.md#5-セキュリティ-normative)、[ユーザーガイド「統制された Action」](user-guide.ja.md#統制された-action-tierauto--confirm--approve) を参照してください。
 
 **Intent / CanonicalIntent / intentHash** — チャットの質問も GUI の操作も合流する、単一の正規化された表現が Intent です(例: `sales.quarterly_summary` + ソート済み params)。そのワイヤ形式が `CanonicalIntent` で、`intentHash`(その canonical JSON の `sha256:` 値)が Spec キャッシュキーの軸になります。同じ Intent は常に同じハッシュになるので、同じ画面になります。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative) を参照してください。
 
@@ -35,6 +45,8 @@
 **MCP Apps** — 同じ Spec と同じ描画コードを、Claude Desktop・claude.ai・ChatGPT などの MCP ホストに、文字の壁ではなく対話的なウィジェットとして届けるためのトランスポートプロファイル(SEP-1865)です。[パス (a): MCP Apps だけ](paths/mcp-apps.ja.md)、[SPEC §6.2](../spec/SPEC.ja.md#62-mcp-apps-プロファイルsep-1865-normative) を参照してください。
 
 **プレイグラウンド**(`apps/playground`) — サンプル Web アプリ全体をブラウザタブの中だけで動かす、サーバー不要のビルドです。ストレージはインメモリの port、LLM は事前収録した fixture から答える再生専用のものに差し替えられており、そこでの操作はサーバーにも API キーにも一切届きません。[ユーザーガイド §10](user-guide.ja.md#10-静的プレイグラウンド) を参照してください。
+
+**ポリシーファイル / レート制限** — コードが与えるコンポーズポリシーの上に、テナント別の上書き(L2 を許すか、トークン予算、ルートごとのレート制限、ロールの権限)を、再デプロイなしで重ねる宣言的な JSON ファイル(`spec/schemas/policy.schema.json`)です。レート制限はテナント・principal・ルートの種類ごとのトークンバケットで、超過したリクエストには再試行の目安付きで 429 `RATE_LIMITED` が返ります。変更したポリシーを再読み込みすると、`policy.applied` の lineage イベントが記録されます。[仕様 §5.6](specification.ja.md#56-ポリシーファイルpolicy-as-code)、[SPEC §6.1](../spec/SPEC.ja.md#61-rest-プロファイル-normative)、[ユーザーガイド §7](user-guide.ja.md#7-運用の勘どころ) を参照してください。
 
 **Port(DomainPort / SemanticPort / AuthzPort / StoragePort)** — kohaku のフレームワーク境界をなす 4 つのインタフェースです。DomainPort はあなたのデータ/クエリ API で、どの製品も自分で書く唯一の Port です。SemanticPort は自然言語と GUI の入力を Intent に正規化します。AuthzPort は capability トークンを発行・検証します。StoragePort は Spec キャッシュ・lineage・昇格・固定化を保存します。[AGENTS.md](../AGENTS.md)、[ユーザーガイド §6 Step 0](user-guide.ja.md#step-0--llm-なしの-server-driven-ui) を参照してください。
 
