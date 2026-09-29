@@ -68,6 +68,7 @@ from .errors import (
     format_error_chain,
     is_typed_host_error,
     notify_hook,
+    notify_hook_nowait,
 )
 from .fixation import (
     ComposeFixationContext,
@@ -95,6 +96,7 @@ from .policy import (
     PolicyRateLimiter,
     PolicyRateLimiterTakeParams,
     PolicyRuntime,
+    RateLimitedInfo,
     create_policy_runtime,
     parse_policy,
 )
@@ -170,6 +172,7 @@ __all__ = [
     "PolicyRateLimiter",
     "PolicyRateLimiterTakeParams",
     "PolicyRuntime",
+    "RateLimitedInfo",
     "RateLimiter",
     "RateLimiterErrorInfo",
     "RateLimiterTakeParams",
@@ -196,6 +199,7 @@ __all__ = [
     "issue_capability_for_spec",
     "load_policy_file",
     "notify_hook",
+    "notify_hook_nowait",
     "parse_invokable_ref",
     "parse_policy",
     "parse_trace_context",

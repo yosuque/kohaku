@@ -338,6 +338,22 @@ def _rate_limit_rule_for(section: PolicySection, route_class: RouteClass) -> Rat
     return RateLimitRule(capacity=rule.capacity, refillPerSecond=rule.refillPerSecond)
 
 
+@dataclass(frozen=True)
+class RateLimitedInfo:
+    """What a host's optional `on_rate_limited` observer receives when a request or tool call is denied by
+    the rate limiter (host_rest's `KohakuHostDeps.on_rate_limited`, host_mcp's
+    `McpHostDeps.on_rate_limited`). `principal` is the identity the bucket was keyed on (REST: the
+    authenticated principal's id; MCP: see `McpHostDeps.rate_limiter`); `requestId` is the same correlation
+    id the response / compose trace carries (REST: `X-Request-Id`; MCP: the tool call's correlation id).
+    Field names are camelCase like the rest of this module's rate-limit types and the TS port's
+    `RateLimitedInfo`."""
+
+    routeClass: RouteClass
+    requestId: str
+    tenant: str | None = None
+    principal: str | None = None
+
+
 class PolicyRateLimiter:
     """The `rate_limiter` a `PolicyRuntime` exposes: resolves the effective `RateLimitRule` for the
     tenant/route_class from the current policy file, and always allows when none is configured (rate

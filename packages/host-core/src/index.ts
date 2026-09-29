@@ -92,6 +92,7 @@ export {
   type PolicyRateLimiterTakeParams,
   type PolicyRuntime,
   parsePolicy,
+  type RateLimitedInfo,
 } from "./policy.js";
 export {
   type CreateMemoryRateLimitStoreOptions,

@@ -138,6 +138,9 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
   // Rate limiting (deps.rateLimiter; SPEC §6.1, REST-RL-001), mounted only on these specific
   // compose-family paths -- never on "*" -- so governance/control-plane routes are excluded by
   // construction. A no-op per-path when deps.rateLimiter is unset (see rate-limit.ts's own doc).
+  // /intent/normalize shares the "compose" class: for a natural-language question it calls the
+  // SemanticPort's LLM, so it spends tokens just like a compose does.
+  app.use("/intent/normalize", createRateLimitMiddleware(ctx, "compose"));
   app.use("/compose", createRateLimitMiddleware(ctx, "compose"));
   app.use("/compose/stream", createRateLimitMiddleware(ctx, "compose"));
   app.use("/events", createRateLimitMiddleware(ctx, "compose"));

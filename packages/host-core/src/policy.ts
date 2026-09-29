@@ -269,6 +269,20 @@ export interface PolicyRateLimiterTakeParams {
   cost?: number;
 }
 
+/**
+ * What a host's optional `onRateLimited` observer receives when a request or tool call is denied by the
+ * rate limiter (host-rest's `KohakuHostDeps.onRateLimited`, host-mcp-apps' `McpHostDeps.onRateLimited`).
+ * `principal` is the identity the bucket was keyed on (REST: the authenticated principal's id; MCP: see
+ * `McpHostDeps.rateLimiter`); `requestId` is the same correlation id the response / compose trace carries
+ * (REST: `X-Request-Id`; MCP: the tool call's correlation id).
+ */
+export interface RateLimitedInfo {
+  tenant?: string;
+  principal?: string;
+  routeClass: PolicyRateLimiterTakeParams["routeClass"];
+  requestId: string;
+}
+
 /** The `rateLimiter` a `PolicyRuntime` exposes: resolves the effective `RateLimitRule` for the tenant/routeClass from the current policy file, and always allows when none is configured (rate limiting is opt-in per route class) or when no `RateLimitStore` was supplied to `createPolicyRuntime` at all. */
 export interface PolicyRateLimiter {
   take(params: PolicyRateLimiterTakeParams): Promise<RateLimitResult>;
