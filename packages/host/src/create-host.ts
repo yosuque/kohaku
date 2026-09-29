@@ -1,6 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
-import type { ComposeContext, ComposePolicy } from "@kohaku-ui/composer";
+import {
+  type ComposeContext,
+  type ComposeObserver,
+  type ComposePolicy,
+  composeObservers,
+} from "@kohaku-ui/composer";
 import type { QueryRef } from "@kohaku-ui/data-binding";
 import { createConsoleErrorReporter } from "@kohaku-ui/host-core";
 import { createKohakuRoutes, type KohakuHostDeps } from "@kohaku-ui/host-rest";
@@ -75,6 +80,17 @@ export interface CreateKohakuHostOptions {
   catalog?: ResolvedCatalog;
   /** `ComposeContext.policy`. Default: unset (composer's own defaults apply). */
   policy?: ComposePolicy;
+  /**
+   * `ComposeContext.policyFor`: per-session policy resolution, e.g. a Policy as Code runtime's `policyFor`
+   * (`createPolicyRuntime(...).policyFor`, see the user guide's policy section). Default: unset.
+   */
+  policyFor?: ComposeContext["policyFor"];
+  /**
+   * An extra `ComposeObserver` (e.g. `@kohaku-ui/otel`'s `createOtelComposeObserver`). It is combined with the
+   * console error reporter's `onError` through composer's `composeObservers`, so wiring one never silences the
+   * default stderr line. Default: unset (the reporter alone).
+   */
+  observer?: ComposeObserver;
 
   /**
    * HMAC signing secret for the default `authz`. Falls back to the `KOHAKU_CAPABILITY_SECRET` environment
@@ -93,14 +109,17 @@ export interface CreateKohakuHostOptions {
   /**
    * The governed-Action audit recorder handed to the REST profile (and, through `attachKohakuMcp`, to the MCP
    * profile). Default: `createActionAuditRecorder(lineage)` over the same lineage instance as `recorder`, so
-   * every `POST /binding/action` outcome lands as an `action.*` event (`action.invoked` / `action.denied` /
-   * `action.approval_requested` / `action.approved`). Pass your own to replace it, or `false` to record nothing.
+   * every gated `POST /binding/action` outcome except `invalid` (which records nothing) lands as an `action.*`
+   * event (`action.invoked` / `action.denied` / `action.approvalRequested` / `action.approved`). Pass your own
+   * to replace it, or `false` to record nothing.
    */
   actionAuditRecorder?: KohakuHostDeps["actionAuditRecorder"] | false;
   /**
    * Every other `KohakuHostDeps` field, passed through to `createKohakuRoutes` unchanged: `auth` / `tenant`
-   * (JWT and multi-tenant resolution), `approvals` / `actionAuditRecorder` / `actionEffects` (governed
-   * Actions), `rateLimiter`, `authorizeGovernance`, `promotions` / `fixations`, ... The fields this facade
+   * (JWT and multi-tenant resolution), `approvals` / `actionEffects` (governed Actions), `rateLimiter` /
+   * `onRateLimited`, `authorizeGovernance`, `promotions` / `fixations`, ... `approvals`, `rateLimiter`,
+   * `actionEffects` and `onRateLimited` are also exposed as `KohakuHost.governance`, which `attachKohakuMcp`
+   * uses as its defaults so both profiles enforce one configuration. The fields this facade
    * owns (`compose`, `domain`, `authz`, `querySource`) and the ones it has a dedicated option for (`onError`,
    * `recorder`, `actionAuditRecorder`) are excluded so there is exactly one way to set each.
    */
@@ -145,6 +164,21 @@ export interface KohakuHost {
   actionAuditRecorder: KohakuHostDeps["actionAuditRecorder"];
   /** The console error reporter's debug flag as given to `createKohakuHost`; `attachKohakuMcp` reuses it for the MCP profile's default `onError`. */
   debug: boolean;
+  /**
+   * The governance configuration in effect on the REST profile (`routes.approvals` / `routes.rateLimiter` /
+   * `routes.actionEffects`, and `onRateLimited`: yours, or a console line through the default error
+   * reporter). `attachKohakuMcp` wires these into the MCP profile as defaults (its own `deps` override), so a
+   * rate limit or an approval port configured once applies on both. Absent fields are simply unwired.
+   */
+  governance: HostGovernance;
+}
+
+/** The REST-profile governance fields the facade shares with the MCP profile; see `KohakuHost.governance`. */
+export interface HostGovernance {
+  approvals?: KohakuHostDeps["approvals"];
+  rateLimiter?: KohakuHostDeps["rateLimiter"];
+  actionEffects?: KohakuHostDeps["actionEffects"];
+  onRateLimited: NonNullable<KohakuHostDeps["onRateLimited"]>;
 }
 
 function resolveIntentCatalog(intents: IntentDef[] | IntentCatalogLike): IntentCatalogLike {
@@ -233,7 +267,23 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
     storage,
     llm: options.llm,
     ...(options.policy != null ? { policy: options.policy } : {}),
-    observer: { onError: errorReporter.compose },
+    ...(options.policyFor != null ? { policyFor: options.policyFor } : {}),
+    observer: composeObservers({ onError: errorReporter.compose }, options.observer),
+  };
+
+  const governance: HostGovernance = {
+    ...(options.routes?.approvals != null ? { approvals: options.routes.approvals } : {}),
+    ...(options.routes?.rateLimiter != null ? { rateLimiter: options.routes.rateLimiter } : {}),
+    ...(options.routes?.actionEffects != null ? { actionEffects: options.routes.actionEffects } : {}),
+    onRateLimited:
+      options.routes?.onRateLimited ??
+      ((info) => {
+        errorReporter.host({
+          endpoint: `rate limit (${info.routeClass})`,
+          requestId: info.requestId,
+          error: new Error(`rate limited${info.principal != null ? ` (principal ${info.principal})` : ""}`),
+        });
+      }),
   };
 
   const app = new Hono();
@@ -246,6 +296,7 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
       authz,
       querySource: options.querySource,
       onError: options.onError ?? errorReporter.host,
+      onRateLimited: governance.onRateLimited,
       ...(recorder != null ? { recorder } : {}),
       ...(actionAuditRecorder != null ? { actionAuditRecorder } : {}),
     }),
@@ -260,5 +311,6 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
     recorder,
     actionAuditRecorder,
     debug,
+    governance,
   };
 }
