@@ -86,6 +86,15 @@ describe("kohaku migrate plan", () => {
     ).rejects.toThrow(/not found/);
   });
 
+  it("adds a hint about built .js files and tsx when the --catalog module cannot be imported", async () => {
+    const dataDir = tmp();
+    const brokenModule = join(tmp(), "broken-catalog.mjs");
+    writeFileSync(brokenModule, "import './no-such-sibling.mjs';\nexport default () => ({});\n");
+    await expect(
+      migratePlan({ dataDir, catalogModule: brokenModule, outPath: join(tmp(), "plan.json") }),
+    ).rejects.toThrow(/Cannot import --catalog module.*built \.js.*--import tsx/s);
+  });
+
   it("fails with a clear error when --catalog does not export a function", async () => {
     const dataDir = tmp();
     const badModule = join(tmp(), "bad-catalog.mjs");
