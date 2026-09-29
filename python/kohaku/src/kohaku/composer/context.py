@@ -153,7 +153,7 @@ class ComposePolicy:
 
     Python has no JS runtime, so a jsdom-equivalent runner is not bundled, but in an environment where Node
     is co-located you can wire l2_js_sidecar.create_l2_js_sidecar().smoke to reuse the TS verifier
-    (@kohaku-ui/sandbox/smoke) across the CLI (Task #39). When unwired (standalone), the gaps are the same
+    (@kohaku-ui/sandbox/smoke) across the CLI. When unwired (standalone), the gaps are the same
     known difference as the L2_SCRIPT_SYNTAX skip."""
     refConstraint: Literal["schema", "validate"] = "schema"
     """How `data.$ref` on L1-generated components is constrained to the resolved QueryHandle set (port of
@@ -175,12 +175,12 @@ def _kit_fingerprint_material(kit: DesignKitVocabulary) -> dict[str, object]:
     an ABSENT key (`UNDEFINED`), not `None`, when unset — mirroring the TS side, where an unset optional
     `skeleton?: string` is simply not a present key on the object literal (not an explicit `undefined`).
 
-    No `classesOrder` key (removed by Task 8/m-15, mirroring the TS side): until then,
+    No `classesOrder` key (mirroring the TS side): it used to be carried, because
     `design_kit_prompt_fragment` iterated `kit.classes.items()` in insertion order, so two vocabularies
     differing only in that order emitted different L2 prompt bytes even though canonical-json
     serialization sorts dict keys before hashing and so would otherwise hash them identically — a
     `classesOrder` list (not reordered by the hash) used to be carried here to force the cache key to
-    separate on that difference too. Task 8/m-15 made `design_kit_prompt_fragment` present classes
+    separate on that difference too. `design_kit_prompt_fragment` now presents classes
     **sorted by name** instead, so the prompt is now a pure function of `kit.classes`' *content*, not its
     insertion order — `classesOrder` no longer corresponds to anything the prompt bytes depend on."""
     return {
@@ -206,7 +206,7 @@ def _fp_design_system(
     if design_system is None:
         return None
     return {
-        # dict(...): design_system.tokens is typed Mapping (n-9), and canonical_json's own dict branch
+        # dict(...): design_system.tokens is typed Mapping, and canonical_json's own dict branch
         # checks isinstance(value, dict) — a Mapping that is not a dict (e.g. MappingProxyType) would
         # otherwise fall through unserialized. Mirrors _kit_fingerprint_material's dict(kit.classes) above.
         "tokens": dict(design_system.tokens) if design_system.tokens is not None else None,
@@ -342,7 +342,7 @@ def policy_fingerprint(
 
     fewShot / selectComponents are callables (their behavior cannot be inspected), so only their optional
     `id` participates (default "anonymous" when unset). designSystem folds in `tokens`, `guidelines`, and
-    `enforceTokenColors` unconditionally, plus two design-kit fields added by the Task 7b/10 mirror: `kit`
+    `enforceTokenColors` unconditionally, plus two design-kit fields: `kit`
     folds in the whole object (via `_kit_fingerprint_material`) whenever set — a different `id`, `version`,
     `classes`, `utilities`, `namespaces` or `skeleton` all separate the cache, matching
     `design_kit_prompt_fragment`'s effect on the L2 prompt — and `enforceKitClasses` folds in **only when
@@ -377,7 +377,7 @@ def policy_fingerprint(
     that has ever computed a fingerprint already has those None-as-null bytes baked into its current cache
     key, so leaving them None changes nothing further. It is not the pattern to copy — `_fp_design_system`
     above appears to write a bare field ten times over, but that is historical grandfathering, not a model
-    for a new field. `kit` / `enforceKitClasses` (Task 7b) and the top-level `tierGate` row (Policy as
+    for a new field. `kit` / `enforceKitClasses` and the top-level `tierGate` row (Policy as
     Code) show the correct shape for a field added *after* callers already depend on this material's
     bytes: fold to UNDEFINED (an absent key), never None — see the UNDEFINED paragraph above. Any new
     fingerprinted field must follow `kit`/`enforceKitClasses`/`tierGate`, not the other ten. Unlike the

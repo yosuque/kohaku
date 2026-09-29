@@ -91,7 +91,7 @@ export interface AppDeps {
    * Unset (default) = no smoke validation. index.ts is the only caller that wires a real one, at the
    * process entry point — mirroring `schemaExtractor`'s convention. Optional (rather than defaulted here)
    * so this file never has to import `@kohaku-ui/sandbox/smoke` conditionally on the caller's environment:
-   * a host with no jsdom/`node:vm` available (the static playground, U5) simply omits it, instead of paying
+   * a host with no jsdom/`node:vm` available (the static playground, apps/playground) simply omits it, instead of paying
    * for createL2Smoke's own per-call fail-open dynamic import on every L2 compose.
    */
   l2Smoke?: ComposePolicy["l2Smoke"];

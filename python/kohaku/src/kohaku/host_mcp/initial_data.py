@@ -1,7 +1,7 @@
 """Preresolution of a composed Spec's bound refs, co-embedded in a tool result's `_meta`.
 
-Port of packages/host-mcp-apps/src/initial-data.ts. Split out of server.py (mechanical file-layout split,
-Task 6) — `_snapshot_html_for` (the self-contained-snapshot ref set, unbudgeted) stays in server.py and reuses
+Port of packages/host-mcp-apps/src/initial-data.ts. Split out of server.py (a mechanical file-layout
+split) — `_snapshot_html_for` (the self-contained-snapshot ref set, unbudgeted) stays in server.py and reuses
 `_resolve_refs_bounded` from here, matching TS's snapshot.ts reusing initial-data.ts's `resolveRefsBounded`.
 
 Error reporting here goes straight through kohaku.host_core's `notify_hook` (not server.py's `_report_mcp_error`,

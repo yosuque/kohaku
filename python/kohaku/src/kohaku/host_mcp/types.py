@@ -2,7 +2,7 @@
 
 Port of packages/host-mcp-apps/src/types.ts (Python's `IntentToolDef` lives in `intent_tools.py`, an earlier
 extraction, rather than here — `AttachOptions.intent_tools` still references it). Split out of `server.py`
-(mechanical file-layout split, Task 6): `attach_kohaku_to_mcp_server` itself, the MCP-cache-hint constants, and
+(a mechanical file-layout split): `attach_kohaku_to_mcp_server` itself, the MCP-cache-hint constants, and
 the initial-data preresolution helpers stay in their own respective modules (`server.py`, `cache_hints.py`,
 `initial_data.py`).
 """

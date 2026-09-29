@@ -512,7 +512,7 @@ async def create_app(
                 "[compose] compose failed (Spec not delivered)%s: %s", intent_label, error
             )
 
-    # L2 verification JS sidecar (Task #39). In an environment where Node is co-located, it reuses TS's verification
+    # L2 verification JS sidecar. In an environment where Node is co-located, it reuses TS's verification
     # logic (<script> syntax check + jsdom smoke) over the CLI, resolving the known Python-only differences
     # (L2_SCRIPT_SYNTAX skipped / smoke not bundled). Disabled with env KOHAKU_L2_JS=off. If unavailable (Node not
     # co-located), it is left unwired = the legacy behavior.

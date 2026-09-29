@@ -178,7 +178,7 @@ export interface DesignKitVocabulary {
   version: string;
   /**
    * Kit class name → usage description. Presented **sorted by name** (not insertion order) in the L2
-   * prompt (Task 8/m-15): JS's own key ordering treats integer-like keys (e.g. a product kit's "2col")
+   * prompt: JS's own key ordering treats integer-like keys (e.g. a product kit's "2col")
    * specially (they sort numerically-first, ahead of every non-numeric key, regardless of declaration
    * order) while Python dict iteration keeps insertion order, so the two languages could otherwise emit
    * different `designKitPromptFragment` bytes for the identical vocabulary content. Sorting output makes
@@ -293,7 +293,7 @@ const KIT_UTILITIES: readonly string[] = [
 /**
  * The built-in kit vocabulary (pairs with renderer-core's defaultDesignKit; the contract test in
  * packages/sandbox/test/design-kit-contract.test.ts pins every class here to a selector there).
- * `classes`' declaration order here is otherwise arbitrary (Task 8/m-15): `designKitPromptFragment`
+ * `classes`' declaration order here is otherwise arbitrary: `designKitPromptFragment`
  * presents them sorted by name, not in this object's insertion order.
  */
 export const DEFAULT_KIT_VOCABULARY: DesignKitVocabulary = {
@@ -396,14 +396,14 @@ export const DEFAULT_KIT_VOCABULARY: DesignKitVocabulary = {
  * design-system section, only when designSystem.kit is set). Character-for-character identical with
  * Python's design_kit_prompt_fragment.
  *
- * **Empty-input guard (Task 8/m-14):** a section whose backing list is empty is omitted entirely (its
+ * **Empty-input guard:** a section whose backing list is empty is omitted entirely (its
  * header line included) rather than emitted with nothing after it — an empty `classes` used to leave a
  * dangling "- Component classes:" heading, and empty `utilities`/`namespaces` used to leave a
  * self-contradicting "…exist: " / "…names): " line trailing on a colon. This guard fires only for
  * genuinely empty input; the built-in `DEFAULT_KIT_VOCABULARY` has all three non-empty, so its own
  * fragment is unchanged.
  *
- * **No skeleton fallback (Task 8/m-14, revised in review):** the "Skeleton of a well-formed widget body"
+ * **No skeleton fallback:** the "Skeleton of a well-formed widget body"
  * section is shown iff `kit.skeleton` is itself set — there is no fallback to the built-in
  * `DEFAULT_KIT_SKELETON` for some other kit that merely "looks like" the built-in one. An earlier version
  * of this guard fell back to `DEFAULT_KIT_SKELETON` when `kit === DEFAULT_KIT_VOCABULARY` (reference
@@ -424,7 +424,7 @@ export function designKitPromptFragment(kit: DesignKitVocabulary): string {
     "- The host injects a base stylesheet: body already has the font, text color, background and line-height; headings are scaled; :focus-visible rings are provided. Do not restate these",
     "- Prefer the kit classes below for common blocks; use the utilities for layout and spacing; write custom CSS only for what they do not cover, and then only with var(--kohaku-*) tokens",
   ];
-  // Sorted by name, not Object.entries' insertion order (m-15): see DesignKitVocabulary.classes' own doc
+  // Sorted by name, not Object.entries' insertion order: see DesignKitVocabulary.classes' own doc
   // for why insertion order is not a cross-language-safe contract.
   const classNames = Object.keys(kit.classes).sort();
   if (classNames.length > 0) {

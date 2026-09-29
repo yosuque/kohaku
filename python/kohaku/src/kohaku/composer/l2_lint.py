@@ -8,8 +8,7 @@ The TS version's L2_SCRIPT_SYNTAX (<script> JS syntax check) uses compilation vi
 collect_l2_issues itself skips it here (per the "skip when dynamic code generation is unavailable" rule in
 environments without a JS runtime. docs/specification.md §8. fail-open — do not break compose in environments
 that cannot run the check). However, in an environment where Node is co-located, l2_js_sidecar (wired to
-ComposePolicy.l2ScriptSyntax) can **symmetrize** it by delegating to the TS CLI (`kohaku smoke-l2 --lint`)
-(Task #39). This function stays a pure function so behavior matches across languages, and the checks that
+ComposePolicy.l2ScriptSyntax) can **symmetrize** it by delegating to the TS CLI (`kohaku smoke-l2 --lint`). This function stays a pure function so behavior matches across languages, and the checks that
 require JS execution are split out into injectable hooks.
 """
 

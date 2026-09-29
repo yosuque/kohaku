@@ -4,7 +4,7 @@
  * static import at all, and `AppDeps.repo` there is mandatory (no disk-reading default to accidentally
  * reach), unlike `app.ts`'s own `AppDeps`. See `app.ts`'s doc comment for why the two are split.
  *
- * A caller through this entry point (the static playground, U5) must supply `repo` (built from its own seed
+ * A caller through this entry point (the static playground, apps/playground) must supply `repo` (built from its own seed
  * data — see `SalesSeedInput`). `l2Smoke` and `otel` should also usually be left unset (see their doc
  * comments on `AppDeps`): both exist for a Node host (index.ts) to opt into.
  */

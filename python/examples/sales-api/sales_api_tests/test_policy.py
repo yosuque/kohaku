@@ -1,4 +1,4 @@
-"""E2E for Policy as Code (design.md #69/#70, brief B3's acceptance criteria). Port of
+"""E2E for Policy as Code (design.md #69/#70). Port of
 apps/sample-api/test/policy.e2e.test.ts.
 
 - tenant-a (allowL2=false) never reaches L2, even for an intent whose route_tier forces a direct L2 entry.

@@ -34,7 +34,7 @@ class Criterion:
     description: str
     weight: float
     floor: float | None = None
-    """Optional per-criterion pass floor (veto; Task 8/n-7; port of TS's `Rubric.criteria[].floor`). When
+    """Optional per-criterion pass floor (veto; port of TS's `Rubric.criteria[].floor`). When
     set, `_score_with_rubric` fails the verdict (`pass_=False`) whenever this criterion's averaged score
     falls strictly below `floor`, even when the weighted-average score clears `pass_score` — a weighted
     average is compensable by design, which is the wrong shape for a criterion whose failure a good score
@@ -67,7 +67,7 @@ l2_promotion_rubric: Rubric = Rubric(
                 "Fetches data only through the window.kohaku API"
             ),
             weight=0.25,
-            # Veto floor (Task 8/n-7). `safety` is the one criterion that reads the generated HTML's
+            # Veto floor. `safety` is the one criterion that reads the generated HTML's
             # semantic behavior the way a human reviewer would — the sandbox's structural defenses
             # (SBX-EXEC-001's Worker isolation, the CSP, the DOM applier's markup allowlist) catch an
             # *attempted* violation, but not, say, a plausible-looking emit() payload a human would
@@ -173,12 +173,11 @@ l2_promotion_rubric_v0_2: Rubric = Rubric(
         ),
     ],
 )
-"""The L2 promotion rubric exactly as it was before the Task 8 rebalance (version "0.2"): the same 6
+"""The L2 promotion rubric exactly as it was before the rebalance that produced today's l2_promotion_rubric (version "0.3"): the same 6
 criteria (safety / determinism / a11y / schema_inferability / generality / visual_quality), with the
-pre-rebalance weights (generality 0.15, visual_quality 0.1 — see the Task-8 changeset for the rebalance
-that produced today's l2_promotion_rubric, version "0.3") and no per-criterion floor. Exported so a
+pre-rebalance weights (generality 0.15, visual_quality 0.1) and no per-criterion floor. Exported so a
 consumer who is not ready for the score shift the rebalance (and the new safety veto) causes can pin the
-exact pre-Task-8 promotion behavior explicitly: `judge(..., rubric=l2_promotion_rubric_v0_2)`. Mirrors
+exact pre-rebalance promotion behavior explicitly: `judge(..., rubric=l2_promotion_rubric_v0_2)`. Mirrors
 TS's `l2PromotionRubricV0_2`. Sibling of `l2_promotion_rubric_v0_1` below (the same pinning strategy, one
 version further along)."""
 
@@ -301,7 +300,7 @@ class JudgeVerdict:
     score: float
     criteria: list[VerdictCriterion]
     vetoed_by: list[str]
-    """The ids of every criterion whose `floor` (Task 8/n-7) vetoed this verdict — i.e. whose averaged
+    """The ids of every criterion whose `floor` vetoed this verdict — i.e. whose averaged
     score fell strictly below its `floor`. Always present; `[]` when the rubric has no floors at all, or
     when every floored criterion cleared its floor. `pass_` is False whenever this is non-empty,
     regardless of whether the weighted-average score itself cleared `pass_score`. Port of TS's
@@ -477,7 +476,7 @@ class _JudgeImpl:
         # but this is a final guard against future input variance.
         score = _clamp01(weighted / sum_weights if sum_weights > 0 else 0.0)
 
-        # Per-criterion floor (veto; Task 8/n-7): a criterion with a `floor` whose averaged score falls
+        # Per-criterion floor (veto): a criterion with a `floor` whose averaged score falls
         # strictly below it fails the verdict outright, regardless of whether the weighted-average `score`
         # above clears `pass_score` — see Criterion.floor's own docstring for the rationale. A rubric with
         # no `floor` set on any criterion always computes `vetoed_by=[]` here, leaving `pass_` exactly the
@@ -609,7 +608,7 @@ def _validate_rubric(rubric: Rubric) -> None:
     - each weight is finite and non-negative (rejects NaN / ±Infinity / negative)
     - the weight sum is positive (all-zero makes the normalization denominator 0, leaving the score undefined)
     - criteria ids are unique (duplicates double-count the average denominator / weighting)
-    - each floor, when set, is finite and within [0,1] (Task 8/n-7)
+    - each floor, when set, is finite and within [0,1]
     """
     if len(rubric.criteria) == 0:
         raise ValueError(f'rubric "{rubric.id}" has no criteria')

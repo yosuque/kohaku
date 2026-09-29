@@ -2,7 +2,7 @@
 
 Port of the TS reference implementation's `packages/lineage/src/evidence/{manifest,source,build,sign,
 artifacts}.ts`. TS keeps those as five separate files; this port deliberately keeps everything in one
-module (an explicit, brief-specified exception to docs/runbooks/python-mirror.md's usual "one TS file
+module (a deliberate exception to docs/runbooks/python-mirror.md's usual "one TS file
 = one Python module" layout rule, not an oversight).
 
 A pack is a directory of normalized, append-only exports (events.jsonl / approvals.jsonl /

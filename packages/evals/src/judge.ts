@@ -24,7 +24,7 @@ export interface Rubric {
     description: string;
     weight: number;
     /**
-     * Optional per-criterion pass floor (veto; Task 8/n-7). When set, `scoreWithRubric` fails the
+     * Optional per-criterion pass floor (veto). When set, `scoreWithRubric` fails the
      * verdict (`pass: false`) whenever this criterion's averaged score falls strictly below `floor`,
      * even when the weighted-average score clears `passScore` — a weighted average is compensable by
      * design (a low score on one criterion can be offset by high scores elsewhere), which is the wrong
@@ -49,7 +49,7 @@ export const l2PromotionRubric: Rubric = {
         "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
       weight: 0.25,
       /**
-       * Veto floor (Task 8/n-7). `safety` is the one criterion that reads the generated HTML's semantic
+       * Veto floor. `safety` is the one criterion that reads the generated HTML's semantic
        * behavior the way a human reviewer would — the sandbox's structural defenses (SBX-EXEC-001's
        * Worker isolation, the CSP, the DOM applier's markup allowlist) catch an *attempted* violation,
        * but not, say, a plausible-looking `emit()` payload a human would recognize as exfiltrating data.
@@ -165,12 +165,11 @@ export const l2PromotionRubricV0_3: Rubric = {
 };
 
 /**
- * The L2 promotion rubric exactly as it was before the Task 8 rebalance (version "0.2"): the same 6
+ * The L2 promotion rubric exactly as it was before the rebalance that produced version "0.3" of `l2PromotionRubric`: the same 6
  * criteria (safety / determinism / a11y / schema_inferability / generality / visual_quality), with the
- * pre-rebalance weights (generality 0.15, visual_quality 0.1 — see the Task-8 changeset for the rebalance
- * that produced version "0.3" of `l2PromotionRubric`) and no per-criterion `floor`. Exported so a
+ * pre-rebalance weights (generality 0.15, visual_quality 0.1) and no per-criterion `floor`. Exported so a
  * consumer who is not ready for the score shift the rebalance (and the new `safety` veto) causes can pin
- * the exact pre-Task-8 promotion behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_2 })`.
+ * the exact pre-rebalance promotion behavior explicitly: `judge({ ..., rubric: l2PromotionRubricV0_2 })`.
  * Mirrored in Python as `kohaku.evals.judge.l2_promotion_rubric_v0_2`. Sibling of `l2PromotionRubricV0_1`
  * below (the same pinning strategy, one version further along).
  */
@@ -313,7 +312,7 @@ export interface JudgeVerdict {
   score: number;
   criteria: { id: string; score: number; reasoning: string }[];
   /**
-   * The ids of every criterion whose `floor` (Task 8/n-7) vetoed this verdict — i.e. whose averaged score
+   * The ids of every criterion whose `floor` vetoed this verdict — i.e. whose averaged score
    * fell strictly below its `floor`. Always present; `[]` when the rubric has no floors at all, or when
    * every floored criterion cleared its floor. `pass` is false whenever this is non-empty, regardless of
    * whether the weighted-average score itself cleared `passScore`.
@@ -538,10 +537,10 @@ export function createJudge(opts: {
     // but this is a final guard against future input variation.
     const score = clamp01(sumWeights > 0 ? weighted / sumWeights : 0);
 
-    // Per-criterion floor (veto; Task 8/n-7): a criterion with a `floor` whose averaged score falls
+    // Per-criterion floor (veto): a criterion with a `floor` whose averaged score falls
     // strictly below it fails the verdict outright, regardless of whether the weighted-average `score`
     // above clears `passScore` — see Rubric.criteria's own doc for the rationale. A rubric with no
-    // `floor` set on any criterion (every rubric before Task 8, and every criterion but `safety` on the
+    // `floor` set on any criterion (every rubric before per-criterion floors existed, and every criterion but `safety` on the
     // current one) always computes `vetoedBy: []` here, leaving `pass` exactly the classic
     // `score >= passScore` it was before this field existed.
     const vetoedBy = activeRubric.criteria
