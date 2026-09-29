@@ -102,6 +102,8 @@ export type {
 } from "./ports.js";
 // Ports
 export {
+  APPROVAL_ISSUE_ERROR_CODE,
+  ApprovalIssueError,
   DEFAULT_APPROVAL_TTL_SECONDS,
   DEFAULT_CAPABILITY_TTL_SECONDS,
   normalizeTenant,

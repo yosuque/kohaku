@@ -14,10 +14,11 @@ import time
 
 import pytest
 
-from kohaku.spec import ApprovalVerifyResult, Principal, Scope, VerifyRequest
+from kohaku.spec import ApprovalIssueError, ApprovalVerifyResult, Principal, Scope, VerifyRequest
 from sales_api.approval_port import (
     APPROVAL_TOKEN_PREFIX,
     DEFAULT_APPROVAL_TTL_SECONDS,
+    DEFAULT_MAX_APPROVAL_TTL_SECONDS,
     HmacApprovalPort,
     MemoryApprovalStore,
     _b64url_encode,
@@ -72,7 +73,7 @@ class TestIssuance:
     def test_rejects_issuing_a_self_approval(self) -> None:
         async def run() -> None:
             approvals = create_hmac_approval_port("test-secret")
-            with pytest.raises(ValueError, match="approverId must differ from requesterId"):
+            with pytest.raises(ApprovalIssueError, match="approverId must differ from requesterId"):
                 await _issue(approvals, requester_id="same-person", approver_id="same-person")
 
         asyncio.run(run())
@@ -145,6 +146,34 @@ class TestBindingChecks:
             # tenant="" on both sides still matches (it is a real, if unusual, tenant value).
             both_empty = await _verify(approvals, empty_tenant_token, tenant="")
             assert both_empty.ok is True
+
+        asyncio.run(run())
+
+
+class TestMaxTtl:
+    def test_a_requested_ttl_above_the_default_maximum_is_clamped_to_it(self) -> None:
+        async def run() -> None:
+            clock = {"t": 1_000_000.0}
+            approvals = create_hmac_approval_port("test-secret", now=lambda: clock["t"])
+            token = await _issue(approvals, ttl_seconds=86_400)
+            clock["t"] += DEFAULT_MAX_APPROVAL_TTL_SECONDS - 1
+            assert (await _verify(approvals, token)).ok is True
+            clock["t"] += 1
+            assert (await _verify(approvals, token)).reason == "approval expired"
+
+        asyncio.run(run())
+
+    def test_a_custom_maximum_applies_and_a_shorter_request_is_never_lengthened(self) -> None:
+        async def run() -> None:
+            clock = {"t": 1_000_000.0}
+            approvals = create_hmac_approval_port("test-secret", max_ttl_seconds=60, now=lambda: clock["t"])
+            clamped = await _issue(approvals, ttl_seconds=600)
+            short = await _issue(approvals, ttl_seconds=10)
+            clock["t"] += 10
+            assert (await _verify(approvals, short)).ok is False
+            assert (await _verify(approvals, clamped)).ok is True
+            clock["t"] += 50
+            assert (await _verify(approvals, clamped)).ok is False
 
         asyncio.run(run())
 

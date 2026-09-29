@@ -236,6 +236,27 @@ export interface ApprovalGrant {
   jti: string;
 }
 
+/**
+ * The `code` an `ApprovalIssueError` carries. A host (and a custom `ApprovalPort`, which need not import
+ * the class) discriminates the client-caused failure structurally by this string, the same convention the
+ * governance errors follow.
+ */
+export const APPROVAL_ISSUE_ERROR_CODE = "APPROVAL_ISSUE_REJECTED";
+
+/**
+ * Thrown by `ApprovalPort.issueApproval` when it refuses a request for a reason the caller caused and can
+ * fix (e.g. self-approval). Its message is safe to show a client as-is; `POST /approvals` maps exactly this
+ * to 400. Any other error thrown by `issueApproval` is an infrastructure failure, reported to the
+ * observability hook and surfaced to the client as a fixed-text 500.
+ */
+export class ApprovalIssueError extends Error {
+  readonly code = APPROVAL_ISSUE_ERROR_CODE;
+  constructor(message: string) {
+    super(message);
+    this.name = "ApprovalIssueError";
+  }
+}
+
 export interface ApprovalVerifyResult {
   ok: boolean;
   grant?: ApprovalGrant;
@@ -256,6 +277,14 @@ export interface ApprovalPort {
    * Issues a token bound to `(action, payloadHash, requesterId, tenant)`. `approverId` MUST differ from
    * `requesterId` — an implementation MUST reject issuing a self-approval (design.md #63) rather than
    * leave that check to the caller. Default TTL `DEFAULT_APPROVAL_TTL_SECONDS`.
+   *
+   * Error contract: a rejection the caller caused (self-approval, an unacceptable request) MUST be
+   * thrown as an `ApprovalIssueError` (or an `Error` whose `code` is `APPROVAL_ISSUE_ERROR_CODE`); the
+   * host reports its message to the client as a 400. Any other thrown error is treated as an
+   * infrastructure failure: it reaches the observability hook and the client only sees a fixed 500
+   * message, so an implementation MUST NOT rely on its own message text reaching the client.
+   * An implementation SHOULD bound the lifetime it grants (`opts.ttlSeconds` is caller-supplied), since a
+   * stateless token without an `ApprovalStore` is replayable until it expires.
    */
   issueApproval(
     input: { action: string; payloadHash: string; requesterId: string; approverId: string; tenant?: string },

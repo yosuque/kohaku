@@ -12,6 +12,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from kohaku.spec import (
+    APPROVAL_ISSUE_ERROR_CODE,
     LineageCursorError,
     LineageEventRecord,
     LineageFilter,
@@ -34,6 +35,12 @@ from .shared import (
     request_id_of,
     require_governance,
 )
+
+# The client-visible message for an unexpected ApprovalPort.issue_approval failure (INTERNAL 500). An
+# arbitrary port error (a store/DB failure, say) may carry internals, so only an exception the port marked as
+# client-caused (APPROVAL_ISSUE_ERROR_CODE) has its own message shown; the original still reaches the
+# observability hook via report_host_error.
+_APPROVAL_INTERNAL_ERROR_MESSAGE = "approval issuance failed; see the observability hook (on_error) for details"
 
 # Aggregation window for usage analytics. Default 200 / max 1000 (aligned with the /lineage window constraint).
 ANALYTICS_DEFAULT_LIMIT = 200
@@ -218,4 +225,6 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return _json({"approval": token})
         except BaseException as e:
             await report_host_error(deps, "approvals", request_id, e)
-            return _error("BAD_REQUEST", _message(e), 400, request_id)
+            if getattr(e, "code", None) == APPROVAL_ISSUE_ERROR_CODE:
+                return _error("BAD_REQUEST", _message(e), 400, request_id)
+            return _error("INTERNAL", _APPROVAL_INTERNAL_ERROR_MESSAGE, 500, request_id)

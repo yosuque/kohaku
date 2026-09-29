@@ -1,14 +1,27 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { ApprovalGrant, ApprovalPort, ApprovalStore, ApprovalVerifyResult } from "@kohaku-ui/spec-core";
-import { DEFAULT_APPROVAL_TTL_SECONDS } from "@kohaku-ui/spec-core";
+import { ApprovalIssueError, DEFAULT_APPROVAL_TTL_SECONDS } from "@kohaku-ui/spec-core";
 import { isExpired, nowSeconds } from "./time.js";
 
 /** Default approval TTL (seconds); the shared spec-core default. Re-exported here for convenience. */
 export { DEFAULT_APPROVAL_TTL_SECONDS };
 
+/**
+ * Default upper bound (seconds) on any approval lifetime this port grants, whatever TTL the caller asks
+ * for. Without an `ApprovalStore` an approval is replayable until it expires, so the bound is the replay
+ * window.
+ */
+export const DEFAULT_MAX_APPROVAL_TTL_SECONDS = 3600;
+
 export interface HmacApprovalOptions {
   /** Default approval lifetime (seconds) when issueApproval's own opts.ttlSeconds is omitted. Defaults to 300. */
   ttlSeconds?: number;
+  /**
+   * Upper bound (seconds) on the lifetime of any approval this port issues. A larger TTL requested through
+   * `issueApproval`'s `opts.ttlSeconds` (or configured as `ttlSeconds`) is clamped down to it rather than
+   * rejected. Defaults to 3600.
+   */
+  maxTtlSeconds?: number;
   /**
    * Optional persistence for single-use enforcement (design.md #63). Omitted = a token stays usable
    * repeatedly until it expires (fine for a demo/dev environment; a production deployment gating a real
@@ -66,6 +79,7 @@ function isApprovalClaims(value: unknown): value is HmacApprovalClaims {
  */
 export function createHmacApprovalPort(secret: string, options: HmacApprovalOptions = {}): ApprovalPort {
   const defaultTtl = options.ttlSeconds ?? DEFAULT_APPROVAL_TTL_SECONDS;
+  const maxTtl = options.maxTtlSeconds ?? DEFAULT_MAX_APPROVAL_TTL_SECONDS;
   const store = options.store;
   const approvalKey = createHmac("sha256", secret).update(APPROVAL_KEY_LABEL).digest();
   const sign = (payload: string): string =>
@@ -108,7 +122,7 @@ export function createHmacApprovalPort(secret: string, options: HmacApprovalOpti
       if (input.approverId === input.requesterId) {
         // design.md #63: an ApprovalPort MUST reject issuing a self-approval rather than leave the check
         // to the caller (which could otherwise forget it and let a requester rubber-stamp their own action).
-        throw new Error("cannot issue an approval: approverId must differ from requesterId");
+        throw new ApprovalIssueError("cannot issue an approval: approverId must differ from requesterId");
       }
       const claims: HmacApprovalClaims = {
         action: input.action,
@@ -116,7 +130,7 @@ export function createHmacApprovalPort(secret: string, options: HmacApprovalOpti
         approverId: input.approverId,
         requesterId: input.requesterId,
         tenant: input.tenant,
-        exp: nowSeconds() + (opts.ttlSeconds ?? defaultTtl),
+        exp: nowSeconds() + Math.min(opts.ttlSeconds ?? defaultTtl, maxTtl),
         jti: randomBytes(16).toString("base64url"),
       };
       const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");

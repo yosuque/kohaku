@@ -105,8 +105,10 @@ from .policy import (
     merge_policy_sections,
 )
 from .ports import (
+    APPROVAL_ISSUE_ERROR_CODE,
     DEFAULT_APPROVAL_TTL_SECONDS,
     ApprovalGrant,
+    ApprovalIssueError,
     ApprovalPort,
     ApprovalStore,
     ApprovalVerifyResult,
@@ -184,6 +186,7 @@ __all__ = [
     "ALLOWED_STYLE_PROPS",
     "ALLOWED_TAGS",
     "ALWAYS_DENIED_ATTRS",
+    "APPROVAL_ISSUE_ERROR_CODE",
     "DEFAULT_APPROVAL_TTL_SECONDS",
     "DEFAULT_LINEAGE_PAGE_SIZE",
     "DEFAULT_MAX_DOM_DEPTH",
@@ -207,6 +210,7 @@ __all__ = [
     "AllPredicate",
     "AnyPredicate",
     "ApprovalGrant",
+    "ApprovalIssueError",
     "ApprovalPort",
     "ApprovalRequiredInfo",
     "ApprovalStore",

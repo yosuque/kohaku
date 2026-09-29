@@ -20,7 +20,7 @@ import secrets
 import time
 from collections.abc import Callable
 
-from kohaku.spec import ApprovalGrant, ApprovalStore, ApprovalVerifyResult
+from kohaku.spec import ApprovalGrant, ApprovalIssueError, ApprovalStore, ApprovalVerifyResult
 
 APPROVAL_TOKEN_PREFIX = "kohaku-approval.v2."
 """Token-kind prefix (design.md #63). It is part of the MAC input, and the version bump rejects every v1
@@ -30,6 +30,10 @@ APPROVAL_KEY_LABEL = "kohaku-approval-v2"
 """Label the approval MAC key is derived under: HMAC(secret, APPROVAL_KEY_LABEL)."""
 
 DEFAULT_APPROVAL_TTL_SECONDS = 300
+
+DEFAULT_MAX_APPROVAL_TTL_SECONDS = 3600
+"""Default upper bound on any approval lifetime this port grants, whatever TTL the caller asks for. Without
+an ApprovalStore an approval is replayable until it expires, so the bound is the replay window."""
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -90,9 +94,11 @@ class HmacApprovalPort:
         secret: str,
         *,
         ttl_seconds: int | None = None,
+        max_ttl_seconds: int | None = None,
         store: ApprovalStore | None = None,
         now: Callable[[], float] | None = None,
     ) -> None:
+        self._max_ttl = max_ttl_seconds if max_ttl_seconds is not None else DEFAULT_MAX_APPROVAL_TTL_SECONDS
         self._key = hmac.new(secret.encode("utf-8"), APPROVAL_KEY_LABEL.encode("utf-8"), hashlib.sha256).digest()
         self._default_ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_APPROVAL_TTL_SECONDS
         self._store = store
@@ -115,14 +121,15 @@ class HmacApprovalPort:
     ) -> str:
         if approver_id == requester_id:
             # design.md #63: reject issuing a self-approval rather than leave the check to the caller.
-            raise ValueError("cannot issue an approval: approverId must differ from requesterId")
+            raise ApprovalIssueError("cannot issue an approval: approverId must differ from requesterId")
         claims = {
             "action": action,
             "payloadHash": payload_hash,
             "approverId": approver_id,
             "requesterId": requester_id,
             "tenant": tenant,
-            "exp": int(self._now()) + (ttl_seconds if ttl_seconds is not None else self._default_ttl),
+            "exp": int(self._now())
+            + min(ttl_seconds if ttl_seconds is not None else self._default_ttl, self._max_ttl),
             "jti": secrets.token_urlsafe(16),
         }
         payload = _b64url_encode(
@@ -206,14 +213,18 @@ def create_hmac_approval_port(
     secret: str = "dev-secret-change-me",
     *,
     ttl_seconds: int | None = None,
+    max_ttl_seconds: int | None = None,
     store: ApprovalStore | None = None,
     now: Callable[[], float] | None = None,
 ) -> HmacApprovalPort:
-    return HmacApprovalPort(secret, ttl_seconds=ttl_seconds, store=store, now=now)
+    return HmacApprovalPort(
+        secret, ttl_seconds=ttl_seconds, max_ttl_seconds=max_ttl_seconds, store=store, now=now
+    )
 
 
 __all__ = [
     "DEFAULT_APPROVAL_TTL_SECONDS",
+    "DEFAULT_MAX_APPROVAL_TTL_SECONDS",
     "HmacApprovalPort",
     "MemoryApprovalStore",
     "create_hmac_approval_port",

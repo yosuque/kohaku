@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import type { ApprovalStore } from "@kohaku-ui/spec-core";
+import { ApprovalIssueError, type ApprovalStore } from "@kohaku-ui/spec-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHmacApprovalPort, createHmacAuthzPort, createMemoryApprovalStore } from "../src/index.js";
 
@@ -30,6 +30,18 @@ describe("createHmacApprovalPort issuance", () => {
         approverId: "same-person",
       }),
     ).rejects.toThrow(/approverId must differ from requesterId/);
+  });
+
+  it("rejects a self-approval with an ApprovalIssueError (the client-caused error contract)", async () => {
+    const approvals = createHmacApprovalPort("test-secret");
+    await expect(
+      approvals.issueApproval({
+        action: REQ.action,
+        payloadHash: REQ.payloadHash,
+        requesterId: "same-person",
+        approverId: "same-person",
+      }),
+    ).rejects.toBeInstanceOf(ApprovalIssueError);
   });
 });
 
@@ -119,6 +131,60 @@ describe("createHmacApprovalPort expiry", () => {
     vi.setSystemTime(new Date("2026-01-01T00:00:01.000Z"));
     const result = await approvals.verifyApproval(token, REQ);
     expect(result).toEqual({ ok: false, reason: "approval expired" });
+  });
+
+  it("clamps a requested TTL above maxTtlSeconds (default 3600) down to the maximum", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const approvals = createHmacApprovalPort("test-secret");
+    const token = await approvals.issueApproval(
+      {
+        action: REQ.action,
+        payloadHash: REQ.payloadHash,
+        requesterId: REQ.requesterId,
+        approverId: "approver-1",
+      },
+      { ttlSeconds: 86400 },
+    );
+
+    vi.setSystemTime(new Date("2026-01-01T00:59:59.000Z"));
+    expect((await approvals.verifyApproval(token, REQ)).ok).toBe(true);
+    vi.setSystemTime(new Date("2026-01-01T01:00:00.000Z"));
+    expect(await approvals.verifyApproval(token, REQ)).toEqual({ ok: false, reason: "approval expired" });
+  });
+
+  it("honors a custom maxTtlSeconds, and never lengthens a shorter requested TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const approvals = createHmacApprovalPort("test-secret", { maxTtlSeconds: 60 });
+    const input = {
+      action: REQ.action,
+      payloadHash: REQ.payloadHash,
+      requesterId: REQ.requesterId,
+      approverId: "approver-1",
+    };
+    const clamped = await approvals.issueApproval(input, { ttlSeconds: 600 });
+    const short = await approvals.issueApproval(input, { ttlSeconds: 10 });
+
+    vi.setSystemTime(new Date("2026-01-01T00:00:10.000Z"));
+    expect((await approvals.verifyApproval(short, REQ)).ok).toBe(false);
+    expect((await approvals.verifyApproval(clamped, REQ)).ok).toBe(true);
+    vi.setSystemTime(new Date("2026-01-01T00:01:00.000Z"));
+    expect((await approvals.verifyApproval(clamped, REQ)).ok).toBe(false);
+  });
+
+  it("also caps a configured default ttlSeconds that exceeds maxTtlSeconds", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const approvals = createHmacApprovalPort("test-secret", { ttlSeconds: 500, maxTtlSeconds: 30 });
+    const token = await approvals.issueApproval({
+      action: REQ.action,
+      payloadHash: REQ.payloadHash,
+      requesterId: REQ.requesterId,
+      approverId: "approver-1",
+    });
+    vi.setSystemTime(new Date("2026-01-01T00:00:30.000Z"));
+    expect((await approvals.verifyApproval(token, REQ)).ok).toBe(false);
   });
 
   it("uses the default TTL (DEFAULT_APPROVAL_TTL_SECONDS = 300) when none is given", async () => {

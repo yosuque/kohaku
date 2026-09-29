@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { type ServerType, serve } from "@hono/node-server";
-import { createHmacApprovalPort } from "@kohaku-ui/authz-hmac";
+import { createHmacApprovalPort, createMemoryApprovalStore } from "@kohaku-ui/authz-hmac";
 import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { loadPolicyFile } from "@kohaku-ui/host-core/policy-node";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
@@ -130,9 +130,12 @@ async function main(): Promise<void> {
     // apps/sample-api/src/domain/port.ts) needs an ApprovalPort to ever be allowed. Reuses the same
     // KOHAKU_CAPABILITY_SECRET as the AuthzPort (capabilitySecretFromEnv) -- see that function's doc
     // comment for why sharing the secret is by design (the approval MAC key is derived from it under
-    // its own label, so the token domains stay separate) -- with no ApprovalStore (single-use enforcement is optional per
-    // design.md #63; out of scope for this demo).
-    approvals: createHmacApprovalPort(capabilitySecretFromEnv(process.env)),
+    // its own label, so the token domains stay separate) -- with an in-process ApprovalStore so an approval is
+    // single-use (design.md #63; without one a token stays replayable until it expires). The store is per
+    // process, which is enough for this single-instance demo; a multi-instance deployment needs a shared one.
+    approvals: createHmacApprovalPort(capabilitySecretFromEnv(process.env), {
+      store: createMemoryApprovalStore(),
+    }),
   });
 
   const port = Number(process.env["PORT"] ?? 8787);
