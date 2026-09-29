@@ -16,6 +16,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import time
 from collections.abc import Callable
@@ -53,6 +54,9 @@ def _claims_well_formed(claims: dict[str, object]) -> bool:
         and isinstance(claims.get("tenant"), (str, type(None)))
         and isinstance(exp, (int, float))
         and not isinstance(exp, bool)
+        # json.loads accepts NaN / Infinity, and `NaN <= now` is False: without this a NaN exp would never
+        # expire. Mirrors TS's Number.isFinite.
+        and math.isfinite(exp)
     )
 
 
