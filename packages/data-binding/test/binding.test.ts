@@ -71,6 +71,27 @@ describe("BindingClient", () => {
     } satisfies Partial<BindingError>);
   });
 
+  it("429 → RATE_LIMITED carrying the envelope's retryAfterMs (resolve)", async () => {
+    const client = createBindingClient({
+      fetcher: async () => ({
+        status: 429,
+        body: { error: { code: "RATE_LIMITED", message: "rate limit exceeded", retryAfterMs: 2500 } },
+      }),
+    });
+    await expect(client.resolve("query://sales/summary")).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      status: 429,
+      retryAfterMs: 2500,
+    } satisfies Partial<BindingError>);
+  });
+
+  it("a 429 without a conformant envelope is still RATE_LIMITED, without a retry hint", async () => {
+    const client = createBindingClient({ fetcher: async () => ({ status: 429, body: null }) });
+    const error = await client.resolve("query://sales/summary").catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "RATE_LIMITED", status: 429 });
+    expect((error as BindingError).retryAfterMs).toBeUndefined();
+  });
+
   it("dataVersion mismatch → STALE_VERSION", async () => {
     const client = createBindingClient({
       fetcher: async () => ({ status: 200, body: { ...DATA, dataVersion: "sales@seed-2" } }),
@@ -201,6 +222,20 @@ describe("invokeAction: governed-action error mapping (design.md #62/#63)", () =
     await expect(client.invokeAction("annotate", { note: "hi" })).rejects.toMatchObject({
       code: "APPROVAL_REQUIRED",
       approval: { requestId: "r1", action: "annotate", tier: "confirm", payloadHash: "sha256:x" },
+    } satisfies Partial<BindingError>);
+  });
+
+  it("429 RATE_LIMITED → BindingError carrying retryAfterMs (invokeAction)", async () => {
+    const client = createBindingClient({
+      fetcher: async () => ({ status: 200, body: DATA }),
+      actionFetcher: async () => ({
+        status: 429,
+        body: { error: { code: "RATE_LIMITED", message: "rate limit exceeded", retryAfterMs: 1000 } },
+      }),
+    });
+    await expect(client.invokeAction("annotate", { note: "hi" })).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+      retryAfterMs: 1000,
     } satisfies Partial<BindingError>);
   });
 

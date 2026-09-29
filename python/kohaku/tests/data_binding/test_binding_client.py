@@ -95,6 +95,34 @@ class TestResolve:
             asyncio.run(client.resolve("query://sales/summary"))
         assert ei.value.code == "UNAUTHORIZED"
 
+    def test_429_rate_limited_carries_the_envelopes_retry_after_ms(self) -> None:
+        envelope = {"error": {"code": "RATE_LIMITED", "message": "rate limit exceeded", "retryAfterMs": 2500}}
+        client = create_binding_client(BindingClientConfig(fetcher=_const_fetcher(429, envelope)))
+        with pytest.raises(BindingError) as ei:
+            asyncio.run(client.resolve("query://sales/summary"))
+        assert ei.value.code == "RATE_LIMITED"
+        assert ei.value.status == 429
+        assert ei.value.retry_after_ms == 2500
+
+    def test_429_without_a_conformant_envelope_is_rate_limited_without_a_retry_hint(self) -> None:
+        client = create_binding_client(BindingClientConfig(fetcher=_const_fetcher(429, None)))
+        with pytest.raises(BindingError) as ei:
+            asyncio.run(client.resolve("query://sales/summary"))
+        assert ei.value.code == "RATE_LIMITED"
+        assert ei.value.retry_after_ms is None
+
+    def test_429_on_invoke_action_is_rate_limited(self) -> None:
+        envelope = {"error": {"code": "RATE_LIMITED", "message": "rate limit exceeded", "retryAfterMs": 1000}}
+        client = create_binding_client(
+            BindingClientConfig(
+                fetcher=_const_fetcher(200, _DATA), action_fetcher=_const_action_fetcher(429, envelope)
+            )
+        )
+        with pytest.raises(BindingError) as ei:
+            asyncio.run(client.invoke_action("annotate", {"note": "hi"}))
+        assert ei.value.code == "RATE_LIMITED"
+        assert ei.value.retry_after_ms == 1000
+
     def test_404_ref_not_found(self) -> None:
         client = create_binding_client(BindingClientConfig(fetcher=_const_fetcher(404, None)))
         with pytest.raises(BindingError) as ei:
