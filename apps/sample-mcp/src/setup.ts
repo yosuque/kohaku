@@ -310,6 +310,18 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
     fallback: FALLBACK_HTML,
   });
 
+  // Governed actions: options.approvals when given (tests); otherwise built from env, reusing the same
+  // KOHAKU_CAPABILITY_SECRET as the AuthzPort (capabilitySecretFromEnv) -- see that function's doc comment for
+  // why sharing the secret is by design. Built ONCE here, with its in-process ApprovalStore, and shared by every
+  // createServer() call: the Streamable HTTP transport builds a fresh McpServer per request, so a store created
+  // inside createServer() would be empty on every exchange and a consumed approval token could be replayed
+  // within its TTL (design.md #63: single-use needs a store that outlives the request).
+  const approvals =
+    options.approvals ??
+    createHmacApprovalPort(capabilitySecretFromEnv(process.env), {
+      store: createMemoryApprovalStore(),
+    });
+
   function createServer(): McpServer {
     const server = new McpServer(
       { name: "kohaku-sales-sample", version: "0.1.0" },
@@ -346,15 +358,8 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
         actionEffects: salesActionEffects,
         // Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish") needs an
         // ApprovalPort to ever be allowed on the MCP profile too (symmetric with app-core.ts's own
-        // wiring). options.approvals when given (tests); otherwise built from env, reusing the same
-        // KOHAKU_CAPABILITY_SECRET as the AuthzPort (capabilitySecretFromEnv) -- see that function's doc
-        // comment for why sharing the secret is by design. Built with an in-process ApprovalStore so an
-        // approval is single-use (design.md #63; without one a token stays replayable until it expires).
-        approvals:
-          options.approvals ??
-          createHmacApprovalPort(capabilitySecretFromEnv(process.env), {
-            store: createMemoryApprovalStore(),
-          }),
+        // wiring). Built once per setup (see `approvals` above), never per createServer() call.
+        approvals,
         // Per-tool-call principal resolution: options.resolvePrincipal when given, else this setup's own
         // default built from the env-derived identity resolver under KOHAKU_AUTHZ=jwt (see this function's
         // `resolvePrincipal` local above). Left unwired (every call runs as the anonymous principal — see
