@@ -13,7 +13,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import type { DailyTokenLedger } from "./daily-token-ledger.js";
 import type { RateLimiterErrorInfo } from "./rate-limit.js";
-import { createRateLimiter } from "./rate-limit.js";
+import { createRateLimiter, DEFAULT_MAX_MEMORY_ENTRIES } from "./rate-limit.js";
 
 /** `PolicySection.compose`, unwrapped from its optional. */
 type PolicyComposeData = NonNullable<PolicySection["compose"]>;
@@ -44,12 +44,12 @@ export async function parsePolicy(json: unknown): Promise<ParsedPolicy> {
 
 /**
  * The `policy.applied` audit event (design.md #69; SPEC is not affected — this is a host-side
- * operational concern). Fired by `reload()` only when the effective `policyId` actually changes
- * (never on a no-op reload — comparing byte-for-byte identical content, including reloading the exact
- * same file twice, is *not* an audit-worthy event). `@kohaku-ui/lineage`'s glue for recording this as a
- * real lineage event (the "policy.applied" event *type* itself is owned by lineage, not this package —
- * see AGENTS.md's "the event vocabulary is owned by @kohaku-ui/lineage") is a later commit on this
- * branch.
+ * operational concern). Fired once by `createPolicyRuntime` for the file the runtime starts with
+ * (`previousPolicyId` is `undefined`, `changedPaths` lists every top-level key of that file), and then by
+ * `reload()` only when the effective `policyId` actually changes (never on a no-op reload — comparing
+ * byte-for-byte identical content, including reloading the exact same file twice, is *not* an
+ * audit-worthy event). The "policy.applied" event *type* is owned by `@kohaku-ui/lineage`, and
+ * `Lineage.policyApplied` records this event as-is.
  */
 export interface PolicyAppliedEvent {
   policyId: string;
@@ -93,8 +93,57 @@ function diffPolicyPaths(previous: unknown, next: unknown, prefix = ""): string[
 
 /** The merged `PolicySection` (`defaults` deep-merged with `tenants[tenant]`, tenant override winning) for one tenant. `undefined` tenant resolves to `defaults` alone. */
 function resolveSection(file: KohakuPolicyFile, tenant: string | undefined): PolicySection {
-  const tenantSection = tenant != null ? file.tenants?.[tenant] : undefined;
+  const tenantSection = declaresTenant(file, tenant) ? file.tenants?.[tenant] : undefined;
   return mergePolicySections(file.defaults, tenantSection ?? {});
+}
+
+/** True when `file.tenants` declares its own section for `tenant` (an own key only: `"constructor"` / `"__proto__"` are not tenants). */
+function declaresTenant(file: KohakuPolicyFile, tenant: string | undefined): tenant is string {
+  return tenant != null && file.tenants != null && Object.hasOwn(file.tenants, tenant);
+}
+
+/**
+ * The memo key of a tenant's resolved `PolicySection`: the tenant id when the file declares a section
+ * for it, else one shared key — an undeclared tenant resolves to `defaults` alone, so the many tenant
+ * ids a caller-controlled header can produce all share a single entry instead of growing the memo.
+ */
+function sectionKeyOf(file: KohakuPolicyFile, tenant: string | undefined): string {
+  return declaresTenant(file, tenant) ? `t:${tenant}` : "d";
+}
+
+/**
+ * Fails fast when `file` declares a limit this runtime has no dependency to enforce: a
+ * `compose.budget.dailyTokens` needs a `ledger`, a `rateLimits` rule needs a `rateLimitStore`. Without
+ * this check such a section would be accepted and then silently never enforced.
+ */
+function assertDependenciesFor(
+  file: KohakuPolicyFile,
+  deps: { ledger?: DailyTokenLedger; rateLimitStore?: RateLimitStore },
+): void {
+  const sections: [string, PolicySection][] = [
+    ["defaults", file.defaults],
+    ...Object.entries(file.tenants ?? {}).map(([tenant, section]): [string, PolicySection] => [
+      `tenants.${tenant}`,
+      section,
+    ]),
+  ];
+  for (const [where, section] of sections) {
+    if (deps.ledger == null && section.compose?.budget?.dailyTokens != null) {
+      throw new Error(
+        `Policy file declares ${where}.compose.budget.dailyTokens but createPolicyRuntime was given no \`ledger\`; the limit would never be enforced. Pass \`ledger: createDailyTokenLedger()\` or remove the setting.`,
+      );
+    }
+    const rules = section.rateLimits;
+    if (
+      deps.rateLimitStore == null &&
+      rules != null &&
+      (rules.compose != null || rules.action != null || rules.resolve != null)
+    ) {
+      throw new Error(
+        `Policy file declares ${where}.rateLimits but createPolicyRuntime was given no \`rateLimitStore\`; the limits would never be enforced. Pass \`rateLimitStore: createMemoryRateLimitStore()\` (or your own RateLimitStore) or remove the setting.`,
+      );
+    }
+  }
 }
 
 /** Combines two optional `ComposeBudget.check` hooks: `base` runs first (its denial wins outright), `extra` runs only when `base` allows (or is absent). `undefined` when both are `undefined`. */
@@ -190,14 +239,14 @@ function buildEffectiveBudget(
   };
 }
 
-/** Layers `data` (the policy file's merged `compose` section for this tenant) onto `base` (the product-supplied `ComposePolicy`, which owns every function-shaped field). Only the keys `data` actually sets override `base`'s own value (design.md #69). */
+/** Layers `section.compose` (the policy file's merged section for this tenant) onto `base` (the product-supplied `ComposePolicy`, which owns every function-shaped field). Only the keys `data` actually sets override `base`'s own value (design.md #69). */
 function buildEffectivePolicy(
-  file: KohakuPolicyFile,
+  section: PolicySection,
   tenant: string | undefined,
   base: ComposePolicy,
   ledger: DailyTokenLedger | undefined,
 ): ComposePolicy {
-  const data = resolveSection(file, tenant).compose ?? {};
+  const data = section.compose ?? {};
   const budget = buildEffectiveBudget(base.budget, data.budget, tenant, ledger);
   return {
     ...base,
@@ -233,7 +282,9 @@ export interface PolicyRuntime {
   rolesFor(tenant?: string): Record<string, readonly string[]>;
   /** The current file's `policyId` (`sha256:<hex>`). Live: reflects the most recent `reload`. */
   readonly policyId: string;
-  /** Replaces the effective policy file. Fires `audit` (if wired) with a `PolicyAppliedEvent` — but only when the new `policyId` actually differs from the current one; reloading byte-identical content is a no-op (no event, memoized `policyFor` results are kept). */
+  /**
+   * Replaces the effective policy file. Fires `audit` (if wired) with a `PolicyAppliedEvent` — but only when the new `policyId` actually differs from the current one; reloading byte-identical content is a no-op (no event, memoized `policyFor` results are kept). Rejects, leaving the previous policy in force, when `file` declares `dailyTokens` / `rateLimits` and the runtime was built without the `ledger` / `rateLimitStore` that would enforce it (see `CreatePolicyRuntimeOptions`).
+   */
   reload(file: KohakuPolicyFile, actor?: string): Promise<void>;
 }
 
@@ -246,10 +297,21 @@ export interface CreatePolicyRuntimeOptions {
    * base policy for every tenant (the policy file becomes the sole source of `ComposePolicy` data).
    */
   basePolicyFor?: (tenant?: string) => ComposePolicy;
-  /** Backs a `compose.budget.dailyTokens` check/onUsage pair. Only needed when some section actually declares `dailyTokens`; omitted, `dailyTokens` is silently not enforced. */
+  /**
+   * Backs a `compose.budget.dailyTokens` check/onUsage pair. Required when any section declares
+   * `dailyTokens`: `createPolicyRuntime` (and `reload`) throws a configuration error rather than accept a
+   * file whose limit would silently never be enforced. The ledger is in-process only, so the budget applies
+   * per host instance (see `DailyTokenLedger`).
+   */
   ledger?: DailyTokenLedger;
-  /** Backs `rateLimiter`. Only needed when some section actually declares `rateLimits`; omitted, `rateLimiter.take` always allows. */
+  /**
+   * Backs `rateLimiter`. Required when any section declares `rateLimits`: `createPolicyRuntime` (and
+   * `reload`) throws a configuration error rather than accept a file whose limits would silently never be
+   * enforced. Omitted (with no `rateLimits` declared), `rateLimiter.take` always allows.
+   */
   rateLimitStore?: RateLimitStore;
+  /** Forwarded as `createRateLimiter`'s `timeoutMs`: how long `rateLimiter.take` waits for `rateLimitStore.take` before failing open. Default `DEFAULT_RATE_LIMIT_TIMEOUT_MS`. */
+  rateLimitTimeoutMs?: number;
   /**
    * Forwarded as `createRateLimiter`'s `onError`: fired (fire-and-forget, `notifyHook`'s convention)
    * whenever `rateLimitStore.take` throws. `rateLimiter.take` itself always fails open (the request is
@@ -259,7 +321,7 @@ export interface CreatePolicyRuntimeOptions {
    * `onError`) so a rate-limit backend failure surfaces the same way any other fail-open failure does.
    */
   onRateLimitError?: (info: RateLimiterErrorInfo) => void | Promise<void>;
-  /** Fired by `reload()`; see `PolicyRuntime.reload`'s doc. `actor` is `reload`'s own second argument, threaded through unchanged (never inspected by this module) — the caller's lineage-wiring glue is expected to place it on the recorded event's `actor` field, not inside the payload. */
+  /** Fired once by `createPolicyRuntime` for the starting file (`actor` `undefined`, `previousPolicyId` `undefined`) and by `reload()` on every effective change; see `PolicyAppliedEvent` and `PolicyRuntime.reload`'s doc. `actor` is `reload`'s own second argument, threaded through unchanged (never inspected by this module) — the caller's lineage-wiring glue is expected to place it on the recorded event's `actor` field, not inside the payload. A rejection from the startup call propagates out of `createPolicyRuntime`, the same way one from `reload` propagates out of `reload`. */
   audit?: (event: PolicyAppliedEvent, actor: string | undefined) => void | Promise<void>;
 }
 
@@ -267,6 +329,23 @@ interface PolicyForMemoEntry {
   base: ComposePolicy;
   policyId: string;
   effective: ComposePolicy;
+}
+
+/** Builds the `policy.applied` event for a change from `previousFile` (`undefined` = the runtime's starting file) to `file`. */
+function buildAppliedEvent(
+  previousFile: KohakuPolicyFile | undefined,
+  previousPolicyId: string | undefined,
+  file: KohakuPolicyFile,
+  policyId: string,
+): PolicyAppliedEvent {
+  return {
+    policyId,
+    previousPolicyId,
+    version: file.version,
+    label: file.label,
+    changedPaths: diffPolicyPaths(previousFile ?? {}, file),
+    tenants: Object.keys(file.tenants ?? {}),
+  };
 }
 
 /**
@@ -278,11 +357,27 @@ interface PolicyForMemoEntry {
  * returned `ComposePolicy` is consumed by `compose()` exactly like a hand-written one, so the existing
  * fingerprint machinery already separates the cache correctly for whatever `allowL2`/`routeTier` this
  * runtime ends up resolving).
+ *
+ * Throws when `options.file` declares `dailyTokens` / `rateLimits` without the matching `ledger` /
+ * `rateLimitStore` (see `CreatePolicyRuntimeOptions`), and fires `audit` once for the starting file.
  */
 export async function createPolicyRuntime(options: CreatePolicyRuntimeOptions): Promise<PolicyRuntime> {
+  assertDependenciesFor(options.file, options);
   let currentFile = options.file;
   let currentPolicyId = await computePolicyId(currentFile);
   const memo = new Map<string, PolicyForMemoEntry>();
+  const sectionMemo = new Map<string, PolicySection>();
+
+  /** `resolveSection`, memoized per `sectionKeyOf` (cleared on every effective change): the deep merge runs once per declared tenant, not once per request. */
+  function sectionFor(tenant: string | undefined): PolicySection {
+    const key = sectionKeyOf(currentFile, tenant);
+    let section = sectionMemo.get(key);
+    if (section == null) {
+      section = resolveSection(currentFile, tenant);
+      sectionMemo.set(key, section);
+    }
+    return section;
+  }
 
   function policyFor(session?: SessionContext): ComposePolicy {
     const tenant = session?.tenant;
@@ -290,48 +385,58 @@ export async function createPolicyRuntime(options: CreatePolicyRuntimeOptions): 
     const base = options.basePolicyFor?.(tenant) ?? {};
     const cached = memo.get(key);
     if (cached != null && cached.base === base && cached.policyId === currentPolicyId) {
+      memo.delete(key); // reinsert to mark as most-recently-used
+      memo.set(key, cached);
       return cached.effective;
     }
-    const effective = buildEffectivePolicy(currentFile, tenant, base, options.ledger);
+    const effective = buildEffectivePolicy(sectionFor(tenant), tenant, base, options.ledger);
+    memo.delete(key);
+    if (memo.size >= DEFAULT_MAX_MEMORY_ENTRIES) {
+      // The key is a caller-controlled tenant header value: bound the memo with LRU eviction (a Map
+      // iterates in insertion order, so the first key is the least recently used).
+      const oldestKey = memo.keys().next().value;
+      if (oldestKey !== undefined) memo.delete(oldestKey);
+    }
     memo.set(key, { base, policyId: currentPolicyId, effective });
     return effective;
   }
 
   const innerRateLimiter =
     options.rateLimitStore != null
-      ? createRateLimiter(options.rateLimitStore, options.onRateLimitError)
+      ? createRateLimiter(
+          options.rateLimitStore,
+          options.onRateLimitError,
+          undefined,
+          options.rateLimitTimeoutMs != null ? { timeoutMs: options.rateLimitTimeoutMs } : {},
+        )
       : undefined;
   const rateLimiter: PolicyRateLimiter = {
     async take({ tenant, principal, routeClass, cost }) {
       if (innerRateLimiter == null) return { allow: true };
-      const rule: RateLimitRule | undefined = resolveSection(currentFile, tenant).rateLimits?.[routeClass];
+      const rule: RateLimitRule | undefined = sectionFor(tenant).rateLimits?.[routeClass];
       if (rule == null) return { allow: true };
       return innerRateLimiter.take({ tenant, principal, routeClass, rule, cost });
     },
   };
 
   function rolesFor(tenant?: string): Record<string, readonly string[]> {
-    return resolveSection(currentFile, tenant).governance?.roles ?? {};
+    return sectionFor(tenant).governance?.roles ?? {};
   }
 
   async function reload(file: KohakuPolicyFile, actor?: string): Promise<void> {
+    assertDependenciesFor(file, options);
+    const policyId = await computePolicyId(file);
+    if (policyId === currentPolicyId) return; // dedup: byte-identical content is a no-op, no event, memos kept
     const previousFile = currentFile;
     const previousPolicyId = currentPolicyId;
-    const policyId = await computePolicyId(file);
     currentFile = file;
     currentPolicyId = policyId;
     memo.clear();
-    if (policyId === previousPolicyId) return; // dedup: byte-identical content is a no-op, no event
-    const event: PolicyAppliedEvent = {
-      policyId,
-      previousPolicyId,
-      version: file.version,
-      label: file.label,
-      changedPaths: diffPolicyPaths(previousFile, file),
-      tenants: Object.keys(file.tenants ?? {}),
-    };
-    await options.audit?.(event, actor);
+    sectionMemo.clear();
+    await options.audit?.(buildAppliedEvent(previousFile, previousPolicyId, file, policyId), actor);
   }
+
+  await options.audit?.(buildAppliedEvent(undefined, undefined, currentFile, currentPolicyId), undefined);
 
   return {
     policyFor,

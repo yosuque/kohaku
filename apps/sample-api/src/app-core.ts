@@ -113,9 +113,9 @@ export interface AppDeps {
    * Verbose error logging on the failure path: the compose observer's console output
    * (`app/compose-context.ts`) and host-rest's own `onError` hook (`app/host-deps.ts`) both print the full
    * cause chain (`@kohaku-ui/host-core`'s `formatErrorChain`) and the stack trace instead of a one-line
-   * summary when this is true. Default false. A concurrent branch (T0-2) originally read
-   * `process.env.KOHAKU_DEBUG` directly in both of those files; merged in as a plain parameter instead, for
-   * the same reason `otel` is one — this file must stay env-neutral, and only index.ts has an env to read.
+   * summary when this is true. Default false. A plain parameter rather than a `process.env.KOHAKU_DEBUG`
+   * read, for the same reason `otel` is one — this file must stay env-neutral, and only index.ts has an
+   * env to read.
    */
   debug?: boolean;
   /**
@@ -229,10 +229,11 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
             const label = `[policy] rate-limit store failed for tenant=${tenant ?? "-"} principal=${principal ?? "-"} routeClass=${routeClass} (failing open)`;
             console.error((deps.debug ?? false) ? `${label}: ${formatErrorChain(error)}` : label);
           },
-          // Records policy.applied (lineage, task 9) on every effective change. actor is reload()'s own
-          // free-string label (an operator id, "system", …); mapped onto lineage's typed Actor shape as a
-          // "system" actor carrying that label as its id (a policy reload is an operational/config action,
-          // never a "model"-kind actor, and this demo has no principal-typed caller for it). Tenant-neutral
+          // Records policy.applied (lineage) once for the starting file (no actor) and again on every
+          // effective reload. actor is reload()'s own free-string label (an operator id, "system", …);
+          // mapped onto lineage's typed Actor shape as a "system" actor carrying that label as its id
+          // (a policy reload is an operational/config action, never a "model"-kind actor, and this demo
+          // has no principal-typed caller for it). Tenant-neutral
           // (omitted): the event's own `tenants` field already carries the affected roster, and the change
           // itself is cross-tenant by nature (a whole file swap), not scoped to one tenant's own timeline.
           audit: (event, actor) =>

@@ -3,6 +3,7 @@ import type { KohakuPolicyFile, RateLimitStore } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { createDailyTokenLedger } from "../src/daily-token-ledger.js";
 import { createPolicyRuntime, type PolicyAppliedEvent, parsePolicy } from "../src/policy.js";
+import { DEFAULT_MAX_MEMORY_ENTRIES } from "../src/rate-limit.js";
 
 function makeFile(overrides: Partial<KohakuPolicyFile> = {}): KohakuPolicyFile {
   return { version: 1, defaults: {}, ...overrides };
@@ -217,12 +218,9 @@ describe("createPolicyRuntime: rolesFor", () => {
 });
 
 describe("createPolicyRuntime: rateLimiter", () => {
-  it("always allows when no RateLimitStore is supplied", async () => {
-    const runtime = await createPolicyRuntime({
-      file: makeFile({ defaults: { rateLimits: { compose: { capacity: 1, refillPerSecond: 1 } } } }),
-    });
+  it("always allows when no RateLimitStore is supplied and the file declares no rateLimits", async () => {
+    const runtime = await createPolicyRuntime({ file: makeFile() });
     expect(await runtime.rateLimiter.take({ routeClass: "compose" })).toEqual({ allow: true });
-    expect(await runtime.rateLimiter.take({ routeClass: "compose" })).toEqual({ allow: true }); // still allows: no store
   });
 
   it("always allows when the routeClass has no configured rule", async () => {
@@ -283,8 +281,20 @@ describe("createPolicyRuntime: reload", () => {
       file: makeFile({ defaults: { compose: { allowL2: true } } }),
       audit: (e) => void events.push(e),
     });
+    events.length = 0; // drop the startup event
     await runtime.reload(makeFile({ defaults: { compose: { allowL2: true } } }));
     expect(events).toHaveLength(0);
+  });
+
+  it("a byte-identical reload keeps the memoized policyFor result (the memo is cleared only on an effective change)", async () => {
+    const base: ComposePolicy = {};
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { allowL2: true } } }),
+      basePolicyFor: () => base,
+    });
+    const before = runtime.policyFor();
+    await runtime.reload(makeFile({ defaults: { compose: { allowL2: true } } }));
+    expect(runtime.policyFor()).toBe(before);
   });
 
   it("fires audit with the new/previous policyId, version, label, changedPaths, and tenants", async () => {
@@ -294,6 +304,7 @@ describe("createPolicyRuntime: reload", () => {
       audit: (event, actor) => void events.push({ event, actor }),
     });
     const previousPolicyId = runtime.policyId;
+    events.length = 0; // drop the startup event
 
     await runtime.reload(
       makeFile({
@@ -330,7 +341,130 @@ describe("createPolicyRuntime: reload", () => {
       audit: (e) => void events.push(e),
     });
     const initialPolicyId = runtime.policyId;
+    events.length = 0; // drop the startup event
     await runtime.reload(makeFile({ label: "new" }));
     expect(events[0]?.previousPolicyId).toBe(initialPolicyId);
+  });
+
+  it("rejects a file declaring dailyTokens / rateLimits the runtime cannot enforce, keeping the previous policy", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { allowL2: false } } }),
+    });
+    const before = runtime.policyId;
+    await expect(
+      runtime.reload(makeFile({ defaults: { compose: { budget: { dailyTokens: 10 } } } })),
+    ).rejects.toThrow(/dailyTokens.*ledger/);
+    await expect(
+      runtime.reload(
+        makeFile({
+          defaults: {},
+          tenants: { "tenant-a": { rateLimits: { compose: { capacity: 1, refillPerSecond: 1 } } } },
+        }),
+      ),
+    ).rejects.toThrow(/tenants\.tenant-a\.rateLimits.*rateLimitStore/);
+    expect(runtime.policyId).toBe(before);
+    expect(runtime.policyFor().allowL2).toBe(false);
+  });
+});
+
+describe("createPolicyRuntime: startup audit", () => {
+  it("fires audit once for the starting file, with no previousPolicyId and no actor", async () => {
+    const calls: Array<{ event: PolicyAppliedEvent; actor: string | undefined }> = [];
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ label: "boot", tenants: { "tenant-a": {} } }),
+      audit: (event, actor) => void calls.push({ event, actor }),
+    });
+    expect(calls).toHaveLength(1);
+    const { event, actor } = calls[0]!;
+    expect(actor).toBeUndefined();
+    expect(event.previousPolicyId).toBeUndefined();
+    expect(event.policyId).toBe(runtime.policyId);
+    expect(event.label).toBe("boot");
+    expect(event.tenants).toEqual(["tenant-a"]);
+    expect(event.changedPaths).toEqual(expect.arrayContaining(["version", "label", "defaults", "tenants"]));
+  });
+
+  it("works without an audit callback", async () => {
+    await expect(createPolicyRuntime({ file: makeFile() })).resolves.toBeDefined();
+  });
+});
+
+describe("createPolicyRuntime: declared dependencies", () => {
+  it("throws when defaults declare dailyTokens but no ledger is supplied", async () => {
+    await expect(
+      createPolicyRuntime({ file: makeFile({ defaults: { compose: { budget: { dailyTokens: 5 } } } }) }),
+    ).rejects.toThrow(/defaults\.compose\.budget\.dailyTokens.*ledger/);
+  });
+
+  it("throws when a tenant section declares dailyTokens but no ledger is supplied", async () => {
+    await expect(
+      createPolicyRuntime({
+        file: makeFile({ tenants: { "tenant-a": { compose: { budget: { dailyTokens: 5 } } } } }),
+      }),
+    ).rejects.toThrow(/tenants\.tenant-a\.compose\.budget\.dailyTokens/);
+  });
+
+  it("throws when rateLimits declare a rule but no rateLimitStore is supplied", async () => {
+    await expect(
+      createPolicyRuntime({
+        file: makeFile({ defaults: { rateLimits: { compose: { capacity: 1, refillPerSecond: 1 } } } }),
+      }),
+    ).rejects.toThrow(/defaults\.rateLimits.*rateLimitStore/);
+  });
+
+  it("does not throw for an empty rateLimits section, or when the dependencies are supplied", async () => {
+    await expect(
+      createPolicyRuntime({ file: makeFile({ defaults: { rateLimits: {} } }) }),
+    ).resolves.toBeDefined();
+    await expect(
+      createPolicyRuntime({
+        file: makeFile({
+          defaults: {
+            compose: { budget: { dailyTokens: 5 } },
+            rateLimits: { action: { capacity: 1, refillPerSecond: 1 } },
+          },
+        }),
+        ledger: createDailyTokenLedger(),
+        rateLimitStore: { take: async () => ({ allow: true }) },
+      }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe("createPolicyRuntime: bounded / shared memos", () => {
+  it("undeclared tenants resolve to the defaults section, including ids that name Object.prototype members", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile({
+        defaults: { governance: { roles: { admin: ["*"] } } },
+        tenants: { "tenant-a": { governance: { roles: { viewer: ["lineage.read"] } } } },
+      }),
+    });
+    expect(runtime.rolesFor("x1")).toEqual({ admin: ["*"] });
+    expect(runtime.rolesFor("x2")).toEqual({ admin: ["*"] });
+    expect(runtime.rolesFor("constructor")).toEqual({ admin: ["*"] });
+    expect(runtime.rolesFor("tenant-a")).toEqual({ admin: ["*"], viewer: ["lineage.read"] });
+  });
+
+  it("rolesFor observes a reload (the section memo is cleared)", async () => {
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { governance: { roles: { admin: ["*"] } } } }),
+    });
+    expect(runtime.rolesFor()).toEqual({ admin: ["*"] });
+    await runtime.reload(makeFile({ defaults: { governance: { roles: { viewer: ["lineage.read"] } } } }));
+    expect(runtime.rolesFor()).toEqual({ viewer: ["lineage.read"] });
+  });
+
+  it("the policyFor memo is LRU-bounded: a flood of distinct tenant ids evicts the oldest entry", async () => {
+    const base: ComposePolicy = {};
+    const runtime = await createPolicyRuntime({ file: makeFile(), basePolicyFor: () => base });
+    const first = runtime.policyFor({ surface: "web", tenant: "t-first" });
+    for (let i = 0; i < DEFAULT_MAX_MEMORY_ENTRIES; i += 1) {
+      runtime.policyFor({ surface: "web", tenant: `flood-${i}` });
+    }
+    expect(runtime.policyFor({ surface: "web", tenant: "t-first" })).not.toBe(first); // evicted, rebuilt
+    const recent = runtime.policyFor({ surface: "web", tenant: `flood-${DEFAULT_MAX_MEMORY_ENTRIES - 1}` });
+    expect(runtime.policyFor({ surface: "web", tenant: `flood-${DEFAULT_MAX_MEMORY_ENTRIES - 1}` })).toBe(
+      recent,
+    );
   });
 });
