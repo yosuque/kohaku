@@ -305,7 +305,7 @@ async function composeAndAudit(
         await ctx.deps.onComposed?.(result.spec, result.trace);
       }
     },
-    (e) => reportMcpError(ctx.deps, endpoint, e),
+    (e) => reportMcpError(ctx.deps, endpoint, e, options?.requestId),
   );
   return result;
 }
@@ -565,7 +565,7 @@ function registerComposeTool(ctx: ToolContext): void {
       _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["model"] }),
     },
     async ({ question, locale }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_compose`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_compose`, extra, async () => {
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
@@ -610,7 +610,7 @@ function registerRenderSnapshotTool(ctx: ToolContext): void {
       _meta: toolUiMeta({ visibility: ["model"] }),
     },
     async ({ question, locale }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, extra, async () => {
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
@@ -671,7 +671,7 @@ function registerIntentTools(ctx: ToolContext): void {
         _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["model"] }),
       },
       async (args, extra) =>
-        safeTool(ctx.deps, tool.name, async () => {
+        safeTool(ctx.deps, tool.name, extra, async () => {
           const principal = await ctx.principalOf(extra);
           const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
           if (rateLimited != null) return rateLimited;
@@ -707,7 +707,7 @@ function registerResolveBindingTool(ctx: ToolContext): void {
     },
     async ({ ref, capability }, extra) =>
       // parseInvokableRef / domain.invoke failures also become tool errors rather than RPC exceptions (symmetric with REST's 400).
-      safeTool(ctx.deps, `${ctx.prefix}_resolve_binding`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_resolve_binding`, extra, async () => {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
@@ -763,7 +763,7 @@ function registerEventTool(ctx: ToolContext): void {
       _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["app"] }),
     },
     async ({ intent, on, payload, locale }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_event`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_event`, extra, async () => {
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
@@ -799,7 +799,7 @@ function registerEventTool(ctx: ToolContext): void {
                 payload: payload as JsonObject,
                 surface: MCP_APP_SURFACE,
               }),
-            (e) => reportMcpError(ctx.deps, `${ctx.prefix}_event`, e),
+            (e) => reportMcpError(ctx.deps, `${ctx.prefix}_event`, e, mcpCorrelationId(extra)),
           );
         }
         // Pass the already-resolved CanonicalIntent through as-is ("canonical" kind) rather than
@@ -902,7 +902,7 @@ function registerActionTool(ctx: ToolContext): void {
       _meta: toolUiMeta({ visibility: ["app"] }),
     },
     async ({ action, payload, capability, confirmed, approval }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_action`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_action`, extra, async () => {
         // DomainPort.invoke carries no cancellation primitive (unlike the compose path's L1/L2 LLM calls), so
         // there is nothing to propagate the abort signal into once the write is under way — but a call already
         // cancelled by the time it reaches the handler must not still perform the write (a client that has
@@ -943,14 +943,14 @@ function registerActionTool(ctx: ToolContext): void {
         try {
           index = await ctx.operationIndex();
         } catch (e) {
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e);
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId);
           return toolError("operation index unavailable");
         }
         const entry = index.get(action);
         if (entry != null && entry.schemaError != null) {
           // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
           // this operation alone (REST's 500 counterpart), reported to the observability hook.
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError);
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError, requestId);
           return toolError("action parameter schema unavailable");
         }
         if (entry == null) {
@@ -960,7 +960,7 @@ function registerActionTool(ctx: ToolContext): void {
             payload: payload as JsonObject,
             principal: resolvedPrincipal,
             correlationId: requestId,
-            report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
+            report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e, requestId),
           });
           return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
         }
@@ -994,7 +994,7 @@ function registerActionTool(ctx: ToolContext): void {
           action,
           payload as JsonObject,
           result,
-          (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.effects`, e),
+          (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.effects`, e, requestId),
         );
         return {
           content: [{ type: "text" as const, text: `Executed action ${action}` }],
@@ -1262,11 +1262,23 @@ async function composeForTool(
 /**
  * Observability of failure paths. Silent if onError is unwired. A throw from the hook is swallowed
  * (observation only), via host-core's notifyHook (the shared swallow-on-throw building block, also consumed
- * by the REST profile's reportHostError). Same shape as the REST surface's reportHostError, but the MCP
- * surface has no error envelope, so there is no requestId.
+ * by the REST profile's reportHostError). The MCP surface has no error envelope, so unlike REST there is no
+ * client-visible requestId; `correlationId` (`mcpCorrelationId`, the same `mcp:...` value the call's lineage
+ * events and `_meta["kohaku/requestId"]` carry) is passed along when the failing path has the call in hand,
+ * so an operator can tie the report back to that call. Paths with no call context (attach-time validation,
+ * fixation self-healing) omit it.
  */
-async function reportMcpError(deps: McpHostDeps, endpoint: string, error: unknown): Promise<void> {
-  await hostCore.notifyHook(deps.onError, { endpoint, error });
+async function reportMcpError(
+  deps: McpHostDeps,
+  endpoint: string,
+  error: unknown,
+  correlationId?: string,
+): Promise<void> {
+  await hostCore.notifyHook(deps.onError, {
+    endpoint,
+    error,
+    ...(correlationId != null ? { correlationId } : {}),
+  });
 }
 
 function toolError(message: string) {
@@ -1466,6 +1478,7 @@ const TOOL_INTERNAL_ERROR_MESSAGE = "internal error; see the observability hook 
 async function safeTool<T extends object>(
   deps: McpHostDeps,
   endpoint: string,
+  extra: ServerContext,
   fn: () => Promise<T>,
 ): Promise<(T & { resultType: "complete" | "task" }) | ReturnType<typeof toolError>> {
   try {
@@ -1476,7 +1489,7 @@ async function safeTool<T extends object>(
     // Symmetric with the REST surface (reportHostError before the COMPOSE_FAILED response), report the failure to the
     // observation hook before converting it to a tool error, rather than leaving the failure rate inferable only via the
     // isError response to the model.
-    await reportMcpError(deps, endpoint, e);
+    await reportMcpError(deps, endpoint, e, mcpCorrelationId(extra));
     const clientMessage = hostCore.clientMessageFor(e, TOOL_INTERNAL_ERROR_MESSAGE);
     return toolError(clientMessage);
   }

@@ -2612,6 +2612,29 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
+  it("onError carries the failing call's correlationId (the same mcp:... id as the lineage events)", async () => {
+    const seen: { endpoint: string; correlationId?: string }[] = [];
+    const server = new McpServer({ name: "kohaku-onerror-correlation", version: "0.1.0" });
+    const handlers = captureToolHandlers(server);
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: makeComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        onError: (info) => void seen.push(info),
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+    const result = (await handlers["kohaku_resolve_binding"]!(
+      { ref: "not-a-query-ref", capability: "cap:none" },
+      fakeServerContext({ signal: new AbortController().signal, id: "9" }, "sess-abc"),
+    )) as { isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(seen.find((s) => s.endpoint === "kohaku_resolve_binding")?.correlationId).toBe("mcp:sess-abc:9");
+  });
+
   it("attaches over the same DomainPort share one operation index: listOperations once, a bad schema reported once (stateless HTTP re-attaches per exchange)", async () => {
     const seen: { endpoint: string; error: unknown }[] = [];
     let listCalls = 0;

@@ -126,11 +126,15 @@ export interface McpHostDeps {
   fixations?: FixationSelfHealApi;
   /**
    * Observability hook for failure paths (product responsibility). Reports the fail-open of the audit
-   * record (onComposed) and failures of fixation self-healing (invalidate/refreshFingerprint) here. Same
-   * shape as REST's KohakuHostDeps.onError (the MCP surface has no error envelope, so no requestId is carried).
+   * record (onComposed) and failures of fixation self-healing (invalidate/refreshFingerprint) here. Like
+   * REST's KohakuHostDeps.onError, except that the MCP surface has no error envelope, so there is no
+   * client-visible `requestId`; `correlationId` is the call's `mcp:<session or per-call uuid>:<jsonrpc id>`
+   * id (the value lineage events and `_meta["kohaku/requestId"]` carry). It is present when the failing path
+   * has a tool call in hand (a tool handler's own failure, the compose audit record, the action gate's
+   * audit / effects steps) and absent for attach-time validation and fixation self-healing.
    * When unwired, silent (legacy behavior). A throw from the hook is swallowed (observation only).
    */
-  onError?: (info: { endpoint: string; error: unknown }) => void | Promise<void>;
+  onError?: (info: { endpoint: string; error: unknown; correlationId?: string }) => void | Promise<void>;
   /**
    * Side-effect declaration for writes (`${prefix}_action`) (optional). Same signature shape as the
    * REST-surface KohakuHostDeps.actionEffects. Called after domain.invoke; returns the `query://` URIs that
