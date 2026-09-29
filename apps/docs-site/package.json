@@ -27,6 +27,7 @@
     "@kohaku-ui/renderer-core": "workspace:^",
     "@kohaku-ui/renderer-react": "workspace:^",
     "@kohaku-ui/spec-core": "workspace:^",
+    "@kohaku-ui/storage-memory": "workspace:^",
     "@modelcontextprotocol/server": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",

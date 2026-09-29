@@ -222,7 +222,7 @@ function auditEventFor(
 }
 
 /**
- * Generation provenance carried from the candidate's `component.generated` lineage event (F-1): which
+ * Generation provenance carried from the candidate's `component.generated` lineage event: which
  * design kit and generator revision produced it, and (when known) which model. Read by the migration
  * planner (host-core's catalog-migration.ts / analyzeCatalogImpact) to flag a published candidate whose
  * `origin.kit` no longer matches the catalog's current kit.

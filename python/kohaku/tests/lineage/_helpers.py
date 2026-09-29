@@ -29,7 +29,7 @@ L2_HTML = "<html><body><script>window.kohaku.ready()</script></body></html>"
 @dataclass(frozen=True)
 class FakeTrace:
     """Minimal implementation of ComposeTraceLike. All fields but durationMs default to None/unset so a bare
-    FakeTrace() reproduces the exact pre-U2 payload shape (no correlationId/cacheKey/decision keys)."""
+    FakeTrace() reproduces the exact payload shape from before the explain fields (no correlationId/cacheKey/decision keys)."""
 
     durationMs: float = 10.0
     correlationId: str | None = None

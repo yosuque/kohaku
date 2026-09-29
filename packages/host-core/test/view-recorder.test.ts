@@ -75,7 +75,7 @@ describe("recordViewFallback", () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
-  it("forwards correlationId to the recorder when given (U2)", async () => {
+  it("forwards correlationId to the recorder when given", async () => {
     const fallback = vi.fn(async (_args: FallbackArgs) => {});
     const recorder: ViewRecorder = { composed: vi.fn(), interacted: vi.fn(), fallback };
     await recordViewFallback(recorder, FALLBACK_SPEC, { surface: "web", correlationId: "req-1" });

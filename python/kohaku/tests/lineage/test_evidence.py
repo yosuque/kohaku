@@ -158,7 +158,7 @@ def test_build_evidence_pack_and_verify_roundtrip(tmp_path: Path) -> None:
         )
         await seed(storage, "component.reviewed", {"artifactId": "a1", "decision": "approve"})
         await seed(storage, "intent.fixated", {"intentHash": "h1"})
-        # intent.migrated (F7's catalog migration, design.md #65) is a real LineageEventType member.
+        # intent.migrated (the catalog migration, design.md #65) is a real LineageEventType member.
         await seed(storage, "intent.migrated", {"intentHash": "h1"})
         await storage.put_promotion_state(
             PromotionState(

@@ -178,11 +178,11 @@ export interface ComponentGeneratedPayload {
   ref?: string;
   /** The compose trace's correlation id (see ViewComposedPayload.correlationId's doc comment). */
   correlationId?: string;
-  /** The design kit the generated markup was written against (spec.provenance.kit). Read by F7 (the
-   * promotion review) to show which kit a candidate component was generated against. */
+  /** The design kit the generated markup was written against (spec.provenance.kit). Read by the promotion
+   * review UI (admin-react Promotions) to show which kit a candidate component was generated against. */
   kit?: { id: string; version: string };
-  /** The host's generator identity in effect at generation time (spec.provenance.generatorVersion). Read by
-   * F7 alongside `kit` above. */
+  /** The host's generator identity in effect at generation time (spec.provenance.generatorVersion). Read by the
+   * promotion review UI alongside `kit` above. */
   generatorVersion?: string;
 }
 

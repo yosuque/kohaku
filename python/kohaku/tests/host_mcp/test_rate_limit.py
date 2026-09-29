@@ -219,7 +219,7 @@ class TestBucketKey:
         """When resolve_principal is unset, the constant fallback principal id ("mcp-user") is never
         used as the bucket key (every anonymous caller would otherwise share one bucket) -- instead it
         falls back to _session_correlation_prefix's stable per-connection opaque id (the same anchor
-        U2's MCP correlation-id work established), which two calls on the *same* connection share."""
+        the MCP correlation-id work (design.md #54) established), which two calls on the *same* connection share."""
 
         async def run() -> None:
             limiter = _StubRateLimiter(RateLimitResult(allow=True))

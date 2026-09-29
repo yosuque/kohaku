@@ -20,7 +20,7 @@ import type { FixationRecord, PromotionState, StoragePort } from "@kohaku-ui/spe
  *    promotion-state authority have drifted apart — a promoted component's catalog registration was
  *    dropped without withdrawing the promotion itself).
  * 4. originKitMismatches — a published candidate generated under a design kit other than `currentKit`
- *    (PromotionCandidate.origin.kit, F-1). Not necessarily broken, but a migration candidate: its markup
+ *    (PromotionCandidate.origin.kit, generation provenance). Not necessarily broken, but a migration candidate: its markup
  *    may not match the kit's current class vocabulary.
  */
 
@@ -84,7 +84,7 @@ function componentTypeOf(state: PromotionState): string | undefined {
   return undefined;
 }
 
-/** Reads a promotion state's origin.kit (F-1), when present. */
+/** Reads a promotion state's origin.kit (generation provenance), when present. */
 function originKitOf(state: PromotionState): { id: string; version: string } | undefined {
   const origin = state.data["origin"];
   if (origin == null || typeof origin !== "object") return undefined;

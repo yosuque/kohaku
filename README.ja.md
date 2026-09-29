@@ -44,8 +44,10 @@ GUI 操作(Web)  ─┼→ 正規化 Intent → Composition ─┼─ 外部チ�
 リファレンス実装は npm に `@kohaku-ui/*`(全パッケージ同一バージョン)、PyPI に `kohaku-ui` として公開されています(配布名。import 名は `kohaku` のままです)。
 
 ```bash
-# REST ホスト + React レンダラ
-npm install @kohaku-ui/host-rest @kohaku-ui/renderer-react @kohaku-ui/composer @kohaku-ui/spec-core zod
+# REST ホスト(1 回の呼び出しのファサード。既定でインメモリ storage・HMAC capability・LLM ベースの SemanticPort)+ React レンダラ
+npm install @kohaku-ui/host @kohaku-ui/renderer-react @kohaku-ui/spec-core zod
+# ファサードを使わず、素の REST プロファイルの上で全 Port を自分で配線するなら
+# npm install @kohaku-ui/host-rest @kohaku-ui/renderer-react @kohaku-ui/composer @kohaku-ui/spec-core zod
 
 # 任意の実装をプロトコルに照らして検査(常設インストール不要)
 npx @kohaku-ui/cli conformance --rest http://localhost:8787/api/kohaku
@@ -121,6 +123,8 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/evals` | Golden Spec 回帰・LLM-as-Judge・FixtureLlm |
 | `packages/host-core` | framework-free な共有ホスト核(固定化配信 + 自己修復、capability 発行、エラーフックヘルパ)。host-rest / host-mcp-apps が同一核を消費する、renderer-core と renderer-react / renderer-wc と同型の関係 |
 | `packages/host-rest` / `host-mcp-apps` | REST / MCP Apps(SEP-1865)プロファイル |
+| `packages/host` | 1 回の呼び出しのファサード: `createKohakuHost()` が既定の Port(インメモリ storage・HMAC capability・LLM ベースの SemanticPort)を host-rest に配線する。MCP は別サブパス `@kohaku-ui/host/mcp` |
+| `packages/mcp-renderer` | 共有 MCP Apps レンダラーのバンドル: `loadRendererHtml()` がビルド済み・依存ゼロの単一 HTML を返し、`./boot` でプロダクト固有のコンポーネント実装を焼き込んで再ビルドできる |
 | `packages/otel` | 薄い opt-in OpenTelemetry 層(`createOtelComposeObserver`。composer の `composeObservers` で束ねて使う)。依存は composer のみ(peer: `@opentelemetry/api`)、exporter/SDK 配線は無い |
 | `packages/host-a2ui` | A2UI 互換プロファイル骨子(UISpec/SpecPatch → A2UI メッセージ。spec-core のみの独立リーフ)[Draft] |
 | `packages/client` | 型付きホストクライアント SDK(spec-core + data-binding のみに依存。host-rest 非依存) |
@@ -132,7 +136,9 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `apps/sample-web` | サンプル: Dashboard(GUI)/ Chat(NLUI)/ Admin(統制面) |
 | `apps/sample-wc` | サンプル: 同一 Spec を React 非依存の `<kohaku-surface>` で描く実演(レンダラー非依存の実証) |
 | `apps/sample-mcp` | サンプル: 外部チャット向け MCP サーバー + 共有レンダラー |
-| `cli/` | `kohaku conformance / scaffold / init / component validate` |
+| `apps/sample-parts` | サンプル: 売上ドメイン固有のコンポーネント定義(`defineComponent`)。sample-api・sample-web・sample-mcp が共有する単一の情報源 |
+| `apps/playground` | サンプル: sample-web を静的・サーバーレスにビルドし、sample-api のホストをブラウザタブ内で動かして録画済みの LLM 応答を再生する |
+| `cli/` | `kohaku conformance / scaffold / init / explain / evidence / migrate / dataset / component validate` |
 | `python/` | **Python 参照実装** — TS `packages/*` のワイヤ互換フル移植(spec / registry / composer / lineage / host-rest / host-mcp)+ サンプル sales-api。conformance CONFORMANT。詳細は [python/README.ja.md](python/README.ja.md) |
 
 ## 開発

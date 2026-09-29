@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { type ComponentDraft, createLineage, createPromotions } from "../src/index.js";
 
 /**
- * F-1: a candidate's `component.generated` payload carries `kit` / `generatorVersion` / `model`
- * (U2), but that provenance was previously dropped on the floor by candidate-store.ts — nothing ever
+ * A candidate's `component.generated` payload carries `kit` / `generatorVersion` / `model`
+ * (design.md #54), but that provenance was previously dropped on the floor by candidate-store.ts — nothing ever
  * read it into the promotion record. This is the fix: `PromotionCandidate.origin` is read from the
  * payload and persisted to `data.origin`, kept across every transition (not just publish, unlike the
  * html/sha256/ref self-contained projection — #9 — which is deliberately publish-only).
@@ -54,7 +54,7 @@ function memoryStorage(): StoragePort & {
 
 const actor = { id: "reviewer-1" };
 
-describe("F-1: promotion candidates carry kit/generatorVersion/model as origin", () => {
+describe("promotion candidates carry kit/generatorVersion/model as origin", () => {
   it("get() surfaces origin read straight from the component.generated payload", async () => {
     const storage = memoryStorage();
     storage.events.push({
