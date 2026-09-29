@@ -4,6 +4,7 @@ import {
   ActionParamsSchemaError,
   actionPayloadHash,
   assertValidActionParamsSchema,
+  findUnsafeActionParamKeys,
   type JsonValue,
   validateActionParams,
 } from "../src/index.js";
@@ -207,6 +208,59 @@ describe("assertValidActionParamsSchema", () => {
   it("rejects additionalProperties: true (only literal false is allowed)", () => {
     const badSchema = { type: "object", additionalProperties: true };
     expect(() => assertValidActionParamsSchema("annotate", badSchema)).toThrow(ActionParamsSchemaError);
+  });
+});
+
+describe("validateActionParams: minLength / maxLength count Unicode code points", () => {
+  const lengthSchema = (keyword: "minLength" | "maxLength", n: number): ActionParamsSchema => ({
+    type: "object",
+    properties: { s: { type: "string", [keyword]: n } },
+  });
+
+  it("counts a non-BMP character once, not as two UTF-16 code units", () => {
+    // "😀😀" is 2 code points but 4 UTF-16 code units.
+    expect(validateActionParams(lengthSchema("maxLength", 3), { s: "😀😀" })).toEqual([]);
+    expect(validateActionParams(lengthSchema("minLength", 3), { s: "😀😀" })).toEqual([
+      { path: "s", code: "minLength", message: "expected at least 3 characters" },
+    ]);
+    expect(validateActionParams(lengthSchema("maxLength", 1), { s: "😀😀" })).toEqual([
+      { path: "s", code: "maxLength", message: "expected at most 1 characters" },
+    ]);
+  });
+
+  it("still counts BMP characters one each", () => {
+    expect(validateActionParams(lengthSchema("maxLength", 3), { s: "abc" })).toEqual([]);
+    expect(validateActionParams(lengthSchema("maxLength", 3), { s: "abcd" })).toHaveLength(1);
+  });
+});
+
+describe("findUnsafeActionParamKeys", () => {
+  it("returns nothing for a clean payload", () => {
+    expect(findUnsafeActionParamKeys({ note: "ok", tags: ["a", { b: 1 }] })).toEqual([]);
+  });
+
+  it("finds a key under a property no schema would declare", () => {
+    const payload = JSON.parse('{"extra":{"deep":{"constructor":{"x":1}}}}');
+    expect(findUnsafeActionParamKeys(payload)).toEqual([
+      {
+        path: "extra.deep.constructor",
+        code: "unsafeKey",
+        message: 'the property name "constructor" is not allowed',
+      },
+    ]);
+  });
+
+  it("descends into arrays, including nested ones, with parent[i] paths", () => {
+    const payload = JSON.parse('{"list":[1,{"prototype":2},[{"__proto__":3}]]}');
+    expect(findUnsafeActionParamKeys(payload).map((i) => i.path)).toEqual([
+      "list[1].prototype",
+      "list[2][0].__proto__",
+    ]);
+  });
+
+  it("does not descend into a flagged key's own value", () => {
+    const payload = JSON.parse('{"__proto__":{"constructor":1}}');
+    expect(findUnsafeActionParamKeys(payload).map((i) => i.path)).toEqual(["__proto__"]);
   });
 });
 

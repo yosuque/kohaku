@@ -699,6 +699,174 @@
         }
       ],
       "payloadHash": "sha256:d45820cda1eac507d4c8f38a9e29ccb5856a38dc51d147e0dea1613b10ffc6f5"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "maxLength": 3
+          }
+        }
+      },
+      "payload": {
+        "s": "😀😀"
+      },
+      "issues": [],
+      "payloadHash": "sha256:231a6596c968dddb1847d539de7e9e3b3255445e4818fa599483c30b6cb3bc7f"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "minLength": 3
+          }
+        }
+      },
+      "payload": {
+        "s": "😀😀"
+      },
+      "issues": [
+        {
+          "path": "s",
+          "code": "minLength",
+          "message": "expected at least 3 characters"
+        }
+      ],
+      "payloadHash": "sha256:231a6596c968dddb1847d539de7e9e3b3255445e4818fa599483c30b6cb3bc7f"
+    },
+    {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "s": {
+            "type": "string",
+            "maxLength": 1
+          }
+        }
+      },
+      "payload": {
+        "s": "😀😀"
+      },
+      "issues": [
+        {
+          "path": "s",
+          "code": "maxLength",
+          "message": "expected at most 1 characters"
+        }
+      ],
+      "payloadHash": "sha256:231a6596c968dddb1847d539de7e9e3b3255445e4818fa599483c30b6cb3bc7f"
+    }
+  ],
+  "actionPayloadScan": [
+    {
+      "payload": {
+        "note": "ok",
+        "tags": [
+          "a",
+          {
+            "b": 1
+          }
+        ]
+      },
+      "issues": []
+    },
+    {
+      "payload": {
+        "amount": 10,
+        "__proto__": {
+          "polluted": true
+        }
+      },
+      "issues": [
+        {
+          "path": "__proto__",
+          "code": "unsafeKey",
+          "message": "the property name \"__proto__\" is not allowed"
+        }
+      ]
+    },
+    {
+      "payload": {
+        "extra": {
+          "deep": {
+            "constructor": {
+              "x": 1
+            }
+          }
+        }
+      },
+      "issues": [
+        {
+          "path": "extra.deep.constructor",
+          "code": "unsafeKey",
+          "message": "the property name \"constructor\" is not allowed"
+        }
+      ]
+    },
+    {
+      "payload": {
+        "list": [
+          1,
+          {
+            "prototype": 2
+          },
+          [
+            {
+              "__proto__": 3
+            }
+          ]
+        ]
+      },
+      "issues": [
+        {
+          "path": "list[1].prototype",
+          "code": "unsafeKey",
+          "message": "the property name \"prototype\" is not allowed"
+        },
+        {
+          "path": "list[2][0].__proto__",
+          "code": "unsafeKey",
+          "message": "the property name \"__proto__\" is not allowed"
+        }
+      ]
+    },
+    {
+      "payload": {
+        "a": {
+          "constructor": 1
+        },
+        "b": [
+          {
+            "prototype": 2
+          }
+        ],
+        "__proto__": {
+          "nested": {
+            "constructor": 3
+          }
+        }
+      },
+      "issues": [
+        {
+          "path": "a.constructor",
+          "code": "unsafeKey",
+          "message": "the property name \"constructor\" is not allowed"
+        },
+        {
+          "path": "b[0].prototype",
+          "code": "unsafeKey",
+          "message": "the property name \"prototype\" is not allowed"
+        },
+        {
+          "path": "__proto__",
+          "code": "unsafeKey",
+          "message": "the property name \"__proto__\" is not allowed"
+        }
+      ]
     }
   ],
   "sandboxDom": {

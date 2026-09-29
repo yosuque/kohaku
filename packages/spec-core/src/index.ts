@@ -7,6 +7,7 @@ export {
   type ActionTier,
   actionPayloadHash,
   assertValidActionParamsSchema,
+  findUnsafeActionParamKeys,
   validateActionParams,
 } from "./action-params.js";
 export { enumerateBindVariants, resolveBoundRef } from "./bind.js";

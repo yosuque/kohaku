@@ -54,6 +54,7 @@ from kohaku.spec import (
     compute_structure_hash,
     decode_seq_cursor,
     encode_seq_cursor,
+    find_unsafe_action_param_keys,
     page_lineage_events,
     parse_spec,
     sha256_hex,
@@ -112,6 +113,16 @@ def test_action_params(cross_language_fixture: dict[str, Any]) -> None:
         got = [{"path": issue.path, "code": issue.code, "message": issue.message} for issue in issues]
         assert got == case["issues"], f"issues mismatch for schema={case['schema']!r} payload={case['payload']!r}"
         assert action_payload_hash(case["payload"]) == case["payloadHash"]
+
+
+def test_action_payload_scan(cross_language_fixture: dict[str, Any]) -> None:
+    """find_unsafe_action_param_keys must reproduce the fixture's whole-payload `__proto__` / `constructor` /
+    `prototype` key scan byte-for-byte (design.md #62)."""
+    assert cross_language_fixture["actionPayloadScan"]
+    for case in cross_language_fixture["actionPayloadScan"]:
+        issues = find_unsafe_action_param_keys(case["payload"])
+        got = [{"path": issue.path, "code": issue.code, "message": issue.message} for issue in issues]
+        assert got == case["issues"], f"scan mismatch for payload={case['payload']!r}"
 
 
 def test_sandbox_dom_allowlist(cross_language_fixture: dict[str, Any]) -> None:

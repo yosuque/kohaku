@@ -26,6 +26,7 @@ import {
   computeStructureHash,
   encodeSeqCursor,
   type FixationRecord,
+  findUnsafeActionParamKeys,
   type JsonObject,
   type LineageEventRecord,
   type LineagePage,
@@ -206,7 +207,8 @@ const CACHE_KEY_CASES: CacheKeyParts[] = [
 // `required` / `additionalProperties: false` violations; `minLength`/`maxLength` on a nested string;
 // `minimum`/`maximum` and integer-vs-number on a nested number; `enum`; array `items` + `maxItems` with
 // the `parent[i]` index-path convention; a nested object's dot-separated path; and an `x-message`
-// override replacing the default wording.
+// override replacing the default wording; and `minLength`/`maxLength` on non-BMP strings, which count
+// Unicode code points (not UTF-16 code units) in both languages (SPEC ACT-PRM-001).
 const ACTION_PARAMS_CASES: { schema: ActionParamsSchema; payload: JsonObject }[] = [
   {
     schema: {
@@ -306,6 +308,34 @@ const ACTION_PARAMS_CASES: { schema: ActionParamsSchema; payload: JsonObject }[]
     },
     payload: JSON.parse('{"amount":10,"toString":1}') as JsonObject,
   },
+  // minLength/maxLength count Unicode code points: "😀😀" is 2 code points (4 UTF-16 code units), so it is
+  // within maxLength 3, below minLength 3, and above maxLength 1.
+  {
+    schema: { type: "object", properties: { s: { type: "string", maxLength: 3 } } },
+    payload: { s: "😀😀" },
+  },
+  {
+    schema: { type: "object", properties: { s: { type: "string", minLength: 3 } } },
+    payload: { s: "😀😀" },
+  },
+  {
+    schema: { type: "object", properties: { s: { type: "string", maxLength: 1 } } },
+    payload: { s: "😀😀" },
+  },
+];
+
+// Pins `findUnsafeActionParamKeys` (the whole-payload `__proto__` / `constructor` / `prototype` key scan the
+// host-core gate runs on every action payload, with or without a paramsSchema; design.md #62) byte-for-byte
+// across languages. Built via JSON.parse so each key is an own property, as on a real parsed request body.
+// Covers: no unsafe key; a top-level key; a key under a property no schema would declare (the
+// `additionalProperties` gap); keys inside arrays (an array with no `items`, and nested arrays); several
+// keys at once, in payload order; and that a flagged key's own value is not descended into.
+const ACTION_PAYLOAD_SCAN_PAYLOADS: string[] = [
+  '{"note":"ok","tags":["a",{"b":1}]}',
+  '{"amount":10,"__proto__":{"polluted":true}}',
+  '{"extra":{"deep":{"constructor":{"x":1}}}}',
+  '{"list":[1,{"prototype":2},[{"__proto__":3}]]}',
+  '{"a":{"constructor":1},"b":[{"prototype":2}],"__proto__":{"nested":{"constructor":3}}}',
 ];
 
 // Pins the Compliance Evidence Pack (design.md #67) byte-for-byte across languages: canonical-JSON
@@ -388,6 +418,11 @@ async function main(): Promise<void> {
       payloadHash: await actionPayloadHash(payload),
     })),
   );
+
+  const actionPayloadScanCases = ACTION_PAYLOAD_SCAN_PAYLOADS.map((json) => {
+    const payload = JSON.parse(json) as JsonObject;
+    return { payload, issues: findUnsafeActionParamKeys(payload) };
+  });
 
   // Pins the prompt fragments that are hand-transcribed as goldens in both languages' composer tests
   // (packages/composer/test/design-kit.test.ts + design-system.test.ts and their Python mirrors under
@@ -589,6 +624,7 @@ async function main(): Promise<void> {
         cacheKey: cacheKeyCases,
         lineageCursor: lineageCursorCases,
         actionParams: actionParamsCases,
+        actionPayloadScan: actionPayloadScanCases,
         sandboxDom,
         distillation,
         fallback: fallbackCases,
@@ -599,7 +635,7 @@ async function main(): Promise<void> {
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
   );
   console.log(
     `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,

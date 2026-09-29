@@ -18,6 +18,7 @@ import {
   decodeSeqCursor,
   encodeSeqCursor,
   type FixationRecord,
+  findUnsafeActionParamKeys,
   type JsonObject,
   type LineageEventRecord,
   type LineagePage,
@@ -73,6 +74,7 @@ interface Fixture {
     issues: ActionParamIssue[];
     payloadHash: string;
   }[];
+  actionPayloadScan: { payload: JsonObject; issues: ActionParamIssue[] }[];
   sandboxDom: { tags: string[]; attrs: string[]; styleProps: string[] };
   distillation: { jsonl: string };
   promptFragments: {
@@ -146,6 +148,13 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     for (const c of fixture.actionParams) {
       expect(validateActionParams(c.schema, c.payload)).toEqual(c.issues);
       expect(await actionPayloadHash(c.payload)).toBe(c.payloadHash);
+    }
+  });
+
+  it("findUnsafeActionParamKeys reproduces the fixture (design.md #62)", () => {
+    expect(fixture.actionPayloadScan.length).toBeGreaterThan(0);
+    for (const c of fixture.actionPayloadScan) {
+      expect(findUnsafeActionParamKeys(c.payload)).toEqual(c.issues);
     }
   });
 

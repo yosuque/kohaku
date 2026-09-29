@@ -19,6 +19,7 @@ from kohaku.spec import (
     JsonObject,
     OperationDescriptor,
     action_payload_hash,
+    find_unsafe_action_param_keys,
     validate_action_params,
 )
 
@@ -96,7 +97,7 @@ class ActionGate:
     """One gate is shared by every invoke of every action for a given host attach; it carries no per-action
     state itself (an ApprovalPort, if configured, owns whatever state single-use enforcement needs).
 
-    Order of checks (params before tier) is deliberate: a payload that is invalid on its own terms should
+    Order of checks (payload key safety, then params, then tier) is deliberate: a payload that is invalid on its own terms should
     never demand a confirmation or an approval for it.
     """
 
@@ -104,6 +105,12 @@ class ActionGate:
         self._approvals = approvals
 
     async def check(self, req: ActionGateRequest) -> ActionGateResult:
+        # Whole-payload unsafe-key scan first, independent of any schema: an action with no params schema, an
+        # undeclared property under additionalProperties, or a list with no `items` would otherwise let a
+        # `__proto__` / `constructor` / `prototype` key through to DomainPort.invoke.
+        unsafe_keys = find_unsafe_action_param_keys(req.payload)
+        if unsafe_keys:
+            return ActionGateInvalid(issues=unsafe_keys)
         if req.params_schema is not None:
             issues = validate_action_params(req.params_schema, req.payload)
             if issues:

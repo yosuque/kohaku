@@ -15,6 +15,7 @@ from kohaku.spec.action_params import (
     ActionParamsSchemaError,
     action_payload_hash,
     assert_valid_action_params_schema,
+    find_unsafe_action_param_keys,
     validate_action_params,
 )
 
@@ -201,3 +202,41 @@ def test_still_validates_the_rest_of_the_payload_alongside_an_unsafe_key() -> No
     triples = [(i.path, i.code, i.message) for i in issues]
     assert ("__proto__", "unsafeKey", 'the property name "__proto__" is not allowed') in triples
     assert ("amount", "type", 'expected a number at "amount"') in triples
+
+
+def test_length_keywords_count_unicode_code_points() -> None:
+    # "😀😀" is 2 code points (4 UTF-16 code units); the TS mirror counts code points explicitly to agree.
+    def schema(keyword: str, n: int) -> ActionParamsSchema:
+        return {"type": "object", "properties": {"s": {"type": "string", keyword: n}}}  # type: ignore[misc]
+
+    assert validate_action_params(schema("maxLength", 3), {"s": "😀😀"}) == []
+    issues = validate_action_params(schema("minLength", 3), {"s": "😀😀"})
+    assert [(i.path, i.code, i.message) for i in issues] == [
+        ("s", "minLength", "expected at least 3 characters")
+    ]
+    issues = validate_action_params(schema("maxLength", 1), {"s": "😀😀"})
+    assert [(i.path, i.code, i.message) for i in issues] == [("s", "maxLength", "expected at most 1 characters")]
+
+
+def test_find_unsafe_action_param_keys_clean_payload() -> None:
+    assert find_unsafe_action_param_keys({"note": "ok", "tags": ["a", {"b": 1}]}) == []
+
+
+def test_find_unsafe_action_param_keys_under_undeclared_property() -> None:
+    issues = find_unsafe_action_param_keys({"extra": {"deep": {"constructor": {"x": 1}}}})
+    assert [(i.path, i.code, i.message) for i in issues] == [
+        ("extra.deep.constructor", "unsafeKey", 'the property name "constructor" is not allowed')
+    ]
+
+
+def test_find_unsafe_action_param_keys_descends_into_arrays() -> None:
+    payload: JsonObject = {"list": [1, {"prototype": 2}, [{"__proto__": 3}]]}
+    assert [i.path for i in find_unsafe_action_param_keys(payload)] == [
+        "list[1].prototype",
+        "list[2][0].__proto__",
+    ]
+
+
+def test_find_unsafe_action_param_keys_does_not_descend_into_a_flagged_key() -> None:
+    payload: JsonObject = {"__proto__": {"constructor": 1}}
+    assert [i.path for i in find_unsafe_action_param_keys(payload)] == ["__proto__"]

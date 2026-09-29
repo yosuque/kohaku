@@ -46,6 +46,56 @@ describe("createActionGate: params validation (runs before tier gating)", () => 
   });
 });
 
+describe("createActionGate: unsafe payload keys (checked regardless of any schema)", () => {
+  const unsafe = (path: string, key: string) => ({
+    path,
+    code: "unsafeKey",
+    message: `the property name "${key}" is not allowed`,
+  });
+
+  it("rejects an unsafe key when the descriptor declares no paramsSchema", async () => {
+    const gate = createActionGate();
+    const result = await gate.check({
+      descriptor: AUTO,
+      payload: JSON.parse('{"note":"hi","__proto__":{"polluted":true}}'),
+      requesterId: "u1",
+    });
+    expect(result).toEqual({ kind: "invalid", issues: [unsafe("__proto__", "__proto__")] });
+  });
+
+  it("rejects an unsafe key under an undeclared property, even without additionalProperties: false", async () => {
+    const gate = createActionGate();
+    const result = await gate.check({
+      descriptor: AUTO,
+      paramsSchema: NOTE_SCHEMA,
+      payload: JSON.parse('{"note":"hi","extra":{"constructor":1}}'),
+      requesterId: "u1",
+    });
+    expect(result).toEqual({ kind: "invalid", issues: [unsafe("extra.constructor", "constructor")] });
+  });
+
+  it("rejects an unsafe key inside an array whose schema declares no items", async () => {
+    const gate = createActionGate();
+    const result = await gate.check({
+      descriptor: AUTO,
+      paramsSchema: { type: "object", properties: { tags: { type: "array" } } },
+      payload: JSON.parse('{"tags":[{"prototype":1}]}'),
+      requesterId: "u1",
+    });
+    expect(result).toEqual({ kind: "invalid", issues: [unsafe("tags[0].prototype", "prototype")] });
+  });
+
+  it("runs before the tier check, so an unsafe payload never demands a confirmation", async () => {
+    const gate = createActionGate();
+    const result = await gate.check({
+      descriptor: CONFIRM,
+      payload: JSON.parse('{"__proto__":1}'),
+      requesterId: "u1",
+    });
+    expect(result.kind).toBe("invalid");
+  });
+});
+
 describe("createActionGate: tier 'auto'", () => {
   it("always allows once params validate", async () => {
     const gate = createActionGate();
