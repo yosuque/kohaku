@@ -1377,7 +1377,9 @@ function approvalRequiredToolError(message: string, approval: ApprovalRequiredIn
  * `ServerContext.sessionId`; else the literal `"anonymous"`. **On the stateless Streamable HTTP serving
  * (SDK 2.0 `createMcpHandler`) and stdio no session id exists, so without `rateLimitKey` or
  * `resolvePrincipal` every caller lands in the one `"anonymous"` bucket** — `attachKohakuToMcpServer`
- * warns once about that configuration.
+ * warns once about that configuration. On a legacy stateful transport the session id is a key the client
+ * can rotate by opening a new session, so it is no defence against a caller intent on evading the limit:
+ * production deployments should wire `rateLimitKey` or `resolvePrincipal`.
  */
 async function mcpRateLimitKey(
   deps: McpHostDeps,
@@ -1435,7 +1437,8 @@ function warnUnkeyedRateLimiter(deps: McpHostDeps): void {
   warnedUnkeyedRateLimiter = true;
   console.warn(
     "[kohaku] McpHostDeps.rateLimiter is wired without resolvePrincipal or rateLimitKey. On a transport with no " +
-      "session id (stateless Streamable HTTP, stdio) every caller shares one rate-limit bucket. " +
+      "session id (stateless Streamable HTTP, stdio) every caller shares one rate-limit bucket, and on a " +
+      "stateful transport the per-session bucket can be shed by opening a new session. " +
       "Wire deps.rateLimitKey (or deps.resolvePrincipal) to key the limit per caller.",
   );
 }

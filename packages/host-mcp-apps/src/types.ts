@@ -177,7 +177,9 @@ export interface McpHostDeps {
    * stateless Streamable HTTP serving (`createMcpHandler`), and stdio has no session, so there it is
    * always absent and every caller shares the single `"anonymous"` bucket.** A shared HTTP deployment must
    * wire `resolvePrincipal` or `rateLimitKey` to get a per-caller limit; `attachKohakuToMcpServer` warns
-   * once when a `rateLimiter` is wired with neither (see `mcpRateLimitKey` in server.ts).
+   * once when a `rateLimiter` is wired with neither (see `mcpRateLimitKey` in server.ts). On a legacy
+   * stateful transport the `sessionId` key is client-rotatable (a new session is a new bucket), so it does
+   * not hold against a caller trying to evade the limit either: use `rateLimitKey` or `resolvePrincipal` in production.
    *
    * On denial, returns a structured tool error (`isError: true`) whose `structuredContent.error.code` is
    * `"RATE_LIMITED"` (SPEC §6.1, REST-RL-001's MCP counterpart) with a `retryAfterMs` when the limiter
