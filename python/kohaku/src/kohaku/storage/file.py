@@ -200,6 +200,8 @@ class FileStoragePort:
         self._lineage: list[LineageEventRecord] = [
             _lineage_from_wire(d) for d in _load_jsonl(self._lineage_path)
         ]
+        # Ids already recorded (in memory or loaded from disk): append_lineage's O(1) idempotence check.
+        self._lineage_ids: set[str] = {e.id for e in self._lineage}
         self._promotions: dict[str, PromotionState] = _load_records(
             self._promotions_path, _promotion_from_wire
         )
@@ -233,16 +235,24 @@ class FileStoragePort:
             del self._spec_cache[oldest]
 
     async def append_lineage(self, event: LineageEventRecord) -> None:
-        # Offloaded to a worker thread so a large/slow disk append does not block the event loop (R6/D6). Not
-        # lock-guarded (matches the TS port): under concurrent appends the completion order is not guaranteed
-        # to follow ts order, a known constraint documented on both ports; order-sensitive consumers compare ts.
-        def _write() -> None:
-            with self._lineage_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(_lineage_to_wire(event), ensure_ascii=False) + "\n")
+        # Serialized per lineage file (the counterpart of TS's keyed mutex): the id check, the file append and
+        # the list append run as one unit, so lineage.jsonl's line order always equals the in-memory list order
+        # (which page_lineage's cursor and a restart's reload both rely on), and two concurrent appends of one
+        # id cannot both pass the check. Idempotent by id, like the TS port: a retried write neither duplicates
+        # the JSONL line nor moves the entry's position.
+        async with self._lock_for(self._lineage_path):
+            if event.id in self._lineage_ids:
+                return
 
-        await asyncio.to_thread(_write)
-        # Reflect to memory only after the append succeeds (so memory and disk do not diverge on append failure).
-        self._lineage.append(event)
+            # Offloaded to a worker thread so a large/slow disk append does not block the event loop (R6/D6).
+            def _write() -> None:
+                with self._lineage_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(_lineage_to_wire(event), ensure_ascii=False) + "\n")
+
+            await asyncio.to_thread(_write)
+            # Reflect to memory only after the append succeeds (so memory and disk do not diverge on failure).
+            self._lineage_ids.add(event.id)
+            self._lineage.append(event)
 
     async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
         f = filter or LineageFilter()

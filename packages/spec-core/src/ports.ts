@@ -324,10 +324,10 @@ export interface LineageFilter {
   tenant?: string;
   /**
    * Filter by the `correlationId` payload field (exact equality; see `LINEAGE_PAYLOAD_INDEX_FIELDS` for
-   * the full set of payload fields a filter can match this way). No writer in this repository stamps
-   * `correlationId` onto a payload yet — it exists so a product's own instrumentation (or a later
-   * feature built on this StoragePort surface) can correlate lineage events that share an
-   * application-defined identifier without inventing a parallel filter mechanism.
+   * the full set of payload fields a filter can match this way). The `view.*` / `action.*` records
+   * host-rest and host-mcp-apps write carry the correlation id of the request that produced them, so
+   * one request's events can be pulled together; a product's own instrumentation may stamp the same
+   * field with an application-defined identifier. Rows stored before 0.4.0 have none and never match.
    */
   correlationId?: string;
 }
@@ -349,7 +349,12 @@ export interface LineagePageRequest extends Omit<LineageFilter, "limit"> {
 export interface LineagePage {
   /** In append order (oldest first within the page), matching the request's filters. */
   events: LineageEventRecord[];
-  /** Opaque cursor for the next page. Absent on the last page (nothing further to read). */
+  /**
+   * Opaque cursor for the next page. Absent on the last page (nothing further to read). A page may hold
+   * fewer than `pageSize` events, even none, and still carry a `nextCursor` (an adapter bounds the work
+   * of one call, so a selective filter over a long log can run out of budget before it fills a page);
+   * a caller keeps following `nextCursor` until it is absent, whatever the page holds.
+   */
   nextCursor?: string;
 }
 
@@ -447,9 +452,16 @@ export interface StoragePort {
    * `listLineage` (a tail window, newest-first semantics via `limit`), this walks the whole log
    * exhaustively from an opaque `cursor` in ascending append order, so a caller (e.g. an export, or a
    * feature that needs every matching event rather than just the most recent ones) can page through
-   * without missing or duplicating events even as new ones are appended between calls. An implementation
-   * MUST return events strictly after `req.cursor` (or from the beginning when omitted), in append order,
-   * and MUST omit `LineagePage.nextCursor` only when there is nothing further to read. `req.pageSize`
+   * without missing or duplicating events across appends that are sequential, or committed before the
+   * page that would return them is read. The cursor is a position in allocation order (a sequence number
+   * handed out at append time), which is not always visibility order: an append that is still in flight
+   * when a page is read (in a database, allocated a lower number but not yet committed) can become
+   * visible behind a cursor that has already passed it, and that cursor will not return it. A caller
+   * that needs a complete pack under concurrent writes bounds the read with `until` at a time safely in
+   * the past. An implementation MUST return events strictly after `req.cursor` (or from the beginning
+   * when omitted), in append order, and MUST omit `LineagePage.nextCursor` only when there is nothing
+   * further to read; it MAY return a page shorter than `req.pageSize` (or empty) with a `nextCursor`
+   * when it stops scanning early to bound the cost of one call. `req.pageSize`
    * defaults to 500 and is clamped to at most 1000. A malformed `cursor` MUST throw rather than silently
    * restart from the beginning or skip to the end. Implementations that omit this method keep the legacy
    * surface (`listLineage` only); a host without it responds to a paging request with 501

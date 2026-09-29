@@ -383,30 +383,57 @@ async function hydrateWithSeq(
 }
 
 /**
- * `StoragePort.pageLineage`'s whole read path (design.md #53): scans `keys.lineage.bySeq` forward from
- * `req.cursor`'s seq (exclusive lower bound -- Redis's `(seq` syntax) in `LINEAGE_SCAN_CHUNK_SIZE`-sized
+ * The most `LINEAGE_SCAN_CHUNK_SIZE` chunks one `readLineagePage` call scans before giving up on filling
+ * the page: a selective filter over a huge log then costs a bounded amount of work per call instead of
+ * a whole-log scan. When the cap is hit first, the page comes back short (possibly empty) with a
+ * `nextCursor` at the last scanned seq, and the caller simply continues from it (a paging loop already
+ * follows `nextCursor` until it is absent, whatever the page holds).
+ */
+export const LINEAGE_PAGE_MAX_SCAN_CHUNKS = 20;
+
+/**
+ * `StoragePort.pageLineage`'s whole read path (design.md #53): scans forward from `req.cursor`'s seq
+ * (exclusive lower bound -- Redis's `(seq` syntax) in `LINEAGE_SCAN_CHUNK_SIZE`-sized
  * `ZRANGEBYSCORE ... WITHSCORES LIMIT` chunks (the same chunk size and "read a bounded slice, not the
  * whole set" idiom `scanForMatches` uses for `listLineage`), hydrating and filtering each chunk with
- * `matchesLineageFilter`. Stops the moment one match past `pageSize` is found (proof a next page exists,
- * without reading further than necessary) or `by-seq` itself is exhausted. `pageSize` defaults to
- * `DEFAULT_LINEAGE_PAGE_SIZE` and is clamped to `MAX_LINEAGE_PAGE_SIZE` (floored at 1, for the same reason
- * `pageLineageArray` floors it: a page must always advance its own cursor). A malformed `req.cursor`
- * propagates as `decodeSeqCursor`'s thrown `LineageCursorError`, before any Redis command is issued.
+ * `matchesLineageFilter`. The zset scanned is the single-value field index `chooseCandidateIndex` picks
+ * for the filter (every index is scored by the same seq as `by-seq`, so the cursor means the same thing
+ * on either), or `by-seq` when there is none (no indexable predicate, or a multi-value `type` union).
+ * Stops the moment one match past `pageSize` is found (proof a next page exists, without reading
+ * further than necessary), the scanned set is exhausted, or `maxScanChunks` chunks have been read (see
+ * `LINEAGE_PAGE_MAX_SCAN_CHUNKS`). `pageSize` defaults to `DEFAULT_LINEAGE_PAGE_SIZE` and is clamped to
+ * `MAX_LINEAGE_PAGE_SIZE` (floored at 1, for the same reason `pageLineageArray` floors it: a page must
+ * always advance its own cursor). A malformed `req.cursor` propagates as `decodeSeqCursor`'s thrown
+ * `LineageCursorError`, before any Redis command is issued.
  */
 export async function readLineagePage(
   redis: Redis,
   keys: RedisKeys,
   req: LineagePageRequest,
+  maxScanChunks: number = LINEAGE_PAGE_MAX_SCAN_CHUNKS,
 ): Promise<LineagePage> {
   const pageSize = Math.max(1, Math.min(req.pageSize ?? DEFAULT_LINEAGE_PAGE_SIZE, MAX_LINEAGE_PAGE_SIZE));
   let cursorSeq = req.cursor != null ? decodeSeqCursor(req.cursor) : 0;
+  // `type: []` matches nothing (see `readLineage`); the by-seq fallback below would still find that out,
+  // but only after scanning, so answer it up front.
+  if (req.type != null && req.type.length === 0) return { events: [] };
+  const candidate = chooseCandidateIndex(req);
+  const scanKey =
+    candidate != null && candidate.values.length === 1
+      ? keys.lineage.index(candidate.field, candidate.values[0]!)
+      : keys.lineage.bySeq;
   const matches: LineageEventRecord[] = [];
   let lastMatchSeq = cursorSeq;
   let hasMore = false;
 
-  for (;;) {
+  for (let chunk = 0; ; chunk++) {
+    if (chunk === maxScanChunks) {
+      // Budget spent with more of the set possibly unread: hand back what was found and resume from the
+      // last scanned seq (an exhausted set never reaches here: it breaks below on a short chunk).
+      return { events: matches, nextCursor: encodeSeqCursor(cursorSeq) };
+    }
     const raw = await redis.zrangebyscore(
-      keys.lineage.bySeq,
+      scanKey,
       `(${cursorSeq}`,
       "+inf",
       "WITHSCORES",
@@ -414,7 +441,7 @@ export async function readLineagePage(
       0,
       LINEAGE_SCAN_CHUNK_SIZE,
     );
-    if (raw.length === 0) break; // by-seq exhausted: nothing after cursorSeq
+    if (raw.length === 0) break; // the scanned set is exhausted: nothing after cursorSeq
     const pairs: { id: string; seq: number }[] = [];
     for (let i = 0; i < raw.length; i += 2) pairs.push({ id: raw[i]!, seq: Number(raw[i + 1]) });
 
@@ -429,7 +456,7 @@ export async function readLineagePage(
     }
     if (hasMore) break;
     cursorSeq = pairs[pairs.length - 1]!.seq;
-    if (pairs.length < LINEAGE_SCAN_CHUNK_SIZE) break; // this chunk was short: by-seq is exhausted
+    if (pairs.length < LINEAGE_SCAN_CHUNK_SIZE) break; // this chunk was short: the set is exhausted
   }
   return hasMore ? { events: matches, nextCursor: encodeSeqCursor(lastMatchSeq) } : { events: matches };
 }

@@ -85,6 +85,35 @@ class TestLineage:
 
         asyncio.run(run())
 
+    def test_concurrent_appends_keep_file_and_memory_order_and_skip_duplicate_ids(
+        self, tmp_path: Path
+    ) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            ids = [f"e{i:03d}" for i in range(30)]
+            # Every id is appended twice in the same tick: unserialized, both copies pass the id check.
+            await asyncio.gather(*(port.append_lineage(_event(i)) for i in [*ids, *ids]))
+
+            in_memory = [e.id for e in await port.list_lineage(LineageFilter(limit=1000))]
+            on_disk = [
+                json.loads(line)["id"]
+                for line in (tmp_path / "lineage.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            assert sorted(in_memory) == ids
+            assert on_disk == in_memory
+
+            # A cursor taken before a restart means the same position after it.
+            page = await port.page_lineage(LineagePageRequest(pageSize=10))
+            reloaded = FileStoragePort(tmp_path)
+            resumed = await reloaded.page_lineage(LineagePageRequest(pageSize=10, cursor=page.nextCursor))
+            assert [e.id for e in resumed.events] == in_memory[10:20]
+
+            # Idempotent across a reload too: an id loaded from disk is not appended again.
+            await reloaded.append_lineage(_event(ids[0]))
+            assert len((tmp_path / "lineage.jsonl").read_text(encoding="utf-8").splitlines()) == len(ids)
+
+        asyncio.run(run())
+
     def test_filters_by_correlation_id(self, tmp_path: Path) -> None:
         async def run() -> None:
             port = FileStoragePort(tmp_path)

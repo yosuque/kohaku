@@ -313,9 +313,10 @@ class LineageFilter:
     intentHash: str | None = None
     correlationId: str | None = None
     """Filter by the `correlationId` payload field (exact equality; port of TS ports.ts's
-    LineageFilter.correlationId, design.md #53). No writer in this repository stamps `correlationId` onto a
-    payload yet -- it exists so a product's own instrumentation can correlate lineage events sharing an
-    application-defined identifier."""
+    LineageFilter.correlationId, design.md #53). The `view.*` / `action.*` records the REST and MCP hosts
+    write carry the correlation id of the request that produced them, so one request's events can be pulled
+    together; a product's own instrumentation may stamp the same field with an application-defined
+    identifier. Rows stored before 0.4.0 have none and never match."""
     since: str | None = None
     """Only events at or after this time (ts >= since, inclusive). Assumes canonical ISO8601 form."""
     until: str | None = None
@@ -352,7 +353,9 @@ class LineagePage:
     events: list[LineageEventRecord]
     """In append order (oldest first within the page), matching the request's filters."""
     nextCursor: str | None = None
-    """Opaque cursor for the next page. None on the last page (nothing further to read)."""
+    """Opaque cursor for the next page. None on the last page (nothing further to read). A page may hold
+    fewer than `pageSize` events, even none, and still carry a `nextCursor` (an adapter bounds the work of
+    one call); a caller keeps following `nextCursor` until it is None, whatever the page holds."""
 
 
 @dataclass(frozen=True)

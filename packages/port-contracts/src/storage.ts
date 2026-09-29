@@ -1,9 +1,10 @@
-import type {
-  FixationRecord,
-  LineageEventRecord,
-  PromotionState,
-  StoragePort,
-  UISpec,
+import {
+  encodeSeqCursor,
+  type FixationRecord,
+  type LineageEventRecord,
+  type PromotionState,
+  type StoragePort,
+  type UISpec,
 } from "@kohaku-ui/spec-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -278,6 +279,13 @@ export function describeStoragePortContract(
       it("throws for a malformed cursor instead of restarting or skipping silently", async () => {
         if (port.pageLineage == null) return; // optional extension not implemented
         await expect(port.pageLineage({ cursor: "not-a-real-cursor" })).rejects.toThrow();
+      });
+
+      it("rejects a well-formed cursor whose seq is fractional, negative or beyond the safe-integer range", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        for (const seq of [0.5, -1, 2 ** 53, 1e300]) {
+          await expect(port.pageLineage({ cursor: encodeSeqCursor(seq) })).rejects.toThrow();
+        }
       });
     });
 

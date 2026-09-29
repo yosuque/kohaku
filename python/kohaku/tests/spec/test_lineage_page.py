@@ -67,6 +67,13 @@ class TestSeqCursorCodec:
         with pytest.raises(LineageCursorError):
             decode_seq_cursor(_to_base64url_json({"v": 1, "seq": 1.5}))
 
+    def test_rejects_a_negative_or_unsafe_seq(self) -> None:
+        # A negative seq would rewind the scan; anything past 2**53 - 1 cannot round-trip through TS.
+        for seq in (-1, -0.5, 2**53, 10**400):
+            with pytest.raises(LineageCursorError):
+                decode_seq_cursor(_to_base64url_json({"v": 1, "seq": seq}))
+        assert decode_seq_cursor(_to_base64url_json({"v": 1, "seq": 2**53 - 1})) == 2**53 - 1
+
 
 class TestPageLineageEvents:
     def _events(self) -> list[LineageEventRecord]:

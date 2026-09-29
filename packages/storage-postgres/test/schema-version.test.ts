@@ -72,6 +72,52 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: schema vers
     await port.close();
   });
 
+  it("upgrades a pre-0.4 kohaku_lineage (no correlation_id) in place, and a second ready() is a no-op", async () => {
+    const schema = uniqueSchema();
+    const pool = new Pool({ connectionString });
+    try {
+      await pool.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+      await pool.query(`
+        CREATE TABLE "${schema}"."kohaku_lineage" (
+          seq bigserial PRIMARY KEY,
+          id text NOT NULL,
+          ts text COLLATE "C" NOT NULL,
+          tenant text NOT NULL DEFAULT '',
+          type text NOT NULL,
+          intent_hash text NULL,
+          artifact_id text NULL,
+          spec_hash text NULL,
+          record text NOT NULL,
+          UNIQUE (id)
+        )
+      `);
+      const catalog = async () => {
+        const column = await pool.query(
+          "SELECT 1 FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'",
+          [schema],
+        );
+        const index = await pool.query(
+          "SELECT 1 FROM pg_indexes WHERE schemaname = $1 AND indexname LIKE '%correlation_id_idx'",
+          [schema],
+        );
+        return [column.rowCount, index.rowCount];
+      };
+      expect(await catalog()).toEqual([0, 0]);
+
+      const first = createPostgresStoragePort({ connectionString, schema });
+      await first.ready();
+      await first.close();
+      expect(await catalog()).toEqual([1, 1]);
+
+      const second = createPostgresStoragePort({ connectionString, schema });
+      await expect(second.ready()).resolves.toBeUndefined();
+      await second.close();
+      expect(await catalog()).toEqual([1, 1]);
+    } finally {
+      await pool.end();
+    }
+  });
+
   it("two ports calling ready() concurrently on a fresh schema both succeed (the advisory lock serializes the DDL)", async () => {
     const schema = uniqueSchema();
     const a = createPostgresStoragePort({ connectionString, schema });
