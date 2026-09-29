@@ -125,6 +125,16 @@ describe("validateFormValues", () => {
     expect(validateFormValues([pat], { s: "123" }, DEFAULT_MESSAGES)).toEqual([]);
   });
 
+  it("counts minLength / maxLength in Unicode code points, not UTF-16 code units", () => {
+    // "𠮷" and the emoji are each one code point (two UTF-16 code units).
+    const max = field({ name: "s", type: "text", maxLength: 2 });
+    expect(validateFormValues([max], { s: "𠮷😀" }, DEFAULT_MESSAGES)).toEqual([]);
+    expect(validateFormValues([max], { s: "𠮷😀a" }, DEFAULT_MESSAGES)[0]!.rule).toBe("maxLength");
+    const min = field({ name: "s", type: "text", minLength: 2 });
+    expect(validateFormValues([min], { s: "𠮷" }, DEFAULT_MESSAGES)[0]!.rule).toBe("minLength");
+    expect(validateFormValues([min], { s: "𠮷😀" }, DEFAULT_MESSAGES)).toEqual([]);
+  });
+
   it("number's min / max are checked against the numeric range", () => {
     const fields = [field({ name: "score", label: "Score", type: "number", min: 0, max: 10 })];
     expect(validateFormValues(fields, { score: -1 }, DEFAULT_MESSAGES)[0]).toMatchObject({

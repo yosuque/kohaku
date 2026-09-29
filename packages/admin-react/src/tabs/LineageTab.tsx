@@ -41,8 +41,8 @@ export function LineageTab(): ReactNode {
         <tbody>
           {events.map((e) => (
             <tr key={e.id} style={{ borderBottom: `1px solid ${V.border}` }}>
-              <td style={{ padding: "5px 8px", whiteSpace: "nowrap", color: V.muted }}>
-                {e.ts.slice(11, 19)}
+              <td style={{ padding: "5px 8px", whiteSpace: "nowrap", color: V.muted }} title={e.ts}>
+                {`${e.ts.slice(11, 19)}Z`}
               </td>
               <td style={{ padding: "5px 8px", fontWeight: 600 }}>{e.type}</td>
               <LineageTierTd event={e} />

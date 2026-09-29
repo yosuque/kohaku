@@ -250,6 +250,38 @@ export function commitCellEdit(
 }
 
 /**
+ * Discards one optimistic cell edit, so the grid shows the server value again. Used when the cellEdit
+ * invoke ended without committing (phase "invalid" / "awaitingApproval" / "failed"). The cell is reset
+ * only if it still holds `committedValue` -- a newer edit to the same cell (made while this invoke was
+ * in flight) is left alone -- and only if `copy` still belongs to `rows` (new data already dropped it).
+ * Returns `copy` itself (the identical reference) when there is nothing to revert.
+ */
+export function revertCellEdit(
+  copy: RowsWorkingCopy | undefined,
+  rows: JsonObject[],
+  rowIndex: number,
+  column: string,
+  committedValue: JsonValue,
+): RowsWorkingCopy | undefined {
+  if (copy == null || copy.source !== rows) return copy;
+  const edited = copy.edits.get(rowIndex);
+  const original = rows[rowIndex];
+  if (edited == null || original == null || edited[column] !== committedValue) return copy;
+
+  const reverted: JsonObject = { ...edited };
+  if (column in original) reverted[column] = original[column] as JsonValue;
+  else delete reverted[column];
+
+  const edits = new Map(copy.edits);
+  const untouched =
+    Object.keys(reverted).length === Object.keys(original).length &&
+    Object.keys(original).every((k) => reverted[k] === original[k]);
+  if (untouched) edits.delete(rowIndex);
+  else edits.set(rowIndex, reverted);
+  return { source: rows, edits };
+}
+
+/**
  * The rows actually displayed: `rows` with any pending edits from `copy` applied. Returns `rows`
  * itself (the identical reference) when there is nothing to apply — no working copy, a stale one
  * (built against a different rows reference — see commitCellEdit), or an empty one — so a caller

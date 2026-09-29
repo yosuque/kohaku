@@ -8,9 +8,12 @@ import type { Provenance } from "@kohaku-ui/spec-core";
  * explain` already read are the single source of truth.
  *
  * Rule (design.md #66):
- * - `provenance.fallback` present -> `"none"`. A fallback is a deterministic degradation (the L1/L2
- *   generation-exhausted markdown fallback, or a capability-negotiation demotion), not model output,
+ * - `provenance.fallback` with `kind` `"generation"` (or no `kind`) -> `"none"`. That fallback is the
+ *   deterministic markdown the composer serves once L1/L2 generation is exhausted, not model output,
  *   regardless of the tier it is attached to.
+ * - `provenance.fallback` with `kind` `"negotiation"` does not affect the result: capability
+ *   negotiation demotes individual parts of a Spec that was still model-generated, so the level is
+ *   derived from the tier and cache exactly as if no fallback were present.
  * - tier `"L1"` or `"L2"` -> `"ai-generated"`.
  * - tier `"L0"` and `cache === "fixated"` -> `"ai-assisted-reviewed"` (a human reviewed and fixated a
  *   once-generated Spec; L0 serves the pinned structure from then on).
@@ -35,7 +38,7 @@ export interface Disclosure {
 /** Derives the disclosure level (and its IPTC digital-source-type term, when applicable) from a Spec's provenance. */
 export function deriveDisclosure(provenance: Provenance): Disclosure {
   const level: DisclosureLevel =
-    provenance.fallback != null
+    provenance.fallback != null && provenance.fallback.kind !== "negotiation"
       ? "none"
       : provenance.tier === "L1" || provenance.tier === "L2"
         ? "ai-generated"

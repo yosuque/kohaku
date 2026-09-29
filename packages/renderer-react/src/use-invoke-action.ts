@@ -25,8 +25,12 @@ export type { ActionPhase };
 
 export interface UseInvokeActionResult {
   state: ActionPhase;
-  /** Resolves eventName's declared binding and executes it (the path branches by the emit kind). */
-  invoke(eventName: string, runtime: JsonObject): Promise<void>;
+  /**
+   * Resolves eventName's declared binding and executes it (the path branches by the emit kind).
+   * `onPhase`, when given, is also called with every phase of a direct execution (never for the
+   * forwarded path), for a caller that must react to how one particular invoke ended.
+   */
+  invoke(eventName: string, runtime: JsonObject, onPhase?: (phase: ActionPhase) => void): Promise<void>;
 }
 
 /**
@@ -46,7 +50,11 @@ export function useInvokeAction(node: ComponentNode): UseInvokeActionResult {
   const row = useRowContext();
   const [state, setState] = useState<ActionPhase>({ phase: "idle" });
 
-  const invoke = async (eventName: string, runtime: JsonObject): Promise<void> => {
+  const invoke = async (
+    eventName: string,
+    runtime: JsonObject,
+    onPhase?: (phase: ActionPhase) => void,
+  ): Promise<void> => {
     // Whether direct execution is possible, the action name, and payload resolution have renderer-core's resolveInvokeTarget as the single source of truth
     // (deciding undeclared / emit kind / presence of binding / unknown action name, plus $row・$value + row-context payload resolution).
     const target = resolveInvokeTarget(spec, node, eventName, runtime, { hasBinding: binding != null, row });
@@ -74,7 +82,10 @@ export function useInvokeAction(node: ComponentNode): UseInvokeActionResult {
         requestApproval,
       },
       node.id,
-      setState,
+      (phase) => {
+        setState(phase);
+        onPhase?.(phase);
+      },
     );
   };
 

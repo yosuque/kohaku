@@ -1,6 +1,6 @@
-import { actionButtonStyle } from "@kohaku-ui/renderer-core";
+import { actionButtonStyle, actionPhaseNotice } from "@kohaku-ui/renderer-core";
 import type { CSSProperties, ReactNode } from "react";
-import { type ImplProps, useSizing, useToken } from "../context.js";
+import { type ImplProps, useMessages, useSizing, useToken } from "../context.js";
 import { useInvokeAction } from "../use-invoke-action.js";
 
 /**
@@ -14,11 +14,13 @@ import { useInvokeAction } from "../use-invoke-action.js";
 export function ActionButton({ node }: ImplProps): ReactNode {
   const { state, invoke } = useInvokeAction(node);
   const sizing = useSizing();
+  const messages = useMessages();
   const primary = String(useToken("color.primary"));
   const border = String(useToken("color.border"));
   const danger = String(useToken("color.danger"));
   const text = String(useToken("color.text"));
   const onPrimary = String(useToken("color.on-primary"));
+  const negativeText = String(useToken("color.negative.text"));
 
   const label = String(node.props["label"] ?? "");
   const variant = (node.props["variant"] as string) ?? "primary";
@@ -32,16 +34,29 @@ export function ActionButton({ node }: ImplProps): ReactNode {
     sizing,
   );
 
+  // A rejected payload or a declined / pending confirmation or approval never commits: say so, next to the button.
+  const notice = actionPhaseNotice(state, messages);
+
   return (
-    <button
-      data-kohaku={node.id}
-      type="button"
-      disabled={disabled}
-      aria-busy={pending || undefined}
-      onClick={() => void invoke("press", {})}
-      style={style as CSSProperties}
-    >
-      {label}
-    </button>
+    <>
+      <button
+        data-kohaku={node.id}
+        type="button"
+        disabled={disabled}
+        aria-busy={pending || undefined}
+        onClick={() => void invoke("press", {})}
+        style={style as CSSProperties}
+      >
+        {label}
+      </button>
+      {notice != null && (
+        <div
+          role={notice.role}
+          style={{ color: notice.role === "alert" ? negativeText : text, fontSize: sizing.fontSm }}
+        >
+          {notice.text}
+        </div>
+      )}
+    </>
   );
 }

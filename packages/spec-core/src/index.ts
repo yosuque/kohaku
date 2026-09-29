@@ -8,6 +8,7 @@ export {
   type ActionTier,
   actionPayloadHash,
   assertValidActionParamsSchema,
+  codePointLength,
   findUnsafeActionParamKeys,
   validateActionParams,
 } from "./action-params.js";

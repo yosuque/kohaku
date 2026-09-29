@@ -14,6 +14,7 @@ import {
   nextSortState,
   planCellEdit,
   type RowsWorkingCopy,
+  revertCellEdit,
   rowKey,
   SPREADSHEET_HARD_ROW_CAP,
   sortRows,
@@ -276,6 +277,37 @@ describe("commitCellEdit / effectiveRows", () => {
     // commitCellEdit itself also starts a fresh copy rather than reusing the stale one
     const freshCopy = commitCellEdit(copy, freshRows, 0, "revenue", 5);
     expect(effectiveRows(freshRows, freshCopy)[0]).toEqual({ region: "japan", revenue: 5 });
+  });
+});
+
+describe("revertCellEdit", () => {
+  const rows: JsonObject[] = [
+    { region: "japan", revenue: 1 },
+    { region: "us", revenue: 2 },
+  ];
+
+  it("drops the only edit of a row, restoring the server value", () => {
+    const copy = commitCellEdit(undefined, rows, 0, "revenue", 99);
+    const reverted = revertCellEdit(copy, rows, 0, "revenue", 99);
+    expect(effectiveRows(rows, reverted)).toBe(rows);
+  });
+
+  it("keeps other cells' edits in the same row", () => {
+    let copy = commitCellEdit(undefined, rows, 0, "revenue", 99);
+    copy = commitCellEdit(copy, rows, 0, "region", "peru");
+    const reverted = revertCellEdit(copy, rows, 0, "revenue", 99);
+    expect(effectiveRows(rows, reverted)[0]).toEqual({ region: "peru", revenue: 1 });
+  });
+
+  it("leaves a newer edit to the same cell alone", () => {
+    const copy = commitCellEdit(commitCellEdit(undefined, rows, 0, "revenue", 99), rows, 0, "revenue", 100);
+    expect(revertCellEdit(copy, rows, 0, "revenue", 99)).toBe(copy);
+  });
+
+  it("is a no-op for a working copy that belongs to other rows or is absent", () => {
+    const copy = commitCellEdit(undefined, rows, 0, "revenue", 99);
+    expect(revertCellEdit(copy, [...rows], 0, "revenue", 99)).toBe(copy);
+    expect(revertCellEdit(undefined, rows, 0, "revenue", 99)).toBeUndefined();
   });
 });
 

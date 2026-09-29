@@ -136,19 +136,26 @@ def negotiate(
     if len(downgrades) == 0:
         return NegotiateResult(spec=spec, downgrades=downgrades)
 
-    # If an existing fallback is present (e.g. "generation" from a generation failure), negotiation
-    # overwrites it last-writer-wins (a simplification of one downgrade trace per Spec).
-    new_provenance = spec.provenance.model_copy(
-        update={
-            "fallback": ProvenanceFallback.model_validate(
-                {
-                    "from": ",".join(f"{d.id}:{d.from_}" for d in downgrades),
-                    "reason": "capability negotiation",
-                    "kind": "negotiation",
-                }
-            )
-        }
-    )
+    # A Spec carries one fallback trace. An existing "generation" fallback (or one without a kind) marks
+    # the Spec as deterministic output rather than model output, which the render-side disclosure
+    # derivation relies on (design.md decision 66), so negotiation must not overwrite it; the downgrades
+    # are still returned. Only a Spec with no fallback, or with an earlier "negotiation" one, gets the
+    # negotiation trace.
+    existing = spec.provenance.fallback
+    if existing is not None and existing.kind != "negotiation":
+        new_provenance = spec.provenance
+    else:
+        new_provenance = spec.provenance.model_copy(
+            update={
+                "fallback": ProvenanceFallback.model_validate(
+                    {
+                        "from": ",".join(f"{d.id}:{d.from_}" for d in downgrades),
+                        "reason": "capability negotiation",
+                        "kind": "negotiation",
+                    }
+                )
+            }
+        )
     return NegotiateResult(
         spec=spec.model_copy(update={"components": components, "provenance": new_provenance}),
         downgrades=downgrades,
