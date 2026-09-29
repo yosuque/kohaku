@@ -478,16 +478,19 @@ async function persistAndTrace(
   const { cacheMode } = prepared;
   const cacheLabel = cacheLabelOf(cacheMode);
 
+  const usage = sumUsage(attempts);
+  // Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
+  // this function at all; a no-attempts fallback has usage:undefined and is excluded by
+  // notifyBudgetUsage's own check) — see ComposeBudget.onUsage's doc. Runs before the cache store: with
+  // `cacheFailure: "closed"` a failing put rethrows, and the tokens already spent on generation must
+  // still be charged (else every retry during a cache outage would generate uncharged).
+  notifyBudgetUsage(prepared.policy.budget, usage, prepared.tenant);
+
   // 9-10. Cache store (the L0/L1/L2-common decision is consolidated in shouldPersist).
   if (shouldPersist(spec, cacheMode)) {
     await putSpecCacheSafely(ctx, prepared, spec);
   }
 
-  const usage = sumUsage(attempts);
-  // Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
-  // this function at all; a no-attempts fallback has usage:undefined and is excluded by
-  // notifyBudgetUsage's own check) — see ComposeBudget.onUsage's doc.
-  notifyBudgetUsage(prepared.policy.budget, usage, prepared.tenant);
   const trace = buildComposeTrace(prepared, {
     cache: cacheLabel,
     tier: spec.provenance.tier,
