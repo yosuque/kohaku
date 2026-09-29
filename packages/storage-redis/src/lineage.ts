@@ -64,7 +64,7 @@ export interface LineageIndexCandidate {
 }
 
 /**
- * Picks the sorted set(s) to read candidate ids from, most selective first: the three payload hash
+ * Picks the sorted set(s) to read candidate ids from, most selective first: the payload id
  * fields (`LINEAGE_PAYLOAD_INDEX_FIELDS` -- typically unique or near-unique), then `type` (usually a
  * small, bounded vocabulary), then `tenant` (broad: everything a tenant has ever done). `null` means "no
  * usable index -- scan `by-seq`". This priority order is independent of `LINEAGE_INDEX_FIELDS`'s
