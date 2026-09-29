@@ -6,6 +6,7 @@ import {
   isSafeEvidenceFilePath,
   MAX_EVIDENCE_FILE_BYTES,
 } from "./manifest.js";
+import { findDuplicateJsonKey } from "./strict-json.js";
 
 /**
  * Opaque handles for WebCrypto Ed25519 key material. Kept untyped/structural (`object`, not the DOM
@@ -156,16 +157,18 @@ export async function signManifest(
  * Verifies a manifest's signature (`manifest.sig`'s base64 contents) against an Ed25519 public key.
  * `manifest` is whatever JSON value was signed: `verifyEvidencePack` passes the raw `JSON.parse` result
  * of manifest.json (not a schema-parsed copy, which would silently drop unknown keys and so verify
- * content the signer never covered). A malformed signature is a failed verification, not a throw.
+ * content the signer never covered). A malformed signature, or a value with no canonical form (a
+ * non-finite number such as the `Infinity` that `1e400` parses to), is a failed verification, not a throw.
  */
 export async function verifyManifestSignature(
   manifest: unknown,
   signatureBase64: string,
   publicKey: Ed25519PublicKey,
 ): Promise<boolean> {
-  const message = encoder.encode(canonicalStringify(manifest));
+  let message: Uint8Array;
   let signature: Uint8Array;
   try {
+    message = encoder.encode(canonicalStringify(manifest));
     signature = base64ToBytes(signatureBase64.trim());
   } catch {
     return false;
@@ -292,7 +295,8 @@ function artifactClaimsFromJsonlRecords(
 
 /**
  * Verifies a Compliance Evidence Pack (design.md #67): the manifest's signature verifies against
- * `publicKey` over the raw manifest.json value, the manifest then matches `EvidenceManifestSchema`, the pack directory contains no file the manifest does not
+ * `publicKey` over the parsed manifest.json value (a manifest.json with a duplicate object key is
+ * rejected outright), the manifest then matches `EvidenceManifestSchema`, the pack directory contains no file the manifest does not
  * list, every file the manifest lists has the exact hash/size the manifest recorded, and -- as an
  * independent, best-effort cross-check -- every artifact reference found inside the jsonl files
  * actually hashes to the value it claims. A single altered byte anywhere the manifest covers changes
@@ -317,13 +321,26 @@ export async function verifyEvidencePack(
     };
   }
   const manifestBytes = await reader.readManifest();
+  const manifestText = decoder.decode(manifestBytes);
   let raw: unknown;
   try {
-    raw = JSON.parse(decoder.decode(manifestBytes));
+    raw = JSON.parse(manifestText);
   } catch (e) {
     return {
       ok: false,
       errors: [`manifest.json is not valid JSON: ${e instanceof Error ? e.message : String(e)}`],
+      mismatches: [],
+    };
+  }
+  // The signature covers the parsed value, and JSON.parse keeps the last of two equal keys, so a duplicate
+  // would let two parsers read different manifests out of the same bytes: refuse it before anything else.
+  const duplicateKey = findDuplicateJsonKey(manifestText);
+  if (duplicateKey !== undefined) {
+    return {
+      ok: false,
+      errors: [
+        `manifest.json contains the duplicate object key ${JSON.stringify(duplicateKey)}; refusing to verify`,
+      ],
       mismatches: [],
     };
   }
