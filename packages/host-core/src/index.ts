@@ -11,13 +11,17 @@ export {
   type ActionGateRequest,
   type ActionGateResult,
   createActionGate,
+  NO_APPROVAL_PORT_REASON,
 } from "./action-gate.js";
 export {
+  ACTION_GATE_UNAVAILABLE_MESSAGE,
   type ActionAuditContext,
   type ActionGateOutcome,
+  APPROVAL_TOKEN_REJECTED_MESSAGE,
   APPROVAL_TOKEN_REQUIRED_MESSAGE,
   CONFIRMATION_REQUIRED_MESSAGE,
   recordActionGateResult,
+  recordActionGateUnavailableDenial,
   recordUndeclaredActionDenial,
   UNDECLARED_ACTION_MESSAGE,
 } from "./action-gate-outcome.js";

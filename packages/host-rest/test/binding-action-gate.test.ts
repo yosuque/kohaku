@@ -133,12 +133,9 @@ describe("POST /binding/action: params validation (ACT-PRM-001)", () => {
   });
 
   it("rejects a constructor key in the payload with 422 ACTION_PARAMS_INVALID, without invoking the domain", async () => {
-    // Regression test for a prototype-chain lookup bug in validateActionParams (spec-core). Uses
-    // "constructor" rather than "__proto__": the request body's JsonObjectSchema (spec-core, backed by
-    // zod's z.record) already strips an incoming "__proto__" key on its own before this ever reaches the
-    // action gate (zod 4's own prototype-pollution guard), but does not strip "constructor" / "prototype"
-    // / "toString" -- those reach validateActionParams as genuine own properties of the parsed payload,
-    // the same shape a real attacker payload would have.
+    // Regression test for a prototype-chain lookup bug in validateActionParams (spec-core). "constructor"
+    // reaches the gate as a genuine own property of the parsed payload; an own "__proto__" key is stripped by
+    // the body's JsonObjectSchema (zod's z.record) and is covered by the raw-body scan tested below.
     const domain = domainWith({ name: "annotate", description: "d", paramsSchema: NOTE_SCHEMA });
     const deps = baseDeps({ domain });
     const app = createKohakuRoutes(deps);
@@ -154,6 +151,119 @@ describe("POST /binding/action: params validation (ACT-PRM-001)", () => {
       { path: "constructor", code: "unsafeKey", message: 'the property name "constructor" is not allowed' },
     ]);
     expect((domain as unknown as { invokeCalls: unknown[] }).invokeCalls).toHaveLength(0);
+  });
+});
+
+describe("POST /binding/action: __proto__ payload key (ACT-PRM-001)", () => {
+  it("rejects an own __proto__ key that zod would silently strip, with the same 422 unsafeKey issue", async () => {
+    const domain = domainWith({ name: "annotate", description: "d", paramsSchema: NOTE_SCHEMA });
+    const app = createKohakuRoutes(baseDeps({ domain }));
+    const res = await app.request("/binding/action", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer cap" },
+      body: '{"action":"annotate","payload":{"note":"hi","nested":{"__proto__":{"polluted":true}}}}',
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: { code: string; issues: unknown } };
+    expect(body.error.code).toBe("ACTION_PARAMS_INVALID");
+    expect(body.error.issues).toEqual([
+      {
+        path: "nested.__proto__",
+        code: "unsafeKey",
+        message: 'the property name "__proto__" is not allowed',
+      },
+    ]);
+    expect((domain as unknown as { invokeCalls: unknown[] }).invokeCalls).toHaveLength(0);
+  });
+});
+
+describe("POST /binding/action: gate infrastructure failures (fail-closed, SPEC ACT-APR-001)", () => {
+  type ErrorBody = { error: { code: string; message: string; requestId?: string } };
+
+  function recorderWith(denied: ReturnType<typeof vi.fn>): ActionAuditRecorder {
+    return {
+      invoked: async () => {},
+      denied: denied as unknown as ActionAuditRecorder["denied"],
+      approvalRequested: async () => {},
+      approved: async () => {},
+    };
+  }
+
+  it("a listOperations() rejection answers 503 INTERNAL with the envelope, reports to onError and records action.denied", async () => {
+    const boom = new Error("db-primary.internal refused");
+    const domain: DomainPort = {
+      async listOperations() {
+        throw boom;
+      },
+      async invoke() {
+        throw new Error("must not be invoked");
+      },
+    };
+    const denied = vi.fn(async () => {});
+    const onError = vi.fn();
+    const deps = baseDeps({ domain, onError, actionAuditRecorder: recorderWith(denied) });
+    const res = await postAction(deps, { action: "annotate", payload: {} });
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as ErrorBody;
+    expect(body.error.code).toBe("INTERNAL");
+    expect(body.error.message).toBe("action gate unavailable");
+    expect(body.error.requestId).toBe(res.headers.get("X-Request-Id"));
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: "binding/action", error: boom }),
+    );
+    expect(denied).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "annotate", tier: "auto", reason: "action gate unavailable" }),
+    );
+  });
+
+  it("an ApprovalPort.verifyApproval that throws is a denial (503, no invoke), audited with the descriptor tier", async () => {
+    const boom = new Error("approval store unavailable");
+    const domain = domainWith({ name: "delete", description: "d", tier: "approve" });
+    const approvals: ApprovalPort = {
+      issueApproval: async () => "token",
+      verifyApproval: async () => {
+        throw boom;
+      },
+    };
+    const denied = vi.fn(async () => {});
+    const onError = vi.fn();
+    const deps = baseDeps({ domain, approvals, onError, actionAuditRecorder: recorderWith(denied) });
+    const res = await postAction(deps, { action: "delete", payload: {}, approval: "tok" });
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as ErrorBody;
+    expect(body.error.code).toBe("INTERNAL");
+    expect(body.error.message).not.toContain("approval store");
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ endpoint: "binding/action", error: boom }),
+    );
+    expect(denied).toHaveBeenCalledWith(expect.objectContaining({ action: "delete", tier: "approve" }));
+    expect((domain as unknown as { invokeCalls: unknown[] }).invokeCalls).toHaveLength(0);
+  });
+
+  it("an error nothing handled still answers the SPEC envelope (not text/plain) and reaches onError", async () => {
+    const boom = new Error("recorder exploded");
+    const onError = vi.fn();
+    const deps = baseDeps({
+      onError,
+      recorder: {
+        rendered: async () => {
+          throw boom;
+        },
+      },
+      // A throwing tenant hook is outside every route's own try/catch.
+      tenant: async () => {
+        throw boom;
+      },
+    });
+    const app = createKohakuRoutes(deps);
+    const res = await app.request("/catalog");
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = (await res.json()) as ErrorBody;
+    expect(body.error.code).toBe("INTERNAL");
+    expect(body.error.message).not.toContain("exploded");
+    expect(body.error.requestId).toBe(res.headers.get("X-Request-Id"));
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ endpoint: "unhandled", error: boom }));
   });
 });
 
@@ -327,6 +437,9 @@ describe("POST /binding/action: tier approve (ACT-APR-001)", () => {
     });
     const res = await postAction(deps, { action: "delete", payload: {}, approval: "token-abc" });
     expect(res.status).toBe(403);
+    // The port's own reason is audited but never shown to the client (it would reveal which binding mismatched).
+    const denial = (await res.json()) as { error: { message: string } };
+    expect(denial.error.message).toBe("approval token was rejected");
     expect(denied).toHaveBeenCalledTimes(1);
     expect(denied.mock.calls[0]![0]).toMatchObject({ action: "delete", reason: "approval already used" });
     expect(approvalRequested).not.toHaveBeenCalled();
@@ -353,7 +466,7 @@ describe("createKohakuRoutes: paramsSchema validation at attach", () => {
     expect((seen[0]!.error as Error).message).toContain('operation "annotate" has an invalid paramsSchema');
   });
 
-  it("a bad paramsSchema breaks only that operation: it fails closed (500) and the other operation still invokes", async () => {
+  it("a bad paramsSchema breaks only that operation: it fails closed (500 envelope) and the other operation still invokes", async () => {
     const domain = domainWith(
       { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a$" } as never },
       { name: "publish", description: "d" },
@@ -361,6 +474,7 @@ describe("createKohakuRoutes: paramsSchema validation at attach", () => {
     const deps = baseDeps({ domain, onError: () => {} });
     const broken = await postAction(deps, { action: "annotate", payload: {} });
     expect(broken.status).toBe(500);
+    expect(((await broken.json()) as { error: { code: string } }).error.code).toBe("INTERNAL");
     const ok = await postAction(deps, { action: "publish", payload: {} });
     expect(ok.status).toBe(200);
     expect((domain as unknown as { invokeCalls: { op: string }[] }).invokeCalls.map((c) => c.op)).toEqual([
