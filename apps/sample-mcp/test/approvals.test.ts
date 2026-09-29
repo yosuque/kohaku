@@ -66,7 +66,7 @@ describe("createKohakuMcpSetup: approval tokens are single-use across createServ
       arguments: { action: "publish", payload, capability, approval },
     });
     expect(replay.isError).toBe(true);
-    expect(JSON.stringify(replay.structuredContent)).toContain("approval already used");
+    expect(JSON.stringify(replay.structuredContent)).toContain("approval token was rejected");
     await second.close();
   });
 });
@@ -112,6 +112,6 @@ describe("createKohakuMcpSetup: approvals issued the way REST issues them, check
   it("rejects a tenant-bound approval, fail-closed", async () => {
     const result = await callPublish("acme");
     expect(result.isError).toBe(true);
-    expect(JSON.stringify(result.structuredContent)).toContain("approval is bound to a different tenant");
+    expect(JSON.stringify(result.structuredContent)).toContain("approval token was rejected");
   });
 });

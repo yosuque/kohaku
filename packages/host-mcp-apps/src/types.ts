@@ -155,8 +155,8 @@ export interface McpHostDeps {
    *
    * **Limitation: tenant-bound approvals are rejected here.** REST's `POST /approvals` binds the resolved
    * tenant into the token, but this profile never resolves a tenant, so `${prefix}_action` verifies with no
-   * tenant and `verifyApproval` denies a tenant-bound token ("approval is bound to a different tenant",
-   * fail-closed). Approve-tier over MCP therefore works only for approvals issued without a tenant binding
+   * tenant and `verifyApproval` denies a tenant-bound token (fail-closed; the caller sees the fixed
+   * "approval token was rejected", the `action.denied` audit records "approval is bound to a different tenant"). Approve-tier over MCP therefore works only for approvals issued without a tenant binding
    * (a deployment with no `deps.tenant` on REST); elsewhere use the REST `POST /binding/action`. Resolving a
    * tenant on this surface is a deferred design decision (design.md #63).
    */
