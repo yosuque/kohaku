@@ -554,7 +554,9 @@ export function GovernancePage() {
 「なぜこの画面はこうなったのか」— ティア、キャッシュのヒット/ミス、キャッシュキーの個々の内訳、どの L1/L2 の
 試行が走ってなぜ失敗したか、capability negotiation による降格、そのリクエストが生んだ lineage イベント — は
 `requestId` 1 つから答えられる(compose の `X-Request-Id` 応答ヘッダ、または MCP ツール呼び出しの
-`mcp:<sessionId または呼び出しごとの uuid>:<jsonrpc id>` 相関 ID)。方法は 2 通りある。どちらも **lineage を記録する**
+`mcp:<sessionId または呼び出しごとの uuid>:<jsonrpc id>` 相関 ID。この ID は MCP ホストが compose 系ツール結果の
+`_meta["kohaku/requestId"]` に返す — セッションを持たないトランスポートでは呼び出しごとの uuid が入るため、JSON-RPC id だけからは
+導けない)。方法は 2 通りある。どちらも **lineage を記録する**
 ホストが前提で(`createKohakuHost` は既定で recorder を配線する。`createKohakuRoutes` を手で組んだホストは `recorder` の
 設定が要る)、CLI の場合は読み出し先となる **稼働中の REST ホスト**も必要になる:
 

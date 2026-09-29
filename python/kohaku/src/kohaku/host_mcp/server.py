@@ -15,7 +15,9 @@ wire shape as TS (co-embedded initial data, both _meta forms) can be reproduced.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import re
 import uuid
 import warnings
 import weakref
@@ -87,6 +89,7 @@ from .meta import (
     CAPABILITY_META_KEY,
     INITIAL_DATA_META_KEY,
     RENDERER_RESOURCE_URI,
+    REQUEST_ID_META_KEY,
     RESOURCE_MIME_TYPE,
     resource_ui_meta,
     tool_ui_meta,
@@ -291,6 +294,21 @@ def _session_correlation_prefix(ctx: ServerRequestContext[Any]) -> str:
     return correlation_id
 
 
+# Upper bound (characters) on the client-controlled JSON-RPC id segment of a correlation id; a longer (or
+# non-printable) id is replaced by a short digest. Mirrors TS host-mcp-apps' MAX_CORRELATION_SEGMENT_LEN.
+_MAX_CORRELATION_SEGMENT_LEN = 64
+_PRINTABLE_ASCII_RE = re.compile(r"[\x20-\x7e]+")
+
+
+def _bounded_correlation_segment(raw: str) -> str:
+    """Bounds one client-controlled segment of a correlation id. The JSON-RPC id is stored in lineage columns a
+    backend may index (a Postgres btree rejects an oversized row), so an over-long or non-printable value is
+    replaced by a short sha256 hex digest of itself: stable and unique per input, but bounded and log-safe."""
+    if 0 < len(raw) <= _MAX_CORRELATION_SEGMENT_LEN and _PRINTABLE_ASCII_RE.fullmatch(raw):
+        return raw
+    return "h" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:32]
+
+
 def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
     """The per-call correlation id: `mcp:<sessionId>:<jsonrpc id>`, where `<sessionId>` is a stable opaque id
     (uuid4 hex) generated once per transport connection (see `_session_correlation_prefix` above) -- never
@@ -319,7 +337,7 @@ def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
     """
     if ctx.request_id is None:
         return None
-    return f"mcp:{_session_correlation_prefix(ctx)}:{ctx.request_id}"
+    return f"mcp:{_session_correlation_prefix(ctx)}:{_bounded_correlation_segment(str(ctx.request_id))}"
 
 
 def _trace_context_of(ctx: ServerRequestContext[Any]) -> TraceContext | None:
@@ -660,6 +678,9 @@ def attach_kohaku_to_mcp_server(
             INITIAL_DATA_META_KEY: {ref: td.to_wire() for ref, td in initial_data.items()},
             CAPABILITY_META_KEY: capability,
             **({ACTIONS_META_KEY: to_jsonable(actions)} if actions is not None else {}),
+            # The id this call's lineage events are recorded under (see REQUEST_ID_META_KEY): what a caller
+            # passes to `kohaku explain`.
+            **({REQUEST_ID_META_KEY: correlation_id} if correlation_id is not None else {}),
         }
         # content[0] is always the text fallback (MCPAPP-FBK-001). The legacy UIResource is placed after.
         content: list[Any] = [

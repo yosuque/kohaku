@@ -33,6 +33,7 @@ import {
   KOHAKU_MCP_LIST_CACHE_HINT,
   RENDERER_RESOURCE_CACHE_HINT,
   RENDERER_RESOURCE_URI,
+  REQUEST_ID_META_KEY,
   RESOURCE_MIME_TYPE,
   RESOURCE_URI_META_KEY,
   UI_META_KEY,
@@ -701,6 +702,73 @@ describe("requestContextOf: reads the per-call abort signal and JSON-RPC id from
       fakeServerContext({ signal: new AbortController().signal, id: "v2-req-1" }, "sess-abc"),
     );
     expect(correlationId).toBe("mcp:sess-abc:v2-req-1");
+  });
+
+  it("bounds a client-controlled JSON-RPC id: an over-long or non-printable id is replaced by a short digest", async () => {
+    const correlationIds: (string | undefined)[] = [];
+    const server = new McpServer({ name: "kohaku-mcpreq-bounded-id", version: "0.1.0" });
+    const handlers = captureToolHandlers(server);
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: makeComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        async onComposed(_spec, trace) {
+          correlationIds.push(trace.correlationId);
+        },
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+
+    for (const id of ["x".repeat(5000), "line1\nline2", "y".repeat(5000)]) {
+      await handlers["kohaku_compose"]!(
+        { question: "Monthly revenue trend" },
+        fakeServerContext({ signal: new AbortController().signal, id }, "sess-abc"),
+      );
+    }
+    expect(correlationIds).toHaveLength(3);
+    for (const id of correlationIds) {
+      expect(id).toMatch(/^mcp:sess-abc:h[0-9a-f]{32}$/);
+    }
+    // Digest-based, so distinct inputs stay distinct.
+    expect(new Set(correlationIds).size).toBe(3);
+    // An over-long session id (legacy stateful transport) is bounded the same way.
+    correlationIds.length = 0;
+    await handlers["kohaku_compose"]!(
+      { question: "Monthly revenue trend" },
+      fakeServerContext({ signal: new AbortController().signal, id: "1" }, "s".repeat(5000)),
+    );
+    expect(correlationIds[0]).toMatch(/^mcp:h[0-9a-f]{32}:1$/);
+  });
+
+  it("returns the correlation id in the result's _meta['kohaku/requestId'] (never structuredContent)", async () => {
+    let correlationId: string | undefined;
+    const server = new McpServer({ name: "kohaku-mcpreq-meta-id", version: "0.1.0" });
+    const handlers = captureToolHandlers(server);
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: makeComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        async onComposed(_spec, trace) {
+          correlationId = trace.correlationId;
+        },
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+
+    const result = (await handlers["kohaku_compose"]!(
+      { question: "Monthly revenue trend" },
+      fakeServerContext({ signal: new AbortController().signal, id: "7" }, "sess-abc"),
+    )) as { _meta?: Record<string, unknown>; structuredContent?: unknown };
+    expect(correlationId).toBe("mcp:sess-abc:7");
+    expect(result._meta?.[REQUEST_ID_META_KEY]).toBe("mcp:sess-abc:7");
+    expect(REQUEST_ID_META_KEY).toBe("kohaku/requestId");
+    expect(JSON.stringify(result.structuredContent)).not.toContain("mcp:sess-abc:7");
   });
 
   it("kohaku_action's synchronous aborted check reads ctx.mcpReq.signal", async () => {

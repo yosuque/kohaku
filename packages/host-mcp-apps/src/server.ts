@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ComposeResult, TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
@@ -31,6 +31,7 @@ import {
   CAPABILITY_META_KEY,
   INITIAL_DATA_META_KEY,
   RENDERER_RESOURCE_URI,
+  REQUEST_ID_META_KEY,
   RESOURCE_MIME_TYPE,
   resourceUiMeta,
   toolUiMeta,
@@ -125,6 +126,24 @@ function requestContextOf(extra: ServerContext): { abort: AbortSignal; requestId
 /** The correlation id already minted for a call's `ServerContext`, so every reader within one call sees the same id (see `mcpCorrelationId`). */
 const correlationIdsByCall = new WeakMap<ServerContext, string>();
 
+/** Upper bound (characters) on each client-influenced segment of an MCP correlation id; longer segments are hashed. */
+const MAX_CORRELATION_SEGMENT_LEN = 64;
+
+/** Printable-ASCII-only check, the same character class host-rest accepts for an inbound `x-request-id`. */
+const PRINTABLE_ASCII_RE = /^[\x20-\x7e]+$/;
+
+/**
+ * Bounds one segment of a correlation id. The JSON-RPC id (and, on a legacy stateful transport, the session
+ * id) is client-controlled, and the correlation id is stored in lineage columns that a backend may index (a
+ * Postgres btree rejects an oversized row), so an over-long or non-printable segment is replaced by a short
+ * sha256 hex digest of itself: still stable and unique per input, but bounded and log-safe. host-rest applies
+ * the same limits to `x-request-id` (there by discarding the value instead).
+ */
+function boundedCorrelationSegment(raw: string): string {
+  if (raw.length > 0 && raw.length <= MAX_CORRELATION_SEGMENT_LEN && PRINTABLE_ASCII_RE.test(raw)) return raw;
+  return `h${createHash("sha256").update(raw).digest("hex").slice(0, 32)}`;
+}
+
 /**
  * The compose correlation id for one MCP tool call: `mcp:<prefix>:<jsonrpc id>`, where `<prefix>` is the
  * transport's session id when it carries one, else a fresh UUID minted for this call. JSON-RPC ids restart
@@ -134,18 +153,24 @@ const correlationIdsByCall = new WeakMap<ServerContext, string>();
  * id unique at the cost of not grouping the calls of one client (nothing on such a transport identifies
  * one), like the Python port's degraded mode. This is the value ultimately recorded as
  * ComposeTrace.correlationId / lineage's view.composed correlationId, so a devtool (`kohaku explain`,
- * admin-react's DevTools) can group every event belonging to one tool call from the id alone.
+ * admin-react's DevTools) can group every event belonging to one tool call from the id alone. Because the
+ * per-call UUID makes the id unguessable from the outside, compose-family tool results also return it in
+ * `_meta` (see REQUEST_ID_META_KEY), which is where a caller gets the id to hand to `kohaku explain`.
+ *
+ * Each client-influenced segment is length- and character-bounded (see boundedCorrelationSegment), so the
+ * whole id stays short whatever the client sends.
  *
  * Memoized per `ServerContext` (one per call): the id is read for the compose pipeline, the rate-limit
- * observer and the action audit within the same call, and they must all agree.
+ * observer, the action audit and the error hook within the same call, and they must all agree.
  *
- * Kept alongside (not merged into) requestContextOf so a caller that only needs the correlation id (none,
- * currently, but keeps the two concerns separable) is not forced to also destructure `abort`.
+ * Kept alongside (not merged into) requestContextOf so a caller that only needs the correlation id (the
+ * rate-limit observer and the error hook) is not forced to also destructure `abort`.
  */
 function mcpCorrelationId(extra: ServerContext): string {
   let id = correlationIdsByCall.get(extra);
   if (id == null) {
-    id = `mcp:${extra.sessionId ?? randomUUID()}:${extra.mcpReq.id}`;
+    const session = boundedCorrelationSegment(extra.sessionId ?? randomUUID());
+    id = `mcp:${session}:${boundedCorrelationSegment(String(extra.mcpReq.id))}`;
     correlationIdsByCall.set(extra, id);
   }
   return id;
@@ -346,6 +371,7 @@ async function composeAndPackage(
   // below so the legacyUiResource co-emission (which needs the identical ref set) does not re-invoke
   // domain.invoke for refs already resolved here.
   const { data: initialData, resolved: preresolvedRefs } = await preresolveInitialData(result.spec, ctx);
+  const requestId = result.trace.correlationId ?? callCtx?.requestId;
   // content[0] is always the text fallback (MCPAPP-FBK-001). The legacy UIResource comes after.
   const content: Array<
     | { type: "text"; text: string }
@@ -378,6 +404,8 @@ async function composeAndPackage(
       [INITIAL_DATA_META_KEY]: initialData,
       [CAPABILITY_META_KEY]: capability,
       ...(actions != null ? { [ACTIONS_META_KEY]: actions } : {}),
+      // The id this call's lineage events are recorded under (see REQUEST_ID_META_KEY): what a caller passes to `kohaku explain`.
+      ...(requestId != null ? { [REQUEST_ID_META_KEY]: requestId } : {}),
     },
   };
 }

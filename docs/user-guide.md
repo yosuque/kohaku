@@ -557,7 +557,9 @@ spots fall back to the package's own light-mode default regardless of theme.
 "Why did this view come out this way" — tier, cache hit/miss, the cache key's individual components,
 which L1/L2 attempts ran and why they failed, capability-negotiation downgrades, and the lineage events a
 request produced — is answerable from a `requestId` alone (a compose's `X-Request-Id` response header, or an
-MCP tool call's `mcp:<sessionId or per-call uuid>:<jsonrpc id>` correlation id) two ways. Both need a host that
+MCP tool call's `mcp:<sessionId or per-call uuid>:<jsonrpc id>` correlation id, which the MCP host returns in the
+compose-family tool result's `_meta["kohaku/requestId"]` — it is not derivable from the JSON-RPC id alone, because
+a session-less transport gets a per-call uuid) two ways. Both need a host that
 **records lineage** (`createKohakuHost` wires a recorder by default; a hand-built `createKohakuRoutes` host needs
 `recorder` set) and, for the CLI, a running **REST host** to read it from:
 

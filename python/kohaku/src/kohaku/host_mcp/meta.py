@@ -48,6 +48,12 @@ operational detail for the widget's own gate (`preflightAction`), not something 
 context. Present only when the composed Spec declares at least one write action the host also recognizes as a
 real DomainPort operation (mirrors the REST profile's `actions` being absent rather than an empty object)."""
 
+REQUEST_ID_META_KEY = "kohaku/requestId"
+"""The key that co-embeds a compose-family tool call's correlation id (`mcp:<session>:<jsonrpc id>`) in the result's
+`_meta`. The id is what the call's `view.*` / `action.*` lineage events are recorded under, so this is where a caller
+reads the value to hand to `kohaku explain`. Placed in `_meta` (transferred only to the widget / client, not the
+model's context) since it is operational detail rather than content."""
+
 ToolVisibility = Literal["model", "app"]
 
 
