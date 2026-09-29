@@ -24,6 +24,8 @@ export {
 export { focusTrapTarget } from "./control/focus-trap.js";
 export {
   type ActionPhase,
+  type ActionPhaseNotice,
+  actionPhaseNotice,
   type InvokeTarget,
   type RunInvokeTargetDeps,
   resolveActionName,

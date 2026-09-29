@@ -228,7 +228,7 @@ describe("KohakuSurface: onActionResult / onNodeError stay live across a no-rebu
 describe("KohakuSurface: action governance hooks stay live across a no-rebuild reassignment", () => {
   it("a reassigned actionManifest and confirm hook govern the next invoke without rebuilding", async () => {
     const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
-    const binding = { resolve: async () => ({ columns: [], rows: [] }), invokeAction };
+    const binding = { resolve: async () => ({ columns: [], rows: [], dataVersion: "v1" }), invokeAction };
     const spec = buildSpec({
       components: [
         { id: "root", type: "layout.stack", props: {}, children: ["b1"] },

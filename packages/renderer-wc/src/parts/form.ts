@@ -1,4 +1,5 @@
 import {
+  actionPhaseNotice,
   asStringArray,
   type BoundData,
   buildDefaults,
@@ -38,6 +39,7 @@ export const presentForm: PartBuilder = (rt, parent, node, row) => {
   const negativeText = tokenStr(rt, "color.negative.text");
   const requiredColor = tokenStr(rt, "color.negative");
   const muted = tokenStr(rt, "color.muted");
+  const textColor = tokenStr(rt, "color.text");
   const fields = (node.props["fields"] as unknown as FieldDef[]) ?? [];
 
   const defaults = buildDefaults(fields);
@@ -106,6 +108,7 @@ export const presentForm: PartBuilder = (rt, parent, node, row) => {
   const onPhase = (phase: ActionPhase): void => {
     submitting = phase.phase === "pending";
     applyBusy();
+    const notice = actionPhaseNotice(phase, rt.messages);
     if (phase.phase === "succeeded") {
       const msg = String((node.props["successMessage"] as string) ?? rt.messages.formSubmitted);
       const div = el("div", { role: "status" }, { color: positiveText, fontSize: rt.sizing.fontSm });
@@ -115,6 +118,16 @@ export const presentForm: PartBuilder = (rt, parent, node, row) => {
       const div = el("div", { role: "alert" }, { color: negativeText, fontSize: rt.sizing.fontSm });
       div.appendChild(text(phase.message));
       setResult(div);
+    } else if (notice != null) {
+      // invalid / awaitingApproval: the action never committed (a rejected payload, or a declined / pending
+      // confirmation or approval).
+      const color = notice.role === "alert" ? negativeText : textColor;
+      const div = el("div", { role: notice.role }, { color, fontSize: rt.sizing.fontSm });
+      div.appendChild(text(notice.text));
+      setResult(div);
+    } else {
+      // idle / pending: drop the previous submit's message, as renderer-react does by re-rendering from the phase.
+      setResult(null);
     }
   };
 
