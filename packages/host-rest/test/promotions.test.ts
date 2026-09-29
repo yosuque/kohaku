@@ -6,7 +6,9 @@ import { createKohakuRoutes, type KohakuHostDeps, type PromotionsApi } from "../
 // The promotions routes do not reference compose/authz/domain, so stubs suffice.
 const NO_COMPOSE = {} as unknown as ComposeContext;
 const NO_AUTHZ = {} as unknown as AuthzPort;
-const NO_DOMAIN = {} as unknown as DomainPort;
+// createKohakuRoutes validates the operation index at attach (listOperations()), so even a stub that no route
+// here touches must answer it, or that validation failure would reach onError.
+const NO_DOMAIN = { listOperations: async () => [] } as unknown as DomainPort;
 
 /** An exception that structurally represents PROMOTION_NOT_PUBLISHED (host-rest discriminates by code, not by importing lineage). */
 class FakeNotPublished extends Error {

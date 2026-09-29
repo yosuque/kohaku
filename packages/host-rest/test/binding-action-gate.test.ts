@@ -333,3 +333,66 @@ describe("POST /binding/action: tier approve (ACT-APR-001)", () => {
     expect((domain as unknown as { invokeCalls: unknown[] }).invokeCalls).toHaveLength(0);
   });
 });
+
+describe("createKohakuRoutes: paramsSchema validation at attach", () => {
+  it("reports a paramsSchema outside the closed subset through onError right away, without throwing", async () => {
+    const seen: { endpoint: string; error: unknown }[] = [];
+    const deps = baseDeps({
+      domain: domainWith({
+        name: "annotate",
+        description: "d",
+        paramsSchema: { type: "string", pattern: "^[a-z]+$" } as never,
+      }),
+      onError: (info) => {
+        seen.push({ endpoint: info.endpoint, error: info.error });
+      },
+    });
+    createKohakuRoutes(deps);
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    expect(seen[0]!.endpoint).toBe("attach.operationIndex");
+    expect((seen[0]!.error as Error).message).toContain('operation "annotate" has an invalid paramsSchema');
+  });
+
+  it("reports nothing for a valid domain", async () => {
+    const seen: string[] = [];
+    const deps = baseDeps({
+      domain: domainWith({ name: "annotate", description: "d", paramsSchema: NOTE_SCHEMA as never }),
+      onError: (info) => {
+        seen.push(info.endpoint);
+      },
+    });
+    createKohakuRoutes(deps);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual([]);
+  });
+
+  it("a listOperations() rejection at attach is reported, and a later request retries it", async () => {
+    let calls = 0;
+    const domain: DomainPort = {
+      async listOperations() {
+        calls += 1;
+        if (calls === 1) throw new Error("listOperations unavailable (transient)");
+        return [{ name: "annotate", description: "d" }];
+      },
+      async invoke() {
+        return { ok: true };
+      },
+    };
+    const seen: string[] = [];
+    const deps = baseDeps({
+      domain,
+      onError: (info) => {
+        seen.push(info.endpoint);
+      },
+    });
+    const app = createKohakuRoutes(deps);
+    await vi.waitFor(() => expect(seen).toContain("attach.operationIndex"));
+    // The failed index was not memoized: the request's own read retries and succeeds.
+    const res = await app.request("/binding/action", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer cap" },
+      body: JSON.stringify({ action: "annotate", payload: {} }),
+    });
+    expect(res.status).toBe(200);
+  });
+});

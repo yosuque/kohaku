@@ -2,18 +2,14 @@ import {
   type ActionGateResult,
   applyActionEffects,
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
-  failOpen,
   type ParsedInvokableRef,
   parseInvokableRef,
+  recordActionGateResult,
+  recordUndeclaredActionDenial,
+  UNDECLARED_ACTION_MESSAGE,
   verifyCapabilitySafely,
 } from "@kohaku-ui/host-core";
-import {
-  actionPayloadHash,
-  type JsonObject,
-  type Principal,
-  type VerifyRequest,
-  type VerifyResult,
-} from "@kohaku-ui/spec-core";
+import type { JsonObject, Principal, VerifyRequest, VerifyResult } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { KohakuHostDeps } from "../types.js";
@@ -37,13 +33,6 @@ import {
  * fixed message; the original error still reaches the observability hook (onError) via reportHostError.
  */
 const REF_NOT_FOUND_MESSAGE = "reference not found or not resolvable";
-
-/**
- * An action name absent from the DomainPort's own operation index is not a declared operation at all --
- * it must never reach `domain.invoke` (fail-closed), on the same footing as a capability that lacks the
- * needed write scope (this reuses that exact response shape: 403 CAPABILITY_DENIED, no new error code).
- */
-const UNDECLARED_ACTION_MESSAGE = "action is not a declared DomainPort operation";
 
 /**
  * Calls `authz.verify` via host-core's `verifyCapabilitySafely` (shared with the MCP profile), and maps its
@@ -173,20 +162,15 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     const index = await operationIndex(deps);
     const entry = index.get(body.action);
     if (entry == null) {
-      await failOpen(
-        async () => {
-          await deps.actionAuditRecorder?.denied({
-            action: body.action,
-            payloadHash: await actionPayloadHash(payload),
-            tier: "auto",
-            reason: UNDECLARED_ACTION_MESSAGE,
-            principal,
-            ...(tenant != null ? { tenant } : {}),
-            correlationId: requestId,
-          });
-        },
-        (e) => reportHostError(deps, "binding/action.audit", requestId, e),
-      );
+      await recordUndeclaredActionDenial({
+        recorder: deps.actionAuditRecorder,
+        action: body.action,
+        payload,
+        principal,
+        tenant,
+        correlationId: requestId,
+        report: (e) => reportHostError(deps, "binding/action.audit", requestId, e),
+      });
       return c.json(errorBody("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE), 403);
     }
     const gate = actionGateFor(deps);
@@ -226,12 +210,11 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
 }
 
 /**
- * Maps one `ActionGate.check` outcome onto the REST response + audit trail (design.md #62/#63; shared
- * shape so `handleActionGateResult`'s caller does not itself branch on `gateResult.kind`). Returns the
- * `Response` to send back to the client (`invalid` / `approvalRequested` / `denied`), or `null` when the
- * gate allowed the invoke (`allow`) and the caller should proceed to `domain.invoke`. Audit recording is
- * always fail-open (host-core's `failOpen`): a recording failure must never turn an otherwise-successful
- * allow, or an otherwise-correct denial, into a 500.
+ * Maps one `ActionGate.check` outcome onto the REST response (design.md #62/#63). The audit trail and the
+ * client-visible messages are host-core's `recordActionGateResult` (shared with the MCP profile); this keeps
+ * only the wire mapping. Returns the `Response` to send back to the client (`invalid` -> 422,
+ * `approvalRequired` / `denied` -> 403), or `null` when the gate allowed the invoke and the caller should
+ * proceed to `domain.invoke`.
  */
 async function handleActionGateResult(
   deps: KohakuHostDeps,
@@ -245,101 +228,36 @@ async function handleActionGateResult(
     requestId: string;
   },
 ): Promise<Response | null> {
-  const { action, principal, tenant, requestId } = ctx;
-  const auditReport = (e: unknown): Promise<void> =>
-    reportHostError(deps, "binding/action.audit", requestId, e);
-
-  if (gateResult.kind === "invalid") {
-    return c.json(
-      errorBody(
-        "ACTION_PARAMS_INVALID",
-        "action parameters failed validation",
-        requestId,
-        undefined,
-        gateResult.issues,
-      ),
-      422,
-    );
+  const { action, payload, principal, tenant, requestId } = ctx;
+  const outcome = await recordActionGateResult(gateResult, {
+    recorder: deps.actionAuditRecorder,
+    action,
+    payload,
+    principal,
+    tenant,
+    correlationId: requestId,
+    report: (e) => reportHostError(deps, "binding/action.audit", requestId, e),
+  });
+  switch (outcome.kind) {
+    case "invalid":
+      return c.json(
+        errorBody(
+          "ACTION_PARAMS_INVALID",
+          "action parameters failed validation",
+          requestId,
+          undefined,
+          outcome.issues,
+        ),
+        422,
+      );
+    case "approvalRequired":
+      return c.json(
+        errorBody("APPROVAL_REQUIRED", outcome.message, requestId, undefined, undefined, outcome.approval),
+        403,
+      );
+    case "proceed":
+      return null;
   }
-
-  if (gateResult.kind === "approvalRequired") {
-    await failOpen(async () => {
-      await deps.actionAuditRecorder?.approvalRequested({
-        action,
-        payloadHash: gateResult.payloadHash,
-        tier: gateResult.tier,
-        requestId: gateResult.requestId,
-        payload: ctx.payload,
-        principal,
-        ...(tenant != null ? { tenant } : {}),
-        correlationId: requestId,
-      });
-    }, auditReport);
-    return c.json(
-      errorBody(
-        "APPROVAL_REQUIRED",
-        gateResult.tier === "confirm"
-          ? "this action requires confirmation (confirmed: true)"
-          : "this action requires an approval token",
-        requestId,
-        undefined,
-        undefined,
-        {
-          requestId: gateResult.requestId,
-          action,
-          tier: gateResult.tier,
-          payloadHash: gateResult.payloadHash,
-        },
-      ),
-      403,
-    );
-  }
-
-  if (gateResult.kind === "denied") {
-    await failOpen(async () => {
-      await deps.actionAuditRecorder?.denied({
-        action,
-        payloadHash: gateResult.payloadHash,
-        tier: gateResult.tier,
-        reason: gateResult.reason,
-        principal,
-        ...(tenant != null ? { tenant } : {}),
-        correlationId: requestId,
-      });
-    }, auditReport);
-    return c.json(
-      errorBody("APPROVAL_REQUIRED", gateResult.reason, requestId, undefined, undefined, {
-        requestId: gateResult.requestId,
-        action,
-        tier: gateResult.tier,
-        payloadHash: gateResult.payloadHash,
-      }),
-      403,
-    );
-  }
-
-  // gateResult.kind === "allow"
-  await failOpen(async () => {
-    await deps.actionAuditRecorder?.invoked({
-      action,
-      payloadHash: gateResult.payloadHash,
-      tier: gateResult.tier,
-      principal,
-      ...(tenant != null ? { tenant } : {}),
-      correlationId: requestId,
-    });
-    if (gateResult.grant != null) {
-      await deps.actionAuditRecorder?.approved({
-        action,
-        payloadHash: gateResult.payloadHash,
-        grant: gateResult.grant,
-        principal,
-        ...(tenant != null ? { tenant } : {}),
-        correlationId: requestId,
-      });
-    }
-  }, auditReport);
-  return null;
 }
 
 function bearerToken(c: Context): string | null {

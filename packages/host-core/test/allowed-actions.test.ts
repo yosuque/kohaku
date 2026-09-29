@@ -1,6 +1,7 @@
 import type { DomainPort } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { createAllowedActions } from "../src/allowed-actions.js";
+import { allowedActionsFromIndex, createAllowedActions } from "../src/allowed-actions.js";
+import { createOperationIndex } from "../src/operation-index.js";
 
 describe("createAllowedActions", () => {
   it("memoizes listOperations() across calls", async () => {
@@ -62,5 +63,47 @@ describe("createAllowedActions", () => {
     const retried = await allowedActions();
     expect(calls).toBe(2);
     expect([...retried]).toEqual(["annotate"]);
+  });
+});
+
+describe("allowedActionsFromIndex", () => {
+  const domainOf = (ops: string[], counter: { calls: number }): DomainPort => ({
+    async listOperations() {
+      counter.calls++;
+      return ops.map((name) => ({ name, description: "d" }));
+    },
+    async invoke() {
+      return null;
+    },
+  });
+
+  it("yields the index's action names without a second listOperations() call", async () => {
+    const counter = { calls: 0 };
+    const index = createOperationIndex(domainOf(["annotate", "publish"], counter));
+    const allowed = allowedActionsFromIndex(index);
+    expect([...(await allowed())]).toEqual(["annotate", "publish"]);
+    await index();
+    await allowed();
+    expect(counter.calls).toBe(1);
+  });
+
+  it("propagates the index's rejection (a schema outside the closed subset), and recovers after a retry", async () => {
+    let bad = true;
+    const domain: DomainPort = {
+      async listOperations() {
+        return [
+          bad
+            ? { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "x" } as never }
+            : { name: "annotate", description: "d" },
+        ];
+      },
+      async invoke() {
+        return null;
+      },
+    };
+    const allowed = allowedActionsFromIndex(createOperationIndex(domain));
+    await expect(allowed()).rejects.toThrow(/invalid paramsSchema/);
+    bad = false;
+    expect([...(await allowed())]).toEqual(["annotate"]);
   });
 });
