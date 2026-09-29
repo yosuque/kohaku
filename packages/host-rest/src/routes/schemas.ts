@@ -69,9 +69,10 @@ export const ActionBodySchema = z.object({
 /**
  * `POST /approvals` (Draft; SPEC ACT-APR-001): an authorized approver mints a token bound to
  * `(action, payloadHash, requesterId, tenant)` for a pending `"approve"`-tier action. `requesterId` is
- * read from the requester's own `action.approvalRequested` lineage record (or the requester's 403
- * `APPROVAL_REQUIRED` response, relayed out of band) -- this route has no notion of "the current pending
- * request" of its own (design.md #63: approvals are stateless and unbound to any persisted request).
+ * the requester's principal id, which an approver-facing flow takes from the actor of the requester's
+ * `action.approvalRequested` lineage record (the 403 `APPROVAL_REQUIRED` descriptor carries no requester) --
+ * this route has no notion of "the current pending request" of its own (design.md #63: approvals are
+ * stateless and unbound to any persisted request).
  */
 export const ApprovalRequestBodySchema = z.object({
   action: z.string().min(1),

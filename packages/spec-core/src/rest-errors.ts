@@ -69,10 +69,12 @@ export const PROMOTION_ERROR_DISCRIMINATORS = GOVERNANCE_ERROR_DISCRIMINATORS;
  * The pending-approval descriptor on a 403 APPROVAL_REQUIRED envelope (SPEC §6.1, ACT-APR-001), for a
  * `"confirm"` or `"approve"` tier action that was invoked without satisfying its gate. `requestId` is a
  * fresh, opaque identifier for this specific approval request (distinct from `ErrorEnvelope.error.requestId`,
- * which correlates the *error response itself* to server logs) -- a client surfaces it to an
- * approver-facing flow (e.g. queried back via `GET /lineage?type=action.approvalRequested`) or simply
- * re-sends it as-is once it has a token, since the gate itself does not persist any request state keyed
- * by this id. `payloadHash` is the `actionPayloadHash` of the payload the approval must be bound to.
+ * which correlates the *error response itself* to server logs). It is a correlation handle for an
+ * approver-facing flow (the same id is stamped on the `action.approvalRequested` lineage event, queryable via
+ * `GET /lineage?type=action.approvalRequested`); no request body field accepts it back, and the gate does not
+ * persist any request state keyed by it -- the retry that carries the approval token is a fresh invoke
+ * (`POST /binding/action` with `approval`) that is re-checked from scratch against the payload and the
+ * token's binding. `payloadHash` is the `actionPayloadHash` of the payload the approval must be bound to.
  */
 export interface ApprovalRequiredInfo {
   requestId: string;
