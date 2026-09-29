@@ -9,9 +9,10 @@ export type { AttachOptions } from "@kohaku-ui/host-mcp-apps";
 export interface AttachKohakuMcpOptions extends AttachOptions {
   /**
    * Every other `McpHostDeps` field, passed through to `attachKohakuToMcpServer`: `resolvePrincipal`,
-   * `approvals`, `actionAuditRecorder`, `rateLimiter`, `fixations`, ... The fields the host owns (`compose`,
-   * `domain`, `authz`, `querySource`) cannot be overridden. `onError` and `recorder` are set here by default
-   * (the console error reporter, and the host's View Lineage recorder) and are replaced by what you pass.
+   * `approvals`, `rateLimiter`, `fixations`, ... The fields the host owns (`compose`, `domain`, `authz`,
+   * `querySource`) cannot be overridden. `onError`, `recorder` and `actionAuditRecorder` are set here by
+   * default (the console error reporter, and the host's View Lineage and action-audit recorders) and are
+   * replaced by what you pass.
    */
   deps?: Partial<Omit<McpHostDeps, "compose" | "domain" | "authz" | "querySource">>;
 }
@@ -23,7 +24,7 @@ export interface AttachKohakuMcpOptions extends AttachOptions {
  * is the only required field -- see `AttachOptions`), except for `deps`, which is merged into the MCP host deps.
  *
  * Like the REST half, the MCP profile gets the console error reporter as its `onError` and the host's View
- * Lineage `recorder` by default, so a failed tool call is visible on stderr and MCP views land in the same
+ * Lineage `recorder` and `actionAuditRecorder` by default, so a failed tool call is visible on stderr and MCP views land in the same
  * lineage `kohaku explain` reads.
  *
  * Kept out of `@kohaku-ui/host`'s main entry point (`.`) so a REST-only consumer never has to install
@@ -36,6 +37,7 @@ export function attachKohakuMcp(server: McpServer, host: KohakuHost, options: At
     {
       onError: createConsoleErrorReporter({ debug: host.debug }).mcp,
       ...(host.recorder != null ? { recorder: host.recorder } : {}),
+      ...(host.actionAuditRecorder != null ? { actionAuditRecorder: host.actionAuditRecorder } : {}),
       ...deps,
       compose: host.compose,
       domain: host.ports.domain,

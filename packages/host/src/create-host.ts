@@ -5,7 +5,12 @@ import type { QueryRef } from "@kohaku-ui/data-binding";
 import { createConsoleErrorReporter } from "@kohaku-ui/host-core";
 import { createKohakuRoutes, type KohakuHostDeps } from "@kohaku-ui/host-rest";
 import type { IntentDef } from "@kohaku-ui/intents";
-import { createLineage, createViewRecorder, type Lineage } from "@kohaku-ui/lineage";
+import {
+  createActionAuditRecorder,
+  createLineage,
+  createViewRecorder,
+  type Lineage,
+} from "@kohaku-ui/lineage";
 import type { LlmPort } from "@kohaku-ui/llm";
 import { coreCatalog, type ResolvedCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import {
@@ -86,14 +91,24 @@ export interface CreateKohakuHostOptions {
    */
   recorder?: KohakuHostDeps["recorder"] | false;
   /**
+   * The governed-Action audit recorder handed to the REST profile (and, through `attachKohakuMcp`, to the MCP
+   * profile). Default: `createActionAuditRecorder(lineage)` over the same lineage instance as `recorder`, so
+   * every `POST /binding/action` outcome lands as an `action.*` event (`action.invoked` / `action.denied` /
+   * `action.approval_requested` / `action.approved`). Pass your own to replace it, or `false` to record nothing.
+   */
+  actionAuditRecorder?: KohakuHostDeps["actionAuditRecorder"] | false;
+  /**
    * Every other `KohakuHostDeps` field, passed through to `createKohakuRoutes` unchanged: `auth` / `tenant`
    * (JWT and multi-tenant resolution), `approvals` / `actionAuditRecorder` / `actionEffects` (governed
    * Actions), `rateLimiter`, `authorizeGovernance`, `promotions` / `fixations`, ... The fields this facade
    * owns (`compose`, `domain`, `authz`, `querySource`) and the ones it has a dedicated option for (`onError`,
-   * `recorder`) are excluded so there is exactly one way to set each.
+   * `recorder`, `actionAuditRecorder`) are excluded so there is exactly one way to set each.
    */
   routes?: Partial<
-    Omit<KohakuHostDeps, "compose" | "domain" | "authz" | "querySource" | "onError" | "recorder">
+    Omit<
+      KohakuHostDeps,
+      "compose" | "domain" | "authz" | "querySource" | "onError" | "recorder" | "actionAuditRecorder"
+    >
   >;
   /** Verbose mode for the default console error reporter (see `createConsoleErrorReporter`'s `debug` option). Default false. */
   debug?: boolean;
@@ -126,6 +141,8 @@ export interface KohakuHost {
   lineage: Lineage;
   /** The ViewRecorder in effect (the default lineage one, yours, or undefined when disabled). `attachKohakuMcp` wires it into the MCP profile too. */
   recorder: KohakuHostDeps["recorder"];
+  /** The ActionAuditRecorder in effect (the default lineage one, yours, or undefined when disabled). `attachKohakuMcp` wires it into the MCP profile too. */
+  actionAuditRecorder: KohakuHostDeps["actionAuditRecorder"];
   /** The console error reporter's debug flag as given to `createKohakuHost`; `attachKohakuMcp` reuses it for the MCP profile's default `onError`. */
   debug: boolean;
 }
@@ -188,8 +205,8 @@ function resolveAuthz(options: CreateKohakuHostOptions): AuthzPort {
  *
  * `createConsoleErrorReporter({ debug })` is wired into both the REST profile's `onError` and the compose
  * observer's `onError` by default, so failures are visible on stderr out of the box; pass your own `onError`
- * to replace the REST-facing half once you have real logging/metrics. A View Lineage recorder over `storage` is
- * wired by default too (see `recorder`), and `routes` passes every remaining `KohakuHostDeps` field (`auth`,
+ * to replace the REST-facing half once you have real logging/metrics. View Lineage and action-audit recorders over
+ * `storage` are wired by default too (see `recorder` / `actionAuditRecorder`), and `routes` passes every remaining `KohakuHostDeps` field (`auth`,
  * `tenant`, `approvals`, `rateLimiter`, ...) through to `createKohakuRoutes`.
  *
  * `kohaku init` and `kohaku scaffold ports` both build on this (see design.md #52). For MCP, see the
@@ -205,6 +222,10 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
   const errorReporter = createConsoleErrorReporter({ debug });
   const lineage = createLineage({ storage });
   const recorder = options.recorder === false ? undefined : (options.recorder ?? createViewRecorder(lineage));
+  const actionAuditRecorder =
+    options.actionAuditRecorder === false
+      ? undefined
+      : (options.actionAuditRecorder ?? createActionAuditRecorder(lineage));
 
   const compose: ComposeContext = {
     catalog,
@@ -226,6 +247,7 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
       querySource: options.querySource,
       onError: options.onError ?? errorReporter.host,
       ...(recorder != null ? { recorder } : {}),
+      ...(actionAuditRecorder != null ? { actionAuditRecorder } : {}),
     }),
   );
 
@@ -236,6 +258,7 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
     querySource: options.querySource,
     lineage,
     recorder,
+    actionAuditRecorder,
     debug,
   };
 }

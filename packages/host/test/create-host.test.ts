@@ -255,6 +255,53 @@ describe("createKohakuHost", () => {
     expect(await custom.lineage.list({ type: ["view.composed"] })).toHaveLength(0);
   });
 
+  it("records action.* audit events for an action invoked through the facade, and actionAuditRecorder: false disables it", async () => {
+    const actionDomain: DomainPort = {
+      async listOperations() {
+        return [{ name: "annotate", description: "annotate a record" }];
+      },
+      async invoke(op) {
+        return { ok: true, op };
+      },
+    };
+    const allowAuthz = {
+      async issueCapability() {
+        return "cap";
+      },
+      async verify() {
+        return { ok: true as const, principal: { id: "u1", roles: ["user"] } };
+      },
+    };
+    const build = (extra: { actionAuditRecorder?: false } = {}) =>
+      createKohakuHost({
+        domain: actionDomain,
+        querySource: "test",
+        llm: new FakeLlm(),
+        authz: allowAuthz,
+        intents: [testIntentDef],
+        dataVersion: () => "v1",
+        ...extra,
+      });
+    const post = (host: ReturnType<typeof build>, action: string) =>
+      host.app.request("/api/kohaku/binding/action", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer cap" },
+        body: JSON.stringify({ action, payload: {} }),
+      });
+
+    const host = build();
+    expect(host.actionAuditRecorder).toBeDefined();
+    expect((await post(host, "annotate")).status).toBe(200);
+    expect(await host.lineage.list({ type: ["action.invoked"] })).toHaveLength(1);
+    expect((await post(host, "not-declared")).status).toBe(403);
+    expect(await host.lineage.list({ type: ["action.denied"] })).toHaveLength(1);
+
+    const silent = build({ actionAuditRecorder: false });
+    expect(silent.actionAuditRecorder).toBeUndefined();
+    expect((await post(silent, "annotate")).status).toBe(200);
+    expect(await silent.lineage.list({ type: ["action.invoked"] })).toHaveLength(0);
+  });
+
   it("routes passes the remaining KohakuHostDeps fields through to createKohakuRoutes", async () => {
     process.env[SECRET_ENV] = "test-secret-of-decent-length";
     const authorizeGovernance = vi.fn(async () => false);

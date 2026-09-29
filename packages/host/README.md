@@ -38,14 +38,16 @@ Every default (`storage`, `authz`, `semantic`, `catalog`) can be overridden with
 implementation; the contract is [@kohaku-ui/spec-core](https://github.com/yosuque/kohaku/tree/main/packages/spec-core)'s
 `ports.ts`. `kohaku init` generates a project wired this way.
 
-Two options reach past the defaults:
+These options reach past the defaults:
 
 - `routes` passes every other `KohakuHostDeps` field straight to `createKohakuRoutes` — `auth` / `tenant` (JWT and
-  multi-tenant resolution), `approvals` / `actionAuditRecorder` / `actionEffects` (governed Actions),
+  multi-tenant resolution), `approvals` / `actionEffects` (governed Actions),
   `rateLimiter`, `authorizeGovernance`, `promotions` / `fixations`, and so on.
 - `recorder` is the View Lineage recorder. By default every compose is recorded into `host.lineage` (built over
   the host's own `storage`), which is what `kohaku explain`, DevTools and the evidence pack read; pass your own
-  recorder to replace it or `false` to record nothing. Persist `storage` (Redis / Postgres) if the lineage must
+  recorder to replace it or `false` to record nothing. `actionAuditRecorder` works the same way for governed
+  Actions: by default each `POST /binding/action` outcome is recorded into the same lineage as an `action.*`
+  event. Persist `storage` (Redis / Postgres) if the lineage must
   outlive the process.
 
 `fallbackIntent` and `rules` are passed through to the default SemanticPort (`createLlmSemanticPort`).
