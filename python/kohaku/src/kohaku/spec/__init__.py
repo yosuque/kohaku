@@ -11,6 +11,7 @@ from .action_params import (
     ActionTier,
     action_payload_hash,
     assert_valid_action_params_schema,
+    find_unsafe_action_param_keys,
     validate_action_params,
 )
 from .bind import enumerate_bind_variants, resolve_bound_ref
@@ -320,6 +321,7 @@ __all__ = [
     "encode_seq_cursor",
     "enumerate_bind_variants",
     "evaluate_visible_when",
+    "find_unsafe_action_param_keys",
     "finalize_intent",
     "format_query_ref",
     "has_errors",

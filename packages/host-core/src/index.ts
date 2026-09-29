@@ -13,11 +13,20 @@ export {
   createActionGate,
 } from "./action-gate.js";
 export {
+  type ActionAuditContext,
+  type ActionGateOutcome,
+  APPROVAL_TOKEN_REQUIRED_MESSAGE,
+  CONFIRMATION_REQUIRED_MESSAGE,
+  recordActionGateResult,
+  recordUndeclaredActionDenial,
+  UNDECLARED_ACTION_MESSAGE,
+} from "./action-gate-outcome.js";
+export {
   type ActionManifest,
   type ActionManifestEntry,
   buildActionManifest,
 } from "./action-manifest.js";
-export { type AllowedActions, createAllowedActions } from "./allowed-actions.js";
+export { type AllowedActions, allowedActionsFromIndex, createAllowedActions } from "./allowed-actions.js";
 export { type InvokableRef, type ParsedInvokableRef, parseInvokableRef } from "./binding-ref.js";
 export {
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
@@ -82,6 +91,7 @@ export {
   createOperationIndex,
   type OperationIndex,
   type OperationIndexEntry,
+  validateOperationIndex,
 } from "./operation-index.js";
 export {
   type CreatePolicyRuntimeOptions,

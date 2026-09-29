@@ -87,7 +87,7 @@ export class IntentCatalog implements IntentCatalogLike {
     // instead of quietly disappearing from the finalized Intent.
     const shape = def.params.shape as Record<string, z.ZodType>;
     const issues: IntentValidationIssue[] = Object.keys(params)
-      .filter((key) => !(key in shape))
+      .filter((key) => !Object.hasOwn(shape, key))
       .map((key) => ({ path: key, message: `unknown param "${key}"` }));
     const parsed = def.params.safeParse(params);
     if (issues.length === 0 && parsed.success) {

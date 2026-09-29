@@ -1,5 +1,5 @@
 import { withTenantCatalog } from "@kohaku-ui/composer";
-import { createKeyedMutex } from "@kohaku-ui/host-core";
+import { createKeyedMutex, validateOperationIndex } from "@kohaku-ui/host-core";
 import { cachedPropsJsonSchema } from "@kohaku-ui/registry";
 import type { Principal } from "@kohaku-ui/spec-core";
 import { type Context, Hono } from "hono";
@@ -12,7 +12,14 @@ import { registerFixationRoutes } from "./routes/fixations.js";
 import { registerGovernanceRoutes } from "./routes/governance.js";
 import { registerPromotionRoutes } from "./routes/promotions.js";
 import { createRateLimitMiddleware } from "./routes/rate-limit.js";
-import { ANONYMOUS, type RouteContext, requestIdOf, resolveTenant } from "./routes/shared.js";
+import {
+  ANONYMOUS,
+  operationIndex,
+  type RouteContext,
+  reportHostError,
+  requestIdOf,
+  resolveTenant,
+} from "./routes/shared.js";
 import type { KohakuHostDeps } from "./types.js";
 
 // The public types are defined in types.ts (relocated along with the route-group split). Re-export them from this module.
@@ -152,6 +159,17 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
   registerGovernanceRoutes(app, ctx);
   registerPromotionRoutes(app, ctx);
   registerFixationRoutes(app, ctx);
+
+  // Validate every operation's `paramsSchema` now rather than at the first invoke: `createKohakuRoutes` is
+  // synchronous and `listOperations()` is async, so this is kicked off here and a failure (listOperations()
+  // rejecting, or a schema outside kohaku's closed subset) is reported through `deps.onError`, endpoint
+  // "attach.operationIndex". A bad schema confines the failure to its own operation (compose omits it from the
+  // `actions` manifest and `/binding/action` fails for it alone); a rejected `listOperations()` is not
+  // memoized, so a later request retries.
+  void validateOperationIndex(
+    () => operationIndex(deps),
+    (e) => reportHostError(deps, "attach.operationIndex", globalThis.crypto.randomUUID(), e),
+  );
 
   // --- Catalog (for capability negotiation / debugging) ---
   app.get("/catalog", async (c) => {

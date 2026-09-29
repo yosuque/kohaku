@@ -61,6 +61,77 @@ def test_invalid_params_short_circuits_before_tier_gating() -> None:
     asyncio.run(run())
 
 
+def _unsafe(path: str, key: str) -> tuple[str, str, str]:
+    return (path, "unsafeKey", f'the property name "{key}" is not allowed')
+
+
+def test_rejects_an_unsafe_key_when_no_params_schema_is_declared() -> None:
+    gate = create_action_gate()
+
+    async def run() -> None:
+        result = await gate.check(
+            ActionGateRequest(
+                descriptor=AUTO, payload={"note": "hi", "__proto__": {"polluted": True}}, requester_id="u1"
+            )
+        )
+        assert result.kind == "invalid"
+        assert [(i.path, i.code, i.message) for i in result.issues] == [_unsafe("__proto__", "__proto__")]
+
+    asyncio.run(run())
+
+
+def test_rejects_an_unsafe_key_under_an_undeclared_property() -> None:
+    gate = create_action_gate()
+
+    async def run() -> None:
+        result = await gate.check(
+            ActionGateRequest(
+                descriptor=AUTO,
+                params_schema=NOTE_SCHEMA,
+                payload={"note": "hi", "extra": {"constructor": 1}},
+                requester_id="u1",
+            )
+        )
+        assert result.kind == "invalid"
+        assert [(i.path, i.code, i.message) for i in result.issues] == [
+            _unsafe("extra.constructor", "constructor")
+        ]
+
+    asyncio.run(run())
+
+
+def test_rejects_an_unsafe_key_inside_an_array_with_no_items_schema() -> None:
+    gate = create_action_gate()
+
+    async def run() -> None:
+        result = await gate.check(
+            ActionGateRequest(
+                descriptor=AUTO,
+                params_schema={"type": "object", "properties": {"tags": {"type": "array"}}},
+                payload={"tags": [{"prototype": 1}]},
+                requester_id="u1",
+            )
+        )
+        assert result.kind == "invalid"
+        assert [(i.path, i.code, i.message) for i in result.issues] == [
+            _unsafe("tags[0].prototype", "prototype")
+        ]
+
+    asyncio.run(run())
+
+
+def test_unsafe_key_check_runs_before_the_tier_check() -> None:
+    gate = create_action_gate()
+
+    async def run() -> None:
+        result = await gate.check(
+            ActionGateRequest(descriptor=CONFIRM, payload={"__proto__": 1}, requester_id="u1")
+        )
+        assert result.kind == "invalid"
+
+    asyncio.run(run())
+
+
 def test_skips_validation_when_no_params_schema_is_declared() -> None:
     gate = create_action_gate()
 

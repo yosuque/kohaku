@@ -36,7 +36,15 @@ import {
 } from "@kohaku-ui/renderer-core";
 import { type ImplRegistry, RendererProvider, SpecView, type SurfaceEvent } from "@kohaku-ui/renderer-react";
 import { createCoreRegistry } from "@kohaku-ui/renderer-react/core";
-import { parseSpec, specToText, type TabularData, type ThemeTokens, type UISpec } from "@kohaku-ui/spec-core";
+import {
+  type ActionParamIssue,
+  type ApprovalRequiredInfo,
+  parseSpec,
+  specToText,
+  type TabularData,
+  type ThemeTokens,
+  type UISpec,
+} from "@kohaku-ui/spec-core";
 import { App } from "@modelcontextprotocol/ext-apps";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -508,13 +516,8 @@ function createBridgeController(app: App, openai: OpenAiWidgetApi | undefined): 
                     error?: {
                       code?: string;
                       message?: string;
-                      issues?: { path: string; code: string; message: string }[];
-                      approval?: {
-                        requestId: string;
-                        action: string;
-                        tier: "confirm" | "approve";
-                        payloadHash: string;
-                      };
+                      issues?: ActionParamIssue[];
+                      approval?: ApprovalRequiredInfo;
                     };
                   }
                 | undefined

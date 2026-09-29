@@ -51,6 +51,7 @@ from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import notify_hook as _host_core_notify_hook
 from kohaku.host_core import notify_hook_nowait as _host_core_notify_hook_nowait
 from kohaku.host_core import parse_trace_context as _parse_trace_context
+from kohaku.host_core import start_operation_index_validation as _host_core_start_index_validation
 from kohaku.host_core.keyed_mutex import _locks as _locks
 from kohaku.spec import (
     MAX_JSON_OBJECT_DEPTH,
@@ -349,6 +350,20 @@ async def operation_index(deps: KohakuHostDeps) -> dict[str, OperationIndexEntry
     if deps._operation_index_fn is None:
         deps._operation_index_fn = _host_core_create_operation_index(deps.domain)
     return await deps._operation_index_fn()
+
+
+def validate_operation_index_at_attach(deps: KohakuHostDeps) -> None:
+    """Builds the memoized operation index in the background at route-registration time, so a failure
+    (`list_operations()` raising, or a `paramsSchema` outside kohaku's closed subset) is reported through
+    `on_error` (endpoint "attach.operationIndex") instead of only at the first request that hits it. Needs a
+    running event loop (see host_core's `start_operation_index_validation`): registration outside one leaves
+    the index to be built lazily, exactly as before."""
+    if deps._operation_index_fn is None:
+        deps._operation_index_fn = _host_core_create_operation_index(deps.domain)
+    _host_core_start_index_validation(
+        deps._operation_index_fn,
+        lambda e: report_host_error(deps, "attach.operationIndex", str(uuid.uuid4()), e),
+    )
 
 
 def action_gate_for(deps: KohakuHostDeps) -> ActionGate:

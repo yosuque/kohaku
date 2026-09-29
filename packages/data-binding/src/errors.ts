@@ -1,4 +1,4 @@
-import type { ActionParamIssue } from "@kohaku-ui/spec-core";
+import type { ActionParamIssue, ApprovalRequiredInfo } from "@kohaku-ui/spec-core";
 
 export type BindingErrorCode =
   | "BAD_REF"
@@ -31,7 +31,7 @@ export class BindingError extends Error {
    * The pending-approval descriptor. Only present on an APPROVAL_REQUIRED error (SPEC §6.1,
    * ACT-APR-001) — mirrors `@kohaku-ui/client`'s `KohakuHostError.approval`.
    */
-  readonly approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+  readonly approval?: ApprovalRequiredInfo;
   /**
    * The host's suggested backoff in milliseconds. Only present on a RATE_LIMITED error whose 429 response
    * carried `error.retryAfterMs` (SPEC §6.1, REST-RL-001).
@@ -45,7 +45,7 @@ export class BindingError extends Error {
       status?: number;
       cause?: unknown;
       issues?: ActionParamIssue[];
-      approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+      approval?: ApprovalRequiredInfo;
       retryAfterMs?: number;
     } = {},
   ) {

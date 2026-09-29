@@ -1,38 +1,16 @@
 import {
+  type ActionManifest,
+  type ActionManifestEntry,
   type ActionParamIssue,
   type ActionParamsSchema,
-  type ActionTier,
   type JsonObject,
-  type JsonValue,
   validateActionParams,
 } from "@kohaku-ui/spec-core";
 import type { ActionPhase } from "./invoke.js";
 
-/**
- * One entry of the Governed Actions manifest (design.md #62/#64, SPEC §6.1/§6.1.1 [Draft]): the wire
- * shape of `actions[name]` on a compose response. Structurally mirrors host-core's `ActionManifestEntry`
- * (packages/host-core/src/action-manifest.ts) -- duplicated here rather than imported, since
- * renderer-core does not depend on `@kohaku-ui/host-core` (AGENTS.md's dependency direction places
- * renderer-core upstream of host-core), the same reason `@kohaku-ui/client`'s types.ts already carries
- * its own copy.
- */
-export interface ActionManifestEntry {
-  tier: ActionTier;
-  /**
-   * The action's raw params schema (the same value `OperationDescriptor.paramsSchema` declared), when
-   * present. Kept as the wire-shaped `JsonValue` (not the stricter `ActionParamsSchema`) since it arrives
-   * over the wire from the host -- `preflightAction` casts it before validating, the same trust boundary
-   * already extended to the capability token itself.
-   */
-  paramsSchema?: JsonValue;
-  confirmMessage?: string;
-}
-
-/**
- * `{ [actionName]: ActionManifestEntry }`. See host-core's `ActionManifest` for the full doc -- carried
- * alongside a compose response, outside the Spec itself, so it never affects `specHash` / the cache key.
- */
-export type ActionManifest = Record<string, ActionManifestEntry>;
+// The wire types live in spec-core (shared with host-core and the client SDK); re-exported so existing
+// `@kohaku-ui/renderer-core` import sites keep working.
+export type { ActionManifest, ActionManifestEntry };
 
 /**
  * The outcome of a client-side governed-action pre-check (design.md #62/#63), run against the

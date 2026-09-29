@@ -47,7 +47,8 @@ def build_action_manifest(
     manifest: ActionManifest = {}
     for action in actions:
         entry = index.get(action)
-        if entry is None:
+        # A declared operation whose paramsSchema failed validation is omitted too: it cannot be invoked.
+        if entry is None or entry.schema_error is not None:
             continue
         manifest[action] = ActionManifestEntry(
             tier=entry.descriptor.tier if entry.descriptor.tier is not None else "auto",

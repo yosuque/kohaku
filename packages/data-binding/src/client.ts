@@ -1,5 +1,6 @@
 import {
   type ActionParamIssue,
+  type ApprovalRequiredInfo,
   canonicalStringify,
   type JsonValue,
   type TabularData,
@@ -358,7 +359,7 @@ function actionErrorEnvelope(body: unknown): {
   code: string;
   message: string;
   issues?: ActionParamIssue[];
-  approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+  approval?: ApprovalRequiredInfo;
 } | null {
   const error = (
     body as { error?: { code?: unknown; message?: unknown; issues?: unknown; approval?: unknown } } | null
@@ -368,9 +369,7 @@ function actionErrorEnvelope(body: unknown): {
     code: error.code,
     message: typeof error.message === "string" ? error.message : error.code,
     issues: error.issues as ActionParamIssue[] | undefined,
-    approval: error.approval as
-      | { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string }
-      | undefined,
+    approval: error.approval as ApprovalRequiredInfo | undefined,
   };
 }
 

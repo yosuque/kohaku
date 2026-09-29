@@ -7,6 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from fastapi.testclient import TestClient
+
 from kohaku.spec import (
     ApprovalGrant,
     ApprovalVerifyResult,
@@ -293,3 +295,81 @@ class TestTierApprove:
         assert recorder.denied_calls[0]["reason"] == "approval already used"
         assert recorder.approval_requested_calls == []
         assert domain.invoke_calls == []
+
+
+class TestOperationIndexValidationAtAttach:
+    """Mirrors the TS createKohakuRoutes tests: a paramsSchema outside the closed subset is reported through
+    on_error at attach, not only at the first invoke. Needs a running event loop at attach time (see
+    host_core's start_operation_index_validation), hence the async wrapper."""
+
+    def test_reports_an_invalid_params_schema_at_attach(self, tmp_path: Path) -> None:
+        import asyncio
+
+        seen: list[Any] = []
+
+        async def run() -> None:
+            build_harness(
+                tmp_path,
+                domain=_EchoDomain(
+                    OperationDescriptor(
+                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                    )
+                ),
+                on_error=seen.append,
+            )
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+        assert [info.endpoint for info in seen] == ["attach.operationIndex"]
+        assert 'operation "annotate" has an invalid paramsSchema' in str(seen[0].error)
+
+    def test_a_bad_schema_breaks_only_that_operation(self, tmp_path: Path) -> None:
+        domain = _EchoDomain(
+            OperationDescriptor(
+                name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+            ),
+            OperationDescriptor(name="publish", description="d"),
+        )
+        harness = build_harness(tmp_path, domain=domain)
+        token = harness.issue([Scope(kind="write", ref="annotate"), Scope(kind="write", ref="publish")])
+        # A raised schema error surfaces as a 500 (the TS route's outcome); the test client must not re-raise it.
+        client = TestClient(harness.client.app, raise_server_exceptions=False)
+        headers = {"authorization": f"Bearer {token}"}
+        broken = client.post(_url("/binding/action"), json={"action": "annotate", "payload": {}}, headers=headers)
+        assert broken.status_code == 500
+        ok = client.post(_url("/binding/action"), json={"action": "publish", "payload": {}}, headers=headers)
+        assert ok.status_code == 200
+        assert [op for op, _ in domain.invoke_calls] == ["publish"]
+
+    def test_reports_nothing_for_a_valid_domain(self, tmp_path: Path) -> None:
+        import asyncio
+
+        seen: list[Any] = []
+
+        async def run() -> None:
+            build_harness(
+                tmp_path,
+                domain=_EchoDomain(
+                    OperationDescriptor(name="annotate", description="d", paramsSchema=NOTE_SCHEMA)
+                ),
+                on_error=seen.append,
+            )
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+        assert seen == []
+
+    def test_registration_outside_an_event_loop_stays_lazy(self, tmp_path: Path) -> None:
+        seen: list[Any] = []
+        build_harness(
+            tmp_path,
+            domain=_EchoDomain(
+                OperationDescriptor(
+                    name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                )
+            ),
+            on_error=seen.append,
+        )
+        assert seen == []

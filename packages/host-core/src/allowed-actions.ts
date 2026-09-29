@@ -1,4 +1,5 @@
 import type { DomainPort } from "@kohaku-ui/spec-core";
+import type { OperationIndex } from "./operation-index.js";
 
 /** A memoized accessor for the write-action names a DomainPort actually exposes. */
 export type AllowedActions = () => Promise<ReadonlySet<string>>;
@@ -11,9 +12,6 @@ export type AllowedActions = () => Promise<ReadonlySet<string>>;
  * - REST/MCP capability issuance (host-core's `issueCapabilityForSpec`'s `allowedActions` option) drops a
  *   Spec-declared write scope whose action is not a DomainPort operation, hardening against a
  *   hallucinated/injected `action.invoke` action name becoming a bearer write scope.
- * - The MCP `${prefix}_action` tool additionally rejects an unknown action name outright, before even
- *   attempting capability verification (defense in depth for a host that does not respect the tool's
- *   app-only visibility hint).
  *
  * On rejection the cached promise is discarded so the next call retries against the DomainPort, and the
  * rejection propagates to the caller — each call site decides its own fail-open/fail-closed response and
@@ -35,4 +33,17 @@ export function createAllowedActions(domain: DomainPort, onError?: (error: unkno
     }
     return cached;
   };
+}
+
+/**
+ * An `AllowedActions` derived from an already-built `OperationIndex` (the keys of its by-name map) instead of a
+ * second, independently memoized `listOperations()` call -- a host that already keeps an index for its
+ * action gate uses this so the capability write-scope filter and the gate can never disagree about which
+ * actions exist. Every declared operation counts, including one whose `paramsSchema` failed validation (that
+ * operation alone is unusable; its write scope is unaffected), so a bad schema never changes the set. It
+ * inherits the index's one failure mode: `listOperations()` rejecting rejects here too, and callers treat
+ * that as `createAllowedActions`'s own rejection (fail-closed for write scopes).
+ */
+export function allowedActionsFromIndex(index: OperationIndex): AllowedActions {
+  return async () => new Set((await index()).keys());
 }

@@ -264,20 +264,70 @@ describe("runInvokeTarget (design.md #62/#63 gating)", () => {
     );
   });
 
-  it("tier approve without a requestApproval hook short-circuits to awaitingApproval", async () => {
-    const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
+  it("tier approve without a requestApproval hook still asks the server once (no approval), so the pending-approval record exists", async () => {
+    const approval = {
+      requestId: "r1",
+      action: "publish",
+      tier: "approve" as const,
+      payloadHash: "sha256:x",
+    };
+    const invokeAction = vi.fn(async () => {
+      throw new BindingError("APPROVAL_REQUIRED", "this action requires an approval token", {
+        status: 403,
+        approval,
+      });
+    });
     const manifest: ActionManifest = { publish: { tier: "approve" } };
+    const onActionResult = vi.fn();
     const phases: ActionPhase[] = [];
     await runInvokeTarget(
       { kind: "invoke", action: "publish", payload: {} },
-      { binding: fakeBinding(invokeAction), bus: NOOP_INVALIDATION_BUS, actionManifest: manifest },
+      {
+        binding: fakeBinding(invokeAction),
+        bus: NOOP_INVALIDATION_BUS,
+        actionManifest: manifest,
+        onActionResult,
+      },
       "node1",
       (p) => phases.push(p),
     );
+    expect(invokeAction).toHaveBeenCalledTimes(1);
+    expect(invokeAction).toHaveBeenCalledWith("publish", {}, { confirmed: undefined, approval: undefined });
     expect(phases).toEqual([
-      { phase: "awaitingApproval", tier: "approve", message: "this action requires approval" },
+      { phase: "pending" },
+      {
+        phase: "awaitingApproval",
+        tier: "approve",
+        message: "this action requires an approval token",
+        approval,
+      },
     ]);
-    expect(invokeAction).not.toHaveBeenCalled();
+    expect(onActionResult).not.toHaveBeenCalled();
+  });
+
+  it("tier approve with a requestApproval hook that declines also asks the server without approval", async () => {
+    const invokeAction = vi.fn(async () => {
+      throw new BindingError("APPROVAL_REQUIRED", "this action requires an approval token", {
+        status: 403,
+      });
+    });
+    const manifest: ActionManifest = { publish: { tier: "approve" } };
+    const requestApproval = vi.fn(async () => undefined);
+    const phases: ActionPhase[] = [];
+    await runInvokeTarget(
+      { kind: "invoke", action: "publish", payload: {} },
+      {
+        binding: fakeBinding(invokeAction),
+        bus: NOOP_INVALIDATION_BUS,
+        actionManifest: manifest,
+        requestApproval,
+      },
+      "node1",
+      (p) => phases.push(p),
+    );
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(invokeAction).toHaveBeenCalledWith("publish", {}, { confirmed: undefined, approval: undefined });
+    expect(phases.map((p) => p.phase)).toEqual(["pending", "awaitingApproval"]);
   });
 
   it("tier approve with a requestApproval hook returning a token invokes with that approval", async () => {

@@ -37,7 +37,8 @@ export interface ActionParamIssue {
 
 /**
  * Object-key names that are always rejected as a payload property, at any nesting depth, regardless of
- * the schema's own `additionalProperties` setting. `__proto__` (and, on some engines, `constructor` /
+ * the schema's own `additionalProperties` setting (and, via `findUnsafeActionParamKeys`, regardless of
+ * whether the action declares a schema at all). `__proto__` (and, on some engines, `constructor` /
  * `prototype`) resolve through the prototype chain rather than the object's own properties when read
  * with a plain `obj[key]` / `key in obj`, which can otherwise let a value silently bypass both schema
  * lookup (`properties[key]` resolves to an inherited `Object.prototype` member instead of `undefined`,
@@ -56,6 +57,51 @@ function joinPath(base: string, key: string): string {
 
 function joinIndex(base: string, index: number): string {
   return `${base}[${index}]`;
+}
+
+/**
+ * The number of Unicode code points in `value` -- what `minLength` / `maxLength` count (SPEC ACT-PRM-001).
+ * `String.prototype.length` counts UTF-16 code units instead, which would make a non-BMP character (an
+ * emoji) count twice and disagree with Python's `len()`, which counts code points.
+ */
+function codePointLength(value: string): number {
+  let count = 0;
+  for (const _ of value) count += 1;
+  return count;
+}
+
+/**
+ * Scans the whole `payload` -- objects and arrays, at any depth, whether or not any schema declares those
+ * properties -- for an object key named `__proto__` / `constructor` / `prototype`, and reports each as an
+ * `"unsafeKey"` issue (same issue shape and path convention as `validateActionParams`). The host-core gate
+ * runs this on every action payload before (and independently of) any `paramsSchema` validation, so the
+ * guarantee does not depend on the action declaring a schema, on `additionalProperties`, or on the
+ * schema descending into the value that carries the key. The payload has already passed the JSON depth
+ * precheck (`schema/json.ts`), which bounds the recursion. A flagged key's own value is not descended into.
+ */
+export function findUnsafeActionParamKeys(payload: JsonObject): ActionParamIssue[] {
+  const issues: ActionParamIssue[] = [];
+  scanUnsafeKeys(payload, "", issues);
+  return issues;
+}
+
+function scanUnsafeKeys(value: JsonValue, path: string, issues: ActionParamIssue[]): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      scanUnsafeKeys(item, joinIndex(path, index), issues);
+    });
+    return;
+  }
+  if (typeof value !== "object" || value === null) return;
+  const obj = value as JsonObject;
+  for (const key of Object.keys(obj)) {
+    const keyPath = joinPath(path, key);
+    if (UNSAFE_PROPERTY_KEYS.has(key)) {
+      issues.push({ path: keyPath, code: "unsafeKey", message: `the property name "${key}" is not allowed` });
+      continue;
+    }
+    scanUnsafeKeys(obj[key] as JsonValue, keyPath, issues);
+  }
 }
 
 /**
@@ -158,10 +204,11 @@ function validateValue(
         report("type", `expected a string at "${path || "(root)"}"`);
         return;
       }
-      if (schema.minLength !== undefined && value.length < schema.minLength) {
+      // Lengths count Unicode code points (see codePointLength), not UTF-16 code units.
+      if (schema.minLength !== undefined && codePointLength(value) < schema.minLength) {
         report("minLength", `expected at least ${schema.minLength} characters`);
       }
-      if (schema.maxLength !== undefined && value.length > schema.maxLength) {
+      if (schema.maxLength !== undefined && codePointLength(value) > schema.maxLength) {
         report("maxLength", `expected at most ${schema.maxLength} characters`);
       }
       if (schema.enum !== undefined && !schema.enum.includes(value)) {

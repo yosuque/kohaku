@@ -24,7 +24,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, McpServer } from "@modelcontextprotocol/server";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   attachKohakuToMcpServer,
   CAPABILITY_META_KEY,
@@ -1964,7 +1964,7 @@ describe("task C: the MCP surface's write path (kohaku_action)", () => {
     await client.close();
   });
 
-  it("an action not listed by DomainPort.listOperations gets no write scope, and kohaku_action itself rejects it as unknown (isError), and onError is notified", async () => {
+  it("an action not listed by DomainPort.listOperations gets no write scope, and kohaku_action rejects it as capability-denied (isError), and onError is notified", async () => {
     // Distinct from writeComposeCtx(): also declares a $ref, so dropping the write scope still leaves a
     // non-empty capability token — the shared `authz` fake here matches by ref-prefix rather than exact
     // kind+ref, so an entirely empty scope list would make its prefix check ("".startsWith trivially matching
@@ -2032,9 +2032,8 @@ describe("task C: the MCP surface's write path (kohaku_action)", () => {
       arguments: { action: "annotate", payload: { note: "review", refs: [TREND_REF] }, capability },
     });
     expect(result.isError).toBe(true);
-    // registerActionTool's own allowedActions check (the same DomainPort.listOperations() source that dropped
-    // the write scope above) rejects the action before capability verification is even attempted.
-    expect((result.content as { text: string }[])[0]!.text).toContain("unknown action");
+    // The capability was issued without the dropped write scope, so its verify denies the action.
+    expect((result.content as { text: string }[])[0]!.text).toContain("capability denied");
     await client.close();
   });
 
@@ -2103,22 +2102,14 @@ describe("task C: the MCP surface's write path (kohaku_action)", () => {
   });
 
   it("allowedActions() fail-closes on the first listOperations() rejection, then recovers on the next compose", async () => {
-    // host-core's createAllowedActions memoizes listOperations() per attachKohakuToMcpServer call, but discards
-    // the cached promise on rejection so the next call retries. The first compose must therefore drop the write
-    // scope (fail-closed = empty allowed set) and notify onError, while a second compose against the same
-    // server recovers the real operation list and grants the write scope. (In between, kohaku_action's own
-    // allowedActions check also retries listOperations() — see the deniedAction call below — so the "second"
-    // real DomainPort call may actually happen there rather than at the second compose.)
-    //
-    // Governed actions (design.md #62/#64) add a second, independent memoized reader of listOperations()
-    // (ToolContext.operationIndex, for the actions manifest) alongside allowedActions() -- each caches its
-    // own success/failure separately. Within the *first* compose, allowedActions() is consulted first (for
-    // capability issuance) and hits the domain's one-time rejection (calls===1); operationIndex() is
-    // consulted immediately after (for the manifest) and lands on the domain's second call, which already
-    // succeeds (the flaky domain only rejects strictly its first invocation) -- so `calls` is 2, not 1,
-    // by the end of the first compose, even though the write scope is still correctly fail-closed (the
-    // manifest and the capability's granted scopes are independent: the manifest describes what a
-    // DomainPort exposes, not what any one capability instance was scoped for).
+    // One memoized operation index per attachKohakuToMcpServer call feeds both the capability write-scope
+    // filter (allowedActions, derived from it) and the actions manifest, and discards its cached promise on
+    // rejection so the next call retries. Attach also validates the index eagerly (that is the domain's first
+    // listOperations() call here, rejecting and reported at "attach.operationIndex"), and the first compose's
+    // capability issuance lands on the domain's second call, which also rejects -- so it must drop the write
+    // scope (fail-closed = empty allowed set) and notify onError. The manifest's own index read in that same
+    // compose is the domain's third call and succeeds, so the second compose finds the memoized real
+    // operation list and grants the write scope.
     //
     // Also declares a $ref (distinct from writeComposeCtx()) so dropping the write scope still leaves a
     // non-empty capability token — with a truly empty scope list, this suite's `authz` fake's prefix check
@@ -2153,7 +2144,7 @@ describe("task C: the MCP surface's write path (kohaku_action)", () => {
     const flakyDomain: DomainPort = {
       async listOperations() {
         calls++;
-        if (calls === 1) throw new Error("listOperations unavailable (transient)");
+        if (calls <= 2) throw new Error("listOperations unavailable (transient)");
         return [{ name: "annotate", description: "sales annotate (write)" }];
       },
       async invoke(op) {
@@ -2184,19 +2175,24 @@ describe("task C: the MCP surface's write path (kohaku_action)", () => {
     // First compose: listOperations() rejects -> fail-closed (empty allowed set), no write scope granted.
     // Two failures land on the observability hook for this single compose: the listOperations() rejection
     // itself, and the consequent write-scope drop (issueCapabilityForSpec's onDroppedAction, since the
-    // fail-closed allowed set is empty) — both reported at endpoint "compose.capability".
+    // fail-closed allowed set is empty) — both reported at endpoint "compose.capability". (The attach-time
+    // validation failure was reported earlier, at "attach.operationIndex".)
     const first = await client.callTool({
       name: "kohaku_compose",
       arguments: { question: "Annotation form" },
     });
     const firstCapability = capabilityOf(first);
-    // 2, not 1: allowedActions() consumes the domain's one-time rejection (capability issuance, fail-closed),
-    // and operationIndex() immediately lands on the domain's second (already-succeeding) call (the actions
-    // manifest) -- see this test's own doc comment above.
-    expect(calls).toBe(2);
+    // 3: attach-time validation (rejected), capability issuance (rejected, fail-closed), then the actions
+    // manifest's index read (succeeds and stays memoized) -- see this test's own doc comment above.
+    expect(calls).toBe(3);
     expect(firstCapability).not.toContain("annotate");
-    expect(seen.length).toBeGreaterThanOrEqual(1);
-    expect(seen.every((s) => s.endpoint === "compose.capability")).toBe(true);
+    expect(seen.some((s) => s.endpoint === "attach.operationIndex")).toBe(true);
+    expect(seen.filter((s) => s.endpoint !== "attach.operationIndex").length).toBeGreaterThanOrEqual(1);
+    expect(
+      seen
+        .filter((s) => s.endpoint !== "attach.operationIndex")
+        .every((s) => s.endpoint === "compose.capability"),
+    ).toBe(true);
     expect(seen.some((s) => (s.error as Error).message.includes("listOperations unavailable"))).toBe(true);
 
     const deniedAction = await client.callTool({
@@ -2205,16 +2201,15 @@ describe("task C: the MCP surface's write path (kohaku_action)", () => {
     });
     expect(deniedAction.isError).toBe(true);
 
-    // Second compose (same server / same allowedActions() closure): the cached rejection was discarded, so
-    // listOperations() is retried and now succeeds, granting the write scope.
+    // Second compose (same server / same operation index): the memoized index is the real operation list, so
+    // the write scope is granted.
     const second = await client.callTool({
       name: "kohaku_compose",
       arguments: { question: "Annotation form" },
     });
     const secondCapability = capabilityOf(second);
-    // 3, not 2: the deniedAction call above already forced allowedActions()'s own retry (its third call
-    // overall); operationIndex() was already memoized-successful since the first compose, so the second
-    // compose itself makes no further DomainPort calls.
+    // Still 3: the index was already memoized-successful since the first compose, so nothing re-reads the
+    // DomainPort.
     expect(calls).toBe(3);
     expect(secondCapability).toContain("annotate");
 
@@ -2245,7 +2240,7 @@ describe("task C: the MCP surface's write path (kohaku_action)", () => {
     await client.close();
   });
 
-  it("when listOperations() always rejects, kohaku_action denies every action (isError: unknown action) and onError is notified", async () => {
+  it("when listOperations() always rejects, kohaku_action fails closed for every action (isError: operation index unavailable) and onError is notified", async () => {
     const seen: { endpoint: string; error: unknown }[] = [];
     const failingDomain: DomainPort = {
       async listOperations() {
@@ -2275,14 +2270,15 @@ describe("task C: the MCP surface's write path (kohaku_action)", () => {
     await Promise.all([server.connect(st), client.connect(ct)]);
 
     // A capability that would, in isolation, verify for a write to "annotate" (the fake `authz` here matches
-    // by ref-prefix) — proving the denial below comes from the allowedActions check, not from verify.
+    // by ref-prefix) — proving the denial below comes from the operation index, not from verify.
     const result = await client.callTool({
       name: "kohaku_action",
       arguments: { action: "annotate", payload: {}, capability: "cap:annotate" },
     });
     expect(result.isError).toBe(true);
-    expect((result.content as { text: string }[])[0]!.text).toContain("unknown action");
-    expect(seen.some((s) => s.endpoint === "kohaku_action.allowedActions")).toBe(true);
+    expect((result.content as { text: string }[])[0]!.text).toContain("operation index unavailable");
+    expect(seen.some((s) => s.endpoint === "kohaku_action.operationIndex")).toBe(true);
+    expect(seen.some((s) => s.endpoint === "attach.operationIndex")).toBe(true);
     expect(seen.some((s) => (s.error as Error).message.includes("domain permanently unavailable"))).toBe(
       true,
     );
@@ -2457,36 +2453,14 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
-  it("rejects an action absent from the operation index even when allowedActions() (memoized separately, from an earlier snapshot) still has it -- fail-closed", async () => {
-    // allowedActions() (capability write-scope issuance) and operationIndex() (the action gate) are two
-    // independently memoized readers of the same DomainPort.listOperations() (see the doc comment at
-    // this fix's call site in server.ts). kohaku_compose triggers both, moments apart, so a domain whose
-    // listOperations() changes between those two specific calls freezes each memoizer on a different
-    // snapshot -- reproducing the "index and DomainPort momentarily disagree" case this fix guards.
-    let calls = 0;
-    const invocations: { op: string; args: JsonObject }[] = [];
-    const flakyDomain: DomainPort & { invocations: typeof invocations } = {
-      invocations,
-      async listOperations() {
-        calls += 1;
-        // Call 1 (allowedActions(), during compose's capability issuance): annotate is declared.
-        // Call 2 onward (operationIndex(), moments later in the same compose): annotate is gone.
-        return calls === 1 ? [{ name: "annotate", description: "d", tier: "confirm" }] : [];
-      },
-      async invoke(op, args) {
-        invocations.push({ op, args });
-        return { ok: true, op, args };
-      },
-    };
-    const { client } = await connectGoverned({ domain: flakyDomain });
-    const composed = await client.callTool({
-      name: "kohaku_compose",
-      arguments: { question: "Annotation form" },
-    });
-    const capability = capabilityOf(composed);
+  it("rejects an action absent from the operation index even when its capability verifies -- fail-closed", async () => {
+    // "cap:ghost" verifies for a write to "ghost" in this suite's fake authz (ref-prefix match) although the
+    // DomainPort never declared it -- the shape of an index/DomainPort disagreement, or a capability
+    // presented for a name that was never an operation.
+    const { client, domain } = await connectGoverned();
     const result = await client.callTool({
       name: "kohaku_action",
-      arguments: { action: "annotate", payload: {}, capability, confirmed: true },
+      arguments: { action: "ghost", payload: {}, capability: "cap:ghost", confirmed: true },
     });
     expect(result.isError).toBe(true);
     expect(result.content).toEqual([
@@ -2495,24 +2469,13 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     // No structuredContent.error.code: this reuses the plain, unstructured "capability denied" tool
     // error shape (the same one an insufficient write scope already returns), not a new error code.
     expect(result.structuredContent).toBeUndefined();
-    expect(flakyDomain.invocations).toHaveLength(0);
+    expect(domain.invocations).toHaveLength(0);
     await client.close();
   });
 
-  it("records action.denied (fail-open) for an action absent from the operation index", async () => {
-    let calls = 0;
-    const flakyDomain: DomainPort = {
-      async listOperations() {
-        calls += 1;
-        return calls === 1 ? [{ name: "annotate", description: "d" }] : [];
-      },
-      async invoke(op, args) {
-        return { ok: true, op, args };
-      },
-    };
+  it("records action.denied (fail-open) for an action absent from the operation index, as REST does", async () => {
     const denied: unknown[] = [];
     const { client } = await connectGoverned({
-      domain: flakyDomain,
       actionAuditRecorder: {
         invoked: async () => {},
         denied: async (args) => {
@@ -2522,29 +2485,114 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
         approved: async () => {},
       },
     });
+    await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "ghost", payload: { note: "x" }, capability: "cap:ghost", confirmed: true },
+    });
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({
+      action: "ghost",
+      tier: "auto",
+      reason: "action is not a declared DomainPort operation",
+      principal: { id: "tester" },
+    });
+    expect((denied[0] as { payloadHash: string }).payloadHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    await client.close();
+  });
+
+  it("an undeclared action is still rejected when the audit recorder throws (recording is fail-open)", async () => {
+    const seen: { endpoint: string }[] = [];
+    const { client, domain } = await connectGoverned({
+      actionAuditRecorder: {
+        invoked: async () => {},
+        denied: async () => {
+          throw new Error("audit sink down");
+        },
+        approvalRequested: async () => {},
+        approved: async () => {},
+      },
+      onError: (info) => {
+        seen.push({ endpoint: info.endpoint });
+      },
+    });
+    const result = await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "ghost", payload: {}, capability: "cap:ghost" },
+    });
+    expect(result.isError).toBe(true);
+    expect(seen.some((s) => s.endpoint === "kohaku_action.audit")).toBe(true);
+    expect(domain.invocations).toHaveLength(0);
+    await client.close();
+  });
+
+  it("reports a paramsSchema outside the closed subset through onError at attach, without throwing", async () => {
+    const seen: { endpoint: string; error: unknown }[] = [];
+    const badDomain: DomainPort = {
+      async listOperations() {
+        return [
+          { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a$" } as never },
+        ];
+      },
+      async invoke() {
+        return { ok: true };
+      },
+    };
+    const { client } = await connectGoverned({ domain: badDomain, onError: (info) => void seen.push(info) });
+    await vi.waitFor(() => expect(seen.some((s) => s.endpoint === "attach.operationIndex")).toBe(true));
+    const attachError = seen.find((s) => s.endpoint === "attach.operationIndex")!.error as Error;
+    expect(attachError.message).toContain('operation "annotate" has an invalid paramsSchema');
+    await client.close();
+  });
+
+  it("a bad paramsSchema on one operation breaks only that operation: its write scope survives, the other operation still invokes", async () => {
+    const invocations: string[] = [];
+    const twoOpDomain: DomainPort = {
+      async listOperations() {
+        return [
+          { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a$" } as never },
+          { name: "publish", description: "d" },
+        ];
+      },
+      async invoke(op) {
+        invocations.push(op);
+        return { ok: true, op };
+      },
+    };
+    const seen: { endpoint: string; error: unknown }[] = [];
+    const { client } = await connectGoverned({
+      domain: twoOpDomain,
+      onError: (info) => void seen.push(info),
+    });
+    // The compose-issued capability keeps BOTH write scopes (scope issuance uses the declared names).
     const composed = await client.callTool({
       name: "kohaku_compose",
       arguments: { question: "Annotation form" },
     });
     const capability = capabilityOf(composed);
-    await client.callTool({
+    expect(capability).toContain("annotate");
+    expect(capability).toContain("publish");
+    // The broken operation fails closed (tool error + onError report); the other one is unaffected.
+    const broken = await client.callTool({
       name: "kohaku_action",
       arguments: { action: "annotate", payload: {}, capability, confirmed: true },
     });
-    expect(denied).toHaveLength(1);
-    expect(denied[0]).toMatchObject({
-      action: "annotate",
-      tier: "auto",
-      reason: "action is not a declared DomainPort operation",
+    expect(broken.isError).toBe(true);
+    expect((broken.content as { text: string }[])[0]!.text).toBe("action parameter schema unavailable");
+    expect(seen.some((s) => s.endpoint === "kohaku_action.operationIndex")).toBe(true);
+    const ok = await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "publish", payload: {}, capability },
     });
+    expect(ok.isError).toBeFalsy();
+    expect(invocations).toEqual(["publish"]);
     await client.close();
   });
 
   it("rejects the A2UI inbound forwarding sentinel -- it must never be a real registered operation (F3)", async () => {
     // "a2ui.forward" is host-a2ui's A2UI_FORWARD_ACTION (packages/host-a2ui/src/inbound/from-a2ui.ts):
     // decision #60 requires it is never registered as a real DomainPort operation, so a governedDomain()
-    // that (correctly) never declares it must reject it -- here via the earlier allowedActions() check
-    // ("unknown action"), the sibling fail-closed check this same fix's doc comment cross-references.
+    // that (correctly) never declares it must reject it -- here the compose-issued capability carries no
+    // write scope for it, so capability verification denies it before the operation index is consulted.
     const { client, domain } = await connectGoverned();
     const composed = await client.callTool({
       name: "kohaku_compose",

@@ -294,10 +294,11 @@ export interface AttachOptions {
  * never resolves a tenant), not per-request state, so there is nothing to gain from rebuilding it on every
  * compose.
  *
- * `allowedActions` is likewise built once (memoizing `deps.domain.listOperations()`, which is async and must
- * not be re-awaited on every compose) and used to restrict issued write scopes to actions the DomainPort
- * actually exposes (hardening against a hallucinated/injected action.invoke action name). Returns the current
- * allowed set on each call — retries against the DomainPort after a prior rejection.
+ * `allowedActions` is derived from `operationIndex` (host-core's `allowedActionsFromIndex`, so the two share
+ * one memoized `deps.domain.listOperations()` read, which is async and must not be re-awaited on every
+ * compose) and used to restrict issued write scopes to actions the DomainPort actually exposes (hardening
+ * against a hallucinated/injected action.invoke action name). Returns the current allowed set on each call —
+ * retries against the DomainPort after a prior rejection.
  *
  * `tasks` is the one field here that DOES hold state (an in-memory task store — see tasks.ts's
  * `createTaskStore` doc comment for its lifetime/expiry design), still built once per `attachKohakuToMcpServer`
@@ -320,8 +321,9 @@ export interface ToolContext {
   getRendererHtml: () => Promise<string>;
   fixationHost: FixationDeliveryHost;
   allowedActions: () => Promise<ReadonlySet<string>>;
-  /** Governed actions (design.md #62/#63): the same OperationIndex the REST profile memoizes per deps,
-   * built here once per attach (mirrors `allowedActions`' own once-per-attach lifetime). */
+  /** Governed actions (design.md #62/#63): the OperationIndex the action gate and the actions manifest read
+   * (the REST profile memoizes the equivalent per deps), built here once per attach; `allowedActions` above
+   * is derived from it. */
   operationIndex: OperationIndex;
   actionGate: ActionGate;
   tasks: TaskStore;

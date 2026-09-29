@@ -172,8 +172,8 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
  * no write actions, so every existing response shape (a read-only Spec) is byte-identical to before this
  * field existed once JSON-serialized (the key is simply absent).
  *
- * Fail-open on a rejected `operationIndex` (e.g. `listOperations()` itself throwing, or a descriptor's
- * `paramsSchema` failing validation): reported to the observability hook and treated as "no manifest this
+ * A declared operation whose `paramsSchema` failed validation is omitted from the manifest on its own (see
+ * `buildActionManifest`). Fail-open on a rejected `operationIndex` (`listOperations()` itself throwing): reported to the observability hook and treated as "no manifest this
  * time" rather than failing the whole compose response, the same fail-open posture
  * `issueSpecCapabilitySafely` already takes for capability issuance under the identical failure.
  */

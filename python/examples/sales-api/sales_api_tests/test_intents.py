@@ -255,3 +255,12 @@ class TestExamplePlacement:
         quarterly = _def_of("sales.quarterly_summary")
         assert "今期の製品別売上は?" in by_product.examples  # type: ignore[attr-defined]
         assert "今期の製品別売上は?" not in quarterly.examples  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("key", ["constructor", "toString", "__proto__", "bogus"])
+def test_validate_params_reports_every_unknown_key_including_object_prototype_names(key: str) -> None:
+    """Parity with the TS IntentCatalog.validateParams: an unrecognized key is reported as an issue even
+    when its name is an Object.prototype member in JS (`in` would have let those through there)."""
+    result = catalog.validate_params("sales.trend", {"metric": "revenue", key: 1})
+    assert result.ok is False
+    assert [(i.path, i.message) for i in result.issues] == [(key, f'unknown param "{key}"')]
