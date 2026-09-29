@@ -7,6 +7,7 @@ import {
   A2uiIngestError,
   type CreateA2uiIngestOptions,
   createA2uiIngest,
+  MAX_COMPONENTS_PER_MESSAGE,
 } from "../src/index.js";
 
 const APPROVER: Principal = { id: "reviewer-1", name: "Reviewer" };
@@ -192,10 +193,88 @@ describe("createA2uiIngest", () => {
     await expect(fixating.fixate("never-ingested", APPROVER)).rejects.toThrow(/no ingested result/);
   });
 
+  it("a fixated shortcut is served, and recorded in lineage, as tier L0 (SPEC.md section 8)", async () => {
+    const fixations = createFixations({ lineage, storage });
+    const fixating = makeIngest({ fixations });
+    const meta = { intent: { canonical: "vendor.pin_l0" } };
+    await fixating.ingest(surfaceMessages("srf-l0", "Pinned"), meta);
+    await fixating.fixate("srf-l0", APPROVER);
+
+    const after = await fixating.ingest(updateMessages("srf-l0", "Later"), meta);
+    expect(after.spec.provenance).toMatchObject({ tier: "L0", cache: "fixated" });
+    const composed = await storage.listLineage({ type: ["view.composed"] });
+    const last = composed[composed.length - 1]!;
+    expect(last.payload["cache"]).toBe("fixated");
+    expect(last.payload["tier"]).toBe("L0");
+  });
+
+  it("fixate() refuses a degraded rendering (provenance.fallback) with an A2uiIngestError", async () => {
+    const fixations = createFixations({ lineage, storage });
+    const fixating = makeIngest({ fixations });
+    await fixating.ingest(
+      [
+        {
+          version: "v0.9.1",
+          createSurface: { surfaceId: "srf-fb", catalogId: "https://example.com/c.json" },
+        },
+        {
+          version: "v0.9.1",
+          updateComponents: { surfaceId: "srf-fb", components: [{ id: "root", component: "VendorWidget" }] },
+        },
+      ],
+      { intent: { canonical: "vendor.no_pin_fallback" } },
+    );
+    await expect(fixating.fixate("srf-fb", APPROVER)).rejects.toThrow(A2uiIngestError);
+    await expect(fixating.fixate("srf-fb", APPROVER)).rejects.toThrow(/degraded rendering/);
+    expect(await storage.listFixations()).toEqual([]);
+  });
+
+  it("fixate() maps a FixationNotAllowedError from the fixations service to an A2uiIngestError", async () => {
+    const refusing = makeIngest({
+      fixations: {
+        async fixate() {
+          const err = new Error("an L2 free-form Spec cannot be fixated");
+          err.name = "FixationNotAllowedError";
+          throw err;
+        },
+      },
+    });
+    await refusing.ingest(surfaceMessages("srf-l2", "Hi"), { intent: { canonical: "vendor.refused" } });
+    await expect(refusing.fixate("srf-l2", APPROVER)).rejects.toThrow(A2uiIngestError);
+  });
+
+  it("a surface whose only loss is a snapshotted {path} binding is not a fallback and can be fixated", async () => {
+    const fixations = createFixations({ lineage, storage });
+    const fixating = makeIngest({ fixations });
+    await fixating.ingest(
+      [
+        {
+          version: "v0.9.1",
+          createSurface: { surfaceId: "srf-bound", catalogId: "https://example.com/c.json" },
+        },
+        { version: "v0.9.1", updateDataModel: { surfaceId: "srf-bound", path: "/greeting", value: "hello" } },
+        {
+          version: "v0.9.1",
+          updateComponents: {
+            surfaceId: "srf-bound",
+            components: [{ id: "root", component: "Text", text: { path: "/greeting" } }],
+          },
+        },
+      ],
+      { intent: { canonical: "vendor.bound" } },
+    );
+    const outcome = fixating.latest("srf-bound")!;
+    expect(outcome.losses.map((l) => l.kind)).toEqual(["binding-snapshotted"]);
+    expect(outcome.spec.provenance.fallback).toBeUndefined();
+    expect(await storage.listLineage({ type: ["view.fallback"] })).toEqual([]);
+    const record = await fixating.fixate("srf-bound", APPROVER);
+    expect(record.canonical).toBe("vendor.bound");
+  });
+
   it("tenant isolation: two tenants sharing the same Intent get independent cache entries", async () => {
-    // Two different surfaceIds (SurfaceState tracking is not itself tenant-scoped — a wire surface belongs to
-    // one agent connection), but an explicit shared Intent so the two calls land on the same cache key aside
-    // from the tenant segment, isolating exactly what this test is about (tenant scoping of the cache key).
+    // An explicit shared Intent so the two calls land on the same cache key aside from the tenant segment,
+    // isolating exactly what this test is about (tenant scoping of the cache key). Surface state is tenant-
+    // scoped too, see "tenant-scoped surface state" below.
     const meta = { intent: { canonical: "vendor.multi_tenant", params: { shared: true } } };
     const forA = await ingest.ingest(surfaceMessages("srf-tenant-a", "Hi"), { ...meta, tenant: "tenant-a" });
     const forB = await ingest.ingest(surfaceMessages("srf-tenant-b", "Hi"), { ...meta, tenant: "tenant-b" });
@@ -206,6 +285,46 @@ describe("createA2uiIngest", () => {
       tenant: "tenant-a",
     });
     expect(repeatA.cache).toBe("hit");
+  });
+
+  describe("tenant-scoped surface state", () => {
+    const meta = (tenant: string) => ({ intent: { canonical: "vendor.tenant_scope" }, tenant });
+
+    it("the same surfaceId under two tenants is two independent surfaces", async () => {
+      // Both tenants send createSurface for "shared": were state keyed by surfaceId alone, the second would
+      // fail with "already exists" (or, worse, extend the first tenant's surface).
+      const forA = await ingest.ingest(surfaceMessages("shared", "A content"), meta("tenant-a"));
+      const forB = await ingest.ingest(surfaceMessages("shared", "B content"), meta("tenant-b"));
+      expect(forA.spec.components[0]!["props"]).toMatchObject({ markdown: "A content" });
+      expect(forB.spec.components[0]!["props"]).toMatchObject({ markdown: "B content" });
+      expect(ingest.latest("shared", "tenant-a")).toBe(forA);
+      expect(ingest.latest("shared", "tenant-b")).toBe(forB);
+      expect(ingest.latest("shared")).toBeUndefined(); // the no-tenant scope is a third, empty one
+    });
+
+    it("one tenant cannot extend or delete another tenant's surface", async () => {
+      await ingest.ingest(surfaceMessages("shared", "A content"), meta("tenant-a"));
+      await expect(ingest.ingest(updateMessages("shared", "B content"), meta("tenant-b"))).rejects.toThrow(
+        /unknown surface/,
+      );
+      await expect(
+        ingest.ingest([{ version: "v0.9.1", deleteSurface: { surfaceId: "shared" } }], meta("tenant-b")),
+      ).rejects.toThrow(/no longer exists/);
+      expect(ingest.latest("shared", "tenant-a")).toBeDefined();
+    });
+
+    it("fixate(surfaceId, approver, tenant) pins that tenant's outcome only", async () => {
+      const fixations = createFixations({ lineage, storage });
+      const fixating = makeIngest({ fixations });
+      await fixating.ingest(surfaceMessages("shared", "A content"), meta("tenant-a"));
+      await fixating.ingest(surfaceMessages("shared", "B content"), meta("tenant-b"));
+
+      await expect(fixating.fixate("shared", APPROVER)).rejects.toThrow(/no ingested result/);
+      const record = await fixating.fixate("shared", APPROVER, "tenant-a");
+      expect(record.tenant).toBe("tenant-a");
+      expect(record.pinnedSpec.components[0]!["props"]).toMatchObject({ markdown: "A content" });
+      expect(await storage.getFixation(record.intentHash, "tenant-b")).toBeNull();
+    });
   });
 
   it("ingest() rejects a batch of messages spanning more than one surfaceId", async () => {
@@ -278,6 +397,117 @@ describe("createA2uiIngest", () => {
           },
         ]),
       ).rejects.toThrow(/maxDataModelSizeBytes/);
+    });
+
+    it("maxDataModelSizeBytes counts UTF-8 bytes, not UTF-16 code units", async () => {
+      const bounded = makeIngest({ maxDataModelSizeBytes: 200 });
+      await bounded.ingest(surfaceMessages("srf-utf8", "Hi"));
+      // 100 CJK characters: about 111 UTF-16 code units of JSON but about 311 UTF-8 bytes.
+      await expect(
+        bounded.ingest([
+          {
+            version: "v0.9.1",
+            updateDataModel: { surfaceId: "srf-utf8", path: "/blob", value: "あ".repeat(100) },
+          },
+        ]),
+      ).rejects.toThrow(/maxDataModelSizeBytes/);
+      // The same number of ASCII characters fits.
+      await expect(
+        bounded.ingest([
+          {
+            version: "v0.9.1",
+            updateDataModel: { surfaceId: "srf-utf8", path: "/blob", value: "a".repeat(100) },
+          },
+        ]),
+      ).resolves.toBeDefined();
+    });
+
+    it("an over-limit call is rejected without committing anything, and a later small update still succeeds", async () => {
+      const bounded = makeIngest({ maxComponentsPerSurface: 10 });
+      const meta = { intent: { canonical: "vendor.atomic" } };
+      await bounded.ingest(surfaceMessages("srf-atomic", "Hi"), meta);
+      const grow = (count: number, prefix: string): unknown[] => [
+        {
+          version: "v0.9.1",
+          updateComponents: {
+            surfaceId: "srf-atomic",
+            components: Array.from({ length: count }, (_, i) => ({
+              id: `${prefix}${i}`,
+              component: "Text",
+              text: "x",
+            })),
+          },
+        },
+      ];
+      // 1 (root) + 50 = 51 > 10: rejected, and every further attempt keeps being judged against the
+      // still-unchanged 1-component surface rather than the rejected 51.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await expect(bounded.ingest(grow(50, `over${attempt}_`), meta)).rejects.toThrow(
+          /maxComponentsPerSurface/,
+        );
+      }
+      const outcome = await bounded.ingest(grow(2, "ok"), meta);
+      expect(outcome.spec.components.map((c) => c.id).sort()).toEqual(["ok0", "ok1", "root"]);
+    });
+
+    it("a reducer error mid-batch leaves the surface exactly as it was", async () => {
+      const meta = { intent: { canonical: "vendor.atomic_reducer" } };
+      await ingest.ingest(surfaceMessages("srf-mid", "Original"), meta);
+      await expect(
+        ingest.ingest(
+          [
+            ...updateMessages("srf-mid", "Applied then discarded"),
+            // A second createSurface for an existing surface is a reducer error.
+            {
+              version: "v0.9.1",
+              createSurface: { surfaceId: "srf-mid", catalogId: "https://example.com/c.json" },
+            },
+          ],
+          meta,
+        ),
+      ).rejects.toThrow(/already exists/);
+      const outcome = await ingest.ingest(
+        [{ version: "v0.9.1", updateDataModel: { surfaceId: "srf-mid", path: "/x", value: 1 } }],
+        meta,
+      );
+      expect(outcome.spec.components[0]!["props"]).toMatchObject({ markdown: "Original" });
+    });
+
+    it("the schema caps a single message's components array", async () => {
+      const tooMany = Array.from({ length: MAX_COMPONENTS_PER_MESSAGE + 1 }, (_, i) => ({
+        id: `c${i}`,
+        component: "Text",
+        text: "x",
+      }));
+      await ingest.ingest(surfaceMessages("srf-msgcap", "Hi"));
+      await expect(
+        ingest.ingest([
+          { version: "v0.9.1", updateComponents: { surfaceId: "srf-msgcap", components: tooMany } },
+        ]),
+      ).rejects.toThrow();
+    });
+
+    it("maxSurfaces evicts the least recently ingested surface (state and latest())", async () => {
+      const bounded = makeIngest({ maxSurfaces: 2 });
+      await bounded.ingest(surfaceMessages("s1", "1"));
+      await bounded.ingest(surfaceMessages("s2", "2"));
+      await bounded.ingest(updateMessages("s1", "1 again")); // s1 is now the most recent
+      await bounded.ingest(surfaceMessages("s3", "3")); // evicts s2
+      expect(bounded.latest("s1")).toBeDefined();
+      expect(bounded.latest("s2")).toBeUndefined();
+      expect(bounded.latest("s3")).toBeDefined();
+      await expect(bounded.ingest(updateMessages("s2", "2 again"))).rejects.toThrow(/unknown surface/);
+    });
+
+    it("deleteSurface drops the surface's latest() outcome", async () => {
+      await ingest.ingest(surfaceMessages("srf-del", "Hi"));
+      expect(ingest.latest("srf-del")).toBeDefined();
+      await expect(
+        ingest.ingest([{ version: "v0.9.1", deleteSurface: { surfaceId: "srf-del" } }]),
+      ).rejects.toThrow(/no longer exists/);
+      expect(ingest.latest("srf-del")).toBeUndefined();
+      // The id is free again: createSurface works instead of failing with "already exists".
+      await expect(ingest.ingest(surfaceMessages("srf-del", "Back"))).resolves.toBeDefined();
     });
 
     it("the default caps are generous enough not to reject ordinary-sized ingests", async () => {
