@@ -9,7 +9,11 @@ import {
   type StoragePort,
   type UISpec,
 } from "@kohaku-ui/spec-core";
-import { type CreatePostgresPoolOptions, createPostgresPool } from "./connection.js";
+import {
+  assertLineageSchemaCurrent,
+  type CreatePostgresPoolOptions,
+  createPostgresPool,
+} from "./connection.js";
 import { correlationColumnValue, DEFAULT_SCHEMA, qualifiedTable } from "./schema.js";
 
 export type PostgresStoragePortOptions = CreatePostgresPoolOptions;
@@ -36,8 +40,14 @@ function correlationForColumn(correlationId: string | null): string | null {
  * is shared with `createPostgresRevocationStore` via `./connection.js`.
  */
 export function createPostgresStoragePort(options: PostgresStoragePortOptions): PostgresStoragePort {
-  const { pool, ready, close } = createPostgresPool(options);
+  const { pool, ready: poolReady, close } = createPostgresPool(options);
   const schema = options.schema ?? DEFAULT_SCHEMA;
+  // `migrate: false` leaves the schema to the operator, so verify (read-only, cheap, retried on every call
+  // until it passes) that it has what `appendLineage` writes instead of losing audit events to 42703.
+  const ready = async (): Promise<void> => {
+    await poolReady();
+    if (options.migrate === false) await assertLineageSchemaCurrent(pool, schema);
+  };
   const tables = {
     spec: qualifiedTable(schema, "kohaku_spec_cache"),
     lineage: qualifiedTable(schema, "kohaku_lineage"),
