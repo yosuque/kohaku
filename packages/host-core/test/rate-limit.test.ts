@@ -46,6 +46,16 @@ describe("createMemoryRateLimitStore", () => {
     expect(denied.retryAfterMs).toBe(500);
   });
 
+  it("a caller whose clock went backwards does not rewind the stored refill time (no over-refill)", async () => {
+    const store = createMemoryRateLimitStore();
+    const rule = { capacity: 2, refillPerSecond: 1 };
+    expect((await store.take("k", 2, rule, 10_000)).allow).toBe(true); // drains to 0 at t=10s
+    expect((await store.take("k", 1, rule, 5_000)).allow).toBe(false); // skewed caller, 5s in the past
+    // A correct clock 0.5s after the drain: only 0.5 token has refilled. Had the skewed call rewound the
+    // stored time to t=5s, this take would see 5.5s of refill and be allowed.
+    expect((await store.take("k", 1, rule, 10_500)).allow).toBe(false);
+  });
+
   it("keys are independent buckets", async () => {
     const store = createMemoryRateLimitStore();
     const rule = { capacity: 1, refillPerSecond: 1 };
@@ -113,6 +123,19 @@ describe("createRateLimiter", () => {
     await limiter.take({ tenant: "a", principal: "b:c", routeClass: "compose", rule: RULE });
     expect(keys).toHaveLength(2);
     expect(keys[0]).not.toBe(keys[1]);
+  });
+
+  it("encodes the key as compact JSON with non-ASCII characters kept literal (byte-identical to the Python port)", async () => {
+    const keys: string[] = [];
+    const store: RateLimitStore = {
+      take: async (key) => {
+        keys.push(key);
+        return { allow: true };
+      },
+    };
+    const limiter = createRateLimiter(store, undefined, () => 0);
+    await limiter.take({ tenant: "テナント", principal: 'é:"x', routeClass: "compose", rule: RULE });
+    expect(keys).toEqual(['["テナント","é:\\"x","compose"]']);
   });
 
   it("an anonymous caller (no tenant/principal) still separates by routeClass", async () => {
