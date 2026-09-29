@@ -381,7 +381,7 @@ canonical-JSON sha256 である。`packages/spec-core/src/action-params.ts` に�
 `action.approvalRequested` / `action.approved`。fail-open — recorder の失敗が書き込みを止めることは無い)。
 
 ステートレスな HMAC `ApprovalPort` の参照実装(`HmacApprovalPort` / `create_hmac_approval_port` /
-`MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v1."` prefix の
+`MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v2."` prefix の
 トークン)は、共有の `kohaku` ライブラリではなく
 `python/examples/sales-api/src/sales_api/approval_port.py` に置かれている — `sales_api/authz_port.py`
 がすでに HMAC `AuthzPort`/capability トークン対を置いているのと同じ場所である。これは、この port が

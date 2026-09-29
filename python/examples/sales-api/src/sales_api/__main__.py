@@ -49,9 +49,9 @@ def main() -> None:
     authz = create_hmac_authz_port(capability_secret)
     # Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish",
     # sales_api/app.py's SalesDomainPort) needs an ApprovalPort to ever be allowed. Reuses the same
-    # KOHAKU_CAPABILITY_SECRET as the AuthzPort -- the "kohaku-approval.v1." prefix already separates the
-    # token domains, so sharing the secret is by design, not a shortcut (see approval_port.py's own doc
-    # comment). No ApprovalStore (single-use enforcement is optional per design.md #63; out of scope for
+    # KOHAKU_CAPABILITY_SECRET as the AuthzPort -- the approval MAC key is derived from it under its own
+    # label, so the token domains stay separate and sharing the secret is by design, not a shortcut (see
+    # approval_port.py's own doc comment). No ApprovalStore (single-use enforcement is optional per design.md #63; out of scope for
     # this demo).
     approvals = create_hmac_approval_port(capability_secret)
     # create_app is async because it performs startup reconcile (snapshot authority -> projection). The app is

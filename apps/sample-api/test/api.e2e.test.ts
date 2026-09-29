@@ -377,7 +377,7 @@ describe("sample-api E2E", () => {
     });
     expect(approveRes.status).toBe(200);
     const { approval } = (await approveRes.json()) as { approval: string };
-    expect(approval.startsWith("kohaku-approval.v1.")).toBe(true);
+    expect(approval.startsWith("kohaku-approval.v2.")).toBe(true);
 
     const approved = await app.request("/api/kohaku/binding/action", {
       method: "POST",

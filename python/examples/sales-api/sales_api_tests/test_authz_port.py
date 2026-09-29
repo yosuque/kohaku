@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import json
 
 from kohaku.spec import Principal, Scope, VerifyRequest
@@ -135,5 +137,40 @@ class TestExpiryAndMalformed:
             )
             assert result.ok is False
             assert result.reason == "invalid signature"
+
+        asyncio.run(run())
+
+    def test_non_ascii_signature_is_denied_not_raised(self) -> None:
+        async def run() -> None:
+            authz = create_hmac_authz_port("test-secret")
+            cap = await authz.issue_capability(
+                PRINCIPAL, [Scope(kind="read", ref="query://sales/kpi")]
+            )
+            payload = cap.split(".")[0]
+            result = await authz.verify(
+                f"{payload}.sig\u00e9\u3042", VerifyRequest(kind="read", ref="query://sales/kpi")
+            )
+            assert result.ok is False
+            assert result.reason == "invalid signature"
+
+        asyncio.run(run())
+
+    def test_signed_payload_with_malformed_claims_is_denied(self) -> None:
+        async def run() -> None:
+            secret = "test-secret"
+            for claims in (
+                {"sub": "u", "scopes": "read", "exp": 9999999999},
+                {"sub": 1, "scopes": [], "exp": 9999999999},
+                {"sub": "u", "exp": 9999999999},
+            ):
+                payload = (
+                    base64.urlsafe_b64encode(json.dumps(claims).encode("utf-8")).rstrip(b"=").decode("ascii")
+                )
+                digest = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
+                sig = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+                result = await create_hmac_authz_port(secret).verify(
+                    f"{payload}.{sig}", VerifyRequest(kind="read", ref="query://sales/kpi")
+                )
+                assert (result.ok, result.reason) == (False, "malformed payload")
 
         asyncio.run(run())

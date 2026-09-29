@@ -247,8 +247,9 @@ export interface ApprovalVerifyResult {
  * (design.md #63). Structurally parallel to `AuthzPort` (issue / verify, fail-open denial vs.
  * fail-closed infrastructure failure), but a distinct port: an approval authorizes one human decision
  * about one exact payload, not a read/write scope over a Spec's lifetime, and a concrete token format
- * MUST NOT be interchangeable with a capability token (see `authz-hmac`'s `"kohaku-approval.v1."`
- * prefix, which keeps the two token domains from being replayed against each other).
+ * MUST NOT be interchangeable with a capability token (see `authz-hmac`, which derives the approval
+ * MAC key under its own label and covers the `"kohaku-approval.v2."` prefix in the MAC input, so the two
+ * token domains cannot be replayed against each other even when they share one secret).
  */
 export interface ApprovalPort {
   /**

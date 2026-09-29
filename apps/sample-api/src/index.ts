@@ -129,8 +129,8 @@ async function main(): Promise<void> {
     // Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish",
     // apps/sample-api/src/domain/port.ts) needs an ApprovalPort to ever be allowed. Reuses the same
     // KOHAKU_CAPABILITY_SECRET as the AuthzPort (capabilitySecretFromEnv) -- see that function's doc
-    // comment for why sharing the secret is by design (the "kohaku-approval.v1." prefix already
-    // separates the token domains) -- with no ApprovalStore (single-use enforcement is optional per
+    // comment for why sharing the secret is by design (the approval MAC key is derived from it under
+    // its own label, so the token domains stay separate) -- with no ApprovalStore (single-use enforcement is optional per
     // design.md #63; out of scope for this demo).
     approvals: createHmacApprovalPort(capabilitySecretFromEnv(process.env)),
   });
