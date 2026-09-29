@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clampLineagePageSize,
   DEFAULT_LINEAGE_PAGE_SIZE,
   decodeSeqCursor,
   encodeSeqCursor,
@@ -146,5 +147,33 @@ describe("pageLineageArray", () => {
 
   it("throws for a malformed cursor instead of restarting or skipping silently", () => {
     expect(() => pageLineageArray(events, { cursor: "garbage" })).toThrow(LineageCursorError);
+  });
+});
+
+describe("clampLineagePageSize", () => {
+  it("defaults when omitted or not a number", () => {
+    expect(clampLineagePageSize()).toBe(DEFAULT_LINEAGE_PAGE_SIZE);
+    expect(clampLineagePageSize(Number.NaN)).toBe(DEFAULT_LINEAGE_PAGE_SIZE);
+  });
+
+  it("floors a fractional size to an integer", () => {
+    expect(clampLineagePageSize(2.5)).toBe(2);
+    expect(clampLineagePageSize(1.9)).toBe(1);
+  });
+
+  it("clamps into [1, MAX_LINEAGE_PAGE_SIZE]", () => {
+    expect(clampLineagePageSize(0)).toBe(1);
+    expect(clampLineagePageSize(0.5)).toBe(1);
+    expect(clampLineagePageSize(-7)).toBe(1);
+    expect(clampLineagePageSize(1_000_000)).toBe(MAX_LINEAGE_PAGE_SIZE);
+    expect(clampLineagePageSize(Number.POSITIVE_INFINITY)).toBe(MAX_LINEAGE_PAGE_SIZE);
+    expect(clampLineagePageSize(Number.NEGATIVE_INFINITY)).toBe(1);
+  });
+
+  it("makes pageLineageArray honour a fractional pageSize", () => {
+    const events = [1, 2, 3, 4].map((n) => event("t", {}, `2026-01-0${n}T00:00:00Z`));
+    const page = pageLineageArray(events, { pageSize: 2.5 });
+    expect(page.events).toHaveLength(2);
+    expect(page.nextCursor).toBeDefined();
   });
 });

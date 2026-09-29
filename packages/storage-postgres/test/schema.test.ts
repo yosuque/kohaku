@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { postgresSchemaSql, qualifiedTable } from "../src/schema.js";
+import {
+  lineageCorrelationDdl,
+  POSTGRES_SCHEMA_VERSION,
+  postgresSchemaSql,
+  qualifiedTable,
+} from "../src/schema.js";
 
 describe("qualifiedTable", () => {
   it("double-quotes and escapes identifiers", () => {
@@ -62,12 +67,24 @@ describe("postgresSchemaSql", () => {
   });
 
   it("adds kohaku_lineage.correlation_id additively (design.md #53), without bumping POSTGRES_SCHEMA_VERSION", () => {
-    expect(sql).toContain(
-      'ALTER TABLE "public"."kohaku_lineage" ADD COLUMN IF NOT EXISTS correlation_id text NULL',
+    // The column goes in through a guarded DO block, so re-running the script takes no ACCESS EXCLUSIVE lock.
+    expect(sql).toMatch(
+      /DO \$kohaku_ddl\$ BEGIN\s+IF NOT EXISTS \(\s+SELECT 1 FROM information_schema\.columns\s+WHERE table_schema = 'public' AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'\s+\) THEN\s+ALTER TABLE "public"\."kohaku_lineage" ADD COLUMN IF NOT EXISTS correlation_id text NULL;\s+END IF;\s+END \$kohaku_ddl\$;/,
     );
     expect(sql).toContain(
       'CREATE INDEX IF NOT EXISTS public_kohaku_lineage_correlation_id_idx ON "public"."kohaku_lineage" (correlation_id, seq)',
     );
+    expect(POSTGRES_SCHEMA_VERSION).toBe(1);
+  });
+
+  it("escapes a schema name inside the guarded column DDL's string literal", () => {
+    expect(postgresSchemaSql("o'brien")).toContain("table_schema = 'o''brien'");
+  });
+
+  it("truncates the correlation index name to PostgreSQL's 63-byte identifier limit", () => {
+    const { indexName, createIndexConcurrentlySql } = lineageCorrelationDdl(`s${"x".repeat(80)}`);
+    expect(indexName).toHaveLength(63);
+    expect(createIndexConcurrentlySql).toContain(` IF NOT EXISTS ${indexName} ON `);
   });
 
   it("makes kohaku_schema_meta a single-row table via a fixed primary key + CHECK", () => {

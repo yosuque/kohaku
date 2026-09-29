@@ -195,6 +195,25 @@ export function describeStoragePortContract(
       });
     });
 
+    describe("oversized correlationId", () => {
+      it("appendLineage succeeds for a 4 KB correlationId, which stays filterable and unmodified", async () => {
+        const long = `req-${"x".repeat(4096)}`;
+        const other = `${long}y`;
+        const withLong = event("view.render", { correlationId: long }, "2026-01-05T00:00:00.000Z");
+        const withOther = event("view.render", { correlationId: other }, "2026-01-05T00:00:01.000Z");
+        await port.appendLineage(withLong);
+        await port.appendLineage(withOther);
+        const listed = await port.listLineage({ correlationId: long });
+        expect(listed.map((e) => e.id)).toEqual([withLong.id]);
+        expect(listed[0]?.payload["correlationId"]).toBe(long);
+        expect((await port.listLineage({ correlationId: other })).map((e) => e.id)).toEqual([withOther.id]);
+        if (port.pageLineage != null) {
+          const page = await port.pageLineage({ correlationId: long });
+          expect(page.events.map((e) => e.id)).toEqual([withLong.id]);
+        }
+      });
+    });
+
     describe("pageLineage (optional forward-paging extension, design.md #53)", () => {
       it("is implemented when this suite requires it", () => {
         if (options.requirePaging === true) {
@@ -274,6 +293,13 @@ export function describeStoragePortContract(
         const page = await port.pageLineage({ pageSize: 1_000_000 });
         expect(page.events).toHaveLength(4);
         expect(page.nextCursor).toBeUndefined();
+      });
+
+      it("floors a fractional pageSize to an integer", async () => {
+        if (port.pageLineage == null) return; // optional extension not implemented
+        const page = await port.pageLineage({ pageSize: 2.5 });
+        expect(page.events).toHaveLength(2);
+        expect(page.nextCursor).toBeDefined();
       });
 
       it("throws for a malformed cursor instead of restarting or skipping silently", async () => {

@@ -1,4 +1,24 @@
+import { createHash } from "node:crypto";
+
 export const DEFAULT_SCHEMA = "public";
+
+/**
+ * Longest `correlationId` stored verbatim in `kohaku_lineage.correlation_id`. A btree entry has a hard size
+ * limit (about 2.7 KB), so an oversized value would make the INSERT -- and with it the audit event -- fail.
+ */
+export const MAX_CORRELATION_COLUMN_LENGTH = 256;
+
+/**
+ * The value stored in (and matched against) `kohaku_lineage.correlation_id` for `correlationId`: the id
+ * itself, or `sha256:<hex>` of it once it exceeds {@link MAX_CORRELATION_COLUMN_LENGTH}. The event's
+ * `record` keeps the original. Applied to writes and to the `correlationId` filter alike, so a lookup by
+ * the full id still finds its rows. (A different, short id spelled exactly like that digest would match
+ * too; the digest form is 71 characters and never produced by a request id generator.)
+ */
+export function correlationColumnValue(correlationId: string): string {
+  if (correlationId.length <= MAX_CORRELATION_COLUMN_LENGTH) return correlationId;
+  return `sha256:${createHash("sha256").update(correlationId, "utf8").digest("hex")}`;
+}
 
 /**
  * The schema version this package's `postgresSchemaSql` produces. Bumped whenever the DDL changes in a
@@ -23,6 +43,14 @@ function indexPrefix(schema: string): string {
   return schema.toLowerCase().replace(/[^a-z0-9_]/g, "_");
 }
 
+/** PostgreSQL silently truncates an identifier to this many bytes (NAMEDATALEN - 1). */
+const MAX_IDENTIFIER_LENGTH = 63;
+
+/** A single-quoted SQL string literal, with embedded single quotes doubled. */
+function quoteLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
 /**
  * The whole schema as one idempotent script (`CREATE … IF NOT EXISTS` only), safe to run on every start.
  * tenant is `''` for a tenant-neutral record (a NULL cannot take part in a primary key, and — as of this
@@ -45,7 +73,7 @@ function indexPrefix(schema: string): string {
  */
 export function postgresSchemaSql(schema: string = DEFAULT_SCHEMA): string {
   const correlation = lineageCorrelationDdl(schema);
-  return `${postgresBaseSchemaSql(schema)}${correlation.addColumnSql};\n${correlation.createIndexSql};\n`;
+  return `${postgresBaseSchemaSql(schema)}${correlation.guardedAddColumnSql};\n${correlation.createIndexSql};\n`;
 }
 
 /**
@@ -53,9 +81,19 @@ export function postgresSchemaSql(schema: string = DEFAULT_SCHEMA): string {
  * table already existed in deployed databases, so they are kept apart from the base script: `ALTER
  * TABLE … ADD COLUMN IF NOT EXISTS` takes an ACCESS EXCLUSIVE lock even when the column is already
  * there, and `CREATE INDEX IF NOT EXISTS` takes a SHARE lock on the table before it notices the index
- * exists. `ready()` therefore checks the catalog first (`columnName` / `indexName`) and issues these
- * statements only when the column or index is missing; the `IF NOT EXISTS` forms stay as a safety net
- * for `postgresSchemaSql`, which external migration tooling may run as one script. A row written before
+ * exists.
+ *
+ * - `ready()` checks the catalog first and adds the column (`addColumnSql`, inside the migration
+ *   transaction) only when it is missing. The index is built afterwards, outside any transaction, with
+ *   `createIndexConcurrentlySql` on a connection without a statement timeout (a build on a large lineage
+ *   table outlives the pool's default one), and an INVALID leftover of a failed build is dropped with
+ *   `dropIndexConcurrentlySql` first.
+ * - `postgresSchemaSql` (which external migration tooling may run as one script) carries the column as a
+ *   `DO` block that issues the `ALTER` only when the column is absent, so re-running it takes no ACCESS
+ *   EXCLUSIVE lock, and the index as a plain `CREATE INDEX IF NOT EXISTS`.
+ *
+ * `indexName` is truncated to PostgreSQL's 63-byte identifier limit here, so it is the name the catalog
+ * really holds (a longer one would never match a lookup by the untruncated name). A row written before
  * the column existed has correlation_id NULL and can never match a `correlationId` filter (there is
  * nothing to backfill it from). No `POSTGRES_SCHEMA_VERSION` bump.
  */
@@ -63,15 +101,32 @@ export function lineageCorrelationDdl(schema: string = DEFAULT_SCHEMA): {
   columnName: string;
   indexName: string;
   addColumnSql: string;
+  guardedAddColumnSql: string;
   createIndexSql: string;
+  createIndexConcurrentlySql: string;
+  dropIndexConcurrentlySql: string;
 } {
-  const indexName = `${indexPrefix(schema)}_kohaku_lineage_correlation_id_idx`;
+  const indexName = `${indexPrefix(schema)}_kohaku_lineage_correlation_id_idx`.slice(
+    0,
+    MAX_IDENTIFIER_LENGTH,
+  );
   const table = qualifiedTable(schema, "kohaku_lineage");
+  const addColumn = `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS correlation_id text NULL`;
   return {
     columnName: "correlation_id",
     indexName,
-    addColumnSql: `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS correlation_id text NULL`,
+    addColumnSql: addColumn,
+    guardedAddColumnSql: `DO $kohaku_ddl$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = ${quoteLiteral(schema)} AND table_name = 'kohaku_lineage' AND column_name = 'correlation_id'
+  ) THEN
+    ${addColumn};
+  END IF;
+END $kohaku_ddl$`,
     createIndexSql: `CREATE INDEX IF NOT EXISTS ${indexName} ON ${table} (correlation_id, seq)`,
+    createIndexConcurrentlySql: `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${indexName} ON ${table} (correlation_id, seq)`,
+    dropIndexConcurrentlySql: `DROP INDEX CONCURRENTLY IF EXISTS ${qualifiedTable(schema, indexName)}`,
   };
 }
 

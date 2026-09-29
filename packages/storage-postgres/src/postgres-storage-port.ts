@@ -1,17 +1,20 @@
 import {
-  DEFAULT_LINEAGE_PAGE_SIZE,
+  clampLineagePageSize,
   decodeSeqCursor,
   encodeSeqCursor,
   type FixationRecord,
   type LineageEventRecord,
-  MAX_LINEAGE_PAGE_SIZE,
   normalizeTenant,
   type PromotionState,
   type StoragePort,
   type UISpec,
 } from "@kohaku-ui/spec-core";
-import { type CreatePostgresPoolOptions, createPostgresPool } from "./connection.js";
-import { DEFAULT_SCHEMA, qualifiedTable } from "./schema.js";
+import {
+  assertLineageSchemaCurrent,
+  type CreatePostgresPoolOptions,
+  createPostgresPool,
+} from "./connection.js";
+import { correlationColumnValue, DEFAULT_SCHEMA, qualifiedTable } from "./schema.js";
 
 export type PostgresStoragePortOptions = CreatePostgresPoolOptions;
 
@@ -24,6 +27,10 @@ export interface PostgresStoragePort extends StoragePort {
   close(): Promise<void>;
 }
 
+function correlationForColumn(correlationId: string | null): string | null {
+  return correlationId == null ? null : correlationColumnValue(correlationId);
+}
+
 /**
  * A PostgreSQL-backed StoragePort (reference adapter). One table per record kind; (tenant, id) primary keys
  * with '' as the tenant-neutral tenant; `seq` bigserial columns give the append / first-insertion order the
@@ -33,8 +40,18 @@ export interface PostgresStoragePort extends StoragePort {
  * is shared with `createPostgresRevocationStore` via `./connection.js`.
  */
 export function createPostgresStoragePort(options: PostgresStoragePortOptions): PostgresStoragePort {
-  const { pool, ready, close } = createPostgresPool(options);
+  const { pool, ready: poolReady, close } = createPostgresPool(options);
   const schema = options.schema ?? DEFAULT_SCHEMA;
+  // `migrate: false` leaves the schema to the operator, so verify (read-only) that it has what
+  // `appendLineage` writes instead of losing audit events to 42703. A pass is remembered; a failure is not,
+  // so an operator can apply the DDL and the next call succeeds without a restart.
+  let schemaVerified = options.migrate !== false;
+  const ready = async (): Promise<void> => {
+    await poolReady();
+    if (schemaVerified) return;
+    await assertLineageSchemaCurrent(pool, schema);
+    schemaVerified = true;
+  };
   const tables = {
     spec: qualifiedTable(schema, "kohaku_spec_cache"),
     lineage: qualifiedTable(schema, "kohaku_lineage"),
@@ -90,7 +107,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
           str("intentHash"),
           str("artifactId"),
           str("specHash"),
-          str("correlationId"),
+          correlationForColumn(str("correlationId")),
           JSON.stringify(event),
         ],
       );
@@ -113,7 +130,8 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       if (filter.intentHash != null) add("intent_hash = ?", filter.intentHash);
       if (filter.artifactId != null) add("artifact_id = ?", filter.artifactId);
       if (filter.specHash != null) add("spec_hash = ?", filter.specHash);
-      if (filter.correlationId != null) add("correlation_id = ?", filter.correlationId);
+      if (filter.correlationId != null)
+        add("correlation_id = ?", correlationColumnValue(filter.correlationId));
       if (filter.since != null) add("ts >= ?", filter.since);
       if (filter.until != null) add("ts <= ?", filter.until);
       params.push(limit);
@@ -125,10 +143,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
     },
     async pageLineage(req) {
       await ready();
-      const pageSize = Math.max(
-        1,
-        Math.min(req.pageSize ?? DEFAULT_LINEAGE_PAGE_SIZE, MAX_LINEAGE_PAGE_SIZE),
-      );
+      const pageSize = clampLineagePageSize(req.pageSize);
       // Malformed cursor throws before issuing any query (same contract as pageLineageArray / readLineagePage).
       const afterSeq = req.cursor != null ? decodeSeqCursor(req.cursor) : 0;
       const where: string[] = [];
@@ -144,7 +159,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       if (req.intentHash != null) add("intent_hash = ?", req.intentHash);
       if (req.artifactId != null) add("artifact_id = ?", req.artifactId);
       if (req.specHash != null) add("spec_hash = ?", req.specHash);
-      if (req.correlationId != null) add("correlation_id = ?", req.correlationId);
+      if (req.correlationId != null) add("correlation_id = ?", correlationColumnValue(req.correlationId));
       if (req.since != null) add("ts >= ?", req.since);
       if (req.until != null) add("ts <= ?", req.until);
       // Read one past pageSize to detect whether a further page exists, mirroring pageLineageArray /

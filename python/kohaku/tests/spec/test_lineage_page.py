@@ -16,6 +16,7 @@ from kohaku.spec import (
     LineageCursorError,
     LineageEventRecord,
     LineagePageRequest,
+    clamp_lineage_page_size,
     decode_seq_cursor,
     encode_seq_cursor,
     page_lineage_events,
@@ -91,6 +92,22 @@ class TestPageLineageEvents:
         page = page_lineage_events(self._events(), LineagePageRequest(pageSize=1_000_000))
         assert len(page.events) == 5
         assert page.nextCursor is None
+
+    def test_clamp_lineage_page_size_defaults_floors_and_clamps(self) -> None:
+        assert clamp_lineage_page_size() == DEFAULT_LINEAGE_PAGE_SIZE
+        assert clamp_lineage_page_size(float("nan")) == DEFAULT_LINEAGE_PAGE_SIZE
+        assert clamp_lineage_page_size(2.5) == 2
+        assert clamp_lineage_page_size(0.5) == 1
+        assert clamp_lineage_page_size(0) == 1
+        assert clamp_lineage_page_size(-7) == 1
+        assert clamp_lineage_page_size(1_000_000) == MAX_LINEAGE_PAGE_SIZE
+        assert clamp_lineage_page_size(float("inf")) == MAX_LINEAGE_PAGE_SIZE
+        assert clamp_lineage_page_size(float("-inf")) == 1
+
+    def test_fractional_page_size_is_floored(self) -> None:
+        page = page_lineage_events(self._events(), LineagePageRequest(pageSize=2.5))  # type: ignore[arg-type]
+        assert len(page.events) == 2
+        assert page.nextCursor is not None
 
     def test_pages_forward_in_ascending_order_with_no_gaps_or_duplicates(self) -> None:
         events = self._events()

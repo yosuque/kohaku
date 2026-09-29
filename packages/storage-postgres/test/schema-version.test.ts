@@ -1,8 +1,34 @@
 import type { UISpec } from "@kohaku-ui/spec-core";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresStoragePort, POSTGRES_SCHEMA_VERSION, qualifiedTable } from "../src/index.js";
+import { lineageCorrelationDdl } from "../src/schema.js";
 import { backend, startPostgres, uniqueSchema } from "./backend.js";
+
+/** Wraps `pool.query` and every checked-out client's `query` so a test can see each statement issued. */
+function recordStatements(pool: Pool): string[] {
+  const statements: string[] = [];
+  const textOf = (arg: unknown): string =>
+    String(typeof arg === "string" ? arg : (arg as { text: string }).text);
+  const query = pool.query.bind(pool) as (...args: unknown[]) => unknown;
+  (pool as unknown as { query: unknown }).query = (...args: unknown[]) => {
+    statements.push(textOf(args[0]));
+    return query(...args);
+  };
+  const connect = pool.connect.bind(pool) as (...args: unknown[]) => Promise<PoolClient>;
+  (pool as unknown as { connect: unknown }).connect = async (...args: unknown[]) => {
+    // `pool.query` itself calls `connect(callback)`; that path is already recorded at `pool.query`.
+    if (typeof args[0] === "function") return connect(...args);
+    const client = await connect();
+    const clientQuery = client.query.bind(client) as (...args: unknown[]) => unknown;
+    (client as unknown as { query: unknown }).query = (...args: unknown[]) => {
+      statements.push(textOf(args[0]));
+      return clientQuery(...args);
+    };
+    return client;
+  };
+  return statements;
+}
 
 // Backend behavior specific to `kohaku_schema_meta` and the advisory-lock-guarded migration
 // (connection.ts's `migrateSchema`): a real Postgres is needed for both -- the version check runs a
@@ -109,10 +135,124 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: schema vers
       await first.close();
       expect(await catalog()).toEqual([1, 1]);
 
-      const second = createPostgresStoragePort({ connectionString, schema });
+      const spied = new Pool({ connectionString });
+      const statements = recordStatements(spied);
+      const second = createPostgresStoragePort({ pool: spied, schema });
       await expect(second.ready()).resolves.toBeUndefined();
-      await second.close();
+      await spied.end();
       expect(await catalog()).toEqual([1, 1]);
+      // The catalog already had everything, so the second start issued no correlation DDL at all -- no
+      // ALTER TABLE (ACCESS EXCLUSIVE) and no index build. Only the base script's own `IF NOT EXISTS`
+      // statements still run.
+      expect(statements.some((sql) => /ALTER TABLE|correlation_id_idx ON/i.test(sql))).toBe(false);
+      expect(statements.some((sql) => /CREATE INDEX CONCURRENTLY|DROP INDEX/i.test(sql))).toBe(false);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("builds the correlation index without a statement timeout, leaving no session setting on the pooled connection", async () => {
+    const schema = uniqueSchema();
+    const pool = new Pool({ connectionString, max: 1, statement_timeout: 7000 });
+    try {
+      await createPostgresStoragePort({ pool, schema }).ready();
+      // max: 1 means the very connection that ran the build is the one queried here.
+      const { rows } = await pool.query("SHOW statement_timeout");
+      expect(rows[0].statement_timeout).toBe("7s");
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("does not re-run correlation DDL on later starts when the schema name is long enough to truncate the index name", async () => {
+    const schema = `s${"x".repeat(40)}${uniqueSchema()}`.slice(0, 60);
+    const { indexName } = lineageCorrelationDdl(schema);
+    expect(`${schema.toLowerCase()}_kohaku_lineage_correlation_id_idx`.length).toBeGreaterThan(63);
+    const first = createPostgresStoragePort({ connectionString, schema });
+    await first.ready();
+    await first.close();
+
+    const pool = new Pool({ connectionString });
+    try {
+      const found = await pool.query(`SELECT 1 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2`, [
+        schema,
+        indexName,
+      ]);
+      expect(found.rowCount).toBe(1);
+
+      const spied = new Pool({ connectionString });
+      const statements = recordStatements(spied);
+      await createPostgresStoragePort({ pool: spied, schema }).ready();
+      await spied.end();
+      expect(statements.some((sql) => /correlation_id_idx ON|CONCURRENTLY|ADD COLUMN/i.test(sql))).toBe(
+        false,
+      );
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("drops and rebuilds an INVALID correlation index left behind by a failed concurrent build", async () => {
+    const schema = uniqueSchema();
+    const ddl = lineageCorrelationDdl(schema);
+    const first = createPostgresStoragePort({ connectionString, schema });
+    await first.ready();
+    for (const id of ["a", "b"]) {
+      await first.appendLineage({
+        id,
+        ts: "2026-01-01T00:00:00.000Z",
+        actor: { kind: "system" },
+        type: "view.composed",
+        payload: { correlationId: "dup" },
+      });
+    }
+    await first.close();
+
+    const pool = new Pool({ connectionString });
+    try {
+      const table = `"${schema}"."kohaku_lineage"`;
+      await pool.query(`DROP INDEX "${schema}"."${ddl.indexName}"`);
+      // A unique build over duplicate values fails and leaves the index INVALID under the same name.
+      await expect(
+        pool.query(`CREATE UNIQUE INDEX CONCURRENTLY ${ddl.indexName} ON ${table} (correlation_id)`),
+      ).rejects.toThrow();
+      const state = () =>
+        pool.query<{ indisvalid: boolean; indisunique: boolean }>(
+          "SELECT indisvalid, indisunique FROM pg_index WHERE indexrelid = to_regclass($1)",
+          [`"${schema}"."${ddl.indexName}"`],
+        );
+      expect((await state()).rows).toEqual([{ indisvalid: false, indisunique: true }]);
+
+      const second = createPostgresStoragePort({ connectionString, schema });
+      await second.ready();
+      await second.close();
+      expect((await state()).rows).toEqual([{ indisvalid: true, indisunique: false }]);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("with migrate: false, fails ready() and appendLineage naming the missing correlation_id DDL, and passes once it is added", async () => {
+    const schema = uniqueSchema();
+    const pool = new Pool({ connectionString });
+    try {
+      await createPostgresStoragePort({ pool, schema }).ready();
+      await pool.query(`ALTER TABLE "${schema}"."kohaku_lineage" DROP COLUMN correlation_id`);
+
+      const port = createPostgresStoragePort({ pool, schema, migrate: false });
+      await expect(port.ready()).rejects.toThrow(/has no correlation_id column[\s\S]*ADD COLUMN/);
+      await expect(
+        port.appendLineage({
+          id: "x",
+          ts: "2026-01-01T00:00:00.000Z",
+          actor: { kind: "system" },
+          type: "view.composed",
+          payload: {},
+        }),
+      ).rejects.toThrow(/Upgrading to 0\.4\.x/);
+
+      await pool.query(`ALTER TABLE "${schema}"."kohaku_lineage" ADD COLUMN correlation_id text NULL`);
+      await expect(port.ready()).resolves.toBeUndefined();
     } finally {
       await pool.end();
     }
