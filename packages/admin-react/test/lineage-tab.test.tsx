@@ -59,6 +59,8 @@ describe("LineageTab", () => {
     expect(rows[0]!.textContent).toContain("view.rendered");
     expect(rows[0]!.textContent).toContain("#abcdef01");
     expect(rows[1]!.textContent).toContain("view.composed");
+    // Timestamps are UTC instants: the suffix says so and the full ISO string is on hover.
+    expect(screen.getByText("09:00:00Z").getAttribute("title")).toBe("2026-01-01T09:00:00Z");
   });
 
   it("shows an action event's gate tier as gate:<tier>, apart from the L0/L1/L2 composition tier", async () => {
