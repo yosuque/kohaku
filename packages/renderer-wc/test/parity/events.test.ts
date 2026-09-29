@@ -555,4 +555,67 @@ describe("event behavior parity (control + A1 have identical external observatio
     expect(react.obs.events).toEqual([]);
     expect(wc.obs.events).toEqual([]);
   });
+
+  describe("cellEdit -> governed action.invoke", () => {
+    const EDIT_STEPS: Step[] = [
+      { act: "click", sel: '[data-kohaku="table1"] tbody button[aria-label="Edit Revenue"]' },
+      { act: "fill", sel: '[data-kohaku="table1"] tbody input[aria-label="Edit Revenue"]', value: "999" },
+      { act: "key", sel: '[data-kohaku="table1"] tbody input[aria-label="Edit Revenue"]', key: "Enter" },
+    ];
+    const cellSpec = () =>
+      spec({
+        refVersions: { [REF]: "v1" },
+        components: [
+          { id: "root", type: "layout.stack", props: {}, children: ["table1"] },
+          { id: "table1", type: "presentSpreadsheet", props: { editable: true }, data: { $ref: REF } },
+        ],
+        events: [
+          {
+            on: "table1.cellEdit",
+            emit: "action.invoke",
+            payload: { action: "updateCell", value: "$value.value" },
+          },
+        ],
+      });
+    /** The table body's text plus whether any cell input is still open and marked invalid. */
+    const tableProbe = (root: ParentNode) => ({
+      body: root.querySelector('[data-kohaku="table1"] tbody')?.textContent ?? "",
+      invalidInput: root.querySelector('[data-kohaku="table1"] tbody input[aria-invalid="true"]') != null,
+    });
+
+    it("a payload the manifest rejects is caught in edit mode, before any commit or invoke, in both", async () => {
+      const sc: Scenario = {
+        spec: cellSpec(),
+        actionManifest: {
+          updateCell: {
+            tier: "auto",
+            paramsSchema: { type: "object", properties: { value: { type: "number", maximum: 100 } } },
+          },
+        },
+        steps: EDIT_STEPS,
+        probe: tableProbe,
+      };
+      const { react, wc } = await bothObserve(sc);
+      expect(react.obs.invokes).toEqual([]);
+      expect(wc.obs.invokes).toEqual([]);
+      expect(react.probe).toMatchObject({ invalidInput: true });
+      expect(wc.probe).toEqual(react.probe);
+    });
+
+    it("a declined confirmation puts the server value back in the cell, in both", async () => {
+      const sc: Scenario = {
+        spec: cellSpec(),
+        actionManifest: { updateCell: { tier: "confirm" } },
+        confirm: async () => false,
+        steps: [...EDIT_STEPS, { act: "settle" }],
+        probe: tableProbe,
+      };
+      const { react, wc } = await bothObserve(sc);
+      expect(react.obs.invokes).toEqual([]);
+      expect(wc.obs.invokes).toEqual([]);
+      expect((react.probe as { body: string }).body).not.toContain("999");
+      expect((react.probe as { body: string }).body).toContain("498,200,000");
+      expect(wc.probe).toEqual(react.probe);
+    });
+  });
 });

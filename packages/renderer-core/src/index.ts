@@ -164,6 +164,7 @@ export {
   planCellEdit,
   type RowsWorkingCopy,
   resolveColumns,
+  revertCellEdit,
   rowKey,
   type SortHeaderDescriptor,
   type SortState,
