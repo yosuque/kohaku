@@ -63,12 +63,16 @@ const REBUILD_SETTER_CASES: [string, unknown, unknown][] = [
   ],
 ];
 
-// onEvent/onNodeError/onActionResult are read live from #context at call time (kohaku-surface.ts's
-// REBUILD_KEYS deliberately excludes them) — changing one of these must NOT rebuild the mounted tree.
+// onEvent/onNodeError/onActionResult and the action-governance hooks are read live from #context at call
+// time (kohaku-surface.ts's REBUILD_KEYS deliberately excludes them) — changing one of these must NOT
+// rebuild the mounted tree.
 const LIVE_SETTER_CASES: [string, unknown, unknown][] = [
   ["onEvent", () => {}, () => {}],
   ["onNodeError", () => {}, () => {}],
   ["onActionResult", () => {}, () => {}],
+  ["actionManifest", { a: { tier: "auto" } }, { a: { tier: "confirm" } }],
+  ["confirm", () => true, () => false],
+  ["requestApproval", () => "tok1", () => "tok2"],
 ];
 
 const ALL_SETTER_CASES = [...REBUILD_SETTER_CASES, ...LIVE_SETTER_CASES];
@@ -218,6 +222,38 @@ describe("KohakuSurface: onActionResult / onNodeError stay live across a no-rebu
 
     expect(spy1).toHaveBeenCalledTimes(1); // unchanged: the old callback is no longer reached
     expect(spy2).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("KohakuSurface: action governance hooks stay live across a no-rebuild reassignment", () => {
+  it("a reassigned actionManifest and confirm hook govern the next invoke without rebuilding", async () => {
+    const invokeAction = vi.fn(async () => ({ result: { ok: true } }));
+    const binding = { resolve: async () => ({ columns: [], rows: [] }), invokeAction };
+    const spec = buildSpec({
+      components: [
+        { id: "root", type: "layout.stack", props: {}, children: ["b1"] },
+        { id: "b1", type: "action.button", props: { action: "annotate", label: "Go" } },
+      ],
+      events: [{ on: "b1.press", emit: "action.invoke", payload: { note: "hi" } }],
+    });
+    const surface = mount(spec, { binding });
+    const button = byKohaku(surface, "b1") as HTMLButtonElement;
+
+    // No manifest yet: the action is auto-tier, so it runs without asking.
+    button.click();
+    await tick();
+    expect(invokeAction).toHaveBeenCalledTimes(1);
+
+    // Assign a manifest + a declining confirm hook afterwards: neither rebuilds the tree, both apply to the next click.
+    const confirm = vi.fn(async () => false);
+    surface.actionManifest = { annotate: { tier: "confirm" } };
+    surface.confirm = confirm;
+    expect(byKohaku(surface, "b1")).toBe(button);
+
+    button.click();
+    await tick();
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(invokeAction).toHaveBeenCalledTimes(1);
   });
 });
 
