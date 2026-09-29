@@ -245,11 +245,6 @@ describe("POST /binding/action: gate infrastructure failures (fail-closed, SPEC 
     const onError = vi.fn();
     const deps = baseDeps({
       onError,
-      recorder: {
-        rendered: async () => {
-          throw boom;
-        },
-      },
       // A throwing tenant hook is outside every route's own try/catch.
       tenant: async () => {
         throw boom;
