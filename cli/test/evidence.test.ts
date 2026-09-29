@@ -4,6 +4,7 @@
  * transport, the same pattern as explain.test.ts), and verify detects tampering.
  */
 
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -15,10 +16,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ComposeContext } from "@kohaku-ui/composer";
 import { createKohakuRoutes, type KohakuHostDeps } from "@kohaku-ui/host-rest";
-import { createFixations, createLineage, createPromotions, createViewRecorder } from "@kohaku-ui/lineage";
+import {
+  createFixations,
+  createLineage,
+  createPromotions,
+  createViewRecorder,
+  signManifest,
+} from "@kohaku-ui/lineage";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import type { AuthzPort, DomainPort, SemanticPort } from "@kohaku-ui/spec-core";
@@ -27,7 +35,9 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { runEvidenceExport } from "../src/evidence/export.js";
 import { runEvidenceKeygen } from "../src/evidence/keygen.js";
+import { importPrivateKeyPem } from "../src/evidence/keys.js";
 import { runEvidenceVerify } from "../src/evidence/verify.js";
+import { EvidenceUsageError, resolveEvidenceWindow } from "../src/evidence/window.js";
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -215,8 +225,111 @@ describe("kohaku evidence export --data-dir / verify", () => {
   });
 });
 
+describe("kohaku evidence export --since / --until normalization", () => {
+  async function exportWindow(since: string, until: string, dataDir: string) {
+    const { privateKeyPath } = await keyPaths();
+    return runEvidenceExport({ dataDir, since, until, privateKeyPath, outDir: tmp("kohaku-evidence-out-") });
+  }
+
+  // Events on the last day of September (late in the UTC day) and at a +09:00 boundary.
+  async function seededDataDir(): Promise<string> {
+    const dataDir = tmp("kohaku-evidence-data-");
+    const storage = createFileStoragePort(dataDir);
+    for (const [id, ts] of [
+      ["before", "2026-08-31T23:59:59.999Z"],
+      ["first", "2026-09-01T00:00:00.000Z"],
+      ["last-day", "2026-09-30T15:00:00.000Z"],
+      ["after", "2026-10-01T00:00:00.000Z"],
+    ] as const) {
+      await storage.appendLineage({
+        id,
+        ts,
+        actor: { kind: "system" },
+        type: "view.composed",
+        payload: { tier: "L1" },
+      });
+    }
+    return dataDir;
+  }
+
+  it("a date-only --until includes that whole UTC day and the manifest records the resolved instants", async () => {
+    const result = await exportWindow("2026-09-01", "2026-09-30", await seededDataDir());
+    expect(result.manifest.counts.events).toBe(2); // first + last-day
+    expect(result.manifest.scope.since).toBe("2026-09-01T00:00:00.000Z");
+    expect(result.manifest.scope.until).toBe("2026-09-30T23:59:59.999Z");
+  });
+
+  it("canonicalizes a +09:00 offset to UTC before comparing", async () => {
+    // 2026-10-01T09:00:00+09:00 is 2026-10-01T00:00:00Z: `after` is exactly on the inclusive bound.
+    const result = await exportWindow(
+      "2026-09-01T09:00:00+09:00",
+      "2026-10-01T09:00:00+09:00",
+      await seededDataDir(),
+    );
+    expect(result.manifest.scope.since).toBe("2026-09-01T00:00:00.000Z");
+    expect(result.manifest.scope.until).toBe("2026-10-01T00:00:00.000Z");
+    expect(result.manifest.counts.events).toBe(3); // first, last-day, after
+  });
+
+  it("resolveEvidenceWindow: date-only since starts the day, timestamps pass through canonicalized", () => {
+    expect(resolveEvidenceWindow({ since: "2026-09-01", until: "2026-09-01" })).toEqual({
+      since: "2026-09-01T00:00:00.000Z",
+      until: "2026-09-01T23:59:59.999Z",
+    });
+    expect(
+      resolveEvidenceWindow({ since: "2026-09-01T00:00:00Z", until: "2026-09-02T00:00:00.5+00:00" }),
+    ).toEqual({ since: "2026-09-01T00:00:00.000Z", until: "2026-09-02T00:00:00.500Z" });
+  });
+
+  it.each([
+    ["2026-9-1", "2026-09-30"],
+    ["July 9, 2026", "2026-09-30"],
+    ["2026-09-01T00:00:00", "2026-09-30"], // a time without an offset is environment-dependent
+    ["2026-02-30", "2026-09-30"], // Date.parse would roll this over to March 2nd
+    ["2026-09-01", "not-a-date"],
+    ["2026-09-30", "2026-09-01"], // since after until
+  ])("rejects an invalid window (%s .. %s) as a usage error", async (since, until) => {
+    const { privateKeyPath } = await keyPaths();
+    const outDir = tmp("kohaku-evidence-out-");
+    const promise = runEvidenceExport({
+      dataDir: tmp("kohaku-evidence-data-"),
+      since,
+      until,
+      privateKeyPath,
+      outDir,
+    });
+    await expect(promise).rejects.toBeInstanceOf(EvidenceUsageError);
+    expect(existsSync(join(outDir, "manifest.json"))).toBe(false);
+  });
+
+  it("the CLI exits 2 with a message for an invalid --since", () => {
+    const bin = join(dirname(fileURLToPath(import.meta.url)), "../bin/kohaku.js");
+    const result = spawnSync(
+      process.execPath,
+      [
+        bin,
+        "evidence",
+        "export",
+        "--data-dir",
+        tmp("kohaku-evidence-data-"),
+        "--since",
+        "yesterday",
+        "--until",
+        "2026-09-30",
+        "--private-key",
+        "unused.pem",
+        "--out",
+        tmp("kohaku-evidence-out-"),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--since must be an ISO 8601");
+  }, 30_000);
+});
+
 describe("kohaku evidence verify (security hardening)", () => {
-  async function exportedPack(): Promise<{ outDir: string; publicKeyPath: string }> {
+  async function exportedPack(): Promise<{ outDir: string; publicKeyPath: string; privateKeyPath: string }> {
     const dataDir = tmp("kohaku-evidence-data-");
     const storage = createFileStoragePort(dataDir);
     await storage.appendLineage({
@@ -235,7 +348,7 @@ describe("kohaku evidence verify (security hardening)", () => {
       privateKeyPath,
       outDir,
     });
-    return { outDir, publicKeyPath };
+    return { outDir, publicKeyPath, privateKeyPath };
   }
 
   it("refuses to follow a symlink planted at a listed path inside the pack", async () => {
@@ -266,15 +379,23 @@ describe("kohaku evidence verify (security hardening)", () => {
   });
 
   it("rejects a manifest whose files[].path is a traversal attempt, without reading any file", async () => {
-    const { outDir, publicKeyPath } = await exportedPack();
+    const { outDir, publicKeyPath, privateKeyPath } = await exportedPack();
     const manifestPath = join(outDir, "manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     manifest.files[0].path = "../../../etc/passwd";
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
-    const result = await runEvidenceVerify(outDir, publicKeyPath);
-    expect(result.ok).toBe(false);
-    expect(result.errors.some((e) => e.includes("EvidenceManifestSchema"))).toBe(true);
+    // Unsigned edit: the signature check (over the raw manifest) stops it before any schema or file access.
+    const unsigned = await runEvidenceVerify(outDir, publicKeyPath);
+    expect(unsigned.ok).toBe(false);
+
+    // Even a manifest its signer really signed is refused on shape: the schema is the first line of
+    // defense against a traversal path, independent of the signature.
+    const { privateKey } = await importPrivateKeyPem(readFileSync(privateKeyPath, "utf8"));
+    writeFileSync(join(outDir, "manifest.sig"), `${await signManifest(manifest, privateKey)}\n`);
+    const signed = await runEvidenceVerify(outDir, publicKeyPath);
+    expect(signed.ok).toBe(false);
+    expect(signed.errors.some((e) => e.includes("EvidenceManifestSchema"))).toBe(true);
   });
 
   it("fails when an extra, unlisted file is smuggled into the pack directory", async () => {

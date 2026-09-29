@@ -13,6 +13,7 @@ import { parseHeaderArgs } from "../commands.js";
 import { CLI_VERSION } from "../version.js";
 import { importPrivateKeyPem } from "./keys.js";
 import { createRestEvidenceSource, REST_FIXATIONS_LIMITATION_WARNING } from "./rest-source.js";
+import { resolveEvidenceWindow } from "./window.js";
 
 export interface EvidenceExportOptions {
   /** Read the pack from a local StoragePort data directory (mutually exclusive with `rest`). */
@@ -22,7 +23,9 @@ export interface EvidenceExportOptions {
   /** Extra REST request headers ("name:value", repeatable) -- e.g. tenant / auth. REST mode only. */
   headers?: string[];
   tenant?: string;
+  /** Lower bound: ISO 8601 date or timestamp; a date-only value starts that UTC day (see `resolveEvidenceWindow`). */
   since: string;
+  /** Upper bound: ISO 8601 date or timestamp; a date-only value INCLUDES that whole UTC day. */
   until: string;
   /** Path to a PEM-encoded Ed25519 private key (PKCS8, `-----BEGIN PRIVATE KEY-----`). */
   privateKeyPath: string;
@@ -84,6 +87,9 @@ export async function runEvidenceExport(opts: EvidenceExportOptions): Promise<Ev
     throw new Error("Specify only one of --data-dir or --rest, not both");
   }
 
+  // Validated first (before any key or storage access): a bad window is a usage error, not a signed pack.
+  const window = resolveEvidenceWindow({ since: opts.since, until: opts.until });
+
   const restFixationsWarning = opts.rest != null ? REST_FIXATIONS_LIMITATION_WARNING : undefined;
   const restHeaders = opts.rest != null ? parseHeaderArgs(opts.headers) : undefined;
   const scopeTenant = opts.rest != null ? resolveRestTenant(restHeaders!, opts.tenant) : opts.tenant;
@@ -111,7 +117,7 @@ export async function runEvidenceExport(opts: EvidenceExportOptions): Promise<Ev
 
   const pack = await buildEvidencePack({
     source,
-    scope: { tenant: scopeTenant, since: opts.since, until: opts.until },
+    scope: { tenant: scopeTenant, since: window.since, until: window.until },
     generator: `kohaku-cli/${CLI_VERSION}`,
     signer: { alg: "Ed25519", keyId },
     allowIncomplete: opts.allowIncomplete,

@@ -22,6 +22,7 @@ import {
 import {
   type EvidenceExportResult,
   type EvidenceKeygenResult,
+  EvidenceUsageError,
   runEvidenceExport,
   runEvidenceKeygen,
   runEvidenceVerify,
@@ -356,8 +357,16 @@ evidence
     "Restrict the export to this tenant. In --rest mode this must match the x-kohaku-tenant --header " +
       "(the header is what actually scopes the request); omit --tenant to have it derived from the header",
   )
-  .requiredOption("--since <iso8601>", "Inclusive lower bound of the exported lineage window")
-  .requiredOption("--until <iso8601>", "Inclusive upper bound of the exported lineage window")
+  .requiredOption(
+    "--since <iso8601>",
+    "Inclusive lower bound of the exported lineage window: a date (YYYY-MM-DD, start of that UTC day) " +
+      "or a timestamp with a Z / ±hh:mm offset",
+  )
+  .requiredOption(
+    "--until <iso8601>",
+    "Inclusive upper bound of the exported lineage window: a date (YYYY-MM-DD, which INCLUDES that whole " +
+      "UTC day) or a timestamp with a Z / ±hh:mm offset",
+  )
   .requiredOption("--private-key <pem>", "Path to a PEM-encoded Ed25519 private key (PKCS8)")
   .requiredOption("--out <dir>", "Output directory for the pack")
   .option(
@@ -390,7 +399,10 @@ evidence
           allowIncomplete: opts.allowIncomplete === true,
         });
       } catch (e) {
-        program.error(e instanceof Error ? e.message : String(e));
+        // A bad --since / --until is a usage error (exit 2, like `evidence verify`); anything else is 1.
+        program.error(e instanceof Error ? e.message : String(e), {
+          exitCode: e instanceof EvidenceUsageError ? 2 : 1,
+        });
         return;
       }
       const c = result.manifest.counts;
