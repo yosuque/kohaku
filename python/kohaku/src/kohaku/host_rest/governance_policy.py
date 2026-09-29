@@ -63,6 +63,11 @@ class GovernanceOperation:
     kind: str
     artifactId: str | None = None
     intentHash: str | None = None
+    action: str | None = None
+    """The governed Action a `action.approve` operation would approve (the POST /approvals body's `action`),
+    so an `authorize_governance` hook can scope who may approve which action. Set only for that kind. The
+    bundled `create_governance_policy` is role-based and ignores it; a product hook that needs per-action
+    approvers reads it."""
 
 
 @dataclass(frozen=True)
@@ -131,6 +136,8 @@ def _matches_pattern(pattern: str, kind: str) -> bool:
 
 def governance_policy_from_roles(
     roles_for: Callable[[str | None], dict[str, list[str]]],
+    *,
+    tenant_of: Callable[[Principal], str | None] | None = None,
 ) -> GovernanceEvaluator:
     """Builds a GovernanceEvaluator from a per-tenant roles resolver (host_core's
     PolicyRuntime.roles_for, or any function of that same shape) instead of a static
@@ -140,12 +147,17 @@ def governance_policy_from_roles(
 
     roles_for is resolved fresh on every evaluation (not memoized here): delegates to
     create_governance_policy for the actual matching so the two evaluators never drift in behavior.
+
+    `tenant_of` is forwarded to create_governance_policy: without it, a per-tenant role grant is resolved
+    against the tenant the *request* names, so a principal holding the role in tenant A could be granted
+    through tenant B's table. With it, `tenant_of(principal)` must equal the resolved tenant before any role
+    is consulted.
     """
 
     def evaluate(
         principal: Principal, operation: GovernanceOperation, tenant: str | None = None
     ) -> bool:
-        return create_governance_policy(GovernancePolicy(roles=roles_for(tenant)))(
+        return create_governance_policy(GovernancePolicy(roles=roles_for(tenant), tenant_of=tenant_of))(
             principal, operation, tenant
         )
 
