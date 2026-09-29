@@ -307,8 +307,10 @@ export interface ApprovalPort {
  * Optional persistence for single-use enforcement of approval tokens, mirroring
  * `CapabilityRevocationStore`'s role for capability tokens. When an `ApprovalPort` is configured with
  * one, `verifyApproval` MUST call `consume` exactly once per verification attempt and deny (`{ ok:
- * false }`) when it returns `false` (already consumed) or throws (store failure — fail-closed, per
- * `ApprovalPort.verifyApproval`'s own contract). An `ApprovalPort` given no store keeps a token usable
+ * false }`) when it returns `false` (already consumed). A `consume` that throws (store failure) is an
+ * infrastructure failure `verifyApproval` cannot classify: it propagates the throw, and the host treats a
+ * thrown `verifyApproval` as a denial (fail-closed, per `ApprovalPort.verifyApproval`'s own contract). An
+ * `ApprovalPort` given no store keeps a token usable
  * repeatedly until it expires (the caller's choice, e.g. for a demo/dev environment).
  */
 export interface ApprovalStore {
