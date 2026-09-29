@@ -6,6 +6,7 @@ import {
   type ApprovalRequiredInfo,
   canonicalStringify,
   type DomainPort,
+  findUnsafeActionParamKeys,
   type JsonObject,
   JsonObjectSchema,
   type Principal,
@@ -889,9 +890,13 @@ function registerActionTool(ctx: ToolContext): void {
         "(app-only) Executes a declared action with a capability and returns a result with a side-effect declaration",
       inputSchema: z.object({
         action: z.string(),
-        // JsonObjectSchema (not a bare z.record) caps nesting depth the same way host-rest's ActionBodySchema
-        // does, for the same reason (canonicalStringify / persistence downstream of an unbounded payload).
-        payload: JsonObjectSchema.default({}),
+        // Deliberately not JsonObjectSchema here: zod's record/object parsing silently drops an own
+        // "__proto__" key, so the ActionGate (and its ACT-PRM-001 unsafe-key rejection) would never see it.
+        // The handler validates the raw value itself, first with JsonObjectSchema (the same nesting-depth
+        // cap host-rest's ActionBodySchema has, for the same reason: canonicalStringify / persistence
+        // downstream of an unbounded payload) and then with findUnsafeActionParamKeys on the raw value.
+        // `.meta` keeps the advertised JSON Schema an object.
+        payload: z.any().default({}).meta({ type: "object", additionalProperties: true }),
         capability: z.string(),
         // Governed actions (design.md #62/#63, SPEC ACT-CNF-001/ACT-APR-001): symmetric with the REST
         // surface's ActionBodySchema.confirmed/.approval.
@@ -901,7 +906,7 @@ function registerActionTool(ctx: ToolContext): void {
       // This tool executes a write rather than opening an iframe view, so it has no resourceUri (same as resolve_binding).
       _meta: toolUiMeta({ visibility: ["app"] }),
     },
-    async ({ action, payload, capability, confirmed, approval }, extra) =>
+    async ({ action, payload: rawPayload, capability, confirmed, approval }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_action`, extra, async () => {
         // DomainPort.invoke carries no cancellation primitive (unlike the compose path's L1/L2 LLM calls), so
         // there is nothing to propagate the abort signal into once the write is under way — but a call already
@@ -913,6 +918,14 @@ function registerActionTool(ctx: ToolContext): void {
         }
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
+        const parsedPayload = JsonObjectSchema.safeParse(rawPayload);
+        if (!parsedPayload.success) {
+          return toolError("payload must be a JSON object within the maximum nesting depth");
+        }
+        const payload = parsedPayload.data;
+        // Scanned on the raw value (its depth was just bounded by the parse above): the parsed copy has
+        // already lost any own "__proto__" key. Reported as the gate's own `invalid` outcome further down.
+        const unsafePayloadKeys = findUnsafeActionParamKeys(rawPayload as JsonObject);
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "action");
         if (rateLimited != null) return rateLimited;
@@ -964,14 +977,17 @@ function registerActionTool(ctx: ToolContext): void {
           });
           return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
         }
-        const gateResult = await ctx.actionGate.check({
-          descriptor: entry.descriptor,
-          paramsSchema: entry.paramsSchema,
-          payload: payload as JsonObject,
-          confirmed,
-          approval,
-          requesterId: resolvedPrincipal.id,
-        });
+        const gateResult: hostCore.ActionGateResult =
+          unsafePayloadKeys.length > 0
+            ? { kind: "invalid", issues: unsafePayloadKeys }
+            : await ctx.actionGate.check({
+                descriptor: entry.descriptor,
+                paramsSchema: entry.paramsSchema,
+                payload: payload as JsonObject,
+                confirmed,
+                approval,
+                requesterId: resolvedPrincipal.id,
+              });
         const gated = await handleActionGateResult(ctx.deps, gateResult, {
           action,
           payload: payload as JsonObject,

@@ -2491,11 +2491,8 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
 
   it("rejects a constructor key in the payload with a structured ACTION_PARAMS_INVALID error, without invoking the domain", async () => {
     // Regression test for a prototype-chain lookup bug in validateActionParams (spec-core). Uses
-    // "constructor" rather than "__proto__": the tool input schema's JsonObjectSchema (spec-core, backed
-    // by zod's z.record) already strips an incoming "__proto__" key on its own (zod 4's own
-    // prototype-pollution guard) before this ever reaches the action gate, but does not strip
-    // "constructor" / "prototype" / "toString" -- those reach validateActionParams as genuine own
-    // properties, the same shape a real attacker payload would have.
+    // "constructor" as the plain own-property shape; the "__proto__" key, which a schema-parsed copy of the
+    // payload silently drops, has its own test below.
     const { client, domain } = await connectGoverned();
     const composed = await client.callTool({
       name: "kohaku_compose",
@@ -2517,6 +2514,51 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     expect(sc.error?.issues).toEqual([
       { path: "constructor", code: "unsafeKey", message: 'the property name "constructor" is not allowed' },
     ]);
+    expect(domain.invocations).toHaveLength(0);
+    await client.close();
+  });
+
+  it("rejects a __proto__ key in the payload with a structured ACTION_PARAMS_INVALID error, without invoking the domain", async () => {
+    // The tool input schema's JsonObjectSchema (zod's z.record) silently drops an own "__proto__" key while
+    // parsing, so the ActionGate would never see it; the handler must scan the raw arguments first.
+    const { client, domain } = await connectGoverned();
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    // JSON.parse (unlike an object literal) makes "__proto__" a genuine own property, as on the wire.
+    const payload = JSON.parse('{"note":"hi","__proto__":{"polluted":true}}') as Record<string, unknown>;
+    const result = await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "annotate", payload, capability, confirmed: true },
+    });
+    expect(result.isError).toBe(true);
+    const sc = result.structuredContent as { error?: { code?: string; issues?: unknown[] } };
+    expect(sc.error?.code).toBe("ACTION_PARAMS_INVALID");
+    expect(sc.error?.issues).toEqual([
+      { path: "__proto__", code: "unsafeKey", message: 'the property name "__proto__" is not allowed' },
+    ]);
+    expect(domain.invocations).toHaveLength(0);
+    await client.close();
+  });
+
+  it("rejects a non-object or over-deep payload as a tool error, without invoking the domain", async () => {
+    const { client, domain } = await connectGoverned();
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    let deep: Record<string, unknown> = { note: "x" };
+    for (let i = 0; i < 200; i++) deep = { nested: deep };
+    for (const payload of [["not", "an", "object"], deep]) {
+      const result = await client.callTool({
+        name: "kohaku_action",
+        arguments: { action: "annotate", payload, capability, confirmed: true },
+      });
+      expect(result.isError).toBe(true);
+    }
     expect(domain.invocations).toHaveLength(0);
     await client.close();
   });
