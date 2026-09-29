@@ -38,6 +38,9 @@ import { createSpecCache } from "./spec-cache.js";
  *   (= a re-read) (acceptable for demo use).
  * - listLineage likewise reads the in-memory array, so lineage appended by another process is invisible.
  *   Promotion-threshold aggregation (evaluateAndList) and fixation proposals also target only this process's lineage.
+ * - appendLineage goes through the same keyed mutex (keyed by lineage.jsonl's path), so the file's line order,
+ *   the in-memory array order and the seq `pageLineage` hands out as a cursor always agree, even for concurrent
+ *   appends, and one id is never written twice.
  * - lineage is only an in-memory array + appends to lineage.jsonl, with no cap or rotation / compaction. In long-term
  *   operation both the file and the startup load time grow without bound (a known constraint). For production use, the
  *   assumption is to swap in a dedicated event store / DB.
@@ -68,24 +71,26 @@ export function createFileStoragePort(dataDir: string): StoragePort {
       specCache.put(key, spec, ttlSeconds);
     },
     async appendLineage(event) {
-      // Idempotent by id: appending an event whose id already exists (in memory or loaded from disk) is a
-      // no-op, so a retried write does not duplicate the JSONL line or move the entry's position.
-      if (lineageIds.has(event.id)) return;
-      // Append with async I/O so the compose response is not blocked by the disk write (concurrent composes do not
-      // serialize). Reflect to memory only after the append succeeds (so memory and disk do not diverge on append
-      // failure); the on-exception behavior is the same as the synchronous version. Under concurrent appends the
-      // completion order (= the in-memory array order and the JSONL line order) is not guaranteed to follow ts
-      // order — a known limit of this file port; order-sensitive consumers pick by ts comparison, not by position.
-      await appendFile(lineagePath, JSON.stringify(event) + "\n");
-      lineageIds.add(event.id);
-      lineage.push(event);
+      // Serialized through the same in-process keyed mutex as the snapshot files: the id check, the file
+      // append and the array push run as one unit, so the JSONL line order always equals the in-memory
+      // array order (which `pageLineage`'s cursor and a restart's reload both rely on), and two concurrent
+      // appends of one id cannot both pass the check. Idempotent by id: appending an event whose id already
+      // exists (in memory or loaded from disk) is a no-op, so a retried write does not duplicate the JSONL
+      // line or move the entry's position. Async I/O keeps the disk write off the compose response's path.
+      // Memory is updated only after the append succeeds, so memory and disk do not diverge on failure.
+      await fileLock(lineagePath, async () => {
+        if (lineageIds.has(event.id)) return;
+        await appendFile(lineagePath, JSON.stringify(event) + "\n");
+        lineageIds.add(event.id);
+        lineage.push(event);
+      });
     },
     async listLineage(filter) {
       return filterLineage(lineage, filter);
     },
     async pageLineage(req) {
       // `lineage`'s array index + 1 matches lineage.jsonl's own line number: every appendLineage writes
-      // the line and pushes to the array in lockstep, and loadJsonl reconstructs the array in file order
+      // the line and pushes to the array in lockstep (serialized, see there), and loadJsonl reconstructs the array in file order
       // at startup (skipping only a genuinely corrupted line, which shifts later seqs by one -- an
       // accepted edge case shared with the rest of this port's "no cap or rotation" constraints, see the
       // module doc comment above).

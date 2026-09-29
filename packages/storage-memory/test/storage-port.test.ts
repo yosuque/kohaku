@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -201,6 +201,35 @@ describe("createFileStoragePort: fixation tenant isolation", () => {
     // Also verify against a reload from disk (the file itself must hold all 20 entries, not just memory).
     const reloaded = createFileStoragePort(dir);
     expect((await reloaded.listFixations()).map((f) => f.intentHash).sort()).toEqual([...hashes].sort());
+  });
+
+  it("concurrent appendLineage calls keep file order, memory order and cursor seq identical, and never write an id twice", async () => {
+    const dir = tmpDir("kohaku-storage-");
+    const storage = createFileStoragePort(dir);
+    const ids = Array.from({ length: 30 }, (_, i) => `e${String(i).padStart(3, "0")}`);
+    const event = (id: string): LineageEventRecord => ({
+      id,
+      ts: "2026-01-01T00:00:00.000Z",
+      actor: { kind: "system" },
+      type: "view.composed",
+      payload: {},
+    });
+    // Every id is appended twice in the same tick: without serialization both copies pass the id check.
+    await Promise.all([...ids, ...ids].map((id) => storage.appendLineage(event(id))));
+
+    const inMemory = (await storage.listLineage({ limit: 1000 })).map((e) => e.id);
+    const onDisk = readFileSync(join(dir, "lineage.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => (JSON.parse(line) as LineageEventRecord).id);
+    expect(new Set(inMemory).size).toBe(ids.length);
+    expect(onDisk).toEqual(inMemory);
+
+    // A cursor taken before a restart means the same position after it (array order == file order).
+    const page = await storage.pageLineage!({ pageSize: 10 });
+    const reloaded = createFileStoragePort(dir);
+    const resumed = await reloaded.pageLineage!({ pageSize: 10, cursor: page.nextCursor });
+    expect(resumed.events.map((e) => e.id)).toEqual(inMemory.slice(10, 20));
   });
 
   it("listLineage returns an empty array for limit <= 0 (symmetric with Python; prevents slice(-0) returning all. D1)", async () => {
