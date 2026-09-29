@@ -13,8 +13,11 @@ all of this for you in one shot -- see "Even faster: from a CSV" below.
 ```bash
 npm install @kohaku-ui/host @kohaku-ui/host-mcp-apps @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/mcp-renderer @kohaku-ui/spec-core @modelcontextprotocol/server zod
 npm install -D tsx
+npm pkg set type=module                            # server.ts uses top-level await, which needs ESM
 npx @kohaku-ui/cli scaffold ports --out ./kohaku   # a DomainPort + an Intent catalog, as files to fill in
 ```
+
+`scaffold ports` also writes `kohaku/server.ts`, a REST host on `@hono/node-server` (not installed above). This path does not use it — the MCP server below replaces it — so delete it or leave it alone; don't start it.
 
 ```ts
 import { createKohakuHost } from "@kohaku-ui/host";
@@ -55,21 +58,21 @@ Save it as `server.ts`. You do not start it yourself: an MCP host launches it as
 **Register it with a host.** The tool for each Intent is its canonical name with the dot replaced by an underscore (`sales.summary` in the snippet → `sales_summary`; the scaffold's placeholder `example.summary` → `example_summary`).
 
 - **Claude Code:** `claude mcp add --env KOHAKU_CAPABILITY_SECRET=<secret> my-product -- npx tsx ./server.ts`
-- **Claude Desktop** does not read `claude mcp add`; edit its `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`) and restart Claude Desktop. It does not inherit your shell's `PATH`, so use absolute paths:
+- **Claude Desktop** does not read `claude mcp add`; edit its `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`) and restart Claude Desktop. It does not inherit your shell's `PATH`, so `npx` would not resolve either: launch `node` on tsx's own entry point, with absolute paths throughout (`kohaku init --mcp` generates the same form):
 
 ```json
 {
   "mcpServers": {
     "my-product": {
-      "command": "/absolute/path/to/npx",
-      "args": ["tsx", "/absolute/path/to/server.ts"],
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/node_modules/tsx/dist/cli.mjs", "/absolute/path/to/server.ts"],
       "env": { "KOHAKU_CAPABILITY_SECRET": "<secret>" }
     }
   }
 }
 ```
 
-Then ask the model to call `sales_summary` (or whichever tool your catalog produced). The host receives a UI Spec plus a text summary; an MCP Apps-capable host (Claude Desktop, claude.ai, ChatGPT) renders the Spec in an iframe with the bundled renderer, a terminal host that cannot draw an iframe (Claude Code, Codex CLI) gets the text fallback plus `kohaku_render_snapshot` for a self-contained HTML file.
+Then ask the model to call `sales_summary` (or whichever tool your catalog produced). The host receives a UI Spec plus a text summary; an MCP Apps-capable host (Claude Desktop, claude.ai, ChatGPT) renders the Spec in an iframe with the bundled renderer, a terminal host that cannot draw an iframe (Claude Code, Codex CLI) gets the text fallback. `kohaku_render_snapshot` (a self-contained HTML file for such hosts) is registered only when you pass `snapshotWriter` to `attachKohakuMcp` — the snippet above does not, so add one (a function that writes the HTML somewhere and returns its path; `kohaku init --mcp`'s generated server is an example) to enable it.
 
 What these three pieces are:
 

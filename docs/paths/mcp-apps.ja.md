@@ -11,8 +11,11 @@
 ```bash
 npm install @kohaku-ui/host @kohaku-ui/host-mcp-apps @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/mcp-renderer @kohaku-ui/spec-core @modelcontextprotocol/server zod
 npm install -D tsx
+npm pkg set type=module                            # server.ts はトップレベル await を使うので ESM が必要
 npx @kohaku-ui/cli scaffold ports --out ./kohaku   # DomainPort と Intent カタログを埋めるためのファイル
 ```
+
+`scaffold ports` は `@hono/node-server` 上の REST ホストである `kohaku/server.ts` も書き出します(上ではインストールしていません)。このパスでは使いません — 下の MCP サーバーがその代わりです — ので、削除するか放置してください。起動はしないでください。
 
 ```ts
 import { createKohakuHost } from "@kohaku-ui/host";
@@ -53,21 +56,21 @@ await server.connect(new StdioServerTransport());
 **ホストへの登録。** 各 Intent のツール名は、正規名のドットをアンダースコアに置き換えたものです(スニペットの `sales.summary` → `sales_summary`、scaffold のプレースホルダ `example.summary` → `example_summary`)。
 
 - **Claude Code:** `claude mcp add --env KOHAKU_CAPABILITY_SECRET=<secret> my-product -- npx tsx ./server.ts`
-- **Claude Desktop** は `claude mcp add` を読みません。`claude_desktop_config.json`(macOS: `~/Library/Application Support/Claude/`、Windows: `%APPDATA%\Claude\`)を編集して、Claude Desktop を再起動します。シェルの `PATH` は引き継がれないので、絶対パスを使ってください。
+- **Claude Desktop** は `claude mcp add` を読みません。`claude_desktop_config.json`(macOS: `~/Library/Application Support/Claude/`、Windows: `%APPDATA%\Claude\`)を編集して、Claude Desktop を再起動します。シェルの `PATH` は引き継がれないので `npx` も解決できません。tsx 自身のエントリポイントを `node` で起動し、パスはすべて絶対パスにしてください(`kohaku init --mcp` も同じ形式を生成します)。
 
 ```json
 {
   "mcpServers": {
     "my-product": {
-      "command": "/absolute/path/to/npx",
-      "args": ["tsx", "/absolute/path/to/server.ts"],
+      "command": "/absolute/path/to/node",
+      "args": ["/absolute/path/to/node_modules/tsx/dist/cli.mjs", "/absolute/path/to/server.ts"],
       "env": { "KOHAKU_CAPABILITY_SECRET": "<secret>" }
     }
   }
 }
 ```
 
-あとはモデルに `sales_summary`(カタログから生成されたツール名)を呼ばせます。ホストは UI Spec とテキスト要約を受け取り、MCP Apps 対応ホスト(Claude Desktop / claude.ai / ChatGPT)は同梱レンダラーで Spec を iframe に描画し、iframe を描画できないターミナルホスト(Claude Code / Codex CLI)はテキストのフォールバックと、自己完結 HTML が要るなら `kohaku_render_snapshot` を受け取ります。
+あとはモデルに `sales_summary`(カタログから生成されたツール名)を呼ばせます。ホストは UI Spec とテキスト要約を受け取り、MCP Apps 対応ホスト(Claude Desktop / claude.ai / ChatGPT)は同梱レンダラーで Spec を iframe に描画し、iframe を描画できないターミナルホスト(Claude Code / Codex CLI)はテキストのフォールバックを受け取ります。`kohaku_render_snapshot`(そうしたホスト向けの自己完結 HTML ファイル)は、`attachKohakuMcp` に `snapshotWriter` を渡したときだけ登録されます — 上のスニペットは渡していないので、有効にするには追加してください(HTML をどこかへ書き出してそのパスを返す関数。`kohaku init --mcp` が生成するサーバーが実例です)。
 
 この 3 つの正体:
 
