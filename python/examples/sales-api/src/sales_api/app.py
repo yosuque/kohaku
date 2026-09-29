@@ -569,7 +569,8 @@ async def create_app(
     if policy_file is not None:
 
         async def _audit_policy_applied(event: PolicyAppliedEvent, actor: str | None) -> None:
-            # Records policy.applied (lineage, task 9) on every effective change. actor is reload()'s own
+            # Records policy.applied (lineage) once for the starting file (no actor, see audit_startup below)
+            # and again on every effective reload. actor is reload()'s own
             # free-string label (an operator id, "system", ...); mapped onto lineage's typed LineageActor
             # shape as a "system" actor carrying that label as its id (a policy reload is an
             # operational/config action, never a "model"-kind actor, and this demo has no
@@ -611,8 +612,9 @@ async def create_app(
             audit=_audit_policy_applied,
             on_rate_limit_error=on_rate_limit_error,
         )
+        await policy_runtime.audit_startup()
 
-    def _lang_overrides(lang: str) -> dict[str, Any]:
+    def _build_lang_overrides(lang: str) -> dict[str, Any]:
         # The EN/JA function-shaped overrides (layered on top of shared -- or, when policy_runtime is
         # wired, on top of policy_runtime.policy_for's result -- by _policy_for_session below), selected
         # per request via session.locale. EN is the historical default policy verbatim -- its
@@ -637,6 +639,17 @@ async def create_app(
             # few-shot self-reinforcement (3-9): supplies fixated (review-passed) Specs as examples for L1 generation.
             "fewShot": create_fixation_fewshot(storage),
         }
+
+    _lang_overrides_cache: dict[str, dict[str, Any]] = {}
+
+    def _lang_overrides(lang: str) -> dict[str, Any]:
+        # Built once per language and reused by every _policy_for_session call: the few-shot source keeps a
+        # short-lived fixation-list cache, which a fresh instance per request would never get to reuse.
+        overrides = _lang_overrides_cache.get(lang)
+        if overrides is None:
+            overrides = _build_lang_overrides(lang)
+            _lang_overrides_cache[lang] = overrides
+        return overrides
 
     def _policy_for_session(session: SessionContext | None) -> ComposePolicy:
         # The effective ComposePolicy for one session: the tenant's Policy-as-Code overrides (when

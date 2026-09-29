@@ -14,7 +14,10 @@ export type BindingErrorCode =
   // confirmed: true (tier "confirm") or a valid unused approval token (tier "approve"), and neither was
   // satisfied (host's 403 APPROVAL_REQUIRED). Distinguished from UNAUTHORIZED (a genuine capability
   // denial) so a caller can drive an "awaitingApproval" phase instead of a hard failure.
-  | "APPROVAL_REQUIRED";
+  | "APPROVAL_REQUIRED"
+  // The host rate limited the request (HTTP 429, SPEC REST-RL-001). Distinguished from RESOLVE_FAILED so a
+  // caller can back off for `retryAfterMs` instead of treating it as a hard failure.
+  | "RATE_LIMITED";
 
 export class BindingError extends Error {
   readonly code: BindingErrorCode;
@@ -29,6 +32,11 @@ export class BindingError extends Error {
    * ACT-APR-001) — mirrors `@kohaku-ui/client`'s `KohakuHostError.approval`.
    */
   readonly approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+  /**
+   * The host's suggested backoff in milliseconds. Only present on a RATE_LIMITED error whose 429 response
+   * carried `error.retryAfterMs` (SPEC §6.1, REST-RL-001).
+   */
+  readonly retryAfterMs?: number;
 
   constructor(
     code: BindingErrorCode,
@@ -38,6 +46,7 @@ export class BindingError extends Error {
       cause?: unknown;
       issues?: ActionParamIssue[];
       approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+      retryAfterMs?: number;
     } = {},
   ) {
     super(message, { cause: opts.cause });
@@ -46,5 +55,6 @@ export class BindingError extends Error {
     this.status = opts.status;
     if (opts.issues != null) this.issues = opts.issues;
     if (opts.approval != null) this.approval = opts.approval;
+    if (opts.retryAfterMs != null) this.retryAfterMs = opts.retryAfterMs;
   }
 }

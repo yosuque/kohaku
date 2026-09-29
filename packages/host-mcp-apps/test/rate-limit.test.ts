@@ -11,7 +11,7 @@ import type {
 } from "@kohaku-ui/spec-core";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, McpServer } from "@modelcontextprotocol/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { attachKohakuToMcpServer, type McpHostDeps } from "../src/index.js";
 
 // McpHostDeps.rateLimiter (port of the REST profile's rate-limit-middleware.test.ts, adapted to tool
@@ -301,4 +301,138 @@ describe("MCP rate limiting: bucket key", () => {
       expect(calls[0]?.principal).toBe("anonymous");
     },
   );
+});
+
+describe("MCP rate limiting: rateLimitKey hook", () => {
+  it("keys the bucket by rateLimitKey(extra), taking precedence over resolvePrincipal and sessionId", async () => {
+    const { limiter, calls } = stubRateLimiter({ allow: true });
+    const client = await connectClient(
+      baseDeps({
+        rateLimiter: limiter,
+        resolvePrincipal: () => ({ id: "principal-id" }),
+        rateLimitKey: async (extra) => `ip:${String(extra.mcpReq._meta?.["ip"] ?? "unknown")}`,
+      }),
+    );
+    await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Monthly revenue trend" },
+      _meta: { ip: "10.0.0.1" },
+    });
+    await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Monthly revenue trend" },
+      _meta: { ip: "10.0.0.2" },
+    });
+    expect(calls.map((c) => c.principal)).toEqual(["ip:10.0.0.1", "ip:10.0.0.2"]);
+  });
+
+  it("a throwing rateLimitKey is fail-closed: a tool error, reported to onError, and the limiter is never consulted", async () => {
+    const { limiter, calls } = stubRateLimiter({ allow: true });
+    const errors: { endpoint: string; error: unknown }[] = [];
+    const client = await connectClient(
+      baseDeps({
+        rateLimiter: limiter,
+        rateLimitKey: () => {
+          throw new Error("key lookup down");
+        },
+        onError: (info) => void errors.push(info),
+      }),
+    );
+    const result = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Monthly revenue trend" },
+    });
+    expect(result.isError).toBe(true);
+    expect(calls).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.endpoint).toBe("kohaku_compose");
+  });
+});
+
+describe("MCP rate limiting: onRateLimited observer", () => {
+  it("is notified on denial with the bucket key and the call's correlation id, and not on an allowed call", async () => {
+    const seen: unknown[] = [];
+    const denied = await connectClient(
+      baseDeps({
+        rateLimiter: stubRateLimiter({ allow: false, retryAfterMs: 1000 }).limiter,
+        rateLimitKey: () => "client-7",
+        onRateLimited: (info) => void seen.push(info),
+      }),
+    );
+    await denied.callTool({
+      name: "kohaku_action",
+      arguments: { action: "annotate", payload: {}, capability: "cap" },
+    });
+    expect(seen).toEqual([
+      {
+        principal: "client-7",
+        routeClass: "action",
+        requestId: expect.stringMatching(/^mcp:[0-9a-f-]{36}:\d+$/),
+      },
+    ]);
+
+    const allowedSeen: unknown[] = [];
+    const allowed = await connectClient(
+      baseDeps({
+        rateLimiter: stubRateLimiter({ allow: true }).limiter,
+        onRateLimited: (info) => void allowedSeen.push(info),
+      }),
+    );
+    await allowed.callTool({ name: "kohaku_compose", arguments: { question: "Monthly revenue trend" } });
+    expect(allowedSeen).toEqual([]);
+  });
+
+  it("never awaits the observer: a hung one cannot delay the RATE_LIMITED result", async () => {
+    const client = await connectClient(
+      baseDeps({
+        rateLimiter: stubRateLimiter({ allow: false }).limiter,
+        onRateLimited: () => new Promise<void>(() => {}),
+      }),
+    );
+    const result = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Monthly revenue trend" },
+    });
+    expect(result.isError).toBe(true);
+  });
+});
+
+describe("MCP rate limiting: unkeyed-limiter startup warning", () => {
+  async function freshAttach(deps: McpHostDeps): Promise<void> {
+    vi.resetModules();
+    const mod = await import("../src/index.js");
+    mod.attachKohakuToMcpServer(new McpServer({ name: "warn-test", version: "0.1.0" }), deps, {
+      rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>",
+    });
+  }
+
+  it("warns once per process when rateLimiter is wired without resolvePrincipal or rateLimitKey", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const deps = baseDeps({ rateLimiter: stubRateLimiter({ allow: true }).limiter });
+      await freshAttach(deps);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/rateLimitKey/);
+      const mod = await import("../src/index.js");
+      mod.attachKohakuToMcpServer(new McpServer({ name: "warn-test-2", version: "0.1.0" }), deps, {
+        rendererHtml: "x",
+      });
+      expect(warn).toHaveBeenCalledTimes(1); // a second (per-request) attach stays silent
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays silent when the limiter is keyed (resolvePrincipal or rateLimitKey) or absent", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { limiter } = stubRateLimiter({ allow: true });
+      await freshAttach(baseDeps({ rateLimiter: limiter, resolvePrincipal: () => ({ id: "u" }) }));
+      await freshAttach(baseDeps({ rateLimiter: limiter, rateLimitKey: () => "k" }));
+      await freshAttach(baseDeps());
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

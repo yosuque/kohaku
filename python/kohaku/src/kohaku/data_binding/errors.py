@@ -21,6 +21,9 @@ type BindingErrorCode = Literal[
     # satisfied (host's 403 APPROVAL_REQUIRED). Distinguished from UNAUTHORIZED (a genuine capability
     # denial) so a caller can drive an "awaiting_approval" phase instead of a hard failure.
     "APPROVAL_REQUIRED",
+    # The host rate limited the request (HTTP 429, SPEC REST-RL-001). Distinguished from RESOLVE_FAILED so
+    # a caller can back off for `retry_after_ms` instead of treating it as a hard failure.
+    "RATE_LIMITED",
 ]
 
 
@@ -33,6 +36,7 @@ class BindingError(Exception):
         status: int | None = None,
         issues: list[ActionParamIssue] | None = None,
         approval: ApprovalRequiredInfo | None = None,
+        retry_after_ms: float | None = None,
     ) -> None:
         super().__init__(message)
         self.code: BindingErrorCode = code
@@ -43,3 +47,6 @@ class BindingError(Exception):
         self.approval = approval
         """The pending-approval descriptor (kohaku.spec's ApprovalRequiredInfo). Only present on an
         APPROVAL_REQUIRED error (SPEC §6.1, ACT-APR-001)."""
+        self.retry_after_ms = retry_after_ms
+        """The host's suggested backoff in milliseconds. Only present on a RATE_LIMITED error whose 429
+        response carried `error.retryAfterMs` (SPEC §6.1, REST-RL-001)."""

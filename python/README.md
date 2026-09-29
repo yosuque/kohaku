@@ -142,7 +142,7 @@ correlation id (`_correlation_id_of`, U2) is `mcp:<sessionId>:<jsonrpc id>` — 
 `_meta.traceparent` (SEP-414), the same rule TS enforces: a W3C trace-id is shared by an entire trace, so
 deriving the correlation id from it would collapse every tool call in one conversation onto the same id. TS's
 `mcpCorrelationId(extra)` reads a real transport session id when one is available (`ServerContext.sessionId`),
-omitting the session segment entirely (`mcp:<jsonrpc id>`) for a session-less transport (stdio). This port's
+using a fresh per-call UUID in place of the session segment (`mcp:<uuid>:<jsonrpc id>`) for a session-less transport (stdio, stateless Streamable HTTP). This port's
 `mcp` SDK exposes no public transport session id to a request handler at all — `ServerRequestContext.session`
 is itself a fresh `ServerSession` wrapper the SDK constructs *per request*, not per connection (verified
 empirically: two calls on the same connection produce two `ctx.session` objects that differ by identity), so
@@ -430,14 +430,15 @@ Three Python-specific divergences from the TS port, none of them wire-visible:
   entirely into a *new* `check_with_context` once `compose.budget.dailyTokens` layers its own check on top
   (`policy.py`'s `_build_effective_budget`), so a base policy that only ever set the plain `check` field is
   never silently dropped.
-- **The MCP rate-limit bucket key has no session-id fallback step**: TS's key chain is
-  `principal.id -> sessionId -> "anonymous"`; Python's is `principal.id -> "anonymous"` only. The installed
-  `mcp` SDK's `ServerRequestContext` (what every `host_mcp` handler actually receives) exposes no public
-  per-connection session id — only the richer `Context` class has one, and `ServerRunner` does not
-  construct that class for handlers. This is a tracked, language-specific gap (not a design choice), the
-  same kind of gap this file's "Structure" section already documents for `McpErrorInfo.correlation_id`
-  (always the tool call's own JSON-RPC request id, never a per-connection session id) for the same
-  underlying SDK-accessor reason.
+- **The MCP rate-limit bucket key falls back to a per-connection id, not the transport session id**: TS's
+  key chain is `rateLimitKey -> principal.id -> sessionId -> "anonymous"`; Python's is
+  `rate_limit_key -> principal.id -> _session_correlation_prefix` (the opaque id it generates once per
+  connection). The installed `mcp` SDK's `ServerRequestContext` (what every `host_mcp` handler actually
+  receives) exposes no public per-connection session id — only the richer `Context` class has one, and
+  `ServerRunner` does not construct that class for handlers — so Python keys on its own per-connection id
+  instead. Either way an unkeyed limiter is only per-connection (Python) or one shared bucket (TS on
+  stateless HTTP / stdio): wire `rate_limit_key` / `resolve_principal` for a per-caller limit;
+  `attach_kohaku_to_mcp_server` warns once when a `rate_limiter` has neither.
 
 ## Governed actions (symmetric with TS)
 

@@ -40,6 +40,7 @@ from kohaku.host_core import (
     ActionGate,
     OperationIndexEntry,
     PolicyRateLimiterTakeParams,
+    RateLimitedInfo,
     TraceContext,
     get_lock,
 )
@@ -48,6 +49,7 @@ from kohaku.host_core import create_allowed_actions as _host_core_create_allowed
 from kohaku.host_core import create_operation_index as _host_core_create_operation_index
 from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import notify_hook as _host_core_notify_hook
+from kohaku.host_core import notify_hook_nowait as _host_core_notify_hook_nowait
 from kohaku.host_core import parse_trace_context as _parse_trace_context
 from kohaku.host_core.keyed_mutex import _locks as _locks
 from kohaku.spec import (
@@ -457,11 +459,14 @@ def _error(
     )
 
 
-def _rate_limited(retry_after_ms: float | None) -> Response:
+def _rate_limited(retry_after_ms: float | None, request_id: str) -> Response:
     headers = {"Retry-After": str(ceil(retry_after_ms / 1000))} if retry_after_ms is not None else None
     return JSONResponse(
         content=error_body(
-            "RATE_LIMITED", "rate limit exceeded", None, ceil(retry_after_ms) if retry_after_ms is not None else None
+            "RATE_LIMITED",
+            "rate limit exceeded",
+            request_id,
+            ceil(retry_after_ms) if retry_after_ms is not None else None,
         ),
         status_code=429,
         headers=headers,
@@ -473,14 +478,16 @@ async def check_rate_limit(
     principal: Principal,
     tenant: str | None,
     route_class: Literal["compose", "action", "resolve"],
+    request_id: str,
 ) -> Response | None:
     """Checks deps.rate_limiter (host_core's PolicyRateLimiter, typically PolicyRuntime.rate_limiter)
     before letting a request reach its route handler. Returns None (proceed) when deps.rate_limiter is
     unset or the limiter allows; a 429 RATE_LIMITED Response (with a Retry-After header when the
-    limiter reports one) otherwise. Port of routes/rate-limit.ts's createRateLimitMiddleware -- called
-    inline at the top of each route handler rather than as an ASGI middleware, since (unlike
+    limiter reports one) otherwise, carrying `request_id` in the envelope and notifying
+    `deps.on_rate_limited` (fire-and-forget). Port of routes/rate-limit.ts's createRateLimitMiddleware --
+    called inline at the top of each route handler rather than as an ASGI middleware, since (unlike
     RequestIdASGIMiddleware / BodyLimitASGIMiddleware, which apply to every route under the prefix)
-    this only applies to five specific paths.
+    this only applies to six specific paths.
     """
     if deps.rate_limiter is None:
         return None
@@ -489,7 +496,11 @@ async def check_rate_limit(
     )
     if result.allow:
         return None
-    return _rate_limited(result.retryAfterMs)
+    _host_core_notify_hook_nowait(
+        deps.on_rate_limited,
+        RateLimitedInfo(routeClass=route_class, requestId=request_id, tenant=tenant, principal=principal.id),
+    )
+    return _rate_limited(result.retryAfterMs, request_id)
 
 
 # A few levels looser than MAX_JSON_OBJECT_DEPTH, mirroring TS's routes/shared.ts MAX_REQUEST_BODY_DEPTH: the

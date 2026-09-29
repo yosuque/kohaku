@@ -7,9 +7,11 @@ import { DEFAULT_MAX_MEMORY_ENTRIES } from "./rate-limit.js";
  * caller: `check` reads `spent(tenant)` and denies once it reaches `dailyTokens`, `onUsage` calls
  * `record(tenant, usage.inputTokens + usage.outputTokens)` after a compose that actually generated.
  *
- * State lives only in this process and is lost on restart (the Zero-Port default, like
- * `createMemoryRateLimitStore`) — a product running several host instances, or that needs the ledger to
- * survive a restart, needs a shared backing store instead.
+ * **In-process only**: state lives only in this process and is lost on restart (the Zero-Port default,
+ * like `createMemoryRateLimitStore`). The interface is synchronous (`ComposeBudget.check` is a synchronous
+ * contract, see `createPolicyRuntime`), so it cannot front a shared backing store: with several host
+ * instances each keeps its own ledger, and `dailyTokens` is enforced per host instance (the fleet-wide
+ * total can reach `dailyTokens` times the instance count), not across the deployment.
  */
 export interface DailyTokenLedger {
   /** The current UTC day's cumulative tokens recorded for `key` (0 if the day has rolled over since the last `record`, or `key` is new). */
@@ -86,6 +88,9 @@ export function createDailyTokenLedger(
       pruneOnRollover(day);
       const entry = entries.get(key);
       if (entry == null || entry.day !== day) return 0;
+      // A read counts as a touch: a tenant that is over budget is only ever read (no compose runs, so
+      // nothing is recorded), and must not become the LRU victim and get its spend reset.
+      touch(key, entry);
       return entry.spentTokens;
     },
     record(key, tokens) {

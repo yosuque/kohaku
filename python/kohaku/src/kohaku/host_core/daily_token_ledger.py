@@ -32,14 +32,15 @@ def _default_now_ms() -> float:
 class DailyTokenLedger:
     """An in-process, per-key cumulative token ledger scoped to the current UTC calendar day. Backs a
     ComposeBudget.check_with_context/on_usage pair for a daily token budget (the Policy file's
-    compose.budget.dailyTokens, kohaku.spec.policy) -- create_policy_runtime (a later commit on this
-    branch) is the intended caller: check_with_context reads spent(tenant) and denies once it reaches
-    dailyTokens, on_usage calls record(tenant, usage.inputTokens + usage.outputTokens) after a compose
-    that actually generated.
+    compose.budget.dailyTokens, kohaku.spec.policy) -- create_policy_runtime is the intended caller:
+    check_with_context reads spent(tenant) and denies once it reaches dailyTokens, on_usage calls
+    record(tenant, usage.inputTokens + usage.outputTokens) after a compose that actually generated.
 
-    State lives only in this process and is lost on restart (the Zero-Port default, like
-    MemoryRateLimitStore) -- a product running several host instances, or that needs the ledger to
-    survive a restart, needs a shared backing store instead.
+    In-process only: state lives only in this process and is lost on restart (the Zero-Port default,
+    like MemoryRateLimitStore). The interface is synchronous (a budget check is a synchronous contract,
+    see create_policy_runtime), so it cannot front a shared backing store: with several host instances
+    each keeps its own ledger, and dailyTokens is enforced per host instance (the fleet-wide total can
+    reach dailyTokens times the instance count), not across the deployment.
 
     Bounded memory (max_entries, default DEFAULT_MAX_MEMORY_ENTRIES): without a cap, a key that stops
     being used would keep its entry forever, so the dict would grow with the number of distinct keys ever
@@ -78,6 +79,10 @@ class DailyTokenLedger:
         entry = self._entries.get(key)
         if entry is None or entry.day != day:
             return 0
+        # A read counts as a touch: a tenant that is over budget is only ever read (no compose runs, so
+        # nothing is recorded), and must not become the LRU victim and get its spend reset.
+        del self._entries[key]
+        self._entries[key] = entry
         return entry.spent_tokens
 
     def record(self, key: str, tokens: int) -> None:

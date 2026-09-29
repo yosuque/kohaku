@@ -14,6 +14,7 @@ from kohaku.host_core import (
     create_console_error_reporter,
     format_error_chain,
 )
+from kohaku.spec import Intent
 
 
 class TestFormatErrorChain:
@@ -96,6 +97,19 @@ class TestCreateConsoleErrorReporter:
         assert lines == [
             "[kohaku] compose fallback: L1 constrained generation failed catalog/structure validation"
         ]
+
+    def test_compose_tier_and_intent_are_in_the_prefix_when_the_context_carries_them(self) -> None:
+        lines: list[str] = []
+        reporter = create_console_error_reporter(ConsoleErrorReporterOptions(log=lines.append))
+        ctx = ComposeErrorContext(
+            phase="fallback",
+            input="intent",
+            tier="L1",
+            intent=Intent(canonical="sales.overview", params={}, hash="sha256:" + "0" * 64),
+            reason="generation failed",
+        )
+        reporter.compose(ctx, None)
+        assert lines == ["[kohaku] compose fallback (tier L1, intent sales.overview): generation failed"]
 
     def test_compose_a_hard_failure_logs_the_raised_error(self) -> None:
         lines: list[str] = []

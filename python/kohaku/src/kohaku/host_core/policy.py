@@ -11,7 +11,9 @@ module" layout rule) is re-exported from this package's top-level `__init__.py` 
 Also unlike the TS port, `create_policy_runtime`/`parse_policy` are **synchronous**: `compute_policy_id`
 is sync in Python (hashlib, not an async Web Crypto call) -- the same reasoning `compute_intent_hash`/
 `compute_spec_hash` already document. `PolicyRuntime.reload` and `PolicyRateLimiter.take` stay `async`
-because they call an `audit` hook / `RateLimiter.take` that may themselves be async.
+because they call an `audit` hook / `RateLimiter.take` that may themselves be async. For the same
+reason the `policy.applied` event for the runtime's *starting* file (which the TS port fires from inside
+its async `createPolicyRuntime`) is fired by awaiting `PolicyRuntime.audit_startup()` once after creation.
 """
 
 from __future__ import annotations
@@ -45,6 +47,8 @@ from kohaku.spec import (
 
 from .daily_token_ledger import DailyTokenLedger
 from .rate_limit import (
+    DEFAULT_MAX_MEMORY_ENTRIES,
+    DEFAULT_RATE_LIMIT_TIMEOUT_MS,
     RateLimiter,
     RateLimiterErrorInfo,
     RateLimiterTakeParams,
@@ -75,9 +79,10 @@ class PolicyAppliedEvent:
     """The `policy.applied` audit event (design.md #69; SPEC is not affected -- this is a host-side
     operational concern). Fired by `reload()` only when the effective `policy_id` actually changes
     (never on a no-op reload -- reloading byte-identical content, including the exact same file twice,
-    is *not* an audit-worthy event). kohaku.lineage's glue for recording this as a real lineage event
-    (the "policy.applied" event *type* itself is owned by lineage, not this package) is a later commit
-    on this branch. Field names are camelCase to match the eventual lineage payload shape (a JSON dict,
+    is *not* an audit-worthy event). The runtime's starting file is announced once through
+    `PolicyRuntime.audit_startup()` (`previousPolicyId` is None, `changedPaths` lists every top-level key
+    of that file). The "policy.applied" event *type* is owned by kohaku.lineage, whose
+    `Lineage.policy_applied` records this event. Field names are camelCase to match the eventual lineage payload shape (a JSON dict,
     the same convention as every other wire-adjacent type in this codebase) and the TS port 1:1.
     """
 
@@ -110,6 +115,48 @@ def _diff_policy_paths(previous: object, next_: object, prefix: str = "") -> lis
             paths.extend(_diff_policy_paths(previous.get(key), next_.get(key), child_prefix))
         return paths
     return [] if _leaf_equals(previous, next_) else [prefix]
+
+
+def _declares_tenant(file: KohakuPolicyFile, tenant: str | None) -> bool:
+    """True when `file.tenants` declares its own section for `tenant`."""
+    return tenant is not None and file.tenants is not None and tenant in file.tenants
+
+
+def _section_key_of(file: KohakuPolicyFile, tenant: str | None) -> str:
+    """The memo key of a tenant's resolved `PolicySection`: the tenant id when the file declares a section
+    for it, else one shared key -- an undeclared tenant resolves to `defaults` alone, so the many tenant
+    ids a caller-controlled header can produce all share a single entry instead of growing the memo."""
+    return f"t:{tenant}" if _declares_tenant(file, tenant) else "d"
+
+
+def _assert_dependencies_for(
+    file: KohakuPolicyFile, ledger: DailyTokenLedger | None, rate_limit_store: RateLimitStore | None
+) -> None:
+    """Fails fast when `file` declares a limit this runtime has no dependency to enforce: a
+    `compose.budget.dailyTokens` needs a `ledger`, a `rateLimits` rule needs a `rate_limit_store`. Without
+    this check such a section would be accepted and then silently never enforced."""
+    sections: list[tuple[str, PolicySection]] = [("defaults", file.defaults)]
+    sections.extend((f"tenants.{tenant}", section) for tenant, section in (file.tenants or {}).items())
+    for where, section in sections:
+        budget = section.compose.budget if section.compose is not None else None
+        if ledger is None and budget is not None and budget.dailyTokens is not None:
+            raise ValueError(
+                f"Policy file declares {where}.compose.budget.dailyTokens but create_policy_runtime was given "
+                "no `ledger`; the limit would never be enforced. Pass `ledger=create_daily_token_ledger()` "
+                "or remove the setting."
+            )
+        rules = section.rateLimits
+        if (
+            rate_limit_store is None
+            and rules is not None
+            and (rules.compose is not None or rules.action is not None or rules.resolve is not None)
+        ):
+            raise ValueError(
+                f"Policy file declares {where}.rateLimits but create_policy_runtime was given no "
+                "`rate_limit_store`; the limits would never be enforced. Pass "
+                "`rate_limit_store=create_memory_rate_limit_store()` (or your own RateLimitStore) or "
+                "remove the setting."
+            )
 
 
 def _resolve_section(file: KohakuPolicyFile, tenant: str | None) -> PolicySection:
@@ -240,15 +287,15 @@ def _build_effective_budget(
 
 
 def _build_effective_policy(
-    file: KohakuPolicyFile,
+    section: PolicySection,
     tenant: str | None,
     base: ComposePolicy,
     ledger: DailyTokenLedger | None,
 ) -> ComposePolicy:
-    """Layers the policy file's merged `compose` section for `tenant` onto `base` (the product-supplied
-    `ComposePolicy`, which owns every function-shaped field). Only the keys the file's `compose` section
-    actually sets override `base`'s own value (design.md #69)."""
-    data = _resolve_section(file, tenant).compose
+    """Layers the policy file's merged `compose` section for `tenant` (`section`) onto `base` (the
+    product-supplied `ComposePolicy`, which owns every function-shaped field). Only the keys the file's
+    `compose` section actually sets override `base`'s own value (design.md #69)."""
+    data = section.compose
     overrides: dict[str, Any] = {}
     if data is not None:
         if data.allowL2 is not None:
@@ -291,21 +338,36 @@ def _rate_limit_rule_for(section: PolicySection, route_class: RouteClass) -> Rat
     return RateLimitRule(capacity=rule.capacity, refillPerSecond=rule.refillPerSecond)
 
 
+@dataclass(frozen=True)
+class RateLimitedInfo:
+    """What a host's optional `on_rate_limited` observer receives when a request or tool call is denied by
+    the rate limiter (host_rest's `KohakuHostDeps.on_rate_limited`, host_mcp's
+    `McpHostDeps.on_rate_limited`). `principal` is the identity the bucket was keyed on (REST: the
+    authenticated principal's id; MCP: see `McpHostDeps.rate_limiter`); `requestId` is the same correlation
+    id the response / compose trace carries (REST: `X-Request-Id`; MCP: the tool call's correlation id).
+    Field names are camelCase like the rest of this module's rate-limit types and the TS port's
+    `RateLimitedInfo`."""
+
+    routeClass: RouteClass
+    requestId: str
+    tenant: str | None = None
+    principal: str | None = None
+
+
 class PolicyRateLimiter:
     """The `rate_limiter` a `PolicyRuntime` exposes: resolves the effective `RateLimitRule` for the
     tenant/route_class from the current policy file, and always allows when none is configured (rate
     limiting is opt-in per route class) or when no `RateLimitStore` was supplied to
     `create_policy_runtime` at all."""
 
-    def __init__(self, get_file: Callable[[], KohakuPolicyFile], inner: RateLimiter | None) -> None:
-        self._get_file = get_file
+    def __init__(self, section_for: Callable[[str | None], PolicySection], inner: RateLimiter | None) -> None:
+        self._section_for = section_for
         self._inner = inner
 
     async def take(self, params: PolicyRateLimiterTakeParams) -> RateLimitResult:
         if self._inner is None:
             return RateLimitResult(allow=True)
-        section = _resolve_section(self._get_file(), params.tenant)
-        rule = _rate_limit_rule_for(section, params.routeClass)
+        rule = _rate_limit_rule_for(self._section_for(params.tenant), params.routeClass)
         if rule is None:
             return RateLimitResult(allow=True)
         return await self._inner.take(
@@ -337,30 +399,60 @@ class PolicyRuntime:
         rate_limit_store: RateLimitStore | None,
         audit: Callable[[PolicyAppliedEvent, str | None], object] | None,
         on_rate_limit_error: Callable[[RateLimiterErrorInfo], object] | None = None,
+        rate_limit_timeout_ms: float | None = None,
     ) -> None:
         self._file = file
         self._policy_id = compute_policy_id(file)
         self._base_policy_for = base_policy_for
         self._ledger = ledger
+        self._rate_limit_store = rate_limit_store
         self._audit = audit
         self._memo: dict[str, _PolicyForMemoEntry] = {}
+        self._section_memo: dict[str, PolicySection] = {}
+        self._startup_audited = False
         inner_rate_limiter = (
-            create_rate_limiter(rate_limit_store, on_rate_limit_error) if rate_limit_store is not None else None
+            create_rate_limiter(
+                rate_limit_store,
+                on_rate_limit_error,
+                timeout_ms=(
+                    rate_limit_timeout_ms if rate_limit_timeout_ms is not None else DEFAULT_RATE_LIMIT_TIMEOUT_MS
+                ),
+            )
+            if rate_limit_store is not None
+            else None
         )
-        self.rate_limiter = PolicyRateLimiter(lambda: self._file, inner_rate_limiter)
+        self.rate_limiter = PolicyRateLimiter(self._section_for, inner_rate_limiter)
+
+    def _section_for(self, tenant: str | None) -> PolicySection:
+        """`_resolve_section`, memoized per `_section_key_of` (cleared on every effective change): the
+        merge runs once per declared tenant, not once per request."""
+        key = _section_key_of(self._file, tenant)
+        section = self._section_memo.get(key)
+        if section is None:
+            section = _resolve_section(self._file, tenant)
+            self._section_memo[key] = section
+        return section
 
     def policy_for(self, session: SessionContext | None = None) -> ComposePolicy:
         """The effective `ComposePolicy` for `session.tenant` (`base_policy_for(tenant)` with the policy
         file's merged `compose` section layered on top). Memoized per (tenant, `base_policy_for`'s
         returned object) pair -- a caller whose `base_policy_for` itself returns a stable object per
-        tenant gets the identical `ComposePolicy` object back across calls, until the next `reload`."""
+        tenant gets the identical `ComposePolicy` object back across calls, until the next effective
+        `reload`. The memo is keyed by a caller-controlled tenant value, so it is LRU-bounded at
+        `DEFAULT_MAX_MEMORY_ENTRIES`."""
         tenant = session.tenant if session is not None else None
         key = tenant or ""
         base = self._base_policy_for(tenant) if self._base_policy_for is not None else ComposePolicy()
         cached = self._memo.get(key)
         if cached is not None and cached.base is base and cached.policy_id == self._policy_id:
+            del self._memo[key]  # reinsert to mark as most-recently-used
+            self._memo[key] = cached
             return cached.effective
-        effective = _build_effective_policy(self._file, tenant, base, self._ledger)
+        effective = _build_effective_policy(self._section_for(tenant), tenant, base, self._ledger)
+        self._memo.pop(key, None)
+        if len(self._memo) >= DEFAULT_MAX_MEMORY_ENTRIES:
+            # A dict iterates in insertion order, so the first key is the least recently used.
+            del self._memo[next(iter(self._memo))]
         self._memo[key] = _PolicyForMemoEntry(base=base, policy_id=self._policy_id, effective=effective)
         return effective
 
@@ -368,7 +460,7 @@ class PolicyRuntime:
         """The effective governance roles map (host_rest's `GovernancePolicy.roles`'s shape) for
         `tenant`. `{}` when neither `defaults` nor the tenant's section declares `governance.roles`
         (deny-by-default, matching `create_governance_policy`'s own behavior on an empty map)."""
-        section = _resolve_section(self._file, tenant)
+        section = self._section_for(tenant)
         return dict(section.governance.roles) if section.governance is not None else {}
 
     @property
@@ -376,36 +468,64 @@ class PolicyRuntime:
         """The current file's `policy_id` (`sha256:<hex>`). Live: reflects the most recent `reload`."""
         return self._policy_id
 
-    async def reload(self, file: KohakuPolicyFile, actor: str | None = None) -> None:
-        """Replaces the effective policy file. Fires `audit` (if wired) with a `PolicyAppliedEvent` --
-        but only when the new `policy_id` actually differs from the current one; reloading
-        byte-identical content is a no-op (no event, memoized `policy_for` results are kept, though the
-        memo is cleared regardless as a matter of hygiene). A failure raised from `audit` propagates
-        out of `reload` (not fail-open -- an admin reloading a policy should see that the audit trail
-        was not recorded, the same way the TS port does not swallow this)."""
-        previous_file = self._file
-        previous_policy_id = self._policy_id
-        policy_id = compute_policy_id(file)
-        self._file = file
-        self._policy_id = policy_id
-        self._memo.clear()
-        if policy_id == previous_policy_id:
-            return
-        event = PolicyAppliedEvent(
-            policyId=policy_id,
-            previousPolicyId=previous_policy_id,
-            version=file.version,
-            label=file.label,
-            changedPaths=_diff_policy_paths(
-                previous_file.model_dump(by_alias=True, exclude_none=True),
-                file.model_dump(by_alias=True, exclude_none=True),
-            ),
-            tenants=list(file.tenants.keys()) if file.tenants is not None else [],
-        )
+    async def _fire_audit(self, event: PolicyAppliedEvent, actor: str | None) -> None:
         if self._audit is not None:
             result = self._audit(event, actor)
             if inspect.isawaitable(result):
                 await result
+
+    async def audit_startup(self) -> None:
+        """Fires `audit` (if wired) once with the `PolicyAppliedEvent` for the runtime's starting file
+        (`previousPolicyId` None, no actor). The TS port fires this from inside its async
+        `createPolicyRuntime`; `create_policy_runtime` is synchronous here, so the caller awaits this once
+        after creating the runtime. Later calls are no-ops. A failure raised from `audit` propagates (as
+        it does from `reload`)."""
+        if self._startup_audited:
+            return
+        self._startup_audited = True
+        await self._fire_audit(_build_applied_event(None, None, self._file, self._policy_id), None)
+
+    async def reload(self, file: KohakuPolicyFile, actor: str | None = None) -> None:
+        """Replaces the effective policy file. Fires `audit` (if wired) with a `PolicyAppliedEvent` --
+        but only when the new `policy_id` actually differs from the current one; reloading
+        byte-identical content is a no-op (no event, memoized `policy_for` results are kept). Raises
+        `ValueError`, leaving the previous policy in force, when `file` declares `dailyTokens` /
+        `rateLimits` and the runtime was built without the `ledger` / `rate_limit_store` that would
+        enforce it. A failure raised from `audit` propagates out of `reload` (not fail-open -- an admin
+        reloading a policy should see that the audit trail was not recorded, the same way the TS port
+        does not swallow this)."""
+        _assert_dependencies_for(file, self._ledger, self._rate_limit_store)
+        policy_id = compute_policy_id(file)
+        if policy_id == self._policy_id:
+            return  # dedup: byte-identical content is a no-op, no event, memos kept
+        previous_file = self._file
+        previous_policy_id = self._policy_id
+        self._file = file
+        self._policy_id = policy_id
+        self._memo.clear()
+        self._section_memo.clear()
+        await self._fire_audit(_build_applied_event(previous_file, previous_policy_id, file, policy_id), actor)
+
+
+def _build_applied_event(
+    previous_file: KohakuPolicyFile | None,
+    previous_policy_id: str | None,
+    file: KohakuPolicyFile,
+    policy_id: str,
+) -> PolicyAppliedEvent:
+    """Builds the `policy.applied` event for a change from `previous_file` (None = the runtime's starting
+    file) to `file`."""
+    return PolicyAppliedEvent(
+        policyId=policy_id,
+        previousPolicyId=previous_policy_id,
+        version=file.version,
+        label=file.label,
+        changedPaths=_diff_policy_paths(
+            previous_file.model_dump(by_alias=True, exclude_none=True) if previous_file is not None else {},
+            file.model_dump(by_alias=True, exclude_none=True),
+        ),
+        tenants=list(file.tenants.keys()) if file.tenants is not None else [],
+    )
 
 
 def create_policy_runtime(
@@ -415,6 +535,7 @@ def create_policy_runtime(
     rate_limit_store: RateLimitStore | None = None,
     audit: Callable[[PolicyAppliedEvent, str | None], object] | None = None,
     on_rate_limit_error: Callable[[RateLimiterErrorInfo], object] | None = None,
+    rate_limit_timeout_ms: float | None = None,
 ) -> PolicyRuntime:
     """Builds the runtime half of Policy as Code: resolves an effective `ComposePolicy` per tenant
     (layering the policy file's data onto a product-supplied base -- design.md #69), a rate limiter
@@ -429,11 +550,19 @@ def create_policy_runtime(
       function-shaped setting (`routeTier`, `fewShot`, `designSystem`, `fixedSpecs`, `l2Smoke`,
       `selectComponents`, `extraRules`; design.md #69), which the policy file's `compose` section is
       layered on top of. `None` (the default) = an empty base policy for every tenant.
-    - `ledger`: backs a `compose.budget.dailyTokens` check/on_usage pair. Only needed when some section
-      actually declares `dailyTokens`; omitted, `dailyTokens` is silently not enforced.
-    - `rate_limit_store`: backs `rate_limiter`. Only needed when some section actually declares
-      `rateLimits`; omitted, `rate_limiter.take` always allows.
-    - `audit`: fired by `reload()`; see `PolicyRuntime.reload`'s docstring. `actor` is `reload`'s own
+    - `ledger`: backs a `compose.budget.dailyTokens` check/on_usage pair. Required when any section
+      declares `dailyTokens`: `ValueError` is raised (here and from `reload`) rather than accept a file
+      whose limit would silently never be enforced. The ledger is in-process only, so the budget applies
+      per host instance (see `DailyTokenLedger`).
+    - `rate_limit_store`: backs `rate_limiter`. Required when any section declares `rateLimits`:
+      `ValueError` is raised (here and from `reload`) rather than accept a file whose limits would
+      silently never be enforced. Omitted (with no `rateLimits` declared), `rate_limiter.take` always
+      allows.
+    - `rate_limit_timeout_ms`: forwarded as `create_rate_limiter`'s `timeout_ms` -- how long
+      `rate_limiter.take` waits for `rate_limit_store.take` before failing open. Default
+      `DEFAULT_RATE_LIMIT_TIMEOUT_MS`.
+    - `audit`: fired by `reload()` on every effective change and, once, by `PolicyRuntime.audit_startup()`
+      for the starting file; see `PolicyRuntime.reload`'s docstring. `actor` is `reload`'s own
       second argument, threaded through unchanged (never inspected by this module) -- the caller's
       lineage-wiring glue is expected to place it on the recorded event's actor field, not inside the
       payload.
@@ -444,4 +573,7 @@ def create_policy_runtime(
       already uses so a rate-limit backend failure surfaces the same way any other fail-open failure
       does.
     """
-    return PolicyRuntime(file, base_policy_for, ledger, rate_limit_store, audit, on_rate_limit_error)
+    _assert_dependencies_for(file, ledger, rate_limit_store)
+    return PolicyRuntime(
+        file, base_policy_for, ledger, rate_limit_store, audit, on_rate_limit_error, rate_limit_timeout_ms
+    )

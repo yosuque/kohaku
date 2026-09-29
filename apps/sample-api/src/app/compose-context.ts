@@ -114,6 +114,7 @@ export function createComposeContext(args: {
   debug?: boolean;
 }): ComposeContext {
   const { registry, semantic, storage, llm, shared, policyRuntime, otel = false, debug = false } = args;
+  type LangOverrides = Pick<ComposePolicy, "fixedSpecs" | "generatorVersion" | "outputLanguage" | "fewShot">;
   /**
    * The EN/JA function-shaped overrides (layered on top of `shared` — or, when `policyRuntime` is wired,
    * on top of `policyRuntime.policyFor`'s result — by `policyForSession` below), selected per request via
@@ -125,9 +126,7 @@ export function createComposeContext(args: {
    * specs and would bias JA generation toward English labels. None of these fields are expressible in the
    * Policy-as-Code schema (design.md #69), so they always come from here, never from a policy file.
    */
-  function langOverrides(
-    lang: OutputLang,
-  ): Pick<ComposePolicy, "fixedSpecs" | "generatorVersion" | "outputLanguage" | "fewShot"> {
+  function buildLangOverrides(lang: OutputLang): LangOverrides {
     if (lang === "ja") {
       return {
         fixedSpecs: createFixedSpecs("ja"),
@@ -147,6 +146,21 @@ export function createComposeContext(args: {
       // it returns an empty array and the generation prompt is byte-identical to the previous version (models increase gradually).
       fewShot: createFixationFewShot(storage),
     };
+  }
+
+  /**
+   * `buildLangOverrides`, built once per language and reused by every `policyForSession` call: the
+   * few-shot source keeps a short-lived fixation-list cache (`createFixationFewShot`), which a fresh
+   * instance per request would never get to reuse.
+   */
+  const langOverridesCache = new Map<OutputLang, LangOverrides>();
+  function langOverrides(lang: OutputLang): LangOverrides {
+    let overrides = langOverridesCache.get(lang);
+    if (overrides == null) {
+      overrides = buildLangOverrides(lang);
+      langOverridesCache.set(lang, overrides);
+    }
+    return overrides;
   }
 
   /**

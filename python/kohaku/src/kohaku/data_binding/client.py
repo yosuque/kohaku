@@ -201,6 +201,8 @@ class BindingClient:
                 raise BindingError("UNAUTHORIZED", f"binding resolve denied for {ref.raw}", status=status)
             if status == 404:
                 raise BindingError("REF_NOT_FOUND", f"no data source for {ref.raw}", status=status)
+            if status == 429:
+                raise _rate_limited_error(f"binding resolve rate limited for {ref.raw}", status, resp.body)
             if status < 200 or status >= 300:
                 raise BindingError(
                     "RESOLVE_FAILED", f"binding resolve failed ({status}) for {ref.raw}", status=status
@@ -278,6 +280,8 @@ class BindingClient:
             raise BindingError(
                 "APPROVAL_REQUIRED", envelope.message, status=resp.status, approval=envelope.approval
             )
+        if resp.status == 429:
+            raise _rate_limited_error(f'action "{action}" rate limited', resp.status, resp.body)
         if resp.status in (401, 403):
             raise BindingError("UNAUTHORIZED", f'action "{action}" denied', status=resp.status)
         if resp.status < 200 or resp.status >= 300:
@@ -328,6 +332,22 @@ def _reserved_from_options(opts: ResolveOptions) -> dict[str, str]:
         reserved["_sort"] = opts.sort.key
         reserved["_dir"] = opts.sort.dir
     return reserved
+
+
+def _rate_limited_error(message: str, status: int, body: Any) -> BindingError:
+    """A RATE_LIMITED BindingError for a 429 response, carrying the envelope's `error.retryAfterMs` (SPEC
+    §6.1, REST-RL-001) when the host sent one. A 429 without a conformant envelope still maps to
+    RATE_LIMITED, just without a retry hint."""
+    error = body.get("error") if isinstance(body, dict) else None
+    retry_after = error.get("retryAfterMs") if isinstance(error, dict) else None
+    return BindingError(
+        "RATE_LIMITED",
+        message,
+        status=status,
+        retry_after_ms=float(retry_after)
+        if isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool)
+        else None,
+    )
 
 
 @dataclass(frozen=True)

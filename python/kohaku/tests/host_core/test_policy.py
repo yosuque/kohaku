@@ -16,7 +16,12 @@ from kohaku.composer import (
     ComposePolicy,
     TokenUsage,
 )
-from kohaku.host_core import PolicyAppliedEvent, create_policy_runtime, parse_policy
+from kohaku.host_core import (
+    DEFAULT_MAX_MEMORY_ENTRIES,
+    PolicyAppliedEvent,
+    create_policy_runtime,
+    parse_policy,
+)
 from kohaku.host_core.daily_token_ledger import create_daily_token_ledger
 from kohaku.host_core.policy import PolicyRateLimiterTakeParams
 from kohaku.host_core.rate_limit import RateLimiterErrorInfo
@@ -267,11 +272,9 @@ class _RecordingStore:
 
 
 class TestRateLimiter:
-    def test_always_allows_without_a_rate_limit_store(self) -> None:
+    def test_always_allows_without_a_rate_limit_store_when_the_file_declares_no_rate_limits(self) -> None:
         async def run() -> None:
-            runtime = create_policy_runtime(
-                make_file(defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}})
-            )
+            runtime = create_policy_runtime(make_file())
             result = await runtime.rate_limiter.take(PolicyRateLimiterTakeParams(routeClass="compose"))
             assert result == RateLimitResult(allow=True)
 
@@ -408,3 +411,124 @@ class TestReload:
                 await runtime.reload(make_file(label="new"))
 
         asyncio.run(run())
+
+
+class TestReloadDedupAndValidation:
+    def test_a_byte_identical_reload_keeps_the_memoized_policy_for_result(self) -> None:
+        async def run() -> None:
+            base = ComposePolicy()
+            runtime = create_policy_runtime(
+                make_file(defaults={"compose": {"allowL2": True}}), base_policy_for=lambda _t: base
+            )
+            before = runtime.policy_for()
+            await runtime.reload(make_file(defaults={"compose": {"allowL2": True}}))
+            assert runtime.policy_for() is before
+
+        asyncio.run(run())
+
+    def test_reload_rejects_a_file_declaring_limits_the_runtime_cannot_enforce_keeping_the_previous_policy(
+        self,
+    ) -> None:
+        async def run() -> None:
+            runtime = create_policy_runtime(make_file(defaults={"compose": {"allowL2": False}}))
+            before = runtime.policy_id
+            with pytest.raises(ValueError, match=r"dailyTokens.*ledger"):
+                await runtime.reload(make_file(defaults={"compose": {"budget": {"dailyTokens": 10}}}))
+            with pytest.raises(ValueError, match=r"tenants\.tenant-a\.rateLimits.*rate_limit_store"):
+                await runtime.reload(
+                    make_file(
+                        tenants={"tenant-a": {"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}}}
+                    )
+                )
+            assert runtime.policy_id == before
+            assert runtime.policy_for().allowL2 is False
+
+        asyncio.run(run())
+
+
+class TestStartupAudit:
+    def test_audit_startup_fires_once_for_the_starting_file_with_no_previous_policy_and_no_actor(self) -> None:
+        async def run() -> None:
+            calls: list[tuple[PolicyAppliedEvent, str | None]] = []
+            runtime = create_policy_runtime(
+                make_file(label="boot", tenants={"tenant-a": {}}),
+                audit=lambda e, a: calls.append((e, a)),
+            )
+            assert calls == []  # create_policy_runtime is synchronous and fires nothing itself
+            await runtime.audit_startup()
+            await runtime.audit_startup()  # idempotent
+            assert len(calls) == 1
+            event, actor = calls[0]
+            assert actor is None
+            assert event.previousPolicyId is None
+            assert event.policyId == runtime.policy_id
+            assert event.label == "boot"
+            assert event.tenants == ["tenant-a"]
+            assert {"version", "label", "defaults", "tenants"} <= set(event.changedPaths)
+
+        asyncio.run(run())
+
+    def test_audit_startup_without_an_audit_callback_is_a_no_op(self) -> None:
+        async def run() -> None:
+            await create_policy_runtime(make_file()).audit_startup()
+
+        asyncio.run(run())
+
+
+class TestDeclaredDependencies:
+    def test_raises_when_defaults_declare_daily_tokens_but_no_ledger_is_supplied(self) -> None:
+        with pytest.raises(ValueError, match=r"defaults\.compose\.budget\.dailyTokens.*ledger"):
+            create_policy_runtime(make_file(defaults={"compose": {"budget": {"dailyTokens": 5}}}))
+
+    def test_raises_when_a_tenant_declares_daily_tokens_but_no_ledger_is_supplied(self) -> None:
+        with pytest.raises(ValueError, match=r"tenants\.tenant-a\.compose\.budget\.dailyTokens"):
+            create_policy_runtime(
+                make_file(tenants={"tenant-a": {"compose": {"budget": {"dailyTokens": 5}}}})
+            )
+
+    def test_raises_when_rate_limits_declare_a_rule_but_no_store_is_supplied(self) -> None:
+        with pytest.raises(ValueError, match=r"defaults\.rateLimits.*rate_limit_store"):
+            create_policy_runtime(
+                make_file(defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}})
+            )
+
+    def test_does_not_raise_for_an_empty_rate_limits_section_or_when_the_dependencies_are_supplied(
+        self,
+    ) -> None:
+        create_policy_runtime(make_file(defaults={"rateLimits": {}}))
+        create_policy_runtime(
+            make_file(
+                defaults={
+                    "compose": {"budget": {"dailyTokens": 5}},
+                    "rateLimits": {"action": {"capacity": 1, "refillPerSecond": 1}},
+                }
+            ),
+            ledger=create_daily_token_ledger(),
+            rate_limit_store=_RecordingStore(),
+        )
+
+
+class TestBoundedMemos:
+    def test_undeclared_tenants_resolve_to_the_defaults_section(self) -> None:
+        runtime = create_policy_runtime(
+            make_file(
+                defaults={"governance": {"roles": {"admin": ["*"]}}},
+                tenants={"tenant-a": {"governance": {"roles": {"viewer": ["lineage.read"]}}}},
+            )
+        )
+        assert runtime.roles_for("x1") == {"admin": ["*"]}
+        assert runtime.roles_for("constructor") == {"admin": ["*"]}
+        assert runtime.roles_for("tenant-a") == {"admin": ["*"], "viewer": ["lineage.read"]}
+
+    def test_the_policy_for_memo_is_lru_bounded(self) -> None:
+        base = ComposePolicy()
+        # An allowL2 override makes every tenant's effective policy a distinct object (an empty file returns `base` itself).
+        runtime = create_policy_runtime(
+            make_file(defaults={"compose": {"allowL2": True}}), base_policy_for=lambda _t: base
+        )
+        first = runtime.policy_for(SessionContext(surface="web", tenant="t-first"))
+        for i in range(DEFAULT_MAX_MEMORY_ENTRIES):
+            runtime.policy_for(SessionContext(surface="web", tenant=f"flood-{i}"))
+        assert runtime.policy_for(SessionContext(surface="web", tenant="t-first")) is not first
+        recent = SessionContext(surface="web", tenant=f"flood-{DEFAULT_MAX_MEMORY_ENTRIES - 1}")
+        assert runtime.policy_for(recent) is runtime.policy_for(recent)

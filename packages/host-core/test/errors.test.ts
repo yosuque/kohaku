@@ -199,6 +199,23 @@ describe("createConsoleErrorReporter", () => {
     ]);
   });
 
+  it("compose(): the correlation id, tier and intent are in the prefix when the context carries them", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    const ctx: ComposeErrorContext = {
+      phase: "fallback",
+      input: { kind: "intent" },
+      tier: "L1",
+      intent: { canonical: "sales.overview", params: {}, hash: "sha256:x" },
+      correlationId: "req-42",
+      reason: "generation failed",
+    };
+    reporter.compose(ctx, undefined);
+    expect(lines).toEqual([
+      "[kohaku] compose fallback (correlation req-42, tier L1, intent sales.overview): generation failed",
+    ]);
+  });
+
   it("compose(): a hard failure logs the thrown error", () => {
     const { lines, log } = captureLines();
     const reporter = createConsoleErrorReporter({ log });

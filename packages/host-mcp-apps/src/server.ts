@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ComposeResult, TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
@@ -121,20 +122,33 @@ function requestContextOf(extra: ServerContext): { abort: AbortSignal; requestId
   };
 }
 
+/** The correlation id already minted for a call's `ServerContext`, so every reader within one call sees the same id (see `mcpCorrelationId`). */
+const correlationIdsByCall = new WeakMap<ServerContext, string>();
+
 /**
- * The compose correlation id for one MCP tool call: `mcp:<sessionId>:<jsonrpc id>` when the transport
- * carries a session id (Streamable HTTP, where a session can issue many requests and the JSON-RPC id alone
- * would be ambiguous across sessions), or `mcp:<jsonrpc id>` when it does not (stdio, which has no session
- * concept at all -- a single stdio connection already scopes JSON-RPC ids uniquely, so no prefix is needed
- * beyond `mcp:`). This is the value ultimately recorded as ComposeTrace.correlationId / lineage's
- * view.composed correlationId, so a devtool (`kohaku explain`, admin-react's DevTools) can group every event
- * belonging to one tool call, and tell which transport session (if any) it came from, from the id alone.
+ * The compose correlation id for one MCP tool call: `mcp:<prefix>:<jsonrpc id>`, where `<prefix>` is the
+ * transport's session id when it carries one, else a fresh UUID minted for this call. JSON-RPC ids restart
+ * at 0/1 for every client, and the stateless Streamable HTTP serving both shipped servers use (and stdio,
+ * across restarts) carries no session id, so the bare JSON-RPC id would match unrelated calls from
+ * different clients -- `kohaku explain mcp:1` would then merge their events. The per-call UUID keeps every
+ * id unique at the cost of not grouping the calls of one client (nothing on such a transport identifies
+ * one), like the Python port's degraded mode. This is the value ultimately recorded as
+ * ComposeTrace.correlationId / lineage's view.composed correlationId, so a devtool (`kohaku explain`,
+ * admin-react's DevTools) can group every event belonging to one tool call from the id alone.
+ *
+ * Memoized per `ServerContext` (one per call): the id is read for the compose pipeline, the rate-limit
+ * observer and the action audit within the same call, and they must all agree.
  *
  * Kept alongside (not merged into) requestContextOf so a caller that only needs the correlation id (none,
  * currently, but keeps the two concerns separable) is not forced to also destructure `abort`.
  */
 function mcpCorrelationId(extra: ServerContext): string {
-  return extra.sessionId != null ? `mcp:${extra.sessionId}:${extra.mcpReq.id}` : `mcp:${extra.mcpReq.id}`;
+  let id = correlationIdsByCall.get(extra);
+  if (id == null) {
+    id = `mcp:${extra.sessionId ?? randomUUID()}:${extra.mcpReq.id}`;
+    correlationIdsByCall.set(extra, id);
+  }
+  return id;
 }
 
 /**
@@ -224,8 +238,8 @@ function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
  * generation work the caller has already given up on (parity with the REST profile's abort wiring via
  * `c.req.raw.signal`).
  *
- * `requestId`, when passed (`mcpCorrelationId(extra)` — `mcp:<sessionId>:<jsonrpc id>`, or `mcp:<jsonrpc id>`
- * when the transport carries no session id, e.g. stdio), is forwarded into composeForTool ->
+ * `requestId`, when passed (`mcpCorrelationId(extra)` — `mcp:<sessionId or per-call uuid>:<jsonrpc id>`),
+ * is forwarded into composeForTool ->
  * composeWithFixation as both the fixation self-heal correlation id (already threaded through
  * resolveFixatedResult) and, additively, ComposeOptions.correlationId, so a degraded/failed delivery's
  * observer.onError call and ComposeTrace can be tied back to this tool call the same way host-rest ties them
@@ -524,7 +538,7 @@ function registerComposeTool(ctx: ToolContext): void {
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_compose`, async () => {
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
         const call = forCall(ctx, principal);
         const callCtx: ComposeCallContext = {
@@ -569,7 +583,7 @@ function registerRenderSnapshotTool(ctx: ToolContext): void {
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, async () => {
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
         const call = forCall(ctx, principal);
         const { spec, html } = await buildSnapshot(
@@ -630,7 +644,7 @@ function registerIntentTools(ctx: ToolContext): void {
       async (args, extra) =>
         safeTool(ctx.deps, tool.name, async () => {
           const principal = await ctx.principalOf(extra);
-          const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+          const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
           if (rateLimited != null) return rateLimited;
           const call = forCall(ctx, principal);
           // Pull the shared language input out before it reaches the intent params (it must not
@@ -668,7 +682,7 @@ function registerResolveBindingTool(ctx: ToolContext): void {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "resolve");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "resolve");
         if (rateLimited != null) return rateLimited;
         // Server-side paging/sorting: as on the REST surface, verify the capability against base (with reserved
         // parameters removed), and merge the reserved parameters into domain.invoke (the `_` namespace convention).
@@ -722,7 +736,7 @@ function registerEventTool(ctx: ToolContext): void {
     async ({ intent, on, payload, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_event`, async () => {
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "compose");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
         const call = forCall(ctx, principal);
         const session = mcpSession(locale, call.principal);
@@ -925,7 +939,7 @@ function registerActionTool(ctx: ToolContext): void {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra.sessionId, "action");
+        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "action");
         if (rateLimited != null) return rateLimited;
         // Reject an action name the DomainPort does not expose before even attempting capability verification
         // (see this function's doc comment). Fail-closed on a listOperations() rejection too — every action is
@@ -1032,6 +1046,7 @@ function registerActionTool(ctx: ToolContext): void {
 export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, options: AttachOptions): void {
   const prefix = options.toolPrefix ?? "kohaku";
   const fallbackPrincipal = deps.principal ?? ANONYMOUS;
+  warnUnkeyedRateLimiter(deps);
 
   // Resolves the principal for one tool call — see McpHostDeps.resolvePrincipal's doc comment for the full
   // fallback order and rationale. A throw from deps.resolvePrincipal is deliberately NOT caught here: it
@@ -1317,37 +1332,73 @@ function approvalRequiredToolError(
  * undefined here). Every unauthenticated call resolves to the same constant fallback principal
  * (`McpHostDeps.principal ?? ANONYMOUS`), so keying on `principal.id` alone in that case would put every
  * anonymous caller into one shared bucket — exactly the failure a per-caller budget exists to prevent.
- * Prefers the resolved principal's id only when `resolvePrincipal` is wired (a genuine per-call
- * identity, which can actually differ between callers); otherwise falls back to the MCP transport's
- * `ServerContext.sessionId` (one per client connection on Streamable HTTP), and only then to the literal
- * `"anonymous"` (e.g. stdio, which has no per-client session concept).
+ * In order: `deps.rateLimitKey(extra)` when wired (a product keying by transport identity, e.g. a client
+ * IP or an API-key id taken from the request); else the resolved principal's id when `resolvePrincipal`
+ * is wired (a genuine per-call identity, which can actually differ between callers); else
+ * `ServerContext.sessionId`; else the literal `"anonymous"`. **On the stateless Streamable HTTP serving
+ * (SDK 2.0 `createMcpHandler`) and stdio no session id exists, so without `rateLimitKey` or
+ * `resolvePrincipal` every caller lands in the one `"anonymous"` bucket** — `attachKohakuToMcpServer`
+ * warns once about that configuration.
  */
-function mcpRateLimitKey(deps: McpHostDeps, principal: Principal, sessionId: string | undefined): string {
-  return deps.resolvePrincipal != null ? principal.id : (sessionId ?? "anonymous");
+async function mcpRateLimitKey(
+  deps: McpHostDeps,
+  principal: Principal,
+  extra: ServerContext,
+): Promise<string> {
+  if (deps.rateLimitKey != null) return deps.rateLimitKey(extra);
+  if (deps.resolvePrincipal != null) return principal.id;
+  return extra.sessionId ?? "anonymous";
 }
 
 /**
  * Checks `deps.rateLimiter` (host-core's `PolicyRateLimiter`, typically `PolicyRuntime.rateLimiter`)
  * before a tool handler proceeds with its actual work. Returns `null` (proceed) when `deps.rateLimiter`
  * is unset or the limiter allows; a structured `RATE_LIMITED` tool error otherwise (see
- * `rateLimitToolError`). Port of the REST profile's `createRateLimitMiddleware` — called inline, as the
- * first statement after resolving `principal`, at the top of each of the 6 tool handlers below, since
- * this profile has no per-path middleware layer to mount a single check on (mirroring how the Python
- * REST mirror calls `check_rate_limit` inline for the same reason). Reuses the principal each handler
- * already resolved via `ctx.principalOf(extra)` rather than invoking that hook a second time.
+ * `rateLimitToolError`), after notifying `deps.onRateLimited` (fire-and-forget). Port of the REST
+ * profile's `createRateLimitMiddleware` — called inline, as the first statement after resolving
+ * `principal`, at the top of each of the 6 tool handlers below, since this profile has no per-path
+ * middleware layer to mount a single check on (mirroring how the Python REST mirror calls
+ * `check_rate_limit` inline for the same reason). Reuses the principal each handler already resolved via
+ * `ctx.principalOf(extra)` rather than invoking that hook a second time. A throw from
+ * `deps.rateLimitKey` propagates into the handler's `safeTool`, failing the call closed like a throw from
+ * `resolvePrincipal`.
  */
 async function checkMcpRateLimit(
   deps: McpHostDeps,
   principal: Principal,
-  sessionId: string | undefined,
+  extra: ServerContext,
   routeClass: "compose" | "action" | "resolve",
 ): Promise<ReturnType<typeof rateLimitToolError> | null> {
   if (deps.rateLimiter == null) return null;
-  const result = await deps.rateLimiter.take({
-    principal: mcpRateLimitKey(deps, principal, sessionId),
+  const key = await mcpRateLimitKey(deps, principal, extra);
+  const result = await deps.rateLimiter.take({ principal: key, routeClass });
+  if (result.allow) return null;
+  void hostCore.notifyHook(deps.onRateLimited, {
+    principal: key,
     routeClass,
+    requestId: mcpCorrelationId(extra),
   });
-  return result.allow ? null : rateLimitToolError(result.retryAfterMs);
+  return rateLimitToolError(result.retryAfterMs);
+}
+
+/** Set once `warnUnkeyedRateLimiter` has fired, so a per-request `attach` (stateless HTTP) warns once per process, not once per request. */
+let warnedUnkeyedRateLimiter = false;
+
+/**
+ * One-time startup warning for a `rateLimiter` wired without a per-caller key (neither `resolvePrincipal`
+ * nor `rateLimitKey`): on a transport with no session id (stateless Streamable HTTP, stdio) every caller
+ * then shares one bucket. Not an error — stdio, a single-user deployment, or a deliberately global limit
+ * is a valid configuration — so it warns rather than throws.
+ */
+function warnUnkeyedRateLimiter(deps: McpHostDeps): void {
+  if (warnedUnkeyedRateLimiter) return;
+  if (deps.rateLimiter == null || deps.resolvePrincipal != null || deps.rateLimitKey != null) return;
+  warnedUnkeyedRateLimiter = true;
+  console.warn(
+    "[kohaku] McpHostDeps.rateLimiter is wired without resolvePrincipal or rateLimitKey. On a transport with no " +
+      "session id (stateless Streamable HTTP, stdio) every caller shares one rate-limit bucket. " +
+      "Wire deps.rateLimitKey (or deps.resolvePrincipal) to key the limit per caller.",
+  );
 }
 
 /**

@@ -624,7 +624,7 @@ function fakeServerContext(
 }
 
 describe("requestContextOf: reads the per-call abort signal and JSON-RPC id from ServerContext.mcpReq", () => {
-  it("the compose correlation id is mcp:<jsonrpc id> when the transport has no session id (e.g. stdio)", async () => {
+  it("the compose correlation id is mcp:<per-call uuid>:<jsonrpc id> when the transport has no session id (stdio, stateless HTTP)", async () => {
     let correlationId: string | undefined;
     const server = new McpServer({ name: "kohaku-mcpreq-id", version: "0.1.0" });
     const handlers = captureToolHandlers(server);
@@ -646,7 +646,36 @@ describe("requestContextOf: reads the per-call abort signal and JSON-RPC id from
       { question: "Monthly revenue trend" },
       fakeServerContext({ signal: new AbortController().signal, id: "v2-req-1" }),
     );
-    expect(correlationId).toBe("mcp:v2-req-1");
+    expect(correlationId).toMatch(/^mcp:[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}:v2-req-1$/);
+  });
+
+  it("two session-less calls that reuse the same JSON-RPC id (two clients' counters both at 1) get different correlation ids", async () => {
+    const correlationIds: (string | undefined)[] = [];
+    const server = new McpServer({ name: "kohaku-mcpreq-colliding-ids", version: "0.1.0" });
+    const handlers = captureToolHandlers(server);
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: makeComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        async onComposed(_spec, trace) {
+          correlationIds.push(trace.correlationId);
+        },
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+
+    for (const _client of ["a", "b"]) {
+      await handlers["kohaku_compose"]!(
+        { question: "Monthly revenue trend" },
+        fakeServerContext({ signal: new AbortController().signal, id: "1" }),
+      );
+    }
+    expect(correlationIds).toHaveLength(2);
+    expect(correlationIds[0]).not.toBe(correlationIds[1]);
+    expect(correlationIds.every((id) => id?.endsWith(":1"))).toBe(true);
   });
 
   it("the compose correlation id is mcp:<sessionId>:<jsonrpc id> when the transport carries a session id", async () => {
@@ -943,8 +972,10 @@ describe("MCP 2026-07-28: correlation id stays the per-call request id even when
     expect(first.isError).toBeFalsy();
     expect(second.isError).toBeFalsy();
     expect(sentRequestIds).toHaveLength(2);
-    // InMemoryTransport carries no session id (stdio-shaped), so the format is mcp:<jsonrpc id>.
-    expect(correlationIds).toEqual(sentRequestIds.map((id) => `mcp:${id}`));
+    // InMemoryTransport carries no session id (stdio-shaped), so the prefix is a per-call uuid.
+    expect(correlationIds).toEqual(
+      sentRequestIds.map((id) => expect.stringMatching(new RegExp(`^mcp:[0-9a-f-]{36}:${id}$`))),
+    );
     // Same trace, two calls -> different correlation ids (never the shared trace-id).
     expect(correlationIds[0]).not.toBe(correlationIds[1]);
     expect(correlationIds[0]).not.toBe("4bf92f3577b34da6a3ce929d0e0e4736");

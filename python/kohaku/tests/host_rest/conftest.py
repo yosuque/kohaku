@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from kohaku.composer import ComposeContext
-from kohaku.host_core import ActionAuditRecorder, PolicyRateLimiter
+from kohaku.host_core import ActionAuditRecorder, PolicyRateLimiter, RateLimitedInfo
 from kohaku.host_rest import (
     KohakuHostDeps,
     attach_kohaku_routes,
@@ -196,6 +196,7 @@ def build_harness(
     action_effects: ActionEffectsHook | None = None,
     max_body_bytes: int | None = None,
     rate_limiter: PolicyRateLimiter | None = None,
+    on_rate_limited: Callable[[RateLimitedInfo], object] | None = None,
     domain: DomainPort | None = None,
     approvals: ApprovalPort | None = None,
     action_audit_recorder: ActionAuditRecorder | None = None,
@@ -234,6 +235,7 @@ def build_harness(
         action_effects=action_effects,
         max_body_bytes=max_body_bytes,
         rate_limiter=rate_limiter,
+        on_rate_limited=on_rate_limited,
         approvals=approvals,
         action_audit_recorder=action_audit_recorder,
     )

@@ -609,7 +609,8 @@ class RateLimitResult:
 
 class RateLimitStore(Protocol):
     """A token-bucket rate-limit store, keyed by an opaque caller-supplied string (host_core's
-    create_rate_limiter composes it as "tenant:principal:routeClass" — see that function's own doc). A
+    create_rate_limiter composes it as the canonical JSON array [tenant, principal, routeClass] — see
+    that function's own doc). A
     Port reference implementation (host_core's create_memory_rate_limit_store, the in-process default)
     and future backing-store adapters all implement this same shape. Port of TS ports.ts's
     RateLimitStore.
@@ -617,6 +618,11 @@ class RateLimitStore(Protocol):
     Concurrency contract: like StoragePort, this carries no cross-process locking of its own — a
     distributed backing store is expected to implement `take` atomically on its own side, not rely on
     the caller to serialize it.
+
+    Latency contract: `take` runs on the request path. host_core's create_rate_limiter bounds it with a
+    timeout (default 250 ms, `timeout_ms`) and, on a raise or a timeout, fails open (the request is
+    allowed and the failure is reported via `on_error`); an implementation should therefore answer well
+    inside that bound and must not rely on a slow call being awaited to completion.
     """
 
     async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:

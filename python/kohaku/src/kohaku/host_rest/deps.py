@@ -20,6 +20,7 @@ from kohaku.host_core import (
     AllowedActions,
     OperationIndex,
     PolicyRateLimiter,
+    RateLimitedInfo,
     TraceContext,
 )
 from kohaku.spec import (
@@ -285,12 +286,19 @@ class KohakuHostDeps:
     rate_limiter: PolicyRateLimiter | None = None
     """Rate limiter for the compose-family routes (product responsibility; typically host_core's
     PolicyRuntime.rate_limiter, which resolves the effective RateLimitRule per tenant/route_class from
-    a Policy file's rateLimits section). Checked before POST /compose, /compose/stream, /events
-    (route_class "compose"), POST /binding/action ("action"), and GET /binding/resolve ("resolve");
-    governance/control-plane routes are never subject to it. On denial, returns 429 with the error
-    envelope's code: RATE_LIMITED (SPEC §6.1, REST-RL-001) and, when the limiter reports a
-    retry_after_ms, an HTTP Retry-After header (seconds, rounded up). When unwired, no rate limiting
-    occurs (backward compatible)."""
+    a Policy file's rateLimits section). Checked before POST /intent/normalize, /compose,
+    /compose/stream, /events (route_class "compose"), POST /binding/action ("action"), and GET
+    /binding/resolve ("resolve"); governance/control-plane routes are never subject to it.
+    /intent/normalize shares the "compose" class because, for a natural-language question, it calls the
+    SemanticPort's LLM and so spends tokens just like a compose does (those normalization tokens are not
+    counted by the policy file's compose.budget.dailyTokens, which only counts generation). On denial,
+    returns 429 with the error envelope's code: RATE_LIMITED (SPEC §6.1, REST-RL-001) -- carrying the
+    request's requestId -- and, when the limiter reports a retry_after_ms, an HTTP Retry-After header
+    (seconds, rounded up). When unwired, no rate limiting occurs (backward compatible)."""
+    on_rate_limited: Callable[[RateLimitedInfo], object] | None = None
+    """Observer called (fire-and-forget: never awaited, a raise is swallowed) each time rate_limiter denies
+    a request, with the tenant, principal and route class the limit was keyed on and the request's
+    requestId (the same value as the 429 response's X-Request-Id header and error.requestId)."""
     _allowed_actions_fn: AllowedActions | None = field(default=None, init=False, repr=False, compare=False)
     """Memoized `AllowedActions` closure (host_core's `create_allowed_actions`, write-scope hardening; see
     _routes.shared.allowed_actions). Not part of the public constructor — built lazily on first capability

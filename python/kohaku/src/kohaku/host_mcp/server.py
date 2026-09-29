@@ -36,6 +36,7 @@ from kohaku.host_core import (
     IntentSourceNl,
     ParsedInvokableRefOk,
     PolicyRateLimiterTakeParams,
+    RateLimitedInfo,
     TraceContext,
     apply_action_effects,
     build_action_manifest,
@@ -53,6 +54,7 @@ from kohaku.host_core import fail_open as _host_core_fail_open
 from kohaku.host_core import get_lock as _get_lock
 from kohaku.host_core import issue_capability_for_spec as _host_core_issue_capability_for_spec
 from kohaku.host_core import notify_hook as _host_core_notify_hook
+from kohaku.host_core import notify_hook_nowait as _host_core_notify_hook_nowait
 from kohaku.host_core import record_view_fallback as _host_core_record_view_fallback
 from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.spec import (
@@ -176,14 +178,16 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
-def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]) -> str:
+async def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]) -> str:
     """The bucket-key "principal" component for a rate-limit check (this profile has no tenant -- see
     `McpHostDeps.rate_limiter`'s doc comment, and `PolicyRateLimiterTakeParams.tenant` is always left
     `None` here). Every unauthenticated call resolves to the same constant fallback principal
     (`McpHostDeps.principal` or the built-in `_ANONYMOUS`), so keying on `principal.id` alone in that
     case would put every anonymous caller into one shared bucket -- exactly the failure a per-caller
-    budget exists to prevent. Prefers the resolved principal's id only when `resolve_principal` is wired
-    (a genuine per-call identity, which can actually differ between callers); otherwise falls back to the
+    budget exists to prevent. In order: `deps.rate_limit_key(ctx)` when wired (a product keying by a
+    transport identity, e.g. a client IP or an API-key id read from the request); else the resolved
+    principal's id when `resolve_principal` is wired (a genuine per-call identity, which can actually
+    differ between callers); otherwise falls back to the
     per-connection opaque id `_session_correlation_prefix` maintains (below) -- unlike TS's
     `ServerContext.sessionId`, this is never absent (even stdio gets one stable prefix for its
     connection's lifetime), so this port has no further "anonymous" fallback beneath it: a shared bucket
@@ -191,7 +195,36 @@ def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal, ctx: ServerRequ
     `_session_correlation_prefix` itself documents (no per-connection anchor reachable at all), which
     already falls back to a collision-free-but-ungrouped id there.
     """
+    if deps.rate_limit_key is not None:
+        key = deps.rate_limit_key(ctx)
+        if inspect.isawaitable(key):
+            return await key
+        return key
     return principal.id if deps.resolve_principal is not None else _session_correlation_prefix(ctx)
+
+
+# Set once `_warn_unkeyed_rate_limiter` has fired, so a per-request attach warns once per process.
+_warned_unkeyed_rate_limiter = False
+
+
+def _warn_unkeyed_rate_limiter(deps: McpHostDeps) -> None:
+    """One-time startup warning for a `rate_limiter` wired without a per-caller key (neither
+    `resolve_principal` nor `rate_limit_key`): the bucket is then keyed per transport connection, which a
+    caller can shed by opening a new one (and, if no per-connection anchor is reachable at all, per call).
+    Not an error -- stdio, a single-user deployment, or a deliberately per-connection limit is a valid
+    configuration -- so it warns rather than raises. Port of TS `warnUnkeyedRateLimiter`."""
+    global _warned_unkeyed_rate_limiter
+    if _warned_unkeyed_rate_limiter:
+        return
+    if deps.rate_limiter is None or deps.resolve_principal is not None or deps.rate_limit_key is not None:
+        return
+    _warned_unkeyed_rate_limiter = True
+    warnings.warn(
+        "kohaku.host_mcp: McpHostDeps.rate_limiter is wired without resolve_principal or rate_limit_key, so "
+        "the rate-limit bucket is keyed per transport connection (which a caller can shed by reconnecting). "
+        "Wire deps.rate_limit_key (or deps.resolve_principal) to key the limit per caller.",
+        stacklevel=3,
+    )
 
 
 # Per-connection opaque id (uuid4 hex), generated once per underlying transport connection and cached for
@@ -373,6 +406,7 @@ def attach_kohaku_to_mcp_server(
 
     prefix = options.tool_prefix if options.tool_prefix is not None else "kohaku"
     fallback_principal = deps.principal if deps.principal is not None else _ANONYMOUS
+    _warn_unkeyed_rate_limiter(deps)
 
     async def _current_principal(ctx: ServerRequestContext[Any]) -> Principal:
         """Resolves the principal for THIS tool call (see `McpHostDeps.resolve_principal`'s doc comment for the
@@ -584,22 +618,31 @@ def attach_kohaku_to_mcp_server(
         """Checks `deps.rate_limiter` (host_core's `PolicyRateLimiter`, typically
         `PolicyRuntime.rate_limiter`) before a tool handler proceeds with its actual work. Returns `None`
         (proceed) when `deps.rate_limiter` is unset or the limiter allows; a structured `RATE_LIMITED`
-        tool error otherwise (see `_rate_limit_tool_error`). Port of the REST profile's
+        tool error otherwise (see `_rate_limit_tool_error`), after notifying `deps.on_rate_limited`
+        (fire-and-forget). Port of the REST profile's
         `check_rate_limit` -- called inline, as the first statement after resolving `principal`, at the
         top of each of the 6 tool handlers below, since this profile has no per-path middleware layer to
         mount a single check on. Reuses the principal each handler already resolved via
-        `_current_principal(ctx)` rather than invoking `resolve_principal` a second time. `ctx` is needed
-        only to resolve `_mcp_rate_limit_key`'s per-connection fallback (`_session_correlation_prefix`)
-        when no real principal is wired.
+        `_current_principal(ctx)` rather than invoking `resolve_principal` a second time. `ctx` is
+        needed to resolve `_mcp_rate_limit_key` (`deps.rate_limit_key`, or the per-connection fallback
+        `_session_correlation_prefix` when no real principal is wired). A raise from `deps.rate_limit_key`
+        propagates into the handler's `_safe_tool`, failing the call closed like `resolve_principal`.
         """
         if deps.rate_limiter is None:
             return None
-        result = await deps.rate_limiter.take(
-            PolicyRateLimiterTakeParams(
-                principal=_mcp_rate_limit_key(deps, principal, ctx), routeClass=route_class
-            )
+        key = await _mcp_rate_limit_key(deps, principal, ctx)
+        result = await deps.rate_limiter.take(PolicyRateLimiterTakeParams(principal=key, routeClass=route_class))
+        if result.allow:
+            return None
+        _host_core_notify_hook_nowait(
+            deps.on_rate_limited,
+            RateLimitedInfo(
+                routeClass=route_class,
+                requestId=_correlation_id_of(ctx) or f"mcp:{uuid.uuid4().hex}",
+                principal=key,
+            ),
         )
-        return None if result.allow else _rate_limit_tool_error(result.retryAfterMs)
+        return _rate_limit_tool_error(result.retryAfterMs)
 
     async def _safe_tool(
         endpoint: str,

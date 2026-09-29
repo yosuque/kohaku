@@ -88,6 +88,19 @@ export interface RateLimiter {
   take(params: RateLimiterTakeParams): Promise<RateLimitResult>;
 }
 
+/** Default `CreateRateLimiterOptions.timeoutMs`: how long `RateLimiter.take` waits for the backing store before failing open. */
+export const DEFAULT_RATE_LIMIT_TIMEOUT_MS = 250;
+
+export interface CreateRateLimiterOptions {
+  /**
+   * How long (ms) `RateLimiter.take` waits for `store.take` before giving up and failing open (the request
+   * is allowed, and `onError` is notified with a timeout error). A hung backing store must not stall every
+   * request that passes through the limiter. Default `DEFAULT_RATE_LIMIT_TIMEOUT_MS` (250); a non-finite or
+   * non-positive value disables the timeout (the store call is awaited for as long as it takes).
+   */
+  timeoutMs?: number;
+}
+
 /** Info passed to `createRateLimiter`'s `onError` when the backing store's `take` throws. */
 export interface RateLimiterErrorInfo {
   error: unknown;
@@ -100,8 +113,8 @@ export interface RateLimiterErrorInfo {
  * Builds a `RateLimiter` over a `RateLimitStore`, keying each bucket by the canonical JSON array
  * `[tenant, principal, routeClass]` (tenant/principal default to the empty string when unset, so an
  * anonymous caller still gets its own bucket per tenant/routeClass rather than colliding with every
- * other anonymous caller across route classes — the MCP profile's "no tenant, no principal" case, task
- * 11, still separates `compose` from `action` this way).
+ * other anonymous caller across route classes — the MCP profile's "no tenant, no principal" case still
+ * separates `compose` from `action` this way).
  *
  * **Not a delimiter-joined string** (e.g. `` `${tenant}:${principal}:${routeClass}` ``): a plain colon
  * join collides whenever a component itself contains the delimiter — `(tenant: "a:b", principal: "c")`
@@ -114,23 +127,46 @@ export interface RateLimiterErrorInfo {
  * in-process `RateLimitStore` never shares state with the other's), just that a divergent encoding isn't
  * left as a subtle trap for a future shared backing store.
  *
- * **Fail-open** on a store error: the request is allowed through (`{ allow: true }`), and the error is
- * reported via `onError` (silent, fire-and-forget, if unwired — the same `notifyHook` convention as
- * `ComposeObserver`'s hooks) rather than left unobserved or turned into a hard failure. A rate limiter
- * outage must never itself become a reason no request can be served.
+ * **Fail-open** on a store error *or* a store that does not answer within `options.timeoutMs`: the
+ * request is allowed through (`{ allow: true }`), and the failure is reported via `onError` (silent if
+ * unwired — the same `notifyHook` convention as `ComposeObserver`'s hooks) rather than left unobserved or
+ * turned into a hard failure. `onError` is fire-and-forget: it is invoked but never awaited, so a slow
+ * observer cannot delay the request either. A rate limiter outage must never itself become a reason no
+ * request can be served.
  */
 export function createRateLimiter(
   store: RateLimitStore,
   onError?: (info: RateLimiterErrorInfo) => void | Promise<void>,
   now: () => number = Date.now,
+  options: CreateRateLimiterOptions = {},
 ): RateLimiter {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_RATE_LIMIT_TIMEOUT_MS;
+  const timeoutEnabled = Number.isFinite(timeoutMs) && timeoutMs > 0;
+
+  /** `store.take`, raced against the timeout (when enabled). The losing branch's outcome is ignored, never an unhandled rejection. */
+  async function takeWithTimeout(key: string, cost: number, rule: RateLimitRule): Promise<RateLimitResult> {
+    if (!timeoutEnabled) return store.take(key, cost, rule, now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`RateLimitStore.take did not respond within ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    });
+    try {
+      return await Promise.race([store.take(key, cost, rule, now()), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
     async take({ tenant, principal, routeClass, rule, cost = 1 }): Promise<RateLimitResult> {
       const key = JSON.stringify([tenant ?? "", principal ?? "", routeClass]);
       try {
-        return await store.take(key, cost, rule, now());
+        return await takeWithTimeout(key, cost, rule);
       } catch (error) {
-        await notifyHook(onError, { error, tenant, principal, routeClass });
+        void notifyHook(onError, { error, tenant, principal, routeClass });
         return { allow: true };
       }
     },

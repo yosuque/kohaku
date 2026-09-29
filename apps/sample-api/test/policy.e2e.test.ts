@@ -119,6 +119,18 @@ describe("sample-api Policy as Code E2E", () => {
     expect(fourth.spec.provenance.cache).toBe("hit");
   });
 
+  it("records a policy.applied lineage event at startup (no actor, no previous policy), tenant-neutral", async () => {
+    const { file } = await loadPolicyFile(POLICY_FILE_PATH);
+    const { storage, policyRuntime } = await freshApp(file);
+
+    const events = await storage.listLineage({ type: ["policy.applied"] });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.payload["policyId"]).toBe(policyRuntime!.policyId);
+    expect(events[0]!.payload["previousPolicyId"]).toBeUndefined();
+    expect("tenant" in events[0]!).toBe(false);
+    expect(events[0]!.actor).toEqual({ kind: "system" }); // no operator id: lineage's own default system actor
+  });
+
   it("records a policy.applied lineage event on reload, tenant-neutral", async () => {
     const { file } = await loadPolicyFile(POLICY_FILE_PATH);
     const { storage, policyRuntime } = await freshApp(file);
@@ -128,7 +140,9 @@ describe("sample-api Policy as Code E2E", () => {
     };
     await policyRuntime!.reload(flipped, "test-operator");
 
-    const events = await storage.listLineage({ type: ["policy.applied"] });
+    const events = (await storage.listLineage({ type: ["policy.applied"] })).filter(
+      (e) => e.payload["previousPolicyId"] !== undefined, // skip the startup event
+    );
     expect(events).toHaveLength(1);
     expect(events[0]!.payload["changedPaths"]).toContain("tenants.tenant-a.compose.allowL2");
     expect("tenant" in events[0]!).toBe(false);

@@ -137,7 +137,7 @@ compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_i
 ルールである。W3C の trace-id は 1 つのトレース全体で共有されるため、そこから相関 id を導出すると 1 会話内の
 全ツール呼び出しが同じ id に潰れてしまう。TS の `mcpCorrelationId(extra)` は実際のトランスポートセッション id
 が取得できる場合にそれを読む(`ServerContext.sessionId`)が、セッションという概念の無いトランスポート(stdio)
-ではセッション部分をまるごと省略する(`mcp:<jsonrpc id>`)。この移植が使う `mcp` SDK はリクエストハンドラに
+ではセッション部分の代わりに呼び出しごとの新しい UUID を使う(`mcp:<uuid>:<jsonrpc id>`)。この移植が使う `mcp` SDK はリクエストハンドラに
 公開のトランスポートセッション id を一切露出しない——`ServerRequestContext.session` 自体が(接続ごとではなく)
 **リクエストごとに**新規構築される `ServerSession` ラッパーである(実測で確認済み: 同一接続上の 2 回の
 呼び出しが、id が異なる 2 つの `ctx.session` オブジェクトを生成した)ため、接続ごとに安定したアンカーは
@@ -393,14 +393,15 @@ TS 版との Python 固有の差異が 3 点あるが、いずれもワイヤに
   `compose.budget.dailyTokens` が自分のチェックを重ねる際には*新しい* `check_with_context` 一つに
   まとめて畳み込まれる(`policy.py` の `_build_effective_budget`)ため、素の `check` フィールドしか
   設定していなかった基本ポリシーが黙って失われることはない。
-- **MCP のレート制限バケットキーにはセッション id へのフォールバック段階が無い**: TS のキーの連鎖は
-  `principal.id -> sessionId -> "anonymous"` だが、Python は `principal.id -> "anonymous"` のみ。
+- **MCP のレート制限バケットキーは、トランスポートのセッション id ではなく接続ごとの id にフォールバックする**:
+  TS のキーの連鎖は `rateLimitKey -> principal.id -> sessionId -> "anonymous"`、Python は
+  `rate_limit_key -> principal.id -> _session_correlation_prefix`(接続ごとに 1 回生成する不透明 id)。
   インストールされている `mcp` SDK の `ServerRequestContext`(`host_mcp` の各ハンドラが実際に受け取る
   もの)には、接続ごとの公開セッション id が無い——それを持つのはより豊富な `Context` クラスだけで、
-  `ServerRunner` はハンドラ向けにそのクラスを構築しない。これは追跡済みの、言語固有のギャップであり
-  (設計判断ではない)、同じ根本原因(SDK のアクセサ不足)により、本ファイルの「構成」の節が
-  `McpErrorInfo.correlation_id`(常にツール呼び出し自身の JSON-RPC リクエスト id であり、接続ごとの
-  セッション id ではない)についてすでに記録しているのと同種のギャップである。
+  `ServerRunner` はハンドラ向けにそのクラスを構築しない——ため、Python は自前の接続ごとの id をキーにする。
+  いずれにせよ、キー未指定のリミッタは接続ごと(Python)か、単一の共有バケット(TS のステートレス HTTP /
+  stdio)にしかならない: 呼び出し元ごとの制限には `rate_limit_key` / `resolve_principal` を配線すること。
+  `rate_limiter` がどちらも持たない場合、`attach_kohaku_to_mcp_server` は 1 度だけ警告する。
 
 ## 統制された Action(TS と対称)
 

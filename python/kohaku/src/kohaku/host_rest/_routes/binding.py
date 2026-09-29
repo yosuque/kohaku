@@ -193,7 +193,11 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     @router.get("/binding/resolve")
     async def binding_resolve(request: Request) -> Response:
         rate_limited = await check_rate_limit(
-            deps, await _get_principal(deps, request), await _resolve_tenant(deps, request), "resolve"
+            deps,
+            await _get_principal(deps, request),
+            await _resolve_tenant(deps, request),
+            "resolve",
+            request_id_of(request, deps),
         )
         if rate_limited is not None:
             return rate_limited
@@ -246,7 +250,11 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     @router.post("/binding/action")
     async def binding_action(request: Request) -> Response:
         rate_limited = await check_rate_limit(
-            deps, await _get_principal(deps, request), await _resolve_tenant(deps, request), "action"
+            deps,
+            await _get_principal(deps, request),
+            await _resolve_tenant(deps, request),
+            "action",
+            request_id_of(request, deps),
         )
         if rate_limited is not None:
             return rate_limited

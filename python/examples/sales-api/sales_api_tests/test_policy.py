@@ -114,6 +114,18 @@ class TestPolicyAsCodeE2E:
         assert compose()["provenance"]["cache"] == "miss"
         assert compose()["provenance"]["cache"] == "hit"
 
+    def test_records_a_policy_applied_lineage_event_at_startup_without_actor_or_previous_policy(self) -> None:
+        file = _load_policy()
+        _client, app = _build(file)
+        assert app.policy_runtime is not None
+
+        events = asyncio.run(app.lineage.list_events(LineageFilter(type=["policy.applied"])))
+        assert len(events) == 1
+        assert events[0].payload["policyId"] == app.policy_runtime.policy_id
+        assert "previousPolicyId" not in events[0].payload
+        assert events[0].tenant is None
+        assert events[0].actor.id is None
+
     def test_records_a_policy_applied_lineage_event_on_reload_tenant_neutral(self) -> None:
         file = _load_policy()
         _client, app = _build(file)
@@ -128,7 +140,11 @@ class TestPolicyAsCodeE2E:
         )
         asyncio.run(app.policy_runtime.reload(flipped, "test-operator"))
 
-        events = asyncio.run(app.lineage.list_events(LineageFilter(type=["policy.applied"])))
+        events = [
+            e
+            for e in asyncio.run(app.lineage.list_events(LineageFilter(type=["policy.applied"])))
+            if "previousPolicyId" in e.payload  # skip the startup event
+        ]
         assert len(events) == 1
         assert "tenants.tenant-a.compose.allowL2" in events[0].payload["changedPaths"]
         assert events[0].tenant is None

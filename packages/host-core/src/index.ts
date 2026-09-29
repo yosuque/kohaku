@@ -92,12 +92,15 @@ export {
   type PolicyRateLimiterTakeParams,
   type PolicyRuntime,
   parsePolicy,
+  type RateLimitedInfo,
 } from "./policy.js";
 export {
   type CreateMemoryRateLimitStoreOptions,
+  type CreateRateLimiterOptions,
   createMemoryRateLimitStore,
   createRateLimiter,
   DEFAULT_MAX_MEMORY_ENTRIES,
+  DEFAULT_RATE_LIMIT_TIMEOUT_MS,
   type RateLimiter,
   type RateLimiterErrorInfo,
   type RateLimiterTakeParams,

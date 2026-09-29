@@ -18,6 +18,7 @@ from kohaku.host_core import (
     ActionAuditRecorder,
     FixationSelfHealApi,
     PolicyRateLimiter,
+    RateLimitedInfo,
     TraceContext,
 )
 from kohaku.spec import (
@@ -219,16 +220,31 @@ class McpHostDeps:
     Checked before `${prefix}_compose` / `${prefix}_render_snapshot` / the intent tools / `${prefix}_event`
     (route_class "compose"), `${prefix}_action` ("action"), and `${prefix}_resolve_binding` ("resolve").
 
-    The bucket key's "principal" component is the resolved principal's id only when `resolve_principal`
-    is wired (a real per-caller identity); otherwise (the unauthenticated demo path, where every call
-    resolves to the same constant fallback principal) it falls back to `_session_correlation_prefix`'s
-    stable per-connection opaque id (the same anchor U2's MCP correlation-id work established: keyed off
-    `ctx.session`'s private `_connection` attribute, degrading to a fresh collision-free-but-ungrouped id
-    when no per-connection anchor is reachable at all) -- see `_mcp_rate_limit_key`'s doc comment.
+    The bucket key's "principal" component is, in order: `rate_limit_key(ctx)` when wired; else the
+    resolved principal's id when `resolve_principal` is wired (a real per-caller identity); else (the
+    unauthenticated demo path, where every call resolves to the same constant fallback principal)
+    `_session_correlation_prefix`'s stable per-connection opaque id (keyed off `ctx.session`'s private
+    `_connection` attribute, degrading to a fresh collision-free-but-ungrouped id when no per-connection
+    anchor is reachable at all -- in which case each call gets its own bucket, i.e. no effective limit) --
+    see `_mcp_rate_limit_key`'s doc comment. A per-connection key is only as strong as the cost of opening
+    a new connection: a shared deployment should wire `resolve_principal` or `rate_limit_key`, and
+    `attach_kohaku_to_mcp_server` warns once when a `rate_limiter` is wired with neither.
 
     On denial, returns a structured tool error whose `structured_content["error"]["code"]` is
     `"RATE_LIMITED"` (SPEC §6.1, REST-RL-001's MCP counterpart) with a `retryAfterMs` when the limiter
     reports one. When unwired, no rate limiting occurs (backward compatible)."""
+    rate_limit_key: Callable[[ServerRequestContext[Any]], str | Awaitable[str]] | None = None
+    """Overrides the rate limiter's bucket key (its "principal" component) for a tool call, from that
+    call's `ServerRequestContext` -- for a product that keys by a transport identity `resolve_principal`
+    does not model (a client IP, an API-key id read from the HTTP request, ...). Takes precedence over
+    `resolve_principal`'s principal id and the per-connection fallback (see `rate_limiter`). A raise is
+    fail-closed: the tool call returns a structured tool error and the failure reaches `on_error`, as with
+    `resolve_principal`."""
+    on_rate_limited: Callable[[RateLimitedInfo], object] | None = None
+    """Observer called (fire-and-forget: never awaited, a raise is swallowed) each time `rate_limiter`
+    denies a tool call, with the route class, the bucket key as `principal` (see `rate_limiter`; this
+    profile has no tenant) and the call's correlation id as `requestId` (`mcp:<connection id>:<jsonrpc
+    id>`)."""
 
 
 @dataclass(frozen=True)

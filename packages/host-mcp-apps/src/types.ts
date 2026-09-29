@@ -7,6 +7,7 @@ import type {
   FixationSelfHealApi,
   OperationIndex,
   PolicyRateLimiter,
+  RateLimitedInfo,
   ViewRecorder,
 } from "@kohaku-ui/host-core";
 import type {
@@ -165,18 +166,36 @@ export interface McpHostDeps {
    * `${prefix}_render_snapshot` / the intent tools / `${prefix}_event` (routeClass "compose"),
    * `${prefix}_action` ("action"), and `${prefix}_resolve_binding` ("resolve").
    *
-   * The bucket key's "principal" component is `resolvePrincipal`'s resolved `principal.id` only when
-   * `resolvePrincipal` is wired (a real per-caller identity); otherwise (the unauthenticated demo path,
-   * where every call resolves to the same constant `principal`/anonymous fallback) it falls back to the
-   * MCP transport's `ServerContext.sessionId`, and only then to the literal string `"anonymous"` — so a
-   * single anonymous client cannot exhaust the shared bucket for every other anonymous client on a
-   * multi-session Streamable HTTP deployment (see `mcpRateLimitKey` in server.ts).
+   * The bucket key's "principal" component is, in order: `rateLimitKey(extra)` when wired; else
+   * `resolvePrincipal`'s resolved `principal.id` when `resolvePrincipal` is wired (a real per-caller
+   * identity); else the MCP transport's `ServerContext.sessionId`; else the literal string `"anonymous"`.
+   * **`sessionId` only exists on a session-bearing transport. Both shipped HTTP servers use the SDK's
+   * stateless Streamable HTTP serving (`createMcpHandler`), and stdio has no session, so there it is
+   * always absent and every caller shares the single `"anonymous"` bucket.** A shared HTTP deployment must
+   * wire `resolvePrincipal` or `rateLimitKey` to get a per-caller limit; `attachKohakuToMcpServer` warns
+   * once when a `rateLimiter` is wired with neither (see `mcpRateLimitKey` in server.ts).
    *
    * On denial, returns a structured tool error (`isError: true`) whose `structuredContent.error.code` is
    * `"RATE_LIMITED"` (SPEC §6.1, REST-RL-001's MCP counterpart) with a `retryAfterMs` when the limiter
    * reports one. When unwired, no rate limiting occurs (backward compatible).
    */
   rateLimiter?: PolicyRateLimiter;
+  /**
+   * Overrides the rate limiter's bucket key (its "principal" component) for a tool call, from that call's
+   * `ServerContext` — for a product that keys by a transport identity `resolvePrincipal` does not model
+   * (a client IP, an API-key id read from the HTTP request, ...). Takes precedence over
+   * `resolvePrincipal`'s `principal.id` and the `sessionId` fallback (see `rateLimiter`). A throw is
+   * fail-closed: the tool call returns a structured tool error and the failure reaches `onError`, as with
+   * `resolvePrincipal`.
+   */
+  rateLimitKey?: (extra: ServerContext) => string | Promise<string>;
+  /**
+   * Observer called (fire-and-forget: never awaited, a throw is swallowed) each time `rateLimiter` denies
+   * a tool call, with the route class, the bucket key as `principal` (see `rateLimiter`; this profile has
+   * no tenant) and the call's correlation id as `requestId` (`mcp:<sessionId or per-call uuid>:<jsonrpc
+   * id>`, the same value `ComposeTrace.correlationId` carries for a compose-family call).
+   */
+  onRateLimited?: (info: RateLimitedInfo) => void | Promise<void>;
 }
 
 export interface IntentToolDef {
