@@ -90,6 +90,38 @@ describe("implement / ImplRegistry.use", () => {
     }
   });
 
+  it("parses a props object once and warns once, however many times the Spec re-renders", () => {
+    vi.stubEnv("NODE_ENV", "test");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const parse = vi.spyOn(badgeDef.propsSchema, "safeParse");
+    try {
+      const registry = new ImplRegistry().use(implement(badgeDef, Badge));
+      const spec = badgeSpec({}); // missing required `label`
+      const ui = (
+        <RendererProvider value={{ impls: registry, theme: {} }}>
+          <SpecView spec={spec} />
+        </RendererProvider>
+      );
+      const { rerender } = render(ui);
+      rerender(ui);
+      rerender(ui);
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      // A replaced Spec carries a new props object, which is parsed (and warned about) afresh.
+      rerender(
+        <RendererProvider value={{ impls: registry, theme: {} }}>
+          <SpecView spec={badgeSpec({})} />
+        </RendererProvider>,
+      );
+      expect(parse).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      parse.mockRestore();
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("skips only the warning (not the parsing) on a mismatch in a NODE_ENV=production build by default", () => {
     vi.stubEnv("NODE_ENV", "production");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
