@@ -246,6 +246,31 @@ def test_build_evidence_pack_fails_fast_when_a_file_exceeds_the_per_file_cap(
     asyncio.run(run())
 
 
+def test_build_evidence_pack_fails_when_page_lineage_does_not_advance_the_cursor() -> None:
+    class _Stuck:
+        async def page_lineage(self, req: Any) -> Any:
+            from kohaku.spec import LineagePage
+
+            return LineagePage(events=[], nextCursor="stuck")
+
+        async def list_lineage(self, filter: Any = None) -> list[Any]:
+            return []
+
+        async def list_promotion_states(self, tenant: str | None = None) -> list[Any]:
+            return []
+
+        async def list_fixations(self, tenant: str | None = None) -> list[Any]:
+            return []
+
+    async def run() -> None:
+        with pytest.raises(ValueError, match="same nextCursor"):
+            await build_evidence_pack(
+                source=_Stuck(), scope=_SCOPE, generator="pytest/1", signer=_SIGNER
+            )
+
+    asyncio.run(run())
+
+
 def test_build_evidence_pack_requires_allow_incomplete_without_page_lineage(tmp_path: Path) -> None:
     class _NoPageLineageSource:
         async def list_lineage(self, filter: Any = None) -> list[Any]:

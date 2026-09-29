@@ -317,4 +317,12 @@ describe("buildEvidencePack", () => {
       expect(entry.bytes).toBe(file.content.byteLength);
     }
   });
+
+  it("throws instead of paging forever when pageLineage returns the cursor it was just given", async () => {
+    const source = fakeSource({});
+    source.pageLineage = async () => ({ events: [], nextCursor: "stuck" });
+    await expect(
+      buildEvidencePack({ source, scope: SCOPE, generator: "test-generator/1", signer: SIGNER }),
+    ).rejects.toThrow(/same nextCursor/);
+  });
 });

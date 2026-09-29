@@ -373,6 +373,11 @@ async def build_evidence_pack(
             events.extend(page.events)
             if page.nextCursor is None:
                 break
+            if page.nextCursor == cursor:
+                raise ValueError(
+                    "EvidenceSource.page_lineage returned the same nextCursor it was given; refusing "
+                    "to page forever (a StoragePort must advance the cursor)"
+                )
             cursor = page.nextCursor
         complete = True
     else:

@@ -155,6 +155,12 @@ export async function buildEvidencePack(options: BuildEvidencePackOptions): Prom
       });
       events.push(...page.events);
       if (page.nextCursor == null) break;
+      if (page.nextCursor === cursor) {
+        throw new Error(
+          "EvidenceSource.pageLineage returned the same nextCursor it was given; refusing to page " +
+            "forever (a StoragePort must advance the cursor)",
+        );
+      }
       cursor = page.nextCursor;
     }
     complete = true;
