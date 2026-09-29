@@ -182,8 +182,10 @@ export function formatExplainReport(report: ExplainReport): string {
   if (report.composes.length === 0) {
     lines.push("No view.composed event found for this requestId.");
     lines.push(
-      "(Events recorded before correlationId support shipped -- LQ/U2 -- have none and will never match; " +
-        "see docs/user-guide.md's DevTools section.)",
+      "Check that the host has a lineage recorder wired (createKohakuHost does by default; a hand-built " +
+        "createKohakuRoutes host needs `recorder`), and that this is the requestId of a compose response. " +
+        "Events recorded before correlationId support shipped have none and will never match; " +
+        "see docs/user-guide.md's DevTools section.",
     );
   }
   report.composes.forEach((c, i) => {

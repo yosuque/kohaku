@@ -323,7 +323,8 @@ npm run mcp:claude-desktop           # registers this project with Claude Deskto
 
 Restart Claude Desktop, then ask it about your data -- it calls this project's MCP server (\`npm run mcp\`, stdio) and
 renders the same UI Specs the web dashboard does. \`npm run mcp:http\` starts a Streamable HTTP server on :8788 instead,
-for claude.ai / ChatGPT (no authentication -- see server/mcp-http.ts before exposing it beyond localhost).
+for claude.ai / ChatGPT (no authentication -- see server/mcp-http.ts before exposing it beyond localhost; it only accepts
+localhost Host / Origin headers unless you set \`KOHAKU_MCP_ALLOWED_HOSTS\` / \`KOHAKU_MCP_ALLOWED_ORIGINS\`, e.g. behind a tunnel).
 Terminal hosts that cannot render an iframe (Claude Code, Codex CLI) get a self-contained HTML snapshot instead
 (\`kohaku_render_snapshot\`, saved under \`.kohaku/snapshots/\`, git-ignored).
 
@@ -343,8 +344,8 @@ KOHAKU_GOLDEN_UPDATE=1 npm test      # once: writes test/golden/summary.json's e
 Open http://localhost:5173. The **Summary** view is an L0 fixed Spec and renders without an LLM. **Chat** and the other views
 (Trend / Records) are composed by the LLM: edit \`.env\` (created for you with a capability secret) and set a provider key
 (or point it at a local ollama); \`.env.example\` documents every variable.
-Chat answers only within the generated Intent catalog; a question outside it returns \`NO_MATCH\`. To widen it, see
-Next steps (\`fallbackIntent\`).
+Chat answers only within the generated Intent catalog; a question outside it returns \`NO_MATCH\`. To widen it, pass a
+\`fallbackIntent\` to \`createKohakuHost\` in \`server/ports.ts\` (see Next steps).
 
 ## What was generated
 
@@ -363,9 +364,15 @@ Next steps (\`fallbackIntent\`).
       : ""
   }
 
-${mcpSection}## Next steps
+${mcpSection}## Debugging a view
 
-- L2 free generation, promotion and fixation (adoption-ladder Step 2): set \`allowL2: true\` in \`server/app.ts\`, add a catch-all Intent and pass it as \`fallbackIntent\`, and wire \`@kohaku-ui/lineage\` — see https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#6-embedding-it-into-your-own-product
+Every compose is recorded into lineage (in memory, so it is lost on restart -- pass a persistent \`storage\` to \`createKohakuHost\` in
+\`server/ports.ts\` to keep it). With the API running (\`npm run dev\`), take the \`X-Request-Id\` header of a compose response and run
+\`npx @kohaku-ui/cli explain <requestId> --rest http://localhost:8787/api/kohaku\` to see its tier, cache and lineage.
+
+## Next steps
+
+- L2 free generation, promotion and fixation (adoption-ladder Step 2): set \`allowL2: true\` in \`server/ports.ts\`'s \`policy\`, add a catch-all Intent (one that takes a \`request\` param) to \`server/intents.ts\` and pass its name as \`fallbackIntent\` to \`createKohakuHost\` in the same file, then wire promotion / fixation through \`createKohakuHost\`'s \`routes\` option (lineage itself is recorded by default) — see https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#6-embedding-it-into-your-own-product
 - Production storage / auth: \`@kohaku-ui/storage-redis\`, \`@kohaku-ui/storage-postgres\`, \`@kohaku-ui/authz-jwt\`.
 `;
 }
