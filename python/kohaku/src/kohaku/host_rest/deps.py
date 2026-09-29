@@ -268,7 +268,8 @@ class KohakuHostDeps:
     """Verifies stateless approval tokens for "approve"-tier actions (design.md #63; typically
     kohaku_authz_hmac's create_hmac_approval_port). Consulted by POST /binding/action's ActionGate and by
     POST /approvals (issuance). If not wired, an "approve"-tier action can never be allowed (the gate
-    returns denied) and POST /approvals responds 501 NOT_IMPLEMENTED."""
+    returns denied) and POST /approvals responds 501 NOT_IMPLEMENTED. Issuing additionally requires
+    authorize_governance: without it POST /approvals also responds 501 (SPEC ACT-APR-001 (e))."""
     action_audit_recorder: ActionAuditRecorder | None = None
     """Audit-recording hooks for governed Actions (design.md #62/#63; typically kohaku.lineage's
     create_action_audit_recorder). Called by POST /binding/action's ActionGate outcome, fail-open (a
@@ -278,7 +279,9 @@ class KohakuHostDeps:
     """Failure-path observability hook. When unwired, silent (no call is made); a requestId is issued and
     placed on the error envelope / X-Request-Id header regardless of whether this hook is wired (ops)."""
     authorize_governance: AuthorizeGovernanceHook | None = None
-    """Governance/audit plane authorization hook. When unwired, allowed without authorization by default (backward compatible)."""
+    """Governance/audit plane authorization hook. When unwired, allowed without authorization by default (backward compatible).
+    The one exception is POST /approvals (operation kind "action.approve"): it fails closed with 501 when this
+    hook is not wired, because otherwise any authenticated principal could approve."""
     rate_limiter: PolicyRateLimiter | None = None
     """Rate limiter for the compose-family routes (product responsibility; typically host_core's
     PolicyRuntime.rate_limiter, which resolves the effective RateLimitRule per tenant/route_class from

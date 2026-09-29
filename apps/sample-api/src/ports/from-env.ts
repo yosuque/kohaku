@@ -148,8 +148,8 @@ function createRevocationsFromEnv(env: NodeJS.ProcessEnv): RevocationsFromEnv {
  * default) rather than being passed through as a literal near-empty secret -- `.trim()` here only decides
  * *whether* the env value counts as set, the value returned is still the untrimmed original. Shared by
  * `buildAuthzFromEnv` (the capability token itself, hmac or jwt) and `index.ts` (design.md #62/#63's
- * approval-token port, `createHmacApprovalPort` -- the `"kohaku-approval.v1."` prefix already separates its
- * domain from the capability token's, so reusing the same secret is by design, not a shortcut).
+ * approval-token port, `createHmacApprovalPort` -- its MAC key is derived from the secret under its own label, which
+ * separates its domain from the capability token's, so reusing the same secret is by design, not a shortcut).
  */
 export function capabilitySecretFromEnv(env: NodeJS.ProcessEnv): string {
   const raw = env["KOHAKU_CAPABILITY_SECRET"];

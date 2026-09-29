@@ -1,14 +1,27 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { ApprovalGrant, ApprovalPort, ApprovalStore, ApprovalVerifyResult } from "@kohaku-ui/spec-core";
-import { DEFAULT_APPROVAL_TTL_SECONDS } from "@kohaku-ui/spec-core";
+import { ApprovalIssueError, DEFAULT_APPROVAL_TTL_SECONDS } from "@kohaku-ui/spec-core";
 import { isExpired, nowSeconds } from "./time.js";
 
 /** Default approval TTL (seconds); the shared spec-core default. Re-exported here for convenience. */
 export { DEFAULT_APPROVAL_TTL_SECONDS };
 
+/**
+ * Default upper bound (seconds) on any approval lifetime this port grants, whatever TTL the caller asks
+ * for. Without an `ApprovalStore` an approval is replayable until it expires, so the bound is the replay
+ * window.
+ */
+export const DEFAULT_MAX_APPROVAL_TTL_SECONDS = 3600;
+
 export interface HmacApprovalOptions {
   /** Default approval lifetime (seconds) when issueApproval's own opts.ttlSeconds is omitted. Defaults to 300. */
   ttlSeconds?: number;
+  /**
+   * Upper bound (seconds) on the lifetime of any approval this port issues. A larger TTL requested through
+   * `issueApproval`'s `opts.ttlSeconds` (or configured as `ttlSeconds`) is clamped down to it rather than
+   * rejected. Defaults to 3600.
+   */
+  maxTtlSeconds?: number;
   /**
    * Optional persistence for single-use enforcement (design.md #63). Omitted = a token stays usable
    * repeatedly until it expires (fine for a demo/dev environment; a production deployment gating a real
@@ -18,16 +31,18 @@ export interface HmacApprovalOptions {
 }
 
 /**
- * Domain-separation prefix (design.md #63): a capability token minted by `createHmacAuthzPort` never
- * carries this prefix, and an approval token is never accepted where a capability is expected, even
- * though both are HMAC-SHA256 tokens signed with (potentially) the same secret. `verifySignatureAndDecode`
- * below checks it before anything else, so a capability token presented here is rejected immediately
- * without even reaching the signature comparison -- and the converse (an approval token presented to
- * `createHmacAuthzPort`'s `verify`) is independently rejected there too, because the HMAC each port
- * computes covers a different message (this port signs only the payload *after* the prefix; a capability
- * port signing the whole string, prefix included, produces a different digest).
+ * Token-kind prefix (design.md #63). Human-readable marker only: what actually keeps this token kind from
+ * being accepted by `createHmacAuthzPort` (and the converse) is cryptographic. The approval MAC key is
+ * derived from the shared secret under `APPROVAL_KEY_LABEL` (so a capability port, which signs with the raw
+ * secret, computes a different digest for the same bytes), and the MAC input covers the prefix as well as
+ * the payload (so a signature cannot be lifted onto a token of another kind or version). The version is part
+ * of the prefix: a `v1` token (whose MAC covered the payload only, under the raw secret) fails the prefix
+ * check and is never accepted.
  */
-const APPROVAL_TOKEN_PREFIX = "kohaku-approval.v1.";
+const APPROVAL_TOKEN_PREFIX = "kohaku-approval.v2.";
+
+/** Label the approval MAC key is derived under: `HMAC(secret, APPROVAL_KEY_LABEL)`. */
+const APPROVAL_KEY_LABEL = "kohaku-approval-v2";
 
 interface HmacApprovalClaims {
   action: string;
@@ -39,9 +54,24 @@ interface HmacApprovalClaims {
   jti: string;
 }
 
+function isApprovalClaims(value: unknown): value is HmacApprovalClaims {
+  if (typeof value !== "object" || value === null) return false;
+  const c = value as Record<string, unknown>;
+  return (
+    typeof c.action === "string" &&
+    typeof c.payloadHash === "string" &&
+    typeof c.approverId === "string" &&
+    typeof c.requesterId === "string" &&
+    (c.tenant === undefined || c.tenant === null || typeof c.tenant === "string") &&
+    typeof c.exp === "number" &&
+    Number.isFinite(c.exp) &&
+    typeof c.jti === "string"
+  );
+}
+
 /**
  * A homegrown HMAC-SHA256 approval token (design.md #63), structurally parallel to
- * `createHmacAuthzPort`'s capability token but in its own signing domain (`APPROVAL_TOKEN_PREFIX`).
+ * `createHmacAuthzPort`'s capability token but in its own signing domain (a derived MAC key plus `APPROVAL_TOKEN_PREFIX` in the MAC input).
  * Stateless: the token itself carries every claim `verifyApproval` checks (action, payloadHash,
  * approverId, requesterId, tenant, exp), so no server-side lookup is needed to verify a fresh token --
  * single-use enforcement (replay prevention) is the only optional stateful behavior, and it is delegated
@@ -49,8 +79,11 @@ interface HmacApprovalClaims {
  */
 export function createHmacApprovalPort(secret: string, options: HmacApprovalOptions = {}): ApprovalPort {
   const defaultTtl = options.ttlSeconds ?? DEFAULT_APPROVAL_TTL_SECONDS;
+  const maxTtl = options.maxTtlSeconds ?? DEFAULT_MAX_APPROVAL_TTL_SECONDS;
   const store = options.store;
-  const sign = (payload: string): string => createHmac("sha256", secret).update(payload).digest("base64url");
+  const approvalKey = createHmac("sha256", secret).update(APPROVAL_KEY_LABEL).digest();
+  const sign = (payload: string): string =>
+    createHmac("sha256", approvalKey).update(APPROVAL_TOKEN_PREFIX).update(payload).digest("base64url");
 
   function verifySignatureAndDecode(
     token: string,
@@ -71,12 +104,17 @@ export function createHmacApprovalPort(secret: string, options: HmacApprovalOpti
       return { ok: false, reason: "invalid signature" };
     }
 
+    let parsed: unknown;
     try {
-      const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as HmacApprovalClaims;
-      return { ok: true, claims };
+      parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     } catch {
       return { ok: false, reason: "malformed payload" };
     }
+    // A correctly signed payload is still untrusted input to this function's caller (the secret may be
+    // shared with another token kind), so every claim is type-checked before use; a malformed one is a
+    // denial, never an exception.
+    if (!isApprovalClaims(parsed)) return { ok: false, reason: "malformed payload" };
+    return { ok: true, claims: parsed };
   }
 
   return {
@@ -84,7 +122,7 @@ export function createHmacApprovalPort(secret: string, options: HmacApprovalOpti
       if (input.approverId === input.requesterId) {
         // design.md #63: an ApprovalPort MUST reject issuing a self-approval rather than leave the check
         // to the caller (which could otherwise forget it and let a requester rubber-stamp their own action).
-        throw new Error("cannot issue an approval: approverId must differ from requesterId");
+        throw new ApprovalIssueError("cannot issue an approval: approverId must differ from requesterId");
       }
       const claims: HmacApprovalClaims = {
         action: input.action,
@@ -92,7 +130,7 @@ export function createHmacApprovalPort(secret: string, options: HmacApprovalOpti
         approverId: input.approverId,
         requesterId: input.requesterId,
         tenant: input.tenant,
-        exp: nowSeconds() + (opts.ttlSeconds ?? defaultTtl),
+        exp: nowSeconds() + Math.min(opts.ttlSeconds ?? defaultTtl, maxTtl),
         jti: randomBytes(16).toString("base64url"),
       };
       const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");

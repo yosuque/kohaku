@@ -233,6 +233,22 @@ class ApprovalGrant:
     tenant: str | None = None
 
 
+APPROVAL_ISSUE_ERROR_CODE: str = "APPROVAL_ISSUE_REJECTED"
+"""The `code` an ApprovalIssueError carries. A host (and a custom ApprovalPort, which need not import the
+class) discriminates the client-caused failure structurally by this string. Port of TS ports.ts's
+APPROVAL_ISSUE_ERROR_CODE."""
+
+
+class ApprovalIssueError(ValueError):
+    """Raised by `ApprovalPort.issue_approval` when it refuses a request for a reason the caller caused and
+    can fix (e.g. self-approval). Its message is safe to show a client as-is; `POST /approvals` maps
+    exactly this to 400. Any other exception from `issue_approval` is an infrastructure failure, reported
+    to the observability hook and surfaced to the client as a fixed-text 500. Port of TS ports.ts's
+    ApprovalIssueError."""
+
+    code: str = APPROVAL_ISSUE_ERROR_CODE
+
+
 @dataclass(frozen=True)
 class ApprovalVerifyResult:
     ok: bool
@@ -259,7 +275,14 @@ class ApprovalPort(Protocol):
     ) -> str:
         """Issue a token bound to (action, payload_hash, requester_id, tenant). approver_id MUST differ
         from requester_id -- an implementation MUST reject issuing a self-approval (design.md #63) rather
-        than leave that check to the caller. Default TTL DEFAULT_APPROVAL_TTL_SECONDS."""
+        than leave that check to the caller. Default TTL DEFAULT_APPROVAL_TTL_SECONDS.
+
+        Error contract: a rejection the caller caused (self-approval, an unacceptable request) MUST be
+        raised as an ApprovalIssueError (or an exception whose `code` is APPROVAL_ISSUE_ERROR_CODE); the
+        host reports its message to the client as a 400. Any other raised exception is treated as an
+        infrastructure failure: it reaches the observability hook and the client only sees a fixed 500
+        message. An implementation SHOULD bound the lifetime it grants (`ttl_seconds` is caller-supplied),
+        since a stateless token without an ApprovalStore is replayable until it expires."""
         ...
 
     async def verify_approval(

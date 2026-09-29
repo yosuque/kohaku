@@ -1,5 +1,5 @@
 import type { LineageFilter, LineagePageRequest, Surface } from "@kohaku-ui/spec-core";
-import { LineageCursorError } from "@kohaku-ui/spec-core";
+import { APPROVAL_ISSUE_ERROR_CODE, LineageCursorError } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import { ApprovalRequestBodySchema, TelemetryBodySchema } from "./schemas.js";
@@ -15,6 +15,19 @@ import {
 /** Aggregation window for usage analytics. Default 200 / max 1000 (aligned with the /lineage window limits). */
 const ANALYTICS_DEFAULT_LIMIT = 200;
 const ANALYTICS_MAX_LIMIT = 1000;
+
+/**
+ * The client-visible message for an unexpected `ApprovalPort.issueApproval` failure (INTERNAL 500). An
+ * arbitrary port error (a store/DB failure, say) may carry internals, so only an error the port marked as
+ * client-caused (`APPROVAL_ISSUE_ERROR_CODE`) has its own message shown; the original error still reaches
+ * the observability hook via reportHostError.
+ */
+const APPROVAL_INTERNAL_ERROR_MESSAGE =
+  "approval issuance failed; see the observability hook (onError) for details";
+
+/** The 501 message for `POST /approvals` on a host that has not wired `authorizeGovernance`. */
+const APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE =
+  "approval issuance requires an approver authorization: wire deps.authorizeGovernance to authorize the action.approve operation";
 
 /** Audit / observability plane (/lineage, /analytics/summary, /telemetry). */
 export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
@@ -195,6 +208,12 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
     if (deps.approvals == null) {
       return c.json(errorBody("NOT_IMPLEMENTED", "approvals are not configured for this host"), 501);
     }
+    // SPEC ACT-APR-001 (e): issuing is a privileged act, so unlike the other governance routes it does not
+    // fall back to "allowed when unwired" -- without the hook any authenticated principal other than the
+    // requester could mint an approval.
+    if (deps.authorizeGovernance == null) {
+      return c.json(errorBody("NOT_IMPLEMENTED", APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE), 501);
+    }
     const requestId = requestIdOf(c, deps);
     const body = await parseBody(
       c,
@@ -224,7 +243,10 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
       return c.json({ approval: token });
     } catch (e) {
       await reportHostError(deps, "approvals", requestId, e);
-      return c.json(errorBody("BAD_REQUEST", message(e), requestId), 400);
+      if ((e as { code?: unknown } | null)?.code === APPROVAL_ISSUE_ERROR_CODE) {
+        return c.json(errorBody("BAD_REQUEST", message(e), requestId), 400);
+      }
+      return c.json(errorBody("INTERNAL", APPROVAL_INTERNAL_ERROR_MESSAGE, requestId), 500);
     }
   });
 }

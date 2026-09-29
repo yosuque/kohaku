@@ -418,7 +418,7 @@ in the same request) and `"approve"` (a bound `ApprovalPort.verify_approval` tok
 `action.approved`; fail-open — a recorder failure never blocks the write).
 
 The stateless HMAC `ApprovalPort` reference implementation (`HmacApprovalPort` /
-`create_hmac_approval_port` / `MemoryApprovalStore`, the `"kohaku-approval.v1."`-prefixed token TS's
+`create_hmac_approval_port` / `MemoryApprovalStore`, the `"kohaku-approval.v2."`-prefixed token TS's
 `packages/authz-hmac` package ships) lives in `python/examples/sales-api/src/sales_api/approval_port.py`
 rather than in the shared `kohaku` library — the same place `sales_api/authz_port.py` already keeps the
 HMAC `AuthzPort`/capability-token counterpart, since this port has no standalone-package boundary on the
