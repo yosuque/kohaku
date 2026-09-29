@@ -19,7 +19,7 @@ import { KOHAKU_SET_STATE_FUNCTION } from "./to-a2ui.js";
  *
  * `callRendererFunction` (the server→renderer direction of the v1.0 RC's function-call channel) is not
  * modeled here: kohaku has no renderer-side catalog function for an agent to invoke (see the package
- * README's "A2UI v1.0 RC support" section), so there is nothing to declare a `callRendererFunction` for.
+ * README's "Outbound" section and SPEC.md §6.3), so there is nothing to declare a `callRendererFunction` for.
  */
 export interface KohakuCatalogDocumentOptions {
   /**

@@ -22,6 +22,7 @@ export {
   DEFAULT_MAX_COMPONENTS_PER_SURFACE,
   DEFAULT_MAX_DATA_MODEL_SIZE_BYTES,
   DEFAULT_MAX_MESSAGES_PER_INGEST,
+  DEFAULT_MAX_SURFACES,
 } from "./inbound/ingest.js";
 export {
   A2UI_ROOT_COMPONENT_ID,
@@ -39,6 +40,7 @@ export {
   InboundA2uiEnvelopeV1Schema,
   InboundA2uiEnvelopeV091Schema,
   type InboundA2uiMessage,
+  MAX_COMPONENTS_PER_MESSAGE,
   parseInboundA2uiMessage,
 } from "./inbound/schemas.js";
 export { type A2uiClientActionMessage, toA2uiClientAction } from "./inbound/to-a2ui-client-action.js";

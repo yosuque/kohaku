@@ -373,8 +373,9 @@ describe("fromA2ui: {path} data binding resolution", () => {
     expect(losses).toEqual([
       { componentId: "root", kind: "binding-snapshotted", detail: expect.any(String) },
     ]);
-    // A binding-snapshotted loss is recorded on provenance.fallback too (kind: negotiation).
-    expect(spec.provenance.fallback).toMatchObject({ from: "root", kind: "negotiation" });
+    // A snapshotted binding is ordinary A2UI (representable, just not live): it stays in `losses` and does
+    // not mark the Spec as a fallback (SPEC.md §6.3), so it remains fixatable.
+    expect(spec.provenance.fallback).toBeUndefined();
   });
 
   it("a {path} binding on an ordinary prop (not 'data') is always snapshotted, even when bindPath could resolve it", () => {
@@ -487,6 +488,22 @@ describe("fromA2ui: unmappable handling (fallback vs. reject)", () => {
     expect(losses).toEqual([
       { componentId: "mystery", kind: "unknown-component", detail: expect.any(String) },
     ]);
+    expect(spec.provenance.fallback).toMatchObject({ from: "mystery", kind: "negotiation" });
+  });
+
+  it("provenance.fallback names the first placeholder loss, skipping an earlier binding-snapshotted one", () => {
+    const surface: SurfaceState = {
+      surfaceId: "s",
+      sendDataModel: false,
+      components: {
+        root: { id: "root", component: "Column", children: ["bound", "mystery"] },
+        bound: { id: "bound", component: "Text", text: { path: "/greeting" } },
+        mystery: { id: "mystery", component: "SomeVendorWidget" },
+      },
+      dataModel: { greeting: "hello" },
+    };
+    const { spec, losses } = fromA2ui(surface, { intent: INTENT, dataVersion: "d1" });
+    expect(losses.map((l) => l.kind)).toEqual(["binding-snapshotted", "unknown-component"]);
     expect(spec.provenance.fallback).toMatchObject({ from: "mystery", kind: "negotiation" });
   });
 

@@ -85,6 +85,21 @@ class FixationUnsupportedError(Exception):
         self.name = "FixationUnsupportedError"
 
 
+class FixationNotAllowedError(Exception):
+    """Raised by `Fixations.fixate` when the Spec must not become the permanent L0 fast path (SPEC.md §8).
+
+    Either it carries `provenance.fallback` (a generation failure or a capability-negotiation downgrade, not the
+    intended structure) or it is a tier-`L2` result (free-form, sandbox-only generation that the promotion
+    pipeline, not fixation, governs). Enforced in the service so every caller is covered, not only the REST route.
+    `reason` is `"fallback"` or `"l2-tier"`.
+    """
+
+    def __init__(self, reason: Literal["fallback", "l2-tier"], message: str) -> None:
+        super().__init__(message)
+        self.name = "FixationNotAllowedError"
+        self.reason = reason
+
+
 class SupportsFingerprint(Protocol):
     """The object returned by catalog_for (supplies the current catalog's fingerprint).
 
@@ -261,7 +276,21 @@ class Fixations:
     async def fixate(
         self, *, pinned_spec: UISpec, approver: Principal, tenant: str | None = None
     ) -> FixationRecord:
-        """Human-approved fixation. The structure of pinned_spec is thereafter served as L0."""
+        """Human-approved fixation. The structure of pinned_spec is thereafter served as L0.
+
+        Raises FixationNotAllowedError for a Spec carrying `provenance.fallback` or a tier-`L2` Spec (SPEC.md §8).
+        """
+        fallback = pinned_spec.provenance.fallback
+        if fallback is not None:
+            raise FixationNotAllowedError(
+                "fallback",
+                f"a Spec carrying provenance.fallback cannot be fixated ({fallback.reason})",
+            )
+        if pinned_spec.provenance.tier == "L2":
+            raise FixationNotAllowedError(
+                "l2-tier",
+                "an L2 free-form Spec cannot be fixated; L2 results are governed by the promotion pipeline (L2->L1)",
+            )
         record = FixationRecord(
             intentHash=pinned_spec.intent.hash,
             canonical=pinned_spec.intent.canonical,

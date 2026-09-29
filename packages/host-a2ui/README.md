@@ -24,7 +24,9 @@ catalogMode: "split"}` additionally stamps a per-component `catalogId` for kohak
 components, and `{target: "v1.0", rendererFunctions: true}` projects a client-local `state.set` as a
 `kohaku.setState` catalog function call instead of a generic event (declared by
 `buildKohakuCatalogDocument`). `fromA2uiEvent(action)` converts an A2UI client action back into a kohaku
-`GuiAction`.
+`GuiAction`. kohaku has no renderer-side catalog function for an agent to call, so `callRendererFunction`
+(the v1.0 RC's server→renderer function-call message) is never emitted and not declared by the catalog
+document.
 
 ## Inbound: A2UI agent → kohaku Spec (ingest, a governance proxy)
 
@@ -44,7 +46,9 @@ resolved by `collectCapabilityScopes`/renderer-core exactly like any other compo
 one-time literal snapshot — wire it when you know which A2UI data-model paths correspond to a kohaku query
 you can re-resolve. `bindPath` is consulted *only* for that one `"data"` prop: an ordinary display prop or an
 event's `context` has no structural home for a live reference at all, so a `{path}` binding anywhere else is
-always a literal snapshot (a recorded `"binding-snapshotted"` loss), never passed to `bindPath`. Since
+always a literal snapshot (a recorded `"binding-snapshotted"` loss), never passed to `bindPath`. A snapshotted
+binding is ordinary A2UI, so unlike a placeholder it does not mark the Spec as a fallback (no
+`provenance.fallback`, no `view.fallback`) and the Spec stays fixatable. Since
 `bindPath` is your own hook and never the agent's, a read capability is only ever issued for a ref you
 yourself associated with that data-model path — an ingested surface cannot mint itself access to an
 arbitrary query this way.
@@ -56,9 +60,10 @@ because spec-core's `collectWriteActions`/`resolveWriteActionName` (what a host 
 capability to issue for a Spec) reads `payload.action`; since an A2UI event's `context` is a wholly
 agent-controlled open dictionary, without this envelope an agent could set `context: {action:
 "someRealOperation"}` and have a host mint a capability for a domain write it was never authorized to name.
-**A host serving an ingested Spec MUST recognize `A2UI_FORWARD_ACTION` and route it to
-`toA2uiClientAction` before ever considering dispatching to its `DomainPort`, and MUST NEVER register
-`A2UI_FORWARD_ACTION` itself as a real operation.** Only pass `trust: "trusted"` (which restores a
+**Routing this forward-action is your product's responsibility** (informative, not a conformance
+requirement; no reference host does it for you): recognize `A2UI_FORWARD_ACTION` and route it to
+`toA2uiClientAction` before ever considering dispatching to your `DomainPort`, and never register
+`A2UI_FORWARD_ACTION` itself as a real operation. Only pass `trust: "trusted"` (which restores a
 component — and its original events — verbatim from `sidecar`, bypassing every safety transform above) for
 content you can prove is kohaku's own prior `toA2ui` output re-ingested, never based on anything present in
 the surface itself; `createA2uiIngest` (below) always uses `"untrusted"` and does not expose this as a
@@ -76,8 +81,13 @@ calls, each to spec-core's `MAX_JSON_OBJECT_DEPTH`), and `createA2uiIngest` caps
 `ingest()` call may carry, how many components a surface may accumulate across calls, and the data model's
 serialized size (`maxMessagesPerIngest` / `maxComponentsPerSurface` / `maxDataModelSizeBytes`, all
 overridable — conservative defaults `DEFAULT_MAX_MESSAGES_PER_INGEST` (1000) /
-`DEFAULT_MAX_COMPONENTS_PER_SURFACE` (2000) / `DEFAULT_MAX_DATA_MODEL_SIZE_BYTES` (1 MiB, measured as
-`JSON.stringify(...).length`)). Those per-field depth checks alone are not enough — they run only *after*
+`DEFAULT_MAX_COMPONENTS_PER_SURFACE` (2000) / `DEFAULT_MAX_DATA_MODEL_SIZE_BYTES` (1 MiB, the UTF-8 byte
+length of `JSON.stringify(...)`)). The schema also caps a single message's `components` array
+(`MAX_COMPONENTS_PER_MESSAGE`, 2000), and `maxSurfaces` (default `DEFAULT_MAX_SURFACES`, 1000) bounds how many
+surfaces an instance tracks, evicting the least recently ingested one. An `ingest()` call is atomic: it folds
+its messages onto a private copy of the surface, checks the bounds, and only then commits, so a rejected call
+(an over-limit surface, or a reducer error part-way through the batch) leaves the surface as it was and later
+valid updates still succeed. Those per-field depth checks alone are not enough — they run only *after*
 zod has already recursed through the mutually-recursive value schemas to validate everything beneath that
 field, so a pathologically deep raw message can exhaust the call stack during that descent itself.
 `parseInboundA2uiMessage` therefore also runs a stack-safe depth check directly against the raw message
@@ -116,9 +126,33 @@ request-stable Intent instead whenever the ingested content represents "the same
 calls.
 
 `ingest()` records `view.composed` (`tier: "L1"`, `composedBy: "a2ui-ingest"`, `model: "a2ui:<agentId>"`)
-on every call and `view.fallback` whenever a loss occurred, so ingested content shows up in Lineage /
-Analytics like anything else; `ingest.fixate(surfaceId, approver)` pins the latest outcome the same way
-any other L1 Spec gets fixated to L0.
+on every call and `view.fallback` whenever a placeholder loss occurred, so ingested content shows up in
+Lineage / Analytics like anything else; `ingest.fixate(surfaceId, approver)` pins the latest outcome the same
+way any other L1 Spec gets fixated to L0.
+
+**Tenant isolation.** Pass `meta.tenant` to `ingest()`: surface state, `latest(surfaceId, tenant)` and
+`fixate(surfaceId, approver, tenant)` are all keyed by `(tenant, surfaceId)`, not `surfaceId` alone, so the
+same `surfaceId` under two tenants is two independent surfaces and one tenant can neither read, extend nor
+fixate another's (the Spec cache key and the fixation lookup were already tenant-scoped). Omitting the tenant
+is its own scope, separate from every named tenant.
+
+**Fixation semantics.** Once fixated, `ingest()` serves the pinned Spec as `tier: "L0"`, `cache: "fixated"`
+(and records it as L0), like every other fixated Spec. An ingested Spec's data is a literal snapshot, not a
+`$ref`, so fixating a surface freezes its data along with its structure — there is no staleness logic for it.
+A Spec carrying `provenance.fallback` (a placeholder loss) cannot be fixated (SPEC.md §8): `fixate()` throws
+`A2uiIngestError`, as does the underlying `Fixations.fixate` for any caller.
+
+**Forwarding an interaction back to the agent.** kohaku does not wire this route for you. In the endpoint
+that receives your renderer's actions, intercept the sentinel before anything reaches your `DomainPort`:
+
+```ts
+import { A2UI_FORWARD_ACTION, toA2uiClientAction } from "@kohaku-ui/host-a2ui";
+
+if (guiAction.params["action"] === A2UI_FORWARD_ACTION) {
+  await sendToAgent(toA2uiClientAction(guiAction)); // your own transport to the originating agent
+  return; // never dispatched as a domain write
+}
+```
 
 - Documentation: https://github.com/yosuque/kohaku#readme
 - Source: https://github.com/yosuque/kohaku/tree/main/packages/host-a2ui

@@ -67,6 +67,7 @@ export { createStorageEvidenceSource, type EvidenceSource } from "./evidence/sou
 export {
   createFixations,
   DEFAULT_FIXATION_POLICY,
+  FixationNotAllowedError,
   type FixationPolicy,
   type FixationProposal,
   type Fixations,

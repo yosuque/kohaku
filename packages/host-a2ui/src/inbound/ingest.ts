@@ -10,8 +10,14 @@ import {
   type UISpec,
 } from "@kohaku-ui/spec-core";
 import { z } from "zod";
-import { type A2uiIngestLoss, fromA2ui } from "./from-a2ui.js";
-import { A2uiIngestError, reduceSurfaces, type SurfaceState, surfaceIdOf } from "./reduce.js";
+import { type A2uiIngestLoss, fromA2ui, isPlaceholderLoss } from "./from-a2ui.js";
+import {
+  A2uiIngestError,
+  copyComponents,
+  reduceSurfaceMessage,
+  type SurfaceState,
+  surfaceIdOf,
+} from "./reduce.js";
 import { type InboundA2uiMessage, parseInboundA2uiMessage } from "./schemas.js";
 
 /**
@@ -60,15 +66,17 @@ export interface A2uiIngestFixations {
 /**
  * Conservative default bounds for `ingest()` (all overridable via `CreateA2uiIngestOptions`). A schema-valid
  * A2UI message has no upper bound on how many of them a caller sends in one `ingest()` call, how many
- * components a surface accumulates across calls, or how large its data model grows — each is an independent
- * DoS lever (parse/fold cost, `fromA2ui` conversion cost, `canonicalStringify`/hashing cost, cache storage
- * size) that schema validation alone does not close. These three are deliberately coarse, cheap-to-check
- * bounds, not a precise resource budget.
+ * components a surface accumulates across calls, how large its data model grows, or how many surfaces an
+ * ingest instance tracks — each is an independent DoS lever (parse/fold cost, `fromA2ui` conversion cost,
+ * `canonicalStringify`/hashing cost, cache storage size, retained memory) that schema validation alone does
+ * not close. These are deliberately coarse, cheap-to-check bounds, not a precise resource budget.
  */
 export const DEFAULT_MAX_MESSAGES_PER_INGEST = 1000;
 export const DEFAULT_MAX_COMPONENTS_PER_SURFACE = 2000;
-/** Measured as `JSON.stringify(dataModel).length` (UTF-16 code units — a portable size proxy that needs no Node `Buffer`/DOM `TextEncoder`, keeping this package's `src` free of any global assumption beyond plain JS). */
+/** Measured as the UTF-8 byte length of `JSON.stringify(dataModel)`. */
 export const DEFAULT_MAX_DATA_MODEL_SIZE_BYTES = 1_048_576;
+/** How many (tenant, surfaceId) surfaces an ingest instance keeps state for before evicting the least recently ingested one. */
+export const DEFAULT_MAX_SURFACES = 1000;
 
 export interface CreateA2uiIngestOptions {
   storage: A2uiIngestStorage;
@@ -109,7 +117,7 @@ export interface CreateA2uiIngestOptions {
   cachePolicy?: "first-wins" | "latest-wins";
   /**
    * The authenticated caller's identity (from the host's own auth, never taken from message payloads — see
-   * the F3 brief). Folded into the default Intent's canonical name and into `generatorVersion`
+   * the README's "governance proxy" section). Folded into the default Intent's canonical name and into `generatorVersion`
    * (`a2ui-ingest/<agentId>`), so two different agents never share a cache entry or a fixation even if they
    * happen to send identically-shaped surfaces.
    */
@@ -122,8 +130,14 @@ export interface CreateA2uiIngestOptions {
   maxMessagesPerIngest?: number;
   /** Caps a surface's total component count after folding (across every `ingest()` call so far, not just this one). Default {@link DEFAULT_MAX_COMPONENTS_PER_SURFACE}. */
   maxComponentsPerSurface?: number;
-  /** Caps the data model's serialized size (see {@link DEFAULT_MAX_DATA_MODEL_SIZE_BYTES} for how it is measured). Default {@link DEFAULT_MAX_DATA_MODEL_SIZE_BYTES}. */
+  /** Caps the data model's serialized size in UTF-8 bytes (of `JSON.stringify(dataModel)`). Default {@link DEFAULT_MAX_DATA_MODEL_SIZE_BYTES}. */
   maxDataModelSizeBytes?: number;
+  /**
+   * Caps how many (tenant, surfaceId) surfaces this instance tracks; past it the least recently ingested
+   * surface (its state and its `latest()` outcome) is evicted, so a later `ingest()` for it must start with
+   * a fresh `createSurface`. Default {@link DEFAULT_MAX_SURFACES}.
+   */
+  maxSurfaces?: number;
 }
 
 /** Per-call override of what `ingest()` would otherwise derive on its own. */
@@ -132,6 +146,10 @@ export interface A2uiIngestMeta {
   intent?: { canonical: string; params?: JsonObject };
   /** Overrides the default `"a2ui:" + sha256(canonical dataModel).slice(0,16)` derivation. */
   dataVersion?: string;
+  /**
+   * Scopes the surface state (not only the cache key) to this tenant: the same `surfaceId` under two tenants
+   * is two independent surfaces, so one tenant can neither read, extend nor fixate another's.
+   */
   tenant?: string;
 }
 
@@ -146,12 +164,51 @@ export interface A2uiIngest {
    * Folds `messages` (raw JSON off the wire; schema-validated here) onto this ingest's surface state, then
    * converts the targeted surface into a Spec (or returns the fixation shortcut). All messages in one call
    * must target the same surfaceId (mixing surfaces requires separate calls — see `surfaceIdOf`).
+   *
+   * Atomic per call: the batch is folded onto a private copy of the surface, the bounds are checked, and only
+   * then is it committed — a call that throws (a malformed sequence, or an over-limit surface) leaves the
+   * surface exactly as it was. The one committed outcome that also throws is a batch that ends in
+   * `deleteSurface`, which removes the surface and then reports that there is nothing to convert.
    */
   ingest(messages: unknown[], meta?: A2uiIngestMeta): Promise<A2uiIngestOutcome>;
-  /** The last `ingest()` outcome recorded for `surfaceId` (`undefined` if it was never ingested). */
-  latest(surfaceId: string): A2uiIngestOutcome | undefined;
-  /** Pins the latest ingest outcome for `surfaceId` via `opts.fixations` (throws if none was configured, or if the surface has no ingest outcome yet). */
-  fixate(surfaceId: string, approver: Principal): Promise<FixationRecord>;
+  /** The last `ingest()` outcome recorded for `surfaceId` under `tenant` (`undefined` if it was never ingested, was deleted, or was evicted). */
+  latest(surfaceId: string, tenant?: string): A2uiIngestOutcome | undefined;
+  /**
+   * Pins the latest ingest outcome for `surfaceId` (under `tenant`) via `opts.fixations` (throws if none was
+   * configured, if the surface has no ingest outcome yet, or if that outcome is a degraded rendering that
+   * SPEC.md §8 forbids fixating — see `provenance.fallback`). The pinned Spec is a literal snapshot: an
+   * ingested surface has no `$ref` data, so fixating it freezes its data along with its structure.
+   */
+  fixate(surfaceId: string, approver: Principal, tenant?: string): Promise<FixationRecord>;
+}
+
+/** One tracked surface: its accumulated state and the last outcome `ingest()` produced for it. */
+interface SurfaceEntry {
+  state: SurfaceState;
+  latest?: A2uiIngestOutcome;
+}
+
+/** Surface state is keyed by (tenant, surfaceId), JSON-encoded so no tenant/surface pair can collide with another. */
+function surfaceKey(tenant: string | undefined, surfaceId: string): string {
+  return JSON.stringify([tenant ?? null, surfaceId]);
+}
+
+/** UTF-8 byte length of `text` without allocating an encoded copy (a lone surrogate counts as U+FFFD, 3 bytes, as `TextEncoder` does). */
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        i++;
+      } else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
 }
 
 /** `a2ui.<agent_slug>.<surface_slug>`, matching spec-core's `CanonicalNameSchema` (`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$`). */
@@ -207,10 +264,29 @@ function buildCacheKey(
   return tenant != null ? `${base}:${tenant}` : base;
 }
 
-/** See the F3 brief (§5) / the package README's "governance proxy" section for the design this implements. */
+/** See the package README's "Inbound: A2UI agent → kohaku Spec (ingest, a governance proxy)" section for the design this implements. */
 export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
-  let surfaces = new Map<string, SurfaceState>();
-  const latestBySurface = new Map<string, { outcome: A2uiIngestOutcome; tenant: string | undefined }>();
+  // Insertion order doubles as recency order (a commit re-inserts its key last), so the first key is the
+  // least recently ingested surface — the one `maxSurfaces` evicts.
+  const entries = new Map<string, SurfaceEntry>();
+  const maxSurfaces = Math.max(1, opts.maxSurfaces ?? DEFAULT_MAX_SURFACES);
+
+  function commit(key: string, state: SurfaceState): void {
+    const previous = entries.get(key);
+    entries.delete(key);
+    entries.set(key, { state, ...(previous?.latest != null ? { latest: previous.latest } : {}) });
+    while (entries.size > maxSurfaces) {
+      const oldest = entries.keys().next().value;
+      if (oldest === undefined) break;
+      entries.delete(oldest);
+    }
+  }
+
+  /** Records `outcome` as the surface's latest unless it was deleted or evicted while `ingest()` awaited. */
+  function setLatest(key: string, outcome: A2uiIngestOutcome): void {
+    const entry = entries.get(key);
+    if (entry != null) entry.latest = outcome;
+  }
 
   async function recordComposed(
     canonicalIntent: { canonical: string; hash: string },
@@ -225,7 +301,7 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
         intent: canonicalIntent,
         dataVersion: spec.dataVersion,
         cache,
-        tier: "L1",
+        tier: spec.provenance.tier,
         model: `a2ui:${opts.agentId}`,
         durationMs,
       },
@@ -266,9 +342,20 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
       );
     }
     const surfaceId = [...surfaceIds][0]!;
-    for (const message of parsed) surfaces = reduceSurfaces(surfaces, message);
-    const surface = surfaces.get(surfaceId);
+    const tenant = meta?.tenant;
+    const surfaceEntryKey = surfaceKey(tenant, surfaceId);
+
+    // Fold the whole batch onto a private copy of the surface (its components copied once, not per message),
+    // and commit it only after the bounds below pass: everything up to `commit` is synchronous, so a throw
+    // anywhere in here (a reducer error mid-batch, an over-limit result) leaves the committed state untouched.
+    const previous = entries.get(surfaceEntryKey)?.state;
+    let surface: SurfaceState | undefined =
+      previous != null ? { ...previous, components: copyComponents(previous.components) } : undefined;
+    for (const message of parsed) {
+      surface = reduceSurfaceMessage(surface, message, { inPlaceComponents: true });
+    }
     if (surface == null) {
+      entries.delete(surfaceEntryKey);
       throw new A2uiIngestError(
         `ingest(): surface "${surfaceId}" no longer exists (its last message deleted it)`,
       );
@@ -285,29 +372,31 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
       );
     }
     const maxDataModelSize = opts.maxDataModelSizeBytes ?? DEFAULT_MAX_DATA_MODEL_SIZE_BYTES;
-    const dataModelSize = JSON.stringify(surface.dataModel).length;
+    const dataModelSize = utf8ByteLength(JSON.stringify(surface.dataModel));
     if (dataModelSize > maxDataModelSize) {
       throw new A2uiIngestError(
-        `ingest(): surface "${surfaceId}"'s data model is ${dataModelSize} (JSON.stringify length), exceeding maxDataModelSizeBytes (${maxDataModelSize})`,
+        `ingest(): surface "${surfaceId}"'s data model is ${dataModelSize} bytes (UTF-8 JSON), exceeding maxDataModelSizeBytes (${maxDataModelSize})`,
       );
     }
+    commit(surfaceEntryKey, surface);
 
-    const tenant = meta?.tenant;
     const canonical = meta?.intent?.canonical ?? defaultCanonical(opts.agentId, surfaceId);
     const params = meta?.intent?.params ?? { agent: opts.agentId, surfaceId };
     const intent = await finalizeIntent({ canonical, params });
 
     // Fixation shortcut, checked before any conversion work — mirrors host-core's composeWithFixation (the
     // structure is fixed; only $ref-resolved data would normally refresh, but an ingested surface has none
-    // of that, so this is a pure "serve the pinned Spec" short-circuit).
+    // of that, so this is a pure "serve the pinned Spec" short-circuit that also freezes the data snapshot).
+    // Served as tier L0 (SPEC.md §8), like composer's materializeFixation, so disclosure and analytics see a
+    // fixated Spec rather than a fresh L1 generation.
     const fixation = await opts.storage.getFixation(intent.hash, tenant);
     if (fixation != null) {
       const spec: UISpec = {
         ...fixation.pinnedSpec,
-        provenance: { ...fixation.pinnedSpec.provenance, cache: "fixated" },
+        provenance: { ...fixation.pinnedSpec.provenance, tier: "L0", cache: "fixated" },
       };
       const outcome: A2uiIngestOutcome = { spec, losses: [], cache: "fixated" };
-      latestBySurface.set(surfaceId, { outcome, tenant });
+      setLatest(surfaceEntryKey, outcome);
       await recordComposed(intent, spec, "fixated", Date.now() - startedAt, tenant);
       return outcome;
     }
@@ -366,14 +455,16 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
 
     const spec: UISpec = { ...servedSpec, provenance: { ...servedSpec.provenance, cache } };
     const outcome: A2uiIngestOutcome = { spec, losses, cache };
-    latestBySurface.set(surfaceId, { outcome, tenant });
+    setLatest(surfaceEntryKey, outcome);
 
     await recordComposed(intent, spec, cache, Date.now() - startedAt, tenant);
-    if (losses.length > 0) {
-      const first = losses[0]!;
+    // view.fallback only for a loss that substituted a placeholder; a snapshotted `{path}` binding is
+    // ordinary A2UI (see isPlaceholderLoss).
+    const firstPlaceholder = losses.find(isPlaceholderLoss);
+    if (firstPlaceholder != null) {
       await opts.recorder?.fallback?.({
         spec,
-        reason: first.detail,
+        reason: firstPlaceholder.detail,
         kind: "negotiation",
         surface: "a2ui",
         ...(tenant != null ? { tenant } : {}),
@@ -384,22 +475,37 @@ export function createA2uiIngest(opts: CreateA2uiIngestOptions): A2uiIngest {
 
   return {
     ingest,
-    latest(surfaceId) {
-      return latestBySurface.get(surfaceId)?.outcome;
+    latest(surfaceId, tenant) {
+      return entries.get(surfaceKey(tenant, surfaceId))?.latest;
     },
-    async fixate(surfaceId, approver) {
+    async fixate(surfaceId, approver, tenant) {
       if (opts.fixations == null) {
         throw new A2uiIngestError("fixate(): createA2uiIngest was not given a `fixations` option");
       }
-      const entry = latestBySurface.get(surfaceId);
-      if (entry == null) {
+      const outcome = entries.get(surfaceKey(tenant, surfaceId))?.latest;
+      if (outcome == null) {
         throw new A2uiIngestError(`fixate(): surface "${surfaceId}" has no ingested result yet`);
       }
-      return opts.fixations.fixate({
-        pinnedSpec: entry.outcome.spec,
-        approver,
-        ...(entry.tenant != null ? { tenant: entry.tenant } : {}),
-      });
+      const fallback = outcome.spec.provenance.fallback;
+      if (fallback != null) {
+        throw new A2uiIngestError(
+          `fixate(): surface "${surfaceId}"'s latest result is a degraded rendering (${fallback.reason}) and cannot be fixated`,
+        );
+      }
+      try {
+        return await opts.fixations.fixate({
+          pinnedSpec: outcome.spec,
+          approver,
+          ...(tenant != null ? { tenant } : {}),
+        });
+      } catch (e) {
+        // `Fixations.fixate` (lineage) enforces the same SPEC.md §8 rule for L2 / fallback Specs with a typed
+        // error this package cannot import; surface it as the ingest pipeline's own error type.
+        if (e instanceof Error && e.name === "FixationNotAllowedError") {
+          throw new A2uiIngestError(`fixate(): ${e.message}`);
+        }
+        throw e;
+      }
     },
   };
 }
