@@ -76,7 +76,9 @@ export function createFileStoragePort(dataDir: string): StoragePort {
       // array order (which `pageLineage`'s cursor and a restart's reload both rely on), and two concurrent
       // appends of one id cannot both pass the check. Idempotent by id: appending an event whose id already
       // exists (in memory or loaded from disk) is a no-op, so a retried write does not duplicate the JSONL
-      // line or move the entry's position. Async I/O keeps the disk write off the compose response's path.
+      // line or move the entry's position. Appends are serialized on that one mutex and hosts await the returned
+      // promise, so a slow disk delays the response that recorded the event; this port is the dev / sample
+      // default, and a production deployment uses a shared backend (storage-redis / storage-postgres).
       // Memory is updated only after the append succeeds, so memory and disk do not diverge on failure.
       await fileLock(lineagePath, async () => {
         if (lineageIds.has(event.id)) return;
