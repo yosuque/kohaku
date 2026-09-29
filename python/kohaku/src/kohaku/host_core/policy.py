@@ -78,8 +78,8 @@ def parse_policy(data: object) -> ParsedPolicy:
 class PolicyAppliedEvent:
     """The `policy.applied` audit event (design.md #69; SPEC is not affected -- this is a host-side
     operational concern). Fired by `reload()` only when the effective `policy_id` actually changes
-    (never on a no-op reload -- reloading byte-identical content, including the exact same file twice,
-    is *not* an audit-worthy event). The runtime's starting file is announced once through
+    (never on a no-op reload -- reloading content with the same canonical-JSON hash, including the
+    exact same file twice, is *not* an audit-worthy event). The runtime's starting file is announced once through
     `PolicyRuntime.audit_startup()` (`previousPolicyId` is None, `changedPaths` lists every top-level key
     of that file). The "policy.applied" event *type* is owned by kohaku.lineage, whose
     `Lineage.policy_applied` records this event. Field names are camelCase to match the eventual lineage payload shape (a JSON dict,
@@ -478,18 +478,20 @@ class PolicyRuntime:
         """Fires `audit` (if wired) once with the `PolicyAppliedEvent` for the runtime's starting file
         (`previousPolicyId` None, no actor). The TS port fires this from inside its async
         `createPolicyRuntime`; `create_policy_runtime` is synchronous here, so the caller awaits this once
-        after creating the runtime. Later calls are no-ops. A failure raised from `audit` propagates (as
-        it does from `reload`)."""
+        after creating the runtime. Later calls are no-ops once one has succeeded. A failure raised from
+        `audit` propagates (as it does from `reload`) and leaves the startup event unrecorded, so a retry
+        fires it again."""
         if self._startup_audited:
             return
-        self._startup_audited = True
         await self._fire_audit(_build_applied_event(None, None, self._file, self._policy_id), None)
+        self._startup_audited = True  # only after success: a failed startup audit can be retried
 
     async def reload(self, file: KohakuPolicyFile, actor: str | None = None) -> None:
         """Replaces the effective policy file. Fires `audit` (if wired) with a `PolicyAppliedEvent` --
         but only when the new `policy_id` actually differs from the current one; reloading
-        byte-identical content is a no-op (no event, memoized `policy_for` results are kept). Raises
-        `ValueError`, leaving the previous policy in force, when `file` declares `dailyTokens` /
+        content with the same `policy_id` (a canonical-JSON hash, so key order and formatting do not matter)
+        is a no-op (no event, memoized `policy_for` results are kept). Leaves the previous policy in force
+        and raises `ValueError` when `file` declares `dailyTokens` /
         `rateLimits` and the runtime was built without the `ledger` / `rate_limit_store` that would
         enforce it. A failure raised from `audit` propagates out of `reload` (not fail-open -- an admin
         reloading a policy should see that the audit trail was not recorded, the same way the TS port
@@ -497,14 +499,14 @@ class PolicyRuntime:
         _assert_dependencies_for(file, self._ledger, self._rate_limit_store)
         policy_id = compute_policy_id(file)
         if policy_id == self._policy_id:
-            return  # dedup: byte-identical content is a no-op, no event, memos kept
-        previous_file = self._file
-        previous_policy_id = self._policy_id
+            return  # dedup: same canonical content is a no-op, no event, memos kept
+        # Audit first, commit only on success: an unauditable policy change is not applied, and a retry
+        # with the same file is not deduped away (it would otherwise never record its event).
+        await self._fire_audit(_build_applied_event(self._file, self._policy_id, file, policy_id), actor)
         self._file = file
         self._policy_id = policy_id
         self._memo.clear()
         self._section_memo.clear()
-        await self._fire_audit(_build_applied_event(previous_file, previous_policy_id, file, policy_id), actor)
 
 
 def _build_applied_event(

@@ -46,8 +46,8 @@ export async function parsePolicy(json: unknown): Promise<ParsedPolicy> {
  * The `policy.applied` audit event (design.md #69; SPEC is not affected — this is a host-side
  * operational concern). Fired once by `createPolicyRuntime` for the file the runtime starts with
  * (`previousPolicyId` is `undefined`, `changedPaths` lists every top-level key of that file), and then by
- * `reload()` only when the effective `policyId` actually changes (never on a no-op reload — comparing
- * byte-for-byte identical content, including reloading the exact same file twice, is *not* an
+ * `reload()` only when the effective `policyId` actually changes (never on a no-op reload — reloading
+ * content with the same canonical-JSON hash, including the exact same file twice, is *not* an
  * audit-worthy event). The "policy.applied" event *type* is owned by `@kohaku-ui/lineage`, and
  * `Lineage.policyApplied` records this event as-is.
  */
@@ -297,7 +297,7 @@ export interface PolicyRuntime {
   /** The current file's `policyId` (`sha256:<hex>`). Live: reflects the most recent `reload`. */
   readonly policyId: string;
   /**
-   * Replaces the effective policy file. Fires `audit` (if wired) with a `PolicyAppliedEvent` — but only when the new `policyId` actually differs from the current one; reloading byte-identical content is a no-op (no event, memoized `policyFor` results are kept). Rejects, leaving the previous policy in force, when `file` declares `dailyTokens` / `rateLimits` and the runtime was built without the `ledger` / `rateLimitStore` that would enforce it (see `CreatePolicyRuntimeOptions`).
+   * Replaces the effective policy file. Fires `audit` (if wired) with a `PolicyAppliedEvent` — but only when the new `policyId` actually differs from the current one; reloading content with the same `policyId` (canonical-JSON hash, so key order and formatting do not matter) is a no-op (no event, memoized `policyFor` results are kept). Rejects, leaving the previous policy in force, when the `audit` hook rejects (the audit runs before the new policy is committed) or when `file` declares `dailyTokens` / `rateLimits` and the runtime was built without the `ledger` / `rateLimitStore` that would enforce it (see `CreatePolicyRuntimeOptions`).
    */
   reload(file: KohakuPolicyFile, actor?: string): Promise<void>;
 }
@@ -440,14 +440,14 @@ export async function createPolicyRuntime(options: CreatePolicyRuntimeOptions): 
   async function reload(file: KohakuPolicyFile, actor?: string): Promise<void> {
     assertDependenciesFor(file, options);
     const policyId = await computePolicyId(file);
-    if (policyId === currentPolicyId) return; // dedup: byte-identical content is a no-op, no event, memos kept
-    const previousFile = currentFile;
-    const previousPolicyId = currentPolicyId;
+    if (policyId === currentPolicyId) return; // dedup: same canonical content is a no-op, no event, memos kept
+    // Audit first, commit only on success: an unauditable policy change is not applied, and a retry with
+    // the same file is not deduped away (it would otherwise never record its `policy.applied` event).
+    await options.audit?.(buildAppliedEvent(currentFile, currentPolicyId, file, policyId), actor);
     currentFile = file;
     currentPolicyId = policyId;
     memo.clear();
     sectionMemo.clear();
-    await options.audit?.(buildAppliedEvent(previousFile, previousPolicyId, file, policyId), actor);
   }
 
   await options.audit?.(buildAppliedEvent(undefined, undefined, currentFile, currentPolicyId), undefined);

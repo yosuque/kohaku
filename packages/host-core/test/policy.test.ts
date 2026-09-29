@@ -275,7 +275,7 @@ describe("createPolicyRuntime: rateLimiter", () => {
 });
 
 describe("createPolicyRuntime: reload", () => {
-  it("is a no-op (no audit call) when the new file is byte-identical", async () => {
+  it("is a no-op (no audit call) when the new file has the same canonical content", async () => {
     const events: PolicyAppliedEvent[] = [];
     const runtime = await createPolicyRuntime({
       file: makeFile({ defaults: { compose: { allowL2: true } } }),
@@ -286,7 +286,7 @@ describe("createPolicyRuntime: reload", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("a byte-identical reload keeps the memoized policyFor result (the memo is cleared only on an effective change)", async () => {
+  it("a same-content reload keeps the memoized policyFor result (the memo is cleared only on an effective change)", async () => {
     const base: ComposePolicy = {};
     const runtime = await createPolicyRuntime({
       file: makeFile({ defaults: { compose: { allowL2: true } } }),
@@ -295,6 +295,30 @@ describe("createPolicyRuntime: reload", () => {
     const before = runtime.policyFor();
     await runtime.reload(makeFile({ defaults: { compose: { allowL2: true } } }));
     expect(runtime.policyFor()).toBe(before);
+  });
+
+  it("a rejecting audit leaves the previous policy in force, and a retry with the same file records the event", async () => {
+    const events: PolicyAppliedEvent[] = [];
+    let failNext = false;
+    const runtime = await createPolicyRuntime({
+      file: makeFile({ defaults: { compose: { allowL2: false } } }),
+      audit: (e) => {
+        if (failNext) throw new Error("lineage down");
+        events.push(e);
+      },
+    });
+    const before = runtime.policyId;
+    const next = makeFile({ defaults: { compose: { allowL2: true } } });
+    failNext = true;
+    await expect(runtime.reload(next)).rejects.toThrow("lineage down");
+    expect(runtime.policyId).toBe(before);
+    expect(runtime.policyFor().allowL2).not.toBe(true);
+    failNext = false;
+    events.length = 0;
+    await runtime.reload(next); // not deduped: the failed attempt never committed
+    expect(runtime.policyId).not.toBe(before);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.previousPolicyId).toBe(before);
   });
 
   it("fires audit with the new/previous policyId, version, label, changedPaths, and tenants", async () => {
@@ -460,8 +484,12 @@ describe("createPolicyRuntime: bounded / shared memos", () => {
     const first = runtime.policyFor({ surface: "web", tenant: "t-first" });
     for (let i = 0; i < DEFAULT_MAX_MEMORY_ENTRIES; i += 1) {
       runtime.policyFor({ surface: "web", tenant: `flood-${i}` });
+      // Re-access mid-flood: recency, not insertion order, decides survival (a FIFO memo would evict it).
+      if (i === Math.floor(DEFAULT_MAX_MEMORY_ENTRIES / 2)) {
+        expect(runtime.policyFor({ surface: "web", tenant: "t-first" })).toBe(first);
+      }
     }
-    expect(runtime.policyFor({ surface: "web", tenant: "t-first" })).not.toBe(first); // evicted, rebuilt
+    expect(runtime.policyFor({ surface: "web", tenant: "t-first" })).toBe(first); // recently used, survives
     const recent = runtime.policyFor({ surface: "web", tenant: `flood-${DEFAULT_MAX_MEMORY_ENTRIES - 1}` });
     expect(runtime.policyFor({ surface: "web", tenant: `flood-${DEFAULT_MAX_MEMORY_ENTRIES - 1}` })).toBe(
       recent,

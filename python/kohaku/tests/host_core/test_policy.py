@@ -412,9 +412,36 @@ class TestReload:
 
         asyncio.run(run())
 
+    def test_a_raising_audit_leaves_the_previous_policy_in_force_and_a_retry_records_the_event(
+        self,
+    ) -> None:
+        async def run() -> None:
+            events: list[PolicyAppliedEvent] = []
+            fail = {"on": False}
+
+            def audit(event: PolicyAppliedEvent, actor: str | None) -> None:
+                if fail["on"]:
+                    raise RuntimeError("audit sink down")
+                events.append(event)
+
+            runtime = create_policy_runtime(make_file(), audit=audit)
+            before = runtime.policy_id
+            nxt = make_file(label="new")
+            fail["on"] = True
+            with pytest.raises(RuntimeError, match="audit sink down"):
+                await runtime.reload(nxt)
+            assert runtime.policy_id == before
+            fail["on"] = False
+            await runtime.reload(nxt)  # not deduped: the failed attempt never committed
+            assert runtime.policy_id != before
+            assert len(events) == 1
+            assert events[0].previousPolicyId == before
+
+        asyncio.run(run())
+
 
 class TestReloadDedupAndValidation:
-    def test_a_byte_identical_reload_keeps_the_memoized_policy_for_result(self) -> None:
+    def test_a_same_content_reload_keeps_the_memoized_policy_for_result(self) -> None:
         async def run() -> None:
             base = ComposePolicy()
             runtime = create_policy_runtime(
@@ -465,6 +492,25 @@ class TestStartupAudit:
             assert event.label == "boot"
             assert event.tenants == ["tenant-a"]
             assert {"version", "label", "defaults", "tenants"} <= set(event.changedPaths)
+
+        asyncio.run(run())
+
+    def test_a_failed_audit_startup_can_be_retried(self) -> None:
+        async def run() -> None:
+            calls: list[PolicyAppliedEvent] = []
+            fail = {"on": True}
+
+            def audit(event: PolicyAppliedEvent, actor: str | None) -> None:
+                if fail["on"]:
+                    raise RuntimeError("audit sink down")
+                calls.append(event)
+
+            runtime = create_policy_runtime(make_file(), audit=audit)
+            with pytest.raises(RuntimeError, match="audit sink down"):
+                await runtime.audit_startup()
+            fail["on"] = False
+            await runtime.audit_startup()
+            assert len(calls) == 1
 
         asyncio.run(run())
 
