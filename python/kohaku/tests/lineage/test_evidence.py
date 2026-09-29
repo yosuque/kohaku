@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +35,7 @@ from kohaku.lineage import (
     verify_evidence_pack,
     verify_manifest_signature,
 )
-from kohaku.spec import LineageActor, PromotionState, sha256_hex
+from kohaku.spec import LineageActor, PromotionState, canonical_stringify, sha256_hex
 from kohaku.storage import FileStoragePort
 
 from ._helpers import seed
@@ -43,7 +44,7 @@ pytest.importorskip("cryptography", reason="the `evidence` optional extra is not
 
 # Wide enough to cover _helpers.seed()'s fixed seed epoch (2026-07-17, see _helpers.py's _SEED_EPOCH).
 _SCOPE = EvidencePackScope(since="2026-01-01T00:00:00.000Z", until="2026-12-31T23:59:59.999Z")
-_SIGNER = EvidenceManifestSigner(keyId="0123456789abcdef")
+_SIGNER = EvidenceManifestSigner(alg="Ed25519", keyId="0123456789abcdef")
 
 ED25519_PKCS8_PREFIX = bytes.fromhex("302e020100300506032b657004220420")
 
@@ -113,7 +114,7 @@ def test_evidence_file_entry_rejects_a_sha256_with_a_trailing_newline() -> None:
 
 def test_evidence_manifest_signer_rejects_a_key_id_with_a_trailing_newline() -> None:
     with pytest.raises(ValidationError):
-        EvidenceManifestSigner(keyId="0123456789abcdef\n")
+        EvidenceManifestSigner(alg="Ed25519", keyId="0123456789abcdef\n")
 
 
 class _MemoryReader:
@@ -170,7 +171,7 @@ def test_build_evidence_pack_and_verify_roundtrip(tmp_path: Path) -> None:
             source=create_storage_evidence_source(storage),
             scope=_SCOPE,
             generator="pytest/1",
-            signer=EvidenceManifestSigner(keyId=key_id),
+            signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
         )
 
         assert pack.manifest.complete is True
@@ -183,7 +184,7 @@ def test_build_evidence_pack_and_verify_roundtrip(tmp_path: Path) -> None:
         signature = sign_manifest(pack.manifest, keypair.private_key)
         assert verify_manifest_signature(pack.manifest, signature, keypair.public_key) is True
 
-        manifest_json = pack.manifest.model_dump_json()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
         reader = _MemoryReader(pack.files, manifest_json, signature)
         result = await verify_evidence_pack(reader, keypair.public_key)
         assert result.errors == []
@@ -255,10 +256,10 @@ def test_verify_fails_when_a_pack_file_byte_is_tampered_with(tmp_path: Path) -> 
             source=create_storage_evidence_source(storage),
             scope=_SCOPE,
             generator="pytest/1",
-            signer=EvidenceManifestSigner(keyId=key_id),
+            signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
         )
         signature = sign_manifest(pack.manifest, keypair.private_key)
-        manifest_json = pack.manifest.model_dump_json()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
 
         tampered_files = []
         for f in pack.files:
@@ -289,14 +290,14 @@ def test_verify_refuses_a_files_entry_whose_manifest_recorded_size_exceeds_the_h
             source=create_storage_evidence_source(storage),
             scope=_SCOPE,
             generator="pytest/1",
-            signer=EvidenceManifestSigner(keyId=key_id),
+            signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
         )
         entry = next(f for f in pack.manifest.files if f.path == "events.jsonl")
         # A manifest that (rightly signed or not) declares an implausible size for a file -- verify must
         # refuse before ever reading it, not after buffering ~100MiB into memory to find out.
         entry.bytes = 100 * 1024 * 1024
         signature = sign_manifest(pack.manifest, keypair.private_key)
-        manifest_json = pack.manifest.model_dump_json()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
 
         read_file_calls: list[str] = []
 
@@ -336,10 +337,10 @@ def test_verify_refuses_a_files_entry_whose_on_disk_size_differs_via_size(tmp_pa
             source=create_storage_evidence_source(storage),
             scope=_SCOPE,
             generator="pytest/1",
-            signer=EvidenceManifestSigner(keyId=key_id),
+            signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
         )
         signature = sign_manifest(pack.manifest, keypair.private_key)
-        manifest_json = pack.manifest.model_dump_json()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
         target_path = "events.jsonl"
         read_file_calls: list[str] = []
 
@@ -383,10 +384,10 @@ def test_verify_fails_with_the_wrong_public_key(tmp_path: Path) -> None:
             source=create_storage_evidence_source(storage),
             scope=_SCOPE,
             generator="pytest/1",
-            signer=EvidenceManifestSigner(keyId=key_id),
+            signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
         )
         signature = sign_manifest(pack.manifest, keypair.private_key)
-        manifest_json = pack.manifest.model_dump_json()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
         reader = _MemoryReader(pack.files, manifest_json, signature)
         result = await verify_evidence_pack(reader, other_keypair.public_key)
         assert result.ok is False
@@ -410,10 +411,10 @@ def test_verify_reports_artifact_mismatch_as_non_fatal(tmp_path: Path) -> None:
             source=create_storage_evidence_source(storage),
             scope=_SCOPE,
             generator="pytest/1",
-            signer=EvidenceManifestSigner(keyId=key_id),
+            signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
         )
         signature = sign_manifest(pack.manifest, keypair.private_key)
-        manifest_json = pack.manifest.model_dump_json()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
         reader = _MemoryReader(pack.files, manifest_json, signature)
         result = await verify_evidence_pack(reader, keypair.public_key)
         assert result.ok is True
@@ -421,6 +422,130 @@ def test_verify_reports_artifact_mismatch_as_non_fatal(tmp_path: Path) -> None:
         assert "a1" in result.mismatches[0]
 
     asyncio.run(run())
+
+
+async def _signed_empty_pack() -> tuple[Any, Any, str]:
+    """(pack, keypair, base64 signature) for an empty-scope pack."""
+    keypair = generate_ed25519_keypair()
+    key_id = derive_ed25519_key_id(export_ed25519_public_key_raw(keypair.public_key))
+
+    class _Empty:
+        async def list_lineage(self, filter: Any = None) -> list[Any]:
+            return []
+
+        async def page_lineage(self, req: Any) -> Any:
+            from kohaku.spec import LineagePage
+
+            return LineagePage(events=[])
+
+        async def list_promotion_states(self, tenant: str | None = None) -> list[Any]:
+            return []
+
+        async def list_fixations(self, tenant: str | None = None) -> list[Any]:
+            return []
+
+    pack = await build_evidence_pack(
+        source=_Empty(),
+        scope=_SCOPE,
+        generator="pytest/1",
+        signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
+    )
+    return pack, keypair, sign_manifest(pack.manifest, keypair.private_key)
+
+
+def _tamper_unknown_top_level(m: dict[str, Any]) -> None:
+    m["injected"] = "approved by legal"
+
+
+def _tamper_unknown_nested(m: dict[str, Any]) -> None:
+    m["scope"]["approvedBy"] = "legal"
+
+
+def _tamper_removed_key(m: dict[str, Any]) -> None:
+    del m["warnings"]
+
+
+def _tamper_retyped_value(m: dict[str, Any]) -> None:
+    m["counts"]["events"] = str(m["counts"]["events"])
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        _tamper_unknown_top_level,
+        _tamper_unknown_nested,
+        _tamper_removed_key,
+        _tamper_retyped_value,
+    ],
+)
+def test_verify_fails_when_manifest_json_is_altered_after_signing(tamper: Any) -> None:
+    """The signature covers the raw manifest.json value, so content the model would ignore, default or
+    coerce cannot ride along under a valid signature."""
+
+    async def run() -> None:
+        pack, keypair, signature = await _signed_empty_pack()
+        manifest = pack.manifest.canonical_dict()
+        tamper(manifest)
+        reader = _MemoryReader(pack.files, json.dumps(manifest), signature)
+        result = await verify_evidence_pack(reader, keypair.public_key)
+        assert result.ok is False
+        assert result.manifest is None
+        assert any("manifest.sig" in e for e in result.errors)
+
+    asyncio.run(run())
+
+
+def test_verify_rejects_a_validly_signed_manifest_with_an_unknown_key_on_shape() -> None:
+    async def run() -> None:
+        pack, keypair, _ = await _signed_empty_pack()
+        manifest = pack.manifest.canonical_dict()
+        manifest["injected"] = "x"
+        message = canonical_stringify(manifest).encode("utf-8")
+        signature = base64.b64encode(sign_bytes(message, keypair.private_key)).decode("ascii")
+        reader = _MemoryReader(pack.files, json.dumps(manifest), signature)
+        result = await verify_evidence_pack(reader, keypair.public_key)
+        assert result.ok is False
+        assert "EvidenceManifestSchema" in result.errors[0]
+
+    asyncio.run(run())
+
+
+def test_verify_rejects_a_validly_signed_manifest_with_a_json_null() -> None:
+    async def run() -> None:
+        pack, keypair, _ = await _signed_empty_pack()
+        manifest = pack.manifest.canonical_dict()
+        manifest["scope"]["tenant"] = None
+        message = canonical_stringify(manifest).encode("utf-8")
+        signature = base64.b64encode(sign_bytes(message, keypair.private_key)).decode("ascii")
+        reader = _MemoryReader(pack.files, json.dumps(manifest), signature)
+        result = await verify_evidence_pack(reader, keypair.public_key)
+        assert result.ok is False
+        assert "null" in result.errors[0]
+
+    asyncio.run(run())
+
+
+def test_verify_treats_a_malformed_signature_as_a_failed_verification() -> None:
+    async def run() -> None:
+        pack, keypair, _ = await _signed_empty_pack()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
+        reader = _MemoryReader(pack.files, manifest_json, "!!!not base64!!!")
+        result = await verify_evidence_pack(reader, keypair.public_key)
+        assert result.ok is False
+        assert any("manifest.sig" in e for e in result.errors)
+
+    asyncio.run(run())
+
+
+def test_evidence_manifest_models_reject_unknown_keys_and_coercion() -> None:
+    with pytest.raises(ValidationError):
+        EvidenceFileEntry.model_validate(
+            {"path": "events.jsonl", "sha256": "a" * 64, "bytes": 1, "extra": True}
+        )
+    with pytest.raises(ValidationError):
+        EvidenceFileEntry.model_validate({"path": "events.jsonl", "sha256": "a" * 64, "bytes": "1"})
+    with pytest.raises(ValidationError):
+        EvidenceManifestSigner.model_validate({"keyId": "0123456789abcdef"})
 
 
 def test_verify_fails_cleanly_on_invalid_manifest_json() -> None:
@@ -452,6 +577,8 @@ def test_signature_is_base64_text() -> None:
     from kohaku.lineage import EvidenceManifest, EvidenceManifestCounts, EvidenceManifestScope
 
     manifest = EvidenceManifest(
+        format="kohaku-evidence-pack",
+        version=1,
         generator="pytest/1",
         generatedAt="2026-02-01T00:00:00.000Z",
         scope=EvidenceManifestScope(

@@ -1,6 +1,11 @@
 import { canonicalStringify, type LineageEventRecord, type PromotionState } from "@kohaku-ui/spec-core";
 import { artifactClaimFromEventPayload, artifactClaimFromPromotionData } from "./artifacts.js";
-import { type EvidenceManifest, EvidenceManifestSchema, isSafeEvidenceFilePath } from "./manifest.js";
+import {
+  type EvidenceManifest,
+  EvidenceManifestSchema,
+  isSafeEvidenceFilePath,
+  MAX_EVIDENCE_FILE_BYTES,
+} from "./manifest.js";
 
 /**
  * Opaque handles for WebCrypto Ed25519 key material. Kept untyped/structural (`object`, not the DOM
@@ -67,7 +72,7 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-async function sha256HexBytes(bytes: Uint8Array): Promise<string> {
+export async function sha256HexBytes(bytes: Uint8Array): Promise<string> {
   const digest = await runtime.crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -147,14 +152,24 @@ export async function signManifest(
   return bytesToBase64(signature);
 }
 
-/** Verifies a manifest's signature (`manifest.sig`'s base64 contents) against an Ed25519 public key. */
+/**
+ * Verifies a manifest's signature (`manifest.sig`'s base64 contents) against an Ed25519 public key.
+ * `manifest` is whatever JSON value was signed: `verifyEvidencePack` passes the raw `JSON.parse` result
+ * of manifest.json (not a schema-parsed copy, which would silently drop unknown keys and so verify
+ * content the signer never covered). A malformed signature is a failed verification, not a throw.
+ */
 export async function verifyManifestSignature(
-  manifest: EvidenceManifest,
+  manifest: unknown,
   signatureBase64: string,
   publicKey: Ed25519PublicKey,
 ): Promise<boolean> {
   const message = encoder.encode(canonicalStringify(manifest));
-  const signature = base64ToBytes(signatureBase64.trim());
+  let signature: Uint8Array;
+  try {
+    signature = base64ToBytes(signatureBase64.trim());
+  } catch {
+    return false;
+  }
   return verifyBytes(message, signature, publicKey);
 }
 
@@ -195,7 +210,7 @@ export interface EvidencePackReader {
  * outright is simpler and safer than trying to stream-hash an arbitrarily large one. */
 const MAX_MANIFEST_JSON_BYTES = 16 * 1024 * 1024; // 16 MiB
 const MAX_MANIFEST_SIG_BYTES = 1 * 1024 * 1024; // 1 MiB (a base64 Ed25519 signature is ~88 bytes)
-const MAX_FILE_BYTES = 64 * 1024 * 1024; // 64 MiB
+const MAX_FILE_BYTES = MAX_EVIDENCE_FILE_BYTES; // shared with buildEvidencePack, so a built pack verifies
 
 /** `reader.size?.(path)`, tolerating a reader that doesn't implement it (returns undefined) or one whose
  * `size()` throws for this path (also undefined -- the subsequent read will surface its own error). */
@@ -210,10 +225,11 @@ async function trySize(reader: EvidencePackReader, path: string): Promise<number
 
 export interface VerifyEvidencePackResult {
   ok: boolean;
-  /** The parsed manifest, present whenever manifest.json at least matched EvidenceManifestSchema. */
+  /** The parsed manifest, present only once its signature verified and it matched EvidenceManifestSchema. */
   manifest?: EvidenceManifest;
   /**
-   * Fatal integrity problems: a malformed manifest, a signature that does not verify, a `files[]` entry
+   * Fatal integrity problems: a malformed manifest, a signature that does not verify (over the raw
+   * manifest.json value, so an added, removed or retyped field fails here), a `files[]` entry
    * whose on-disk hash/size does not match what the (signed) manifest recorded, or a file that could
    * not be read at all. Any entry here means `ok` is false -- these are exactly the class of problem a
    * single-byte tamper produces.
@@ -270,8 +286,8 @@ function artifactClaimsFromJsonlRecords(
 }
 
 /**
- * Verifies a Compliance Evidence Pack (design.md #67): the manifest matches `EvidenceManifestSchema`,
- * its signature verifies against `publicKey`, the pack directory contains no file the manifest does not
+ * Verifies a Compliance Evidence Pack (design.md #67): the manifest's signature verifies against
+ * `publicKey` over the raw manifest.json value, the manifest then matches `EvidenceManifestSchema`, the pack directory contains no file the manifest does not
  * list, every file the manifest lists has the exact hash/size the manifest recorded, and -- as an
  * independent, best-effort cross-check -- every artifact reference found inside the jsonl files
  * actually hashes to the value it claims. A single altered byte anywhere the manifest covers changes
@@ -296,18 +312,9 @@ export async function verifyEvidencePack(
     };
   }
   const manifestBytes = await reader.readManifest();
-  let manifest: EvidenceManifest;
+  let raw: unknown;
   try {
-    const parsed: unknown = JSON.parse(decoder.decode(manifestBytes));
-    const result = EvidenceManifestSchema.safeParse(parsed);
-    if (!result.success) {
-      return {
-        ok: false,
-        errors: [`manifest.json does not match EvidenceManifestSchema: ${result.error.message}`],
-        mismatches: [],
-      };
-    }
-    manifest = result.data;
+    raw = JSON.parse(decoder.decode(manifestBytes));
   } catch (e) {
     return {
       ok: false,
@@ -320,7 +327,6 @@ export async function verifyEvidencePack(
   if (signatureSize != null && signatureSize > MAX_MANIFEST_SIG_BYTES) {
     return {
       ok: false,
-      manifest,
       errors: [
         `manifest.sig is ${signatureSize} bytes, exceeding the ${MAX_MANIFEST_SIG_BYTES}-byte cap; refusing to read it`,
       ],
@@ -328,15 +334,25 @@ export async function verifyEvidencePack(
     };
   }
   const signatureText = decoder.decode(await reader.readSignature()).trim();
-  const signatureOk = await verifyManifestSignature(manifest, signatureText, publicKey);
+  // The signature is checked over the raw parsed JSON, before schema validation: EvidenceManifestSchema
+  // is not the signed value (an unknown key would be dropped by a lax parse and still verify).
+  const signatureOk = await verifyManifestSignature(raw, signatureText, publicKey);
   if (!signatureOk) {
     return {
       ok: false,
-      manifest,
       errors: ["manifest.sig does not verify against the given public key for this manifest"],
       mismatches: [],
     };
   }
+  const parsed = EvidenceManifestSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      errors: [`manifest.json does not match EvidenceManifestSchema: ${parsed.error.message}`],
+      mismatches: [],
+    };
+  }
+  const manifest: EvidenceManifest = parsed.data;
 
   const errors: string[] = [];
   const mismatches: string[] = [];
