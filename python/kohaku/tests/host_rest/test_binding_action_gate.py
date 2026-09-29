@@ -293,3 +293,63 @@ class TestTierApprove:
         assert recorder.denied_calls[0]["reason"] == "approval already used"
         assert recorder.approval_requested_calls == []
         assert domain.invoke_calls == []
+
+
+class TestOperationIndexValidationAtAttach:
+    """Mirrors the TS createKohakuRoutes tests: a paramsSchema outside the closed subset is reported through
+    on_error at attach, not only at the first invoke. Needs a running event loop at attach time (see
+    host_core's start_operation_index_validation), hence the async wrapper."""
+
+    def test_reports_an_invalid_params_schema_at_attach(self, tmp_path: Path) -> None:
+        import asyncio
+
+        seen: list[Any] = []
+
+        async def run() -> None:
+            build_harness(
+                tmp_path,
+                domain=_EchoDomain(
+                    OperationDescriptor(
+                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                    )
+                ),
+                on_error=seen.append,
+            )
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+        assert [info.endpoint for info in seen] == ["attach.operationIndex"]
+        assert 'operation "annotate" has an invalid paramsSchema' in str(seen[0].error)
+
+    def test_reports_nothing_for_a_valid_domain(self, tmp_path: Path) -> None:
+        import asyncio
+
+        seen: list[Any] = []
+
+        async def run() -> None:
+            build_harness(
+                tmp_path,
+                domain=_EchoDomain(
+                    OperationDescriptor(name="annotate", description="d", paramsSchema=NOTE_SCHEMA)
+                ),
+                on_error=seen.append,
+            )
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        asyncio.run(run())
+        assert seen == []
+
+    def test_registration_outside_an_event_loop_stays_lazy(self, tmp_path: Path) -> None:
+        seen: list[Any] = []
+        build_harness(
+            tmp_path,
+            domain=_EchoDomain(
+                OperationDescriptor(
+                    name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                )
+            ),
+            on_error=seen.append,
+        )
+        assert seen == []

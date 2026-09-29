@@ -23,8 +23,20 @@ from .action_gate import (
     ActionGateResult,
     create_action_gate,
 )
+from .action_gate_outcome import (
+    APPROVAL_TOKEN_REQUIRED_MESSAGE,
+    CONFIRMATION_REQUIRED_MESSAGE,
+    UNDECLARED_ACTION_MESSAGE,
+    ActionAuditContext,
+    ActionGateApprovalRequiredOutcome,
+    ActionGateInvalidOutcome,
+    ActionGateOutcome,
+    ActionGateProceedOutcome,
+    record_action_gate_result,
+    record_undeclared_action_denial,
+)
 from .action_manifest import ActionManifest, ActionManifestEntry, build_action_manifest
-from .allowed_actions import AllowedActions, create_allowed_actions
+from .allowed_actions import AllowedActions, allowed_actions_from_index, create_allowed_actions
 from .binding_ref import (
     InvokableRef,
     ParsedInvokableRef,
@@ -88,7 +100,12 @@ from .intent import (
     resolve_intent,
 )
 from .keyed_mutex import get_lock
-from .operation_index import OperationIndex, OperationIndexEntry, create_operation_index
+from .operation_index import (
+    OperationIndex,
+    OperationIndexEntry,
+    create_operation_index,
+    start_operation_index_validation,
+)
 from .policy import (
     ParsedPolicy,
     PolicyAppliedEvent,
@@ -113,6 +130,18 @@ from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 from .view_recorder import record_view_fallback
 
 __all__ = [
+    "APPROVAL_TOKEN_REQUIRED_MESSAGE",
+    "CONFIRMATION_REQUIRED_MESSAGE",
+    "UNDECLARED_ACTION_MESSAGE",
+    "ActionAuditContext",
+    "ActionGateApprovalRequiredOutcome",
+    "ActionGateInvalidOutcome",
+    "ActionGateOutcome",
+    "ActionGateProceedOutcome",
+    "allowed_actions_from_index",
+    "record_action_gate_result",
+    "record_undeclared_action_denial",
+    "start_operation_index_validation",
     "DEFAULT_CAPABILITY_TTL_SECONDS",
     "DEFAULT_MAX_MEMORY_ENTRIES",
     "TRACEPARENT_RE",

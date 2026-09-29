@@ -24,6 +24,7 @@ from .shared import (
     RequestIdASGIMiddleware,
     _json,
     _resolve_tenant,
+    validate_operation_index_at_attach,
 )
 
 
@@ -55,6 +56,7 @@ def register_routes(app: FastAPI, deps: KohakuHostDeps, prefix: str = "/api/koha
     register_governance_routes(router, deps)
     register_promotion_routes(router, deps)
     register_fixation_routes(router, deps)
+    validate_operation_index_at_attach(deps)
 
     # --- Catalog --------------------------------------------------------------
     @router.get("/catalog")

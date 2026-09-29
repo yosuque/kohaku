@@ -4,6 +4,7 @@ packages/host-core/src/operation-index.ts).
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -73,4 +74,41 @@ def create_operation_index(
     return operation_index
 
 
-__all__ = ["OperationIndex", "OperationIndexEntry", "create_operation_index"]
+_background_validations: set[asyncio.Task[None]] = set()
+"""Strong references to in-flight `start_operation_index_validation` tasks (the event loop only keeps weak
+ones), dropped as each task finishes."""
+
+
+def start_operation_index_validation(
+    index: OperationIndex, report: Callable[[BaseException], Awaitable[None]]
+) -> asyncio.Task[None] | None:
+    """Builds `index` in the background so a failure (`list_operations()` raising, or a descriptor's
+    `paramsSchema` outside kohaku's closed subset) is reported at attach time rather than only at the first
+    request that hits it; `report` must not raise. The host attach functions are synchronous while
+    `list_operations()` is async, so this needs a running event loop: without one it does nothing and returns
+    None, and the index is then built lazily by the first request that needs it (unlike the TS hosts, which
+    always have a microtask queue to start from). A rejected build is not memoized, so a later call retries.
+    Counterpart of the TS hosts' eager `operationIndex()` call at attach."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+    async def _run() -> None:
+        try:
+            await index()
+        except Exception as exc:  # noqa: BLE001 -- reported, never raised out of the background task
+            await report(exc)
+
+    task = loop.create_task(_run())
+    _background_validations.add(task)
+    task.add_done_callback(_background_validations.discard)
+    return task
+
+
+__all__ = [
+    "OperationIndex",
+    "OperationIndexEntry",
+    "create_operation_index",
+    "start_operation_index_validation",
+]
