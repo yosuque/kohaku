@@ -1,8 +1,8 @@
 """Diagnostic + regression coverage for the deep-nesting recursion-DoS fix (mirrors TS's
-packages/spec-core/test/json-depth.test.ts). host_rest/bodies.py's `_json_depth_ok` already runs before any
+packages/spec-core/test/json-depth.test.ts). host_rest/bodies.py's `json_depth_ok` (now shared from kohaku.spec) already runs before any
 recursive parsing for the request-body fields it guards (params/payload), so this focuses on the other path
-the TS fix also had to close: `JsonValue`-typed pydantic model fields (ComponentNode.props, UISpec.model_validate
-as a whole, ...), validated directly via pydantic-core with no depth cap at the model layer today.
+the TS fix also had to close: `JsonValue`-typed pydantic model fields, validated directly via pydantic-core --
+ComponentNode.props now enforces the same 32-level cap as TS's ComponentNodeSchema (accept 32, reject 33).
 
 Built with a loop, never a recursive Python helper, so the fixture itself can reach depths (5000 / 100000)
 that would overflow the *test's own* stack if built recursively.
@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from kohaku.spec.models import MAX_PREDICATE_DEPTH, ComponentNode
+from kohaku.spec.models import MAX_JSON_OBJECT_DEPTH, MAX_PREDICATE_DEPTH, ComponentNode
 
 
 def nested_object(depth: int) -> dict[str, object]:
@@ -33,21 +33,31 @@ def nested_not(depth: int) -> dict[str, object]:
     return obj
 
 
-@pytest.mark.parametrize("depth", [33, 5000, 100_000])
-def test_component_props_deep_nesting_does_not_crash_uncatchably(depth: int) -> None:
-    """`ComponentNode.props` (`dict[str, JsonValue]`) has no depth cap at the pydantic-model layer (unlike
-    TS's JsonValueSchema after the fix). Diagnostic + regression pin for pydantic-core's actual behavior on a
-    deeply nested value passed straight through model_validate: whatever it does (accept, or reject with a
-    ValidationError), it must never surface as an uncaught RecursionError / interpreter-level crash, since
-    that would be a 500 (or a downed worker process) instead of a 400 at the host layer.
-    """
-    try:
-        node = ComponentNode.model_validate({"id": "root", "type": "x", "props": {"a": nested_object(depth)}})
-    except ValidationError:
-        return  # Rejected -- fine either way (see docstring); nothing further to check.
-    # Accepted: confirm it round-trips back out (to_wire) without incident either, since that is the next
-    # recursive traversal a composed/persisted Spec goes through.
+def test_component_props_value_at_the_depth_limit_is_accepted() -> None:
+    """Mirrors TS's ComponentNodeSchema: each `props` value is a JsonValue whose own nesting (the value
+    itself = depth 1) may reach MAX_JSON_OBJECT_DEPTH levels."""
+    node = ComponentNode.model_validate(
+        {"id": "root", "type": "x", "props": {"a": nested_object(MAX_JSON_OBJECT_DEPTH)}}
+    )
     assert node.props["a"] is not None
+
+
+@pytest.mark.parametrize("depth", [MAX_JSON_OBJECT_DEPTH + 1, 5000, 100_000])
+def test_component_props_value_beyond_the_depth_limit_is_rejected(depth: int) -> None:
+    """One level past the limit -- and the pathological depths that would otherwise reach pydantic-core's
+    own recursion -- is a ValidationError, never accepted and never an uncaught RecursionError."""
+    with pytest.raises(ValidationError, match="nested too deeply"):
+        ComponentNode.model_validate({"id": "root", "type": "x", "props": {"a": nested_object(depth)}})
+
+
+def test_component_props_depth_cap_applies_to_every_value_and_to_arrays() -> None:
+    deep_list: object = ["leaf"]
+    for _ in range(1, MAX_JSON_OBJECT_DEPTH + 1):
+        deep_list = [deep_list]
+    with pytest.raises(ValidationError, match="nested too deeply"):
+        ComponentNode.model_validate(
+            {"id": "root", "type": "x", "props": {"ok": 1, "deep": deep_list}}
+        )
 
 
 @pytest.mark.parametrize("depth", [MAX_PREDICATE_DEPTH, MAX_PREDICATE_DEPTH + 1, 33, 5000, 100_000])

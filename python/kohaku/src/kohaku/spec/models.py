@@ -41,6 +41,10 @@ MAX_PREDICATE_DEPTH = 8
 MAX_PREDICATE_ITEMS = 16
 """Maximum length of the element array of all / any."""
 
+MAX_JSON_OBJECT_DEPTH = 32
+"""Maximum nesting depth of a JSON value carried by a wire field (the value itself = depth 1). Mirrors
+packages/spec-core/src/schema/json.ts's MAX_JSON_OBJECT_DEPTH."""
+
 # --- Patterns (identical to zod .regex) ---
 
 COMPONENT_ID_PATTERN = r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$"
@@ -211,6 +215,24 @@ def _validate_predicate_depth(pred: VisibleWhen) -> VisibleWhen:
     return pred
 
 
+def json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 1) -> bool:
+    """True while `value`'s nesting stays within `limit` (the object/array itself = depth 1). Only
+    descending into a dict/list counts toward depth -- a scalar leaf never does, since it cannot nest any
+    further. Recursion is bounded to `limit + 1` frames (a dict/list stops descending the instant its own
+    depth exceeds the limit), so a pathologically deep payload cannot blow the stack while being measured.
+    Mirrors spec-core/schema/json.ts's exceedsMaxJsonDepth (inverted: True = not exceeded), and is the
+    single depth helper host_rest's body parsing shares."""
+    if isinstance(value, dict):
+        if depth > limit:
+            return False
+        return all(json_depth_ok(v, limit, depth + 1) for v in value.values())
+    if isinstance(value, list):
+        if depth > limit:
+            return False
+        return all(json_depth_ok(v, limit, depth + 1) for v in value)
+    return True
+
+
 # --- Components (schema/component.ts) ---
 
 
@@ -295,6 +317,15 @@ class ComponentNode(_WireModel):
         "artifact",
         "visibleWhen",
     )
+
+    @field_validator("props", mode="before")
+    @classmethod
+    def _check_props_depth(cls, v: Any) -> Any:
+        """Runs before pydantic-core's own recursive JsonValue validation, like TS's JsonValueSchema depth
+        guard: each prop value (depth 1 = the value itself) may nest at most MAX_JSON_OBJECT_DEPTH levels."""
+        if isinstance(v, dict) and not all(json_depth_ok(item) for item in v.values()):
+            raise ValueError(f"props value is nested too deeply (limit {MAX_JSON_OBJECT_DEPTH})")
+        return v
 
     @field_validator("visibleWhen", mode="after")
     @classmethod
