@@ -59,6 +59,14 @@ async function flushMicrotasks(times = 3): Promise<void> {
 
 const CONFIG: WorkerShimConfig = { rpcTimeoutMs: 5000, viewportWidth: 800, bodyHtml: "" };
 
+/**
+ * Wall-clock ceiling for the selector-parsing timing assertions. A linear-time parse of these inputs takes
+ * well under a millisecond, while the polynomial-ReDoS shape they guard against runs for many seconds to
+ * minutes, so a budget this generous still tells the two apart yet leaves ample headroom for a loaded CI
+ * runner (a tight budget here flaked under parallel test load).
+ */
+const REDOS_BUDGET_MS = 2000;
+
 describe("workerShimMain (evaluable in a bare vm context — no document/location/fetch/importScripts)", () => {
   it("is a plain, standalone script that runs to completion with only postMessage/addEventListener/timers/queueMicrotask", async () => {
     await expect(bootWorker(CONFIG)).resolves.toBeDefined();
@@ -197,14 +205,14 @@ describe("workerShimMain (evaluable in a bare vm context — no document/locatio
     const manyBrackets = JSON.stringify("[".repeat(1000));
     const start1 = Date.now();
     expect(w.run(`document.body.querySelectorAll(${manyBrackets}).length`)).toBe(1);
-    expect(Date.now() - start1).toBeLessThan(200);
+    expect(Date.now() - start1).toBeLessThan(REDOS_BUDGET_MS);
 
     // A huge gap of whitespace between two real simple selectors -- exercises the tokenizer's
     // whitespace-collapsing loop, not just .trim() (which only strips the leading/trailing ends).
     const bigGapSelector = JSON.stringify(`div${" ".repeat(1000)}span`);
     const start2 = Date.now();
     expect(w.run(`document.body.querySelectorAll(${bigGapSelector}).length`)).toBe(0);
-    expect(Date.now() - start2).toBeLessThan(200);
+    expect(Date.now() - start2).toBeLessThan(REDOS_BUDGET_MS);
   });
 
   it("selectors over SELECTOR_LENGTH_LIMIT return no match immediately instead of being parsed", async () => {
@@ -214,13 +222,13 @@ describe("workerShimMain (evaluable in a bare vm context — no document/locatio
     const manyBrackets = JSON.stringify("[".repeat(100_000));
     const start1 = Date.now();
     expect(w.run(`document.body.querySelectorAll(${manyBrackets}).length`)).toBe(0);
-    expect(Date.now() - start1).toBeLessThan(200);
+    expect(Date.now() - start1).toBeLessThan(REDOS_BUDGET_MS);
 
     const manySpaces = JSON.stringify(" ".repeat(100_000));
     const start2 = Date.now();
     expect(w.run(`document.body.querySelector(${manySpaces}) === null`)).toBe(true);
     expect(w.run(`document.body.querySelector('#root').matches(${manySpaces})`)).toBe(false);
-    expect(Date.now() - start2).toBeLessThan(200);
+    expect(Date.now() - start2).toBeLessThan(REDOS_BUDGET_MS);
   });
 
   it("event bubbling: a child dispatches, both child and ancestor listeners fire in order, stopPropagation halts it", async () => {
