@@ -22,6 +22,10 @@ DEFAULT_LINEAGE_PAGE_SIZE = 500
 MAX_LINEAGE_PAGE_SIZE = 1000
 """The upper bound pageSize is clamped to (an oversized request is truncated, not rejected)."""
 
+_MAX_SAFE_INTEGER = 2**53 - 1
+"""JavaScript's Number.MAX_SAFE_INTEGER: the largest seq the TS decoder accepts, mirrored here so both
+languages reject the same cursors."""
+
 
 class LineageCursorError(ValueError):
     """Raised by decode_seq_cursor when a cursor string is not one this codec produced."""
@@ -42,11 +46,10 @@ def encode_seq_cursor(seq: int) -> str:
 def decode_seq_cursor(cursor: str) -> int:
     """Decodes a cursor produced by encode_seq_cursor (from either language). Raises LineageCursorError for
     anything else: malformed base64url, invalid JSON, the wrong shape, an unsupported `v`, or a `seq` that
-    is not a finite integer. Requiring `seq` to be an *integer* (not just a finite number, as TS's decoder
-    checks) is a deliberate, narrower difference from the TS side -- every real seq value in this codebase
-    (a list index, a line number, a bigserial, an INCR counter) is already an integer, so this only ever
-    rejects a cursor no real encoder on either side could have produced, never one TS's own decoder would
-    accept.
+    is not a non-negative safe integer (0 <= seq <= 2**53 - 1, the same bound TS's Number.isSafeInteger
+    enforces). Every real seq value in this codebase (a list index, a line number, a bigserial, an INCR
+    counter) satisfies that, so this only rejects a cursor no real encoder on either side could have
+    produced -- a fractional or negative one would otherwise rewind or duplicate a page.
     """
     padded = cursor + "=" * (-len(cursor) % 4)
     try:
@@ -63,10 +66,11 @@ def decode_seq_cursor(cursor: str) -> int:
         or parsed.get("v") != 1
         or not isinstance(seq, (int, float))
         or isinstance(seq, bool)
-        or not math.isfinite(seq)
-        or (isinstance(seq, float) and not seq.is_integer())
+        or (isinstance(seq, float) and not (math.isfinite(seq) and seq.is_integer()))
+        or seq < 0
+        or seq > _MAX_SAFE_INTEGER
     ):
-        raise LineageCursorError(cursor, 'expected {"v":1,"seq":<integer>}')
+        raise LineageCursorError(cursor, 'expected {"v":1,"seq":<non-negative integer>}')
     return int(seq)
 
 
