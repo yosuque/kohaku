@@ -202,8 +202,10 @@ program
       console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once, then npm test");
       if (opts.mcp === true) {
         console.log(
-          "\nMCP front door generated: npm run mcp (stdio, e.g. for Claude Desktop / Claude Code / Codex CLI) " +
-            "or npm run mcp:http (Streamable HTTP :8788, for claude.ai / ChatGPT).",
+          "\nMCP front door generated. To use it from Claude Desktop, run: npm run mcp:claude-desktop " +
+            "(then restart Claude Desktop). `npm run mcp` (stdio) is the command Claude Desktop / Claude Code / " +
+            "Codex CLI launch themselves -- you do not run it by hand. `npm run mcp:http` starts a Streamable HTTP " +
+            "server on :8788 for claude.ai / ChatGPT.",
         );
       }
     },

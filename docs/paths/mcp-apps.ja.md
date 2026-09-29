@@ -10,6 +10,7 @@
 
 ```bash
 npm install @kohaku-ui/host @kohaku-ui/host-mcp-apps @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/mcp-renderer @kohaku-ui/spec-core @modelcontextprotocol/server zod
+npm install -D tsx
 npx @kohaku-ui/cli scaffold ports --out ./kohaku   # DomainPort と Intent カタログを埋めるためのファイル
 ```
 
@@ -26,7 +27,7 @@ import { domainPort as domain } from "./kohaku/ports.js"; // your DomainPort (ko
 
 const host = createKohakuHost({
   domain,
-  querySource: "my-product",
+  querySource: "my-product", // must equal the `source` of every Intent in intents.ts
   llm: createLlmFromEnv(),
   intents: intents.map((i) => i.toIntentDef()),
   dataVersion: () => "my-product@1",
@@ -42,7 +43,31 @@ attachKohakuMcp(server, host, {
 await server.connect(new StdioServerTransport());
 ```
 
-ホストに登録し(Claude Code / Claude Desktop なら `claude mcp add my-product -- node ./server.js`)、`sales_summary` を呼びます。ホストは UI Spec とテキスト要約を受け取り、MCP Apps 対応ホスト(Claude Desktop / claude.ai / ChatGPT)は同梱レンダラーで Spec を iframe に描画し、iframe を描画できないターミナルホスト(Claude Code / Codex CLI)はテキストのフォールバックと、自己完結 HTML が要るなら `kohaku_render_snapshot` を受け取ります。
+`server.ts` として保存します。自分で起動する必要はありません。チャットを開くたびに、MCP ホストが子プロセス(stdio)として起動します。
+
+**最初の呼び出しの前に、次の 2 つを揃えます。**
+
+- **ソース名。** `querySource` は `intents.ts` の全 Intent の `source` と一致させます。一致しないと、ウィジェットのデータ読み出しが `SOURCE_MISMATCH` で拒否されます(エラーメッセージにはホストが担当するソース名が入ります)。`kohaku scaffold ports` が書くプレースホルダは `"example"`、スニペットは `"my-product"` です。名前を 1 つ決めて両方のファイルで使ってください。
+- **capability のシークレット。** capability トークンは `KOHAKU_CAPABILITY_SECRET` で署名され、未設定だと `createKohakuHost` は例外を投げます。下の登録設定に、長いランダム文字列(`openssl rand -base64 32`)を渡してください。手元で試すだけなら、`createKohakuHost` に `dev: true` を足す方法もあります。プロセス限りの一時シークレットを生成して stderr に警告を出します。本番では使わないでください。`KOHAKU_LLM_PROVIDER` とプロバイダのキーが要るのは、Intent がモデルに届く場合(L1/L2)だけで、L0 の経路ではモデルを呼びません。
+
+**ホストへの登録。** 各 Intent のツール名は、正規名のドットをアンダースコアに置き換えたものです(スニペットの `sales.summary` → `sales_summary`、scaffold のプレースホルダ `example.summary` → `example_summary`)。
+
+- **Claude Code:** `claude mcp add --env KOHAKU_CAPABILITY_SECRET=<secret> my-product -- npx tsx ./server.ts`
+- **Claude Desktop** は `claude mcp add` を読みません。`claude_desktop_config.json`(macOS: `~/Library/Application Support/Claude/`、Windows: `%APPDATA%\Claude\`)を編集して、Claude Desktop を再起動します。シェルの `PATH` は引き継がれないので、絶対パスを使ってください。
+
+```json
+{
+  "mcpServers": {
+    "my-product": {
+      "command": "/absolute/path/to/npx",
+      "args": ["tsx", "/absolute/path/to/server.ts"],
+      "env": { "KOHAKU_CAPABILITY_SECRET": "<secret>" }
+    }
+  }
+}
+```
+
+あとはモデルに `sales_summary`(カタログから生成されたツール名)を呼ばせます。ホストは UI Spec とテキスト要約を受け取り、MCP Apps 対応ホスト(Claude Desktop / claude.ai / ChatGPT)は同梱レンダラーで Spec を iframe に描画し、iframe を描画できないターミナルホスト(Claude Code / Codex CLI)はテキストのフォールバックと、自己完結 HTML が要るなら `kohaku_render_snapshot` を受け取ります。
 
 この 3 つの正体:
 

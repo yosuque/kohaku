@@ -9,8 +9,10 @@ Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation 
 (a declarative UI Spec), with generation separated from rendering.
 
 ```bash
-npm install @kohaku-ui/host zod
+npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic @hono/node-server zod
 ```
+
+(`@ai-sdk/anthropic` is the provider SDK for Claude, used by `createLlmFromEnv()`; swap it for the provider you configure.)
 
 ```ts
 import { serve } from "@hono/node-server";
@@ -36,6 +38,20 @@ Every default (`storage`, `authz`, `semantic`, `catalog`) can be overridden with
 implementation; the contract is [@kohaku-ui/spec-core](https://github.com/yosuque/kohaku/tree/main/packages/spec-core)'s
 `ports.ts`. `kohaku init` generates a project wired this way.
 
+These options reach past the defaults:
+
+- `routes` passes every other `KohakuHostDeps` field straight to `createKohakuRoutes` — `auth` / `tenant` (JWT and
+  multi-tenant resolution), `approvals` / `actionEffects` (governed Actions),
+  `rateLimiter`, `authorizeGovernance`, `promotions` / `fixations`, and so on.
+- `recorder` is the View Lineage recorder. By default every compose is recorded into `host.lineage` (built over
+  the host's own `storage`), which is what `kohaku explain`, DevTools and the evidence pack read; pass your own
+  recorder to replace it or `false` to record nothing. `actionAuditRecorder` works the same way for governed
+  Actions: by default each `POST /binding/action` outcome is recorded into the same lineage as an `action.*`
+  event. Persist `storage` (Redis / Postgres) if the lineage must
+  outlive the process.
+
+`fallbackIntent` and `rules` are passed through to the default SemanticPort (`createLlmSemanticPort`).
+
 The default `authz` needs a capability secret: set the `KOHAKU_CAPABILITY_SECRET` environment variable
 (`kohaku init` generates one into a project's `.env`) or pass `capabilitySecret`. Without either,
 `createKohakuHost` throws — pass `dev: true` for a temporary, randomly generated secret instead (local
@@ -48,16 +64,23 @@ development only; every capability issued under it is invalidated on restart).
 `npm install @kohaku-ui/host`; install both yourself to use this subpath:
 
 ```bash
-npm install @kohaku-ui/host-mcp-apps @modelcontextprotocol/server
+npm install @kohaku-ui/host-mcp-apps @kohaku-ui/mcp-renderer @modelcontextprotocol/server
 ```
 
 ```ts
+import { createKohakuHost } from "@kohaku-ui/host";
 import { attachKohakuMcp } from "@kohaku-ui/host/mcp";
+import { loadRendererHtml } from "@kohaku-ui/mcp-renderer";
 import { McpServer } from "@modelcontextprotocol/server";
 
+const host = createKohakuHost({ /* as above */ });
 const server = new McpServer({ name: "my-app", version: "1.0.0" });
-attachKohakuMcp(server, host, { rendererHtml: () => readRendererBundle() });
+attachKohakuMcp(server, host, { rendererHtml: loadRendererHtml });
 ```
+
+The MCP profile shares the host's Ports, reports failures through the same console error reporter as REST
+(`onError`) and records into the same lineage. `attachKohakuMcp`'s `deps` option passes any other
+`McpHostDeps` field through (`resolvePrincipal`, `approvals`, `rateLimiter`, ...).
 
 The packages in this scope share a single version and are designed to be installed together.
 

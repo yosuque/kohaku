@@ -216,7 +216,11 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         except (QueryRefError, ValueError) as e:
             return _error("BAD_REQUEST", _message(e), 400)
         if not isinstance(parsed, ParsedInvokableRefOk):
-            return _error("SOURCE_MISMATCH", f'unknown query source "{parsed.source}"', 404)
+            return _error(
+                "SOURCE_MISMATCH",
+                f'unknown query source "{parsed.source}" (this host serves "{deps.query_source}")',
+                404,
+            )
         base, params = parsed.ref.base, parsed.ref.params
         verdict = await deps.authz.verify(token, VerifyRequest(kind="read", ref=base.raw))
         if not verdict.ok:

@@ -319,7 +319,7 @@ The server's protocol conformance (resource MIME / `_meta`'s modern+legacy / tex
 ### Asymmetry of custom parts (L2)
 
 - **The "creation" of a custom part (L2 free generation) can be triggered from MCP too**: asking an MCP host something like "**Show me sales as a calendar heatmap**" (the Japanese "売上をカレンダーヒートマップで見せて" works the same way) calls `kohaku_compose` (or `kohaku_render_snapshot`), and with the same NL normalization as the Web's Chat, it enters `sales.custom` → L2. Usage is appended to the same lineage store (shared persistence), but the API server tallies the lineage loaded at its own startup plus its own process's events — an MCP-side use becomes visible to the promotion counter after the API server restarts. After that restart, one use each from MCP and Web reaches the demo threshold (2 uses), and a candidate lines up in Admin's promotion review (from there it is the same as Demo 3, steps 3–4).
-- **However, there is an asymmetry in displaying custom parts**: the shared renderer (`apps/sample-mcp/renderer/main.tsx`) registers only the core-part implementations and does not inject the sandbox renderer (`renderSandbox`) either. Therefore, on the MCP side, an L2-generated part becomes a "the sandbox renderer needs to be injected" notice, and contribution/promotion parts (`sales.kpiCard` / `sales.calendarHeatmap`) become an "unimplemented part type" notice (since sample-mcp does not declare `SurfaceCapabilities`, the server-side degradation to fallback〈negotiate〉 does not run either). For the full display of custom parts (sandbox iframe, native implementation), check on the Web surface.
+- **However, there is an asymmetry in displaying custom parts**: the shared renderer (`apps/sample-mcp/renderer/main.tsx`) registers the core parts plus the sample's own sales-domain implementations (`registerSalesImpls`, so `sales.kpiCard` / `sales.calendarHeatmap` do render), but does not inject the sandbox renderer (`renderSandbox`). Therefore, on the MCP side, an L2-generated part becomes a "the sandbox renderer needs to be injected" notice, and any contribution/promotion part whose implementation is not baked into that renderer build becomes an "unimplemented part type" notice (since sample-mcp does not declare `SurfaceCapabilities`, the server-side degradation to fallback〈negotiate〉 does not run either). For the full display of custom parts (sandbox iframe, native implementation), check on the Web surface.
 
 ## 6. Embedding it into your own product
 
@@ -343,7 +343,7 @@ npm run dev                                      # API :8787 + web :5173
 
 `init` also writes a `.env` with a freshly generated capability secret, so add only a provider key to it — never copy `.env.example` over it. The **Summary** view renders with no LLM configured; set a provider in `.env` for Chat and the L1 views.
 
-Chat answers only within the generated Intent catalog and returns `NO_MATCH` for anything outside it (widen it with `fallbackIntent`). Everything generated is a starting point — the DomainPort remains your product's responsibility (design doc §2), and each file says what else to replace (`createKohakuHost`'s other defaults included).
+Chat answers only within the generated Intent catalog and returns `NO_MATCH` for anything outside it (widen it by passing `fallbackIntent` — an Intent name in your catalog that takes a `request` param — to `createKohakuHost` in `server/ports.ts`). Everything generated is a starting point — the DomainPort remains your product's responsibility (design doc §2), and each file says what else to replace (`createKohakuHost`'s other defaults included).
 
 No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv).
 
@@ -364,7 +364,7 @@ Implement the one Port `createKohakuHost()` (`@kohaku-ui/host`) does not default
 The other three Ports have working defaults; override any of them by passing your own once you outgrow the default:
 
 2. **SemanticPort** (default: `@kohaku-ui/semantic-llm`'s `createLlmSemanticPort`, built from `intents.ts` + `dataVersion`/`describeShape`): `normalize` is only the deterministic mapping of GUI operations; `resolveQuery` is Intent → a `query://` handle. Pass your own as `createKohakuHost({ semantic, ... })` — `intents` / `dataVersion` / `describeShape` are then ignored.
-3. **AuthzPort** (default: `@kohaku-ui/authz-hmac`'s `createHmacAuthzPort(secret)`, `secret` resolved from `capabilitySecret` or the `KOHAKU_CAPABILITY_SECRET` environment variable). For a JWT / OIDC deployment, pass `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })` (`@kohaku-ui/authz-jwt`) instead — it keeps the same capability tokens and adds `identity.fromAuthorizationHeader(...)`, which resolves `Principal` (id / name / roles) and the tenant from the token's claims for your `KohakuHostDeps.auth` / `tenant` hooks and MCP's `resolvePrincipal` (see §7 "Production adapters").
+3. **AuthzPort** (default: `@kohaku-ui/authz-hmac`'s `createHmacAuthzPort(secret)`, `secret` resolved from `capabilitySecret` or the `KOHAKU_CAPABILITY_SECRET` environment variable). For a JWT / OIDC deployment, pass `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })` (`@kohaku-ui/authz-jwt`) instead — it keeps the same capability tokens and adds `identity.fromAuthorizationHeader(...)`, which resolves `Principal` (id / name / roles) and the tenant from the token's claims for your `KohakuHostDeps.auth` / `tenant` hooks — pass those as `createKohakuHost({ routes: { auth, tenant } })`, and MCP's `resolvePrincipal` as `attachKohakuMcp(server, host, { deps: { resolvePrincipal }, ... })` (see §7 "Production adapters"). `routes` accepts every other `KohakuHostDeps` field too (`approvals`, `actionEffects`, `rateLimiter`, `authorizeGovernance`, …); the facade already wires `recorder` and `actionAuditRecorder` (lineage over its own storage; `false` disables either) and `onError` for you.
 4. **StoragePort** (default: `@kohaku-ui/storage-memory`'s `createMemoryStoragePort()`). For more than one host instance, pass `storage: createRedisStoragePort(...)` / `createPostgresStoragePort(...)` (`@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres`) so the Spec cache is shared (§7).
 
 If you register fixed Spec templates (the sample is `apps/sample-api/src/intents/fixed-specs.ts`) in `createKohakuHost`'s `policy.fixedSpecs` option, a Server-Driven UI via renderer-react works **without an LLM** actually being called — `llm` is still a required argument (`createKohakuHost` never defaults it), but nothing invokes it as long as every Intent you compose resolves through `fixedSpecs`.
@@ -557,12 +557,15 @@ spots fall back to the package's own light-mode default regardless of theme.
 "Why did this view come out this way" — tier, cache hit/miss, the cache key's individual components,
 which L1/L2 attempts ran and why they failed, capability-negotiation downgrades, and the lineage events a
 request produced — is answerable from a `requestId` alone (a compose's `X-Request-Id` response header, or an
-MCP tool call's `mcp:<sessionId>:<jsonrpc id>` correlation id) two ways:
+MCP tool call's correlation id: `mcp:<sessionId>:<jsonrpc id>`, or `mcp:<jsonrpc id>` on stdio, where there is no
+session, or a per-call id when a transport gives none) two ways. Both need a host that **records lineage**
+(`createKohakuHost` wires a recorder by default; a hand-built `createKohakuRoutes` host needs `recorder` set) and,
+for the CLI, a running **REST host** to read it from:
 
 **From the CLI**, against any running REST host:
 
 ```bash
-node cli/bin/kohaku.js explain <requestId> --rest http://localhost:8787/api/kohaku
+npx @kohaku-ui/cli explain <requestId> --rest http://localhost:8787/api/kohaku   # inside this repository: node cli/bin/kohaku.js explain …
 # --json for the raw ExplainReport JSON instead of formatted text
 # --header "x-kohaku-tenant:acme" (repeatable) for tenant/auth headers
 # --spec spec.json to additionally show capability scopes (collectCapabilityScopes)

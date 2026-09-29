@@ -110,7 +110,13 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
       return c.json(errorBody("BAD_REQUEST", message(e)), 400);
     }
     if (parsed.kind === "source_mismatch") {
-      return c.json(errorBody("SOURCE_MISMATCH", `unknown query source "${parsed.source}"`), 404);
+      return c.json(
+        errorBody(
+          "SOURCE_MISMATCH",
+          `unknown query source "${parsed.source}" (this host serves "${deps.querySource}")`,
+        ),
+        404,
+      );
     }
     const { base, params } = parsed.ref;
 

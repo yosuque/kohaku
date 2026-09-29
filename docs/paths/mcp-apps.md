@@ -12,6 +12,7 @@ all of this for you in one shot -- see "Even faster: from a CSV" below.
 
 ```bash
 npm install @kohaku-ui/host @kohaku-ui/host-mcp-apps @kohaku-ui/intents @kohaku-ui/llm @kohaku-ui/mcp-renderer @kohaku-ui/spec-core @modelcontextprotocol/server zod
+npm install -D tsx
 npx @kohaku-ui/cli scaffold ports --out ./kohaku   # a DomainPort + an Intent catalog, as files to fill in
 ```
 
@@ -28,7 +29,7 @@ import { domainPort as domain } from "./kohaku/ports.js"; // your DomainPort (ko
 
 const host = createKohakuHost({
   domain,
-  querySource: "my-product",
+  querySource: "my-product", // must equal the `source` of every Intent in intents.ts
   llm: createLlmFromEnv(),
   intents: intents.map((i) => i.toIntentDef()),
   dataVersion: () => "my-product@1",
@@ -44,7 +45,31 @@ attachKohakuMcp(server, host, {
 await server.connect(new StdioServerTransport());
 ```
 
-Register it with a host — `claude mcp add my-product -- node ./server.js` for Claude Code / Claude Desktop — and call `sales_summary`. The host receives a UI Spec plus a text summary; an MCP Apps-capable host (Claude Desktop, claude.ai, ChatGPT) renders the Spec in an iframe with the bundled renderer, a terminal host that cannot draw an iframe (Claude Code, Codex CLI) gets the text fallback plus `kohaku_render_snapshot` for a self-contained HTML file.
+Save it as `server.ts`. You do not start it yourself: an MCP host launches it as a child process (stdio) whenever you open a chat.
+
+**Two things must line up before the first call:**
+
+- **The source name.** `querySource` must equal the `source` of every Intent in `intents.ts`, or the widget's data read is refused with `SOURCE_MISMATCH` (the error message names the source the host serves). `kohaku scaffold ports` writes the placeholder `"example"`; the snippet uses `"my-product"` — pick one name and use it in both files.
+- **The capability secret.** Capability tokens are signed with `KOHAKU_CAPABILITY_SECRET`; `createKohakuHost` throws without one. Pass any long random string in the registration below (`openssl rand -base64 32`). For a quick local trial you can instead add `dev: true` to `createKohakuHost`, which generates a temporary secret for the process and warns on stderr — never in production. `KOHAKU_LLM_PROVIDER` and a provider key are only needed once an Intent reaches the model (L1/L2); the L0 path does not call it.
+
+**Register it with a host.** The tool for each Intent is its canonical name with the dot replaced by an underscore (`sales.summary` in the snippet → `sales_summary`; the scaffold's placeholder `example.summary` → `example_summary`).
+
+- **Claude Code:** `claude mcp add --env KOHAKU_CAPABILITY_SECRET=<secret> my-product -- npx tsx ./server.ts`
+- **Claude Desktop** does not read `claude mcp add`; edit its `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`) and restart Claude Desktop. It does not inherit your shell's `PATH`, so use absolute paths:
+
+```json
+{
+  "mcpServers": {
+    "my-product": {
+      "command": "/absolute/path/to/npx",
+      "args": ["tsx", "/absolute/path/to/server.ts"],
+      "env": { "KOHAKU_CAPABILITY_SECRET": "<secret>" }
+    }
+  }
+}
+```
+
+Then ask the model to call `sales_summary` (or whichever tool your catalog produced). The host receives a UI Spec plus a text summary; an MCP Apps-capable host (Claude Desktop, claude.ai, ChatGPT) renders the Spec in an iframe with the bundled renderer, a terminal host that cannot draw an iframe (Claude Code, Codex CLI) gets the text fallback plus `kohaku_render_snapshot` for a self-contained HTML file.
 
 What these three pieces are:
 

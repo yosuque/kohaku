@@ -178,9 +178,26 @@ describe("renderReadme", () => {
     expect(readme).toContain("fallbackIntent");
   });
 
+  it("points L2 / fallbackIntent at server/ports.ts (where createKohakuHost is called), never server/app.ts", async () => {
+    const { profile } = await profileOf();
+    const readme = renderReadme(profile);
+    expect(readme).toContain("`allowL2: true` in `server/ports.ts`");
+    expect(readme).toContain("`fallbackIntent` to `createKohakuHost` in `server/ports.ts`");
+    expect(readme).not.toMatch(/`allowL2: true` in `server\/app\.ts`/);
+  });
+
+  it("states what the explain walkthrough needs (a recorder and a REST host)", async () => {
+    const { profile } = await profileOf();
+    const readme = renderReadme(profile);
+    expect(readme).toContain("Debugging a view");
+    expect(readme).toContain(
+      "npx @kohaku-ui/cli explain <requestId> --rest http://localhost:8787/api/kohaku",
+    );
+  });
+
   it("tells the reader to edit the generated .env, never to copy .env.example over it", async () => {
     // Overwriting .env with .env.example's empty KOHAKU_CAPABILITY_SECRET would make the generated
-    // server throw at startup (see server/app.ts) -- the wording must not suggest that.
+    // server throw at startup (see server/ports.ts) -- the wording must not suggest that.
     const { profile } = await profileOf();
     const readme = renderReadme(profile);
     expect(readme).not.toMatch(/copy `?\.env\.example`? to `?\.env`?/);

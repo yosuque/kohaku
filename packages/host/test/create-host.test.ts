@@ -1,9 +1,16 @@
 import { createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import type { FixedSpecSource } from "@kohaku-ui/composer";
 import { defineIntent } from "@kohaku-ui/intents";
+import { LlmError, type LlmPort } from "@kohaku-ui/llm";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import { type DomainPort, type SemanticPort, SPEC_VERSION, type UISpec } from "@kohaku-ui/spec-core";
+import {
+  type DomainPort,
+  type SemanticPort,
+  type SessionContext,
+  SPEC_VERSION,
+  type UISpec,
+} from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import type { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -201,5 +208,150 @@ describe("createKohakuHost", () => {
         intents: [testIntentDef],
       }),
     ).toThrow(/dataVersion/);
+  });
+  it("records every compose into View Lineage by default, readable through host.lineage", async () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const host = createKohakuHost({
+      domain,
+      querySource: "test",
+      llm: new FakeLlm(),
+      intents: [testIntentDef],
+      dataVersion: () => "v1",
+      policy: { fixedSpecs: fixedSpecs(), allowL2: false },
+    });
+    expect(host.recorder).toBeDefined();
+    const res = await composeTestView(host.app);
+    expect(res.status).toBe(200);
+    const events = await host.lineage.list({ type: ["view.composed"] });
+    expect(events).toHaveLength(1);
+    // The same events are what GET /lineage (and therefore `kohaku explain`) serves.
+    const viaRest = await host.app.request("/api/kohaku/lineage?type=view.composed");
+    expect(viaRest.status).toBe(200);
+    expect(JSON.stringify(await viaRest.json())).toContain("view.composed");
+  });
+
+  it("recorder: false records nothing, and a custom recorder replaces the default", async () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const base = {
+      domain,
+      querySource: "test",
+      llm: new FakeLlm(),
+      intents: [testIntentDef],
+      dataVersion: () => "v1",
+      policy: { fixedSpecs: fixedSpecs(), allowL2: false },
+    };
+    const silent = createKohakuHost({ ...base, recorder: false });
+    expect(silent.recorder).toBeUndefined();
+    await composeTestView(silent.app);
+    expect(await silent.lineage.list({ type: ["view.composed"] })).toHaveLength(0);
+
+    const composed = vi.fn(async () => {});
+    const custom = createKohakuHost({
+      ...base,
+      recorder: { composed, interacted: async () => {} },
+    });
+    await composeTestView(custom.app);
+    expect(composed).toHaveBeenCalledTimes(1);
+    expect(await custom.lineage.list({ type: ["view.composed"] })).toHaveLength(0);
+  });
+
+  it("records action.* audit events for an action invoked through the facade, and actionAuditRecorder: false disables it", async () => {
+    const actionDomain: DomainPort = {
+      async listOperations() {
+        return [{ name: "annotate", description: "annotate a record" }];
+      },
+      async invoke(op) {
+        return { ok: true, op };
+      },
+    };
+    const allowAuthz = {
+      async issueCapability() {
+        return "cap";
+      },
+      async verify() {
+        return { ok: true as const, principal: { id: "u1", roles: ["user"] } };
+      },
+    };
+    const build = (extra: { actionAuditRecorder?: false } = {}) =>
+      createKohakuHost({
+        domain: actionDomain,
+        querySource: "test",
+        llm: new FakeLlm(),
+        authz: allowAuthz,
+        intents: [testIntentDef],
+        dataVersion: () => "v1",
+        ...extra,
+      });
+    const post = (host: ReturnType<typeof build>, action: string) =>
+      host.app.request("/api/kohaku/binding/action", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer cap" },
+        body: JSON.stringify({ action, payload: {} }),
+      });
+
+    const host = build();
+    expect(host.actionAuditRecorder).toBeDefined();
+    expect((await post(host, "annotate")).status).toBe(200);
+    expect(await host.lineage.list({ type: ["action.invoked"] })).toHaveLength(1);
+    expect((await post(host, "not-declared")).status).toBe(403);
+    expect(await host.lineage.list({ type: ["action.denied"] })).toHaveLength(1);
+
+    const silent = build({ actionAuditRecorder: false });
+    expect(silent.actionAuditRecorder).toBeUndefined();
+    expect((await post(silent, "annotate")).status).toBe(200);
+    expect(await silent.lineage.list({ type: ["action.invoked"] })).toHaveLength(0);
+  });
+
+  it("routes passes the remaining KohakuHostDeps fields through to createKohakuRoutes", async () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const authorizeGovernance = vi.fn(async () => false);
+    const host = createKohakuHost({
+      domain,
+      querySource: "test",
+      llm: new FakeLlm(),
+      intents: [testIntentDef],
+      dataVersion: () => "v1",
+      policy: { fixedSpecs: fixedSpecs(), allowL2: false },
+      routes: { authorizeGovernance },
+    });
+    const res = await host.app.request("/api/kohaku/lineage");
+    expect(res.status).toBe(403);
+    expect(authorizeGovernance).toHaveBeenCalled();
+  });
+
+  it("passes fallbackIntent and rules through to the default SemanticPort", async () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const fallbackDef = defineIntent({
+      canonical: "test.custom",
+      description: "free-form request",
+      params: z.object({ request: z.string() }),
+      examples: [],
+      source: "test",
+      queries: () => [],
+    }).toIntentDef();
+    const invalidOutput: LlmPort = {
+      provider: "stub",
+      modelId: "stub",
+      async generateObject() {
+        throw new LlmError("INVALID_OUTPUT", "stub");
+      },
+      async generateText() {
+        throw new LlmError("INVALID_OUTPUT", "stub");
+      },
+    };
+    const rules = vi.fn((): string[] => []);
+    const host = createKohakuHost({
+      domain,
+      querySource: "test",
+      llm: invalidOutput,
+      intents: [testIntentDef, fallbackDef],
+      dataVersion: () => "v1",
+      fallbackIntent: "test.custom",
+      rules,
+    });
+    const session: SessionContext = { surface: "chat" };
+    const out = await host.ports.semantic.normalize({ kind: "nl", text: "heatmap please" }, session);
+    expect(out).toEqual({ canonical: "test.custom", params: { request: "heatmap please" } });
+    expect(rules).toHaveBeenCalled();
   });
 });

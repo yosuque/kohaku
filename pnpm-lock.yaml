@@ -1086,6 +1086,9 @@ importers:
       '@kohaku-ui/intents':
         specifier: workspace:^
         version: link:../intents
+      '@kohaku-ui/lineage':
+        specifier: workspace:^
+        version: link:../lineage
       '@kohaku-ui/llm':
         specifier: workspace:^
         version: link:../llm

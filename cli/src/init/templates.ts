@@ -582,12 +582,12 @@ KOHAKU_LLM_PROVIDER=claude
 
 # HMAC signing secret for capability tokens. \`kohaku init\` already generated a random one into .env
 # (git-ignored, not this file); set this only if you need a fixed value of your own. The server refuses
-# to start without one (see server/app.ts).
+# to start without one (see server/ports.ts).
 KOHAKU_CAPABILITY_SECRET=
 PORT=8787
 
 # Set to 1 for verbose error logging (the full cause chain + stack trace on every compose/request failure,
-# instead of a one-line summary) -- see server/app.ts.
+# instead of a one-line summary) -- see server/ports.ts.
 # KOHAKU_DEBUG=
 `;
 
@@ -603,12 +603,12 @@ export const GITIGNORE_MCP_EXTRA = `.kohaku/
 export const MCP_SERVER_TEMPLATE = `import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { KohakuHost } from "@kohaku-ui/host";
 import { attachKohakuMcp } from "@kohaku-ui/host/mcp";
 import { intentToolsFromCatalog } from "@kohaku-ui/host-mcp-apps";
 import { loadRendererHtml } from "@kohaku-ui/mcp-renderer";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { INTENT_DEFINITIONS } from "./intents.js";
-import { createPorts, type PortDeps } from "./ports.js";
 
 /**
  * Self-contained snapshot HTML (kohaku_render_snapshot, for UI-incapable hosts like Claude Code / Codex
@@ -619,9 +619,14 @@ import { createPorts, type PortDeps } from "./ports.js";
 const SNAPSHOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".kohaku", "snapshots");
 
 /**
- * Attaches the generated project's host (server/ports.ts -- the exact same Ports and compose the REST
- * front door in server/app.ts uses) to an MCP server, via \`@kohaku-ui/host/mcp\`'s \`attachKohakuMcp\`. "Same
- * request content -> same Spec -> same rendering" holds across both front doors this way.
+ * Attaches the generated project's host (built by createPorts in server/ports.ts -- the same Ports and
+ * compose the REST front door in server/app.ts builds on) to an MCP server, via \`@kohaku-ui/host/mcp\`'s
+ * \`attachKohakuMcp\`. "Same request content -> same Spec -> same rendering" holds across both front doors
+ * this way.
+ *
+ * The caller builds the host ONCE per process and passes it in: the Spec cache, fixations, lineage and
+ * single-flight state all live in that host's storage, so building a new one per MCP exchange would throw
+ * them away and regenerate every L1 view on each call.
  *
  * \`rendererHtml\` is \`@kohaku-ui/mcp-renderer\`'s pre-built, dependency-free core renderer bundle -- swap it
  * for your own build (see that package's README's "./boot" section) once you have product-specific
@@ -629,8 +634,7 @@ const SNAPSHOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".kohak
  * MCP tool (e.g. \`sales_summary\` for a project whose data source is named "sales") in addition to the
  * generic \`kohaku_compose\`.
  */
-export function attachMcpServer(server: McpServer, deps: PortDeps): void {
-  const host = createPorts(deps);
+export function attachMcpServer(server: McpServer, host: KohakuHost): void {
   attachKohakuMcp(server, host, {
     rendererHtml: loadRendererHtml,
     intentTools: intentToolsFromCatalog(INTENT_DEFINITIONS.map((d) => d.toToolSource())),
@@ -651,6 +655,7 @@ import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { attachMcpServer } from "./mcp-server.js";
+import { createPorts } from "./ports.js";
 
 /**
  * MCP server (stdio) for terminal / desktop hosts (Claude Desktop, Claude Code, Codex CLI, ...). Registered
@@ -665,26 +670,35 @@ if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
 
 const llm = createLlmFromEnv();
 const server = new McpServer({ name: "__NAME__", version: "0.1.0" });
-attachMcpServer(server, { llm });
+attachMcpServer(server, createPorts({ llm }));
 
 await server.connect(new StdioServerTransport());
 console.error("__NAME__ MCP server: ready (stdio)");
 `;
 
 export const MCP_HTTP_TEMPLATE = `import { existsSync } from "node:fs";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, type IncomingMessage } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import { toNodeHandler } from "@modelcontextprotocol/node";
+import { hostHeaderValidation, originValidation, toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { attachMcpServer } from "./mcp-server.js";
+import { createPorts } from "./ports.js";
 
 /**
  * MCP server (Streamable HTTP) for remote / browser-based hosts (claude.ai, ChatGPT) -- claude.ai and
  * ChatGPT can only connect through a remote MCP connector, not stdio. Run with \`npm run mcp:http\`
- * (default :8788, override with PORT). No authentication (a local demo default); put this behind your own
- * auth (e.g. @kohaku-ui/authz-jwt) before exposing it beyond localhost -- see docs/user-guide.md §6.
+ * (default :8788, override with PORT).
+ *
+ * No authentication (a local demo default): put this behind your own auth (e.g. @kohaku-ui/authz-jwt) before
+ * exposing it beyond localhost -- see https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#6-embedding-it-into-your-own-product
+ * Until then it defends itself against a web page in your browser driving it (DNS rebinding / CSRF): the Host
+ * header must be localhost / 127.0.0.1 / [::1], and a request that carries an Origin header (browsers always
+ * do) must come from one of those too. Clients that send no Origin (Claude Desktop, MCP connectors calling
+ * from a server) are unaffected. Behind a tunnel or a reverse proxy the Host is your public name -- allow it
+ * with KOHAKU_MCP_ALLOWED_HOSTS=name1,name2 (hostnames, no port); allow a browser-based caller's origin with
+ * KOHAKU_MCP_ALLOWED_ORIGINS=name1,name2 (hostnames, no scheme or port).
  *
  * .env is resolved next to this file, the same reasoning as server/mcp.ts.
  */
@@ -694,24 +708,78 @@ if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
 const llm = createLlmFromEnv();
 const port = Number(process.env["PORT"] ?? 8788);
 
+// The host (Ports + Spec cache + lineage) is built ONCE for the whole process. The handler below builds a
+// fresh McpServer per exchange, but every one of them attaches to this same host -- building a new host per
+// request would start each call with empty storage: no Spec cache, no fixation, no lineage, so an L1 view
+// would be regenerated by the LLM every time.
+const host = createPorts({ llm });
+
+const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
+const extraNames = (value: string | undefined): string[] =>
+  (value ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "");
+const validateHost = hostHeaderValidation([...LOCAL_HOSTNAMES, ...extraNames(process.env["KOHAKU_MCP_ALLOWED_HOSTS"])]);
+const validateOrigin = originValidation([...LOCAL_HOSTNAMES, ...extraNames(process.env["KOHAKU_MCP_ALLOWED_ORIGINS"])]);
+
+/** JSON-RPC bodies are a few KB; anything past this is refused before it piles up in memory. */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+class BodyTooLargeError extends Error {}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) throw new BodyTooLargeError();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += (chunk as Buffer).byteLength;
+    if (total > MAX_BODY_BYTES) throw new BodyTooLargeError();
+    chunks.push(chunk as Buffer);
+  }
+  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  return raw === "" ? undefined : JSON.parse(raw);
+}
+
 // Stateless serving (MCP protocol version 2026-07-28 removed protocol-level sessions): a fresh McpServer
-// per exchange, built from the same Ports every time (createPorts / server/ports.ts).
+// per exchange, all attached to the one host above.
 const mcpHandler = createMcpHandler(() => {
   const server = new McpServer({ name: "__NAME__", version: "0.1.0" });
-  attachMcpServer(server, { llm });
+  attachMcpServer(server, host);
   return server;
 });
 const handleMcp = toNodeHandler(mcpHandler);
 
 const httpServer = createHttpServer(async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, mcp-protocol-version");
+  // Each guard has already answered with a 403 when it returns false.
+  if (!validateHost(req, res)) return;
+  if (!validateOrigin(req, res)) return;
+  // Only an Origin that passed validateOrigin is ever echoed back -- never "*".
+  const origin = req.headers.origin;
+  if (origin != null) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, mcp-protocol-version");
+  }
   if (req.method === "OPTIONS") {
     res.writeHead(204).end();
     return;
   }
   try {
+    if (req.method === "POST") {
+      // Read the body under the size cap ourselves and hand it to the adapter as the parsed body.
+      let body: unknown;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        const tooLarge = err instanceof BodyTooLargeError;
+        res.setHeader("Connection", "close");
+        res.writeHead(tooLarge ? 413 : 400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: tooLarge ? -32000 : -32700, message: tooLarge ? "Request body too large" : "Parse error" }, id: null }));
+        return;
+      }
+      await handleMcp(req, res, body);
+      return;
+    }
     await handleMcp(req, res);
   } catch (err) {
     console.error("[mcp-http] request failed:", err);
@@ -719,17 +787,22 @@ const httpServer = createHttpServer(async (req, res) => {
   }
 });
 
+// Closing the server also tears down the handler (aborts in-flight exchanges, closes their McpServer instances).
+httpServer.on("close", () => {
+  void mcpHandler.close();
+});
+
 // Bind to 127.0.0.1 by default (local only); override with HOST for LAN/container exposure.
-const host = process.env["HOST"] ?? "127.0.0.1";
-httpServer.listen(port, host, () => {
-  console.log(\`__NAME__ MCP server: ready (Streamable HTTP) at http://\${host}:\${port}/mcp\`);
+const bindHost = process.env["HOST"] ?? "127.0.0.1";
+httpServer.listen(port, bindHost, () => {
+  console.log(\`__NAME__ MCP server: ready (Streamable HTTP) at http://\${bindHost}:\${port}/mcp\`);
 });
 `;
 
 /**
- * Generated verbatim by \`kohaku init --mcp\` (no run-time logic of its own -- it only reads the sibling
- * claude_desktop_config.example.json this same init run wrote, and \`npm run mcp:claude-desktop\` is the
- * only thing that ever invokes it). Backs up the user's existing Claude Desktop config to \`.bak\` and merges
+ * Copied verbatim into every \`kohaku init --mcp\` project (the template itself is not parameterized -- it
+ * reads the sibling claude_desktop_config.example.json this same init run wrote, and \`npm run
+ * mcp:claude-desktop\` is the only thing that ever invokes it). Backs up the user's existing Claude Desktop config to \`.bak\` and merges
  * in this project's mcpServers entry, or (with --print) just prints the merged result without writing
  * anything. **The real config is only ever touched by a person explicitly running this script** -- kohaku
  * init itself never runs it.
@@ -760,8 +833,7 @@ const EXAMPLE_CONFIG_PATH = join(PROJECT_ROOT, "claude_desktop_config.example.js
 
 /**
  * Claude Desktop's own config file path for the current platform. \`env\`/\`plat\` are injectable (tests pass
- * a temporary HOME so this never touches a real user's config -- see this project's own
- * test/claude-desktop.test.ts if you generated one, or the kohaku monorepo's cli/test/init-mcp.test.ts).
+ * a temporary HOME so this never touches a real user's config).
  */
 export function claudeDesktopConfigPath(env = process.env, plat = platform()) {
   const home = env.HOME ?? homedir();

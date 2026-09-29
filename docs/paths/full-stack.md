@@ -6,7 +6,7 @@ English | [日本語](full-stack.ja.md)
 
 **Time:** about 30 minutes to a REST host that composes with your LLM; an afternoon to walk the promotion loop end to end with the sample.
 
-Don't need lineage, promotion or fixation? `@kohaku-ui/host`'s `createKohakuHost()` ([Path (a)](mcp-apps.md)) wires the same three Ports this path still hand-wires (`authz`, `storage`, `semantic`) with working defaults in one call — this path builds on `createKohakuRoutes` directly instead, because `recorder` / `promotions` / `fixations` / `authorizeGovernance` below are governance-plane options `createKohakuHost` does not (yet) cover.
+Don't need promotion or fixation? `@kohaku-ui/host`'s `createKohakuHost()` ([Path (a)](mcp-apps.md)) wires the same three Ports this path still hand-wires (`authz`, `storage`, `semantic`) with working defaults in one call, records every compose into lineage by default (`recorder`), and passes every other `KohakuHostDeps` field (`auth`, `tenant`, `authorizeGovernance`, `promotions`, `fixations`, `rateLimiter`, …) through its `routes` option — so this path's governance wiring also fits inside the facade. It builds on `createKohakuRoutes` directly instead because the promotion / fixation services below need the lineage instance and a few more pieces you assemble yourself; the facade hands you `host.lineage` for exactly that.
 
 ## The first code: a governed REST host
 

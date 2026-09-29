@@ -319,7 +319,7 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 ### カスタム部品(L2)の非対称
 
 - **カスタム部品の「作成」(L2 自由生成)も MCP から起こせます**: MCP ホストに「**Show me sales as a calendar heatmap**」(日本語「売上をカレンダーヒートマップで見せて」でも同様)のように頼むと `kohaku_compose`(または `kohaku_render_snapshot`)が呼ばれ、Web の Chat と同じ NL 正規化で `sales.custom` → L2 に入ります。利用イベントは同じ lineage ストアに追記されます(永続化共有)が、API サーバーが集計するのは自身の起動時に読み込んだ lineage + 自プロセスのイベントです — MCP 側の利用が昇格カウンタに見えるのは API サーバーの再起動後です。再起動後は MCP と Web で 1 回ずつでもデモ閾値(2 回)に到達し、Admin の昇格レビューに候補が並びます(以降はデモ 3 の手順 3〜4 と同じ)。
-- **ただしカスタム部品の表示には非対称があります**: 共有レンダラー(`apps/sample-mcp/renderer/main.tsx`)はコア部品の実装だけを登録し、sandbox レンダラー(`renderSandbox`)も注入していません。そのため MCP 面では L2 生成部品は「sandbox レンダラーの注入が必要」という通知に、寄与部品・昇格部品(`sales.kpiCard` / `sales.calendarHeatmap`)は「未実装の部品タイプ」という通知になります(sample-mcp は `SurfaceCapabilities` を宣言していないため、fallback へのサーバー側降格〈negotiate〉も走りません)。カスタム部品の完全な表示(sandbox iframe・ネイティブ実装)は Web サーフェスで確認してください。
+- **ただしカスタム部品の表示には非対称があります**: 共有レンダラー(`apps/sample-mcp/renderer/main.tsx`)はコア部品に加えてサンプル自身の sales ドメイン実装(`registerSalesImpls`。そのため `sales.kpiCard` / `sales.calendarHeatmap` は描画されます)を登録しますが、sandbox レンダラー(`renderSandbox`)は注入していません。そのため MCP 面では L2 生成部品は「sandbox レンダラーの注入が必要」という通知に、実装がそのレンダラービルドに焼き込まれていない寄与部品・昇格部品は「未実装の部品タイプ」という通知になります(sample-mcp は `SurfaceCapabilities` を宣言していないため、fallback へのサーバー側降格〈negotiate〉も走りません)。カスタム部品の完全な表示(sandbox iframe・ネイティブ実装)は Web サーフェスで確認してください。
 
 ## 6. 自分のプロダクトに組み込む
 
@@ -343,7 +343,7 @@ npm run dev                                      # API :8787 + web :5173
 
 `init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。
 
-Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`fallbackIntent` で範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
+Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`server/ports.ts` の `createKohakuHost` に `fallbackIntent`(カタログ内の、`request` パラメータを取る Intent 名)を渡すと範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
 
 手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。
 
@@ -364,7 +364,7 @@ npx @kohaku-ui/cli scaffold ports --out ./my-app/kohaku
 残り 3 つの Port には動く既定値があります。既定を超えたら、自分の実装を渡して差し替えてください:
 
 2. **SemanticPort**(既定: `@kohaku-ui/semantic-llm` の `createLlmSemanticPort`。`intents.ts` + `dataVersion` / `describeShape` から組み立てられます): `normalize` は GUI 操作の決定的マッピングだけ、`resolveQuery` は Intent → `query://` ハンドル。自分の実装は `createKohakuHost({ semantic, ... })` として渡します — このとき `intents` / `dataVersion` / `describeShape` は無視されます。
-3. **AuthzPort**(既定: `@kohaku-ui/authz-hmac` の `createHmacAuthzPort(secret)`。`secret` は `capabilitySecret` か環境変数 `KOHAKU_CAPABILITY_SECRET` から解決されます)。JWT / OIDC で運用する場合は代わりに `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })`(`@kohaku-ui/authz-jwt`)を渡してください — capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決して、`KohakuHostDeps.auth` / `tenant` フックや MCP の `resolvePrincipal` に渡せます(§7「本番用アダプタ」参照)。
+3. **AuthzPort**(既定: `@kohaku-ui/authz-hmac` の `createHmacAuthzPort(secret)`。`secret` は `capabilitySecret` か環境変数 `KOHAKU_CAPABILITY_SECRET` から解決されます)。JWT / OIDC で運用する場合は代わりに `authz: createJwtAuthzPort({ key: { jwksUrl }, issuer, audience, capabilitySecret })`(`@kohaku-ui/authz-jwt`)を渡してください — capability token をそのまま維持しつつ `identity.fromAuthorizationHeader(...)` を追加し、トークンのクレームから `Principal`(id / name / roles)とテナントを解決します。`KohakuHostDeps.auth` / `tenant` フックは `createKohakuHost({ routes: { auth, tenant } })` として、MCP の `resolvePrincipal` は `attachKohakuMcp(server, host, { deps: { resolvePrincipal }, ... })` として渡せます(§7「本番用アダプタ」参照)。`routes` は他の `KohakuHostDeps` のフィールド(`approvals`、`actionEffects`、`rateLimiter`、`authorizeGovernance` など)も受け付けます。`recorder` と `actionAuditRecorder`(ファサード自身のストレージに対する lineage。`false` でどちらも無効化できます)と `onError` はファサードがすでに配線します。
 4. **StoragePort**(既定: `@kohaku-ui/storage-memory` の `createMemoryStoragePort()`)。ホストインスタンスが複数になったら `storage: createRedisStoragePort(...)` / `createPostgresStoragePort(...)`(`@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres`)を渡し、Spec キャッシュを共有する(§7)。
 
 `createKohakuHost` の `policy.fixedSpecs` オプションに固定 Spec テンプレート(`apps/sample-api/src/intents/fixed-specs.ts` が見本)を登録すれば、**LLM が実際に呼ばれることなく** renderer-react による Server-Driven UI が動きます — `llm` は必須の引数のままです(`createKohakuHost` は既定値を作りません)が、compose する全 Intent が `fixedSpecs` で解決される限り、それが呼び出されることはありません。
@@ -553,13 +553,16 @@ export function GovernancePage() {
 
 「なぜこの画面はこうなったのか」— ティア、キャッシュのヒット/ミス、キャッシュキーの個々の内訳、どの L1/L2 の
 試行が走ってなぜ失敗したか、capability negotiation による降格、そのリクエストが生んだ lineage イベント — は
-`requestId` 1 つから答えられる(compose の `X-Request-Id` 応答ヘッダ、または MCP ツール呼び出しの
-`mcp:<sessionId>:<jsonrpc id>` 相関 ID)。方法は 2 通りある。
+`requestId` 1 つから答えられる(compose の `X-Request-Id` 応答ヘッダ、または MCP ツール呼び出しの相関 ID:
+`mcp:<sessionId>:<jsonrpc id>`、セッションの無い stdio では `mcp:<jsonrpc id>`、トランスポートが何も与えない場合は
+呼び出しごとの ID)。方法は 2 通りある。どちらも **lineage を記録する**ホストが前提で(`createKohakuHost` は既定で
+recorder を配線する。`createKohakuRoutes` を手で組んだホストは `recorder` の設定が要る)、CLI の場合は読み出し先となる
+**稼働中の REST ホスト**も必要になる:
 
 **CLI から**、動いている任意の REST ホストに対して:
 
 ```bash
-node cli/bin/kohaku.js explain <requestId> --rest http://localhost:8787/api/kohaku
+npx @kohaku-ui/cli explain <requestId> --rest http://localhost:8787/api/kohaku   # このリポジトリの中では: node cli/bin/kohaku.js explain …
 # --json で整形テキストの代わりに生の ExplainReport JSON を出力
 # --header "x-kohaku-tenant:acme"(繰り返し可)でテナント/認証ヘッダを付与
 # --spec spec.json を渡すと capability スコープ(collectCapabilityScopes)も表示される
