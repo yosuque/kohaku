@@ -286,7 +286,7 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 | ルート | 認可 | 内容 |
 |---|---|---|
 | `GET /catalog` | —(公開読み取り) | `{ components: [{type, version, description, capabilities, implementation, propsSchema(JSON Schema), deprecated?}], catalogVersion }`。`deprecated`(design.md #65)は `{reason, since?, replacedBy?: {type, version?}, sunset?}` で、置き換えられた部品にのみ存在する |
-| `GET /lineage?type=&intentHash=&artifactId=&specHash=&correlationId=&since=&until=&limit=` | `authorizeGovernance`(配線時) | `{ events: LineageEventRecord[] }`。`since` / `until` は ISO8601(`/analytics/summary` と同一の正規化・境界解釈)、`limit` は既定 200(`DEFAULT_LINEAGE_LIMIT`)、上限 1000。`correlationId` は `intentHash` / `artifactId` / `specHash` と同様、payload フィールドの完全一致で絞り込む。加えて、網羅的な forward paging(下記)用に `order=asc&cursor=&pageSize=` を受け付ける |
+| `GET /lineage?type=&intentHash=&artifactId=&specHash=&correlationId=&since=&until=&limit=` | `authorizeGovernance`(配線時) | `{ events: LineageEventRecord[] }`。`since` / `until` は ISO8601(`/analytics/summary` と同一の正規化・境界解釈。`2026-02-30` のような存在しない日付は 400。日付だけの `until` はその日の `00:00:00.000Z` という瞬間を表し、その日全体を含める `kohaku evidence export --until` とは異なる)、`limit` は既定 200(`DEFAULT_LINEAGE_LIMIT`)、上限 1000。`correlationId` は `intentHash` / `artifactId` / `specHash` と同様、payload フィールドの完全一致で絞り込む。加えて、網羅的な forward paging(下記)用に `order=asc&cursor=&pageSize=` を受け付ける |
 | `GET /analytics/summary?since=&until=&limit=` | `authorizeGovernance`(配線時。`analytics.read`) | `{ window, summary }`。lineage の生イベント列を集計した俯瞰サマリ(下記)。**参照実装レベルの拡張**(本書 §11 の必須集合外) |
 | `POST /telemetry` | `authorizeGovernance`(配線時) | `{ events: [{kind:"rendered", specHash,…} \| {kind:"componentUsed", artifactId, outcome}] }` → `{ok}` |
 

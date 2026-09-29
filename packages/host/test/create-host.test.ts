@@ -319,6 +319,74 @@ describe("createKohakuHost", () => {
     expect(authorizeGovernance).toHaveBeenCalled();
   });
 
+  it("observer is combined with the console reporter, and policyFor reaches the compose context", async () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const onComposed = vi.fn();
+    const policyFor = vi.fn(() => ({ fixedSpecs: fixedSpecs(), allowL2: false }));
+    const host = createKohakuHost({
+      domain,
+      querySource: "test",
+      llm: new FakeLlm(),
+      intents: [testIntentDef],
+      dataVersion: () => "v1",
+      policyFor,
+      observer: { onComposed },
+    });
+    expect(host.compose.policyFor).toBe(policyFor);
+    // The console reporter's onError survives next to the caller's observer.
+    expect(host.compose.observer?.onError).toBeTypeOf("function");
+    const res = await composeTestView(host.app);
+    expect(res.status).toBe(200);
+    expect(policyFor).toHaveBeenCalled();
+    expect(onComposed).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes approvals / rateLimiter / actionEffects as host.governance and logs a rate-limited line by default", async () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const rateLimiter = { take: vi.fn(async () => ({ allow: false, retryAfterMs: 1000 })) };
+      const host = createKohakuHost({
+        domain,
+        querySource: "test",
+        llm: new FakeLlm(),
+        intents: [testIntentDef],
+        dataVersion: () => "v1",
+        policy: { fixedSpecs: fixedSpecs(), allowL2: false },
+        routes: { rateLimiter },
+      });
+      expect(host.governance.rateLimiter).toBe(rateLimiter);
+      expect(host.governance.approvals).toBeUndefined();
+      const res = await composeTestView(host.app);
+      expect(res.status).toBe(429);
+      // onRateLimited is fire-and-forget; let its microtask run.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(
+        log.mock.calls.some((c) => /\[kohaku\] rate limit \(compose\).*rate limited/.test(String(c[0]))),
+      ).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("routes.onRateLimited replaces the default console line and is what host.governance carries", async () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const onRateLimited = vi.fn();
+    const host = createKohakuHost({
+      domain,
+      querySource: "test",
+      llm: new FakeLlm(),
+      intents: [testIntentDef],
+      dataVersion: () => "v1",
+      policy: { fixedSpecs: fixedSpecs(), allowL2: false },
+      routes: { rateLimiter: { take: async () => ({ allow: false }) }, onRateLimited },
+    });
+    expect(host.governance.onRateLimited).toBe(onRateLimited);
+    await composeTestView(host.app);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onRateLimited).toHaveBeenCalledTimes(1);
+  });
+
   it("passes fallbackIntent and rules through to the default SemanticPort", async () => {
     process.env[SECRET_ENV] = "test-secret-of-decent-length";
     const fallbackDef = defineIntent({

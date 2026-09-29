@@ -9,10 +9,12 @@ export type { AttachOptions } from "@kohaku-ui/host-mcp-apps";
 export interface AttachKohakuMcpOptions extends AttachOptions {
   /**
    * Every other `McpHostDeps` field, passed through to `attachKohakuToMcpServer`: `resolvePrincipal`,
-   * `approvals`, `rateLimiter`, `fixations`, ... The fields the host owns (`compose`, `domain`, `authz`,
-   * `querySource`) cannot be overridden. `onError`, `recorder` and `actionAuditRecorder` are set here by
-   * default (the console error reporter, and the host's View Lineage and action-audit recorders) and are
-   * replaced by what you pass.
+   * `fixations`, ... The fields the host owns (`compose`, `domain`, `authz`, `querySource`) cannot be
+   * overridden. `onError`, `recorder`, `actionAuditRecorder` and the governance fields `approvals`,
+   * `rateLimiter`, `actionEffects` and `onRateLimited` are set here by default (the console error reporter,
+   * the host's View Lineage and action-audit recorders, and `host.governance`) and are replaced by what you
+   * pass. Note that the MCP profile resolves no tenant, so an approval token issued with a tenant binding is
+   * rejected here even though the shared `approvals` port is wired.
    */
   deps?: Partial<Omit<McpHostDeps, "compose" | "domain" | "authz" | "querySource">>;
 }
@@ -25,7 +27,8 @@ export interface AttachKohakuMcpOptions extends AttachOptions {
  *
  * Like the REST half, the MCP profile gets the console error reporter as its `onError` and the host's View
  * Lineage `recorder` and `actionAuditRecorder` by default, so a failed tool call is visible on stderr and MCP views land in the same
- * lineage `kohaku explain` reads.
+ * lineage `kohaku explain` reads. It also inherits `host.governance` (`approvals`, `rateLimiter`,
+ * `actionEffects`, `onRateLimited`), so the REST rate limits and approval port apply to MCP tool calls too.
  *
  * Kept out of `@kohaku-ui/host`'s main entry point (`.`) so a REST-only consumer never has to install
  * `@modelcontextprotocol/server` (an optional peer dependency of this package, needed only for this subpath).
@@ -38,6 +41,7 @@ export function attachKohakuMcp(server: McpServer, host: KohakuHost, options: At
       onError: createConsoleErrorReporter({ debug: host.debug }).mcp,
       ...(host.recorder != null ? { recorder: host.recorder } : {}),
       ...(host.actionAuditRecorder != null ? { actionAuditRecorder: host.actionAuditRecorder } : {}),
+      ...host.governance,
       ...deps,
       compose: host.compose,
       domain: host.ports.domain,

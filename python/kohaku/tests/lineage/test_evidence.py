@@ -677,3 +677,43 @@ def test_signature_is_base64_text() -> None:
     signature = sign_manifest(manifest, keypair.private_key)
     # round-trips through base64 cleanly
     assert base64.b64encode(base64.b64decode(signature)).decode("ascii") == signature
+
+
+@pytest.mark.parametrize("literal", ["1e400", "NaN", "Infinity", "-Infinity"])
+def test_verify_fails_instead_of_raising_on_a_non_finite_number_in_the_manifest(literal: str) -> None:
+    async def run() -> None:
+        pack, keypair, signature = await _signed_empty_pack()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
+        tampered = manifest_json[:-1] + f', "extra": {literal}' + "}"
+        reader = _MemoryReader(pack.files, tampered, signature)
+        result = await verify_evidence_pack(reader, keypair.public_key)
+        assert result.ok is False
+        assert result.errors
+
+    asyncio.run(run())
+
+
+def test_verify_manifest_signature_is_false_for_a_value_with_no_canonical_form() -> None:
+    async def run() -> None:
+        _, keypair, signature = await _signed_empty_pack()
+        assert verify_manifest_signature({"extra": float("inf")}, signature, keypair.public_key) is False
+
+    asyncio.run(run())
+
+
+def test_verify_rejects_a_manifest_with_a_duplicate_object_key() -> None:
+    async def run() -> None:
+        pack, keypair, signature = await _signed_empty_pack()
+        manifest_json = json.dumps(pack.manifest.canonical_dict())
+        # The repeated key carries the same value, so the parsed value still matches the signature: only the
+        # duplicate-key check can refuse it.
+        duplicated = manifest_json.replace('"complete": true', '"complete": true, "complete": true', 1)
+        assert duplicated != manifest_json
+        assert verify_manifest_signature(json.loads(duplicated), signature, keypair.public_key) is True
+        reader = _MemoryReader(pack.files, duplicated, signature)
+        result = await verify_evidence_pack(reader, keypair.public_key)
+        assert result.ok is False
+        assert "duplicate object key" in result.errors[0]
+        assert "complete" in result.errors[0]
+
+    asyncio.run(run())

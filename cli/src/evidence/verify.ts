@@ -28,6 +28,11 @@ function resolveSafePath(rootReal: string, relativePath: string): string {
   if (lstat.isSymbolicLink()) {
     throw new Error(`refusing to access "${relativePath}": it is a symlink`);
   }
+  // A FIFO, socket or device node would make readFileSync block (or read unbounded data) instead of
+  // failing, so only a plain regular file is ever opened.
+  if (!lstat.isFile()) {
+    throw new Error(`refusing to access "${relativePath}": it is not a regular file`);
+  }
   // realpath additionally resolves a symlinked *intermediate* directory component (e.g. "artifacts"
   // itself being a symlink), which lstat on the leaf alone cannot detect.
   const realTarget = realpathSync(target);
@@ -48,8 +53,9 @@ function safeStatSize(rootReal: string, relativePath: string): number {
   return statSync(resolveSafePath(rootReal, relativePath)).size;
 }
 
-/** Lists every regular file (and, deliberately, every symlink -- so one shows up as an "unexpected
- * file" rather than being silently skipped) under `dir`, as POSIX-style paths relative to `root`. */
+/** Lists every non-directory entry under `dir` -- regular files and, deliberately, everything else too
+ * (symlinks, FIFOs, sockets, devices), so an odd entry shows up as an "unexpected file" rather than being
+ * silently skipped -- as POSIX-style paths relative to `root`. */
 function listFilesRecursive(root: string, dir: string, acc: string[] = []): string[] {
   let entries: Dirent[];
   try {
@@ -60,13 +66,9 @@ function listFilesRecursive(root: string, dir: string, acc: string[] = []): stri
   for (const entry of entries) {
     const full = join(dir, entry.name);
     const relPath = relative(root, full).split(sep).join("/");
-    if (entry.isSymbolicLink()) {
-      acc.push(relPath);
-      continue;
-    }
     if (entry.isDirectory()) {
       listFilesRecursive(root, full, acc);
-    } else if (entry.isFile()) {
+    } else {
       acc.push(relPath);
     }
   }

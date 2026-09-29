@@ -617,15 +617,37 @@ def verify_manifest_signature(
 
     `manifest` is an EvidenceManifest or, as verify_evidence_pack passes it, the raw `json.loads` result
     of manifest.json: the signed value is the raw JSON, so a schema-parsed copy (which could drop or
-    default fields) must not stand in for it. A malformed signature is a failed verification, not a raise.
+    default fields) must not stand in for it. A malformed signature, or a value with no canonical form (a
+    non-finite number such as the `inf` that `1e400` parses to), is a failed verification, not a raise.
     """
     value = manifest.canonical_dict() if isinstance(manifest, EvidenceManifest) else manifest
-    message = canonical_stringify(value).encode("utf-8")
     try:
+        message = canonical_stringify(value).encode("utf-8")
         signature = base64.b64decode(signature_base64.strip())
-    except ValueError:
+    except (TypeError, ValueError):
         return False
     return verify_bytes(message, signature, public_key)
+
+
+class _DuplicateKeyError(ValueError):
+    """Raised while decoding manifest.json when one object holds the same key twice."""
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """`json.loads`'s `object_pairs_hook`: the default keeps the last of two equal keys, so a duplicate would
+    let two parsers read different manifests out of the same bytes (the signature covers the parsed value)."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateKeyError(f"manifest.json contains the duplicate object key {json.dumps(key)}")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(name: str) -> Any:
+    """`json.loads`'s `parse_constant`: refuses the non-standard `NaN` / `Infinity` / `-Infinity` literals,
+    which `JSON.parse` (the TS verifier) rejects too."""
+    raise ValueError(f"{name} is not valid JSON")
 
 
 # Hard caps verify_evidence_pack enforces before reading, independent of what any particular reader's
@@ -752,8 +774,16 @@ async def verify_evidence_pack(
         )
     manifest_bytes = await reader.read_manifest()
     try:
-        raw = json.loads(manifest_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raw = json.loads(
+            manifest_bytes.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except _DuplicateKeyError as e:
+        return VerifyEvidencePackResult(
+            ok=False, manifest=None, errors=[f"{e}; refusing to verify"], mismatches=[]
+        )
+    except ValueError as e:  # includes UnicodeDecodeError and json.JSONDecodeError
         return VerifyEvidencePackResult(
             ok=False, manifest=None, errors=[f"manifest.json is not valid JSON: {e}"], mismatches=[]
         )

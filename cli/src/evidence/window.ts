@@ -8,20 +8,11 @@ export class EvidenceUsageError extends Error {
   }
 }
 
-const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-/** Date.parse rolls an out-of-range day over ("2026-02-30" is March 2nd); refuse it instead. */
-function isRealCalendarDate(raw: string): boolean {
-  const m = DATE_ONLY_PATTERN.exec(raw.slice(0, 10));
-  if (m == null) return false;
-  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const d = new Date(Date.UTC(year, month - 1, day));
-  return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
-}
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function canonicalBound(flag: "--since" | "--until", raw: string): string {
   const canonical = parseIso8601(raw);
-  if (canonical == null || !isRealCalendarDate(raw)) {
+  if (canonical == null) {
     throw new EvidenceUsageError(
       `${flag} must be an ISO 8601 date (YYYY-MM-DD) or timestamp with a Z or ±hh:mm offset, got "${raw}"`,
     );
@@ -30,9 +21,11 @@ function canonicalBound(flag: "--since" | "--until", raw: string): string {
 }
 
 /**
- * Validates and canonicalizes `--since` / `--until` the way the REST `/lineage` route does (a StoragePort
- * compares them to event timestamps as strings, so an offset like `+09:00`, or a bare date, matches the
- * wrong events unless normalized to canonical UTC first).
+ * Validates and canonicalizes `--since` / `--until` with the same `parseIso8601` the REST `/lineage` route
+ * uses (a StoragePort compares them to event timestamps as strings, so an offset like `+09:00`, or a bare
+ * date, matches the wrong events unless normalized to canonical UTC first). The one deliberate difference
+ * from REST is a date-only `--until`: REST reads it as the instant 00:00:00.000Z of that day, this CLI as
+ * the whole day (below).
  *
  * A date-only value is a whole UTC day: `--since 2026-09-01` starts at 00:00:00.000Z and, so that
  * `--until 2026-09-30` does not silently drop the last day, a date-only `--until` ends at 23:59:59.999Z.

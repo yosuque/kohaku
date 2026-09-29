@@ -40,7 +40,19 @@ async function loadCatalogFor(modulePath: string): Promise<(tenant?: string) => 
   if (!existsSync(absolute)) {
     throw new Error(`--catalog module not found: ${absolute}`);
   }
-  const mod: Record<string, unknown> = await import(pathToFileURL(absolute).href);
+  let mod: Record<string, unknown>;
+  try {
+    mod = await import(pathToFileURL(absolute).href);
+  } catch (e) {
+    // The published CLI runs on plain Node, which cannot load a TypeScript module (or the extensionless
+    // imports inside one), and that surfaces as a bare ERR_UNKNOWN_FILE_EXTENSION / ERR_MODULE_NOT_FOUND.
+    throw new Error(
+      `Cannot import --catalog module ${absolute} (${e instanceof Error ? e.message : String(e)}). ` +
+        "The CLI runs on plain Node: if the module is TypeScript, pass a built .js file, or run the CLI " +
+        'under tsx, e.g. NODE_OPTIONS="--import tsx" kohaku migrate ...',
+      { cause: e },
+    );
+  }
   const candidate = mod["default"] ?? mod["catalogFor"];
   if (typeof candidate !== "function") {
     throw new Error(

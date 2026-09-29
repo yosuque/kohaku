@@ -7,7 +7,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createKohakuHost, type KohakuHost } from "../src/create-host.js";
+import { type CreateKohakuHostOptions, createKohakuHost, type KohakuHost } from "../src/create-host.js";
 import { type AttachKohakuMcpOptions, attachKohakuMcp } from "../src/mcp.js";
 
 const testIntentBuilder = defineIntent({
@@ -49,8 +49,10 @@ function fixedSpecs(): FixedSpecSource {
 function buildServer(
   attachExtras: Pick<AttachKohakuMcpOptions, "deps"> = {},
   onHost: (host: KohakuHost) => void = () => {},
+  hostExtras: Pick<CreateKohakuHostOptions, "routes"> = {},
 ): McpServer {
   const host = createKohakuHost({
+    ...hostExtras,
     domain,
     querySource: "test",
     llm: new FakeLlm(),
@@ -78,8 +80,9 @@ function buildServer(
 async function connect(
   attachExtras: Pick<AttachKohakuMcpOptions, "deps"> = {},
   onHost: (host: KohakuHost) => void = () => {},
+  hostExtras: Pick<CreateKohakuHostOptions, "routes"> = {},
 ): Promise<{ client: Client; close: () => Promise<void> }> {
-  const handler = createMcpHandler(() => buildServer(attachExtras, onHost));
+  const handler = createMcpHandler(() => buildServer(attachExtras, onHost, hostExtras));
   const client = new Client(
     { name: "kohaku-host-test-client", version: "0.0.1" },
     { versionNegotiation: { mode: "auto" } },
@@ -178,6 +181,40 @@ describe("attachKohakuMcp", () => {
       expect(log).not.toHaveBeenCalled();
     } finally {
       log.mockRestore();
+      await close();
+    }
+  });
+
+  it("inherits the facade's rateLimiter, so a REST rate limit also denies MCP tool calls", async () => {
+    const take = vi.fn(async () => ({ allow: false, retryAfterMs: 500 }));
+    const onRateLimited = vi.fn();
+    const { client, close } = await connect({}, () => {}, {
+      routes: { rateLimiter: { take }, onRateLimited },
+    });
+    try {
+      const result = await client.callTool({ name: "test_view", arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.structuredContent)).toContain("RATE_LIMITED");
+      expect(take).toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onRateLimited).toHaveBeenCalledTimes(1);
+    } finally {
+      await close();
+    }
+  });
+
+  it("deps.rateLimiter overrides the facade's rateLimiter", async () => {
+    const facadeTake = vi.fn(async () => ({ allow: false }));
+    const { client, close } = await connect(
+      { deps: { rateLimiter: { take: async () => ({ allow: true }) } } },
+      () => {},
+      { routes: { rateLimiter: { take: facadeTake } } },
+    );
+    try {
+      const result = await client.callTool({ name: "test_view", arguments: {} });
+      expect(result.isError).not.toBe(true);
+      expect(facadeTake).not.toHaveBeenCalled();
+    } finally {
       await close();
     }
   });

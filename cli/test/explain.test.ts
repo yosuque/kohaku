@@ -145,6 +145,34 @@ describe("kohaku explain (end-to-end via an in-process host-rest app)", () => {
     expect(formatExplainReport(report)).toContain("No view.composed event found for this requestId.");
   });
 
+  it("escapes control characters in lineage-derived strings so a hostile record cannot drive the terminal", () => {
+    const text = formatExplainReport({
+      composes: [
+        {
+          eventId: "e1",
+          ts: "2026-01-01T00:00:00.000Z",
+          intentHash: "h",
+          canonical: "evil\u001b[2J\rname\u009b",
+          specHash: "s",
+          tier: "L1",
+          cache: "miss",
+          decision: { attempts: [{ kind: "l1", ok: false, issues: ["bad\u0007bell", "keeps\nnewline"] }] },
+        },
+      ],
+      events: [],
+    });
+    const controls = [...text].filter((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      return ch !== "\n" && (code < 0x20 || (code >= 0x7f && code <= 0x9f));
+    });
+    expect(controls).toEqual([]);
+    expect(text).toContain("evil\\x1b[2J\\x0dname\\x9b");
+    expect(text).toContain("bad\\x07bell");
+    // A newline inside a value is escaped too, so it cannot forge an extra report line.
+    expect(text).toContain("keeps\\x0anewline");
+    expect(text).not.toContain("keeps\nnewline");
+  });
+
   it("rejects a malformed --header value", async () => {
     const { app } = makeApp();
     const transport = (url: string, init?: RequestInit) => Promise.resolve(app.request(url, init));

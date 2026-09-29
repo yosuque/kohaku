@@ -698,7 +698,8 @@ import { createPorts } from "./ports.js";
  * do) must come from one of those too. Clients that send no Origin (Claude Desktop, MCP connectors calling
  * from a server) are unaffected. Behind a tunnel or a reverse proxy the Host is your public name -- allow it
  * with KOHAKU_MCP_ALLOWED_HOSTS=name1,name2 (hostnames, no port); allow a browser-based caller's origin with
- * KOHAKU_MCP_ALLOWED_ORIGINS=name1,name2 (hostnames, no scheme or port).
+ * KOHAKU_MCP_ALLOWED_ORIGINS=name1,name2 (hostnames, no scheme or port -- which also means the Origin check is
+ * port-agnostic; see validateOrigin below for how to pin an exact origin).
  *
  * .env is resolved next to this file, the same reasoning as server/mcp.ts.
  */
@@ -718,6 +719,10 @@ const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
 const extraNames = (value: string | undefined): string[] =>
   (value ?? "").split(",").map((name) => name.trim()).filter((name) => name !== "");
 const validateHost = hostHeaderValidation([...LOCAL_HOSTNAMES, ...extraNames(process.env["KOHAKU_MCP_ALLOWED_HOSTS"])]);
+// originValidation compares hostnames only, never ports or schemes: with the default list, a page served by ANY
+// local dev server (http://localhost:<any port>) is accepted, not just your own front end. To pin one origin,
+// replace validateOrigin with an exact-match check, e.g. reject (403) unless the Origin header is in a Set such as
+// new Set(["http://localhost:5173"]).
 const validateOrigin = originValidation([...LOCAL_HOSTNAMES, ...extraNames(process.env["KOHAKU_MCP_ALLOWED_ORIGINS"])]);
 
 /** JSON-RPC bodies are a few KB; anything past this is refused before it piles up in memory. */
@@ -791,6 +796,22 @@ const httpServer = createHttpServer(async (req, res) => {
 httpServer.on("close", () => {
   void mcpHandler.close();
 });
+
+// Graceful shutdown: SIGINT / SIGTERM close the server, which fires the 'close' cleanup above. An open stream
+// can hold it open, so a bounded drain window (KOHAKU_SHUTDOWN_GRACE_MS, default 10s) precedes a forced exit.
+// A clean drain lets the process end on its own; a forced one exits 1.
+const SHUTDOWN_GRACE_MS = Number(process.env["KOHAKU_SHUTDOWN_GRACE_MS"] ?? 10_000);
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    console.error(\`__NAME__ MCP server: \${signal} received, draining connections\`);
+    setTimeout(() => {
+      console.error("__NAME__ MCP server: drain window elapsed, forcing exit");
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS).unref();
+    httpServer.close();
+    httpServer.closeIdleConnections();
+  });
+}
 
 // Bind to 127.0.0.1 by default (local only); override with HOST for LAN/container exposure.
 const bindHost = process.env["HOST"] ?? "127.0.0.1";

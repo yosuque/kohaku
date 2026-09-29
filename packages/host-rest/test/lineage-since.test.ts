@@ -123,6 +123,17 @@ describe("until support in /lineage (readability-6, same normalization and bound
     expect(body.events.map((e) => e.ts)).toEqual(["2026-07-09T05:00:00.000Z"]);
   });
 
+  it("an impossible calendar date is 400 BAD_REQUEST for since and until (not rolled over to the next month)", async () => {
+    const app = createKohakuRoutes(deps(lineageStorage([])));
+    for (const param of ["since", "until"]) {
+      for (const bad of ["2026-02-30", "2026-04-31", "2026-02-30T00:00:00Z", "2026-07-09T24:00:00Z"]) {
+        const res = await app.request(`/lineage?${param}=${encodeURIComponent(bad)}`);
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { error: { code: string } }).error.code).toBe("BAD_REQUEST");
+      }
+    }
+  });
+
   it("non-ISO format until is 400 BAD_REQUEST", async () => {
     const app = createKohakuRoutes(deps(lineageStorage([])));
     const res = await app.request(`/lineage?until=${encodeURIComponent("July 9, 2026")}`);

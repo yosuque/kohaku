@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import type { ExplainReport } from "@kohaku-ui/client";
 import type { VerifyEvidencePackResult } from "@kohaku-ui/lineage";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
-import { Command } from "commander";
+import { Command, type CommanderError } from "commander";
 import {
   type ExportDatasetResult,
   exportDataset,
@@ -317,6 +317,16 @@ const evidence = program
       "Article 50 disclosure-evidence context (not legal advice)",
   );
 
+/**
+ * `exitOverride` handler for the evidence subcommands whose exit code 1 means "invalid pack" / a runtime
+ * failure: commander's own usage errors (a missing required option, an unknown option, a bad argument)
+ * default to exit 1 and would collide with it, so they exit 2 instead. `--help` / `--version` carry exit
+ * code 0 and stay 0. Commander has already printed the message by the time this runs.
+ */
+function exitUsageErrorAsTwo(err: CommanderError): never {
+  process.exit(err.exitCode === 0 ? 0 : 2);
+}
+
 evidence
   .command("keygen")
   .description("Generate a fresh Ed25519 keypair for signing/verifying evidence packs")
@@ -343,6 +353,7 @@ evidence
 
 evidence
   .command("export")
+  .exitOverride(exitUsageErrorAsTwo)
   .description(
     "Assemble and sign a Compliance Evidence Pack from a local StoragePort data directory or a REST host",
   )
@@ -427,13 +438,14 @@ evidence
 
 evidence
   .command("verify")
+  .exitOverride(exitUsageErrorAsTwo)
   .argument("<dir>", "Evidence pack directory")
   .description("Verify a Compliance Evidence Pack's signature and file integrity")
   .requiredOption("--public-key <pem>", "Path to a PEM-encoded Ed25519 public key (SPKI)")
   .action(async (dir: string, opts: { publicKey: string }) => {
     // Exit codes: 0 = valid, 1 = invalid, 2 = usage error (bad --public-key, missing/malformed pack
-    // directory) -- program.error() is not used here since its default exit code (1) would collide
-    // with "invalid".
+    // directory, and commander's own option errors via exitUsageErrorAsTwo) -- program.error() is not
+    // used here since its default exit code (1) would collide with "invalid".
     let result: VerifyEvidencePackResult;
     try {
       result = await runEvidenceVerify(dir, opts.publicKey);

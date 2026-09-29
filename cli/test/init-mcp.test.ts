@@ -124,6 +124,16 @@ describe("kohaku init --mcp", () => {
     expect(http).toMatch(/httpServer\.on\("close", \(\) => \{\s*void mcpHandler\.close\(\);/);
   });
 
+  it("server/mcp-http.ts shuts down gracefully on SIGINT / SIGTERM and documents the port-agnostic Origin check", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
+    const http = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
+    expect(http).toContain('for (const signal of ["SIGINT", "SIGTERM"] as const)');
+    expect(http).toContain("httpServer.close();");
+    expect(http).toContain("KOHAKU_SHUTDOWN_GRACE_MS");
+    expect(http).toContain("port-agnostic");
+  });
+
   it("server/mcp-server.ts exposes the generated Intent catalog as typed MCP tools", async () => {
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
