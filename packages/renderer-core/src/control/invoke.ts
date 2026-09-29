@@ -130,8 +130,9 @@ export interface RunInvokeTargetDeps {
   /**
    * Approval-token hook for an "approve"-tier action (design.md #63), consulted the same way as
    * `confirm`. Returning a token (sync or async) retries the invoke with that `approval` token;
-   * `undefined` leaves the action unexecuted, reporting phase "awaitingApproval" instead. This profile
-   * exposes no default (an approval token is obtained out of band, e.g. the host's `POST /approvals` or
+   * `undefined` (or an unset hook) still sends the invoke, without `approval`: the server records the
+   * pending approval and answers APPROVAL_REQUIRED, reported as phase "awaitingApproval" carrying the
+   * approval descriptor. This profile exposes no default (an approval token is obtained out of band, e.g. the host's `POST /approvals` or
    * an approver-facing surface -- there is no generic browser-native equivalent of `globalThis.confirm`
    * for it).
    */
@@ -153,10 +154,11 @@ export interface RunInvokeTargetDeps {
  *
  * Governed actions (design.md #62/#63): `preflightAction` runs first, purely locally (no network call
  * yet). "invalid" short-circuits immediately (never attempts the invoke at all — a payload invalid on its
- * own terms should never even reach the tier gate, mirroring host-core's ActionGate order). "confirm" /
- * "approve" consult `deps.confirm` / `deps.requestApproval`; a hook that is unset, or that declines
- * (returns false / undefined), also short-circuits (phase "awaitingApproval") without attempting the
- * invoke. Only once the local gate is satisfied (or there was nothing to check — no manifest, or the
+ * own terms should never even reach the tier gate, mirroring host-core's ActionGate order). "confirm"
+ * consults `deps.confirm`; a hook that is unset, or that declines (returns false), short-circuits (phase
+ * "awaitingApproval") without attempting the invoke. "approve" consults `deps.requestApproval` but never
+ * short-circuits: without a token the invoke is still sent (no `approval`), so the server records
+ * `action.approvalRequested` and returns the pending-approval descriptor. Only once the local gate is satisfied (or there was nothing to check — no manifest, or the
  * action's tier is "auto") does execution proceed to `binding.invokeAction`, whose own rejection is
  * additionally mapped: a `BindingError` with code `ACTION_PARAMS_INVALID` / `APPROVAL_REQUIRED` maps to
  * the same "invalid" / "awaitingApproval" phases (the server is always the final authority — a stale or
@@ -191,12 +193,12 @@ export async function runInvokeTarget(
     }
     confirmed = true;
   } else if (preflight.kind === "approve") {
+    // No token obtained (no hook, or the hook declined): the request is still sent, without `approval`,
+    // so the server records `action.approvalRequested` and answers 403 APPROVAL_REQUIRED with the
+    // pending-approval descriptor (requestId / payloadHash) an approver needs. The catch below maps that
+    // response to the "awaitingApproval" phase.
     const token = requestApproval != null ? await requestApproval({ action, payload }) : undefined;
-    if (token == null) {
-      onPhase({ phase: "awaitingApproval", tier: "approve", message: "this action requires approval" });
-      return;
-    }
-    approval = token;
+    if (token != null) approval = token;
   }
 
   onPhase({ phase: "pending" });
