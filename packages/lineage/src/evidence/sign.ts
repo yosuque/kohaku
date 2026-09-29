@@ -230,8 +230,9 @@ export interface VerifyEvidencePackResult {
   /**
    * Fatal integrity problems: a malformed manifest, a signature that does not verify (over the raw
    * manifest.json value, so an added, removed or retyped field fails here), a `files[]` entry
-   * whose on-disk hash/size does not match what the (signed) manifest recorded, or a file that could
-   * not be read at all. Any entry here means `ok` is false -- these are exactly the class of problem a
+   * whose on-disk hash/size does not match what the (signed) manifest recorded, a file that could
+   * not be read at all, or a jsonl file whose (correctly hashed) signed content has a line that is not
+   * valid JSON. Any entry here means `ok` is false -- these are exactly the class of problem a
    * single-byte tamper produces.
    */
   errors: string[];
@@ -246,19 +247,23 @@ export interface VerifyEvidencePackResult {
   mismatches: string[];
 }
 
-function parseJsonlRecords(text: string): unknown[] {
+/** Parses a jsonl file's non-empty lines. `badLines` are the 1-based numbers of lines that are not valid
+ * JSON: this only ever runs on content whose hash already matched the signed manifest, so an
+ * unparseable line is a defect in what the exporter signed, not something a hash check has caught. */
+function parseJsonlRecords(text: string): { records: unknown[]; badLines: number[] } {
   const records: unknown[] = [];
-  for (const line of text.split("\n")) {
+  const badLines: number[] = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     if (line.length === 0) continue;
     try {
       records.push(JSON.parse(line));
     } catch {
-      // Malformed JSONL is reported by the caller as a files[] hash mismatch already (the file's
-      // content no longer matches what was signed); re-parsing here is only a best-effort artifact
-      // cross-check, so a line that fails to parse is simply skipped rather than raised twice.
+      badLines.push(i + 1);
     }
   }
-  return records;
+  return { records, badLines };
 }
 
 /** Re-derives the artifact claims a jsonl file's own records make, by the same rules build.ts used to
@@ -411,7 +416,12 @@ export async function verifyEvidencePack(
       continue; // The content is not what was signed; an artifact cross-check against it would be meaningless.
     }
     if (entry.path.endsWith(".jsonl") && content.byteLength > 0) {
-      const records = parseJsonlRecords(decoder.decode(content));
+      const { records, badLines } = parseJsonlRecords(decoder.decode(content));
+      if (badLines.length > 0) {
+        errors.push(
+          `${entry.path}: unparseable JSON on line(s) ${badLines.join(", ")} of the signed content`,
+        );
+      }
       for (const claim of artifactClaimsFromJsonlRecords(entry.path, records)) {
         if (claim.claimedSha256 == null) continue;
         const actual = await sha256HexBytes(encoder.encode(claim.html));

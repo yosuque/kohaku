@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -546,6 +547,32 @@ def test_evidence_manifest_models_reject_unknown_keys_and_coercion() -> None:
         EvidenceFileEntry.model_validate({"path": "events.jsonl", "sha256": "a" * 64, "bytes": "1"})
     with pytest.raises(ValidationError):
         EvidenceManifestSigner.model_validate({"keyId": "0123456789abcdef"})
+
+
+def test_verify_reports_an_unparseable_line_inside_correctly_hashed_signed_jsonl() -> None:
+    async def run() -> None:
+        pack, keypair, _ = await _signed_empty_pack()
+        # The exporter signed a file whose second line is not JSON: the hash matches, so only the
+        # content scan can notice it.
+        content = b'{"ok":true}\nnot json at all\n'
+        files = [
+            EvidencePackFile(path=f.path, content=content) if f.path == "events.jsonl" else f
+            for f in pack.files
+        ]
+        manifest = pack.manifest.canonical_dict()
+        for entry in manifest["files"]:
+            if entry["path"] == "events.jsonl":
+                entry["sha256"] = hashlib.sha256(content).hexdigest()
+                entry["bytes"] = len(content)
+        message = canonical_stringify(manifest).encode("utf-8")
+        signature = base64.b64encode(sign_bytes(message, keypair.private_key)).decode("ascii")
+        reader = _MemoryReader(files, json.dumps(manifest), signature)
+        result = await verify_evidence_pack(reader, keypair.public_key)
+        assert result.ok is False
+        assert len(result.errors) == 1
+        assert "events.jsonl: unparseable JSON on line(s) 2" in result.errors[0]
+
+    asyncio.run(run())
 
 
 def test_verify_fails_cleanly_on_invalid_manifest_json() -> None:

@@ -659,18 +659,20 @@ class VerifyEvidencePackResult:
     mismatches: list[str]
 
 
-def _parse_jsonl(text: str) -> list[Any]:
+def _parse_jsonl(text: str) -> tuple[list[Any], list[int]]:
+    """Parses a jsonl file's non-empty lines. The second element is the 1-based numbers of lines that are
+    not valid JSON: this only ever runs on content whose hash already matched the signed manifest, so an
+    unparseable line is a defect in what the exporter signed, not something a hash check has caught."""
     records: list[Any] = []
-    for line in text.split("\n"):
+    bad_lines: list[int] = []
+    for number, line in enumerate(text.split("\n"), start=1):
         if line == "":
             continue
         try:
             records.append(json.loads(line))
         except json.JSONDecodeError:
-            # Malformed JSONL is reported by the caller as a files[] hash mismatch already (the
-            # content no longer matches what was signed); this cross-check is best-effort only.
-            continue
-    return records
+            bad_lines.append(number)
+    return records, bad_lines
 
 
 def _artifact_claims_from_jsonl_records(path: str, records: list[Any]) -> list[ArtifactClaim]:
@@ -818,7 +820,12 @@ async def verify_evidence_pack(
             )
             continue  # The content is not what was signed; an artifact cross-check would be meaningless.
         if entry.path.endswith(".jsonl") and len(content) > 0:
-            records = _parse_jsonl(content.decode("utf-8"))
+            records, bad_lines = _parse_jsonl(content.decode("utf-8", errors="replace"))
+            if bad_lines:
+                errors.append(
+                    f"{entry.path}: unparseable JSON on line(s) "
+                    f"{', '.join(str(n) for n in bad_lines)} of the signed content"
+                )
             for claim in _artifact_claims_from_jsonl_records(entry.path, records):
                 if claim.claimed_sha256 is None:
                     continue
