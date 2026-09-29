@@ -74,7 +74,9 @@ python/
 │  │  ├─ composer/         # ← packages/composer(L0/L1/L2・single-flight・修復ループ。TS と異なり
 │  │  │                    #   tier ladder・single-flight・結果組み立てを compose.py から別モジュール
 │  │  │                    #   に分割していない — 挙動は同一で、ファイル構成が粗いだけ)
-│  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)
+│  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)。
+│  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
+│  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
 │  │  ├─ evals/            # ← packages/evals(judge / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
 │  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
@@ -232,6 +234,48 @@ meta}`。`"fixation"` 行では、レコードが持っていれば `meta` に `
 ため。Python 側に対応する CLI は無く、TS 側の `kohaku dataset export`(`cli/bin/kohaku.js`)
 がファイルベースの既製エントリポイントとして使える(ワイヤ形式が同一なのでどちらの言語の
 fixation に対しても動く)。
+
+## Compliance Evidence Pack(TS と対称)
+
+`kohaku.lineage` は TS の `evidence` モジュール(design.md #67)を 1 ファイル
+`kohaku/lineage/evidence.py` に移植しています。正規化した lineage / 承認 / promotion / fixation の
+レコードと参照先の部品アーティファクトを、監査者に渡すための署名付きディレクトリにまとめます。
+パックの組み立てに追加依存は要りません。Ed25519 の署名と検証にはオプションの `evidence` extra
+(`cryptography` が入る)が必要です。
+
+```bash
+pip install 'kohaku-ui[evidence]'
+```
+
+```python
+from kohaku.lineage import (
+    EvidenceManifestSigner, EvidencePackScope, build_evidence_pack, create_storage_evidence_source,
+    derive_ed25519_key_id, export_ed25519_public_key_raw, generate_ed25519_keypair,
+    sign_manifest, verify_evidence_pack,
+)
+
+keypair = generate_ed25519_keypair()  # または import_ed25519_private_key_pkcs8(...)
+key_id = derive_ed25519_key_id(export_ed25519_public_key_raw(keypair.public_key))
+pack = await build_evidence_pack(  # 1 ファイルでも 64 MiB の上限を超えるなら ValueError
+    source=create_storage_evidence_source(storage),  # 任意の StoragePort
+    scope=EvidencePackScope(since="2026-09-01T00:00:00.000Z", until="2026-09-30T23:59:59.999Z"),
+    generator="my-service/1.0",
+    signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
+)
+signature = sign_manifest(pack.manifest, keypair.private_key)  # manifest.sig の中身
+# pack.files、manifest.json(json.dumps(pack.manifest.canonical_dict()))、署名(manifest.sig)を
+# 書き出し、後で verify_evidence_pack(reader, public_key) で検証する。
+```
+
+`verify_evidence_pack(reader, public_key)` は `EvidencePackReader`(ファイルの読み出しは呼び出し側が
+用意する)を受け取り、`manifest.json` の生の値に対する署名、manifest の形、列挙された全ファイルの
+ハッシュとサイズ、列挙されていないファイルが無いことを検査します。Python 側に対応する CLI は
+無く、`kohaku evidence keygen|export|verify` は TS 側の `cli/bin/kohaku.js` です。そのパックはこちらでも
+検証でき、逆も同様です。`spec/test/fixtures/evidence-pack/` が言語間の golden で、`store.json`
+(元のレコード)、`manifest.json`、`manifest.sig`(RFC 8032 §7.1 TEST 1 の鍵)から成り、両言語が
+バイト単位で再現しなければなりません(`tests/spec/test_cross_language_golden.py`)。パックの中身・期間
+とサイズのルール・REST の制約は [ユーザーガイド](../docs/user-guide.ja.md)の evidence の節を参照
+してください。
 
 ## opt-in のプロンプトキャッシュ / `refConstraint`(TS と対称)
 
