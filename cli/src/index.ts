@@ -345,7 +345,12 @@ evidence
     "Assemble and sign a Compliance Evidence Pack from a local StoragePort data directory or a REST host",
   )
   .option("--data-dir <dir>", "Read from a local StoragePort data directory (mutually exclusive with --rest)")
-  .option("--rest <baseUrl>", "Read over REST from a running host (mutually exclusive with --data-dir)")
+  .option(
+    "--rest <baseUrl>",
+    "Read over REST from a running host (mutually exclusive with --data-dir). The pack is ALWAYS " +
+      "incomplete (complete: false, fixations.jsonl empty) by design: GET /fixations cannot supply full " +
+      "fixation records. Use --data-dir (or a direct StoragePort) for a complete pack",
+  )
   .option(
     "--header <name:value>",
     "Extra REST request header, e.g. tenant or auth (repeatable; --rest only)",

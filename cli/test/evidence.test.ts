@@ -302,6 +302,15 @@ describe("kohaku evidence export --since / --until normalization", () => {
     expect(existsSync(join(outDir, "manifest.json"))).toBe(false);
   });
 
+  it("the CLI help says a --rest pack is always incomplete and points at --data-dir", () => {
+    const bin = join(dirname(fileURLToPath(import.meta.url)), "../bin/kohaku.js");
+    const result = spawnSync(process.execPath, [bin, "evidence", "export", "--help"], { encoding: "utf8" });
+    expect(result.status).toBe(0);
+    const help = result.stdout.replace(/\s+/g, " ");
+    expect(help).toContain("ALWAYS incomplete");
+    expect(help).toContain("Use --data-dir");
+  }, 30_000);
+
   it("the CLI exits 2 with a message for an invalid --since", () => {
     const bin = join(dirname(fileURLToPath(import.meta.url)), "../bin/kohaku.js");
     const result = spawnSync(
