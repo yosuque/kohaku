@@ -120,6 +120,16 @@ titled `chore(release): version packages`. Review it like any other pull request
 Merging this pull request does **not** publish anything. It only removes the merged changesets, which
 is what lets `version.yml`'s next run notice "no changesets pending" and create the draft release.
 
+### Reverting a version PR
+
+If a merged version PR has to be undone (a wrong bump, a changeset that should not have shipped), reverting it is not enough by itself, because `version.yml` may already have created a draft GitHub release for that version:
+
+1. Revert the version PR's merge commit on `main` (a revert PR; no history rewriting). This restores the removed changesets and the previous versions.
+2. Delete the draft GitHub release the merge created (`gh release delete v<version>` or the Releases page). **This step is required**: `version.yml`'s detection step skips creating a new draft whenever a release for the tag — draft or published — already exists (`gh release view "$TAG"`), so leaving the stale draft in place means the corrected version will never get its own draft. If the draft was already published, do not delete it; follow section 7 and ship the fix under a new version instead.
+3. Fix whatever was wrong (edit or add changesets), merge, and let `version.yml` open a fresh version PR.
+
+**Changeset text rule**: never write `#<number>` (an issue or PR number) in a changeset. The changelog generator autolinks it to the repository's issue tracker, and the link is often wrong (it may point at an unrelated item, or at a pull request that did not exist yet). Refer to a design decision by name instead, for example "design.md decision 63", and rely on the changelog's own commit links for provenance. Published CHANGELOG entries are never rewritten after the fact.
+
 ## 4. Pre-publish checklist
 
 Before publishing the draft release:

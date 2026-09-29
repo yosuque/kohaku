@@ -118,6 +118,16 @@ changeset 付きの PR が `main` にマージされると、`version.yml` が `
 `version.yml` の次回実行が「changeset が残っていない」ことに気づき、下書き Release を作成できるようになり
 ます。
 
+### version PR を取り消す
+
+マージ済みの version PR を取り消す必要が生じた場合(バージョンの上げ間違い、出すべきでなかった changeset など)、revert するだけでは足りません。`version.yml` がそのバージョンの下書き GitHub Release をすでに作成している可能性があるためです。
+
+1. version PR のマージコミットを `main` 上で revert する(revert PR を使い、履歴は書き換えない)。取り除かれていた changeset と以前のバージョンが戻ります。
+2. マージ時に作成された下書き GitHub Release を削除する(`gh release delete v<version>` または Releases ページ)。**この手順は必須です**: `version.yml` の検出ステップは、そのタグの Release が下書きか公開済みかを問わず存在するとき(`gh release view "$TAG"`)は新しい下書きの作成をスキップします。古い下書きを残したままだと、修正後のバージョンには下書きが作られません。下書きがすでに公開されている場合は削除せず、第 7 節に従い、修正を新しいバージョンで出してください。
+3. 誤りを直し(changeset を編集または追加し)、マージして、`version.yml` に新しい version PR を開かせる。
+
+**changeset の文面のルール**: changeset には `#<番号>`(Issue や PR の番号)を書かないでください。changelog の生成器がこれをリポジトリの Issue トラッカーへ自動リンクし、そのリンクはしばしば誤ります(無関係な項目を指す、あるいはまだ存在しなかった PR を指す)。設計上の決定は、たとえば「design.md decision 63」のように名前で参照し、出所の確認は changelog 自身のコミットリンクに任せてください。公開済みの CHANGELOG エントリは後から書き換えません。
+
 ## 4. 公開前チェックリスト
 
 下書き Release を公開する前に:
