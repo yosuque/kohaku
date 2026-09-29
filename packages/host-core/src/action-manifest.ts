@@ -1,22 +1,10 @@
-import type { ActionTier, JsonValue, UISpec } from "@kohaku-ui/spec-core";
+import type { ActionManifest, ActionManifestEntry, JsonValue, UISpec } from "@kohaku-ui/spec-core";
 import { collectWriteActions } from "@kohaku-ui/spec-core";
 import type { OperationIndexEntry } from "./operation-index.js";
 
-/** One entry of an `ActionManifest` (design.md #64: the wire shape of `actions[name]`). */
-export interface ActionManifestEntry {
-  tier: ActionTier;
-  /** The action's raw params schema (the same value `OperationDescriptor.paramsSchema` declared), when present. */
-  paramsSchema?: JsonValue;
-  confirmMessage?: string;
-}
-
-/**
- * `{ [actionName]: ActionManifestEntry }`, keyed by exactly the write actions the Spec declares
- * (`collectWriteActions`, SPEC §5 A1) — the same set a capability's write scopes are issued for. Carried
- * alongside a compose response, not inside the `UISpec` itself (design.md #64: an Action manifest lives
- * outside the Spec, next to the capability), so it never affects `specHash` / the cache key.
- */
-export type ActionManifest = Record<string, ActionManifestEntry>;
+// The wire types live in spec-core (shared with the client SDK and renderer-core); re-exported so existing
+// `@kohaku-ui/host-core` import sites keep working.
+export type { ActionManifest, ActionManifestEntry };
 
 /**
  * Builds the `ActionManifest` for `spec`, given the domain's `OperationIndex` (already resolved via

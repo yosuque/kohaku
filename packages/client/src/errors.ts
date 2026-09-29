@@ -1,4 +1,9 @@
-import type { ActionParamIssue, ErrorEnvelope, HostErrorCode } from "@kohaku-ui/spec-core";
+import type {
+  ActionParamIssue,
+  ApprovalRequiredInfo,
+  ErrorEnvelope,
+  HostErrorCode,
+} from "@kohaku-ui/spec-core";
 
 /**
  * A discriminable exception representing the error envelope `{error:{code,message}}` returned by the host (REST profile §6.1).
@@ -34,7 +39,7 @@ export class KohakuHostError extends Error {
    * APPROVAL_REQUIRED error (SPEC §6.1, ACT-APR-001) for a "confirm" or "approve" tier action that was
    * invoked without satisfying its gate. See {@link ErrorEnvelope}'s doc comment for the field's role.
    */
-  readonly approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+  readonly approval?: ApprovalRequiredInfo;
 
   constructor(
     code: HostErrorCode,
@@ -44,7 +49,7 @@ export class KohakuHostError extends Error {
     promotionStatus?: string,
     retryAfterMs?: number,
     issues?: ActionParamIssue[],
-    approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string },
+    approval?: ApprovalRequiredInfo,
   ) {
     super(message);
     this.name = "KohakuHostError";

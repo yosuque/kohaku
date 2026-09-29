@@ -2,6 +2,7 @@ import type { ComposeResult, TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
   type ActionParamIssue,
+  type ApprovalRequiredInfo,
   actionPayloadHash,
   canonicalStringify,
   type JsonObject,
@@ -1299,10 +1300,7 @@ function actionParamsInvalidToolError(issues: ActionParamIssue[]) {
  * and, upstream, by which `action.*` lineage event was recorded for the attempt (see
  * `handleActionGateResult` below).
  */
-function approvalRequiredToolError(
-  message: string,
-  approval: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string },
-) {
+function approvalRequiredToolError(message: string, approval: ApprovalRequiredInfo) {
   return {
     content: [{ type: "text" as const, text: message }],
     isError: true,

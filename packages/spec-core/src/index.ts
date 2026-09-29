@@ -1,5 +1,6 @@
 // Schemas
 
+export type { ActionManifest, ActionManifestEntry } from "./action-manifest.js";
 export { collectWriteActions, resolveWriteActionName } from "./action-name.js";
 export {
   type ActionParamIssue,
@@ -115,7 +116,7 @@ export {
   QueryRefError,
 } from "./query-ref.js";
 // Error envelope of the REST profile (SPEC §6.1) (a wire contract shared by host-rest / client).
-export type { ErrorEnvelope, HostErrorCode } from "./rest-errors.js";
+export type { ApprovalRequiredInfo, ErrorEnvelope, HostErrorCode } from "./rest-errors.js";
 export { GOVERNANCE_ERROR_DISCRIMINATORS, PROMOTION_ERROR_DISCRIMINATORS } from "./rest-errors.js";
 export {
   type ActionParamsSchema,

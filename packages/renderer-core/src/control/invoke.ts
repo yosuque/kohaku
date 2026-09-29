@@ -1,6 +1,7 @@
 import { type ActionResult, type BindingClient, BindingError } from "@kohaku-ui/data-binding";
 import {
   type ActionParamIssue,
+  type ApprovalRequiredInfo,
   type ComponentNode,
   type JsonObject,
   resolveWriteActionName,
@@ -96,7 +97,7 @@ export type ActionPhase =
       /** The server-issued pending-approval descriptor, present only when this phase was reached from
        * the server's own APPROVAL_REQUIRED response (absent for a locally short-circuited preflight,
        * which never reaches the network). */
-      approval?: { requestId: string; action: string; tier: "confirm" | "approve"; payloadHash: string };
+      approval?: ApprovalRequiredInfo;
     };
 
 export interface RunInvokeTargetDeps {
