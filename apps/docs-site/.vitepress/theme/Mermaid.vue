@@ -8,7 +8,9 @@ let counter = 0;
 onMounted(async () => {
   const { default: mermaid } = await import("mermaid");
   const dark = document.documentElement.classList.contains("dark");
-  mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default" });
+  // mermaid 12 defaults to the ELK layout engine and a new look; keep the dagre layout and classic look the
+  // design diagrams were written and reviewed with.
+  mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "default", layout: "dagre", look: "classic" });
   counter += 1;
   const { svg } = await mermaid.render(`kohaku-mermaid-${counter}-${Date.now()}`, props.code);
   if (host.value != null) host.value.innerHTML = svg;
