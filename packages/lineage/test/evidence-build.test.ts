@@ -155,6 +155,39 @@ describe("buildEvidencePack", () => {
     }
   });
 
+  it("indexes governed-action decisions and policy changes in approvals.jsonl, but not action.invoked", async () => {
+    const types = [
+      "action.invoked",
+      "action.approvalRequested",
+      "action.approved",
+      "action.denied",
+      "policy.applied",
+      "view.composed",
+    ] as const;
+    const events = types.map((type, i) =>
+      event({ id: `e${i}`, ts: `2026-01-0${i + 1}T00:00:00.000Z`, type, payload: {} }),
+    );
+    const result = await buildEvidencePack({
+      source: fakeSource({ events }),
+      scope: SCOPE,
+      generator: "test-generator/1",
+      signer: SIGNER,
+    });
+    const approvalsText = textDecoder.decode(result.files.find((f) => f.path === "approvals.jsonl")!.content);
+    const approvalTypes = approvalsText
+      .trim()
+      .split("\n")
+      .map((line: string) => (JSON.parse(line) as LineageEventRecord).type);
+    expect(approvalTypes).toEqual([
+      "action.approvalRequested",
+      "action.approved",
+      "action.denied",
+      "policy.applied",
+    ]);
+    expect(result.manifest.counts.approvals).toBe(4);
+    expect(result.manifest.counts.events).toBe(6);
+  });
+
   it("records an artifact hash mismatch as a warning instead of failing the export", async () => {
     const events = [
       event({

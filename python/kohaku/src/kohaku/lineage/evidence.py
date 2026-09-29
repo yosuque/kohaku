@@ -271,8 +271,10 @@ def create_storage_evidence_source(storage: StoragePort) -> EvidenceSource:
 # --- build.ts ---
 
 # Typed as tuple[LineageEventType, ...] (not a bare str tuple) so a typo or a retired event type is
-# caught by mypy; `intent.migrated` (design.md #65, F7's catalog migration) is a real member of that
-# type.
+# caught by mypy; `intent.migrated` (design.md #65, catalog migration) is a real member of that type.
+# The governed-action decision points (design.md #62/#63) and `policy.applied` (design.md #69) belong here
+# too; `action.invoked` is deliberately absent (an allowed invoke, not a decision) and stays in
+# events.jsonl only.
 EVIDENCE_APPROVAL_EVENT_TYPES: tuple[LineageEventType, ...] = (
     "component.reviewed",
     "component.published",
@@ -280,6 +282,10 @@ EVIDENCE_APPROVAL_EVENT_TYPES: tuple[LineageEventType, ...] = (
     "intent.fixated",
     "intent.unfixated",
     "intent.migrated",
+    "action.approvalRequested",
+    "action.approved",
+    "action.denied",
+    "policy.applied",
 )
 
 

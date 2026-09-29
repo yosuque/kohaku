@@ -24,8 +24,11 @@ import type { EvidenceSource } from "./source.js";
  * is the same normalized `LineageEventRecord` as the full log.
  *
  * Typed as `readonly LineageEventType[]` (not a bare `string[]`) so a typo or a retired event type is
- * caught at compile time; `intent.migrated` (design.md #65, F7's catalog migration) is a real member of
- * that union.
+ * caught at compile time; `intent.migrated` (design.md #65, catalog migration) is a real member of
+ * that union. The governed-action decision points (design.md #62/#63: an approval was requested,
+ * granted, or denied) and the policy-change record (`policy.applied`, design.md #69) belong here too:
+ * they are the approvals an auditor asks for. `action.invoked` is deliberately absent -- it records that
+ * an allowed invoke happened, not a decision -- and stays in `events.jsonl` only.
  */
 export const EVIDENCE_APPROVAL_EVENT_TYPES: readonly LineageEventType[] = [
   "component.reviewed",
@@ -34,6 +37,10 @@ export const EVIDENCE_APPROVAL_EVENT_TYPES: readonly LineageEventType[] = [
   "intent.fixated",
   "intent.unfixated",
   "intent.migrated",
+  "action.approvalRequested",
+  "action.approved",
+  "action.denied",
+  "policy.applied",
 ];
 
 export interface EvidencePackScope {
