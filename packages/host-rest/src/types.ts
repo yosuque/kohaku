@@ -191,7 +191,8 @@ export interface KohakuHostDeps {
    * Verifies stateless approval tokens for `"approve"`-tier actions (design.md #63; typically
    * `@kohaku-ui/authz-hmac`'s `createHmacApprovalPort`). Consulted by `POST /binding/action`'s
    * `ActionGate` and by `POST /approvals` (issuance). **If not wired, an `"approve"`-tier action can
-   * never be allowed** (the gate returns `denied`) and `POST /approvals` responds 501 `NOT_IMPLEMENTED`.
+   * never be allowed** (the gate returns `denied`) and `POST /approvals` responds 501 `NOT_IMPLEMENTED`. Issuing additionally requires
+   * `authorizeGovernance` (below): without it `POST /approvals` also responds 501 (SPEC ACT-APR-001 (e)).
    */
   approvals?: ApprovalPort;
   /**
@@ -219,6 +220,8 @@ export interface KohakuHostDeps {
    * **If not wired, it is allowed without authorization (backward compatible). Governance-plane
    * authorization is a product responsibility, and since it becomes authorization-less when not wired, in
    * production either wiring this hook or protecting it with external middleware (a reverse proxy, etc.) is mandatory.**
+   * The one exception is `POST /approvals` (`operation.kind` `"action.approve"`): it fails closed with 501
+   * when this hook is not wired, because otherwise any authenticated principal could approve.
    */
   authorizeGovernance?: (
     principal: Principal,

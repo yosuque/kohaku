@@ -25,6 +25,10 @@ const ANALYTICS_MAX_LIMIT = 1000;
 const APPROVAL_INTERNAL_ERROR_MESSAGE =
   "approval issuance failed; see the observability hook (onError) for details";
 
+/** The 501 message for `POST /approvals` on a host that has not wired `authorizeGovernance`. */
+const APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE =
+  "approval issuance requires an approver authorization: wire deps.authorizeGovernance to authorize the action.approve operation";
+
 /** Audit / observability plane (/lineage, /analytics/summary, /telemetry). */
 export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
   const { deps, getPrincipal, requireGovernance } = ctx;
@@ -203,6 +207,12 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
     if (denied != null) return denied;
     if (deps.approvals == null) {
       return c.json(errorBody("NOT_IMPLEMENTED", "approvals are not configured for this host"), 501);
+    }
+    // SPEC ACT-APR-001 (e): issuing is a privileged act, so unlike the other governance routes it does not
+    // fall back to "allowed when unwired" -- without the hook any authenticated principal other than the
+    // requester could mint an approval.
+    if (deps.authorizeGovernance == null) {
+      return c.json(errorBody("NOT_IMPLEMENTED", APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE), 501);
     }
     const requestId = requestIdOf(c, deps);
     const body = await parseBody(

@@ -42,6 +42,12 @@ from .shared import (
 # observability hook via report_host_error.
 _APPROVAL_INTERNAL_ERROR_MESSAGE = "approval issuance failed; see the observability hook (on_error) for details"
 
+# The 501 message for POST /approvals on a host that has not wired authorize_governance.
+_APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE = (
+    "approval issuance requires an approver authorization: wire deps.authorize_governance to authorize "
+    "the action.approve operation"
+)
+
 # Aggregation window for usage analytics. Default 200 / max 1000 (aligned with the /lineage window constraint).
 ANALYTICS_DEFAULT_LIMIT = 200
 ANALYTICS_MAX_LIMIT = 1000
@@ -202,6 +208,11 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return denied
         if deps.approvals is None:
             return _error("NOT_IMPLEMENTED", "approvals are not configured for this host", 501)
+        # SPEC ACT-APR-001 (e): issuing is a privileged act, so unlike the other governance routes it does
+        # not fall back to "allowed when unwired" -- without the hook any authenticated principal other than
+        # the requester could mint an approval.
+        if deps.authorize_governance is None:
+            return _error("NOT_IMPLEMENTED", _APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE, 501)
         request_id = request_id_of(request, deps)
         body = parse_approval_request_body(await _read_json(request))
         if body is None:

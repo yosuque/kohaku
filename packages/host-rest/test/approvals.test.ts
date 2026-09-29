@@ -33,6 +33,9 @@ function baseDeps(extra?: Partial<KohakuHostDeps>): KohakuHostDeps {
     domain: noOpDomain(),
     authz: allowAuthz(),
     querySource: "sales",
+    // POST /approvals fails closed without an approver authorization (SPEC ACT-APR-001 (e)); the tests that
+    // exercise issuance therefore wire an allowing hook by default.
+    authorizeGovernance: async () => true,
     ...extra,
   };
 }
@@ -53,6 +56,32 @@ describe("POST /approvals", () => {
     const res = await postApprovals(baseDeps(), VALID_BODY);
     expect(res.status).toBe(501);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("NOT_IMPLEMENTED");
+  });
+
+  it("fails closed with 501 when approvals is wired but authorizeGovernance is not (ACT-APR-001 (e))", async () => {
+    const issueApproval = vi.fn(async () => "should-not-be-issued");
+    const approvals: ApprovalPort = { issueApproval, verifyApproval: async () => ({ ok: true }) };
+    const deps = baseDeps({ approvals, auth: async () => ({ id: "approver-1", roles: ["approver"] }) });
+    delete deps.authorizeGovernance;
+
+    const res = await postApprovals(deps, VALID_BODY);
+    expect(res.status).toBe(501);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("NOT_IMPLEMENTED");
+    expect(body.error.message).toContain("authorizeGovernance");
+    expect(issueApproval).not.toHaveBeenCalled();
+  });
+
+  it("the other governance routes keep their backward-compatible allow-when-unwired behavior", async () => {
+    const deps = baseDeps();
+    delete deps.authorizeGovernance;
+    const app = createKohakuRoutes(deps);
+    const res = await app.request("/telemetry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ events: [] }),
+    });
+    expect(res.status).toBe(200);
   });
 
   it("issues a token when authorized and approver != requester", async () => {
