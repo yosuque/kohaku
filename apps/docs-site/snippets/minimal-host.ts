@@ -10,7 +10,7 @@ import { domainPort as domain } from "./kohaku/ports.js"; // your DomainPort (ko
 
 const host = createKohakuHost({
   domain,
-  querySource: "my-product",
+  querySource: "my-product", // must equal the `source` of every Intent in intents.ts
   llm: createLlmFromEnv(),
   intents: intents.map((i) => i.toIntentDef()),
   dataVersion: () => "my-product@1",
