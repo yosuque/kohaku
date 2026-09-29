@@ -168,7 +168,9 @@ describe("kohaku explain (end-to-end via an in-process host-rest app)", () => {
     expect(controls).toEqual([]);
     expect(text).toContain("evil\\x1b[2J\\x0dname\\x9b");
     expect(text).toContain("bad\\x07bell");
-    expect(text).toContain("keeps\nnewline");
+    // A newline inside a value is escaped too, so it cannot forge an extra report line.
+    expect(text).toContain("keeps\\x0anewline");
+    expect(text).not.toContain("keeps\nnewline");
   });
 
   it("rejects a malformed --header value", async () => {

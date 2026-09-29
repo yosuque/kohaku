@@ -172,17 +172,18 @@ function label(text: string, width = 20): string {
 }
 
 /**
- * Replaces C0 / C1 control characters (other than `\n`) and DEL with a visible `\xNN` escape.
+ * Replaces C0 / C1 control characters (newline and carriage return included) and DEL with a visible `\xNN` escape.
  * `kohaku explain` prints strings that come out of lineage (an Intent's canonical name, validation
  * issues, ...), which a tampered or hostile record could fill with terminal escape sequences (an ESC
- * that rewrites the screen, a carriage return that overwrites the line above); escaping them keeps the
+ * that rewrites the screen, a carriage return that overwrites the line above, a newline that forges an
+ * extra report line); escaping them keeps the
  * report a plain-text description of the data rather than a channel into the terminal.
  */
 export function escapeControlChars(text: string): string {
   let out = "";
   for (const ch of text) {
     const code = ch.codePointAt(0) ?? 0;
-    const isControl = (code < 0x20 && code !== 0x0a) || (code >= 0x7f && code <= 0x9f);
+    const isControl = code < 0x20 || (code >= 0x7f && code <= 0x9f);
     out += isControl ? `\\x${code.toString(16).padStart(2, "0")}` : ch;
   }
   return out;

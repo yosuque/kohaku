@@ -2,4 +2,4 @@
 "@kohaku-ui/cli": patch
 ---
 
-`kohaku explain` escapes control characters (other than newlines) in the lineage-derived strings it prints, so a tampered lineage record cannot inject terminal escape sequences.
+`kohaku explain` escapes control characters (newlines included) in the lineage-derived strings it prints, so a tampered lineage record can neither inject terminal escape sequences nor forge an extra report line.
