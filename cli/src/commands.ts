@@ -172,12 +172,30 @@ function label(text: string, width = 20): string {
 }
 
 /**
+ * Replaces C0 / C1 control characters (other than `\n`) and DEL with a visible `\xNN` escape.
+ * `kohaku explain` prints strings that come out of lineage (an Intent's canonical name, validation
+ * issues, ...), which a tampered or hostile record could fill with terminal escape sequences (an ESC
+ * that rewrites the screen, a carriage return that overwrites the line above); escaping them keeps the
+ * report a plain-text description of the data rather than a channel into the terminal.
+ */
+export function escapeControlChars(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    const isControl = (code < 0x20 && code !== 0x0a) || (code >= 0x7f && code <= 0x9f);
+    out += isControl ? `\\x${code.toString(16).padStart(2, "0")}` : ch;
+  }
+  return out;
+}
+
+/**
  * Formats an ExplainReport as human-readable text: `kohaku explain`'s default output (the non-`--json`
  * path). Renders provenance, the cache-key breakdown, the decision flow, capability scopes (when present),
  * and the raw lineage events -- in that order, matching the documented order of "tier, cache, cache-key breakdown,
  * decision flow, related lineage events" (docs/user-guide.md, "Kohaku DevTools and `kohaku explain`").
  */
 export function formatExplainReport(report: ExplainReport): string {
+  const esc = escapeControlChars;
   const lines: string[] = [];
   if (report.composes.length === 0) {
     lines.push("No view.composed event found for this requestId.");
@@ -192,28 +210,28 @@ export function formatExplainReport(report: ExplainReport): string {
     if (report.composes.length > 1) {
       lines.push(`--- compose ${i + 1}/${report.composes.length} (a reused requestId) ---`);
     }
-    lines.push(`${label("Intent")}${c.canonical} (${c.intentHash})`);
+    lines.push(`${label("Intent")}${esc(c.canonical)} (${esc(c.intentHash)})`);
     lines.push(
-      `${label("Tier / cache")}${c.tier} / ${c.cache}${c.model != null ? ` (model: ${c.model})` : ""}`,
+      `${label("Tier / cache")}${esc(c.tier)} / ${esc(c.cache)}${c.model != null ? ` (model: ${esc(c.model)})` : ""}`,
     );
-    if (c.generatorVersion != null) lines.push(`${label("Generator")}${c.generatorVersion}`);
-    if (c.kit != null) lines.push(`${label("Design kit")}${c.kit.id}@${c.kit.version}`);
+    if (c.generatorVersion != null) lines.push(`${label("Generator")}${esc(c.generatorVersion)}`);
+    if (c.kit != null) lines.push(`${label("Design kit")}${esc(c.kit.id)}@${esc(c.kit.version)}`);
     if (c.fallback != null) {
       lines.push(
-        `${label("Fallback")}${c.fallback.from} (${c.fallback.kind ?? "generation"}): ${c.fallback.reason}`,
+        `${label("Fallback")}${esc(c.fallback.from)} (${esc(c.fallback.kind ?? "generation")}): ${esc(c.fallback.reason)}`,
       );
     }
     if (c.cacheKey != null) {
-      lines.push(`${label("Cache key")}${c.cacheKey}`);
+      lines.push(`${label("Cache key")}${esc(c.cacheKey)}`);
       if (c.cacheKeyParts != null) {
         const p = c.cacheKeyParts;
         lines.push(
-          `${label("  specVersion")}${p.specVersion ?? "-"}`,
-          `${label("  intentHash")}${p.intentHash}`,
-          `${label("  dataVersion")}${p.dataVersion}`,
-          `${label("  catalogFingerprint")}${p.catalogFingerprint ?? "-"}`,
-          `${label("  generatorVersion")}${p.generatorVersion ?? "-"}`,
-          `${label("  policyFingerprint")}${p.policyFingerprint ?? "-"}`,
+          `${label("  specVersion")}${esc(p.specVersion ?? "-")}`,
+          `${label("  intentHash")}${esc(p.intentHash)}`,
+          `${label("  dataVersion")}${esc(p.dataVersion)}`,
+          `${label("  catalogFingerprint")}${esc(p.catalogFingerprint ?? "-")}`,
+          `${label("  generatorVersion")}${esc(p.generatorVersion ?? "-")}`,
+          `${label("  policyFingerprint")}${esc(p.policyFingerprint ?? "-")}`,
         );
       }
     }
@@ -221,11 +239,11 @@ export function formatExplainReport(report: ExplainReport): string {
       lines.push("Decision:");
       for (const a of c.decision.attempts) {
         lines.push(
-          `  ${a.kind} attempt: ${a.ok ? "ok" : "failed"}${a.issues != null ? ` -- ${a.issues.join("; ")}` : ""}`,
+          `  ${esc(a.kind)} attempt: ${a.ok ? "ok" : "failed"}${a.issues != null ? ` -- ${esc(a.issues.join("; "))}` : ""}`,
         );
       }
       for (const d of c.decision.downgrades ?? []) {
-        lines.push(`  downgrade: ${d.id} ${d.from} -> ${d.to} (${d.reason})`);
+        lines.push(`  downgrade: ${esc(d.id)} ${esc(d.from)} -> ${esc(d.to)} (${esc(d.reason)})`);
       }
       if (c.decision.coalesced === true) {
         lines.push("  coalesced: rode along on another compose under single-flight");
@@ -239,10 +257,10 @@ export function formatExplainReport(report: ExplainReport): string {
   });
   if (report.scopes != null) {
     lines.push(`Capability scopes (${report.scopes.length}):`);
-    for (const s of report.scopes) lines.push(`  ${s.kind}: ${s.ref}`);
+    for (const s of report.scopes) lines.push(`  ${esc(s.kind)}: ${esc(s.ref)}`);
   }
   lines.push(`Lineage events (${report.events.length}):`);
-  for (const e of report.events) lines.push(`  ${e.ts}  ${e.type}  ${e.id}`);
+  for (const e of report.events) lines.push(`  ${esc(e.ts)}  ${esc(e.type)}  ${esc(e.id)}`);
   return lines.join("\n");
 }
 
