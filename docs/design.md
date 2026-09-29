@@ -931,6 +931,7 @@ switch, which happened independently and later than this TS one.
   `KOHAKU_MCP_HTTP_ALLOWED_HOSTS`'s host:port exact-match semantics were deliberately *not* replaced with the
   SDK's own `hostHeaderValidation` helper (also from `@modelcontextprotocol/node`), which validates hostname
   only (port-agnostic) — a narrower match that would have been an observable behavior change for that env var.
+  **Later update**: the samples' DNS-rebinding protection is now on by default (localhost names only, Host and Origin both validated) using the SDK's hostname-level guards (`hostHeaderValidation` / `originValidation`); `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` extend it, and `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` remains as a deprecated alias (a `:port` suffix is ignored). CORS echoes only a validated Origin (see the user guide's "claude.ai / ChatGPT" section).
 - **`server/discover`**: the SDK provides a default (a private `_ondiscover` handler on the base `Protocol` /
   `Server` class every `McpServer` inherits, confirmed by reading the shipped type declarations) — nothing was
   wired for it.

@@ -4,7 +4,7 @@ claude.ai / ChatGPT can only connect through remote MCP connectors (Streamable H
 (mcp_main.py) this HTTP entry point is provided. The common setup (Ports, .data, catalog) is shared with
 mcp_setup.py. The transport is the mcp SDK's own `Server.streamable_http_app(...)` (mcp 2.x), which assembles
 the StreamableHTTPSessionManager, the `/mcp` route, and its lifespan for us, run on uvicorn (the SDK handles
-session management, idle cleanup, and optional DNS rebinding protection).
+session management, idle cleanup, and DNS rebinding protection).
 
 ⚠️ No authentication (demo). This HTTP entry has no authentication whatsoever. It assumes local use
    (127.0.0.1:8791); when connecting claude.ai / ChatGPT through a public tunnel (ngrok / cloudflared, etc.),
@@ -18,13 +18,18 @@ env:
 - KOHAKU_MCP_HTTP_PORT (default 8791; a separate port so it can coexist with the TS version's :8788)
 - KOHAKU_MCP_HTTP_HOST (default 127.0.0.1 = local only. For LAN / container exposure, override explicitly with 0.0.0.0)
 - KOHAKU_MCP_PUBLIC_URL (the base URL for snapshot publishing. The tunnel URL when using a public tunnel)
-- KOHAKU_MCP_HTTP_ALLOWED_HOSTS (comma-separated. Enables DNS rebinding protection only when specified)
+- KOHAKU_MCP_ALLOWED_HOSTS (comma-separated hostnames, no port. DNS rebinding protection is always on for
+  localhost / 127.0.0.1 / [::1]; list a public tunnel's or reverse proxy's hostname here)
+- KOHAKU_MCP_ALLOWED_ORIGINS (comma-separated hostnames, no scheme or port. Extra browser origins allowed to call
+  this server; CORS echoes only an allowed origin, never `*`)
+- KOHAKU_MCP_HTTP_ALLOWED_HOSTS (deprecated alias of KOHAKU_MCP_ALLOWED_HOSTS)
 For UI display, run `pnpm --filter @kohaku-ui-sample/mcp build:renderer` beforehand.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,11 +40,51 @@ _MCP_PATH = "/mcp"
 _SNAPSHOT_PREFIX = "/snapshots"
 
 
+_LOCAL_HOSTNAMES = ("localhost", "127.0.0.1", "[::1]")
+
+
 def parse_allowed_hosts(value: str | None) -> list[str]:
-    """Parses the comma-separated allowed-hosts env (empty -> empty = protection off). Exported for testability."""
+    """Parses a comma-separated allow-list env value (empty -> empty). Exported for testability."""
     if not value:
         return []
     return [h.strip() for h in value.split(",") if h.strip() != ""]
+
+
+def allowed_hostname_of(entry: str) -> str:
+    """The bare hostname of an allow-list entry: a leading scheme and a trailing `:port` are dropped
+    (`https://x.example:8443` and `x.example:8443` both become `x.example`; `[::1]:8788` becomes `[::1]`).
+    Mirrors the TS sample's `allowedHostnameOf`."""
+    without_scheme = re.sub(r"^[a-z][a-z0-9+.-]*://", "", entry.strip(), flags=re.IGNORECASE)
+    authority = without_scheme.split("/")[0]
+    if authority.startswith("["):
+        return re.sub(r"\]:\d+$", "]", authority)
+    return re.sub(r":\d+$", "", authority)
+
+
+def _hostnames(extra: list[str] | None) -> list[str]:
+    """The always-allowed localhost names plus any extra allow-listed hostnames (deduplicated, in order)."""
+    return list(dict.fromkeys([*_LOCAL_HOSTNAMES, *(allowed_hostname_of(e) for e in (extra or []))]))
+
+
+def allowed_host_patterns(extra_hosts: list[str] | None) -> list[str]:
+    """`Host` header values the SDK's transport security accepts: each hostname bare and with any port."""
+    return [pattern for h in _hostnames(extra_hosts) for pattern in (h, f"{h}:*")]
+
+
+def allowed_origin_patterns(extra_origins: list[str] | None) -> list[str]:
+    """`Origin` header values the SDK's transport security accepts: each hostname over http/https, any port."""
+    return [
+        pattern
+        for h in _hostnames(extra_origins)
+        for scheme in ("http", "https")
+        for pattern in (f"{scheme}://{h}", f"{scheme}://{h}:*")
+    ]
+
+
+def _origin_regex(extra_origins: list[str] | None) -> str:
+    """The same origin set as a CORS `allow_origin_regex`, so the middleware echoes only an allowed origin."""
+    names = "|".join(re.escape(h) for h in _hostnames(extra_origins))
+    return rf"^https?://({names})(:\d+)?$"
 
 
 def _serve_snapshot_body(snapshot_dir: Path, raw_name: str) -> tuple[int, str, bytes]:
@@ -69,7 +114,11 @@ def _serve_snapshot_body(snapshot_dir: Path, raw_name: str) -> tuple[int, str, b
 
 
 def build_starlette_app(
-    setup: KohakuMcpSetup, *, allowed_hosts: list[str] | None = None, host: str = "127.0.0.1"
+    setup: KohakuMcpSetup,
+    *,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
+    host: str = "127.0.0.1",
 ) -> Any:
     """Assembles a Starlette app from setup (passed to uvicorn). Does not listen (the caller decides the port).
 
@@ -83,7 +132,7 @@ def build_starlette_app(
     same returned app, and CORS is layered on afterward via `Starlette.add_middleware` (`streamable_http_app`
     takes no `middleware` parameter).
     """
-    from mcp.server.transport_security import TransportSecuritySettings
+    from mcp.server.transport_security import TransportSecurityMiddleware, TransportSecuritySettings
     from starlette.middleware.cors import CORSMiddleware
     from starlette.requests import Request
     from starlette.responses import Response
@@ -96,17 +145,23 @@ def build_starlette_app(
     # it (McpHostDeps.resolve_principal, resolved per tool call from that call's mcp SDK ServerRequestContext)
     # rather than a single static McpHostDeps.principal, which would give every caller the same identity.
     server = setup.create_server()
-    # Off by default (unlike `streamable_http_app`'s own behavior, which auto-enables DNS rebinding protection
-    # whenever `host` is a loopback address): this module's documented policy is protection off unless
-    # KOHAKU_MCP_HTTP_ALLOWED_HOSTS opts in, so an empty allowed_hosts explicitly disables it rather than
-    # leaving `transport_security=None` (which would silently turn protection back on for 127.0.0.1/localhost).
-    security_settings = (
-        TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=allowed_hosts)
-        if allowed_hosts
-        else TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    # DNS rebinding protection is always on: localhost names by default, plus the extra hostnames listed in
+    # allowed_hosts / allowed_origins (a public tunnel's or reverse proxy's name), the same policy as the TS
+    # sample and the `kohaku init --mcp` template. `streamable_http_app` only validates the /mcp route, so the
+    # snapshot route below runs the same Host / Origin check itself.
+    host_patterns = allowed_host_patterns(allowed_hosts)
+    origin_patterns = allowed_origin_patterns(allowed_origins)
+    security_settings = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=host_patterns,
+        allowed_origins=origin_patterns,
     )
+    security = TransportSecurityMiddleware(security_settings)
 
     async def serve_snapshot(request: Request) -> Response:
+        rejected = await security.validate_request(request)
+        if rejected is not None:
+            return rejected
         # Static snapshot serving (so it can be opened by URL even in remote MCP). Accepts only a single segment.
         status, content_type, body = _serve_snapshot_body(
             setup.snapshot_dir, request.path_params.get("file_name", "")
@@ -127,7 +182,8 @@ def build_starlette_app(
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        # Only an allowed origin is echoed back (never "*"), the same set the transport security check accepts.
+        allow_origin_regex=_origin_regex(allowed_origins),
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         # Explicitly allow custom headers from the browser and expose the session id.
         allow_headers=[
@@ -158,12 +214,20 @@ def main() -> None:
     # The base URL for snapshot publishing. When using a public tunnel, set the tunnel's URL.
     # If unspecified, falls back to localhost (local viewing only). The trailing slash is stripped.
     public_url = (os.environ.get("KOHAKU_MCP_PUBLIC_URL") or f"http://localhost:{port}").rstrip("/")
-    allowed_hosts = parse_allowed_hosts(os.environ.get("KOHAKU_MCP_HTTP_ALLOWED_HOSTS"))
+    # KOHAKU_MCP_HTTP_ALLOWED_HOSTS is the former name of KOHAKU_MCP_ALLOWED_HOSTS (kept as a deprecated alias).
+    deprecated_hosts = parse_allowed_hosts(os.environ.get("KOHAKU_MCP_HTTP_ALLOWED_HOSTS"))
+    if deprecated_hosts:
+        print(
+            "kohaku-sales-sample MCP server: KOHAKU_MCP_HTTP_ALLOWED_HOSTS is deprecated, use KOHAKU_MCP_ALLOWED_HOSTS",
+            file=sys.stderr,
+        )
+    allowed_hosts = [*parse_allowed_hosts(os.environ.get("KOHAKU_MCP_ALLOWED_HOSTS")), *deprecated_hosts]
+    allowed_origins = parse_allowed_hosts(os.environ.get("KOHAKU_MCP_ALLOWED_ORIGINS"))
 
     import asyncio
 
     setup = asyncio.run(create_kohaku_mcp_setup(snapshot_base_url=public_url))
-    app = build_starlette_app(setup, allowed_hosts=allowed_hosts, host=host)
+    app = build_starlette_app(setup, allowed_hosts=allowed_hosts, allowed_origins=allowed_origins, host=host)
 
     print(
         f"kohaku-sales-sample MCP server: ready (Streamable HTTP) at http://{host}:{port}{_MCP_PATH}",
@@ -184,13 +248,17 @@ def main() -> None:
         "  ⚠️ No authentication (demo). Anyone who knows the URL can view and operate the sales data.",
         file=sys.stderr,
     )
-    if allowed_hosts:
-        print(f"  DNS rebinding protection: enabled (allowed_hosts={', '.join(allowed_hosts)})", file=sys.stderr)
-    else:
-        print(
-            "  DNS rebinding protection: disabled (enable by listing allowed hosts in KOHAKU_MCP_HTTP_ALLOWED_HOSTS)",
-            file=sys.stderr,
-        )
+    extra_hosts = f"; extra hosts: {', '.join(allowed_hosts)}" if allowed_hosts else ""
+    extra_origins = f"; extra origins: {', '.join(allowed_origins)}" if allowed_origins else ""
+    print(
+        f"  DNS rebinding protection: enabled (Host / Origin: localhost, 127.0.0.1, [::1]{extra_hosts}{extra_origins})",
+        file=sys.stderr,
+    )
+    print(
+        "  Behind a public tunnel the Host is the tunnel's domain: add it with KOHAKU_MCP_ALLOWED_HOSTS=<name>"
+        " (and a browser caller's origin with KOHAKU_MCP_ALLOWED_ORIGINS=<name>)",
+        file=sys.stderr,
+    )
 
     uvicorn.run(app, host=host, port=port, log_level="warning")
 

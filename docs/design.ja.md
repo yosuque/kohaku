@@ -922,7 +922,7 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
   `parsedBody` 引数として渡す。`KOHAKU_MCP_HTTP_ALLOWED_HOSTS` の host:port 完全一致セマンティクスは、SDK 自身
   の `hostHeaderValidation` ヘルパ(同じく `@modelcontextprotocol/node`)へ意図的に置き換えなかった — こちら
   は hostname のみ(port 非依存)の検証であり、この環境変数にとっては観測可能な挙動変化になる、より緩い
-  一致条件だからである。
+  一致条件だからである。**その後の更新**: サンプルの DNS リバインディング対策は既定で有効になり(`localhost` 名のみ許可、Host と Origin の両方を検証)、SDK の hostname 単位ガード(`hostHeaderValidation` / `originValidation`)を使う。`KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` で追加でき、`KOHAKU_MCP_HTTP_ALLOWED_HOSTS` は非推奨エイリアス(`:port` は無視)として残る。CORS は検証済みの Origin だけを返す(ユーザーガイド §「claude.ai / ChatGPT」を参照)。
 - **`server/discover`**: SDK が既定実装を提供する(配布済みの型定義を読んで確認した限り、全 `McpServer` が継承
   するベース `Protocol` / `Server` クラス上の非公開 `_ondiscover` ハンドラ)— そのため何も配線していない。
 - **エラー面**: `safeTool` 自身のエラー処理(catch → `reportMcpError` → `isTypedHostError` → 型付きツール

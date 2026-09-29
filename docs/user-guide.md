@@ -289,9 +289,19 @@ pnpm --filter @kohaku-ui-sample/mcp start:http        # listens on the default :
 cloudflared tunnel --url http://localhost:8788      # open a public tunnel in a separate terminal (ngrok, etc. also work)
 ```
 
-Register the URL — the `https://<random>.trycloudflare.com` the tunnel hands out with `/mcp` appended — with the host's custom connector (claude.ai) / MCP server (ChatGPT's developer mode).
+The server validates the `Host` and `Origin` headers (DNS-rebinding / CSRF protection), and only `localhost` / `127.0.0.1` / `[::1]` pass by default. A tunnel changes the Host to its own domain, so start the server with that hostname added, once the tunnel has printed it:
 
-> ⚠️ **This is a no-auth demo.** This HTTP entry has no authentication whatsoever. Once exposed via a public tunnel, **anyone who knows the URL can view and operate the sales data**. Hand the URL only to trusted parties, and do not put sensitive data on it. When you stop it, close the tunnel too. DNS rebinding protection, which rejects Host spoofing from the browser, is enabled only when you pass `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` (comma-separated), but via a public tunnel the Host becomes the tunnel's domain, so it is disabled by default. To wire real authentication, resolve the caller's identity per tool call via `McpHostDeps.resolvePrincipal` (TS) / `resolve_principal` (Python) — e.g. reading a bearer token off the request and looking up the corresponding `Principal` — rather than a single static `McpHostDeps.principal`, since every connection on a shared HTTP server shares one `McpHostDeps` and a static `principal` would give every caller the same identity.
+```bash
+KOHAKU_MCP_PUBLIC_URL=https://<random>.trycloudflare.com \
+KOHAKU_MCP_ALLOWED_HOSTS=<random>.trycloudflare.com \
+  pnpm --filter @kohaku-ui-sample/mcp start:http
+```
+
+Register the URL — the `https://<random>.trycloudflare.com` the tunnel hands out with `/mcp` appended — with the host's custom connector (claude.ai) / MCP server (ChatGPT's developer mode). `KOHAKU_MCP_ALLOWED_ORIGINS` (comma-separated hostnames, no scheme or port) additionally allows a browser-based caller's origin; a request with no `Origin` (the connectors' own server-side calls, Claude Desktop) needs nothing.
+
+> ⚠️ **This is a no-auth demo.** This HTTP entry has no authentication whatsoever. Once exposed via a public tunnel, **anyone who knows the URL can view and operate the sales data**. Hand the URL only to trusted parties, and do not put sensitive data on it. When you stop it, close the tunnel too. DNS rebinding protection, which rejects Host spoofing and cross-site requests from a browser, is on by default (Host and Origin must be a localhost name unless you list more with `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS`, as above; the CORS response echoes only a validated Origin, never `*`); the older `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` still works as a deprecated alias of `KOHAKU_MCP_ALLOWED_HOSTS`. The Python sample (`sales_api.mcp_http`) behaves the same.
+>
+> To wire real authentication, resolve the caller's identity per tool call via `McpHostDeps.resolvePrincipal` (TS) / `resolve_principal` (Python) — e.g. reading a bearer token off the request and looking up the corresponding `Principal` — rather than a single static `McpHostDeps.principal`, since every connection on a shared HTTP server shares one `McpHostDeps` and a static `principal` would give every caller the same identity.
 
 ### For terminal hosts: `kohaku_render_snapshot` (self-contained snapshot)
 

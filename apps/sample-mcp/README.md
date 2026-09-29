@@ -21,7 +21,7 @@ pnpm --filter @kohaku-ui-sample/mcp start:http   # Streamable HTTP on :8788 (cla
 ```
 
 ⚠️ The HTTP entry is an **unauthenticated demo** — see the user guide for tunnel cautions and env vars
-(`KOHAKU_MCP_HTTP_PORT` / `KOHAKU_MCP_PUBLIC_URL` / `KOHAKU_MCP_HTTP_ALLOWED_HOSTS`, etc.).
+(`KOHAKU_MCP_HTTP_PORT` / `KOHAKU_MCP_PUBLIC_URL` / `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS`, etc.; a tunnel's hostname must be added to `KOHAKU_MCP_ALLOWED_HOSTS`).
 
 ⚠️ With `KOHAKU_AUTHZ=jwt`, only the Streamable HTTP profile can authenticate (bearer token); the stdio
 profile has no transport-level identity and rejects every tool call (fail-closed). Use `KOHAKU_AUTHZ=hmac`

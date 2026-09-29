@@ -25,12 +25,9 @@
  * timer, the session-limit rejection, the `Mcp-Session-Id` header handling) is removed, not merely
  * simplified — `createMcpHandler` + `toNodeHandler` (from `@modelcontextprotocol/node`, the
  * fetch-Request/Response <-> node:http adapter) now own request routing and protocol-era
- * classification entirely. The `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` DNS-rebinding-protection guard
- * (host:port exact match) is unrelated to sessions and is kept as-is: the SDK's own
- * `hostHeaderValidation` helper (from `@modelcontextprotocol/node`) validates hostname only
- * (port-agnostic), a narrower match than this app's existing host:port env-var contract, so
- * switching to it would be an observable behavior change for `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` —
- * not adopted here.
+ * classification entirely. DNS-rebinding protection (Host + Origin validation, on by default for the localhost
+ * names, extended with `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS`) uses the SDK's
+ * `hostHeaderValidation` / `originValidation` guards, the same ones `kohaku init --mcp`'s generated server uses.
  */
 
 import { readFile } from "node:fs/promises";
@@ -46,7 +43,7 @@ import { pathToFileURL } from "node:url";
 // see that module's own doc comment for why it lives there and why this subpath is framework-free (no hono
 // / host-rest import), so importing it here does not pull the REST framework into this profile.
 import { createGracefulShutdownHandler, shutdownGraceMs } from "@kohaku-ui-sample/api/app/shutdown";
-import { toNodeHandler } from "@modelcontextprotocol/node";
+import { hostHeaderValidation, originValidation, toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
 import { createKohakuMcpSetup, type KohakuMcpSetup } from "./setup.js";
 
@@ -85,24 +82,32 @@ export interface McpHttpServerOptions {
   /** Path of the MCP endpoint (default /mcp). */
   path?: string;
   /**
-   * Allowed hosts for DNS rebinding protection. Protection is enabled only when specified.
-   * Guards a demo bound to localhost from being hit with a spoofed Host from a malicious page in a browser.
-   * However, through a public tunnel the Host becomes the tunnel's domain, so it is rejected unless that host
-   * is listed. Therefore protection is off by default (unspecified). To use it for localhost only,
-   * pass e.g. ["localhost:8788","127.0.0.1:8788"].
+   * Extra hostnames accepted in the `Host` header (DNS rebinding protection), on top of the always-allowed
+   * `localhost` / `127.0.0.1` / `[::1]`. Hostnames only: a `:port` suffix is ignored (the SDK's guard is
+   * port-agnostic). Through a public tunnel or reverse proxy the Host is the tunnel's domain, so it must be
+   * listed here. Every request is validated; an unlisted Host is rejected with 403 before routing.
    */
   allowedHosts?: string[];
+  /**
+   * Extra origin hostnames accepted in the `Origin` header, on top of the always-allowed localhost names. A
+   * request without an Origin (non-browser MCP clients) passes; one from an unlisted origin is rejected with
+   * 403, and the CORS headers echo only an origin that passed this check (never `*`).
+   */
+  allowedOrigins?: string[];
 }
 
+const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
+
 /**
- * Judge whether a Host is allowed. Matches the host:port header exactly against `allowedHosts`
- * (case-sensitive). When allowedHosts is unset (empty), always allow (protection off = default
- * behavior). Kept as this app's own guard rather than the SDK's `hostHeaderValidation` (see this
- * file's top doc comment) — same matching semantics as before the SDK v2 migration.
+ * The bare hostname of an allow-list entry, as the SDK's guards expect it: a leading scheme and a trailing
+ * `:port` are dropped (`https://x.example:8443` and `x.example:8443` both become `x.example`; `[::1]:8788`
+ * becomes `[::1]`). Exported for testability.
  */
-function isAllowedHost(host: string | undefined, allowedHosts: string[] | undefined): boolean {
-  if (allowedHosts == null || allowedHosts.length === 0) return true;
-  return host != null && allowedHosts.includes(host);
+export function allowedHostnameOf(entry: string): string {
+  const withoutScheme = entry.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  const authority = withoutScheme.split("/")[0] ?? "";
+  if (authority.startsWith("[")) return authority.replace(/\]:\d+$/, "]");
+  return authority.replace(/:\d+$/, "");
 }
 
 /**
@@ -117,7 +122,15 @@ function isAllowedHost(host: string | undefined, allowedHosts: string[] | undefi
 export function createMcpHttpServer(options: McpHttpServerOptions): Server {
   const path = options.path ?? MCP_PATH;
   const snapshotPath = options.snapshotPath ?? SNAPSHOT_PATH;
-  const dnsProtection = (options.allowedHosts?.length ?? 0) > 0;
+  // DNS rebinding protection is always on: localhost names by default, plus whatever the caller lists.
+  const validateHost = hostHeaderValidation([
+    ...LOCAL_HOSTNAMES,
+    ...(options.allowedHosts ?? []).map(allowedHostnameOf),
+  ]);
+  const validateOrigin = originValidation([
+    ...LOCAL_HOSTNAMES,
+    ...(options.allowedOrigins ?? []).map(allowedHostnameOf),
+  ]);
 
   // One handler for the whole server's lifetime (not "per session" — createMcpHandler itself builds a
   // fresh per-request McpServer instance from options.createServer). onerror observes failures the
@@ -136,18 +149,15 @@ export function createMcpHttpServer(options: McpHttpServerOptions): Server {
   });
 
   const httpServer = createHttpServer(async (req, res) => {
-    applyCors(res);
+    // DNS rebinding / CSRF protection, at a common point before routing (snapshot / mcp) so it also guards
+    // the static snapshot serving that bypasses the MCP handler's own routing. Each guard has already
+    // answered with a 403 when it returns false.
+    if (!validateHost(req, res)) return;
+    if (!validateOrigin(req, res)) return;
+    applyCors(req, res);
     // Browser preflight. Return only the CORS headers and finish.
     if (req.method === "OPTIONS") {
       res.writeHead(204).end();
-      return;
-    }
-
-    // DNS rebinding protection: when allowedHosts is set, validate the Host header at a common point
-    // before routing (snapshot / mcp). This also protects the static snapshot serving that bypasses the
-    // MCP handler's own routing. When unset (default), this branch is not taken and behavior is unchanged.
-    if (dnsProtection && !isAllowedHost(req.headers.host, options.allowedHosts)) {
-      sendJsonError(res, 403, -32000, `Invalid Host header: ${req.headers.host ?? ""}`);
       return;
     }
 
@@ -205,9 +215,15 @@ export function createMcpHttpServer(options: McpHttpServerOptions): Server {
   return httpServer;
 }
 
-/** CORS headers so browser MCP hosts can hit us (allow-all for the demo). */
-function applyCors(res: ServerResponse): void {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+/**
+ * CORS headers so browser MCP hosts can hit us. Only an Origin that already passed `originValidation` is ever
+ * echoed back (with `Vary: Origin`); a request with no Origin gets no CORS headers at all, never `*`.
+ */
+function applyCors(req: IncomingMessage, res: ServerResponse): void {
+  const origin = req.headers.origin;
+  if (origin == null) return;
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   // mcp-protocol-version is a custom header the SDK's modern-era classification reads from the browser
   // request, so allow it explicitly (mcp-session-id is no longer part of the wire contract — protocol
@@ -343,7 +359,7 @@ export function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-/** Parse the comma-separated allowed-hosts env (undefined if empty = protection off). Exported for testability. */
+/** Parse a comma-separated allow-list env value (undefined if empty). Exported for testability. */
 export function parseAllowedHosts(value: string | undefined): string[] | undefined {
   if (!value) return undefined;
   const hosts = value
@@ -374,11 +390,23 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
-  const allowedHosts = parseAllowedHosts(process.env["KOHAKU_MCP_HTTP_ALLOWED_HOSTS"]);
+  // KOHAKU_MCP_HTTP_ALLOWED_HOSTS is the former name of KOHAKU_MCP_ALLOWED_HOSTS (kept as a deprecated alias).
+  const deprecatedHosts = parseAllowedHosts(process.env["KOHAKU_MCP_HTTP_ALLOWED_HOSTS"]);
+  if (deprecatedHosts != null) {
+    console.error(
+      "kohaku-sales-sample MCP server: KOHAKU_MCP_HTTP_ALLOWED_HOSTS is deprecated, use KOHAKU_MCP_ALLOWED_HOSTS",
+    );
+  }
+  const allowedHosts = [
+    ...(parseAllowedHosts(process.env["KOHAKU_MCP_ALLOWED_HOSTS"]) ?? []),
+    ...(deprecatedHosts ?? []),
+  ];
+  const allowedOrigins = parseAllowedHosts(process.env["KOHAKU_MCP_ALLOWED_ORIGINS"]) ?? [];
   const httpServer = createMcpHttpServer({
     createServer: setup.createServer,
     snapshotDir: setup.snapshotDir,
     allowedHosts,
+    allowedOrigins,
   });
 
   // By default, bind to 127.0.0.1 (local only). Without a host specified, Node binds to 0.0.0.0 / ::,
@@ -403,13 +431,14 @@ async function main(): Promise<void> {
     console.error(
       `  When sharing via a public tunnel (ngrok / cloudflared, etc.), set KOHAKU_MCP_PUBLIC_URL to the tunnel URL (if unset, the local URL ${publicUrl} is returned and cannot be opened externally), and hand the URL only to trusted parties.`,
     );
-    if (allowedHosts) {
-      console.error(`  DNS rebinding protection: enabled (allowedHosts=${allowedHosts.join(", ")})`);
-    } else {
-      console.error(
-        "  DNS rebinding protection: disabled (enable by listing allowed hosts in KOHAKU_MCP_HTTP_ALLOWED_HOSTS)",
-      );
-    }
+    console.error(
+      `  DNS rebinding protection: enabled (Host / Origin: localhost, 127.0.0.1, [::1]${
+        allowedHosts.length > 0 ? `; extra hosts: ${allowedHosts.join(", ")}` : ""
+      }${allowedOrigins.length > 0 ? `; extra origins: ${allowedOrigins.join(", ")}` : ""})`,
+    );
+    console.error(
+      "  Behind a public tunnel the Host is the tunnel's domain: add it with KOHAKU_MCP_ALLOWED_HOSTS=<name> (and a browser caller's origin with KOHAKU_MCP_ALLOWED_ORIGINS=<name>)",
+    );
   });
 
   // Graceful shutdown: closing the server fires the 'close' cleanup above (tearing down the modern leg).
