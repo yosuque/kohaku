@@ -14,6 +14,7 @@ from .action_effects import (
     apply_action_effects,
 )
 from .action_gate import (
+    NO_APPROVAL_PORT_REASON,
     ActionGate,
     ActionGateAllow,
     ActionGateApprovalRequired,
@@ -24,6 +25,8 @@ from .action_gate import (
     create_action_gate,
 )
 from .action_gate_outcome import (
+    ACTION_GATE_UNAVAILABLE_MESSAGE,
+    APPROVAL_TOKEN_REJECTED_MESSAGE,
     APPROVAL_TOKEN_REQUIRED_MESSAGE,
     CONFIRMATION_REQUIRED_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
@@ -33,6 +36,7 @@ from .action_gate_outcome import (
     ActionGateOutcome,
     ActionGateProceedOutcome,
     record_action_gate_result,
+    record_action_gate_unavailable_denial,
     record_undeclared_action_denial,
 )
 from .action_manifest import ActionManifest, ActionManifestEntry, build_action_manifest
@@ -133,8 +137,11 @@ from .trace_context import TRACEPARENT_RE, TraceContext, parse_trace_context
 from .view_recorder import record_view_fallback
 
 __all__ = [
+    "ACTION_GATE_UNAVAILABLE_MESSAGE",
+    "APPROVAL_TOKEN_REJECTED_MESSAGE",
     "APPROVAL_TOKEN_REQUIRED_MESSAGE",
     "CONFIRMATION_REQUIRED_MESSAGE",
+    "NO_APPROVAL_PORT_REASON",
     "UNDECLARED_ACTION_MESSAGE",
     "ActionAuditContext",
     "ActionGateApprovalRequiredOutcome",
@@ -143,6 +150,7 @@ __all__ = [
     "ActionGateProceedOutcome",
     "allowed_actions_from_index",
     "record_action_gate_result",
+    "record_action_gate_unavailable_denial",
     "record_undeclared_action_denial",
     "start_operation_index_validation",
     "DEFAULT_CAPABILITY_TTL_SECONDS",
