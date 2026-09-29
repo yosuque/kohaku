@@ -22,7 +22,7 @@
 
 **デザインキット** — L2 自由生成が従うクラス名の語彙です(`DesignSystemGuide.kit`。型は `DesignKitVocabulary`)。これを渡すと、生成される部品は独自のクラス名を発明する代わりにこの語彙に従います。この語彙はデザインキットの半分でしかなく、実際の CSS は別の描画側のオブジェクト(renderer-core 組み込みの `defaultDesignKit`、または製品側が sandbox に渡す独自のもの)です。[ユーザーガイド「L2 にデザインシステムを適用する」](user-guide.ja.md#l2-にデザインシステムを適用する) を参照してください。
 
-**開示(disclosure。AI 生成の開示)** — 画面のどこまでをモデルが作ったかを示すために、レンダラーが表示できるラベルです。L1/L2 は `ai-generated`、人が承認した固定化は `ai-assisted-reviewed`、決定的な出力やフォールバックは表示なしです。描画時に `provenance`(`tier` / `cache` / `fallback`)から導出し、Spec のフィールドには決してならないので、ペイロードを作った側が古い値を残したり偽ったりできません。[SPEC §7.1](../spec/SPEC.ja.md#71-レンダラー適合チェックリスト-normative-reference)(SPEC-DISC-001)を参照してください。
+**開示(disclosure。AI 生成の開示)** — 画面のどこまでをモデルが作ったかを示すために、レンダラーが表示できるラベルです。L1/L2 は `ai-generated`、人が承認した固定化は `ai-assisted-reviewed`、決定的な出力や生成のフォールバックは表示なしです(capability negotiation による降格ではラベルは消えません)。描画時に `provenance`(`tier` / `cache` / `fallback`)から導出し、Spec のフィールドには決してならないので、ペイロードを作った側が古い値を残したり偽ったりできません。[SPEC §7.1](../spec/SPEC.ja.md#71-レンダラー適合チェックリスト-normative-reference)(SPEC-DISC-001)を参照してください。
 
 **エビデンスパック(evidence pack)** — レビュアーや監査人向けの、署名付きの監査証跡エクスポートです。lineage イベント・承認・昇格・固定化・生成された成果物をまとめたディレクトリに、マニフェストと分離 Ed25519 署名が付き、`kohaku evidence verify` で検証できます。Lineage の上に作られたエクスポート形式であり、ワイヤ上の型ではありません。[ユーザーガイド §7](user-guide.ja.md#7-運用の勘どころ)、design.md の決定 67 を参照してください。
 
