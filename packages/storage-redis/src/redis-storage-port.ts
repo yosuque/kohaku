@@ -239,7 +239,7 @@ async function putIndexed(
 
 /** Reads every record an index points at, in index (first-insertion) order. */
 async function listIndexed<T>(redis: Redis, indexKey: string): Promise<T[]> {
-  const memberKeys = await redis.zrange(indexKey, 0, -1);
+  const memberKeys = await redis.zrange(indexKey, 0, "-1");
   if (memberKeys.length === 0) return [];
   const raws = await redis.mget(...memberKeys);
   const out: T[] = [];
