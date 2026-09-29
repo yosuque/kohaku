@@ -1,4 +1,24 @@
+import { createHash } from "node:crypto";
+
 export const DEFAULT_SCHEMA = "public";
+
+/**
+ * Longest `correlationId` stored verbatim in `kohaku_lineage.correlation_id`. A btree entry has a hard size
+ * limit (about 2.7 KB), so an oversized value would make the INSERT -- and with it the audit event -- fail.
+ */
+export const MAX_CORRELATION_COLUMN_LENGTH = 256;
+
+/**
+ * The value stored in (and matched against) `kohaku_lineage.correlation_id` for `correlationId`: the id
+ * itself, or `sha256:<hex>` of it once it exceeds {@link MAX_CORRELATION_COLUMN_LENGTH}. The event's
+ * `record` keeps the original. Applied to writes and to the `correlationId` filter alike, so a lookup by
+ * the full id still finds its rows. (A different, short id spelled exactly like that digest would match
+ * too; the digest form is 71 characters and never produced by a request id generator.)
+ */
+export function correlationColumnValue(correlationId: string): string {
+  if (correlationId.length <= MAX_CORRELATION_COLUMN_LENGTH) return correlationId;
+  return `sha256:${createHash("sha256").update(correlationId, "utf8").digest("hex")}`;
+}
 
 /**
  * The schema version this package's `postgresSchemaSql` produces. Bumped whenever the DDL changes in a

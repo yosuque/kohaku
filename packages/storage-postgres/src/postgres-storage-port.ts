@@ -10,7 +10,7 @@ import {
   type UISpec,
 } from "@kohaku-ui/spec-core";
 import { type CreatePostgresPoolOptions, createPostgresPool } from "./connection.js";
-import { DEFAULT_SCHEMA, qualifiedTable } from "./schema.js";
+import { correlationColumnValue, DEFAULT_SCHEMA, qualifiedTable } from "./schema.js";
 
 export type PostgresStoragePortOptions = CreatePostgresPoolOptions;
 
@@ -21,6 +21,10 @@ export interface PostgresStoragePort extends StoragePort {
   sweepExpiredSpecCache(): Promise<number>;
   /** Ends the pool this port created (a no-op for an injected pool). */
   close(): Promise<void>;
+}
+
+function correlationForColumn(correlationId: string | null): string | null {
+  return correlationId == null ? null : correlationColumnValue(correlationId);
 }
 
 /**
@@ -89,7 +93,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
           str("intentHash"),
           str("artifactId"),
           str("specHash"),
-          str("correlationId"),
+          correlationForColumn(str("correlationId")),
           JSON.stringify(event),
         ],
       );
@@ -112,7 +116,8 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       if (filter.intentHash != null) add("intent_hash = ?", filter.intentHash);
       if (filter.artifactId != null) add("artifact_id = ?", filter.artifactId);
       if (filter.specHash != null) add("spec_hash = ?", filter.specHash);
-      if (filter.correlationId != null) add("correlation_id = ?", filter.correlationId);
+      if (filter.correlationId != null)
+        add("correlation_id = ?", correlationColumnValue(filter.correlationId));
       if (filter.since != null) add("ts >= ?", filter.since);
       if (filter.until != null) add("ts <= ?", filter.until);
       params.push(limit);
@@ -140,7 +145,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       if (req.intentHash != null) add("intent_hash = ?", req.intentHash);
       if (req.artifactId != null) add("artifact_id = ?", req.artifactId);
       if (req.specHash != null) add("spec_hash = ?", req.specHash);
-      if (req.correlationId != null) add("correlation_id = ?", req.correlationId);
+      if (req.correlationId != null) add("correlation_id = ?", correlationColumnValue(req.correlationId));
       if (req.since != null) add("ts >= ?", req.since);
       if (req.until != null) add("ts <= ?", req.until);
       // Read one past pageSize to detect whether a further page exists, mirroring pageLineageArray /
