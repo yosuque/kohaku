@@ -21,7 +21,7 @@ pnpm --filter @kohaku-ui-sample/mcp start:http   # Streamable HTTP :8788(claude.
 ```
 
 ⚠️ HTTP エントリは**認証なしのデモ**です — トンネル利用時の注意と環境変数
-(`KOHAKU_MCP_HTTP_PORT` / `KOHAKU_MCP_PUBLIC_URL` / `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` など)は
+(`KOHAKU_MCP_HTTP_PORT` / `KOHAKU_MCP_PUBLIC_URL` / `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` など。トンネルのホスト名は `KOHAKU_MCP_ALLOWED_HOSTS` に足す必要があります)は
 ユーザーガイドを参照してください。
 
 ⚠️ `KOHAKU_AUTHZ=jwt` では、認証できるのは Streamable HTTP プロファイル(bearer トークン)だけです。

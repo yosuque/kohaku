@@ -1,10 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ComposeResult, TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
   type ActionParamIssue,
   type ApprovalRequiredInfo,
   canonicalStringify,
+  type DomainPort,
+  findUnsafeActionParamKeys,
   type JsonObject,
   JsonObjectSchema,
   type Principal,
@@ -31,6 +33,7 @@ import {
   CAPABILITY_META_KEY,
   INITIAL_DATA_META_KEY,
   RENDERER_RESOURCE_URI,
+  REQUEST_ID_META_KEY,
   RESOURCE_MIME_TYPE,
   resourceUiMeta,
   toolUiMeta,
@@ -125,6 +128,24 @@ function requestContextOf(extra: ServerContext): { abort: AbortSignal; requestId
 /** The correlation id already minted for a call's `ServerContext`, so every reader within one call sees the same id (see `mcpCorrelationId`). */
 const correlationIdsByCall = new WeakMap<ServerContext, string>();
 
+/** Upper bound (characters) on each client-influenced segment of an MCP correlation id; longer segments are hashed. */
+const MAX_CORRELATION_SEGMENT_LEN = 64;
+
+/** Printable-ASCII-only check, the same character class host-rest accepts for an inbound `x-request-id`. */
+const PRINTABLE_ASCII_RE = /^[\x20-\x7e]+$/;
+
+/**
+ * Bounds one segment of a correlation id. The JSON-RPC id (and, on a legacy stateful transport, the session
+ * id) is client-controlled, and the correlation id is stored in lineage columns that a backend may index (a
+ * Postgres btree rejects an oversized row), so an over-long or non-printable segment is replaced by a short
+ * sha256 hex digest of itself: still stable and unique per input, but bounded and log-safe. host-rest applies
+ * the same limits to `x-request-id` (there by discarding the value instead).
+ */
+function boundedCorrelationSegment(raw: string): string {
+  if (raw.length > 0 && raw.length <= MAX_CORRELATION_SEGMENT_LEN && PRINTABLE_ASCII_RE.test(raw)) return raw;
+  return `h${createHash("sha256").update(raw).digest("hex").slice(0, 32)}`;
+}
+
 /**
  * The compose correlation id for one MCP tool call: `mcp:<prefix>:<jsonrpc id>`, where `<prefix>` is the
  * transport's session id when it carries one, else a fresh UUID minted for this call. JSON-RPC ids restart
@@ -134,18 +155,24 @@ const correlationIdsByCall = new WeakMap<ServerContext, string>();
  * id unique at the cost of not grouping the calls of one client (nothing on such a transport identifies
  * one), like the Python port's degraded mode. This is the value ultimately recorded as
  * ComposeTrace.correlationId / lineage's view.composed correlationId, so a devtool (`kohaku explain`,
- * admin-react's DevTools) can group every event belonging to one tool call from the id alone.
+ * admin-react's DevTools) can group every event belonging to one tool call from the id alone. Because the
+ * per-call UUID makes the id unguessable from the outside, compose-family tool results also return it in
+ * `_meta` (see REQUEST_ID_META_KEY), which is where a caller gets the id to hand to `kohaku explain`.
+ *
+ * Each client-influenced segment is length- and character-bounded (see boundedCorrelationSegment), so the
+ * whole id stays short whatever the client sends.
  *
  * Memoized per `ServerContext` (one per call): the id is read for the compose pipeline, the rate-limit
- * observer and the action audit within the same call, and they must all agree.
+ * observer, the action audit and the error hook within the same call, and they must all agree.
  *
- * Kept alongside (not merged into) requestContextOf so a caller that only needs the correlation id (none,
- * currently, but keeps the two concerns separable) is not forced to also destructure `abort`.
+ * Kept alongside (not merged into) requestContextOf so a caller that only needs the correlation id (the
+ * rate-limit observer and the error hook) is not forced to also destructure `abort`.
  */
 function mcpCorrelationId(extra: ServerContext): string {
   let id = correlationIdsByCall.get(extra);
   if (id == null) {
-    id = `mcp:${extra.sessionId ?? randomUUID()}:${extra.mcpReq.id}`;
+    const session = boundedCorrelationSegment(extra.sessionId ?? randomUUID());
+    id = `mcp:${session}:${boundedCorrelationSegment(String(extra.mcpReq.id))}`;
     correlationIdsByCall.set(extra, id);
   }
   return id;
@@ -279,7 +306,7 @@ async function composeAndAudit(
         await ctx.deps.onComposed?.(result.spec, result.trace);
       }
     },
-    (e) => reportMcpError(ctx.deps, endpoint, e),
+    (e) => reportMcpError(ctx.deps, endpoint, e, options?.requestId),
   );
   return result;
 }
@@ -346,6 +373,7 @@ async function composeAndPackage(
   // below so the legacyUiResource co-emission (which needs the identical ref set) does not re-invoke
   // domain.invoke for refs already resolved here.
   const { data: initialData, resolved: preresolvedRefs } = await preresolveInitialData(result.spec, ctx);
+  const requestId = result.trace.correlationId ?? callCtx?.requestId;
   // content[0] is always the text fallback (MCPAPP-FBK-001). The legacy UIResource comes after.
   const content: Array<
     | { type: "text"; text: string }
@@ -378,6 +406,8 @@ async function composeAndPackage(
       [INITIAL_DATA_META_KEY]: initialData,
       [CAPABILITY_META_KEY]: capability,
       ...(actions != null ? { [ACTIONS_META_KEY]: actions } : {}),
+      // The id this call's lineage events are recorded under (see REQUEST_ID_META_KEY): what a caller passes to `kohaku explain`.
+      ...(requestId != null ? { [REQUEST_ID_META_KEY]: requestId } : {}),
     },
   };
 }
@@ -536,7 +566,7 @@ function registerComposeTool(ctx: ToolContext): void {
       _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["model"] }),
     },
     async ({ question, locale }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_compose`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_compose`, extra, async () => {
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
@@ -581,7 +611,7 @@ function registerRenderSnapshotTool(ctx: ToolContext): void {
       _meta: toolUiMeta({ visibility: ["model"] }),
     },
     async ({ question, locale }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, extra, async () => {
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
@@ -642,7 +672,7 @@ function registerIntentTools(ctx: ToolContext): void {
         _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["model"] }),
       },
       async (args, extra) =>
-        safeTool(ctx.deps, tool.name, async () => {
+        safeTool(ctx.deps, tool.name, extra, async () => {
           const principal = await ctx.principalOf(extra);
           const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
           if (rateLimited != null) return rateLimited;
@@ -678,7 +708,7 @@ function registerResolveBindingTool(ctx: ToolContext): void {
     },
     async ({ ref, capability }, extra) =>
       // parseInvokableRef / domain.invoke failures also become tool errors rather than RPC exceptions (symmetric with REST's 400).
-      safeTool(ctx.deps, `${ctx.prefix}_resolve_binding`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_resolve_binding`, extra, async () => {
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
@@ -734,7 +764,7 @@ function registerEventTool(ctx: ToolContext): void {
       _meta: toolUiMeta({ resourceUri: RENDERER_RESOURCE_URI, visibility: ["app"] }),
     },
     async ({ intent, on, payload, locale }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_event`, async () => {
+      safeTool(ctx.deps, `${ctx.prefix}_event`, extra, async () => {
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
         if (rateLimited != null) return rateLimited;
@@ -770,7 +800,7 @@ function registerEventTool(ctx: ToolContext): void {
                 payload: payload as JsonObject,
                 surface: MCP_APP_SURFACE,
               }),
-            (e) => reportMcpError(ctx.deps, `${ctx.prefix}_event`, e),
+            (e) => reportMcpError(ctx.deps, `${ctx.prefix}_event`, e, mcpCorrelationId(extra)),
           );
         }
         // Pass the already-resolved CanonicalIntent through as-is ("canonical" kind) rather than
@@ -860,9 +890,13 @@ function registerActionTool(ctx: ToolContext): void {
         "(app-only) Executes a declared action with a capability and returns a result with a side-effect declaration",
       inputSchema: z.object({
         action: z.string(),
-        // JsonObjectSchema (not a bare z.record) caps nesting depth the same way host-rest's ActionBodySchema
-        // does, for the same reason (canonicalStringify / persistence downstream of an unbounded payload).
-        payload: JsonObjectSchema.default({}),
+        // Deliberately not JsonObjectSchema here: zod's record/object parsing silently drops an own
+        // "__proto__" key, so the ActionGate (and its ACT-PRM-001 unsafe-key rejection) would never see it.
+        // The handler validates the raw value itself, first with JsonObjectSchema (the same nesting-depth
+        // cap host-rest's ActionBodySchema has, for the same reason: canonicalStringify / persistence
+        // downstream of an unbounded payload) and then with findUnsafeActionParamKeys on the raw value.
+        // `.meta` keeps the advertised JSON Schema an object.
+        payload: z.any().default({}).meta({ type: "object", additionalProperties: true }),
         capability: z.string(),
         // Governed actions (design.md #62/#63, SPEC ACT-CNF-001/ACT-APR-001): symmetric with the REST
         // surface's ActionBodySchema.confirmed/.approval.
@@ -872,8 +906,8 @@ function registerActionTool(ctx: ToolContext): void {
       // This tool executes a write rather than opening an iframe view, so it has no resourceUri (same as resolve_binding).
       _meta: toolUiMeta({ visibility: ["app"] }),
     },
-    async ({ action, payload, capability, confirmed, approval }, extra) =>
-      safeTool(ctx.deps, `${ctx.prefix}_action`, async () => {
+    async ({ action, payload: rawPayload, capability, confirmed, approval }, extra) =>
+      safeTool(ctx.deps, `${ctx.prefix}_action`, extra, async () => {
         // DomainPort.invoke carries no cancellation primitive (unlike the compose path's L1/L2 LLM calls), so
         // there is nothing to propagate the abort signal into once the write is under way — but a call already
         // cancelled by the time it reaches the handler must not still perform the write (a client that has
@@ -884,6 +918,14 @@ function registerActionTool(ctx: ToolContext): void {
         }
         // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
         // fallback below when the AuthzPort's verify does not itself return a principal.
+        const parsedPayload = JsonObjectSchema.safeParse(rawPayload);
+        if (!parsedPayload.success) {
+          return toolError("payload must be a JSON object within the maximum nesting depth");
+        }
+        const payload = parsedPayload.data;
+        // Scanned on the raw value (its depth was just bounded by the parse above): the parsed copy has
+        // already lost any own "__proto__" key. Reported as the gate's own `invalid` outcome further down.
+        const unsafePayloadKeys = findUnsafeActionParamKeys(rawPayload as JsonObject);
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "action");
         if (rateLimited != null) return rateLimited;
@@ -914,14 +956,14 @@ function registerActionTool(ctx: ToolContext): void {
         try {
           index = await ctx.operationIndex();
         } catch (e) {
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e);
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId);
           return toolError("operation index unavailable");
         }
         const entry = index.get(action);
         if (entry != null && entry.schemaError != null) {
           // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
           // this operation alone (REST's 500 counterpart), reported to the observability hook.
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError);
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError, requestId);
           return toolError("action parameter schema unavailable");
         }
         if (entry == null) {
@@ -931,18 +973,21 @@ function registerActionTool(ctx: ToolContext): void {
             payload: payload as JsonObject,
             principal: resolvedPrincipal,
             correlationId: requestId,
-            report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
+            report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e, requestId),
           });
           return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
         }
-        const gateResult = await ctx.actionGate.check({
-          descriptor: entry.descriptor,
-          paramsSchema: entry.paramsSchema,
-          payload: payload as JsonObject,
-          confirmed,
-          approval,
-          requesterId: resolvedPrincipal.id,
-        });
+        const gateResult: hostCore.ActionGateResult =
+          unsafePayloadKeys.length > 0
+            ? { kind: "invalid", issues: unsafePayloadKeys }
+            : await ctx.actionGate.check({
+                descriptor: entry.descriptor,
+                paramsSchema: entry.paramsSchema,
+                payload: payload as JsonObject,
+                confirmed,
+                approval,
+                requesterId: resolvedPrincipal.id,
+              });
         const gated = await handleActionGateResult(ctx.deps, gateResult, {
           action,
           payload: payload as JsonObject,
@@ -965,7 +1010,7 @@ function registerActionTool(ctx: ToolContext): void {
           action,
           payload as JsonObject,
           result,
-          (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.effects`, e),
+          (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.effects`, e, requestId),
         );
         return {
           content: [{ type: "text" as const, text: `Executed action ${action}` }],
@@ -973,6 +1018,44 @@ function registerActionTool(ctx: ToolContext): void {
         };
       }),
   );
+}
+
+/**
+ * The operation index (and its one-time validation) shared by every attach over the same `DomainPort`.
+ * Keyed by the DomainPort, not by `deps`: a stateless HTTP transport re-attaches on every exchange with a
+ * freshly built deps object around one long-lived DomainPort, and a per-attach index would call
+ * `listOperations()` again and re-report a bad `paramsSchema` to `onError` on every request. The validation
+ * (design.md decision 62: every operation's `paramsSchema` checked at startup rather than at the first invoke)
+ * is kicked off by the first attach and reported through that attach's `onError`; a rejected
+ * `listOperations()` is not memoized (see createOperationIndex), so it re-arms validation and a later attach
+ * retries. Trade-off: the operation list is fixed for the DomainPort's lifetime, which matches the
+ * "static at startup" posture of the tool list itself.
+ */
+const operationIndexesByDomain = new WeakMap<
+  DomainPort,
+  { index: hostCore.OperationIndex; validated: boolean }
+>();
+
+function sharedOperationIndex(deps: McpHostDeps): hostCore.OperationIndex {
+  let shared = operationIndexesByDomain.get(deps.domain);
+  if (shared == null) {
+    shared = { index: hostCore.createOperationIndex(deps.domain), validated: false };
+    operationIndexesByDomain.set(deps.domain, shared);
+  }
+  if (!shared.validated) {
+    const entry = shared;
+    entry.validated = true;
+    // `attachKohakuToMcpServer` is synchronous, so validation is kicked off here and a failure
+    // (listOperations() rejecting, or a schema outside kohaku's closed subset) is reported through `onError`.
+    // A bad schema confines the failure to its own operation.
+    void hostCore.validateOperationIndex(entry.index, (e) =>
+      reportMcpError(deps, "attach.operationIndex", e),
+    );
+    entry.index().catch(() => {
+      entry.validated = false;
+    });
+  }
+  return shared.index;
 }
 
 /**
@@ -1009,17 +1092,10 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
   // principalOf, unlike the old attach-time `principal` field it replaces, is resolved per tool call (see
   // McpHostDeps.resolvePrincipal's doc comment) — each handler calls it once, inside its own safeTool body,
   // and builds a ToolCallContext (via forCall) to carry the resolved value through the compose pipeline.
-  // One memoized operation index per attach; the allowed-action set (capability write-scope filter) is derived
-  // from it rather than from a second, independently memoized `listOperations()` call, so the two can never
-  // disagree about which actions exist.
-  const operationIndex = hostCore.createOperationIndex(deps.domain);
-  // Validate every operation's `paramsSchema` now rather than at the first invoke: `attachKohakuToMcpServer`
-  // is synchronous, so this is kicked off here and a failure (listOperations() rejecting, or a schema outside
-  // kohaku's closed subset) is reported through `onError`. A bad schema confines the failure to its own
-  // operation; a rejected listOperations() is not memoized, so a later call retries.
-  void hostCore.validateOperationIndex(operationIndex, (e) =>
-    reportMcpError(deps, "attach.operationIndex", e),
-  );
+  // One memoized operation index per DomainPort (see sharedOperationIndex); the allowed-action set (capability
+  // write-scope filter) is derived from it rather than from a second, independently memoized `listOperations()`
+  // call, so the two can never disagree about which actions exist.
+  const operationIndex = sharedOperationIndex(deps);
   const ctx: ToolContext = {
     server,
     deps,
@@ -1202,11 +1278,23 @@ async function composeForTool(
 /**
  * Observability of failure paths. Silent if onError is unwired. A throw from the hook is swallowed
  * (observation only), via host-core's notifyHook (the shared swallow-on-throw building block, also consumed
- * by the REST profile's reportHostError). Same shape as the REST surface's reportHostError, but the MCP
- * surface has no error envelope, so there is no requestId.
+ * by the REST profile's reportHostError). The MCP surface has no error envelope, so unlike REST there is no
+ * client-visible requestId; `correlationId` (`mcpCorrelationId`, the same `mcp:...` value the call's lineage
+ * events and `_meta["kohaku/requestId"]` carry) is passed along when the failing path has the call in hand,
+ * so an operator can tie the report back to that call. Paths with no call context (attach-time validation,
+ * fixation self-healing) omit it.
  */
-async function reportMcpError(deps: McpHostDeps, endpoint: string, error: unknown): Promise<void> {
-  await hostCore.notifyHook(deps.onError, { endpoint, error });
+async function reportMcpError(
+  deps: McpHostDeps,
+  endpoint: string,
+  error: unknown,
+  correlationId?: string,
+): Promise<void> {
+  await hostCore.notifyHook(deps.onError, {
+    endpoint,
+    error,
+    ...(correlationId != null ? { correlationId } : {}),
+  });
 }
 
 function toolError(message: string) {
@@ -1289,7 +1377,9 @@ function approvalRequiredToolError(message: string, approval: ApprovalRequiredIn
  * `ServerContext.sessionId`; else the literal `"anonymous"`. **On the stateless Streamable HTTP serving
  * (SDK 2.0 `createMcpHandler`) and stdio no session id exists, so without `rateLimitKey` or
  * `resolvePrincipal` every caller lands in the one `"anonymous"` bucket** — `attachKohakuToMcpServer`
- * warns once about that configuration.
+ * warns once about that configuration. On a legacy stateful transport the session id is a key the client
+ * can rotate by opening a new session, so it is no defence against a caller intent on evading the limit:
+ * production deployments should wire `rateLimitKey` or `resolvePrincipal`.
  */
 async function mcpRateLimitKey(
   deps: McpHostDeps,
@@ -1347,7 +1437,8 @@ function warnUnkeyedRateLimiter(deps: McpHostDeps): void {
   warnedUnkeyedRateLimiter = true;
   console.warn(
     "[kohaku] McpHostDeps.rateLimiter is wired without resolvePrincipal or rateLimitKey. On a transport with no " +
-      "session id (stateless Streamable HTTP, stdio) every caller shares one rate-limit bucket. " +
+      "session id (stateless Streamable HTTP, stdio) every caller shares one rate-limit bucket, and on a " +
+      "stateful transport the per-session bucket can be shed by opening a new session. " +
       "Wire deps.rateLimitKey (or deps.resolvePrincipal) to key the limit per caller.",
   );
 }
@@ -1406,6 +1497,7 @@ const TOOL_INTERNAL_ERROR_MESSAGE = "internal error; see the observability hook 
 async function safeTool<T extends object>(
   deps: McpHostDeps,
   endpoint: string,
+  extra: ServerContext,
   fn: () => Promise<T>,
 ): Promise<(T & { resultType: "complete" | "task" }) | ReturnType<typeof toolError>> {
   try {
@@ -1416,7 +1508,7 @@ async function safeTool<T extends object>(
     // Symmetric with the REST surface (reportHostError before the COMPOSE_FAILED response), report the failure to the
     // observation hook before converting it to a tool error, rather than leaving the failure rate inferable only via the
     // isError response to the model.
-    await reportMcpError(deps, endpoint, e);
+    await reportMcpError(deps, endpoint, e, mcpCorrelationId(extra));
     const clientMessage = hostCore.clientMessageFor(e, TOOL_INTERNAL_ERROR_MESSAGE);
     return toolError(clientMessage);
   }

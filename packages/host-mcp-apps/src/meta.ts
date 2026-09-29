@@ -48,6 +48,15 @@ export const CAPABILITY_META_KEY = "kohaku/capability";
  */
 export const ACTIONS_META_KEY = "kohaku/actions";
 
+/**
+ * The key for co-embedding a compose-family tool call's correlation id (`mcp:<session or per-call uuid>:<jsonrpc id>`)
+ * in the result's `_meta`. The id is what the call's `view.*` / `action.*` lineage events are recorded under,
+ * so this is where a caller reads the value to hand to `kohaku explain`. Placed in `_meta` (transferred only to
+ * the widget / client, not the model's context) since it is operational detail rather than content. Because the
+ * per-call uuid makes the id unguessable from the outside, this is the only way to learn it on a session-less transport.
+ */
+export const REQUEST_ID_META_KEY = "kohaku/requestId";
+
 export type ToolVisibility = "model" | "app";
 
 /**

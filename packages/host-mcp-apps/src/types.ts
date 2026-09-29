@@ -126,11 +126,15 @@ export interface McpHostDeps {
   fixations?: FixationSelfHealApi;
   /**
    * Observability hook for failure paths (product responsibility). Reports the fail-open of the audit
-   * record (onComposed) and failures of fixation self-healing (invalidate/refreshFingerprint) here. Same
-   * shape as REST's KohakuHostDeps.onError (the MCP surface has no error envelope, so no requestId is carried).
+   * record (onComposed) and failures of fixation self-healing (invalidate/refreshFingerprint) here. Like
+   * REST's KohakuHostDeps.onError, except that the MCP surface has no error envelope, so there is no
+   * client-visible `requestId`; `correlationId` is the call's `mcp:<session or per-call uuid>:<jsonrpc id>`
+   * id (the value lineage events and `_meta["kohaku/requestId"]` carry). It is present when the failing path
+   * has a tool call in hand (a tool handler's own failure, the compose audit record, the action gate's
+   * audit / effects steps) and absent for attach-time validation and fixation self-healing.
    * When unwired, silent (legacy behavior). A throw from the hook is swallowed (observation only).
    */
-  onError?: (info: { endpoint: string; error: unknown }) => void | Promise<void>;
+  onError?: (info: { endpoint: string; error: unknown; correlationId?: string }) => void | Promise<void>;
   /**
    * Side-effect declaration for writes (`${prefix}_action`) (optional). Same signature shape as the
    * REST-surface KohakuHostDeps.actionEffects. Called after domain.invoke; returns the `query://` URIs that
@@ -148,6 +152,13 @@ export interface McpHostDeps {
    * `POST /approvals`-equivalent tool of its own (design.md #63 scopes approval issuance to the REST
    * governance plane); a deployment that also mounts the REST profile shares one `ApprovalPort` instance
    * across both.
+   *
+   * **Limitation: tenant-bound approvals are rejected here.** REST's `POST /approvals` binds the resolved
+   * tenant into the token, but this profile never resolves a tenant, so `${prefix}_action` verifies with no
+   * tenant and `verifyApproval` denies a tenant-bound token ("approval is bound to a different tenant",
+   * fail-closed). Approve-tier over MCP therefore works only for approvals issued without a tenant binding
+   * (a deployment with no `deps.tenant` on REST); elsewhere use the REST `POST /binding/action`. Resolving a
+   * tenant on this surface is a deferred design decision (design.md #63).
    */
   approvals?: ApprovalPort;
   /**
@@ -173,7 +184,9 @@ export interface McpHostDeps {
    * stateless Streamable HTTP serving (`createMcpHandler`), and stdio has no session, so there it is
    * always absent and every caller shares the single `"anonymous"` bucket.** A shared HTTP deployment must
    * wire `resolvePrincipal` or `rateLimitKey` to get a per-caller limit; `attachKohakuToMcpServer` warns
-   * once when a `rateLimiter` is wired with neither (see `mcpRateLimitKey` in server.ts).
+   * once when a `rateLimiter` is wired with neither (see `mcpRateLimitKey` in server.ts). On a legacy
+   * stateful transport the `sessionId` key is client-rotatable (a new session is a new bucket), so it does
+   * not hold against a caller trying to evade the limit either: use `rateLimitKey` or `resolvePrincipal` in production.
    *
    * On denial, returns a structured tool error (`isError: true`) whose `structuredContent.error.code` is
    * `"RATE_LIMITED"` (SPEC §6.1, REST-RL-001's MCP counterpart) with a `retryAfterMs` when the limiter

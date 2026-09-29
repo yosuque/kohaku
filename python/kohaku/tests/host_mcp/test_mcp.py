@@ -19,6 +19,7 @@ from kohaku.host_mcp import (
     CAPABILITY_META_KEY,
     INITIAL_DATA_META_KEY,
     RENDERER_RESOURCE_URI,
+    REQUEST_ID_META_KEY,
     RESOURCE_MIME_TYPE,
     RESOURCE_URI_META_KEY,
     UI_META_KEY,
@@ -265,6 +266,52 @@ class TestMcpCorrelationId:
             assert cid.startswith("mcp:")
         # Different calls -> different correlation ids (each carries its own JSON-RPC request id).
         assert correlation_ids[0] != correlation_ids[1]
+
+    def test_result_meta_carries_the_correlation_id_recorded_on_the_trace(self, tmp_path: Path) -> None:
+        correlation_ids: list[str | None] = []
+        meta_ids: list[Any] = []
+
+        async def _on_composed(spec: Any, trace: Any) -> None:
+            correlation_ids.append(trace.correlationId)
+
+        async def run() -> None:
+            deps = _deps(tmp_path, on_composed=_on_composed)
+            async with connect(deps, _OPTIONS) as client:
+                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                assert result.meta is not None
+                meta_ids.append(result.meta.get(REQUEST_ID_META_KEY))
+                assert REQUEST_ID_META_KEY == "kohaku/requestId"
+                # Operational detail, so it must not ride the model-visible structured content.
+                assert meta_ids[0] not in json.dumps(result.structured_content)
+
+        asyncio.run(run())
+        assert correlation_ids == meta_ids
+        assert isinstance(meta_ids[0], str) and meta_ids[0].startswith("mcp:")
+
+    def test_client_controlled_jsonrpc_id_is_bounded(self) -> None:
+        """An over-long or non-printable JSON-RPC id is replaced by a short digest so the correlation id
+        stays indexable by a backend (mirrors TS mcpCorrelationId)."""
+        from kohaku.host_mcp.server import _correlation_id_of
+
+        class _Ctx:
+            session = None
+
+            def __init__(self, request_id: Any) -> None:
+                self.request_id = request_id
+
+        ids = []
+        for request_id in ("x" * 5000, "line1\nline2", "y" * 5000):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                cid = _correlation_id_of(cast(Any, _Ctx(request_id)))
+            assert cid is not None
+            ids.append(cid)
+            assert re.fullmatch(r"mcp:[0-9a-f]{32}:h[0-9a-f]{32}", cid)
+        # A short printable id (str or int) passes through unchanged.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            short = _correlation_id_of(cast(Any, _Ctx(7)))
+        assert short is not None and short.endswith(":7")
 
     def test_two_concurrent_sessions_never_collide_even_with_the_same_jsonrpc_id(
         self, tmp_path: Path
@@ -1458,6 +1505,39 @@ class TestGovernedActions:
                 attach_errors = [info for info in seen if info.endpoint == "attach.operationIndex"]
                 assert len(attach_errors) == 1
                 assert 'operation "annotate" has an invalid paramsSchema' in str(attach_errors[0].error)
+
+        asyncio.run(run())
+
+    def test_attaches_over_the_same_domain_share_one_operation_index(self, tmp_path: Path) -> None:
+        """A host that re-attaches per request builds fresh deps around one DomainPort: list_operations() runs
+        once and a bad paramsSchema is reported once (mirrors TS sharedOperationIndex)."""
+
+        list_calls = 0
+
+        class BadSchemaDomain:
+            async def list_operations(self) -> list[Any]:
+                nonlocal list_calls
+                list_calls += 1
+                return [
+                    OperationDescriptor(
+                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                    )
+                ]
+
+            async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                return {"ok": True}
+
+        async def run() -> None:
+            seen: list[McpErrorInfo] = []
+            domain = BadSchemaDomain()
+            compose = make_compose_ctx(tmp_path, builder=governed_spec_builder)
+            for _ in range(2):
+                deps = _deps(tmp_path, compose=compose, domain=domain, on_error=seen.append)
+                async with connect(deps, _OPTIONS):
+                    for _ in range(5):
+                        await asyncio.sleep(0)
+            assert list_calls == 1
+            assert len([i for i in seen if i.endpoint == "attach.operationIndex"]) == 1
 
         asyncio.run(run())
 

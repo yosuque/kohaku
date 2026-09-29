@@ -15,7 +15,9 @@ wire shape as TS (co-embedded initial data, both _meta forms) can be reproduced.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import re
 import uuid
 import warnings
 import weakref
@@ -64,6 +66,7 @@ from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.host_core import start_operation_index_validation as _host_core_start_index_validation
 from kohaku.spec import (
     ActionParamIssue,
+    ActionParamsSchemaError,
     AuthzPort,
     IntentInput,
     InvocationContext,
@@ -87,6 +90,7 @@ from .meta import (
     CAPABILITY_META_KEY,
     INITIAL_DATA_META_KEY,
     RENDERER_RESOURCE_URI,
+    REQUEST_ID_META_KEY,
     RESOURCE_MIME_TYPE,
     resource_ui_meta,
     tool_ui_meta,
@@ -291,6 +295,65 @@ def _session_correlation_prefix(ctx: ServerRequestContext[Any]) -> str:
     return correlation_id
 
 
+# Upper bound (characters) on the client-controlled JSON-RPC id segment of a correlation id; a longer (or
+# non-printable) id is replaced by a short digest. Mirrors TS host-mcp-apps' MAX_CORRELATION_SEGMENT_LEN.
+_MAX_CORRELATION_SEGMENT_LEN = 64
+_PRINTABLE_ASCII_RE = re.compile(r"[\x20-\x7e]+")
+
+
+def _bounded_correlation_segment(raw: str) -> str:
+    """Bounds one client-controlled segment of a correlation id. The JSON-RPC id is stored in lineage columns a
+    backend may index (a Postgres btree rejects an oversized row), so an over-long or non-printable value is
+    replaced by a short sha256 hex digest of itself: stable and unique per input, but bounded and log-safe."""
+    if 0 < len(raw) <= _MAX_CORRELATION_SEGMENT_LEN and _PRINTABLE_ASCII_RE.fullmatch(raw):
+        return raw
+    return "h" + hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:32]
+
+
+class _SharedOperationIndex:
+    """The operation index for one DomainPort plus whether its one-time validation has been started."""
+
+    __slots__ = ("index", "validated")
+
+    def __init__(self, index: Any) -> None:
+        self.index = index
+        self.validated = False
+
+
+_operation_indexes_by_domain: weakref.WeakKeyDictionary[Any, _SharedOperationIndex] = weakref.WeakKeyDictionary()
+
+
+def _shared_operation_index(deps: McpHostDeps) -> Any:
+    """The operation index (and its one-time validation) shared by every attach over the same DomainPort.
+
+    Keyed by the DomainPort, not by `deps`: a host that re-attaches per request builds a fresh deps object
+    around one long-lived DomainPort, and a per-attach index would call `list_operations()` again and re-report
+    a bad `paramsSchema` to `on_error` on every request (design.md #62: validated once, at startup). Mirrors TS
+    host-mcp-apps' `sharedOperationIndex`. A DomainPort that cannot be weakly referenced or hashed just gets a
+    per-attach index, as before. Validation needs a running event loop (attach itself is synchronous): without
+    one it is not started and a later attach retries; a rejected `list_operations()` is not memoized, so a
+    later attach retries that too.
+    """
+    try:
+        shared = _operation_indexes_by_domain.get(deps.domain)
+        if shared is None:
+            shared = _SharedOperationIndex(_host_core_create_operation_index(deps.domain))
+            _operation_indexes_by_domain[deps.domain] = shared
+    except TypeError:
+        shared = _SharedOperationIndex(_host_core_create_operation_index(deps.domain))
+    if not shared.validated:
+        entry = shared
+
+        async def _report(exc: BaseException) -> None:
+            if not isinstance(exc, ActionParamsSchemaError):
+                # list_operations() itself failed (not memoized): re-arm so a later attach retries.
+                entry.validated = False
+            await _report_mcp_error(deps, "attach.operationIndex", exc)
+
+        entry.validated = _host_core_start_index_validation(entry.index, _report) is not None
+    return shared.index
+
+
 def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
     """The per-call correlation id: `mcp:<sessionId>:<jsonrpc id>`, where `<sessionId>` is a stable opaque id
     (uuid4 hex) generated once per transport connection (see `_session_correlation_prefix` above) -- never
@@ -319,7 +382,7 @@ def _correlation_id_of(ctx: ServerRequestContext[Any]) -> str | None:
     """
     if ctx.request_id is None:
         return None
-    return f"mcp:{_session_correlation_prefix(ctx)}:{ctx.request_id}"
+    return f"mcp:{_session_correlation_prefix(ctx)}:{_bounded_correlation_segment(str(ctx.request_id))}"
 
 
 def _trace_context_of(ctx: ServerRequestContext[Any]) -> TraceContext | None:
@@ -414,21 +477,14 @@ def attach_kohaku_to_mcp_server(
         return await _principal_of(deps, fallback_principal, ctx)
 
     # Memoized deps.domain.list_operations() index (host_core's create_operation_index, design.md #62/#64),
-    # consulted by the actions manifest (`_compose_and_package`) and `${prefix}_action`'s ActionGate below. Kept
-    # here as a closure variable rather than on deps — McpHostDeps is frozen (unlike host_rest's per-deps field).
-    _operation_index = _host_core_create_operation_index(deps.domain)
+    # consulted by the actions manifest (`_compose_and_package`) and `${prefix}_action`'s ActionGate below. Shared
+    # by every attach over the same DomainPort (see `_shared_operation_index`); kept out of deps because
+    # McpHostDeps is frozen (unlike host_rest's per-deps field).
+    _operation_index = _shared_operation_index(deps)
     # The allowed-action set (write-scope hardening; see _issue_capability) is derived from that same index
     # rather than from a second, independently memoized list_operations() call, so the capability filter and the
     # gate can never disagree about which actions exist.
     _allowed_actions = _host_core_allowed_actions_from_index(_operation_index)
-    # Validate every operation's paramsSchema now rather than at the first invoke: a failure (list_operations()
-    # raising, or a schema outside kohaku's closed subset) is reported through on_error (endpoint
-    # "attach.operationIndex"). Needs a running event loop (attach itself is synchronous): without one the
-    # index is built lazily by the first request that needs it.
-    _host_core_start_index_validation(
-        _operation_index,
-        lambda exc: _report_mcp_error(deps, "attach.operationIndex", exc),
-    )
     # One ActionGate per attach call, shared by every `${prefix}_action` invoke (design.md #62/#63).
     _action_gate = _host_core_create_action_gate(deps.approvals)
 
@@ -660,6 +716,9 @@ def attach_kohaku_to_mcp_server(
             INITIAL_DATA_META_KEY: {ref: td.to_wire() for ref, td in initial_data.items()},
             CAPABILITY_META_KEY: capability,
             **({ACTIONS_META_KEY: to_jsonable(actions)} if actions is not None else {}),
+            # The id this call's lineage events are recorded under (see REQUEST_ID_META_KEY): what a caller
+            # passes to `kohaku explain`.
+            **({REQUEST_ID_META_KEY: correlation_id} if correlation_id is not None else {}),
         }
         # content[0] is always the text fallback (MCPAPP-FBK-001). The legacy UIResource is placed after.
         content: list[Any] = [
