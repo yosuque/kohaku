@@ -6,59 +6,61 @@
 
 **所要時間目安:** あなたの LLM で合成する REST ホストまで約 30 分。サンプルで昇格ループを端から端まで歩くのに半日。
 
-昇格・固定化が要らないなら、`@kohaku-ui/host` の `createKohakuHost()`([パス (a)](mcp-apps.ja.md))がこのパスで今も手で配線している 3 つの Port(`authz`、`storage`、`semantic`)に既定を用意して 1 回の呼び出しで済ませます。compose のたびに lineage へ記録する `recorder` も既定で配線され、それ以外の `KohakuHostDeps` のフィールド(`auth`、`tenant`、`authorizeGovernance`、`promotions`、`fixations`、`rateLimiter` など)は `routes` オプションでそのまま `createKohakuRoutes` へ渡せます。つまりこのパスの統治面の配線もファサードの中に収まります。このパスが `createKohakuRoutes` を直接使うのは、下記の昇格・固定化のサービスが lineage インスタンスなどを自分で組み立てる必要があるためで、ファサードはそのために `host.lineage` を返します。
+昇格・固定化が要らないなら、`@kohaku-ui/host` の `createKohakuHost()`([パス (a)](mcp-apps.ja.md))が `authz`・`storage`・`semantic` の 3 つの Port に既定を用意して 1 回の呼び出しで済ませ、compose のたびに lineage へ記録する `recorder` も既定で配線します。このパスはそのファサードをそのまま使い、統治面の部品を `routes` オプションで足します。`routes` はそれ以外の `KohakuHostDeps` のフィールド(`auth`、`tenant`、`authorizeGovernance`、`promotions`、`fixations`、`rateLimiter` など)をそのまま `createKohakuRoutes` へ渡します。昇格・固定化のサービスはホストが記録する先と同じ `storage` と lineage を必要とするため、スニペットは両者を先に作って渡します(`storage`、`recorder`)。ファサードが返す `host.lineage` は、あとで同じ lineage を使いたいとき(たとえば `createActionAuditRecorder`)のためのものです。
 
 ## 最初のコード: 統制付き REST ホスト
 
 ```bash
-npm install @kohaku-ui/host-rest @kohaku-ui/composer @kohaku-ui/registry @kohaku-ui/lineage @kohaku-ui/llm @kohaku-ui/spec-core hono @hono/node-server @ai-sdk/anthropic zod
+npm install @kohaku-ui/host @kohaku-ui/host-rest @kohaku-ui/lineage @kohaku-ui/storage-memory @kohaku-ui/llm @kohaku-ui/composer @kohaku-ui/intents @kohaku-ui/spec-core hono @hono/node-server @ai-sdk/anthropic zod
 npx @kohaku-ui/cli scaffold ports --out ./kohaku
 ```
 
+`kohaku scaffold ports` は `./kohaku` に 3 つのファイルを書き出します: `ports.ts`(埋めるための `domainPort`)、`intents.ts`(Intent カタログ)、`server.ts`(最小の REST ホスト — 下のスニペットがその代わりなので削除してください)。手で書くのは `./kohaku/fixed-specs.ts`(L0 の画面)だけです。`fixedSpecs`(`@kohaku-ui/composer` の `FixedSpecSource`)を export し、その `lookup(intent)` が Spec のビルダーを返します。モデルに届かせたい Intent には `null` を返します — サンプルのものは `apps/sample-api/src/intents/fixed-specs.ts`。L0 の画面がまだなければ、その import を外して `policy: { allowL2: true }` だけを渡してください。残り 3 つの Port はファサードの既定です: インメモリの `storage`、HMAC の `authz`(`KOHAKU_CAPABILITY_SECRET` を設定します。例: `openssl rand -base64 32`。手元で試すだけなら `dev: true`)、`intents.ts` から組み立てる LLM ベースの `semantic`。
+
 ```ts
 import { serve } from "@hono/node-server";
-import { createGovernancePolicy, createKohakuRoutes } from "@kohaku-ui/host-rest";
+import { createKohakuHost } from "@kohaku-ui/host";
+import { createGovernancePolicy } from "@kohaku-ui/host-rest";
 import { createFixations, createLineage, createPromotions, createViewRecorder } from "@kohaku-ui/lineage";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
-import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
-import { Hono } from "hono";
-import { fixedSpecs } from "./kohaku/fixed-specs.js"; // L0: screens that never touch the model
-import * as ports from "./kohaku/ports.js"; // your four Ports (kohaku scaffold ports gives you a DomainPort to start from)
+import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
+import { fixedSpecs } from "./kohaku/fixed-specs.js"; // L0: screens that never touch the model (hand-written)
+import { intents } from "./kohaku/intents.js"; // written by kohaku scaffold ports
+import { domainPort as domain } from "./kohaku/ports.js"; // written by kohaku scaffold ports
 
-const { authzPort: authz, domainPort: domain, semanticPort: semantic, storagePort: storage } = ports;
+const storage = createMemoryStoragePort(); // the facade's default, created here so the services below share it
 const lineage = createLineage({ storage }); // every compose / review / fixation becomes an event
-const promotions = createPromotions({ lineage, storage }); // L2 → L1 (add `judge` to score candidates)
-const fixations = createFixations({ lineage, storage, policy: { minUses: 3 } }); // L1 → L0
-const policy = { fixedSpecs, allowL2: true }; // the L0 shortcut, and permission to generate freely
-const app = new Hono().route(
-  "/api/kohaku",
-  createKohakuRoutes({
-    compose: { catalog: resolveCatalog(coreCatalog), semantic, storage, llm: createLlmFromEnv(), policy },
-    domain,
-    authz,
-    querySource: "my-product",
+const { app } = createKohakuHost({
+  domain,
+  storage,
+  querySource: "my-product", // must equal the `source` of every Intent in intents.ts
+  llm: createLlmFromEnv(),
+  intents: intents.map((i) => i.toIntentDef()),
+  dataVersion: () => "my-product@1",
+  policy: { fixedSpecs, allowL2: true }, // the L0 shortcut, and permission to generate freely
+  recorder: createViewRecorder(lineage),
+  routes: {
     auth: async (c) => ({ id: "demo-admin", roles: [c.req.header("x-kohaku-role") ?? "admin"] }),
     authorizeGovernance: createGovernancePolicy({ roles: { admin: ["*"], viewer: ["lineage.read"] } }),
-    recorder: createViewRecorder(lineage),
-    promotions,
-    fixations,
+    promotions: createPromotions({ lineage, storage }), // L2 → L1 (add `judge` to score candidates)
+    fixations: createFixations({ lineage, storage, policy: { minUses: 3 } }), // L1 → L0
     fixationLookup: (intentHash, session) => storage.getFixation(intentHash, session.tenant),
-  }),
-);
+  },
+});
 serve({ fetch: app.fetch, port: 8787 });
 ```
 
 `auth` の `x-kohaku-role` ヘッダーはデモ用の簡易実装で、同梱サンプル(`apps/sample-api/src/app/host-deps.ts`)と同じ手法です — 実運用では principal とそのロールをクライアント任せのヘッダーではなく、自前の認証基盤(JWT/OIDC など)から解決してください。
 
-[パス (b)](react-dashboard.ja.md) の 2 つ目のスニペットをこのホストに向ければダッシュボードが描画されます。次に `POST /compose` に `{ "input": { "kind": "nl", "text": "revenue by region as a bar chart" } }` を送ると、あなたの `SemanticPort.normalize` が文を Intent に写像し(サンプルの LLM 実装は `apps/sample-api/src/ports/semantic-port.ts`)、composer は固定 L0 Spec を返すか、カタログから L1 Spec を合成するか、あなたの SemanticPort が L2 に振る受け皿 Intent(サンプルでは `sales.custom`)ならサンドボックスで動く L2 アーティファクトを生成します。
+[パス (b)](react-dashboard.ja.md) の 2 つ目のスニペットをこのホストに向ければダッシュボードが描画されます。次に `POST /compose` に `{ "input": { "kind": "nl", "text": "revenue by region as a bar chart" } }` を送ると、`SemanticPort`(ここではファサードの既定で、`intents.ts` から組み立てたもの。サンプルの実装は `apps/sample-api/src/ports/semantic-port.ts`)が文を Intent に写像し、composer は固定 L0 Spec を返すか、カタログから L1 Spec を合成するか、あなたの SemanticPort が L2 に振る受け皿 Intent(サンプルでは `sales.custom`)ならサンドボックスで動く L2 アーティファクトを生成します。
 
 ## 3 つの階層をひとつのホストで
 
 | 階層 | 何が決めるか | 上のコードのどこか |
 |---|---|---|
-| **L0 固定** | `policy.fixedSpecs.lookup(intent)` がビルダーを返す → モデル呼び出しなし、最初の compose は `cache: "miss"`、同一の要求なら `"hit"` | `fixedSpecs` |
-| **L1 宣言的合成** | モデルが `catalog` から部品を選び props を埋める。決定的後処理と修復ループがカタログに対して検証する | `catalog`, `llm` |
-| **L2 自由生成** | `policy.allowL2` + L2 に振られた Intent(`routeTier`)→ HTML/JS アーティファクト、ブリッジ契約の lint、サンドボックス描画 | `allowL2: true` |
+| **L0 固定** | `policy.fixedSpecs.lookup(intent)` がビルダーを返す → モデル呼び出しなし、最初の compose は `cache: "miss"`、同一の要求なら `"hit"` | `policy.fixedSpecs` |
+| **L1 宣言的合成** | モデルが `catalog` から部品を選び props を埋める。決定的後処理と修復ループがカタログに対して検証する | `llm`(と、ファサードの既定の `catalog`) |
+| **L2 自由生成** | `policy.allowL2` + L2 に振られた Intent(`routeTier`)→ HTML/JS アーティファクト、ブリッジ契約の lint、サンドボックス描画 | `policy.allowL2` |
 
 ## 昇格と固定化(統制ループ)
 
