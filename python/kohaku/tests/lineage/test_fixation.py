@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from kohaku.lineage import (
+    FixationNotAllowedError,
     FixationPolicy,
     FixationUnsupportedError,
     create_fixations,
@@ -21,7 +22,7 @@ from kohaku.lineage import (
 from kohaku.spec import FixationRecord, LineageEventRecord, Principal, UISpec
 from kohaku.storage import FileStoragePort
 
-from ._helpers import NoDeleteFixationStorage, l2_spec, seed
+from ._helpers import NoDeleteFixationStorage, l1_spec, l2_spec, seed
 
 APPROVER = Principal(id="admin")
 
@@ -88,6 +89,39 @@ def test_unfixate_absent_is_noop(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+# --- Fixation of a Spec that must not become the L0 fast path (SPEC.md §8) ---
+
+
+def test_fixate_rejects_a_spec_carrying_fallback(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
+        wire = l1_spec().model_dump(mode="json", by_alias=True, exclude_none=True)
+        wire["provenance"]["fallback"] = {"from": "root", "reason": "generation exhausted", "kind": "generation"}
+        pinned = UISpec.model_validate(wire)
+
+        with pytest.raises(FixationNotAllowedError) as info:
+            await fixations.fixate(pinned_spec=pinned, approver=APPROVER)
+        assert info.value.reason == "fallback"
+        assert await storage.list_fixations() == []
+        assert await storage.list_lineage() == []
+
+    asyncio.run(run())
+
+
+def test_fixate_rejects_a_tier_l2_spec(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
+
+        with pytest.raises(FixationNotAllowedError) as info:
+            await fixations.fixate(pinned_spec=l2_spec(), approver=APPROVER)
+        assert info.value.reason == "l2-tier"
+        assert await storage.list_fixations() == []
+
+    asyncio.run(run())
+
+
 # --- Fixation staleness detection ---
 
 
@@ -100,7 +134,7 @@ def test_fixate_stamps_catalog_fingerprint(tmp_path: Path) -> None:
             catalog_for=lambda tenant: _Cat("fp-catalog-1"),
         )
 
-        record = await fixations.fixate(pinned_spec=l2_spec(), approver=APPROVER)
+        record = await fixations.fixate(pinned_spec=l1_spec(), approver=APPROVER)
         assert record.catalogFingerprint == "fp-catalog-1"
         got = await storage.get_fixation(record.intentHash)
         assert got is not None and got.catalogFingerprint == "fp-catalog-1"
@@ -113,7 +147,7 @@ def test_fixate_without_catalog_no_stamp(tmp_path: Path) -> None:
         storage = FileStoragePort(tmp_path)
         fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
 
-        record = await fixations.fixate(pinned_spec=l2_spec(), approver=APPROVER)
+        record = await fixations.fixate(pinned_spec=l1_spec(), approver=APPROVER)
         # The dataclass always has a catalogFingerprint field, but when unstamped it is None (omitted in the wire form).
         assert record.catalogFingerprint is None
 
@@ -333,7 +367,7 @@ def test_fixate_stamps_a_revision(tmp_path: Path) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
-        record = await fixations.fixate(pinned_spec=l2_spec(), approver=APPROVER)
+        record = await fixations.fixate(pinned_spec=l1_spec(), approver=APPROVER)
         assert record.revision is not None and record.revision != ""
 
     asyncio.run(run())

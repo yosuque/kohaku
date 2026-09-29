@@ -27,6 +27,23 @@ export class FixationUnsupportedError extends Error {
   }
 }
 
+/**
+ * Raised by `fixate` when the Spec it is asked to pin must not become the permanent L0 fast path (SPEC.md §8):
+ * a Spec carrying `provenance.fallback` (a generation failure or a capability-negotiation downgrade, not the
+ * intended structure) or a tier-`L2` result (free-form, sandbox-only generation that the promotion pipeline,
+ * not fixation, governs). Enforced here rather than only at the REST route so every caller of `fixate`
+ * (an ingest pipeline, a CLI, a product's own code) is covered by the same rule.
+ */
+export class FixationNotAllowedError extends Error {
+  constructor(
+    readonly reason: "fallback" | "l2-tier",
+    message: string,
+  ) {
+    super(message);
+    this.name = "FixationNotAllowedError";
+  }
+}
+
 export interface FixationPolicy {
   minUses: number;
   minDistinctSessions: number;
@@ -132,6 +149,7 @@ export interface Fixations {
   /**
    * Human-approved fixation. The structure of pinnedSpec is thereafter served as L0.
    * Passing tenant stamps it into record.tenant, and the StoragePort key-separates by (tenant, intentHash).
+   * Throws {@link FixationNotAllowedError} for a Spec carrying `provenance.fallback` or a tier-`L2` Spec (SPEC.md §8).
    */
   fixate(args: { pinnedSpec: UISpec; approver: Principal; tenant?: string }): Promise<FixationRecord>;
   unfixate(intentHash: string, approver: Principal, scope?: TenantScope): Promise<void>;
@@ -349,6 +367,19 @@ export function createFixations(opts: {
     },
 
     async fixate({ pinnedSpec, approver, tenant }) {
+      const fallback = pinnedSpec.provenance.fallback;
+      if (fallback != null) {
+        throw new FixationNotAllowedError(
+          "fallback",
+          `a Spec carrying provenance.fallback cannot be fixated (${fallback.reason})`,
+        );
+      }
+      if (pinnedSpec.provenance.tier === "L2") {
+        throw new FixationNotAllowedError(
+          "l2-tier",
+          "an L2 free-form Spec cannot be fixated; L2 results are governed by the promotion pipeline (L2->L1)",
+        );
+      }
       const record: FixationRecord = {
         intentHash: pinnedSpec.intent.hash,
         canonical: pinnedSpec.intent.canonical,

@@ -86,6 +86,12 @@ async function l2Spec(): Promise<UISpec> {
   };
 }
 
+/** The same structure as `l2Spec`, but as an L1 result (the only tier `fixate` accepts without a fallback). */
+async function l1Spec(): Promise<UISpec> {
+  const spec = await l2Spec();
+  return { ...spec, provenance: { ...spec.provenance, tier: "L1" } };
+}
+
 const trace = {
   intent: { canonical: "sales.custom", hash: "sha256:" + "1".repeat(64) },
   dataVersion: "sales@seed-1",
@@ -1156,7 +1162,7 @@ describe("固定化の陳腐化検出(2c-4)", () => {
       catalogFor: () => ({ fingerprint: "fp-catalog-1" }),
     });
 
-    const record = await fixations.fixate({ pinnedSpec: await l2Spec(), approver });
+    const record = await fixations.fixate({ pinnedSpec: await l1Spec(), approver });
     expect(record.catalogFingerprint).toBe("fp-catalog-1");
     expect(storage.fixed.get(record.intentHash)?.catalogFingerprint).toBe("fp-catalog-1");
   });
@@ -1165,7 +1171,7 @@ describe("固定化の陳腐化検出(2c-4)", () => {
     const storage = storageWithFixations();
     const fixations = createFixations({ lineage: createLineage({ storage }), storage });
 
-    const record = await fixations.fixate({ pinnedSpec: await l2Spec(), approver });
+    const record = await fixations.fixate({ pinnedSpec: await l1Spec(), approver });
     expect("catalogFingerprint" in record).toBe(false);
   });
 
