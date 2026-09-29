@@ -1,7 +1,7 @@
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import type { CSSProperties, ReactNode } from "react";
 import { V } from "../../theme.js";
-import { TIER_COLOR } from "../../tiers.js";
+import { lineageTierCell } from "../../tiers.js";
 import { Empty } from "../../ui.js";
 import type { DevToolsMessages } from "../messages.js";
 
@@ -13,6 +13,19 @@ const summary: CSSProperties = {
   fontFamily: "ui-monospace, monospace",
   cursor: "pointer",
 };
+
+function TierLabel(props: { event: LineageEventRecord }): ReactNode {
+  const cell = lineageTierCell(props.event);
+  if (cell == null) return null;
+  return (
+    <span
+      style={{ color: cell.color || V.subtle, fontWeight: 700 }}
+      data-kohaku-tier-kind={cell.gate ? "gate" : "composition"}
+    >
+      {cell.text}
+    </span>
+  );
+}
 
 /** Every lineage event found under the request's correlationId, in append order, each expandable to its
  * raw payload (the decision flow's underlying evidence). */
@@ -26,11 +39,7 @@ export function LineagePanel(props: { events: LineageEventRecord[]; messages: De
           <summary style={summary}>
             <span style={{ color: V.muted, whiteSpace: "nowrap" }}>{e.ts.slice(11, 19)}</span>
             <span style={{ fontWeight: 700 }}>{e.type}</span>
-            {typeof e.payload["tier"] === "string" && (
-              <span style={{ color: TIER_COLOR[e.payload["tier"]] ?? V.subtle, fontWeight: 700 }}>
-                {e.payload["tier"]}
-              </span>
-            )}
+            <TierLabel event={e} />
           </summary>
           <pre
             style={{
