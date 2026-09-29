@@ -63,6 +63,37 @@ def test_chart_downgrades_to_spreadsheet() -> None:
     assert result.spec.provenance.fallback.kind == "negotiation"
 
 
+def test_existing_generation_fallback_is_kept() -> None:
+    """A generation fallback marks deterministic output; negotiation must not overwrite it."""
+    provenance = {
+        "tier": "L1",
+        "composedBy": "test",
+        "cache": "miss",
+        "fallback": {"from": "L1", "reason": "generation exhausted", "kind": "generation"},
+    }
+    spec = _spec(
+        [
+            {
+                "id": "root",
+                "type": "presentChart",
+                "version": "1.1.0",
+                "props": {"kind": "bar", "x": "r", "y": "v"},
+                "data": {"$ref": "query://s/p"},
+            }
+        ],
+        provenance=provenance,
+    )
+    surface = SurfaceCapabilities(
+        supports={"presentSpreadsheet": "*", "presentMarkdown": "*", "layout.stack": "*"}
+    )
+    result = negotiate(spec, _CATALOG, surface)
+    assert len(result.downgrades) == 1
+    assert result.spec.components[0].type == "presentSpreadsheet"
+    assert result.spec.provenance.fallback is not None
+    assert result.spec.provenance.fallback.kind == "generation"
+    assert result.spec.provenance.fallback.reason == "generation exhausted"
+
+
 def test_chain_to_terminal_markdown() -> None:
     """On a surface that also lacks presentChart -> spreadsheet, it chains down to presentMarkdown."""
     spec = _spec(

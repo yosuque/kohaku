@@ -45,6 +45,48 @@ describe("negotiate (capability negotiation)", () => {
     expect(out.provenance.fallback?.kind).toBe("negotiation");
   });
 
+  it("keeps an existing generation fallback (or one without a kind) instead of overwriting it", () => {
+    const supports = {
+      "layout.stack": "^1.0.0",
+      "text.heading": "^1.0.0",
+      presentSpreadsheet: "^1.0.0",
+      presentMarkdown: "^1.0.0",
+    };
+    for (const existing of [
+      { from: "L2", reason: "generation exhausted", kind: "generation" as const },
+      { from: "L2", reason: "generation exhausted" },
+    ]) {
+      const base = spec();
+      const input = { ...base, provenance: { ...base.provenance, fallback: existing } };
+      const { spec: out, downgrades } = negotiate(input, catalog, { supports });
+      // The downgrade still happens and is reported, but the deterministic-output marker survives.
+      expect(downgrades).toHaveLength(1);
+      expect(out.components.find((c) => c.id === "chart1")?.type).toBe("presentSpreadsheet");
+      expect(out.provenance.fallback).toEqual(existing);
+    }
+  });
+
+  it("replaces an earlier negotiation fallback with the new negotiation trace", () => {
+    const base = spec();
+    const input = {
+      ...base,
+      provenance: {
+        ...base.provenance,
+        fallback: { from: "old:x", reason: "capability negotiation", kind: "negotiation" as const },
+      },
+    };
+    const { spec: out } = negotiate(input, catalog, {
+      supports: {
+        "layout.stack": "^1.0.0",
+        "text.heading": "^1.0.0",
+        presentSpreadsheet: "^1.0.0",
+        presentMarkdown: "^1.0.0",
+      },
+    });
+    expect(out.provenance.fallback?.kind).toBe("negotiation");
+    expect(out.provenance.fallback?.from).toContain("chart1:presentChart");
+  });
+
   it("falls to the presentMarkdown terminal when the chain is exhausted", () => {
     const { spec: out, downgrades } = negotiate(spec(), catalog, {
       supports: {
