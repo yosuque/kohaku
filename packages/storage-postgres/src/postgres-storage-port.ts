@@ -42,11 +42,15 @@ function correlationForColumn(correlationId: string | null): string | null {
 export function createPostgresStoragePort(options: PostgresStoragePortOptions): PostgresStoragePort {
   const { pool, ready: poolReady, close } = createPostgresPool(options);
   const schema = options.schema ?? DEFAULT_SCHEMA;
-  // `migrate: false` leaves the schema to the operator, so verify (read-only, cheap, retried on every call
-  // until it passes) that it has what `appendLineage` writes instead of losing audit events to 42703.
+  // `migrate: false` leaves the schema to the operator, so verify (read-only) that it has what
+  // `appendLineage` writes instead of losing audit events to 42703. A pass is remembered; a failure is not,
+  // so an operator can apply the DDL and the next call succeeds without a restart.
+  let schemaVerified = options.migrate !== false;
   const ready = async (): Promise<void> => {
     await poolReady();
-    if (options.migrate === false) await assertLineageSchemaCurrent(pool, schema);
+    if (schemaVerified) return;
+    await assertLineageSchemaCurrent(pool, schema);
+    schemaVerified = true;
   };
   const tables = {
     spec: qualifiedTable(schema, "kohaku_spec_cache"),

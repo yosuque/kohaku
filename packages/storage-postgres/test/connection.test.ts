@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertLineageSchemaCurrent, createPostgresPool } from "../src/connection.js";
+import { createPostgresStoragePort } from "../src/postgres-storage-port.js";
 
 // A fully mocked `pg` module: `createPostgresPool` is the single place the owned-`Pool` construction
 // (timeouts, `max`, the `error` listener) and the `ready()` migration transaction live, so both are
@@ -369,6 +370,27 @@ describe("createPostgresPool: ready() migration transaction", () => {
       const query = vi.fn(async () => ({ rows: [catalog], rowCount: 1 }));
       return { query } as unknown as Pool;
     }
+
+    it("createPostgresStoragePort runs the catalog check once across successful calls, and re-runs it after a failure", async () => {
+      const catalogRow = { has_table: true, has_column: false };
+      const query = vi.fn(async (sql: string) =>
+        sql.includes("has_column") ? { rows: [catalogRow], rowCount: 1 } : { rows: [], rowCount: 0 },
+      );
+      const port = createPostgresStoragePort({ pool: { query } as unknown as Pool, migrate: false });
+      const catalogCalls = () =>
+        query.mock.calls.filter(([sql]) => String(sql).includes("has_column")).length;
+
+      await expect(port.ready()).rejects.toThrow(/no correlation_id column/);
+      await expect(port.ready()).rejects.toThrow(/no correlation_id column/);
+      expect(catalogCalls()).toBe(2); // a failing check is not remembered
+
+      catalogRow.has_column = true;
+      await port.ready();
+      await port.ready();
+      await port.getSpecCache("k");
+      await port.getSpecCache("k");
+      expect(catalogCalls()).toBe(3); // one passing check, then none
+    });
 
     it("assertLineageSchemaCurrent fails fast, naming the missing DDL and the README section", async () => {
       const pool = poolWithCatalog({ has_table: true, has_column: false });
