@@ -337,6 +337,25 @@ describe("kohaku evidence export --since / --until normalization", () => {
   }, 30_000);
 });
 
+describe("kohaku evidence usage errors", () => {
+  const bin = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "kohaku.js");
+  const run = (...args: string[]) =>
+    spawnSync(process.execPath, [bin, "evidence", ...args], { encoding: "utf8" });
+
+  it("exits 2 (not 1, which means an invalid pack) for commander's own usage errors", () => {
+    const missingKey = run("verify", tmp("kohaku-evidence-usage-"));
+    expect(missingKey.status).toBe(2);
+    expect(missingKey.stderr).toContain("--public-key");
+    expect(run("verify", "--no-such-option").status).toBe(2);
+    expect(run("export", "--data-dir", "x").status).toBe(2);
+  }, 60_000);
+
+  it("keeps --help at exit 0", () => {
+    expect(run("verify", "--help").status).toBe(0);
+    expect(run("export", "--help").status).toBe(0);
+  }, 60_000);
+});
+
 describe("kohaku evidence verify (security hardening)", () => {
   async function exportedPack(): Promise<{ outDir: string; publicKeyPath: string; privateKeyPath: string }> {
     const dataDir = tmp("kohaku-evidence-data-");
@@ -372,6 +391,28 @@ describe("kohaku evidence verify (security hardening)", () => {
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.includes("events.jsonl") && e.includes("symlink"))).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a FIFO planted at a listed path instead of blocking on it, and reports an unlisted one as unexpected",
+    async () => {
+      const { outDir, publicKeyPath } = await exportedPack();
+      const eventsPath = join(outDir, "events.jsonl");
+      rmSync(eventsPath);
+      expect(spawnSync("mkfifo", [eventsPath]).status).toBe(0);
+      const listed = await runEvidenceVerify(outDir, publicKeyPath);
+      expect(listed.ok).toBe(false);
+      expect(listed.errors.some((e) => e.includes("events.jsonl") && e.includes("not a regular file"))).toBe(
+        true,
+      );
+
+      const second = await exportedPack();
+      expect(spawnSync("mkfifo", [join(second.outDir, "extra.pipe")]).status).toBe(0);
+      const unlisted = await runEvidenceVerify(second.outDir, second.publicKeyPath);
+      expect(unlisted.ok).toBe(false);
+      expect(unlisted.errors.some((e) => e.includes("extra.pipe") && e.includes("unexpected"))).toBe(true);
+    },
+    30_000,
+  );
 
   it("refuses a file whose on-disk size differs from the manifest's recorded bytes, without buffering it (bounded reads)", async () => {
     const { outDir, publicKeyPath } = await exportedPack();
