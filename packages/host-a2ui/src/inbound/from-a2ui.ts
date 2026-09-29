@@ -16,7 +16,7 @@ import { A2uiIngestError, getAtPointer, getRootComponent, type SurfaceState } fr
  * Converts an accumulated `SurfaceState` (a third-party A2UI agent's surface, or kohaku's own re-ingested
  * output) into a kohaku `UISpec`. This is the counterpart of `toA2ui`, but not its exact inverse: a
  * genuinely third-party surface carries no `KohakuSidecar`, so most of the mapping below is the best-effort,
- * potentially-lossy reconstruction described in the F3 brief (`§4`), not a lossless replay. **No LLM is ever
+ * potentially-lossy reconstruction described in SPEC.md §6.3 ("Inbound A2UI (ingest)"), not a lossless replay. **No LLM is ever
  * called here** — every unrepresentable case is handled deterministically (a fixed placeholder, or a thrown
  * error), never regenerated.
  */
@@ -27,6 +27,16 @@ export type A2uiIngestLossKind =
   | "template-children"
   | "function-call-value"
   | "binding-snapshotted";
+
+/**
+ * True for a loss that replaced a component with a placeholder (everything except `"binding-snapshotted"`).
+ * Only these make the converted Spec a degraded rendering (`provenance.fallback`, `view.fallback`, not
+ * fixatable): a snapshotted `{path}` binding is ordinary A2UI, always representable as a literal, just not
+ * live, so it stays in `losses` alone (SPEC.md §6.3, "Loss policy").
+ */
+export function isPlaceholderLoss(loss: { kind: A2uiIngestLossKind }): boolean {
+  return loss.kind !== "binding-snapshotted";
+}
 
 /** One recorded loss (kept even in the common case of zero losses, so a caller can always check `.length`). */
 export interface A2uiIngestLoss {
@@ -49,7 +59,7 @@ export interface A2uiIngestLoss {
 export const A2UI_FORWARD_ACTION = "a2ui.forward";
 
 export interface FromA2uiOptions {
-  /** The Spec's Intent (already resolved/hashed by the caller — see `createA2uiIngest`, task 5). */
+  /** The Spec's Intent (already resolved/hashed by the caller — see `createA2uiIngest`). */
   intent: CanonicalIntent;
   /** The Spec's dataVersion (already derived by the caller). */
   dataVersion: string;
@@ -184,11 +194,11 @@ interface ConvertCtx {
  * surface's data model here — `ctx.bindPath` is consulted only for a component's own `"data"` prop (see
  * `convertDataBinding`, the one place a binding can become a live `ComponentNode.data.$ref` instead of a
  * literal); every other position (an ordinary display prop, an event's `context`) has no structural home for
- * a live reference at all, so this always just snapshots and records the loss, never calling `bindPath`.
- * This always succeeds, it never throws. A function-call value throws `UnmappableSignal` (fromA2ui cannot
- * execute it), demoting the *whole* containing component to a placeholder — a computed value is not a
- * "leave this one field null" situation, since the value's meaning wasn't just uncertain, it was never asked
- * for from a fixed data source at all.
+ * a live reference at all, so a binding always just snapshots (an absent path becomes `null`) and records a
+ * `"binding-snapshotted"` loss, never calling `bindPath`. A function-call value is the one case that does
+ * not resolve: it throws `UnmappableSignal` (fromA2ui cannot execute it), demoting the *whole* containing
+ * component to a placeholder — a computed value is not a "leave this one field null" situation, since the
+ * value's meaning wasn't just uncertain, it was never asked for from a fixed data source at all.
  */
 function resolveValue(value: A2uiValue, ctx: ConvertCtx, componentId: string, hint: string): JsonValue {
   if (isBindingValue(value)) {
@@ -258,7 +268,7 @@ function resolveChildren(node: A2uiComponent): ChildrenResolution {
 /**
  * Maps a firing component's `action` onto a kohaku `EventBinding` pushed onto `ctx.events`, so the ingested
  * Spec is genuinely interactive in kohaku's own renderer (not just visually reconstructed) and a later
- * interaction can be routed back to the original agent via `toA2uiClientAction` (task 6). Only `action.event`
+ * interaction can be routed back to the original agent via `toA2uiClientAction`. Only `action.event`
  * produces one: `emit: "action.invoke"` is the closest existing kohaku emit kind to "an opaque client
  * interaction the server/agent should hear about" (the same kind kohaku's own outbound `action.button`
  * fixtures use — see `to-a2ui.ts`'s test suite). A `functionCall` action is client-local by A2UI's own
@@ -494,9 +504,16 @@ export function fromA2ui(surface: SurfaceState, opts: FromA2uiOptions): FromA2ui
   }
 
   const provenance: UISpec["provenance"] = { tier: "L1", composedBy: "a2ui-ingest", cache: "miss" };
-  if (losses.length > 0) {
-    const first = losses[0]!;
-    provenance.fallback = { from: first.componentId, reason: first.detail, kind: "negotiation" };
+  // Only a loss that substituted a placeholder degrades the Spec (SPEC.md §6.3 "Loss policy"); a snapshotted
+  // `{path}` binding is ordinary A2UI and must not mark the Spec as a fallback (which would also make it
+  // unfixatable).
+  const firstPlaceholder = losses.find(isPlaceholderLoss);
+  if (firstPlaceholder != null) {
+    provenance.fallback = {
+      from: firstPlaceholder.componentId,
+      reason: firstPlaceholder.detail,
+      kind: "negotiation",
+    };
   }
 
   const spec: UISpec = {
