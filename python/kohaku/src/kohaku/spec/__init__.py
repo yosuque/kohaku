@@ -51,6 +51,7 @@ from .lineage_page import (
 )
 from .models import (
     ACCEPTED_SPEC_VERSIONS,
+    MAX_JSON_OBJECT_DEPTH,
     MAX_PREDICATE_DEPTH,
     MAX_PREDICATE_ITEMS,
     SANDBOX_HTML_TYPE,
@@ -76,6 +77,7 @@ from .models import (
     SpecPatch,
     UISpec,
     VisibleWhen,
+    json_depth_ok,
     predicate_depth,
 )
 from .parse import (
@@ -196,6 +198,7 @@ __all__ = [
     "KOHAKU_POLICY_FILE_VERSION",
     "MAX_BIND_VARIANTS",
     "MAX_LINEAGE_PAGE_SIZE",
+    "MAX_JSON_OBJECT_DEPTH",
     "MAX_PREDICATE_DEPTH",
     "MAX_PREDICATE_ITEMS",
     "ROOT_COMPONENT_ID",
@@ -329,6 +332,7 @@ __all__ = [
     "merge_policy_sections",
     "normalize_intent",
     "normalize_json_value",
+    "json_depth_ok",
     "order_components",
     "page_lineage_events",
     "parse_patch",

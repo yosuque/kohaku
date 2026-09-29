@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from typing import Any
 
 import pytest
 
+from kohaku.composer import ComposeContext, ComposeError, IntentComposeInput, compose
 from kohaku.llm import (
     GenerateObjectRequest,
     GenerateObjectResult,
@@ -21,6 +23,7 @@ from kohaku.llm import (
     LlmErrorCode,
     LlmUsage,
 )
+from kohaku.registry import core_catalog, resolve_catalog
 from kohaku.spec import (
     GuiAction,
     IntentInput,
@@ -30,9 +33,10 @@ from kohaku.spec import (
     SessionContext,
     finalize_intent,
 )
+from kohaku.storage import FileStoragePort
 from sales_api.domain import SalesRepo
 from sales_api.intents_catalog import IntentCatalog
-from sales_api.semantic_port import create_semantic_port, fiscal_period_of
+from sales_api.semantic_port import UnknownIntentError, create_semantic_port, fiscal_period_of
 
 CTX = SessionContext(surface="web", locale="ja")
 
@@ -279,6 +283,34 @@ class TestResolveAndShape:
         )
         handles = asyncio.run(port.resolve_query(intent))  # type: ignore[attr-defined]
         assert [h.uri for h in handles] == ["query://sales/trend?granularity=month&metric=revenue"]
+
+    def test_resolve_query_on_an_unknown_intent_raises_a_typed_client_safe_error(self) -> None:
+        port = _make_port(_FixedLlm({}))
+        intent = finalize_intent(IntentInput(canonical="sales.nope", params={}))
+        with pytest.raises(UnknownIntentError) as info:
+            asyncio.run(port.resolve_query(intent))  # type: ignore[attr-defined]
+        error = info.value
+        assert error.code == "UNKNOWN_INTENT"
+        # clientSafe is the explicit opt-in composer's SEMANTIC_FAILED wrapping requires (a bare `code` is not enough).
+        assert error.clientSafe is True
+        assert error.canonical == "sales.nope"
+        # Identical to the TS UnknownIntentError message.
+        assert str(error) == 'unknown intent "sales.nope"'
+
+    def test_compose_reports_the_unknown_intent_name_in_semantic_failed(self, tmp_path: Any) -> None:
+        async def run() -> None:
+            ctx = ComposeContext(
+                catalog=resolve_catalog(core_catalog()),
+                semantic=_make_port(_FixedLlm({})),  # type: ignore[arg-type]
+                storage=FileStoragePort(tmp_path),
+                llm=_FixedLlm({}),
+            )
+            input = IntentComposeInput(intent=IntentInput(canonical="sales.nope", params={}))
+            with pytest.raises(ComposeError, match=r'^query resolution failed: unknown intent "sales\.nope"$') as info:
+                await compose(input, ctx)
+            assert info.value.code == "SEMANTIC_FAILED"
+
+        asyncio.run(run())
 
     def test_data_version(self) -> None:
         repo = SalesRepo()

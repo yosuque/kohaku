@@ -2,8 +2,8 @@
  * Records real-LLM responses for every `requiresFixtures: true` scenario (`../src/scenarios.ts`) into
  * `../fixtures/<scenario.id>.json`, so the playground's `ReplayLlm` can replay them offline.
  *
- * **This script has never been run.** Recording with a real LLM was deliberately postponed by the user on
- * 2026-09-27 (see `reports/u5-3.md`) — writing it was in scope for u5-3, running it was not. Treat it as
+ * **This script has never been run.** Recording with a real LLM has been deliberately postponed (see
+ * docs/user-guide.md §10) — writing this script was in scope, running it was not. Treat it as
  * reviewed-but-unverified: the API calls it makes (compose, then, for a `promotion` scenario, list + approve)
  * are believed correct from reading `packages/host-rest/src/routes/compose.ts` and
  * `packages/host-rest/src/routes/promotions.ts`, but nothing has actually exercised this file end to end.

@@ -115,6 +115,16 @@ interface DomainPort {
 ```
 Invariants (consistency) are upheld by the domain module behind this. For read operations, the return of `invoke` is recommended to be TabularData. **`listOperations` must also enumerate write operations** (those invoked via `action.invoke`, e.g. the sample's `annotate`), not only `query://` reads: hosts restrict a composed capability's write scopes to the names it returns (see "Capability issuance scope" below), silently dropping any `action.invoke` action a composed UI declares that is not listed.
 
+**Governed Actions fields of `OperationDescriptor`** (design.md #62/#63; normative requirements in SPEC §5 ACT-PRM-001 / ACT-APR-001 / ACT-CNF-001): a write operation may declare, besides `name` / `description` / `resultShape?`:
+
+| Field | Meaning |
+|---|---|
+| `tier?` | `"auto"` (default when omitted: no gate, the pre-existing behavior) / `"confirm"` (the request must carry `confirmed: true`) / `"approve"` (the request must carry a bound approval token minted by `POST /approvals`, §5.4). Unrelated to the L0/L1/L2 composition tier ladder. |
+| `paramsSchema?` | A JSON Schema in kohaku's own closed subset (`type`, `properties`, `required`, `additionalProperties: false`, `enum`, `minimum`/`maximum`, `minLength`/`maxLength`, `items`, `maxItems`, `x-message`; **no** `pattern`). Validated at attach time (host-core's `createOperationIndex`) and, per invoke, against the payload (`validateActionParams`) before `DomainPort.invoke` runs; a payload failure is 422 `ACTION_PARAMS_INVALID` (§5). It also doubles as the semantic-layer document in the LLM prompt. |
+| `confirmMessage?` | Human-readable prompt a `"confirm"`-tier gate shows before setting `confirmed: true` (renderer-core's `preflightAction`); ignored for other tiers. |
+
+The same three values reach the client as the `actions` manifest of a compose response (§5.1), so a renderer can pre-check before ever calling `POST /binding/action`.
+
 ### 4.2 SemanticPort — Intent normalization and deterministic query resolution
 
 ```ts
@@ -177,6 +187,25 @@ The Spec envelope **has no theme** (SPEC-ENV-003 — a UI Spec is structure only
 - **Aliases**: `color.danger`→`color.negative`, `color.focus`→`color.primary` (they have no concrete entry in the default theme and resolve solely via the alias table).
 - For the full list of tokens, the light/dark defaults, and the dark-mode WCAG AA policy, see [design.md §7.2](design.md). Apps use it composed as base + brand delta in the form `{ ...defaultDarkTheme, ...brand }`.
 
+### 4.7 Optional governance Ports (ApprovalPort / ApprovalStore / RateLimitStore)
+
+Not among the four Ports a product must implement: each is optional, wired through `KohakuHostDeps` (REST) / `McpHostDeps` (MCP Apps), and defined in `packages/spec-core/src/ports.ts`.
+
+```ts
+interface ApprovalPort {  // design.md #63
+  issueApproval(input: { action, payloadHash, requesterId, approverId, tenant? }, opts?: { ttlSeconds? }): Promise<string>;
+  verifyApproval(token, req: { action, payloadHash, requesterId, tenant? }): Promise<{ ok, grant?: ApprovalGrant, reason? }>;
+}
+interface ApprovalStore { consume(jti, expiresAt): Promise<boolean>; close?(): Promise<void> }
+interface RateLimitStore { take(key, cost, rule: { capacity, refillPerSecond }, nowMs): Promise<{ allow, retryAfterMs? }> }
+```
+
+- **`ApprovalPort`** issues and verifies the stateless approval token an `"approve"`-tier action requires (SPEC ACT-APR-001). A token is bound to `(action, payloadHash, requesterId, tenant)` plus an expiry (`DEFAULT_APPROVAL_TTL_SECONDS` = 300 s) and a unique `jti`; `issueApproval` MUST refuse `approverId === requesterId` (no self-approval). A denial (expired, malformed, wrong binding, already consumed) is `{ ok: false, reason }`; `verifyApproval` throws only for an infrastructure failure it cannot classify, which a host treats fail-closed as a denial. A concrete token format MUST NOT be interchangeable with a capability token. Reference implementation: `createHmacApprovalPort(secret, { store?, ttlSeconds? })` in `@kohaku-ui/authz-hmac` (its own `"kohaku-approval.v1."` signing-domain prefix). Without an `ApprovalPort`, an `"approve"`-tier action can never be allowed and `POST /approvals` is 501 `NOT_IMPLEMENTED`.
+- **`ApprovalStore`** is the optional single-use backing for the port: `consume` atomically marks a `jti` consumed until `expiresAt` (epoch seconds) and returns `false` on a replay; `verifyApproval` MUST call it exactly once per attempt and deny on `false` or a throw. Reference: `createMemoryApprovalStore()`. With no store, a token is reusable until it expires.
+- **`RateLimitStore`** is the token-bucket store behind the rate-limit policy (`REST-RL-001`): `take` consumes `cost` tokens from the bucket `key` under `rule`, using the caller-supplied clock `nowMs` (the store never reads the clock itself), and on denial returns a `retryAfterMs` estimate. It carries no cross-process locking of its own — a distributed backing store implements `take` atomically on its side. Reference: `createMemoryRateLimitStore()` in `@kohaku-ui/host-core`; `createRateLimiter(store)` builds the bucket key from `(tenant, principal, routeClass)` and is fail-open on a store error.
+
+`@kohaku-ui/port-contracts` exports `describeApprovalPortContract` / `describeRateLimitStorePortContract`; every adapter must pass them, the same as the four core Ports.
+
 ## 5. REST API reference (host-rest)
 
 Mount example: `app.route("/api/kohaku", createKohakuRoutes(deps))`. Errors use a common envelope across all routes:
@@ -185,13 +214,15 @@ Mount example: `app.route("/api/kohaku", createKohakuRoutes(deps))`. Errors use 
 { "error": { "code": "CAPABILITY_DENIED", "message": "…" } }
 ```
 
-Codes: `BAD_REQUEST` (400) / `INTENT_INVALID` (422) / `CAPABILITY_REQUIRED` (401) / `CAPABILITY_DENIED` (403) / `REF_NOT_FOUND` (404) / `SOURCE_MISMATCH` (404) / `NOT_FOUND` (404) / `PROMOTION_INVALID` (422) / `PROMOTION_NOT_PUBLISHED` (409) / `COMPOSE_FAILED` (500) / `INTERNAL` (500, or 503 when `authz.verify` rejects for an infrastructure reason — message `capability verification unavailable`, see §4.3) / `NOT_IMPLEMENTED` (501) / `RATE_LIMITED` (429, when a rate-limit policy is configured — see the user guide's budget/rate-limit section). `NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` are for the named control-plane routes (promotions) (§5.4).
+Codes: `BAD_REQUEST` (400) / `INTENT_INVALID` (422) / `CAPABILITY_REQUIRED` (401) / `CAPABILITY_DENIED` (403) / `REF_NOT_FOUND` (404) / `SOURCE_MISMATCH` (404) / `NOT_FOUND` (404) / `PROMOTION_INVALID` (422) / `PROMOTION_NOT_PUBLISHED` (409) / `COMPOSE_FAILED` (500) / `INTERNAL` (500, or 503 when `authz.verify` rejects for an infrastructure reason — message `capability verification unavailable`, see §4.3) / `NOT_IMPLEMENTED` (501) / `RATE_LIMITED` (429, when a rate-limit policy is configured — see the user guide's budget/rate-limit section) / `ACTION_PARAMS_INVALID` (422, `POST /binding/action` payload failed the action's `paramsSchema` before `DomainPort.invoke` ran — SPEC ACT-PRM-001) / `APPROVAL_REQUIRED` (403, the action's tier gate — `"confirm"` without `confirmed: true`, or `"approve"` without a valid unused bound token — was not satisfied — SPEC ACT-APR-001 / ACT-CNF-001). `NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` are for the named control-plane routes (promotions) (§5.4).
 
 Since the code set is a wire contract, the types `HostErrorCode` / `ErrorEnvelope` are **defined by `@kohaku-ui/spec-core`** (host-rest keeps the server-side generation helper `errorBody` while re-exporting them for backward compatibility). On the client side, using **`@kohaku-ui/client`** (a typed host client SDK) that handles these with types lets you receive responses like `{spec, capability}` and `{error:{code,message}}` as the discriminable exception `KohakuHostError` (`code: HostErrorCode` / `status` / `requestId`) (avoiding the collapse of codes into a bare string that hand-written fetch produces). For SDK usage, see the user guide §6 "Calling from a client."
 
 `ErrorEnvelope.error` also carries an optional **`status`**, present only on the 409 `PROMOTION_NOT_PUBLISHED` envelope: the promotion state the batch transition stopped at (e.g. `"judge_failed"`), **distinct from the HTTP status code of the response itself**. The client SDK exposes it as `KohakuHostError.promotionStatus` (named apart from `KohakuHostError.status`, which is the HTTP status, to avoid confusing the two).
 
 `ErrorEnvelope.error` also carries an optional **`retryAfterMs`**, present only on the 429 `RATE_LIMITED` envelope (SPEC §6.1, REST-RL-001): the suggested backoff in milliseconds, mirroring the HTTP `Retry-After` header a rate-limiting host also sets. The client SDK exposes it as `KohakuHostError.retryAfterMs`.
+
+`ErrorEnvelope.error` also carries two more optional fields, each present only on one governed-action code (SPEC §6.1): **`issues`** on the 422 `ACTION_PARAMS_INVALID` envelope — the per-field problems `validateActionParams` returned, an array of `{ path, code, message }` — and **`approval`** on the 403 `APPROVAL_REQUIRED` envelope — the pending-approval descriptor `{ requestId, action, tier: "confirm" | "approve", payloadHash }`. `approval.requestId` is a fresh opaque identifier for this approval request, distinct from `error.requestId` (which correlates the error response itself to server logs); `payloadHash` is the value an approver passes to `POST /approvals` (§5.4). The client SDK exposes them as `KohakuHostError.issues` / `KohakuHostError.approval`.
 
 **Error-message policy for unexpected failures**: a 500 (`INTERNAL` / `COMPOSE_FAILED`) response, and the 404 `REF_NOT_FOUND` a raw `DomainPort.invoke` failure maps to, never echo the underlying exception's message to the client — it may carry internals (SQL fragments, stack-trace text, downstream-library wording) unsafe to expose — and instead use a fixed, host-authored message; a "typed" error the host's own code produced (`SpecError` / `ComposeError` / `QueryRefError`, or any error carrying a `code`, per `@kohaku-ui/host-core`'s `isTypedHostError`) still has its own message pass through. The original exception always still reaches `onError` (§ above), correlated by the same `requestId` the response carries, so nothing is lost for diagnosis. The MCP Apps profile applies the same policy to its tool-error text.
 
@@ -211,9 +242,9 @@ Since the code set is a wire contract, the types `HostErrorCode` / `ErrorEnvelop
 | Route | Request | Response |
 |---|---|---|
 | `POST /intent/normalize` | `{ input: NLQuery\|GuiAction, session? }` | `{ intent: CanonicalIntent, source: "llm"\|"deterministic" }` |
-| `POST /compose` | `{ intent: {canonical, params} }` or `{ input, session? }` | `{ spec: UISpec, capability: string }` |
+| `POST /compose` | `{ intent: {canonical, params} }` or `{ input, session? }` | `{ spec: UISpec, capability: string, actions?: ActionManifest }` (`actions?` is the Governed Actions manifest, below) |
 | `POST /compose/stream` | Same as `/compose` | SSE: `event: spec {spec, capability, final}` → `event: patch {patch}` → `event: done {specHash, tier, cache}` (or `event: error`). SPEC §6.1.1 [Draft] |
-| `POST /events` | `{ intent: {canonical, params}, event: {on, payload}, session? }` | `{ spec, capability }` (event → GuiAction → recompose) |
+| `POST /events` | `{ intent: {canonical, params}, event: {on, payload}, session? }` | `{ spec, capability, actions? }` (event → GuiAction → recompose) |
 
 - `session` = `{ surface: "web"\|"chat"\|…, sessionId?, locale? }` (recorded in lineage; `locale` is an optional language tag such as `"en"` / `"ja"` — threaded into `SessionContext.locale` for the NL-normalization hint and, in the sample, the per-session output-language policy. See "Output language of generated text" below)
 - **`NLQuery.locale` vs. `session.locale`**: a `{input}` NLQuery's own optional `locale` field is only an NL-normalization hint — when present it takes precedence over `session.locale` for that single purpose (the sample's `normalizeNl` resolves `input.locale ?? ctx.locale`). Output-language selection (`ComposePolicy` / `policyFor`, below) and the fixation short-circuit's language gate (`fixationLookup`) are driven by `session.locale` alone; a per-call `NLQuery.locale` never substitutes for `session.locale` in either of those.
@@ -242,7 +273,11 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 | Route | Authorization | Description |
 |---|---|---|
 | `GET /binding/resolve?ref=<encoded query://…>` | `Authorization: Bearer <capability>` required | Returns TabularData. 401 (none) / 403 (out of scope) / 404 (unknown source/op). The `_` reserved parameters (paging/sorting) are capability-verified against the base ref and merged into the DomainPort |
-| `POST /binding/action` `{action, payload}` | Bearer (write scope) | Direct write path (presentForm submit, etc.) → `{result, invalidates?, refVersions?}` |
+| `POST /binding/action` `{action, payload?, confirmed?, approval?}` | Bearer (write scope) | Direct write path (presentForm submit, etc.) → `{result, invalidates?, refVersions?}`. `confirmed` (boolean) is the same-request acknowledgement a `"confirm"`-tier action requires; `approval` (string, ≤ 4096 chars) is the bound token a `"approve"`-tier action requires (minted by `POST /approvals`, §5.4). Both are ignored for other tiers. Governed Actions gate (below): 422 `ACTION_PARAMS_INVALID` / 403 `APPROVAL_REQUIRED` |
+
+**Governed Actions (design.md #62/#63/#64)**: after the write-scope capability check, `POST /binding/action` runs the action gate before `DomainPort.invoke`, in this order: (1) an `action` absent from `DomainPort.listOperations()` is 403 `CAPABILITY_DENIED` and recorded as `action.denied` with tier `"auto"`; (2) a payload failing the operation's `paramsSchema` is 422 `ACTION_PARAMS_INVALID` with `error.issues`; (3) the tier gate — `"auto"` passes; `"confirm"` passes only with `confirmed: true`; `"approve"` passes only with an `approval` token that verifies against this exact `(action, payloadHash, requesterId, tenant)` (`payloadHash` is the canonical-JSON hash of `payload`), that is unexpired and, when an `ApprovalStore` is configured, not already consumed — otherwise 403 `APPROVAL_REQUIRED` with `error.approval`. A thrown `ApprovalPort.verifyApproval` is a denial (fail-closed). The same body and error envelope apply to the MCP Apps tool `${prefix}_action` as a structured tool error (SPEC MCPAPP-ACT-001).
+
+The `actions` field of `POST /compose` / `POST /events` (and of each `event: spec` payload of `POST /compose/stream`) is the Governed Actions manifest `{ [actionName]: { tier, paramsSchema?, confirmMessage? } }` (SPEC §6.1 [Draft], design.md #64): one entry per write action (`emit: "action.invoke"`) the Spec declares that is also a `DomainPort` operation, with `tier` defaulting to `"auto"`. It sits beside `capability`, outside the Spec, so it never affects `specHash` or the cache key, and it is omitted entirely (never `{}`) when the Spec declares no such action.
 
 The response of `POST /binding/action` is `{result, invalidates?, refVersions?}`. `invalidates` is an array of `query://` URIs (exact match) that the write staled, and `refVersions` is the new per-reference data version (synonymous with the refVersions in §2). They are supplied by the `KohakuHostDeps.actionEffects(action, payload, result)` hook (if unwired, only `{result}` = backward compatible). On success, the client (`BindingClient.invokeAction`) flows `invalidates` onto the data-invalidation bus, causing distant tables to re-resolve in place (**the small loop**; see §6). `DomainPort` is unaltered — the write substance is `domain.invoke`, and only the "declaration" of side effects is separated into `actionEffects`.
 
@@ -275,6 +310,7 @@ The response of `POST /binding/action` is `{result, invalidates?, refVersions?}`
 | `GET /fixations` / `GET /fixations/proposals` | `authorizeGovernance` (when wired) | List of fixated / candidates (uses, sessions, structural stability) |
 | `POST /fixations/approve` | `authorizeGovernance` (when wired) | `{ intent: {canonical, params} }` → pin the current composition result → `{ fixation }`. 422 `COMPOSE_FAILED` if the result is a deterministic fallback Spec (a generation failure must not be pinned as L0); 400 `BAD_REQUEST` if the result is an L2 free-form Spec (governed by the promotion pipeline, not fixation) |
 | `POST /fixations/:intentHash/remove` | `authorizeGovernance` (when wired) | Unfixate → `{ok}` |
+| `POST /approvals` | `authorizeGovernance` (when wired; kind `action.approve`) | body `{ action, payloadHash, requesterId, ttlSeconds? }` (`payloadHash` ≤ 128 chars, `requesterId` ≤ 256, `ttlSeconds` a positive integer ≤ 86400; default `DEFAULT_APPROVAL_TTL_SECONDS` = 300) → `{ approval: <token> }`. The approver's own principal id becomes `approverId`; the token is bound to `(action, payloadHash, requesterId, tenant)`, and the requester presents it as `approval` on `POST /binding/action` for a `"approve"`-tier action (SPEC ACT-APR-001). `requesterId` and `payloadHash` come from the requester's `action.approvalRequested` lineage record (or their 403 `APPROVAL_REQUIRED` response relayed out of band) — the route keeps no pending-request state of its own (design.md #63). 400 `BAD_REQUEST` if the approver is the requester (no self-approval) or the port refuses to issue. `501 NOT_IMPLEMENTED` if no `ApprovalPort` is wired. **Draft** |
 
 **Control-plane authorization (`authorizeGovernance`)**: the audit / control routes (§5.3's `GET /lineage`, `GET /analytics/summary`, `POST /telemetry`, and the promotions / fixations set in this section) pass an authorization decision before each request when the `KohakuHostDeps.authorizeGovernance` hook (optional) is wired, returning 403 `CAPABILITY_DENIED` on refusal. When unwired, it is fail-open (see "Production wiring caution" at the top of §5). `GET /catalog` is exempt from this authorization.
 
@@ -309,6 +345,14 @@ The decision is returned by the composer's `materializeFixation` as `{result, ch
 `GET /api/health` (LLM, seed, catalog version, intent list) / `POST /api/kohaku/admin/bump-data-version` (demo cache-busting; behind identity + governance RBAC, operation `admin.bumpDataVersion`, admin only — registered ahead of the host-rest mount so the same `bodyLimit`/`identity.middleware` apply; disabled under JWT unless `KOHAKU_DEMO_ADMIN_ROUTES=1`, see §9).
 
 Promotion approve/reject/withdraw have been promoted to first-class host-rest named routes (§5.4's `POST /promotions/:id/approve|reject|withdraw`). The former `POST /api/admin/promotions/:id/approve|reject` have been removed, and sample-web's admin surface calls those instead (the reviewer injects the server-side principal, so the client does not declare the approver).
+
+### 5.6 Policy file (Policy as Code)
+
+Not a route: a declarative JSON file that a host loads (host-core's `loadPolicyFile` / `createPolicyRuntime`, design.md #69/#70) to layer per-tenant overrides over the base `ComposePolicy` the product's code supplies. Machine-readable schema: [`spec/schemas/policy.schema.json`](../spec/schemas/policy.schema.json) (generated from `KohakuPolicyFileSchema` in `packages/spec-core/src/schema/policy.ts`; a typo'd key fails at load time, since every object is strict). Shape:
+
+- `version` — literal `1`; `label?` — a human-readable label surfaced in the `policy.applied` audit event; `$schema?` — an editor-completion pointer, not interpreted.
+- `defaults` (required) and `tenants[<tenantId>]` — each a section with the optional parts `compose` (`allowL2`, `maxRepairAttempts`, `refConstraint`, `effort{l1,l2}`, `outputLanguage`, `cacheFailure`, `ttlSeconds`, `budget{perCompose.stopAfterTokens, deadlineMs, dailyTokens}`), `rateLimits` (per route class `compose` / `action` / `resolve`, each a token bucket `{capacity, refillPerSecond}` backing the `RATE_LIMITED` 429 of §5), and `governance.roles` (role → allowed `operation.kind` patterns, consumed by `governancePolicyFromRoles`).
+- Fields that are functions in `ComposePolicy` (`routeTier`, `fewShot`, `designSystem`, `fixedSpecs`, `l2Smoke`, `selectComponents`, `extraRules`) have no schema field and always come from the base policy. Operator guidance (wiring, the one-time cache miss on adoption, the identity caveat): the user guide's "Policy as Code and rate limiting". A successful reload that changes the effective `policyId` is recorded as `policy.applied` (§10).
 
 ## 6. MCP Apps profile (host-mcp-apps)
 
@@ -501,6 +545,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 | `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` | — (unset = protection off) | Comma-separated allowed hosts for DNS-rebinding protection. Enabled only when specified (for localhost-limited operation; e.g. `localhost:8788,127.0.0.1:8788`; via a public tunnel the Host becomes the tunnel's domain, so it is rejected unless enumerated) |
 | `KOHAKU_MCP_PUBLIC_URL` | `http://localhost:{port}` | The base URL for sample-mcp HTTP's static snapshot serving (`/snapshots`). The origin of the URL `kohaku_render_snapshot` returns. Set the tunnel URL when going through a public tunnel (ngrok / cloudflared, etc.) (if unset, a local URL is returned that cannot be opened externally) |
 | `KOHAKU_MCP_SNAPSHOT_TTL_MS` | 86400000 (24h) | The retention TTL (ms) for snapshot HTML files under `.data/snapshots` before the periodic sweep deletes them (each self-contained snapshot is ~1MB and previously accumulated without bound). Non-numeric / `<= 0` falls back to the default (`apps/sample-mcp/src/setup.ts`) |
+| `VITE_KOHAKU_DISCLOSURE` | `off` | **sample-web (and the static playground built from it) only**, read at Vite build/dev time. `attributes` / `label` turns on `SpecView`'s AI-generation disclosure (design.md #66; SPEC-DISC-001) for every Spec the app renders: data attributes on a wrapper, or attributes plus a visible localized label. Anything else is `off` (the DOM is unchanged). The MCP renderer takes the same choice as `bootMcpRenderer`'s `disclosure` option |
 
 ## 10. List of Lineage event types
 
@@ -517,6 +562,11 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 | `intent.fixated` / `intent.unfixated` | intentHash, canonical, structureHash, approver | fixations |
 | `intent.migrated` | intentHash, structureHash, approver, planId? | `Fixations.replace` (design.md #65): a catalog migration rewrote a fixation's `pinnedSpec` in place (deprecated part → its `replacedBy`). Unlike `intent.fixated`, the fixation's identity (`intentHash`/tenant) is unchanged; only the pinned structure and `structureHash` are. `planId` correlates to the `kohaku migrate plan` output that produced the rewrite, when driven via the CLI |
 | `intent.observed` | — | A reservation in the type catalog (not recorded in v0.1) |
+| `action.invoked` | action, payloadHash, tier (`auto`/`confirm`/`approve`), correlationId? | Governed Actions (SPEC LIN-ACT-001): `POST /binding/action`'s gate returned `allow` (params validated, tier satisfied). Recorded **when the gate allows, before `DomainPort.invoke` runs**: it means "allowed by the gate", not "the write succeeded", and an `"approve"` token has already been consumed at that point. Never carries the payload itself, only its hash |
+| `action.denied` | action, payloadHash, tier, reason, correlationId? | An `"approve"`-tier invoke whose presented token did not verify (or no `ApprovalPort` is wired), or an invoke whose action name is not a declared `DomainPort` operation (tier `auto`, rejected before the gate ran) |
+| `action.approvalRequested` | action, payloadHash, tier (`confirm`/`approve`), requestId, payload?, correlationId? | Nothing was presented yet (`"confirm"` without `confirmed: true`, or `"approve"` without a token). `payload` is present only when the recorder is configured with `recordPayload: true` (default: hash only). `requestId` is the same opaque id as the 403 `APPROVAL_REQUIRED` envelope's `approval.requestId`; the approver reads `payloadHash` and the requester's id (the event's actor id) from here to call `POST /approvals` |
+| `action.approved` | action, payloadHash, approverId, requesterId, correlationId? | An `"approve"`-tier invoke whose approval grant was verified and consumed; recorded in addition to `action.invoked` |
+| `policy.applied` | policyId, previousPolicyId?, version, label?, changedPaths[], tenants[] | Host-core's `PolicyRuntime.reload()` changed the effective policy (design.md #69). A byte-identical reload records nothing. The policy file format is §5.6 |
 
 ## 11. conformance
 

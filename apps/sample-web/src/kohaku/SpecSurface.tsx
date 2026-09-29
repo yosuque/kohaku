@@ -17,6 +17,7 @@ import { JA_MESSAGES } from "../i18n/messages.ja.js";
 import { registerSalesImpls } from "../renderer-impls/index.js";
 import { useThemeMode } from "../theme/mode.js";
 import { buildTheme } from "../theme/tokens.js";
+import { DISCLOSURE_MODE } from "./disclosure.js";
 import { tenantHeader } from "./tenant.js";
 
 /**
@@ -121,7 +122,11 @@ export function SpecSurface(props: {
 
   return (
     <RendererProvider value={rendererValue}>
-      <SpecView spec={props.spec} enableViewTransitions={props.enableViewTransitions} />
+      <SpecView
+        spec={props.spec}
+        enableViewTransitions={props.enableViewTransitions}
+        disclosure={DISCLOSURE_MODE}
+      />
     </RendererProvider>
   );
 }

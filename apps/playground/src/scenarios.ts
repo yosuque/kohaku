@@ -1,6 +1,6 @@
 /**
  * The single list of playground scenarios, shared by the UI (`PlaygroundBar`'s example buttons), the
- * fixture recorder (`scripts/record-fixtures.ts`, written but never run — see reports/u5-3.md), the demo
+ * fixture recorder (`scripts/record-fixtures.ts`, written but never run — see docs/user-guide.md §10), the demo
  * bootstrap (`host/bootstrap-demo.ts`), and the drift test (`test/drift/fixtures-drift.test.ts`). Adding a
  * scenario here is the only place any of those four need to change.
  */

@@ -43,6 +43,22 @@ from .fixed_specs import language_of
 from .intents_catalog import FISCAL_YEAR_MAX, FISCAL_YEAR_MIN, IntentCatalog
 
 
+class UnknownIntentError(Exception):
+    """Raised by resolve_query for a canonical the (per-tenant) catalog does not know. Port of TS
+    semantic-llm's UnknownIntentError: `code` is a string discriminator and `clientSafe` is the explicit opt-in
+    composer's SEMANTIC_FAILED wrapping requires before it appends this exception's own message (see
+    kohaku.composer.compose._is_client_safe_cause), so the caller learns *which* Intent was unknown. The
+    message is just the canonical name, which is the caller's own input, so it is safe to show as-is.
+    """
+
+    code = "UNKNOWN_INTENT"
+    clientSafe = True
+
+    def __init__(self, canonical: str) -> None:
+        super().__init__(f'unknown intent "{canonical}"')
+        self.canonical = canonical
+
+
 @dataclass(frozen=True)
 class FiscalPeriod:
     fiscal_year: int
@@ -116,7 +132,7 @@ class SalesSemanticPort:
     ) -> list[QueryHandle]:
         def_ = self._catalog_for(tenant).get(intent.canonical)
         if def_ is None:
-            raise ValueError(f"unknown intent: {intent.canonical}")
+            raise UnknownIntentError(intent.canonical)
         return def_.to_queries(intent.params)
 
     async def data_version(self, handle: QueryHandle) -> str:

@@ -14,7 +14,11 @@ import type { ActionTier, ApprovalGrant, JsonObject, Principal } from "@kohaku-u
  * otherwise-denied) action response.
  */
 export interface ActionAuditRecorder {
-  /** Records a successful invoke (the `ActionGate` returned `allow`). Never includes the payload itself. */
+  /**
+   * Records that the gate allowed an invoke (the `ActionGate` returned `allow`), never the payload
+   * itself. It means "allowed by the gate", not "the write succeeded": a caller records it before
+   * `DomainPort.invoke` runs, and an `"approve"` token has already been consumed by then (SPEC LIN-ACT-001).
+   */
   invoked(args: {
     action: string;
     payloadHash: string;

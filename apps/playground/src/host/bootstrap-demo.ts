@@ -11,7 +11,7 @@ import { RECORDED_SCENARIO_IDS } from "./fixtures.js";
  * itself.
  *
  * A scenario whose fixture has not been recorded yet is skipped, logged via `console.info` rather than
- * thrown: real-LLM recording is postponed (see reports/u5-3.md), so every `promotion`/`fixation` scenario
+ * thrown: real-LLM recording has not been done (see docs/user-guide.md §10), so every `promotion`/`fixation` scenario
  * is skipped today, and this function is a deliberate no-op until `record-fixtures.ts` is actually run.
  */
 export async function bootstrapDemoState(host: SampleApp): Promise<void> {

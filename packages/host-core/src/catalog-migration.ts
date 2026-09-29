@@ -151,17 +151,29 @@ async function computePlanHash(
 }
 
 /**
- * Recomputes `plan.planHash` from the plan's own `rewrites` / `steps` / `blocked` and compares it against
- * the stored value — detects a hand-edited or otherwise corrupted plan (e.g. a `plan.json` round-tripped
- * through an external tool that altered a step's `pinnedSpec` without updating its `afterStructureHash`,
- * or `planHash` itself) before `applyCatalogMigration` ever calls `Fixations.replace`. This is a narrower,
- * cheaper check than re-running `planCatalogMigration` from scratch (it does not need a `catalogFor` or
- * `storage`, so it is available to `apply` even though `apply`'s own options carry neither) — it does not
- * (and cannot, without recomposing) detect that the *catalog itself* has since changed; the per-step TOCTOU
- * guard `applyCatalogMigration` already runs against live storage is what catches that.
+ * Checks a plan's integrity before `applyCatalogMigration` ever calls `Fixations.replace`, on two levels:
+ *
+ * 1. `plan.planHash` is recomputed from the plan's own `rewrites` / `steps` / `blocked` and compared against
+ *    the stored value — this covers `planHash` itself and every field the hash material includes
+ *    (including each step's `afterStructureHash`). The material deliberately excludes each step's full
+ *    `pinnedSpec`, so this level alone cannot see a `pinnedSpec` edit.
+ * 2. Each step's `computeStructureHash(pinnedSpec)` is recomputed and must equal that step's
+ *    `afterStructureHash` — this is what detects a `plan.json` round-tripped through an external tool that
+ *    altered a step's `pinnedSpec` components, events, or state while leaving its hashes alone. An edit to
+ *    the envelope fields `computeStructureHash` excludes (provenance, dataVersion) is not detectable here.
+ *
+ * Neither level needs a `catalogFor` or `storage`, so both are available to a caller that holds only the
+ * plan file. It is a narrower, cheaper check than re-running `planCatalogMigration` from scratch: it does
+ * not (and cannot, without recomposing) detect that the *catalog itself* has since changed — the per-step
+ * revalidation `applyCatalogMigration` runs against the live catalog (`ApplyCatalogMigrationOptions`'s
+ * required `catalogFor`) and the per-fixation TOCTOU guard against live storage are what catch that.
  */
 export async function verifyCatalogMigrationPlan(plan: CatalogMigrationPlan): Promise<boolean> {
-  return (await computePlanHash(plan.rewrites, plan.steps, plan.blocked)) === plan.planHash;
+  if ((await computePlanHash(plan.rewrites, plan.steps, plan.blocked)) !== plan.planHash) return false;
+  for (const step of plan.steps) {
+    if ((await computeStructureHash(step.pinnedSpec)) !== step.afterStructureHash) return false;
+  }
+  return true;
 }
 
 /**

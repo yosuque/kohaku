@@ -103,7 +103,7 @@ export async function migrateApply(options: MigrateApplyOptions): Promise<Catalo
   const plan = JSON.parse(readFileSync(options.planPath, "utf8")) as CatalogMigrationPlan;
   if (!(await verifyCatalogMigrationPlan(plan))) {
     throw new Error(
-      `${options.planPath} failed its integrity check (recomputed planHash does not match the stored one) — ` +
+      `${options.planPath} failed its integrity check (a recomputed planHash or a step's structure hash does not match the stored one) —` +
         "was it hand-edited? Re-run `kohaku migrate plan` and apply the fresh output.",
     );
   }

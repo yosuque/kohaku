@@ -180,7 +180,10 @@ export interface Lineage {
    */
   policyApplied(event: PolicyAppliedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
 
-  /** Records `action.invoked` (design.md #62/#63) -- the ActionGate returned `allow`. */
+  /**
+   * Records `action.invoked` (design.md #62/#63) -- the ActionGate returned `allow`. Recorded before
+   * `DomainPort.invoke` runs, so it does not imply the write succeeded.
+   */
   actionInvoked(event: ActionInvokedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
   /** Records `action.denied` (design.md #63) -- a presented approval token did not verify. */
   actionDenied(event: ActionDeniedPayload, actor?: ActorKind, tenant?: string): Promise<void>;

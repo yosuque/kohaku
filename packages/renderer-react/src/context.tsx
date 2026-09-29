@@ -70,7 +70,8 @@ export interface ImplEntry {
  * omits; skipping it in production would silently make `Component` see `undefined` for a prop its type says
  * is always present. On success, `Component` receives `parsed.data`; on failure it receives the raw
  * (unvalidated) `node.props` instead, matching the renderer's general fail-open policy (a malformed prop
- * should degrade the part's own display, not take down the surface). Only the **diagnostic** — a
+ * should degrade the part's own display, not take down the surface). The parse (and so the warning) runs
+ * once per `node.props` object rather than on every render. Only the **diagnostic** — a
  * `console.warn` on a mismatch — is gated by environment: by default it fires outside a `NODE_ENV=production`
  * build (see `isDevEnvironment`); pass `{ validate }` to force it on or off regardless of environment.
  */
@@ -80,18 +81,25 @@ export function implement<P extends z.ZodObject>(
   options?: { validate?: boolean },
 ): ImplEntry {
   const shouldWarn = options?.validate ?? isDevEnvironment();
+  // Parse once per props object, not once per render: `node.props` keeps its identity for as long as the
+  // Spec does, so re-renders (and the mismatch warning) reuse the first result. Keyed weakly, so a replaced
+  // Spec's props are collected with it.
+  const resolved = new WeakMap<object, z.infer<P>>();
   const Wrapped: ComponentImpl = ({ node, children }: ImplProps) => {
-    const parsed = def.propsSchema.safeParse(node.props);
-    let props: z.infer<P>;
-    if (parsed.success) {
-      props = parsed.data as z.infer<P>;
-    } else {
-      props = node.props as z.infer<P>;
-      if (shouldWarn) {
-        console.warn(
-          `[kohaku] component "${def.type}" (node ${node.id}) received props that don't match its schema: ${parsed.error.message}`,
-        );
+    let props = resolved.get(node.props);
+    if (props === undefined) {
+      const parsed = def.propsSchema.safeParse(node.props);
+      if (parsed.success) {
+        props = parsed.data as z.infer<P>;
+      } else {
+        props = node.props as z.infer<P>;
+        if (shouldWarn) {
+          console.warn(
+            `[kohaku] component "${def.type}" (node ${node.id}) received props that don't match its schema: ${parsed.error.message}`,
+          );
+        }
       }
+      resolved.set(node.props, props);
     }
     return (
       <Component node={node} props={props}>

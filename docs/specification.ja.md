@@ -115,6 +115,16 @@ interface DomainPort {
 ```
 不変条件(整合性)はこの背後のドメインモジュールで守る。`invoke` の戻りは読み取り系なら TabularData を推奨。**`listOperations` は `query://` 読み取りだけでなく書き込み操作(`action.invoke` 経由で呼ばれるもの。例: サンプルの `annotate`)も列挙しなければならない**: ホストは合成された capability の write スコープを、ここが返す名前に制限する(下記「capability の発行スコープ」参照)。合成 UI が宣言した `action.invoke` のアクション名がここに列挙されていない場合、そのスコープは黙って落とされる。
 
+**`OperationDescriptor` の Governed Actions フィールド**(design.md #62/#63。規範要件は SPEC §5 の ACT-PRM-001 / ACT-APR-001 / ACT-CNF-001): 書き込み操作は、`name` / `description` / `resultShape?` に加えて次を宣言できる。
+
+| フィールド | 意味 |
+|---|---|
+| `tier?` | `"auto"`(省略時の既定。ゲート無し=従来どおりの挙動)/ `"confirm"`(リクエストに `confirmed: true` が必要)/ `"approve"`(`POST /approvals`〔§5.4〕が発行する、束縛済みの承認トークンが必要)。L0/L1/L2 の合成 tier とは無関係。 |
+| `paramsSchema?` | kohaku 独自の閉じた部分集合の JSON Schema(`type`、`properties`、`required`、`additionalProperties: false`、`enum`、`minimum`/`maximum`、`minLength`/`maxLength`、`items`、`maxItems`、`x-message`。`pattern` は**無い**)。接続時(host-core の `createOperationIndex`)と、invoke ごとのペイロード検証(`validateActionParams`)で `DomainPort.invoke` の前に検証される。ペイロードの不一致は 422 `ACTION_PARAMS_INVALID`(§5)。LLM プロンプト内の意味層ドキュメントも兼ねる。 |
+| `confirmMessage?` | `"confirm"` tier のゲートが `confirmed: true` を立てる前に表示する人間向けメッセージ(renderer-core の `preflightAction`)。他の tier では無視される。 |
+
+同じ 3 つの値は、compose レスポンスの `actions` マニフェスト(§5.1)としてクライアントにも届くので、Renderer は `POST /binding/action` を呼ぶ前に事前チェックできる。
+
 ### 4.2 SemanticPort — Intent 正規化と決定的クエリ解決
 
 ```ts
@@ -177,6 +187,25 @@ Spec エンベロープは**テーマを持たない**(SPEC-ENV-003 — UI Spec 
 - **alias**: `color.danger`→`color.negative`、`color.focus`→`color.primary`(既定テーマに実体を持たず alias 表のみで解決)。
 - 全トークンの一覧・light/dark 既定値・dark の WCAG AA 方針は [design.ja.md §7.2](design.ja.md) を参照。アプリは `{ ...defaultDarkTheme, ...brand }` の形で基底 + ブランド差分を合成して使う。
 
+### 4.7 任意の統制 Port(ApprovalPort / ApprovalStore / RateLimitStore)
+
+プロダクトが実装すべき 4 つの Port には含まれない。いずれも任意で、`KohakuHostDeps`(REST)/ `McpHostDeps`(MCP Apps)から配線し、定義は `packages/spec-core/src/ports.ts`。
+
+```ts
+interface ApprovalPort {  // design.md #63
+  issueApproval(input: { action, payloadHash, requesterId, approverId, tenant? }, opts?: { ttlSeconds? }): Promise<string>;
+  verifyApproval(token, req: { action, payloadHash, requesterId, tenant? }): Promise<{ ok, grant?: ApprovalGrant, reason? }>;
+}
+interface ApprovalStore { consume(jti, expiresAt): Promise<boolean>; close?(): Promise<void> }
+interface RateLimitStore { take(key, cost, rule: { capacity, refillPerSecond }, nowMs): Promise<{ allow, retryAfterMs? }> }
+```
+
+- **`ApprovalPort`** は `"approve"` tier のアクションが要求する、ステートレスな承認トークンを発行・検証する(SPEC ACT-APR-001)。トークンは `(action, payloadHash, requesterId, tenant)` に束縛され、有効期限(`DEFAULT_APPROVAL_TTL_SECONDS` = 300 秒)と一意な `jti` を持つ。`issueApproval` は `approverId === requesterId` の発行を拒否しなければならない(自己承認の禁止)。拒否(期限切れ・不正形式・束縛の不一致・消費済み)は `{ ok: false, reason }`。`verifyApproval` が throw するのは自力で allow/deny に分類できないインフラ障害のときだけで、ホストはこれを fail-closed で拒否として扱う。具体的なトークン形式は capability トークンと相互に流用できてはならない。実装見本: `@kohaku-ui/authz-hmac` の `createHmacApprovalPort(secret, { store?, ttlSeconds? })`(専用の `"kohaku-approval.v1."` 署名ドメイン接頭辞)。`ApprovalPort` が無いと `"approve"` tier のアクションは決して許可されず、`POST /approvals` は 501 `NOT_IMPLEMENTED`。
+- **`ApprovalStore`** は Port の単回使用を担う任意の永続先: `consume` は `jti` を `expiresAt`(エポック秒)まで消費済みとしてアトミックにマークし、再利用(リプレイ)なら `false` を返す。`verifyApproval` は 1 回の試行につきちょうど 1 回これを呼び、`false` または throw なら拒否しなければならない。実装見本: `createMemoryApprovalStore()`。ストアが無ければトークンは期限まで繰り返し使える。
+- **`RateLimitStore`** はレート制限ポリシー(`REST-RL-001`)の背後にあるトークンバケットのストア: `take` はバケット `key` から `rule` に従って `cost` トークンを消費する。時計は呼び出し側が渡す `nowMs` で、ストア自身は時計を読まない。拒否時は `retryAfterMs` の見積りを返す。プロセス間のロックは持たず、分散ストアは自身の側で `take` をアトミックに実装する。実装見本: `@kohaku-ui/host-core` の `createMemoryRateLimitStore()`。`createRateLimiter(store)` が `(tenant, principal, routeClass)` からバケットキーを作り、ストアのエラーは fail-open。
+
+`@kohaku-ui/port-contracts` が `describeApprovalPortContract` / `describeRateLimitStorePortContract` を export する。4 つの中核 Port と同様、すべてのアダプタはこれに合格しなければならない。
+
 ## 5. REST API リファレンス(host-rest)
 
 マウント例: `app.route("/api/kohaku", createKohakuRoutes(deps))`。エラーは全ルート共通の封筒:
@@ -185,13 +214,15 @@ Spec エンベロープは**テーマを持たない**(SPEC-ENV-003 — UI Spec 
 { "error": { "code": "CAPABILITY_DENIED", "message": "…" } }
 ```
 
-コード: `BAD_REQUEST`(400)/ `INTENT_INVALID`(422)/ `CAPABILITY_REQUIRED`(401)/ `CAPABILITY_DENIED`(403)/ `REF_NOT_FOUND`(404)/ `SOURCE_MISMATCH`(404)/ `NOT_FOUND`(404)/ `PROMOTION_INVALID`(422)/ `PROMOTION_NOT_PUBLISHED`(409)/ `COMPOSE_FAILED`(500)/ `INTERNAL`(500。ただし `authz.verify` がインフラ障害で拒否したときは 503 — メッセージは `capability verification unavailable`、§4.3 参照)/ `NOT_IMPLEMENTED`(501)/ `RATE_LIMITED`(429。レート制限ポリシーが設定されているとき — ユーザーガイドの予算/レート制限節を参照)。`NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` は統制系(promotions)の named ルート用(§5.4)。
+コード: `BAD_REQUEST`(400)/ `INTENT_INVALID`(422)/ `CAPABILITY_REQUIRED`(401)/ `CAPABILITY_DENIED`(403)/ `REF_NOT_FOUND`(404)/ `SOURCE_MISMATCH`(404)/ `NOT_FOUND`(404)/ `PROMOTION_INVALID`(422)/ `PROMOTION_NOT_PUBLISHED`(409)/ `COMPOSE_FAILED`(500)/ `INTERNAL`(500。ただし `authz.verify` がインフラ障害で拒否したときは 503 — メッセージは `capability verification unavailable`、§4.3 参照)/ `NOT_IMPLEMENTED`(501)/ `RATE_LIMITED`(429。レート制限ポリシーが設定されているとき — ユーザーガイドの予算/レート制限節を参照)/ `ACTION_PARAMS_INVALID`(422。`POST /binding/action` のペイロードが、`DomainPort.invoke` の前にアクションの `paramsSchema` の検証に失敗 — SPEC ACT-PRM-001)/ `APPROVAL_REQUIRED`(403。アクションの tier ゲート — `confirmed: true` の無い `"confirm"`、または有効で未使用の束縛済みトークンの無い `"approve"` — を満たしていない — SPEC ACT-APR-001 / ACT-CNF-001)。`NOT_FOUND` / `PROMOTION_INVALID` / `PROMOTION_NOT_PUBLISHED` は統制系(promotions)の named ルート用(§5.4)。
 
 コード集合はワイヤ契約なので、型 `HostErrorCode` / `ErrorEnvelope` は **`@kohaku-ui/spec-core` が定義元**(host-rest はサーバー側生成ヘルパ `errorBody` を残しつつ後方互換で再エクスポート)。クライアント側はこれらを型付きで扱う **`@kohaku-ui/client`**(型付きホストクライアント SDK)を使うと、`{spec, capability}` 等の応答と `{error:{code,message}}` を判別可能例外 `KohakuHostError`(`code: HostErrorCode` / `status` / `requestId`)として受け取れる(手書き fetch でコードが文字列に潰れるのを避ける)。SDK の使い方はユーザーガイド §6「クライアントから叩く」を参照。
 
 `ErrorEnvelope.error` は省略可能な **`status`** も持つ。これは 409 `PROMOTION_NOT_PUBLISHED` エンベロープにのみ現れ、バッチ遷移が止まったプロモーション状態(例: `"judge_failed"`)を示す — **応答自体の HTTP ステータスコードとは別物**。クライアント SDK はこれを `KohakuHostError.promotionStatus` として公開する(HTTP ステータスを表す `KohakuHostError.status` と混同しないよう別名にしている)。
 
 `ErrorEnvelope.error` は省略可能な **`retryAfterMs`** も持つ。これは 429 `RATE_LIMITED` エンベロープにのみ現れ(SPEC §6.1、REST-RL-001)、ミリ秒単位の推奨バックオフを示す — レート制限を行うホストが設定する HTTP `Retry-After` ヘッダと同じ値を運ぶ。クライアント SDK はこれを `KohakuHostError.retryAfterMs` として公開する。
+
+`ErrorEnvelope.error` は、統制された Action のコード 1 つにだけ現れる省略可能なフィールドをさらに 2 つ持つ(SPEC §6.1)。422 `ACTION_PARAMS_INVALID` エンベロープの **`issues`** は `validateActionParams` が返したフィールドごとの問題 `{ path, code, message }` の配列、403 `APPROVAL_REQUIRED` エンベロープの **`approval`** は承認待ちの記述子 `{ requestId, action, tier: "confirm" | "approve", payloadHash }`。`approval.requestId` はこの承認リクエスト用に新しく発行される不透明な識別子で、エラー応答自体をサーバーログと突き合わせる `error.requestId` とは別物。`payloadHash` は承認者が `POST /approvals`(§5.4)に渡す値。クライアント SDK はこれらを `KohakuHostError.issues` / `KohakuHostError.approval` として公開する。
 
 **予期しない失敗に対するエラーメッセージ方針**: 500(`INTERNAL` / `COMPOSE_FAILED`)応答、および生の `DomainPort.invoke` の失敗がマップされる 404 `REF_NOT_FOUND` は、元の例外のメッセージをクライアントにそのまま返さない(SQL の断片・スタックトレース・下流ライブラリの文言など内部情報が漏れる可能性があるため)。代わりに固定のホスト側文言を返す。ホスト自身のコードが生成した「型付き」エラー(`SpecError` / `ComposeError` / `QueryRefError`、または `@kohaku-ui/host-core` の `isTypedHostError` が認識する `code` 付きの例外)はメッセージがそのまま通る。元の例外は常に `onError`(上述)には届き、応答が運ぶのと同じ `requestId` で突合できるので、診断に必要な情報は失われない。MCP Apps プロファイルもツールエラーのテキストに同じ方針を適用する。
 
@@ -211,9 +242,9 @@ Spec エンベロープは**テーマを持たない**(SPEC-ENV-003 — UI Spec 
 | ルート | リクエスト | レスポンス |
 |---|---|---|
 | `POST /intent/normalize` | `{ input: NLQuery\|GuiAction, session? }` | `{ intent: CanonicalIntent, source: "llm"\|"deterministic" }` |
-| `POST /compose` | `{ intent: {canonical, params} }` または `{ input, session? }` | `{ spec: UISpec, capability: string }` |
+| `POST /compose` | `{ intent: {canonical, params} }` または `{ input, session? }` | `{ spec: UISpec, capability: string, actions?: ActionManifest }`(`actions?` は後述の Governed Actions マニフェスト) |
 | `POST /compose/stream` | `/compose` と同一 | SSE: `event: spec {spec, capability, final}` → `event: patch {patch}` → `event: done {specHash, tier, cache}`(または `event: error`)。SPEC §6.1.1 [Draft] |
-| `POST /events` | `{ intent: {canonical, params}, event: {on, payload}, session? }` | `{ spec, capability }`(イベント → GuiAction → 再合成) |
+| `POST /events` | `{ intent: {canonical, params}, event: {on, payload}, session? }` | `{ spec, capability, actions? }`(イベント → GuiAction → 再合成) |
 
 - `session` = `{ surface: "web"\|"chat"\|…, sessionId?, locale? }`(lineage に記録される。`locale` は `"en"` / `"ja"` のような任意の言語タグ — `SessionContext.locale` へ透過され、NL 正規化ヒントと、サンプルではセッション単位の出力言語 policy に使われる。後述「生成テキストの出力言語」参照)
 - **`NLQuery.locale` と `session.locale` の違い**: `{input}` NLQuery 自身が持つ任意の `locale` フィールドは NL 正規化のヒントに過ぎない — 存在する場合、その用途に限り `session.locale` より優先される(サンプルの `normalizeNl` は `input.locale ?? ctx.locale` を解決する)。出力言語の選択(下記 `ComposePolicy` / `policyFor`)と固定化短絡の言語ゲート(`fixationLookup`)はいずれも `session.locale` のみで駆動され、呼び出しごとの `NLQuery.locale` はどちらの代わりにもならない。
@@ -242,7 +273,11 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 | ルート | 認可 | 内容 |
 |---|---|---|
 | `GET /binding/resolve?ref=<encoded query://…>` | `Authorization: Bearer <capability>` 必須 | TabularData を返す。401(なし)/ 403(スコープ外)/ 404(未知 source/op)。`_` 予約パラメータ(ページング/ソート)は base ref で capability 検証し、DomainPort に合流させる |
-| `POST /binding/action` `{action, payload}` | Bearer(write スコープ) | 書き込み直結路(presentForm submit 等)→ `{result, invalidates?, refVersions?}` |
+| `POST /binding/action` `{action, payload?, confirmed?, approval?}` | Bearer(write スコープ) | 書き込み直結路(presentForm submit 等)→ `{result, invalidates?, refVersions?}`。`confirmed`(boolean)は `"confirm"` tier のアクションが要求する同一リクエスト内の確認応答、`approval`(文字列。4096 文字以下)は `"approve"` tier のアクションが要求する束縛済みトークン(`POST /approvals`〔§5.4〕が発行)。どちらも他の tier では無視される。Governed Actions のゲート(後述): 422 `ACTION_PARAMS_INVALID` / 403 `APPROVAL_REQUIRED` |
+
+**Governed Actions(design.md #62/#63/#64)**: write スコープの capability 検査のあと、`POST /binding/action` は `DomainPort.invoke` の前にアクションゲートを次の順で実行する。(1) `DomainPort.listOperations()` に無い `action` は 403 `CAPABILITY_DENIED` で、tier `"auto"` の `action.denied` として記録される。(2) その操作の `paramsSchema` に合わないペイロードは 422 `ACTION_PARAMS_INVALID`(`error.issues` 付き)。(3) tier ゲート — `"auto"` は通過。`"confirm"` は `confirmed: true` があるときだけ通過。`"approve"` は、今回の `(action, payloadHash, requesterId, tenant)`(`payloadHash` は `payload` の正規 JSON ハッシュ)に対して検証に通り、期限内で、`ApprovalStore` が設定されていれば未消費の `approval` トークンがあるときだけ通過。満たさなければ 403 `APPROVAL_REQUIRED`(`error.approval` 付き)。`ApprovalPort.verifyApproval` が throw した場合は拒否として扱う(fail-closed)。同じ body とエラーエンベロープが MCP Apps のツール `${prefix}_action` にも構造化ツールエラーとして適用される(SPEC MCPAPP-ACT-001)。
+
+`POST /compose` / `POST /events`(および `POST /compose/stream` の各 `event: spec` ペイロード)の `actions` フィールドは、Governed Actions マニフェスト `{ [actionName]: { tier, paramsSchema?, confirmMessage? } }`(SPEC §6.1 [Draft]、design.md #64)。Spec が宣言する write アクション(`emit: "action.invoke"`)のうち `DomainPort` の操作でもあるものごとに 1 エントリで、`tier` の既定は `"auto"`。`capability` の隣、Spec の外に置かれるため `specHash` やキャッシュキーには影響せず、該当アクションを宣言しない Spec では(`{}` ではなく)フィールドごと省略される。
 
 `POST /binding/action` の応答は `{result, invalidates?, refVersions?}`。`invalidates` は書き込みが陳腐化させた `query://` URI(完全一致)の配列、`refVersions` は参照単位の新しいデータ版(`§2` の refVersions と同義)。`KohakuHostDeps.actionEffects(action, payload, result)` フックが供給する(未配線なら `{result}` のみ = 後方互換)。クライアント(`BindingClient.invokeAction`)は成功時に `invalidates` をデータ無効化バスへ流し、離れた表を in-place 再解決させる(**小ループ**。§6 参照)。`DomainPort` は不改変で、書き込み実体は `domain.invoke`、副作用の「宣言」だけを `actionEffects` に分離する。
 
@@ -275,6 +310,7 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 | `GET /fixations` / `GET /fixations/proposals` | `authorizeGovernance`(配線時) | 固定化済み一覧 / 候補(uses・sessions・構造安定度) |
 | `POST /fixations/approve` | `authorizeGovernance`(配線時) | `{ intent: {canonical, params} }` → 現在の合成結果を pin → `{ fixation }`。結果が決定的フォールバック Spec の場合は 422 `COMPOSE_FAILED`(生成失敗を L0 として固定化してはならない)、L2 自由形式 Spec の場合は 400 `BAD_REQUEST`(固定化ではなく昇格パイプラインの管轄) |
 | `POST /fixations/:intentHash/remove` | `authorizeGovernance`(配線時) | 固定化解除 → `{ok}` |
+| `POST /approvals` | `authorizeGovernance`(配線時。kind `action.approve`) | body `{ action, payloadHash, requesterId, ttlSeconds? }`(`payloadHash` は 128 文字以下、`requesterId` は 256 以下、`ttlSeconds` は 86400 以下の正の整数。既定は `DEFAULT_APPROVAL_TTL_SECONDS` = 300)→ `{ approval: <token> }`。承認者自身の principal id が `approverId` になり、トークンは `(action, payloadHash, requesterId, tenant)` に束縛される。依頼者は `"approve"` tier のアクションについて、これを `POST /binding/action` の `approval` として提示する(SPEC ACT-APR-001)。`requesterId` と `payloadHash` は依頼者の `action.approvalRequested` lineage レコード(または、別経路で受け渡された 403 `APPROVAL_REQUIRED` 応答)から得る — このルートは承認待ちリクエストの状態を自前では持たない(design.md #63)。承認者が依頼者本人(自己承認)の場合、または Port が発行を拒否した場合は 400 `BAD_REQUEST`。`ApprovalPort` が配線されていなければ `501 NOT_IMPLEMENTED`。**Draft** |
 
 **統制プレーンの認可(`authorizeGovernance`)**: 監査・統制系ルート(§5.3 の `GET /lineage`・`GET /analytics/summary`・`POST /telemetry` と本節の promotions / fixations 一式)は、`KohakuHostDeps.authorizeGovernance` フック(オプショナル)の配線時に各リクエスト前で認可判定を通し、拒否時は 403 `CAPABILITY_DENIED` を返す。未配線時は fail-open(§5 冒頭「本番配線の注意」参照)。`GET /catalog` はこの認可の対象外。
 
@@ -309,6 +345,14 @@ curl -s -X POST http://localhost:8787/api/kohaku/compose \
 `GET /api/health`(LLM・シード・カタログ版・intent 一覧)/ `POST /api/kohaku/admin/bump-data-version`(デモ用のキャッシュ無効化ルート。identity + governance RBAC 配下で、operation は `admin.bumpDataVersion`、admin のみ許可。host-rest のマウントより前に登録され、同じ `bodyLimit` / `identity.middleware` の対象になる。JWT では `KOHAKU_DEMO_ADMIN_ROUTES=1` を指定しない限り無効。§9 参照)。
 
 昇格の承認/却下/取り下げは host-rest の named ルート(§5.4 の `POST /promotions/:id/approve|reject|withdraw`)に一級化した。以前あった `POST /api/admin/promotions/:id/approve|reject` は削除し、sample-web の管理面もそちらを叩く(reviewer はサーバー側 principal を注入するので、クライアントは承認者を申告しない)。
+
+### 5.6 ポリシーファイル(Policy as Code)
+
+ルートではなく、ホストが読み込む宣言的な JSON ファイル(host-core の `loadPolicyFile` / `createPolicyRuntime`、design.md #69/#70)。プロダクトのコードが与える基本の `ComposePolicy` の上に、テナントごとの上書きを重ねる。機械可読なスキーマ: [`spec/schemas/policy.schema.json`](../spec/schemas/policy.schema.json)(`packages/spec-core/src/schema/policy.ts` の `KohakuPolicyFileSchema` から生成。すべてのオブジェクトが strict なので、キーの打ち間違いは読み込み時に失敗する)。形:
+
+- `version` — リテラル `1`。`label?` — `policy.applied` 監査イベントに出る人間向けラベル。`$schema?` — エディタ補完用の参照で、解釈されない。
+- `defaults`(必須)と `tenants[<tenantId>]` — それぞれ次の任意の部分を持つセクション: `compose`(`allowL2`、`maxRepairAttempts`、`refConstraint`、`effort{l1,l2}`、`outputLanguage`、`cacheFailure`、`ttlSeconds`、`budget{perCompose.stopAfterTokens, deadlineMs, dailyTokens}`)、`rateLimits`(ルートの種類 `compose` / `action` / `resolve` ごとのトークンバケット `{capacity, refillPerSecond}`。§5 の `RATE_LIMITED` 429 の根拠)、`governance.roles`(ロール → 許可する `operation.kind` パターン。`governancePolicyFromRoles` が消費する)。
+- `ComposePolicy` で関数になっているフィールド(`routeTier`、`fewShot`、`designSystem`、`fixedSpecs`、`l2Smoke`、`selectComponents`、`extraRules`)にはスキーマ上のフィールドが無く、常に基本ポリシーから来る。運用上の指針(配線、導入時に一度だけ起きるキャッシュミス、identity の注意点)はユーザーガイドの「Policy as Code とレート制限」を参照。実効 `policyId` が変わる再読み込みが成功すると `policy.applied`(§10)として記録される。
 
 ## 6. MCP Apps プロファイル(host-mcp-apps)
 
@@ -456,6 +500,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` | —(未指定=保護オフ) | カンマ区切りの DNS リバインディング保護の許可ホスト。指定したときのみ保護を有効化する(localhost 限定運用向け。例 `localhost:8788,127.0.0.1:8788`。公開トンネル経由では Host がトンネルのドメインになるため列挙しない限り弾かれる) |
 | `KOHAKU_MCP_PUBLIC_URL` | `http://localhost:{port}` | sample-mcp HTTP のスナップショット静的配信(`/snapshots`)の base URL。`kohaku_render_snapshot` が返す URL の起点。公開トンネル(ngrok / cloudflared 等)経由時はトンネル URL を設定する(未設定だとローカル URL が返り外部から開けない) |
 | `KOHAKU_MCP_SNAPSHOT_TTL_MS` | 86400000(24h) | `.data/snapshots` 配下のスナップショット HTML ファイルを定期掃除で削除するまでの保持 TTL(ms)(自己完結スナップショットは 1 件あたり約 1MB で、従来は無制限に蓄積していた)。数値化できない値・`0` 以下は既定値にフォールバック(`apps/sample-mcp/src/setup.ts`) |
+| `VITE_KOHAKU_DISCLOSURE` | `off` | **sample-web(とそれから作る静的プレイグラウンド)のみ**。Vite のビルド時/開発時に読まれる。`attributes` / `label` を指定すると、アプリが描画するすべての Spec で `SpecView` の AI 生成の開示(design.md #66、SPEC-DISC-001)が有効になる — ラッパーへの data 属性、または data 属性に加えて見える形のローカライズ済みラベル。それ以外の値は `off`(DOM は変わらない)。MCP レンダラーでは同じ選択を `bootMcpRenderer` の `disclosure` オプションで行う |
 
 ## 10. Lineage イベント型一覧
 
@@ -472,6 +517,11 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `intent.fixated` / `intent.unfixated` | intentHash, canonical, structureHash, approver | fixations |
 | `intent.migrated` | intentHash, structureHash, approver, planId? | `Fixations.replace`(design.md #65): カタログ移行が固定化の `pinnedSpec` をその場で書き換えた(deprecated な部品 → その `replacedBy`)。`intent.fixated` と異なり、固定化の識別子(`intentHash`/テナント)は変わらず、変わるのは pin 済み構造と `structureHash` のみ。`planId` は CLI 経由で駆動した場合、書き換えを生んだ `kohaku migrate plan` の出力に対応する |
 | `intent.observed` | — | 型カタログ上の予約(v0.1 では記録されない) |
+| `action.invoked` | action, payloadHash, tier(`auto`/`confirm`/`approve`), correlationId? | Governed Actions(SPEC LIN-ACT-001): `POST /binding/action` のゲートが `allow` を返した(パラメータ検証済み・tier 充足)。**ゲートが許可した時点で `DomainPort.invoke` の前に**記録される。意味は「ゲートが許可した」であって「書き込みが成功した」ではなく、`"approve"` のトークンもこの時点で消費済み。ペイロード自体は持たず、ハッシュのみ |
+| `action.denied` | action, payloadHash, tier, reason, correlationId? | 提示されたトークンが検証に通らなかった(または `ApprovalPort` が未配線の)`"approve"` tier の invoke、あるいは `DomainPort` の宣言済み操作でないアクション名の invoke(tier は `auto`。ゲート実行前に拒否) |
+| `action.approvalRequested` | action, payloadHash, tier(`confirm`/`approve`), requestId, payload?, correlationId? | まだ何も提示されていない(`confirmed: true` の無い `"confirm"`、またはトークンの無い `"approve"`)。`payload` はレコーダーが `recordPayload: true` で設定されたときだけ入る(既定はハッシュのみ)。`requestId` は 403 `APPROVAL_REQUIRED` エンベロープの `approval.requestId` と同じ不透明 ID。承認者はここから `payloadHash` と依頼者の id(イベントの actor の id)を読み取り、`POST /approvals` を呼ぶ |
+| `action.approved` | action, payloadHash, approverId, requesterId, correlationId? | 承認グラントが検証・消費された `"approve"` tier の invoke。`action.invoked` に加えて記録される |
+| `policy.applied` | policyId, previousPolicyId?, version, label?, changedPaths[], tenants[] | host-core の `PolicyRuntime.reload()` が実効ポリシーを変えた(design.md #69)。バイト単位で同一の再読み込みでは記録されない。ポリシーファイルの形式は §5.6 |
 
 ## 11. conformance(適合検査)
 

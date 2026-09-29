@@ -5,7 +5,7 @@ name: Release
 # from it and every version in the tree must equal it before anything is uploaded.
 #
 # The file name is load-bearing: PyPI's trusted publisher for kohaku-ui is registered against
-# `release.yml` in environment `pypi`, and npm's trusted publishers for the twenty-seven packages against
+# `release.yml` in environment `pypi`, and npm's trusted publishers for every published package against
 # `release.yml` in environment `npm`. Renaming this file means re-registering all of them.
 on:
   release:
@@ -90,7 +90,7 @@ jobs:
           # keeps its caches; pnpm's lockfile integrity hashes still verify every package here.
           package-manager-cache: false
       - run: pnpm install --frozen-lockfile
-      # The tag, all twenty-seven manifests, and both places Python states its version must agree. CI's drift
+      # The tag, every package manifest, and both places Python states its version must agree. CI's drift
       # check covers the Python side on every push; this is the last gate before an asymmetric release,
       # and the only place the tag itself is compared with the tree.
       - name: Assert the tag and every version in the tree agree
@@ -192,7 +192,7 @@ jobs:
       # packages that have versions not yet published to the registry"), so a re-run after a partial
       # failure publishes only what is missing, and a re-run with nothing missing is a no-op. That
       # per-package check is the right granularity; a job-level "is spec-core on npm?" gate would skip
-      # the other twenty-one after a failure that happened after spec-core went out.
+      # every package after it after a failure that happened once spec-core had gone out.
       - name: Publish to npm
         env:
           DRY_RUN: ${{ needs.verify.outputs.dry_run }}

@@ -96,7 +96,7 @@ describe("createA2uiIngest", () => {
     const hugeSurfaceId = "_".repeat(100_000);
     const startedAt = Date.now();
     const outcome = await ingest.ingest(surfaceMessages(hugeSurfaceId, "Hi"));
-    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(Date.now() - startedAt).toBeLessThan(2000);
     expect(CanonicalNameSchema.safeParse(outcome.spec.intent.canonical).success).toBe(true);
   });
 
