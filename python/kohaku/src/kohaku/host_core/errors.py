@@ -91,11 +91,13 @@ async def fail_open(
     """Runs `fn`, and on failure runs `on_failure(error)` instead of re-raising. Shared building block for
     fail-open audit recording (REST's safe_record / MCP's on_composed fail-open wrapper): prioritizes delivery
     availability by swallowing a recording failure rather than letting it take down an otherwise-successful
-    response.
+    response. Catches `Exception` only: a `BaseException` such as `asyncio.CancelledError` must keep
+    propagating, or a cancelled recording would be swallowed and the caller would carry on (e.g. into
+    `domain.invoke`) as if the request were still live.
     """
     try:
         await fn()
-    except BaseException as e:
+    except Exception as e:
         await on_failure(e)
 
 
