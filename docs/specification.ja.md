@@ -500,6 +500,7 @@ boot(`ui.ready` 到達)前に guest の実行時エラー(`telemetry.report kind
 | `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` | —(未指定=保護オフ) | カンマ区切りの DNS リバインディング保護の許可ホスト。指定したときのみ保護を有効化する(localhost 限定運用向け。例 `localhost:8788,127.0.0.1:8788`。公開トンネル経由では Host がトンネルのドメインになるため列挙しない限り弾かれる) |
 | `KOHAKU_MCP_PUBLIC_URL` | `http://localhost:{port}` | sample-mcp HTTP のスナップショット静的配信(`/snapshots`)の base URL。`kohaku_render_snapshot` が返す URL の起点。公開トンネル(ngrok / cloudflared 等)経由時はトンネル URL を設定する(未設定だとローカル URL が返り外部から開けない) |
 | `KOHAKU_MCP_SNAPSHOT_TTL_MS` | 86400000(24h) | `.data/snapshots` 配下のスナップショット HTML ファイルを定期掃除で削除するまでの保持 TTL(ms)(自己完結スナップショットは 1 件あたり約 1MB で、従来は無制限に蓄積していた)。数値化できない値・`0` 以下は既定値にフォールバック(`apps/sample-mcp/src/setup.ts`) |
+| `VITE_KOHAKU_DISCLOSURE` | `off` | **sample-web(とそれから作る静的プレイグラウンド)のみ**。Vite のビルド時/開発時に読まれる。`attributes` / `label` を指定すると、アプリが描画するすべての Spec で `SpecView` の AI 生成の開示(design.md #66、SPEC-DISC-001)が有効になる — ラッパーへの data 属性、または data 属性に加えて見える形のローカライズ済みラベル。それ以外の値は `off`(DOM は変わらない)。MCP レンダラーでは同じ選択を `bootMcpRenderer` の `disclosure` オプションで行う |
 
 ## 10. Lineage イベント型一覧
 

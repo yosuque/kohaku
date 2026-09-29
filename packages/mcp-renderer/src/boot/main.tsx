@@ -201,11 +201,15 @@ function Diagnostic(props: { info: BridgeDiagnostics; recoveryFailed?: boolean }
   );
 }
 
-function Root(props: {
+/** The mounted tree of both boot modes. Exported for this package's own tests only -- `./boot`'s
+ * `index.ts` re-exports `bootMcpRenderer` alone, so it is not part of the public surface. */
+export function Root(props: {
   controller: RendererController;
   initialView: ViewState | null;
   /** The component-implementation registry to render with (core, or core + product overlay -- see `registerImpls`). */
   impls: ImplRegistry;
+  /** SpecView's AI-generation disclosure mode (design.md #66); see `BootMcpRendererOptions.disclosure`. */
+  disclosure?: BootMcpRendererOptions["disclosure"];
   /**
    * Register so that, when a tool-result arrives in normal mode, setView / setError / setWaiting can be injected from outside.
    * setError is used by bridge-side events like ontoolcancelled; setWaiting by the self-recovery phase transitions.
@@ -315,7 +319,7 @@ function Root(props: {
           </button>
         </div>
       ) : null}
-      <SpecView spec={view.spec} />
+      <SpecView spec={view.spec} disclosure={props.disclosure ?? "off"} />
       {controller.note != null ? (
         <div style={{ marginTop: 12, color: "#6b7280", fontSize: 11 }}>{controller.note}</div>
       ) : null}
@@ -339,7 +343,12 @@ function readSnapshot(): Snapshot | null {
 }
 
 /** Snapshot mode: render statically from the embedded Spec + data (does not connect to the bridge). */
-function bootSnapshot(snapshot: Snapshot, impls: ImplRegistry, container: HTMLElement): void {
+function bootSnapshot(
+  snapshot: Snapshot,
+  impls: ImplRegistry,
+  container: HTMLElement,
+  disclosure: BootMcpRendererOptions["disclosure"],
+): void {
   const controller: RendererController = {
     makeBinding: (view) =>
       createBindingClient({
@@ -365,7 +374,7 @@ function bootSnapshot(snapshot: Snapshot, impls: ImplRegistry, container: HTMLEl
   };
   createRoot(container).render(
     <StrictMode>
-      <Root controller={controller} initialView={initialView} impls={impls} />
+      <Root controller={controller} initialView={initialView} impls={impls} disclosure={disclosure} />
     </StrictMode>,
   );
 }
@@ -806,7 +815,11 @@ function setupRecovery(app: App, views: ViewChannel): { start(): void } {
 }
 
 /** Normal mode: connect to the ext-apps bridge and pass the Spec via tool-result / event. */
-async function bootBridge(impls: ImplRegistry, container: HTMLElement): Promise<void> {
+async function bootBridge(
+  impls: ImplRegistry,
+  container: HTMLElement,
+  disclosure: BootMcpRendererOptions["disclosure"],
+): Promise<void> {
   // Declare displayMode support (inline / fullscreen) via appCapabilities (MCP Apps standard).
   // pip is assumed host-driven only and is not a toggle target.
   const app = new App(
@@ -838,7 +851,13 @@ async function bootBridge(impls: ImplRegistry, container: HTMLElement): Promise<
   );
   createRoot(container).render(
     <StrictMode>
-      <Root controller={controller} initialView={views.initialView()} impls={impls} onReady={views.onReady} />
+      <Root
+        controller={controller}
+        initialView={views.initialView()}
+        impls={impls}
+        disclosure={disclosure}
+        onReady={views.onReady}
+      />
     </StrictMode>,
   );
 
@@ -859,6 +878,13 @@ export interface BootMcpRendererOptions {
    * this package's `renderer/index.html`).
    */
   root?: string | HTMLElement;
+  /**
+   * AI-generation disclosure (design.md #66; SPEC-DISC-001), passed straight to `SpecView`'s `disclosure`
+   * prop: `"off"` (default -- the DOM is byte-identical to a build that never heard of disclosure),
+   * `"attributes"` (data attributes on a wrapper) or `"label"` (attributes plus a visible localized label).
+   * It is derived from each rendered Spec's own `provenance`, never from a wire field.
+   */
+  disclosure?: "off" | "attributes" | "label";
 }
 
 function resolveRoot(root: string | HTMLElement | undefined): HTMLElement {
@@ -886,8 +912,8 @@ export async function bootMcpRenderer(options: BootMcpRendererOptions = {}): Pro
   const container = resolveRoot(options.root);
   const snapshot = readSnapshot();
   if (snapshot != null) {
-    bootSnapshot(snapshot, impls, container);
+    bootSnapshot(snapshot, impls, container, options.disclosure);
   } else {
-    await bootBridge(impls, container);
+    await bootBridge(impls, container, options.disclosure);
   }
 }

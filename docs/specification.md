@@ -545,6 +545,7 @@ If a runtime error occurs in the guest before boot (`ui.ready` reached) (`teleme
 | `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` | — (unset = protection off) | Comma-separated allowed hosts for DNS-rebinding protection. Enabled only when specified (for localhost-limited operation; e.g. `localhost:8788,127.0.0.1:8788`; via a public tunnel the Host becomes the tunnel's domain, so it is rejected unless enumerated) |
 | `KOHAKU_MCP_PUBLIC_URL` | `http://localhost:{port}` | The base URL for sample-mcp HTTP's static snapshot serving (`/snapshots`). The origin of the URL `kohaku_render_snapshot` returns. Set the tunnel URL when going through a public tunnel (ngrok / cloudflared, etc.) (if unset, a local URL is returned that cannot be opened externally) |
 | `KOHAKU_MCP_SNAPSHOT_TTL_MS` | 86400000 (24h) | The retention TTL (ms) for snapshot HTML files under `.data/snapshots` before the periodic sweep deletes them (each self-contained snapshot is ~1MB and previously accumulated without bound). Non-numeric / `<= 0` falls back to the default (`apps/sample-mcp/src/setup.ts`) |
+| `VITE_KOHAKU_DISCLOSURE` | `off` | **sample-web (and the static playground built from it) only**, read at Vite build/dev time. `attributes` / `label` turns on `SpecView`'s AI-generation disclosure (design.md #66; SPEC-DISC-001) for every Spec the app renders: data attributes on a wrapper, or attributes plus a visible localized label. Anything else is `off` (the DOM is unchanged). The MCP renderer takes the same choice as `bootMcpRenderer`'s `disclosure` option |
 
 ## 10. List of Lineage event types
 
