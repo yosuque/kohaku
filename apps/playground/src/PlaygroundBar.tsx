@@ -36,7 +36,7 @@ const buttonStyle: React.CSSProperties = {
  * The playground-only banner (permanently above sample-web's own header, via `App`): states plainly that
  * this is a replay, not a live product, gives a Reset button (see `host/reset.ts`), a row of example
  * scenarios (`scenarios.ts` — disabled with "awaiting recording" until `record-fixtures.ts` is actually run;
- * see reports/u5-3.md), and links out to the real project.
+ * see docs/user-guide.md §10), and links out to the real project.
  *
  * Not localized (unlike the rest of sample-web, which has full EN/JA via `i18n/ui.ts`): this component lives
  * in apps/playground, not sample-web, and is deliberately kept out of that package's i18n system rather than
@@ -89,8 +89,8 @@ export function PlaygroundBar({
           <a href="https://www.npmjs.com/org/kohaku-ui" target="_blank" rel="noreferrer">
             npm
           </a>
-          {/* No public docs-site URL exists yet (apps/docs-site's `base` is env-driven, unpublished — see
-              reports/u5-2.md) — links to the docs source in the repo itself in the meantime. */}
+          {/* No public docs-site URL exists yet (apps/docs-site's `base` is env-driven and the site is
+              unpublished) — links to the docs source in the repo itself in the meantime. */}
           <a href="https://github.com/yosuque/kohaku/tree/main/docs" target="_blank" rel="noreferrer">
             Docs
           </a>

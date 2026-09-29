@@ -75,7 +75,7 @@ function joinApiPrefix(base: string): string {
  * The two path prefixes a same-origin request is matched against, in order:
  * - `/api/` (the site root), unconditionally — this is what sample-web's own API client
  *   (`kohaku/client.ts`) actually calls, as a hardcoded root-absolute path, regardless of any deployed
- *   `<base>`. sample-web is reused unforked (U5's own constraint), so the shim has to meet it here rather
+ *   `<base>`. sample-web is reused unforked (design.md decision 57), so the shim has to meet it here rather
  *   than the other way around.
  * - `<base>api/` — additive, for a base-aware caller (or a future one): under a non-root base (a GitHub
  *   Pages project site, `<base>` = `/kohaku/`), `/kohaku/api/*` is recognized the same way.

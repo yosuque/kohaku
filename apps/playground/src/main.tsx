@@ -77,7 +77,7 @@ function Root({ handle }: { handle: PlaygroundHostHandle }): ReactNode {
 }
 
 /**
- * The static playground's real entry point (U5-2/U5-3). Builds one host (`host/reset.ts`) and mounts
+ * The static playground's real entry point (design.md decision 57). Builds one host (`host/reset.ts`) and mounts
  * sample-web's own `App` unmodified (via `Root`, above) under a `HashRouter` — a `BrowserRouter` 404s on a
  * deep-linked path on GitHub Pages, which has no server to fall back to `index.html` for an unknown path; a
  * hash route never leaves the single `index.html` request in the first place.

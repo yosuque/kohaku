@@ -11,7 +11,7 @@ import { SCENARIOS, type Scenario } from "../../src/scenarios.js";
 
 /**
  * Replay-only, against whatever `fixtures/*.json` are actually recorded (today: none — see
- * reports/u5-3.md). Never calls a real LLM. Two disjoint groups, by design (not `it.skip`, so an
+ * docs/user-guide.md §10). Never calls a real LLM. Two disjoint groups, by design (not `it.skip`, so an
  * unrecorded scenario is never silently green nor silently invisible):
  * - a `requiresFixtures` scenario WITH a recorded fixture gets its own checks (tier, cache, and the
  *   promotion/fixation-specific outcome).
@@ -139,7 +139,7 @@ describe.each(recordedScenarios)("recorded scenario: $id", (scenario) => {
 
 it(`${unrecordedScenarios.length} scenario(s) awaiting recording: ${unrecordedScenarios.map((s) => s.id).join(", ")}`, () => {
   // Deliberately not it.skip: a scenario with no recorded fixture is a fact about the suite worth seeing in
-  // the test list every run, not a silently-absent or silently-passing one. See reports/u5-3.md for why
+  // the test list every run, not a silently-absent or silently-passing one. See docs/user-guide.md §10 for why
   // real-LLM recording is postponed — this count should read 0 once it no longer is.
   expect(unrecordedScenarios.map((s) => s.id)).toEqual(
     fixtureScenarios.map((s) => s.id).filter((id) => !RECORDED_SCENARIO_IDS.has(id)),

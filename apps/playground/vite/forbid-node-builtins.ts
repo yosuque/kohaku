@@ -33,8 +33,8 @@ export interface ForbidNodeBuiltinsOptions {
    * single build can surface more than one of these thrown errors at once rather than exactly the first one
    * chronologically — still a hard failure either way, just not a guaranteed single-error report.
    * "audit": never throws. Records every occurrence (deduplicated by importer+source pair) and prints the
-   * full list from `buildEnd`, for the Node-dependency spike (U5-1 task 1's `KOHAKU_PLAYGROUND_AUDIT=1` /
-   * `pnpm run build:audit`). In this mode a matched import is marked `external` instead of erroring, so the
+   * full list from `buildEnd`, for auditing the Node dependencies (`KOHAKU_PLAYGROUND_AUDIT=1` /
+   * `pnpm run build:audit`; design.md decision 57). In this mode a matched import is marked `external` instead of erroring, so the
    * build keeps walking the rest of the module graph instead of stopping at the first hit.
    */
   mode?: "strict" | "audit";
