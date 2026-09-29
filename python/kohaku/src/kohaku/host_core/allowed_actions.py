@@ -55,9 +55,10 @@ def allowed_actions_from_index(index: OperationIndex) -> AllowedActions:
     """An `AllowedActions` derived from an already-built `OperationIndex` (the keys of its by-name mapping)
     instead of a second, independently memoized `list_operations()` call -- a host that already keeps an
     index for its action gate uses this so the capability write-scope filter and the gate can never disagree
-    about which actions exist. It inherits the index's failure modes: a rejected index (`list_operations()`
-    failing, or a descriptor's `paramsSchema` outside kohaku's closed subset) rejects here too, and callers
-    treat that as `create_allowed_actions`'s own rejection (fail-closed for write scopes). Port of TS
+    about which actions exist. Every declared operation counts, including one whose `paramsSchema` failed
+    validation (that operation alone is unusable; its write scope is unaffected), so a bad schema never
+    changes the set. It inherits the index's one failure mode: `list_operations()` raising rejects here too,
+    and callers treat that as `create_allowed_actions`'s own rejection (fail-closed for write scopes). Port of TS
     `allowedActionsFromIndex`."""
 
     async def allowed_actions() -> frozenset[str]:

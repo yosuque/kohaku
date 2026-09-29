@@ -1,5 +1,5 @@
 import { withTenantCatalog } from "@kohaku-ui/composer";
-import { createKeyedMutex } from "@kohaku-ui/host-core";
+import { createKeyedMutex, validateOperationIndex } from "@kohaku-ui/host-core";
 import { cachedPropsJsonSchema } from "@kohaku-ui/registry";
 import type { Principal } from "@kohaku-ui/spec-core";
 import { type Context, Hono } from "hono";
@@ -160,11 +160,13 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
   // Validate every operation's `paramsSchema` now rather than at the first invoke: `createKohakuRoutes` is
   // synchronous and `listOperations()` is async, so this is kicked off here and a failure (listOperations()
   // rejecting, or a schema outside kohaku's closed subset) is reported through `deps.onError`, endpoint
-  // "attach.operationIndex". The index memo discards a rejected promise, so a later request retries; until
-  // then compose omits the `actions` manifest (fail-open) and `/binding/action` fails on the same error.
-  void Promise.resolve()
-    .then(() => operationIndex(deps))
-    .catch((e) => reportHostError(deps, "attach.operationIndex", globalThis.crypto.randomUUID(), e));
+  // "attach.operationIndex". A bad schema confines the failure to its own operation (compose omits it from the
+  // `actions` manifest and `/binding/action` fails for it alone); a rejected `listOperations()` is not
+  // memoized, so a later request retries.
+  void validateOperationIndex(
+    () => operationIndex(deps),
+    (e) => reportHostError(deps, "attach.operationIndex", globalThis.crypto.randomUUID(), e),
+  );
 
   // --- Catalog (for capability negotiation / debugging) ---
   app.get("/catalog", async (c) => {

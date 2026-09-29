@@ -985,14 +985,19 @@ def attach_kohaku_to_mcp_server(
             # momentarily disagree, or because the name was never a real operation (a capability verifying
             # for it is the only way to get this far) -- is rejected here and audited exactly as REST does,
             # rather than let through ungated (fail-closed; ACT-PRM-001, MCPAPP-ACT-001). A rejected
-            # operation index (list_operations() raising, or a descriptor's paramsSchema failing validation)
-            # is likewise fail-closed for this call.
+            # operation index (list_operations() raising) is likewise fail-closed for this call, and a declared
+            # operation whose paramsSchema failed validation is fail-closed for that operation alone.
             try:
                 index = await _operation_index()
             except Exception as exc:  # noqa: BLE001 — fail-closed for this call, reported below
                 await _report_mcp_error(deps, f"{prefix}_action.operationIndex", exc)
                 return _tool_error("operation index unavailable")
             entry = index.get(action)
+            if entry is not None and entry.schema_error is not None:
+                # A declared operation whose paramsSchema failed validation must never be invoked: fail closed
+                # for this operation alone (REST's 500 counterpart), reported to the observability hook.
+                await _report_mcp_error(deps, f"{prefix}_action.operationIndex", entry.schema_error)
+                return _tool_error("action parameter schema unavailable")
             if entry is None:
                 await record_undeclared_action_denial(
                     ActionAuditContext(

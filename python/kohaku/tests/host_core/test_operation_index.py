@@ -10,6 +10,7 @@ from kohaku.host_core.allowed_actions import allowed_actions_from_index
 from kohaku.host_core.operation_index import (
     create_operation_index,
     start_operation_index_validation,
+    validate_operation_index,
 )
 from kohaku.spec import (
     ActionParamsSchemaError,
@@ -70,16 +71,24 @@ def test_memoizes_list_operations_across_calls_keyed_by_operation_name() -> None
     asyncio.run(run())
 
 
-def test_raises_action_params_schema_error_for_a_disallowed_keyword() -> None:
-    domain_impl = _FakeDomain(
-        [[OperationDescriptor(name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a+$"})]]
+def test_a_bad_params_schema_is_confined_to_its_own_operation() -> None:
+    bad = {"type": "string", "pattern": "^a+$"}
+    domain: DomainPort = _FakeDomain(
+        [
+            [
+                OperationDescriptor(name="annotate", description="d", paramsSchema=bad),
+                OperationDescriptor(name="publish", description="d", paramsSchema=NOTE_SCHEMA),
+            ]
+        ]
     )
-    domain: DomainPort = domain_impl
 
     async def run() -> None:
-        index = create_operation_index(domain)
-        with pytest.raises(ActionParamsSchemaError):
-            await index()
+        index = await create_operation_index(domain)()
+        assert list(index) == ["annotate", "publish"]
+        assert isinstance(index["annotate"].schema_error, ActionParamsSchemaError)
+        assert index["annotate"].params_schema is None
+        assert index["publish"].schema_error is None
+        assert index["publish"].params_schema == NOTE_SCHEMA
 
     asyncio.run(run())
 
@@ -132,17 +141,16 @@ def test_allowed_actions_from_index_shares_one_list_operations_read() -> None:
     assert domain_impl.calls == 1
 
 
-def test_allowed_actions_from_index_propagates_a_schema_error_and_recovers_after_a_retry() -> None:
+def test_allowed_actions_from_index_keeps_an_operation_with_a_bad_schema_and_propagates_a_rejection() -> None:
     bad = OperationDescriptor(name="annotate", description="d", paramsSchema={"type": "string", "pattern": "x"})
-    good = OperationDescriptor(name="annotate", description="d")
-    domain_impl = _FakeDomain([[bad], [good]])
-    domain: DomainPort = domain_impl
+    publish = OperationDescriptor(name="publish", description="d")
+    domain: DomainPort = _FakeDomain([RuntimeError("down"), [bad, publish]])
     allowed = allowed_actions_from_index(create_operation_index(domain))
 
     async def run() -> None:
-        with pytest.raises(ActionParamsSchemaError):
+        with pytest.raises(RuntimeError):
             await allowed()
-        assert await allowed() == frozenset({"annotate"})
+        assert await allowed() == frozenset({"annotate", "publish"})
 
     asyncio.run(run())
 
@@ -190,3 +198,28 @@ def test_start_operation_index_validation_is_a_no_op_without_a_running_event_loo
 
     assert start_operation_index_validation(create_operation_index(domain), report) is None
     assert domain_impl.calls == 0
+
+
+def test_validate_operation_index_reports_each_schema_error_and_a_build_failure() -> None:
+    bad = {"type": "string", "pattern": "x"}
+    reported: list[BaseException] = []
+
+    async def report(exc: BaseException) -> None:
+        reported.append(exc)
+
+    ops = [
+        OperationDescriptor(name="a", description="d", paramsSchema=bad),
+        OperationDescriptor(name="b", description="d", paramsSchema=bad),
+        OperationDescriptor(name="c", description="d"),
+    ]
+    domain: DomainPort = _FakeDomain([ops])
+    failing: DomainPort = _FakeDomain([RuntimeError("down")])
+
+    async def run() -> None:
+        await validate_operation_index(create_operation_index(domain), report)
+        assert len(reported) == 2
+        assert all(isinstance(e, ActionParamsSchemaError) for e in reported)
+        await validate_operation_index(create_operation_index(failing), report)
+        assert len(reported) == 3
+
+    asyncio.run(run())

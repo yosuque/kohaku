@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from kohaku.spec import (
     ActionParamsSchema,
+    ActionParamsSchemaError,
     DomainPort,
     OperationDescriptor,
     assert_valid_action_params_schema,
@@ -26,6 +27,12 @@ class OperationIndexEntry:
     (design.md #62) -- None when the descriptor declared none (an action with no schema accepts any
     payload). Consumers (`create_action_gate`) validate a request's payload against this without
     re-checking the schema's own shape on every call."""
+    schema_error: ActionParamsSchemaError | None = None
+    """Set (and `params_schema` left None) when the descriptor's `paramsSchema` uses a keyword outside the
+    closed subset. The operation stays in the index -- its name is still a declared operation, so capability
+    scopes and the undeclared-action check are unaffected -- but it must never be invoked: a consumer that
+    gates an invoke fails closed on this entry (REST: 500, MCP: a tool error), and the actions manifest omits
+    it. One bad schema therefore breaks only its own operation."""
 
 
 OperationIndex = Callable[[], Awaitable[dict[str, OperationIndexEntry]]]
@@ -39,11 +46,13 @@ def create_operation_index(
     object, mirroring `create_allowed_actions`'s own memoization contract (`list_operations()` is async and
     must not be re-awaited on every action invoke). Unlike `create_allowed_actions` (which only needs the
     *names* of a DomainPort's operations, for capability-scope filtering), this index keeps each operation's
-    full descriptor plus its params schema, already validated for keyword-subset compliance (design.md #62)
-    -- an operation whose `paramsSchema` uses a disallowed keyword raises `ActionParamsSchemaError` here, at
-    index-build time (attach time), rather than on the first request that happens to invoke it.
+    full descriptor plus its params schema, already validated for keyword-subset compliance (design.md #62).
+    An operation whose `paramsSchema` uses a disallowed keyword does not fail the whole index: it is kept with
+    `schema_error` set (see `OperationIndexEntry`), so the failure is confined to that operation, and
+    `validate_operation_index` reports it at attach time rather than on the first request that happens to
+    invoke it.
 
-    On rejection nothing is cached, so the next call retries against the DomainPort, and the rejection
+    On rejection (`list_operations()` itself failing) nothing is cached, so the next call retries against the DomainPort, and the rejection
     propagates to the caller — the same fail-fast-but-retryable contract as `create_allowed_actions`.
     `on_error` is a coarse, observability-only fallback fired (fire-and-forget, synchronously before the
     rejection propagates) on that same rejection.
@@ -58,11 +67,15 @@ def create_operation_index(
             ops = await domain.list_operations()
             index: dict[str, OperationIndexEntry] = {}
             for op in ops:
-                params_schema = (
-                    assert_valid_action_params_schema(op.name, op.paramsSchema)
-                    if op.paramsSchema is not None
-                    else None
-                )
+                try:
+                    params_schema = (
+                        assert_valid_action_params_schema(op.name, op.paramsSchema)
+                        if op.paramsSchema is not None
+                        else None
+                    )
+                except ActionParamsSchemaError as schema_error:
+                    index[op.name] = OperationIndexEntry(descriptor=op, schema_error=schema_error)
+                    continue
                 index[op.name] = OperationIndexEntry(descriptor=op, params_schema=params_schema)
         except BaseException as e:
             if on_error is not None:
@@ -79,28 +92,35 @@ _background_validations: set[asyncio.Task[None]] = set()
 ones), dropped as each task finishes."""
 
 
+async def validate_operation_index(
+    index: OperationIndex, report: Callable[[BaseException], Awaitable[None]]
+) -> None:
+    """Builds `index` now and reports every problem it finds through `report` (which must not raise): the
+    index failing to build at all (`list_operations()` raising), and each operation whose `paramsSchema` is
+    outside the closed subset (`OperationIndexEntry.schema_error`). Never raises. Port of TS
+    `validateOperationIndex`."""
+    try:
+        for entry in (await index()).values():
+            if entry.schema_error is not None:
+                await report(entry.schema_error)
+    except Exception as exc:  # noqa: BLE001 -- reported, never raised
+        await report(exc)
+
+
 def start_operation_index_validation(
     index: OperationIndex, report: Callable[[BaseException], Awaitable[None]]
 ) -> asyncio.Task[None] | None:
-    """Builds `index` in the background so a failure (`list_operations()` raising, or a descriptor's
-    `paramsSchema` outside kohaku's closed subset) is reported at attach time rather than only at the first
-    request that hits it; `report` must not raise. The host attach functions are synchronous while
+    """Runs `validate_operation_index` in the background so a failure is reported at attach time rather than
+    only at the first request that hits it. The host attach functions are synchronous while
     `list_operations()` is async, so this needs a running event loop: without one it does nothing and returns
     None, and the index is then built lazily by the first request that needs it (unlike the TS hosts, which
     always have a microtask queue to start from). A rejected build is not memoized, so a later call retries.
-    Counterpart of the TS hosts' eager `operationIndex()` call at attach."""
+    Counterpart of the TS hosts' eager `validateOperationIndex` call at attach."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return None
-
-    async def _run() -> None:
-        try:
-            await index()
-        except Exception as exc:  # noqa: BLE001 -- reported, never raised out of the background task
-            await report(exc)
-
-    task = loop.create_task(_run())
+    task = loop.create_task(validate_operation_index(index, report))
     _background_validations.add(task)
     task.add_done_callback(_background_validations.discard)
     return task
@@ -111,4 +131,5 @@ __all__ = [
     "OperationIndexEntry",
     "create_operation_index",
     "start_operation_index_validation",
+    "validate_operation_index",
 ]

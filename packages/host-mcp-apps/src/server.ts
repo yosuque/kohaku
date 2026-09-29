@@ -893,8 +893,9 @@ function registerActionTool(ctx: ToolContext): void {
         // because the index and DomainPort momentarily disagree, or because the name was never a real
         // operation to begin with (a capability verifying for it is the only way to get this far) -- is
         // rejected here and audited exactly as REST does, rather than let through ungated (fail-closed;
-        // ACT-PRM-001, MCPAPP-ACT-001). A rejected operation index (listOperations() itself failing, or a
-        // descriptor's paramsSchema failing validation) is likewise fail-closed for this call.
+        // ACT-PRM-001, MCPAPP-ACT-001). A rejected operation index (listOperations() itself failing) is
+        // likewise fail-closed for this call, and a declared operation whose paramsSchema failed validation
+        // is fail-closed for that operation alone.
         let index: Awaited<ReturnType<typeof ctx.operationIndex>>;
         try {
           index = await ctx.operationIndex();
@@ -903,6 +904,12 @@ function registerActionTool(ctx: ToolContext): void {
           return toolError("operation index unavailable");
         }
         const entry = index.get(action);
+        if (entry != null && entry.schemaError != null) {
+          // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
+          // this operation alone (REST's 500 counterpart), reported to the observability hook.
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError);
+          return toolError("action parameter schema unavailable");
+        }
         if (entry == null) {
           await hostCore.recordUndeclaredActionDenial({
             recorder: ctx.deps.actionAuditRecorder,
@@ -993,10 +1000,11 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
   const operationIndex = hostCore.createOperationIndex(deps.domain);
   // Validate every operation's `paramsSchema` now rather than at the first invoke: `attachKohakuToMcpServer`
   // is synchronous, so this is kicked off here and a failure (listOperations() rejecting, or a schema outside
-  // kohaku's closed subset) is reported through `onError` (the memo is discarded, so a later call retries).
-  void Promise.resolve()
-    .then(() => operationIndex())
-    .catch((e) => reportMcpError(deps, "attach.operationIndex", e));
+  // kohaku's closed subset) is reported through `onError`. A bad schema confines the failure to its own
+  // operation; a rejected listOperations() is not memoized, so a later call retries.
+  void hostCore.validateOperationIndex(operationIndex, (e) =>
+    reportMcpError(deps, "attach.operationIndex", e),
+  );
   const ctx: ToolContext = {
     server,
     deps,

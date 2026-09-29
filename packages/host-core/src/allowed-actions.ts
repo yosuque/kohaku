@@ -39,9 +39,10 @@ export function createAllowedActions(domain: DomainPort, onError?: (error: unkno
  * An `AllowedActions` derived from an already-built `OperationIndex` (the keys of its by-name map) instead of a
  * second, independently memoized `listOperations()` call -- a host that already keeps an index for its
  * action gate uses this so the capability write-scope filter and the gate can never disagree about which
- * actions exist. It inherits the index's failure modes: a rejected index (`listOperations()` failing, or a
- * descriptor's `paramsSchema` outside kohaku's closed subset) rejects here too, and callers treat that as
- * `createAllowedActions`'s own rejection (fail-closed for write scopes).
+ * actions exist. Every declared operation counts, including one whose `paramsSchema` failed validation (that
+ * operation alone is unusable; its write scope is unaffected), so a bad schema never changes the set. It
+ * inherits the index's one failure mode: `listOperations()` rejecting rejects here too, and callers treat
+ * that as `createAllowedActions`'s own rejection (fail-closed for write scopes).
  */
 export function allowedActionsFromIndex(index: OperationIndex): AllowedActions {
   return async () => new Set((await index()).keys());

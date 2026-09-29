@@ -1,5 +1,5 @@
 import type { ActionParamsSchema, DomainPort, OperationDescriptor } from "@kohaku-ui/spec-core";
-import { assertValidActionParamsSchema } from "@kohaku-ui/spec-core";
+import { ActionParamsSchemaError, assertValidActionParamsSchema } from "@kohaku-ui/spec-core";
 
 /** One `DomainPort` operation, indexed by name, with its `paramsSchema` (if any) pre-validated. */
 export interface OperationIndexEntry {
@@ -11,6 +11,14 @@ export interface OperationIndexEntry {
    * re-checking the schema's own shape on every call.
    */
   paramsSchema?: ActionParamsSchema;
+  /**
+   * Set (and `paramsSchema` left undefined) when the descriptor's `paramsSchema` uses a keyword outside the
+   * closed subset. The operation stays in the index -- its name is still a declared operation, so capability
+   * scopes and the undeclared-action check are unaffected -- but it must never be invoked: a consumer that
+   * gates an invoke fails closed on this entry (REST: 500, MCP: a tool error), and the actions manifest omits
+   * it. One bad schema therefore breaks only its own operation.
+   */
+  schemaError?: ActionParamsSchemaError;
 }
 
 /** A memoized, by-name index of a `DomainPort`'s operations. See `createOperationIndex`. */
@@ -22,13 +30,14 @@ export type OperationIndex = () => Promise<ReadonlyMap<string, OperationIndexEnt
  * must not be re-awaited on every action invoke). Unlike `createAllowedActions` (which only needs the
  * *names* of a DomainPort's operations, for capability-scope filtering), this index keeps each
  * operation's full descriptor plus its params schema, already validated for keyword-subset compliance
- * (design.md #62) -- an operation whose `paramsSchema` uses a disallowed keyword throws
- * `ActionParamsSchemaError` here, at index-build time (attach time), rather than on the first request
- * that happens to invoke it.
+ * (design.md #62). An operation whose `paramsSchema` uses a disallowed keyword does not fail the whole
+ * index: it is kept with `schemaError` set (see `OperationIndexEntry`), so the failure is confined to that
+ * operation, and `validateOperationIndex` reports it at attach time rather than on the first request that
+ * happens to invoke it.
  *
- * On rejection (either `listOperations()` itself failing, or a descriptor's schema failing validation)
- * the cached promise is discarded so the next call retries, and the rejection propagates to the caller
- * -- the same fail-fast-but-retryable contract as `createAllowedActions`. `onError` is a coarse,
+ * On rejection (`listOperations()` itself failing) the cached promise is discarded so the next call
+ * retries, and the rejection propagates to the caller -- the same fail-fast-but-retryable contract as
+ * `createAllowedActions`. `onError` is a coarse,
  * observability-only fallback fired (fire-and-forget) on that same rejection.
  */
 export function createOperationIndex(domain: DomainPort, onError?: (error: unknown) => void): OperationIndex {
@@ -38,9 +47,14 @@ export function createOperationIndex(domain: DomainPort, onError?: (error: unkno
       const promise = domain.listOperations().then((ops) => {
         const index = new Map<string, OperationIndexEntry>();
         for (const op of ops) {
-          const paramsSchema =
-            op.paramsSchema != null ? assertValidActionParamsSchema(op.name, op.paramsSchema) : undefined;
-          index.set(op.name, { descriptor: op, paramsSchema });
+          try {
+            const paramsSchema =
+              op.paramsSchema != null ? assertValidActionParamsSchema(op.name, op.paramsSchema) : undefined;
+            index.set(op.name, { descriptor: op, paramsSchema });
+          } catch (e) {
+            if (!(e instanceof ActionParamsSchemaError)) throw e;
+            index.set(op.name, { descriptor: op, schemaError: e });
+          }
         }
         return index;
       });
@@ -52,4 +66,24 @@ export function createOperationIndex(domain: DomainPort, onError?: (error: unkno
     }
     return cached;
   };
+}
+
+/**
+ * Builds `index` now and reports every problem it finds through `report` (which must not reject): the
+ * index failing to build at all (`listOperations()` rejecting), and each operation whose `paramsSchema` is
+ * outside the closed subset (`OperationIndexEntry.schemaError`). Both host attach functions are synchronous
+ * while `listOperations()` is async, so they call this without awaiting it, to surface a schema author's
+ * typo at startup rather than at the first request that hits it. Never rejects.
+ */
+export async function validateOperationIndex(
+  index: OperationIndex,
+  report: (error: unknown) => void | Promise<void>,
+): Promise<void> {
+  try {
+    for (const entry of (await index()).values()) {
+      if (entry.schemaError != null) await report(entry.schemaError);
+    }
+  } catch (e) {
+    await report(e);
+  }
 }

@@ -91,6 +91,7 @@ export {
   createOperationIndex,
   type OperationIndex,
   type OperationIndexEntry,
+  validateOperationIndex,
 } from "./operation-index.js";
 export {
   type CreatePolicyRuntimeOptions,

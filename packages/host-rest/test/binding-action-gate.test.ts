@@ -353,6 +353,21 @@ describe("createKohakuRoutes: paramsSchema validation at attach", () => {
     expect((seen[0]!.error as Error).message).toContain('operation "annotate" has an invalid paramsSchema');
   });
 
+  it("a bad paramsSchema breaks only that operation: it fails closed (500) and the other operation still invokes", async () => {
+    const domain = domainWith(
+      { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a$" } as never },
+      { name: "publish", description: "d" },
+    );
+    const deps = baseDeps({ domain, onError: () => {} });
+    const broken = await postAction(deps, { action: "annotate", payload: {} });
+    expect(broken.status).toBe(500);
+    const ok = await postAction(deps, { action: "publish", payload: {} });
+    expect(ok.status).toBe(200);
+    expect((domain as unknown as { invokeCalls: { op: string }[] }).invokeCalls.map((c) => c.op)).toEqual([
+      "publish",
+    ]);
+  });
+
   it("reports nothing for a valid domain", async () => {
     const seen: string[] = [];
     const deps = baseDeps({

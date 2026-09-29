@@ -219,6 +219,10 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             )
             return _error("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE, 403)
 
+        # A declared operation whose paramsSchema failed validation must never be invoked: fail closed (raised,
+        # so the app's exception handling answers 500 -- the TS route's outcome too).
+        if entry.schema_error is not None:
+            raise entry.schema_error
         gate = action_gate_for(deps)
         gate_result = await gate.check(
             ActionGateRequest(

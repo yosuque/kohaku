@@ -7,6 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from fastapi.testclient import TestClient
+
 from kohaku.spec import (
     ApprovalGrant,
     ApprovalVerifyResult,
@@ -321,6 +323,24 @@ class TestOperationIndexValidationAtAttach:
         asyncio.run(run())
         assert [info.endpoint for info in seen] == ["attach.operationIndex"]
         assert 'operation "annotate" has an invalid paramsSchema' in str(seen[0].error)
+
+    def test_a_bad_schema_breaks_only_that_operation(self, tmp_path: Path) -> None:
+        domain = _EchoDomain(
+            OperationDescriptor(
+                name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+            ),
+            OperationDescriptor(name="publish", description="d"),
+        )
+        harness = build_harness(tmp_path, domain=domain)
+        token = harness.issue([Scope(kind="write", ref="annotate"), Scope(kind="write", ref="publish")])
+        # A raised schema error surfaces as a 500 (the TS route's outcome); the test client must not re-raise it.
+        client = TestClient(harness.client.app, raise_server_exceptions=False)
+        headers = {"authorization": f"Bearer {token}"}
+        broken = client.post(_url("/binding/action"), json={"action": "annotate", "payload": {}}, headers=headers)
+        assert broken.status_code == 500
+        ok = client.post(_url("/binding/action"), json={"action": "publish", "payload": {}}, headers=headers)
+        assert ok.status_code == 200
+        assert [op for op, _ in domain.invoke_calls] == ["publish"]
 
     def test_reports_nothing_for_a_valid_domain(self, tmp_path: Path) -> None:
         import asyncio

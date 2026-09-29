@@ -173,6 +173,9 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
       });
       return c.json(errorBody("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE), 403);
     }
+    // A declared operation whose paramsSchema failed validation must never be invoked: fail closed (500), the
+    // same outcome a schema error had before the index confined it to one operation.
+    if (entry.schemaError != null) throw entry.schemaError;
     const gate = actionGateFor(deps);
     const gateResult = await gate.check({
       descriptor: entry.descriptor,

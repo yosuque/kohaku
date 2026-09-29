@@ -28,7 +28,8 @@ export function buildActionManifest(
   const manifest: ActionManifest = {};
   for (const action of actions) {
     const entry = index.get(action);
-    if (entry == null) continue;
+    // A declared operation whose paramsSchema failed validation is omitted too: it cannot be invoked.
+    if (entry == null || entry.schemaError != null) continue;
     manifest[action] = buildManifestEntry(entry);
   }
   return Object.keys(manifest).length > 0 ? manifest : undefined;

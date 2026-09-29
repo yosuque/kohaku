@@ -1461,6 +1461,53 @@ class TestGovernedActions:
 
         asyncio.run(run())
 
+    def test_a_bad_params_schema_breaks_only_that_operation(self, tmp_path: Path) -> None:
+        """A bad paramsSchema on one operation leaves its write scope intact and the other operation
+        invocable; the broken one fails closed (tool error + on_error report)."""
+
+        invocations: list[str] = []
+
+        class TwoOpDomain:
+            async def list_operations(self) -> list[Any]:
+                return [
+                    OperationDescriptor(
+                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                    ),
+                    OperationDescriptor(name="publish", description="d"),
+                ]
+
+            async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                invocations.append(op)
+                return {"ok": True, "op": op}
+
+        async def run() -> None:
+            seen: list[McpErrorInfo] = []
+            deps = _deps(
+                tmp_path,
+                compose=make_compose_ctx(tmp_path, builder=governed_spec_builder),
+                domain=TwoOpDomain(),
+                on_error=seen.append,
+            )
+            async with connect(deps, _OPTIONS) as client:
+                composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
+                capability = _capability_of(composed)
+                assert "annotate" in capability
+                assert "publish" in capability
+                broken = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": {}, "capability": capability, "confirmed": True},
+                )
+                assert broken.is_error is True
+                assert broken.content[0].text == "action parameter schema unavailable"  # type: ignore[union-attr]
+                assert any(info.endpoint == "kohaku_action.operationIndex" for info in seen)
+                ok = await client.call_tool(
+                    "kohaku_action", {"action": "publish", "payload": {}, "capability": capability}
+                )
+                assert not ok.is_error
+                assert invocations == ["publish"]
+
+        asyncio.run(run())
+
     def test_rejects_a2ui_forward_action(self, tmp_path: Path) -> None:
         """"a2ui.forward" (host_a2ui's A2UI_FORWARD_ACTION) must never be a real registered operation
         (decision #60, F3) -- a GovernedDomain that never declares it rejects it: the compose-issued

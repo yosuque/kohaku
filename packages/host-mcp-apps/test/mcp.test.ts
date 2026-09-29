@@ -2513,6 +2513,50 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
+  it("a bad paramsSchema on one operation breaks only that operation: its write scope survives, the other operation still invokes", async () => {
+    const invocations: string[] = [];
+    const twoOpDomain: DomainPort = {
+      async listOperations() {
+        return [
+          { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a$" } as never },
+          { name: "publish", description: "d" },
+        ];
+      },
+      async invoke(op) {
+        invocations.push(op);
+        return { ok: true, op };
+      },
+    };
+    const seen: { endpoint: string; error: unknown }[] = [];
+    const { client } = await connectGoverned({
+      domain: twoOpDomain,
+      onError: (info) => void seen.push(info),
+    });
+    // The compose-issued capability keeps BOTH write scopes (scope issuance uses the declared names).
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    expect(capability).toContain("annotate");
+    expect(capability).toContain("publish");
+    // The broken operation fails closed (tool error + onError report); the other one is unaffected.
+    const broken = await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "annotate", payload: {}, capability, confirmed: true },
+    });
+    expect(broken.isError).toBe(true);
+    expect((broken.content as { text: string }[])[0]!.text).toBe("action parameter schema unavailable");
+    expect(seen.some((s) => s.endpoint === "kohaku_action.operationIndex")).toBe(true);
+    const ok = await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "publish", payload: {}, capability },
+    });
+    expect(ok.isError).toBeFalsy();
+    expect(invocations).toEqual(["publish"]);
+    await client.close();
+  });
+
   it("rejects the A2UI inbound forwarding sentinel -- it must never be a real registered operation (F3)", async () => {
     // "a2ui.forward" is host-a2ui's A2UI_FORWARD_ACTION (packages/host-a2ui/src/inbound/from-a2ui.ts):
     // decision #60 requires it is never registered as a real DomainPort operation, so a governedDomain()

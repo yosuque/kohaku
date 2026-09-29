@@ -87,14 +87,14 @@ describe("allowedActionsFromIndex", () => {
     expect(counter.calls).toBe(1);
   });
 
-  it("propagates the index's rejection (a schema outside the closed subset), and recovers after a retry", async () => {
-    let bad = true;
+  it("keeps an operation whose paramsSchema is invalid (a bad schema never changes the set), and propagates a listOperations() rejection", async () => {
+    let fail = true;
     const domain: DomainPort = {
       async listOperations() {
+        if (fail) throw new Error("down");
         return [
-          bad
-            ? { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "x" } as never }
-            : { name: "annotate", description: "d" },
+          { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "x" } as never },
+          { name: "publish", description: "d" },
         ];
       },
       async invoke() {
@@ -102,8 +102,8 @@ describe("allowedActionsFromIndex", () => {
       },
     };
     const allowed = allowedActionsFromIndex(createOperationIndex(domain));
-    await expect(allowed()).rejects.toThrow(/invalid paramsSchema/);
-    bad = false;
-    expect([...(await allowed())]).toEqual(["annotate"]);
+    await expect(allowed()).rejects.toThrow("down");
+    fail = false;
+    expect([...(await allowed())]).toEqual(["annotate", "publish"]);
   });
 });
