@@ -122,9 +122,10 @@ export interface ConsoleErrorReporter {
   host: (info: { endpoint: string; requestId: string; error: unknown }) => void;
   /**
    * Matches `McpHostDeps.onError` (host-mcp-apps) verbatim — pass as `onError` directly. The MCP profile has no
-   * error envelope, so no request id is printed.
+   * error envelope, so there is no client-visible request id; the call's correlation id is printed when the
+   * failing path carries one.
    */
-  mcp: (info: { endpoint: string; error: unknown }) => void;
+  mcp: (info: { endpoint: string; error: unknown; correlationId?: string }) => void;
   /** Matches `ComposeObserver.onError` (composer) verbatim — pass as `observer.onError` directly. */
   compose: (ctx: ComposeErrorContext, error: unknown) => void;
 }
@@ -154,7 +155,8 @@ export function createConsoleErrorReporter(options: ConsoleErrorReporterOptions 
       writeLine(`[kohaku] ${info.endpoint} (request ${info.requestId})`, info.error);
     },
     mcp: (info) => {
-      writeLine(`[kohaku] mcp ${info.endpoint}`, info.error);
+      const suffix = info.correlationId != null ? ` (correlation ${info.correlationId})` : "";
+      writeLine(`[kohaku] mcp ${info.endpoint}${suffix}`, info.error);
     },
     compose: (ctx, error) => {
       // A "fallback"/"cancelled" phase carries no thrown exception (error is undefined for most failure

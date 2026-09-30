@@ -8,6 +8,7 @@ export {
   type ActionTier,
   actionPayloadHash,
   assertValidActionParamsSchema,
+  codePointLength,
   findUnsafeActionParamKeys,
   validateActionParams,
 } from "./action-params.js";
@@ -48,6 +49,7 @@ export {
 } from "./lineage-filter.js";
 // Lineage forward-paging cursor codec + the array-backed pageLineage reference implementation (design.md #53)
 export {
+  clampLineagePageSize,
   DEFAULT_LINEAGE_PAGE_SIZE,
   decodeSeqCursor,
   encodeSeqCursor,

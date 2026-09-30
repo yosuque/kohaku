@@ -306,6 +306,26 @@ describe("compose: budget guard check(ctx) / onUsage", () => {
     expect(calls).toEqual([{ tenant: "tenant-y", usage: { inputTokens: 30, outputTokens: 70 } }]);
   });
 
+  it("onUsage still fires when a cacheFailure:'closed' cache write rethrows (spent tokens are charged before the put)", async () => {
+    const { llm } = makeUsageLlm([goodRawDraft()], [{ inputTokens: 30, outputTokens: 70 }]);
+    const calls: { tenant?: string; usage: { inputTokens: number; outputTokens: number } }[] = [];
+    const base = makeStorage();
+    const ctx: ComposeContext = {
+      ...makeCtx(llm, { cacheFailure: "closed", budget: { onUsage: (info) => void calls.push(info) } }),
+      storage: {
+        ...base,
+        async putSpecCache() {
+          throw new Error("cache backend unavailable(test)");
+        },
+      },
+    };
+    await expect(
+      compose(GUI_INPUT, ctx, { session: { surface: "web", tenant: "tenant-y" } }),
+    ).rejects.toThrow(/cache backend unavailable/);
+
+    expect(calls).toEqual([{ tenant: "tenant-y", usage: { inputTokens: 30, outputTokens: 70 } }]);
+  });
+
   it("onUsage does not fire on a cache hit (only the miss that actually generated calls it)", async () => {
     const storage = makeStorage();
     const calls: unknown[] = [];

@@ -27,6 +27,17 @@ _MAX_SAFE_INTEGER = 2**53 - 1
 languages reject the same cursors."""
 
 
+def clamp_lineage_page_size(page_size: float | None = None) -> int:
+    """The effective page size for a `LineagePageRequest.pageSize` (port of TS lineage-page.ts's
+    clampLineagePageSize): DEFAULT_LINEAGE_PAGE_SIZE when omitted (or NaN), otherwise floored to an integer
+    and clamped to [1, MAX_LINEAGE_PAGE_SIZE]. The floor at 1 means a page always advances its own cursor."""
+    if page_size is None or math.isnan(page_size):
+        return DEFAULT_LINEAGE_PAGE_SIZE
+    if math.isinf(page_size):
+        return MAX_LINEAGE_PAGE_SIZE if page_size > 0 else 1
+    return max(1, min(math.floor(page_size), MAX_LINEAGE_PAGE_SIZE))
+
+
 class LineageCursorError(ValueError):
     """Raised by decode_seq_cursor when a cursor string is not one this codec produced."""
 
@@ -106,19 +117,13 @@ def page_lineage_events(events: list[LineageEventRecord], req: LineagePageReques
 
     Scans forward from `req.cursor` (or the start), applying every predicate `req` carries (`_matches`),
     and collects up to `page_size` matches (default DEFAULT_LINEAGE_PAGE_SIZE, clamped to
-    MAX_LINEAGE_PAGE_SIZE; also floored at 1 so a `page_size` of 0 or less can never produce a page whose
+    MAX_LINEAGE_PAGE_SIZE by clamp_lineage_page_size; also floored at 1 so a `page_size` of 0 or less can never produce a page whose
     `nextCursor` fails to advance, which would otherwise strand a caller looping on `nextCursor` forever).
     `nextCursor` is set to the last returned event's own seq only when at least one further match exists
     beyond the page (detected by scanning one match past `page_size` before trimming) -- so the last page
     always omits it.
     """
-    page_size = max(
-        1,
-        min(
-            req.pageSize if req.pageSize is not None else DEFAULT_LINEAGE_PAGE_SIZE,
-            MAX_LINEAGE_PAGE_SIZE,
-        ),
-    )
+    page_size = clamp_lineage_page_size(req.pageSize)
     after_seq = decode_seq_cursor(req.cursor) if req.cursor is not None else 0
 
     matches: list[LineageEventRecord] = []

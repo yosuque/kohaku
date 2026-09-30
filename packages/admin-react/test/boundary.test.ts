@@ -28,7 +28,7 @@ const RELOCATED_UI_PRIMITIVES = [
 // never needs /ui" claim. They now live at the package root instead.
 const DOMAIN_HELPERS_NOT_ON_UI = ["TIER_COLOR", "describeDeniedOperation"] as const;
 
-// U2's DevTools API surface, reachable only through the `@kohaku-ui/admin-react/devtools` subpath.
+// The DevTools API surface (design.md #55), reachable only through the `@kohaku-ui/admin-react/devtools` subpath.
 const DEVTOOLS_EXPORTS = ["KohakuDevTools", "withDevToolsCapture", "defaultDevToolsMessages"] as const;
 
 // The ticket's dependency contract: client + renderer-core (+ sandbox for the promotion preview, spec-core for
@@ -115,7 +115,7 @@ describe("dependency boundary", () => {
     expect(leakedIntoUi).toEqual([]);
   });
 
-  // U2's DevTools ("kohaku explain" as a console panel) lives on its own subpath, same as /ui, so it does not
+  // The DevTools ("kohaku explain" as a console panel, design.md #55) lives on its own subpath, same as /ui, so it does not
   // force every AdminProvider/KohakuAdmin consumer to pull it in. It must not leak onto the root, and must
   // expose the components/helpers a product actually wires (KohakuDevTools + withDevToolsCapture).
   it("does not export DevTools from the root", () => {

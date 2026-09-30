@@ -1,6 +1,8 @@
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
+import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresStoragePort, type PostgresStoragePort } from "../src/index.js";
+import { correlationColumnValue, MAX_CORRELATION_COLUMN_LENGTH } from "../src/schema.js";
 import { backend, startPostgres, uniqueSchema } from "./backend.js";
 
 function ev(id: string, extra: Partial<LineageEventRecord> = {}): LineageEventRecord {
@@ -91,5 +93,38 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: lineage", (
     await port.appendLineage(nonCanonical);
     const [readBack] = await port.listLineage({ limit: 1 });
     expect(JSON.stringify(readBack)).toBe(JSON.stringify(nonCanonical));
+  });
+});
+
+describe("correlationColumnValue", () => {
+  it("keeps an id at or under the bound verbatim and digests a longer one deterministically", () => {
+    const atBound = "a".repeat(MAX_CORRELATION_COLUMN_LENGTH);
+    expect(correlationColumnValue(atBound)).toBe(atBound);
+    const longer = `${atBound}b`;
+    expect(correlationColumnValue(longer)).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(correlationColumnValue(longer)).toBe(correlationColumnValue(longer));
+    expect(correlationColumnValue(longer)).not.toBe(correlationColumnValue(`${atBound}c`));
+  });
+});
+
+describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: oversized correlationId", () => {
+  it("stores the digest in the column, keeps the original in the record, and filters by the full id", async () => {
+    const started = await startPostgres();
+    const schema = uniqueSchema();
+    const pool = new Pool({ connectionString: started.connectionString });
+    const port = createPostgresStoragePort({ pool, schema });
+    try {
+      const long = `req-${"x".repeat(4096)}`;
+      await port.appendLineage(ev("01", { payload: { correlationId: long } }));
+      const { rows } = await pool.query<{ correlation_id: string }>(
+        `SELECT correlation_id FROM "${schema}".kohaku_lineage`,
+      );
+      expect(rows).toEqual([{ correlation_id: correlationColumnValue(long) }]);
+      const [found] = await port.listLineage({ correlationId: long });
+      expect(found?.payload["correlationId"]).toBe(long);
+    } finally {
+      await pool.end();
+      await started.stop();
+    }
   });
 });

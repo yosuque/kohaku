@@ -307,8 +307,10 @@ export interface ApprovalPort {
  * Optional persistence for single-use enforcement of approval tokens, mirroring
  * `CapabilityRevocationStore`'s role for capability tokens. When an `ApprovalPort` is configured with
  * one, `verifyApproval` MUST call `consume` exactly once per verification attempt and deny (`{ ok:
- * false }`) when it returns `false` (already consumed) or throws (store failure — fail-closed, per
- * `ApprovalPort.verifyApproval`'s own contract). An `ApprovalPort` given no store keeps a token usable
+ * false }`) when it returns `false` (already consumed). A `consume` that throws (store failure) is an
+ * infrastructure failure `verifyApproval` cannot classify: it propagates the throw, and the host treats a
+ * thrown `verifyApproval` as a denial (fail-closed, per `ApprovalPort.verifyApproval`'s own contract). An
+ * `ApprovalPort` given no store keeps a token usable
  * repeatedly until it expires (the caller's choice, e.g. for a demo/dev environment).
  */
 export interface ApprovalStore {
@@ -569,8 +571,8 @@ export interface RateLimitResult {
 
 /**
  * A token-bucket rate-limit store, keyed by an opaque caller-supplied string (host-core's
- * `createRateLimiter` composes it as the canonical JSON array `[tenant, principal, routeClass]` — see that
- * function's own doc).
+ * `createRateLimiter` composes it as the `JSON.stringify` of the array `[tenant, principal, routeClass]` — see
+ * that function's own doc).
  * A Port reference implementation (host-core's `createMemoryRateLimitStore`, the in-process default)
  * and future backing-store adapters (Redis, etc.) all implement this same shape, verified against
  * `@kohaku-ui/port-contracts`' `describeRateLimitStorePortContract`.
@@ -588,6 +590,10 @@ export interface RateLimitStore {
    *
    * On denial, `retryAfterMs` estimates the wait until enough tokens will have refilled for this same
    * request to succeed.
+   *
+   * `nowMs` comes from each caller's own clock, so callers of one distributed store can disagree. The
+   * store must not let that skew over-refill a bucket: keep the stored last-refill time monotonic (never
+   * move it backwards to a smaller `nowMs`) or use the backing store's own clock instead.
    */
   take(key: string, cost: number, rule: RateLimitRule, nowMs: number): Promise<RateLimitResult>;
 }

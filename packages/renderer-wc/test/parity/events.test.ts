@@ -3,7 +3,7 @@
 // binding call sequence / action results / DOM appearance via visibleWhen. Both are driven by the same interactions and matched.
 
 import type { ActionResult, BindingClient, ResolveOptions } from "@kohaku-ui/data-binding";
-import type { ActionManifest } from "@kohaku-ui/renderer-core";
+import { type ActionManifest, DEFAULT_MESSAGES } from "@kohaku-ui/renderer-core";
 import { type JsonObject, parseSpec, type TabularData, type UISpec } from "@kohaku-ui/spec-core";
 import { fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -87,7 +87,9 @@ type Step =
   | { act: "fill"; sel: string; value: string }
   | { act: "select"; sel: string; value: string }
   | { act: "submit"; sel: string }
-  | { act: "key"; sel: string; key: string };
+  | { act: "key"; sel: string; key: string }
+  /** Waits for in-flight async work (an invoke round trip) to settle before the next step. */
+  | { act: "settle" };
 
 function recordingBinding(obs: Obs, sc: Scenario): BindingClient {
   return {
@@ -105,6 +107,7 @@ function recordingBinding(obs: Obs, sc: Scenario): BindingClient {
 
 /** React-side interaction (testing-library fireEvent handles controlled input and act). */
 function applyReact(root: ParentNode, step: Step): void {
+  if (step.act === "settle") return;
   const el = root.querySelector(step.sel);
   if (el == null) throw new Error(`React: element not found: ${step.sel}`);
   if (step.act === "click") fireEvent.click(el);
@@ -115,6 +118,7 @@ function applyReact(root: ParentNode, step: Step): void {
 
 /** WC-side interaction (raw DOM. fill dispatches input, select dispatches change, submit dispatches submit natively). */
 function applyWc(root: ParentNode, step: Step): void {
+  if (step.act === "settle") return;
   const el = root.querySelector(step.sel) as HTMLElement | null;
   if (el == null) throw new Error(`WC: element not found: ${step.sel}`);
   if (step.act === "click") (el as HTMLElement).click();
@@ -142,7 +146,10 @@ async function runReact(sc: Scenario): Promise<{ obs: Obs; probe: unknown }> {
     },
     (e) => obs.events.push(e),
   );
-  for (const step of sc.steps) applyReact(container, step);
+  for (const step of sc.steps) {
+    applyReact(container, step);
+    if (step.act === "settle") await flushReact();
+  }
   await flushReact();
   return { obs, probe: sc.probe?.(container) };
 }
@@ -162,7 +169,10 @@ async function runWc(sc: Scenario): Promise<{ obs: Obs; probe: unknown }> {
     (e) => obs.events.push(e),
   );
   const shadow = surface.shadowRoot!;
-  for (const step of sc.steps) applyWc(shadow, step);
+  for (const step of sc.steps) {
+    applyWc(shadow, step);
+    if (step.act === "settle") await tick();
+  }
   await tick();
   return { obs, probe: sc.probe?.(shadow) };
 }
@@ -360,6 +370,86 @@ describe("event behavior parity (control + A1 have identical external observatio
     expect(wc.obs.invokes).toEqual(react.obs.invokes);
   });
 
+  // The visible outcome of a governed action that did not commit: every alert / status region, in DOM order.
+  const notices = (root: ParentNode): string[] =>
+    [...root.querySelectorAll('[role="alert"], [role="status"]')].map(
+      (e) => `${e.getAttribute("role")}:${e.textContent}`,
+    );
+
+  it("governed actions: an invalid payload on action.button is announced as an alert in both (design.md #62)", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        components: [{ id: "root", type: "action.button", props: { action: "annotate", label: "Go" } }],
+        events: [{ on: "root.press", emit: "action.invoke", payload: { note: "way too long" } }],
+      }),
+      actionManifest: {
+        annotate: {
+          tier: "auto",
+          paramsSchema: { type: "object", properties: { note: { type: "string", maxLength: 3 } } },
+        },
+      },
+      steps: [{ act: "click", sel: '[data-kohaku="root"]' }],
+      probe: notices,
+    };
+    const { react, wc } = await bothObserve(sc);
+    expect(react.probe).toEqual([`alert:${DEFAULT_MESSAGES.actionInvalid(1)}`]);
+    expect(wc.probe).toEqual(react.probe);
+  });
+
+  it("governed actions: a declined confirmation on action.button is announced as a status in both (design.md #63)", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        components: [{ id: "root", type: "action.button", props: { action: "annotate", label: "Go" } }],
+        events: [{ on: "root.press", emit: "action.invoke", payload: { note: "hi" } }],
+      }),
+      actionManifest: { annotate: { tier: "confirm" } },
+      confirm: async () => false,
+      steps: [{ act: "click", sel: '[data-kohaku="root"]' }],
+      probe: notices,
+    };
+    const { react, wc } = await bothObserve(sc);
+    expect(react.obs.invokes).toEqual([]);
+    expect(react.probe).toEqual([`status:${DEFAULT_MESSAGES.actionAwaiting("confirm")}`]);
+    expect(wc.probe).toEqual(react.probe);
+  });
+
+  it("governed actions: a form's invalid submit replaces the previous submit's message in both", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        components: [
+          { id: "root", type: "layout.stack", props: {}, children: ["f1"] },
+          {
+            id: "f1",
+            type: "presentForm",
+            props: { action: "annotate", successMessage: "Saved", fields: [{ name: "note", type: "text" }] },
+          },
+        ],
+        events: [{ on: "f1.submit", emit: "action.invoke", payload: { note: "$value.note" } }],
+      }),
+      actionManifest: {
+        annotate: {
+          tier: "auto",
+          paramsSchema: { type: "object", properties: { note: { type: "string", maxLength: 5 } } },
+        },
+      },
+      steps: [
+        { act: "fill", sel: "#f1-note", value: "ok" },
+        { act: "submit", sel: '[data-kohaku="f1"]' },
+        { act: "settle" },
+        { act: "fill", sel: "#f1-note", value: "way too long" },
+        { act: "submit", sel: '[data-kohaku="f1"]' },
+        { act: "settle" },
+      ],
+      probe: notices,
+    };
+    const { react, wc } = await bothObserve(sc);
+    expect(react.obs.invokes).toEqual([{ action: "annotate", payload: { note: "ok" } }]);
+    expect(wc.obs.invokes).toEqual(react.obs.invokes);
+    // Only the rejection remains: "Saved" from the first submit must not linger next to it.
+    expect(react.probe).toEqual([`alert:${DEFAULT_MESSAGES.actionInvalid(1)}`]);
+    expect(wc.probe).toEqual(react.probe);
+  });
+
   it("governed actions: tier confirm defaults to globalThis.confirm identically in both (design.md #62/#63)", async () => {
     const sc: Scenario = {
       spec: spec({
@@ -464,5 +554,68 @@ describe("event behavior parity (control + A1 have identical external observatio
     // Since cellEdit is action.invoke here, it does not flow to onEvent (governance).
     expect(react.obs.events).toEqual([]);
     expect(wc.obs.events).toEqual([]);
+  });
+
+  describe("cellEdit -> governed action.invoke", () => {
+    const EDIT_STEPS: Step[] = [
+      { act: "click", sel: '[data-kohaku="table1"] tbody button[aria-label="Edit Revenue"]' },
+      { act: "fill", sel: '[data-kohaku="table1"] tbody input[aria-label="Edit Revenue"]', value: "999" },
+      { act: "key", sel: '[data-kohaku="table1"] tbody input[aria-label="Edit Revenue"]', key: "Enter" },
+    ];
+    const cellSpec = () =>
+      spec({
+        refVersions: { [REF]: "v1" },
+        components: [
+          { id: "root", type: "layout.stack", props: {}, children: ["table1"] },
+          { id: "table1", type: "presentSpreadsheet", props: { editable: true }, data: { $ref: REF } },
+        ],
+        events: [
+          {
+            on: "table1.cellEdit",
+            emit: "action.invoke",
+            payload: { action: "updateCell", value: "$value.value" },
+          },
+        ],
+      });
+    /** The table body's text plus whether any cell input is still open and marked invalid. */
+    const tableProbe = (root: ParentNode) => ({
+      body: root.querySelector('[data-kohaku="table1"] tbody')?.textContent ?? "",
+      invalidInput: root.querySelector('[data-kohaku="table1"] tbody input[aria-invalid="true"]') != null,
+    });
+
+    it("a payload the manifest rejects is caught in edit mode, before any commit or invoke, in both", async () => {
+      const sc: Scenario = {
+        spec: cellSpec(),
+        actionManifest: {
+          updateCell: {
+            tier: "auto",
+            paramsSchema: { type: "object", properties: { value: { type: "number", maximum: 100 } } },
+          },
+        },
+        steps: EDIT_STEPS,
+        probe: tableProbe,
+      };
+      const { react, wc } = await bothObserve(sc);
+      expect(react.obs.invokes).toEqual([]);
+      expect(wc.obs.invokes).toEqual([]);
+      expect(react.probe).toMatchObject({ invalidInput: true });
+      expect(wc.probe).toEqual(react.probe);
+    });
+
+    it("a declined confirmation puts the server value back in the cell, in both", async () => {
+      const sc: Scenario = {
+        spec: cellSpec(),
+        actionManifest: { updateCell: { tier: "confirm" } },
+        confirm: async () => false,
+        steps: [...EDIT_STEPS, { act: "settle" }],
+        probe: tableProbe,
+      };
+      const { react, wc } = await bothObserve(sc);
+      expect(react.obs.invokes).toEqual([]);
+      expect(wc.obs.invokes).toEqual([]);
+      expect((react.probe as { body: string }).body).not.toContain("999");
+      expect((react.probe as { body: string }).body).toContain("498,200,000");
+      expect(wc.probe).toEqual(react.probe);
+    });
   });
 });

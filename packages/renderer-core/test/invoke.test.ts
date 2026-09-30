@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type ActionManifest,
   type ActionPhase,
+  actionPhaseNotice,
+  DEFAULT_MESSAGES,
   NOOP_INVALIDATION_BUS,
   preflightAction,
   resolveActionName,
@@ -429,5 +431,39 @@ describe("runInvokeTarget (design.md #62/#63 gating)", () => {
       phase: "failed",
       message: "boom",
     });
+  });
+});
+
+describe("actionPhaseNotice", () => {
+  it("reports a rejected payload as an alert carrying the issue count", () => {
+    const phase: ActionPhase = {
+      phase: "invalid",
+      issues: [{ path: "note", code: "maxLength", message: "too long" }],
+    };
+    expect(actionPhaseNotice(phase, DEFAULT_MESSAGES)).toEqual({
+      role: "alert",
+      text: DEFAULT_MESSAGES.actionInvalid(1),
+    });
+  });
+
+  it("reports a pending confirmation / approval as a non-interrupting status", () => {
+    expect(
+      actionPhaseNotice({ phase: "awaitingApproval", tier: "confirm", message: "m" }, DEFAULT_MESSAGES),
+    ).toEqual({ role: "status", text: DEFAULT_MESSAGES.actionAwaiting("confirm") });
+    expect(
+      actionPhaseNotice({ phase: "awaitingApproval", tier: "approve", message: "m" }, DEFAULT_MESSAGES)?.text,
+    ).toBe(DEFAULT_MESSAGES.actionAwaiting("approve"));
+    expect(DEFAULT_MESSAGES.actionAwaiting("confirm")).not.toBe(DEFAULT_MESSAGES.actionAwaiting("approve"));
+  });
+
+  it("has no notice for the other phases", () => {
+    for (const phase of [
+      { phase: "idle" },
+      { phase: "pending" },
+      { phase: "succeeded", result: null },
+      { phase: "failed", message: "x" },
+    ] satisfies ActionPhase[]) {
+      expect(actionPhaseNotice(phase, DEFAULT_MESSAGES)).toBeNull();
+    }
   });
 });

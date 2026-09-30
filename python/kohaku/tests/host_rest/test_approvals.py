@@ -118,6 +118,40 @@ def test_returns_403_when_authorize_governance_denies_action_approve(tmp_path: P
     assert res.json()["error"]["code"] == "CAPABILITY_DENIED"
 
 
+def test_passes_the_action_being_approved_to_authorize_governance(tmp_path: Path) -> None:
+    approvals = _RecordingApprovals()
+    seen: list[Any] = []
+
+    def only_delete(_principal: Any, operation: Any, _tenant: Any) -> bool:
+        seen.append(operation)
+        return bool(operation.kind == "action.approve" and operation.action == "delete")
+
+    authorize: AuthorizeGovernanceHook = only_delete
+    harness = build_harness(
+        tmp_path, approvals=approvals, auth=role_auth("approver"), authorize_governance=authorize
+    )
+    allowed = harness.client.post(_url("/approvals"), json=VALID_BODY)
+    assert allowed.status_code == 200
+    assert seen[0].action == "delete"
+    denied = harness.client.post(_url("/approvals"), json={**VALID_BODY, "action": "purge"})
+    assert denied.status_code == 403
+    assert len(approvals.issue_calls) == 1
+
+
+def test_does_not_consult_authorize_governance_for_a_body_that_fails_validation(tmp_path: Path) -> None:
+    calls: list[Any] = []
+
+    def record(_principal: Any, operation: Any, _tenant: Any) -> bool:
+        calls.append(operation)
+        return True
+
+    authorize: AuthorizeGovernanceHook = record
+    harness = build_harness(tmp_path, approvals=_RecordingApprovals(), authorize_governance=authorize)
+    res = harness.client.post(_url("/approvals"), json={"action": "delete"})
+    assert res.status_code == 400
+    assert calls == []
+
+
 def test_rejects_a_missing_required_field_with_400(tmp_path: Path) -> None:
     harness = build_harness(
         tmp_path, approvals=_RecordingApprovals(), authorize_governance=_allow_all

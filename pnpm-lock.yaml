@@ -373,6 +373,9 @@ importers:
       '@kohaku-ui/spec-core':
         specifier: workspace:^
         version: link:../../packages/spec-core
+      '@kohaku-ui/storage-memory':
+        specifier: workspace:^
+        version: link:../../packages/storage-memory
       '@modelcontextprotocol/server':
         specifier: 'catalog:'
         version: 2.0.0
@@ -978,6 +981,9 @@ importers:
       '@kohaku-ui/host-rest':
         specifier: workspace:^
         version: link:../host-rest
+      '@kohaku-ui/lineage':
+        specifier: workspace:^
+        version: link:../lineage
       '@kohaku-ui/llm':
         specifier: workspace:^
         version: link:../llm

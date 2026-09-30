@@ -595,18 +595,12 @@ async function issueSpecCapability(
 }
 
 /**
- * Per-deps memoized `AllowedActions` (host-core's createAllowedActions, shared with the MCP profile so both
- * profiles agree on how a DomainPort's listOperations() names are cached and retried). Built once per deps
- * (listOperations is async and must not be re-awaited on every compose).
+ * The write-scope filter for capability issuance, derived from the same per-deps `OperationIndex` the action
+ * gate and the `actions` manifest use (routes/shared.ts's `operationIndex`), so the three can never disagree
+ * about which actions exist and `listOperations()` is read (and memoized) once.
  */
-const allowedActionsByDeps = new WeakMap<KohakuHostDeps, hostCore.AllowedActions>();
 function allowedActions(deps: KohakuHostDeps): Promise<ReadonlySet<string>> {
-  let fn = allowedActionsByDeps.get(deps);
-  if (fn == null) {
-    fn = hostCore.createAllowedActions(deps.domain);
-    allowedActionsByDeps.set(deps, fn);
-  }
-  return fn();
+  return hostCore.allowedActionsFromIndex(() => operationIndex(deps))();
 }
 
 /**

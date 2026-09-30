@@ -24,6 +24,8 @@ export {
 export { focusTrapTarget } from "./control/focus-trap.js";
 export {
   type ActionPhase,
+  type ActionPhaseNotice,
+  actionPhaseNotice,
   type InvokeTarget,
   type RunInvokeTargetDeps,
   resolveActionName,
@@ -162,6 +164,7 @@ export {
   planCellEdit,
   type RowsWorkingCopy,
   resolveColumns,
+  revertCellEdit,
   rowKey,
   type SortHeaderDescriptor,
   type SortState,

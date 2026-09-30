@@ -56,6 +56,19 @@ def test_retry_after_ms_reflects_the_shortfall_at_the_refill_rate() -> None:
     asyncio.run(run())
 
 
+def test_a_caller_whose_clock_went_backwards_does_not_rewind_the_stored_refill_time() -> None:
+    async def run() -> None:
+        store = create_memory_rate_limit_store()
+        rule = RateLimitRule(capacity=2, refillPerSecond=1)
+        assert (await store.take("k", 2, rule, 10_000)).allow is True  # drains to 0 at t=10s
+        assert (await store.take("k", 1, rule, 5_000)).allow is False  # skewed caller, 5s in the past
+        # A correct clock 0.5s after the drain: only 0.5 token has refilled. Had the skewed call rewound
+        # the stored time to t=5s, this take would see 5.5s of refill and be allowed.
+        assert (await store.take("k", 1, rule, 10_500)).allow is False
+
+    asyncio.run(run())
+
+
 def test_keys_are_independent_buckets() -> None:
     async def run() -> None:
         store = create_memory_rate_limit_store()
@@ -140,6 +153,28 @@ def test_does_not_collide_across_a_delimiter_ambiguous_tenant_principal_pair() -
         await limiter.take(RateLimiterTakeParams(tenant="a", principal="b:c", routeClass="compose", rule=_RULE))
         assert len(store.keys) == 2
         assert store.keys[0] != store.keys[1]
+
+    asyncio.run(run())
+
+
+def test_encodes_the_key_as_compact_json_with_non_ascii_kept_literal() -> None:
+    """Byte-identical to the TS port's JSON.stringify of the same triple (same expected string there)."""
+
+    class _RecordingKeyStore:
+        def __init__(self) -> None:
+            self.keys: list[str] = []
+
+        async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+            self.keys.append(key)
+            return RateLimitResult(allow=True)
+
+    async def run() -> None:
+        store = _RecordingKeyStore()
+        limiter = create_rate_limiter(store, now=lambda: 0)
+        await limiter.take(
+            RateLimiterTakeParams(tenant="テナント", principal='é:"x', routeClass="compose", rule=_RULE)
+        )
+        assert store.keys == ['["テナント","é:\\"x","compose"]']
 
     asyncio.run(run())
 

@@ -38,4 +38,9 @@ export const JA_MESSAGES: RendererMessages = {
   disclosureAiGenerated: "AIが生成したコンテンツ",
   disclosureAiReviewed: "AI生成後に人がレビューしたコンテンツ",
   actionConfirmDefault: (action) => `「${action}」を実行しますか?`,
+  actionInvalid: (count) => `入力内容に ${count} 件の問題があるため、実行されませんでした`,
+  actionAwaiting: (tier) =>
+    tier === "confirm"
+      ? "確認されなかったため、実行されませんでした"
+      : "承認待ちのため、まだ実行されていません",
 };

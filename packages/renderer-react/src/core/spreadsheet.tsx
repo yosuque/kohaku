@@ -11,6 +11,7 @@ import {
   planCellEdit,
   type RowsWorkingCopy,
   resolveColumns,
+  revertCellEdit,
   rowKey,
   type SpreadsheetCellEdit,
   type SpreadsheetCellEditRuntime,
@@ -60,7 +61,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
   const spec = useSpec();
   const messages = useMessages();
   const locale = useLocale();
-  const { binding } = useRenderer();
+  const { binding, actionManifest } = useRenderer();
   const bus = useDataInvalidation();
   // The effective ref (data.bind resolved against $state) — kept following by the remote controller
   // via setRef (see use-spreadsheet-remote.ts) so a sibling filter's $state change doesn't leave
@@ -133,7 +134,7 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
   }, [editing]);
 
   const commitEdit = (rowIndex: number, col: TabularColumn, raw: string): void => {
-    const plan = planCellEdit({ rows, copy, rowIndex, col, raw });
+    const plan = planCellEdit({ rows, copy, rowIndex, col, raw, spec, node, actionManifest });
     switch (plan.kind) {
       case "invalid":
         setEditing({ rowIndex, column: col.key, invalid: true });
@@ -144,7 +145,13 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
       case "commit":
         setCopy(plan.copy);
         setEditing(undefined);
-        void invokeCellEdit("cellEdit", plan.runtime as unknown as JsonObject);
+        // A confirm / approve edit commits optimistically; if the invoke then ends without committing
+        // (rejected payload, declined confirmation, pending approval, failure), show the server value again.
+        void invokeCellEdit("cellEdit", plan.runtime as unknown as JsonObject, (phase) => {
+          if (phase.phase === "invalid" || phase.phase === "awaitingApproval" || phase.phase === "failed") {
+            setCopy((current) => revertCellEdit(current, rows, rowIndex, col.key, plan.runtime.value.value));
+          }
+        });
         return;
     }
   };

@@ -7,6 +7,7 @@ import {
   resolveWriteActionName,
   type UISpec,
 } from "@kohaku-ui/spec-core";
+import type { RendererMessages } from "../messages.js";
 import type { DataInvalidationBus } from "../stores/invalidation-bus.js";
 import { type ActionManifest, preflightAction } from "./action-manifest.js";
 import { resolvePayloadTemplate } from "./emit.js";
@@ -231,5 +232,28 @@ export async function runInvokeTarget(
     const message = e instanceof Error ? e.message : String(e);
     onPhase({ phase: "failed", message });
     onActionResult?.({ componentId: nodeId, action, phase: "failed", message });
+  }
+}
+
+/**
+ * A visible notice for the two governed-action phases that stop an action before it commits
+ * ("invalid" / "awaitingApproval", design.md #62/#63/#64), or `null` for every other phase. The single
+ * source of truth for both renderers: `role` is `"alert"` for a rejection (interrupting) and `"status"`
+ * for a wait (non-interrupting), matching how a form reports "failed" / "succeeded".
+ */
+export interface ActionPhaseNotice {
+  role: "alert" | "status";
+  text: string;
+}
+
+/** Derives the {@link ActionPhaseNotice} for a phase (localized through `messages`), or `null` when it needs none. */
+export function actionPhaseNotice(phase: ActionPhase, messages: RendererMessages): ActionPhaseNotice | null {
+  switch (phase.phase) {
+    case "invalid":
+      return { role: "alert", text: messages.actionInvalid(phase.issues.length) };
+    case "awaitingApproval":
+      return { role: "status", text: messages.actionAwaiting(phase.tier) };
+    default:
+      return null;
   }
 }

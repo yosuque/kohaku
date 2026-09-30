@@ -80,7 +80,7 @@ describe("buildEvidencePack", () => {
         type: "intent.fixated",
         payload: { intentHash: "h1" },
       }),
-      // intent.migrated (F7's catalog migration, design.md #65) is a real LineageEventType member.
+      // intent.migrated (the catalog migration, design.md #65) is a real LineageEventType member.
       event({
         id: "5",
         ts: "2026-01-09T00:00:00.000Z",

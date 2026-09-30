@@ -222,11 +222,13 @@ export interface KohakuHostDeps {
    * authorization is a product responsibility, and since it becomes authorization-less when not wired, in
    * production either wiring this hook or protecting it with external middleware (a reverse proxy, etc.) is mandatory.**
    * The one exception is `POST /approvals` (`operation.kind` `"action.approve"`): it fails closed with 501
-   * when this hook is not wired, because otherwise any authenticated principal could approve.
+   * when this hook is not wired, because otherwise any authenticated principal could approve. For that kind
+   * `operation.action` carries the governed Action being approved (the request body's `action`), so the hook
+   * can scope approvers per action.
    */
   authorizeGovernance?: (
     principal: Principal,
-    operation: { kind: string; artifactId?: string; intentHash?: string },
+    operation: { kind: string; artifactId?: string; intentHash?: string; action?: string },
     tenant?: string,
   ) => boolean | Promise<boolean>;
   /**

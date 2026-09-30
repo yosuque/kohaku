@@ -1,5 +1,5 @@
 import type { PresentFormField } from "@kohaku-ui/registry";
-import type { ComponentNode, JsonObject, JsonValue } from "@kohaku-ui/spec-core";
+import { type ComponentNode, codePointLength, type JsonObject, type JsonValue } from "@kohaku-ui/spec-core";
 import type { RendererMessages } from "../messages.js";
 import type { SizingTokens } from "../theme.js";
 
@@ -108,8 +108,9 @@ function firstViolation(field: FieldDef, value: JsonValue | undefined): FieldVio
   if (empty) return null;
 
   if (typeof value === "string") {
-    if (field.minLength != null && value.length < field.minLength) return "minLength";
-    if (field.maxLength != null && value.length > field.maxLength) return "maxLength";
+    // Lengths count Unicode code points, matching the ACT-PRM-001 paramsSchema check the host applies.
+    if (field.minLength != null && codePointLength(value) < field.minLength) return "minLength";
+    if (field.maxLength != null && codePointLength(value) > field.maxLength) return "maxLength";
     if (field.pattern != null && !patternMatches(field.pattern, value)) return "pattern";
   }
   // min/max apply only to number (date's min/max are declared as number, so they are out of scope for range matching).

@@ -62,7 +62,7 @@ describe("buildExplainReport", () => {
     expect(report.events).toHaveLength(1);
   });
 
-  it("omits every U2 field for a pre-U2 event (byte-identical to the historical payload shape)", () => {
+  it("omits every explain field for an event recorded before those fields existed (byte-identical to the historical payload shape)", () => {
     const event = composedEvent({ ...BASE_PAYLOAD });
     const report = buildExplainReport([event]);
     const c = report.composes[0]!;

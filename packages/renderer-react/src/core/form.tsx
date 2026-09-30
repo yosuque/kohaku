@@ -1,4 +1,5 @@
 import {
+  actionPhaseNotice,
   asStringArray,
   buildDefaults,
   describeControl,
@@ -38,12 +39,14 @@ export function PresentForm({ node }: ImplProps): ReactNode {
   const positiveText = String(useToken("color.positive.text"));
   const requiredColor = String(useToken("color.negative"));
   const muted = String(useToken("color.muted"));
+  const textColor = String(useToken("color.text"));
   const fieldRowColors: FieldRowColors = { border, muted, requiredColor, errorColor: negativeText };
   const fields = (node.props["fields"] as unknown as FieldDef[]) ?? [];
 
   // Write-execution hook (wires submit directly to action.invoke; if binding is unset, auto-falls back to onEvent forwarding).
   const { state: actionState, invoke } = useInvokeAction(node);
   const submitting = actionState.phase === "pending";
+  const phaseNotice = actionPhaseNotice(actionState, messages);
 
   // If node.data exists, fill initial values from the first row (an "edit this record" form).
   const hasData = node.data?.$ref != null;
@@ -142,6 +145,15 @@ export function PresentForm({ node }: ImplProps): ReactNode {
       {actionState.phase === "failed" && (
         <div role="alert" style={{ color: negativeText, fontSize: sizing.fontSm }}>
           {actionState.message}
+        </div>
+      )}
+      {/* A rejected payload (invalid) or a declined / pending confirmation or approval (awaitingApproval) never commits. */}
+      {phaseNotice != null && (
+        <div
+          role={phaseNotice.role}
+          style={{ color: phaseNotice.role === "alert" ? negativeText : textColor, fontSize: sizing.fontSm }}
+        >
+          {phaseNotice.text}
         </div>
       )}
     </form>

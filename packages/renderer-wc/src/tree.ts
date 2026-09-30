@@ -64,9 +64,17 @@ export function createRuntime(deps: RuntimeDeps): RenderRuntime {
     messages: deps.messages,
     onNodeError: deps.ctx.onNodeError,
     onActionResult: deps.ctx.onActionResult,
-    actionManifest: deps.ctx.actionManifest,
-    confirm: deps.ctx.confirm,
-    requestApproval: deps.ctx.requestApproval,
+    // Read through `deps.ctx` on every access, not snapshotted: the surface hands in a live view of these
+    // three so reassigning one never needs a rebuild (see kohaku-surface.ts's REBUILD_KEYS).
+    get actionManifest() {
+      return deps.ctx.actionManifest;
+    },
+    get confirm() {
+      return deps.ctx.confirm;
+    },
+    get requestApproval() {
+      return deps.ctx.requestApproval;
+    },
     sandbox: deps.ctx.sandbox,
     registry: deps.registry,
     dispatchForward: deps.dispatchForward,

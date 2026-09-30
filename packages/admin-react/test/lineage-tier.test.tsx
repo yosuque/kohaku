@@ -53,4 +53,15 @@ describe("LineagePanel tier label", () => {
     expect(screen.getByText("gate:approve").getAttribute("data-kohaku-tier-kind")).toBe("gate");
     expect(screen.queryByText("approve")).toBeNull();
   });
+
+  it("marks the timestamp as UTC and keeps the full ISO instant in a title", () => {
+    render(
+      <LineagePanel
+        events={[event("1", "view.composed", { tier: "L1" })]}
+        messages={defaultDevToolsMessages}
+      />,
+    );
+    const time = screen.getByText("09:00:00Z");
+    expect(time.getAttribute("title")).toBe("2026-01-01T09:00:00Z");
+  });
 });

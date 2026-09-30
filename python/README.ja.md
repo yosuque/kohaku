@@ -132,7 +132,7 @@ compose/event サーフェス横断の Intent 解決(`host_core.intent.resolve_i
 し、各ハンドラはリクエストスコープの contextvar を読む代わりに自身専用の `ServerRequestContext` を受け取る。
 全ツール結果はすでに `result_type: "complete"` を実の宣言済み pydantic フィールドとして持つ(2.x の
 `CallToolResult` 他の `Result` サブクラスが直接宣言している — TS は自身の SDK バージョン事情で引き続き明示的
-にスタンプしているのとは異なり、事後のスタンプ処理は不要)。compose の相関 id(`_correlation_id_of`、U2)は
+にスタンプしているのとは異なり、事後のスタンプ処理は不要)。compose の相関 id(`_correlation_id_of`、design.md #54)は
 `mcp:<sessionId>:<jsonrpc id>` — `_meta.traceparent`(SEP-414)からは**決して導出しない** — TS と同じ
 ルールである。W3C の trace-id は 1 つのトレース全体で共有されるため、そこから相関 id を導出すると 1 会話内の
 全ツール呼び出しが同じ id に潰れてしまう。TS の `mcpCorrelationId(extra)` は実際のトランスポートセッション id
@@ -176,7 +176,7 @@ Python サンプル(`examples/sales-api`)はシード JSON をリポジトリル
 
 **`storage/` の `FileStoragePort` の永続性契約**: これは参照実装・デモ用の `StoragePort` 実装であり、本番向けストレージバックエンドではない。書き込みは OS のページキャッシュを通すのみで、このモジュールには **`fsync` が一切無い**。tmp→rename のパターンにより読み手が書きかけの不完全なファイルを見ることはない(プロセスクラッシュへの耐性)が、rename 後のバイト列が実際にディスクへ到達していることまでは保証されない(電源断・カーネルパニック等では失われ得る)。**単一プロセス前提**でもある: 同一スナップショットファイルへの並行 read-modify-write はプロセス内でのみ直列化される(パスごとの `asyncio.Lock`。TS の `createKeyedMutex` に相当)ため、同じ `data_dir` を指す 2 プロセスは依然として競合し更新を失い得る。本番投入時は、真の永続性・プロセス間の並行安全性・lineage のローテーション/圧縮を備えた DB バックエンドの `StoragePort` 実装に置き換えること。詳細は `kohaku.storage.file` のモジュール docstring を参照。任意の forward-paging 拡張 `page_lineage`(design.md #53)も実装しており、呼び出し側では `put_promotion_states` が使う「`isinstance` と `runtime_checkable` Protocol」の仕組みではなく、単純な `hasattr(storage, "page_lineage")` プローブで確認する — 理由は `kohaku.spec.ports.StoragePort` の `page_lineage` に付けたコメントを参照。
 
-**`kohaku explain` / DevTools(U2、design.md #54/#55)**: `ComposeTrace.cacheKeyParts`(`cache_key()` 呼び出し
+**`kohaku explain` / DevTools(design.md #54/#55)**: `ComposeTrace.cacheKeyParts`(`cache_key()` 呼び出し
 そのものの部品。TS とバイト単位で一致)と、上で述べた相関 id は、`kohaku.lineage` の `view.composed` /
 `component.generated` / `component.used` / `view.fallback` の payload(`correlationId`、`cacheKey`、
 `cacheKeyParts`、`generatorVersion`、`kit`、`fallback`、`decision`)にも到達するようになった。これは TS の

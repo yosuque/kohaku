@@ -64,7 +64,7 @@ function joinIndex(base: string, index: number): string {
  * `String.prototype.length` counts UTF-16 code units instead, which would make a non-BMP character (an
  * emoji) count twice and disagree with Python's `len()`, which counts code points.
  */
-function codePointLength(value: string): number {
+export function codePointLength(value: string): number {
   let count = 0;
   for (const _ of value) count += 1;
   return count;

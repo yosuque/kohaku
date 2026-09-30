@@ -47,6 +47,8 @@ catalog:
   ulid: ^3.0.2
   vite-plugin-singlefile: ^2.3.3
   axe-core: ^4.13.0
+  # The dev/test version. storage-redis's peer range is deliberately wider (^5.11.1 || ^6.0.0): the adapter's
+  # commands are wire-identical on both majors.
   ioredis: ^6.0.0
   pg: ^8.23.0
   "@types/pg": ^8.23.1

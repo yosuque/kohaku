@@ -16,6 +16,7 @@ export {
   type McpResourceUiMeta,
   type McpToolUiMeta,
   RENDERER_RESOURCE_URI,
+  REQUEST_ID_META_KEY,
   RESOURCE_MIME_TYPE,
   RESOURCE_URI_META_KEY,
   resourceUiMeta,

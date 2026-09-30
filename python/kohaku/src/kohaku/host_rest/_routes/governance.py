@@ -203,9 +203,6 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     # --- Approval issuance for "approve"-tier governed Actions (design.md #63, SPEC ACT-APR-001 [Draft]) --
     @router.post("/approvals")
     async def approvals_route(request: Request) -> Response:
-        denied = await require_governance(deps, request, GovernanceOperation(kind="action.approve"))
-        if denied is not None:
-            return denied
         if deps.approvals is None:
             return _error("NOT_IMPLEMENTED", "approvals are not configured for this host", 501)
         # SPEC ACT-APR-001 (e): issuing is a privileged act, so unlike the other governance routes it does
@@ -217,6 +214,13 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         body = parse_approval_request_body(await _read_json(request))
         if body is None:
             return _error("BAD_REQUEST", "action, payloadHash, and requesterId are required", 400)
+        # The body is parsed before authorizing so the hook can scope the grant to the action being approved
+        # (`operation.action`): a role that may approve one action is not thereby an approver of every action.
+        denied = await require_governance(
+            deps, request, GovernanceOperation(kind="action.approve", action=body.action)
+        )
+        if denied is not None:
+            return denied
         approver = await _get_principal(deps, request)
         # design.md #63: an approver must not be able to approve their own pending action. The
         # ApprovalPort itself also refuses this (defense in depth), but checking here first gives a
@@ -234,7 +238,7 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                 ttl_seconds=body.ttl_seconds,
             )
             return _json({"approval": token})
-        except BaseException as e:
+        except Exception as e:
             await report_host_error(deps, "approvals", request_id, e)
             if getattr(e, "code", None) == APPROVAL_ISSUE_ERROR_CODE:
                 return _error("BAD_REQUEST", _message(e), 400, request_id)

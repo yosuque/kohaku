@@ -37,7 +37,10 @@ export function LineagePanel(props: { events: LineageEventRecord[]; messages: De
       {props.events.map((e) => (
         <details key={e.id} style={row}>
           <summary style={summary}>
-            <span style={{ color: V.muted, whiteSpace: "nowrap" }}>{e.ts.slice(11, 19)}</span>
+            <span style={{ color: V.muted, whiteSpace: "nowrap" }} title={e.ts}>
+              {/* ts is an ISO-8601 UTC instant; the suffix says so, the title carries the full value. */}
+              {`${e.ts.slice(11, 19)}Z`}
+            </span>
             <span style={{ fontWeight: 700 }}>{e.type}</span>
             <TierLabel event={e} />
           </summary>

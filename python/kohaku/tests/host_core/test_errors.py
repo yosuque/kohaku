@@ -4,6 +4,7 @@ packages/host-core/test/errors.test.ts's additions for the same two building blo
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 import pytest
@@ -12,6 +13,7 @@ from kohaku.composer import ComposeErrorContext
 from kohaku.host_core import (
     ConsoleErrorReporterOptions,
     create_console_error_reporter,
+    fail_open,
     format_error_chain,
 )
 from kohaku.spec import Intent
@@ -126,3 +128,34 @@ class TestCreateConsoleErrorReporter:
         captured = capsys.readouterr()
         assert captured.err.strip() == "[kohaku] /compose (request r1): boom"
         assert captured.out == ""
+
+
+class TestFailOpen:
+    def test_reports_an_exception_to_on_failure_instead_of_raising(self) -> None:
+        boom = RuntimeError("record failed")
+        reported: list[BaseException] = []
+
+        async def fn() -> None:
+            raise boom
+
+        async def on_failure(e: BaseException) -> None:
+            reported.append(e)
+
+        asyncio.run(fail_open(fn, on_failure))
+        assert reported == [boom]
+
+    def test_does_not_swallow_a_cancellation(self) -> None:
+        reported: list[BaseException] = []
+
+        async def fn() -> None:
+            raise asyncio.CancelledError
+
+        async def on_failure(e: BaseException) -> None:
+            reported.append(e)
+
+        async def run() -> None:
+            await fail_open(fn, on_failure)
+
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(run())
+        assert reported == []

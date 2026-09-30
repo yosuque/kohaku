@@ -61,7 +61,9 @@ class MemoryRateLimitStore:
             elapsed_seconds = max(0.0, now_ms - existing.last_refill_ms) / 1000
             bucket = _Bucket(
                 tokens=min(rule.capacity, existing.tokens + elapsed_seconds * rule.refillPerSecond),
-                last_refill_ms=now_ms,
+                # Monotonic: a caller whose clock went backwards must not rewind the stored time, or
+                # the next take (with a correct clock) would refill for the rewound span a second time.
+                last_refill_ms=max(existing.last_refill_ms, now_ms),
             )
         else:
             bucket = _Bucket(tokens=rule.capacity, last_refill_ms=now_ms)
@@ -133,7 +135,9 @@ class RateLimiter:
 
     async def take(self, params: RateLimiterTakeParams) -> RateLimitResult:
         key = json.dumps(
-            [params.tenant or "", params.principal or "", params.routeClass], separators=(",", ":")
+            [params.tenant or "", params.principal or "", params.routeClass],
+            separators=(",", ":"),
+            ensure_ascii=False,
         )
         try:
             # wait_for cancels the store call on timeout; a hung store must not stall the request.
@@ -173,8 +177,8 @@ def create_rate_limiter(
     now: Callable[[], float] = _default_now_ms,
     timeout_ms: float = DEFAULT_RATE_LIMIT_TIMEOUT_MS,
 ) -> RateLimiter:
-    """Builds a RateLimiter over a RateLimitStore, keying each bucket by the canonical JSON array
-    [tenant, principal, routeClass] (tenant/principal default to the empty string when unset, so an
+    """Builds a RateLimiter over a RateLimitStore, keying each bucket by the compact JSON encoding of the
+    array [tenant, principal, routeClass] (tenant/principal default to the empty string when unset, so an
     anonymous caller still gets its own bucket per tenant/routeClass rather than colliding with every
     other anonymous caller across route classes -- the MCP profile's "no tenant, no principal" case
     still separates compose from action this way).
@@ -182,10 +186,12 @@ def create_rate_limiter(
     Not a delimiter-joined string (e.g. f"{tenant}:{principal}:{routeClass}"): a plain colon join
     collides whenever a component itself contains the delimiter -- (tenant="a:b", principal="c") and
     (tenant="a", principal="b:c") would both join to "a:b:c:<routeClass>" and share a bucket, letting one
-    caller's usage count against (or be undercounted against) another's. json.dumps(...,
-    separators=(",", ":")) escapes any '"'/':'/control character inside a component, so two distinct
-    triples can never encode to the same string; the separators argument drops the whitespace json.dumps
-    adds by default, matching the TS port's JSON.stringify (which never adds whitespace) byte-for-byte --
+    caller's usage count against (or be undercounted against) another's. Every element is a
+    quoted string in a JSON array, and json.dumps escapes any '"' / backslash / control character inside
+    it, so two distinct triples can never encode to the same string (a ':' inside a component is not
+    escaped, and does not need to be). separators=(",", ":") drops the whitespace json.dumps adds by
+    default and ensure_ascii=False keeps non-ASCII characters literal instead of \\uXXXX-escaped, matching
+    the TS port's JSON.stringify byte-for-byte --
     not that cross-language key equality itself matters (each language's in-process RateLimitStore never
     shares state with the other's), just that a divergent encoding isn't left as a subtle trap for a
     future shared backing store.

@@ -33,6 +33,7 @@ import {
   KOHAKU_MCP_LIST_CACHE_HINT,
   RENDERER_RESOURCE_CACHE_HINT,
   RENDERER_RESOURCE_URI,
+  REQUEST_ID_META_KEY,
   RESOURCE_MIME_TYPE,
   RESOURCE_URI_META_KEY,
   UI_META_KEY,
@@ -701,6 +702,73 @@ describe("requestContextOf: reads the per-call abort signal and JSON-RPC id from
       fakeServerContext({ signal: new AbortController().signal, id: "v2-req-1" }, "sess-abc"),
     );
     expect(correlationId).toBe("mcp:sess-abc:v2-req-1");
+  });
+
+  it("bounds a client-controlled JSON-RPC id: an over-long or non-printable id is replaced by a short digest", async () => {
+    const correlationIds: (string | undefined)[] = [];
+    const server = new McpServer({ name: "kohaku-mcpreq-bounded-id", version: "0.1.0" });
+    const handlers = captureToolHandlers(server);
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: makeComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        async onComposed(_spec, trace) {
+          correlationIds.push(trace.correlationId);
+        },
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+
+    for (const id of ["x".repeat(5000), "line1\nline2", "y".repeat(5000)]) {
+      await handlers["kohaku_compose"]!(
+        { question: "Monthly revenue trend" },
+        fakeServerContext({ signal: new AbortController().signal, id }, "sess-abc"),
+      );
+    }
+    expect(correlationIds).toHaveLength(3);
+    for (const id of correlationIds) {
+      expect(id).toMatch(/^mcp:sess-abc:h[0-9a-f]{32}$/);
+    }
+    // Digest-based, so distinct inputs stay distinct.
+    expect(new Set(correlationIds).size).toBe(3);
+    // An over-long session id (legacy stateful transport) is bounded the same way.
+    correlationIds.length = 0;
+    await handlers["kohaku_compose"]!(
+      { question: "Monthly revenue trend" },
+      fakeServerContext({ signal: new AbortController().signal, id: "1" }, "s".repeat(5000)),
+    );
+    expect(correlationIds[0]).toMatch(/^mcp:h[0-9a-f]{32}:1$/);
+  });
+
+  it("returns the correlation id in the result's _meta['kohaku/requestId'] (never structuredContent)", async () => {
+    let correlationId: string | undefined;
+    const server = new McpServer({ name: "kohaku-mcpreq-meta-id", version: "0.1.0" });
+    const handlers = captureToolHandlers(server);
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: makeComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        async onComposed(_spec, trace) {
+          correlationId = trace.correlationId;
+        },
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+
+    const result = (await handlers["kohaku_compose"]!(
+      { question: "Monthly revenue trend" },
+      fakeServerContext({ signal: new AbortController().signal, id: "7" }, "sess-abc"),
+    )) as { _meta?: Record<string, unknown>; structuredContent?: unknown };
+    expect(correlationId).toBe("mcp:sess-abc:7");
+    expect(result._meta?.[REQUEST_ID_META_KEY]).toBe("mcp:sess-abc:7");
+    expect(REQUEST_ID_META_KEY).toBe("kohaku/requestId");
+    expect(JSON.stringify(result.structuredContent)).not.toContain("mcp:sess-abc:7");
   });
 
   it("kohaku_action's synchronous aborted check reads ctx.mcpReq.signal", async () => {
@@ -2423,11 +2491,8 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
 
   it("rejects a constructor key in the payload with a structured ACTION_PARAMS_INVALID error, without invoking the domain", async () => {
     // Regression test for a prototype-chain lookup bug in validateActionParams (spec-core). Uses
-    // "constructor" rather than "__proto__": the tool input schema's JsonObjectSchema (spec-core, backed
-    // by zod's z.record) already strips an incoming "__proto__" key on its own (zod 4's own
-    // prototype-pollution guard) before this ever reaches the action gate, but does not strip
-    // "constructor" / "prototype" / "toString" -- those reach validateActionParams as genuine own
-    // properties, the same shape a real attacker payload would have.
+    // "constructor" as the plain own-property shape; the "__proto__" key, which a schema-parsed copy of the
+    // payload silently drops, has its own test below.
     const { client, domain } = await connectGoverned();
     const composed = await client.callTool({
       name: "kohaku_compose",
@@ -2449,6 +2514,51 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     expect(sc.error?.issues).toEqual([
       { path: "constructor", code: "unsafeKey", message: 'the property name "constructor" is not allowed' },
     ]);
+    expect(domain.invocations).toHaveLength(0);
+    await client.close();
+  });
+
+  it("rejects a __proto__ key in the payload with a structured ACTION_PARAMS_INVALID error, without invoking the domain", async () => {
+    // The tool input schema's JsonObjectSchema (zod's z.record) silently drops an own "__proto__" key while
+    // parsing, so the ActionGate would never see it; the handler must scan the raw arguments first.
+    const { client, domain } = await connectGoverned();
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    // JSON.parse (unlike an object literal) makes "__proto__" a genuine own property, as on the wire.
+    const payload = JSON.parse('{"note":"hi","__proto__":{"polluted":true}}') as Record<string, unknown>;
+    const result = await client.callTool({
+      name: "kohaku_action",
+      arguments: { action: "annotate", payload, capability, confirmed: true },
+    });
+    expect(result.isError).toBe(true);
+    const sc = result.structuredContent as { error?: { code?: string; issues?: unknown[] } };
+    expect(sc.error?.code).toBe("ACTION_PARAMS_INVALID");
+    expect(sc.error?.issues).toEqual([
+      { path: "__proto__", code: "unsafeKey", message: 'the property name "__proto__" is not allowed' },
+    ]);
+    expect(domain.invocations).toHaveLength(0);
+    await client.close();
+  });
+
+  it("rejects a non-object or over-deep payload as a tool error, without invoking the domain", async () => {
+    const { client, domain } = await connectGoverned();
+    const composed = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Annotation form" },
+    });
+    const capability = capabilityOf(composed);
+    let deep: Record<string, unknown> = { note: "x" };
+    for (let i = 0; i < 200; i++) deep = { nested: deep };
+    for (const payload of [["not", "an", "object"], deep]) {
+      const result = await client.callTool({
+        name: "kohaku_action",
+        arguments: { action: "annotate", payload, capability, confirmed: true },
+      });
+      expect(result.isError).toBe(true);
+    }
     expect(domain.invocations).toHaveLength(0);
     await client.close();
   });
@@ -2544,6 +2654,54 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
+  it("onError carries the failing call's correlationId (the same mcp:... id as the lineage events)", async () => {
+    const seen: { endpoint: string; correlationId?: string }[] = [];
+    const server = new McpServer({ name: "kohaku-onerror-correlation", version: "0.1.0" });
+    const handlers = captureToolHandlers(server);
+    attachKohakuToMcpServer(
+      server,
+      {
+        compose: makeComposeCtx(),
+        domain,
+        authz,
+        querySource: "sales",
+        onError: (info) => void seen.push(info),
+      },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+    const result = (await handlers["kohaku_resolve_binding"]!(
+      { ref: "not-a-query-ref", capability: "cap:none" },
+      fakeServerContext({ signal: new AbortController().signal, id: "9" }, "sess-abc"),
+    )) as { isError?: boolean };
+    expect(result.isError).toBe(true);
+    expect(seen.find((s) => s.endpoint === "kohaku_resolve_binding")?.correlationId).toBe("mcp:sess-abc:9");
+  });
+
+  it("attaches over the same DomainPort share one operation index: listOperations once, a bad schema reported once (stateless HTTP re-attaches per exchange)", async () => {
+    const seen: { endpoint: string; error: unknown }[] = [];
+    let listCalls = 0;
+    const sharedDomain: DomainPort = {
+      async listOperations() {
+        listCalls++;
+        return [
+          { name: "annotate", description: "d", paramsSchema: { type: "string", pattern: "^a$" } as never },
+        ];
+      },
+      async invoke() {
+        return { ok: true };
+      },
+    };
+    const first = await connectGoverned({ domain: sharedDomain, onError: (info) => void seen.push(info) });
+    await vi.waitFor(() => expect(seen.some((s) => s.endpoint === "attach.operationIndex")).toBe(true));
+    // A second attach builds a fresh deps object (as a per-request HTTP attach does) around the same DomainPort.
+    const second = await connectGoverned({ domain: sharedDomain, onError: (info) => void seen.push(info) });
+    await second.client.callTool({ name: "kohaku_compose", arguments: { question: "Annotation form" } });
+    expect(listCalls).toBe(1);
+    expect(seen.filter((s) => s.endpoint === "attach.operationIndex")).toHaveLength(1);
+    await first.client.close();
+    await second.client.close();
+  });
+
   it("a bad paramsSchema on one operation breaks only that operation: its write scope survives, the other operation still invokes", async () => {
     const invocations: string[] = [];
     const twoOpDomain: DomainPort = {
@@ -2588,7 +2746,7 @@ describe("task D: governed actions on kohaku_action + kohaku/actions manifest (d
     await client.close();
   });
 
-  it("rejects the A2UI inbound forwarding sentinel -- it must never be a real registered operation (F3)", async () => {
+  it("rejects the A2UI inbound forwarding sentinel -- it must never be a real registered operation (design.md decision 60)", async () => {
     // "a2ui.forward" is host-a2ui's A2UI_FORWARD_ACTION (packages/host-a2ui/src/inbound/from-a2ui.ts):
     // decision #60 requires it is never registered as a real DomainPort operation, so a governedDomain()
     // that (correctly) never declares it must reject it -- here the compose-issued capability carries no

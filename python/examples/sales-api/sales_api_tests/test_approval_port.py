@@ -294,6 +294,8 @@ class TestMalformedTokens:
             {"approverId": ["a"]},
             {"exp": "9999999999"},
             {"exp": True},
+            {"exp": float("nan")},
+            {"exp": float("inf")},
             {"jti": None},
             {"tenant": 5},
         ],

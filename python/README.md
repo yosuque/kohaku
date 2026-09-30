@@ -138,7 +138,7 @@ decorators mcp 1.x used, and every handler receives its own `ServerRequestContex
 request-scoped contextvar). Every tool result already carries `result_type: "complete"` as a real declared
 pydantic field (2.x's `CallToolResult` and other `Result` subclasses declare it directly — no post-hoc
 stamping needed, unlike TS which still stamps it explicitly for its own SDK-version reasons). The compose
-correlation id (`_correlation_id_of`, U2) is `mcp:<sessionId>:<jsonrpc id>` — **never** derived from
+correlation id (`_correlation_id_of`, design.md #54) is `mcp:<sessionId>:<jsonrpc id>` — **never** derived from
 `_meta.traceparent` (SEP-414), the same rule TS enforces: a W3C trace-id is shared by an entire trace, so
 deriving the correlation id from it would collapse every tool call in one conversation onto the same id. TS's
 `mcpCorrelationId(extra)` reads a real transport session id when one is available (`ServerContext.sessionId`),
@@ -208,7 +208,7 @@ forward-paging extension `page_lineage` (design.md #53), checked at call sites w
 mechanism `put_promotion_states` uses — see `kohaku.spec.ports.StoragePort`'s comment on `page_lineage` for
 why.
 
-**`kohaku explain` / DevTools (U2, design.md #54/#55)**: `ComposeTrace.cacheKeyParts` (the `cache_key()`
+**`kohaku explain` / DevTools (design.md #54/#55)**: `ComposeTrace.cacheKeyParts` (the `cache_key()`
 call's own components, matching TS byte-for-byte) and the same correlation id described above now also reach
 `kohaku.lineage`'s `view.composed` / `component.generated` / `component.used` / `view.fallback` payloads
 (`correlationId`, `cacheKey`, `cacheKeyParts`, `generatorVersion`, `kit`, `fallback`, `decision`), mirroring

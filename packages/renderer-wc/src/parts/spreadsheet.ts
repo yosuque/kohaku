@@ -13,6 +13,7 @@ import {
   planCellEdit,
   type RowsWorkingCopy,
   resolveColumns,
+  revertCellEdit,
   type SizingTokens,
   type SortState,
   type SpreadsheetCellEdit,
@@ -144,7 +145,16 @@ export const presentSpreadsheet: PartBuilder = (rt, parent, node) => {
     col: TabularColumn,
   ): void => {
     if (editing?.rowIndex !== rowIndex || editing.column !== col.key || !input.isConnected) return;
-    const plan = planCellEdit({ rows, copy, rowIndex, col, raw: input.value });
+    const plan = planCellEdit({
+      rows,
+      copy,
+      rowIndex,
+      col,
+      raw: input.value,
+      spec: rt.spec,
+      node,
+      actionManifest: rt.actionManifest,
+    });
     switch (plan.kind) {
       case "invalid":
         // Keep the same input node (no rerender): a full rebuild would replace it with a fresh one
@@ -164,7 +174,17 @@ export const presentSpreadsheet: PartBuilder = (rt, parent, node) => {
         rerender();
         // SpreadsheetCellEditRuntime -> JsonObject: a plain nested-object shape, just without index
         // signatures — structurally a JsonObject at runtime.
-        rt.invoke(node, "cellEdit", plan.runtime as unknown as JsonObject, null, () => {});
+        // A confirm / approve edit commits optimistically; if the invoke then ends without committing
+        // (rejected payload, declined confirmation, pending approval, failure), show the server value again.
+        rt.invoke(node, "cellEdit", plan.runtime as unknown as JsonObject, null, (phase) => {
+          if (phase.phase !== "invalid" && phase.phase !== "awaitingApproval" && phase.phase !== "failed") {
+            return;
+          }
+          const reverted = revertCellEdit(copy, rows, rowIndex, col.key, plan.runtime.value.value);
+          if (reverted === copy) return;
+          copy = reverted;
+          rerender();
+        });
         return;
     }
   };

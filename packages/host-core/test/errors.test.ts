@@ -165,11 +165,18 @@ describe("createConsoleErrorReporter", () => {
     expect(lines).toEqual(["[kohaku] /compose (request r1): boom"]);
   });
 
-  it("mcp(): logs a one-line summary that carries no request id", () => {
+  it("mcp(): logs a one-line summary without a correlation id when the failing path has none", () => {
     const { lines, log } = captureLines();
     const reporter = createConsoleErrorReporter({ log });
     reporter.mcp({ endpoint: "kohaku_compose", error: new Error("boom") });
     expect(lines).toEqual(["[kohaku] mcp kohaku_compose: boom"]);
+  });
+
+  it("mcp(): prints the call's correlation id when one is provided", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    reporter.mcp({ endpoint: "kohaku_action", error: new Error("boom"), correlationId: "mcp:sess:7" });
+    expect(lines).toEqual(["[kohaku] mcp kohaku_action (correlation mcp:sess:7): boom"]);
   });
 
   it("debug:true logs the full cause chain and the stack trace, as separate lines", () => {

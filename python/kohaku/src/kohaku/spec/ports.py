@@ -299,8 +299,10 @@ class ApprovalPort(Protocol):
 class ApprovalStore(Protocol):
     """Optional persistence for single-use enforcement of approval tokens. Port of TS ports.ts's
     ApprovalStore. When an ApprovalPort is configured with one, verify_approval MUST call `consume`
-    exactly once per verification attempt and deny (`ok=False`) when it returns False (already consumed)
-    or raises (store failure -- fail-closed). An ApprovalPort given no store keeps a token usable
+    exactly once per verification attempt and deny (`ok=False`) when it returns False (already consumed).
+    A `consume` that raises (store failure) is an infrastructure failure verify_approval cannot classify:
+    it propagates the exception, and the host treats a raised verify_approval as a denial (fail-closed, per
+    ApprovalPort.verify_approval's own contract). An ApprovalPort given no store keeps a token usable
     repeatedly until it expires."""
 
     async def consume(self, jti: str, expires_at: int) -> bool:
@@ -609,8 +611,8 @@ class RateLimitResult:
 
 class RateLimitStore(Protocol):
     """A token-bucket rate-limit store, keyed by an opaque caller-supplied string (host_core's
-    create_rate_limiter composes it as the canonical JSON array [tenant, principal, routeClass] — see
-    that function's own doc). A
+    create_rate_limiter composes it as the compact JSON encoding of the array
+    [tenant, principal, routeClass] — see that function's own doc). A
     Port reference implementation (host_core's create_memory_rate_limit_store, the in-process default)
     and future backing-store adapters all implement this same shape. Port of TS ports.ts's
     RateLimitStore.
@@ -632,7 +634,12 @@ class RateLimitStore(Protocol):
         fixed clock in tests.
 
         On denial, `retryAfterMs` estimates the wait until enough tokens will have refilled for this
-        same request to succeed."""
+        same request to succeed.
+
+        `now_ms` comes from each caller's own clock, so callers of one distributed store can disagree.
+        The store must not let that skew over-refill a bucket: keep the stored last-refill time
+        monotonic (never move it backwards to a smaller `now_ms`) or use the backing store's own
+        clock instead."""
         ...
 
 

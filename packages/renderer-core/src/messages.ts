@@ -79,6 +79,18 @@ export interface RendererMessages {
    * `confirm` hook (`globalThis.confirm`), consulted only when the host does not supply its own.
    */
   actionConfirmDefault: (action: string) => string;
+  /**
+   * Governed actions (design.md #62/#64): shown when an action was rejected before it committed because
+   * its payload failed the action's `paramsSchema` (locally or as the server's 422 `ACTION_PARAMS_INVALID`).
+   * count is the number of reported issues.
+   */
+  actionInvalid: (count: number) => string;
+  /**
+   * Governed actions (design.md #62/#63): shown when an action did not run because it is waiting on the
+   * user or an approver -- a "confirm"-tier action whose confirmation was declined, or an "approve"-tier
+   * action whose approval is still pending.
+   */
+  actionAwaiting: (tier: "confirm" | "approve") => string;
 }
 
 /** Default English strings. The default value of RendererMessages. */
@@ -117,4 +129,9 @@ export const DEFAULT_MESSAGES: RendererMessages = {
   disclosureAiGenerated: "AI-generated content",
   disclosureAiReviewed: "AI-assisted, human-reviewed content",
   actionConfirmDefault: (action) => `Proceed with "${action}"?`,
+  actionInvalid: (count) => `The action was not run: ${count} issue(s) found in the input`,
+  actionAwaiting: (tier) =>
+    tier === "confirm"
+      ? "The action was not run because it was not confirmed"
+      : "The action is waiting for approval before it can run",
 };

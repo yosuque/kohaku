@@ -101,21 +101,28 @@ export function negotiate(
 
   if (downgrades.length === 0) return { spec, downgrades };
 
+  // A Spec carries one fallback trace (recording several kinds = turning it into an array is future
+  // work). An existing "generation" fallback (or one without a kind) marks the Spec as deterministic
+  // output rather than model output, which the render-side disclosure derivation relies on (design.md
+  // decision 66), so negotiation must not overwrite it; the downgrades are still returned. Only a Spec
+  // with no fallback, or with an earlier "negotiation" one, gets the negotiation trace.
+  const existing = spec.provenance.fallback;
+  const keepExisting = existing != null && existing.kind !== "negotiation";
+
   return {
     spec: {
       ...spec,
       components,
-      provenance: {
-        ...spec.provenance,
-        // If an existing fallback is present (e.g. "generation" from a generation failure), negotiation
-        // overwrites it last-writer-wins (a simplification of one downgrade trace per Spec; recording
-        // multiple kinds together = turning it into an array is future work).
-        fallback: {
-          from: downgrades.map((d) => `${d.id}:${d.from}`).join(","),
-          reason: "capability negotiation",
-          kind: "negotiation",
-        },
-      },
+      provenance: keepExisting
+        ? spec.provenance
+        : {
+            ...spec.provenance,
+            fallback: {
+              from: downgrades.map((d) => `${d.id}:${d.from}`).join(","),
+              reason: "capability negotiation",
+              kind: "negotiation",
+            },
+          },
     },
     downgrades,
   };

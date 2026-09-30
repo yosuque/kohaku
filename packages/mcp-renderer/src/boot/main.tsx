@@ -59,6 +59,7 @@ import {
   resolveHostTheme,
   type ThemeHostContext,
 } from "./host-integration.js";
+import { actionRateLimitedError, resolveFailureResponse } from "./tool-errors.js";
 
 /**
  * Timeout for app-originated tool calls (ms). A cutoff so an unresponsive host does not freeze indefinitely.
@@ -460,7 +461,7 @@ function createBridgeController(app: App, openai: OpenAiWidgetApi | undefined): 
             );
             if (result.isError === true) {
               console.log(`[kohaku] resolve failed: ${ref.raw} (tool error)`);
-              return { status: 403, body: null };
+              return resolveFailureResponse(result.structuredContent);
             }
             const data = (result.structuredContent as { data?: TabularData } | undefined)?.data;
             console.log(`[kohaku] resolve done: ${ref.raw}`);
@@ -541,6 +542,10 @@ function createBridgeController(app: App, openai: OpenAiWidgetApi | undefined): 
               });
             }
             pushModelContext(summarizeActionForModel(action, { phase: "failed", message: text ?? "" }));
+            // A structured RATE_LIMITED keeps its retryAfterMs (SPEC §6.1) as a BindingError, like data-binding's
+            // REST client does for a 429, instead of collapsing into a plain Error.
+            const rateLimited = actionRateLimitedError(result.structuredContent);
+            if (rateLimited != null) throw rateLimited;
             throw new Error(`Write operation "${action}" failed: ${text ?? ""}`);
           }
           // Writes (app-only tools) are also invisible to the model, so feed back only the fact of execution

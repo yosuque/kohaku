@@ -544,6 +544,34 @@ describe("signManifest / verifyEvidencePack", () => {
     ]);
   });
 
+  it("fails (never throws) on a tampered manifest holding a number that parses to Infinity", async () => {
+    const { pack, manifestJson, signatureBase64, publicKey } = await buildSignedPack();
+    const tampered = manifestJson.replace('"complete":true', '"complete":true,"extra":1e400');
+    expect(tampered).not.toBe(manifestJson);
+    const result = await verifyEvidencePack(memoryReader(pack.files, tampered, signatureBase64), publicKey);
+    expect(result.ok).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(
+      await verifyManifestSignature({ extra: Number.POSITIVE_INFINITY }, signatureBase64, publicKey),
+    ).toBe(false);
+  });
+
+  it("rejects a manifest.json with a duplicate object key even though its parsed value still verifies", async () => {
+    const { pack, manifestJson, signatureBase64, publicKey } = await buildSignedPack();
+    // The duplicate repeats the same value, so JSON.parse yields the signed value and the signature holds:
+    // only the duplicate-key check can refuse it.
+    const withDuplicate = manifestJson.replace('"complete":true', '"complete":true,"complete":true');
+    expect(withDuplicate).not.toBe(manifestJson);
+    expect(await verifyManifestSignature(JSON.parse(withDuplicate), signatureBase64, publicKey)).toBe(true);
+    const result = await verifyEvidencePack(
+      memoryReader(pack.files, withDuplicate, signatureBase64),
+      publicKey,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]).toContain("duplicate object key");
+    expect(result.errors[0]).toContain("complete");
+  });
+
   it("fails cleanly on a manifest that is not valid JSON", async () => {
     const keyPair = await generateEd25519KeyPair();
     const reader: EvidencePackReader = {

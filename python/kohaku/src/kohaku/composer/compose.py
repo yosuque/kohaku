@@ -646,16 +646,19 @@ async def _persist_and_trace(
     """After the cache store (condition/timing consolidated in _should_persist), builds the ComposeTrace for the
     leader. The L0 short-circuit does the equivalent store/trace on the _try_fixed_spec side, so this is dedicated
     to the L1/L2/fallback path."""
+    # Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
+    # this function at all; a no-attempts fallback has usage=None and is excluded by
+    # notify_budget_usage's own check) — see ComposeBudget.on_usage's doc. Runs before the cache store:
+    # with cacheFailure="closed" a failing put re-raises, and the tokens already spent on generation must
+    # still be charged (else every retry during a cache outage would generate uncharged).
+    notify_budget_usage(prepared.policy.budget, _sum_usage(attempts), prepared.tenant)
+
     if _should_persist(spec, prepared.cache_mode):
         await _put_spec_cache_safely(ctx, prepared, spec)
 
     fallback_reason = outcome.reason if isinstance(outcome, _TierOutcomeFallback) else None
     model = outcome.model if isinstance(outcome, _TierOutcomeOk) else None
     cancelled = outcome.cancelled if isinstance(outcome, _TierOutcomeFallback) else False
-    # Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
-    # this function at all; a no-attempts fallback has usage=None and is excluded by
-    # notify_budget_usage's own check) — see ComposeBudget.on_usage's doc.
-    notify_budget_usage(prepared.policy.budget, _sum_usage(attempts), prepared.tenant)
     trace = _build_trace(
         prepared,
         tier=spec.provenance.tier,

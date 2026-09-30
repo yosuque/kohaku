@@ -16,7 +16,7 @@
     "@kohaku-ui/spec-core": "workspace:^"
   },
   "peerDependencies": {
-    "ioredis": "catalog:"
+    "ioredis": "^5.11.1 || ^6.0.0"
   },
   "devDependencies": {
     "@kohaku-ui/port-contracts": "workspace:^",

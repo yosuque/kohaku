@@ -4,7 +4,7 @@
 - create_kohaku_mcp_setup: smoke-pins that a Server can be assembled with the governance wiring (fixation_lookup /
   fixations / on_composed / action_effects) included (that create_server does not throw).
 - make_snapshot_locator / make_renderer_html_loader: pins the pure logic.
-- mcp_http's path-traversal defense / allowed_hosts parsing: pinned.
+- mcp_http's path-traversal defense / allowed_hosts parsing / Host + Origin validation and CORS: pinned.
 """
 
 from __future__ import annotations
@@ -16,7 +16,12 @@ import pytest
 from mcp.server import NotificationOptions
 
 from sales_api.fake_llm import create_deterministic_fake_llm
-from sales_api.mcp_http import _serve_snapshot_body, build_starlette_app, parse_allowed_hosts
+from sales_api.mcp_http import (
+    _serve_snapshot_body,
+    allowed_hostname_of,
+    build_starlette_app,
+    parse_allowed_hosts,
+)
 from sales_api.mcp_setup import (
     KohakuMcpSetup,
     create_kohaku_mcp_setup,
@@ -150,7 +155,7 @@ class TestBuildStarletteApp:
 
         setup = self._setup(tmp_path)
         app = build_starlette_app(setup, allowed_hosts=None, host="127.0.0.1")
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost") as client:
             # The custom_starlette_routes snapshot route and the SDK-built /mcp route coexist on one app.
             missing = client.get("/snapshots/does-not-exist.html")
             assert missing.status_code == 404
@@ -172,17 +177,74 @@ class TestBuildStarletteApp:
             assert init.status_code == 200
             assert '"protocolVersion":"2025-06-18"' in init.text
 
-    def test_cors_headers_are_present_on_the_mcp_route(self, tmp_path: Path) -> None:
+    def test_cors_echoes_only_an_allowed_origin_never_a_wildcard(self, tmp_path: Path) -> None:
         from starlette.testclient import TestClient
 
         setup = self._setup(tmp_path)
-        app = build_starlette_app(setup, allowed_hosts=None, host="127.0.0.1")
-        with TestClient(app) as client:
-            preflight = client.options(
+        app = build_starlette_app(
+            setup, allowed_hosts=None, allowed_origins=["claude.ai"], host="127.0.0.1"
+        )
+        with TestClient(app, base_url="http://localhost") as client:
+            allowed = client.options(
                 "/mcp",
-                headers={
-                    "Origin": "https://claude.ai",
-                    "Access-Control-Request-Method": "POST",
-                },
+                headers={"Origin": "https://claude.ai", "Access-Control-Request-Method": "POST"},
             )
-            assert preflight.headers.get("access-control-allow-origin") == "*"
+            assert allowed.headers.get("access-control-allow-origin") == "https://claude.ai"
+            local = client.options(
+                "/mcp",
+                headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"},
+            )
+            assert local.headers.get("access-control-allow-origin") == "http://localhost:5173"
+            denied = client.options(
+                "/mcp",
+                headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"},
+            )
+            assert denied.headers.get("access-control-allow-origin") is None
+
+    def test_host_and_origin_are_validated_by_default_on_both_routes(self, tmp_path: Path) -> None:
+        from starlette.testclient import TestClient
+
+        setup = self._setup(tmp_path)
+        app = build_starlette_app(setup, allowed_hosts=["tunnel.example"], host="127.0.0.1")
+        with TestClient(app, base_url="http://localhost") as client:
+            # A bad Host is rejected on the snapshot route too (streamable_http_app only guards /mcp).
+            assert client.get("/snapshots/x.html", headers={"Host": "evil.example"}).status_code == 421
+            assert client.get("/snapshots/x.html", headers={"Host": "tunnel.example"}).status_code == 404
+            assert (
+                client.get("/snapshots/x.html", headers={"Origin": "https://evil.example"}).status_code
+                == 403
+            )
+            body = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            }
+            accept = {"Accept": "application/json, text/event-stream"}
+            bad_host = client.post("/mcp", json=body, headers={**accept, "Host": "evil.example"})
+            assert bad_host.status_code == 421
+            bad_origin = client.post("/mcp", json=body, headers={**accept, "Origin": "https://evil.example"})
+            assert bad_origin.status_code == 403
+            ok = client.post("/mcp", json=body, headers=accept)
+            assert ok.status_code == 200
+
+
+class TestAllowedHostnameOf:
+    @pytest.mark.parametrize(
+        ("entry", "hostname"),
+        [
+            ("localhost", "localhost"),
+            ("allowed.example:9999", "allowed.example"),
+            ("https://x.trycloudflare.com", "x.trycloudflare.com"),
+            ("https://x.example:8443/path", "x.example"),
+            ("[::1]:8788", "[::1]"),
+            ("[::1]", "[::1]"),
+            ("  spaced.example  ", "spaced.example"),
+        ],
+    )
+    def test_strips_scheme_port_and_path(self, entry: str, hostname: str) -> None:
+        assert allowed_hostname_of(entry) == hostname

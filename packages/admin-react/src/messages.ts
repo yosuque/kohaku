@@ -95,7 +95,7 @@ export interface AdminMessages {
     usesSessions: (uses: number, sessions: number) => string;
     changesRequestedBanner: string;
     generatedHtml: (kb: string) => string;
-    /** F-1: shown when the candidate's origin (kit / generatorVersion) is known. kit is "id@version" or "—". */
+    /** Generation provenance: shown when the candidate's origin (kit / generatorVersion) is known. kit is "id@version" or "—". */
     generatedWith: (kit: string, generatorVersion?: string) => string;
     descriptionFieldLabel: string;
     schemaDetailsSummary: string;

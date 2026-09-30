@@ -354,11 +354,17 @@ export const DISCLOSURE_CORPUS: Record<string, UISpec> = {
     cache: "fixated",
   }),
   "none (tier L0, cache miss)": disclosureSpec({ tier: "L0", composedBy: "parity", cache: "miss" }),
-  "none (fallback overrides tier L2)": disclosureSpec({
+  "none (generation fallback overrides tier L2)": disclosureSpec({
     tier: "L2",
     composedBy: "parity",
     cache: "hit",
-    fallback: { from: "sandbox1:sandbox.html", reason: "capability negotiation" },
+    fallback: { from: "L2", reason: "generation exhausted", kind: "generation" },
+  }),
+  "ai-generated (negotiation fallback on tier L2)": disclosureSpec({
+    tier: "L2",
+    composedBy: "parity",
+    cache: "hit",
+    fallback: { from: "sandbox1:sandbox.html", reason: "capability negotiation", kind: "negotiation" },
   }),
 };
 

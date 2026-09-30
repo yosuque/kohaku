@@ -291,9 +291,69 @@ class TestTierApprove:
             harness, {"action": "delete", "payload": {}, "approval": "token-abc"}, token
         )
         assert res.status_code == 403
+        # The port's own reason is audited but never shown to the client.
+        assert res.json()["error"]["message"] == "approval token was rejected"
         assert len(recorder.denied_calls) == 1
         assert recorder.denied_calls[0]["reason"] == "approval already used"
         assert recorder.approval_requested_calls == []
+        assert domain.invoke_calls == []
+
+
+class TestGateInfrastructureFailures:
+    """Fail-closed with the SPEC envelope when the gate cannot decide (SPEC ACT-APR-001)."""
+
+    def test_a_list_operations_failure_answers_503_internal_and_records_denied(self, tmp_path: Path) -> None:
+        class _BrokenDomain(_EchoDomain):
+            async def list_operations(self) -> list[OperationDescriptor]:
+                raise RuntimeError("db-primary.internal refused")
+
+        seen: list[Any] = []
+        recorder = _RecordingAuditRecorder()
+        harness = build_harness(
+            tmp_path,
+            domain=_BrokenDomain(),
+            action_audit_recorder=recorder,
+            on_error=lambda info: seen.append(info),
+        )
+        token = harness.issue([Scope(kind="write", ref="annotate")])
+        res = _post_action(harness, {"action": "annotate", "payload": {}}, token)
+        assert res.status_code == 503
+        body = res.json()["error"]
+        assert body["code"] == "INTERNAL"
+        assert body["message"] == "action gate unavailable"
+        assert body["requestId"] == res.headers["X-Request-Id"]
+        assert any(i.endpoint == "binding/action" for i in seen)
+        assert len(recorder.denied_calls) == 1
+        assert recorder.denied_calls[0]["reason"] == "action gate unavailable"
+        assert recorder.denied_calls[0]["tier"] == "auto"
+
+    def test_a_raising_verify_approval_is_a_denial_not_a_bare_500(self, tmp_path: Path) -> None:
+        domain = _EchoDomain(OperationDescriptor(name="delete", description="d", tier="approve"))
+
+        class _BrokenApprovals:
+            async def issue_approval(self, **kwargs: Any) -> str:
+                raise AssertionError("not used")
+
+            async def verify_approval(self, token: str, **kwargs: Any) -> ApprovalVerifyResult:
+                raise RuntimeError("approval store unavailable")
+
+        seen: list[Any] = []
+        recorder = _RecordingAuditRecorder()
+        harness = build_harness(
+            tmp_path,
+            domain=domain,
+            approvals=_BrokenApprovals(),
+            action_audit_recorder=recorder,
+            on_error=lambda info: seen.append(info),
+        )
+        token = harness.issue([Scope(kind="write", ref="delete")])
+        res = _post_action(harness, {"action": "delete", "payload": {}, "approval": "tok"}, token)
+        assert res.status_code == 503
+        body = res.json()["error"]
+        assert body["code"] == "INTERNAL"
+        assert "approval store" not in body["message"]
+        assert [i.endpoint for i in seen] == ["binding/action"]
+        assert recorder.denied_calls[0]["tier"] == "approve"
         assert domain.invoke_calls == []
 
 
@@ -338,6 +398,7 @@ class TestOperationIndexValidationAtAttach:
         headers = {"authorization": f"Bearer {token}"}
         broken = client.post(_url("/binding/action"), json={"action": "annotate", "payload": {}}, headers=headers)
         assert broken.status_code == 500
+        assert broken.json()["error"]["code"] == "INTERNAL"
         ok = client.post(_url("/binding/action"), json={"action": "publish", "payload": {}}, headers=headers)
         assert ok.status_code == 200
         assert [op for op, _ in domain.invoke_calls] == ["publish"]

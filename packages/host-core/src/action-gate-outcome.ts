@@ -1,7 +1,13 @@
-import type { ActionParamIssue, ApprovalRequiredInfo, JsonObject, Principal } from "@kohaku-ui/spec-core";
+import type {
+  ActionParamIssue,
+  ActionTier,
+  ApprovalRequiredInfo,
+  JsonObject,
+  Principal,
+} from "@kohaku-ui/spec-core";
 import { actionPayloadHash } from "@kohaku-ui/spec-core";
 import type { ActionAuditRecorder } from "./action-audit.js";
-import type { ActionGateResult } from "./action-gate.js";
+import { type ActionGateResult, NO_APPROVAL_PORT_REASON } from "./action-gate.js";
 import { failOpen } from "./errors.js";
 
 /**
@@ -17,6 +23,21 @@ export const CONFIRMATION_REQUIRED_MESSAGE = "this action requires confirmation 
 
 /** Client-visible message for an `"approve"`-tier action invoked without an approval token. */
 export const APPROVAL_TOKEN_REQUIRED_MESSAGE = "this action requires an approval token";
+
+/**
+ * Client-visible message when an `"approve"`-tier token was presented but the `ApprovalPort` did not accept it.
+ * Fixed on purpose: the port's own reason (which binding mismatched -- requester, tenant, payload -- or a
+ * product-specific store message) tells a caller how to probe for a valid token, so it reaches only the
+ * `action.denied` audit event, never the wire.
+ */
+export const APPROVAL_TOKEN_REJECTED_MESSAGE = "approval token was rejected";
+
+/**
+ * Client-visible message when the action gate could not reach a decision at all (the operation index or the
+ * `ApprovalPort` threw). The invoke is refused (fail-closed; SPEC ACT-APR-001); the underlying error reaches
+ * the host's observability hook only.
+ */
+export const ACTION_GATE_UNAVAILABLE_MESSAGE = "action gate unavailable";
 
 /** The audit context both `recordActionGateResult` and `recordUndeclaredActionDenial` need. */
 export interface ActionAuditContext {
@@ -47,7 +68,8 @@ export type ActionGateOutcome =
   | { kind: "proceed" };
 
 /**
- * The audit trail for one `ActionGate.check` outcome (design.md #62/#63; SPEC LIN-ACT-001), shared by both
+ * Audits one `ActionGate.check` outcome and maps it onto the client-visible `ActionGateOutcome`
+ * (design.md #62/#63; SPEC LIN-ACT-001), shared by both
  * host profiles so REST and MCP record identical `action.*` events for the same gate result: `invalid`
  * records nothing, `approvalRequired` records `action.approvalRequested`, `denied` records `action.denied`,
  * and `allow` records `action.invoked` (plus `action.approved` when a grant was consumed). Recording is
@@ -105,7 +127,12 @@ export async function recordActionGateResult(
       }, report);
       return {
         kind: "approvalRequired",
-        message: gateResult.reason,
+        // Only the "no ApprovalPort configured" reason is a fixed, client-safe diagnosis; any other reason came
+        // from the ApprovalPort itself and stays in the audit event above.
+        message:
+          gateResult.reason === NO_APPROVAL_PORT_REASON
+            ? NO_APPROVAL_PORT_REASON
+            : APPROVAL_TOKEN_REJECTED_MESSAGE,
         approval: {
           requestId: gateResult.requestId,
           action,
@@ -115,6 +142,8 @@ export async function recordActionGateResult(
       };
 
     case "allow":
+      // Each event has its own fail-open: a failed `invoked` write must not drop the `approved` record of a
+      // grant that was already consumed.
       await failOpen(async () => {
         await recorder?.invoked({
           action,
@@ -124,17 +153,20 @@ export async function recordActionGateResult(
           ...tenant,
           correlationId,
         });
-        if (gateResult.grant != null) {
+      }, report);
+      if (gateResult.grant != null) {
+        const grant = gateResult.grant;
+        await failOpen(async () => {
           await recorder?.approved({
             action,
             payloadHash: gateResult.payloadHash,
-            grant: gateResult.grant,
+            grant,
             principal,
             ...tenant,
             correlationId,
           });
-        }
-      }, report);
+        }, report);
+      }
       return { kind: "proceed" };
   }
 }
@@ -153,6 +185,30 @@ export async function recordUndeclaredActionDenial(ctx: ActionAuditContext): Pro
       payloadHash: await actionPayloadHash(payload),
       tier: "auto",
       reason: UNDECLARED_ACTION_MESSAGE,
+      principal,
+      ...(ctx.tenant != null ? { tenant: ctx.tenant } : {}),
+      correlationId,
+    });
+  }, report);
+}
+
+/**
+ * Records `action.denied` for an invoke the host refused because the gate could not decide (the operation
+ * index or the `ApprovalPort` threw): fail-closed, so the attempt is audited as a denial with the fixed
+ * `ACTION_GATE_UNAVAILABLE_MESSAGE` reason (the underlying error goes to the observability hook instead).
+ * `tier` is the descriptor's tier when the index was readable, `"auto"` otherwise. Fail-open like the other
+ * recorders in this module.
+ */
+export async function recordActionGateUnavailableDenial(
+  ctx: ActionAuditContext & { tier?: ActionTier },
+): Promise<void> {
+  const { recorder, action, payload, principal, correlationId, report } = ctx;
+  await failOpen(async () => {
+    await recorder?.denied({
+      action,
+      payloadHash: await actionPayloadHash(payload),
+      tier: ctx.tier ?? "auto",
+      reason: ACTION_GATE_UNAVAILABLE_MESSAGE,
       principal,
       ...(ctx.tenant != null ? { tenant: ctx.tenant } : {}),
       correlationId,

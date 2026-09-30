@@ -18,7 +18,7 @@ Four independent findings, each catching a different class of problem:
    promotion-state authority have drifted apart -- a promoted component's catalog registration was dropped
    without withdrawing the promotion itself).
 4. origin_kit_mismatches -- a published candidate generated under a design kit other than current_kit
-   (PromotionCandidate.origin.kit, F-1). Not necessarily broken, but a migration candidate: its markup may
+   (PromotionCandidate.origin.kit, generation provenance). Not necessarily broken, but a migration candidate: its markup may
    not match the kit's current class vocabulary.
 """
 
@@ -103,7 +103,7 @@ def _component_type_of(state: PromotionState) -> str | None:
 
 
 def _origin_kit_of(state: PromotionState) -> dict[str, str] | None:
-    """Reads a promotion state's origin.kit (F-1), when present."""
+    """Reads a promotion state's origin.kit (generation provenance), when present."""
     origin = state.data.get("origin")
     if not isinstance(origin, dict):
         return None

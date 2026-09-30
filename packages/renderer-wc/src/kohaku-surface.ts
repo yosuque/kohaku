@@ -25,20 +25,14 @@ export const KOHAKU_EVENT = "kohaku-event";
  * Individual context properties whose change requires tearing down and rebuilding the mounted tree
  * (they are baked into the RenderRuntime at #render time — binding/theme/locale/messages feed the
  * BoundDataController / theme resolution / message lookup, and sandbox is read at mount time by the
- * sandbox.html part builder). `onEvent` / `onNodeError` / `onActionResult` are deliberately **not** in
- * this set: they are read live from `#context` at call time (see `#dispatchForward` and the wrapper
- * closures built in `#render`), so reassigning one of them mid-lifecycle must not force a full rebuild.
+ * sandbox.html part builder). `onEvent` / `onNodeError` / `onActionResult` and the action-governance
+ * hooks `actionManifest` / `confirm` / `requestApproval` are deliberately **not** in this set: they are
+ * read live from `#context` at call time (see `#dispatchForward` and the wrapper closures / getters built
+ * in `#render`), so reassigning one of them mid-lifecycle must not force a full rebuild -- which would
+ * tear down every mounted L2 sandbox iframe, and would fire twice when a host assigns the spec and its
+ * manifest back to back.
  */
-const REBUILD_KEYS = new Set<keyof SurfaceContext>([
-  "binding",
-  "theme",
-  "locale",
-  "messages",
-  "sandbox",
-  "actionManifest",
-  "confirm",
-  "requestApproval",
-]);
+const REBUILD_KEYS = new Set<keyof SurfaceContext>(["binding", "theme", "locale", "messages", "sandbox"]);
 
 /** Every property <kohaku-surface> exposes as a plain instance accessor (used by #upgradeProperty). */
 const UPGRADE_PROPS = [
@@ -293,6 +287,7 @@ export class KohakuSurface extends HTMLElement {
       this.style.setProperty(name, value);
     }
 
+    const liveContext = (): SurfaceContext => this.#context;
     const rt = createRuntime({
       spec,
       store: this.#store,
@@ -305,13 +300,21 @@ export class KohakuSurface extends HTMLElement {
       // just one of these callbacks does not go through #render again, so RenderRuntime's own onNodeError/
       // onActionResult fields (baked in once here) must forward through a stable indirection instead of
       // holding a stale reference to whatever callback existed when the tree was last built.
-      // actionManifest / confirm / requestApproval are *not* wrapped: all three are in REBUILD_KEYS, so any
-      // change already goes through a fresh #render, matching binding/theme/sandbox's own treatment as
-      // tree-scoped data rather than a live-read callback.
+      // actionManifest / confirm / requestApproval are exposed as getters for the same reason: they are
+      // consulted per invoke, so a reassignment takes effect on the next action without a rebuild.
       ctx: {
         ...this.#context,
         onNodeError: (args) => this.#context.onNodeError?.(args),
         onActionResult: (args) => this.#context.onActionResult?.(args),
+        get actionManifest() {
+          return liveContext().actionManifest;
+        },
+        get confirm() {
+          return liveContext().confirm;
+        },
+        get requestApproval() {
+          return liveContext().requestApproval;
+        },
       },
       registry: this.#registry,
       dispatchForward: (event) => this.#dispatchForward(event),

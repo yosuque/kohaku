@@ -68,9 +68,43 @@ export function sessionMeta(session: SessionContext): { sessionId?: string; tena
   };
 }
 
-/** Resolves the tenant from the request. No tenant (undefined) if not wired. */
-export async function resolveTenant(c: Context, deps: KohakuHostDeps): Promise<string | undefined> {
-  return (await deps.tenant?.(c)) ?? undefined;
+/** The Hono context-variable key resolveTenant memoizes the request's tenant lookup under. */
+const TENANT_VAR = "kohakuTenant";
+
+/**
+ * Resolves the tenant from the request. No tenant (undefined) if not wired. Memoized per request on the Hono
+ * Context (the same idiom as requestIdOf): the rate-limit middleware and the route handler both resolve it,
+ * and `deps.tenant` may do real work (a JWT verification, a session lookup) that must not run once per call
+ * site. The memo holds the promise, so concurrent callers share one lookup, and a rejection reaches each of them.
+ */
+export function resolveTenant(c: Context, deps: KohakuHostDeps): Promise<string | undefined> {
+  let pending = c.get(TENANT_VAR) as Promise<string | undefined> | undefined;
+  if (pending == null) {
+    pending = (async () => (await deps.tenant?.(c)) ?? undefined)();
+    c.set(TENANT_VAR, pending);
+  }
+  return pending;
+}
+
+/** The Hono context-variable key memoizePrincipal stores the request's principal lookup under. */
+const PRINCIPAL_VAR = "kohakuPrincipal";
+
+/**
+ * Per-request memo for `RouteContext.getPrincipal`: `deps.auth` is called at most once per request even
+ * though the rate-limit middleware, the governance check and the handler each ask for the principal (see
+ * resolveTenant for why the promise is what gets stored).
+ */
+export function memoizePrincipal(
+  resolve: (c: Context) => Promise<Principal>,
+): (c: Context) => Promise<Principal> {
+  return (c) => {
+    let pending = c.get(PRINCIPAL_VAR) as Promise<Principal> | undefined;
+    if (pending == null) {
+      pending = resolve(c);
+      c.set(PRINCIPAL_VAR, pending);
+    }
+    return pending;
+  };
 }
 
 /**
@@ -256,11 +290,11 @@ export function errorReporterFor(
 }
 
 /**
- * Per-deps memoized `OperationIndex` (host-core's `createOperationIndex`), the governed-action
- * counterpart of compose.ts's own `allowedActions` memoization (same WeakMap-keyed-by-deps idiom;
+ * Per-deps memoized `OperationIndex` (host-core's `createOperationIndex`; WeakMap-keyed-by-deps, since
  * `listOperations()` is async and must not be re-awaited on every action invoke / compose). Shared by
  * `/binding/action` (the `ActionGate`, below) and the compose routes (the `actions` manifest on the
- * response, SPEC §6.1.1) so both consult the exact same index rather than each memoizing its own.
+ * response, SPEC §6.1.1, and the capability write-scope filter via host-core's `allowedActionsFromIndex`) so
+ * all of them consult the exact same index rather than each memoizing its own.
  */
 const operationIndexByDeps = new WeakMap<KohakuHostDeps, OperationIndex>();
 export function operationIndex(deps: KohakuHostDeps): ReturnType<OperationIndex> {
