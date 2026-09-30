@@ -1,5 +1,16 @@
 # @kohaku-ui/semantic-llm
 
+## 0.4.1
+
+### Patch Changes
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`90fa44b`](https://github.com/yosuque/kohaku/commit/90fa44b415b225aa4cf55e963f62d31557e3ef51) Thanks [@yosuque](https://github.com/yosuque)! - `IntentCatalog.validateParams` now reports a param named after an `Object.prototype` member (`constructor`, `toString`, `__proto__`, ...) as an unknown param instead of letting Zod silently strip it.
+- Updated dependencies [[`e250463`](https://github.com/yosuque/kohaku/commit/e2504639145c3baacd1843c72512e8abf4f21b08), [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a), [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc), [`5bb982e`](https://github.com/yosuque/kohaku/commit/5bb982e2fca7d4c609d5b99b6dc71bac95dbfe55), [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d), [`71e17f9`](https://github.com/yosuque/kohaku/commit/71e17f9d970e01abaa8ebdf967054ad468555b56), [`ab25ddc`](https://github.com/yosuque/kohaku/commit/ab25ddc5691e216e6d5d027920a0a9abbc8f4207), [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b), [`7c92cc4`](https://github.com/yosuque/kohaku/commit/7c92cc433e40a88f3b43eaeba7fd0af1a8755cad), [`a936266`](https://github.com/yosuque/kohaku/commit/a9362668b281564bc09a3b4a20233f8e1294bf41), [`f8ecb4c`](https://github.com/yosuque/kohaku/commit/f8ecb4c71ba780378849c27c8ccdc6a14b31dcdc)]:
+  - @kohaku-ui/spec-core@0.4.1
+  - @kohaku-ui/data-binding@0.4.1
+  - @kohaku-ui/intents@0.4.1
+  - @kohaku-ui/llm@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes

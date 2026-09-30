@@ -1,5 +1,21 @@
 # @kohaku-ui/storage-postgres
 
+## 0.4.1
+
+### Patch Changes
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b) Thanks [@yosuque](https://github.com/yosuque)! - `pageLineage` now floors a fractional `pageSize` to an integer before clamping it. spec-core exports `clampLineagePageSize()`, which the array-backed pager and the Redis and Postgres adapters share: a request for `2.5` previously became `LIMIT 3.5` (a Postgres error) and made the page-size bound ineffective for the memory and Redis pagers.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`a8b9590`](https://github.com/yosuque/kohaku/commit/a8b95905244795f8591cfd7f78ff89df6e0d4065) Thanks [@yosuque](https://github.com/yosuque)! - `ready()` now builds the `kohaku_lineage` `(correlation_id, seq)` index after the migration transaction commits, with `CREATE INDEX CONCURRENTLY` on a connection that has no statement timeout, instead of a plain `CREATE INDEX` inside the transaction. On a large lineage table the old build outlived the pool's default 10 s `statement_timeout`, rolled back, and made every StoragePort call fail on every retry while blocking inserts. The index is found through `pg_index.indisvalid` (an INVALID leftover is dropped and rebuilt; a long schema name no longer hides it), and a failed `ready()` retries with a 1 s to 60 s backoff instead of immediately.
+  
+  With `migrate: false`, `createPostgresStoragePort` now checks that `kohaku_lineage.correlation_id` exists and fails fast, naming the `ALTER TABLE`, instead of failing every lineage INSERT with 42703 and losing audit events silently. A deployment that runs `migrate: false` must apply the 0.4.x DDL before deploying (see the README's "Upgrading to 0.4.x"). `postgresSchemaSql` adds the column through a guarded `DO` block that takes no ACCESS EXCLUSIVE lock when the column is already there. Design.md decision 53 describes the behavior.
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`ae99ee6`](https://github.com/yosuque/kohaku/commit/ae99ee6a3c392cfabe97ee4f00ac94d55508cf51) Thanks [@yosuque](https://github.com/yosuque)! - `ready()` no longer takes an ACCESS EXCLUSIVE lock on `kohaku_lineage` on every start: the `correlation_id` column and its index are added only when the catalog says they are missing, and the migration transaction runs with a 5 second `lock_timeout` so a start fails fast instead of queueing behind live traffic. The README gains an "Upgrading to 0.4.x" note with the `CREATE INDEX CONCURRENTLY` statement for large tables.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`1973b96`](https://github.com/yosuque/kohaku/commit/1973b96cfc39f589d01aeb50e638c91e89ab3120) Thanks [@yosuque](https://github.com/yosuque)! - `appendLineage` no longer fails for an oversized `correlationId`. A value longer than 256 characters is stored in the indexed `correlation_id` column as `sha256:<hex>` (a btree entry cannot hold a multi-kilobyte key), the `correlationId` filter applies the same transform so lookups by the full id still match, and the event's stored record keeps the original. The storage contract now checks a 4 KB `correlationId` against every adapter.
+- Updated dependencies [[`e250463`](https://github.com/yosuque/kohaku/commit/e2504639145c3baacd1843c72512e8abf4f21b08), [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a), [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc), [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d), [`71e17f9`](https://github.com/yosuque/kohaku/commit/71e17f9d970e01abaa8ebdf967054ad468555b56), [`ab25ddc`](https://github.com/yosuque/kohaku/commit/ab25ddc5691e216e6d5d027920a0a9abbc8f4207), [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b), [`7c92cc4`](https://github.com/yosuque/kohaku/commit/7c92cc433e40a88f3b43eaeba7fd0af1a8755cad), [`a936266`](https://github.com/yosuque/kohaku/commit/a9362668b281564bc09a3b4a20233f8e1294bf41), [`f8ecb4c`](https://github.com/yosuque/kohaku/commit/f8ecb4c71ba780378849c27c8ccdc6a14b31dcdc)]:
+  - @kohaku-ui/spec-core@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
