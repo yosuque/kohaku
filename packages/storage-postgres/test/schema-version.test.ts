@@ -258,20 +258,26 @@ describe.skipIf(backend.mode === "skip")("createPostgresStoragePort: schema vers
     }
   });
 
-  it("two ports calling ready() concurrently on a fresh schema both succeed (the advisory lock serializes the DDL)", async () => {
-    const schema = uniqueSchema();
-    const a = createPostgresStoragePort({ connectionString, schema });
-    const b = createPostgresStoragePort({ connectionString, schema });
-    try {
-      await expect(Promise.all([a.ready(), b.ready()])).resolves.toEqual([undefined, undefined]);
+  it("several ports calling ready() concurrently on a fresh schema all succeed, repeatedly (one lock covers the DDL and the index build)", async () => {
+    // Repeated on fresh schemas so a lock-ordering regression (a migrator's transaction waiting behind
+    // another's CREATE INDEX CONCURRENTLY, which waits for that transaction: 40P01) shows up reliably.
+    for (let round = 0; round < 10; round++) {
+      const schema = uniqueSchema();
+      const ports = [0, 1, 2].map(() => createPostgresStoragePort({ connectionString, schema }));
+      try {
+        await expect(Promise.all(ports.map((port) => port.ready()))).resolves.toEqual([
+          undefined,
+          undefined,
+          undefined,
+        ]);
 
-      // Both ports are left usable against the one, once-migrated schema.
-      const spec = { key: "concurrent-ready" } as unknown as UISpec;
-      await a.putSpecCache("k", spec);
-      expect(await b.getSpecCache("k")).toEqual(spec);
-    } finally {
-      await a.close();
-      await b.close();
+        // Every port is left usable against the one, once-migrated schema.
+        const spec = { key: `concurrent-ready-${round}` } as unknown as UISpec;
+        await ports[0]!.putSpecCache("k", spec);
+        expect(await ports[2]!.getSpecCache("k")).toEqual(spec);
+      } finally {
+        await Promise.all(ports.map((port) => port.close()));
+      }
     }
   });
 });
