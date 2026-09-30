@@ -32,8 +32,8 @@ const READY_RETRY_INITIAL_DELAY_MS = 1000;
 /** Ceiling of the `ready()` retry backoff. */
 const READY_RETRY_MAX_DELAY_MS = 60000;
 
-/** How often a process waiting for another process's index build re-tries the build lock. */
-const CORRELATION_INDEX_LOCK_POLL_MS = 250;
+/** How often a migrator waiting for another one re-tries the migration lock. */
+const MIGRATION_LOCK_POLL_MS = 250;
 
 /** What `pg.Pool` and `pg.PoolClient` share and the catalog helpers below need. */
 interface Queryable {
@@ -167,25 +167,49 @@ export function createPostgresPool(options: CreatePostgresPoolOptions): Postgres
 }
 
 /**
- * Runs the idempotent DDL inside one transaction, serialized against every other migrator (this
- * process's other callers, and other processes/instances) via a session-scoped advisory lock keyed by
- * `schema` -- `CREATE TABLE IF NOT EXISTS` alone is not safe under concurrent first-run migration
- * (two instances can both pass the "does it exist" check before either commits, and race on the same
- * DDL). Also enforces `kohaku_schema_meta`: inserts `POSTGRES_SCHEMA_VERSION` on an empty table, throws
- * if a deployed schema already carries a different version. The correlation index is built after that
- * transaction commits, outside it -- see `ensureCorrelationIndex`.
+ * The whole `ready()` sequence -- the idempotent DDL transaction, then the correlation index build -- on
+ * one dedicated connection, serialized against every other migrator (this process's other callers, and
+ * other processes/instances) by a session-level advisory lock keyed by `schema`. `CREATE TABLE IF NOT
+ * EXISTS` alone is not safe under concurrent first-run migration (two instances can both pass the "does
+ * it exist" check before either commits, and race on the same DDL).
+ *
+ * One lock covers both steps on purpose. The index build (`CREATE INDEX CONCURRENTLY`) waits for every
+ * older transaction to finish, and a second migrator's transaction that is itself waiting for a table lock
+ * behind that build would never finish: a deadlock. Holding the lock across the transaction and the build,
+ * and acquiring it by polling outside any transaction (`acquireSessionLock`), means a waiting migrator has
+ * no open transaction or running statement for the build to wait on.
+ *
+ * Also enforces `kohaku_schema_meta`: inserts `POSTGRES_SCHEMA_VERSION` on an empty table, throws if a
+ * deployed schema already carries a different version.
  */
 async function migrateSchema(pool: Pool, schema: string): Promise<void> {
+  const lockKey = `kohaku:schema:${schema}`;
+  const client: PoolClient = await pool.connect();
+  let discard: Error | undefined;
+  const remember = (error: unknown): void => {
+    discard = error instanceof Error ? error : new Error(String(error));
+  };
   try {
-    await runMigration(pool, schema);
-  } catch (error) {
-    if (!isRetryableDdlRace(error)) throw error;
-    // A concurrent-DDL race can still surface here even under the advisory lock (e.g. a transaction
-    // that read the catalog just before a concurrent migrator committed) -- retry once rather than
-    // failing the whole process's first `ready()` on a one-off race.
-    await runMigration(pool, schema);
+    await acquireSessionLock(client, lockKey);
+    try {
+      try {
+        await runMigration(client, schema);
+      } catch (error) {
+        if (!isRetryableDdlRace(error)) throw error;
+        // A concurrent-DDL race can still surface here even under the advisory lock (e.g. a transaction
+        // that read the catalog just before a concurrent migrator committed) -- retry once rather than
+        // failing the whole process's first `ready()` on a one-off race.
+        await runMigration(client, schema);
+      }
+      await ensureCorrelationIndex(client, schema);
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]).catch(remember);
+    }
+  } finally {
+    // The session setting must not leak into the pool: restore the timeout, or drop the connection.
+    await client.query("RESET statement_timeout").catch(remember);
+    client.release(discard);
   }
-  await ensureCorrelationIndex(pool, schema);
 }
 
 function isRetryableDdlRace(error: unknown): boolean {
@@ -193,16 +217,12 @@ function isRetryableDdlRace(error: unknown): boolean {
   return typeof code === "string" && RETRYABLE_DDL_SQLSTATES.has(code);
 }
 
-async function runMigration(pool: Pool, schema: string): Promise<void> {
-  const client: PoolClient = await pool.connect();
+async function runMigration(client: PoolClient, schema: string): Promise<void> {
   try {
     await client.query("BEGIN");
-    // Transaction-scoped advisory lock: needs the one connection this whole migration runs on (it is
-    // released automatically at COMMIT/ROLLBACK). `hashtext` folds the lock name to a single int4,
-    // implicitly widened to the bigint `pg_advisory_xact_lock(bigint)` overload expects.
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`kohaku:schema:${schema}`]);
-    // After the advisory lock on purpose: waiting for another migrator is expected, waiting for a table
-    // lock behind live traffic is not. `SET LOCAL` reverts at COMMIT/ROLLBACK, so it never leaks into the pool.
+    // Waiting for another migrator happens before this transaction (`acquireSessionLock`); the timeout
+    // below is for table locks behind live traffic, which must not queue. `SET LOCAL` reverts at
+    // COMMIT/ROLLBACK, so it never leaks into the pool.
     await client.query(`SET LOCAL lock_timeout = ${MIGRATION_LOCK_TIMEOUT_MS}`);
     await client.query(`CREATE SCHEMA IF NOT EXISTS ${quoteIdentifier(schema)}`);
     await client.query(postgresBaseSchemaSql(schema));
@@ -212,8 +232,6 @@ async function runMigration(pool: Pool, schema: string): Promise<void> {
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
-  } finally {
-    client.release();
   }
 }
 
@@ -282,8 +300,8 @@ async function correlationIndexState(
 
 /**
  * Takes a session-level advisory lock by polling `pg_try_advisory_lock`. A blocking `pg_advisory_lock`
- * would leave the waiter inside a running statement (a transaction) while the holder's `CREATE INDEX
- * CONCURRENTLY` waits for every older transaction to finish: a deadlock. Each try is a statement of its own.
+ * would leave the waiter inside a running statement while the holder's `CREATE INDEX CONCURRENTLY` waits
+ * for every older transaction to finish: a deadlock. Each try is a statement of its own.
  */
 async function acquireSessionLock(client: Queryable, key: string): Promise<void> {
   for (;;) {
@@ -292,45 +310,25 @@ async function acquireSessionLock(client: Queryable, key: string): Promise<void>
       [key],
     );
     if (rows[0]?.locked === true) return;
-    await new Promise((resolve) => setTimeout(resolve, CORRELATION_INDEX_LOCK_POLL_MS));
+    await new Promise((resolve) => setTimeout(resolve, MIGRATION_LOCK_POLL_MS));
   }
 }
 
 /**
  * Makes sure the `(correlation_id, seq)` index exists and is valid, outside any transaction (`CREATE
  * INDEX CONCURRENTLY` cannot run in one, and unlike a plain `CREATE INDEX` it does not block inserts
- * while it builds). Runs on a dedicated connection with `statement_timeout = 0`: the owned pool's default
+ * while it builds). Runs with `statement_timeout = 0` (restored by the caller): the owned pool's default
  * (10 s) is far shorter than a build over a large lineage table, and a timed-out build would be rolled
- * back and restarted forever. Serialized across processes by a session-level advisory lock. An INVALID
- * index left by an earlier failed build is dropped and rebuilt. Up to date: one catalog read, no DDL.
+ * back and restarted forever. The caller holds the migration lock. An INVALID index left by an earlier
+ * failed build is dropped and rebuilt. Up to date: one catalog read, no DDL.
  */
-async function ensureCorrelationIndex(pool: Pool, schema: string): Promise<void> {
+async function ensureCorrelationIndex(client: PoolClient, schema: string): Promise<void> {
   const ddl = lineageCorrelationDdl(schema);
-  if ((await correlationIndexState(pool, schema, ddl.indexName)) === "valid") return;
-
-  const lockKey = `kohaku:schema:${schema}:correlation-index`;
-  const client = await pool.connect();
-  let discard: Error | undefined;
-  try {
-    await client.query("SET statement_timeout = 0");
-    await acquireSessionLock(client, lockKey);
-    try {
-      // Re-read under the lock: another process may have finished the build while this one waited.
-      const state = await correlationIndexState(client, schema, ddl.indexName);
-      if (state === "invalid") await client.query(ddl.dropIndexConcurrentlySql);
-      if (state !== "valid") await client.query(ddl.createIndexConcurrentlySql);
-    } finally {
-      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]).catch((error: unknown) => {
-        discard = error instanceof Error ? error : new Error(String(error));
-      });
-    }
-  } finally {
-    // The session settings must not leak into the pool: restore the timeout, or drop the connection.
-    await client.query("RESET statement_timeout").catch((error: unknown) => {
-      discard = error instanceof Error ? error : new Error(String(error));
-    });
-    client.release(discard);
-  }
+  const state = await correlationIndexState(client, schema, ddl.indexName);
+  if (state === "valid") return;
+  await client.query("SET statement_timeout = 0");
+  if (state === "invalid") await client.query(ddl.dropIndexConcurrentlySql);
+  await client.query(ddl.createIndexConcurrentlySql);
 }
 
 async function ensureSchemaVersion(client: PoolClient, schema: string): Promise<void> {

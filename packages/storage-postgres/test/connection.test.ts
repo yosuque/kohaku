@@ -187,7 +187,7 @@ describe("createPostgresPool: ready() migration transaction", () => {
 
   it("retries once on a concurrent-DDL race (SQLSTATE 23505 / 42P07) and then succeeds", async () => {
     const race = Object.assign(new Error("duplicate_object"), { code: "42P07" });
-    const { client } = fakeClient({ column: true, index: "valid" }, [
+    const { client, statements } = fakeClient({ column: true, index: "valid" }, [
       { match: (sql) => sql.includes("CREATE TABLE IF NOT EXISTS"), error: race },
     ]);
     const connect = vi.fn().mockResolvedValue(client);
@@ -197,7 +197,8 @@ describe("createPostgresPool: ready() migration transaction", () => {
     });
 
     await expect(handle.ready()).resolves.toBeUndefined();
-    expect(connect).toHaveBeenCalledTimes(2); // the raced attempt, then the retry
+    expect(statements.filter((sql) => sql === "BEGIN")).toHaveLength(2); // the raced attempt, then the retry
+    expect(connect).toHaveBeenCalledTimes(1); // both on the connection that holds the migration lock
   });
 
   describe("retry backoff after a failed ready()", () => {
@@ -308,18 +309,61 @@ describe("createPostgresPool: ready() migration transaction", () => {
       expect(create).toBeGreaterThan(drop);
     });
 
-    it("runs the build without a statement timeout, restores it, and serializes on a session advisory lock", async () => {
+    it("holds one session lock across the migration transaction and the index build, taken before BEGIN", async () => {
       const statements = await migrate({ column: true, index: "missing" });
+      const at = (match: (sql: string) => boolean) => statements.findIndex(match);
+      const lock = at((sql) => sql.includes("pg_try_advisory_lock"));
+      const begin = statements.indexOf("BEGIN");
+      const commit = statements.indexOf("COMMIT");
       const setTimeout0 = statements.indexOf("SET statement_timeout = 0");
-      const lock = statements.findIndex((sql) => sql.includes("pg_try_advisory_lock"));
-      const create = statements.findIndex((sql) => sql.startsWith("CREATE INDEX CONCURRENTLY"));
-      const unlock = statements.findIndex((sql) => sql.includes("pg_advisory_unlock"));
+      const create = at((sql) => sql.startsWith("CREATE INDEX CONCURRENTLY"));
+      const unlock = at((sql) => sql.includes("pg_advisory_unlock"));
       const reset = statements.indexOf("RESET statement_timeout");
-      expect(setTimeout0).toBeGreaterThanOrEqual(0);
-      expect(lock).toBeGreaterThan(setTimeout0);
-      expect(create).toBeGreaterThan(lock);
+      expect(lock).toBeGreaterThanOrEqual(0);
+      expect(begin).toBeGreaterThan(lock); // waiting for another migrator never happens inside a transaction
+      expect(commit).toBeGreaterThan(begin);
+      expect(setTimeout0).toBeGreaterThan(commit); // the timeout is lifted only for the build
+      expect(create).toBeGreaterThan(setTimeout0);
       expect(unlock).toBeGreaterThan(create);
       expect(reset).toBeGreaterThan(unlock);
+      // Exactly one lock, on the schema key, and no transaction-scoped one that would wait inside BEGIN.
+      expect(statements.filter((sql) => sql.includes("advisory")).length).toBe(2);
+      expect(statements.some((sql) => sql.includes("pg_advisory_xact_lock"))).toBe(false);
+    });
+
+    it("runs everything on a single checked-out connection", async () => {
+      const { client } = fakeClient({ column: true, index: "missing" });
+      const connect = vi.fn().mockResolvedValue(client);
+      await createPostgresPool({
+        pool: injectedPool({ connect, query: client.query }),
+        schema: "one_conn",
+      }).ready();
+      expect(connect).toHaveBeenCalledTimes(1);
+    });
+
+    it("polls the lock instead of blocking on it while another migrator holds it", async () => {
+      vi.useFakeTimers();
+      const { client, statements } = fakeClient({ column: true, index: "valid" });
+      let tries = 0;
+      const base = client.query.getMockImplementation()!;
+      client.query.mockImplementation(async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          statements.push(sql);
+          return { rows: [{ locked: ++tries >= 3 }], rowCount: 1 };
+        }
+        return base(sql);
+      });
+      const ready = createPostgresPool({
+        pool: injectedPool({ connect: vi.fn().mockResolvedValue(client), query: client.query }),
+        schema: "poll_test",
+      }).ready();
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(ready).resolves.toBeUndefined();
+      expect(tries).toBe(3);
+      expect(statements.indexOf("BEGIN")).toBeGreaterThan(
+        statements.lastIndexOf(statements.find((sql) => sql.includes("pg_try_advisory_lock"))!),
+      );
+      expect(statements.some((sql) => sql.includes("SELECT pg_advisory_lock"))).toBe(false);
     });
 
     it("looks the index up by catalog name, so a schema long enough to truncate it does not rerun the DDL", async () => {
@@ -336,13 +380,13 @@ describe("createPostgresPool: ready() migration transaction", () => {
       expect(statements.some((sql) => sql.startsWith("CREATE INDEX"))).toBe(false);
     });
 
-    it("bounds table-lock waits with a transaction-local lock_timeout, set after the advisory lock", async () => {
+    it("bounds table-lock waits with a transaction-local lock_timeout, set right after BEGIN", async () => {
       const statements = await migrate({ column: true, index: "valid" });
-      const advisory = statements.findIndex((sql) => sql.includes("pg_advisory_xact_lock"));
+      const begin = statements.indexOf("BEGIN");
       const timeout = statements.indexOf("SET LOCAL lock_timeout = 5000");
       const firstDdl = statements.findIndex((sql) => sql.startsWith("CREATE SCHEMA"));
-      expect(advisory).toBeGreaterThanOrEqual(0);
-      expect(timeout).toBeGreaterThan(advisory);
+      expect(begin).toBeGreaterThanOrEqual(0);
+      expect(timeout).toBeGreaterThan(begin);
       expect(timeout).toBeLessThan(firstDdl);
     });
 
