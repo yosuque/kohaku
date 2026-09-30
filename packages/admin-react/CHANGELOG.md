@@ -1,5 +1,18 @@
 # @kohaku-ui/admin-react
 
+## 0.4.1
+
+### Patch Changes
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`f5e5c1b`](https://github.com/yosuque/kohaku/commit/f5e5c1b20b6af1c5298ad6dcb7edac9fc4d25c89) Thanks [@yosuque](https://github.com/yosuque)! - The Lineage tab and the DevTools lineage panel show the composition tier (L0/L1/L2) only for `view.*` / `component.*` events, and render an `action.*` event's gate tier as `gate:<tier>` in its own color, so `L1` and `approve` no longer share one undifferentiated column. The wire payload is unchanged.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`a0238af`](https://github.com/yosuque/kohaku/commit/a0238afa081a14419e272ab5d6096142dbe634e7) Thanks [@yosuque](https://github.com/yosuque)! - The DevTools lineage panel and the admin Lineage tab now mark event times as UTC (`HH:MM:SSZ`) and expose the full ISO-8601 instant in a `title` attribute, instead of showing an unlabeled UTC clock time.
+- Updated dependencies [[`e250463`](https://github.com/yosuque/kohaku/commit/e2504639145c3baacd1843c72512e8abf4f21b08), [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a), [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc), [`003e360`](https://github.com/yosuque/kohaku/commit/003e3605159973f6837fccf87f83691b40839483), [`6bb1769`](https://github.com/yosuque/kohaku/commit/6bb1769feb9eed35f32e8e489453ceea6c932745), [`f34568b`](https://github.com/yosuque/kohaku/commit/f34568bb40e3c136bfc74e9c7d10c50c812f7e18), [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d), [`71e17f9`](https://github.com/yosuque/kohaku/commit/71e17f9d970e01abaa8ebdf967054ad468555b56), [`ab25ddc`](https://github.com/yosuque/kohaku/commit/ab25ddc5691e216e6d5d027920a0a9abbc8f4207), [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b), [`7c92cc4`](https://github.com/yosuque/kohaku/commit/7c92cc433e40a88f3b43eaeba7fd0af1a8755cad), [`a936266`](https://github.com/yosuque/kohaku/commit/a9362668b281564bc09a3b4a20233f8e1294bf41), [`0a2a43b`](https://github.com/yosuque/kohaku/commit/0a2a43b5ea0cbe90df1bbe53af9137452654e477), [`f8ecb4c`](https://github.com/yosuque/kohaku/commit/f8ecb4c71ba780378849c27c8ccdc6a14b31dcdc), [`4072ca8`](https://github.com/yosuque/kohaku/commit/4072ca8c86f28c2bb79abbfc0483b2e6242b7768)]:
+  - @kohaku-ui/spec-core@0.4.1
+  - @kohaku-ui/client@0.4.1
+  - @kohaku-ui/renderer-core@0.4.1
+  - @kohaku-ui/sandbox@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes

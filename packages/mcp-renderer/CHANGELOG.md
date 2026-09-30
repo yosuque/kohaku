@@ -1,5 +1,20 @@
 # @kohaku-ui/mcp-renderer
 
+## 0.4.1
+
+### Patch Changes
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a) Thanks [@yosuque](https://github.com/yosuque)! - Types only, no wire change: the pending-approval descriptor is now a named `ApprovalRequiredInfo` type exported from spec-core (typing `ErrorEnvelope["error"]["approval"]` and every consumer, with `issues` typed as `ActionParamIssue[]`), and `ActionManifest` / `ActionManifestEntry` are defined once in spec-core and re-exported from host-core, renderer-core and client under their existing names (design.md decisions 62-64).
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`bfe34a9`](https://github.com/yosuque/kohaku/commit/bfe34a9120037d4e79073a157876c36f01cb742c) Thanks [@yosuque](https://github.com/yosuque)! - `bootMcpRenderer` accepts a `disclosure` option (`"off"` | `"attributes"` | `"label"`, default `"off"`) that is passed to `SpecView`, so the AI-generation disclosure of design.md decision 66 can be switched on in the MCP Apps widget. The default leaves the rendered DOM unchanged.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`dfccc53`](https://github.com/yosuque/kohaku/commit/dfccc53f4f7e5fc7ff89faea0de73945dc13e4f9) Thanks [@yosuque](https://github.com/yosuque)! - The MCP renderer boot now maps a structured `RATE_LIMITED` tool error from `kohaku_resolve_binding` and `kohaku_action` to a `BindingError("RATE_LIMITED", ..., { retryAfterMs })`, the same as data-binding's REST client does for a 429, instead of a generic 403 / plain `Error` that dropped the retry hint (SPEC §6.1, REST-RL-001).
+- Updated dependencies [[`e250463`](https://github.com/yosuque/kohaku/commit/e2504639145c3baacd1843c72512e8abf4f21b08), [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a), [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc), [`003e360`](https://github.com/yosuque/kohaku/commit/003e3605159973f6837fccf87f83691b40839483), [`5bb982e`](https://github.com/yosuque/kohaku/commit/5bb982e2fca7d4c609d5b99b6dc71bac95dbfe55), [`f34568b`](https://github.com/yosuque/kohaku/commit/f34568bb40e3c136bfc74e9c7d10c50c812f7e18), [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d), [`71e17f9`](https://github.com/yosuque/kohaku/commit/71e17f9d970e01abaa8ebdf967054ad468555b56), [`b1a7af7`](https://github.com/yosuque/kohaku/commit/b1a7af7f39f09f2f088298098eaae618b32e363e), [`ab25ddc`](https://github.com/yosuque/kohaku/commit/ab25ddc5691e216e6d5d027920a0a9abbc8f4207), [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b), [`7c92cc4`](https://github.com/yosuque/kohaku/commit/7c92cc433e40a88f3b43eaeba7fd0af1a8755cad), [`a936266`](https://github.com/yosuque/kohaku/commit/a9362668b281564bc09a3b4a20233f8e1294bf41), [`0a2a43b`](https://github.com/yosuque/kohaku/commit/0a2a43b5ea0cbe90df1bbe53af9137452654e477), [`f8ecb4c`](https://github.com/yosuque/kohaku/commit/f8ecb4c71ba780378849c27c8ccdc6a14b31dcdc), [`4072ca8`](https://github.com/yosuque/kohaku/commit/4072ca8c86f28c2bb79abbfc0483b2e6242b7768)]:
+  - @kohaku-ui/spec-core@0.4.1
+  - @kohaku-ui/data-binding@0.4.1
+  - @kohaku-ui/renderer-core@0.4.1
+  - @kohaku-ui/renderer-react@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes

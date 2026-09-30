@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/host-mcp-apps",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "MCP Apps transport profile for a kohaku host.",
   "type": "module",
   "exports": {

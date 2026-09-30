@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/mcp-renderer",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "The shared MCP Apps renderer bundle: `.` loads the pre-built, dependency-free single-file HTML (`loadRendererHtml`); `./boot` builds a product-specific renderer bundle from React source (renderer-react etc. as optional peers).",
   "type": "module",
   "exports": {

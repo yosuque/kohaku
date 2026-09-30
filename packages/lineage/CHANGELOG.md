@@ -1,5 +1,21 @@
 # @kohaku-ui/lineage
 
+## 0.4.1
+
+### Patch Changes
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d) Thanks [@yosuque](https://github.com/yosuque)! - Compliance Evidence Pack (design.md decision 67): `verifyEvidencePack` now checks the signature over the raw `manifest.json` value before validating its shape, so a field added, removed or retyped after signing no longer verifies (the manifest schemas are strict and have no defaults, and the Python port matches). `buildEvidencePack` refuses to emit a file larger than the 64 MiB cap that verification enforces (new `maxFileBytes` option), instead of producing a pack that cannot be verified, and reports unparseable lines inside signed jsonl content.
+  
+  `approvals.jsonl` now also indexes `action.approvalRequested`, `action.approved`, `action.denied` and `policy.applied` events, so its bytes (and its manifest hash) change for any pack whose window contains them.
+  
+  `kohaku evidence export` now validates and canonicalizes `--since` / `--until` like the REST `/lineage` route (via the new `parseIso8601` export of spec-core, which host-rest now imports): `+hh:mm` offsets are converted to UTC, a date-only `--until` includes that whole UTC day, and an invalid or reversed window exits 2 instead of signing a wrongly scoped pack. The client's `lineagePages` and the pack builder throw instead of looping forever when a host returns the cursor it was given.
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`38da68b`](https://github.com/yosuque/kohaku/commit/38da68b1629df99aa7406f0068e2a479052f0cc4) Thanks [@yosuque](https://github.com/yosuque)! - `Fixations.fixate` now throws the new `FixationNotAllowedError` for a Spec carrying `provenance.fallback` or a tier-`L2` Spec, so the SPEC section 8 rule holds for every caller and not only the REST route. The Python `Fixations.fixate` enforces the same rule.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`5d1f473`](https://github.com/yosuque/kohaku/commit/5d1f473064c1c489ce54441cf8c9841c1be3028d) Thanks [@yosuque](https://github.com/yosuque)! - Evidence pack verification now fails (instead of throwing) on a manifest.json holding a number that parses to a non-finite value such as `1e400`, and rejects a manifest.json that contains a duplicate object key at any depth, so the signed parsed value cannot differ between parsers (design.md decision 67).
+- Updated dependencies [[`e250463`](https://github.com/yosuque/kohaku/commit/e2504639145c3baacd1843c72512e8abf4f21b08), [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a), [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc), [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d), [`71e17f9`](https://github.com/yosuque/kohaku/commit/71e17f9d970e01abaa8ebdf967054ad468555b56), [`ab25ddc`](https://github.com/yosuque/kohaku/commit/ab25ddc5691e216e6d5d027920a0a9abbc8f4207), [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b), [`7c92cc4`](https://github.com/yosuque/kohaku/commit/7c92cc433e40a88f3b43eaeba7fd0af1a8755cad), [`a936266`](https://github.com/yosuque/kohaku/commit/a9362668b281564bc09a3b4a20233f8e1294bf41), [`f8ecb4c`](https://github.com/yosuque/kohaku/commit/f8ecb4c71ba780378849c27c8ccdc6a14b31dcdc)]:
+  - @kohaku-ui/spec-core@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes

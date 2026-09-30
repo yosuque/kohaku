@@ -1,5 +1,36 @@
 # @kohaku-ui/cli
 
+## 0.4.1
+
+### Patch Changes
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`4199e34`](https://github.com/yosuque/kohaku/commit/4199e34ae868b54da09961bc4312932e7546e9bf) Thanks [@yosuque](https://github.com/yosuque)! - `kohaku evidence verify` now refuses a FIFO or device node in place of a pack file (it used to block forever on a FIFO) and reports one as an unexpected file, and commander's own usage errors on `evidence verify` / `evidence export` (a missing required option, an unknown option) exit 2 instead of 1, so they no longer collide with "invalid pack".
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`1e446cc`](https://github.com/yosuque/kohaku/commit/1e446cc3f6bdbae47852c5adb0612fc58bd00271) Thanks [@yosuque](https://github.com/yosuque)! - `kohaku explain` escapes control characters (newlines included) in the lineage-derived strings it prints, so a tampered lineage record can neither inject terminal escape sequences nor forge an extra report line.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`f5132f4`](https://github.com/yosuque/kohaku/commit/f5132f488a4b5a96f227468359a87b542976d553) Thanks [@yosuque](https://github.com/yosuque)! - The MCP Streamable HTTP server that `kohaku init --mcp` generates now shuts down gracefully on SIGINT / SIGTERM and documents that its Origin check is port-agnostic; `kohaku migrate --catalog` adds a hint (pass a built `.js`, or run under tsx) when the catalog module cannot be imported on plain Node.
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d) Thanks [@yosuque](https://github.com/yosuque)! - Compliance Evidence Pack (design.md decision 67): `verifyEvidencePack` now checks the signature over the raw `manifest.json` value before validating its shape, so a field added, removed or retyped after signing no longer verifies (the manifest schemas are strict and have no defaults, and the Python port matches). `buildEvidencePack` refuses to emit a file larger than the 64 MiB cap that verification enforces (new `maxFileBytes` option), instead of producing a pack that cannot be verified, and reports unparseable lines inside signed jsonl content.
+  
+  `approvals.jsonl` now also indexes `action.approvalRequested`, `action.approved`, `action.denied` and `policy.applied` events, so its bytes (and its manifest hash) change for any pack whose window contains them.
+  
+  `kohaku evidence export` now validates and canonicalizes `--since` / `--until` like the REST `/lineage` route (via the new `parseIso8601` export of spec-core, which host-rest now imports): `+hh:mm` offsets are converted to UTC, a date-only `--until` includes that whole UTC day, and an invalid or reversed window exits 2 instead of signing a wrongly scoped pack. The client's `lineagePages` and the pack builder throw instead of looping forever when a host returns the cursor it was given.
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`12c4285`](https://github.com/yosuque/kohaku/commit/12c4285b126e898cdf23aa9f03793cbec29d68e1) Thanks [@yosuque](https://github.com/yosuque)! - `kohaku init --mcp`: the generated Streamable HTTP server now builds its host once per process (so the Spec cache, fixations and lineage survive across calls), validates the Host and Origin headers (localhost by default, `KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` to extend), no longer answers `Access-Control-Allow-Origin: *`, caps the request body at 4 MiB and closes its handler with the server. The generated README and next-steps text point at `server/ports.ts` and the new `fallbackIntent` option, and `init --mcp` now leads with `npm run mcp:claude-desktop`.
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`718b9e0`](https://github.com/yosuque/kohaku/commit/718b9e01c9f015881cc49db41af26e1d54c53519) Thanks [@yosuque](https://github.com/yosuque)! - `verifyCatalogMigrationPlan` now also recomputes each step's structure hash from its `pinnedSpec` and compares it with `afterStructureHash`, so a plan whose `pinnedSpec` was altered without touching its hashes is rejected before `kohaku migrate apply` writes anything (design.md decision 65). The Python port mirrors the change.
+- Updated dependencies [[`67828f4`](https://github.com/yosuque/kohaku/commit/67828f4150934eb42a61b25f44390b4c0bacf604), [`e250463`](https://github.com/yosuque/kohaku/commit/e2504639145c3baacd1843c72512e8abf4f21b08), [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a), [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc), [`6bb1769`](https://github.com/yosuque/kohaku/commit/6bb1769feb9eed35f32e8e489453ceea6c932745), [`6b01a1f`](https://github.com/yosuque/kohaku/commit/6b01a1fe0e8ac5f640bbc0a482a3dbe43e6b353a), [`0c4d5a2`](https://github.com/yosuque/kohaku/commit/0c4d5a298ccabe2ca47cac00f4c33730c2b915b0), [`8eb466b`](https://github.com/yosuque/kohaku/commit/8eb466bc52a5259e897d1cbc1713e57796a702e7), [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d), [`fc7b074`](https://github.com/yosuque/kohaku/commit/fc7b07414ea58b50b687cf9c72db4b2a51706df9), [`38da68b`](https://github.com/yosuque/kohaku/commit/38da68b1629df99aa7406f0068e2a479052f0cc4), [`71e17f9`](https://github.com/yosuque/kohaku/commit/71e17f9d970e01abaa8ebdf967054ad468555b56), [`5cfd417`](https://github.com/yosuque/kohaku/commit/5cfd417a7959c03a00587ad22b920b7fe62bf045), [`ab25ddc`](https://github.com/yosuque/kohaku/commit/ab25ddc5691e216e6d5d027920a0a9abbc8f4207), [`5d1f473`](https://github.com/yosuque/kohaku/commit/5d1f473064c1c489ce54441cf8c9841c1be3028d), [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b), [`806c5f2`](https://github.com/yosuque/kohaku/commit/806c5f222097eaf6599a1fc12a5c24c11e83886f), [`343ccd7`](https://github.com/yosuque/kohaku/commit/343ccd7a71d4370473640dce94f1e2e2a821b39d), [`1e0d356`](https://github.com/yosuque/kohaku/commit/1e0d3564d6296bdae557e5d96376c798a3759b5f), [`7fa1981`](https://github.com/yosuque/kohaku/commit/7fa1981c6e574ba3e9f4eb570b88304c65565011), [`7c92cc4`](https://github.com/yosuque/kohaku/commit/7c92cc433e40a88f3b43eaeba7fd0af1a8755cad), [`8bd2e93`](https://github.com/yosuque/kohaku/commit/8bd2e93a305b2cfb12ddc394a8044b9dd9ca6378), [`a936266`](https://github.com/yosuque/kohaku/commit/a9362668b281564bc09a3b4a20233f8e1294bf41), [`837b4d2`](https://github.com/yosuque/kohaku/commit/837b4d27d3273daa9aa9d33b94e27c041a30c0ff), [`adb2744`](https://github.com/yosuque/kohaku/commit/adb27442a9169eb74e803e88ec52d54db3a944b2), [`f8ecb4c`](https://github.com/yosuque/kohaku/commit/f8ecb4c71ba780378849c27c8ccdc6a14b31dcdc), [`718b9e0`](https://github.com/yosuque/kohaku/commit/718b9e01c9f015881cc49db41af26e1d54c53519)]:
+  - @kohaku-ui/host-core@0.4.1
+  - @kohaku-ui/spec-core@0.4.1
+  - @kohaku-ui/client@0.4.1
+  - @kohaku-ui/composer@0.4.1
+  - @kohaku-ui/lineage@0.4.1
+  - @kohaku-ui/storage-memory@0.4.1
+  - @kohaku-ui/registry@0.4.1
+  - @kohaku-ui/evals@0.4.1
+  - @kohaku-ui/sandbox@0.4.1
+  - @kohaku-ui/spec@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
