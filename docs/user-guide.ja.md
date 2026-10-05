@@ -923,6 +923,7 @@ const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
 |---|---|
 | 画面に「Could not render this request」(presentMarkdown) | L1 生成が 2 回とも検証に落ちた決定的フォールバック。LLM 設定(キー・モデル)を確認。ollama なら非思考モデルへ変更。**予算ガード(`ComposePolicy.budget`)配線時は予算超過でも同じ画面**になる(`fallback.reason` の英語文言「budget exceeded」/ `observer.onError` の `budgetExceeded` で判別) |
 | `fallback.reason` が「the LLM provider was unavailable」と言っている | LLM が一度も応答しなかった(provider/config の一時的な障害)ケースで、「failed catalog/structure validation」(LLM は応答したが出力が検証に落ちた)とは異なる。`KOHAKU_LLM_PROVIDER` と provider の API キーを確認 — 上記の `KOHAKU_DEBUG` と、`observer.onError` の `ComposeErrorContext.failure` / `error` で根本原因を調べられる |
+| Chat / `/intent/normalize` が 503 `INTERNAL` "LLM provider unavailable" を返す | LLM provider が Intent 解決を処理できなかった(API キー未設定・provider の失敗・タイムアウト・中断)。Spec 生成は決定的な Spec へ縮退できるが、Intent 解決は LLM 無しには縮退できない。`KOHAKU_LLM_PROVIDER` と provider の API キーを確認。原因は `onError` / `KOHAKU_DEBUG=1` のサーバーログに、応答の `requestId` 付きで出る |
 | Chat が常に L2(橙)になる | NL 正規化が既知 Intent にマップできていない。`/api/health` の `intents` と質問の噛み合わせ、モデル品質を確認 |
 | `cache:HIT` にならない | params が完全一致しているか(チップの hash を比較)。bump 後は dataVersion が変わるので MISS が正しい |
 | データ部分だけ「データが更新されています」 | STALE_VERSION(Spec が古い)。再操作で新しい dataVersion の Spec に切り替わる |

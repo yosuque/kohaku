@@ -1,0 +1,7 @@
+---
+"@kohaku-ui/host-core": patch
+"@kohaku-ui/host-rest": patch
+"@kohaku-ui/host-mcp-apps": patch
+---
+
+An LLM provider that cannot serve Intent resolution (API key not set, provider failure or timeout, aborted call: an `LlmError` with code `PROVIDER` / `CONFIG` / `ABORTED`) is no longer reported as `422 INTENT_INVALID` carrying the provider SDK's raw wording (for example "Anthropic API key is missing…"). `/intent/normalize`, `/events`, `/compose` / `/compose/stream` with a natural-language `input` and `/fixations/approve` now answer 503 `INTERNAL` with the fixed message `LLM provider unavailable; see the host's observability hook (onError) for details`, and the MCP tools return the same text as a structured tool error; the original error still reaches `onError`. `/compose` with a directly-specified Intent is unchanged (200 with `provenance.fallback`), and unknown-Intent / invalid-param / no-match failures keep their 422 and their own message. `isTypedHostError` now excludes `LlmError` from its "an Error with a string `code` is typed" rule, so an `LlmError`'s raw message never reaches a client through `clientMessageFor`. New host-core exports: `classifyHostError`, `isLlmUnavailableError`, `LLM_PROVIDER_UNAVAILABLE_MESSAGE`, `HostErrorClass`; `@kohaku-ui/llm` moves from a devDependency to a dependency of host-core.
