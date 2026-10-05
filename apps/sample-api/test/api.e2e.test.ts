@@ -1,4 +1,8 @@
-import { createHmacApprovalPort, createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
+import {
+  createHmacApprovalPort,
+  createHmacAuthzPort,
+  createMemoryApprovalStore,
+} from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type {
   FixationRecord,
@@ -43,8 +47,9 @@ async function makeTestApp(objects: unknown[] = [], storage: StoragePort = makeM
   const llm = new FakeLlm({ objects });
   const authz = createHmacAuthzPort("test-secret");
   // Governed actions (design.md #62/#63): wired by default so every test exercises the same shape the
-  // real demo does (index.ts wires createHmacApprovalPort the same way, off the same secret).
-  const approvals = createHmacApprovalPort("test-secret");
+  // real demo does (index.ts wires createHmacApprovalPort the same way, off the same secret, with an
+  // in-process ApprovalStore so an approval token is single-use).
+  const approvals = createHmacApprovalPort("test-secret", { store: createMemoryApprovalStore() });
   return { ...(await createApp({ llm, storage, authz, approvals })), llm };
 }
 
@@ -437,16 +442,16 @@ describe("sample-api E2E", () => {
       },
     });
 
-    // This demo wires no ApprovalStore, so single-use enforcement (optional per design.md #63) is off and
-    // the same token verifies again for a second invoke of the identical (action, payload, requester) triple
-    // — a product that wants single-use tokens configures an ApprovalStore (packages/authz-hmac's
-    // createMemoryApprovalStore or its own), which this demo intentionally does not (out of scope).
+    // The demo wires an in-process ApprovalStore (index.ts), so the token is single-use (design.md #63): the
+    // identical (action, payload, requester) triple needs a new approval for a second invoke, which is what
+    // the console's Re-issue is for.
     const replay = await app.request("/api/kohaku/binding/action", {
       method: "POST",
       headers: { authorization: `Bearer ${requesterCap}`, "content-type": "application/json" },
       body: JSON.stringify({ action: "publish", payload, approval }),
     });
-    expect(replay.status).toBe(200);
+    expect(replay.status).toBe(403);
+    expect(((await replay.json()) as { error: { code: string } }).error.code).toBe("APPROVAL_REQUIRED");
   });
 
   it("the second compose of the same Intent is a cache hit", async () => {

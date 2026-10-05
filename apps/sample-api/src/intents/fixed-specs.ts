@@ -353,12 +353,12 @@ function recordsView(intent: CanonicalIntent, refs: QueryHandle[], lang: OutputL
       props: { label: S.addNoteLabel, variant: "secondary" },
     },
     // A second write action, "approve"-tier (design.md #62/#63's governed-actions demo). Its DomainPort
-    // operation (publish, apps/sample-api/src/domain/port.ts) requires a bound approval token that is
-    // obtained out of band (POST /approvals) -- this demo intentionally does not add an approver-facing
-    // UI of its own (out of scope), so pressing this button without one just leaves the write ungated
-    // client-side and, with no confirm/requestApproval hook wired, phase "awaitingApproval" (no visible
-    // change) -- the actual end-to-end proof of the "approve" tier is the E2E test that presents a real
-    // approval token to POST /binding/action / kohaku_action directly.
+    // operation (publish, apps/sample-api/src/domain/port.ts) requires a bound approval token. The first
+    // press reaches the server without one (phase "awaitingApproval", recorded as action.approvalRequested);
+    // an approver mints the token in Admin > Approvals (POST /approvals, design.md #72) and the requester
+    // pastes it into the renderer's default requestApproval prompt on the next press. The end-to-end proof of
+    // the "approve" tier is the E2E test that presents a real approval token to POST /binding/action /
+    // kohaku_action directly.
     {
       id: "publishBtn",
       type: "action.button",
