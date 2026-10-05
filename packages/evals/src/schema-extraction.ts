@@ -29,8 +29,12 @@ const SUGGESTED_DRAFT_VERSION = "1.0.0";
 const HTML_PROMPT_BUDGET = 12_000;
 /** Prompt budget for one reviewer-corrected example's HTML excerpt (characters). */
 const EXAMPLE_HTML_BUDGET = 1_500;
+/** Prompt budget for one reviewer-corrected example's draft JSON (characters), final and proposed each. */
+const EXAMPLE_DRAFT_BUDGET = 4_000;
 /** How many reviewer-corrected examples go into one prompt unless `maxExamples` says otherwise. */
 const DEFAULT_MAX_EXAMPLES = 2;
+/** The most reviewer-corrected examples one prompt may carry, whatever `maxExamples` asks for. */
+const MAX_EXAMPLES_CAP = 5;
 
 /**
  * Default extraction budget (milliseconds). `evaluateAndList` runs every freshly nominated candidate's
@@ -83,6 +87,11 @@ export interface SchemaExtractionInput {
   queryPaths?: readonly string[];
   /** Existing catalog (component types / intent names already taken), so the proposal avoids collisions. */
   catalogSummary?: string;
+  /**
+   * The tenant the candidate belongs to, when the host has one. Passed to the `examples` provider so reviewer
+   * corrections are read from this tenant's records only (design.md #73); it is not part of the prompt itself.
+   */
+  tenant?: string;
 }
 
 /** The single spec-core definition also used by @kohaku-ui/lineage's SchemaSuggestion. */
@@ -130,27 +139,52 @@ export function createSchemaExtractor(opts: {
   /** Per-call extraction budget in milliseconds (default `DEFAULT_EXTRACTION_TIMEOUT_MS`, 20s). See its own doc. */
   timeoutMs?: number;
   /**
-   * Supplies reviewer-corrected examples for the prompt (design.md #73). Called once per extraction; a throw or
-   * rejection is swallowed and treated as "no examples" (the same convention as composer's few-shot provider:
-   * a failing examples source must never fail the extraction it only decorates). With no examples the prompt
-   * has no examples section at all.
+   * Supplies reviewer-corrected examples for the prompt (design.md #73). Called once per extraction with the
+   * extraction input (`input.tenant` says whose corrections may be read) and the extraction's own timeout
+   * signal, so the read counts against `timeoutMs` like the LLM call does; a provider that ignores the signal
+   * is abandoned when it fires. A throw, a rejection or an abort is swallowed and treated as "no examples" (the
+   * same convention as composer's few-shot provider: a failing examples source must never fail the extraction
+   * it only decorates). With no examples the prompt has no examples section at all.
    */
-  examples?: (input: SchemaExtractionInput) => Promise<SchemaExtractionExample[]>;
-  /** The most examples one prompt carries (default 2; a provider returning more is truncated). */
+  examples?: (
+    input: SchemaExtractionInput,
+    ctx: { signal: AbortSignal },
+  ) => Promise<SchemaExtractionExample[]>;
+  /** The most examples one prompt carries (default 2, at most 5; a provider returning more is truncated). */
   maxExamples?: number;
 }): SchemaExtractor {
   const now = (): Date => opts.now?.() ?? new Date();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS;
-  const maxExamples = Math.max(0, Math.floor(opts.maxExamples ?? DEFAULT_MAX_EXAMPLES));
+  const maxExamples = Math.min(
+    MAX_EXAMPLES_CAP,
+    Math.max(0, Math.floor(opts.maxExamples ?? DEFAULT_MAX_EXAMPLES)),
+  );
 
-  async function loadExamples(input: SchemaExtractionInput): Promise<SchemaExtractionExample[]> {
-    if (opts.examples == null || maxExamples === 0) return [];
+  async function loadExamples(
+    input: SchemaExtractionInput,
+    signal: AbortSignal,
+  ): Promise<SchemaExtractionExample[]> {
+    if (opts.examples == null || maxExamples === 0 || signal.aborted) return [];
+    let onAbort: (() => void) | undefined;
     try {
-      const examples = await opts.examples(input);
+      const aborted = new Promise<never>((_, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      // `aborted` never resolves, so a provider that outlives the budget loses the race instead of holding the
+      // extraction (and the caller's promotion lock) open; its late rejection is absorbed by the race.
+      const examples = await Promise.race([opts.examples(input, { signal }), aborted]);
       return Array.isArray(examples) ? examples.filter((e) => e?.final != null).slice(0, maxExamples) : [];
     } catch {
       return [];
+    } finally {
+      if (onAbort != null) signal.removeEventListener("abort", onAbort);
     }
+  }
+
+  /** `JSON.stringify` cut to the draft budget (a cut draft is no longer valid JSON; the block is data, not parsed). */
+  function draftJson(draft: SuggestedDraft): string {
+    return JSON.stringify(draft).slice(0, EXAMPLE_DRAFT_BUDGET);
   }
 
   function examplesSection(examples: readonly SchemaExtractionExample[]): string[] {
@@ -164,18 +198,18 @@ export function createSchemaExtractor(opts: {
         ...(example.suggestion != null
           ? [
               "The machine proposal the reviewer replaced:",
-              untrustedBlock("EXAMPLE_PROPOSED_DRAFT", JSON.stringify(example.suggestion), "json"),
+              untrustedBlock("EXAMPLE_PROPOSED_DRAFT", draftJson(example.suggestion), "json"),
             ]
           : []),
         "The draft the reviewer approved:",
-        untrustedBlock("EXAMPLE_FINAL_DRAFT", JSON.stringify(example.final), "json"),
+        untrustedBlock("EXAMPLE_FINAL_DRAFT", draftJson(example.final), "json"),
       ].join("\n"),
     );
     return [`## Reviewer-corrected examples\n${blocks.join("\n\n")}`];
   }
 
-  async function buildPrompt(input: SchemaExtractionInput): Promise<string> {
-    const examples = await loadExamples(input);
+  async function buildPrompt(input: SchemaExtractionInput, signal: AbortSignal): Promise<string> {
+    const examples = await loadExamples(input, signal);
     const html = input.html.slice(0, HTML_PROMPT_BUDGET);
     const refs = extractDataRefs(input.html);
     const issues = collectL2Issues(input.html);
@@ -203,13 +237,16 @@ export function createSchemaExtractor(opts: {
 
   return {
     async extract(input) {
+      // One budget for the whole extraction: created before the prompt is built so the examples read counts
+      // against it too (the lock-holding worst case is `timeoutMs`, not `timeoutMs` plus a slow examples read).
+      const abort = AbortSignal.timeout(timeoutMs);
       const result = await opts.llm.generateObject({
         schema: SchemaSuggestionOutputSchema,
         schemaName: "schema_suggestion",
         system: SYSTEM_PROMPT,
-        prompt: await buildPrompt(input),
+        prompt: await buildPrompt(input, abort),
         temperature: 0,
-        abort: AbortSignal.timeout(timeoutMs),
+        abort,
       });
       const out = result.object;
       return {

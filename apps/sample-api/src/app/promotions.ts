@@ -199,6 +199,8 @@ export function createPromotionPipeline(args: {
               namespace: "sales",
               queryPaths: QUERY_PATHS,
               catalogSummary: catalogSummaryFor(registry, context?.tenant),
+              // Whose reviewer corrections the extractor's few-shot provider may read (design.md #73).
+              ...(context?.tenant != null ? { tenant: context.tenant } : {}),
             });
           },
         }

@@ -125,8 +125,10 @@ async function main(): Promise<void> {
     // is the kill switch: every LLM-wiring env var carries one so a deployment can shed non-essential LLM
     // spend without shedding compose itself. The extractor learns from earlier reviewer corrections of its own
     // proposals (component.schemaEdited -> few-shot examples, design.md #73): schemaEditExamples reads the same
-    // lineage the host writes. Built once per process, so it reuses only tenant-less records -- one tenant's
-    // reviewed components are never shown to the model while it extracts for another.
+    // lineage the host writes. Built once per process but told the tenant on every call (the suggestSchema hook
+    // passes its TenantScope as SchemaExtractionInput.tenant): an extraction for a tenant reuses only that
+    // tenant's records, and one with no tenant only the tenant-less records -- another tenant's reviewed
+    // components are never shown to the model.
     ...(schemaSuggestEnabled()
       ? {
           schemaExtractor: createSchemaExtractor({

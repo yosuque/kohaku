@@ -265,6 +265,90 @@ describe("createSchemaExtractor: reviewer-corrected examples (design.md #73)", (
     }).extract(input);
     expect(seen).toEqual([input]);
   });
+
+  it("hands the input's tenant to the provider (and keeps it out of the prompt)", async () => {
+    const seen: Array<string | undefined> = [];
+    const llm = new FakeLlm({ objects: [OUTPUT, OUTPUT] });
+    const extractor = createSchemaExtractor({
+      llm,
+      examples: async (i) => {
+        seen.push(i.tenant);
+        return [];
+      },
+    });
+    await extractor.extract({ ...input, tenant: "acme" });
+    await extractor.extract(input);
+    expect(seen).toEqual(["acme", undefined]);
+    expect(llm.calls[0]!.prompt).not.toContain("acme");
+  });
+
+  it("gives the provider the extraction's own timeout signal, shared with the LLM call", async () => {
+    let providerSignal: AbortSignal | undefined;
+    let llmSignal: AbortSignal | undefined;
+    const llm = new FakeLlm({
+      objects: (req: GenerateObjectRequest<unknown>) => {
+        llmSignal = req.abort;
+        return OUTPUT;
+      },
+    });
+    await createSchemaExtractor({
+      llm,
+      examples: async (_i, { signal }) => {
+        providerSignal = signal;
+        return [];
+      },
+    }).extract(input);
+    expect(providerSignal).toBeDefined();
+    expect(providerSignal).toBe(llmSignal);
+  });
+
+  it("treats an examples read that outlives the budget as no examples (the read is inside the timeout)", async () => {
+    const llm = new FakeLlm({ objects: [OUTPUT] });
+    const extractor = createSchemaExtractor({
+      llm,
+      timeoutMs: 20,
+      // Ignores the signal on purpose: the extractor must stop waiting for it anyway.
+      examples: () =>
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("too late")), 200);
+        }),
+    });
+    const started = Date.now();
+    // The budget is spent by the read; whatever the (already aborted) LLM call then does, the extraction must
+    // neither wait for the provider's 200ms nor surface the provider's own error.
+    const outcome = await extractor.extract(input).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(Date.now() - started).toBeLessThan(150);
+    expect(outcome instanceof Error && outcome.message === "too late").toBe(false);
+    expect(llm.calls[0]?.prompt ?? "").not.toContain("Reviewer-corrected examples");
+  });
+
+  it("never carries more than 5 examples, whatever maxExamples asks for", async () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({
+      final: { ...FINAL, componentType: `sales.example${i}` },
+    }));
+    const llm = new FakeLlm({ objects: [OUTPUT] });
+    await createSchemaExtractor({ llm, examples: async () => many, maxExamples: 50 }).extract(input);
+    const prompt = llm.calls[0]!.prompt;
+    expect(prompt).toContain("sales.example4");
+    expect(prompt).not.toContain("sales.example5");
+  });
+
+  it("cuts each draft JSON to 4000 characters", async () => {
+    const llm = new FakeLlm({ objects: [OUTPUT] });
+    const fat = { ...FINAL, description: `${"d".repeat(4_000)}FINALTAIL` };
+    const fatSuggestion = { ...FINAL, description: `${"s".repeat(4_000)}SUGGESTIONTAIL` };
+    await createSchemaExtractor({
+      llm,
+      examples: async () => [{ suggestion: fatSuggestion, final: fat }],
+    }).extract(input);
+    const prompt = llm.calls[0]!.prompt;
+    expect(prompt).toContain("ddddddddd");
+    expect(prompt).not.toContain("FINALTAIL");
+    expect(prompt).not.toContain("SUGGESTIONTAIL");
+  });
 });
 
 describe("SchemaSuggestionOutputSchema (negative cases)", () => {
