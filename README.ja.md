@@ -83,6 +83,10 @@ cd my-dashboard && npm run dev
 
 自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。あわせて、生成し立ての capability secret を書いた `.env` も作られるので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。手元にデータがなければ、このページの冒頭で案内している同梱サンプル CSV([`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv))を使えます。このセクションの残りはモノレポ自体の開発セットアップです。
 
+> **バージョンに関する注記**: ここと利用ガイドで説明している生成プロジェクトの挙動(インストール後の golden fixture の自動生成、1 行の開発モード通知、`usage export`)は、`@kohaku-ui/cli` と `@kohaku-ui/host` の 0.4.1 以降のものです。公開版 0.4.0 にはいずれもありません。
+
+<!-- remove after 0.4.1 -->
+
 前提: Node >= 22(SQLite 入力は >= 22.13)、pnpm 12。CI は Node 22 と 24 で検証しています。
 
 ```bash

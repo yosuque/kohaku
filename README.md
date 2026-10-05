@@ -85,6 +85,10 @@ cd my-dashboard && npm run dev
 
 Generates a runnable Dashboard + Chat app (DomainPort, Intent catalog, L0 fixed Spec) from your own CSV/JSON/SQLite, plus a `.env` with a freshly generated capability secret (add only a provider key to it — never copy `.env.example` over it) — see the [Zero-Port quickstart](docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code) for what it produces and how to add L1/L2. No data at hand? See the bundled sample CSV at the top of this page ([`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv)). The rest of this section is the monorepo's own dev setup.
 
+> **Version note**: the generated project's behavior described here and in the guide (the golden fixture written automatically after install, the single-line development notice, `usage export`) is that of `@kohaku-ui/cli` and `@kohaku-ui/host` 0.4.1 and later. The published 0.4.0 has none of them.
+
+<!-- remove after 0.4.1 -->
+
 Prerequisites: Node >= 22 (>= 22.13 for SQLite input), pnpm 12. CI verifies on Node 22 and 24.
 
 ```bash
