@@ -11,6 +11,8 @@ import {
   renderProjectFiles,
 } from "./render.js";
 
+export { formatInitResult, type InitReportOptions } from "./report.js";
+
 export interface InitOptions {
   from: string;
   out?: string;
