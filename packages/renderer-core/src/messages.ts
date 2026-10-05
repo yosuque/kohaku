@@ -91,6 +91,17 @@ export interface RendererMessages {
    * action whose approval is still pending.
    */
   actionAwaiting: (tier: "confirm" | "approve") => string;
+  /**
+   * Governed actions (design.md #63/#72): the prompt text of the renderers' default `requestApproval` hook
+   * (`globalThis.prompt`), asking the requester to paste the approval token an approver issued for `action`.
+   */
+  actionApprovalPrompt: (action: string) => string;
+  /**
+   * Governed actions (design.md #63/#72): the identifying detail appended to the "awaiting approval" notice
+   * when the pending-approval descriptor is known, so the requester can tell an approver which request to
+   * approve. `payloadHash` is shown truncated (the first 12 characters).
+   */
+  actionAwaitingApprovalDetail: (requestId: string, payloadHash: string) => string;
 }
 
 /** Default English strings. The default value of RendererMessages. */
@@ -134,4 +145,8 @@ export const DEFAULT_MESSAGES: RendererMessages = {
     tier === "confirm"
       ? "The action was not run because it was not confirmed"
       : "The action is waiting for approval before it can run",
+  actionApprovalPrompt: (action) =>
+    `Paste the approval token for "${action}" (ask an approver; see Admin › Approvals)`,
+  actionAwaitingApprovalDetail: (requestId, payloadHash) =>
+    `request ${requestId} · payload ${payloadHash.slice(0, 12)}`,
 };

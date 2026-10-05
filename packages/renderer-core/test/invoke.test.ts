@@ -456,6 +456,24 @@ describe("actionPhaseNotice", () => {
     expect(DEFAULT_MESSAGES.actionAwaiting("confirm")).not.toBe(DEFAULT_MESSAGES.actionAwaiting("approve"));
   });
 
+  it("appends the request id and the truncated payload hash when the server's descriptor is known", () => {
+    const payloadHash = `sha256:${"cd".repeat(32)}`;
+    const notice = actionPhaseNotice(
+      {
+        phase: "awaitingApproval",
+        tier: "approve",
+        message: "m",
+        approval: { requestId: "req-7", action: "annotate", tier: "approve", payloadHash },
+      },
+      DEFAULT_MESSAGES,
+    );
+    expect(notice).toEqual({
+      role: "status",
+      text: `${DEFAULT_MESSAGES.actionAwaiting("approve")} (request req-7 · payload sha256:cdcdc)`,
+    });
+    expect(DEFAULT_MESSAGES.actionApprovalPrompt("annotate")).toContain('"annotate"');
+  });
+
   it("has no notice for the other phases", () => {
     for (const phase of [
       { phase: "idle" },

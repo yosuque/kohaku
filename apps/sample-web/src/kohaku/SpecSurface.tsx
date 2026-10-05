@@ -37,8 +37,9 @@ export function SpecSurface(props: {
   /**
    * The compose-issued Action manifest (design.md #62/#64, `ComposeView.actions`), for
    * `useInvokeAction`'s client-side `preflightAction` check before the write round trip (a "confirm"-tier
-   * action pops `globalThis.confirm` via renderer-react's own default; an "approve"-tier action has no
-   * default here — see RendererContextValue.requestApproval's own doc comment — and stays gated).
+   * action pops `globalThis.confirm` via renderer-react's own default; an "approve"-tier action asks for the
+   * approval token with renderer-react's default `globalThis.prompt` once it is awaiting approval — see
+   * RendererContextValue.requestApproval's own doc comment, design.md #72).
    */
   actionManifest?: ActionManifest;
 }): ReactNode {
