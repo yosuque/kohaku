@@ -493,8 +493,16 @@ usage
     "--until <iso8601>",
     "Inclusive upper bound: a date (YYYY-MM-DD, which INCLUDES that whole UTC day) or a timestamp with a Z / ±hh:mm offset",
   )
+  .option(
+    "--timeout-ms <ms>",
+    "Time limit of each --rest request, in milliseconds (a slower request fails the export)",
+    "30000",
+  )
   .option("--format <csv|json>", "Output format", "csv")
-  .option("--out <file>", "Write to this file instead of stdout")
+  .option(
+    "--out <file>",
+    "Write to this file instead of stdout (written to <file>.tmp first, then renamed into place)",
+  )
   .action(
     async (opts: {
       dataDir?: string;
@@ -503,6 +511,7 @@ usage
       tenant?: string;
       since: string;
       until: string;
+      timeoutMs: string;
       format: string;
       out?: string;
     }) => {
@@ -517,6 +526,7 @@ usage
           ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
           since: opts.since,
           until: opts.until,
+          timeoutMs: Number(opts.timeoutMs),
           format: opts.format as "csv" | "json",
           ...(opts.out != null ? { out: opts.out } : {}),
         });

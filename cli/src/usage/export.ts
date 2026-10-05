@@ -1,12 +1,15 @@
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createKohakuClient, type Transport } from "@kohaku-ui/client";
+import { createKohakuClient, globalTransport, type Transport } from "@kohaku-ui/client";
 import { mergeUsageRows, summarizeUsage, type UsageRow } from "@kohaku-ui/lineage";
 import type { LineageEventRecord, StoragePort } from "@kohaku-ui/spec-core";
 import { parseHeaderArgs } from "../header-args.js";
 import { CliUsageError, resolveRestTenant, resolveWindow } from "../lineage-window.js";
 import { formatUsageCsv } from "./csv.js";
 import { LINEAGE_FILE_NAME, type LineageFileScanStats, streamLineageChunks } from "./lineage-file.js";
+
+/** The default per-request time limit of a `--rest` export, in milliseconds. */
+export const DEFAULT_REST_TIMEOUT_MS = 30_000;
 
 /** The lineage event types a usage summary reads (everything else is skipped at the source). */
 const USAGE_EVENT_TYPES = ["view.composed", "intent.fixated", "intent.unfixated"];
@@ -27,6 +30,11 @@ export interface UsageExportOptions {
   format?: "csv" | "json";
   /** Write to this file instead of returning the text only (the caller prints it to stdout when omitted). */
   out?: string;
+  /**
+   * Time limit of each REST request (one page), in milliseconds; a request that takes longer fails the export
+   * instead of hanging it. REST mode only. Default `DEFAULT_REST_TIMEOUT_MS`.
+   */
+  timeoutMs?: number;
   /** Transport override (no CLI flag; REST mode tests inject an in-process Hono app's `app.request`). */
   transport?: Transport;
   /**
@@ -76,6 +84,41 @@ async function* pagesOfStorage(
 }
 
 /**
+ * Gives every request of `base` its own time limit: a fresh `AbortSignal.timeout` per call, combined with any
+ * signal the caller already set. `KohakuClient.lineagePages` takes one `RequestOptions.signal` for the whole
+ * walk, which would cap the export as a whole rather than each page, so the limit goes on the transport.
+ */
+function withRequestTimeout(base: Transport, timeoutMs: number): Transport {
+  return (url, init) => {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = init?.signal != null ? AbortSignal.any([init.signal, timeout]) : timeout;
+    return base(url, { ...init, signal });
+  };
+}
+
+/**
+ * Writes `text` to `path` through `<path>.tmp` and a rename, so a failed or interrupted export never leaves a
+ * half-written file under the final name (a billing job reading it would take the truncated rows for the whole).
+ */
+function writeAtomically(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  try {
+    writeFileSync(tmp, text);
+    renameSync(tmp, path);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
+}
+
+/** Whether `error` is the abort an `AbortSignal.timeout` raises (fetch and `Response.json()` surface it as is or as a cause). */
+function isTimeoutError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "TimeoutError" || isTimeoutError(error.cause);
+}
+
+/**
  * `kohaku usage export`: derives per-day, per-tenant usage rows (design.md #74) from the **whole** lineage log
  * in the window -- exhaustive cursor paging, not the bounded sample behind GET /analytics/summary -- so the
  * numbers are suitable for metering. `--data-dir` streams the `lineage.jsonl` of a `createFileStoragePort`
@@ -100,6 +143,12 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
       '--tenant must not be empty: an empty tenant means "no tenant filter". Usage that carries no tenant ' +
         "(every compose through an MCP host, which resolves none) is part of the unfiltered export, as the " +
         "rows whose tenant column is empty",
+    );
+  }
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_REST_TIMEOUT_MS;
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new CliUsageError(
+      `--timeout-ms must be a positive integer (milliseconds), got "${String(timeoutMs)}"`,
     );
   }
   const format = opts.format ?? "csv";
@@ -137,7 +186,7 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
     const client = createKohakuClient({
       baseUrl: opts.rest!.replace(/\/$/, ""),
       headers: () => headers,
-      ...(opts.transport != null ? { transport: opts.transport } : {}),
+      transport: withRequestTimeout(opts.transport ?? globalTransport(), timeoutMs),
     });
     pages = client.lineagePages({
       type: USAGE_EVENT_TYPES,
@@ -147,16 +196,27 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
   }
 
   let rows: UsageRow[] = [];
-  for await (const page of pages) {
-    rows = mergeUsageRows(
-      rows,
-      summarizeUsage(page, {
-        bucket: "day",
-        since: window.since,
-        until: window.until,
-        ...(tenantFilter != null ? { tenant: tenantFilter } : {}),
-      }),
-    );
+  try {
+    for await (const page of pages) {
+      rows = mergeUsageRows(
+        rows,
+        summarizeUsage(page, {
+          bucket: "day",
+          since: window.since,
+          until: window.until,
+          ...(tenantFilter != null ? { tenant: tenantFilter } : {}),
+        }),
+      );
+    }
+  } catch (e) {
+    if (opts.rest != null && isTimeoutError(e)) {
+      throw new Error(
+        `A request to ${opts.rest} took longer than ${timeoutMs} ms and was abandoned; raise --timeout-ms ` +
+          "if the host is just slow",
+        { cause: e },
+      );
+    }
+    throw e;
   }
   if (scan.skippedLines > 0) {
     const warn = opts.warn ?? ((message: string) => console.error(message));
@@ -167,7 +227,6 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
   }
   const text = format === "json" ? `${JSON.stringify(rows, null, 2)}\n` : formatUsageCsv(rows);
   if (opts.out == null) return { rows, text, skippedLines: scan.skippedLines };
-  mkdirSync(dirname(opts.out), { recursive: true });
-  writeFileSync(opts.out, text);
+  writeAtomically(opts.out, text);
   return { rows, text, outPath: opts.out, skippedLines: scan.skippedLines };
 }

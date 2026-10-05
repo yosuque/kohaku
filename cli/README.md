@@ -53,7 +53,9 @@ were spent), `cache_fixated` the composes served from a fixation, `fallbacks` th
 fallback, and `fixations_created` / `fixations_removed` how many times a fixation was created / removed (operations,
 not composes). A compose through an MCP host cannot be attributed to a tenant (the MCP profile resolves none), so
 its usage lands in the rows whose tenant column is empty; an unfiltered export includes them, and an
-empty `--tenant` is rejected because it would read as no filter. A bad argument exits 2: a bad window or format, both or neither of `--data-dir` /
+empty `--tenant` is rejected because it would read as no filter. Each `--rest` request has a time limit (`--timeout-ms`, default 30000), so a stalled host fails the
+export instead of hanging it, and `--out` is written to `<out>.tmp` and then renamed into place, so a
+failed export never leaves a truncated file. A bad argument exits 2: a bad window, format or `--timeout-ms`, both or neither of `--data-dir` /
 `--rest`, a `--data-dir` that does not exist, or a `--tenant` that disagrees with (or has no)
 `x-kohaku-tenant` header.
 

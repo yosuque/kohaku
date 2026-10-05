@@ -5,10 +5,11 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Transport } from "@kohaku-ui/client";
 import type { ComposeContext } from "@kohaku-ui/composer";
 import { createKohakuRoutes, type KohakuHostDeps } from "@kohaku-ui/host-rest";
 import type { UsageRow } from "@kohaku-ui/lineage";
@@ -306,6 +307,34 @@ describe("kohaku usage export --data-dir", () => {
   }, 30_000);
 });
 
+describe("kohaku usage export --out", () => {
+  const window = { since: "2026-07-01", until: "2026-07-31" };
+
+  it("writes through <out>.tmp and renames, leaving no temporary file behind", async () => {
+    const dataDir = tmp("kohaku-usage-data-");
+    await seed(createFileStoragePort(dataDir), EVENTS);
+    const outDir = tmp("kohaku-usage-out-");
+    const out = join(outDir, "usage.csv");
+    writeFileSync(out, "stale\n"); // replaced as a whole
+
+    const result = await runUsageExport({ dataDir, ...window, out });
+    expect(readFileSync(out, "utf8")).toBe(result.text);
+    expect(readdirSync(outDir)).toEqual(["usage.csv"]);
+  });
+
+  it("removes the temporary file and keeps the target when the final rename fails", async () => {
+    const dataDir = tmp("kohaku-usage-data-");
+    await seed(createFileStoragePort(dataDir), EVENTS);
+    const outDir = tmp("kohaku-usage-out-");
+    const out = join(outDir, "usage.csv");
+    mkdirSync(out); // a directory where the file should go: the rename cannot replace it
+
+    await expect(runUsageExport({ dataDir, ...window, out })).rejects.toThrow();
+    expect(readdirSync(outDir)).toEqual(["usage.csv"]);
+    expect(readdirSync(out)).toEqual([]);
+  });
+});
+
 describe("kohaku usage export --data-dir reads lineage.jsonl as a read-only stream", () => {
   const window = { since: "2026-07-01", until: "2026-07-31" };
 
@@ -565,6 +594,28 @@ describe("kohaku usage export usage errors", () => {
     expect(result.stderr).toContain("--since must be an ISO 8601 date");
   }, 30_000);
 
+  it("the CLI exits 2 for a --timeout-ms that is not a positive integer", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        bin,
+        "usage",
+        "export",
+        "--rest",
+        "http://127.0.0.1:1/api/kohaku",
+        "--timeout-ms",
+        "soon",
+        "--since",
+        "2026-07-01",
+        "--until",
+        "2026-07-31",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--timeout-ms must be a positive integer");
+  }, 30_000);
+
   it("the CLI help says the header decides the tenant and that no header reads every tenant", () => {
     const result = spawnSync(process.execPath, [bin, "usage", "export", "--help"], { encoding: "utf8" });
     expect(result.status).toBe(0);
@@ -677,6 +728,67 @@ describe("kohaku usage export --rest (in-process host-rest app)", () => {
         ...window,
       }),
     ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("gives every page request its own time limit, not one for the whole walk", async () => {
+    const storage = createMemoryStoragePort();
+    const many: LineageEventRecord[] = [];
+    for (let i = 0; i < 1200; i++) many.push(composed({ ts: "2026-07-03T00:00:00.000Z", tenant: "acme" }));
+    await seed(storage, many);
+    const app = makeRestApp(storage);
+    const signals: AbortSignal[] = [];
+    const transport: Transport = (url, init) => {
+      if (init?.signal != null) signals.push(init.signal);
+      return Promise.resolve(app.request(url, init));
+    };
+    const { rows } = await runUsageExport({
+      rest: "/api/kohaku",
+      transport,
+      headers: ["x-kohaku-tenant:acme"],
+      timeoutMs: 5_000,
+      ...window,
+    });
+    expect(rows[0]?.composed).toBe(1200);
+    // More than one page was read, and each request carried a timeout signal of its own that had not fired.
+    expect(signals.length).toBeGreaterThan(1);
+    expect(new Set(signals).size).toBe(signals.length);
+    expect(signals.every((s) => !s.aborted)).toBe(true);
+  });
+
+  /** A transport that never answers, like a host that accepted the connection and stalled. It honours abort. */
+  const hang: Transport = (_url, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) return reject(signal.reason);
+      signal?.addEventListener("abort", () => reject(signal.reason));
+    });
+
+  it("fails with a clear error when a REST request exceeds --timeout-ms, instead of hanging", async () => {
+    await expect(
+      runUsageExport({ rest: "/api/kohaku", transport: hang, timeoutMs: 20, ...window }),
+    ).rejects.toThrow(/took longer than 20 ms and was abandoned; raise --timeout-ms/);
+    // Not a usage error: the arguments were fine, the host was slow (exit 1, not 2).
+    await expect(
+      runUsageExport({ rest: "/api/kohaku", transport: hang, timeoutMs: 20, ...window }),
+    ).rejects.not.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects a --timeout-ms that is not a positive integer as a usage error", async () => {
+    for (const timeoutMs of [0, -5, 1.5, Number.NaN]) {
+      await expect(
+        runUsageExport({ rest: "/api/kohaku", transport: hang, timeoutMs, ...window }),
+      ).rejects.toBeInstanceOf(CliUsageError);
+    }
+  });
+
+  it("leaves an existing --out file alone when the export fails", async () => {
+    const out = join(tmp("kohaku-usage-out-"), "usage.csv");
+    writeFileSync(out, "previous export\n");
+    await expect(
+      runUsageExport({ rest: "/api/kohaku", transport: hang, timeoutMs: 20, out, ...window }),
+    ).rejects.toThrow(/took longer than/);
+    expect(readFileSync(out, "utf8")).toBe("previous export\n");
+    expect(existsSync(`${out}.tmp`)).toBe(false);
   });
 
   it("rejects a --tenant that has no x-kohaku-tenant header to back it (usage error)", async () => {
