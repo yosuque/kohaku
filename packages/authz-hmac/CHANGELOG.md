@@ -1,5 +1,17 @@
 # @kohaku-ui/authz-hmac
 
+## 0.4.1
+
+### Patch Changes
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc) Thanks [@yosuque](https://github.com/yosuque)! - `POST /approvals` no longer reports every `issueApproval` failure as a 400 with the raw message: only an `ApprovalIssueError` (or an error carrying `code: "APPROVAL_ISSUE_REJECTED"`, both new in spec-core; `createHmacApprovalPort` throws it for a self-approval) maps to 400, and any other error is reported to `onError` and returned as a fixed-text 500 `INTERNAL` (design.md decision 63). `createHmacApprovalPort` also gains `maxTtlSeconds` (default 3600) that clamps every granted lifetime, so a caller-supplied `ttlSeconds` up to 86400 no longer yields a day-long replay window when no `ApprovalStore` is configured.
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`5298e29`](https://github.com/yosuque/kohaku/commit/5298e299c010b6c7b088d9c778f3856a8b96e941) Thanks [@yosuque](https://github.com/yosuque)! - Approval tokens are now domain-separated from capability tokens cryptographically (design.md decision 63): the approval MAC key is derived from the shared secret under its own label and the MAC input covers the token prefix, and the token prefix is bumped to `kohaku-approval.v2.`. Approval tokens issued by an earlier version (`kohaku-approval.v1.`) are rejected after upgrading; they are short-lived (default TTL 300 s), so an approver only needs to re-issue any approval still pending at the moment of the rollout. Both HMAC ports now type-check every decoded claim and return a denial instead of throwing on a correctly signed but malformed payload.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`9c51dab`](https://github.com/yosuque/kohaku/commit/9c51dab3d986ba1bddc444f8542e41b2e5daa654) Thanks [@yosuque](https://github.com/yosuque)! - `createMemoryApprovalStore` sweeps expired entries at most once per second instead of scanning the whole map on every `consume`; an expired but unswept entry still does not count as consumed, so expiry semantics are unchanged.
+- Updated dependencies [[`e250463`](https://github.com/yosuque/kohaku/commit/e2504639145c3baacd1843c72512e8abf4f21b08), [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a), [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc), [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d), [`71e17f9`](https://github.com/yosuque/kohaku/commit/71e17f9d970e01abaa8ebdf967054ad468555b56), [`ab25ddc`](https://github.com/yosuque/kohaku/commit/ab25ddc5691e216e6d5d027920a0a9abbc8f4207), [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b), [`7c92cc4`](https://github.com/yosuque/kohaku/commit/7c92cc433e40a88f3b43eaeba7fd0af1a8755cad), [`a936266`](https://github.com/yosuque/kohaku/commit/a9362668b281564bc09a3b4a20233f8e1294bf41), [`f8ecb4c`](https://github.com/yosuque/kohaku/commit/f8ecb4c71ba780378849c27c8ccdc6a14b31dcdc)]:
+  - @kohaku-ui/spec-core@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes

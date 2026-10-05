@@ -1,6 +1,0 @@
----
-"@kohaku-ui/host-core": patch
-"@kohaku-ui/host-rest": patch
----
-
-`POST /binding/action` now fails closed with the SPEC error envelope when the action gate cannot decide: a rejecting `listOperations()` or a throwing `ApprovalPort.verifyApproval` answers 503 `INTERNAL` ("action gate unavailable", with the request id) and records `action.denied`, and a declared operation with an invalid `paramsSchema` answers a 500 envelope; `createKohakuRoutes` also gains an `app.onError` backstop so any other uncaught error is an `INTERNAL` envelope reported to `onError` instead of a bare `text/plain` 500. An own `__proto__` key in the payload (which zod strips while parsing) is now rejected with the same 422 `unsafeKey` issue as the other unsafe keys (SPEC ACT-PRM-001). The client-visible message for a rejected approval token is now the fixed "approval token was rejected" (the port's reason is audited, not returned), `recordActionGateResult` records `action.approved` even when `action.invoked` fails to record, and `deps.auth` / `deps.tenant` are resolved once per request. New host-core exports: `recordActionGateUnavailableDenial`, `ACTION_GATE_UNAVAILABLE_MESSAGE`, `APPROVAL_TOKEN_REJECTED_MESSAGE`, `NO_APPROVAL_PORT_REASON`.

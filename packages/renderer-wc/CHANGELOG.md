@@ -1,5 +1,23 @@
 # @kohaku-ui/renderer-wc
 
+## 0.4.1
+
+### Patch Changes
+
+- [#64](https://github.com/yosuque/kohaku/pull/64) [`b1a7af7`](https://github.com/yosuque/kohaku/commit/b1a7af7f39f09f2f088298098eaae618b32e363e) Thanks [@yosuque](https://github.com/yosuque)! - `implement` and `implementWc` parse a node's props against the part's schema once per `node.props` object instead of on every render or rebuild, and emit the dev-mode schema-mismatch warning once per props object (design.md decision 68). Rendered output is unchanged.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`0a2a43b`](https://github.com/yosuque/kohaku/commit/0a2a43b5ea0cbe90df1bbe53af9137452654e477) Thanks [@yosuque](https://github.com/yosuque)! - `action.button` and `presentForm` now show the governed-action phases that stop an action before it commits: a rejected payload (`invalid`, `role="alert"`) and a declined confirmation or pending approval (`awaitingApproval`, `role="status"`). renderer-core adds `actionPhaseNotice` and the `RendererMessages.actionInvalid` / `actionAwaiting` strings (design.md decisions 62-64); `<kohaku-surface>` also clears a form's previous submit message when a new submit starts, as the React form does.
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`4072ca8`](https://github.com/yosuque/kohaku/commit/4072ca8c86f28c2bb79abbfc0483b2e6242b7768) Thanks [@yosuque](https://github.com/yosuque)! - Editable `presentSpreadsheet` cells now run the governed-action pre-check in both renderers (a value the `actionManifest` rejects stays in edit mode with `aria-invalid`), and an optimistic cell edit is discarded again when its `cellEdit` invoke ends `invalid`, `awaitingApproval` or `failed`, so the grid shows the server value. renderer-core adds `revertCellEdit`; renderer-react's `useInvokeAction().invoke` takes an optional `onPhase` callback (design.md decisions 62-64).
+
+- [#66](https://github.com/yosuque/kohaku/pull/66) [`d16f7b3`](https://github.com/yosuque/kohaku/commit/d16f7b367ec62be4875ac18b42fd8be4d9da5c33) Thanks [@yosuque](https://github.com/yosuque)! - `<kohaku-surface>` reads `actionManifest`, `confirm` and `requestApproval` live at invoke time instead of rebuilding the mounted tree when one is reassigned. Assigning a spec and its manifest back to back no longer tears down an L2 sandbox iframe twice, and an inline `confirm` arrow no longer causes a rebuild on every assignment.
+- Updated dependencies [[`a80f17a`](https://github.com/yosuque/kohaku/commit/a80f17a8ac304def877d23df9e7b8e37ef5c7396), [`e250463`](https://github.com/yosuque/kohaku/commit/e2504639145c3baacd1843c72512e8abf4f21b08), [`cb6e91a`](https://github.com/yosuque/kohaku/commit/cb6e91afdbbc083587cd32941ebac07b0151753a), [`171103f`](https://github.com/yosuque/kohaku/commit/171103f58ab87ff98daad8cb12901d417079d76b), [`b712fef`](https://github.com/yosuque/kohaku/commit/b712fef7404c6af1ca6ff726890eb6ddfd44dbfc), [`003e360`](https://github.com/yosuque/kohaku/commit/003e3605159973f6837fccf87f83691b40839483), [`5bb982e`](https://github.com/yosuque/kohaku/commit/5bb982e2fca7d4c609d5b99b6dc71bac95dbfe55), [`f34568b`](https://github.com/yosuque/kohaku/commit/f34568bb40e3c136bfc74e9c7d10c50c812f7e18), [`06a724e`](https://github.com/yosuque/kohaku/commit/06a724e046a432e8c64af217911bb2683ab8ca9d), [`71e17f9`](https://github.com/yosuque/kohaku/commit/71e17f9d970e01abaa8ebdf967054ad468555b56), [`ab25ddc`](https://github.com/yosuque/kohaku/commit/ab25ddc5691e216e6d5d027920a0a9abbc8f4207), [`206b95b`](https://github.com/yosuque/kohaku/commit/206b95b425800ec5af8f7e9ac203a8be70fd8d0b), [`343ccd7`](https://github.com/yosuque/kohaku/commit/343ccd7a71d4370473640dce94f1e2e2a821b39d), [`7c92cc4`](https://github.com/yosuque/kohaku/commit/7c92cc433e40a88f3b43eaeba7fd0af1a8755cad), [`a936266`](https://github.com/yosuque/kohaku/commit/a9362668b281564bc09a3b4a20233f8e1294bf41), [`0a2a43b`](https://github.com/yosuque/kohaku/commit/0a2a43b5ea0cbe90df1bbe53af9137452654e477), [`f8ecb4c`](https://github.com/yosuque/kohaku/commit/f8ecb4c71ba780378849c27c8ccdc6a14b31dcdc), [`4072ca8`](https://github.com/yosuque/kohaku/commit/4072ca8c86f28c2bb79abbfc0483b2e6242b7768)]:
+  - @kohaku-ui/registry@0.4.1
+  - @kohaku-ui/spec-core@0.4.1
+  - @kohaku-ui/data-binding@0.4.1
+  - @kohaku-ui/renderer-core@0.4.1
+  - @kohaku-ui/sandbox@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
