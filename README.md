@@ -8,9 +8,9 @@ English | [日本語](README.ja.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-kohaku is the governance layer that takes Generative UI to production: the same request always gets the same screen, no row of your data ever enters the model's context, every screen is on an audit trail, and whatever the model invents has to pass review before it becomes a part of your product.
+kohaku is the governance layer that takes Generative UI to production: the same request on the same data version always gets the same screen, no row of your data ever enters the model's context, every screen is on an audit trail, and whatever the model invents has to pass review before it becomes a part of your product.
 
-- **Identical display is structural, not statistical** — chat and GUI requests normalize to one Intent and one cached UI Spec.
+- **Identical display is structural, not statistical** — chat and GUI requests normalize to one Intent and one cached UI Spec per data version.
 - **The model builds the plumbing; the water never flows through it** — a Spec carries `query://` references, never data values.
 - **Freedom is allowed, then governed** — free-form output runs in a sandbox; what is worth keeping is reviewed and promoted to an official part.
 
@@ -19,6 +19,8 @@ Try it on your own CSV / JSON / SQLite file:
 npx @kohaku-ui/cli init --from data.csv --out my-dashboard
 cd my-dashboard && npm run dev
 ```
+
+No data at hand? Use the bundled sample: `curl -O https://raw.githubusercontent.com/yosuque/kohaku/main/cli/test/init/fixtures/sales.csv`, then pass `--from sales.csv`.
 
 **Choose your path:** [MCP Apps only](docs/paths/mcp-apps.md) · [React dashboard only](docs/paths/react-dashboard.md) · [full stack](docs/paths/full-stack.md) — or read [Why kohaku](docs/why-kohaku.md) first.
 
@@ -81,7 +83,11 @@ npx @kohaku-ui/cli init --from data.csv --out my-dashboard   # or a .json array 
 cd my-dashboard && npm run dev
 ```
 
-Generates a runnable Dashboard + Chat app (DomainPort, Intent catalog, L0 fixed Spec) from your own CSV/JSON/SQLite, plus a `.env` with a freshly generated capability secret (add only a provider key to it — never copy `.env.example` over it) — see the [Zero-Port quickstart](docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code) for what it produces and how to add L1/L2. No data at hand? Try [`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv). The rest of this section is the monorepo's own dev setup.
+Generates a runnable Dashboard + Chat app (DomainPort, Intent catalog, L0 fixed Spec) from your own CSV/JSON/SQLite, plus a `.env` with a freshly generated capability secret (add only a provider key to it — never copy `.env.example` over it) — see the [Zero-Port quickstart](docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code) for what it produces and how to add L1/L2. No data at hand? See the bundled sample CSV at the top of this page ([`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv)). The rest of this section is the monorepo's own dev setup.
+
+> **Version note**: the generated project's behavior described here and in the guide (the golden fixture written automatically after install, the single-line development notice, `usage export`) is that of `@kohaku-ui/cli` and `@kohaku-ui/host` 0.4.1 and later. The published 0.4.0 has none of them.
+
+<!-- remove after 0.4.1 -->
 
 Prerequisites: Node >= 22 (>= 22.13 for SQLite input), pnpm 12. CI verifies on Node 22 and 24.
 
