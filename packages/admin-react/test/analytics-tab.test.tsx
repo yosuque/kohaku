@@ -265,6 +265,8 @@ describe("AnalyticsTab", () => {
     // 8 pending: candidate x2, judging, judge_failed, in_review, changes_requested, approved, schema_proposed.
     const pendingCard = screen.getByText(a.pendingPromotions).parentElement;
     await waitFor(() => expect(pendingCard?.textContent).toContain(`${a.pendingPromotions}8`));
+    // The count is only final once every response is in ("ready"), not merely once some text appeared.
+    await waitFor(() => expect(pendingCard?.getAttribute("data-state")).toBe("ready"));
     // One status-narrowed GET /promotions per pending status (7), in parallel; never a full list scan, and the
     // terminal / in_use statuses are not asked for.
     const listed = view.calls
@@ -283,12 +285,17 @@ describe("AnalyticsTab", () => {
     });
     await screen.findByText(defaultAdminMessages.analytics.noL2Intents);
     expect(screen.getByText(defaultAdminMessages.analytics.noSchemaEdits)).toBeTruthy();
-    // The pending card falls back to "—" and, unlike the Promotions tab, does not raise a notice.
-    await new Promise((r) => setTimeout(r, 0));
+    // The pending card falls back to "—" and, unlike the Promotions tab, does not raise a notice. "—" alone is
+    // also what a still-loading card shows, so wait until all 7 status reads were issued and the card says it
+    // is unavailable (not loading) before asserting on it.
+    const pendingCard = screen.getByText(defaultAdminMessages.analytics.pendingPromotions).parentElement;
+    await waitFor(() => expect(pendingCard?.getAttribute("data-state")).toBe("unavailable"));
+    const listed = view.calls
+      .filter((c) => c.url.split("?")[0]!.endsWith("/promotions"))
+      .map((c) => statusOf(c.url));
+    expect(listed.sort()).toEqual([...PENDING_PROMOTION_STATUSES].sort());
     expect(view.notices).toEqual([]);
-    expect(
-      screen.getByText(defaultAdminMessages.analytics.pendingPromotions).parentElement?.textContent,
-    ).toContain("—");
+    expect(pendingCard?.textContent).toContain("—");
   });
 
   it("stays silent on a 401 for the pending count too (a role without promotion.list)", async () => {

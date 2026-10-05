@@ -17,6 +17,20 @@ const ANNOTATE_PARAMS_SCHEMA = {
 };
 
 /**
+ * publish's params schema: the Publish button is an `action.button`, whose propsSchema carries no `action`,
+ * so the action name travels in the event payload and the payload is exactly `{ action: "publish" }`.
+ * Closing the schema (`additionalProperties: false`) makes the host answer 422 `ACTION_PARAMS_INVALID` for
+ * any other key rather than hashing and approving an arbitrary payload for this "approve"-tier action.
+ * Same plain-literal convention as ANNOTATE_PARAMS_SCHEMA above.
+ */
+const PUBLISH_PARAMS_SCHEMA = {
+  type: "object",
+  properties: { action: { type: "string", enum: ["publish"] } },
+  required: ["action"],
+  additionalProperties: false,
+};
+
+/**
  * DomainPort: the 5 sales-aggregation operations (= query://sales/{op}) + 2 demo write operations
  * (annotate: tier "confirm", publish: tier "approve" — design.md #62/#63's governed-actions demo). The API
  * is the product itself.
@@ -45,6 +59,7 @@ export function createSalesDomainPort(repo: SalesRepo): DomainPort {
           name: "publish",
           description:
             "sales publish (write, demo only): marks the current sales report as published and advances the data version",
+          paramsSchema: PUBLISH_PARAMS_SCHEMA,
           tier: "approve",
         },
       ];
@@ -57,8 +72,9 @@ export function createSalesDomainPort(repo: SalesRepo): DomainPort {
         return { ok: true, note, dataVersion: repo.annotate(note), notes: repo.notes.length };
       }
       // Demo of the "approve" tier (design.md #62/#63): a governance-gated write with no further side
-      // effect declared beyond the version bump itself (out of scope: this demo does not add a distinct
-      // approver-facing UI -- see the "publish" button's own doc comment in fixed-specs.ts).
+      // effect declared beyond the version bump itself. The approver side is the console's Approvals tab
+      // (design.md #72), which lists the refused attempts and mints the token; see also the "publish"
+      // button's own doc comment in fixed-specs.ts.
       if (op === "publish") {
         return { ok: true, dataVersion: repo.publish(), published: repo.publishCount };
       }

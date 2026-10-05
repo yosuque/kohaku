@@ -80,7 +80,7 @@ class TestPublishGovernance:
     def test_requires_a_bound_approval_token_issued_to_a_different_principal(self) -> None:
         client = _client()
         requester_cap = _issue_capability("publish")
-        payload: JsonObject = {}
+        payload: JsonObject = {"action": "publish"}
         payload_hash = action_payload_hash(payload)
 
         no_approval = client.post(
@@ -124,3 +124,21 @@ class TestPublishGovernance:
             json={"action": "publish", "payload": payload, "approval": approval},
         )
         assert replay.status_code == 200
+
+    def test_rejects_a_payload_with_an_extra_key_before_the_approval_gate(self) -> None:
+        # publish's paramsSchema is closed: the payload is exactly {"action": "publish"}, so an approval
+        # can never be requested (or minted) for an arbitrary payload.
+        client = _client()
+        cap = _issue_capability("publish")
+
+        res = client.post(
+            "/api/kohaku/binding/action",
+            headers={"authorization": f"Bearer {cap}"},
+            json={"action": "publish", "payload": {"action": "publish", "extra": 1}},
+        )
+        assert res.status_code == 422
+        body = res.json()
+        assert body["error"]["code"] == "ACTION_PARAMS_INVALID"
+        assert body["error"]["issues"] == [
+            {"path": "extra", "code": "additionalProperties", "message": 'unexpected property "extra"'}
+        ]

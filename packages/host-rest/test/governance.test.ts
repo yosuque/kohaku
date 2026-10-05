@@ -2,7 +2,7 @@ import type { ComposeContext } from "@kohaku-ui/composer";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import type { AuthzPort, DomainPort, Principal, SemanticPort, StoragePort } from "@kohaku-ui/spec-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createKohakuRoutes,
   type FixationsApi,
@@ -318,6 +318,12 @@ describe("authorization hook of the governance/audit plane (host-rest)", () => {
 });
 
 describe("startup warnings for unwired security-relevant hooks", () => {
+  // Restored after every test, including one whose assertion throws, so a failure cannot leave console.warn /
+  // console.info silenced for the tests that follow.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("warns exactly once when authorizeGovernance is unwired, and not at all when wired", () => {
     const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
     createKohakuRoutes(makeDeps({ auth: async () => ({ id: "u", roles: ["user"] }) }));
@@ -329,7 +335,6 @@ describe("startup warnings for unwired security-relevant hooks", () => {
       makeDeps({ authorizeGovernance: () => true, auth: async () => ({ id: "u", roles: ["user"] }) }),
     );
     expect(spy.mock.calls.some((args) => String(args[0]).includes("Governance/audit routes"))).toBe(false);
-    spy.mockRestore();
   });
 
   it("warns exactly once when deps.auth is unwired, and not at all when wired", () => {
@@ -343,7 +348,6 @@ describe("startup warnings for unwired security-relevant hooks", () => {
       makeDeps({ authorizeGovernance: () => true, auth: async () => ({ id: "u", roles: ["user"] }) }),
     );
     expect(spy.mock.calls.some((args) => String(args[0]).includes("deps.auth is not wired"))).toBe(false);
-    spy.mockRestore();
   });
 
   it("dev: true folds both warnings into one console.warn (stderr) naming both unwired hooks and both consequences", () => {
@@ -361,8 +365,6 @@ describe("startup warnings for unwired security-relevant hooks", () => {
     expect(line).toContain(
       "https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#7-operational-tips",
     );
-    warn.mockRestore();
-    info.mockRestore();
   });
 
   it("dev: true with only deps.auth wired names only authorizeGovernance and only the governance consequence", () => {
@@ -376,8 +378,6 @@ describe("startup warnings for unwired security-relevant hooks", () => {
     expect(line).not.toContain("deps.auth /");
     expect(line).toContain("the governance routes are open to every caller");
     expect(line).not.toContain("ANONYMOUS");
-    warn.mockRestore();
-    info.mockRestore();
   });
 
   it("dev: true with only authorizeGovernance wired names only deps.auth and only the ANONYMOUS consequence", () => {
@@ -391,8 +391,6 @@ describe("startup warnings for unwired security-relevant hooks", () => {
     expect(line).not.toContain("deps.authorizeGovernance");
     expect(line).toContain("every request runs as the ANONYMOUS principal");
     expect(line).not.toContain("governance routes are open");
-    warn.mockRestore();
-    info.mockRestore();
   });
 
   it("dev: true with both hooks wired prints nothing at all", () => {
@@ -407,8 +405,6 @@ describe("startup warnings for unwired security-relevant hooks", () => {
     );
     expect(warn).not.toHaveBeenCalled();
     expect(info).not.toHaveBeenCalled();
-    warn.mockRestore();
-    info.mockRestore();
   });
 
   it("without dev, both original warnings are kept verbatim and nothing goes to console.info", () => {
@@ -419,7 +415,5 @@ describe("startup warnings for unwired security-relevant hooks", () => {
     expect(String(warn.mock.calls[0]?.[0])).toContain("Governance/audit routes");
     expect(String(warn.mock.calls[1]?.[0])).toContain("deps.auth is not wired");
     expect(info).not.toHaveBeenCalled();
-    warn.mockRestore();
-    info.mockRestore();
   });
 });

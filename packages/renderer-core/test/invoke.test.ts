@@ -11,6 +11,8 @@ import {
   resolveActionName,
   resolveInvokeTarget,
   runInvokeTarget,
+  shortPayloadHash,
+  shouldPromptForApproval,
   summarizeActionForModel,
 } from "../src/index.js";
 
@@ -474,6 +476,28 @@ describe("actionPhaseNotice", () => {
     expect(DEFAULT_MESSAGES.actionApprovalPrompt("annotate")).toContain('"annotate"');
   });
 
+  it("hands the dictionary the already-shortened hash, so a custom dictionary never re-derives it", () => {
+    const seen: string[] = [];
+    const messages = {
+      ...DEFAULT_MESSAGES,
+      actionAwaitingApprovalDetail: (requestId: string, shortHash: string) => {
+        seen.push(shortHash);
+        return `${requestId}/${shortHash}`;
+      },
+    };
+    const notice = actionPhaseNotice(
+      {
+        phase: "awaitingApproval",
+        tier: "approve",
+        message: "m",
+        approval: { requestId: "r", action: "a", tier: "approve", payloadHash: `sha256:${"ab".repeat(32)}` },
+      },
+      messages,
+    );
+    expect(seen).toEqual(["abababababab"]);
+    expect(notice?.text).toContain("r/abababababab");
+  });
+
   it("has no notice for the other phases", () => {
     for (const phase of [
       { phase: "idle" },
@@ -483,5 +507,23 @@ describe("actionPhaseNotice", () => {
     ] satisfies ActionPhase[]) {
       expect(actionPhaseNotice(phase, DEFAULT_MESSAGES)).toBeNull();
     }
+  });
+});
+
+describe("shouldPromptForApproval", () => {
+  it("is true only for an approve-tier phase that is already awaiting approval", () => {
+    expect(shouldPromptForApproval({ phase: "awaitingApproval", tier: "approve", message: "m" })).toBe(true);
+    expect(shouldPromptForApproval({ phase: "awaitingApproval", tier: "confirm", message: "m" })).toBe(false);
+    expect(shouldPromptForApproval({ phase: "pending" })).toBe(false);
+    expect(shouldPromptForApproval({ phase: "idle" })).toBe(false);
+    expect(shouldPromptForApproval(undefined)).toBe(false);
+  });
+});
+
+describe("shortPayloadHash", () => {
+  it("drops the sha256: prefix and keeps the first 12 hex characters", () => {
+    expect(shortPayloadHash(`sha256:${"0123456789abcdef".repeat(4)}`)).toBe("0123456789ab");
+    expect(shortPayloadHash("0123456789abcdef")).toBe("0123456789ab");
+    expect(shortPayloadHash("sha256:x")).toBe("x");
   });
 });

@@ -1,6 +1,6 @@
 import { actionPayloadHash, type LineageEventRecord } from "@kohaku-ui/spec-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { derivePendingApprovals } from "../src/index.js";
+import { derivePendingApprovals } from "../src/approvals.js";
 
 let seq = 0;
 function ev(
