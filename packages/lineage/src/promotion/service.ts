@@ -4,11 +4,12 @@ import type { ActorKind, LineageEventType } from "../events.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { recordFailOpen } from "./audit.js";
+import type { PromotionCandidate, PromotionPolicy } from "./candidate.js";
 import { createCandidateStore } from "./candidate-store.js";
+import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
 import {
   type ComponentDraft,
   type JudgeVerdict,
-  type MachinePolicy,
   mayHaveProjection,
   type PromotionAction,
   type PromotionStatus,
@@ -18,11 +19,10 @@ import { createNomination } from "./nomination.js";
 import { diffDraft, type SchemaSuggestion } from "./suggestion.js";
 import { createUsageIndex, indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
 
-export interface PromotionPolicy extends MachinePolicy {
-  /** Threshold for candidacy (usage log -> candidate) */
-  minUses: number;
-  minDistinctSessions: number;
-}
+export type { PromotionCandidate, PromotionOrigin, PromotionPolicy } from "./candidate.js";
+// The error-hook and candidate types live in their own modules so candidate-store / nomination / audit never
+// import this file (no import cycle); they are re-exported here to keep this module's surface unchanged.
+export { notifyPromotionError, type PromotionErrorContext, type PromotionErrorEndpoint } from "./errors.js";
 
 /**
  * Base of the batch-transition "did not reach the goal" errors (approve -> published / reject -> rejected),
@@ -86,69 +86,6 @@ export const DEFAULT_PROMOTION_POLICY: PromotionPolicy = {
 
 /** Default for `createPromotions`' `suggestConcurrency` opt (#15). See that opt's own doc. */
 export const DEFAULT_SUGGEST_CONCURRENCY = 4;
-
-/**
- * The call sites `createPromotions`' `onError` hook may fire from, named for the observability hook:
- * - `promotion.publish.audit` / `promotion.unpublish.audit`: the fail-open `component.published` /
- *   `component.withdrawn` audit record at publish/unpublish time failed (handlePublish / handleUnpublish).
- * - `promotion.reconcile.audit`: reconcile's audit-event backfill (for either side) failed.
- * - `promotion.reconcile.projection`: reconcile skipped re-applying a published snapshot's projection because
- *   neither the snapshot itself nor `component.generated` could supply the required html (#9).
- * - `promotion.nominate.tenant`: `evaluateAndList` (tenant unspecified) skipped auto-nominating a candidate that
- *   belongs to a specific tenant, to avoid persisting a tenant-neutral state for it (#10; promotion/nomination.ts).
- * - `promotion.nominate.audit`: the fail-open `component.nominated` audit record (recorded after the status
- *   transition to `candidate` is already persisted) failed for one nominated candidate (promotion/nomination.ts).
- *   Unlike publish/unpublish's audit, there is currently no reconcile-style backfill for a missed
- *   `component.nominated` event, so the audit trail stays incomplete for that artifact until a manual fix.
- * - `promotion.suggest.schema`: the optional `suggestSchema` hook (schema extraction) threw or rejected for one
- *   newly nominated candidate; the candidate is nominated without a suggestion (promotion/nomination.ts).
- * - `promotion.suggest.audit`: the fail-open `component.schemaSuggested` audit record failed (nomination.ts).
- * - `promotion.approve.audit`: the fail-open `component.schemaEdited` audit record on the approve path failed.
- * - `storage.record.invalid`: a promotion-state record read back from `StoragePort.getPromotionState`
- *   (candidate-store.ts's `loadCandidate`) failed `@kohaku-ui/spec-core`'s `PromotionStateSchema` (a
- *   corrupted or hand-edited `promotions.json` entry). The reader treats it exactly
- *   like a real absence (the candidate falls back to status "in_use", the same default as no persisted state
- *   at all); shared with lineage's Fixations service, which uses the same discriminator string for the
- *   equivalent fixation-record check (fixation/service.ts's `FixationErrorEndpoint`).
- */
-export type PromotionErrorEndpoint =
-  | "promotion.publish.audit"
-  | "promotion.unpublish.audit"
-  | "promotion.reconcile.audit"
-  | "promotion.reconcile.projection"
-  | "promotion.nominate.tenant"
-  | "promotion.nominate.audit"
-  | "promotion.suggest.schema"
-  | "promotion.suggest.audit"
-  | "promotion.approve.audit"
-  | "storage.record.invalid";
-
-/** Context passed to `createPromotions`' `onError` hook alongside the causing error. */
-export interface PromotionErrorContext {
-  endpoint: PromotionErrorEndpoint;
-  artifactId: string;
-  tenant?: string;
-}
-
-/**
- * Fires opts.onError fire-and-forget, swallowing any synchronous throw from the hook itself (an
- * observation-only hook must never mask or replace the caller's own error/result). Deliberately local
- * (not imported from composer's fireObserverHook) because lineage does not depend on composer (dependency
- * direction). Exported so promotion/nomination.ts (the tenant-mismatch skip, #10) can share the same
- * fire-and-forget discipline rather than duplicating it.
- */
-export function notifyPromotionError(
-  onError: ((ctx: PromotionErrorContext, error: unknown) => void) | undefined,
-  ctx: PromotionErrorContext,
-  error: unknown,
-): void {
-  if (onError == null) return;
-  try {
-    onError(ctx, error);
-  } catch {
-    // Swallowed: an observability-only hook must not affect publish/reconcile's own control flow.
-  }
-}
 
 /**
  * Copies the action-carried data onto the candidate for the two action kinds that mutate persisted candidate
@@ -219,40 +156,6 @@ function auditEventFor(
     case "unpublish":
       return undefined;
   }
-}
-
-/**
- * Generation provenance carried from the candidate's `component.generated` lineage event: which
- * design kit and generator revision produced it, and (when known) which model. Read by the migration
- * planner (host-core's catalog-migration.ts / analyzeCatalogImpact) to flag a published candidate whose
- * `origin.kit` no longer matches the catalog's current kit.
- */
-export interface PromotionOrigin {
-  kit?: { id: string; version: string };
-  generatorVersion?: string;
-  model?: string;
-}
-
-export interface PromotionCandidate {
-  artifactId: string;
-  status: PromotionStatus;
-  canonical?: string;
-  request?: string;
-  html?: string;
-  /** The artifact body's sha256 (used for content verification at sandbox mount time). */
-  sha256?: string;
-  /** The data reference at generation time (data.$ref). Used to re-mount the preview and resolve its data. */
-  ref?: string;
-  uses: number;
-  sessions: number;
-  verdict?: unknown;
-  draft?: ComponentDraft;
-  /** Machine-extracted registration proposal (advisory; persisted on the snapshot as data.suggestion). */
-  suggestion?: SchemaSuggestion;
-  /** See PromotionOrigin. Kept across every transition once captured (unlike html/sha256/ref, which are
-   * only copied onto the snapshot at publish time — origin is provenance, not a projection). */
-  origin?: PromotionOrigin;
-  updatedAt: string;
 }
 
 /**

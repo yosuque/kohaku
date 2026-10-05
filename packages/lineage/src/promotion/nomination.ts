@@ -3,14 +3,10 @@ import { NOMINATED_SCAN_WINDOW } from "../constants.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { recordFailOpen } from "./audit.js";
+import type { PromotionCandidate, PromotionPolicy } from "./candidate.js";
 import { mapWithConcurrency } from "./concurrency.js";
+import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
 import { transition } from "./machine.js";
-import {
-  notifyPromotionError,
-  type PromotionCandidate,
-  type PromotionErrorContext,
-  type PromotionPolicy,
-} from "./service.js";
 import type { SchemaSuggestion } from "./suggestion.js";
 import { usageIndexKey } from "./usage.js";
 

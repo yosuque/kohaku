@@ -6,13 +6,9 @@ import {
 } from "@kohaku-ui/spec-core";
 import { GENERATED_SCAN_WINDOW } from "../constants.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
+import type { PromotionCandidate, PromotionOrigin } from "./candidate.js";
+import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
 import type { ComponentDraft, PromotionStatus } from "./machine.js";
-import {
-  notifyPromotionError,
-  type PromotionCandidate,
-  type PromotionErrorContext,
-  type PromotionOrigin,
-} from "./service.js";
 import type { SchemaSuggestion } from "./suggestion.js";
 import type { createUsageIndex } from "./usage.js";
 import { indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";

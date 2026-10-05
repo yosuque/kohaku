@@ -1,7 +1,7 @@
 import type { ActorKind, LineageEventType } from "../events.js";
 import type { Lineage } from "../lineage.js";
 import { tenantField } from "../tenant-scope.js";
-import { notifyPromotionError, type PromotionErrorContext, type PromotionErrorEndpoint } from "./service.js";
+import { notifyPromotionError, type PromotionErrorContext, type PromotionErrorEndpoint } from "./errors.js";
 
 /**
  * Shared fail-open audit-record helper for the promotion pipeline (H7). Five call sites (handlePublish's
