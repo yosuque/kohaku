@@ -5,6 +5,7 @@ import { type ServerType, serve } from "@hono/node-server";
 import { createHmacApprovalPort, createMemoryApprovalStore } from "@kohaku-ui/authz-hmac";
 import { createSchemaExtractor } from "@kohaku-ui/evals";
 import { loadPolicyFile } from "@kohaku-ui/host-core/policy-node";
+import { schemaEditExamples } from "@kohaku-ui/lineage";
 import { createLlmFromEnv } from "@kohaku-ui/llm";
 import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
 import type { KohakuPolicyFile } from "@kohaku-ui/spec-core";
@@ -122,9 +123,18 @@ async function main(): Promise<void> {
     // LLM auto-extraction of the promotion schema (advisory prefill in Admin › Promotions). Opt-in at the
     // entry point so the FakeLlm-scripted tests keep their exact response order. KOHAKU_PROMOTION_SCHEMA_SUGGEST=0
     // is the kill switch: every LLM-wiring env var carries one so a deployment can shed non-essential LLM
-    // spend without shedding compose itself.
+    // spend without shedding compose itself. The extractor learns from earlier reviewer corrections of its own
+    // proposals (component.schemaEdited -> few-shot examples, design.md #73): schemaEditExamples reads the same
+    // lineage the host writes. Built once per process, so it reuses only tenant-less records -- one tenant's
+    // reviewed components are never shown to the model while it extracts for another.
     ...(schemaSuggestEnabled()
-      ? { schemaExtractor: createSchemaExtractor({ llm, timeoutMs: schemaSuggestTimeoutMs() }) }
+      ? {
+          schemaExtractor: createSchemaExtractor({
+            llm,
+            timeoutMs: schemaSuggestTimeoutMs(),
+            examples: schemaEditExamples(ports.storage, { limit: 2 }),
+          }),
+        }
       : {}),
     // Governed actions (design.md #62/#63): the demo's "approve"-tier action ("publish",
     // apps/sample-api/src/domain/port.ts) needs an ApprovalPort to ever be allowed. Reuses the same

@@ -87,6 +87,11 @@ export {
   type Lineage,
 } from "./lineage.js";
 export {
+  type SchemaEditExample,
+  type SchemaEditExamplesOptions,
+  schemaEditExamples,
+} from "./promotion/examples.js";
+export {
   type ComponentDraft,
   isTerminal,
   type JudgeVerdict,
