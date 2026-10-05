@@ -15,7 +15,7 @@ All issue templates are under `.github/ISSUE_TEMPLATE/`.
 
 ## 2. Prerequisites
 
-- Node >= 22, pnpm 12 (the floor declared in `package.json`'s `engines`). `.node-version` pins 25.7.0 for local development; CI verifies both Node 22 (the declared floor) and Node 24.
+- Node >= 22 (>= 22.13 for SQLite input), pnpm 12. CI verifies on Node 22 and 24. Contributors may use the version pinned in `.node-version` (25.7.0) for local development.
 - [uv](https://docs.astral.sh/uv/) — only needed if you touch anything under `python/`.
 
 ## 3. Setup

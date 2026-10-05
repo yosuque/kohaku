@@ -9,7 +9,7 @@ import {
   signManifest,
 } from "@kohaku-ui/lineage";
 import { createFileStoragePort } from "@kohaku-ui/storage-memory";
-import { parseHeaderArgs } from "../commands.js";
+import { parseHeaderArgs } from "../header-args.js";
 import { CLI_VERSION } from "../version.js";
 import { importPrivateKeyPem } from "./keys.js";
 import { createRestEvidenceSource, REST_FIXATIONS_LIMITATION_WARNING } from "./rest-source.js";

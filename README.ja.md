@@ -1,6 +1,6 @@
 <img src="docs/assets/kohaku-icon.png" alt="kohaku" width="112">
 
-# kohaku — AI-Native GUI ライブラリ(リファレンス実装)
+# kohaku — LLM が生成した UI を、統制のもとで
 
 [English](README.md) | 日本語
 
@@ -8,9 +8,21 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-UI をコードではなくデータ(宣言的 **UI Spec**)として扱い、生成(Composition)と描画(Rendering)を完全分離する Generative UI 基盤。
+kohaku は Generative UI を本番に出すための統制層です。同じ要求には同じ画面を返し、行データはモデルに渡らず、表示された画面は監査証跡に残り、モデルが発明したものは正式な部品になる前にレビューを通ります。
 
-**「同内容のリクエストなら、チャットでも Web でも同一表示」**を、UI Composition Service の一本化と Spec キャッシュで構造的に保証します。
+- **同一表示は統計ではなく構造で保証する** — チャットの質問も GUI 操作も、1 つの Intent と 1 つのキャッシュ済み UI Spec に正規化される。
+- **モデルが組むのは配管で、水は流れない** — Spec が持つのは `query://` 参照だけで、データの値は持たない。
+- **自由を許し、そのうえで統制する** — 自由生成は sandbox の中で動き、残す価値のあるものはレビューを経て正式な部品に昇格する。
+
+自分の CSV / JSON / SQLite ファイルで試す:
+```bash
+npx @kohaku-ui/cli init --from data.csv --out my-dashboard
+cd my-dashboard && npm run dev
+```
+
+**入口を選ぶ:** [MCP Apps だけ](docs/paths/mcp-apps.ja.md) · [React ダッシュボードだけ](docs/paths/react-dashboard.ja.md) · [フル構成](docs/paths/full-stack.ja.md) — 先に判断したいなら[なぜ kohaku か](docs/why-kohaku.ja.md)。
+
+内部では、UI をコードではなくデータ(宣言的 **UI Spec**)として扱い、生成(Composition)と描画(Rendering)を完全に分離しています。
 
 ```
 自然言語(Chat) ─┐                              ┌─ Web(renderer-react)
@@ -63,14 +75,13 @@ kohaku 自体を開発する場合は、以下のクイックスタートと [CO
 **まず自分のデータで試したい場合**
 
 ```bash
-mkdir my-app && cd my-app
-npx @kohaku-ui/cli init --from ../sales.csv   # .json 配列 / .sqlite ファイルも可
-npm run dev
+npx @kohaku-ui/cli init --from data.csv --out my-dashboard   # .json 配列 / .sqlite ファイルも可
+cd my-dashboard && npm run dev
 ```
 
 自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。あわせて、生成し立ての capability secret を書いた `.env` も作られるので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv) を試してください。このセクションの残りはモノレポ自体の開発セットアップです。
 
-前提: Node >= 22、pnpm 12(下限は `package.json` の `engines`。CI は宣言下限の Node 22 と Node 24 の両方で検証、`.node-version` はローカル開発用に 25.7.0 を指定)。
+前提: Node >= 22(SQLite 入力は >= 22.13)、pnpm 12。CI は Node 22 と 24 で検証しています。
 
 ```bash
 cp .env.example .env    # LLM プロバイダ設定(下表)
@@ -149,6 +160,8 @@ pnpm typecheck   # 全パッケージ型検査
 node cli/bin/kohaku.js conformance --self                                   # 仕様自己検査
 node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku # REST 黒箱検査
 ```
+
+リポジトリのチェックアウトから CLI を直接使う(`node cli/bin/kohaku.js …`)ときは、先に `pnpm install` を実行してください。リポジトリの外では `npx @kohaku-ui/cli` を使います。
 
 先に知っておくと踏まずに済む落とし穴:
 
