@@ -1252,6 +1252,20 @@ function toolError(message: string) {
 }
 
 /**
+ * The shared shape of the structured tool errors below: the text content is the message, and
+ * `structuredContent.error` is `{ code, message, ...extra }` (spec-core's `HostErrorCode` / `ErrorEnvelope`
+ * wire vocabulary, with the code-specific fields spread after `message`).
+ */
+function structuredToolError(code: string, message: string, extra: Record<string, unknown>) {
+  return {
+    content: [{ type: "text" as const, text: message }],
+    isError: true,
+    resultType: "complete" as const,
+    structuredContent: { error: { code, message, ...extra } },
+  };
+}
+
+/**
  * A structured `RATE_LIMITED` tool error (SPEC §6.1, REST-RL-001's MCP counterpart). Unlike the generic
  * `toolError`, this also carries `structuredContent.error` (spec-core's `HostErrorCode`/`ErrorEnvelope`
  * wire vocabulary) so a client can identify the failure programmatically rather than by matching the
@@ -1259,18 +1273,9 @@ function toolError(message: string) {
  * `retryAfterMs` (when the limiter reports one) travel in `structuredContent` instead.
  */
 function rateLimitToolError(retryAfterMs: number | undefined) {
-  return {
-    content: [{ type: "text" as const, text: "rate limit exceeded" }],
-    isError: true,
-    resultType: "complete" as const,
-    structuredContent: {
-      error: {
-        code: "RATE_LIMITED",
-        message: "rate limit exceeded",
-        ...(retryAfterMs != null ? { retryAfterMs } : {}),
-      },
-    },
-  };
+  return structuredToolError("RATE_LIMITED", "rate limit exceeded", {
+    ...(retryAfterMs != null ? { retryAfterMs } : {}),
+  });
 }
 
 /**
@@ -1281,14 +1286,7 @@ function rateLimitToolError(retryAfterMs: number | undefined) {
  * field(s) programmatically rather than by parsing the text message.
  */
 function actionParamsInvalidToolError(issues: ActionParamIssue[]) {
-  return {
-    content: [{ type: "text" as const, text: "action parameters failed validation" }],
-    isError: true,
-    resultType: "complete" as const,
-    structuredContent: {
-      error: { code: "ACTION_PARAMS_INVALID", message: "action parameters failed validation", issues },
-    },
-  };
+  return structuredToolError("ACTION_PARAMS_INVALID", "action parameters failed validation", { issues });
 }
 
 /**
@@ -1300,12 +1298,7 @@ function actionParamsInvalidToolError(issues: ActionParamIssue[]) {
  * the gate-outcome switch in `registerActionTool`).
  */
 function approvalRequiredToolError(message: string, approval: ApprovalRequiredInfo) {
-  return {
-    content: [{ type: "text" as const, text: message }],
-    isError: true,
-    resultType: "complete" as const,
-    structuredContent: { error: { code: "APPROVAL_REQUIRED", message, approval } },
-  };
+  return structuredToolError("APPROVAL_REQUIRED", message, { approval });
 }
 
 /**
