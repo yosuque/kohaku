@@ -1,9 +1,39 @@
 import { parseIso8601 } from "@kohaku-ui/spec-core";
 import { CliUsageError } from "./usage-error.js";
 
-// A bad command-line argument of a lineage-reading subcommand (`evidence export`, `usage export`) is a
-// `CliUsageError` (exit 2); the class itself lives in the dependency-free ./usage-error.ts.
-export { CliUsageError };
+/**
+ * The lineage source and window of a lineage-reading subcommand (`evidence export`, `usage export`):
+ * `dataDir` and `rest` are mutually exclusive, and `since` / `until` are validated by `resolveWindow`.
+ */
+export interface LineageSourceArgs {
+  /** Read from a local StoragePort data directory (mutually exclusive with `rest`). */
+  dataDir?: string;
+  /**
+   * Read over REST from a running host (mutually exclusive with `dataDir`). The `x-kohaku-tenant` header
+   * decides the tenant scope; a host without tenant scoping returns every tenant.
+   */
+  rest?: string;
+  /** Extra REST request headers ("name:value", repeatable) -- e.g. tenant / auth. REST mode only. */
+  headers?: string[];
+  tenant?: string;
+  /** Lower bound: ISO 8601 date or timestamp; a date-only value starts that UTC day (see `resolveWindow`). */
+  since: string;
+  /** Upper bound: ISO 8601 date or timestamp; a date-only value INCLUDES that whole UTC day. */
+  until: string;
+}
+
+/**
+ * The commander option bag behind `LineageSourceArgs`: the six options both subcommands declare, with the
+ * repeatable `--header` accumulated into `header`.
+ */
+export interface LineageSourceCliOptions {
+  dataDir?: string;
+  rest?: string;
+  header: string[];
+  tenant?: string;
+  since: string;
+  until: string;
+}
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 

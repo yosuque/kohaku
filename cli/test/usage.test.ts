@@ -25,10 +25,10 @@ import type {
 import { createFileStoragePort, createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import { CliUsageError } from "../src/lineage-window.js";
 import { formatUsageCsv, USAGE_CSV_HEADER } from "../src/usage/csv.js";
 import { runUsageExport } from "../src/usage/export.js";
 import { streamLineageChunks } from "../src/usage/lineage-file.js";
+import { CliUsageError } from "../src/usage-error.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = join(here, "../bin/kohaku.js");
