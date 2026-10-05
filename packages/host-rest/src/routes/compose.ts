@@ -15,8 +15,10 @@ import { errorBody } from "../errors.js";
 import type { KohakuHostDeps } from "../types.js";
 import {
   COMPOSE_FAILED_MESSAGE,
+  capabilityTtl,
   composeForRest,
   intentResolutionFailure,
+  issueSpecCapability,
   resolveFixatedForRest,
 } from "./compose-pipeline.js";
 import { ComposeBodySchema, EventsBodySchema } from "./schemas.js";
@@ -437,49 +439,6 @@ async function streamGenerated(
   }
   // recorder / view.fallback runs exactly once against the final Spec (the skeleton is not recorded).
   if (final != null) await finishStream(deps, stream, final, session, call);
-}
-
-/** The effective capability TTL: deps.capabilityTtlSeconds when set, otherwise host-core's shared default. */
-function capabilityTtl(deps: KohakuHostDeps): number {
-  return deps.capabilityTtlSeconds ?? hostCore.DEFAULT_CAPABILITY_TTL_SECONDS;
-}
-
-/**
- * Issues a capability matching the Spec's declarations (components' read references + the /binding/action
- * write-through path). Delegates to host-core's issueSpecCapabilitySafely, the fail-closed wrapper shared with
- * the MCP profile (host-mcp-apps' composeAndPackage), which in turn consumes issueCapabilityForSpec / spec-core's
- * collectCapabilityScopes (the single source of truth) so both profiles agree on the issuance rule.
- *
- * Write scopes are additionally restricted to the DomainPort's listOperations() names (hardening against a
- * hallucinated/injected action.invoke action name becoming a bearer write scope): the allowed set is memoized
- * per deps below (listOperations is async and must not be awaited on every compose). issueSpecCapabilitySafely
- * reports a dropped action via the endpoint's onError hook as a WriteScopeDroppedError, and — if listOperations
- * itself rejects — still issues the capability but fail-closed for writes (an empty allowed set), reporting the
- * rejection the same way; delivery proceeds either way.
- */
-async function issueSpecCapability(
-  spec: UISpec,
-  principal: Principal,
-  deps: KohakuHostDeps,
-  call: RestCallContext,
-): Promise<string> {
-  return hostCore.issueSpecCapabilitySafely(
-    deps.authz,
-    principal,
-    spec,
-    () => allowedActions(deps),
-    (e) => reportHostError(deps, call.endpoint, call.requestId, e),
-    capabilityTtl(deps),
-  );
-}
-
-/**
- * The write-scope filter for capability issuance, derived from the same per-deps `OperationIndex` the action
- * gate and the `actions` manifest use (routes/shared.ts's `operationIndex`), so the three can never disagree
- * about which actions exist and `listOperations()` is read (and memoized) once.
- */
-function allowedActions(deps: KohakuHostDeps): Promise<ReadonlySet<string>> {
-  return hostCore.allowedActionsFromIndex(() => operationIndex(deps))();
 }
 
 /**
