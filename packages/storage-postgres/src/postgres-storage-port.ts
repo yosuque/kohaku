@@ -17,6 +17,7 @@ import {
   createPostgresPool,
 } from "./connection.js";
 import { correlationColumnValue, DEFAULT_SCHEMA, qualifiedTable } from "./schema.js";
+import { tenantKeyedTable } from "./tenant-keyed-table.js";
 
 export type PostgresStoragePortOptions = CreatePostgresPoolOptions;
 
@@ -90,6 +91,8 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
     promotion: qualifiedTable(schema, "kohaku_promotion_state"),
     fixation: qualifiedTable(schema, "kohaku_fixation"),
   };
+  const promotionStates = tenantKeyedTable<PromotionState>(pool, tables.promotion, "artifact_id", "state");
+  const fixations = tenantKeyedTable<FixationRecord>(pool, tables.fixation, "intent_hash", "record");
 
   return {
     ready,
@@ -179,102 +182,43 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
     },
     async getPromotionState(artifactId, tenant) {
       await ready();
-      // `state` is stored as text -- see schema.ts -- so no jsonb key-reordering between put and get.
-      const { rows } = await pool.query<{ state: string }>(
-        `SELECT state FROM ${tables.promotion} WHERE tenant = $1 AND artifact_id = $2`,
-        [normalizeTenant(tenant) ?? "", artifactId],
-      );
-      return rows[0] != null ? (JSON.parse(rows[0].state) as PromotionState) : null;
+      return promotionStates.get(tenant, artifactId);
     },
     async putPromotionState(state) {
       await ready();
-      await pool.query(
-        `INSERT INTO ${tables.promotion} (tenant, artifact_id, state) VALUES ($1, $2, $3)
-         ON CONFLICT (tenant, artifact_id) DO UPDATE SET state = EXCLUDED.state`,
-        [normalizeTenant(state.tenant) ?? "", state.artifactId, JSON.stringify(state)],
-      );
+      await promotionStates.put(state.tenant, state.artifactId, state);
     },
     async putPromotionStates(states) {
       if (states.length === 0) return;
       await ready();
-      // Dedupe by (tenant, artifactId), last write wins, before the single batched statement below --
-      // `unnest` feeds every row to one INSERT, so a duplicate key within the same call would otherwise
-      // hit `ON CONFLICT` twice for the same target row in one statement, which Postgres rejects
-      // ("ON CONFLICT DO UPDATE command cannot affect row a second time").
-      const deduped = new Map<string, PromotionState>();
-      for (const state of states) {
-        deduped.set(`${normalizeTenant(state.tenant) ?? ""}\u0000${state.artifactId}`, state);
-      }
-      const tenants: string[] = [];
-      const artifactIds: string[] = [];
-      const payloads: string[] = [];
-      for (const state of deduped.values()) {
-        tenants.push(normalizeTenant(state.tenant) ?? "");
-        artifactIds.push(state.artifactId);
-        payloads.push(JSON.stringify(state));
-      }
-      await pool.query(
-        `INSERT INTO ${tables.promotion} (tenant, artifact_id, state)
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[])
-         ON CONFLICT (tenant, artifact_id) DO UPDATE SET state = EXCLUDED.state`,
-        [tenants, artifactIds, payloads],
+      // Deduped by (tenant, artifactId), last write wins, inside `putMany` before the single batched statement.
+      await promotionStates.putMany(
+        states.map((state) => ({ tenant: state.tenant, id: state.artifactId, record: state })),
       );
     },
     async listPromotionStates(tenant) {
       await ready();
-      const normalized = normalizeTenant(tenant);
-      const { rows } =
-        normalized == null
-          ? await pool.query<{ state: string }>(`SELECT state FROM ${tables.promotion} ORDER BY seq`)
-          : await pool.query<{ state: string }>(
-              `SELECT state FROM ${tables.promotion} WHERE tenant = $1 ORDER BY seq`,
-              [normalized],
-            );
-      return rows.map((r) => JSON.parse(r.state) as PromotionState);
+      return promotionStates.list(tenant);
     },
     async getFixation(intentHash, tenant) {
       await ready();
-      // `record` is stored as text -- see schema.ts -- so no jsonb key-reordering between put and get.
-      const { rows } = await pool.query<{ record: string }>(
-        `SELECT record FROM ${tables.fixation} WHERE tenant = $1 AND intent_hash = $2`,
-        [normalizeTenant(tenant) ?? "", intentHash],
-      );
-      return rows[0] != null ? (JSON.parse(rows[0].record) as FixationRecord) : null;
+      return fixations.get(tenant, intentHash);
     },
     async putFixation(record, options) {
       await ready();
-      const params = [normalizeTenant(record.tenant) ?? "", record.intentHash, JSON.stringify(record)];
       if (options?.ifPresent === true) {
-        await pool.query(
-          `UPDATE ${tables.fixation} SET record = $3 WHERE tenant = $1 AND intent_hash = $2`,
-          params,
-        );
+        await fixations.updateExisting(record.tenant, record.intentHash, record);
         return;
       }
-      await pool.query(
-        `INSERT INTO ${tables.fixation} (tenant, intent_hash, record) VALUES ($1, $2, $3)
-         ON CONFLICT (tenant, intent_hash) DO UPDATE SET record = EXCLUDED.record`,
-        params,
-      );
+      await fixations.put(record.tenant, record.intentHash, record);
     },
     async listFixations(tenant) {
       await ready();
-      const normalized = normalizeTenant(tenant);
-      const { rows } =
-        normalized == null
-          ? await pool.query<{ record: string }>(`SELECT record FROM ${tables.fixation} ORDER BY seq`)
-          : await pool.query<{ record: string }>(
-              `SELECT record FROM ${tables.fixation} WHERE tenant = $1 ORDER BY seq`,
-              [normalized],
-            );
-      return rows.map((r) => JSON.parse(r.record) as FixationRecord);
+      return fixations.list(tenant);
     },
     async deleteFixation(intentHash, tenant) {
       await ready();
-      await pool.query(`DELETE FROM ${tables.fixation} WHERE tenant = $1 AND intent_hash = $2`, [
-        normalizeTenant(tenant) ?? "",
-        intentHash,
-      ]);
+      await fixations.delete(tenant, intentHash);
     },
     close,
   };
