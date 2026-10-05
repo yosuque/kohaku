@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { basename } from "node:path";
 import type { ExplainReport } from "@kohaku-ui/client";
 import type { VerifyEvidencePackResult } from "@kohaku-ui/lineage";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
@@ -185,48 +184,14 @@ program
       install: boolean;
       mcp?: boolean;
     }) => {
-      const { initProject } = await import("./init/index.js");
+      const { formatInitResult, initProject } = await import("./init/index.js");
       let result: InitResult;
       try {
         result = await initProject(opts);
       } catch (e) {
         fail(e);
       }
-      const p = result.profile;
-      console.log(`Generated ${result.written.length} files in ${result.outDir}`);
-      if (opts.name == null && result.name !== basename(result.outDir)) {
-        console.log(
-          `  name: ${result.name} (derived from directory "${basename(result.outDir)}"; pass --name to override)`,
-        );
-      }
-      console.log(`  source: ${p.source} (${p.rowCount} rows)`);
-      console.log(`  dimensions: ${p.dimensions.map((c) => c.name).join(", ")}`);
-      console.log(`  measures: ${p.measures.map((c) => c.name).join(", ") || "(none; row counts only)"}`);
-      console.log(`  time: ${p.time?.name ?? "(none; no trend view)"}`);
-      if (p.unrecognizedDateColumns != null && p.unrecognizedDateColumns.length > 0) {
-        console.log(
-          `  warning: column(s) ${p.unrecognizedDateColumns.join(", ")} look like dates but the format ` +
-            "is ambiguous (e.g. MM/DD/YYYY vs DD/MM/YYYY), so no time axis was created; convert the column " +
-            "to YYYY-MM-DD, the one unambiguous shape kohaku init recognizes, and run it again.",
-        );
-      }
-      console.log(
-        `\nNext steps: ${result.installed ? "" : "npm install && "}npm run dev  →  http://localhost:5173`,
-      );
-      console.log(
-        "For chat and the LLM-composed views, edit .env (created for you with a capability secret) " +
-          "and set a provider key; .env.example documents every variable.",
-      );
-      if (!result.installed)
-        console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once after npm install, then npm test");
-      if (opts.mcp === true) {
-        console.log(
-          "\nMCP front door generated. To use it from Claude Desktop, run: npm run mcp:claude-desktop " +
-            "(then restart Claude Desktop). `npm run mcp` (stdio) is the command Claude Desktop / Claude Code / " +
-            "Codex CLI launch themselves -- you do not run it by hand. `npm run mcp:http` starts a Streamable HTTP " +
-            "server on :8788 for claude.ai / ChatGPT.",
-        );
-      }
+      console.log(formatInitResult(result, opts));
     },
   );
 
