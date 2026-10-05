@@ -312,68 +312,10 @@ async function deliverComposedStream(
       // detection) returns null = fall through to the streaming generation path below.
       const fixated = await resolveFixatedForRest(intent, session, deps, call);
       if (fixated != null) {
-        const capability = await issueSpecCapability(fixated.spec, principal, deps, call);
-        const actions = await actionsFor(deps, fixated.spec, call);
-        await stream.writeSSE({
-          event: "spec",
-          data: JSON.stringify({
-            spec: fixated.spec,
-            capability,
-            final: true,
-            ...(actions != null ? { actions } : {}),
-          }),
-        });
-        await finishStream(deps, stream, fixated, session, call);
+        await streamFixated(stream, fixated, { session, principal, deps, call });
         return;
       }
-
-      // L1/L2 path: skeleton (final:false) -> patch -> done. The capability is issued exactly once on the
-      // first event.
-      //
-      // final:true (cache hit / L0 fixed Spec — composeStream can complete in a single event without ever
-      // emitting a skeleton) is issued from the Spec itself, via the same issueSpecCapability wrapper as
-      // the fixation shortcut above: collectCapabilityScopes covers both the $ref/bind-variant read scopes
-      // and any action.invoke write scope the final Spec declares, and enforces MAX_BIND_VARIANTS (an
-      // overflow throws into the catch below -> event: error COMPOSE_FAILED). A final Spec can declare
-      // action.invoke (e.g. presentForm submit) — without this, that write scope would never be
-      // issued and /binding/action would always 403 for a stream-delivered final Spec.
-      //
-      // final:false (the skeleton) has no $ref yet, so it is issued read-only from composeStream's resolved
-      // refs instead (host-core's issueCapabilityForRefs). bind (two-way binding, [Draft]) is declared only
-      // on the final Spec and is not opened up to L1/L2 generation (generation:excluded), so a skeleton never
-      // needs bind variants; consequently an L1/L2-generated Spec delivered via patches after this skeleton
-      // carries no write scope either (documented limitation — only a single-event final:true response can
-      // carry action.invoke over the stream).
-      let capability: string | undefined;
-      let final: ComposeResult | undefined;
-      for await (const ev of composeStream({ kind: "intent", intent }, deps.compose, {
-        session,
-        abort,
-        correlationId: requestId,
-        ...(traceContext != null ? { traceContext } : {}),
-      })) {
-        if (ev.kind === "spec") {
-          capability ??= ev.final
-            ? await issueSpecCapability(ev.spec, principal, deps, call)
-            : await hostCore.issueCapabilityForRefs(deps.authz, principal, ev.refs, capabilityTtl(deps));
-          const actions = await actionsFor(deps, ev.spec, call);
-          await stream.writeSSE({
-            event: "spec",
-            data: JSON.stringify({
-              spec: ev.spec,
-              capability,
-              final: ev.final,
-              ...(actions != null ? { actions } : {}),
-            }),
-          });
-        } else if (ev.kind === "patch") {
-          await stream.writeSSE({ event: "patch", data: JSON.stringify({ patch: ev.patch }) });
-        } else {
-          final = ev.result;
-        }
-      }
-      // recorder / view.fallback runs exactly once against the final Spec (the skeleton is not recorded).
-      if (final != null) await finishStream(deps, stream, final, session, call);
+      await streamGenerated(stream, { intent, session, principal, deps, call, abort });
     } catch (e) {
       // A client disconnect / request timeout surfaces here too (composeStream's for-await loop / a
       // stream.writeSSE call above rejects once the underlying connection is gone). That is not a
@@ -400,6 +342,98 @@ async function deliverComposedStream(
       clearInterval(heartbeat);
     }
   });
+}
+
+/**
+ * The fixation-shortcut leg of deliverComposedStream: a single final:true spec event followed by done. The
+ * capability is issued from the $ref inside the fixed Spec (no skeleton is involved, so refs-based issuance
+ * is unnecessary). Any failure propagates to deliverComposedStream's abort-aware catch.
+ */
+async function streamFixated(
+  stream: SSEStreamingApi,
+  fixated: ComposeResult,
+  args: { session: SessionContext; principal: Principal; deps: KohakuHostDeps; call: RestCallContext },
+): Promise<void> {
+  const { session, principal, deps, call } = args;
+  const capability = await issueSpecCapability(fixated.spec, principal, deps, call);
+  const actions = await actionsFor(deps, fixated.spec, call);
+  await stream.writeSSE({
+    event: "spec",
+    data: JSON.stringify({
+      spec: fixated.spec,
+      capability,
+      final: true,
+      ...(actions != null ? { actions } : {}),
+    }),
+  });
+  await finishStream(deps, stream, fixated, session, call);
+}
+
+/**
+ * The streaming-generation leg of deliverComposedStream (no fixation hit): skeleton (final:false) -> patch ->
+ * done. Any failure (including an abort surfacing from composeStream or a write) propagates to
+ * deliverComposedStream's abort-aware catch. `abort` is the same client-disconnect / timeout signal as
+ * `call.signal`, passed explicitly because the latter is optional on RestCallContext.
+ */
+async function streamGenerated(
+  stream: SSEStreamingApi,
+  args: {
+    intent: CanonicalIntent;
+    session: SessionContext;
+    principal: Principal;
+    deps: KohakuHostDeps;
+    call: RestCallContext;
+    abort: AbortSignal;
+  },
+): Promise<void> {
+  const { intent, session, principal, deps, call, abort } = args;
+  // L1/L2 path: skeleton (final:false) -> patch -> done. The capability is issued exactly once on the
+  // first event.
+  //
+  // final:true (cache hit / L0 fixed Spec — composeStream can complete in a single event without ever
+  // emitting a skeleton) is issued from the Spec itself, via the same issueSpecCapability wrapper as
+  // streamFixated: collectCapabilityScopes covers both the $ref/bind-variant read scopes
+  // and any action.invoke write scope the final Spec declares, and enforces MAX_BIND_VARIANTS (an
+  // overflow throws into deliverComposedStream's catch -> event: error COMPOSE_FAILED). A final Spec can declare
+  // action.invoke (e.g. presentForm submit) — without this, that write scope would never be
+  // issued and /binding/action would always 403 for a stream-delivered final Spec.
+  //
+  // final:false (the skeleton) has no $ref yet, so it is issued read-only from composeStream's resolved
+  // refs instead (host-core's issueCapabilityForRefs). bind (two-way binding, [Draft]) is declared only
+  // on the final Spec and is not opened up to L1/L2 generation (generation:excluded), so a skeleton never
+  // needs bind variants; consequently an L1/L2-generated Spec delivered via patches after this skeleton
+  // carries no write scope either (documented limitation — only a single-event final:true response can
+  // carry action.invoke over the stream).
+  let capability: string | undefined;
+  let final: ComposeResult | undefined;
+  for await (const ev of composeStream({ kind: "intent", intent }, deps.compose, {
+    session,
+    abort,
+    correlationId: call.requestId,
+    ...(call.traceContext != null ? { traceContext: call.traceContext } : {}),
+  })) {
+    if (ev.kind === "spec") {
+      capability ??= ev.final
+        ? await issueSpecCapability(ev.spec, principal, deps, call)
+        : await hostCore.issueCapabilityForRefs(deps.authz, principal, ev.refs, capabilityTtl(deps));
+      const actions = await actionsFor(deps, ev.spec, call);
+      await stream.writeSSE({
+        event: "spec",
+        data: JSON.stringify({
+          spec: ev.spec,
+          capability,
+          final: ev.final,
+          ...(actions != null ? { actions } : {}),
+        }),
+      });
+    } else if (ev.kind === "patch") {
+      await stream.writeSSE({ event: "patch", data: JSON.stringify({ patch: ev.patch }) });
+    } else {
+      final = ev.result;
+    }
+  }
+  // recorder / view.fallback runs exactly once against the final Spec (the skeleton is not recorded).
+  if (final != null) await finishStream(deps, stream, final, session, call);
 }
 
 /**
