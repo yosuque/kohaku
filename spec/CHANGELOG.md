@@ -1,5 +1,12 @@
 # @kohaku-ui/spec
 
+## 0.5.0
+
+### Patch Changes
+
+- Updated dependencies [[`7dada20`](https://github.com/yosuque/kohaku/commit/7dada207c923752a410219d26bd073216ee5814d)]:
+  - @kohaku-ui/spec-core@0.5.0
+
 ## 0.4.1
 
 ### Patch Changes

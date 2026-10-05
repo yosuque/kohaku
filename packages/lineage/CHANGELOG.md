@@ -1,5 +1,13 @@
 # @kohaku-ui/lineage
 
+## 0.5.0
+
+### Patch Changes
+
+- [#80](https://github.com/yosuque/kohaku/pull/80) [`4742970`](https://github.com/yosuque/kohaku/commit/4742970f69c41259e940f656bf7605e42cb3f141) Thanks [@yosuque](https://github.com/yosuque)! - Internal, behavior-preserving refactoring of the composer tier ladder (budget gate, discriminated `TierResult`, L2 lint rule table), the evals judge (pure verdict aggregation), lineage (promotion import cycle, fixation guard/stamp helpers, candidate bulk loader, analytics accumulators), the CLI (shared lineage-source options, scaffold target table), both hosts (compose pipeline module, shared tool-call preamble, inline gate mapping) and the Postgres/Redis adapters (shared WHERE builder and record-table helper). No public API, wire format, persisted format or client-visible message changes.
+- Updated dependencies [[`7dada20`](https://github.com/yosuque/kohaku/commit/7dada207c923752a410219d26bd073216ee5814d)]:
+  - @kohaku-ui/spec-core@0.5.0
+
 ## 0.4.1
 
 ### Patch Changes
