@@ -15,6 +15,15 @@ export interface SchemaEditExample {
 export interface SchemaEditExamplesOptions {
   /** How many examples one call returns (default 2). */
   limit?: number;
+  /**
+   * How long (milliseconds) one tenant's result is reused before the log is read again (default 5000; 0 turns
+   * the memo off). A nomination pass asks for examples once per candidate, all for the same tenant within a
+   * moment, so the log is read once per pass instead of once per candidate. A reviewer correction therefore
+   * reaches the prompt at most this long after it was recorded.
+   */
+  cacheTtlMs?: number;
+  /** Clock injection point (tests only; defaults to `Date.now`). */
+  now?: () => number;
 }
 
 /**
@@ -33,8 +42,16 @@ export interface SchemaEditExamplesInput {
 }
 
 const DEFAULT_LIMIT = 2;
-/** How many recent records of each event type are considered (one query per type). */
+/** How long one tenant's examples are reused before the log is read again. */
+const DEFAULT_CACHE_TTL_MS = 5_000;
+/** How many recent `component.schemaEdited` records are considered (one query). */
 const SCAN_WINDOW = 200;
+/**
+ * How many of one artifact's records a per-artifact lookup reads when no tenant narrows the query. The same
+ * artifactId (a content hash) can be promoted by several tenants, whose records interleave; a tenant-less call
+ * keeps only the tenant-less ones, so it reads a few more than the one it needs.
+ */
+const ARTIFACT_WINDOW = 20;
 /** Characters of the artifact's HTML kept per example (the prompt side cuts to the same length). */
 const HTML_EXCERPT_CHARS = 1_500;
 
@@ -56,11 +73,15 @@ function isDraft(value: unknown): value is SuggestedDraft {
  * artifact, each joined with that artifact's latest `component.schemaProposed` (the final draft; a case with
  * none is skipped), `component.schemaSuggested` (the replaced proposal) and `component.generated` (the HTML).
  *
- * Four storage reads per call (one per event type, the newest 200 records of each, all with the same tenant
- * condition), joined in memory by `artifactId`: a case whose proposal or HTML has scrolled out of that window is
- * skipped or loses its optional parts rather than costing another query. Read-only; a storage failure
- * rejects, which the extractor treats as "no examples". The `signal` the extractor passes is only checked
- * between steps: the extractor stops waiting for a slow provider on its own when its budget is spent.
+ * One read of the newest 200 `component.schemaEdited` records, and nothing more when none of them carries an
+ * edit (the common case: most tenants never correct a suggestion). Only the artifacts that become examples
+ * (at most `limit`) are then looked up, each by its own `artifactId`, so a component's HTML is never read for
+ * the 200 records of a window, and a case whose proposal is missing costs one lookup and is skipped. The
+ * result is reused per tenant for `cacheTtlMs` (default 5 s; see the option), shared by calls that arrive
+ * while it is being computed. Read-only; a storage failure rejects (and is not remembered), which the
+ * extractor treats as "no examples". The `signal` the extractor passes is only checked before the read and
+ * after it, because the computation is shared between callers: the extractor stops waiting for a slow
+ * provider on its own when its budget is spent.
  */
 export function schemaEditExamples(
   storage: StoragePort,
@@ -70,68 +91,67 @@ export function schemaEditExamples(
   ctx?: { signal?: { readonly aborted: boolean } },
 ) => Promise<SchemaEditExample[]> {
   const limit = Math.max(0, Math.floor(opts.limit ?? DEFAULT_LIMIT));
+  const ttlMs = Math.max(0, opts.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS);
+  const clock = opts.now ?? Date.now;
+  /** tenant ("" for none) -> the computation started at `at`; a rejected one removes itself. */
+  const memo = new Map<string, { at: number; result: Promise<SchemaEditExample[]> }>();
 
-  return async (input, ctx) => {
-    if (limit === 0) return [];
-    const tenant = input?.tenant != null && input.tenant !== "" ? input.tenant : undefined;
+  const compute = async (tenant: string | undefined): Promise<SchemaEditExample[]> => {
     // With a tenant the storage already narrows to it; the exact-match check only guards an adapter that
     // ignores the filter. Without one, "no tenant" means both an absent field and an empty string.
     const inScope = (e: LineageEventRecord): boolean =>
       tenant != null ? e.tenant === tenant : e.tenant == null || e.tenant === "";
-    const read = async (type: string): Promise<LineageEventRecord[]> =>
-      (
-        await storage.listLineage({
-          type: [type],
-          limit: SCAN_WINDOW,
-          ...(tenant != null ? { tenant } : {}),
-        })
-      ).filter(inScope);
+    const tenantFilter = tenant != null ? { tenant } : {};
 
-    const [editedAll, proposed, suggested, generated] = await Promise.all([
-      read("component.schemaEdited"),
-      read("component.schemaProposed"),
-      read("component.schemaSuggested"),
-      read("component.generated"),
-    ]);
-    if (ctx?.signal?.aborted === true) return [];
-
-    /** artifactId -> payload field of the latest event (the log is in append order, so the last one wins). */
-    const latestBy = (events: LineageEventRecord[], field: string): Map<string, unknown> => {
-      const byArtifact = new Map<string, unknown>();
-      for (const event of events) {
-        const artifactId = event.payload["artifactId"];
-        if (typeof artifactId === "string") byArtifact.set(artifactId, event.payload[field]);
-      }
-      return byArtifact;
-    };
-    const finals = latestBy(proposed, "draft");
-    const suggestions = latestBy(suggested, "suggestion");
-    const htmls = latestBy(generated, "html");
-
-    const edits = editedAll
-      .map((event, index) => ({ event, index }))
-      // Newest first: by timestamp, and for equal timestamps the later append wins.
-      .sort((a, b) => (a.event.ts === b.event.ts ? b.index - a.index : a.event.ts < b.event.ts ? 1 : -1))
-      .map(({ event }) => event);
-
-    const examples: SchemaEditExample[] = [];
+    const edited = (
+      await storage.listLineage({ type: ["component.schemaEdited"], limit: SCAN_WINDOW, ...tenantFilter })
+    ).filter(inScope);
+    // Newest first: by timestamp, and for equal timestamps the later append wins. One candidate per artifact,
+    // and only an edit that actually changed the suggestion.
+    const candidates: string[] = [];
     const seen = new Set<string>();
-    for (const edit of edits) {
-      if (examples.length >= limit) break;
-      const changed = edit.payload["changed"];
-      const artifactId = edit.payload["artifactId"];
+    const newestFirst = edited
+      .map((event, index) => ({ event, index }))
+      .sort((a, b) => (a.event.ts === b.event.ts ? b.index - a.index : a.event.ts < b.event.ts ? 1 : -1));
+    for (const { event } of newestFirst) {
+      const changed = event.payload["changed"];
+      const artifactId = event.payload["artifactId"];
       if (!Array.isArray(changed) || changed.length === 0) continue;
       if (typeof artifactId !== "string" || artifactId === "" || seen.has(artifactId)) continue;
       seen.add(artifactId);
+      candidates.push(artifactId);
+    }
+    // Nothing was corrected: there is nothing to join, so do not read the other three event types at all.
+    if (candidates.length === 0) return [];
 
-      const final = finals.get(artifactId);
+    /** The latest record of `type` for one artifact (the log is in append order, so the last one wins). */
+    const latestOf = async (type: string, artifactId: string): Promise<LineageEventRecord | undefined> => {
+      const records = (
+        await storage.listLineage({
+          type: [type],
+          artifactId,
+          limit: tenant != null ? 1 : ARTIFACT_WINDOW,
+          ...tenantFilter,
+        })
+      ).filter(inScope);
+      return records[records.length - 1];
+    };
+
+    const examples: SchemaEditExample[] = [];
+    for (const artifactId of candidates) {
+      if (examples.length >= limit) break;
+      const final = (await latestOf("component.schemaProposed", artifactId))?.payload["draft"];
       if (!isDraft(final)) continue;
-      const suggestion = suggestions.get(artifactId);
+      const [suggested, generated] = await Promise.all([
+        latestOf("component.schemaSuggested", artifactId),
+        latestOf("component.generated", artifactId),
+      ]);
+      const suggestion = suggested?.payload["suggestion"];
       const suggestedDraft =
         suggestion != null && typeof suggestion === "object"
           ? (suggestion as Record<string, unknown>)["draft"]
           : undefined;
-      const html = htmls.get(artifactId);
+      const html = generated?.payload["html"];
 
       examples.push({
         final,
@@ -142,5 +162,30 @@ export function schemaEditExamples(
       });
     }
     return examples;
+  };
+
+  return async (input, ctx) => {
+    // A function, not a property read: the flag can flip while the shared computation is awaited below.
+    const aborted = (): boolean => ctx?.signal?.aborted === true;
+    if (limit === 0 || aborted()) return [];
+    const tenant = input?.tenant != null && input.tenant !== "" ? input.tenant : undefined;
+    const key = tenant ?? "";
+    const at = clock();
+    let entry = ttlMs > 0 ? memo.get(key) : undefined;
+    if (entry == null || at - entry.at >= ttlMs) {
+      const fresh = { at, result: compute(tenant) };
+      entry = fresh;
+      if (ttlMs > 0) {
+        for (const [k, v] of memo) if (at - v.at >= ttlMs) memo.delete(k);
+        memo.set(key, fresh);
+        // A failed computation must not be served again for the rest of the TTL.
+        fresh.result.catch(() => {
+          if (memo.get(key) === fresh) memo.delete(key);
+        });
+      }
+    }
+    const result = await entry.result;
+    if (aborted()) return [];
+    return [...result];
   };
 }

@@ -217,21 +217,32 @@ describe("schemaEditExamples", () => {
     ]);
   });
 
-  it("narrows by tenant in the storage query (not only after the fact) and joins with four queries", async () => {
+  /** A storage that records every listLineage filter, over the given events. */
+  function recording(events: LineageEventRecord[]): {
+    storage: StoragePort;
+    queries: Array<{ type?: string[]; tenant?: string; limit?: number; artifactId?: string }>;
+  } {
+    const base = storageOf(events);
+    const queries: Array<{ type?: string[]; tenant?: string; limit?: number; artifactId?: string }> = [];
+    return {
+      queries,
+      storage: {
+        ...base,
+        async listLineage(filter = {}) {
+          queries.push(filter);
+          return base.listLineage(filter);
+        },
+      },
+    };
+  }
+
+  it("narrows by tenant in every storage query (not only after the fact): one window read, then a lookup per case", async () => {
     const events = [
       ...reviewed("a-acme", "sales.acme", "2026-07-02T00:00:00.000Z", { tenant: "acme" }),
       ...reviewed("a-acme2", "sales.acme2", "2026-07-03T00:00:00.000Z", { tenant: "acme" }),
       ...reviewed("a-globex", "sales.globex", "2026-07-04T00:00:00.000Z", { tenant: "globex" }),
     ];
-    const base = storageOf(events);
-    const queries: Array<{ type?: string[]; tenant?: string; limit?: number; artifactId?: string }> = [];
-    const storage: StoragePort = {
-      ...base,
-      async listLineage(filter = {}) {
-        queries.push(filter);
-        return base.listLineage(filter);
-      },
-    };
+    const { storage, queries } = recording(events);
     const examples = await schemaEditExamples(storage, { limit: 5 })({ tenant: "acme" });
     expect(examples.map((e) => e.final.componentType)).toEqual(["sales.acme2", "sales.acme"]);
     expect(examples[0]).toEqual({
@@ -239,36 +250,73 @@ describe("schemaEditExamples", () => {
       suggestion: draft("sales.acme2Machine"),
       htmlExcerpt: "<div>a-acme2</div>",
     });
-    expect(queries).toHaveLength(4);
-    expect(queries.map((q) => q.type?.[0]).sort()).toEqual([
-      "component.generated",
-      "component.schemaEdited",
-      "component.schemaProposed",
-      "component.schemaSuggested",
-    ]);
-    for (const q of queries) {
-      expect(q.tenant).toBe("acme");
-      expect(q.limit).toBe(200);
-      expect(q.artifactId).toBeUndefined();
+    // One window read of the edits, then three lookups (proposed, suggested, generated) per case.
+    expect(queries).toHaveLength(1 + 2 * 3);
+    expect(queries[0]).toMatchObject({ type: ["component.schemaEdited"], limit: 200, tenant: "acme" });
+    expect(queries[0]?.artifactId).toBeUndefined();
+    for (const q of queries) expect(q.tenant).toBe("acme");
+    for (const q of queries.slice(1)) {
+      expect(q.limit).toBe(1);
+      expect(["a-acme", "a-acme2"]).toContain(q.artifactId);
     }
   });
 
-  it("issues the same four queries (no per-artifact lookups) however many cases there are", async () => {
+  it("reads the other three event types only for the artifacts that become examples, never as a 200-record window", async () => {
     const events = Array.from({ length: 12 }, (_, i) =>
       reviewed(`a${i}`, `sales.n${i}`, `2026-07-${String(i + 1).padStart(2, "0")}T00:00:00.000Z`),
     ).flat();
-    const base = storageOf(events);
-    let count = 0;
-    const storage: StoragePort = {
-      ...base,
-      async listLineage(filter = {}) {
-        count++;
-        return base.listLineage(filter);
-      },
-    };
-    const examples = await schemaEditExamples(storage, { limit: 10 })({});
-    expect(examples).toHaveLength(10);
-    expect(count).toBe(4);
+    const { storage, queries } = recording(events);
+    const examples = await schemaEditExamples(storage, { limit: 3 })({});
+    expect(examples.map((e) => e.final.componentType)).toEqual(["sales.n11", "sales.n10", "sales.n9"]);
+    // 1 window read + (proposed, suggested, generated) for exactly the 3 chosen artifacts: 12 cases cost no more.
+    expect(queries).toHaveLength(1 + 3 * 3);
+    const lookups = queries.slice(1);
+    expect(lookups.every((q) => q.artifactId != null)).toBe(true);
+    expect(new Set(lookups.map((q) => q.artifactId))).toEqual(new Set(["a11", "a10", "a9"]));
+    // The only unbounded-looking read is the edits window; the HTML (component.generated) is looked up per artifact.
+    expect(queries.filter((q) => q.limit === 200).map((q) => q.type)).toEqual([["component.schemaEdited"]]);
+  });
+
+  it("returns early after the single edits read when no edit changed a suggestion", async () => {
+    const events = [
+      ...reviewed("a1", "sales.one", "2026-07-01T00:00:00.000Z", { changed: [] }),
+      ...reviewed("a2", "sales.two", "2026-07-02T00:00:00.000Z", { changed: [] }),
+    ];
+    const { storage, queries } = recording(events);
+    expect(await schemaEditExamples(storage)({})).toEqual([]);
+    expect(queries).toHaveLength(1);
+    expect(queries[0]?.type).toEqual(["component.schemaEdited"]);
+
+    const empty = recording([]);
+    expect(await schemaEditExamples(empty.storage)({ tenant: "acme" })).toEqual([]);
+    expect(empty.queries).toHaveLength(1);
+  });
+
+  it("skips a case whose proposal is missing at the cost of one lookup, and fills the limit from the next case", async () => {
+    const noFinal = reviewed("a-nofinal", "sales.noFinal", "2026-07-05T00:00:00.000Z").filter(
+      (e) => e.type !== "component.schemaProposed",
+    );
+    const events = [
+      ...reviewed("a-good", "sales.good", "2026-07-03T00:00:00.000Z"),
+      ...noFinal, // newest edit, no proposal
+    ];
+    const { storage, queries } = recording(events);
+    const examples = await schemaEditExamples(storage, { limit: 1 })({});
+    expect(examples.map((e) => e.final.componentType)).toEqual(["sales.good"]);
+    // edits window + (proposed for a-nofinal) + (proposed, suggested, generated for a-good)
+    expect(queries).toHaveLength(1 + 1 + 3);
+  });
+
+  it("without a tenant a per-artifact lookup reads a small window and keeps only tenant-less records", async () => {
+    // The same artifactId promoted by two tenants: the newest record of each type belongs to acme.
+    const events = [
+      ...reviewed("shared", "sales.noTenant", "2026-07-01T00:00:00.000Z"),
+      ...reviewed("shared", "sales.acme", "2026-07-02T00:00:00.000Z", { tenant: "acme" }),
+    ];
+    const { storage, queries } = recording(events);
+    const examples = await schemaEditExamples(storage)({});
+    expect(examples.map((e) => e.final.componentType)).toEqual(["sales.noTenant"]);
+    expect(queries.slice(1).every((q) => (q.limit ?? 0) > 1)).toBe(true);
   });
 
   it("returns nothing when the extraction was already aborted", async () => {
@@ -302,5 +350,138 @@ describe("schemaEditExamples", () => {
       throw new Error("down");
     };
     await expect(schemaEditExamples(storage)({})).rejects.toThrow("down");
+  });
+});
+
+describe("schemaEditExamples: per-tenant memo", () => {
+  function counting(events: LineageEventRecord[]): { storage: StoragePort; reads: () => number } {
+    const base = storageOf(events);
+    let n = 0;
+    return {
+      reads: () => n,
+      storage: {
+        ...base,
+        async listLineage(filter = {}) {
+          n++;
+          return base.listLineage(filter);
+        },
+      },
+    };
+  }
+
+  const events = [
+    ...reviewed("a-acme", "sales.acme", "2026-07-02T00:00:00.000Z", { tenant: "acme" }),
+    ...reviewed("a-globex", "sales.globex", "2026-07-03T00:00:00.000Z", { tenant: "globex" }),
+    ...reviewed("a-none", "sales.none", "2026-07-04T00:00:00.000Z"),
+  ];
+
+  it("reuses a tenant's result within the TTL, so a batch of candidates reads the log once", async () => {
+    const { storage, reads } = counting(events);
+    const provider = schemaEditExamples(storage, { now: () => 1_000 });
+    const first = await provider({ tenant: "acme" });
+    const readsAfterFirst = reads();
+    expect(readsAfterFirst).toBeGreaterThan(0);
+    for (let i = 0; i < 5; i++) expect(await provider({ tenant: "acme" })).toEqual(first);
+    expect(reads()).toBe(readsAfterFirst);
+  });
+
+  it("keys the memo by tenant: another tenant, or no tenant, is not served acme's examples", async () => {
+    const { storage } = counting(events);
+    const provider = schemaEditExamples(storage, { now: () => 1_000, limit: 10 });
+    const types = async (tenant?: string) =>
+      (await provider(tenant != null ? { tenant } : {})).map((e) => e.final.componentType);
+    expect(await types("acme")).toEqual(["sales.acme"]);
+    expect(await types("globex")).toEqual(["sales.globex"]);
+    expect(await types()).toEqual(["sales.none"]);
+    // An empty tenant is the same scope as none (and shares its entry).
+    expect(await types("")).toEqual(["sales.none"]);
+    expect(await types("acme")).toEqual(["sales.acme"]);
+  });
+
+  it("reads the log again once the TTL has passed, and picks up a newer correction", async () => {
+    const live: LineageEventRecord[] = [...reviewed("a1", "sales.one", "2026-07-01T00:00:00.000Z")];
+    const { storage, reads } = counting(live);
+    let now = 0;
+    const provider = schemaEditExamples(storage, { now: () => now, cacheTtlMs: 5_000, limit: 10 });
+    expect((await provider({})).map((e) => e.final.componentType)).toEqual(["sales.one"]);
+    const afterFirst = reads();
+
+    live.push(...reviewed("a2", "sales.two", "2026-07-02T00:00:00.000Z"));
+    now = 4_999; // still inside the TTL: the new correction is not visible yet
+    expect((await provider({})).map((e) => e.final.componentType)).toEqual(["sales.one"]);
+    expect(reads()).toBe(afterFirst);
+
+    now = 5_000; // the TTL has elapsed
+    expect((await provider({})).map((e) => e.final.componentType)).toEqual(["sales.two", "sales.one"]);
+    expect(reads()).toBeGreaterThan(afterFirst);
+  });
+
+  it("defaults the TTL to 5 seconds", async () => {
+    const { storage, reads } = counting(events);
+    let now = 100;
+    const provider = schemaEditExamples(storage, { now: () => now });
+    await provider({ tenant: "acme" });
+    const afterFirst = reads();
+    now += 4_999;
+    await provider({ tenant: "acme" });
+    expect(reads()).toBe(afterFirst);
+    now += 1;
+    await provider({ tenant: "acme" });
+    expect(reads()).toBeGreaterThan(afterFirst);
+  });
+
+  it("cacheTtlMs: 0 turns the memo off", async () => {
+    const { storage, reads } = counting(events);
+    const provider = schemaEditExamples(storage, { now: () => 1_000, cacheTtlMs: 0 });
+    await provider({ tenant: "acme" });
+    const afterFirst = reads();
+    await provider({ tenant: "acme" });
+    expect(reads()).toBe(afterFirst * 2);
+  });
+
+  it("shares one computation between calls that arrive while it is running", async () => {
+    const { storage, reads } = counting(events);
+    const provider = schemaEditExamples(storage, { now: () => 1_000 });
+    const [a, b, c] = await Promise.all([
+      provider({ tenant: "acme" }),
+      provider({ tenant: "acme" }),
+      provider({ tenant: "acme" }),
+    ]);
+    expect(b).toEqual(a);
+    expect(c).toEqual(a);
+    const single = counting(events);
+    await schemaEditExamples(single.storage, { now: () => 1_000 })({ tenant: "acme" });
+    expect(reads()).toBe(single.reads());
+  });
+
+  it("does not remember a failure: the next call reads again", async () => {
+    const base = storageOf(events);
+    let failing = true;
+    const storage: StoragePort = {
+      ...base,
+      async listLineage(filter) {
+        if (failing) throw new Error("down");
+        return base.listLineage(filter);
+      },
+    };
+    const provider = schemaEditExamples(storage, { now: () => 1_000 });
+    await expect(provider({ tenant: "acme" })).rejects.toThrow("down");
+    failing = false;
+    expect((await provider({ tenant: "acme" })).map((e) => e.final.componentType)).toEqual(["sales.acme"]);
+  });
+
+  it("an aborted caller gets nothing without poisoning the shared result for the next one", async () => {
+    const { storage } = counting(events);
+    const provider = schemaEditExamples(storage, { now: () => 1_000 });
+    expect(await provider({ tenant: "acme" }, { signal: { aborted: true } })).toEqual([]);
+    expect((await provider({ tenant: "acme" })).map((e) => e.final.componentType)).toEqual(["sales.acme"]);
+  });
+
+  it("hands each caller its own array, so one caller cannot change what the next one sees", async () => {
+    const { storage } = counting(events);
+    const provider = schemaEditExamples(storage, { now: () => 1_000 });
+    const first = await provider({ tenant: "acme" });
+    first.length = 0;
+    expect(await provider({ tenant: "acme" })).toHaveLength(1);
   });
 });
