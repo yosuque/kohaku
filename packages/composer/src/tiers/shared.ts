@@ -152,19 +152,32 @@ export function resolveMaxAttempts(ctx: ComposeContext): number {
   return 1 + (ctx.policy?.maxRepairAttempts ?? 1);
 }
 
+/** The classification of a failed L1/L2 generation (see TierFailure.failure). */
+export type TierFailureKind = "transient" | "invalid" | "budget" | "aborted";
+
+/** The ok:true form of TierResult: the assembled components/events of a generation that passed validation. */
+export interface TierSuccess {
+  ok: true;
+  components: ComponentNode[];
+  events: EventBinding[];
+  model?: string;
+  attempts: ComposeAttempt[];
+}
+
 /**
  * The shared L1/L2 tier-generation result shape (structurally identical between L1 and L2). On success
  * carries the assembled components/events; on failure carries the attempt trace and failure classification
- * that compose.ts's settleL1Failure / runL2Stage branch on.
+ * that tier-ladder.ts's settleTierFailure branches on.
  */
-export interface TierResult {
-  ok: boolean;
-  components?: ComponentNode[];
-  events?: EventBinding[];
+export type TierResult = TierSuccess | TierFailure;
+
+/** The ok:false form of TierResult. */
+export interface TierFailure {
+  ok: false;
   model?: string;
   attempts: ComposeAttempt[];
   /**
-   * The failure kind when ok:false.
+   * The failure kind.
    * - "transient": abort (ABORTED), provider failure (PROVIDER), misconfiguration (CONFIG), or an unexpected
    *   non-LlmError. Since throwing another full generation at the same provider in L2 would hit the same
    *   failure, compose does not promote an L1 transient failure to L2.
@@ -181,12 +194,12 @@ export interface TierResult {
    *   is classified as "budget" above instead, precisely so it is NOT marked cancelled and DOES count toward
    *   that same fallback-rate analytics (it is an operator-configured budget outcome, not a client disconnect).
    */
-  failure?: "transient" | "invalid" | "budget" | "aborted";
+  failure: TierFailureKind;
   /** The downgrade reason when failure==="budget" (compose places it on fallback.reason). */
   budgetReason?: string;
   /**
    * The thrown error behind the *last* attempt that actually threw (typically an LlmError), so callers
-   * (tier-ladder.ts's settleL1Failure / runL2Stage) can enrich a fallback reason and observer.onError's
+   * (tier-ladder.ts's settleTierFailure) can enrich a fallback reason and observer.onError's
    * `error` argument with the underlying cause instead of leaving it undefined. Unset whenever the
    * terminal failure did not come from a throw — in particular, an "invalid" failure whose *last* attempt
    * failed via `config.validate` returning `{ ok: false }` (a response existed but failed validation, no
@@ -265,7 +278,7 @@ export async function runRepairLoop(
   let model: string | undefined;
   // The failure kind when returning ok:false. Default "invalid" (the safe side that promotes to L2 and
   // matches a repair-loop-internal validation failure, which is never "transient").
-  let failure: "transient" | "invalid" | "aborted" | "budget" = "invalid";
+  let failure: TierFailureKind = "invalid";
   // Set only on the mid-call deadline-abort branch below (BudgetGate.skipIfDenied's own BudgetSkipResult already
   // carries its own budgetReason on the early-return path — this variable is for the OTHER route into
   // failure="budget": an in-flight call aborted by the deadline timer rather than skipped before it started).

@@ -6,7 +6,14 @@ import type { ComposeContext } from "./context.js";
 import { reportBudgetCheckError } from "./observer.js";
 import { generateL1 } from "./tiers/l1-generate.js";
 import { generateL2 } from "./tiers/l2-generate.js";
-import { type BudgetGate, createBudgetGate, type TierRequest, type TierResult } from "./tiers/shared.js";
+import {
+  type BudgetGate,
+  createBudgetGate,
+  type TierFailure,
+  type TierFailureKind,
+  type TierRequest,
+  type TierSuccess,
+} from "./tiers/shared.js";
 import type { ComposeAttempt } from "./trace.js";
 
 /**
@@ -45,7 +52,7 @@ export type TierOutcome =
        * by buildSpecFromOutcome (compose.ts) into ComposeErrorContext.failure so an observer can
        * machine-distinguish a provider outage from a validation failure without string-matching `reason`.
        */
-      failure?: TierResult["failure"];
+      failure?: TierFailureKind;
       /**
        * The thrown error behind this fallback (typically an LlmError), mirrored from the settling
        * TierResult.lastError. Threaded by buildSpecFromOutcome into observer.onError's `error` argument
@@ -63,7 +70,7 @@ type FallbackOutcome = Extract<TierOutcome, { kind: "fallback" }>;
 const fallback = (
   from: "L1" | "L2",
   reason: string,
-  options?: { budgetExceeded?: boolean; failure?: TierResult["failure"]; error?: unknown },
+  options?: { budgetExceeded?: boolean; failure?: TierFailureKind; error?: unknown },
 ): FallbackOutcome => ({
   kind: "fallback",
   from,
@@ -97,12 +104,12 @@ function transientErrorDetail(error: unknown): string {
 }
 
 /** Constructs the ok form of a TierOutcome from a successful TierResult (shared by the L1 and L2 success returns). */
-function okOutcome(tier: "L1" | "L2", result: TierResult): TierOutcome {
+function okOutcome(tier: "L1" | "L2", result: TierSuccess): TierOutcome {
   return {
     kind: "ok",
     tier,
-    components: result.components!,
-    events: result.events ?? [],
+    components: result.components,
+    events: result.events,
     model: result.model,
   };
 }
@@ -213,57 +220,100 @@ export async function runTierGeneration(
 }
 
 /**
- * The failure→reason table for a settled (non-promotable-or-not) L1 failure. Precedence: budget always
- * wins regardless of canL2 (both the `!canL2` branch and the dedicated budget branch produce the same
- * reason/budgetExceeded, so the kind is budget-exceeded either way); transient gets a provider-outage
- * reason either way (the wording differs slightly depending on whether L2 was skipped as a result);
- * invalid (or an unexpected undefined) is promotable to L2 (null) only when canL2 is true, else it takes
- * the plain validation-failure reason (unchanged from before this failure/error split existed — a caller
- * distinguishing a validation failure from a provider outage should key off `failure`, not string-match
- * `reason`).
- * Returns null only for the invalid/undefined + canL2 case (proceed to L2).
+ * The per-tier fallback `reason` strings used by settleTierFailure (observable as `provenance.fallback.reason`,
+ * so each is fixed byte-for-byte). A caller distinguishing a validation failure from a provider outage
+ * should key off `failure`, not string-match `reason`.
+ * - `budget`: the default when the failed result carries no `budgetReason` of its own.
+ * - `transient`: derived from the thrown error behind the failure.
+ * - `invalid`: the plain validation-failure reason.
  */
-function settleL1Failure(l1: TierResult, canL2: boolean, from: "L1" | "L2"): TierOutcome | null {
-  switch (l1.failure) {
+interface TierFailureReasons {
+  budget: string;
+  transient: (error: unknown) => string;
+  invalid: string;
+}
+
+/**
+ * L1's reasons. The transient wording differs slightly depending on whether L2 was skipped as a result
+ * (`canL2`).
+ * When L1 fell with a transient failure (LLM provider unavailable, misconfigured, or an unexpected
+ * non-LlmError throw), it is not sent to L2 — throwing another full generation (1×timeout) at the
+ * same failing provider would just hit the same failure. The reason names the provider explicitly
+ * (rather than reusing the validation-failure wording) so an operator can tell "the LLM never
+ * answered" apart from "the LLM answered but the output didn't validate" without inspecting failure/error.
+ * If L2 is disabled, an invalid failure takes the plain validation-failure message (unchanged wording —
+ * this is not a provider outage).
+ */
+function l1FailureReasons(canL2: boolean): TierFailureReasons {
+  return {
+    budget: "Generation stopped: token budget exceeded",
+    transient: (error) => {
+      const detail = transientErrorDetail(error);
+      return canL2
+        ? `Skipped L2 because L1 generation failed: the LLM provider was unavailable (${detail}). Check KOHAKU_LLM_PROVIDER and the provider API key.`
+        : `L1 generation failed: the LLM provider was unavailable (${detail}). Check KOHAKU_LLM_PROVIDER and the provider API key.`;
+    },
+    invalid: "L1 constrained generation failed catalog/structure validation",
+  };
+}
+
+/**
+ * L2's reasons. The default budget reason is the L2 repair-retry skip (the initial L2 passed the pre-L2
+ * check and actually ran, and the repair after a lint failure was skipped). Transient and invalid share one
+ * wording; the observer tells them apart through `failure`.
+ */
+const L2_FAILURE_REASONS: TierFailureReasons = {
+  budget: "Skipped L2 repair retry: token budget exceeded",
+  transient: () => "L2 free-form generation failed",
+  invalid: "L2 free-form generation failed",
+};
+
+/**
+ * Settles a failed L1/L2 generation into the fallback TierOutcome. `from` is "the stage that actually
+ * failed" recorded on the fallback. Precedence follows `result.failure`: aborted and budget are never
+ * promoted and carry the same reasons for both tiers (budget's default text comes from `reasons`);
+ * transient and invalid take the tier's reason from `reasons`. `failure`/`error` mirror the failed result.
+ */
+function settleTierFailure(from: "L1" | "L2", result: TierFailure, reasons: TierFailureReasons): TierOutcome {
+  switch (result.failure) {
     case "aborted":
       // The caller's AbortSignal fired — a client disconnect/timeout, not a generation failure. Never
       // promoted to L2 (there is no one left to receive it), and marked cancelled so hosts skip
       // recording it as a generation fallback.
       return {
-        ...fallback(from, "Generation cancelled by the caller", { failure: "aborted", error: l1.lastError }),
+        ...fallback(from, "Generation cancelled by the caller", {
+          failure: "aborted",
+          error: result.lastError,
+        }),
         cancelled: true,
       };
     case "budget":
-      // L1 was aborted due to budget overage (initial skip or repair skip). Not promoted to L2 either.
-      return fallback(from, l1.budgetReason ?? "Generation stopped: token budget exceeded", {
+      // The tier was aborted due to budget overage (initial skip or repair skip). Not promoted to L2 either.
+      return fallback(from, result.budgetReason ?? reasons.budget, {
         budgetExceeded: true,
         failure: "budget",
-        error: l1.lastError,
+        error: result.lastError,
       });
-    case "transient": {
-      // When L1 fell with a transient failure (LLM provider unavailable, misconfigured, or an unexpected
-      // non-LlmError throw), do not send it to L2 — throwing another full generation (1×timeout) at the
-      // same failing provider would just hit the same failure. The reason names the provider explicitly
-      // (rather than reusing the validation-failure wording below) so an operator can tell "the LLM never
-      // answered" apart from "the LLM answered but the output didn't validate" without inspecting failure/error.
-      const detail = transientErrorDetail(l1.lastError);
-      const reason = canL2
-        ? `Skipped L2 because L1 generation failed: the LLM provider was unavailable (${detail}). Check KOHAKU_LLM_PROVIDER and the provider API key.`
-        : `L1 generation failed: the LLM provider was unavailable (${detail}). Check KOHAKU_LLM_PROVIDER and the provider API key.`;
-      return fallback(from, reason, { failure: "transient", error: l1.lastError });
-    }
+    case "transient":
+      return fallback(from, reasons.transient(result.lastError), {
+        failure: "transient",
+        error: result.lastError,
+      });
     case "invalid":
-    case undefined:
-      // Only a schema-derived (invalid: a response existed but failed validation) L1 failure is
-      // promoted to L2 (null = proceed to L2). If L2 is disabled, the reason is the plain
-      // validation-failure message (unchanged wording — this is not a provider outage).
-      return canL2
-        ? null
-        : fallback(from, "L1 constrained generation failed catalog/structure validation", {
-            failure: "invalid",
-            error: l1.lastError,
-          });
+      return fallback(from, reasons.invalid, { failure: "invalid", error: result.lastError });
   }
+}
+
+/**
+ * The settlement of a failed L1: null when the failure is promotable to L2 (proceed to L2), else the
+ * fallback TierOutcome. Only a schema-derived (invalid: a response existed but failed validation) L1 failure
+ * is promoted, and only when canL2 is true. Budget always wins regardless of canL2 (both the `!canL2` branch
+ * and the dedicated budget branch produce the same reason/budgetExceeded, so the kind is budget-exceeded
+ * either way).
+ */
+function settleL1Failure(l1: TierFailure, canL2: boolean, from: "L1" | "L2"): TierOutcome | null {
+  if (l1.failure === "invalid" && canL2) return null;
+  return settleTierFailure(from, l1, l1FailureReasons(canL2));
 }
 
 /**
@@ -321,23 +371,8 @@ async function runL2Stage(run: TierRun): Promise<TierOutcome> {
   if (l2.ok) {
     return okOutcome("L2", l2);
   }
-  if (l2.failure === "aborted") {
-    // Same rationale as L1's "aborted" branch: a client disconnect/timeout, not a generation failure.
-    return {
-      ...fallback("L2", "Generation cancelled by the caller", { failure: "aborted", error: l2.lastError }),
-      cancelled: true,
-    };
-  }
-  if (l2.failure === "budget") {
-    // L2's repair re-attempt was aborted by budget (the initial L2 passed the l2Verdict above and
-    // actually ran, and the repair after a lint failure was skipped). "The stage that actually failed" is L2.
-    return fallback("L2", l2.budgetReason ?? "Skipped L2 repair retry: token budget exceeded", {
-      budgetExceeded: true,
-      failure: "budget",
-      error: l2.lastError,
-    });
-  }
-  // L2 was tried and failed (match from to reality). failure mirrors l2.failure ("transient" or "invalid")
-  // so an observer can tell a provider outage apart from an L2 validation/lint failure the same way L1 does.
-  return fallback("L2", "L2 free-form generation failed", { failure: l2.failure, error: l2.lastError });
+  // L2 was tried and failed (match from to reality: "the stage that actually failed" is L2). failure mirrors
+  // l2.failure so an observer can tell a provider outage apart from an L2 validation/lint failure the same
+  // way L1 does.
+  return settleTierFailure("L2", l2, L2_FAILURE_REASONS);
 }
