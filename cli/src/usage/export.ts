@@ -1,10 +1,11 @@
 import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createKohakuClient, globalTransport, type Transport } from "@kohaku-ui/client";
+import { globalTransport, type Transport } from "@kohaku-ui/client";
 import { iterateLineagePages, mergeUsageRows, summarizeUsage, type UsageRow } from "@kohaku-ui/lineage";
 import type { LineageEventRecord, StoragePort } from "@kohaku-ui/spec-core";
 import { parseHeaderArgs } from "../header-args.js";
-import { resolveRestTenant, resolveWindow } from "../lineage-window.js";
+import { type LineageSourceArgs, resolveRestTenant, resolveWindow } from "../lineage-window.js";
+import { createRestClient } from "../rest-client.js";
 import { CliUsageError } from "../usage-error.js";
 import { formatUsageCsv } from "./csv.js";
 import { LINEAGE_FILE_NAME, type LineageFileScanStats, streamLineageChunks } from "./lineage-file.js";
@@ -15,21 +16,8 @@ export const DEFAULT_REST_TIMEOUT_MS = 30_000;
 /** The lineage event types a usage summary reads (everything else is skipped at the source). */
 const USAGE_EVENT_TYPES = ["view.composed", "intent.fixated", "intent.unfixated"];
 
-export interface UsageExportOptions {
-  /** Read from a local StoragePort data directory (mutually exclusive with `rest`). All tenants unless `tenant` is set. */
-  dataDir?: string;
-  /**
-   * Read over REST from a running host (mutually exclusive with `dataDir`). The `x-kohaku-tenant` header
-   * decides the tenant scope; a host without tenant scoping returns every tenant.
-   */
-  rest?: string;
-  /** Extra REST request headers ("name:value", repeatable) -- e.g. tenant / auth. REST mode only. */
-  headers?: string[];
-  tenant?: string;
-  /** Lower bound: ISO 8601 date or timestamp; a date-only value starts that UTC day (see `resolveWindow`). */
-  since: string;
-  /** Upper bound: ISO 8601 date or timestamp; a date-only value INCLUDES that whole UTC day. */
-  until: string;
+/** `--data-dir` reads every tenant unless `tenant` is set; a `--rest` host without tenant scoping returns every tenant. */
+export interface UsageExportOptions extends LineageSourceArgs {
   /** Output format. Default "csv". */
   format?: "csv" | "json";
   /** Write to this file instead of returning the text only (the caller prints it to stdout when omitted). */
@@ -181,11 +169,11 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
     // The x-kohaku-tenant header is what actually scopes a REST request, so a --tenant that disagrees with
     // it (or has no header to back it) is rejected rather than mislabelled.
     resolveRestTenant(headers, opts.tenant);
-    const client = createKohakuClient({
-      baseUrl: opts.rest!.replace(/\/$/, ""),
-      headers: () => headers,
-      transport: withRequestTimeout(opts.transport ?? globalTransport(), timeoutMs),
-    });
+    const client = createRestClient(
+      opts.rest!,
+      headers,
+      withRequestTimeout(opts.transport ?? globalTransport(), timeoutMs),
+    );
     pages = client.lineagePages({
       type: USAGE_EVENT_TYPES,
       since: window.since,

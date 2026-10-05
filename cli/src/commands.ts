@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createKohakuClient, type ExplainReport, type Transport } from "@kohaku-ui/client";
+import type { ExplainReport, Transport } from "@kohaku-ui/client";
 import { collectScriptSyntaxIssues } from "@kohaku-ui/composer";
 import { exportDistillationDataset } from "@kohaku-ui/evals";
 import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
@@ -20,6 +20,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import semver from "semver";
 import { parseHeaderArgs } from "./header-args.js";
+import { createRestClient } from "./rest-client.js";
 import { writeScaffold } from "./scaffold-fs.js";
 import {
   GOLDEN_README_TEMPLATE,
@@ -132,11 +133,7 @@ export interface ExplainOptions {
  */
 export async function runExplain(requestId: string, opts: ExplainOptions): Promise<ExplainReport> {
   const headers = parseHeaderArgs(opts.headers);
-  const client = createKohakuClient({
-    baseUrl: opts.rest.replace(/\/$/, ""),
-    headers: () => headers,
-    ...(opts.transport != null ? { transport: opts.transport } : {}),
-  });
+  const client = createRestClient(opts.rest, headers, opts.transport);
   let spec: UISpec | undefined;
   if (opts.specPath != null) {
     let raw: unknown;

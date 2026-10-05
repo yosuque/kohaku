@@ -3,10 +3,11 @@ import { basename } from "node:path";
 import type { ExplainReport } from "@kohaku-ui/client";
 import type { VerifyEvidencePackResult } from "@kohaku-ui/lineage";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
-import { Command, type CommanderError } from "commander";
+import { Command, type CommanderError, Option } from "commander";
 import type { ExportDatasetResult, SmokeL2Output } from "./commands.js";
 import type { EvidenceExportResult, EvidenceKeygenResult } from "./evidence/index.js";
 import type { InitResult } from "./init/index.js";
+import type { LineageSourceArgs, LineageSourceCliOptions } from "./lineage-window.js";
 import type { MigrateApplyOptions, MigratePlanOptions } from "./migrate.js";
 import { CLI_VERSION } from "./version.js";
 
@@ -36,6 +37,46 @@ function errorMessage(e: unknown): string {
 /** Prints `e`'s message and exits with `exitCode` through commander (which calls `process.exit`). */
 function fail(e: unknown, exitCode = 1): never {
   return program.error(errorMessage(e), { exitCode });
+}
+
+/** A repeatable `--header <name:value>` option: each occurrence is appended to the `header` string array. */
+function headerOption(description: string): Option {
+  return new Option("--header <name:value>", description)
+    .argParser((value: string, prev: string[]) => [...prev, value])
+    .default([] as string[]);
+}
+
+/**
+ * Adds the six options `evidence export` and `usage export` share, in help order: `--data-dir`, `--rest`,
+ * `--header`, `--tenant`, then the required `--since` / `--until`. The descriptions that differ per command are
+ * passed in; the commander option bag is `LineageSourceCliOptions`.
+ */
+function addLineageSourceOptions(
+  cmd: Command,
+  help: { rest: string; tenant: string; since: string; until: string },
+): Command {
+  return cmd
+    .option(
+      "--data-dir <dir>",
+      "Read from a local StoragePort data directory (mutually exclusive with --rest)",
+    )
+    .option("--rest <baseUrl>", help.rest)
+    .addOption(headerOption("Extra REST request header, e.g. tenant or auth (repeatable; --rest only)"))
+    .option("--tenant <id>", help.tenant)
+    .requiredOption("--since <iso8601>", help.since)
+    .requiredOption("--until <iso8601>", help.until);
+}
+
+/** Maps the commander option bag of a lineage-reading subcommand onto the runner's `LineageSourceArgs`. */
+function lineageSourceArgs(opts: LineageSourceCliOptions): LineageSourceArgs {
+  return {
+    ...(opts.dataDir != null ? { dataDir: opts.dataDir } : {}),
+    ...(opts.rest != null ? { rest: opts.rest } : {}),
+    headers: opts.header,
+    ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
+    since: opts.since,
+    until: opts.until,
+  };
 }
 
 program
@@ -72,12 +113,7 @@ program
     "Explain why a compose came out the way it did (tier, cache, cache-key breakdown, decision flow, related lineage events)",
   )
   .requiredOption("--rest <baseUrl>", "REST host base URL (e.g. http://localhost:8787/api/kohaku)")
-  .option(
-    "--header <name:value>",
-    "Extra request header, e.g. tenant or auth (repeatable)",
-    (value: string, prev: string[]) => [...prev, value],
-    [] as string[],
-  )
+  .addOption(headerOption("Extra request header, e.g. tenant or auth (repeatable)"))
   .option("--json", "Output the raw ExplainReport JSON instead of formatted text")
   .option("--spec <file>", "Path to a UISpec JSON file; adds capability scopes to the report")
   .action(
@@ -343,40 +379,29 @@ evidence
     console.log(`keyId: ${result.keyId}`);
   });
 
-evidence
-  .command("export")
-  .exitOverride(exitUsageErrorAsTwo)
-  .description(
-    "Assemble and sign a Compliance Evidence Pack from a local StoragePort data directory or a REST host",
-  )
-  .option("--data-dir <dir>", "Read from a local StoragePort data directory (mutually exclusive with --rest)")
-  .option(
-    "--rest <baseUrl>",
-    "Read over REST from a running host (mutually exclusive with --data-dir). The pack is ALWAYS " +
+addLineageSourceOptions(
+  evidence
+    .command("export")
+    .exitOverride(exitUsageErrorAsTwo)
+    .description(
+      "Assemble and sign a Compliance Evidence Pack from a local StoragePort data directory or a REST host",
+    ),
+  {
+    rest:
+      "Read over REST from a running host (mutually exclusive with --data-dir). The pack is ALWAYS " +
       "incomplete (complete: false, fixations.jsonl empty) by design: GET /fixations cannot supply full " +
       "fixation records. Use --data-dir (or a direct StoragePort) for a complete pack",
-  )
-  .option(
-    "--header <name:value>",
-    "Extra REST request header, e.g. tenant or auth (repeatable; --rest only)",
-    (value: string, prev: string[]) => [...prev, value],
-    [] as string[],
-  )
-  .option(
-    "--tenant <id>",
-    "Restrict the export to this tenant. In --rest mode this must match the x-kohaku-tenant --header " +
+    tenant:
+      "Restrict the export to this tenant. In --rest mode this must match the x-kohaku-tenant --header " +
       "(the header is what actually scopes the request); omit --tenant to have it derived from the header",
-  )
-  .requiredOption(
-    "--since <iso8601>",
-    "Inclusive lower bound of the exported lineage window: a date (YYYY-MM-DD, start of that UTC day) " +
+    since:
+      "Inclusive lower bound of the exported lineage window: a date (YYYY-MM-DD, start of that UTC day) " +
       "or a timestamp with a Z / ±hh:mm offset",
-  )
-  .requiredOption(
-    "--until <iso8601>",
-    "Inclusive upper bound of the exported lineage window: a date (YYYY-MM-DD, which INCLUDES that whole " +
+    until:
+      "Inclusive upper bound of the exported lineage window: a date (YYYY-MM-DD, which INCLUDES that whole " +
       "UTC day) or a timestamp with a Z / ±hh:mm offset",
-  )
+  },
+)
   .requiredOption("--private-key <pem>", "Path to a PEM-encoded Ed25519 private key (PKCS8)")
   .requiredOption("--out <dir>", "Output directory for the pack")
   .option(
@@ -384,28 +409,15 @@ evidence
     "Fall back to a bounded lineage read (and mark the pack incomplete) when exhaustive paging is unsupported",
   )
   .action(
-    async (opts: {
-      dataDir?: string;
-      rest?: string;
-      header: string[];
-      tenant?: string;
-      since: string;
-      until: string;
-      privateKey: string;
-      out: string;
-      allowIncomplete?: boolean;
-    }) => {
+    async (
+      opts: LineageSourceCliOptions & { privateKey: string; out: string; allowIncomplete?: boolean },
+    ) => {
       const { runEvidenceExport } = await import("./evidence/index.js");
       const { CliUsageError } = await import("./usage-error.js");
       let result: EvidenceExportResult;
       try {
         result = await runEvidenceExport({
-          ...(opts.dataDir != null ? { dataDir: opts.dataDir } : {}),
-          ...(opts.rest != null ? { rest: opts.rest } : {}),
-          headers: opts.header,
-          ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
-          since: opts.since,
-          until: opts.until,
+          ...lineageSourceArgs(opts),
           privateKeyPath: opts.privateKey,
           outDir: opts.out,
           allowIncomplete: opts.allowIncomplete === true,
@@ -463,39 +475,28 @@ const usage = program
   .command("usage")
   .description("Usage metering derived from the lineage log (design.md #74)");
 
-usage
-  .command("export")
-  .exitOverride(exitUsageErrorAsTwo)
-  .description(
-    "Export per-day, per-tenant usage (compositions, cache, tiers, L2 generations, fallbacks, tokens, " +
-      "fixations) from the whole lineage log of a local StoragePort data directory or a REST host",
-  )
-  .option("--data-dir <dir>", "Read from a local StoragePort data directory (mutually exclusive with --rest)")
-  .option(
-    "--rest <baseUrl>",
-    "Read over REST from a running host (mutually exclusive with --data-dir). The x-kohaku-tenant " +
+addLineageSourceOptions(
+  usage
+    .command("export")
+    .exitOverride(exitUsageErrorAsTwo)
+    .description(
+      "Export per-day, per-tenant usage (compositions, cache, tiers, L2 generations, fallbacks, tokens, " +
+        "fixations) from the whole lineage log of a local StoragePort data directory or a REST host",
+    ),
+  {
+    rest:
+      "Read over REST from a running host (mutually exclusive with --data-dir). The x-kohaku-tenant " +
       "--header decides the tenant (export each tenant with its own header); without the header every " +
       "tenant is read (legacy, unscoped hosts)",
-  )
-  .option(
-    "--header <name:value>",
-    "Extra REST request header, e.g. tenant or auth (repeatable; --rest only)",
-    (value: string, prev: string[]) => [...prev, value],
-    [] as string[],
-  )
-  .option(
-    "--tenant <id>",
-    "Restrict the export to this tenant (--data-dir; omitted = every tenant, one row per day and tenant). " +
+    tenant:
+      "Restrict the export to this tenant (--data-dir; omitted = every tenant, one row per day and tenant). " +
       "In --rest mode this must match the x-kohaku-tenant --header",
-  )
-  .requiredOption(
-    "--since <iso8601>",
-    "Inclusive lower bound: a date (YYYY-MM-DD, start of that UTC day) or a timestamp with a Z / ±hh:mm offset",
-  )
-  .requiredOption(
-    "--until <iso8601>",
-    "Inclusive upper bound: a date (YYYY-MM-DD, which INCLUDES that whole UTC day) or a timestamp with a Z / ±hh:mm offset",
-  )
+    since:
+      "Inclusive lower bound: a date (YYYY-MM-DD, start of that UTC day) or a timestamp with a Z / ±hh:mm offset",
+    until:
+      "Inclusive upper bound: a date (YYYY-MM-DD, which INCLUDES that whole UTC day) or a timestamp with a Z / ±hh:mm offset",
+  },
+)
   .option(
     "--timeout-ms <ms>",
     "Time limit of each --rest request, in milliseconds (a slower request fails the export)",
@@ -506,44 +507,27 @@ usage
     "--out <file>",
     "Write to this file instead of stdout (written to <file>.tmp first, then renamed into place)",
   )
-  .action(
-    async (opts: {
-      dataDir?: string;
-      rest?: string;
-      header: string[];
-      tenant?: string;
-      since: string;
-      until: string;
-      timeoutMs: string;
-      format: string;
-      out?: string;
-    }) => {
-      const { CliUsageError } = await import("./usage-error.js");
-      const { runUsageExport } = await import("./usage/index.js");
-      let result: Awaited<ReturnType<typeof runUsageExport>>;
-      try {
-        result = await runUsageExport({
-          ...(opts.dataDir != null ? { dataDir: opts.dataDir } : {}),
-          ...(opts.rest != null ? { rest: opts.rest } : {}),
-          headers: opts.header,
-          ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
-          since: opts.since,
-          until: opts.until,
-          timeoutMs: Number(opts.timeoutMs),
-          format: opts.format as "csv" | "json",
-          ...(opts.out != null ? { out: opts.out } : {}),
-        });
-      } catch (e) {
-        // A bad argument (window, format, source, data dir, tenant) is a usage error (exit 2); anything else is 1.
-        fail(e, e instanceof CliUsageError ? 2 : 1);
-      }
-      if (result.outPath != null) {
-        console.error(`Wrote ${result.rows.length} usage row(s) to ${result.outPath}`);
-      } else {
-        process.stdout.write(result.text);
-      }
-    },
-  );
+  .action(async (opts: LineageSourceCliOptions & { timeoutMs: string; format: string; out?: string }) => {
+    const { CliUsageError } = await import("./usage-error.js");
+    const { runUsageExport } = await import("./usage/index.js");
+    let result: Awaited<ReturnType<typeof runUsageExport>>;
+    try {
+      result = await runUsageExport({
+        ...lineageSourceArgs(opts),
+        timeoutMs: Number(opts.timeoutMs),
+        format: opts.format as "csv" | "json",
+        ...(opts.out != null ? { out: opts.out } : {}),
+      });
+    } catch (e) {
+      // A bad argument (window, format, source, data dir, tenant) is a usage error (exit 2); anything else is 1.
+      fail(e, e instanceof CliUsageError ? 2 : 1);
+    }
+    if (result.outPath != null) {
+      console.error(`Wrote ${result.rows.length} usage row(s) to ${result.outPath}`);
+    } else {
+      process.stdout.write(result.text);
+    }
+  });
 
 const migrate = program
   .command("migrate")
