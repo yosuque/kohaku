@@ -347,6 +347,25 @@ describe("sample-api E2E", () => {
     expect(body.error.issues).toEqual([{ path: "note", code: "maxLength", message: expect.any(String) }]);
   });
 
+  it("governed actions: publish rejects a payload with an extra key with 422 ACTION_PARAMS_INVALID, before the approval gate", async () => {
+    const { app } = await makeTestApp();
+    const authz = createHmacAuthzPort("test-secret");
+    const cap = await authz.issueCapability({ id: "demo-user", roles: ["user"] }, [
+      { kind: "write", ref: "publish" },
+    ]);
+    const res = await app.request("/api/kohaku/binding/action", {
+      method: "POST",
+      headers: { authorization: `Bearer ${cap}`, "content-type": "application/json" },
+      body: JSON.stringify({ action: "publish", payload: { action: "publish", extra: 1 } }),
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: { code: string; issues: { path: string; code: string }[] } };
+    expect(body.error.code).toBe("ACTION_PARAMS_INVALID");
+    expect(body.error.issues).toEqual([
+      { path: "extra", code: "additionalProperties", message: expect.any(String) },
+    ]);
+  });
+
   it("governed actions: publish (tier approve) requires a bound approval token issued to a different principal (design.md #62/#63)", async () => {
     // A real (in-memory) StoragePort, not the stub: this test reads the action audit trail back from lineage.
     const { app } = await makeTestApp([], createMemoryStoragePort());
@@ -355,7 +374,7 @@ describe("sample-api E2E", () => {
     const requesterCap = await authz.issueCapability({ id: "demo-user", roles: ["user"] }, [
       { kind: "write", ref: "publish" },
     ]);
-    const payload = {};
+    const payload = { action: "publish" };
 
     const noApproval = await app.request("/api/kohaku/binding/action", {
       method: "POST",
