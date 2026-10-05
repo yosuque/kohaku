@@ -82,11 +82,13 @@ class UsageRow:
     Field order is the wire key order (`to_jsonable` follows it), identical to the TS object. `tenant`
     is the empty string for a record that carries none. `l2Generated` counts the composes that actually
     generated an L2 Spec and succeeded: view.composed of tier L2 whose cache was miss or bypass, other than
-    a record carrying `payload.fallback` (a failed or budget-skipped generation keeps the L2 label on its
-    fallback Spec) and a single-flight follower (`decision.coalesced`). `fallbacks` counts view.composed
-    records that carry `payload.fallback`, whatever their tier (MCP hosts write no `view.fallback`, REST
-    hosts write one next to the composed record, so the composed record is the one place both agree).
-    `tokens` sums `payload.decision.usage` (a single-flight follower carries none).
+    a record whose `payload.fallback` has kind "generation" or no kind (a failed or budget-skipped generation
+    keeps the L2 label on its fallback Spec) and a single-flight follower (`decision.coalesced`). A
+    negotiation downgrade (`payload.fallback.kind` "negotiation") is applied to a Spec that was generated, so
+    it still counts. `fallbacks` counts view.composed records that carry `payload.fallback`, whatever
+    their tier. It reads the composed record rather than `view.fallback` because the REST and the MCP
+    profile both record a `view.composed` and a `view.fallback` for the same compose (SPEC.md, MCP
+    profile recording points), so counting both would double-count. `tokens` sums `payload.decision.usage` (a single-flight follower carries none).
     """
 
     day: str
@@ -97,8 +99,10 @@ class UsageRow:
     l2Generated: int
     fallbacks: int
     tokens: dict[str, int | float]
-    fixated: int
-    unfixated: int
+    fixationsCreated: int
+    """`intent.fixated` records: how many times a fixation was created (operations, not composes served from one)."""
+    fixationsRemoved: int
+    """`intent.unfixated` records: how many times a fixation was removed (operations)."""
 
 
 @dataclass
@@ -107,8 +111,10 @@ class L2IntentGap:
 
     Mutable on purpose: `summarize_lineage` accumulates into its rows while folding. `intentHash` is the
     first one seen for the canonical. `generated` counts the composes that actually generated an L2 Spec
-    and succeeded (a record carrying `payload.fallback` and a single-flight follower are not generations);
-    `fallbacks` counts the fallback records, read from the view.composed record itself (not `view.fallback`).
+    and succeeded (a record whose `payload.fallback` has kind "generation" or no kind, and a single-flight
+    follower, are not generations; a negotiation downgrade is applied to a generated Spec, so it is one);
+    `fallbacks` counts every record carrying `payload.fallback`, read from the view.composed record itself
+    (not `view.fallback`).
     """
 
     canonical: str
@@ -184,9 +190,33 @@ def _quantile(sorted_values: list[float], p: float) -> float | None:
     return sorted_values[idx]
 
 
+def _tenant_matches(wanted: str | None, record_tenant: str | None) -> bool:
+    """Whether a record's tenant passes a `tenant` option, read like a StoragePort's `LineageFilter.tenant`.
+
+    `None` and `""` both mean "no filter" on the option side and "no tenant" on the record side (TS
+    `normalizeTenant`), so `tenant=""` keeps every record, including the ones that carry no tenant.
+    """
+    if wanted is None or wanted == "":
+        return True
+    return (record_tenant if record_tenant != "" else None) == wanted
+
+
 def _has_fallback(payload: dict[str, Any]) -> bool:
     """A view.composed record that carries `payload.fallback`: a fallback Spec was served for it."""
     return payload.get("fallback") is not None
+
+
+def _is_generation_fallback(payload: dict[str, Any]) -> bool:
+    """A `payload.fallback` that marks a failed or budget-skipped generation (kind "generation" or no kind).
+
+    A negotiation downgrade (kind "negotiation") is applied to a Spec that was generated and consumed its
+    tokens, so it is not one and that compose still counts as a generation.
+    """
+    fallback = payload.get("fallback")
+    if fallback is None:
+        return False
+    kind = fallback.get("kind") if isinstance(fallback, dict) else None
+    return kind is None or kind == "generation"
 
 
 def _is_coalesced(payload: dict[str, Any]) -> bool:
@@ -203,7 +233,7 @@ def summarize_lineage(
     opts = opts if opts is not None else SummarizeLineageOptions()
     scoped: list[LineageEventRecord] = []
     for e in events:
-        if opts.tenant is not None and e.tenant != opts.tenant:
+        if not _tenant_matches(opts.tenant, e.tenant):
             continue
         if opts.since is not None and e.ts < opts.since:
             continue
@@ -278,7 +308,7 @@ def summarize_lineage(
                     gap.intentHash = intent_hash
                 if _has_fallback(e.payload):
                     gap.fallbacks += 1
-                elif not _is_coalesced(e.payload):
+                if not _is_generation_fallback(e.payload) and not _is_coalesced(e.payload):
                     gap.generated += 1
         elif e.type == "view.fallback":
             fallback_total += 1
@@ -424,14 +454,14 @@ def summarize_usage(
                 l2Generated=0,
                 fallbacks=0,
                 tokens={"input": 0, "output": 0},
-                fixated=0,
-                unfixated=0,
+                fixationsCreated=0,
+                fixationsRemoved=0,
             )
             rows[key] = row
         return row
 
     for e in events:
-        if opts.tenant is not None and e.tenant != opts.tenant:
+        if not _tenant_matches(opts.tenant, e.tenant):
             continue
         if opts.since is not None and e.ts < opts.since:
             continue
@@ -449,7 +479,7 @@ def summarize_usage(
             if (
                 tier == "L2"
                 and cache_key in ("miss", "bypass")
-                and not _has_fallback(e.payload)
+                and not _is_generation_fallback(e.payload)
                 and not _is_coalesced(e.payload)
             ):
                 row.l2Generated += 1
@@ -463,9 +493,9 @@ def summarize_usage(
                 if _is_number(usage.get("outputTokens")):
                     row.tokens["output"] += usage["outputTokens"]
         elif e.type == "intent.fixated":
-            row_for(e).fixated += 1
+            row_for(e).fixationsCreated += 1
         elif e.type == "intent.unfixated":
-            row_for(e).unfixated += 1
+            row_for(e).fixationsRemoved += 1
 
     return sorted(rows.values(), key=lambda r: (r.day, r.tenant.encode("utf-16-be")))
 
@@ -491,8 +521,8 @@ def merge_usage_rows(a: Sequence[UsageRow], b: Sequence[UsageRow]) -> list[Usage
                 l2Generated=row.l2Generated,
                 fallbacks=row.fallbacks,
                 tokens=dict(row.tokens),
-                fixated=row.fixated,
-                unfixated=row.unfixated,
+                fixationsCreated=row.fixationsCreated,
+                fixationsRemoved=row.fixationsRemoved,
             )
             continue
         into.composed += row.composed
@@ -504,6 +534,6 @@ def merge_usage_rows(a: Sequence[UsageRow], b: Sequence[UsageRow]) -> list[Usage
         into.fallbacks += row.fallbacks
         into.tokens["input"] += row.tokens["input"]
         into.tokens["output"] += row.tokens["output"]
-        into.fixated += row.fixated
-        into.unfixated += row.unfixated
+        into.fixationsCreated += row.fixationsCreated
+        into.fixationsRemoved += row.fixationsRemoved
     return sorted(merged.values(), key=lambda r: (r.day, r.tenant.encode("utf-16-be")))

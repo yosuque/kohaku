@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from kohaku.composer import IntentComposeInput, compose
-from kohaku.spec import IntentInput, JsonObject, UISpec
+from kohaku.spec import IntentInput, JsonObject, UISpec, collect_write_actions
 from kohaku.storage import MemoryStoragePort
 from sales_api.app import create_app
 from sales_api.authz_port import create_hmac_authz_port
@@ -82,6 +82,15 @@ class TestFixedSpecsAreL0:
         table = next(c for c in spec.components if c.type == "presentSpreadsheet")
         assert table.props["serverSide"] is True
         assert table.props["pageSize"] == 50
+
+    def test_records_declares_the_publish_write(self) -> None:
+        # Pair of the TS regression test in apps/sample-api (api.e2e.test.ts): the action name has to survive the
+        # compose post-processing (action.button's propsSchema has no `action`, so it travels in the event
+        # payload); otherwise the write scope is never issued and the Publish button cannot reach the approval gate.
+        spec = asyncio.run(
+            _compose("sales.records", {"fiscalYear": 2026, "quarter": 2, "region": "apac", "limit": 50})
+        )
+        assert sorted(collect_write_actions(spec)) == ["annotate", "publish"]
 
     def test_target_attainment_is_l0(self) -> None:
         spec = asyncio.run(_compose("sales.target_attainment", {"fiscalYear": 2026, "quarter": 2}))

@@ -73,6 +73,7 @@ program
   .action(
     async (requestId: string, opts: { rest: string; header: string[]; json?: boolean; spec?: string }) => {
       const { formatExplainReport, runExplain } = await import("./commands.js");
+      const { CliUsageError } = await import("./usage-error.js");
       let report: ExplainReport;
       try {
         report = await runExplain(requestId, {
@@ -81,7 +82,10 @@ program
           ...(opts.spec != null ? { specPath: opts.spec } : {}),
         });
       } catch (e) {
-        program.error(e instanceof Error ? e.message : String(e));
+        // A malformed --header is a usage error (exit 2); anything else is 1.
+        program.error(e instanceof Error ? e.message : String(e), {
+          exitCode: e instanceof CliUsageError ? 2 : 1,
+        });
         return;
       }
       console.log(opts.json === true ? JSON.stringify(report, null, 2) : formatExplainReport(report));
@@ -493,8 +497,16 @@ usage
     "--until <iso8601>",
     "Inclusive upper bound: a date (YYYY-MM-DD, which INCLUDES that whole UTC day) or a timestamp with a Z / ±hh:mm offset",
   )
+  .option(
+    "--timeout-ms <ms>",
+    "Time limit of each --rest request, in milliseconds (a slower request fails the export)",
+    "30000",
+  )
   .option("--format <csv|json>", "Output format", "csv")
-  .option("--out <file>", "Write to this file instead of stdout")
+  .option(
+    "--out <file>",
+    "Write to this file instead of stdout (written to <file>.tmp first, then renamed into place)",
+  )
   .action(
     async (opts: {
       dataDir?: string;
@@ -503,6 +515,7 @@ usage
       tenant?: string;
       since: string;
       until: string;
+      timeoutMs: string;
       format: string;
       out?: string;
     }) => {
@@ -517,6 +530,7 @@ usage
           ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
           since: opts.since,
           until: opts.until,
+          timeoutMs: Number(opts.timeoutMs),
           format: opts.format as "csv" | "json",
           ...(opts.out != null ? { out: opts.out } : {}),
         });

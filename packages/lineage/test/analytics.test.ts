@@ -21,7 +21,7 @@ function composed(
     tenant?: string;
     ts?: string;
     /** `payload.fallback`: a fallback Spec was served (it keeps the failed tier / cache label). */
-    fallback?: { from: string; reason: string };
+    fallback?: { from: string; reason: string; kind?: string };
     /** `payload.decision.coalesced`: a single-flight follower. */
     coalesced?: boolean;
   } = {},
@@ -462,7 +462,7 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
       { bucket: "day" },
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ composed: 1, fallbacks: 0, fixated: 1, unfixated: 2 });
+    expect(rows[0]).toMatchObject({ composed: 1, fallbacks: 0, fixationsCreated: 1, fixationsRemoved: 2 });
   });
 
   it("keeps a fallback Spec out of l2Generated and counts it in fallbacks (it still carries the L2 label)", () => {
@@ -480,6 +480,18 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
     expect(rows[0]?.tiers).toEqual({ L0: 0, L1: 1, L2: 3 });
   });
 
+  it("keeps only a generation fallback (or one with no kind) out of l2Generated; a negotiation downgrade of a generated Spec counts", () => {
+    const rows = summarizeUsage(
+      [
+        composed({ tier: "L2", cache: "miss", fallback: { from: "L2", reason: "x", kind: "negotiation" } }),
+        composed({ tier: "L2", cache: "miss", fallback: { from: "L2", reason: "x", kind: "generation" } }),
+        composed({ tier: "L2", cache: "bypass", fallback: { from: "L2", reason: "x" } }), // no kind
+      ],
+      { bucket: "day" },
+    );
+    expect(rows[0]).toMatchObject({ composed: 3, l2Generated: 1, fallbacks: 3 });
+  });
+
   it("keeps a single-flight follower out of l2Generated", () => {
     const rows = summarizeUsage(
       [
@@ -492,11 +504,14 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
     expect(rows[0]).toMatchObject({ composed: 3, l2Generated: 1, fallbacks: 1 });
   });
 
-  it("counts fallbacks from view.composed alone: an MCP host (no view.fallback) is counted, a REST host is not doubled", () => {
-    const mcp = [composed({ tier: "L2", fallback: { from: "L2", reason: "x" } })];
-    const rest = [...mcp, ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:aaa" })];
-    expect(summarizeUsage(mcp, { bucket: "day" })[0]?.fallbacks).toBe(1);
-    expect(summarizeUsage(rest, { bucket: "day" })[0]?.fallbacks).toBe(1);
+  it("counts fallbacks from view.composed alone: a compose with no view.fallback is counted, and a recorded view.fallback is not doubled", () => {
+    const composedOnly = [composed({ tier: "L2", fallback: { from: "L2", reason: "x" } })];
+    const withViewFallback = [
+      ...composedOnly,
+      ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:aaa" }),
+    ];
+    expect(summarizeUsage(composedOnly, { bucket: "day" })[0]?.fallbacks).toBe(1);
+    expect(summarizeUsage(withViewFallback, { bucket: "day" })[0]?.fallbacks).toBe(1);
     // A bare view.fallback with no composed record opens no row at all.
     expect(summarizeUsage([ev("view.fallback", { kind: "generation" })], { bucket: "day" })).toEqual([]);
   });
@@ -548,6 +563,26 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
       since: "2026-07-02T00:00:00.000Z",
     });
     expect(rows.map((r) => `${r.day}/${r.tenant}`)).toEqual(["2026-07-03/acme"]);
+  });
+
+  it("reads an empty tenant option like a StoragePort does (no filter), so tenant-less records are kept", () => {
+    // An MCP host never resolves a tenant: every one of its composes is a record with no tenant, which the
+    // `tenant: ""` row of the export stands for.
+    const events = [
+      metered({ ts: "2026-07-01T00:00:00.000Z" }),
+      metered({ tenant: "acme", ts: "2026-07-01T00:00:00.000Z" }),
+    ];
+    const keyed = (rows: { day: string; tenant: string; composed: number }[]) =>
+      rows.map((r) => `${r.day}/${r.tenant}/${r.composed}`);
+    expect(keyed(summarizeUsage(events, { bucket: "day", tenant: "" }))).toEqual([
+      "2026-07-01//1",
+      "2026-07-01/acme/1",
+    ]);
+    expect(keyed(summarizeUsage(events, { bucket: "day" }))).toEqual(
+      keyed(summarizeUsage(events, { bucket: "day", tenant: "" })),
+    );
+    expect(keyed(summarizeUsage(events, { bucket: "day", tenant: "acme" }))).toEqual(["2026-07-01/acme/1"]);
+    expect(summarizeLineage(events, { tenant: "" }).composed).toBe(2);
   });
 
   it("LineageSummary.usage follows the same window as the rest of the summary; empty input gives []", () => {
@@ -629,7 +664,7 @@ describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; de
         intentHash: "sha256:t1",
         fallback: { from: "L1", reason: "x" },
       }),
-      // view.fallback rows are not read here (REST writes one per fallback; MCP writes none).
+      // view.fallback rows are not read here (REST and MCP both write one per fallback next to the composed record).
       ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:c1" }),
     ]);
     expect(s.l2ByIntent).toEqual([
@@ -638,6 +673,25 @@ describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; de
     ]);
     // The overall view.fallback counters are untouched.
     expect(s.fallback.total).toBe(1);
+  });
+
+  it("l2ByIntent counts a negotiation downgrade as a generation but a generation fallback or kind-less one as a failure", () => {
+    const at = (fallback?: { from: string; reason: string; kind?: string }) =>
+      composed({
+        tier: "L2",
+        cache: "miss",
+        canonical: "sales.custom",
+        intentHash: "sha256:c1",
+        ...(fallback != null ? { fallback } : {}),
+      });
+    const s = summarizeLineage([
+      at({ from: "L2", reason: "x", kind: "negotiation" }),
+      at({ from: "L2", reason: "x", kind: "generation" }),
+      at({ from: "L2", reason: "x" }),
+    ]);
+    expect(s.l2ByIntent).toEqual([
+      { canonical: "sales.custom", intentHash: "sha256:c1", generated: 1, fallbacks: 3 },
+    ]);
   });
 
   it("l2ByIntent and schemaEditsByComponent honor topIntentsLimit", () => {
@@ -703,6 +757,45 @@ describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; de
       { key: "sales.gauge", count: 1, topFields: [{ field: "paramsJsonSchema", count: 1 }] },
       { key: "sales.newer", count: 1, topFields: [{ field: "version", count: 1 }] },
     ]);
+  });
+
+  it("schemaEditsByComponent takes the latest proposal by ts even when the array order is the reverse", () => {
+    const proposed = (componentType: string, ts: string) =>
+      ev(
+        "component.schemaProposed",
+        { artifactId: "a1", draft: { componentType, version: "1.0.0" } },
+        { ts },
+      );
+    const edited = ev(
+      "component.schemaEdited",
+      {
+        artifactId: "a1",
+        changed: [{ field: "version", suggested: "a", final: "b" }],
+        unchanged: [],
+        acknowledged: true,
+      },
+      { ts: "2026-07-01T00:00:03.000Z" },
+    );
+    // The newer proposal is listed first, the older one after it: array order says "old wins", ts order says "newer wins".
+    const newerFirst = [
+      proposed("sales.newer", "2026-07-01T00:00:02.000Z"),
+      proposed("sales.older", "2026-07-01T00:00:01.000Z"),
+      edited,
+    ];
+    expect(summarizeLineage(newerFirst).schemaEditsByComponent.map((g) => g.key)).toEqual(["sales.newer"]);
+    // And in the natural order (older listed first) the same proposal wins, so the result does not depend on it.
+    expect(summarizeLineage([...newerFirst].reverse()).schemaEditsByComponent.map((g) => g.key)).toEqual([
+      "sales.newer",
+    ]);
+    // Equal timestamps keep the array order (a stable sort): the one listed last wins.
+    const tied = "2026-07-01T00:00:01.000Z";
+    expect(
+      summarizeLineage([
+        proposed("sales.first", tied),
+        proposed("sales.second", tied),
+        edited,
+      ]).schemaEditsByComponent.map((g) => g.key),
+    ).toEqual(["sales.second"]);
   });
 
   it("schemaEditsByComponent ignores zero-edit records, falls back to the artifactId, and keeps tenants apart", () => {

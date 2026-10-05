@@ -1,4 +1,4 @@
-import type { LineageEventRecord } from "@kohaku-ui/spec-core";
+import { type LineageEventRecord, normalizeTenant } from "@kohaku-ui/spec-core";
 
 /**
  * Usage analytics. A pure function that folds the raw lineage event stream (the LineageEventRecord[]
@@ -119,11 +119,14 @@ export interface LineageSummary {
    * Catalog gap: the Intents that went to free-form L2 generation (view.composed of tier L2 with cache miss or
    * bypass), aggregated per `canonical` and ordered by `generated` descending, then `fallbacks` descending (top
    * N, N as for `topIntents`). `generated` counts the composes that actually generated an L2 Spec and succeeded:
-   * a record carrying `payload.fallback` (the generation failed, or the budget skipped L2, and a fallback Spec
-   * was served under the same tier / cache label) and a single-flight follower (`decision.coalesced`, which
-   * rode on another request's generation) are not generations. `fallbacks` counts those fallback records, read
-   * from the view.composed record itself (not from `view.fallback`, which MCP hosts never write and REST hosts
-   * write in addition, so counting both would double-count). `intentHash` is the first one seen for that
+   * a record whose `payload.fallback` has kind "generation" or no kind (the generation failed, or the budget
+   * skipped L2, and a fallback Spec was served under the same tier / cache label) and a single-flight follower
+   * (`decision.coalesced`, which rode on another request's generation) are not generations; a negotiation
+   * downgrade (`payload.fallback.kind` "negotiation") is applied to a generated Spec, so it is one.
+   * `fallbacks` counts every record carrying `payload.fallback`, negotiation included, read
+   * from the view.composed record itself (not from `view.fallback`: the REST and the MCP profile both record a
+   * `view.composed` and a `view.fallback` for the same compose, so counting both would double-count).
+   * `intentHash` is the first one seen for that
    * canonical (a representative; the same canonical can recur with different params). A canonical with no
    * L2-labelled compose has no row.
    */
@@ -157,11 +160,14 @@ export interface SchemaEditGap {
 /**
  * One metering row: everything countable about one tenant on one UTC day, derived purely from lineage
  * (design.md #74). `l2Generated` counts the composes that actually generated an L2 Spec and succeeded:
- * view.composed events of tier L2 whose cache was miss or bypass, other than a record carrying
- * `payload.fallback` (a failed or budget-skipped generation keeps the L2 label on its fallback Spec) and a
- * single-flight follower (`decision.coalesced`). `fallbacks` counts view.composed records that carry
- * `payload.fallback`, whatever their tier (MCP hosts write no `view.fallback`, REST hosts write one next to the
- * composed record, so the composed record is the one place both agree). `tokens` sums `view.composed`'s
+ * view.composed events of tier L2 whose cache was miss or bypass, other than a record whose
+ * `payload.fallback` has kind "generation" or no kind (a failed or budget-skipped generation keeps the L2 label
+ * on its fallback Spec) and a single-flight follower (`decision.coalesced`). A negotiation downgrade
+ * (`payload.fallback.kind` "negotiation") is applied to a Spec that was generated, so it still counts.
+ * `fallbacks` counts view.composed records that carry `payload.fallback`, whatever their tier. It reads the
+ * composed record rather than `view.fallback` because the REST and the MCP profile both record a `view.composed`
+ * and a `view.fallback` for the same compose (SPEC.md, MCP profile recording points), so counting both would
+ * double-count. `tokens` sums `view.composed`'s
  * `payload.decision.usage` (a single-flight follower carries no usage, so it never double-counts).
  */
 export interface UsageRow {
@@ -176,16 +182,24 @@ export interface UsageRow {
   /** view.composed records that carry `payload.fallback`. */
   fallbacks: number;
   tokens: { input: number; output: number };
-  /** intent.fixated / intent.unfixated records. */
-  fixated: number;
-  unfixated: number;
+  /**
+   * intent.fixated records: how many times a fixation was created (an operation count, not the composes served
+   * from a fixation: that is `cache.fixated`).
+   */
+  fixationsCreated: number;
+  /** intent.unfixated records: how many times a fixation was removed (an operation count). */
+  fixationsRemoved: number;
 }
 
 /** Options for summarizeUsage. */
 export interface SummarizeUsageOptions {
   /** The bucket width. Only "day" (UTC) exists. */
   bucket: "day";
-  /** Aggregate only records whose record.tenant matches. */
+  /**
+   * Aggregate only records whose record.tenant matches. Read like a StoragePort's `LineageFilter.tenant`
+   * (`normalizeTenant`): the empty string means no filter, so it keeps every record, including the ones that
+   * carry no tenant (an MCP host never resolves one, so its composes always land in the `tenant: ""` row).
+   */
   tenant?: string;
   /** Aggregate only events at or after this time (record.ts >= since). */
   since?: string;
@@ -195,7 +209,11 @@ export interface SummarizeUsageOptions {
 
 /** Narrowing and shaping options for summarizeLineage. */
 export interface SummarizeLineageOptions {
-  /** Narrow by tenant (aggregate only records whose record.tenant matches). Older events without a recorded tenant are excluded as non-matching. */
+  /**
+   * Narrow by tenant (aggregate only records whose record.tenant matches). Older events without a recorded
+   * tenant are excluded as non-matching. The empty string means no filter (`normalizeTenant`, as in a
+   * StoragePort's `LineageFilter`).
+   */
   tenant?: string;
   /** Aggregate only events at or after this time (record.ts >= since). Expects canonical ISO8601 (the route normalizes before passing). */
   since?: string;
@@ -209,9 +227,32 @@ const TOP_INTENTS_DEFAULT = 10;
 const TOP_INTENTS_MAX = 50;
 const SCHEMA_EDIT_TOP_FIELDS = 5;
 
+/**
+ * Whether a record's tenant passes a `tenant` option, read the way a StoragePort reads `LineageFilter.tenant`:
+ * `normalizeTenant` on both sides, so `undefined` and `""` mean "no filter" on the option side and "no tenant"
+ * on the record side.
+ */
+function tenantMatches(wanted: string | undefined, recordTenant: string | undefined): boolean {
+  const filter = normalizeTenant(wanted);
+  return filter == null || normalizeTenant(recordTenant) === filter;
+}
+
 /** A view.composed record that carries `payload.fallback`: a fallback Spec was served for it. */
 function hasFallback(payload: Readonly<Record<string, unknown>>): boolean {
   return payload["fallback"] != null;
+}
+
+/**
+ * A view.composed record whose `payload.fallback` marks a failed or budget-skipped *generation* (kind
+ * "generation", or no kind at all): the L2 label stayed but no Spec was generated. A negotiation downgrade
+ * (kind "negotiation", registry/negotiate.ts) is not one: it is applied to a Spec that was generated and
+ * consumed its tokens, so that compose still counts as a generation.
+ */
+function isGenerationFallback(payload: Readonly<Record<string, unknown>>): boolean {
+  const fallback = payload["fallback"];
+  if (fallback == null) return false;
+  const kind = typeof fallback === "object" ? (fallback as Record<string, unknown>)["kind"] : undefined;
+  return kind === undefined || kind === "generation";
 }
 
 /** A view.composed record of a single-flight follower (`payload.decision.coalesced`): it rode on another generation. */
@@ -230,7 +271,7 @@ export function summarizeLineage(
   opts: SummarizeLineageOptions = {},
 ): LineageSummary {
   const scoped = events.filter((e) => {
-    if (opts.tenant != null && e.tenant !== opts.tenant) return false;
+    if (!tenantMatches(opts.tenant, e.tenant)) return false;
     if (opts.since != null && e.ts < opts.since) return false;
     if (opts.until != null && e.ts > opts.until) return false;
     return true;
@@ -314,7 +355,7 @@ export function summarizeLineage(
             row.intentHash = intentHash;
           }
           if (hasFallback(e.payload)) row.fallbacks++;
-          else if (!isCoalesced(e.payload)) row.generated++;
+          if (!isGenerationFallback(e.payload) && !isCoalesced(e.payload)) row.generated++;
         }
         break;
       }
@@ -524,8 +565,8 @@ export function summarizeUsage(
         l2Generated: 0,
         fallbacks: 0,
         tokens: { input: 0, output: 0 },
-        fixated: 0,
-        unfixated: 0,
+        fixationsCreated: 0,
+        fixationsRemoved: 0,
       };
       rows.set(key, row);
     }
@@ -533,7 +574,7 @@ export function summarizeUsage(
   };
 
   for (const e of events) {
-    if (opts.tenant != null && e.tenant !== opts.tenant) continue;
+    if (!tenantMatches(opts.tenant, e.tenant)) continue;
     if (opts.since != null && e.ts < opts.since) continue;
     if (opts.until != null && e.ts > opts.until) continue;
     switch (e.type) {
@@ -549,7 +590,7 @@ export function summarizeUsage(
         if (
           tier === "L2" &&
           (cacheKey === "miss" || cacheKey === "bypass") &&
-          !hasFallback(e.payload) &&
+          !isGenerationFallback(e.payload) &&
           !isCoalesced(e.payload)
         ) {
           row.l2Generated++;
@@ -572,10 +613,10 @@ export function summarizeUsage(
         break;
       }
       case "intent.fixated":
-        rowFor(e).fixated++;
+        rowFor(e).fixationsCreated++;
         break;
       case "intent.unfixated":
-        rowFor(e).unfixated++;
+        rowFor(e).fixationsRemoved++;
         break;
       default:
         break;
@@ -616,8 +657,8 @@ export function mergeUsageRows(a: readonly UsageRow[], b: readonly UsageRow[]): 
     into.fallbacks += row.fallbacks;
     into.tokens.input += row.tokens.input;
     into.tokens.output += row.tokens.output;
-    into.fixated += row.fixated;
-    into.unfixated += row.unfixated;
+    into.fixationsCreated += row.fixationsCreated;
+    into.fixationsRemoved += row.fixationsRemoved;
   }
   return [...merged.values()].sort(compareUsageRows);
 }

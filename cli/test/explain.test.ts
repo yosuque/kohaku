@@ -2,6 +2,10 @@
  * kohaku explain <requestId>: an end-to-end test against an in-process host-rest app (Hono's app.request as
  * the client transport), memory storage, and FakeLlm -- compose, then explain the request that produced it.
  */
+
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ComposeContext } from "@kohaku-ui/composer";
 import { createKohakuRoutes, type KohakuHostDeps } from "@kohaku-ui/host-rest";
 import { createLineage, createViewRecorder } from "@kohaku-ui/lineage";
@@ -12,6 +16,7 @@ import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { formatExplainReport, runExplain } from "../src/commands.js";
+import { CliUsageError } from "../src/usage-error.js";
 
 const catalog = resolveCatalog(coreCatalog);
 
@@ -176,8 +181,22 @@ describe("kohaku explain (end-to-end via an in-process host-rest app)", () => {
   it("rejects a malformed --header value", async () => {
     const { app } = makeApp();
     const transport = (url: string, init?: RequestInit) => Promise.resolve(app.request(url, init));
+    const run = runExplain("whatever", { rest: "/api/kohaku", transport, headers: ["no-colon-here"] });
+    await expect(run).rejects.toThrow(/--header must be given as/);
+    // A bad argument, not a runtime failure: the CLI maps it to exit 2.
     await expect(
       runExplain("whatever", { rest: "/api/kohaku", transport, headers: ["no-colon-here"] }),
-    ).rejects.toThrow(/--header must be given as/);
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
+
+  it("the CLI exits 2 for a malformed --header, before any request is made", () => {
+    const bin = join(dirname(fileURLToPath(import.meta.url)), "../bin/kohaku.js");
+    const result = spawnSync(
+      process.execPath,
+      [bin, "explain", "whatever", "--rest", "http://127.0.0.1:1/api/kohaku", "--header", "no-colon-here"],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--header must be given as");
+  }, 30_000);
 });

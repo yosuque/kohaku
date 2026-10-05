@@ -584,6 +584,17 @@ describe("kohaku evidence export --rest (in-process host-rest app)", () => {
         outDir: tmp("kohaku-evidence-out-"),
       }),
     ).rejects.toThrow(/--header must be given as/);
+    await expect(
+      runEvidenceExport({
+        rest: "/api/kohaku",
+        transport,
+        headers: ["no-colon-here"],
+        since: "2026-01-01T00:00:00.000Z",
+        until: "2026-12-31T23:59:59.999Z",
+        privateKeyPath,
+        outDir: tmp("kohaku-evidence-out-"),
+      }),
+    ).rejects.toBeInstanceOf(EvidenceUsageError);
   });
 
   it("derives scope.tenant from an x-kohaku-tenant header when --tenant is omitted", async () => {

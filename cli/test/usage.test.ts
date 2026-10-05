@@ -5,10 +5,11 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Transport } from "@kohaku-ui/client";
 import type { ComposeContext } from "@kohaku-ui/composer";
 import { createKohakuRoutes, type KohakuHostDeps } from "@kohaku-ui/host-rest";
 import type { UsageRow } from "@kohaku-ui/lineage";
@@ -24,16 +25,16 @@ import type {
 import { createFileStoragePort, createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import { EvidenceUsageError } from "../src/evidence/window.js";
 import { CliUsageError } from "../src/lineage-window.js";
 import { formatUsageCsv, USAGE_CSV_HEADER } from "../src/usage/csv.js";
 import { runUsageExport } from "../src/usage/export.js";
+import { streamLineageChunks } from "../src/usage/lineage-file.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = join(here, "../bin/kohaku.js");
 
 const EXPECTED_HEADER =
-  "day,tenant,composed,cache_hit,cache_miss,cache_bypass,cache_fixated,l0,l1,l2,l2_generated,fallbacks,tokens_in,tokens_out,fixated,unfixated";
+  "day,tenant,composed,cache_hit,cache_miss,cache_bypass,cache_fixated,l0,l1,l2,l2_generated,fallbacks,tokens_in,tokens_out,fixations_created,fixations_removed";
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -49,8 +50,8 @@ function row(partial: Partial<UsageRow> = {}): UsageRow {
     l2Generated: 0,
     fallbacks: 0,
     tokens: { input: 0, output: 0 },
-    fixated: 0,
-    unfixated: 0,
+    fixationsCreated: 0,
+    fixationsRemoved: 0,
     ...partial,
   };
 }
@@ -144,8 +145,8 @@ describe("formatUsageCsv", () => {
         l2Generated: 8,
         fallbacks: 10,
         tokens: { input: 11, output: 12 },
-        fixated: 13,
-        unfixated: 14,
+        fixationsCreated: 13,
+        fixationsRemoved: 14,
       }),
     ]);
     expect(csv.split("\n")[1]).toBe("2026-07-01,acme,9,1,2,3,4,5,6,7,8,10,11,12,13,14");
@@ -204,7 +205,7 @@ describe("kohaku usage export --data-dir", () => {
       tokens: { input: 100, output: 10 },
       cache: { hit: 1, miss: 2, bypass: 0, fixated: 0 },
     });
-    expect(rows[2]).toMatchObject({ composed: 0, fixated: 1 });
+    expect(rows[2]).toMatchObject({ composed: 0, fixationsCreated: 1 });
     expect(rows[3]).toMatchObject({ composed: 1, l2Generated: 1, tokens: { input: 7, output: 3 } });
   });
 
@@ -245,6 +246,26 @@ describe("kohaku usage export --data-dir", () => {
       },
     };
     await expect(runUsageExport({ dataDir, storage: stuck, ...window })).rejects.toThrow(/same nextCursor/);
+  });
+
+  it("passes pageSize to a StoragePort's pageLineage on every page", async () => {
+    const dataDir = tmp("kohaku-usage-data-");
+    const requests: { pageSize?: number; cursor?: string }[] = [];
+    const base = createMemoryStoragePort();
+    const many: LineageEventRecord[] = [];
+    for (let i = 0; i < 25; i++) many.push(composed({ ts: "2026-07-03T00:00:00.000Z" }));
+    await seed(base, many);
+    const storage: StoragePort = {
+      ...base,
+      async pageLineage(req) {
+        requests.push({ pageSize: req.pageSize, cursor: req.cursor });
+        return base.pageLineage!(req);
+      },
+    };
+    const { rows } = await runUsageExport({ dataDir, storage, pageSize: 10, ...window });
+    expect(rows[0]?.composed).toBe(25);
+    expect(requests.length).toBeGreaterThanOrEqual(3);
+    expect(requests.every((r) => r.pageSize === 10)).toBe(true);
   });
 
   it("folds pages as they arrive: the rows equal one pass over every event", async () => {
@@ -305,20 +326,199 @@ describe("kohaku usage export --data-dir", () => {
   }, 30_000);
 });
 
+describe("kohaku usage export --out", () => {
+  const window = { since: "2026-07-01", until: "2026-07-31" };
+
+  it("writes through <out>.tmp and renames, leaving no temporary file behind", async () => {
+    const dataDir = tmp("kohaku-usage-data-");
+    await seed(createFileStoragePort(dataDir), EVENTS);
+    const outDir = tmp("kohaku-usage-out-");
+    const out = join(outDir, "usage.csv");
+    writeFileSync(out, "stale\n"); // replaced as a whole
+
+    const result = await runUsageExport({ dataDir, ...window, out });
+    expect(readFileSync(out, "utf8")).toBe(result.text);
+    expect(readdirSync(outDir)).toEqual(["usage.csv"]);
+  });
+
+  it("removes the temporary file and keeps the target when the final rename fails", async () => {
+    const dataDir = tmp("kohaku-usage-data-");
+    await seed(createFileStoragePort(dataDir), EVENTS);
+    const outDir = tmp("kohaku-usage-out-");
+    const out = join(outDir, "usage.csv");
+    mkdirSync(out); // a directory where the file should go: the rename cannot replace it
+
+    await expect(runUsageExport({ dataDir, ...window, out })).rejects.toThrow();
+    expect(readdirSync(outDir)).toEqual(["usage.csv"]);
+    expect(readdirSync(out)).toEqual([]);
+  });
+});
+
+describe("kohaku usage export --data-dir reads lineage.jsonl as a read-only stream", () => {
+  const window = { since: "2026-07-01", until: "2026-07-31" };
+
+  /** Writes raw lines (valid or not) as a data directory's lineage.jsonl. */
+  function writeLineage(dataDir: string, lines: string[]): void {
+    writeFileSync(join(dataDir, "lineage.jsonl"), `${lines.join("\n")}\n`);
+  }
+
+  it("reads a hand-written lineage.jsonl, skipping and counting a malformed or invalid line and warning on stderr", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    writeLineage(dataDir, [
+      JSON.stringify(composed({ ts: "2026-07-01T10:00:00.000Z", tenant: "acme", tier: "L2" })),
+      "{not json", // a line cut off by a crash
+      "",
+      JSON.stringify({ id: "x", type: "view.composed" }), // JSON, but not a LineageEventRecord
+      JSON.stringify(composed({ ts: "2026-07-01T11:00:00.000Z", tenant: "acme", tier: "L1" })),
+      JSON.stringify(other("component.generated", "2026-07-01T12:00:00.000Z", "acme")), // not a metering event
+      JSON.stringify(composed({ ts: "2026-08-15T00:00:00.000Z", tenant: "acme" })), // outside the window
+    ]);
+    const warnings: string[] = [];
+    const result = await runUsageExport({ dataDir, ...window, warn: (m) => warnings.push(m) });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({ day: "2026-07-01", tenant: "acme", composed: 2 });
+    expect(result.skippedLines).toBe(2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Skipped 2 malformed or invalid line(s)");
+    expect(warnings[0]).toContain("lineage.jsonl");
+  });
+
+  it("does not warn when every line is valid", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    writeLineage(dataDir, [JSON.stringify(composed({ ts: "2026-07-01T10:00:00.000Z" }))]);
+    const warnings: string[] = [];
+    const result = await runUsageExport({ dataDir, ...window, warn: (m) => warnings.push(m) });
+    expect(result.skippedLines).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
+  it("leaves the data directory exactly as it found it, even with a corrupt promotions.json / fixations.json", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    writeLineage(dataDir, [JSON.stringify(composed({ ts: "2026-07-01T10:00:00.000Z", tenant: "acme" }))]);
+    writeFileSync(join(dataDir, "promotions.json"), "{ this is not json");
+    writeFileSync(join(dataDir, "fixations.json"), "[1, 2, 3]"); // parses, but is not a {key -> record} object
+    const before = Object.fromEntries(
+      readdirSync(dataDir).map((f) => [f, readFileSync(join(dataDir, f), "utf8")]),
+    );
+
+    const result = await runUsageExport({ dataDir, ...window });
+    expect(result.rows).toHaveLength(1);
+
+    // createFileStoragePort would have renamed both snapshots to *.corrupt; the export never opens them.
+    const after = Object.fromEntries(
+      readdirSync(dataDir).map((f) => [f, readFileSync(join(dataDir, f), "utf8")]),
+    );
+    expect(after).toEqual(before);
+    expect(readdirSync(dataDir).some((f) => f.endsWith(".corrupt"))).toBe(false);
+  });
+
+  it("treats a data directory without a lineage.jsonl as an empty log and creates nothing in it", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    const result = await runUsageExport({ dataDir, ...window });
+    expect(result.rows).toEqual([]);
+    expect(readdirSync(dataDir)).toEqual([]);
+  });
+
+  it("hands the rows over in chunks of at most 500 matching events, never the whole log at once", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    const lines: string[] = [];
+    for (let i = 0; i < 1203; i++) lines.push(JSON.stringify(composed({ ts: "2026-07-03T00:00:00.000Z" })));
+    for (let i = 0; i < 40; i++)
+      lines.push(JSON.stringify(other("component.used", "2026-07-03T00:00:00.000Z")));
+    writeLineage(dataDir, lines);
+    const stats = { skippedLines: 0 };
+    const sizes: number[] = [];
+    for await (const chunk of streamLineageChunks(
+      join(dataDir, "lineage.jsonl"),
+      { type: ["view.composed"], since: "2026-07-01T00:00:00.000Z", until: "2026-07-31T23:59:59.999Z" },
+      stats,
+    )) {
+      sizes.push(chunk.length);
+    }
+    expect(sizes).toEqual([500, 500, 203]);
+    expect(stats.skippedLines).toBe(0);
+  });
+
+  it("applies the type, window and tenant filter the way a StoragePort does", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    writeLineage(dataDir, [
+      JSON.stringify(composed({ ts: "2026-07-01T00:00:00.000Z", tenant: "acme" })),
+      JSON.stringify(composed({ ts: "2026-07-01T00:00:00.000Z", tenant: "globex" })),
+      JSON.stringify(composed({ ts: "2026-07-01T00:00:00.000Z" })), // no tenant
+      JSON.stringify(composed({ ts: "2026-06-30T23:59:59.999Z", tenant: "acme" })), // before the window
+      JSON.stringify(composed({ ts: "2026-07-31T23:59:59.999Z", tenant: "acme" })), // the last instant: included
+    ]);
+    const path = join(dataDir, "lineage.jsonl");
+    const read = async (tenant?: string): Promise<number> => {
+      let n = 0;
+      for await (const chunk of streamLineageChunks(
+        path,
+        {
+          type: ["view.composed"],
+          since: "2026-07-01T00:00:00.000Z",
+          until: "2026-07-31T23:59:59.999Z",
+          ...(tenant != null ? { tenant } : {}),
+        },
+        { skippedLines: 0 },
+      )) {
+        n += chunk.length;
+      }
+      return n;
+    };
+    expect(await read()).toBe(4);
+    expect(await read("acme")).toBe(2);
+    expect(await read("globex")).toBe(1);
+  });
+});
+
 describe("kohaku usage export usage errors", () => {
-  it("rejects a bad window with EvidenceUsageError before touching storage", async () => {
+  it("rejects a bad window with CliUsageError before touching storage", async () => {
     const dataDir = tmp("kohaku-usage-data-");
     await expect(runUsageExport({ dataDir, since: "yesterday", until: "2026-07-31" })).rejects.toBeInstanceOf(
-      EvidenceUsageError,
+      CliUsageError,
     );
     await expect(
       runUsageExport({ dataDir, since: "2026-08-01", until: "2026-07-01" }),
-    ).rejects.toBeInstanceOf(EvidenceUsageError);
+    ).rejects.toBeInstanceOf(CliUsageError);
     // The storage was never opened, so nothing was created in the data directory.
     expect(existsSync(join(dataDir, "lineage.jsonl"))).toBe(false);
   });
 
-  it("rejects an unknown --format with EvidenceUsageError", async () => {
+  it("rejects an empty --tenant (it would read as no filter) and says where tenant-less usage lands", async () => {
+    const w = { since: "2026-07-01", until: "2026-07-31" };
+    const dataDir = tmp("kohaku-usage-data-");
+    await expect(runUsageExport({ dataDir, tenant: "", ...w })).rejects.toBeInstanceOf(CliUsageError);
+    await expect(runUsageExport({ dataDir, tenant: "", ...w })).rejects.toThrow(
+      /rows whose tenant column is empty/,
+    );
+    await expect(runUsageExport({ rest: "http://127.0.0.1:1", tenant: "", ...w })).rejects.toBeInstanceOf(
+      CliUsageError,
+    );
+  });
+
+  it("the CLI exits 2 for --tenant with an empty value", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        bin,
+        "usage",
+        "export",
+        "--data-dir",
+        tmp("kohaku-usage-data-"),
+        "--tenant",
+        "",
+        "--since",
+        "2026-07-01",
+        "--until",
+        "2026-07-31",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--tenant must not be empty");
+  }, 30_000);
+
+  it("rejects an unknown --format with CliUsageError", async () => {
     await expect(
       runUsageExport({
         dataDir: tmp("kohaku-usage-data-"),
@@ -326,7 +526,7 @@ describe("kohaku usage export usage errors", () => {
         until: "2026-07-31",
         format: "xml" as unknown as "csv",
       }),
-    ).rejects.toBeInstanceOf(EvidenceUsageError);
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 
   it("requires exactly one of --data-dir / --rest (usage errors)", async () => {
@@ -411,6 +611,28 @@ describe("kohaku usage export usage errors", () => {
     );
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("--since must be an ISO 8601 date");
+  }, 30_000);
+
+  it("the CLI exits 2 for a --timeout-ms that is not a positive integer", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        bin,
+        "usage",
+        "export",
+        "--rest",
+        "http://127.0.0.1:1/api/kohaku",
+        "--timeout-ms",
+        "soon",
+        "--since",
+        "2026-07-01",
+        "--until",
+        "2026-07-31",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--timeout-ms must be a positive integer");
   }, 30_000);
 
   it("the CLI help says the header decides the tenant and that no header reads every tenant", () => {
@@ -524,6 +746,96 @@ describe("kohaku usage export --rest (in-process host-rest app)", () => {
         tenant: "globex",
         ...window,
       }),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("passes pageSize on every GET /lineage page request", async () => {
+    const storage = createMemoryStoragePort();
+    const many: LineageEventRecord[] = [];
+    for (let i = 0; i < 25; i++) many.push(composed({ ts: "2026-07-03T00:00:00.000Z", tenant: "acme" }));
+    await seed(storage, many);
+    const app = makeRestApp(storage);
+    const urls: string[] = [];
+    const transport: Transport = (url, init) => {
+      urls.push(url);
+      return Promise.resolve(app.request(url, init));
+    };
+    const { rows } = await runUsageExport({
+      rest: "/api/kohaku",
+      transport,
+      headers: ["x-kohaku-tenant:acme"],
+      pageSize: 10,
+      ...window,
+    });
+    expect(rows[0]?.composed).toBe(25);
+    expect(urls.length).toBeGreaterThanOrEqual(3);
+    expect(urls.every((u) => new URL(u, "http://x").searchParams.get("pageSize") === "10")).toBe(true);
+  });
+
+  it("gives every page request its own time limit, not one for the whole walk", async () => {
+    const storage = createMemoryStoragePort();
+    const many: LineageEventRecord[] = [];
+    for (let i = 0; i < 1200; i++) many.push(composed({ ts: "2026-07-03T00:00:00.000Z", tenant: "acme" }));
+    await seed(storage, many);
+    const app = makeRestApp(storage);
+    const signals: AbortSignal[] = [];
+    const transport: Transport = (url, init) => {
+      if (init?.signal != null) signals.push(init.signal);
+      return Promise.resolve(app.request(url, init));
+    };
+    const { rows } = await runUsageExport({
+      rest: "/api/kohaku",
+      transport,
+      headers: ["x-kohaku-tenant:acme"],
+      timeoutMs: 5_000,
+      ...window,
+    });
+    expect(rows[0]?.composed).toBe(1200);
+    // More than one page was read, and each request carried a timeout signal of its own that had not fired.
+    expect(signals.length).toBeGreaterThan(1);
+    expect(new Set(signals).size).toBe(signals.length);
+    expect(signals.every((s) => !s.aborted)).toBe(true);
+  });
+
+  /** A transport that never answers, like a host that accepted the connection and stalled. It honours abort. */
+  const hang: Transport = (_url, init) =>
+    new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) return reject(signal.reason);
+      signal?.addEventListener("abort", () => reject(signal.reason));
+    });
+
+  it("fails with a clear error when a REST request exceeds --timeout-ms, instead of hanging", async () => {
+    await expect(
+      runUsageExport({ rest: "/api/kohaku", transport: hang, timeoutMs: 20, ...window }),
+    ).rejects.toThrow(/took longer than 20 ms and was abandoned; raise --timeout-ms/);
+    // Not a usage error: the arguments were fine, the host was slow (exit 1, not 2).
+    await expect(
+      runUsageExport({ rest: "/api/kohaku", transport: hang, timeoutMs: 20, ...window }),
+    ).rejects.not.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects a --timeout-ms that is not a positive integer as a usage error", async () => {
+    for (const timeoutMs of [0, -5, 1.5, Number.NaN]) {
+      await expect(
+        runUsageExport({ rest: "/api/kohaku", transport: hang, timeoutMs, ...window }),
+      ).rejects.toBeInstanceOf(CliUsageError);
+    }
+  });
+
+  it("leaves an existing --out file alone when the export fails", async () => {
+    const out = join(tmp("kohaku-usage-out-"), "usage.csv");
+    writeFileSync(out, "previous export\n");
+    await expect(
+      runUsageExport({ rest: "/api/kohaku", transport: hang, timeoutMs: 20, out, ...window }),
+    ).rejects.toThrow(/took longer than/);
+    expect(readFileSync(out, "utf8")).toBe("previous export\n");
+    expect(existsSync(`${out}.tmp`)).toBe(false);
+  });
+
+  it("rejects a malformed --header as a usage error (exit 2)", async () => {
+    await expect(
+      runUsageExport({ rest: "/api/kohaku", headers: ["no-colon-here"], ...window }),
     ).rejects.toBeInstanceOf(CliUsageError);
   });
 

@@ -24,7 +24,7 @@ in the user guide for what it produces.
 
 `usage export` derives per-day, per-tenant usage (compositions, cache outcomes, tiers, L2
 generations, fallbacks, LLM tokens, fixations) from the **whole** lineage log in a window, for
-metering or cost review. It pages the log exhaustively, unlike the bounded sample behind the admin
+metering or cost review. It reads the log exhaustively, unlike the bounded sample behind the admin
 Analytics tab (`GET /analytics/summary`).
 
 ```bash
@@ -33,22 +33,36 @@ npx @kohaku-ui/cli usage export --rest http://localhost:8787/api/kohaku \
   --header "x-kohaku-tenant:acme" --since 2026-09-01 --until 2026-09-30 --format json
 ```
 
+A project made by `kohaku init` keeps its data in memory, so use
+`--rest http://localhost:8787/api/kohaku` for it instead of `--data-dir`.
+
 `--data-dir` reads a local directory in the file layout of `createFileStoragePort` (every tenant,
-unless `--tenant` narrows it; a Redis or Postgres deployment is read through `--rest` instead);
+unless `--tenant` narrows it; a Redis or Postgres deployment is read through `--rest` instead). It
+streams only `lineage.jsonl`, line by line, and writes nothing into the directory, so it is safe
+against a data directory a host is using; a malformed line is skipped and reported on stderr;
 `--rest` reads over REST, where the `x-kohaku-tenant` header decides the tenant (export each tenant
-with its own header; a host that sends no header, a legacy unscoped one, returns every tenant). A
-date-only `--until` includes that whole UTC day. The CSV has the
-fixed header `day,tenant,composed,cache_hit,cache_miss,cache_bypass,cache_fixated,l0,l1,l2,l2_generated,fallbacks,tokens_in,tokens_out,fixated,unfixated`
+with its own header; when a request carries no header, a host without tenant scoping, a legacy one,
+returns every tenant). A date-only `--until` includes that whole UTC day, and the `day` column is the
+UTC day of each record. Run the export a few minutes after the window ends: an event that is still
+being written when a page is read can land behind the paging cursor and be missed (the caution
+`StoragePort.pageLineage` states), so the export is the source of record for a window that has gone
+quiet. The CSV has the
+fixed header `day,tenant,composed,cache_hit,cache_miss,cache_bypass,cache_fixated,l0,l1,l2,l2_generated,fallbacks,tokens_in,tokens_out,fixations_created,fixations_removed`
 (an unrecorded tenant is an empty field; a tenant starting with `=`, `+`, `-` or `@` gets a leading
 `'` so a spreadsheet does not read it as a formula); lines end in LF. `--format json` writes the
 same rows as an array. Without `--out` the result goes to stdout.
 
 Columns: `l2` counts the composes delivered as an L2 Spec (including ones served from the cache and
 fallback Specs that kept the L2 label), `l2_generated` only those that actually generated an L2
-Spec and succeeded (a fallback Spec and a single-flight follower are not counted),
-`cache_fixated` the composes served from a fixation, `fallbacks` the composes that carry a
-fallback, and `fixated` / `unfixated` how many times a fixation was created / removed (operations,
-not composes). A bad argument exits 2: a bad window or format, both or neither of `--data-dir` /
+Spec and succeeded (a fallback Spec of a failed or budget-skipped generation and a single-flight
+follower are not counted; a negotiation downgrade of a Spec that was generated is, because its tokens
+were spent), `cache_fixated` the composes served from a fixation, `fallbacks` the composes that carry a
+fallback, and `fixations_created` / `fixations_removed` how many times a fixation was created / removed (operations,
+not composes). A compose through an MCP host cannot be attributed to a tenant (the MCP profile resolves none), so
+its usage lands in the rows whose tenant column is empty; an unfiltered export includes them, and an
+empty `--tenant` is rejected because it would read as no filter. Each `--rest` request has a time limit (`--timeout-ms`, default 30000), so a stalled host fails the
+export instead of hanging it, and `--out` is written to `<out>.tmp` and then renamed into place, so a
+failed export never leaves a truncated file. A bad argument exits 2: a bad window, format or `--timeout-ms`, both or neither of `--data-dir` /
 `--rest`, a `--data-dir` that does not exist, or a `--tenant` that disagrees with (or has no)
 `x-kohaku-tenant` header.
 

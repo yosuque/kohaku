@@ -342,7 +342,7 @@ def test_usage_counts_fixations() -> None:
         ]
     )
     assert len(rows) == 1
-    assert (rows[0].composed, rows[0].fallbacks, rows[0].fixated, rows[0].unfixated) == (1, 0, 1, 2)
+    assert (rows[0].composed, rows[0].fallbacks, rows[0].fixationsCreated, rows[0].fixationsRemoved) == (1, 0, 1, 2)
 
 
 def test_usage_keeps_a_fallback_spec_out_of_l2_generated_and_counts_it_in_fallbacks() -> None:
@@ -359,6 +359,17 @@ def test_usage_keeps_a_fallback_spec_out_of_l2_generated_and_counts_it_in_fallba
     assert rows[0].tiers == {"L0": 0, "L1": 1, "L2": 3}
 
 
+def test_usage_counts_a_negotiation_downgrade_as_a_generation() -> None:
+    rows = summarize_usage(
+        [
+            composed(tier="L2", cache="miss", fallback={"from": "L2", "reason": "x", "kind": "negotiation"}),
+            composed(tier="L2", cache="miss", fallback={"from": "L2", "reason": "x", "kind": "generation"}),
+            composed(tier="L2", cache="bypass", fallback={"from": "L2", "reason": "x"}),  # no kind
+        ]
+    )
+    assert (rows[0].composed, rows[0].l2Generated, rows[0].fallbacks) == (3, 1, 3)
+
+
 def test_usage_keeps_a_single_flight_follower_out_of_l2_generated() -> None:
     rows = summarize_usage(
         [
@@ -371,10 +382,13 @@ def test_usage_keeps_a_single_flight_follower_out_of_l2_generated() -> None:
 
 
 def test_usage_counts_fallbacks_from_view_composed_alone() -> None:
-    mcp = [composed(tier="L2", fallback={"from": "L2", "reason": "x"})]  # MCP writes no view.fallback
-    rest = [*mcp, ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:aaa"})]
-    assert summarize_usage(mcp)[0].fallbacks == 1
-    assert summarize_usage(rest)[0].fallbacks == 1  # a REST host's extra view.fallback is not doubled
+    composed_only = [composed(tier="L2", fallback={"from": "L2", "reason": "x"})]
+    with_view_fallback = [
+        *composed_only,
+        ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:aaa"}),
+    ]
+    assert summarize_usage(composed_only)[0].fallbacks == 1
+    assert summarize_usage(with_view_fallback)[0].fallbacks == 1  # the recorded view.fallback is not doubled
     # A bare view.fallback with no composed record opens no row at all.
     assert summarize_usage([ev("view.fallback", {"kind": "generation"})]) == []
 
@@ -421,6 +435,26 @@ def test_usage_narrowing_options() -> None:
     assert [f"{r.day}/{r.tenant}" for r in rows] == ["2026-07-03/acme"]
 
 
+def test_usage_reads_an_empty_tenant_option_as_no_filter() -> None:
+    # An MCP host never resolves a tenant: every one of its composes is a record with no tenant, which the
+    # `tenant: ""` row of the export stands for.
+    events = [
+        metered(ts="2026-07-01T00:00:00.000Z"),
+        metered(tenant="acme", ts="2026-07-01T00:00:00.000Z"),
+    ]
+
+    def keyed(rows: list[UsageRow]) -> list[str]:
+        return [f"{r.day}/{r.tenant}/{r.composed}" for r in rows]
+
+    assert keyed(summarize_usage(events, SummarizeUsageOptions(tenant=""))) == [
+        "2026-07-01//1",
+        "2026-07-01/acme/1",
+    ]
+    assert keyed(summarize_usage(events)) == keyed(summarize_usage(events, SummarizeUsageOptions(tenant="")))
+    assert keyed(summarize_usage(events, SummarizeUsageOptions(tenant="acme"))) == ["2026-07-01/acme/1"]
+    assert summarize_lineage(events, SummarizeLineageOptions(tenant="")).composed == 2
+
+
 def test_lineage_summary_usage_follows_the_summary_window_and_empty_is_empty_list() -> None:
     assert summarize_lineage([]).usage == []
     events = [
@@ -448,8 +482,8 @@ def test_usage_wire_shape_key_order_matches_ts() -> None:
         "l2Generated",
         "fallbacks",
         "tokens",
-        "fixated",
-        "unfixated",
+        "fixationsCreated",
+        "fixationsRemoved",
     ]
     assert list(row["cache"].keys()) == ["hit", "miss", "bypass", "fixated"]
     assert list(row["tiers"].keys()) == ["L0", "L1", "L2"]
@@ -504,7 +538,7 @@ def test_l2_by_intent_separates_generations_from_fallbacks_and_followers() -> No
                 intent_hash="sha256:t1",
                 fallback={"from": "L1", "reason": "x"},
             ),
-            # view.fallback rows are not read here (REST writes one per fallback; MCP writes none).
+            # view.fallback rows are not read here (REST and MCP both write one per fallback next to the composed record).
             ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:c1"}),
         ]
     )
@@ -513,6 +547,24 @@ def test_l2_by_intent_separates_generations_from_fallbacks_and_followers() -> No
         ("sales.broken", "sha256:b1", 0, 1),
     ]
     assert s.fallback.total == 1  # the overall view.fallback counters are untouched
+
+
+def test_l2_by_intent_counts_a_negotiation_downgrade_as_a_generation() -> None:
+    def at(fallback: dict[str, Any]) -> LineageEventRecord:
+        return composed(
+            tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1", fallback=fallback
+        )
+
+    s = summarize_lineage(
+        [
+            at({"from": "L2", "reason": "x", "kind": "negotiation"}),
+            at({"from": "L2", "reason": "x", "kind": "generation"}),
+            at({"from": "L2", "reason": "x"}),
+        ]
+    )
+    assert [(r.canonical, r.intentHash, r.generated, r.fallbacks) for r in s.l2ByIntent] == [
+        ("sales.custom", "sha256:c1", 1, 3),
+    ]
 
 
 def test_catalog_gaps_honor_top_intents_limit() -> None:
@@ -583,6 +635,45 @@ def test_schema_edits_group_by_the_final_component_type() -> None:
         ("sales.gauge", 1, [{"field": "paramsJsonSchema", "count": 1}]),
         ("sales.newer", 1, [{"field": "version", "count": 1}]),
     ]
+
+
+def test_schema_edits_take_the_latest_proposal_by_ts_even_when_the_array_order_is_the_reverse() -> None:
+    def proposed(component_type: str, ts: str) -> LineageEventRecord:
+        return ev(
+            "component.schemaProposed",
+            {"artifactId": "a1", "draft": {"componentType": component_type, "version": "1.0.0"}},
+            ts=ts,
+        )
+
+    edited = ev(
+        "component.schemaEdited",
+        {
+            "artifactId": "a1",
+            "changed": [{"field": "version", "suggested": "a", "final": "b"}],
+            "unchanged": [],
+        },
+        ts="2026-07-01T00:00:03.000Z",
+    )
+    # The newer proposal is listed first, the older one after it: array order says "old wins", ts order says "newer wins".
+    newer_first = [
+        proposed("sales.newer", "2026-07-01T00:00:02.000Z"),
+        proposed("sales.older", "2026-07-01T00:00:01.000Z"),
+        edited,
+    ]
+    assert [g.key for g in summarize_lineage(newer_first).schemaEditsByComponent] == ["sales.newer"]
+    # And in the natural order (older listed first) the same proposal wins, so the result does not depend on it.
+    assert [g.key for g in summarize_lineage(list(reversed(newer_first))).schemaEditsByComponent] == [
+        "sales.newer"
+    ]
+    # Equal timestamps keep the array order (a stable sort): the one listed last wins.
+    tied = "2026-07-01T00:00:01.000Z"
+    keys = [
+        g.key
+        for g in summarize_lineage(
+            [proposed("sales.first", tied), proposed("sales.second", tied), edited]
+        ).schemaEditsByComponent
+    ]
+    assert keys == ["sales.second"]
 
 
 def test_schema_edits_ignore_zero_edit_fall_back_to_artifact_id_and_keep_tenants_apart() -> None:
