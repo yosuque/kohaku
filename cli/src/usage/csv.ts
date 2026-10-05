@@ -16,8 +16,8 @@ export const USAGE_CSV_HEADER = [
   "fallbacks",
   "tokens_in",
   "tokens_out",
-  "fixated",
-  "unfixated",
+  "fixations_created",
+  "fixations_removed",
 ] as const;
 
 /** RFC 4180 quoting: a field containing a comma, a double quote, CR or LF is wrapped in quotes, with embedded quotes doubled. */
@@ -58,8 +58,8 @@ export function formatUsageCsv(rows: readonly UsageRow[]): string {
         r.fallbacks,
         r.tokens.input,
         r.tokens.output,
-        r.fixated,
-        r.unfixated,
+        r.fixationsCreated,
+        r.fixationsRemoved,
       ]
         .map(csvField)
         .join(","),

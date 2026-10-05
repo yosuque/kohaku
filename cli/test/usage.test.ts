@@ -33,7 +33,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const bin = join(here, "../bin/kohaku.js");
 
 const EXPECTED_HEADER =
-  "day,tenant,composed,cache_hit,cache_miss,cache_bypass,cache_fixated,l0,l1,l2,l2_generated,fallbacks,tokens_in,tokens_out,fixated,unfixated";
+  "day,tenant,composed,cache_hit,cache_miss,cache_bypass,cache_fixated,l0,l1,l2,l2_generated,fallbacks,tokens_in,tokens_out,fixations_created,fixations_removed";
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -49,8 +49,8 @@ function row(partial: Partial<UsageRow> = {}): UsageRow {
     l2Generated: 0,
     fallbacks: 0,
     tokens: { input: 0, output: 0 },
-    fixated: 0,
-    unfixated: 0,
+    fixationsCreated: 0,
+    fixationsRemoved: 0,
     ...partial,
   };
 }
@@ -144,8 +144,8 @@ describe("formatUsageCsv", () => {
         l2Generated: 8,
         fallbacks: 10,
         tokens: { input: 11, output: 12 },
-        fixated: 13,
-        unfixated: 14,
+        fixationsCreated: 13,
+        fixationsRemoved: 14,
       }),
     ]);
     expect(csv.split("\n")[1]).toBe("2026-07-01,acme,9,1,2,3,4,5,6,7,8,10,11,12,13,14");
@@ -204,7 +204,7 @@ describe("kohaku usage export --data-dir", () => {
       tokens: { input: 100, output: 10 },
       cache: { hit: 1, miss: 2, bypass: 0, fixated: 0 },
     });
-    expect(rows[2]).toMatchObject({ composed: 0, fixated: 1 });
+    expect(rows[2]).toMatchObject({ composed: 0, fixationsCreated: 1 });
     expect(rows[3]).toMatchObject({ composed: 1, l2Generated: 1, tokens: { input: 7, output: 3 } });
   });
 

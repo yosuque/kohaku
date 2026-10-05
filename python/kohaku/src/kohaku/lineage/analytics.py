@@ -99,8 +99,10 @@ class UsageRow:
     l2Generated: int
     fallbacks: int
     tokens: dict[str, int | float]
-    fixated: int
-    unfixated: int
+    fixationsCreated: int
+    """`intent.fixated` records: how many times a fixation was created (operations, not composes served from one)."""
+    fixationsRemoved: int
+    """`intent.unfixated` records: how many times a fixation was removed (operations)."""
 
 
 @dataclass
@@ -441,8 +443,8 @@ def summarize_usage(
                 l2Generated=0,
                 fallbacks=0,
                 tokens={"input": 0, "output": 0},
-                fixated=0,
-                unfixated=0,
+                fixationsCreated=0,
+                fixationsRemoved=0,
             )
             rows[key] = row
         return row
@@ -480,9 +482,9 @@ def summarize_usage(
                 if _is_number(usage.get("outputTokens")):
                     row.tokens["output"] += usage["outputTokens"]
         elif e.type == "intent.fixated":
-            row_for(e).fixated += 1
+            row_for(e).fixationsCreated += 1
         elif e.type == "intent.unfixated":
-            row_for(e).unfixated += 1
+            row_for(e).fixationsRemoved += 1
 
     return sorted(rows.values(), key=lambda r: (r.day, r.tenant.encode("utf-16-be")))
 
@@ -508,8 +510,8 @@ def merge_usage_rows(a: Sequence[UsageRow], b: Sequence[UsageRow]) -> list[Usage
                 l2Generated=row.l2Generated,
                 fallbacks=row.fallbacks,
                 tokens=dict(row.tokens),
-                fixated=row.fixated,
-                unfixated=row.unfixated,
+                fixationsCreated=row.fixationsCreated,
+                fixationsRemoved=row.fixationsRemoved,
             )
             continue
         into.composed += row.composed
@@ -521,6 +523,6 @@ def merge_usage_rows(a: Sequence[UsageRow], b: Sequence[UsageRow]) -> list[Usage
         into.fallbacks += row.fallbacks
         into.tokens["input"] += row.tokens["input"]
         into.tokens["output"] += row.tokens["output"]
-        into.fixated += row.fixated
-        into.unfixated += row.unfixated
+        into.fixationsCreated += row.fixationsCreated
+        into.fixationsRemoved += row.fixationsRemoved
     return sorted(merged.values(), key=lambda r: (r.day, r.tenant.encode("utf-16-be")))

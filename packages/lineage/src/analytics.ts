@@ -182,9 +182,13 @@ export interface UsageRow {
   /** view.composed records that carry `payload.fallback`. */
   fallbacks: number;
   tokens: { input: number; output: number };
-  /** intent.fixated / intent.unfixated records. */
-  fixated: number;
-  unfixated: number;
+  /**
+   * intent.fixated records: how many times a fixation was created (an operation count, not the composes served
+   * from a fixation: that is `cache.fixated`).
+   */
+  fixationsCreated: number;
+  /** intent.unfixated records: how many times a fixation was removed (an operation count). */
+  fixationsRemoved: number;
 }
 
 /** Options for summarizeUsage. */
@@ -543,8 +547,8 @@ export function summarizeUsage(
         l2Generated: 0,
         fallbacks: 0,
         tokens: { input: 0, output: 0 },
-        fixated: 0,
-        unfixated: 0,
+        fixationsCreated: 0,
+        fixationsRemoved: 0,
       };
       rows.set(key, row);
     }
@@ -591,10 +595,10 @@ export function summarizeUsage(
         break;
       }
       case "intent.fixated":
-        rowFor(e).fixated++;
+        rowFor(e).fixationsCreated++;
         break;
       case "intent.unfixated":
-        rowFor(e).unfixated++;
+        rowFor(e).fixationsRemoved++;
         break;
       default:
         break;
@@ -635,8 +639,8 @@ export function mergeUsageRows(a: readonly UsageRow[], b: readonly UsageRow[]): 
     into.fallbacks += row.fallbacks;
     into.tokens.input += row.tokens.input;
     into.tokens.output += row.tokens.output;
-    into.fixated += row.fixated;
-    into.unfixated += row.unfixated;
+    into.fixationsCreated += row.fixationsCreated;
+    into.fixationsRemoved += row.fixationsRemoved;
   }
   return [...merged.values()].sort(compareUsageRows);
 }

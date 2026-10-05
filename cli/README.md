@@ -38,7 +38,7 @@ unless `--tenant` narrows it; a Redis or Postgres deployment is read through `--
 `--rest` reads over REST, where the `x-kohaku-tenant` header decides the tenant (export each tenant
 with its own header; a host that sends no header, a legacy unscoped one, returns every tenant). A
 date-only `--until` includes that whole UTC day. The CSV has the
-fixed header `day,tenant,composed,cache_hit,cache_miss,cache_bypass,cache_fixated,l0,l1,l2,l2_generated,fallbacks,tokens_in,tokens_out,fixated,unfixated`
+fixed header `day,tenant,composed,cache_hit,cache_miss,cache_bypass,cache_fixated,l0,l1,l2,l2_generated,fallbacks,tokens_in,tokens_out,fixations_created,fixations_removed`
 (an unrecorded tenant is an empty field; a tenant starting with `=`, `+`, `-` or `@` gets a leading
 `'` so a spreadsheet does not read it as a formula); lines end in LF. `--format json` writes the
 same rows as an array. Without `--out` the result goes to stdout.
@@ -48,7 +48,7 @@ fallback Specs that kept the L2 label), `l2_generated` only those that actually 
 Spec and succeeded (a fallback Spec of a failed or budget-skipped generation and a single-flight
 follower are not counted; a negotiation downgrade of a Spec that was generated is, because its tokens
 were spent), `cache_fixated` the composes served from a fixation, `fallbacks` the composes that carry a
-fallback, and `fixated` / `unfixated` how many times a fixation was created / removed (operations,
+fallback, and `fixations_created` / `fixations_removed` how many times a fixation was created / removed (operations,
 not composes). A bad argument exits 2: a bad window or format, both or neither of `--data-dir` /
 `--rest`, a `--data-dir` that does not exist, or a `--tenant` that disagrees with (or has no)
 `x-kohaku-tenant` header.

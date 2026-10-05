@@ -67,7 +67,7 @@ function usageValue(row: UsageRowView, column: UsageColumn): number {
     case "tokensOut":
       return row.tokens.output;
     case "fixated":
-      return row.fixated;
+      return row.fixationsCreated;
   }
 }
 

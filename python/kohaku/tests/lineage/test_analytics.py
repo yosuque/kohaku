@@ -342,7 +342,7 @@ def test_usage_counts_fixations() -> None:
         ]
     )
     assert len(rows) == 1
-    assert (rows[0].composed, rows[0].fallbacks, rows[0].fixated, rows[0].unfixated) == (1, 0, 1, 2)
+    assert (rows[0].composed, rows[0].fallbacks, rows[0].fixationsCreated, rows[0].fixationsRemoved) == (1, 0, 1, 2)
 
 
 def test_usage_keeps_a_fallback_spec_out_of_l2_generated_and_counts_it_in_fallbacks() -> None:
@@ -462,8 +462,8 @@ def test_usage_wire_shape_key_order_matches_ts() -> None:
         "l2Generated",
         "fallbacks",
         "tokens",
-        "fixated",
-        "unfixated",
+        "fixationsCreated",
+        "fixationsRemoved",
     ]
     assert list(row["cache"].keys()) == ["hit", "miss", "bypass", "fixated"]
     assert list(row["tiers"].keys()) == ["L0", "L1", "L2"]

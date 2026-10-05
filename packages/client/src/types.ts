@@ -234,8 +234,13 @@ export interface UsageRowView {
   /** view.composed records that carry `payload.fallback`. */
   fallbacks: number;
   tokens: { input: number; output: number };
-  fixated: number;
-  unfixated: number;
+  /**
+   * `intent.fixated` records: how many times a fixation was created (an operation count, not the composes
+   * served from a fixation: that is `cache.fixated`).
+   */
+  fixationsCreated: number;
+  /** `intent.unfixated` records: how many times a fixation was removed (an operation count). */
+  fixationsRemoved: number;
 }
 
 /**

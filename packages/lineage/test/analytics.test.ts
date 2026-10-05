@@ -462,7 +462,7 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
       { bucket: "day" },
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ composed: 1, fallbacks: 0, fixated: 1, unfixated: 2 });
+    expect(rows[0]).toMatchObject({ composed: 1, fallbacks: 0, fixationsCreated: 1, fixationsRemoved: 2 });
   });
 
   it("keeps a fallback Spec out of l2Generated and counts it in fallbacks (it still carries the L2 label)", () => {
