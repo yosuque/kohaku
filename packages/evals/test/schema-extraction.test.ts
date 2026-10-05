@@ -350,17 +350,18 @@ describe("createSchemaExtractor: reviewer-corrected examples (design.md #73)", (
         return OUTPUT;
       },
     });
-    // timeoutMs 400 -> default examplesTimeoutMs 100: the never-settling read is cut at ~100ms, not 400ms.
+    // timeoutMs 2000 -> default examplesTimeoutMs 500: the never-settling read is cut at ~500ms, not 2000ms.
+    // The margins are wide on purpose so a loaded CI runner cannot flip this wall-clock assertion.
     const extractor = createSchemaExtractor({
       llm,
-      timeoutMs: 400,
+      timeoutMs: 2000,
       examples: () => new Promise<never>(() => {}),
     });
     const started = Date.now();
     const result = await extractor.extract(input);
     const elapsed = Date.now() - started;
     expect(result.draft.componentType).toBe("sales.calendarHeatmap");
-    expect(elapsed).toBeLessThan(350);
+    expect(elapsed).toBeLessThan(1500);
     expect(llmSignalAbortedAtCall).toBe(false);
   });
 
