@@ -492,29 +492,14 @@ migrate
       outPath: opts.out,
       ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
     };
-    const { migratePlan } = await import("./migrate.js");
+    const { formatMigratePlanResult, migratePlan } = await import("./migrate.js");
     let result: Awaited<ReturnType<typeof migratePlan>>;
     try {
       result = await migratePlan(options);
     } catch (e) {
       fail(e);
     }
-    const { plan } = result;
-    console.log(`Wrote ${result.outPath} (planHash: ${plan.planHash})`);
-    console.log(
-      `  rewrites: ${plan.rewrites.map((r) => `${r.from} -> ${r.to.type}`).join(", ") || "(none)"}`,
-    );
-    console.log(`  steps: ${plan.steps.length} fixation(s) ready to apply`);
-    if (plan.blocked.length > 0) {
-      console.log(
-        `  blocked: ${plan.blocked.length} fixation(s) failed revalidation and need manual attention:`,
-      );
-      for (const b of plan.blocked) {
-        console.log(
-          `    - ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""}: ${b.issues.join("; ")}`,
-        );
-      }
-    }
+    console.log(formatMigratePlanResult(result));
   });
 
 migrate
@@ -544,29 +529,14 @@ migrate
       approver: opts.approver,
       catalogModule: opts.catalog,
     };
-    const { migrateApply } = await import("./migrate.js");
+    const { formatMigrateApplyResult, migrateApply } = await import("./migrate.js");
     let result: Awaited<ReturnType<typeof migrateApply>>;
     try {
       result = await migrateApply(options);
     } catch (e) {
       fail(e);
     }
-    console.log(
-      `Applied ${result.applied.length}, skipped ${result.skipped.length}, blocked ${result.blocked.length}`,
-    );
-    for (const a of result.applied)
-      console.log(`  applied: ${a.intentHash}${a.tenant != null ? ` (tenant: ${a.tenant})` : ""}`);
-    for (const s of result.skipped) {
-      console.log(
-        `  skipped: ${s.intentHash}${s.tenant != null ? ` (tenant: ${s.tenant})` : ""} (fixation changed since the plan was computed)`,
-      );
-    }
-    for (const b of result.blocked) {
-      console.log(
-        `  blocked: ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""} (catalog drift — ` +
-          `live fingerprint ${b.observedCatalogFingerprint}${b.issues.length > 0 ? `; ${b.issues.join("; ")}` : ""})`,
-      );
-    }
+    console.log(formatMigrateApplyResult(result));
     if (result.skipped.length > 0 || result.blocked.length > 0) process.exitCode = 1;
   });
 
