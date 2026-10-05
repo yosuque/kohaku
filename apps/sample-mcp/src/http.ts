@@ -94,7 +94,7 @@ export function allowedHostnameOf(entry: string): string {
 }
 
 /**
- * Build this app's Streamable HTTP MCP server: the shared scaffold (`./mcp-http-server.ts` — Host / Origin
+ * Build this app's Streamable HTTP MCP server: the shared scaffold (`@kohaku-ui/host/mcp-http` — Host / Origin
  * guards, CORS, body cap, stateless `createMcpHandler`) plus this entry point's own behavior, passed as
  * options so the wire answers stay exactly what they were: the static snapshot route, a 404 for any other
  * path, JSON-RPC 500 / -32603 for a malformed body or an unexpected failure, the extra `Last-Event-ID` /
