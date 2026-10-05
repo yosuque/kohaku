@@ -14,7 +14,7 @@ import type {
 import { IntentValidationError } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import { createKohakuRoutes, type FixationsApi, type KohakuHostDeps } from "../src/index.js";
-import { INTENT_INVALID_MESSAGE } from "../src/routes/compose.js";
+import { INTENT_INVALID_MESSAGE } from "../src/routes/compose-pipeline.js";
 
 // When the LLM provider cannot serve an Intent-resolution call (no API key, provider failure, abort), the
 // REST host must answer 503 INTERNAL with a fixed message instead of 422 INTENT_INVALID with the provider

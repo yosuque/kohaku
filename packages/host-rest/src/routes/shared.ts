@@ -257,7 +257,7 @@ export async function reportHostError(
  * the client-disconnect/timeout abort signal (`c.req.raw.signal`), and the optional W3C trace context
  * (traceContextOf). Introduced to collapse the `(deps, endpoint, requestId)` triples and the separate
  * `abort`/`requestId`/`traceContext` parameter lists previously threaded individually through
- * composeForRest / resolveFixatedForRest / issueSpecCapability / finishStream (routes/compose.ts) into one
+ * composeForRest / resolveFixatedForRest / issueSpecCapability / finishStream (routes/compose.ts, routes/compose-pipeline.ts) into one
  * object built once per request.
  */
 export interface RestCallContext {

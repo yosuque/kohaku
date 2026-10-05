@@ -5,7 +5,7 @@ import { errorBody } from "../errors.js";
 import type { GovernanceOperation } from "../governance-policy.js";
 import { withFixationLock } from "../keyed-mutex.js";
 import type { FixationsApi } from "../types.js";
-import { COMPOSE_FAILED_MESSAGE, composeForRest, intentResolutionFailure } from "./compose.js";
+import { COMPOSE_FAILED_MESSAGE, composeForRest, intentResolutionFailure } from "./compose-pipeline.js";
 import { ComposeBodySchema } from "./schemas.js";
 import {
   parseBody,
@@ -22,7 +22,7 @@ import {
 
 /**
  * The client-visible message for an unexpected fixation-removal failure (INTERNAL 500). See
- * COMPOSE_FAILED_MESSAGE's doc (compose.ts) for the rationale (an arbitrary exception's message may leak
+ * COMPOSE_FAILED_MESSAGE's doc (compose-pipeline.ts) for the rationale (an arbitrary exception's message may leak
  * internals; the original error still reaches the observability hook via reportHostError).
  */
 const FIXATION_INTERNAL_ERROR_MESSAGE =
