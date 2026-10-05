@@ -213,6 +213,42 @@ describe("GET /analytics/summary (usage analytics route)", () => {
     expect(all.summary.composed).toBe(4);
   });
 
+  it("returns per-day usage rows in the summary, and the tenant boundary applies to them too (design.md #74)", async () => {
+    const withUsage = (tenant: string, ts: string, usage: { inputTokens: number; outputTokens: number }) => {
+      const base = composed({ tenant, ts, tier: "L2", cache: "miss" });
+      return { ...base, payload: { ...base.payload, decision: { attempts: [], usage } } };
+    };
+    const events = [
+      withUsage("acme", "2026-07-01T10:00:00.000Z", { inputTokens: 100, outputTokens: 10 }),
+      withUsage("acme", "2026-07-01T11:00:00.000Z", { inputTokens: 50, outputTokens: 5 }),
+      withUsage("globex", "2026-07-01T12:00:00.000Z", { inputTokens: 999, outputTokens: 99 }),
+    ];
+    const app = createKohakuRoutes(
+      makeDeps(events, { tenant: (c) => c.req.header("x-kohaku-tenant") || undefined }),
+    );
+    const acme = (await (
+      await app.request("/analytics/summary", { headers: { "x-kohaku-tenant": "acme" } })
+    ).json()) as {
+      summary: {
+        usage: {
+          day: string;
+          tenant: string;
+          composed: number;
+          l2Generated: number;
+          tokens: { input: number; output: number };
+        }[];
+      };
+    };
+    expect(acme.summary.usage).toHaveLength(1);
+    expect(acme.summary.usage[0]).toMatchObject({
+      day: "2026-07-01",
+      tenant: "acme",
+      composed: 2,
+      l2Generated: 2,
+      tokens: { input: 150, output: 15 },
+    });
+  });
+
   it("limit is clamped to the ceiling of 1000 and reflected in window (not a silent cap)", async () => {
     const app = createKohakuRoutes(makeDeps([composed()]));
     const res = await app.request("/analytics/summary?limit=99999");

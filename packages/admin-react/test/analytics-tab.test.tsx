@@ -26,6 +26,20 @@ export const SUMMARY = {
     },
     fixations: { fixated: 1, unfixated: 0 },
     review: { count: 1, durationMs: { p50: 90_000, p95: 90_000, max: 90_000 }, acceptedAsIs: 1 },
+    usage: [
+      {
+        day: "2026-07-01",
+        tenant: "",
+        composed: 5,
+        cache: { hit: 2, miss: 3, bypass: 0, fixated: 0 },
+        tiers: { L0: 1, L1: 3, L2: 1 },
+        l2Generated: 1,
+        fallbacks: 1,
+        tokens: { input: 1234, output: 567 },
+        fixated: 1,
+        unfixated: 0,
+      },
+    ],
   },
   promotionPolicy: { fixationMinUses: 3, promotionMinUses: 2 },
 };
@@ -56,6 +70,32 @@ const FULL_SUMMARY = {
     },
     fixations: { fixated: 4, unfixated: 6 },
     review: { count: 8, durationMs: { p50: 45_000, p95: 200_000, max: 300_000 }, acceptedAsIs: 3 },
+    usage: [
+      {
+        day: "2026-07-01",
+        tenant: "acme",
+        composed: 6,
+        cache: { hit: 4, miss: 2, bypass: 0, fixated: 0 },
+        tiers: { L0: 0, L1: 3, L2: 3 },
+        l2Generated: 2,
+        fallbacks: 0,
+        tokens: { input: 7001, output: 802 },
+        fixated: 0,
+        unfixated: 0,
+      },
+      {
+        day: "2026-07-02",
+        tenant: "globex",
+        composed: 2,
+        cache: { hit: 1, miss: 1, bypass: 0, fixated: 0 },
+        tiers: { L0: 1, L1: 1, L2: 0 },
+        l2Generated: 0,
+        fallbacks: 1,
+        tokens: { input: 9, output: 3 },
+        fixated: 1,
+        unfixated: 0,
+      },
+    ],
   },
   promotionPolicy: { fixationMinUses: 3, promotionMinUses: 2 },
 };
@@ -98,6 +138,52 @@ describe("AnalyticsTab", () => {
     // Promotion lifecycle pills ("<label> <strong>{n}</strong>").
     expect(text).toContain("generated 7");
     expect(text).toContain("reviewed 9");
+  });
+
+  it("renders the Usage by day table with the sample caveat, and (none) for an unrecorded tenant", async () => {
+    const view = renderInAdmin(<AnalyticsTab />, {
+      handlers: { "GET /analytics/summary": () => jsonResponse(SUMMARY) },
+    });
+    await screen.findByText(defaultAdminMessages.analytics.usageByDay);
+    expect(screen.getByText(defaultAdminMessages.analytics.usageNote(200))).toBeTruthy();
+    const text = view.container.textContent ?? "";
+    expect(text).toContain("2026-07-01");
+    expect(text).toContain(defaultAdminMessages.analytics.usageNoTenant);
+    expect(text).toContain("1234");
+    expect(text).toContain("567");
+    for (const header of [
+      defaultAdminMessages.analytics.usageDay,
+      defaultAdminMessages.analytics.usageTenant,
+      defaultAdminMessages.analytics.usageComposed,
+      defaultAdminMessages.analytics.usageHit,
+      defaultAdminMessages.analytics.usageMiss,
+      defaultAdminMessages.analytics.usageL2Generated,
+      defaultAdminMessages.analytics.usageTokensIn,
+      defaultAdminMessages.analytics.usageTokensOut,
+      defaultAdminMessages.analytics.usageFixated,
+    ]) {
+      expect(screen.getByRole("columnheader", { name: header })).toBeTruthy();
+    }
+  });
+
+  it("renders one Usage by day row per (day, tenant) and the empty state when usage is empty or absent", async () => {
+    const full = renderInAdmin(<AnalyticsTab />, {
+      handlers: { "GET /analytics/summary": () => jsonResponse(FULL_SUMMARY) },
+    });
+    await screen.findByText(defaultAdminMessages.analytics.usageByDay);
+    const text = full.container.textContent ?? "";
+    expect(text).toContain("acme");
+    expect(text).toContain("globex");
+    expect(text).toContain("7001");
+    full.unmount();
+
+    const { usage: _usage, ...summaryWithoutUsage } = SUMMARY.summary;
+    renderInAdmin(<AnalyticsTab />, {
+      handlers: {
+        "GET /analytics/summary": () => jsonResponse({ ...SUMMARY, summary: summaryWithoutUsage }),
+      },
+    });
+    await screen.findByText(defaultAdminMessages.analytics.noUsage);
   });
 
   it("notifies the denied message on 403 and stays on the loading card", async () => {

@@ -45,6 +45,19 @@ export interface AdminMessages {
     reviewTurnaroundSub: (p95: string, count: number) => string;
     acceptedAsIs: string;
     acceptedAsIsSub: (suggested: number) => string;
+    usageByDay: string;
+    usageNote: (limit: number) => string;
+    noUsage: string;
+    usageDay: string;
+    usageTenant: string;
+    usageNoTenant: string;
+    usageComposed: string;
+    usageHit: string;
+    usageMiss: string;
+    usageL2Generated: string;
+    usageTokensIn: string;
+    usageTokensOut: string;
+    usageFixated: string;
   };
   fixations: {
     description: string;
@@ -171,6 +184,20 @@ export const defaultAdminMessages: AdminMessages = {
     reviewTurnaroundSub: (p95, count) => `p95 ${p95} · ${count} reviews`,
     acceptedAsIs: "Suggestions accepted as-is",
     acceptedAsIsSub: (suggested) => `of ${suggested} suggested`,
+    usageByDay: "Usage by day",
+    usageNote: (limit) =>
+      `A sample of the most recent ${limit} events in this window, not a complete count. For metering, use \`kohaku usage export\`.`,
+    noUsage: "No usage in this window yet",
+    usageDay: "day",
+    usageTenant: "tenant",
+    usageNoTenant: "(none)",
+    usageComposed: "composed",
+    usageHit: "hit",
+    usageMiss: "miss",
+    usageL2Generated: "L2 generated",
+    usageTokensIn: "tokens in",
+    usageTokensOut: "tokens out",
+    usageFixated: "fixated",
   },
   fixations: {
     description:

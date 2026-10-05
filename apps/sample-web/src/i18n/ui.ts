@@ -285,6 +285,20 @@ const JA: UIStrings = {
       reviewTurnaroundSub: (p95, count) => `p95 ${p95} ・ ${count} 件`,
       acceptedAsIs: "修正なしで承認された提案",
       acceptedAsIsSub: (suggested) => `提案 ${suggested} 件中`,
+      usageByDay: "日別の利用量",
+      usageNote: (limit) =>
+        `このウィンドウ(直近 ${limit} イベント)のサンプルであり、全件の集計ではありません。計量には \`kohaku usage export\` を使ってください。`,
+      noUsage: "このウィンドウにはまだ利用がありません",
+      usageDay: "日付",
+      usageTenant: "テナント",
+      usageNoTenant: "(なし)",
+      usageComposed: "composed",
+      usageHit: "hit",
+      usageMiss: "miss",
+      usageL2Generated: "L2 生成",
+      usageTokensIn: "入力トークン",
+      usageTokensOut: "出力トークン",
+      usageFixated: "固定化",
     },
     fixations: {
       description:

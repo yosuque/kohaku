@@ -216,6 +216,25 @@ export interface FixationRecordView {
 }
 
 /**
+ * One per-day, per-tenant metering row of the analytics summary (the hand-written mirror of lineage's
+ * `UsageRow`; design.md #74). `tenant` is the empty string for records that carry none.
+ */
+export interface UsageRowView {
+  /** UTC calendar day, `YYYY-MM-DD`. */
+  day: string;
+  tenant: string;
+  composed: number;
+  cache: { hit: number; miss: number; bypass: number; fixated: number };
+  tiers: { L0: number; L1: number; L2: number };
+  /** view.composed of tier L2 whose cache was miss or bypass (an L2 Spec actually generated). */
+  l2Generated: number;
+  fallbacks: number;
+  tokens: { input: number; output: number };
+  fixated: number;
+  unfixated: number;
+}
+
+/**
  * View shape of the aggregated usage-analytics summary (response of GET /analytics/summary; SPEC governance
  * plane, host-rest's `registerGovernanceRoutes`). Only the fields the admin UI (sample-web AnalyticsTab) reads.
  */
@@ -257,6 +276,8 @@ export interface AnalyticsSummaryView {
       durationMs: { p50: number | null; p95: number | null; max: number | null };
       acceptedAsIs: number;
     };
+    /** Per-day, per-tenant metering rows over the same (tail-window) sample as the rest of the summary. */
+    usage: UsageRowView[];
   };
   /**
    * Nomination thresholds for promotion / fixation candidates ("N or more uses"), when the host bundles them

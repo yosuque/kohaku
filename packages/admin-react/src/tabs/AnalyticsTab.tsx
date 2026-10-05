@@ -1,6 +1,8 @@
-import type { ReactNode } from "react";
+import type { UsageRowView } from "@kohaku-ui/client";
+import type { CSSProperties, ReactNode } from "react";
 import { useAdmin } from "../context.js";
 import { useAnalyticsSummary } from "../hooks.js";
+import type { AdminMessages } from "../messages.js";
 import { V } from "../theme.js";
 import { TIER_COLOR } from "../tiers.js";
 import { BarRow, card, Empty, StatCard, sectionTitle, smallButton } from "../ui.js";
@@ -10,6 +12,51 @@ function formatDuration(ms: number | null): string {
   if (ms == null) return "—";
   if (ms < 60_000) return `${Math.round(ms / 1000)} s`;
   return `${(ms / 60_000).toFixed(1)} min`;
+}
+
+type UsageColumn = "composed" | "hit" | "miss" | "l2Generated" | "tokensIn" | "tokensOut" | "fixated";
+
+type UsageHeaderKey = Extract<
+  keyof AdminMessages["analytics"],
+  | "usageComposed"
+  | "usageHit"
+  | "usageMiss"
+  | "usageL2Generated"
+  | "usageTokensIn"
+  | "usageTokensOut"
+  | "usageFixated"
+>;
+
+/** The numeric columns of the Usage-by-day table: row key, then the message key of its header. */
+const usageNumericColumns: readonly [UsageColumn, UsageHeaderKey][] = [
+  ["composed", "usageComposed"],
+  ["hit", "usageHit"],
+  ["miss", "usageMiss"],
+  ["l2Generated", "usageL2Generated"],
+  ["tokensIn", "usageTokensIn"],
+  ["tokensOut", "usageTokensOut"],
+  ["fixated", "usageFixated"],
+];
+
+const usageCell: CSSProperties = { padding: "5px 8px", textAlign: "right" };
+
+function usageValue(row: UsageRowView, column: UsageColumn): number {
+  switch (column) {
+    case "composed":
+      return row.composed;
+    case "hit":
+      return row.cache.hit;
+    case "miss":
+      return row.cache.miss;
+    case "l2Generated":
+      return row.l2Generated;
+    case "tokensIn":
+      return row.tokens.input;
+    case "tokensOut":
+      return row.tokens.output;
+    case "fixated":
+      return row.fixated;
+  }
 }
 
 /**
@@ -22,6 +69,8 @@ export function AnalyticsTab(): ReactNode {
   if (data == null) return <div style={card}>{t.analytics.loading}</div>;
 
   const { summary, window } = data;
+  // An older host that predates `usage` omits it; render the empty state rather than crash.
+  const usage: readonly UsageRowView[] = summary.usage ?? [];
   const tierTotal = summary.tiers.L0 + summary.tiers.L1 + summary.tiers.L2;
   const cacheEntries: [string, number][] = [
     ["hit", summary.cache.hit],
@@ -145,6 +194,50 @@ export function AnalyticsTab(): ReactNode {
             )}
           </tbody>
         </table>
+      </div>
+      <div style={card}>
+        <div style={sectionTitle}>{t.analytics.usageByDay}</div>
+        <div style={{ fontSize: 11.5, color: V.muted, marginBottom: 8 }}>
+          {t.analytics.usageNote(window.limit)}
+        </div>
+        {usage.length === 0 ? (
+          <Empty text={t.analytics.noUsage} />
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${V.border}`, color: V.muted, textAlign: "right" }}>
+                <th scope="col" style={{ ...usageCell, textAlign: "left" }}>
+                  {t.analytics.usageDay}
+                </th>
+                <th scope="col" style={{ ...usageCell, textAlign: "left" }}>
+                  {t.analytics.usageTenant}
+                </th>
+                {usageNumericColumns.map(([key, label]) => (
+                  <th key={key} scope="col" style={usageCell}>
+                    {t.analytics[label]}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {usage.map((row) => (
+                <tr key={`${row.day}\u0000${row.tenant}`} style={{ borderBottom: `1px solid ${V.border}` }}>
+                  <td style={{ ...usageCell, textAlign: "left", fontFamily: "ui-monospace, monospace" }}>
+                    {row.day}
+                  </td>
+                  <td style={{ ...usageCell, textAlign: "left", fontFamily: "ui-monospace, monospace" }}>
+                    {row.tenant === "" ? t.analytics.usageNoTenant : row.tenant}
+                  </td>
+                  {usageNumericColumns.map(([key]) => (
+                    <td key={key} style={usageCell}>
+                      {usageValue(row, key)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
       <div style={card}>
         <div style={sectionTitle}>{t.analytics.promotionLifecycle}</div>

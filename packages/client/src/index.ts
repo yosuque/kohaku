@@ -74,4 +74,5 @@ export type {
   SerializedDeprecation,
   SessionArg,
   SuggestedEventView,
+  UsageRowView,
 } from "./types.js";
