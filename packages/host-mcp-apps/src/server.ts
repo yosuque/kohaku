@@ -348,14 +348,11 @@ async function composeAndPackage(
       // (ACTIONS_META_KEY). Fail-open on a rejected operationIndex, the same posture
       // issueSpecCapabilitySafely takes just above for the identical failure (listOperations() itself
       // rejecting, or a descriptor's paramsSchema failing validation): report it and treat as "no
-      // manifest this time" rather than failing the whole tool call.
-      try {
-        const index = await ctx.operationIndex();
-        actions = hostCore.buildActionManifest(composed.spec, index);
-      } catch (e) {
-        await reportMcpError(ctx.deps, "compose.actions", e);
-        actions = undefined;
-      }
+      // manifest this time" rather than failing the whole tool call (host-core's buildActionManifestSafely,
+      // shared with the REST profile's actionsFor).
+      actions = await hostCore.buildActionManifestSafely(ctx.operationIndex, composed.spec, (e) =>
+        reportMcpError(ctx.deps, "compose.actions", e),
+      );
     },
   });
   onComposeResult?.(result);

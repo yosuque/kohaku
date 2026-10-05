@@ -160,20 +160,20 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
  * A declared operation whose `paramsSchema` failed validation is omitted from the manifest on its own (see
  * `buildActionManifest`). Fail-open on a rejected `operationIndex` (`listOperations()` itself throwing): reported to the observability hook and treated as "no manifest this
  * time" rather than failing the whole compose response, the same fail-open posture
- * `issueSpecCapabilitySafely` already takes for capability issuance under the identical failure.
+ * `issueSpecCapabilitySafely` already takes for capability issuance under the identical failure. That
+ * fail-open build is host-core's `buildActionManifestSafely`, shared with the MCP profile's compose tool; this
+ * wrapper only supplies the REST profile's own index and endpoint name for the report.
  */
-async function actionsFor(
+function actionsFor(
   deps: KohakuHostDeps,
   spec: UISpec,
   call: Pick<RestCallContext, "endpoint" | "requestId">,
 ): Promise<hostCore.ActionManifest | undefined> {
-  try {
-    const index = await operationIndex(deps);
-    return hostCore.buildActionManifest(spec, index);
-  } catch (e) {
-    await reportHostError(deps, call.endpoint, call.requestId, e);
-    return undefined;
-  }
+  return hostCore.buildActionManifestSafely(
+    () => operationIndex(deps),
+    spec,
+    (e) => reportHostError(deps, call.endpoint, call.requestId, e),
+  );
 }
 
 /**

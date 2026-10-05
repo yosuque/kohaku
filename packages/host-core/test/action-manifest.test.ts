@@ -1,6 +1,6 @@
 import type { OperationDescriptor, UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { buildActionManifest } from "../src/action-manifest.js";
+import { buildActionManifest, buildActionManifestSafely } from "../src/action-manifest.js";
 import type { OperationIndexEntry } from "../src/operation-index.js";
 
 function indexOf(...descriptors: OperationDescriptor[]): ReadonlyMap<string, OperationIndexEntry> {
@@ -72,5 +72,73 @@ describe("buildActionManifest", () => {
     const spec = specWithActions("annotate");
     const index = indexOf({ name: "annotate", description: "d" });
     expect(buildActionManifest(spec, index)).toEqual({ annotate: { tier: "auto" } });
+  });
+});
+
+describe("buildActionManifestSafely", () => {
+  it("resolves to the built manifest and reports nothing on success", async () => {
+    const reported: unknown[] = [];
+    const index = indexOf({ name: "annotate", description: "d", tier: "confirm" });
+    const manifest = await buildActionManifestSafely(
+      async () => index,
+      specWithActions("annotate"),
+      (e) => void reported.push(e),
+    );
+    expect(manifest).toEqual({ annotate: { tier: "confirm" } });
+    expect(reported).toEqual([]);
+  });
+
+  it("resolves to undefined (no report) when the Spec declares no write actions", async () => {
+    const reported: unknown[] = [];
+    const manifest = await buildActionManifestSafely(
+      async () => indexOf(),
+      specWithActions(),
+      (e) => void reported.push(e),
+    );
+    expect(manifest).toBeUndefined();
+    expect(reported).toEqual([]);
+  });
+
+  it("reports the rejection and resolves to undefined when the operation index rejects", async () => {
+    const reported: unknown[] = [];
+    const failure = new Error("list-ops down");
+    const manifest = await buildActionManifestSafely(
+      async () => {
+        throw failure;
+      },
+      specWithActions("annotate"),
+      (e) => void reported.push(e),
+    );
+    expect(manifest).toBeUndefined();
+    expect(reported).toEqual([failure]);
+  });
+
+  it("reports the throw and resolves to undefined when the build itself throws", async () => {
+    const reported: unknown[] = [];
+    const broken = { ...specWithActions("annotate"), events: null } as unknown as UISpec;
+    const manifest = await buildActionManifestSafely(
+      async () => indexOf({ name: "annotate", description: "d" }),
+      broken,
+      (e) => void reported.push(e),
+    );
+    expect(manifest).toBeUndefined();
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toBeInstanceOf(TypeError);
+  });
+
+  it("awaits an async report callback before resolving", async () => {
+    const order: string[] = [];
+    await buildActionManifestSafely(
+      async () => {
+        throw new Error("x");
+      },
+      specWithActions("annotate"),
+      async () => {
+        await Promise.resolve();
+        order.push("reported");
+      },
+    );
+    order.push("resolved");
+    expect(order).toEqual(["reported", "resolved"]);
   });
 });

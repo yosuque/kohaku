@@ -29,6 +29,7 @@ export {
   type ActionManifest,
   type ActionManifestEntry,
   buildActionManifest,
+  buildActionManifestSafely,
 } from "./action-manifest.js";
 export { type AllowedActions, allowedActionsFromIndex, createAllowedActions } from "./allowed-actions.js";
 export { type InvokableRef, type ParsedInvokableRef, parseInvokableRef } from "./binding-ref.js";
