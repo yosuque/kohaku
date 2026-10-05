@@ -8,9 +8,9 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-kohaku は Generative UI を本番に出すための統制層です。同じ要求には同じ画面を返し、行データはモデルに渡らず、表示された画面は監査証跡に残り、モデルが発明したものは正式な部品になる前にレビューを通ります。
+kohaku は Generative UI を本番に出すための統制層です。同じ要求には、同じデータ版である限り同じ画面を返し、行データはモデルに渡らず、表示された画面は監査証跡に残り、モデルが発明したものは正式な部品になる前にレビューを通ります。
 
-- **同一表示は統計ではなく構造で保証する** — チャットの質問も GUI 操作も、1 つの Intent と 1 つのキャッシュ済み UI Spec に正規化される。
+- **同一表示は統計ではなく構造で保証する** — チャットの質問も GUI 操作も、1 つの Intent と、データ版ごとに 1 つのキャッシュ済み UI Spec に正規化される。
 - **モデルが組むのは配管で、水は流れない** — Spec が持つのは `query://` 参照だけで、データの値は持たない。
 - **自由を許し、そのうえで統制する** — 自由生成は sandbox の中で動き、残す価値のあるものはレビューを経て正式な部品に昇格する。
 
@@ -19,6 +19,8 @@ kohaku は Generative UI を本番に出すための統制層です。同じ要�
 npx @kohaku-ui/cli init --from data.csv --out my-dashboard
 cd my-dashboard && npm run dev
 ```
+
+手元にデータがなければ同梱のサンプルを使えます。`curl -O https://raw.githubusercontent.com/yosuque/kohaku/main/cli/test/init/fixtures/sales.csv` で取得し、`--from sales.csv` を指定してください。
 
 **入口を選ぶ:** [MCP Apps だけ](docs/paths/mcp-apps.ja.md) · [React ダッシュボードだけ](docs/paths/react-dashboard.ja.md) · [フル構成](docs/paths/full-stack.ja.md) — 先に判断したいなら[なぜ kohaku か](docs/why-kohaku.ja.md)。
 
@@ -79,7 +81,7 @@ npx @kohaku-ui/cli init --from data.csv --out my-dashboard   # .json 配列 / .s
 cd my-dashboard && npm run dev
 ```
 
-自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。あわせて、生成し立ての capability secret を書いた `.env` も作られるので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv) を試してください。このセクションの残りはモノレポ自体の開発セットアップです。
+自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。あわせて、生成し立ての capability secret を書いた `.env` も作られるので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。手元にデータがなければ、このページの冒頭で案内している同梱サンプル CSV([`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv))を使えます。このセクションの残りはモノレポ自体の開発セットアップです。
 
 前提: Node >= 22(SQLite 入力は >= 22.13)、pnpm 12。CI は Node 22 と 24 で検証しています。
 
