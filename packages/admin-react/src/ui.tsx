@@ -35,13 +35,16 @@ export function StatCard({
   label,
   value,
   sub,
+  state,
 }: {
   label: string;
   value: string | number;
   sub?: string;
+  /** Exposed as `data-state`, for a card whose value ("—") reads the same while loading and when unavailable. */
+  state?: string;
 }): ReactNode {
   return (
-    <div style={card}>
+    <div style={card} {...(state != null ? { "data-state": state } : {})}>
       <div style={{ fontSize: 11.5, color: V.muted }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: V.text, marginTop: 2 }}>{value}</div>
       {sub != null && <div style={{ fontSize: 11, color: V.muted, marginTop: 2 }}>{sub}</div>}
