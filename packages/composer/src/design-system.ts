@@ -221,6 +221,9 @@ export const DEFAULT_KIT_SKELETON = [
   "</div>",
 ].join("\n");
 
+/** The spacing-scale utility class names of one prefix, `${prefix}-1` … `${prefix}-6` in ascending order. */
+const scale = (prefix: string): string[] => [1, 2, 3, 4, 5, 6].map((n) => `${prefix}-${n}`);
+
 /**
  * 134 utility class names (same set, in the same order, as Python's `_KIT_UTILITIES` in
  * design_system.py). Like `classes` in `DEFAULT_KIT_VOCABULARY` below, every entry here is pinned by
@@ -243,23 +246,23 @@ const KIT_UTILITIES: readonly string[] = [
   "grid-cols-2",
   "grid-cols-3",
   "grid-cols-4",
-  ...[1, 2, 3, 4, 5, 6].map((n) => `gap-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `p-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `px-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `py-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `pt-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `pb-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `pl-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `pr-${n}`),
+  ...scale("gap"),
+  ...scale("p"),
+  ...scale("px"),
+  ...scale("py"),
+  ...scale("pt"),
+  ...scale("pb"),
+  ...scale("pl"),
+  ...scale("pr"),
   "m-0",
-  ...[1, 2, 3, 4, 5, 6].map((n) => `m-${n}`),
+  ...scale("m"),
   "mx-auto",
-  ...[1, 2, 3, 4, 5, 6].map((n) => `mx-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `my-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `mt-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `mb-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `ml-${n}`),
-  ...[1, 2, 3, 4, 5, 6].map((n) => `mr-${n}`),
+  ...scale("mx"),
+  ...scale("my"),
+  ...scale("mt"),
+  ...scale("mb"),
+  ...scale("ml"),
+  ...scale("mr"),
   "text-xs",
   "text-sm",
   "text-md",
