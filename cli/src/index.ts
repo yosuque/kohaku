@@ -141,25 +141,16 @@ program
   .option("--out <dir>", "Output directory (default depends on the target)")
   .description("Generate scaffolds for product-side Port implementations / Golden regression tests")
   .action(async (what: string, opts: { out?: string }) => {
-    // Switch the default output directory and the post-generation "next steps" per target. Validate the target
-    // before loading `commands.js` so that a typo does not pay for (or fail on) the heavy module import.
-    const targets: Record<string, { defaultOut: string; next: string }> = {
-      ports: {
-        defaultOut: "./kohaku-ports",
-        next: "Implement the TODOs in ports.ts and intents.ts, then start server.ts.",
-      },
-      golden: {
-        defaultOut: "./kohaku-golden",
-        next: "Wire up makeContext in golden.test.ts, add *.json files under golden/, then generate the expected specs with KOHAKU_GOLDEN_UPDATE=1.",
-      },
-    };
-    const target = Object.hasOwn(targets, what) ? targets[what] : undefined;
+    // The default output directory, the post-generation "next steps" and the files come from the target's
+    // table entry. Validate the target before loading anything else, so that a typo does not pay for (or fail
+    // on) a heavy module import; `scaffold-targets.js` itself is light (the embedded templates only).
+    const { SCAFFOLD_TARGETS } = await import("./scaffold-targets.js");
+    const target = Object.hasOwn(SCAFFOLD_TARGETS, what) ? SCAFFOLD_TARGETS[what] : undefined;
     if (target == null) program.error(`Unknown scaffold target: ${what} (allowed: ports / golden)`);
-    const { scaffoldGolden, scaffoldPorts } = await import("./commands.js");
-    const scaffold = what === "ports" ? scaffoldPorts : scaffoldGolden;
+    const { writeScaffold } = await import("./scaffold-fs.js");
     let written: string[];
     try {
-      written = scaffold(opts.out ?? target.defaultOut);
+      written = writeScaffold(target.files(opts.out ?? target.defaultOut));
     } catch (e) {
       // As with the conformance action, show failures such as existing-file collisions as a single line (no raw stack).
       fail(e);

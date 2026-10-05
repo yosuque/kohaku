@@ -22,13 +22,7 @@ import semver from "semver";
 import { parseHeaderArgs } from "./header-args.js";
 import { createRestClient } from "./rest-client.js";
 import { writeScaffold } from "./scaffold-fs.js";
-import {
-  GOLDEN_README_TEMPLATE,
-  GOLDEN_TEST_TEMPLATE,
-  INTENTS_TEMPLATE,
-  PORTS_TEMPLATE,
-  SERVER_TEMPLATE,
-} from "./templates.js";
+import { GOLDEN_TARGET, PORTS_TARGET } from "./scaffold-targets.js";
 
 /** conformance --self: self-check of the Spec format */
 export async function runSelfConformance(): Promise<ConformanceReport> {
@@ -250,11 +244,7 @@ export function formatExplainReport(report: ExplainReport): string {
 
 /** scaffold ports: generate scaffolds for the DomainPort, an Intent catalog, and a Hono server built on createKohakuHost() */
 export function scaffoldPorts(outDir: string): string[] {
-  return writeScaffold([
-    [join(outDir, "ports.ts"), PORTS_TEMPLATE],
-    [join(outDir, "intents.ts"), INTENTS_TEMPLATE],
-    [join(outDir, "server.ts"), SERVER_TEMPLATE],
-  ]);
+  return writeScaffold(PORTS_TARGET.files(outDir));
 }
 
 /**
@@ -263,10 +253,7 @@ export function scaffoldPorts(outDir: string): string[] {
  * (the fixture format). The user adds fixtures (*.json), and the expected specs are generated with KOHAKU_GOLDEN_UPDATE=1.
  */
 export function scaffoldGolden(outDir: string): string[] {
-  return writeScaffold([
-    [join(outDir, "golden.test.ts"), GOLDEN_TEST_TEMPLATE],
-    [join(outDir, "golden", "README.md"), GOLDEN_README_TEMPLATE],
-  ]);
+  return writeScaffold(GOLDEN_TARGET.files(outDir));
 }
 
 /**
