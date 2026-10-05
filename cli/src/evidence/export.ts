@@ -10,11 +10,10 @@ import {
 } from "@kohaku-ui/lineage";
 import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { parseHeaderArgs } from "../header-args.js";
-import { resolveRestTenant } from "../lineage-window.js";
+import { resolveRestTenant, resolveWindow } from "../lineage-window.js";
 import { CLI_VERSION } from "../version.js";
 import { importPrivateKeyPem } from "./keys.js";
 import { createRestEvidenceSource, REST_FIXATIONS_LIMITATION_WARNING } from "./rest-source.js";
-import { resolveEvidenceWindow } from "./window.js";
 
 export interface EvidenceExportOptions {
   /** Read the pack from a local StoragePort data directory (mutually exclusive with `rest`). */
@@ -24,7 +23,7 @@ export interface EvidenceExportOptions {
   /** Extra REST request headers ("name:value", repeatable) -- e.g. tenant / auth. REST mode only. */
   headers?: string[];
   tenant?: string;
-  /** Lower bound: ISO 8601 date or timestamp; a date-only value starts that UTC day (see `resolveEvidenceWindow`). */
+  /** Lower bound: ISO 8601 date or timestamp; a date-only value starts that UTC day (see `resolveWindow`). */
   since: string;
   /** Upper bound: ISO 8601 date or timestamp; a date-only value INCLUDES that whole UTC day. */
   until: string;
@@ -41,9 +40,6 @@ export interface EvidenceExportResult {
   manifest: EvidenceManifest;
 }
 
-// Shared with `kohaku usage export`; kept exported from here for existing importers.
-export { resolveRestTenant };
-
 /**
  * `kohaku evidence export`: assembles and signs a Compliance Evidence Pack (design.md #67), then writes
  * it to `--out <dir>` (events.jsonl / approvals.jsonl / promotions.jsonl / fixations.jsonl /
@@ -58,7 +54,7 @@ export async function runEvidenceExport(opts: EvidenceExportOptions): Promise<Ev
   }
 
   // Validated first (before any key or storage access): a bad window is a usage error, not a signed pack.
-  const window = resolveEvidenceWindow({ since: opts.since, until: opts.until });
+  const window = resolveWindow({ since: opts.since, until: opts.until });
 
   const restFixationsWarning = opts.rest != null ? REST_FIXATIONS_LIMITATION_WARNING : undefined;
   const restHeaders = opts.rest != null ? parseHeaderArgs(opts.headers) : undefined;

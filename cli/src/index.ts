@@ -394,7 +394,8 @@ evidence
       out: string;
       allowIncomplete?: boolean;
     }) => {
-      const { EvidenceUsageError, runEvidenceExport } = await import("./evidence/index.js");
+      const { runEvidenceExport } = await import("./evidence/index.js");
+      const { CliUsageError } = await import("./usage-error.js");
       let result: EvidenceExportResult;
       try {
         result = await runEvidenceExport({
@@ -411,7 +412,7 @@ evidence
       } catch (e) {
         // A bad --since / --until is a usage error (exit 2, like `evidence verify`); anything else is 1.
         program.error(e instanceof Error ? e.message : String(e), {
-          exitCode: e instanceof EvidenceUsageError ? 2 : 1,
+          exitCode: e instanceof CliUsageError ? 2 : 1,
         });
         return;
       }
@@ -519,7 +520,7 @@ usage
       format: string;
       out?: string;
     }) => {
-      const { CliUsageError } = await import("./lineage-window.js");
+      const { CliUsageError } = await import("./usage-error.js");
       const { runUsageExport } = await import("./usage/index.js");
       let result: Awaited<ReturnType<typeof runUsageExport>>;
       try {

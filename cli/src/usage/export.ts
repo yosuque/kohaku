@@ -4,7 +4,8 @@ import { createKohakuClient, globalTransport, type Transport } from "@kohaku-ui/
 import { iterateLineagePages, mergeUsageRows, summarizeUsage, type UsageRow } from "@kohaku-ui/lineage";
 import type { LineageEventRecord, StoragePort } from "@kohaku-ui/spec-core";
 import { parseHeaderArgs } from "../header-args.js";
-import { CliUsageError, resolveRestTenant, resolveWindow } from "../lineage-window.js";
+import { resolveRestTenant, resolveWindow } from "../lineage-window.js";
+import { CliUsageError } from "../usage-error.js";
 import { formatUsageCsv } from "./csv.js";
 import { LINEAGE_FILE_NAME, type LineageFileScanStats, streamLineageChunks } from "./lineage-file.js";
 

@@ -1,10 +1,6 @@
 import { parseIso8601 } from "@kohaku-ui/spec-core";
 import { CliUsageError } from "./usage-error.js";
 
-// A bad command-line argument of a lineage-reading subcommand (`evidence export`, `usage export`) is a
-// `CliUsageError` (exit 2); the class itself lives in the dependency-free ./usage-error.ts.
-export { CliUsageError };
-
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 function canonicalBound(flag: "--since" | "--until", raw: string): string {
