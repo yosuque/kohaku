@@ -2,11 +2,19 @@
 import type { ExplainReport } from "@kohaku-ui/client";
 import type { VerifyEvidencePackResult } from "@kohaku-ui/lineage";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
-import { Command, type CommanderError, Option } from "commander";
+import { Command } from "commander";
+import {
+  addLineageSourceOptions,
+  errorMessage,
+  exitUsageErrorAsTwo,
+  fail,
+  headerOption,
+  lineageSourceArgs,
+} from "./cli/shared.js";
 import type { ExportDatasetResult, SmokeL2Output } from "./commands.js";
 import type { EvidenceExportResult, EvidenceKeygenResult } from "./evidence/index.js";
 import type { InitResult } from "./init/index.js";
-import type { LineageSourceArgs, LineageSourceCliOptions } from "./lineage-window.js";
+import type { LineageSourceCliOptions } from "./lineage-window.js";
 import type { MigrateApplyOptions, MigratePlanOptions } from "./migrate.js";
 import { CLI_VERSION } from "./version.js";
 
@@ -28,56 +36,6 @@ const program: Command = new Command("kohaku")
   )
   .version(CLI_VERSION);
 
-/** The one-line message shown for a caught failure (no stack trace). */
-function errorMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
-/** Prints `e`'s message and exits with `exitCode` through commander (which calls `process.exit`). */
-function fail(e: unknown, exitCode = 1): never {
-  return program.error(errorMessage(e), { exitCode });
-}
-
-/** A repeatable `--header <name:value>` option: each occurrence is appended to the `header` string array. */
-function headerOption(description: string): Option {
-  return new Option("--header <name:value>", description)
-    .argParser((value: string, prev: string[]) => [...prev, value])
-    .default([] as string[]);
-}
-
-/**
- * Adds the six options `evidence export` and `usage export` share, in help order: `--data-dir`, `--rest`,
- * `--header`, `--tenant`, then the required `--since` / `--until`. The descriptions that differ per command are
- * passed in; the commander option bag is `LineageSourceCliOptions`.
- */
-function addLineageSourceOptions(
-  cmd: Command,
-  help: { rest: string; tenant: string; since: string; until: string },
-): Command {
-  return cmd
-    .option(
-      "--data-dir <dir>",
-      "Read from a local StoragePort data directory (mutually exclusive with --rest)",
-    )
-    .option("--rest <baseUrl>", help.rest)
-    .addOption(headerOption("Extra REST request header, e.g. tenant or auth (repeatable; --rest only)"))
-    .option("--tenant <id>", help.tenant)
-    .requiredOption("--since <iso8601>", help.since)
-    .requiredOption("--until <iso8601>", help.until);
-}
-
-/** Maps the commander option bag of a lineage-reading subcommand onto the runner's `LineageSourceArgs`. */
-function lineageSourceArgs(opts: LineageSourceCliOptions): LineageSourceArgs {
-  return {
-    ...(opts.dataDir != null ? { dataDir: opts.dataDir } : {}),
-    ...(opts.rest != null ? { rest: opts.rest } : {}),
-    headers: opts.header,
-    ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
-    since: opts.since,
-    until: opts.until,
-  };
-}
-
 program
   .command("conformance")
   .description("Run the specification conformance suite (SPEC.md §7)")
@@ -96,7 +54,7 @@ program
     } catch (e) {
       // Show a malformed --intent shape or a network failure as a single line rather than a stack trace.
       // `fail` is typed `never`, so the compiler knows `report` is assigned after this try/catch.
-      fail(e);
+      fail(program, e);
     }
     console.log(formatReport(report));
     process.exitCode = report.pass ? 0 : 1;
@@ -128,7 +86,7 @@ program
         });
       } catch (e) {
         // A malformed --header is a usage error (exit 2); anything else is 1.
-        fail(e, e instanceof CliUsageError ? 2 : 1);
+        fail(program, e, e instanceof CliUsageError ? 2 : 1);
       }
       console.log(opts.json === true ? JSON.stringify(report, null, 2) : formatExplainReport(report));
     },
@@ -152,7 +110,7 @@ program
       written = writeScaffold(target.files(opts.out ?? target.defaultOut));
     } catch (e) {
       // As with the conformance action, show failures such as existing-file collisions as a single line (no raw stack).
-      fail(e);
+      fail(program, e);
     }
     console.log("Generated:");
     for (const path of written) console.log(`  ${path}`);
@@ -189,7 +147,7 @@ program
       try {
         result = await initProject(opts);
       } catch (e) {
-        fail(e);
+        fail(program, e);
       }
       console.log(formatInitResult(result, opts));
     },
@@ -287,7 +245,7 @@ dataset
         outPath: opts.out,
       });
     } catch (e) {
-      fail(e);
+      fail(program, e);
     }
     console.log(formatDatasetExportResult(result));
   });
@@ -298,16 +256,6 @@ const evidence = program
     "Operations on Compliance Evidence Packs (design.md #67) -- see docs/user-guide.md for the EU AI Act " +
       "Article 50 disclosure-evidence context (not legal advice)",
   );
-
-/**
- * `exitOverride` handler for the evidence subcommands whose exit code 1 means "invalid pack" / a runtime
- * failure: commander's own usage errors (a missing required option, an unknown option, a bad argument)
- * default to exit 1 and would collide with it, so they exit 2 instead. `--help` / `--version` carry exit
- * code 0 and stay 0. Commander has already printed the message by the time this runs.
- */
-function exitUsageErrorAsTwo(err: CommanderError): never {
-  process.exit(err.exitCode === 0 ? 0 : 2);
-}
 
 evidence
   .command("keygen")
@@ -326,7 +274,7 @@ evidence
     try {
       result = await runEvidenceKeygen(opts.outDir, { force: opts.force === true });
     } catch (e) {
-      fail(e);
+      fail(program, e);
     }
     console.log(formatEvidenceKeygenResult(result));
   });
@@ -376,7 +324,7 @@ addLineageSourceOptions(
         });
       } catch (e) {
         // A bad --since / --until is a usage error (exit 2, like `evidence verify`); anything else is 1.
-        fail(e, e instanceof CliUsageError ? 2 : 1);
+        fail(program, e, e instanceof CliUsageError ? 2 : 1);
       }
       console.log(formatEvidenceExportResult(result));
     },
@@ -454,7 +402,7 @@ addLineageSourceOptions(
       });
     } catch (e) {
       // A bad argument (window, format, source, data dir, tenant) is a usage error (exit 2); anything else is 1.
-      fail(e, e instanceof CliUsageError ? 2 : 1);
+      fail(program, e, e instanceof CliUsageError ? 2 : 1);
     }
     if (result.outPath != null) {
       console.error(formatUsageExportResult(result));
@@ -495,7 +443,7 @@ migrate
     try {
       result = await migratePlan(options);
     } catch (e) {
-      fail(e);
+      fail(program, e);
     }
     console.log(formatMigratePlanResult(result));
   });
@@ -532,7 +480,7 @@ migrate
     try {
       result = await migrateApply(options);
     } catch (e) {
-      fail(e);
+      fail(program, e);
     }
     console.log(formatMigrateApplyResult(result));
     if (result.skipped.length > 0 || result.blocked.length > 0) process.exitCode = 1;
