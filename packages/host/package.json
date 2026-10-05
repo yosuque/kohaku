@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./mcp": "./src/mcp.ts"
+    "./mcp": "./src/mcp.ts",
+    "./mcp-http": "./src/mcp-http.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -29,11 +30,15 @@
   },
   "peerDependencies": {
     "@kohaku-ui/host-mcp-apps": "workspace:^",
+    "@modelcontextprotocol/node": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "zod": "catalog:"
   },
   "peerDependenciesMeta": {
     "@kohaku-ui/host-mcp-apps": {
+      "optional": true
+    },
+    "@modelcontextprotocol/node": {
       "optional": true
     },
     "@modelcontextprotocol/server": {
@@ -43,6 +48,7 @@
   "devDependencies": {
     "@kohaku-ui/host-mcp-apps": "workspace:^",
     "@modelcontextprotocol/client": "catalog:",
+    "@modelcontextprotocol/node": "catalog:",
     "@modelcontextprotocol/server": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
@@ -81,6 +87,10 @@
       "./mcp": {
         "types": "./dist/mcp.d.ts",
         "default": "./dist/mcp.js"
+      },
+      "./mcp-http": {
+        "types": "./dist/mcp-http.d.ts",
+        "default": "./dist/mcp-http.js"
       },
       "./package.json": "./package.json"
     }

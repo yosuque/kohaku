@@ -29,6 +29,7 @@ export {
   type ActionManifest,
   type ActionManifestEntry,
   buildActionManifest,
+  buildActionManifestSafely,
 } from "./action-manifest.js";
 export { type AllowedActions, allowedActionsFromIndex, createAllowedActions } from "./allowed-actions.js";
 export { type InvokableRef, type ParsedInvokableRef, parseInvokableRef } from "./binding-ref.js";
@@ -124,4 +125,9 @@ export {
   type RateLimiterTakeParams,
 } from "./rate-limit.js";
 export { parseTraceContext, TRACEPARENT_RE } from "./trace-context.js";
-export { recordComposedResult, recordViewFallback, type ViewRecorder } from "./view-recorder.js";
+export {
+  recordComposedAndFallback,
+  recordComposedResult,
+  recordViewFallback,
+  type ViewRecorder,
+} from "./view-recorder.js";

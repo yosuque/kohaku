@@ -125,3 +125,52 @@ export async function migrateApply(options: MigrateApplyOptions): Promise<Catalo
   const fixations = createFixations({ lineage, storage, catalogFor });
   return applyCatalogMigration({ plan, fixations, approver: { id: options.approver }, catalogFor });
 }
+
+/**
+ * The text `kohaku migrate plan` prints, as one string with its newlines (the caller does a single
+ * `console.log`, which adds the final one): where the plan went, the rewrites, and the fixations that
+ * need manual attention.
+ */
+export function formatMigratePlanResult(result: MigratePlanResult): string {
+  const { plan } = result;
+  const lines = [
+    `Wrote ${result.outPath} (planHash: ${plan.planHash})`,
+    `  rewrites: ${plan.rewrites.map((r) => `${r.from} -> ${r.to.type}`).join(", ") || "(none)"}`,
+    `  steps: ${plan.steps.length} fixation(s) ready to apply`,
+  ];
+  if (plan.blocked.length > 0) {
+    lines.push(
+      `  blocked: ${plan.blocked.length} fixation(s) failed revalidation and need manual attention:`,
+    );
+    for (const b of plan.blocked) {
+      lines.push(
+        `    - ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""}: ${b.issues.join("; ")}`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * The text `kohaku migrate apply` prints: the applied / skipped / blocked tally, then one line per step. The
+ * non-zero exit code for a skipped or blocked step stays with the caller.
+ */
+export function formatMigrateApplyResult(result: CatalogMigrationApplyResult): string {
+  const lines = [
+    `Applied ${result.applied.length}, skipped ${result.skipped.length}, blocked ${result.blocked.length}`,
+  ];
+  for (const a of result.applied)
+    lines.push(`  applied: ${a.intentHash}${a.tenant != null ? ` (tenant: ${a.tenant})` : ""}`);
+  for (const s of result.skipped) {
+    lines.push(
+      `  skipped: ${s.intentHash}${s.tenant != null ? ` (tenant: ${s.tenant})` : ""} (fixation changed since the plan was computed)`,
+    );
+  }
+  for (const b of result.blocked) {
+    lines.push(
+      `  blocked: ${b.intentHash}${b.tenant != null ? ` (tenant: ${b.tenant})` : ""} (catalog drift — ` +
+        `live fingerprint ${b.observedCatalogFingerprint}${b.issues.length > 0 ? `; ${b.issues.join("; ")}` : ""})`,
+    );
+  }
+  return lines.join("\n");
+}

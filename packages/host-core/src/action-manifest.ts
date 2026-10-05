@@ -1,6 +1,6 @@
 import type { ActionManifest, ActionManifestEntry, JsonValue, UISpec } from "@kohaku-ui/spec-core";
 import { collectWriteActions } from "@kohaku-ui/spec-core";
-import type { OperationIndexEntry } from "./operation-index.js";
+import type { OperationIndex, OperationIndexEntry } from "./operation-index.js";
 
 // The wire types live in spec-core (shared with the client SDK and renderer-core); re-exported so existing
 // `@kohaku-ui/host-core` import sites keep working.
@@ -33,6 +33,32 @@ export function buildActionManifest(
     manifest[action] = buildManifestEntry(entry);
   }
   return Object.keys(manifest).length > 0 ? manifest : undefined;
+}
+
+/**
+ * The fail-open `buildActionManifest` both host profiles call when delivering a composed Spec (REST's compose
+ * routes, the MCP profile's compose tool): awaits the host's `OperationIndex`, builds the manifest, and on ANY
+ * throw -- the index rejecting (`listOperations()` itself failing) or the build throwing -- reports the error
+ * through `report` and resolves to `undefined` ("no manifest this time") instead of failing the whole
+ * delivery. The same fail-open posture `issueSpecCapabilitySafely` takes for capability issuance under the
+ * identical failure.
+ *
+ * Order-neutral: the host decides where in its own delivery sequence to call this, and supplies the
+ * `report` callback carrying its own endpoint name. Contract: `report` must not reject -- same convention as
+ * `issueSpecCapabilitySafely`'s `report`.
+ */
+export async function buildActionManifestSafely(
+  operationIndex: OperationIndex,
+  spec: UISpec,
+  report: (error: unknown) => void | Promise<void>,
+): Promise<ActionManifest | undefined> {
+  try {
+    const index = await operationIndex();
+    return buildActionManifest(spec, index);
+  } catch (e) {
+    await report(e);
+    return undefined;
+  }
 }
 
 function buildManifestEntry(entry: OperationIndexEntry): ActionManifestEntry {

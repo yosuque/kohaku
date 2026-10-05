@@ -103,7 +103,7 @@ query://<source>/<path>?<params>     例: query://sales/summary?fy=2026&groupBy=
 
 ## 4. Port インターフェース(プロダクトが実装する 4 つ)
 
-定義: `packages/spec-core/src/ports.ts`。実装見本: `apps/sample-api/src/ports/`。
+定義: `packages/spec-core/src/ports.ts`(`src/ports/*.ts` に Port ごとに分かれた定義を束ねる barrel)。実装見本: `apps/sample-api/src/ports/`。
 
 ### 4.1 DomainPort — 業務 API(プロダクトの本体)
 
@@ -182,14 +182,14 @@ interface LlmPort {
 
 Spec エンベロープは**テーマを持たない**(SPEC-ENV-003 — UI Spec は構造のみ)。テーマは Renderer 側で解決する。関連する型と値の住処:
 
-- **型**: `packages/spec-core/src/ports.ts` の `KnownThemeTokens`(既知トークンの語彙。全キー optional)+ `ThemeTokens = KnownThemeTokens & Record<string, string | number>`(開いた index signature で独自トークンも許容 = 後方互換)。
+- **型**: `packages/spec-core/src/theme-tokens.ts` の `KnownThemeTokens`(`src/ports.ts` の barrel からも再エクスポートされる。既知トークンの語彙。全キー optional)+ `ThemeTokens = KnownThemeTokens & Record<string, string | number>`(開いた index signature で独自トークンも許容 = 後方互換)。
 - **既定値**: `@kohaku-ui/renderer-core` の `defaultLightTheme` / `defaultDarkTheme`(spec-core は環境中立なので値を持たない)。解決は `resolveToken(theme, name[, fallback])` が `theme[name] → alias 表 → 明示 fallback(第 3 引数)→ defaultLightTheme` の順にフォールバックする(明示 fallback を既定網より先に置くのは「既定と異なる fallback を尊重する」旧 API 意味論の維持。fallback を省いた 2 引数は既定網へ落ちる)。型は 2 引数版が `keyof KnownThemeTokens`(既知トークン。既定網か alias で必ず解決)、任意文字列トークンは fallback 必須の 3 引数版のみ許可する(2 引数経路の undefined 漏れを型で塞ぐ)。両レンダラー(React `useToken` / WC `tokenStr`)が同一の既定網を引くため、同一 `ThemeTokens` なら React=WC がピクセル一致する(SPEC-A2 parity)。
 - **alias**: `color.danger`→`color.negative`、`color.focus`→`color.primary`(既定テーマに実体を持たず alias 表のみで解決)。
 - 全トークンの一覧・light/dark 既定値・dark の WCAG AA 方針は [design.ja.md §7.2](design.ja.md) を参照。アプリは `{ ...defaultDarkTheme, ...brand }` の形で基底 + ブランド差分を合成して使う。
 
 ### 4.7 任意の統制 Port(ApprovalPort / ApprovalStore / RateLimitStore)
 
-プロダクトが実装すべき 4 つの Port には含まれない。いずれも任意で、`KohakuHostDeps`(REST)/ `McpHostDeps`(MCP Apps)から配線し、定義は `packages/spec-core/src/ports.ts`。
+プロダクトが実装すべき 4 つの Port には含まれない。いずれも任意で、`KohakuHostDeps`(REST)/ `McpHostDeps`(MCP Apps)から配線し、定義は `packages/spec-core/src/ports.ts`(`src/ports/*.ts` に Port ごとに分かれた定義を束ねる barrel)。
 
 ```ts
 interface ApprovalPort {  // design.md #63

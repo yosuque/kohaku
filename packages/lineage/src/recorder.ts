@@ -79,8 +79,9 @@ export function createViewRecorder(lineage: Lineage): RestViewRecorder {
     async fallback(args) {
       // Derive specHash / intentHash from spec and record view.fallback.
       // Makes the occurrence rate (L1/L2 failures, capability downgrade) observable from lineage.
-      // If the caller already computed it (host-rest's deliverComposed shares one computation across
-      // recordComposed and recordFallbackIfAny), reuse it instead of hashing the same Spec again.
+      // If the caller already computed it (host-rest's deliverComposed shares one computation across the
+      // composed and fallback records via host-core's recordComposedAndFallback), reuse it instead of hashing
+      // the same Spec again.
       const specHash = args.specHash ?? (await computeSpecHash(args.spec));
       await lineage.viewFallback({
         specHash,

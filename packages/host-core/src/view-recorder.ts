@@ -68,7 +68,8 @@ export interface ViewRecorder {
  * deliverComposed/finishStream and the MCP profile's composeAndAudit): a cancelled compose (the caller's
  * abort fired) is not a generation failure and observer.onError already received phase:"cancelled" from the
  * composer, so `record` is skipped entirely — a client disconnect/timeout must not inflate view.composed /
- * view.fallback counts. Otherwise `record` (the host's own composed -> fallback recording, in that order) runs
+ * view.fallback counts. Otherwise `record` (the host's own composed -> fallback recording, in that order --
+ * `recordComposedAndFallback` below is that pair) runs
  * fail-open (host-core's failOpen): a recording failure must not take down an otherwise-successful delivery,
  * and is instead reported to `onError`. Caveat: this only protects `record`; `onError` itself must not throw
  * (a throwing `onError` is not caught here and would escape to the caller).
@@ -91,8 +92,9 @@ export async function recordComposedResult(
  * spec.provenance.fallback the downgrade on the cache-hit path would be missed. A missing `kind` is treated as
  * "generation" (compatible with older records that predate the field).
  *
- * Shared by both host profiles (REST's recordFallbackIfAny and the MCP profile's composeAndAudit) so the
- * fallback-detection rule lives in exactly one place instead of two independently-drifting copies.
+ * Both host profiles reach this through `recordComposedAndFallback` below (REST's deliverComposed/finishStream
+ * and the MCP profile's composeAndAudit), so the fallback-detection rule lives in exactly one place instead
+ * of two independently-drifting copies.
  */
 export async function recordViewFallback(
   recorder: ViewRecorder | undefined,
@@ -117,5 +119,40 @@ export async function recordViewFallback(
     ...(meta.sessionId != null ? { sessionId: meta.sessionId } : {}),
     ...(meta.tenant != null ? { tenant: meta.tenant } : {}),
     ...(meta.correlationId != null ? { correlationId: meta.correlationId } : {}),
+  });
+}
+
+/**
+ * The composed -> fallback recording pair both host profiles run inside `recordComposedResult`'s record
+ * callback (REST's deliverComposed/finishStream, the MCP profile's composeAndAudit): `recorder.composed`
+ * first, then `recordViewFallback` (a no-op unless the spec carries `provenance.fallback`), and nothing at all
+ * when no `recorder` is wired. Order-neutral about where it sits in a host's delivery sequence and about
+ * cancellation / fail-open handling, which stay with `recordComposedResult` and the caller.
+ *
+ * Optional `meta` keys (`specHash`, `sessionId`, `tenant`) are spread only when present, so the recorder sees
+ * an absent key rather than an `undefined` one: REST passes all of them (a precomputed `specHash` plus its
+ * session metadata), the MCP profile passes only `surface` (it computes no `specHash` and resolves no
+ * session). The fallback record additionally carries the compose trace's `correlationId` when set.
+ */
+export async function recordComposedAndFallback(
+  recorder: ViewRecorder | undefined,
+  result: { spec: UISpec; trace: ComposeTrace },
+  meta: { surface: Surface; specHash?: string; sessionId?: string; tenant?: string },
+): Promise<void> {
+  if (recorder == null) return;
+  await recorder.composed({
+    spec: result.spec,
+    trace: result.trace,
+    surface: meta.surface,
+    ...(meta.specHash != null ? { specHash: meta.specHash } : {}),
+    ...(meta.sessionId != null ? { sessionId: meta.sessionId } : {}),
+    ...(meta.tenant != null ? { tenant: meta.tenant } : {}),
+  });
+  await recordViewFallback(recorder, result.spec, {
+    surface: meta.surface,
+    ...(meta.specHash != null ? { specHash: meta.specHash } : {}),
+    ...(meta.sessionId != null ? { sessionId: meta.sessionId } : {}),
+    ...(meta.tenant != null ? { tenant: meta.tenant } : {}),
+    ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
   });
 }

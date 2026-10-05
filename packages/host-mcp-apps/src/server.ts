@@ -254,8 +254,8 @@ function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
  * afterCompose runs immediately before the audit record (preserving composeAndPackage's capability-issuance ordering).
  *
  * Audit recording is symmetric with the REST profile: when `deps.recorder` (ViewRecorder) is wired, both
- * `composed` and `fallback` (host-core's recordViewFallback, shared with REST's recordFallbackIfAny) are
- * recorded here, matching REST's deliverComposed/finishStream. When only the legacy `deps.onComposed` is
+ * `composed` and `fallback` (host-core's recordComposedAndFallback, shared with REST's
+ * deliverComposed/finishStream) are recorded here. When only the legacy `deps.onComposed` is
  * wired, that alone is called (no fallback recording — the old, narrower contract). `recorder` takes priority
  * when both are present.
  *
@@ -292,15 +292,7 @@ async function composeAndAudit(
     result,
     async () => {
       if (ctx.deps.recorder != null) {
-        await ctx.deps.recorder.composed({
-          spec: result.spec,
-          trace: result.trace,
-          surface: MCP_APP_SURFACE,
-        });
-        await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, {
-          surface: MCP_APP_SURFACE,
-          ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
-        });
+        await hostCore.recordComposedAndFallback(ctx.deps.recorder, result, { surface: MCP_APP_SURFACE });
       } else {
         await ctx.deps.onComposed?.(result.spec, result.trace);
       }
@@ -320,7 +312,11 @@ async function composeAndPackage(
   // that distinction. Unused by every synchronous caller, so this is purely additive.
   onComposeResult?: (result: ComposeResult) => void,
 ) {
-  // The compose → capability → audit-record (fail-open) order is intentional; do not reorder.
+  // The compose → capability → action manifest → audit-record (fail-open) order is intentional; do not
+  // reorder. It is this profile's own order (REST's /compose runs capability → record → manifest, its stream
+  // route capability → manifest → write → record): the steps are host-core's order-neutral helpers
+  // (issueSpecCapabilitySafely, buildActionManifestSafely, recordComposedResult + recordComposedAndFallback)
+  // and each host keeps its own sequence and onError endpoint names.
   let capability!: string;
   let actions: hostCore.ActionManifest | undefined;
   const result = await composeAndAudit(ctx, input, "compose", {
@@ -348,14 +344,11 @@ async function composeAndPackage(
       // (ACTIONS_META_KEY). Fail-open on a rejected operationIndex, the same posture
       // issueSpecCapabilitySafely takes just above for the identical failure (listOperations() itself
       // rejecting, or a descriptor's paramsSchema failing validation): report it and treat as "no
-      // manifest this time" rather than failing the whole tool call.
-      try {
-        const index = await ctx.operationIndex();
-        actions = hostCore.buildActionManifest(composed.spec, index);
-      } catch (e) {
-        await reportMcpError(ctx.deps, "compose.actions", e);
-        actions = undefined;
-      }
+      // manifest this time" rather than failing the whole tool call (host-core's buildActionManifestSafely,
+      // shared with the REST profile's actionsFor).
+      actions = await hostCore.buildActionManifestSafely(ctx.operationIndex, composed.spec, (e) =>
+        reportMcpError(ctx.deps, "compose.actions", e),
+      );
     },
   });
   onComposeResult?.(result);
