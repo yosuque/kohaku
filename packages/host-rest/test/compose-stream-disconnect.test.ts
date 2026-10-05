@@ -4,7 +4,7 @@ import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import type { AuthzPort, DomainPort, SemanticPort, StoragePort } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import { createKohakuRoutes, type KohakuHostDeps } from "../src/index.js";
-import { COMPOSE_FAILED_MESSAGE } from "../src/routes/compose.js";
+import { COMPOSE_FAILED_MESSAGE } from "../src/routes/compose-pipeline.js";
 
 // §4.5 R2: /compose/stream must not treat a client disconnect as a generation failure — it must not call
 // onError, and must not attempt to write an `event: error` onto an already-closed stream (a raw exception's

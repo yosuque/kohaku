@@ -115,6 +115,89 @@ function buildDecision(trace: ComposeTraceLike): ViewComposedDecision | undefine
   };
 }
 
+/** The `model` payload / actor field, omitted entirely when the Spec carries no model (no undefined key). */
+function modelField(spec: UISpec): { model: string } | Record<string, never> {
+  return spec.provenance.model != null ? { model: spec.provenance.model } : {};
+}
+
+/** The actor stamped on view.composed / component.generated: `kind`, plus the generating model when known. */
+function actorOf(spec: UISpec, kind: "system" | "model"): { kind: "system" | "model"; model?: string } {
+  return { kind, ...modelField(spec) };
+}
+
+/** Builds the `view.composed` payload (omitting each optional key when its source is unset; key order is part of the recorded shape). */
+function buildViewComposedPayload(args: {
+  spec: UISpec;
+  trace: ComposeTraceLike;
+  surface: Surface;
+  sessionId: string | undefined;
+  specHash: string;
+  structureHash: string;
+  artifactId: string | undefined;
+}): ViewComposedPayload & { structureHash: string; params: JsonObject } {
+  const { spec, trace, surface, sessionId, specHash, structureHash, artifactId } = args;
+  const decision = buildDecision(trace);
+  return {
+    specHash,
+    structureHash,
+    intentHash: spec.intent.hash,
+    canonical: spec.intent.canonical,
+    params: spec.intent.params,
+    dataVersion: spec.dataVersion,
+    tier: spec.provenance.tier,
+    cache: spec.provenance.cache,
+    surface,
+    ...(sessionId != null ? { sessionId } : {}),
+    ...modelField(spec),
+    durationMs: trace.durationMs,
+    ...(artifactId != null ? { artifactId } : {}),
+    ...(trace.correlationId != null ? { correlationId: trace.correlationId } : {}),
+    ...(trace.cacheKey != null ? { cacheKey: trace.cacheKey } : {}),
+    ...(trace.cacheKeyParts != null ? { cacheKeyParts: trace.cacheKeyParts } : {}),
+    ...(spec.provenance.generatorVersion != null
+      ? { generatorVersion: spec.provenance.generatorVersion }
+      : {}),
+    ...(spec.provenance.kit != null ? { kit: spec.provenance.kit } : {}),
+    ...(spec.provenance.fallback != null ? { fallback: spec.provenance.fallback } : {}),
+    ...(decision != null ? { decision } : {}),
+  };
+}
+
+/** The artifact inline-or-referenced by an L2 sandbox node (the node `viewComposed` selects by `artifact != null`). */
+type SandboxArtifact = NonNullable<UISpec["components"][number]["artifact"]>;
+
+/** Builds the `component.generated` payload for an L2 sandbox node's artifact (key order is part of the recorded shape). */
+function buildComponentGeneratedPayload(args: {
+  spec: UISpec;
+  trace: ComposeTraceLike;
+  artifactId: string;
+  artifact: SandboxArtifact;
+  ref: string | undefined;
+  specHash: string;
+}): Record<string, unknown> {
+  const { spec, trace, artifactId, artifact, ref, specHash } = args;
+  return {
+    artifactId,
+    artifactSha256: artifact.sha256,
+    intentHash: spec.intent.hash,
+    canonical: spec.intent.canonical,
+    specHash,
+    // Keep the artifact body too, since it is needed for the promotion review (preview / publish)
+    // (JSONL is sufficient at demo scale; production is expected to use a dedicated artifact store)
+    ...(artifact.inline != null ? { html: artifact.inline } : {}),
+    // The data reference at generation time. Used so the promotion review preview can re-mount with the same data
+    // (the sandbox bridge's allowlist requires an exact match with data.$ref, so without this the data cannot be resolved).
+    ...(ref != null ? { ref } : {}),
+    ...modelField(spec),
+    ...(typeof spec.intent.params["request"] === "string" ? { request: spec.intent.params["request"] } : {}),
+    ...(trace.correlationId != null ? { correlationId: trace.correlationId } : {}),
+    ...(spec.provenance.kit != null ? { kit: spec.provenance.kit } : {}),
+    ...(spec.provenance.generatorVersion != null
+      ? { generatorVersion: spec.provenance.generatorVersion }
+      : {}),
+  };
+}
+
 export interface Lineage {
   /**
    * Appends an arbitrary event (higher-level APIs such as the promotion pipeline use this too).
@@ -253,38 +336,19 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
       const artifactId =
         sandboxNode?.artifact != null ? artifactIdOf(sandboxNode.artifact.sha256) : undefined;
 
-      const decision = buildDecision(trace);
-      const payload: ViewComposedPayload & { structureHash: string; params: JsonObject } = {
+      const payload = buildViewComposedPayload({
+        spec,
+        trace,
+        surface,
+        sessionId,
         specHash,
         structureHash,
-        intentHash: spec.intent.hash,
-        canonical: spec.intent.canonical,
-        params: spec.intent.params,
-        dataVersion: spec.dataVersion,
-        tier: spec.provenance.tier,
-        cache: spec.provenance.cache,
-        surface,
-        ...(sessionId != null ? { sessionId } : {}),
-        ...(spec.provenance.model != null ? { model: spec.provenance.model } : {}),
-        durationMs: trace.durationMs,
-        ...(artifactId != null ? { artifactId } : {}),
-        ...(trace.correlationId != null ? { correlationId: trace.correlationId } : {}),
-        ...(trace.cacheKey != null ? { cacheKey: trace.cacheKey } : {}),
-        ...(trace.cacheKeyParts != null ? { cacheKeyParts: trace.cacheKeyParts } : {}),
-        ...(spec.provenance.generatorVersion != null
-          ? { generatorVersion: spec.provenance.generatorVersion }
-          : {}),
-        ...(spec.provenance.kit != null ? { kit: spec.provenance.kit } : {}),
-        ...(spec.provenance.fallback != null ? { fallback: spec.provenance.fallback } : {}),
-        ...(decision != null ? { decision } : {}),
-      };
+        artifactId,
+      });
       await record(
         "view.composed",
         payload as unknown as Record<string, unknown>,
-        {
-          kind: spec.provenance.tier === "L0" ? "system" : "model",
-          ...(spec.provenance.model != null ? { model: spec.provenance.model } : {}),
-        },
+        actorOf(spec, spec.provenance.tier === "L0" ? "system" : "model"),
         tenant,
       );
 
@@ -313,32 +377,15 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
             if (existing.length === 0) {
               await record(
                 "component.generated",
-                {
+                buildComponentGeneratedPayload({
+                  spec,
+                  trace,
                   artifactId,
-                  artifactSha256: sandboxNode.artifact.sha256,
-                  intentHash: spec.intent.hash,
-                  canonical: spec.intent.canonical,
+                  artifact: sandboxNode.artifact,
+                  ref: sandboxNode.data?.$ref,
                   specHash,
-                  // Keep the artifact body too, since it is needed for the promotion review (preview / publish)
-                  // (JSONL is sufficient at demo scale; production is expected to use a dedicated artifact store)
-                  ...(sandboxNode.artifact.inline != null ? { html: sandboxNode.artifact.inline } : {}),
-                  // The data reference at generation time. Used so the promotion review preview can re-mount with the same data
-                  // (the sandbox bridge's allowlist requires an exact match with data.$ref, so without this the data cannot be resolved).
-                  ...(sandboxNode.data?.$ref != null ? { ref: sandboxNode.data.$ref } : {}),
-                  ...(spec.provenance.model != null ? { model: spec.provenance.model } : {}),
-                  ...(typeof spec.intent.params["request"] === "string"
-                    ? { request: spec.intent.params["request"] }
-                    : {}),
-                  ...(trace.correlationId != null ? { correlationId: trace.correlationId } : {}),
-                  ...(spec.provenance.kit != null ? { kit: spec.provenance.kit } : {}),
-                  ...(spec.provenance.generatorVersion != null
-                    ? { generatorVersion: spec.provenance.generatorVersion }
-                    : {}),
-                },
-                {
-                  kind: "model",
-                  ...(spec.provenance.model != null ? { model: spec.provenance.model } : {}),
-                },
+                }),
+                actorOf(spec, "model"),
                 tenant,
               );
             }

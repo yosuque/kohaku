@@ -3,6 +3,7 @@ import {
   type ActionGateResult,
   applyActionEffects,
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
+  errorMessage,
   type ParsedInvokableRef,
   parseInvokableRef,
   recordActionGateResult,
@@ -27,7 +28,6 @@ import { ActionBodySchema } from "./schemas.js";
 import {
   ANONYMOUS,
   actionGateFor,
-  message,
   operationIndex,
   parseBody,
   type RouteContext,
@@ -123,7 +123,7 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     try {
       parsed = parseInvokableRef(refParam, deps.querySource);
     } catch (e) {
-      return c.json(errorBody("BAD_REQUEST", message(e)), 400);
+      return c.json(errorBody("BAD_REQUEST", errorMessage(e)), 400);
     }
     if (parsed.kind === "source_mismatch") {
       return c.json(
@@ -244,14 +244,31 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
         return gateUnavailable(e, entry.descriptor.tier ?? "auto");
       }
     }
-    const gated = await handleActionGateResult(deps, c, gateResult, {
-      action: body.action,
-      payload,
-      principal,
-      tenant,
-      requestId,
-    });
-    if (gated != null) return gated;
+    // Maps one `ActionGate.check` outcome onto the REST response (design.md #62/#63). The audit trail and the
+    // client-visible messages are host-core's `recordActionGateResult` (shared with the MCP profile); this keeps
+    // only the wire mapping: `invalid` -> 422, `approvalRequired` / `denied` -> 403, and `proceed` falls through
+    // to `domain.invoke`.
+    const outcome = await recordActionGateResult(gateResult, auditContext);
+    switch (outcome.kind) {
+      case "invalid":
+        return c.json(
+          errorBody(
+            "ACTION_PARAMS_INVALID",
+            "action parameters failed validation",
+            requestId,
+            undefined,
+            outcome.issues,
+          ),
+          422,
+        );
+      case "approvalRequired":
+        return c.json(
+          errorBody("APPROVAL_REQUIRED", outcome.message, requestId, undefined, undefined, outcome.approval),
+          403,
+        );
+      case "proceed":
+        break;
+    }
 
     let result: unknown;
     try {
@@ -268,57 +285,6 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     });
     return c.json(response);
   });
-}
-
-/**
- * Maps one `ActionGate.check` outcome onto the REST response (design.md #62/#63). The audit trail and the
- * client-visible messages are host-core's `recordActionGateResult` (shared with the MCP profile); this keeps
- * only the wire mapping. Returns the `Response` to send back to the client (`invalid` -> 422,
- * `approvalRequired` / `denied` -> 403), or `null` when the gate allowed the invoke and the caller should
- * proceed to `domain.invoke`.
- */
-async function handleActionGateResult(
-  deps: KohakuHostDeps,
-  c: Context,
-  gateResult: ActionGateResult,
-  ctx: {
-    action: string;
-    payload: JsonObject;
-    principal: Principal;
-    tenant: string | undefined;
-    requestId: string;
-  },
-): Promise<Response | null> {
-  const { action, payload, principal, tenant, requestId } = ctx;
-  const outcome = await recordActionGateResult(gateResult, {
-    recorder: deps.actionAuditRecorder,
-    action,
-    payload,
-    principal,
-    tenant,
-    correlationId: requestId,
-    report: (e) => reportHostError(deps, "binding/action.audit", requestId, e),
-  });
-  switch (outcome.kind) {
-    case "invalid":
-      return c.json(
-        errorBody(
-          "ACTION_PARAMS_INVALID",
-          "action parameters failed validation",
-          requestId,
-          undefined,
-          outcome.issues,
-        ),
-        422,
-      );
-    case "approvalRequired":
-      return c.json(
-        errorBody("APPROVAL_REQUIRED", outcome.message, requestId, undefined, undefined, outcome.approval),
-        403,
-      );
-    case "proceed":
-      return null;
-  }
 }
 
 function bearerToken(c: Context): string | null {

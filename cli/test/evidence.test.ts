@@ -37,7 +37,8 @@ import { runEvidenceExport } from "../src/evidence/export.js";
 import { runEvidenceKeygen } from "../src/evidence/keygen.js";
 import { importPrivateKeyPem } from "../src/evidence/keys.js";
 import { runEvidenceVerify } from "../src/evidence/verify.js";
-import { EvidenceUsageError, resolveEvidenceWindow } from "../src/evidence/window.js";
+import { resolveWindow } from "../src/lineage-window.js";
+import { CliUsageError } from "../src/usage-error.js";
 
 function tmp(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -271,14 +272,15 @@ describe("kohaku evidence export --since / --until normalization", () => {
     expect(result.manifest.counts.events).toBe(3); // first, last-day, after
   });
 
-  it("resolveEvidenceWindow: date-only since starts the day, timestamps pass through canonicalized", () => {
-    expect(resolveEvidenceWindow({ since: "2026-09-01", until: "2026-09-01" })).toEqual({
+  it("resolveWindow: date-only since starts the day, timestamps pass through canonicalized", () => {
+    expect(resolveWindow({ since: "2026-09-01", until: "2026-09-01" })).toEqual({
       since: "2026-09-01T00:00:00.000Z",
       until: "2026-09-01T23:59:59.999Z",
     });
-    expect(
-      resolveEvidenceWindow({ since: "2026-09-01T00:00:00Z", until: "2026-09-02T00:00:00.5+00:00" }),
-    ).toEqual({ since: "2026-09-01T00:00:00.000Z", until: "2026-09-02T00:00:00.500Z" });
+    expect(resolveWindow({ since: "2026-09-01T00:00:00Z", until: "2026-09-02T00:00:00.5+00:00" })).toEqual({
+      since: "2026-09-01T00:00:00.000Z",
+      until: "2026-09-02T00:00:00.500Z",
+    });
   });
 
   it.each([
@@ -298,7 +300,7 @@ describe("kohaku evidence export --since / --until normalization", () => {
       privateKeyPath,
       outDir,
     });
-    await expect(promise).rejects.toBeInstanceOf(EvidenceUsageError);
+    await expect(promise).rejects.toBeInstanceOf(CliUsageError);
     expect(existsSync(join(outDir, "manifest.json"))).toBe(false);
   });
 
@@ -594,7 +596,7 @@ describe("kohaku evidence export --rest (in-process host-rest app)", () => {
         privateKeyPath,
         outDir: tmp("kohaku-evidence-out-"),
       }),
-    ).rejects.toBeInstanceOf(EvidenceUsageError);
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 
   it("derives scope.tenant from an x-kohaku-tenant header when --tenant is omitted", async () => {

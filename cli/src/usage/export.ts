@@ -1,10 +1,12 @@
 import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createKohakuClient, globalTransport, type Transport } from "@kohaku-ui/client";
+import { globalTransport, type Transport } from "@kohaku-ui/client";
 import { iterateLineagePages, mergeUsageRows, summarizeUsage, type UsageRow } from "@kohaku-ui/lineage";
 import type { LineageEventRecord, StoragePort } from "@kohaku-ui/spec-core";
 import { parseHeaderArgs } from "../header-args.js";
-import { CliUsageError, resolveRestTenant, resolveWindow } from "../lineage-window.js";
+import { type LineageSourceArgs, resolveRestTenant, resolveWindow } from "../lineage-window.js";
+import { createRestClient } from "../rest-client.js";
+import { CliUsageError } from "../usage-error.js";
 import { formatUsageCsv } from "./csv.js";
 import { LINEAGE_FILE_NAME, type LineageFileScanStats, streamLineageChunks } from "./lineage-file.js";
 
@@ -14,21 +16,8 @@ export const DEFAULT_REST_TIMEOUT_MS = 30_000;
 /** The lineage event types a usage summary reads (everything else is skipped at the source). */
 const USAGE_EVENT_TYPES = ["view.composed", "intent.fixated", "intent.unfixated"];
 
-export interface UsageExportOptions {
-  /** Read from a local StoragePort data directory (mutually exclusive with `rest`). All tenants unless `tenant` is set. */
-  dataDir?: string;
-  /**
-   * Read over REST from a running host (mutually exclusive with `dataDir`). The `x-kohaku-tenant` header
-   * decides the tenant scope; a host without tenant scoping returns every tenant.
-   */
-  rest?: string;
-  /** Extra REST request headers ("name:value", repeatable) -- e.g. tenant / auth. REST mode only. */
-  headers?: string[];
-  tenant?: string;
-  /** Lower bound: ISO 8601 date or timestamp; a date-only value starts that UTC day (see `resolveWindow`). */
-  since: string;
-  /** Upper bound: ISO 8601 date or timestamp; a date-only value INCLUDES that whole UTC day. */
-  until: string;
+/** `--data-dir` reads every tenant unless `tenant` is set; a `--rest` host without tenant scoping returns every tenant. */
+export interface UsageExportOptions extends LineageSourceArgs {
   /** Output format. Default "csv". */
   format?: "csv" | "json";
   /** Write to this file instead of returning the text only (the caller prints it to stdout when omitted). */
@@ -114,18 +103,18 @@ function isTimeoutError(error: unknown): boolean {
   return error.name === "TimeoutError" || isTimeoutError(error.cause);
 }
 
+/** The arguments of a usage export once `validateUsageExportOptions` has accepted them (defaults applied). */
+interface ValidatedUsageExport {
+  timeoutMs: number;
+  format: "csv" | "json";
+  window: { since: string; until: string };
+}
+
 /**
- * `kohaku usage export`: derives per-day, per-tenant usage rows (design.md #74) from the **whole** lineage log
- * in the window -- exhaustive cursor paging, not the bounded sample behind GET /analytics/summary -- so the
- * numbers are suitable for metering. `--data-dir` streams the `lineage.jsonl` of a `createFileStoragePort`
- * directory line by line, in chunks of 500 matching events; it reads that one file and writes nothing (it
- * does not open the store, so a corrupt promotions.json is left alone). A Redis / Postgres deployment is read
- * through `--rest`, which pages GET /lineage through the client, scoped by the `x-kohaku-tenant` header (a host
- * without tenant scoping returns every tenant). Each chunk or page is summarized as it arrives and folded into
- * the running rows (`mergeUsageRows`), so memory holds the rows and one chunk, not the log.
- * Every bad argument is a `CliUsageError` (exit 2).
+ * Rejects every bad argument of a usage export (all `CliUsageError`, exit 2) before any storage access, and
+ * applies the defaults (`timeoutMs`, `format`) and the canonical `--since` / `--until` window.
  */
-export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExportResult> {
+function validateUsageExportOptions(opts: UsageExportOptions): ValidatedUsageExport {
   if (opts.dataDir == null && opts.rest == null) {
     throw new CliUsageError("Specify either --data-dir <dir> or --rest <baseUrl>");
   }
@@ -153,17 +142,35 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
   }
   // Validated before any storage access: a bad window is a usage error (exit 2).
   const window = resolveWindow({ since: opts.since, until: opts.until });
+  return { timeoutMs, format, window };
+}
 
-  let pages: AsyncIterable<LineageEventRecord[]>;
-  let tenantFilter: string | undefined;
-  const scan: LineageFileScanStats = { skippedLines: 0 };
+/** Where a usage export reads the lineage log from, as a stream of pages. */
+interface LineagePageSource {
+  pages: AsyncIterable<LineageEventRecord[]>;
+  /** The tenant the summary is filtered to (`--data-dir` only; over REST the `x-kohaku-tenant` header scopes). */
+  tenantFilter: string | undefined;
+  /** The `lineage.jsonl` read in `--data-dir` mode without a `storage`; "" over REST. */
+  lineagePath: string;
+}
+
+/**
+ * Opens the lineage source of an export that `validateUsageExportOptions` accepted: the caller's `storage`
+ * or the `--data-dir` file stream (which records skipped lines in `scan`), or the `--rest` client with a
+ * per-request time limit.
+ */
+function openLineagePages(
+  opts: UsageExportOptions,
+  window: { since: string; until: string },
+  timeoutMs: number,
+  scan: LineageFileScanStats,
+): LineagePageSource {
   const lineagePath = opts.dataDir != null ? join(opts.dataDir, LINEAGE_FILE_NAME) : "";
   if (opts.dataDir != null) {
     // A mistyped path would otherwise read as an empty (and successful) export; stop at the door instead.
     if (!existsSync(opts.dataDir) || !statSync(opts.dataDir).isDirectory()) {
       throw new CliUsageError(`--data-dir ${opts.dataDir} is not an existing directory`);
     }
-    tenantFilter = opts.tenant;
     const filter = {
       type: USAGE_EVENT_TYPES,
       since: window.since,
@@ -171,27 +178,45 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
       ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
       ...(opts.pageSize != null ? { pageSize: opts.pageSize } : {}),
     };
-    pages =
+    const pages =
       opts.storage != null
         ? pagesOfStorage(opts.storage, filter)
         : streamLineageChunks(lineagePath, filter, scan);
-  } else {
-    const headers = parseHeaderArgs(opts.headers);
-    // The x-kohaku-tenant header is what actually scopes a REST request, so a --tenant that disagrees with
-    // it (or has no header to back it) is rejected rather than mislabelled.
-    resolveRestTenant(headers, opts.tenant);
-    const client = createKohakuClient({
-      baseUrl: opts.rest!.replace(/\/$/, ""),
-      headers: () => headers,
-      transport: withRequestTimeout(opts.transport ?? globalTransport(), timeoutMs),
-    });
-    pages = client.lineagePages({
-      type: USAGE_EVENT_TYPES,
-      since: window.since,
-      until: window.until,
-      ...(opts.pageSize != null ? { pageSize: opts.pageSize } : {}),
-    });
+    return { pages, tenantFilter: opts.tenant, lineagePath };
   }
+  const headers = parseHeaderArgs(opts.headers);
+  // The x-kohaku-tenant header is what actually scopes a REST request, so a --tenant that disagrees with
+  // it (or has no header to back it) is rejected rather than mislabelled.
+  resolveRestTenant(headers, opts.tenant);
+  const client = createRestClient(
+    opts.rest!,
+    headers,
+    withRequestTimeout(opts.transport ?? globalTransport(), timeoutMs),
+  );
+  const pages = client.lineagePages({
+    type: USAGE_EVENT_TYPES,
+    since: window.since,
+    until: window.until,
+    ...(opts.pageSize != null ? { pageSize: opts.pageSize } : {}),
+  });
+  return { pages, tenantFilter: undefined, lineagePath };
+}
+
+/**
+ * `kohaku usage export`: derives per-day, per-tenant usage rows (design.md #74) from the **whole** lineage log
+ * in the window -- exhaustive cursor paging, not the bounded sample behind GET /analytics/summary -- so the
+ * numbers are suitable for metering. `--data-dir` streams the `lineage.jsonl` of a `createFileStoragePort`
+ * directory line by line, in chunks of 500 matching events; it reads that one file and writes nothing (it
+ * does not open the store, so a corrupt promotions.json is left alone). A Redis / Postgres deployment is read
+ * through `--rest`, which pages GET /lineage through the client, scoped by the `x-kohaku-tenant` header (a host
+ * without tenant scoping returns every tenant). Each chunk or page is summarized as it arrives and folded into
+ * the running rows (`mergeUsageRows`), so memory holds the rows and one chunk, not the log.
+ * Every bad argument is a `CliUsageError` (exit 2).
+ */
+export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExportResult> {
+  const { timeoutMs, format, window } = validateUsageExportOptions(opts);
+  const scan: LineageFileScanStats = { skippedLines: 0 };
+  const { pages, tenantFilter, lineagePath } = openLineagePages(opts, window, timeoutMs, scan);
 
   let rows: UsageRow[] = [];
   try {

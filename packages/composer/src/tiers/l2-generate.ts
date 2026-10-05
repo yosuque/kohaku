@@ -54,65 +54,34 @@ export type L2LintOptions = {
 };
 
 export function collectL2Issues(html: string, opts?: L2LintOptions): string[] {
-  const issues: string[] = [];
+  // Every check is a row of the rule table (see L2_LINT_RULES below); the issue strings and their order are
+  // the repair prompt, so the rows run in table order and each row's issues are appended in turn.
+  return L2_LINT_RULES.flatMap((rule) => rule(html, opts));
+}
+
+/**
+ * One row of the L2 bridge-contract lint's rule table (see L2_LINT_RULES): the 0-N issue strings the check
+ * finds in `html`. A check with a single fixed message is built with `fixed`.
+ */
+type L2LintRule = (html: string, opts?: L2LintOptions) => string[];
+
+/** A rule row for a single boolean predicate over (html, opts) that produces at most one fixed message. */
+const fixed =
+  (applies: (html: string, opts?: L2LintOptions) => boolean, message: string): L2LintRule =>
+  (html, opts) =>
+    applies(html, opts) ? [message] : [];
+
+/**
+ * The window.kohaku.xxx / kohaku?.xxx names a document references (on the premise that, since L2_SYSTEM_PROMPT
+ * enforces the direct-call form, destructuring or aliasing is not generated. A deviation is detected as a missing ready).
+ */
+function usedKohakuApis(html: string): Set<string> {
   const used = new Set<string>();
-  // Extract the window.kohaku.xxx / kohaku?.xxx form (on the premise that, since L2_SYSTEM_PROMPT enforces
-  // the direct-call form, destructuring or aliasing is not generated. A deviation is detected as a missing ready).
   for (const m of html.matchAll(/kohaku\s*\??\.\s*([A-Za-z_$][A-Za-z0-9_$]*)/g)) {
     used.add(m[1]!);
   }
-  // The next two checks do not fit the rule table below: L2_UNKNOWN_API emits 0-N issues (one per
-  // hallucinated name found in `used`) and L2_READY_MISSING needs that same `used` set as extra state.
-  for (const name of [...used].sort()) {
-    if (!KOHAKU_API_ALLOWLIST.has(name)) {
-      issues.push(
-        `L2_UNKNOWN_API: window.kohaku.${name} does not exist (it will throw a TypeError at runtime). ` +
-          "The only available APIs are fetchData / emit / onProps / ready. " +
-          `Remove every occurrence of kohaku.${name}, including comments`,
-      );
-    }
-  }
-  if (!used.has("ready")) {
-    issues.push(
-      "L2_READY_MISSING: window.kohaku.ready() is never called. Always call window.kohaku.ready() directly " +
-        "when rendering completes (including when data fetching fails); destructuring or aliasing is not allowed",
-    );
-  }
-  // Syntax check (sending back JS syntax errors). Delegated to the carved-out collectScriptSyntaxIssues
-  // (since Python has no JS execution engine, it reuses just this checker from a CLI sidecar). Also does
-  // not fit the rule table: it parses <script> bodies and can emit more than one issue.
-  issues.push(...collectScriptSyntaxIssues(html));
-  // Truncation detection: a complete single HTML document ends with </html> (the L2_SYSTEM_PROMPT contract).
-  // An output truncated by the output-token limit etc. is a breeding ground for syntax errors or rendering cutoff, so send it back.
-  if (!/<\/html>\s*$/i.test(html)) {
-    issues.push(
-      "L2_TRUNCATED: the HTML document does not end with </html> (output may be truncated). " +
-        "Output a complete single HTML document",
-    );
-  }
-  // The remaining checks are all a single boolean predicate over (html, opts) producing at most one fixed
-  // message, so they are expressed as a rule table (see L2_LINT_RULES below) rather than repeated ifs.
-  issues.push(...L2_LINT_RULES.filter((rule) => rule.applies(html, opts)).map((rule) => rule.message));
-  // Unknown kit class detection (only when a design kit is applied). A class in the kit's namespace that
-  // the vocabulary does not define renders unstyled — exactly the "browser default look" the kit exists
-  // to prevent — so send it back with the list of offenders. Classes outside the namespaces (the
-  // model's own, styled in its <style>) are never flagged. This is the one lint rule whose message is
-  // computed per-input (the offending class list), so it stays an explicit block here rather than joining
-  // L2_LINT_RULES above, which holds only fixed-message rules.
-  if (opts?.kit != null) {
-    const unknown = collectUnknownKitClasses(html, opts.kit);
-    if (unknown.length > 0) {
-      issues.push(
-        `L2_UNKNOWN_CLASS: these class names look like design-kit classes but do not exist in the kit: ${unknown.join(", ")}. ` +
-          "Use only the kit classes and utilities listed in the Design kit section, or rename them to your own classes and style those in <style> with var(--kohaku-*) tokens",
-      );
-    }
-  }
-  return issues;
+  return used;
 }
-
-/** One row of the L2 bridge-contract lint's rule table (see L2_LINT_RULES). */
-type L2LintRule = { applies: (html: string, opts?: L2LintOptions) => boolean; message: string };
 
 /** Raw-color detection pattern (hex literal / rgb() / rgba() / hsl() / hsla()). */
 const L2_RAW_COLOR_RE = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/;
@@ -233,55 +202,79 @@ const L2_LIB_SIGNATURES: readonly [RegExp, string][] = [
 ];
 
 /**
- * The bridge-contract lint checks that reduce to "a single boolean predicate over (html, opts) → at most
- * one fixed message", in the same order collectL2Issues ran them as sequential `if`s before this refactor.
+ * The bridge-contract lint checks, in the order collectL2Issues emits their issues: L2_UNKNOWN_API,
+ * L2_READY_MISSING, L2_SCRIPT_SYNTAX, L2_TRUNCATED, the fixed-message rows, then L2_UNKNOWN_CLASS.
  * Order matters: the issue strings and their order are part of the repair prompt (repairFeedback) sent to
  * the LLM, so this table must keep producing byte-identical output in the same order for every input.
  */
 const L2_LINT_RULES: readonly L2LintRule[] = [
+  // Unknown window.kohaku API detection: emits 0-N issues (one per hallucinated name found among the names
+  // the document references, in sorted order).
+  (html) =>
+    [...usedKohakuApis(html)]
+      .sort()
+      .filter((name) => !KOHAKU_API_ALLOWLIST.has(name))
+      .map(
+        (name) =>
+          `L2_UNKNOWN_API: window.kohaku.${name} does not exist (it will throw a TypeError at runtime). ` +
+          "The only available APIs are fetchData / emit / onProps / ready. " +
+          `Remove every occurrence of kohaku.${name}, including comments`,
+      ),
+  fixed(
+    (html) => !usedKohakuApis(html).has("ready"),
+    "L2_READY_MISSING: window.kohaku.ready() is never called. Always call window.kohaku.ready() directly " +
+      "when rendering completes (including when data fetching fails); destructuring or aliasing is not allowed",
+  ),
+  // Syntax check (sending back JS syntax errors). Delegated to the carved-out collectScriptSyntaxIssues
+  // (since Python has no JS execution engine, it reuses just this checker from a CLI sidecar). It parses
+  // <script> bodies and can emit more than one issue.
+  (html) => collectScriptSyntaxIssues(html),
+  // Truncation detection: a complete single HTML document ends with </html> (the L2_SYSTEM_PROMPT contract).
+  // An output truncated by the output-token limit etc. is a breeding ground for syntax errors or rendering cutoff, so send it back.
+  fixed(
+    (html) => !/<\/html>\s*$/i.test(html),
+    "L2_TRUNCATED: the HTML document does not end with </html> (output may be truncated). " +
+      "Output a complete single HTML document",
+  ),
   // Non-deterministic rendering detection: Math.random breaks both "fabricating values not in the data"
   // (observed in the field: random-generating the tooltip's sales amount) and the cache-premise
   // determinism of "same data → same display", so send it back. Being a lexical check it also reacts
   // inside comments, but erring on the side of it being removed by repair is acceptable.
-  {
-    applies: (html) => /Math\s*\.\s*random\s*\(/.test(html),
-    message:
-      "L2_NONDETERMINISM: Math.random() is used. The widget must render deterministically " +
+  fixed(
+    (html) => /Math\s*\.\s*random\s*\(/.test(html),
+    "L2_NONDETERMINISM: Math.random() is used. The widget must render deterministically " +
       "from the actual data returned by fetchData (generating fake values from random numbers or dummy data is forbidden)",
-  },
+  ),
   // Navigation detection: the generated script now runs inside a Worker with no document/assignable
   // location/window.open of its own (SBX-EXEC-001), so this class of attempt is neutralized by the runtime
   // regardless — but sending it back before delivery still saves a repair round-trip versus letting the model
   // discover the TypeError only at smoke-validation or runtime.
-  {
-    applies: (html) => L2_NAVIGATION_RE.test(html),
-    message:
-      "L2_NAVIGATION: the document navigates (meta refresh / location assignment / window.open). " +
+  fixed(
+    (html) => L2_NAVIGATION_RE.test(html),
+    "L2_NAVIGATION: the document navigates (meta refresh / location assignment / window.open). " +
       "Navigation APIs do not exist in the sandbox runtime; render in place and use window.kohaku.emit for interactions",
-  },
+  ),
   // Markup the applier's allowlist always rejects (packages/spec-core/src/schema/sandbox-dom.ts): sent back
   // before delivery for the same reason as L2_NAVIGATION above — none of this ever reaches the real DOM once
   // the applier drops it, so catching it here saves a repair round-trip.
-  {
-    applies: (html) => L2_UNSAFE_MARKUP_RE.test(html),
-    message:
-      "L2_UNSAFE_MARKUP: the document contains markup the sandbox's DOM applier always rejects " +
+  fixed(
+    (html) => L2_UNSAFE_MARKUP_RE.test(html),
+    "L2_UNSAFE_MARKUP: the document contains markup the sandbox's DOM applier always rejects " +
       "(an <iframe>/<object>/<embed>/<form>/<base>/<link>/<frame>/<applet> element, an on*= event-handler " +
       "attribute, a javascript: URL, or a <script src=...>). None of these ever reach the real DOM " +
       "(the applier drops them and the widget renders without them); use the DOM shim API's " +
       "addEventListener and window.kohaku.emit instead",
-  },
+  ),
   // APIs the Worker DOM shim does not provide at all (see guest/worker-shim.ts's module docstring): calling
   // one throws a TypeError, so — like L2_UNKNOWN_API for the window.kohaku surface — send it back before
   // delivery rather than let it surface only as a runtime failure.
-  {
-    applies: (html) => L2_UNSUPPORTED_DOM_RE.test(html),
-    message:
-      "L2_UNSUPPORTED_DOM: the code uses an API that does not exist in the sandbox's Worker DOM shim " +
+  fixed(
+    (html) => L2_UNSUPPORTED_DOM_RE.test(html),
+    "L2_UNSUPPORTED_DOM: the code uses an API that does not exist in the sandbox's Worker DOM shim " +
       "(canvas getContext, document.write, alert/confirm/prompt, localStorage/sessionStorage/indexedDB, " +
       "document.cookie, or MutationObserver/IntersectionObserver). Calling any of these throws a TypeError " +
       "at runtime; render only through the DOM shim API and window.kohaku",
-  },
+  ),
   // External-library trace detection: because the sandbox cannot load external scripts under CSP, all
   // chart-library APIs become a runtime TypeError. What was observed in the field is D3-style method
   // chains (plain DOM's append() returns undefined, so .attr() gives "Cannot read properties of
@@ -289,25 +282,38 @@ const L2_LINT_RULES: readonly L2LintRule[] = [
   // back via a lexical check together with direct references to library names. One rule per L2_LIB_SIGNATURES
   // entry, in the same order the original for-loop iterated it.
   ...L2_LIB_SIGNATURES.map(
-    ([pattern, label]): L2LintRule => ({
-      applies: (html) => pattern.test(html),
-      message:
+    ([pattern, label]): L2LintRule =>
+      fixed(
+        (html) => pattern.test(html),
         `L2_LIB_UNAVAILABLE: the code uses ${label}. The sandbox cannot load external libraries, ` +
-        "and plain DOM elements have no .attr() or similar methods (it will throw a TypeError at runtime). " +
-        "Build SVG with document.createElementNS + setAttribute, or assemble a string and insert it via innerHTML",
-    }),
+          "and plain DOM elements have no .attr() or similar methods (it will throw a TypeError at runtime). " +
+          "Build SVG with document.createElementNS + setAttribute, or assemble a string and insert it via innerHTML",
+      ),
   ),
   // Raw-color detection (only when a design system is applied). Baking in concrete colors cannot follow a
   // theme switch and breaks the Spec's theme independence (SPEC-ENV-003) and the cache's cross-theme
   // reuse, so send back a substitution to token references var(--kohaku-*). To avoid reacting to CSS id
   // selectors (#chart etc.), #hex is judged by 3-8 hex digits + a word boundary (an id with the same form
   // as a hex value such as #fee is a false positive, but err toward repair).
-  {
-    applies: (html, opts) => opts?.enforceTokenColors === true && L2_RAW_COLOR_RE.test(html),
-    message:
-      "L2_RAW_COLOR: hard-coded colors (#hex / rgb() / hsl() etc.) are present. Always specify colors " +
+  fixed(
+    (html, opts) => opts?.enforceTokenColors === true && L2_RAW_COLOR_RE.test(html),
+    "L2_RAW_COLOR: hard-coded colors (#hex / rgb() / hsl() etc.) are present. Always specify colors " +
       "with design tokens var(--kohaku-*) (e.g. color: var(--kohaku-color-text), background " +
       "var(--kohaku-color-background), chart series var(--kohaku-chart-palette-1) …)",
+  ),
+  // Unknown kit class detection (only when a design kit is applied). A class in the kit's namespace that
+  // the vocabulary does not define renders unstyled — exactly the "browser default look" the kit exists
+  // to prevent — so send it back with the list of offenders. Classes outside the namespaces (the
+  // model's own, styled in its <style>) are never flagged. The message is computed per-input (the
+  // offending class list).
+  (html, opts) => {
+    if (opts?.kit == null) return [];
+    const unknown = collectUnknownKitClasses(html, opts.kit);
+    if (unknown.length === 0) return [];
+    return [
+      `L2_UNKNOWN_CLASS: these class names look like design-kit classes but do not exist in the kit: ${unknown.join(", ")}. ` +
+        "Use only the kit classes and utilities listed in the Design kit section, or rename them to your own classes and style those in <style> with var(--kohaku-*) tokens",
+    ];
   },
 ];
 

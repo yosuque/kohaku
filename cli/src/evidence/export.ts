@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createKohakuClient, type Transport } from "@kohaku-ui/client";
+import type { Transport } from "@kohaku-ui/client";
 import {
   buildEvidencePack,
   createStorageEvidenceSource,
@@ -10,24 +10,13 @@ import {
 } from "@kohaku-ui/lineage";
 import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { parseHeaderArgs } from "../header-args.js";
-import { resolveRestTenant } from "../lineage-window.js";
+import { type LineageSourceArgs, resolveRestTenant, resolveWindow } from "../lineage-window.js";
+import { createRestClient } from "../rest-client.js";
 import { CLI_VERSION } from "../version.js";
 import { importPrivateKeyPem } from "./keys.js";
 import { createRestEvidenceSource, REST_FIXATIONS_LIMITATION_WARNING } from "./rest-source.js";
-import { resolveEvidenceWindow } from "./window.js";
 
-export interface EvidenceExportOptions {
-  /** Read the pack from a local StoragePort data directory (mutually exclusive with `rest`). */
-  dataDir?: string;
-  /** Read the pack over REST from a running host (mutually exclusive with `dataDir`). */
-  rest?: string;
-  /** Extra REST request headers ("name:value", repeatable) -- e.g. tenant / auth. REST mode only. */
-  headers?: string[];
-  tenant?: string;
-  /** Lower bound: ISO 8601 date or timestamp; a date-only value starts that UTC day (see `resolveEvidenceWindow`). */
-  since: string;
-  /** Upper bound: ISO 8601 date or timestamp; a date-only value INCLUDES that whole UTC day. */
-  until: string;
+export interface EvidenceExportOptions extends LineageSourceArgs {
   /** Path to a PEM-encoded Ed25519 private key (PKCS8, `-----BEGIN PRIVATE KEY-----`). */
   privateKeyPath: string;
   outDir: string;
@@ -40,9 +29,6 @@ export interface EvidenceExportResult {
   outDir: string;
   manifest: EvidenceManifest;
 }
-
-// Shared with `kohaku usage export`; kept exported from here for existing importers.
-export { resolveRestTenant };
 
 /**
  * `kohaku evidence export`: assembles and signs a Compliance Evidence Pack (design.md #67), then writes
@@ -58,7 +44,7 @@ export async function runEvidenceExport(opts: EvidenceExportOptions): Promise<Ev
   }
 
   // Validated first (before any key or storage access): a bad window is a usage error, not a signed pack.
-  const window = resolveEvidenceWindow({ since: opts.since, until: opts.until });
+  const window = resolveWindow({ since: opts.since, until: opts.until });
 
   const restFixationsWarning = opts.rest != null ? REST_FIXATIONS_LIMITATION_WARNING : undefined;
   const restHeaders = opts.rest != null ? parseHeaderArgs(opts.headers) : undefined;
@@ -66,13 +52,7 @@ export async function runEvidenceExport(opts: EvidenceExportOptions): Promise<Ev
   const source =
     opts.dataDir != null
       ? createStorageEvidenceSource(createFileStoragePort(opts.dataDir))
-      : createRestEvidenceSource(
-          createKohakuClient({
-            baseUrl: opts.rest!.replace(/\/$/, ""),
-            headers: () => restHeaders!,
-            ...(opts.transport != null ? { transport: opts.transport } : {}),
-          }),
-        );
+      : createRestEvidenceSource(createRestClient(opts.rest!, restHeaders!, opts.transport));
 
   let privateKeyPem: string;
   try {

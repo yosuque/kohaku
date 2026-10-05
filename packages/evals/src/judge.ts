@@ -39,14 +39,35 @@ export interface Rubric {
   }[];
 }
 
+/**
+ * The criterion descriptions shared by the `l2PromotionRubric*` versions (prompt bytes — they are
+ * interpolated verbatim into the system prompt, so changing one is a rubric change that needs a version bump).
+ * Weights, floors and the version stamp stay literal on each version. `visual_quality` has two wordings: the
+ * current one (versions "0.4" / "0.3") and the earlier one of version "0.2".
+ */
+const CRITERION_TEXT = {
+  safety:
+    "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+  determinism:
+    "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+  a11y: "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+  schema_inferability: "The structure can be parameterized and a typed schema (props) can be extracted",
+  generality: "It is general enough to be reused with other data and time ranges, not a one-off",
+  visual_quality:
+    "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, use the primary color for one emphasis at most; tone colors only when they carry meaning, numeric columns right-aligned with tabular figures, empty/error/loading states shown as notices, never use fixed pixel widths — fill the container width, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+  visual_quality_v0_2:
+    "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, restrained color, numeric columns right-aligned with tabular figures, empty/error states shown as notices, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+  suggestion_fidelity:
+    "Schema fidelity: the schema under judgement — the DRAFT block when one is supplied, otherwise the SUGGESTION block — its props, query parameters and events — is exactly what the HTML reads and emits (nothing invented, nothing missing); verify it against the HTML in both cases. When a SUGGESTION is shown alongside a DRAFT, the SUGGESTION is context only — score the DRAFT, not the proposal. When neither a draft nor a suggestion is supplied, this criterion is dropped from the rubric entirely rather than scored (see JudgeVerdict.rubricVariant)",
+} as const;
+
 export const l2PromotionRubric: Rubric = {
   id: "l2-promotion",
   version: "0.4",
   criteria: [
     {
       id: "safety",
-      description:
-        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      description: CRITERION_TEXT.safety,
       weight: 0.25,
       /**
        * Veto floor. `safety` is the one criterion that reads the generated HTML's semantic
@@ -64,36 +85,32 @@ export const l2PromotionRubric: Rubric = {
     },
     {
       id: "determinism",
-      description:
-        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      description: CRITERION_TEXT.determinism,
       weight: 0.2,
     },
     {
       id: "a11y",
-      description:
-        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      description: CRITERION_TEXT.a11y,
       weight: 0.15,
     },
     {
       id: "schema_inferability",
-      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      description: CRITERION_TEXT.schema_inferability,
       weight: 0.05,
     },
     {
       id: "generality",
-      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      description: CRITERION_TEXT.generality,
       weight: 0.05,
     },
     {
       id: "visual_quality",
-      description:
-        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, use the primary color for one emphasis at most; tone colors only when they carry meaning, numeric columns right-aligned with tabular figures, empty/error/loading states shown as notices, never use fixed pixel widths — fill the container width, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      description: CRITERION_TEXT.visual_quality,
       weight: 0.2,
     },
     {
       id: "suggestion_fidelity",
-      description:
-        "Schema fidelity: the schema under judgement — the DRAFT block when one is supplied, otherwise the SUGGESTION block — its props, query parameters and events — is exactly what the HTML reads and emits (nothing invented, nothing missing); verify it against the HTML in both cases. When a SUGGESTION is shown alongside a DRAFT, the SUGGESTION is context only — score the DRAFT, not the proposal. When neither a draft nor a suggestion is supplied, this criterion is dropped from the rubric entirely rather than scored (see JudgeVerdict.rubricVariant)",
+      description: CRITERION_TEXT.suggestion_fidelity,
       weight: 0.1,
     },
   ],
@@ -128,37 +145,33 @@ export const l2PromotionRubricV0_3: Rubric = {
   criteria: [
     {
       id: "safety",
-      description:
-        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      description: CRITERION_TEXT.safety,
       weight: 0.25,
       floor: 0.5,
     },
     {
       id: "determinism",
-      description:
-        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      description: CRITERION_TEXT.determinism,
       weight: 0.2,
     },
     {
       id: "a11y",
-      description:
-        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      description: CRITERION_TEXT.a11y,
       weight: 0.15,
     },
     {
       id: "schema_inferability",
-      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      description: CRITERION_TEXT.schema_inferability,
       weight: 0.15,
     },
     {
       id: "generality",
-      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      description: CRITERION_TEXT.generality,
       weight: 0.05,
     },
     {
       id: "visual_quality",
-      description:
-        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, use the primary color for one emphasis at most; tone colors only when they carry meaning, numeric columns right-aligned with tabular figures, empty/error/loading states shown as notices, never use fixed pixel widths — fill the container width, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      description: CRITERION_TEXT.visual_quality,
       weight: 0.2,
     },
   ],
@@ -179,36 +192,32 @@ export const l2PromotionRubricV0_2: Rubric = {
   criteria: [
     {
       id: "safety",
-      description:
-        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      description: CRITERION_TEXT.safety,
       weight: 0.25,
     },
     {
       id: "determinism",
-      description:
-        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      description: CRITERION_TEXT.determinism,
       weight: 0.2,
     },
     {
       id: "a11y",
-      description:
-        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      description: CRITERION_TEXT.a11y,
       weight: 0.15,
     },
     {
       id: "schema_inferability",
-      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      description: CRITERION_TEXT.schema_inferability,
       weight: 0.15,
     },
     {
       id: "generality",
-      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      description: CRITERION_TEXT.generality,
       weight: 0.15,
     },
     {
       id: "visual_quality",
-      description:
-        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, restrained color, numeric columns right-aligned with tabular figures, empty/error states shown as notices, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      description: CRITERION_TEXT.visual_quality_v0_2,
       weight: 0.1,
     },
   ],
@@ -230,30 +239,27 @@ export const l2PromotionRubricV0_1: Rubric = {
   criteria: [
     {
       id: "safety",
-      description:
-        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      description: CRITERION_TEXT.safety,
       weight: 0.3,
     },
     {
       id: "determinism",
-      description:
-        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      description: CRITERION_TEXT.determinism,
       weight: 0.2,
     },
     {
       id: "a11y",
-      description:
-        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      description: CRITERION_TEXT.a11y,
       weight: 0.15,
     },
     {
       id: "schema_inferability",
-      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      description: CRITERION_TEXT.schema_inferability,
       weight: 0.2,
     },
     {
       id: "generality",
-      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      description: CRITERION_TEXT.generality,
       weight: 0.15,
     },
   ],
@@ -405,6 +411,18 @@ export interface Judge {
 }
 
 /**
+ * Rounds a computed weight to 4 decimal places. Floating-point arithmetic on the tenths/hundredths that
+ * rubric weights are always written in (e.g. `0.05 + 0.1`) does not land on an exact binary value (it
+ * comes out `0.15000000000000002`), and that raw value would otherwise be interpolated verbatim into the
+ * criterion list `rubricSystem` sends the model (`weight ${c.weight}`) -- a cosmetic defect there, but one
+ * that also risks reading to the model as a deliberately, suspiciously precise number. Four decimal places
+ * is more precision than any rubric weight in this file is ever written with.
+ */
+function roundWeight(weight: number): number {
+  return Math.round(weight * 10_000) / 10_000;
+}
+
+/**
  * Builds the "no-schema" rubric variant `judge()` scores against when its input carries neither `draft` nor
  * `suggestion` (see `l2PromotionRubric`'s `suggestion_fidelity` criterion and `JudgeVerdict.rubricVariant`):
  * drops that criterion and renormalizes the remaining weights to sum to 1.
@@ -421,18 +439,6 @@ export interface Judge {
  * renormalization of its remaining weights (sum to 1). Returns `rubric` unchanged if it has no
  * `suggestion_fidelity` criterion at all (the caller only invokes this after confirming one exists).
  */
-/**
- * Rounds a computed weight to 4 decimal places. Floating-point arithmetic on the tenths/hundredths that
- * rubric weights are always written in (e.g. `0.05 + 0.1`) does not land on an exact binary value (it
- * comes out `0.15000000000000002`), and that raw value would otherwise be interpolated verbatim into the
- * criterion list `rubricSystem` sends the model (`weight ${c.weight}`) -- a cosmetic defect there, but one
- * that also risks reading to the model as a deliberately, suspiciously precise number. Four decimal places
- * is more precision than any rubric weight in this file is ever written with.
- */
-function roundWeight(weight: number): number {
-  return Math.round(weight * 10_000) / 10_000;
-}
-
 function noSchemaRubricVariant(rubric: Rubric): Rubric {
   const remaining = rubric.criteria.filter((c) => c.id !== "suggestion_fidelity");
   if (remaining.length === rubric.criteria.length) return rubric;
@@ -450,6 +456,97 @@ function noSchemaRubricVariant(rubric: Rubric): Rubric {
           }));
         })();
   return { id: rubric.id, version: rubric.version, criteria };
+}
+
+/** One sampled judge response, as `scoreWithRubric` collects it from the LLM port. */
+type JudgeRun = { object: z.infer<typeof JudgeOutputSchema>; model: string };
+
+/**
+ * Combines the sampled responses into a verdict: multi-sample average → weight normalization → veto →
+ * version stamping. Pure (no LLM, no clock), so the scoring arithmetic is testable apart from sampling.
+ * `runs` is non-empty (one entry per sample, so `samples` is `runs.length`).
+ */
+function aggregateVerdict(activeRubric: Rubric, runs: JudgeRun[], passScore: number): JudgeVerdict {
+  // Average per criterion, then combine with weights
+  const byId = new Map<string, { total: number; count: number; reasoning: string }>();
+  for (const run of runs) {
+    for (const item of run.object.criteria) {
+      const acc = byId.get(item.id) ?? { total: 0, count: 0, reasoning: item.reasoning };
+      acc.total += item.score;
+      acc.count += 1;
+      // Take the reasoning from the last sample (prevents the averaged score from diverging from the first sample's explanation).
+      acc.reasoning = item.reasoning;
+      byId.set(item.id, acc);
+    }
+  }
+  const criteria = activeRubric.criteria.map((c) => {
+    const acc = byId.get(c.id);
+    const score = acc != null ? acc.total / acc.count : 0;
+    return { id: c.id, score, reasoning: acc?.reasoning ?? "(not evaluated)" };
+  });
+  // Index the per-criterion scores once (rubric ids are unique — validateRubric rejects duplicates).
+  const scoreById = new Map(criteria.map((item) => [item.id, item.score]));
+  // Normalize by the weight sum so that even a custom rubric (sum≠1.0) keeps score within [0,1].
+  // The default rubrics sum to 1.0, so the result is unchanged.
+  const sumWeights = activeRubric.criteria.reduce((sum, c) => sum + c.weight, 0);
+  const weighted = activeRubric.criteria.reduce((sum, c) => sum + scoreById.get(c.id)! * c.weight, 0);
+  // Defensively clamp to [0,1]. validateRubric already forces weights to be finite/non-negative/positive-sum
+  // and VerdictItemSchema already forces each criterion score to [0,1], so it is normally already in range,
+  // but this is a final guard against future input variation.
+  const score = clamp01(sumWeights > 0 ? weighted / sumWeights : 0);
+
+  // Per-criterion floor (veto): a criterion with a `floor` whose averaged score falls
+  // strictly below it fails the verdict outright, regardless of whether the weighted-average `score`
+  // above clears `passScore` — see Rubric.criteria's own doc for the rationale. A rubric with no
+  // `floor` set on any criterion (every rubric before per-criterion floors existed, and every criterion but `safety` on the
+  // current one) always computes `vetoedBy: []` here, leaving `pass` exactly the classic
+  // `score >= passScore` it was before this field existed.
+  const vetoedBy = activeRubric.criteria
+    .filter((c) => c.floor != null && scoreById.get(c.id)! < c.floor)
+    .map((c) => c.id);
+
+  return {
+    pass: score >= passScore && vetoedBy.length === 0,
+    score: Math.round(score * 1000) / 1000,
+    criteria,
+    vetoedBy,
+    // summary also comes from the last sample (identical to runs[0] when samples=1).
+    summary: runs[runs.length - 1]!.object.summary,
+    samples: runs.length,
+    model: runs[runs.length - 1]!.model,
+    rubricId: activeRubric.id,
+    rubricVersion: activeRubric.version,
+  };
+}
+
+/** The user prompt `judge()` sends for an L2 promotion review (the data under review is wrapped as untrusted). */
+function buildL2JudgePrompt(input: JudgeInput): string {
+  return [
+    // The request and HTML are untrusted. Wrap them in delimiters and copy HTML in with a fence-break-resistant fence.
+    `## Original request\n${untrustedBlock("REQUEST", input.request)}`,
+    `## Usage\nuses=${input.usage.uses}, sessions=${input.usage.sessions}`,
+    ...(input.telemetry != null
+      ? [
+          `## Runtime telemetry (observed real renders)\nrendered=${input.telemetry.renderedCount}, errors=${input.telemetry.errorCount}`,
+        ]
+      : []),
+    ...(input.catalogSummary != null
+      ? [`## Existing catalog (for duplicate checking)\n${input.catalogSummary}`]
+      : []),
+    // The schema actually being registered (when known) is the source of truth for suggestion_fidelity;
+    // the machine suggestion, when also present, is shown as context only (it is not what gets published).
+    ...(input.draft != null
+      ? [
+          `## Schema being registered (verify this against the HTML for schema fidelity)\n${untrustedBlock("DRAFT", JSON.stringify(input.draft, null, 2), "json")}`,
+        ]
+      : []),
+    ...(input.suggestion != null
+      ? [
+          `## Proposed schema (machine-extracted${input.draft != null ? "; context only — the schema being registered above is the one actually published" : "; verify it against the HTML"})\n${untrustedBlock("SUGGESTION", JSON.stringify(input.suggestion, null, 2), "json")}`,
+        ]
+      : []),
+    `## HTML under review\n${untrustedBlock("HTML", input.html.slice(0, 12_000), "html")}`,
+  ].join("\n\n");
 }
 
 export function createJudge(opts: {
@@ -496,7 +593,7 @@ export function createJudge(opts: {
     system: string,
     prompt: string,
   ): Promise<JudgeVerdict> {
-    const runs = [];
+    const runs: JudgeRun[] = [];
     for (let i = 0; i < samples; i++) {
       const result = await opts.llm.generateObject({
         schema: JudgeOutputSchema,
@@ -507,58 +604,7 @@ export function createJudge(opts: {
       });
       runs.push(result);
     }
-
-    // Average per criterion, then combine with weights
-    const byId = new Map<string, { total: number; count: number; reasoning: string }>();
-    for (const run of runs) {
-      for (const item of run.object.criteria) {
-        const acc = byId.get(item.id) ?? { total: 0, count: 0, reasoning: item.reasoning };
-        acc.total += item.score;
-        acc.count += 1;
-        // Take the reasoning from the last sample (prevents the averaged score from diverging from the first sample's explanation).
-        acc.reasoning = item.reasoning;
-        byId.set(item.id, acc);
-      }
-    }
-    const criteria = activeRubric.criteria.map((c) => {
-      const acc = byId.get(c.id);
-      const score = acc != null ? acc.total / acc.count : 0;
-      return { id: c.id, score, reasoning: acc?.reasoning ?? "(not evaluated)" };
-    });
-    // Normalize by the weight sum so that even a custom rubric (sum≠1.0) keeps score within [0,1].
-    // The default rubrics sum to 1.0, so the result is unchanged.
-    const sumWeights = activeRubric.criteria.reduce((sum, c) => sum + c.weight, 0);
-    const weighted = activeRubric.criteria.reduce((sum, c) => {
-      const item = criteria.find((x) => x.id === c.id)!;
-      return sum + item.score * c.weight;
-    }, 0);
-    // Defensively clamp to [0,1]. validateRubric already forces weights to be finite/non-negative/positive-sum
-    // and VerdictItemSchema already forces each criterion score to [0,1], so it is normally already in range,
-    // but this is a final guard against future input variation.
-    const score = clamp01(sumWeights > 0 ? weighted / sumWeights : 0);
-
-    // Per-criterion floor (veto): a criterion with a `floor` whose averaged score falls
-    // strictly below it fails the verdict outright, regardless of whether the weighted-average `score`
-    // above clears `passScore` — see Rubric.criteria's own doc for the rationale. A rubric with no
-    // `floor` set on any criterion (every rubric before per-criterion floors existed, and every criterion but `safety` on the
-    // current one) always computes `vetoedBy: []` here, leaving `pass` exactly the classic
-    // `score >= passScore` it was before this field existed.
-    const vetoedBy = activeRubric.criteria
-      .filter((c) => c.floor != null && criteria.find((x) => x.id === c.id)!.score < c.floor)
-      .map((c) => c.id);
-
-    return {
-      pass: score >= passScore && vetoedBy.length === 0,
-      score: Math.round(score * 1000) / 1000,
-      criteria,
-      vetoedBy,
-      // summary also comes from the last sample (identical to runs[0] when samples=1).
-      summary: runs[runs.length - 1]!.object.summary,
-      samples,
-      model: runs[runs.length - 1]!.model,
-      rubricId: activeRubric.id,
-      rubricVersion: activeRubric.version,
-    };
+    return aggregateVerdict(activeRubric, runs, passScore);
   }
 
   return {
@@ -576,32 +622,7 @@ export function createJudge(opts: {
         activeRubric,
         "You are the promotion reviewer for generated UI components. Score the sandbox HTML component on the following criteria with a score from 0 to 1.",
       );
-      const prompt = [
-        // The request and HTML are untrusted. Wrap them in delimiters and copy HTML in with a fence-break-resistant fence.
-        `## Original request\n${untrustedBlock("REQUEST", input.request)}`,
-        `## Usage\nuses=${input.usage.uses}, sessions=${input.usage.sessions}`,
-        ...(input.telemetry != null
-          ? [
-              `## Runtime telemetry (observed real renders)\nrendered=${input.telemetry.renderedCount}, errors=${input.telemetry.errorCount}`,
-            ]
-          : []),
-        ...(input.catalogSummary != null
-          ? [`## Existing catalog (for duplicate checking)\n${input.catalogSummary}`]
-          : []),
-        // The schema actually being registered (when known) is the source of truth for suggestion_fidelity;
-        // the machine suggestion, when also present, is shown as context only (it is not what gets published).
-        ...(input.draft != null
-          ? [
-              `## Schema being registered (verify this against the HTML for schema fidelity)\n${untrustedBlock("DRAFT", JSON.stringify(input.draft, null, 2), "json")}`,
-            ]
-          : []),
-        ...(input.suggestion != null
-          ? [
-              `## Proposed schema (machine-extracted${input.draft != null ? "; context only — the schema being registered above is the one actually published" : "; verify it against the HTML"})\n${untrustedBlock("SUGGESTION", JSON.stringify(input.suggestion, null, 2), "json")}`,
-            ]
-          : []),
-        `## HTML under review\n${untrustedBlock("HTML", input.html.slice(0, 12_000), "html")}`,
-      ].join("\n\n");
+      const prompt = buildL2JudgePrompt(input);
       const verdict = await scoreWithRubric(activeRubric, system, prompt);
       return hasFidelityCriterion ? { ...verdict, rubricVariant } : verdict;
     },

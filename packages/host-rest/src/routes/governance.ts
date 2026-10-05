@@ -1,16 +1,10 @@
+import { errorMessage } from "@kohaku-ui/host-core";
 import type { LineageFilter, LineagePageRequest, Surface } from "@kohaku-ui/spec-core";
 import { APPROVAL_ISSUE_ERROR_CODE, LineageCursorError, parseIso8601 } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import { ApprovalRequestBodySchema, TelemetryBodySchema } from "./schemas.js";
-import {
-  message,
-  parseBody,
-  type RouteContext,
-  reportHostError,
-  requestIdOf,
-  resolveTenant,
-} from "./shared.js";
+import { parseBody, type RouteContext, reportHostError, requestIdOf, resolveTenant } from "./shared.js";
 
 /** Aggregation window for usage analytics. Default 200 / max 1000 (aligned with the /lineage window limits). */
 const ANALYTICS_DEFAULT_LIMIT = 200;
@@ -246,7 +240,7 @@ export function registerGovernanceRoutes(app: Hono, ctx: RouteContext): void {
     } catch (e) {
       await reportHostError(deps, "approvals", requestId, e);
       if ((e as { code?: unknown } | null)?.code === APPROVAL_ISSUE_ERROR_CODE) {
-        return c.json(errorBody("BAD_REQUEST", message(e), requestId), 400);
+        return c.json(errorBody("BAD_REQUEST", errorMessage(e), requestId), 400);
       }
       return c.json(errorBody("INTERNAL", APPROVAL_INTERNAL_ERROR_MESSAGE, requestId), 500);
     }

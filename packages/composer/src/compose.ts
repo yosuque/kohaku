@@ -12,7 +12,13 @@ import {
   type SpecPatch,
   type UISpec,
 } from "@kohaku-ui/spec-core";
-import { assembleSpec, cacheLabelOf, postAndValidate, shouldPersist } from "./assemble.js";
+import {
+  assembleSpec,
+  cacheLabelOf,
+  postAndValidate,
+  provenanceStampsOf,
+  shouldPersist,
+} from "./assemble.js";
 import { notifyBudgetUsage } from "./budget.js";
 import { COMPOSER_ID } from "./constants.js";
 import type { ComposeContext, ComposeErrorContext, ComposePolicy, FixedSpecSource } from "./context.js";
@@ -179,15 +185,7 @@ export async function compose(
     return finish(spec, trace, ctx);
   } catch (e) {
     // Notify the observation hook of a hard failure (a normalize / reference-resolution / final-validation exception) and re-throw.
-    reportComposeError(
-      ctx,
-      {
-        phase: "hard",
-        input: toTraceInput(input),
-        ...traceIdentity(opts),
-      },
-      e,
-    );
+    reportHardFailure(ctx, input, opts, e);
     throw e;
   }
 }
@@ -389,10 +387,7 @@ async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Pro
     events: template.events,
     tier: "L0",
     cache: cacheLabel,
-    ...(ctx.policy?.generatorVersion != null ? { generatorVersion: ctx.policy.generatorVersion } : {}),
-    ...(ctx.policy?.designSystem?.kit != null
-      ? { kit: { id: ctx.policy.designSystem.kit.id, version: ctx.policy.designSystem.kit.version } }
-      : {}),
+    ...provenanceStampsOf(ctx.policy),
     // Carry the fixed template's state over to the delivered Spec (preserve visibleWhen's initial state).
     ...(template.state != null ? { state: template.state } : {}),
   });
@@ -421,10 +416,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
       tier: outcome.tier,
       cache: cacheLabel,
       ...(outcome.model != null ? { model: outcome.model } : {}),
-      ...(ctx.policy?.generatorVersion != null ? { generatorVersion: ctx.policy.generatorVersion } : {}),
-      ...(ctx.policy?.designSystem?.kit != null
-        ? { kit: { id: ctx.policy.designSystem.kit.id, version: ctx.policy.designSystem.kit.version } }
-        : {}),
+      ...provenanceStampsOf(ctx.policy),
     });
     return postAndValidate(assembled, refs, ctx);
   }
@@ -525,6 +517,27 @@ export function finish(spec: UISpec, trace: ComposeTrace, ctx: ComposeContext): 
 /** Normalizes ComposeInput into the form placed on trace/observer (drops the intent body, keeps only kind). */
 export function toTraceInput(input: ComposeInput): SemanticInput | { kind: "intent" } {
   return input.kind === "intent" ? { kind: "intent" } : input;
+}
+
+/**
+ * Notifies the observation hook of a hard failure (a normalize / reference-resolution / final-validation
+ * exception) for compose and composeStream; the caller re-throws.
+ */
+export function reportHardFailure(
+  ctx: ComposeContext,
+  input: ComposeInput,
+  opts: ComposeOptions,
+  e: unknown,
+): void {
+  reportComposeError(
+    ctx,
+    {
+      phase: "hard",
+      input: toTraceInput(input),
+      ...traceIdentity(opts),
+    },
+    e,
+  );
 }
 
 /** Sums the attempts' usage. undefined if not a single attempt has usage. */

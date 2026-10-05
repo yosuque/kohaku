@@ -1,7 +1,7 @@
 import { LlmError } from "@kohaku-ui/llm";
 import type { GenerationSchema } from "@kohaku-ui/registry";
 import type { CanonicalIntent, ComponentNode, EventBinding } from "@kohaku-ui/spec-core";
-import { checkBudget, sumSpentTokens } from "../budget.js";
+import { type BudgetVerdict, checkBudget, sumSpentTokens } from "../budget.js";
 import type { ComposeBudget, ComposeContext } from "../context.js";
 import { errorMessage } from "../error-message.js";
 import type { ResolvedRefs } from "../refs.js";
@@ -20,23 +20,11 @@ export interface TierRequest {
    * immediately falls to ok:false (failure="transient").
    */
   signal?: AbortSignal;
-  budget?: ComposeBudget;
-  /** `PreparedCompose.tenant`, threaded through for `ComposeBudget.check`'s `BudgetCheckContext.tenant`. */
-  tenant?: string;
-  /** The forwarding target for the occurrence of a fail-open-swallowed throw from the budget hook check() (for observation). Wired by compose. */
-  onBudgetCheckError?: (error: unknown) => void;
   /**
-   * `PreparedCompose.startedAt`, threaded through so runRepairLoop can measure elapsed wall-clock time for
-   * `budget.deadlineMs`'s between-call check without calling Date.now() itself at a stage further removed
-   * from the caller. Only read when `budget?.deadlineMs` is set; harmless (and conventionally omittable) otherwise.
+   * The token/call/deadline budget guard for this compose (see BudgetGate), shared by the L1 and L2
+   * stages. Omittable: a request without one never skips or classifies anything as a budget outcome.
    */
-  startedAt?: number;
-  /**
-   * Fires only when `budget.deadlineMs` elapses (see budget.ts's createDeadlineGuard) — never by the
-   * caller's own abort. Used by runRepairLoop to classify a mid-call `ABORTED` as a deadline-budget
-   * fallback rather than a client cancellation. Undefined whenever `budget?.deadlineMs` is unset.
-   */
-  deadlineSignal?: AbortSignal;
+  budgetGate?: BudgetGate;
   /**
    * The notification target for the cumulative partial draft during generation (incremental streaming).
    * Only the composeStream path passes it, and only generateL1 consumes it (generateL2 accepts and
@@ -78,37 +66,85 @@ export interface BudgetSkipResult {
 }
 
 /**
- * If the budget check says subsequent LLM calls should be skipped, returns an abort result.
- * Used by the caller while it keeps the outer condition (L1: every attempt / L2: attempt > 0).
- * Returns null when allowed (continue calling).
- * elapsedMs (wall-clock since the compose started) is forwarded to checkBudget's deadline check; pass
- * undefined (the default) when budget.deadlineMs is not in play, matching checkBudget's own contract.
- * tier/tenant are forwarded verbatim into `BudgetCheckContext` for `ComposeBudget.check`.
+ * The budget guard's inputs, grouped (Introduce Parameter Object). Built once per compose by
+ * tier-ladder.ts's runTierGeneration and shared by every L1/L2 generation call and the pre-L2 check.
  */
-export function budgetSkipIfDenied(
-  budget: ComposeBudget,
-  tier: "L1" | "L2",
-  attempts: ComposeAttempt[],
-  onBudgetCheckError: ((error: unknown) => void) | undefined,
-  model: string | undefined,
-  elapsedMs?: number,
-  tenant?: string,
-): BudgetSkipResult | null {
-  const verdict = checkBudget(
+export interface BudgetGateParams {
+  budget?: ComposeBudget;
+  /** `PreparedCompose.tenant`, threaded through for `ComposeBudget.check`'s `BudgetCheckContext.tenant`. */
+  tenant?: string;
+  /**
+   * `PreparedCompose.startedAt`, so the gate can measure elapsed wall-clock time for `budget.deadlineMs`'s
+   * between-call check. Only read when `budget?.deadlineMs` is set; harmless (and conventionally omittable) otherwise.
+   */
+  startedAt?: number;
+  /**
+   * Fires only when `budget.deadlineMs` elapses (see budget.ts's createDeadlineGuard) — never by the
+   * caller's own abort. Used by runRepairLoop to classify a mid-call `ABORTED` as a deadline-budget
+   * fallback rather than a client cancellation. Undefined whenever `budget?.deadlineMs` is unset.
+   */
+  deadlineSignal?: AbortSignal;
+  /**
+   * The factory for the forwarding target of the occurrence of a fail-open-swallowed throw from the budget
+   * hook check() (for observation), given the tier being checked. Wired by compose; undefined when no
+   * budget is specified.
+   */
+  reportFor?: (tier: "L1" | "L2") => (error: unknown) => void;
+}
+
+/** The budget guard built by createBudgetGate: owns the elapsed-time measurement and the per-tier error forwarding. */
+export interface BudgetGate {
+  /** The compose's budget (undefined when none is specified, in which case every check allows). */
+  readonly budget: ComposeBudget | undefined;
+  /** See BudgetGateParams.deadlineSignal. */
+  readonly deadlineSignal: AbortSignal | undefined;
+  /**
+   * Whether one more LLM call is allowed for `tier`, given the attempts so far (spentTokens is their usage).
+   * elapsedMs (wall-clock since the compose started) is forwarded to checkBudget's deadline check only when
+   * budget.deadlineMs is in play, matching checkBudget's own contract. tier/tenant are forwarded verbatim
+   * into `BudgetCheckContext` for `ComposeBudget.check`. Always allows when no budget is specified.
+   */
+  verdict(tier: "L1" | "L2", attempts: ComposeAttempt[]): BudgetVerdict;
+  /**
+   * If the budget check says subsequent LLM calls should be skipped, returns an abort result.
+   * Used by the caller while it keeps the outer condition (L1: every attempt / L2: attempt > 0).
+   * Returns null when allowed (continue calling).
+   */
+  skipIfDenied(
+    tier: "L1" | "L2",
+    attempts: ComposeAttempt[],
+    model: string | undefined,
+  ): BudgetSkipResult | null;
+}
+
+/** Builds the BudgetGate for one compose (see BudgetGateParams). */
+export function createBudgetGate(params: BudgetGateParams): BudgetGate {
+  const { budget, tenant, startedAt, deadlineSignal, reportFor } = params;
+  const verdict = (tier: "L1" | "L2", attempts: ComposeAttempt[]): BudgetVerdict => {
+    if (budget == null) return { allow: true };
+    const elapsedMs = budget.deadlineMs != null && startedAt != null ? Date.now() - startedAt : undefined;
+    return checkBudget(
+      budget,
+      { tenant, tier, spentTokens: sumSpentTokens(attempts), elapsedMs },
+      reportFor?.(tier),
+    );
+  };
+  return {
     budget,
-    { tenant, tier, spentTokens: sumSpentTokens(attempts), elapsedMs },
-    onBudgetCheckError,
-  );
-  if (!verdict.allow) {
-    return {
-      ok: false,
-      attempts,
-      failure: "budget",
-      ...(verdict.reason != null ? { budgetReason: verdict.reason } : {}),
-      ...(model != null ? { model } : {}),
-    };
-  }
-  return null;
+    deadlineSignal,
+    verdict,
+    skipIfDenied(tier, attempts, model) {
+      const v = verdict(tier, attempts);
+      if (v.allow) return null;
+      return {
+        ok: false,
+        attempts,
+        failure: "budget",
+        ...(v.reason != null ? { budgetReason: v.reason } : {}),
+        ...(model != null ? { model } : {}),
+      };
+    },
+  };
 }
 
 /** Computes the loop upper bound from the initial attempt + the number of repair re-attempts (common to L1 / L2). */
@@ -116,19 +152,32 @@ export function resolveMaxAttempts(ctx: ComposeContext): number {
   return 1 + (ctx.policy?.maxRepairAttempts ?? 1);
 }
 
+/** The classification of a failed L1/L2 generation (see TierFailure.failure). */
+export type TierFailureKind = "transient" | "invalid" | "budget" | "aborted";
+
+/** The ok:true form of TierResult: the assembled components/events of a generation that passed validation. */
+export interface TierSuccess {
+  ok: true;
+  components: ComponentNode[];
+  events: EventBinding[];
+  model?: string;
+  attempts: ComposeAttempt[];
+}
+
 /**
  * The shared L1/L2 tier-generation result shape (structurally identical between L1 and L2). On success
  * carries the assembled components/events; on failure carries the attempt trace and failure classification
- * that compose.ts's settleL1Failure / runL2Stage branch on.
+ * that tier-ladder.ts's settleTierFailure branches on.
  */
-export interface TierResult {
-  ok: boolean;
-  components?: ComponentNode[];
-  events?: EventBinding[];
+export type TierResult = TierSuccess | TierFailure;
+
+/** The ok:false form of TierResult. */
+export interface TierFailure {
+  ok: false;
   model?: string;
   attempts: ComposeAttempt[];
   /**
-   * The failure kind when ok:false.
+   * The failure kind.
    * - "transient": abort (ABORTED), provider failure (PROVIDER), misconfiguration (CONFIG), or an unexpected
    *   non-LlmError. Since throwing another full generation at the same provider in L2 would hit the same
    *   failure, compose does not promote an L1 transient failure to L2.
@@ -145,12 +194,12 @@ export interface TierResult {
    *   is classified as "budget" above instead, precisely so it is NOT marked cancelled and DOES count toward
    *   that same fallback-rate analytics (it is an operator-configured budget outcome, not a client disconnect).
    */
-  failure?: "transient" | "invalid" | "budget" | "aborted";
+  failure: TierFailureKind;
   /** The downgrade reason when failure==="budget" (compose places it on fallback.reason). */
   budgetReason?: string;
   /**
    * The thrown error behind the *last* attempt that actually threw (typically an LlmError), so callers
-   * (tier-ladder.ts's settleL1Failure / runL2Stage) can enrich a fallback reason and observer.onError's
+   * (tier-ladder.ts's settleTierFailure) can enrich a fallback reason and observer.onError's
    * `error` argument with the underlying cause instead of leaving it undefined. Unset whenever the
    * terminal failure did not come from a throw — in particular, an "invalid" failure whose *last* attempt
    * failed via `config.validate` returning `{ ok: false }` (a response existed but failed validation, no
@@ -212,25 +261,25 @@ export interface RepairLoopConfig {
  * Shared by tiers/l1-generate.ts and tiers/l2-generate.ts — see `TierResult`'s and `RepairLoopConfig`'s
  * docs for the exact contract each tier's caller relies on.
  *
- * `startedAt`/`deadlineSignal` are `budget.deadlineMs`'s two extra inputs (both undefined when it is unset,
- * which keeps this function's behavior byte-identical to before they existed): `startedAt` lets the
- * between-call budget gate above measure elapsed wall-clock time; `deadlineSignal` lets the catch block
- * below tell a deadline-caused mid-call abort apart from the caller's own AbortSignal firing.
+ * The budget gate's `startedAt`/`deadlineSignal` are `budget.deadlineMs`'s two extra inputs (both undefined
+ * when it is unset, which keeps this function's behavior byte-identical to before they existed): `startedAt`
+ * lets the between-call budget gate above measure elapsed wall-clock time; `deadlineSignal` lets the catch
+ * block below tell a deadline-caused mid-call abort apart from the caller's own AbortSignal firing.
  */
 export async function runRepairLoop(
   kind: "l1" | "l2",
   config: RepairLoopConfig,
-  req: Pick<TierRequest, "budget" | "tenant" | "onBudgetCheckError" | "startedAt" | "deadlineSignal">,
+  req: Pick<TierRequest, "budgetGate">,
 ): Promise<TierResult> {
-  const { budget, tenant, onBudgetCheckError, startedAt, deadlineSignal } = req;
+  const { budgetGate } = req;
   const tier: "L1" | "L2" = kind === "l1" ? "L1" : "L2";
   const attempts: ComposeAttempt[] = [];
   let feedback: string[] = [];
   let model: string | undefined;
   // The failure kind when returning ok:false. Default "invalid" (the safe side that promotes to L2 and
   // matches a repair-loop-internal validation failure, which is never "transient").
-  let failure: "transient" | "invalid" | "aborted" | "budget" = "invalid";
-  // Set only on the mid-call deadline-abort branch below (budgetSkipIfDenied's own BudgetSkipResult already
+  let failure: TierFailureKind = "invalid";
+  // Set only on the mid-call deadline-abort branch below (BudgetGate.skipIfDenied's own BudgetSkipResult already
   // carries its own budgetReason on the early-return path — this variable is for the OTHER route into
   // failure="budget": an in-flight call aborted by the deadline timer rather than skipped before it started).
   let budgetReason: string | undefined;
@@ -240,17 +289,8 @@ export async function runRepairLoop(
   let lastError: unknown;
 
   for (let attempt = 0; attempt < config.maxAttempts; attempt++) {
-    if (budget != null && config.shouldCheckBudget(attempt)) {
-      const elapsedMs = budget.deadlineMs != null && startedAt != null ? Date.now() - startedAt : undefined;
-      const skipped = budgetSkipIfDenied(
-        budget,
-        tier,
-        attempts,
-        onBudgetCheckError,
-        model,
-        elapsedMs,
-        tenant,
-      );
+    if (budgetGate != null && config.shouldCheckBudget(attempt)) {
+      const skipped = budgetGate.skipIfDenied(tier, attempts, model);
       if (skipped != null) return skipped;
     }
 
@@ -272,13 +312,13 @@ export async function runRepairLoop(
         // deadlineSignal fires only from budget.ts's createDeadlineGuard, never from the caller's own
         // AbortSignal — so this reliably tells the two abort sources apart regardless of which one the LLM
         // adapter's own AbortSignal.any combination actually reports (see createDeadlineGuard's doc).
-        if (deadlineSignal?.aborted === true) {
+        if (budgetGate?.deadlineSignal?.aborted === true) {
           // The compose-wide deadline elapsed while this call was already in flight. This is an
           // operator-configured budget outcome, not a client disconnect: classify it the same way a
           // between-call deadline skip is classified ("budget") so it is NOT marked cancelled and DOES
           // count toward the generation-fallback rate (see docs/design.md §5).
           failure = "budget";
-          budgetReason = `Budget exceeded: deadline ${budget?.deadlineMs}ms reached during generation`;
+          budgetReason = `Budget exceeded: deadline ${budgetGate?.budget?.deadlineMs}ms reached during generation`;
           break;
         }
         // Otherwise: a client disconnect/timeout, not a generation failure — classify it separately from
