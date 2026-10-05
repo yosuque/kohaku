@@ -109,7 +109,7 @@ modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "only composer / evals may import llm (no inflow from lower packages)"
+name = "only composer / evals / host_core may import llm (no inflow from lower packages)"
 type = "forbidden"
 source_modules = [
     "kohaku.spec",

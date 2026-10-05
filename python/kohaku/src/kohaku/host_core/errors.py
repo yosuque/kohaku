@@ -48,7 +48,8 @@ LLM_PROVIDER_UNAVAILABLE_MESSAGE = "LLM provider unavailable; see the host's obs
 """The fixed, client-safe message for a failure caused by the LLM provider being unavailable (API key not
 configured, provider error or timeout, aborted call) while a host operation that cannot degrade without an LLM
 (Intent resolution) was running. The detail goes to the observability hook (`on_error`); the envelope's request
-id correlates the two. Identical to TS host-core's LLM_PROVIDER_UNAVAILABLE_MESSAGE."""
+id correlates the two. Identical to TS host-core's LLM_PROVIDER_UNAVAILABLE_MESSAGE (same wording, including
+the TS-style "(onError)", for wire compatibility, even though the Python hook is named `on_error`)."""
 
 
 def is_llm_unavailable_error(e: object) -> bool:

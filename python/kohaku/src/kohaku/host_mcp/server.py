@@ -29,6 +29,7 @@ from kohaku.composer import (
 )
 from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
+    LLM_PROVIDER_UNAVAILABLE_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
     ActionGateRequest,
@@ -45,7 +46,6 @@ from kohaku.host_core import (
     apply_action_effects,
     build_action_manifest,
     classify_host_error,
-    is_typed_host_error,
     parse_invokable_ref,
     parse_trace_context,
     record_action_gate_result,
@@ -670,9 +670,9 @@ def attach_kohaku_to_mcp_server(
             # An unavailable LLM provider (LlmError PROVIDER / CONFIG / ABORTED) gets host_core's fixed message
             # (the same text the REST profile answers with on 503); its raw SDK wording must not reach the model.
             cls = classify_host_error(exc)
-            if cls.kind == "upstream_unavailable" and cls.message is not None:
-                return _tool_error(cls.message)
-            message = str(exc) if is_typed_host_error(exc) else _TOOL_INTERNAL_ERROR_MESSAGE
+            if cls.kind == "upstream_unavailable":
+                return _tool_error(LLM_PROVIDER_UNAVAILABLE_MESSAGE)
+            message = str(exc) if cls.kind == "typed" else _TOOL_INTERNAL_ERROR_MESSAGE
             return _tool_error(message)
 
     async def _compose_and_package(

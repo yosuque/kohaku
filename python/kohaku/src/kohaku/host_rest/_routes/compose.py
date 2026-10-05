@@ -562,9 +562,10 @@ def _intent_invalid(e: BaseException, request_id: str) -> Response:
     Reporting the error to the observability hook (report_host_error, endpoint- and trace-context-specific
     per call site) stays the caller's responsibility — this helper only builds the response.
     """
-    if classify_host_error(e).kind == "upstream_unavailable":
+    cls = classify_host_error(e)
+    if cls.kind == "upstream_unavailable":
         return _error("INTERNAL", LLM_PROVIDER_UNAVAILABLE_MESSAGE, 503, request_id)
-    client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
+    client_message = _message(e) if cls.kind == "typed" else _INTENT_INVALID_MESSAGE
     return _error("INTENT_INVALID", client_message, 422, request_id)
 
 
