@@ -291,7 +291,11 @@ describe("ApprovalsTab", () => {
       expect(screen.queryByText(m.approvals.approveButton)).toBeNull();
       fireEvent.click(reissue);
       await waitFor(() => expect(issueCalls).toBe(2));
-      expect((screen.getByLabelText(m.approvals.tokenLabel) as HTMLInputElement).value).toBe("tok.2");
+      // The stub has answered, but the row's state update lands on a later microtask: wait for it rather
+      // than reading the input right away (a slower CI runner showed the old token for one more tick).
+      await waitFor(() =>
+        expect((screen.getByLabelText(m.approvals.tokenLabel) as HTMLInputElement).value).toBe("tok.2"),
+      );
       expect(screen.queryByText(m.approvals.reissue)).toBeNull();
     } finally {
       vi.useRealTimers();
