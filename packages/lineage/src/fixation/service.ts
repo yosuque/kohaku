@@ -10,6 +10,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import { FIXATION_PROPOSAL_SCAN_WINDOW } from "../constants.js";
 import type { ActorKind } from "../events.js";
+import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 
@@ -76,21 +77,16 @@ export interface FixationErrorContext {
 
 /**
  * Fires opts.onError fire-and-forget, swallowing any synchronous throw from the hook itself (an
- * observation-only hook must never mask or replace the caller's own error/result). Deliberately local (not
- * shared with promotion/service.ts's notifyPromotionError) because the two modules' contexts differ in
- * shape (intentHash vs. artifactId) and fixation/service.ts has no existing dependency on promotion/service.ts.
+ * observation-only hook must never mask or replace the caller's own error/result). Shares its implementation
+ * with promotion's notifyPromotionError through the generic `notifyFailOpen`; only the context type differs
+ * (intentHash vs. artifactId).
  */
 export function notifyFixationError(
   onError: ((ctx: FixationErrorContext, error: unknown) => void) | undefined,
   ctx: FixationErrorContext,
   error: unknown,
 ): void {
-  if (onError == null) return;
-  try {
-    onError(ctx, error);
-  } catch {
-    // Swallowed: an observability-only hook must not affect the caller's control flow.
-  }
+  notifyFailOpen(onError, ctx, error);
 }
 
 export interface FixationProposal {
@@ -101,6 +97,34 @@ export interface FixationProposal {
   sessions: number;
   stability: number;
   tier: string;
+}
+
+/** The TOCTOU guard fields shared by `InvalidateOptions.guard` and `ReplaceOptions.guard` (see `guardMatches`). */
+export interface FixationGuard {
+  ifCatalogFingerprint?: string;
+  ifFixatedAt?: string;
+  ifRevision?: string;
+}
+
+/**
+ * TOCTOU guard check shared by invalidate and replace: true when the current fixation still matches what was
+ * observed at the time of the decision (re-approved after the decision = a mismatch = do not touch it). A
+ * conditional write/delete that avoids sweeping up a new fixation in the window between the decision and the
+ * write. ifRevision, when supplied, takes priority over ifFixatedAt (finer-grained: distinguishes a
+ * same-millisecond unfixate→fixate pair); ifFixatedAt remains the fallback for callers/records that predate
+ * revision, so a legacy record with no catalogFingerprint is still protected against a re-approval race.
+ * ifCatalogFingerprint is checked independently of that pair.
+ */
+function guardMatches(existing: FixationRecord, guard: FixationGuard | undefined): boolean {
+  if (guard?.ifRevision != null) {
+    if (existing.revision !== guard.ifRevision) return false;
+  } else if (guard?.ifFixatedAt != null && existing.fixatedAt !== guard.ifFixatedAt) {
+    return false;
+  }
+  if (guard?.ifCatalogFingerprint != null && existing.catalogFingerprint !== guard.ifCatalogFingerprint) {
+    return false;
+  }
+  return true;
 }
 
 /** Options for Fixations.invalidate: detail is an optional human-facing note, guard is the TOCTOU check, scope narrows the owning tenant. */
@@ -116,7 +140,7 @@ export interface InvalidateOptions extends TenantScope {
    * with no `catalogFingerprint`), so that a fixation re-approved between the stale decision and the delete
    * call is never swept up even without a fingerprint or a revision.
    */
-  guard?: { ifCatalogFingerprint?: string; ifFixatedAt?: string; ifRevision?: string };
+  guard?: FixationGuard;
 }
 
 /** Options for Fixations.replace (design.md #65's catalog migration). */
@@ -131,12 +155,7 @@ export interface ReplaceOptions extends TenantScope {
    * the structure it actually planned against having stayed unchanged (unlike a plain staleness
    * invalidation, which only cares that *some* fixation is still there to delete).
    */
-  guard?: {
-    ifCatalogFingerprint?: string;
-    ifFixatedAt?: string;
-    ifRevision?: string;
-    ifStructureHash?: string;
-  };
+  guard?: FixationGuard & { ifStructureHash?: string };
   /** The migration plan's `planHash` (host-core's CatalogMigrationPlan), recorded on intent.migrated for audit traceability. */
   planId?: string;
 }
@@ -319,6 +338,23 @@ export function createFixations(opts: {
     await opts.lineage.record("intent.unfixated", payload, actor, tenant);
   }
 
+  /**
+   * The fields (re)stamped whenever a pinnedSpec is written, shared by fixate and replace: the recomputed
+   * structureHash (never trusted from the caller), the pinnedSpec itself, a fresh fixatedAt / revision, the
+   * approver, and this tenant's catalog fingerprint (the fast-path basis for materialize's staleness
+   * detection) when a catalog source is configured.
+   */
+  async function stampPinned(pinnedSpec: UISpec, approver: Principal, tenant: string | undefined) {
+    return {
+      structureHash: await computeStructureHash(pinnedSpec),
+      pinnedSpec,
+      fixatedAt: now().toISOString(),
+      revision: generateRevision(),
+      approver,
+      ...(opts.catalogFor != null ? { catalogFingerprint: opts.catalogFor(tenant).fingerprint } : {}),
+    };
+  }
+
   return {
     async proposals(scope?: TenantScope) {
       // Aggregation covers only the most recent FIXATION_PROPOSAL_SCAN_WINDOW view.composed events. Anything beyond is dropped.
@@ -383,13 +419,7 @@ export function createFixations(opts: {
       const record: FixationRecord = {
         intentHash: pinnedSpec.intent.hash,
         canonical: pinnedSpec.intent.canonical,
-        structureHash: await computeStructureHash(pinnedSpec),
-        pinnedSpec,
-        fixatedAt: now().toISOString(),
-        revision: generateRevision(),
-        approver,
-        // Stamp this tenant's catalog fingerprint at fixation time (the fast-path basis for materialize's staleness detection).
-        ...(opts.catalogFor != null ? { catalogFingerprint: opts.catalogFor(tenant).fingerprint } : {}),
+        ...(await stampPinned(pinnedSpec, approver, tenant)),
         // Stamp the tenant (the basis on which the StoragePort key-separates by (tenant, intentHash)).
         ...tenantField(tenant),
       };
@@ -426,19 +456,8 @@ export function createFixations(opts: {
       if (existing == null) return;
       // TOCTOU guard: if the fixation at the time of the stale decision (guard.ifCatalogFingerprint /
       // guard.ifRevision / guard.ifFixatedAt) and the current fixation are different (re-approved after the
-      // decision), do not delete. A conditional delete that avoids sweeping up a new fixation in the window
-      // between the decision and the deletion. ifRevision, when supplied, takes priority over ifFixatedAt
-      // (finer-grained: distinguishes a same-millisecond unfixate→fixate pair); ifFixatedAt remains the
-      // fallback for callers/records that predate revision, so a legacy record with no catalogFingerprint is
-      // still protected against a re-approval race.
-      if (guard?.ifRevision != null) {
-        if (existing.revision !== guard.ifRevision) return;
-      } else if (guard?.ifFixatedAt != null && existing.fixatedAt !== guard.ifFixatedAt) {
-        return;
-      }
-      if (guard?.ifCatalogFingerprint != null && existing.catalogFingerprint !== guard.ifCatalogFingerprint) {
-        return;
-      }
+      // decision), do not delete (see guardMatches).
+      if (!guardMatches(existing, guard)) return;
       // Since this is self-healing invalidation, the actor is system (distinguished from human-approved unfixate).
       await deleteFixationAndAudit(
         intentHash,
@@ -467,25 +486,13 @@ export function createFixations(opts: {
       const existing = await getValidatedFixation(intentHash, tenant);
       if (existing == null) return null;
       // Same TOCTOU shape as invalidate's guard, plus ifStructureHash (see ReplaceOptions.guard's doc).
-      if (guard?.ifRevision != null) {
-        if (existing.revision !== guard.ifRevision) return null;
-      } else if (guard?.ifFixatedAt != null && existing.fixatedAt !== guard.ifFixatedAt) {
-        return null;
-      }
-      if (guard?.ifCatalogFingerprint != null && existing.catalogFingerprint !== guard.ifCatalogFingerprint) {
-        return null;
-      }
+      if (!guardMatches(existing, guard)) return null;
       if (guard?.ifStructureHash != null && existing.structureHash !== guard.ifStructureHash) {
         return null;
       }
       const record: FixationRecord = {
         ...existing,
-        pinnedSpec,
-        structureHash: await computeStructureHash(pinnedSpec),
-        fixatedAt: now().toISOString(),
-        revision: generateRevision(),
-        approver,
-        ...(opts.catalogFor != null ? { catalogFingerprint: opts.catalogFor(tenant).fingerprint } : {}),
+        ...(await stampPinned(pinnedSpec, approver, tenant)),
       };
       // ifPresent: true guards the same race refreshFingerprint's own write does (a concurrent unfixate
       // between this function's get and put must not resurrect the fixation from this stale in-memory copy).

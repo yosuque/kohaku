@@ -1,18 +1,15 @@
 import {
   GOVERNANCE_ERROR_DISCRIMINATORS,
+  type LineageEventRecord,
   type PromotionState,
   PromotionStateSchema,
   type StoragePort,
 } from "@kohaku-ui/spec-core";
 import { GENERATED_SCAN_WINDOW } from "../constants.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
+import type { PromotionCandidate, PromotionOrigin } from "./candidate.js";
+import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
 import type { ComponentDraft, PromotionStatus } from "./machine.js";
-import {
-  notifyPromotionError,
-  type PromotionCandidate,
-  type PromotionErrorContext,
-  type PromotionOrigin,
-} from "./service.js";
 import type { SchemaSuggestion } from "./suggestion.js";
 import type { createUsageIndex } from "./usage.js";
 import { indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
@@ -72,6 +69,18 @@ export interface CandidateStore {
   scanWithTenant(tenant?: string): Promise<{ candidate: PromotionCandidate; tenant?: string }[]>;
   require(artifactId: string, tenant?: string): Promise<PromotionCandidate>;
   listByStatus(status: PromotionStatus, scope?: TenantScope): Promise<PromotionCandidate[]>;
+  /**
+   * Reads the usage and `component.generated` bulk indexes once (scoped to `tenant`; unset = all tenants) and
+   * returns a loader for the N+1-avoiding callers — see the `bulkLoader` implementation below.
+   */
+  bulkLoader(tenant?: string): Promise<BulkCandidateLoader>;
+}
+
+/** Result of `CandidateStore.bulkLoader`: the latest `component.generated` event per `(tenant, artifactId)` key and a per-candidate `load` that reuses the bulk indexes. */
+export interface BulkCandidateLoader {
+  /** Latest `component.generated` event per `usageIndexKey(tenant, artifactId)` (see `indexLatestGenerated`). */
+  latestGenerated: ReadonlyMap<string, LineageEventRecord>;
+  load(artifactId: string, recordTenant: string | undefined): Promise<PromotionCandidate | null>;
 }
 
 export function createCandidateStore(opts: {
@@ -250,6 +259,36 @@ export function createCandidateStore(opts: {
   }
 
   /**
+   * Performs the two bulk index reads the N+1-avoiding callers (scanCandidatesWithTenant, listByStatus and
+   * service.ts's reconcile) each need exactly once — the (tenant, artifactId)-keyed component.used index (for the
+   * window-drift known constraint, see the usage.index doc) and a single fetch of the most recent
+   * GENERATED_SCAN_WINDOW component.generated events reduced to the latest per key — and returns a `load` that
+   * hydrates one candidate from them. A candidate whose generated event has aged out of that window is simply
+   * absent from `latestGenerated`, so `load` falls back to loadCandidate's own per-artifact lookup, unchanged.
+   * `recordTenant` is the record's own tenant (not the call-level scope), the same as everywhere else.
+   */
+  async function bulkLoader(tenant?: string): Promise<BulkCandidateLoader> {
+    const usedByArtifact = await usage.index(tenant);
+    const generated = await storage.listLineage({
+      type: ["component.generated"],
+      limit: GENERATED_SCAN_WINDOW,
+      ...tenantField(tenant),
+    });
+    const latestGenerated = indexLatestGenerated(generated);
+    return {
+      latestGenerated,
+      load(artifactId, recordTenant) {
+        const key = usageIndexKey(recordTenant, artifactId);
+        return loadCandidate(artifactId, {
+          tenant: recordTenant,
+          usageStats: tallyUsage(usedByArtifact.get(key) ?? []),
+          generatedEvent: latestGenerated.get(key),
+        });
+      },
+    };
+  }
+
+  /**
    * Pure read scan (no side effects), paired with each candidate's own owning tenant. The shared core behind
    * `scanCandidates` / `list` / `listByStatus`'s in_use branch, and `evaluateAndList`'s read step (before
    * `nominateEligible`'s side effects, which needs the per-candidate tenant to detect a tenant mismatch, #10).
@@ -260,30 +299,18 @@ export function createCandidateStore(opts: {
     // Aggregation covers only the most recent GENERATED_SCAN_WINDOW component.generated events. Anything beyond is dropped.
     // In the future, move toward a since window or an aggregate query (DB backend).
     // When tenant is given, scan only that tenant's records (unset = all = legacy behavior).
-    const generated = await storage.listLineage({
-      type: ["component.generated"],
-      limit: GENERATED_SCAN_WINDOW,
-      ...tenantField(tenant),
-    });
     // Key candidates by (tenant, artifactId) rather than artifactId alone (#10): artifactId derives from content
     // sha256 and is globally unique, so the *same* artifactId can be promoted independently by multiple tenants
     // (see promotion-tenant-mix.test.ts). Keying by artifactId alone when `tenant` is left unspecified (an
     // all-tenant scan) would collapse those tenants' independent generated events (and hence candidates) into
     // one, silently mixing their state. `e.tenant` is each event's own recorded tenant (equal to `tenant` when a
     // specific tenant was requested; the record's own value otherwise).
-    const latestByKey = indexLatestGenerated(generated);
-    // Build the (tenant, artifactId)-keyed component.used index with a single fetch (for the window-drift known
-    // constraint, see the usage.index doc).
-    const usedByArtifact = await usage.index(tenant);
+    const loader = await bulkLoader(tenant);
     const candidates: { candidate: PromotionCandidate; tenant?: string }[] = [];
-    for (const event of latestByKey.values()) {
+    for (const event of loader.latestGenerated.values()) {
       const artifactId = event.payload["artifactId"] as string;
       const recordTenant = event.tenant;
-      const candidate = await loadCandidate(artifactId, {
-        tenant: recordTenant,
-        usageStats: tallyUsage(usedByArtifact.get(usageIndexKey(recordTenant, artifactId)) ?? []),
-        generatedEvent: event,
-      });
+      const candidate = await loader.load(artifactId, recordTenant);
       if (candidate == null) continue;
       candidates.push({ candidate, tenant: recordTenant });
     }
@@ -333,20 +360,10 @@ export function createCandidateStore(opts: {
     // component.used / component.generated window reads below.
     const states = (await storage.listPromotionStates(tenant)).filter((state) => state.status === status);
     if (states.length === 0) return [];
-    // Inject usage into loadCandidate using the same component.used index as scanCandidates
-    // (for the window-drift known constraint, see the usage.index doc).
-    const usedByArtifact = await usage.index(tenant);
-    // N+1 avoidance for component.generated too (mirrors scanCandidatesWithTenant's own generated index, and
-    // reconcile's, service.ts): a single bulk fetch of the most recent GENERATED_SCAN_WINDOW component.generated
-    // events, keyed the same way, so a state whose generated event falls inside that window skips
-    // loadCandidate's own individual listLineage lookup below. A state whose generated event has aged out of
-    // the window is simply absent here and falls back to that per-artifact lookup, unchanged from before.
-    const generated = await storage.listLineage({
-      type: ["component.generated"],
-      limit: GENERATED_SCAN_WINDOW,
-      ...tenantField(tenant),
-    });
-    const latestGeneratedByKey = indexLatestGenerated(generated);
+    // Inject usage and component.generated into loadCandidate from the same bulk indexes scanCandidates and
+    // reconcile use (see bulkLoader): a state whose generated event falls inside the scan window skips
+    // loadCandidate's own individual listLineage lookup below.
+    const loader = await bulkLoader(tenant);
     const candidates: PromotionCandidate[] = [];
     for (const state of states) {
       // Use each state's own recorded tenant (state.tenant), not the call-level `tenant` (#10): when `tenant`
@@ -355,12 +372,7 @@ export function createCandidateStore(opts: {
       // component.generated / promotion-state lookups (they are keyed by the actual owning tenant), silently
       // falling back to a wrong/incomplete candidate. When a specific tenant was requested, state.tenant already
       // equals it (listPromotionStates(tenant) filters to that tenant), so this is a no-op for that case.
-      const key = usageIndexKey(state.tenant, state.artifactId);
-      const candidate = await loadCandidate(state.artifactId, {
-        tenant: state.tenant,
-        usageStats: tallyUsage(usedByArtifact.get(key) ?? []),
-        generatedEvent: latestGeneratedByKey.get(key),
-      });
+      const candidate = await loader.load(state.artifactId, state.tenant);
       // Something that has state but whose component.generated cannot be pulled (normally impossible) cannot be projected, so exclude it.
       if (candidate != null) candidates.push(candidate);
     }
@@ -375,5 +387,6 @@ export function createCandidateStore(opts: {
     scanWithTenant: scanCandidatesWithTenant,
     require: requireCandidate,
     listByStatus,
+    bulkLoader,
   };
 }
