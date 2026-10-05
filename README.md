@@ -1,6 +1,6 @@
 <img src="docs/assets/kohaku-icon.png" alt="kohaku" width="112">
 
-# kohaku — an AI-native GUI library (reference implementation)
+# kohaku — LLM-generated UI, under control
 
 English | [日本語](README.ja.md)
 
@@ -8,9 +8,22 @@ English | [日本語](README.ja.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-A Generative UI foundation that treats UI as data (a declarative **UI Spec**) rather than code, and fully separates generation (Composition) from rendering (Rendering).
+kohaku is a library for putting LLM-generated UI under control in production: the same request gets the same screen, the model never touches your data, and whatever the model invents passes review before it becomes a part of your product. (It is the governance layer that takes Generative UI to production.)
 
-**"The same request produces the same display, whether it comes from chat or from the Web"** — guaranteed structurally by unifying the UI Composition Service and caching Specs.
+- **Identical display is structural, not statistical** — chat and GUI requests normalize to one Intent and one cached UI Spec.
+- **The model builds the plumbing; the water never flows through it** — a Spec carries `query://` references, never data values.
+- **Freedom is allowed, then governed** — free-form output runs in a sandbox; what is worth keeping is reviewed and promoted to an official part.
+
+Try it on your own CSV / JSON / SQLite file:
+
+```bash
+npx @kohaku-ui/cli init --from data.csv --out my-dashboard
+cd my-dashboard && npm run dev
+```
+
+**Choose your path:** [MCP Apps only](docs/paths/mcp-apps.md) · [React dashboard only](docs/paths/react-dashboard.md) · [full stack](docs/paths/full-stack.md) — or read [Why kohaku](docs/why-kohaku.md) first.
+
+Under the hood, UI is data (a declarative **UI Spec**) rather than code, and generation (Composition) is fully separated from rendering (Rendering):
 
 ```
 Natural language (chat) ─┐                                   ┌─ Web (renderer-react)
@@ -65,14 +78,13 @@ Working on kohaku itself rather than building on it? Start from the quick start 
 **Try it on your own data first?**
 
 ```bash
-mkdir my-app && cd my-app
-npx @kohaku-ui/cli init --from ../sales.csv   # or a .json array / a .sqlite file
-npm run dev
+npx @kohaku-ui/cli init --from data.csv --out my-dashboard   # or a .json array / a .sqlite file
+cd my-dashboard && npm run dev
 ```
 
 Generates a runnable Dashboard + Chat app (DomainPort, Intent catalog, L0 fixed Spec) from your own CSV/JSON/SQLite, plus a `.env` with a freshly generated capability secret (add only a provider key to it — never copy `.env.example` over it) — see the [Zero-Port quickstart](docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code) for what it produces and how to add L1/L2. No data at hand? Try [`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv). The rest of this section is the monorepo's own dev setup.
 
-Prerequisites: Node >= 22, pnpm 12 (the floor is `package.json`'s `engines`; CI verifies on both Node 22 (the declared floor) and Node 24, and `.node-version` pins 25.7.0 for local development).
+Prerequisites: Node >= 22 (>= 22.13 for SQLite input), pnpm 12. CI verifies on Node 22 and 24.
 
 ```bash
 cp .env.example .env    # LLM provider settings (table below)
@@ -151,6 +163,8 @@ pnpm typecheck   # type-check all packages
 node cli/bin/kohaku.js conformance --self                                   # spec self-check
 node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku # REST black-box check
 ```
+
+To use the CLI straight from a repository checkout (`node cli/bin/kohaku.js …`), run `pnpm install` first; outside the repository, use `npx @kohaku-ui/cli` instead.
 
 Onboarding pitfalls worth knowing up front:
 
