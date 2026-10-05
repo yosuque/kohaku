@@ -58,6 +58,20 @@ export interface AdminMessages {
     usageTokensIn: string;
     usageTokensOut: string;
     usageFixated: string;
+    catalogGaps: string;
+    catalogGapsNote: string;
+    pendingPromotions: string;
+    pendingPromotionsSub: string;
+    l2Intents: string;
+    gapIntent: string;
+    gapGenerated: string;
+    gapFallbacks: string;
+    noL2Intents: string;
+    editedSchemas: string;
+    gapComponent: string;
+    gapEdits: string;
+    gapTopFields: string;
+    noSchemaEdits: string;
   };
   fixations: {
     description: string;
@@ -198,6 +212,21 @@ export const defaultAdminMessages: AdminMessages = {
     usageTokensIn: "tokens in",
     usageTokensOut: "tokens out",
     usageFixated: "fixated",
+    catalogGaps: "Catalog gaps",
+    catalogGapsNote:
+      "Where the catalog falls short: requests answered by free-form L2 generation, and the schemas reviewers had to correct. Counted over the same sample window as above.",
+    pendingPromotions: "Promotions awaiting action",
+    pendingPromotionsSub: "candidate through schema_proposed (all time)",
+    l2Intents: "Intents falling to L2",
+    gapIntent: "intent",
+    gapGenerated: "L2 generations",
+    gapFallbacks: "fallbacks",
+    noL2Intents: "No L2 generations in this window",
+    editedSchemas: "Most-edited schemas",
+    gapComponent: "component",
+    gapEdits: "edits",
+    gapTopFields: "most-changed fields",
+    noSchemaEdits: "No schema edits in this window",
   },
   fixations: {
     description:

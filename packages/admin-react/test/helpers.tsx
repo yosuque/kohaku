@@ -13,13 +13,16 @@ export function jsonResponse(body: unknown, status = 200): Response {
 /**
  * A typed client whose transport is an in-memory table keyed by "METHOD path-suffix" (the same style as the
  * sample's pre-extraction characterization test). Every tab's reload also fires GET /analytics/summary for the
- * "N or more uses" thresholds, so that route has a default unless a test overrides it.
+ * "N or more uses" thresholds, so that route has a default unless a test overrides it. The same goes for
+ * GET /promotions (an empty list), which the Analytics tab reads once for its pending-promotions count.
  */
 export function stubClient(handlers: Record<string, Handler>): { client: KohakuClient; calls: FetchCall[] } {
   const calls: FetchCall[] = [];
   const table: Record<string, Handler> = {
     "GET /analytics/summary": () =>
       jsonResponse({ promotionPolicy: { fixationMinUses: 3, promotionMinUses: 2 } }),
+    // The Analytics tab's "pending promotions" card lists every candidate once.
+    "GET /promotions": () => jsonResponse({ candidates: [] }),
     ...handlers,
   };
   const client = createKohakuClient({

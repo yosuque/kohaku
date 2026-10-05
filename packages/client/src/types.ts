@@ -278,6 +278,14 @@ export interface AnalyticsSummaryView {
     };
     /** Per-day, per-tenant metering rows over the same (tail-window) sample as the rest of the summary. */
     usage: UsageRowView[];
+    /** Catalog gap: Intents that fell to free-form L2 generation, most generated first (top N of the sample). */
+    l2ByIntent: { canonical: string; intentHash: string; generated: number; fallbacks: number }[];
+    /** Catalog gap: reviewer corrections of the machine's schema suggestion, per final component type. */
+    schemaEditsByComponent: {
+      key: string;
+      count: number;
+      topFields: { field: string; count: number }[];
+    }[];
   };
   /**
    * Nomination thresholds for promotion / fixation candidates ("N or more uses"), when the host bundles them

@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { AnalyticsTab, defaultAdminMessages } from "../src/index.js";
 import { jsonResponse, renderInAdmin } from "./helpers.js";
@@ -38,6 +38,17 @@ export const SUMMARY = {
         tokens: { input: 1234, output: 567 },
         fixated: 1,
         unfixated: 0,
+      },
+    ],
+    l2ByIntent: [{ canonical: "sales.customViz", intentHash: "sha256:c0ffee", generated: 4, fallbacks: 1 }],
+    schemaEditsByComponent: [
+      {
+        key: "sales.calendarHeatmap",
+        count: 3,
+        topFields: [
+          { field: "description", count: 3 },
+          { field: "intentName", count: 1 },
+        ],
       },
     ],
   },
@@ -95,6 +106,14 @@ const FULL_SUMMARY = {
         fixated: 1,
         unfixated: 0,
       },
+    ],
+    l2ByIntent: [
+      { canonical: "reporting.funnel", intentHash: "sha256:aaaa", generated: 11, fallbacks: 2 },
+      { canonical: "reporting.sankey", intentHash: "sha256:bbbb", generated: 6, fallbacks: 0 },
+    ],
+    schemaEditsByComponent: [
+      { key: "reporting.funnelChart", count: 5, topFields: [{ field: "paramsJsonSchema", count: 4 }] },
+      { key: "art-orphan", count: 1, topFields: [{ field: "version", count: 1 }] },
     ],
   },
   promotionPolicy: { fixationMinUses: 3, promotionMinUses: 2 },
@@ -184,6 +203,77 @@ describe("AnalyticsTab", () => {
       },
     });
     await screen.findByText(defaultAdminMessages.analytics.noUsage);
+  });
+
+  it("renders the Catalog gaps section: L2 intents, most-edited schemas, and the pending promotion count", async () => {
+    const statuses = [
+      "in_use",
+      "candidate",
+      "judging",
+      "judge_failed",
+      "in_review",
+      "changes_requested",
+      "approved",
+      "schema_proposed",
+      "published",
+      "rejected",
+      "withdrawn",
+      "candidate",
+    ];
+    const view = renderInAdmin(<AnalyticsTab />, {
+      handlers: {
+        "GET /analytics/summary": () => jsonResponse(FULL_SUMMARY),
+        "GET /promotions": () =>
+          jsonResponse({
+            candidates: statuses.map((status, i) => ({
+              artifactId: `art-${i}`,
+              status,
+              uses: 1,
+              sessions: 1,
+              updatedAt: "2026-07-01T00:00:00.000Z",
+            })),
+          }),
+      },
+    });
+    await screen.findByText(defaultAdminMessages.analytics.catalogGaps);
+    const a = defaultAdminMessages.analytics;
+    expect(screen.getByText(a.l2Intents)).toBeTruthy();
+    expect(screen.getByText(a.editedSchemas)).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: a.gapIntent })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: a.gapComponent })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: a.gapFallbacks })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: a.gapEdits })).toBeTruthy();
+    expect(screen.getByRole("columnheader", { name: a.gapTopFields })).toBeTruthy();
+    const text = view.container.textContent ?? "";
+    expect(text).toContain("reporting.funnel");
+    expect(text).toContain("reporting.sankey");
+    expect(text).toContain("reporting.funnelChart");
+    expect(text).toContain("art-orphan");
+    expect(text).toContain("paramsJsonSchema (4)");
+    // 8 pending: candidate x2, judging, judge_failed, in_review, changes_requested, approved, schema_proposed.
+    const pendingCard = screen.getByText(a.pendingPromotions).parentElement;
+    await waitFor(() => expect(pendingCard?.textContent).toContain(`${a.pendingPromotions}8`));
+    // One GET /promotions for the whole count (no per-status fan-out).
+    expect(view.calls.filter((c) => c.url.split("?")[0]!.endsWith("/promotions"))).toHaveLength(1);
+    expect(view.calls.some((c) => c.url.includes("status="))).toBe(false);
+  });
+
+  it("shows the Catalog gaps empty states and an em dash when the promotions list is unavailable", async () => {
+    const { l2ByIntent: _l2, schemaEditsByComponent: _edits, ...summaryWithoutGaps } = SUMMARY.summary;
+    const view = renderInAdmin(<AnalyticsTab />, {
+      handlers: {
+        "GET /analytics/summary": () => jsonResponse({ ...SUMMARY, summary: summaryWithoutGaps }),
+        "GET /promotions": () => jsonResponse({ error: { code: "CAPABILITY_DENIED", message: "no" } }, 403),
+      },
+    });
+    await screen.findByText(defaultAdminMessages.analytics.noL2Intents);
+    expect(screen.getByText(defaultAdminMessages.analytics.noSchemaEdits)).toBeTruthy();
+    // The pending card falls back to "—" and, unlike the Promotions tab, does not raise a notice.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(view.notices).toEqual([]);
+    expect(
+      screen.getByText(defaultAdminMessages.analytics.pendingPromotions).parentElement?.textContent,
+    ).toContain("—");
   });
 
   it("notifies the denied message on 403 and stays on the loading card", async () => {

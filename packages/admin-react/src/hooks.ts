@@ -9,6 +9,7 @@ import {
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAdmin } from "./context.js";
+import { PENDING_PROMOTION_STATUSES } from "./pending-statuses.js";
 import { describeDeniedOperation } from "./rbac.js";
 
 const DEFAULT_LINEAGE_QUERY: LineageQuery = { limit: 120 };
@@ -89,6 +90,34 @@ export function useAnalyticsSummary(): { data: AnalyticsSummaryView | null; relo
   }, [client, notify, getMessages, guard]);
   useEffect(reload, [reload]);
   return { data, reload };
+}
+
+/**
+ * The number of promotion candidates still awaiting action (see `PENDING_PROMOTION_STATUSES`): one
+ * unfiltered GET /promotions, filtered client-side (the route narrows by one status at a time). `count` is null
+ * until the call resolves and stays null when it fails. Failure is deliberately silent (no notice, unlike the
+ * Promotions tab): this feeds one card on the Analytics tab, and a role that may read analytics but not list
+ * promotions (a viewer) would otherwise get an error toast on every visit; the card shows "—" instead.
+ */
+export function usePendingPromotionCount(): { count: number | null; reload: () => void } {
+  const { client } = useAdmin();
+  const [count, setCount] = useState<number | null>(null);
+  const guard = useResultGuard();
+  const reload = useCallback(() => {
+    const stillCurrent = guard();
+    void client.promotions
+      .list()
+      .then((candidates) => {
+        if (stillCurrent()) {
+          setCount(candidates.filter((c) => PENDING_PROMOTION_STATUSES.includes(c.status)).length);
+        }
+      })
+      .catch(() => {
+        if (stillCurrent()) setCount(null);
+      });
+  }, [client, guard]);
+  useEffect(reload, [reload]);
+  return { count, reload };
 }
 
 /**

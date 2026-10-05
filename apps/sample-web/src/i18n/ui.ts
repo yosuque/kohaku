@@ -299,6 +299,21 @@ const JA: UIStrings = {
       usageTokensIn: "入力トークン",
       usageTokensOut: "出力トークン",
       usageFixated: "固定化",
+      catalogGaps: "カタログの不足",
+      catalogGapsNote:
+        "カタログが足りていない箇所: 自由生成の L2 で応えた要求と、レビュアーが修正せざるを得なかった schema。上と同じサンプル窓で集計しています。",
+      pendingPromotions: "対応待ちの昇格",
+      pendingPromotionsSub: "candidate から schema_proposed まで(全期間)",
+      l2Intents: "L2 に落ちた Intent",
+      gapIntent: "Intent",
+      gapGenerated: "L2 生成数",
+      gapFallbacks: "フォールバック",
+      noL2Intents: "このウィンドウに L2 生成はありません",
+      editedSchemas: "修正の多い schema",
+      gapComponent: "部品",
+      gapEdits: "修正数",
+      gapTopFields: "修正の多い項目",
+      noSchemaEdits: "このウィンドウに schema の修正はありません",
     },
     fixations: {
       description:

@@ -1,7 +1,7 @@
 import type { UsageRowView } from "@kohaku-ui/client";
 import type { CSSProperties, ReactNode } from "react";
 import { useAdmin } from "../context.js";
-import { useAnalyticsSummary } from "../hooks.js";
+import { useAnalyticsSummary, usePendingPromotionCount } from "../hooks.js";
 import type { AdminMessages } from "../messages.js";
 import { V } from "../theme.js";
 import { TIER_COLOR } from "../tiers.js";
@@ -66,11 +66,14 @@ function usageValue(row: UsageRowView, column: UsageColumn): number {
 export function AnalyticsTab(): ReactNode {
   const { messages: t } = useAdmin();
   const { data, reload } = useAnalyticsSummary();
+  const pending = usePendingPromotionCount();
   if (data == null) return <div style={card}>{t.analytics.loading}</div>;
 
   const { summary, window } = data;
   // An older host that predates `usage` omits it; render the empty state rather than crash.
   const usage: readonly UsageRowView[] = summary.usage ?? [];
+  const l2ByIntent = summary.l2ByIntent ?? [];
+  const schemaEdits = summary.schemaEditsByComponent ?? [];
   const tierTotal = summary.tiers.L0 + summary.tiers.L1 + summary.tiers.L2;
   const cacheEntries: [string, number][] = [
     ["hit", summary.cache.hit],
@@ -87,7 +90,14 @@ export function AnalyticsTab(): ReactNode {
         <div style={{ fontSize: 13, color: V.muted }}>
           {t.analytics.description(window.limit, window.truncated, summary.events)}
         </div>
-        <button type="button" onClick={reload} style={smallButton}>
+        <button
+          type="button"
+          onClick={() => {
+            reload();
+            pending.reload();
+          }}
+          style={smallButton}
+        >
           {t.refresh}
         </button>
       </div>
@@ -233,6 +243,83 @@ export function AnalyticsTab(): ReactNode {
                       {usageValue(row, key)}
                     </td>
                   ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div style={card}>
+        <div style={sectionTitle}>{t.analytics.catalogGaps}</div>
+        <div style={{ fontSize: 11.5, color: V.muted, marginBottom: 10 }}>{t.analytics.catalogGapsNote}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginBottom: 12 }}>
+          <StatCard
+            label={t.analytics.pendingPromotions}
+            value={pending.count ?? "—"}
+            sub={t.analytics.pendingPromotionsSub}
+          />
+          <div>
+            <div style={{ ...sectionTitle, fontSize: 12.5 }}>{t.analytics.l2Intents}</div>
+            {l2ByIntent.length === 0 ? (
+              <Empty text={t.analytics.noL2Intents} />
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${V.border}`, color: V.muted }}>
+                    <th scope="col" style={{ ...usageCell, textAlign: "left" }}>
+                      {t.analytics.gapIntent}
+                    </th>
+                    <th scope="col" style={usageCell}>
+                      {t.analytics.gapGenerated}
+                    </th>
+                    <th scope="col" style={usageCell}>
+                      {t.analytics.gapFallbacks}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {l2ByIntent.map((it) => (
+                    <tr key={it.canonical} style={{ borderBottom: `1px solid ${V.border}` }}>
+                      <td style={{ ...usageCell, textAlign: "left", fontFamily: "ui-monospace, monospace" }}>
+                        {it.canonical}
+                      </td>
+                      <td style={{ ...usageCell, fontWeight: 700 }}>{it.generated}</td>
+                      <td style={usageCell}>{it.fallbacks}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+        <div style={{ ...sectionTitle, fontSize: 12.5 }}>{t.analytics.editedSchemas}</div>
+        {schemaEdits.length === 0 ? (
+          <Empty text={t.analytics.noSchemaEdits} />
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${V.border}`, color: V.muted }}>
+                <th scope="col" style={{ ...usageCell, textAlign: "left" }}>
+                  {t.analytics.gapComponent}
+                </th>
+                <th scope="col" style={usageCell}>
+                  {t.analytics.gapEdits}
+                </th>
+                <th scope="col" style={{ ...usageCell, textAlign: "left" }}>
+                  {t.analytics.gapTopFields}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {schemaEdits.map((row) => (
+                <tr key={row.key} style={{ borderBottom: `1px solid ${V.border}` }}>
+                  <td style={{ ...usageCell, textAlign: "left", fontFamily: "ui-monospace, monospace" }}>
+                    {row.key}
+                  </td>
+                  <td style={{ ...usageCell, fontWeight: 700 }}>{row.count}</td>
+                  <td style={{ ...usageCell, textAlign: "left", color: V.muted }}>
+                    {row.topFields.map((f) => `${f.field} (${f.count})`).join(", ")}
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -11,7 +11,13 @@ export {
   useAdmin,
   useAdminNotice,
 } from "./context.js";
-export { useAnalyticsSummary, useFixations, useLineage, usePromotions } from "./hooks.js";
+export {
+  useAnalyticsSummary,
+  useFixations,
+  useLineage,
+  usePendingPromotionCount,
+  usePromotions,
+} from "./hooks.js";
 export {
   type AdminExtraTab,
   type AdminTabKey,
