@@ -242,6 +242,7 @@ const JA: UIStrings = {
     tabAnalytics: "アナリティクス",
     tabPromotions: "昇格レビュー(L2→L1)",
     tabFixations: "固定化(L1→L0)",
+    tabApprovals: "承認",
     tabGallery: "ギャラリー",
     bumpButton: "データ更新をシミュレート(bump)",
     bumpNotice: (v) => `dataVersion → ${v}(次の compose はキャッシュ MISS になります)`,
@@ -304,6 +305,42 @@ const JA: UIStrings = {
       opRemove: "固定化の解除 (fixation.remove)",
       opRead: "固定化候補・レコードの閲覧 (fixation.read)",
       fetchFailed: "固定化データの取得に失敗しました",
+    },
+    approvals: {
+      description:
+        "人間の承認が必要な統制 Action のうち、有効なトークン無しで実行が試みられたものです。承認すると、要求者・Action・ペイロードに束縛された短命のトークンを発行します。それを要求者に渡し、要求者が再実行時に貼り付けます。lineage の末尾(直近 24 時間・最大 1000 イベント)から導出するため、ごく古い要求は一覧から外れることがあります。",
+      empty: "承認待ちはありません。",
+      requester: "要求者",
+      requesterUnknown:
+        "要求者が不明です(lineage の記録に actor id がありません)。トークンを束縛できないため承認できません。",
+      age: (seconds) =>
+        seconds < 60
+          ? `${seconds} 秒前`
+          : seconds < 3600
+            ? `${Math.floor(seconds / 60)} 分前`
+            : `${Math.floor(seconds / 3600)} 時間前`,
+      requestCount: (count) => `${count} 回要求`,
+      requestIdLabel: "requestId",
+      payloadHashLabel: "ペイロードハッシュ",
+      payloadLabel: "記録されたペイロード",
+      payloadMismatch:
+        "記録されたペイロードがペイロードハッシュと一致しません。表示されたペイロードを根拠に承認しないでください。",
+      approveButton: "承認する",
+      issuedNotice: (action) =>
+        `${action} の承認トークンを発行しました。コピーして要求者に渡してください(持参人トークンです)。`,
+      tokenLabel: "承認トークン",
+      issuedAge: (seconds, ttlSeconds) => `${seconds} 秒前に発行(有効期間 ${ttlSeconds} 秒)`,
+      copyButton: "コピー",
+      copied: "コピーしました",
+      reissue: "再発行",
+      issueFailed: "承認トークンの発行に失敗しました",
+      selfApproval:
+        "自分自身の要求は承認できません。別の承認者に切り替えてください(要求者と承認者は別人である必要があります)。",
+      notConfigured:
+        "このホストは承認の発行に対応していません(ApprovalPort / authorizeGovernance が未配線です)。",
+      opIssue: "承認トークンの発行 (action.approve)",
+      opRead: "承認待ちを探すための lineage イベントの閲覧 (lineage.read)",
+      fetchFailed: "承認待ちの取得に失敗しました",
     },
     promotions: {
       description:

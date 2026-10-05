@@ -1,7 +1,7 @@
 # @kohaku-ui/admin-react
 
-Governance console for kohaku hosts — the four review surfaces (View Lineage, Analytics, Promotion review L2→L1,
-Fixation L1→L0) as embeddable React components. Talks to the host only through `@kohaku-ui/client`.
+Governance console for kohaku hosts — the five review surfaces (View Lineage, Analytics, Promotion review L2→L1,
+Fixation L1→L0, Approvals) as embeddable React components. Talks to the host only through `@kohaku-ui/client`.
 
 Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation of the
 [Kohaku Protocol](https://github.com/yosuque/kohaku/blob/main/spec/SPEC.md): UI treated as data
@@ -39,6 +39,13 @@ export function AdminPage() {
 - `promotionDefaults` — prefill / `queryTemplate.path` choices for the promotion approval form.
 - The published promotion card has an **Unpublish** action (`PromotionActionKind: "unpublish"`; copy in
   `messages.promotions.opUnpublish` / `unpublishedNotice`) alongside approve/reject/withdraw/request-changes.
+- The **Approvals** tab is the approver's inbox for `"approve"`-tier governed Actions (design.md #72). It derives
+  the pending requests from the lineage tail (`GET /lineage`, last 24 hours, at most 1000 events; also exported
+  as `derivePendingApprovals` / `useApprovalInbox`) and mints a bearer token with `POST /approvals` that the
+  approver copies and hands to the requester. It needs `lineage.read` and `action.approve`; a host that records
+  only hashes (the default) shows the payload hash, one that records payloads
+  (`createActionAuditRecorder(lineage, { recordPayload: true })`) also shows what is being approved. The token is
+  never stored by the console, and a token that was issued but not yet used is not visible after a reload.
 - Empty-state copy for the Promotions / Fixations tabs shows the usage thresholds (`promotionMinUses` /
   `fixationMinUses`) exposed by `useAdmin()`, fetched once per `(client, tenant)` from `GET /analytics/summary`.
 

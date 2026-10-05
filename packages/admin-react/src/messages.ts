@@ -12,6 +12,7 @@ export interface AdminMessages {
   tabAnalytics: string;
   tabPromotions: string;
   tabFixations: string;
+  tabApprovals: string;
   refresh: string;
   deniedMessage: (code: string, operation: string) => string;
   /** 401 (missing/expired session) — distinct from `deniedMessage`'s 403 role explanation. */
@@ -62,6 +63,37 @@ export interface AdminMessages {
     removeFailed: string;
     opRemove: string;
     /** Operation label for the GET /fixations + GET /fixations/proposals denied/failed explanation. */
+    opRead: string;
+    fetchFailed: string;
+  };
+  approvals: {
+    description: string;
+    empty: string;
+    requester: string;
+    /** Shown for a row whose lineage record has no `actor.id` (the Approve button is disabled with this as its title). */
+    requesterUnknown: string;
+    /** Relative age of the latest request, `seconds` since it was recorded. */
+    age: (seconds: number) => string;
+    /** How many times the same (requester, action, payload) was attempted. */
+    requestCount: (count: number) => string;
+    requestIdLabel: string;
+    payloadHashLabel: string;
+    payloadLabel: string;
+    payloadMismatch: string;
+    approveButton: string;
+    /** Info notice after a token is minted. */
+    issuedNotice: (action: string) => string;
+    tokenLabel: string;
+    /** "issued N s ago (TTL M s)" under the token. */
+    issuedAge: (seconds: number, ttlSeconds: number) => string;
+    copyButton: string;
+    copied: string;
+    reissue: string;
+    issueFailed: string;
+    selfApproval: string;
+    notConfigured: string;
+    opIssue: string;
+    /** Operation label for the GET /lineage denied/failed explanation. */
     opRead: string;
     fetchFailed: string;
   };
@@ -134,6 +166,7 @@ export const defaultAdminMessages: AdminMessages = {
   tabAnalytics: "Analytics",
   tabPromotions: "Promotion Review (L2→L1)",
   tabFixations: "Fixation (L1→L0)",
+  tabApprovals: "Approvals",
   refresh: "Refresh",
   deniedMessage: (code, operation) =>
     `Permission denied (${code}): the current role is not allowed to "${operation}". Switch the role at the top-right of the header to admin / reviewer.`,
@@ -190,6 +223,41 @@ export const defaultAdminMessages: AdminMessages = {
     opRemove: "removing a fixation (fixation.remove)",
     opRead: "viewing fixation candidates and records (fixation.read)",
     fetchFailed: "Failed to fetch fixation data",
+  },
+  approvals: {
+    description:
+      "Governed Actions that need a human approval and were attempted without a valid token. Approving mints a short-lived token bound to the requester, the action and the exact payload; hand it to the requester, who pastes it when they retry. Derived from the lineage tail (the last 24 hours, up to 1000 events), so a very old request can fall out of this list.",
+    empty: "No pending approvals.",
+    requester: "requester",
+    requesterUnknown:
+      "The requester is unknown (the lineage record has no actor id), so a token cannot be bound.",
+    age: (seconds) =>
+      seconds < 60
+        ? `${seconds}s ago`
+        : seconds < 3600
+          ? `${Math.floor(seconds / 60)}m ago`
+          : `${Math.floor(seconds / 3600)}h ago`,
+    requestCount: (count) => `requested ${count}×`,
+    requestIdLabel: "requestId",
+    payloadHashLabel: "payload hash",
+    payloadLabel: "Recorded payload",
+    payloadMismatch:
+      "The recorded payload does not match the payload hash. Do not approve based on the displayed payload.",
+    approveButton: "Approve",
+    issuedNotice: (action) =>
+      `Approval token issued for ${action}. Copy it and hand it to the requester; it is a bearer secret.`,
+    tokenLabel: "Approval token",
+    issuedAge: (seconds, ttlSeconds) => `issued ${seconds}s ago (TTL ${ttlSeconds}s)`,
+    copyButton: "Copy",
+    copied: "Copied",
+    reissue: "Re-issue",
+    issueFailed: "Failed to issue the approval token",
+    selfApproval:
+      "You cannot approve your own request. Switch to a different approver (the requester and the approver must differ).",
+    notConfigured: "This host does not issue approvals (no ApprovalPort / authorizeGovernance is wired).",
+    opIssue: "issuing an approval token (action.approve)",
+    opRead: "viewing lineage events to find pending approvals (lineage.read)",
+    fetchFailed: "Failed to fetch pending approvals",
   },
   promotions: {
     description:

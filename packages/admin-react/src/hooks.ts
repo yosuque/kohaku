@@ -8,6 +8,7 @@ import {
 } from "@kohaku-ui/client";
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { derivePendingApprovals, type PendingApproval } from "./approvals.js";
 import { useAdmin } from "./context.js";
 import { describeDeniedOperation } from "./rbac.js";
 
@@ -164,4 +165,52 @@ export function useFixations(): {
   }, [client, notify, getMessages, guard]);
   useEffect(reload, [reload]);
   return { proposals, records, fixationMinUses, reload };
+}
+
+/** How far back the inbox looks. Older requests are not shown (and a 1000-event tail cap applies on top). */
+const APPROVAL_INBOX_WINDOW_MS = 24 * 60 * 60 * 1000;
+const APPROVAL_INBOX_EVENT_TYPES = ["action.approvalRequested", "action.invoked", "action.approved"];
+
+/**
+ * The approver's inbox (design.md #72): reads the lineage tail (GET /lineage, the last 24 hours, at most 1000
+ * events) and derives the pending approvals from it with `derivePendingApprovals` — there is no server-side
+ * pending store. A 401 / 403 becomes the role explanation, anything else the generic fetchFailed text. The
+ * previous list stays visible while a reload is in flight so a row's local state (an issued token) is not lost.
+ */
+export function useApprovalInbox(): {
+  pending: PendingApproval[];
+  reload: () => void;
+  loading: boolean;
+} {
+  const { client, notify, getMessages } = useAdmin();
+  const [pending, setPending] = useState<PendingApproval[]>([]);
+  const [loading, setLoading] = useState(true);
+  const guard = useResultGuard();
+  const reload = useCallback(() => {
+    const stillCurrent = guard();
+    setLoading(true);
+    const now = new Date();
+    void client
+      .lineage({
+        type: APPROVAL_INBOX_EVENT_TYPES,
+        since: new Date(now.getTime() - APPROVAL_INBOX_WINDOW_MS).toISOString(),
+        limit: 1000,
+      })
+      .then((events) => derivePendingApprovals(events, now))
+      .then((result) => {
+        if (!stillCurrent()) return;
+        setPending(result);
+        setLoading(false);
+      })
+      .catch((e: unknown) => {
+        if (!stillCurrent()) return;
+        const m = getMessages();
+        const denied = isKohakuHostError(e) ? describeDeniedOperation(e, m.approvals.opRead, m) : null;
+        notify(denied ?? m.approvals.fetchFailed, "error");
+        setPending([]);
+        setLoading(false);
+      });
+  }, [client, notify, getMessages, guard]);
+  useEffect(reload, [reload]);
+  return { pending, reload, loading };
 }

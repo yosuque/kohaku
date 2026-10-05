@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import axe from "axe-core";
 import { describe, expect, it } from "vitest";
 import {
   AnalyticsTab,
+  ApprovalsTab,
   FixationsTab,
   KohakuAdmin,
   LineageTab,
@@ -77,6 +78,37 @@ describe("a11y (axe structural rules) per tab", () => {
   it("FixationsTab", async () => {
     const { container } = renderInAdmin(<FixationsTab />, { handlers });
     await screen.findByText(m.fixations.fixatedTitle);
+    expect((await axe.run(container, AXE_OPTIONS)).violations).toEqual([]);
+  });
+
+  it("ApprovalsTab (a pending row, then an issued token)", async () => {
+    const { container } = renderInAdmin(<ApprovalsTab />, {
+      handlers: {
+        ...handlers,
+        "GET /lineage": () =>
+          jsonResponse({
+            events: [
+              {
+                id: "a1",
+                ts: "2026-01-01T09:00:00Z",
+                type: "action.approvalRequested",
+                actor: { kind: "user", id: "demo-viewer" },
+                payload: {
+                  action: "sales.refund",
+                  payloadHash: "sha256:0123456789abcdef0123",
+                  tier: "approve",
+                  requestId: "req-1",
+                  payload: { orderId: "o-1" },
+                },
+              },
+            ],
+          }),
+        "POST /approvals": () => jsonResponse({ approval: "tok.en.value" }),
+      },
+    });
+    await screen.findByText("sales.refund");
+    fireEvent.click(screen.getByText(m.approvals.approveButton));
+    await screen.findByLabelText(m.approvals.tokenLabel);
     expect((await axe.run(container, AXE_OPTIONS)).violations).toEqual([]);
   });
 

@@ -4,6 +4,7 @@ import { type ReactNode, useCallback, useRef, useState } from "react";
 import { AdminProvider } from "./context.js";
 import { type AdminMessages, defaultAdminMessages } from "./messages.js";
 import { AnalyticsTab } from "./tabs/AnalyticsTab.js";
+import { ApprovalsTab } from "./tabs/ApprovalsTab.js";
 import { FixationsTab } from "./tabs/FixationsTab.js";
 import { LineageTab } from "./tabs/LineageTab.js";
 import type { PromotionDefaults } from "./tabs/promotions/draft.js";
@@ -11,7 +12,7 @@ import { PromotionsTab } from "./tabs/promotions/PromotionsTab.js";
 import { adminThemeStyle, V } from "./theme.js";
 import { ErrorBanner, type NoticeKind, type NotifyFn } from "./ui.js";
 
-export type AdminTabKey = "lineage" | "analytics" | "promotions" | "fixations";
+export type AdminTabKey = "lineage" | "analytics" | "promotions" | "fixations" | "approvals";
 
 /** A product-specific tab rendered inside the same provider (e.g. the sample's design-kit Gallery). */
 export interface AdminExtraTab {
@@ -34,7 +35,7 @@ export interface KohakuAdminProps {
   theme?: ThemeTokens;
   messages?: AdminMessages;
   // `AdminTabKey | (string & {})` (not a bare `AdminTabKey | string`, which TS widens away to plain
-  // `string`) keeps the four built-in keys autocompleting in an editor while still accepting any
+  // `string`) keeps the five built-in keys autocompleting in an editor while still accepting any
   // product-supplied extra tab's key.
   initialTab?: AdminTabKey | (string & {});
   /** Product controls rendered at the right of the tab bar (may call useAdminNotice). */
@@ -76,6 +77,7 @@ export function KohakuAdmin(props: KohakuAdminProps): ReactNode {
       ),
     },
     { key: "fixations", label: t.tabFixations, render: () => <FixationsTab /> },
+    { key: "approvals", label: t.tabApprovals, render: () => <ApprovalsTab /> },
     ...(props.extraTabs ?? []),
   ];
   const active = tabs.find((x) => x.key === tab) ?? tabs[0]!;
