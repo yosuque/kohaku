@@ -1,11 +1,17 @@
-import { GOVERNANCE_ERROR_DISCRIMINATORS, type Principal, type StoragePort } from "@kohaku-ui/spec-core";
+import {
+  GOVERNANCE_ERROR_DISCRIMINATORS,
+  type LineageEventRecord,
+  type Principal,
+  type PromotionState,
+  type StoragePort,
+} from "@kohaku-ui/spec-core";
 import { RECONCILE_AUDIT_SCAN_WINDOW } from "../constants.js";
 import type { ActorKind, LineageEventType } from "../events.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { createFailOpenAudit } from "./audit.js";
 import type { PromotionCandidate, PromotionPolicy } from "./candidate.js";
-import { createCandidateStore } from "./candidate-store.js";
+import { type BulkCandidateLoader, createCandidateStore } from "./candidate-store.js";
 import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
 import {
   type ComponentDraft,
@@ -180,6 +186,23 @@ export function publishArgs(
 }
 
 /**
+ * Builds the onUnpublish projection-removal argument object (the pair of `publishArgs`). Shared by
+ * `handleUnpublish` (the unpublish transition) and `reconcile` (projection-removal recovery from snapshot
+ * authority) so the two call sites cannot drift. Callers must only invoke this once candidate.draft is
+ * confirmed non-null (handleUnpublish's fail-fast guard; reconcile's `continue` guard).
+ */
+function unpublishArgs(
+  candidate: PromotionCandidate,
+  tenant?: string,
+): { artifactId: string; draft: ComponentDraft; tenant?: string } {
+  return {
+    artifactId: candidate.artifactId,
+    draft: candidate.draft!,
+    ...tenantField(tenant),
+  };
+}
+
+/**
  * Promotion-review hook on the approve path (LLM-as-Judge, etc.). Receives a candidate and returns pass/fail and
  * a score. The 2nd argument context.tenant is additive optional: it propagates the tenant passed to approve
  * into the judge, enabling per-tenant aggregation of telemetry etc. (existing implementations that ignore context
@@ -305,6 +328,16 @@ export interface ReconcileSummary {
   published: number;
   withdrawn: number;
   skipped: number;
+}
+
+/** The shared inputs of one `reconcile` pass, built once before its per-snapshot loop. */
+interface ReconcileContext {
+  summary: ReconcileSummary;
+  loader: BulkCandidateLoader;
+  /** `(tenant, artifactId)` keys that already have a `component.published` event. */
+  publishedAuditKeys: Set<string>;
+  /** `(tenant, artifactId)` keys that already have a `component.withdrawn` event with `from: "published"`. */
+  withdrawnFromPublishedAuditKeys: Set<string>;
 }
 
 /**
@@ -518,11 +551,7 @@ export function createPromotions(opts: {
       artifactId,
     });
     // 3. Projection removal (idempotent; reconcile re-runs it against any lingering projection).
-    await opts.onUnpublish?.({
-      artifactId,
-      draft: candidate.draft,
-      ...tenantField(tenant),
-    });
+    await opts.onUnpublish?.(unpublishArgs(candidate, tenant));
     return candidate;
   }
 
@@ -603,6 +632,54 @@ export function createPromotions(opts: {
         score: 0,
         reason: `judge could not run: ${e instanceof Error ? e.message : String(e)}`,
       };
+    }
+  }
+
+  /**
+   * Records `component.schemaEdited` (the reviewer's edits against the machine suggestion) on the approve path,
+   * fail-open like the other audit records there.
+   */
+  async function recordSchemaEdit(
+    artifactId: string,
+    suggestion: SchemaSuggestion,
+    draft: ComponentDraft,
+    reviewer: Principal,
+    tenant: string | undefined,
+    acknowledgedSuggestion: boolean,
+  ): Promise<void> {
+    // diffDraft itself is pure but not defensive: candidate-store casts the persisted `data.suggestion` to
+    // SchemaSuggestion without validating it, so a suggestion that exists but is missing/malformed `draft`
+    // (a truncated write, a hand-edited promotions.json, a future field rename) would otherwise throw here
+    // and propagate out of approve() -- blocking the one thing this whole feature must never block, the
+    // publish. Fail-open like the audit record it feeds: report and skip the diff instead of throwing.
+    try {
+      const diff = diffDraft(suggestion.draft, draft);
+      await auditFailOpen({
+        endpoint: "promotion.approve.audit",
+        type: "component.schemaEdited",
+        payload: {
+          artifactId,
+          reviewer: reviewer.id,
+          extractorId: suggestion.extractorId,
+          extractorVersion: suggestion.extractorVersion,
+          changed: diff.changed,
+          unchanged: diff.unchanged,
+          // Recorded, not enforced (ApproveOptions' own doc): whether the reviewer ticked the
+          // acknowledgement checkbox for *this* suggestion. Only present when the candidate actually
+          // carried a suggestion to acknowledge (approve gates this call on that); a missing
+          // acknowledgedSuggestion in the approve request is recorded as false, not omitted.
+          acknowledged: acknowledgedSuggestion,
+        },
+        actor: { kind: "user", id: reviewer.id },
+        tenant,
+        artifactId,
+      });
+    } catch (e) {
+      notifyPromotionError(
+        opts.onError,
+        { endpoint: "promotion.approve.audit", artifactId, ...tenantField(tenant) },
+        e,
+      );
     }
   }
 
@@ -689,40 +766,14 @@ export function createPromotions(opts: {
       // nomination) and the final draft (this approve's argument) are known. Fail-open like the other audit
       // records on this path: a storage hiccup must not stop the publish below.
       if (candidate.suggestion != null) {
-        // diffDraft itself is pure but not defensive: candidate-store casts the persisted `data.suggestion` to
-        // SchemaSuggestion without validating it, so a suggestion that exists but is missing/malformed `draft`
-        // (a truncated write, a hand-edited promotions.json, a future field rename) would otherwise throw here
-        // and propagate out of approve() -- blocking the one thing this whole feature must never block, the
-        // publish. Fail-open like the audit record it feeds: report and skip the diff instead of throwing.
-        try {
-          const diff = diffDraft(candidate.suggestion.draft, draft);
-          await auditFailOpen({
-            endpoint: "promotion.approve.audit",
-            type: "component.schemaEdited",
-            payload: {
-              artifactId,
-              reviewer: reviewer.id,
-              extractorId: candidate.suggestion.extractorId,
-              extractorVersion: candidate.suggestion.extractorVersion,
-              changed: diff.changed,
-              unchanged: diff.unchanged,
-              // Recorded, not enforced (ApproveOptions' own doc): whether the reviewer ticked the
-              // acknowledgement checkbox for *this* suggestion. Only present when the candidate actually
-              // carried a suggestion to acknowledge (this whole block is gated on that); a missing
-              // acknowledgedSuggestion in the approve request is recorded as false, not omitted.
-              acknowledged: acknowledgedSuggestion,
-            },
-            actor: { kind: "user", id: reviewer.id },
-            tenant,
-            artifactId,
-          });
-        } catch (e) {
-          notifyPromotionError(
-            opts.onError,
-            { endpoint: "promotion.approve.audit", artifactId, ...tenantField(tenant) },
-            e,
-          );
-        }
+        await recordSchemaEdit(
+          artifactId,
+          candidate.suggestion,
+          draft,
+          reviewer,
+          tenant,
+          acknowledgedSuggestion,
+        );
       }
     }
     if (candidate.status === "schema_proposed") {
@@ -789,6 +840,112 @@ export function createPromotions(opts: {
   }
 
   /**
+   * Builds the set of `(tenant, artifactId)` keys (see `usageIndexKey`) that already have a lineage audit event of
+   * `type` (optionally narrowed by `predicate`), from a single tail-window read (RECONCILE_AUDIT_SCAN_WINDOW), so
+   * reconcile's per-snapshot audit backfill check is a Set lookup rather than its own `listLineage` round trip.
+   */
+  async function auditKeySet(
+    type: LineageEventType,
+    predicate?: (event: LineageEventRecord) => boolean,
+  ): Promise<Set<string>> {
+    const events = await opts.storage.listLineage({ type: [type], limit: RECONCILE_AUDIT_SCAN_WINDOW });
+    return new Set(
+      (predicate != null ? events.filter(predicate) : events).map((e) =>
+        usageIndexKey(e.tenant, e.payload["artifactId"] as string),
+      ),
+    );
+  }
+
+  /**
+   * reconcile's step for a `published` snapshot: re-checks the freshest status after the load, backfills a
+   * missing `component.published` audit event, then re-applies onPublish from the rebuilt candidate (or skips and
+   * reports when the projection cannot be rebuilt). See `reconcile`'s doc for the scan/load race and the
+   * summary counting rules.
+   */
+  async function reconcilePublished(state: PromotionState, ctx: ReconcileContext): Promise<void> {
+    const key = usageIndexKey(state.tenant, state.artifactId);
+    const candidate = await ctx.loader.load(state.artifactId, state.tenant);
+    // Re-check the freshest status right after the load (see this function's doc on the scan/load race): a
+    // *real* candidate whose status has since moved off "published" is a stale scan entry, not a failure,
+    // so skip it uncounted and without onError -- the withdrawn branch converges it (this reconcile or the
+    // next). candidate == null is a different, pre-existing case (loadCandidate found no source data at
+    // all) and falls through unchanged to the "unrecoverable" skip+onError path below.
+    if (candidate != null && candidate.status !== "published") return;
+    if (candidate?.draft != null && !ctx.publishedAuditKeys.has(key)) {
+      await auditFailOpen({
+        endpoint: "promotion.reconcile.audit",
+        type: "component.published",
+        payload: {
+          artifactId: state.artifactId,
+          componentType: candidate.draft.componentType,
+          version: candidate.draft.version,
+          intentName: candidate.draft.intentName,
+          reconciled: true,
+        },
+        tenant: state.tenant,
+        artifactId: state.artifactId,
+      });
+    }
+    if (opts.onPublish == null) return;
+    // The projection cannot be reconstructed unless both draft (state, or the snapshot's own duplicate) and
+    // html (snapshot duplicate or component.generated) are present. Anything unrecoverable due to a missing
+    // audit log etc. is skipped (the snapshot remains, so it is retried on the next reconcile) and reported.
+    if (candidate?.draft == null || candidate.html == null) {
+      ctx.summary.skipped++;
+      notifyPromotionError(
+        opts.onError,
+        {
+          endpoint: "promotion.reconcile.projection",
+          artifactId: state.artifactId,
+          ...tenantField(state.tenant),
+        },
+        new Error(
+          candidate?.draft == null
+            ? `cannot rebuild the published projection for artifact ${state.artifactId}: no schema draft is recorded`
+            : `cannot rebuild the published projection for artifact ${state.artifactId}: no html is recorded (neither the snapshot nor component.generated has it)`,
+        ),
+      );
+      return;
+    }
+    await opts.onPublish(publishArgs(candidate, state.tenant));
+    ctx.summary.published++;
+  }
+
+  /**
+   * reconcile's step for a `withdrawn` snapshot, symmetric with `reconcilePublished`: re-apply the projection
+   * removal for a withdrawal whose onUnpublish failed partway, after re-checking the freshest status and
+   * backfilling a missing `component.withdrawn` (from:"published") audit event.
+   */
+  async function reconcileWithdrawn(state: PromotionState, ctx: ReconcileContext): Promise<void> {
+    const key = usageIndexKey(state.tenant, state.artifactId);
+    if (opts.onUnpublish == null) return;
+    const candidate = await ctx.loader.load(state.artifactId, state.tenant);
+    // Re-check the freshest status for the same race as the published branch (see reconcile's own
+    // doc): a *real* candidate that has since been re-published is a stale scan entry, not a failure, so it
+    // is skipped uncounted and without onError rather than incorrectly unpublished -- the published branch
+    // converges it instead. candidate == null is a different, pre-existing case (loadCandidate found no
+    // source data at all) and falls through unchanged to the "no draft" skip right below.
+    if (candidate != null && candidate.status !== "withdrawn") return;
+    // A candidate with no persisted draft was never published (or its draft is unrecoverable), so there is
+    // no projection to remove and it is skipped.
+    if (candidate?.draft == null) return;
+    // Backfill component.withdrawn for a withdrawn snapshot, symmetric with the published side: matched
+    // by `from: "published"` so a pre-promotion withdraw's own (unrelated) withdrawn event does not suppress
+    // this backfill.
+    if (!ctx.withdrawnFromPublishedAuditKeys.has(key)) {
+      await auditFailOpen({
+        endpoint: "promotion.reconcile.audit",
+        type: "component.withdrawn",
+        payload: { artifactId: state.artifactId, from: "published", reconciled: true },
+        tenant: state.tenant,
+        artifactId: state.artifactId,
+      });
+    }
+    await opts.onUnpublish(unpublishArgs(candidate, state.tenant));
+    ctx.summary.withdrawn++;
+  }
+
+  /**
    * Projection recovery from snapshot authority. Scans the published/withdrawn snapshots across all tenants —
    * every other status has no projection to converge, see `mayHaveProjection` — assembles each artifact's
    * complete candidate — since #9, `candidate.html` (and sha256/ref) come from the snapshot's own duplicated
@@ -842,101 +999,23 @@ export function createPromotions(opts: {
     // Scan snapshots across all tenants (listPromotionStates with tenant omitted returns all). Each state has .tenant.
     const states = await opts.storage.listPromotionStates();
     const loader = await store.bulkLoader(undefined);
-    const publishedAuditKeys = new Set(
-      (
-        await opts.storage.listLineage({ type: ["component.published"], limit: RECONCILE_AUDIT_SCAN_WINDOW })
-      ).map((e) => usageIndexKey(e.tenant, e.payload["artifactId"] as string)),
-    );
-    const withdrawnFromPublishedAuditKeys = new Set(
-      (await opts.storage.listLineage({ type: ["component.withdrawn"], limit: RECONCILE_AUDIT_SCAN_WINDOW }))
-        .filter((e) => e.payload["from"] === "published")
-        .map((e) => usageIndexKey(e.tenant, e.payload["artifactId"] as string)),
-    );
+    const ctx: ReconcileContext = {
+      summary,
+      loader,
+      publishedAuditKeys: await auditKeySet("component.published"),
+      withdrawnFromPublishedAuditKeys: await auditKeySet(
+        "component.withdrawn",
+        (e) => e.payload["from"] === "published",
+      ),
+    };
     for (const state of states) {
       // Only published/withdrawn snapshots can have a projection to converge (see mayHaveProjection's doc).
       // state.status is PromotionState's storage-layer `string` (loosely typed at the StoragePort boundary);
       // cast to PromotionStatus the same way candidate-store.ts's loadCandidate already does for this field.
       if (!mayHaveProjection(state.status as PromotionStatus)) continue;
-      const key = usageIndexKey(state.tenant, state.artifactId);
-      if (state.status === "published") {
-        const candidate = await loader.load(state.artifactId, state.tenant);
-        // Re-check the freshest status right after the load (see this function's doc on the scan/load race): a
-        // *real* candidate whose status has since moved off "published" is a stale scan entry, not a failure,
-        // so skip it uncounted and without onError -- the withdrawn branch converges it (this reconcile or the
-        // next). candidate == null is a different, pre-existing case (loadCandidate found no source data at
-        // all) and falls through unchanged to the "unrecoverable" skip+onError path below.
-        if (candidate != null && candidate.status !== "published") continue;
-        if (candidate?.draft != null && !publishedAuditKeys.has(key)) {
-          await auditFailOpen({
-            endpoint: "promotion.reconcile.audit",
-            type: "component.published",
-            payload: {
-              artifactId: state.artifactId,
-              componentType: candidate.draft.componentType,
-              version: candidate.draft.version,
-              intentName: candidate.draft.intentName,
-              reconciled: true,
-            },
-            tenant: state.tenant,
-            artifactId: state.artifactId,
-          });
-        }
-        if (opts.onPublish == null) continue;
-        // The projection cannot be reconstructed unless both draft (state, or the snapshot's own duplicate) and
-        // html (snapshot duplicate or component.generated) are present. Anything unrecoverable due to a missing
-        // audit log etc. is skipped (the snapshot remains, so it is retried on the next reconcile) and reported.
-        if (candidate?.draft == null || candidate.html == null) {
-          summary.skipped++;
-          notifyPromotionError(
-            opts.onError,
-            {
-              endpoint: "promotion.reconcile.projection",
-              artifactId: state.artifactId,
-              ...tenantField(state.tenant),
-            },
-            new Error(
-              candidate?.draft == null
-                ? `cannot rebuild the published projection for artifact ${state.artifactId}: no schema draft is recorded`
-                : `cannot rebuild the published projection for artifact ${state.artifactId}: no html is recorded (neither the snapshot nor component.generated has it)`,
-            ),
-          );
-          continue;
-        }
-        await opts.onPublish(publishArgs(candidate, state.tenant));
-        summary.published++;
-        continue;
-      }
-      // mayHaveProjection admits only "published" (handled above) and "withdrawn", so only withdrawn reaches
-      // here: re-apply the projection removal for a withdrawal whose onUnpublish failed partway.
-      if (opts.onUnpublish == null) continue;
-      const candidate = await loader.load(state.artifactId, state.tenant);
-      // Re-check the freshest status for the same race as the published branch above (see this function's own
-      // doc): a *real* candidate that has since been re-published is a stale scan entry, not a failure, so it
-      // is skipped uncounted and without onError rather than incorrectly unpublished -- the published branch
-      // converges it instead. candidate == null is a different, pre-existing case (loadCandidate found no
-      // source data at all) and falls through unchanged to the "no draft" skip right below.
-      if (candidate != null && candidate.status !== "withdrawn") continue;
-      // A candidate with no persisted draft was never published (or its draft is unrecoverable), so there is
-      // no projection to remove and it is skipped.
-      if (candidate?.draft == null) continue;
-      // Backfill component.withdrawn for a withdrawn snapshot, symmetric with the published side above: matched
-      // by `from: "published"` so a pre-promotion withdraw's own (unrelated) withdrawn event does not suppress
-      // this backfill.
-      if (!withdrawnFromPublishedAuditKeys.has(key)) {
-        await auditFailOpen({
-          endpoint: "promotion.reconcile.audit",
-          type: "component.withdrawn",
-          payload: { artifactId: state.artifactId, from: "published", reconciled: true },
-          tenant: state.tenant,
-          artifactId: state.artifactId,
-        });
-      }
-      await opts.onUnpublish({
-        artifactId: state.artifactId,
-        draft: candidate.draft,
-        ...tenantField(state.tenant),
-      });
-      summary.withdrawn++;
+      // mayHaveProjection admits only "published" and "withdrawn", so anything not published is withdrawn.
+      if (state.status === "published") await reconcilePublished(state, ctx);
+      else await reconcileWithdrawn(state, ctx);
     }
     return summary;
   }
