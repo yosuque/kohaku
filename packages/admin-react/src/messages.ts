@@ -46,6 +46,35 @@ export interface AdminMessages {
     reviewTurnaroundSub: (p95: string, count: number) => string;
     acceptedAsIs: string;
     acceptedAsIsSub: (suggested: number) => string;
+    usageByDay: string;
+    usageNote: (limit: number) => string;
+    noUsage: string;
+    usageDay: string;
+    usageTenant: string;
+    usageNoTenant: string;
+    usageComposed: string;
+    usageHit: string;
+    usageMiss: string;
+    usageL2Generated: string;
+    usageTokensIn: string;
+    usageTokensOut: string;
+    usageCacheFixated: string;
+    usageFixated: string;
+    catalogGaps: string;
+    catalogGapsNote: string;
+    pendingPromotions: string;
+    pendingPromotionsSub: string;
+    pendingFetchFailed: string;
+    l2Intents: string;
+    gapIntent: string;
+    gapGenerated: string;
+    gapFallbacks: string;
+    noL2Intents: string;
+    editedSchemas: string;
+    gapComponent: string;
+    gapEdits: string;
+    gapTopFields: string;
+    noSchemaEdits: string;
   };
   fixations: {
     description: string;
@@ -213,6 +242,37 @@ export const defaultAdminMessages: AdminMessages = {
     reviewTurnaroundSub: (p95, count) => `p95 ${p95} · ${count} reviews`,
     acceptedAsIs: "Suggestions accepted as-is",
     acceptedAsIsSub: (suggested) => `of ${suggested} suggested`,
+    usageByDay: "Usage by day",
+    usageNote: (limit) =>
+      `A sample of the most recent ${limit} events in this window, not a complete count. For metering, use the kohaku usage export command.`,
+    noUsage: "No usage in this window yet",
+    usageDay: "day",
+    usageTenant: "tenant",
+    usageNoTenant: "(none)",
+    usageComposed: "composed",
+    usageHit: "hit",
+    usageMiss: "miss",
+    usageL2Generated: "L2 generated",
+    usageTokensIn: "tokens in",
+    usageTokensOut: "tokens out",
+    usageCacheFixated: "fixated (served from fixation)",
+    usageFixated: "fixated (fixation ops)",
+    catalogGaps: "Catalog gaps",
+    catalogGapsNote:
+      "Where the catalog falls short: requests answered by free-form L2 generation, and the schemas reviewers had to correct. Counted over the same sample window as above.",
+    pendingPromotions: "Promotions awaiting action",
+    pendingPromotionsSub: "candidate through schema_proposed (all time)",
+    pendingFetchFailed: "Could not count the promotions awaiting action",
+    l2Intents: "Intents falling to L2",
+    gapIntent: "intent",
+    gapGenerated: "L2 generations",
+    gapFallbacks: "fallbacks",
+    noL2Intents: "No L2 generations in this window",
+    editedSchemas: "Most-edited schemas",
+    gapComponent: "component",
+    gapEdits: "edits",
+    gapTopFields: "most-changed fields",
+    noSchemaEdits: "No schema edits in this window",
   },
   fixations: {
     description:

@@ -110,6 +110,87 @@ export interface LineageSummary {
   };
   /** Fixation event counts (intent.fixated / intent.unfixated). */
   fixations: { fixated: number; unfixated: number };
+  /**
+   * Per-day, per-tenant usage rows over the same window (`summarizeUsage(scoped, { bucket: "day" })`). Day
+   * ascending, tenant ascending; an unrecorded tenant is the empty string.
+   */
+  usage: UsageRow[];
+  /**
+   * Catalog gap: the Intents that went to free-form L2 generation (view.composed of tier L2 with cache miss or
+   * bypass), aggregated per `canonical` and ordered by `generated` descending, then `fallbacks` descending (top
+   * N, N as for `topIntents`). `generated` counts the composes that actually generated an L2 Spec and succeeded:
+   * a record carrying `payload.fallback` (the generation failed, or the budget skipped L2, and a fallback Spec
+   * was served under the same tier / cache label) and a single-flight follower (`decision.coalesced`, which
+   * rode on another request's generation) are not generations. `fallbacks` counts those fallback records, read
+   * from the view.composed record itself (not from `view.fallback`, which MCP hosts never write and REST hosts
+   * write in addition, so counting both would double-count). `intentHash` is the first one seen for that
+   * canonical (a representative; the same canonical can recur with different params). A canonical with no
+   * L2-labelled compose has no row.
+   */
+  l2ByIntent: L2IntentGap[];
+  /**
+   * Catalog gap: where reviewers had to correct the machine's schema suggestion. Counts `component.schemaEdited`
+   * records whose `changed` is non-empty, grouped by the component type the reviewer finally proposed (the
+   * `draft.componentType` of the same artifact's `component.schemaProposed`; the artifactId when none is
+   * recorded in the window), ordered by `count` descending (top N, N as for `topIntents`). `topFields` is the
+   * five most-changed draft fields of that group.
+   */
+  schemaEditsByComponent: SchemaEditGap[];
+}
+
+/** One row of `LineageSummary.l2ByIntent`. */
+export interface L2IntentGap {
+  canonical: string;
+  intentHash: string;
+  generated: number;
+  fallbacks: number;
+}
+
+/** One row of `LineageSummary.schemaEditsByComponent`. */
+export interface SchemaEditGap {
+  /** The final component type, or the artifactId when no `component.schemaProposed` names one. */
+  key: string;
+  count: number;
+  topFields: { field: string; count: number }[];
+}
+
+/**
+ * One metering row: everything countable about one tenant on one UTC day, derived purely from lineage
+ * (design.md #74). `l2Generated` counts the composes that actually generated an L2 Spec and succeeded:
+ * view.composed events of tier L2 whose cache was miss or bypass, other than a record carrying
+ * `payload.fallback` (a failed or budget-skipped generation keeps the L2 label on its fallback Spec) and a
+ * single-flight follower (`decision.coalesced`). `fallbacks` counts view.composed records that carry
+ * `payload.fallback`, whatever their tier (MCP hosts write no `view.fallback`, REST hosts write one next to the
+ * composed record, so the composed record is the one place both agree). `tokens` sums `view.composed`'s
+ * `payload.decision.usage` (a single-flight follower carries no usage, so it never double-counts).
+ */
+export interface UsageRow {
+  /** UTC calendar day, `YYYY-MM-DD` (the first 10 characters of the record's `ts`). */
+  day: string;
+  /** The record's tenant; the empty string when the record carries none. */
+  tenant: string;
+  composed: number;
+  cache: { hit: number; miss: number; bypass: number; fixated: number };
+  tiers: { L0: number; L1: number; L2: number };
+  l2Generated: number;
+  /** view.composed records that carry `payload.fallback`. */
+  fallbacks: number;
+  tokens: { input: number; output: number };
+  /** intent.fixated / intent.unfixated records. */
+  fixated: number;
+  unfixated: number;
+}
+
+/** Options for summarizeUsage. */
+export interface SummarizeUsageOptions {
+  /** The bucket width. Only "day" (UTC) exists. */
+  bucket: "day";
+  /** Aggregate only records whose record.tenant matches. */
+  tenant?: string;
+  /** Aggregate only events at or after this time (record.ts >= since). */
+  since?: string;
+  /** Aggregate only events at or before this time (record.ts <= until). */
+  until?: string;
 }
 
 /** Narrowing and shaping options for summarizeLineage. */
@@ -120,12 +201,28 @@ export interface SummarizeLineageOptions {
   since?: string;
   /** Aggregate only events at or before this time (record.ts <= until). Expects canonical ISO8601. */
   until?: string;
-  /** N for topIntents. Default 10, clamped to 1..50. */
+  /** N for topIntents, l2ByIntent and schemaEditsByComponent. Default 10, clamped to 1..50. */
   topIntentsLimit?: number;
 }
 
 const TOP_INTENTS_DEFAULT = 10;
 const TOP_INTENTS_MAX = 50;
+const SCHEMA_EDIT_TOP_FIELDS = 5;
+
+/** A view.composed record that carries `payload.fallback`: a fallback Spec was served for it. */
+function hasFallback(payload: Readonly<Record<string, unknown>>): boolean {
+  return payload["fallback"] != null;
+}
+
+/** A view.composed record of a single-flight follower (`payload.decision.coalesced`): it rode on another generation. */
+function isCoalesced(payload: Readonly<Record<string, unknown>>): boolean {
+  const decision = payload["decision"];
+  return (
+    decision != null &&
+    typeof decision === "object" &&
+    (decision as Record<string, unknown>)["coalesced"] === true
+  );
+}
 
 /** Folds the raw lineage event stream into an aggregate summary (pure, read-only). */
 export function summarizeLineage(
@@ -157,6 +254,12 @@ export function summarizeLineage(
   const durations: number[] = [];
   // intentHash → { canonical (first seen), count }. Preserves insertion order while taking the top items by descending count.
   const intents = new Map<string, { canonical: string; count: number }>();
+  // Catalog-gap input: canonical -> the L2 row (generations and fallbacks of the composes labelled tier L2).
+  const l2Rows = new Map<string, L2IntentGap>();
+  // (tenant, artifactId) -> the final component type of the latest component.schemaProposed; and the edits
+  // (non-empty `changed`) to group once that map is complete.
+  const proposedType = new Map<string, string>();
+  const schemaEdits: { key: string; artifactId: string; fields: string[] }[] = [];
 
   let composed = 0;
   let fallbackTotal = 0;
@@ -195,6 +298,23 @@ export function summarizeLineage(
           const prev = intents.get(intentHash);
           if (prev != null) prev.count++;
           else intents.set(intentHash, { canonical: String(e.payload["canonical"] ?? ""), count: 1 });
+        }
+        if (tier === "L2" && (cacheKey === "miss" || cacheKey === "bypass")) {
+          const canonical = String(e.payload["canonical"] ?? "");
+          let row = l2Rows.get(canonical);
+          if (row == null) {
+            row = {
+              canonical,
+              intentHash: typeof intentHash === "string" ? intentHash : "",
+              generated: 0,
+              fallbacks: 0,
+            };
+            l2Rows.set(canonical, row);
+          } else if (row.intentHash === "" && typeof intentHash === "string") {
+            row.intentHash = intentHash;
+          }
+          if (hasFallback(e.payload)) row.fallbacks++;
+          else if (!isCoalesced(e.payload)) row.generated++;
         }
         break;
       }
@@ -256,6 +376,29 @@ export function summarizeLineage(
         if (Array.isArray(changed) && changed.length === 0 && e.payload["acknowledged"] === true) {
           acceptedAsIs++;
         }
+        if (Array.isArray(changed) && changed.length > 0) {
+          const artifactId = String(e.payload["artifactId"] ?? "");
+          schemaEdits.push({
+            key: reviewKey(e),
+            artifactId,
+            fields: changed
+              .map((c) =>
+                c != null && typeof c === "object" ? (c as Record<string, unknown>)["field"] : undefined,
+              )
+              .filter((f): f is string => typeof f === "string"),
+          });
+        }
+        break;
+      }
+      case "component.schemaProposed": {
+        const draft = e.payload["draft"];
+        const componentType =
+          draft != null && typeof draft === "object"
+            ? (draft as Record<string, unknown>)["componentType"]
+            : undefined;
+        if (typeof componentType === "string" && componentType.length > 0) {
+          proposedType.set(reviewKey(e), componentType);
+        }
         break;
       }
       case "component.published":
@@ -293,6 +436,33 @@ export function summarizeLineage(
     .sort((a, b) => b.count - a.count)
     .slice(0, topN);
 
+  const l2ByIntent = [...l2Rows.values()]
+    .sort((a, b) => b.generated - a.generated || b.fallbacks - a.fallbacks)
+    .slice(0, topN);
+
+  const editGroups = new Map<string, { count: number; fields: Map<string, number> }>();
+  for (const edit of schemaEdits) {
+    const key = proposedType.get(edit.key) ?? edit.artifactId;
+    let group = editGroups.get(key);
+    if (group == null) {
+      group = { count: 0, fields: new Map() };
+      editGroups.set(key, group);
+    }
+    group.count++;
+    for (const field of edit.fields) group.fields.set(field, (group.fields.get(field) ?? 0) + 1);
+  }
+  const schemaEditsByComponent: SchemaEditGap[] = [...editGroups.entries()]
+    .map(([key, g]) => ({
+      key,
+      count: g.count,
+      topFields: [...g.fields.entries()]
+        .map(([field, count]) => ({ field, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, SCHEMA_EDIT_TOP_FIELDS),
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, topN);
+
   return {
     events: scoped.length,
     composed,
@@ -322,7 +492,134 @@ export function summarizeLineage(
       acceptedAsIs,
     },
     fixations,
+    usage: summarizeUsage(scoped, { bucket: "day" }),
+    l2ByIntent,
+    schemaEditsByComponent,
   };
+}
+
+/**
+ * Folds the lineage stream into per-day, per-tenant metering rows (pure, read-only). Reads only
+ * view.composed / intent.fixated / intent.unfixated; every other event type (view.fallback included: the
+ * fallback count comes from view.composed's `payload.fallback`) is ignored.
+ */
+export function summarizeUsage(
+  events: readonly LineageEventRecord[],
+  opts: SummarizeUsageOptions,
+): UsageRow[] {
+  // `opts.bucket` is "day" today (the field keeps the signature open for wider buckets).
+  const rows = new Map<string, UsageRow>();
+  const rowFor = (e: LineageEventRecord): UsageRow => {
+    const day = e.ts.slice(0, 10);
+    const tenant = e.tenant ?? "";
+    const key = `${day}\u0000${tenant}`;
+    let row = rows.get(key);
+    if (row == null) {
+      row = {
+        day,
+        tenant,
+        composed: 0,
+        cache: { hit: 0, miss: 0, bypass: 0, fixated: 0 },
+        tiers: { L0: 0, L1: 0, L2: 0 },
+        l2Generated: 0,
+        fallbacks: 0,
+        tokens: { input: 0, output: 0 },
+        fixated: 0,
+        unfixated: 0,
+      };
+      rows.set(key, row);
+    }
+    return row;
+  };
+
+  for (const e of events) {
+    if (opts.tenant != null && e.tenant !== opts.tenant) continue;
+    if (opts.since != null && e.ts < opts.since) continue;
+    if (opts.until != null && e.ts > opts.until) continue;
+    switch (e.type) {
+      case "view.composed": {
+        const row = rowFor(e);
+        row.composed++;
+        const tier = e.payload["tier"];
+        if (tier === "L0" || tier === "L1" || tier === "L2") row.tiers[tier]++;
+        const cacheKey = e.payload["cache"];
+        if (cacheKey === "hit" || cacheKey === "miss" || cacheKey === "bypass" || cacheKey === "fixated") {
+          row.cache[cacheKey]++;
+        }
+        if (
+          tier === "L2" &&
+          (cacheKey === "miss" || cacheKey === "bypass") &&
+          !hasFallback(e.payload) &&
+          !isCoalesced(e.payload)
+        ) {
+          row.l2Generated++;
+        }
+        if (hasFallback(e.payload)) row.fallbacks++;
+        const decision = e.payload["decision"];
+        const usage =
+          decision != null && typeof decision === "object"
+            ? (decision as Record<string, unknown>)["usage"]
+            : undefined;
+        if (usage != null && typeof usage === "object") {
+          const u = usage as Record<string, unknown>;
+          if (typeof u["inputTokens"] === "number" && Number.isFinite(u["inputTokens"])) {
+            row.tokens.input += u["inputTokens"];
+          }
+          if (typeof u["outputTokens"] === "number" && Number.isFinite(u["outputTokens"])) {
+            row.tokens.output += u["outputTokens"];
+          }
+        }
+        break;
+      }
+      case "intent.fixated":
+        rowFor(e).fixated++;
+        break;
+      case "intent.unfixated":
+        rowFor(e).unfixated++;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return [...rows.values()].sort(compareUsageRows);
+}
+
+function compareUsageRows(a: UsageRow, b: UsageRow): number {
+  return a.day !== b.day ? (a.day < b.day ? -1 : 1) : a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0;
+}
+
+/**
+ * Adds two row lists key by key (`day`, `tenant`): rows with the same key are summed field by field, the rest
+ * are kept; the result is ordered like `summarizeUsage`'s. Neither input is modified. It makes the summary
+ * foldable: `mergeUsageRows(summarizeUsage(pageA), summarizeUsage(pageB))` equals `summarizeUsage` of both pages
+ * together, so an exporter can page through a whole log and keep only the (small) row list in memory.
+ */
+export function mergeUsageRows(a: readonly UsageRow[], b: readonly UsageRow[]): UsageRow[] {
+  const merged = new Map<string, UsageRow>();
+  for (const row of [...a, ...b]) {
+    const key = `${row.day}\u0000${row.tenant}`;
+    const into = merged.get(key);
+    if (into == null) {
+      merged.set(key, {
+        ...row,
+        cache: { ...row.cache },
+        tiers: { ...row.tiers },
+        tokens: { ...row.tokens },
+      });
+      continue;
+    }
+    into.composed += row.composed;
+    for (const k of ["hit", "miss", "bypass", "fixated"] as const) into.cache[k] += row.cache[k];
+    for (const k of ["L0", "L1", "L2"] as const) into.tiers[k] += row.tiers[k];
+    into.l2Generated += row.l2Generated;
+    into.fallbacks += row.fallbacks;
+    into.tokens.input += row.tokens.input;
+    into.tokens.output += row.tokens.output;
+    into.fixated += row.fixated;
+    into.unfixated += row.unfixated;
+  }
+  return [...merged.values()].sort(compareUsageRows);
 }
 
 /** Nearest-rank percentile of an ascending-sorted array (null if empty). */

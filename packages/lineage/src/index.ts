@@ -1,8 +1,14 @@
 export {
   type IntentUsage,
+  type L2IntentGap,
   type LineageSummary,
+  mergeUsageRows,
+  type SchemaEditGap,
   type SummarizeLineageOptions,
+  type SummarizeUsageOptions,
   summarizeLineage,
+  summarizeUsage,
+  type UsageRow,
 } from "./analytics.js";
 export {
   ACTION_EVENT_TYPES,
@@ -81,6 +87,11 @@ export {
   createLineage,
   type Lineage,
 } from "./lineage.js";
+export {
+  type SchemaEditExample,
+  type SchemaEditExamplesOptions,
+  schemaEditExamples,
+} from "./promotion/examples.js";
 export {
   type ComponentDraft,
   isTerminal,

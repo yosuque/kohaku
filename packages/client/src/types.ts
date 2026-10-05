@@ -216,6 +216,29 @@ export interface FixationRecordView {
 }
 
 /**
+ * One per-day, per-tenant metering row of the analytics summary (the hand-written mirror of lineage's
+ * `UsageRow`; design.md #74). `tenant` is the empty string for records that carry none.
+ */
+export interface UsageRowView {
+  /** UTC calendar day, `YYYY-MM-DD`. */
+  day: string;
+  tenant: string;
+  composed: number;
+  cache: { hit: number; miss: number; bypass: number; fixated: number };
+  tiers: { L0: number; L1: number; L2: number };
+  /**
+   * The composes that actually generated an L2 Spec and succeeded: view.composed of tier L2 whose cache was
+   * miss or bypass, except a record carrying `payload.fallback` and a single-flight follower.
+   */
+  l2Generated: number;
+  /** view.composed records that carry `payload.fallback`. */
+  fallbacks: number;
+  tokens: { input: number; output: number };
+  fixated: number;
+  unfixated: number;
+}
+
+/**
  * View shape of the aggregated usage-analytics summary (response of GET /analytics/summary; SPEC governance
  * plane, host-rest's `registerGovernanceRoutes`). Only the fields the admin UI (sample-web AnalyticsTab) reads.
  */
@@ -257,6 +280,25 @@ export interface AnalyticsSummaryView {
       durationMs: { p50: number | null; p95: number | null; max: number | null };
       acceptedAsIs: number;
     };
+    /**
+     * Per-day, per-tenant metering rows over the same (tail-window) sample as the rest of the summary. Absent
+     * from a host that predates the field (the admin UI renders its empty state).
+     */
+    usage?: UsageRowView[];
+    /**
+     * Catalog gap: Intents that went to free-form L2 generation, most generated first (top N of the sample); a
+     * row with `generated: 0` is an Intent whose L2 only ever failed. Absent from a host that predates the field.
+     */
+    l2ByIntent?: { canonical: string; intentHash: string; generated: number; fallbacks: number }[];
+    /**
+     * Catalog gap: reviewer corrections of the machine's schema suggestion, per final component type. Absent from
+     * a host that predates the field.
+     */
+    schemaEditsByComponent?: {
+      key: string;
+      count: number;
+      topFields: { field: string; count: number }[];
+    }[];
   };
   /**
    * Nomination thresholds for promotion / fixation candidates ("N or more uses"), when the host bundles them

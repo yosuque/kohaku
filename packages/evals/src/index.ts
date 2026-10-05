@@ -40,6 +40,7 @@ export {
   extractDataRefs,
   SCHEMA_EXTRACTOR_ID,
   SCHEMA_EXTRACTOR_VERSION,
+  type SchemaExtractionExample,
   type SchemaExtractionInput,
   type SchemaExtractionResult,
   type SchemaExtractor,

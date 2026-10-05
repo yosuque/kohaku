@@ -10,6 +10,7 @@ import {
 } from "@kohaku-ui/lineage";
 import { createFileStoragePort } from "@kohaku-ui/storage-memory";
 import { parseHeaderArgs } from "../header-args.js";
+import { resolveRestTenant } from "../lineage-window.js";
 import { CLI_VERSION } from "../version.js";
 import { importPrivateKeyPem } from "./keys.js";
 import { createRestEvidenceSource, REST_FIXATIONS_LIMITATION_WARNING } from "./rest-source.js";
@@ -40,39 +41,8 @@ export interface EvidenceExportResult {
   manifest: EvidenceManifest;
 }
 
-/**
- * In `--rest` mode, `--tenant` cannot by itself scope the export -- the request headers do (a
- * REST-sourced pack only ever sees whatever the transport actually sends). Resolves the manifest's
- * `scope.tenant` label from the `x-kohaku-tenant` header (case-insensitive, matching
- * apps/sample-api's own convention in request-identity.ts, which is a product convention, not a
- * protocol-level guarantee) and rejects a `--tenant` that disagrees with it, so the two can never
- * silently diverge -- an auditor reading `scope.tenant` must be able to trust it reflects the actual
- * REST scope, not just whatever label the caller happened to type.
- */
-export function resolveRestTenant(
-  headers: Record<string, string>,
-  requestedTenant: string | undefined,
-): string | undefined {
-  const headerEntry = Object.entries(headers).find(([name]) => name.toLowerCase() === "x-kohaku-tenant");
-  const headerTenant = headerEntry?.[1];
-  if (headerTenant == null) {
-    if (requestedTenant != null) {
-      throw new Error(
-        `--tenant ${requestedTenant} was given but no x-kohaku-tenant header was supplied; in --rest ` +
-          `mode the header determines the actual scope, so pass ` +
-          `--header "x-kohaku-tenant:${requestedTenant}" as well`,
-      );
-    }
-    return undefined;
-  }
-  if (requestedTenant != null && requestedTenant !== headerTenant) {
-    throw new Error(
-      `--tenant ${requestedTenant} conflicts with the x-kohaku-tenant header (${headerTenant}); the ` +
-        "header determines the actual REST scope, so remove --tenant or make it match",
-    );
-  }
-  return headerTenant;
-}
+// Shared with `kohaku usage export`; kept exported from here for existing importers.
+export { resolveRestTenant };
 
 /**
  * `kohaku evidence export`: assembles and signs a Compliance Evidence Pack (design.md #67), then writes

@@ -1,6 +1,6 @@
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { summarizeLineage } from "../src/index.js";
+import { mergeUsageRows, summarizeLineage, summarizeUsage } from "../src/index.js";
 
 // Tests for the pure aggregation summarizeLineage of usage analytics:
 // - view.composed count / tier distribution / cache breakdown / durationMs quantiles / top frequent intents
@@ -20,6 +20,10 @@ function composed(
     canonical?: string;
     tenant?: string;
     ts?: string;
+    /** `payload.fallback`: a fallback Spec was served (it keeps the failed tier / cache label). */
+    fallback?: { from: string; reason: string };
+    /** `payload.decision.coalesced`: a single-flight follower. */
+    coalesced?: boolean;
   } = {},
 ): LineageEventRecord {
   return {
@@ -33,6 +37,8 @@ function composed(
       intentHash: args.intentHash ?? "sha256:aaa",
       canonical: args.canonical ?? "sales.trend",
       ...(args.durationMs != null ? { durationMs: args.durationMs } : {}),
+      ...(args.fallback != null ? { fallback: args.fallback } : {}),
+      ...(args.coalesced === true ? { decision: { attempts: [], coalesced: true } } : {}),
     },
     ...(args.tenant != null ? { tenant: args.tenant } : {}),
   };
@@ -354,5 +360,423 @@ describe("summarizeLineage: review turnaround and suggestion acceptance", () => 
     const s = summarizeLineage(events);
     expect(s.promotions.schemaEdited).toBe(3);
     expect(s.review.acceptedAsIs).toBe(1);
+  });
+});
+
+describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, design.md #74)", () => {
+  /** A view.composed with an optional decision.usage, shaped like lineage.ts's recorded payload. */
+  function metered(
+    args: {
+      tier?: "L0" | "L1" | "L2";
+      cache?: string;
+      tenant?: string;
+      ts?: string;
+      usage?: { inputTokens: number; outputTokens: number };
+      decision?: unknown;
+    } = {},
+  ): LineageEventRecord {
+    const base = composed({
+      ...(args.tier != null ? { tier: args.tier } : {}),
+      ...(args.cache != null ? { cache: args.cache } : {}),
+      ...(args.tenant != null ? { tenant: args.tenant } : {}),
+      ...(args.ts != null ? { ts: args.ts } : {}),
+    });
+    const decision =
+      args.decision !== undefined
+        ? args.decision
+        : args.usage != null
+          ? { attempts: [], usage: args.usage }
+          : undefined;
+    return decision !== undefined ? { ...base, payload: { ...base.payload, decision } } : base;
+  }
+
+  it("counts l2Generated only for tier L2 with cache miss or bypass (hit and fixated excluded)", () => {
+    const rows = summarizeUsage(
+      [
+        metered({ tier: "L2", cache: "miss" }),
+        metered({ tier: "L2", cache: "bypass" }),
+        metered({ tier: "L2", cache: "hit" }),
+        metered({ tier: "L2", cache: "fixated" }),
+        metered({ tier: "L1", cache: "miss" }), // not L2
+      ],
+      { bucket: "day" },
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.composed).toBe(5);
+    expect(rows[0]?.l2Generated).toBe(2);
+    expect(rows[0]?.tiers).toEqual({ L0: 0, L1: 1, L2: 4 });
+    expect(rows[0]?.cache).toEqual({ hit: 1, miss: 2, bypass: 1, fixated: 1 });
+  });
+
+  it("sums decision.usage tokens, ignoring missing or non-numeric usage", () => {
+    const rows = summarizeUsage(
+      [
+        metered({ usage: { inputTokens: 100, outputTokens: 20 } }),
+        metered({ usage: { inputTokens: 50, outputTokens: 5 } }),
+        metered({}), // no decision at all (a cache hit / L0)
+        metered({ decision: { attempts: [] } }), // a single-flight follower: no usage
+        metered({ decision: { attempts: [], usage: { inputTokens: "x", outputTokens: null } } }),
+      ],
+      { bucket: "day" },
+    );
+    expect(rows[0]?.tokens).toEqual({ input: 150, output: 25 });
+  });
+
+  it("keys an unrecorded tenant as the empty string and splits rows per tenant", () => {
+    const rows = summarizeUsage([metered({}), metered({ tenant: "acme" }), metered({ tenant: "acme" })], {
+      bucket: "day",
+    });
+    expect(rows.map((r) => [r.tenant, r.composed])).toEqual([
+      ["", 1],
+      ["acme", 2],
+    ]);
+  });
+
+  it("buckets by the UTC day of ts and orders rows by day then tenant", () => {
+    const rows = summarizeUsage(
+      [
+        metered({ tenant: "b", ts: "2026-07-02T00:00:00.000Z" }),
+        metered({ tenant: "a", ts: "2026-07-02T23:59:59.999Z" }),
+        metered({ tenant: "z", ts: "2026-07-01T23:59:59.999Z" }),
+        metered({ tenant: "a", ts: "2026-07-01T00:00:00.000Z" }),
+      ],
+      { bucket: "day" },
+    );
+    expect(rows.map((r) => `${r.day}/${r.tenant}`)).toEqual([
+      "2026-07-01/a",
+      "2026-07-01/z",
+      "2026-07-02/a",
+      "2026-07-02/b",
+    ]);
+  });
+
+  it("counts intent.fixated and intent.unfixated into their day / tenant row", () => {
+    const rows = summarizeUsage(
+      [
+        metered({ tenant: "acme" }),
+        ev("intent.fixated", { intentHash: "sha256:a" }, { tenant: "acme" }),
+        ev("intent.unfixated", { intentHash: "sha256:a" }, { tenant: "acme" }),
+        ev("intent.unfixated", { intentHash: "sha256:b" }, { tenant: "acme" }),
+        ev("component.generated", { artifactId: "a" }, { tenant: "acme" }), // ignored
+      ],
+      { bucket: "day" },
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ composed: 1, fallbacks: 0, fixated: 1, unfixated: 2 });
+  });
+
+  it("keeps a fallback Spec out of l2Generated and counts it in fallbacks (it still carries the L2 label)", () => {
+    const rows = summarizeUsage(
+      [
+        composed({ tier: "L2", cache: "miss" }), // generated
+        composed({ tier: "L2", cache: "miss", fallback: { from: "L2", reason: "generation failed" } }),
+        composed({ tier: "L2", cache: "bypass", fallback: { from: "L2", reason: "budget" } }),
+        composed({ tier: "L1", cache: "miss", fallback: { from: "L1", reason: "L1 failed" } }),
+      ],
+      { bucket: "day" },
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ composed: 4, l2Generated: 1, fallbacks: 3 });
+    expect(rows[0]?.tiers).toEqual({ L0: 0, L1: 1, L2: 3 });
+  });
+
+  it("keeps a single-flight follower out of l2Generated", () => {
+    const rows = summarizeUsage(
+      [
+        composed({ tier: "L2", cache: "miss" }), // the leader
+        composed({ tier: "L2", cache: "miss", coalesced: true }), // rode on the leader's generation
+        composed({ tier: "L2", cache: "miss", coalesced: true, fallback: { from: "L2", reason: "x" } }),
+      ],
+      { bucket: "day" },
+    );
+    expect(rows[0]).toMatchObject({ composed: 3, l2Generated: 1, fallbacks: 1 });
+  });
+
+  it("counts fallbacks from view.composed alone: an MCP host (no view.fallback) is counted, a REST host is not doubled", () => {
+    const mcp = [composed({ tier: "L2", fallback: { from: "L2", reason: "x" } })];
+    const rest = [...mcp, ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:aaa" })];
+    expect(summarizeUsage(mcp, { bucket: "day" })[0]?.fallbacks).toBe(1);
+    expect(summarizeUsage(rest, { bucket: "day" })[0]?.fallbacks).toBe(1);
+    // A bare view.fallback with no composed record opens no row at all.
+    expect(summarizeUsage([ev("view.fallback", { kind: "generation" })], { bucket: "day" })).toEqual([]);
+  });
+
+  it("mergeUsageRows folds per-page summaries into the same rows as one pass over every event", () => {
+    const events = [
+      metered({ tier: "L2", cache: "miss", tenant: "acme", usage: { inputTokens: 10, outputTokens: 1 } }),
+      metered({ tier: "L1", cache: "hit", tenant: "acme" }),
+      composed({ tier: "L2", cache: "miss", tenant: "acme", fallback: { from: "L2", reason: "x" } }),
+      metered({ tier: "L0", cache: "fixated", tenant: "globex", ts: "2026-07-02T09:00:00.000Z" }),
+      metered({ tier: "L2", cache: "bypass", usage: { inputTokens: 5, outputTokens: 2 } }),
+      ev("intent.fixated", {}, { tenant: "acme" }),
+      ev("intent.unfixated", {}, { tenant: "acme", ts: "2026-07-02T10:00:00.000Z" }),
+      metered({ tier: "L2", cache: "miss", tenant: "acme", usage: { inputTokens: 1, outputTokens: 1 } }),
+    ];
+    const opts = { bucket: "day" } as const;
+    // Any split of the stream into pages gives the whole-stream rows, whichever order the pages arrive in.
+    for (const cut of [1, 3, 5, 7]) {
+      const pages = [events.slice(0, cut), events.slice(cut)];
+      const folded = pages.reduce<ReturnType<typeof summarizeUsage>>(
+        (acc, page) => mergeUsageRows(acc, summarizeUsage(page, opts)),
+        [],
+      );
+      expect(folded).toEqual(summarizeUsage(events, opts));
+    }
+  });
+
+  it("mergeUsageRows does not modify its inputs and tolerates empty lists", () => {
+    const a = summarizeUsage([metered({ tier: "L2", tenant: "acme" })], { bucket: "day" });
+    const b = summarizeUsage([metered({ tier: "L2", tenant: "acme" })], { bucket: "day" });
+    const snapshot = JSON.stringify(a);
+    const merged = mergeUsageRows(a, b);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ composed: 2, l2Generated: 2 });
+    expect(JSON.stringify(a)).toBe(snapshot);
+    expect(mergeUsageRows([], [])).toEqual([]);
+    expect(mergeUsageRows(a, [])).toEqual(a);
+  });
+
+  it("narrows by tenant / since / until", () => {
+    const events = [
+      metered({ tenant: "acme", ts: "2026-07-01T00:00:00.000Z" }),
+      metered({ tenant: "acme", ts: "2026-07-03T00:00:00.000Z" }),
+      metered({ tenant: "globex", ts: "2026-07-01T00:00:00.000Z" }),
+    ];
+    const rows = summarizeUsage(events, {
+      bucket: "day",
+      tenant: "acme",
+      since: "2026-07-02T00:00:00.000Z",
+    });
+    expect(rows.map((r) => `${r.day}/${r.tenant}`)).toEqual(["2026-07-03/acme"]);
+  });
+
+  it("LineageSummary.usage follows the same window as the rest of the summary; empty input gives []", () => {
+    expect(summarizeLineage([]).usage).toEqual([]);
+    const events = [
+      metered({ tenant: "acme", ts: "2026-07-01T10:00:00.000Z" }),
+      metered({ tenant: "globex", ts: "2026-07-01T10:00:00.000Z" }),
+    ];
+    const s = summarizeLineage(events, { tenant: "acme" });
+    expect(s.usage.map((r) => r.tenant)).toEqual(["acme"]);
+    expect(s.usage[0]?.composed).toBe(s.composed);
+  });
+});
+
+describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; design.md #73)", () => {
+  it("is empty for empty input", () => {
+    const s = summarizeLineage([]);
+    expect(s.l2ByIntent).toEqual([]);
+    expect(s.schemaEditsByComponent).toEqual([]);
+  });
+
+  it("l2ByIntent counts only L2 miss/bypass, per canonical, most generated first", () => {
+    const s = summarizeLineage([
+      composed({ tier: "L2", cache: "miss", canonical: "sales.custom", intentHash: "sha256:c1" }),
+      composed({ tier: "L2", cache: "bypass", canonical: "sales.custom", intentHash: "sha256:c2" }),
+      composed({ tier: "L2", cache: "hit", canonical: "sales.custom", intentHash: "sha256:c1" }), // served from cache
+      composed({ tier: "L2", cache: "fixated", canonical: "sales.custom" }), // not generated
+      composed({ tier: "L1", cache: "miss", canonical: "sales.trend" }), // not L2
+      composed({ tier: "L2", cache: "miss", canonical: "sales.heatmap", intentHash: "sha256:h1" }),
+      composed({ tier: "L2", cache: "miss", canonical: "sales.heatmap", intentHash: "sha256:h1" }),
+      composed({ tier: "L2", cache: "miss", canonical: "sales.heatmap", intentHash: "sha256:h1" }),
+    ]);
+    expect(s.l2ByIntent).toEqual([
+      { canonical: "sales.heatmap", intentHash: "sha256:h1", generated: 3, fallbacks: 0 },
+      // intentHash is the first one seen for the canonical
+      { canonical: "sales.custom", intentHash: "sha256:c1", generated: 2, fallbacks: 0 },
+    ]);
+  });
+
+  it("l2ByIntent separates real generations from fallbacks and followers, reading fallbacks off view.composed", () => {
+    const failed = { from: "L2", reason: "generation failed" };
+    const s = summarizeLineage([
+      composed({ tier: "L2", cache: "miss", canonical: "sales.custom", intentHash: "sha256:c1" }), // generated
+      composed({
+        tier: "L2",
+        cache: "miss",
+        canonical: "sales.custom",
+        intentHash: "sha256:c1",
+        fallback: failed,
+      }),
+      composed({
+        tier: "L2",
+        cache: "bypass",
+        canonical: "sales.custom",
+        intentHash: "sha256:c1",
+        fallback: failed,
+      }),
+      // A single-flight follower rode on another request's generation: not a generation of its own.
+      composed({
+        tier: "L2",
+        cache: "miss",
+        canonical: "sales.custom",
+        intentHash: "sha256:c1",
+        coalesced: true,
+      }),
+      // An intent whose L2 only ever failed still gets a row (that is the gap), with nothing generated.
+      composed({
+        tier: "L2",
+        cache: "miss",
+        canonical: "sales.broken",
+        intentHash: "sha256:b1",
+        fallback: failed,
+      }),
+      // An L1 failure is not an L2 gap.
+      composed({
+        tier: "L1",
+        cache: "miss",
+        canonical: "sales.trend",
+        intentHash: "sha256:t1",
+        fallback: { from: "L1", reason: "x" },
+      }),
+      // view.fallback rows are not read here (REST writes one per fallback; MCP writes none).
+      ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:c1" }),
+    ]);
+    expect(s.l2ByIntent).toEqual([
+      { canonical: "sales.custom", intentHash: "sha256:c1", generated: 1, fallbacks: 2 },
+      { canonical: "sales.broken", intentHash: "sha256:b1", generated: 0, fallbacks: 1 },
+    ]);
+    // The overall view.fallback counters are untouched.
+    expect(s.fallback.total).toBe(1);
+  });
+
+  it("l2ByIntent and schemaEditsByComponent honor topIntentsLimit", () => {
+    const events: LineageEventRecord[] = [];
+    for (let i = 0; i < 4; i++) {
+      for (let n = 0; n <= i; n++)
+        events.push(composed({ tier: "L2", canonical: `c${i}`, intentHash: `sha256:${i}` }));
+      events.push(
+        ev("component.schemaEdited", {
+          artifactId: `art-${i}`,
+          changed: [{ field: "description", suggested: "a", final: "b" }],
+          unchanged: [],
+          acknowledged: true,
+        }),
+      );
+    }
+    const s = summarizeLineage(events, { topIntentsLimit: 2 });
+    expect(s.l2ByIntent.map((r) => r.canonical)).toEqual(["c3", "c2"]);
+    expect(s.schemaEditsByComponent).toHaveLength(2);
+  });
+
+  it("schemaEditsByComponent groups edits by the component type of the proposed draft", () => {
+    const edit = (artifactId: string, fields: string[], tenant?: string) =>
+      ev(
+        "component.schemaEdited",
+        {
+          artifactId,
+          reviewer: "r",
+          changed: fields.map((field) => ({ field, suggested: "a", final: "b" })),
+          unchanged: [],
+          acknowledged: true,
+        },
+        tenant != null ? { tenant } : {},
+      );
+    const proposed = (artifactId: string, componentType: string, tenant?: string) =>
+      ev(
+        "component.schemaProposed",
+        { artifactId, draft: { componentType, version: "1.0.0" } },
+        tenant != null ? { tenant } : {},
+      );
+    const s = summarizeLineage([
+      // Two artifacts resolve to the same final component type and are merged.
+      edit("a1", ["description", "intentName"]),
+      proposed("a1", "sales.heatmap"),
+      edit("a2", ["description"]),
+      proposed("a2", "sales.heatmap"),
+      edit("a3", ["paramsJsonSchema"]),
+      proposed("a3", "sales.gauge"),
+      // The proposal arrives only after a later one for the same artifact: the latest wins.
+      proposed("a4", "sales.old"),
+      proposed("a4", "sales.newer"),
+      edit("a4", ["version"]),
+    ]);
+    expect(s.schemaEditsByComponent).toEqual([
+      {
+        key: "sales.heatmap",
+        count: 2,
+        topFields: [
+          { field: "description", count: 2 },
+          { field: "intentName", count: 1 },
+        ],
+      },
+      { key: "sales.gauge", count: 1, topFields: [{ field: "paramsJsonSchema", count: 1 }] },
+      { key: "sales.newer", count: 1, topFields: [{ field: "version", count: 1 }] },
+    ]);
+  });
+
+  it("schemaEditsByComponent ignores zero-edit records, falls back to the artifactId, and keeps tenants apart", () => {
+    const s = summarizeLineage([
+      // accepted as-is: not a correction
+      ev("component.schemaEdited", {
+        artifactId: "a1",
+        changed: [],
+        unchanged: ["componentType"],
+        acknowledged: true,
+      }),
+      // no proposal in the window: grouped under the artifactId
+      ev("component.schemaEdited", {
+        artifactId: "orphan",
+        changed: [{ field: "queryTemplate", suggested: 1, final: 2 }],
+        unchanged: [],
+        acknowledged: false,
+      }),
+      // the same artifactId under another tenant must not borrow this tenant's proposal
+      ev(
+        "component.schemaProposed",
+        { artifactId: "shared", draft: { componentType: "sales.a" } },
+        { tenant: "t1" },
+      ),
+      ev(
+        "component.schemaEdited",
+        {
+          artifactId: "shared",
+          changed: [{ field: "description", suggested: "a", final: "b" }],
+          unchanged: [],
+        },
+        { tenant: "t2" },
+      ),
+      // a proposal without a usable componentType does not name a group either
+      ev("component.schemaProposed", { artifactId: "bad", draft: {} }),
+      ev("component.schemaEdited", {
+        artifactId: "bad",
+        changed: [{ field: "version", suggested: "1", final: "2" }],
+        unchanged: [],
+      }),
+    ]);
+    expect(s.schemaEditsByComponent.map((r) => [r.key, r.count])).toEqual([
+      ["orphan", 1],
+      ["shared", 1],
+      ["bad", 1],
+    ]);
+  });
+
+  it("topFields keeps the five most-changed fields", () => {
+    const fields = [
+      "componentType",
+      "version",
+      "intentName",
+      "description",
+      "paramsJsonSchema",
+      "queryTemplate",
+    ];
+    const s = summarizeLineage(
+      fields.map((_, i) =>
+        ev("component.schemaEdited", {
+          artifactId: "a",
+          // edit i changes the first (6 - i) fields, so field 0 is changed 6 times and the last once
+          changed: fields.slice(0, 6 - i).map((field) => ({ field, suggested: 1, final: 2 })),
+          unchanged: [],
+        }),
+      ),
+    );
+    expect(s.schemaEditsByComponent).toHaveLength(1);
+    expect(s.schemaEditsByComponent[0]?.topFields).toEqual([
+      { field: "componentType", count: 6 },
+      { field: "version", count: 5 },
+      { field: "intentName", count: 4 },
+      { field: "description", count: 3 },
+      { field: "paramsJsonSchema", count: 2 },
+    ]);
   });
 });

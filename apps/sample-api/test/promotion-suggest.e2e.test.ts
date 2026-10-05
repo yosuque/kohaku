@@ -186,6 +186,39 @@ describe("promotion schema suggestion E2E (the calendar heatmap is approvable wi
     expect(errors.mock.calls.some((args) => String(args[0]).includes("promotion.suggest.schema"))).toBe(true);
   });
 
+  it("tells the extractor which tenant it is extracting for (the few-shot provider's scope, design.md #73)", async () => {
+    const llm = scriptedLlm();
+    const inner = createSchemaExtractor({ llm });
+    const seenTenants: Array<string | undefined> = [];
+    const storage = createFileStoragePort(tmpDir("kohaku-suggest-tenant-"));
+    const { app } = await createApp({
+      llm,
+      storage,
+      authz: createHmacAuthzPort("test-secret"),
+      schemaExtractor: {
+        extract(input) {
+          seenTenants.push(input.tenant);
+          return inner.extract(input);
+        },
+      },
+    });
+    const headers = { "content-type": "application/json", "x-kohaku-tenant": "acme" };
+    for (const sessionId of ["s1", "s2"]) {
+      const res = await app.request("/api/kohaku/compose", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          input: { kind: "nl", text: "Sales as a calendar heatmap" },
+          session: { surface: "chat", sessionId },
+        }),
+      });
+      expect(res.status).toBe(200);
+    }
+    const evaluate = await app.request("/api/kohaku/promotions/evaluate", { method: "POST", headers });
+    expect(evaluate.status).toBe(200);
+    expect(seenTenants).toEqual(["acme"]);
+  });
+
   it("without an extractor (the test default) nothing is attached and no extraction call is made", async () => {
     const llm = scriptedLlm();
     const storage = createFileStoragePort(tmpDir("kohaku-suggest-off-"));

@@ -17,6 +17,7 @@ export {
   useApprovalInbox,
   useFixations,
   useLineage,
+  usePendingPromotionCount,
   usePromotions,
 } from "./hooks.js";
 export {
