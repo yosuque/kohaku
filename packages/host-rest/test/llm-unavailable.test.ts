@@ -26,7 +26,7 @@ const REF = "query://sales/summary?fy=2026&groupBy=region";
 const RAW_SDK_MESSAGE =
   "[claude/claude-sonnet-5] Anthropic API key is missing. Pass it using the 'apiKey' parameter or the ANTHROPIC_API_KEY environment variable.";
 
-/** A SemanticPort whose normalize and validateIntent both fail with `error` (or succeed when `error` is null). */
+/** A SemanticPort whose normalize and validateIntent both always fail with `error`. */
 function failingSemantic(error: Error): SemanticPort {
   return {
     async normalize() {

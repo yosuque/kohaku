@@ -7,6 +7,8 @@ import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, McpServer } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
 import { attachKohakuToMcpServer } from "../src/index.js";
+import { __getTaskStoreForTest } from "../src/server.js";
+import { sendRawModern, taskExtensionEnvelope } from "./connect-modern.js";
 
 // When the LLM provider cannot serve Intent resolution (no API key, provider failure, abort), the MCP tool
 // must answer a structured tool error carrying the fixed message -- never the provider SDK's raw wording --
@@ -152,6 +154,82 @@ describe("an unavailable LLM provider during Intent resolution is a structured t
     expect(result.isError).toBe(true);
     expect((result.content as { type: string; text: string }[])[0]!.text).toBe(
       "no intent matches the question",
+    );
+  });
+});
+
+/**
+ * Starts a task-backed `kohaku_compose` (tasksEnabled on, request declares the extension) whose Intent
+ * resolution throws `error`, waits for the background compose to settle, and returns the stored task.
+ * `tasks/get` itself is unreachable on the installed SDK (see tasks.test.ts), so the task is read from the
+ * store directly -- the same object a `tasks/get` handler would serialize to the client.
+ */
+async function failedTaskFor(error: Error): Promise<{
+  task: ReturnType<NonNullable<ReturnType<typeof __getTaskStoreForTest>>["get"]>;
+  onError: ReturnType<typeof vi.fn>;
+}> {
+  const onError = vi.fn();
+  const server = new McpServer({ name: "kohaku-llm-unavailable-tasks-test", version: "0.1.0" });
+  attachKohakuToMcpServer(
+    server,
+    { compose: makeComposeCtx(failingSemantic(error)), domain, authz, querySource: "sales", onError },
+    { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>", tasksEnabled: true },
+  );
+  const { json } = await sendRawModern(() => server, {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "kohaku_compose",
+      arguments: { question: "Monthly revenue trend" },
+      _meta: taskExtensionEnvelope(),
+    },
+  });
+  const result = json["result"] as Record<string, unknown>;
+  expect(result["resultType"]).toBe("task");
+  const store = __getTaskStoreForTest(server)!;
+  for (let i = 0; i < 50 && store.get(result["taskId"] as string)?.status === "working"; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return { task: store.get(result["taskId"] as string), onError };
+}
+
+describe("an unavailable LLM provider inside a task-backed kohaku_compose fails the task with the same fixed message", () => {
+  for (const code of ["PROVIDER", "CONFIG", "ABORTED"] as const satisfies LlmErrorCode[]) {
+    it(`LlmError ${code}: the failed task carries the fixed message, not the SDK wording, and onError gets the original error`, async () => {
+      const error = new LlmError(code, RAW_SDK_MESSAGE);
+      const { task, onError } = await failedTaskFor(error);
+
+      expect(task?.status).toBe("failed");
+      const message = (task as { error?: { message?: string } }).error?.message;
+      expect(message).toBe(LLM_PROVIDER_UNAVAILABLE_MESSAGE);
+      expect(message).not.toContain("API key");
+      expect(onError).toHaveBeenCalledWith(expect.objectContaining({ error }));
+    });
+  }
+
+  it("an untyped error collapses to the generic message instead of its own wording", async () => {
+    const { task } = await failedTaskFor(new Error("connect ECONNREFUSED 10.0.0.5:5432"));
+
+    expect(task?.status).toBe("failed");
+    const message = (task as { error?: { message?: string } }).error?.message;
+    expect(message).not.toContain("ECONNREFUSED");
+    expect(message).not.toBe(LLM_PROVIDER_UNAVAILABLE_MESSAGE);
+  });
+
+  it("a typed error (string code) keeps passing its own message through", async () => {
+    const typed = Object.assign(new Error("no intent matches the question"), { code: "NO_MATCH" });
+    const { task } = await failedTaskFor(typed);
+
+    expect(task?.status).toBe("failed");
+    expect((task as { error?: { message?: string } }).error?.message).toBe("no intent matches the question");
+  });
+
+  it("onError receives the tool call's correlation id", async () => {
+    const { onError } = await failedTaskFor(new LlmError("CONFIG", RAW_SDK_MESSAGE));
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ correlationId: expect.stringMatching(/^mcp:/) }),
     );
   });
 });

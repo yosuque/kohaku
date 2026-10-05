@@ -463,8 +463,12 @@ function startComposeTask(
       else ctx.tasks.complete(taskId, packaged as unknown as JsonObject);
     })
     .catch((e) => {
-      void reportMcpError(ctx.deps, "tasks.compose", e);
-      ctx.tasks.fail(taskId, { message: hostCore.errorMessage(e) });
+      // Same correlation id the tool call's compose pipeline recorded (callCtx.requestId is
+      // mcpCorrelationId(extra), set by the tool handler), and the same client-visible classification as
+      // safeTool: a task's failure message reaches the client through tasks/get, so a raw provider SDK
+      // message (e.g. an LlmError naming the missing API key) must not be stored there.
+      void reportMcpError(ctx.deps, "tasks.compose", e, callCtx.requestId);
+      ctx.tasks.fail(taskId, { message: clientFailureMessage(e) });
     });
   return createTaskResult(task);
 }
@@ -1509,14 +1513,18 @@ async function safeTool<T extends object>(
     // observation hook before converting it to a tool error, rather than leaving the failure rate inferable only via the
     // isError response to the model.
     await reportMcpError(deps, endpoint, e, mcpCorrelationId(extra));
-    // An unavailable LLM provider (LlmError PROVIDER / CONFIG / ABORTED) is an operator-side failure whose raw
-    // SDK wording must not reach the model: host-core's classifyHostError gives it the same fixed message the
-    // REST profile answers with on 503. Everything else keeps the typed-passes-through / untyped-collapses rule.
-    const cls = hostCore.classifyHostError(e);
-    return toolError(
-      cls.kind === "upstreamUnavailable"
-        ? cls.message
-        : hostCore.clientMessageFor(e, TOOL_INTERNAL_ERROR_MESSAGE),
-    );
+    return toolError(clientFailureMessage(e));
   }
+}
+
+/**
+ * The client-visible message for a failure that reached a tool boundary (a synchronous tool call's catch in
+ * safeTool, or a background MCP Tasks compose failing in startComposeTask). An unavailable LLM provider
+ * (LlmError PROVIDER / CONFIG / ABORTED) is an operator-side failure whose raw SDK wording must not reach the
+ * model: host-core's classifyHostError gives it the same fixed message the REST profile answers with on 503.
+ * A typed host error passes its own message through; everything else collapses to TOOL_INTERNAL_ERROR_MESSAGE.
+ */
+function clientFailureMessage(e: unknown): string {
+  const cls = hostCore.classifyHostError(e);
+  return cls.kind === "untyped" ? TOOL_INTERNAL_ERROR_MESSAGE : cls.message;
 }

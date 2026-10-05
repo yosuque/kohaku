@@ -59,11 +59,12 @@ export const INTENT_INVALID_MESSAGE =
  * own message passed through and anything untyped collapsed to INTENT_INVALID_MESSAGE.
  */
 export function intentResolutionFailure(c: Context, e: unknown, requestId: string): Response {
-  if (hostCore.classifyHostError(e).kind === "upstreamUnavailable") {
-    return c.json(errorBody("INTERNAL", hostCore.LLM_PROVIDER_UNAVAILABLE_MESSAGE, requestId), 503);
+  const cls = hostCore.classifyHostError(e);
+  if (cls.kind === "upstreamUnavailable") {
+    return c.json(errorBody("INTERNAL", cls.message, requestId), 503);
   }
   return c.json(
-    errorBody("INTENT_INVALID", hostCore.clientMessageFor(e, INTENT_INVALID_MESSAGE), requestId),
+    errorBody("INTENT_INVALID", cls.kind === "typed" ? cls.message : INTENT_INVALID_MESSAGE, requestId),
     422,
   );
 }
