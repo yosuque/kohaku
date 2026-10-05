@@ -32,11 +32,11 @@ catalog:
   "@ai-sdk/openai": ^4.0.72
   "@ai-sdk/google": ^4.0.76
   "@ai-sdk/openai-compatible": ^3.0.53
-  "@modelcontextprotocol/server": ^2.0.0
-  "@modelcontextprotocol/client": ^2.0.0
-  "@modelcontextprotocol/core": ^2.0.0
-  "@modelcontextprotocol/node": ^2.0.0
-  "@modelcontextprotocol/ext-apps": ^2.0.0
+  "@modelcontextprotocol/server": ^2.2.0
+  "@modelcontextprotocol/client": ^2.2.0
+  "@modelcontextprotocol/core": ^2.2.0
+  "@modelcontextprotocol/node": ^2.1.0
+  "@modelcontextprotocol/ext-apps": ^2.0.3
   "@opentelemetry/api": ^1.9.1
   "@tanstack/react-query": ^5.101.0
   react-router-dom: ^7.18.4
