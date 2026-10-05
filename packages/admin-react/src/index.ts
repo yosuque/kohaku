@@ -4,7 +4,7 @@
 // tokens — the domain API only. The generic UI primitives the tabs are built from live on
 // the separate `@kohaku-ui/admin-react/ui` subpath. See the package README for usage patterns.
 
-export { derivePendingApprovals, type PendingApproval } from "./approvals.js";
+export type { PendingApproval } from "./approvals.js";
 export {
   type AdminContextValue,
   AdminProvider,

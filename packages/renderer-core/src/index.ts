@@ -31,6 +31,8 @@ export {
   resolveActionName,
   resolveInvokeTarget,
   runInvokeTarget,
+  shortPayloadHash,
+  shouldPromptForApproval,
 } from "./control/invoke.js";
 export { resolveRowProps, substituteRow } from "./control/row-template.js";
 export { boundStateKey, normalizeSelectOptions, type SelectOption } from "./control/select-options.js";

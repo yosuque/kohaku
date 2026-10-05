@@ -99,9 +99,10 @@ export interface RendererMessages {
   /**
    * Governed actions (design.md #63/#72): the identifying detail appended to the "awaiting approval" notice
    * when the pending-approval descriptor is known, so the requester can tell an approver which request to
-   * approve. `payloadHash` is shown truncated (the first 12 characters).
+   * approve. `shortHash` is already shortened by the renderer (the hex digest without `sha256:`, first 12
+   * characters), so a dictionary only places it in the sentence and never re-derives it.
    */
-  actionAwaitingApprovalDetail: (requestId: string, payloadHash: string) => string;
+  actionAwaitingApprovalDetail: (requestId: string, shortHash: string) => string;
 }
 
 /** Default English strings. The default value of RendererMessages. */
@@ -147,6 +148,5 @@ export const DEFAULT_MESSAGES: RendererMessages = {
       : "The action is waiting for approval before it can run",
   actionApprovalPrompt: (action) =>
     `Paste the approval token for "${action}" (ask an approver; see Admin › Approvals)`,
-  actionAwaitingApprovalDetail: (requestId, payloadHash) =>
-    `request ${requestId} · payload ${payloadHash.replace(/^sha256:/, "").slice(0, 12)}`,
+  actionAwaitingApprovalDetail: (requestId, shortHash) => `request ${requestId} · payload ${shortHash}`,
 };
