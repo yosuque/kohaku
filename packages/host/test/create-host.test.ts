@@ -187,7 +187,7 @@ describe("createKohakuHost", () => {
     }
   });
 
-  it("dev: true with a secret is forwarded to the routes: no secret warning, and the two production warnings fold into one info", () => {
+  it("dev: true with a secret is forwarded to the routes: no secret warning, and the two production warnings fold into one line on stderr", () => {
     process.env[SECRET_ENV] = "test-secret-of-decent-length";
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -200,12 +200,37 @@ describe("createKohakuHost", () => {
         dataVersion: () => "v1",
         dev: true,
       });
-      expect(warn).not.toHaveBeenCalled();
-      expect(info).toHaveBeenCalledTimes(1);
-      expect(String(info.mock.calls[0]?.[0])).toContain("development mode");
+      expect(info).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("development mode");
+      expect(String(warn.mock.calls[0]?.[0])).not.toContain("capability secret");
     } finally {
       warn.mockRestore();
       info.mockRestore();
+    }
+  });
+
+  it("routes.dev: true folds the warnings but does not relax the secret requirement", () => {
+    const base = {
+      domain,
+      querySource: "test",
+      llm: new FakeLlm(),
+      intents: [testIntentDef],
+      dataVersion: () => "v1",
+      routes: { dev: true },
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // A secret is set: the two production warnings fold into one.
+      process.env[SECRET_ENV] = "test-secret-of-decent-length";
+      createKohakuHost(base);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("development mode");
+      // No secret and no top-level `dev`: still the fail-fast throw (this is what a generated project relies on).
+      delete process.env[SECRET_ENV];
+      expect(() => createKohakuHost(base)).toThrow(/capability secret/);
+    } finally {
+      warn.mockRestore();
     }
   });
 

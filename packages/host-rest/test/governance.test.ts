@@ -346,30 +346,51 @@ describe("startup warnings for unwired security-relevant hooks", () => {
     spy.mockRestore();
   });
 
-  it("dev: true folds both warnings into one console.info naming both unwired hooks, and warns nothing", () => {
+  it("dev: true folds both warnings into one console.warn (stderr) naming both unwired hooks and both consequences", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     createKohakuRoutes(makeDeps({ dev: true }));
-    expect(warn).not.toHaveBeenCalled();
-    expect(info).toHaveBeenCalledTimes(1);
-    const line = String(info.mock.calls[0]?.[0]);
+    // stdout stays clean: a stdio MCP server reserves it for JSON-RPC.
+    expect(info).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]?.[0]);
     expect(line).toContain("development mode");
-    expect(line).toContain("deps.auth");
-    expect(line).toContain("deps.authorizeGovernance");
-    expect(line).toContain("ANONYMOUS");
+    expect(line).toContain("deps.auth / deps.authorizeGovernance");
+    expect(line).toContain("every request runs as the ANONYMOUS principal");
+    expect(line).toContain("the governance routes are open to every caller");
+    expect(line).toContain(
+      "https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#7-operational-tips",
+    );
     warn.mockRestore();
     info.mockRestore();
   });
 
-  it("dev: true names only the hook that is still unwired", () => {
+  it("dev: true with only deps.auth wired names only authorizeGovernance and only the governance consequence", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     createKohakuRoutes(makeDeps({ dev: true, auth: async () => ({ id: "u", roles: ["user"] }) }));
-    expect(info).toHaveBeenCalledTimes(1);
-    const line = String(info.mock.calls[0]?.[0]);
-    expect(line).toContain("deps.authorizeGovernance");
+    expect(info).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]?.[0]);
+    expect(line).toContain("deps.authorizeGovernance not wired");
     expect(line).not.toContain("deps.auth /");
-    expect(warn).not.toHaveBeenCalled();
+    expect(line).toContain("the governance routes are open to every caller");
+    expect(line).not.toContain("ANONYMOUS");
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
+  it("dev: true with only authorizeGovernance wired names only deps.auth and only the ANONYMOUS consequence", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    createKohakuRoutes(makeDeps({ dev: true, authorizeGovernance: () => true }));
+    expect(info).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]?.[0]);
+    expect(line).toContain("deps.auth not wired");
+    expect(line).not.toContain("deps.authorizeGovernance");
+    expect(line).toContain("every request runs as the ANONYMOUS principal");
+    expect(line).not.toContain("governance routes are open");
     warn.mockRestore();
     info.mockRestore();
   });
@@ -390,7 +411,7 @@ describe("startup warnings for unwired security-relevant hooks", () => {
     info.mockRestore();
   });
 
-  it("without dev, both original warnings are kept and no info line is printed", () => {
+  it("without dev, both original warnings are kept verbatim and nothing goes to console.info", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     createKohakuRoutes(makeDeps({}));

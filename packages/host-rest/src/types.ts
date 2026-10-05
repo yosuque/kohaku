@@ -148,10 +148,11 @@ export interface KohakuHostDeps {
   capabilityTtlSeconds?: number;
   /**
    * Development mode: folds the two production-facing startup warnings (governance routes open without
-   * `authorizeGovernance`, and no `auth` so every request is ANONYMOUS) into a single `console.info` line
-   * naming whatever is unwired, and prints nothing when both are wired. Changes no behavior at all -- only
-   * the log output; when false or omitted the two `console.warn` lines are kept verbatim. `createKohakuHost`
-   * (`@kohaku-ui/host`) forwards its own `dev` option here.
+   * `authorizeGovernance`, and no `auth` so every request is ANONYMOUS) into a single `console.warn` line
+   * (stderr, so a stdio MCP server's stdout stays JSON-RPC only) naming whatever is unwired, and prints
+   * nothing when both are wired. Changes no behavior at all -- only the log output; when false or omitted the
+   * two `console.warn` lines are kept verbatim. `createKohakuHost` (`@kohaku-ui/host`) forwards its own
+   * `dev` option here.
    */
   dev?: boolean;
   /**

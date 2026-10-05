@@ -94,16 +94,23 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
   );
 
   if (deps.dev === true) {
-    // Development mode (deps.dev): the two production-facing warnings below fold into one info line, and only
+    // Development mode (deps.dev): the two production-facing warnings below fold into one line, and only
     // when something is actually unwired. Behavior is identical either way; only the log output differs.
-    const unwired = [
-      ...(deps.auth == null ? ["deps.auth"] : []),
-      ...(deps.authorizeGovernance == null ? ["deps.authorizeGovernance"] : []),
+    // It goes to stderr (console.warn), not stdout (console.info): a stdio MCP server (host-mcp-apps over a
+    // generated project's server/mcp-server.ts) reserves stdout for JSON-RPC, so any stdout line corrupts the
+    // stream. The two warnings this replaces are stderr too.
+    const consequences = [
+      ...(deps.auth == null ? ["every request runs as the ANONYMOUS principal"] : []),
+      ...(deps.authorizeGovernance == null ? ["the governance routes are open to every caller"] : []),
     ];
-    if (unwired.length > 0) {
-      console.info(
-        `[kohaku] development mode: ${unwired.join(" / ")} not wired — every request runs as the ANONYMOUS principal and the governance routes are open. ` +
-          "Wire them before production (docs/user-guide.md §7 Operational tips).",
+    if (consequences.length > 0) {
+      const unwired = [
+        ...(deps.auth == null ? ["deps.auth"] : []),
+        ...(deps.authorizeGovernance == null ? ["deps.authorizeGovernance"] : []),
+      ];
+      console.warn(
+        `[kohaku] development mode: ${unwired.join(" / ")} not wired — ${consequences.join(" and ")}. ` +
+          "Wire them before production (https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#7-operational-tips).",
       );
     }
   } else {

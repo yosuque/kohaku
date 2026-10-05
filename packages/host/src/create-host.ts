@@ -134,14 +134,16 @@ export interface CreateKohakuHostOptions {
   /**
    * Development mode. Two effects, both for local development only:
    * 1. When no capability secret can be resolved (see `capabilitySecret`), generates a temporary random one for
-   *    this process instead of throwing, and warns on `console.warn`. Never enable this in production -- a
-   *    secret that changes every restart invalidates every capability token issued before the restart, and a
-   *    fresh one is trivially guessable by nobody only because nobody else knows it either (it is not
-   *    persisted anywhere). This only matters when no secret is given: a project that always sets
-   *    `KOHAKU_CAPABILITY_SECRET` (as `kohaku init`'s generated `.env` does) is unaffected by `dev` here.
+   *    this process instead of throwing, and warns on `console.warn`. Never enable this in production: the
+   *    secret is not persisted, so it changes on every restart and invalidates every capability token issued
+   *    before it. This only matters when no secret is given; a project that always sets
+   *    `KOHAKU_CAPABILITY_SECRET` is unaffected by this half of `dev`.
    * 2. Forwarded to `createKohakuRoutes` (`KohakuHostDeps.dev`), which folds its two production-facing startup
-   *    warnings (no `authorizeGovernance`, no `auth`) into one `console.info` line. No behavior changes.
+   *    warnings (no `authorizeGovernance`, no `auth`) into one `console.warn` line. No behavior changes.
    *    `routes.dev` overrides this forwarded value.
+   *
+   * `dev` turns on both effects. To fold only the warnings and keep the missing-secret throw, pass
+   * `routes: { dev: true }` instead (this is what `kohaku init`'s generated `server/ports.ts` does).
    */
   dev?: boolean;
   /** Where `app` mounts `createKohakuRoutes`. Default `"/api/kohaku"`. */
