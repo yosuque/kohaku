@@ -367,7 +367,7 @@ def test_usage_wire_shape_key_order_matches_ts() -> None:
     from kohaku.host_rest.serialize import to_jsonable
 
     wire = to_jsonable(summarize_lineage([metered(tier="L2", usage={"inputTokens": 3, "outputTokens": 4})]))
-    assert list(wire.keys())[-1] == "usage"
+    assert list(wire.keys())[-3] == "usage"
     row = wire["usage"][0]
     assert list(row.keys()) == [
         "day",
@@ -385,3 +385,189 @@ def test_usage_wire_shape_key_order_matches_ts() -> None:
     assert list(row["tiers"].keys()) == ["L0", "L1", "L2"]
     assert row["tokens"] == {"input": 3, "output": 4}
     assert row["tenant"] == ""
+
+
+# --- catalog gaps: l2ByIntent / schemaEditsByComponent (design.md #73) ---
+
+
+def fallback_for(intent_hash: str, ts: str = "2026-07-01T00:00:00.000Z") -> LineageEventRecord:
+    return ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": intent_hash}, ts=ts)
+
+
+def test_catalog_gaps_are_empty_for_empty_input() -> None:
+    s = summarize_lineage([])
+    assert s.l2ByIntent == []
+    assert s.schemaEditsByComponent == []
+
+
+def test_l2_by_intent_counts_only_l2_miss_or_bypass_per_canonical() -> None:
+    s = summarize_lineage(
+        [
+            composed(tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1"),
+            composed(tier="L2", cache="bypass", canonical="sales.custom", intent_hash="sha256:c2"),
+            composed(tier="L2", cache="hit", canonical="sales.custom", intent_hash="sha256:c1"),
+            composed(tier="L2", cache="fixated", canonical="sales.custom"),
+            composed(tier="L1", cache="miss", canonical="sales.trend"),
+            composed(tier="L2", cache="miss", canonical="sales.heatmap", intent_hash="sha256:h1"),
+            composed(tier="L2", cache="miss", canonical="sales.heatmap", intent_hash="sha256:h1"),
+            composed(tier="L2", cache="miss", canonical="sales.heatmap", intent_hash="sha256:h1"),
+        ]
+    )
+    assert [(r.canonical, r.intentHash, r.generated, r.fallbacks) for r in s.l2ByIntent] == [
+        ("sales.heatmap", "sha256:h1", 3, 0),
+        ("sales.custom", "sha256:c1", 2, 0),  # intentHash = the first one seen
+    ]
+
+
+def test_l2_by_intent_joins_fallbacks_through_the_composed_hash_order_independent() -> None:
+    s = summarize_lineage(
+        [
+            fallback_for("sha256:c1", "2026-07-01T00:00:00.000Z"),  # sorts before its composed record
+            composed(
+                tier="L2",
+                cache="miss",
+                canonical="sales.custom",
+                intent_hash="sha256:c1",
+                ts="2026-07-01T00:00:01.000Z",
+            ),
+            fallback_for("sha256:c1", "2026-07-01T00:00:02.000Z"),
+            fallback_for("sha256:unknown"),  # never composed: cannot be attributed
+            composed(tier="L1", cache="miss", canonical="sales.trend", intent_hash="sha256:t1"),
+            fallback_for("sha256:t1"),  # an L1 intent has no L2 row
+            ev("view.fallback", {"kind": "generation"}),  # no intentHash at all
+        ]
+    )
+    assert [(r.canonical, r.generated, r.fallbacks) for r in s.l2ByIntent] == [("sales.custom", 1, 2)]
+    assert s.fallback.total == 5
+
+
+def test_catalog_gaps_honor_top_intents_limit() -> None:
+    events: list[LineageEventRecord] = []
+    for i in range(4):
+        for _ in range(i + 1):
+            events.append(composed(tier="L2", canonical=f"c{i}", intent_hash=f"sha256:{i}"))
+        events.append(
+            ev(
+                "component.schemaEdited",
+                {
+                    "artifactId": f"art-{i}",
+                    "changed": [{"field": "description", "suggested": "a", "final": "b"}],
+                    "unchanged": [],
+                },
+            )
+        )
+    s = summarize_lineage(events, SummarizeLineageOptions(topIntentsLimit=2))
+    assert [r.canonical for r in s.l2ByIntent] == ["c3", "c2"]
+    assert len(s.schemaEditsByComponent) == 2
+
+
+def _edit(
+    artifact_id: str, fields: list[str], tenant: str | None = None
+) -> LineageEventRecord:
+    return ev(
+        "component.schemaEdited",
+        {
+            "artifactId": artifact_id,
+            "reviewer": "r",
+            "changed": [{"field": f, "suggested": "a", "final": "b"} for f in fields],
+            "unchanged": [],
+        },
+        tenant=tenant,
+    )
+
+
+def _proposed(
+    artifact_id: str, component_type: str, tenant: str | None = None
+) -> LineageEventRecord:
+    return ev(
+        "component.schemaProposed",
+        {"artifactId": artifact_id, "draft": {"componentType": component_type, "version": "1.0.0"}},
+        tenant=tenant,
+    )
+
+
+def test_schema_edits_group_by_the_final_component_type() -> None:
+    s = summarize_lineage(
+        [
+            _edit("a1", ["description", "intentName"]),
+            _proposed("a1", "sales.heatmap"),
+            _edit("a2", ["description"]),
+            _proposed("a2", "sales.heatmap"),
+            _edit("a3", ["paramsJsonSchema"]),
+            _proposed("a3", "sales.gauge"),
+            _proposed("a4", "sales.old"),
+            _proposed("a4", "sales.newer"),  # the latest proposal wins
+            _edit("a4", ["version"]),
+        ]
+    )
+    assert [(g.key, g.count, g.topFields) for g in s.schemaEditsByComponent] == [
+        (
+            "sales.heatmap",
+            2,
+            [{"field": "description", "count": 2}, {"field": "intentName", "count": 1}],
+        ),
+        ("sales.gauge", 1, [{"field": "paramsJsonSchema", "count": 1}]),
+        ("sales.newer", 1, [{"field": "version", "count": 1}]),
+    ]
+
+
+def test_schema_edits_ignore_zero_edit_fall_back_to_artifact_id_and_keep_tenants_apart() -> None:
+    s = summarize_lineage(
+        [
+            ev(
+                "component.schemaEdited",
+                {"artifactId": "a1", "changed": [], "unchanged": ["componentType"]},
+            ),
+            _edit("orphan", ["queryTemplate"]),
+            _proposed("shared", "sales.a", tenant="t1"),
+            _edit("shared", ["description"], tenant="t2"),  # must not borrow t1's proposal
+            ev("component.schemaProposed", {"artifactId": "bad", "draft": {}}),
+            _edit("bad", ["version"]),
+        ]
+    )
+    assert [(g.key, g.count) for g in s.schemaEditsByComponent] == [
+        ("orphan", 1),
+        ("shared", 1),
+        ("bad", 1),
+    ]
+
+
+def test_schema_edits_top_fields_keep_the_five_most_changed() -> None:
+    fields = [
+        "componentType",
+        "version",
+        "intentName",
+        "description",
+        "paramsJsonSchema",
+        "queryTemplate",
+    ]
+    s = summarize_lineage([_edit("a", fields[: 6 - i]) for i in range(6)])
+    assert len(s.schemaEditsByComponent) == 1
+    assert s.schemaEditsByComponent[0].topFields == [
+        {"field": "componentType", "count": 6},
+        {"field": "version", "count": 5},
+        {"field": "intentName", "count": 4},
+        {"field": "description", "count": 3},
+        {"field": "paramsJsonSchema", "count": 2},
+    ]
+
+
+def test_catalog_gaps_wire_shape_matches_ts() -> None:
+    from kohaku.host_rest.serialize import to_jsonable
+
+    wire = to_jsonable(
+        summarize_lineage(
+            [
+                composed(tier="L2", canonical="sales.custom", intent_hash="sha256:c1"),
+                _edit("a1", ["description"]),
+                _proposed("a1", "sales.x"),
+            ]
+        )
+    )
+    assert list(wire.keys())[-3:] == ["usage", "l2ByIntent", "schemaEditsByComponent"]
+    assert wire["l2ByIntent"] == [
+        {"canonical": "sales.custom", "intentHash": "sha256:c1", "generated": 1, "fallbacks": 0}
+    ]
+    assert wire["schemaEditsByComponent"] == [
+        {"key": "sales.x", "count": 1, "topFields": [{"field": "description", "count": 1}]}
+    ]

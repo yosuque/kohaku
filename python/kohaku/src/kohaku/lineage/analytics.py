@@ -8,6 +8,10 @@ Differences from TS:
 - LineageSummary / IntentUsage etc. are dataclasses. tiers / cache / promotions / fixations /
   byKind are fixed-key counters, so they stay as dict[str, int] (corresponding to TS plain objects).
 - Quantile / rate computation is identical to TS (nearest-rank / total / (composed+total)).
+- Known gap (docs/design.md, python/README.md): the `review` block and the `schemaSuggested` /
+  `schemaEdited` counters are not ported. Only the fields of design.md #73 / #74 are mirrored:
+  `usage`, `l2ByIntent` and `schemaEditsByComponent` (the last one reads `component.schemaEdited` /
+  `component.schemaProposed` for its own grouping, without adding the counters).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from kohaku.spec import LineageEventRecord
 
 TOP_INTENTS_DEFAULT = 10
 TOP_INTENTS_MAX = 50
+SCHEMA_EDIT_TOP_FIELDS = 5
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,34 @@ class UsageRow:
     unfixated: int
 
 
+@dataclass
+class L2IntentGap:
+    """One row of `LineageSummary.l2ByIntent` (design.md #73; port of TS `L2IntentGap`).
+
+    Mutable on purpose: `summarize_lineage` accumulates into its rows while folding. `intentHash` is the
+    first one seen for the canonical; `fallbacks` counts the view.fallback records whose intentHash maps
+    back to this canonical through the window's view.composed records.
+    """
+
+    canonical: str
+    intentHash: str
+    generated: int
+    fallbacks: int
+
+
+@dataclass(frozen=True)
+class SchemaEditGap:
+    """One row of `LineageSummary.schemaEditsByComponent` (design.md #73; port of TS `SchemaEditGap`).
+
+    `key` is the final component type (the latest component.schemaProposed draft's componentType), or the
+    artifactId when none is recorded; `topFields` is `[{"field": ..., "count": ...}]`, most changed first.
+    """
+
+    key: str
+    count: int
+    topFields: list[dict[str, Any]]
+
+
 @dataclass(frozen=True)
 class SummarizeUsageOptions:
     """Options for summarize_usage. `bucket` is "day" (UTC), the only bucket."""
@@ -120,6 +153,10 @@ class LineageSummary:
     promotions: dict[str, int]
     fixations: dict[str, int]
     usage: list[UsageRow]
+    l2ByIntent: list[L2IntentGap]
+    """Catalog gap: Intents that fell to L2 generation, per canonical, most generated first."""
+    schemaEditsByComponent: list[SchemaEditGap]
+    """Catalog gap: reviewer corrections of the schema proposal, per final component type."""
 
 
 @dataclass(frozen=True)
@@ -175,10 +212,23 @@ def summarize_lineage(
     intent_counts: dict[str, int] = {}
     intent_canonical: dict[str, str] = {}
 
+    # Catalog-gap inputs (design.md #73), as in TS: canonical -> L2 generation row; intentHash -> canonical (from
+    # every view.composed, so a view.fallback that carries only the hash can be attributed); the fallbacks'
+    # hashes, resolved after the pass; (tenant, artifactId) -> the latest proposed component type; the edits
+    # (non-empty `changed`) to group once that map is complete.
+    l2_rows: dict[str, L2IntentGap] = {}
+    canonical_of_hash: dict[str, str] = {}
+    fallback_hashes: list[str] = []
+    proposed_type: dict[tuple[str, str], str] = {}
+    schema_edits: list[tuple[tuple[str, str], str, list[str]]] = []
+
     composed = 0
     fallback_total = 0
 
-    for e in scoped:
+    # Stable sort by ts (ties keep input order), like TS: "latest proposal wins" below needs time order.
+    ordered = sorted(scoped, key=lambda e: e.ts)
+    for e in ordered:
+        review_key = (e.tenant if e.tenant is not None else "", str(e.payload.get("artifactId") or ""))
         if e.type == "view.composed":
             composed += 1
             tier = str(e.payload.get("tier") or "")
@@ -199,7 +249,30 @@ def summarize_lineage(
                 else:
                     intent_counts[intent_hash] = 1
                     intent_canonical[intent_hash] = str(e.payload.get("canonical") or "")
+            canonical = str(e.payload.get("canonical") or "")
+            if (
+                isinstance(intent_hash, str)
+                and len(intent_hash) > 0
+                and intent_hash not in canonical_of_hash
+            ):
+                canonical_of_hash[intent_hash] = canonical
+            if tier == "L2" and cache_key in ("miss", "bypass"):
+                gap = l2_rows.get(canonical)
+                if gap is not None:
+                    gap.generated += 1
+                    if gap.intentHash == "" and isinstance(intent_hash, str):
+                        gap.intentHash = intent_hash
+                else:
+                    l2_rows[canonical] = L2IntentGap(
+                        canonical=canonical,
+                        intentHash=intent_hash if isinstance(intent_hash, str) else "",
+                        generated=1,
+                        fallbacks=0,
+                    )
         elif e.type == "view.fallback":
+            fallback_hash = e.payload.get("intentHash")
+            if isinstance(fallback_hash, str) and len(fallback_hash) > 0:
+                fallback_hashes.append(fallback_hash)
             fallback_total += 1
             kind = e.payload.get("kind")
             if kind in ("generation", "negotiation"):
@@ -224,6 +297,22 @@ def summarize_lineage(
             fixations["fixated"] += 1
         elif e.type == "intent.unfixated":
             fixations["unfixated"] += 1
+        elif e.type == "component.schemaEdited":
+            # Only the catalog-gap grouping reads this record (the `schemaEdited` counter and the review
+            # block stay unported; see the module docstring).
+            changed = e.payload.get("changed")
+            if isinstance(changed, list) and len(changed) > 0:
+                fields = [
+                    c["field"]
+                    for c in changed
+                    if isinstance(c, dict) and isinstance(c.get("field"), str)
+                ]
+                schema_edits.append((review_key, review_key[1], fields))
+        elif e.type == "component.schemaProposed":
+            draft = e.payload.get("draft")
+            component_type = draft.get("componentType") if isinstance(draft, dict) else None
+            if isinstance(component_type, str) and len(component_type) > 0:
+                proposed_type[review_key] = component_type
         # intent.migrated (design.md #65) is intentionally ignored here: a migration-driven rewrite of a
         # fixation's pinnedSpec is neither a fresh fixation nor a removal, and has no counter of its own.
 
@@ -237,6 +326,38 @@ def summarize_lineage(
             for h, c in intent_counts.items()
         ),
         key=lambda u: u.count,
+        reverse=True,
+    )[:top_n]
+
+    for fallback_hash in fallback_hashes:
+        fallback_canonical = canonical_of_hash.get(fallback_hash)
+        gap = l2_rows.get(fallback_canonical) if fallback_canonical is not None else None
+        if gap is not None:
+            gap.fallbacks += 1
+    l2_by_intent = sorted(l2_rows.values(), key=lambda r: r.generated, reverse=True)[:top_n]
+
+    edit_groups: dict[str, tuple[int, dict[str, int]]] = {}
+    for edit_key, artifact_id, edit_fields in schema_edits:
+        group_key = proposed_type.get(edit_key, artifact_id)
+        edit_count, field_counts = edit_groups.get(group_key, (0, {}))
+        for field in edit_fields:
+            field_counts[field] = field_counts.get(field, 0) + 1
+        edit_groups[group_key] = (edit_count + 1, field_counts)
+    schema_edits_by_component = sorted(
+        (
+            SchemaEditGap(
+                key=group_key,
+                count=edit_count,
+                topFields=[
+                    {"field": field, "count": n}
+                    for field, n in sorted(
+                        field_counts.items(), key=lambda fc: fc[1], reverse=True
+                    )[:SCHEMA_EDIT_TOP_FIELDS]
+                ],
+            )
+            for group_key, (edit_count, field_counts) in edit_groups.items()
+        ),
+        key=lambda g: g.count,
         reverse=True,
     )[:top_n]
 
@@ -261,6 +382,8 @@ def summarize_lineage(
         promotions=promotions,
         fixations=fixations,
         usage=summarize_usage(scoped, SummarizeUsageOptions(bucket="day")),
+        l2ByIntent=l2_by_intent,
+        schemaEditsByComponent=schema_edits_by_component,
     )
 
 
