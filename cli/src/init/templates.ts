@@ -565,7 +565,7 @@ describe("golden regression", () => {
         writeFileSync(path, \`\${JSON.stringify({ ...fixture, expected: spec }, null, 2)}\\n\`);
         return;
       }
-      expect(fixture.expected, \`\${file}: expected not generated. Generate it with KOHAKU_GOLDEN_UPDATE=1 npm test\`).not.toBeNull();
+      expect(fixture.expected, \`\${file}: expected is null. kohaku init normally generates it after npm install; run KOHAKU_GOLDEN_UPDATE=1 npm test once, review the diff, and commit.\`).not.toBeNull();
       const cases: GoldenCase[] = [{ name: fixture.name, input: fixture.input, expected: fixture.expected! }];
       const report = await runGolden(cases, ctx);
       const failed = report.cases.find((c) => !c.pass);

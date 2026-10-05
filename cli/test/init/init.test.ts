@@ -65,20 +65,64 @@ describe("initProject", () => {
     expect(pkgRaw).not.toMatch(/workspace:/);
   });
 
-  it("runs npm install by default through the injected runner", async () => {
-    const calls: string[][] = [];
+  it("runs npm install, then a golden-update vitest run without CI, through the injected runner", async () => {
+    const calls: { argv: string[]; cwd: string; opts?: { env?: NodeJS.ProcessEnv } }[] = [];
+    const logs: string[] = [];
     const out = join(tmp(), "app");
     const result = await initProject(
       { from: FIXTURE, out },
       {
-        run: async (cmd, args) => {
-          calls.push([cmd, ...args]);
+        run: async (cmd, args, cwd, opts) => {
+          calls.push({ argv: [cmd, ...args], cwd, ...(opts != null ? { opts } : {}) });
           return 0;
         },
+        log: (line) => logs.push(line),
       },
     );
     expect(result.installed).toBe(true);
-    expect(calls).toEqual([["npm", "install", "--no-audit", "--no-fund"]]);
+    expect(result.goldenGenerated).toBe(true);
+    expect(calls.map((c) => c.argv)).toEqual([
+      ["npm", "install", "--no-audit", "--no-fund"],
+      ["npx", "vitest", "run"],
+    ]);
+    expect(calls[1]?.cwd).toBe(out);
+    expect(calls[1]?.opts?.env?.["KOHAKU_GOLDEN_UPDATE"]).toBe("1");
+    // CI is explicitly present-and-undefined so the runner strips it from the inherited environment.
+    expect(calls[1]?.opts?.env).toHaveProperty("CI", undefined);
+    expect(logs).toEqual(["golden: wrote test/golden/*.json expected (npm test is green)"]);
+  });
+
+  it.each([
+    ["exits non-zero", async () => 1],
+    [
+      "throws",
+      async () => {
+        throw new Error("spawn npx ENOENT");
+      },
+    ],
+  ])(
+    "does not fail init when the golden-update run %s; it prints the manual command",
+    async (_label, golden) => {
+      const logs: string[] = [];
+      const out = join(tmp(), "app");
+      const result = await initProject(
+        { from: FIXTURE, out },
+        { run: async (cmd) => (cmd === "npm" ? 0 : golden()), log: (line) => logs.push(line) },
+      );
+      expect(result.installed).toBe(true);
+      expect(result.goldenGenerated).toBe(false);
+      expect(logs).toEqual([
+        `golden: could not generate expected; run "KOHAKU_GOLDEN_UPDATE=1 npm test" once in ${out}`,
+      ]);
+    },
+  );
+
+  it("does not run any child process with install: false", async () => {
+    const run = vi.fn(async () => 0);
+    const result = await initProject({ from: FIXTURE, out: join(tmp(), "app"), install: false }, { run });
+    expect(run).not.toHaveBeenCalled();
+    expect(result.installed).toBe(false);
+    expect(result.goldenGenerated).toBe(false);
   });
 
   it("throws when the injected install runner exits non-zero", async () => {

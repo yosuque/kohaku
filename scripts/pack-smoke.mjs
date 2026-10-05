@@ -583,7 +583,8 @@ function checkInit(packages, tmpRoot, consumerDir) {
   runOrFail("npm", ["install", "--no-audit", "--no-fund"], { cwd: appDir });
   runOrFail("npx", ["tsc", "--noEmit"], { cwd: appDir });
   log("  generated project type-checks");
-  // Generate the golden's `expected` the way a user would (update mode refuses to run under CI, so unset it for this pass only).
+  // Generate the golden's `expected` the way a user would (an install-enabled `kohaku init` does this step itself;
+  // this run used --no-install). Update mode refuses to run under CI, so unset it for this pass only.
   const updateEnv = { ...process.env, KOHAKU_GOLDEN_UPDATE: "1" };
   delete updateEnv.CI;
   runOrFail("npx", ["vitest", "run"], { cwd: appDir, env: updateEnv });

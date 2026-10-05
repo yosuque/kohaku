@@ -353,6 +353,8 @@ npm run dev                                      # API :8787 + web :5173
 
 `init` also writes a `.env` with a freshly generated capability secret, so add only a provider key to it — never copy `.env.example` over it. The **Summary** view renders with no LLM configured; set a provider in `.env` for Chat and the L1 views.
 
+After `npm install`, `init` runs the generated golden test once in update mode (deterministic, no LLM) to write the fixture's `expected`, so `npm test` is green from the start. If that step fails, `init` still succeeds and prints the one command to run by hand (`KOHAKU_GOLDEN_UPDATE=1 npm test`); `--no-install` skips it.
+
 Chat answers only within the generated Intent catalog and returns `NO_MATCH` for anything outside it (widen it by passing `fallbackIntent` — an Intent name in your catalog that takes a `request` param — to `createKohakuHost` in `server/ports.ts`). Everything generated is a starting point — the DomainPort remains your product's responsibility (design doc §2), and each file says what else to replace (`createKohakuHost`'s other defaults included).
 
 No data at hand? Try [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv).

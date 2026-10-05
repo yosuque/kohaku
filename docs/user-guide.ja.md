@@ -353,6 +353,8 @@ npm run dev                                      # API :8787 + web :5173
 
 `init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。
 
+`init` は `npm install` の後に、生成された golden テストを update モードで 1 回実行して(決定的で LLM は使いません)fixture の `expected` を書き込むため、`npm test` は最初から緑になります。この手順が失敗しても `init` 自体は成功し、手動で実行する 1 コマンド(`KOHAKU_GOLDEN_UPDATE=1 npm test`)が表示されます。`--no-install` ではこの手順をスキップします。
+
 Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`server/ports.ts` の `createKohakuHost` に `fallbackIntent`(カタログ内の、`request` パラメータを取る Intent 名)を渡すと範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
 
 手元にデータがなければ [`cli/test/init/fixtures/sales.csv`](../cli/test/init/fixtures/sales.csv) を試してください。

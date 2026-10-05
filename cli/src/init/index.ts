@@ -36,17 +36,36 @@ export interface InitResult {
   written: string[];
   profile: DatasetProfile;
   installed: boolean;
+  /**
+   * True when the post-install `vitest run` wrote `test/golden/*.json`'s `expected`, so `npm test` is green
+   * from the start. False for `install: false`, and when that step failed (init itself does not fail then).
+   */
+  goldenGenerated: boolean;
   /** The npm package name actually used (see `initProject`'s name-derivation notes). */
   name: string;
 }
 
 export interface InitIo {
-  run?: (cmd: string, args: string[], cwd: string) => Promise<number>;
+  /**
+   * Runs a child process. `opts.env` is overlaid on `process.env`; a key whose value is `undefined` is
+   * removed from the child's environment (used to drop `CI`, which the golden test refuses to update under).
+   */
+  run?: (cmd: string, args: string[], cwd: string, opts?: { env?: NodeJS.ProcessEnv }) => Promise<number>;
+  /** Progress output (default `console.log`). */
+  log?: (line: string) => void;
 }
 
-function defaultRun(cmd: string, args: string[], cwd: string): Promise<number> {
+function defaultRun(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  opts?: { env?: NodeJS.ProcessEnv },
+): Promise<number> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(cmd, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
+    const env: NodeJS.ProcessEnv = { ...process.env, ...opts?.env };
+    // spawn ignores undefined values on POSIX, but delete them explicitly so Windows behaves the same.
+    for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+    const child = spawn(cmd, args, { cwd, env, stdio: "inherit", shell: process.platform === "win32" });
     child.on("error", reject);
     child.on("exit", (code) => resolvePromise(code ?? 1));
   });
@@ -142,11 +161,31 @@ export async function initProject(options: InitOptions, io: InitIo = {}): Promis
     [...files, ...extraFiles].map((f) => [join(outDir, f.path), f.content] as const),
   );
   let installed = false;
+  let goldenGenerated = false;
   if (options.install !== false) {
-    const code = await (io.run ?? defaultRun)("npm", ["install", "--no-audit", "--no-fund"], outDir);
+    const run = io.run ?? defaultRun;
+    const code = await run("npm", ["install", "--no-audit", "--no-fund"], outDir);
     if (code !== 0)
       throw new Error(`npm install exited ${code} in ${outDir}; fix the error and run "npm install" again`);
     installed = true;
+    // The fixture is rendered with `expected: null` (init never composes), so a plain `npm test` would be red.
+    // Write it now, through the same vitest the project just installed. `npx vitest run` rather than
+    // `npm test`: it sidesteps npm-script quoting, and CI is removed because the golden test refuses to
+    // update under it (same shape as scripts/pack-smoke.mjs). Best-effort: init has already succeeded.
+    const log = io.log ?? console.log;
+    try {
+      const goldenCode = await run("npx", ["vitest", "run"], outDir, {
+        env: { KOHAKU_GOLDEN_UPDATE: "1", CI: undefined },
+      });
+      goldenGenerated = goldenCode === 0;
+    } catch {
+      goldenGenerated = false;
+    }
+    log(
+      goldenGenerated
+        ? "golden: wrote test/golden/*.json expected (npm test is green)"
+        : `golden: could not generate expected; run "KOHAKU_GOLDEN_UPDATE=1 npm test" once in ${outDir}`,
+    );
   }
-  return { outDir, written, profile, installed, name };
+  return { outDir, written, profile, installed, goldenGenerated, name };
 }
