@@ -39,14 +39,35 @@ export interface Rubric {
   }[];
 }
 
+/**
+ * The criterion descriptions shared by the `l2PromotionRubric*` versions (prompt bytes — they are
+ * interpolated verbatim into the system prompt, so changing one is a rubric change that needs a version bump).
+ * Weights, floors and the version stamp stay literal on each version. `visual_quality` has two wordings: the
+ * current one (versions "0.4" / "0.3") and the earlier one of version "0.2".
+ */
+const CRITERION_TEXT = {
+  safety:
+    "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+  determinism:
+    "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+  a11y: "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+  schema_inferability: "The structure can be parameterized and a typed schema (props) can be extracted",
+  generality: "It is general enough to be reused with other data and time ranges, not a one-off",
+  visual_quality:
+    "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, use the primary color for one emphasis at most; tone colors only when they carry meaning, numeric columns right-aligned with tabular figures, empty/error/loading states shown as notices, never use fixed pixel widths — fill the container width, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+  visual_quality_v0_2:
+    "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, restrained color, numeric columns right-aligned with tabular figures, empty/error states shown as notices, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+  suggestion_fidelity:
+    "Schema fidelity: the schema under judgement — the DRAFT block when one is supplied, otherwise the SUGGESTION block — its props, query parameters and events — is exactly what the HTML reads and emits (nothing invented, nothing missing); verify it against the HTML in both cases. When a SUGGESTION is shown alongside a DRAFT, the SUGGESTION is context only — score the DRAFT, not the proposal. When neither a draft nor a suggestion is supplied, this criterion is dropped from the rubric entirely rather than scored (see JudgeVerdict.rubricVariant)",
+} as const;
+
 export const l2PromotionRubric: Rubric = {
   id: "l2-promotion",
   version: "0.4",
   criteria: [
     {
       id: "safety",
-      description:
-        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      description: CRITERION_TEXT.safety,
       weight: 0.25,
       /**
        * Veto floor. `safety` is the one criterion that reads the generated HTML's semantic
@@ -64,36 +85,32 @@ export const l2PromotionRubric: Rubric = {
     },
     {
       id: "determinism",
-      description:
-        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      description: CRITERION_TEXT.determinism,
       weight: 0.2,
     },
     {
       id: "a11y",
-      description:
-        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      description: CRITERION_TEXT.a11y,
       weight: 0.15,
     },
     {
       id: "schema_inferability",
-      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      description: CRITERION_TEXT.schema_inferability,
       weight: 0.05,
     },
     {
       id: "generality",
-      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      description: CRITERION_TEXT.generality,
       weight: 0.05,
     },
     {
       id: "visual_quality",
-      description:
-        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, use the primary color for one emphasis at most; tone colors only when they carry meaning, numeric columns right-aligned with tabular figures, empty/error/loading states shown as notices, never use fixed pixel widths — fill the container width, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      description: CRITERION_TEXT.visual_quality,
       weight: 0.2,
     },
     {
       id: "suggestion_fidelity",
-      description:
-        "Schema fidelity: the schema under judgement — the DRAFT block when one is supplied, otherwise the SUGGESTION block — its props, query parameters and events — is exactly what the HTML reads and emits (nothing invented, nothing missing); verify it against the HTML in both cases. When a SUGGESTION is shown alongside a DRAFT, the SUGGESTION is context only — score the DRAFT, not the proposal. When neither a draft nor a suggestion is supplied, this criterion is dropped from the rubric entirely rather than scored (see JudgeVerdict.rubricVariant)",
+      description: CRITERION_TEXT.suggestion_fidelity,
       weight: 0.1,
     },
   ],
@@ -128,37 +145,33 @@ export const l2PromotionRubricV0_3: Rubric = {
   criteria: [
     {
       id: "safety",
-      description:
-        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      description: CRITERION_TEXT.safety,
       weight: 0.25,
       floor: 0.5,
     },
     {
       id: "determinism",
-      description:
-        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      description: CRITERION_TEXT.determinism,
       weight: 0.2,
     },
     {
       id: "a11y",
-      description:
-        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      description: CRITERION_TEXT.a11y,
       weight: 0.15,
     },
     {
       id: "schema_inferability",
-      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      description: CRITERION_TEXT.schema_inferability,
       weight: 0.15,
     },
     {
       id: "generality",
-      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      description: CRITERION_TEXT.generality,
       weight: 0.05,
     },
     {
       id: "visual_quality",
-      description:
-        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, use the primary color for one emphasis at most; tone colors only when they carry meaning, numeric columns right-aligned with tabular figures, empty/error/loading states shown as notices, never use fixed pixel widths — fill the container width, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      description: CRITERION_TEXT.visual_quality,
       weight: 0.2,
     },
   ],
@@ -179,36 +192,32 @@ export const l2PromotionRubricV0_2: Rubric = {
   criteria: [
     {
       id: "safety",
-      description:
-        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      description: CRITERION_TEXT.safety,
       weight: 0.25,
     },
     {
       id: "determinism",
-      description:
-        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      description: CRITERION_TEXT.determinism,
       weight: 0.2,
     },
     {
       id: "a11y",
-      description:
-        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      description: CRITERION_TEXT.a11y,
       weight: 0.15,
     },
     {
       id: "schema_inferability",
-      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      description: CRITERION_TEXT.schema_inferability,
       weight: 0.15,
     },
     {
       id: "generality",
-      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      description: CRITERION_TEXT.generality,
       weight: 0.15,
     },
     {
       id: "visual_quality",
-      description:
-        "Clear visual hierarchy (one heading, muted secondary text), consistent spacing, restrained color, numeric columns right-aligned with tabular figures, empty/error states shown as notices, no browser-default styling left on tables, buttons or inputs, and, when the generation prompt supplied design tokens or a design kit, styles expressed with them rather than hard-coded values",
+      description: CRITERION_TEXT.visual_quality_v0_2,
       weight: 0.1,
     },
   ],
@@ -230,30 +239,27 @@ export const l2PromotionRubricV0_1: Rubric = {
   criteria: [
     {
       id: "safety",
-      description:
-        "Loads no external resources and uses no fetch/XHR/WebSocket/eval. Fetches data only through the window.kohaku API",
+      description: CRITERION_TEXT.safety,
       weight: 0.3,
     },
     {
       id: "determinism",
-      description:
-        "Renders the same display for the same data (no rendering that depends on randomness or the current time)",
+      description: CRITERION_TEXT.determinism,
       weight: 0.2,
     },
     {
       id: "a11y",
-      description:
-        "Text is readable and it does not rely on color alone. Basic structure (headings, labels) is present",
+      description: CRITERION_TEXT.a11y,
       weight: 0.15,
     },
     {
       id: "schema_inferability",
-      description: "The structure can be parameterized and a typed schema (props) can be extracted",
+      description: CRITERION_TEXT.schema_inferability,
       weight: 0.2,
     },
     {
       id: "generality",
-      description: "It is general enough to be reused with other data and time ranges, not a one-off",
+      description: CRITERION_TEXT.generality,
       weight: 0.15,
     },
   ],
