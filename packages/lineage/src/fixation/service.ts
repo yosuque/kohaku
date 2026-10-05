@@ -10,6 +10,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import { FIXATION_PROPOSAL_SCAN_WINDOW } from "../constants.js";
 import type { ActorKind } from "../events.js";
+import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 
@@ -76,21 +77,16 @@ export interface FixationErrorContext {
 
 /**
  * Fires opts.onError fire-and-forget, swallowing any synchronous throw from the hook itself (an
- * observation-only hook must never mask or replace the caller's own error/result). Deliberately local (not
- * shared with promotion/service.ts's notifyPromotionError) because the two modules' contexts differ in
- * shape (intentHash vs. artifactId) and fixation/service.ts has no existing dependency on promotion/service.ts.
+ * observation-only hook must never mask or replace the caller's own error/result). Shares its implementation
+ * with promotion's notifyPromotionError through the generic `notifyFailOpen`; only the context type differs
+ * (intentHash vs. artifactId).
  */
 export function notifyFixationError(
   onError: ((ctx: FixationErrorContext, error: unknown) => void) | undefined,
   ctx: FixationErrorContext,
   error: unknown,
 ): void {
-  if (onError == null) return;
-  try {
-    onError(ctx, error);
-  } catch {
-    // Swallowed: an observability-only hook must not affect the caller's control flow.
-  }
+  notifyFailOpen(onError, ctx, error);
 }
 
 export interface FixationProposal {

@@ -1,3 +1,5 @@
+import { notifyFailOpen } from "../fail-open.js";
+
 /**
  * The call sites `createPromotions`' `onError` hook may fire from, named for the observability hook:
  * - `promotion.publish.audit` / `promotion.unpublish.audit`: the fail-open `component.published` /
@@ -43,9 +45,8 @@ export interface PromotionErrorContext {
 
 /**
  * Fires opts.onError fire-and-forget, swallowing any synchronous throw from the hook itself (an
- * observation-only hook must never mask or replace the caller's own error/result). Deliberately local
- * (not imported from composer's fireObserverHook) because lineage does not depend on composer (dependency
- * direction). Exported so promotion/nomination.ts (the tenant-mismatch skip, #10) can share the same
+ * observation-only hook must never mask or replace the caller's own error/result); see `notifyFailOpen`.
+ * Exported so promotion/nomination.ts (the tenant-mismatch skip, #10) can share the same
  * fire-and-forget discipline rather than duplicating it.
  */
 export function notifyPromotionError(
@@ -53,10 +54,5 @@ export function notifyPromotionError(
   ctx: PromotionErrorContext,
   error: unknown,
 ): void {
-  if (onError == null) return;
-  try {
-    onError(ctx, error);
-  } catch {
-    // Swallowed: an observability-only hook must not affect publish/reconcile's own control flow.
-  }
+  notifyFailOpen(onError, ctx, error);
 }
