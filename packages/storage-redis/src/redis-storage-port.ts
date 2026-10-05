@@ -1,6 +1,6 @@
 import type { FixationRecord, PromotionState, StoragePort, UISpec } from "@kohaku-ui/spec-core";
 import { normalizeTenant } from "@kohaku-ui/spec-core";
-import type { Redis } from "ioredis";
+import type { ChainableCommander, Redis } from "ioredis";
 import { createRedisConnection } from "./connection.js";
 import { DEFAULT_KEY_PREFIX, type RedisKeys, redisKeys } from "./keys.js";
 import { indexValues, readLineage, readLineagePage } from "./lineage.js";
@@ -165,16 +165,16 @@ export function createRedisStoragePort(options: RedisStoragePortOptions): RedisS
     async putPromotionStates(states) {
       if (states.length === 0) return;
       await ready();
-      const seqs = await nextSeqs(redis, keys.promotionSeq, states.length);
-      const multi = redis.multi();
-      states.forEach((state, i) => {
-        const key = keys.promotion(state.tenant, state.artifactId);
-        multi.set(key, JSON.stringify(state));
-        multi.zadd(keys.promotionIndex(undefined), "NX", seqs[i]!, key);
-        if (normalizeTenant(state.tenant) != null)
-          multi.zadd(keys.promotionIndex(state.tenant), "NX", seqs[i]!, key);
-      });
-      await multi.exec();
+      await putIndexedMany(
+        redis,
+        keys.promotionSeq,
+        states.map((state) => ({
+          key: keys.promotion(state.tenant, state.artifactId),
+          tenant: state.tenant,
+          value: state,
+        })),
+        keys.promotionIndex,
+      );
     },
     async listPromotionStates(tenant) {
       await ready();
@@ -231,10 +231,40 @@ async function putIndexed(
 ): Promise<void> {
   const seq = await redis.incr(seqKey);
   const multi = redis.multi();
+  queueIndexed(multi, seq, key, tenant, indexKey, value);
+  await multi.exec();
+}
+
+/**
+ * `putIndexed` for a batch: reserves one consecutive block of sequence numbers (a single INCRBY), then
+ * writes every record in one MULTI. The caller returns early on an empty batch.
+ */
+async function putIndexedMany(
+  redis: Redis,
+  seqKey: string,
+  entries: readonly { key: string; tenant: string | undefined; value: unknown }[],
+  indexKey: (tenant: string | undefined) => string,
+): Promise<void> {
+  const seqs = await nextSeqs(redis, seqKey, entries.length);
+  const multi = redis.multi();
+  entries.forEach((entry, i) => {
+    queueIndexed(multi, seqs[i]!, entry.key, entry.tenant, indexKey, entry.value);
+  });
+  await multi.exec();
+}
+
+/** Queues one record's SET plus its all-tenants / per-tenant index entries on `multi`. */
+function queueIndexed(
+  multi: ChainableCommander,
+  seq: number,
+  key: string,
+  tenant: string | undefined,
+  indexKey: (tenant: string | undefined) => string,
+  value: unknown,
+): void {
   multi.set(key, JSON.stringify(value));
   multi.zadd(indexKey(undefined), "NX", seq, key);
   if (normalizeTenant(tenant) != null) multi.zadd(indexKey(tenant), "NX", seq, key);
-  await multi.exec();
 }
 
 /** Reads every record an index points at, in index (first-insertion) order. */
