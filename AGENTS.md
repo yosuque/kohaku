@@ -20,7 +20,7 @@ pnpm dev                     # sample-api (:8787) + sample-web (:5173) together
 pnpm docs:build              # documentation site generated from docs/ (apps/docs-site; nothing there is content — edit docs/*.md)
 node cli/bin/kohaku.js conformance --self                                    # spec self-check
 node cli/bin/kohaku.js conformance --rest http://localhost:8787/api/kohaku  # REST black-box check
-node cli/bin/kohaku.js init --from <data.csv> --out <dir>   # Zero-Port quickstart project
+node cli/bin/kohaku.js init --from <data.csv> --out <dir>   # Zero-Port quickstart project (the generated project resolves the published `^<CLI_VERSION>`, so a template change that depends on an unpublished API is a type error until 0.4.1 ships; pack-smoke verifies the tarballs, so CI does not show it)
 node cli/bin/kohaku.js init --mcp --from <data.csv> --out <dir>   # same, plus a stdio + Streamable HTTP MCP front door and a Claude Desktop config
 pnpm --filter @kohaku-ui/mcp-renderer run build       # tsc + the core-only single-file renderer build (dist/renderer.html)
 pnpm --filter @kohaku-ui-sample/mcp build:renderer   # single-file build of the shared renderer for MCP
