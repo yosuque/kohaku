@@ -2,7 +2,7 @@
 
 English | [日本語](why-kohaku.ja.md)
 
-kohaku is the governance layer that takes Generative UI to production: the same request always gets the same screen, no row of your data ever enters the model's context, every screen is on an audit trail, and whatever the model invents has to pass review before it becomes a part of your product. It is not a faster way to generate screens.
+kohaku is the governance layer that takes Generative UI to production: the same request on the same data version always gets the same screen, no row of your data ever enters the model's context, every screen is on an audit trail, and whatever the model invents has to pass review before it becomes a part of your product. It is not a faster way to generate screens.
 
 If you evaluate Generative UI on "how quickly can the model draw something", most tools look alike. kohaku is built for the questions that come after the demo: *Will it show the same thing tomorrow? Can I audit what it showed? What happens when the model is wrong?*
 
