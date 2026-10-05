@@ -12,7 +12,13 @@ import {
   type SpecPatch,
   type UISpec,
 } from "@kohaku-ui/spec-core";
-import { assembleSpec, cacheLabelOf, postAndValidate, shouldPersist } from "./assemble.js";
+import {
+  assembleSpec,
+  cacheLabelOf,
+  postAndValidate,
+  provenanceStampsOf,
+  shouldPersist,
+} from "./assemble.js";
 import { notifyBudgetUsage } from "./budget.js";
 import { COMPOSER_ID } from "./constants.js";
 import type { ComposeContext, ComposeErrorContext, ComposePolicy, FixedSpecSource } from "./context.js";
@@ -389,10 +395,7 @@ async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Pro
     events: template.events,
     tier: "L0",
     cache: cacheLabel,
-    ...(ctx.policy?.generatorVersion != null ? { generatorVersion: ctx.policy.generatorVersion } : {}),
-    ...(ctx.policy?.designSystem?.kit != null
-      ? { kit: { id: ctx.policy.designSystem.kit.id, version: ctx.policy.designSystem.kit.version } }
-      : {}),
+    ...provenanceStampsOf(ctx.policy),
     // Carry the fixed template's state over to the delivered Spec (preserve visibleWhen's initial state).
     ...(template.state != null ? { state: template.state } : {}),
   });
@@ -421,10 +424,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
       tier: outcome.tier,
       cache: cacheLabel,
       ...(outcome.model != null ? { model: outcome.model } : {}),
-      ...(ctx.policy?.generatorVersion != null ? { generatorVersion: ctx.policy.generatorVersion } : {}),
-      ...(ctx.policy?.designSystem?.kit != null
-        ? { kit: { id: ctx.policy.designSystem.kit.id, version: ctx.policy.designSystem.kit.version } }
-        : {}),
+      ...provenanceStampsOf(ctx.policy),
     });
     return postAndValidate(assembled, refs, ctx);
   }
