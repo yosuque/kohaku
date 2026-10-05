@@ -16,13 +16,11 @@ import {
   negotiateSpec,
   type PreparedCompose,
   prepareCompose,
-  toTraceInput,
+  reportHardFailure,
 } from "./compose.js";
 import type { ComposeContext, ResolvedRefs } from "./context.js";
 import { resolveEntryContext, resolveTierLlm } from "./context.js";
-import { reportComposeError } from "./observer.js";
 import { runGeneration } from "./single-flight.js";
-import { traceIdentity } from "./trace-identity.js";
 
 /**
  * The minimum wall-clock interval, in milliseconds, between two provisional-patch emissions during
@@ -81,8 +79,7 @@ export async function* composeStream(
     // 1. Cache hit: complete in one event with final:true, the Spec with negotiate applied.
     if (prepared.cached != null) {
       const result = finish(prepared.cached.spec, prepared.cached.trace, ctx);
-      yield { kind: "spec", spec: result.spec, final: true, refs };
-      yield { kind: "done", result };
+      for (const event of finalEvents(result, refs)) yield event;
       return;
     }
 
@@ -95,8 +92,7 @@ export async function* composeStream(
     if (fixed != null) {
       const { spec, trace } = await runGeneration(prepared, ctx, { generate: generateSpec });
       const result = finish(spec, trace, ctx);
-      yield { kind: "spec", spec: result.spec, final: true, refs };
-      yield { kind: "done", result };
+      for (const event of finalEvents(result, refs)) yield event;
       return;
     }
 
@@ -201,17 +197,21 @@ export async function* composeStream(
   } catch (e) {
     // Notify the observation hook of a hard failure (whether before or after skeleton emission) and re-throw.
     // An L1/L2 failure after skeleton emission does not reach here because buildFallbackSpec returns a normal-path Spec.
-    reportComposeError(
-      ctx,
-      {
-        phase: "hard",
-        input: toTraceInput(input),
-        ...traceIdentity(opts),
-      },
-      e,
-    );
+    reportHardFailure(ctx, input, opts, e);
     throw e;
   }
+}
+
+/**
+ * The two events of a one-shot completion (cache hit / L0 / fixation short-circuit): the final Spec
+ * (final=true) followed by done. Returned as an array rather than delegated to with `yield*`, so each event is
+ * still yielded by the generator itself.
+ */
+function finalEvents(result: ComposeResult, refs: string[]): ComposeStreamInternalEvent[] {
+  return [
+    { kind: "spec", spec: result.spec, final: true, refs },
+    { kind: "done", result },
+  ];
 }
 
 /**

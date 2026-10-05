@@ -185,15 +185,7 @@ export async function compose(
     return finish(spec, trace, ctx);
   } catch (e) {
     // Notify the observation hook of a hard failure (a normalize / reference-resolution / final-validation exception) and re-throw.
-    reportComposeError(
-      ctx,
-      {
-        phase: "hard",
-        input: toTraceInput(input),
-        ...traceIdentity(opts),
-      },
-      e,
-    );
+    reportHardFailure(ctx, input, opts, e);
     throw e;
   }
 }
@@ -525,6 +517,27 @@ export function finish(spec: UISpec, trace: ComposeTrace, ctx: ComposeContext): 
 /** Normalizes ComposeInput into the form placed on trace/observer (drops the intent body, keeps only kind). */
 export function toTraceInput(input: ComposeInput): SemanticInput | { kind: "intent" } {
   return input.kind === "intent" ? { kind: "intent" } : input;
+}
+
+/**
+ * Notifies the observation hook of a hard failure (a normalize / reference-resolution / final-validation
+ * exception) for compose and composeStream; the caller re-throws.
+ */
+export function reportHardFailure(
+  ctx: ComposeContext,
+  input: ComposeInput,
+  opts: ComposeOptions,
+  e: unknown,
+): void {
+  reportComposeError(
+    ctx,
+    {
+      phase: "hard",
+      input: toTraceInput(input),
+      ...traceIdentity(opts),
+    },
+    e,
+  );
 }
 
 /** Sums the attempts' usage. undefined if not a single attempt has usage. */
