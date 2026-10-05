@@ -1,7 +1,12 @@
 import type { ComposeTrace } from "@kohaku-ui/composer";
 import type { UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
-import { recordComposedResult, recordViewFallback, type ViewRecorder } from "../src/view-recorder.js";
+import {
+  recordComposedAndFallback,
+  recordComposedResult,
+  recordViewFallback,
+  type ViewRecorder,
+} from "../src/view-recorder.js";
 
 const SPEC: UISpec = {
   kohaku: "0.1",
@@ -89,5 +94,130 @@ describe("recordViewFallback", () => {
     await recordViewFallback(recorder, FALLBACK_SPEC, { surface: "web" });
     expect(fallback).toHaveBeenCalledTimes(1);
     expect("correlationId" in fallback.mock.calls[0]![0]).toBe(false);
+  });
+});
+
+describe("recordComposedAndFallback", () => {
+  type ComposedArgs = Parameters<ViewRecorder["composed"]>[0];
+
+  function recording(): {
+    recorder: ViewRecorder;
+    calls: string[];
+    composed: ComposedArgs[];
+    fallback: FallbackArgs[];
+  } {
+    const calls: string[] = [];
+    const composed: ComposedArgs[] = [];
+    const fallback: FallbackArgs[] = [];
+    return {
+      calls,
+      composed,
+      fallback,
+      recorder: {
+        async composed(args) {
+          calls.push("composed");
+          composed.push(args);
+        },
+        async fallback(args) {
+          calls.push("fallback");
+          fallback.push(args);
+        },
+        async interacted() {},
+      },
+    };
+  }
+
+  it("does nothing when no recorder is wired", async () => {
+    await expect(
+      recordComposedAndFallback(undefined, { spec: FALLBACK_SPEC, trace: traceOf() }, { surface: "web" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("records composed only for a spec without a fallback, with the REST-shaped keys in order", async () => {
+    const { recorder, composed, fallback } = recording();
+    const trace = traceOf({ correlationId: "req-1" });
+    await recordComposedAndFallback(
+      recorder,
+      { spec: SPEC, trace },
+      { surface: "web", specHash: "sha256:abc", sessionId: "s-1", tenant: "acme" },
+    );
+    expect(composed).toHaveLength(1);
+    expect(Object.keys(composed[0]!)).toEqual([
+      "spec",
+      "trace",
+      "surface",
+      "specHash",
+      "sessionId",
+      "tenant",
+    ]);
+    expect(composed[0]).toEqual({
+      spec: SPEC,
+      trace,
+      surface: "web",
+      specHash: "sha256:abc",
+      sessionId: "s-1",
+      tenant: "acme",
+    });
+    expect(fallback).toEqual([]);
+  });
+
+  it("records composed then fallback, the fallback carrying specHash, session meta and the trace's correlationId", async () => {
+    const { recorder, calls, composed, fallback } = recording();
+    const trace = traceOf({ correlationId: "req-2" });
+    await recordComposedAndFallback(
+      recorder,
+      { spec: FALLBACK_SPEC, trace },
+      { surface: "web", specHash: "sha256:abc", sessionId: "s-1", tenant: "acme" },
+    );
+    expect(calls).toEqual(["composed", "fallback"]);
+    expect(composed).toHaveLength(1);
+    expect(fallback).toHaveLength(1);
+    expect(Object.keys(fallback[0]!)).toEqual([
+      "spec",
+      "reason",
+      "kind",
+      "surface",
+      "specHash",
+      "sessionId",
+      "tenant",
+      "correlationId",
+    ]);
+    expect(fallback[0]).toEqual({
+      spec: FALLBACK_SPEC,
+      reason: "generation failed",
+      kind: "generation",
+      surface: "web",
+      specHash: "sha256:abc",
+      sessionId: "s-1",
+      tenant: "acme",
+      correlationId: "req-2",
+    });
+  });
+
+  it("omits every absent optional key (MCP shape: surface only, no correlationId on the trace)", async () => {
+    const { recorder, composed, fallback } = recording();
+    await recordComposedAndFallback(
+      recorder,
+      { spec: FALLBACK_SPEC, trace: traceOf() },
+      { surface: "mcp-app" },
+    );
+    expect(Object.keys(composed[0]!)).toEqual(["spec", "trace", "surface"]);
+    expect(Object.keys(fallback[0]!)).toEqual(["spec", "reason", "kind", "surface"]);
+  });
+
+  it("does not record the fallback when composed rejects (the rejection propagates to the caller)", async () => {
+    const boom = new Error("composed failed");
+    const fallbackSpy = vi.fn(async () => {});
+    const recorder: ViewRecorder = {
+      async composed() {
+        throw boom;
+      },
+      fallback: fallbackSpy,
+      async interacted() {},
+    };
+    await expect(
+      recordComposedAndFallback(recorder, { spec: FALLBACK_SPEC, trace: traceOf() }, { surface: "web" }),
+    ).rejects.toBe(boom);
+    expect(fallbackSpy).not.toHaveBeenCalled();
   });
 });

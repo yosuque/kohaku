@@ -15,8 +15,10 @@ import { errorBody } from "../errors.js";
 import type { KohakuHostDeps } from "../types.js";
 import {
   COMPOSE_FAILED_MESSAGE,
+  capabilityTtl,
   composeForRest,
   intentResolutionFailure,
+  issueSpecCapability,
   resolveFixatedForRest,
 } from "./compose-pipeline.js";
 import { ComposeBodySchema, EventsBodySchema } from "./schemas.js";
@@ -134,7 +136,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       principal,
       deps,
       call: { requestId, endpoint: "events", signal: c.req.raw.signal, traceContext },
-      // /events-specific: record interacted before recordComposed (preserve execution order).
+      // /events-specific: record interacted before the composed record (preserve execution order).
       beforeRecord: async () => {
         await deps.recorder?.interacted({
           intentHash: current.hash,
@@ -160,20 +162,20 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
  * A declared operation whose `paramsSchema` failed validation is omitted from the manifest on its own (see
  * `buildActionManifest`). Fail-open on a rejected `operationIndex` (`listOperations()` itself throwing): reported to the observability hook and treated as "no manifest this
  * time" rather than failing the whole compose response, the same fail-open posture
- * `issueSpecCapabilitySafely` already takes for capability issuance under the identical failure.
+ * `issueSpecCapabilitySafely` already takes for capability issuance under the identical failure. That
+ * fail-open build is host-core's `buildActionManifestSafely`, shared with the MCP profile's compose tool; this
+ * wrapper only supplies the REST profile's own index and endpoint name for the report.
  */
-async function actionsFor(
+function actionsFor(
   deps: KohakuHostDeps,
   spec: UISpec,
   call: Pick<RestCallContext, "endpoint" | "requestId">,
 ): Promise<hostCore.ActionManifest | undefined> {
-  try {
-    const index = await operationIndex(deps);
-    return hostCore.buildActionManifest(spec, index);
-  } catch (e) {
-    await reportHostError(deps, call.endpoint, call.requestId, e);
-    return undefined;
-  }
+  return hostCore.buildActionManifestSafely(
+    () => operationIndex(deps),
+    spec,
+    (e) => reportHostError(deps, call.endpoint, call.requestId, e),
+  );
 }
 
 /**
@@ -218,9 +220,13 @@ async function resolveComposeRequest(
 
 /**
  * Shared skeleton for the latter half of /compose and /events: composeForRest -> capability issuance ->
- * audit recording (fail-open) -> JSON response.
+ * audit recording (fail-open) -> action manifest -> JSON response. The step order is this REST route's own
+ * (the MCP profile and the stream route order the same steps differently); the steps themselves are host-core's
+ * order-neutral helpers (issueSpecCapabilitySafely via issueSpecCapability, recordComposedResult +
+ * recordComposedAndFallback, buildActionManifestSafely via actionsFor).
  * Failures are COMPOSE_FAILED 500. The endpoint name (call.endpoint) is passed as-is to logs / error reporting.
- * beforeRecord runs inside recordComposedResult's record callback, before recordComposed (for /events' interacted).
+ * beforeRecord runs inside recordComposedResult's record callback, before recordComposedAndFallback
+ * (for /events' interacted).
  */
 async function deliverComposed(
   c: Context,
@@ -252,12 +258,15 @@ async function deliverComposed(
       result,
       async () => {
         await beforeRecord?.();
-        // Compute specHash exactly once and share it between recordComposed and recordFallbackIfAny
+        // Compute specHash exactly once and share it between the composed and fallback records
         // (mirroring finishStream): without it, each independently hashes the same Spec when a fallback
         // occurred (view.composed always runs; view.fallback additionally runs only on a fallback Spec).
         const specHash = await computeSpecHash(result.spec);
-        await recordComposed(deps, result, session, specHash);
-        await recordFallbackIfAny(deps, result, session, specHash);
+        await hostCore.recordComposedAndFallback(deps.recorder, result, {
+          surface: session.surface,
+          specHash,
+          ...sessionMeta(session),
+        });
       },
       report,
     );
@@ -437,92 +446,9 @@ async function streamGenerated(
 }
 
 /**
- * Centralizes the recorder.composed call in one place (shared by /compose, /events, and finishStream; prevents
- * missing spreads of session metadata (sessionId / tenant); isomorphic to the Python implementation's
- * _record_composed). specHash is passed only when the streaming path shares its precomputed value; the
- * non-streaming path computes it exactly once inside the recorder implementation.
- */
-async function recordComposed(
-  deps: KohakuHostDeps,
-  result: ComposeResult,
-  session: SessionContext,
-  specHash?: string,
-): Promise<void> {
-  await deps.recorder?.composed({
-    spec: result.spec,
-    trace: result.trace,
-    surface: session.surface,
-    ...(specHash != null ? { specHash } : {}),
-    ...sessionMeta(session),
-  });
-}
-
-/**
- * Records view.fallback when the spec includes a fallback (deterministic downgrade on generation failure /
- * capability-negotiation downgrade). Delegates the fallback-detection rule (spec.provenance.fallback, not the
- * trace) to host-core's recordViewFallback, shared with the MCP profile's composeAndAudit, so both profiles
- * agree on when a fallback is recorded.
- */
-async function recordFallbackIfAny(
-  deps: KohakuHostDeps,
-  result: ComposeResult,
-  session: SessionContext,
-  specHash?: string,
-): Promise<void> {
-  await hostCore.recordViewFallback(deps.recorder, result.spec, {
-    surface: session.surface,
-    ...(specHash != null ? { specHash } : {}),
-    ...sessionMeta(session),
-    ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
-  });
-}
-
-/** The effective capability TTL: deps.capabilityTtlSeconds when set, otherwise host-core's shared default. */
-function capabilityTtl(deps: KohakuHostDeps): number {
-  return deps.capabilityTtlSeconds ?? hostCore.DEFAULT_CAPABILITY_TTL_SECONDS;
-}
-
-/**
- * Issues a capability matching the Spec's declarations (components' read references + the /binding/action
- * write-through path). Delegates to host-core's issueSpecCapabilitySafely, the fail-closed wrapper shared with
- * the MCP profile (host-mcp-apps' composeAndPackage), which in turn consumes issueCapabilityForSpec / spec-core's
- * collectCapabilityScopes (the single source of truth) so both profiles agree on the issuance rule.
- *
- * Write scopes are additionally restricted to the DomainPort's listOperations() names (hardening against a
- * hallucinated/injected action.invoke action name becoming a bearer write scope): the allowed set is memoized
- * per deps below (listOperations is async and must not be awaited on every compose). issueSpecCapabilitySafely
- * reports a dropped action via the endpoint's onError hook as a WriteScopeDroppedError, and — if listOperations
- * itself rejects — still issues the capability but fail-closed for writes (an empty allowed set), reporting the
- * rejection the same way; delivery proceeds either way.
- */
-async function issueSpecCapability(
-  spec: UISpec,
-  principal: Principal,
-  deps: KohakuHostDeps,
-  call: RestCallContext,
-): Promise<string> {
-  return hostCore.issueSpecCapabilitySafely(
-    deps.authz,
-    principal,
-    spec,
-    () => allowedActions(deps),
-    (e) => reportHostError(deps, call.endpoint, call.requestId, e),
-    capabilityTtl(deps),
-  );
-}
-
-/**
- * The write-scope filter for capability issuance, derived from the same per-deps `OperationIndex` the action
- * gate and the `actions` manifest use (routes/shared.ts's `operationIndex`), so the three can never disagree
- * about which actions exist and `listOperations()` is read (and memoized) once.
- */
-function allowedActions(deps: KohakuHostDeps): Promise<ReadonlySet<string>> {
-  return hostCore.allowedActionsFromIndex(() => operationIndex(deps))();
-}
-
-/**
  * SSE stream termination handling. Records lineage exactly once against the final Spec (the skeleton is not
- * recorded), writes the done event ({specHash, tier, cache}), and terminates.
+ * recorded; host-core's recordComposedResult + recordComposedAndFallback, the same pair deliverComposed uses),
+ * writes the done event ({specHash, tier, cache}), and terminates.
  */
 async function finishStream(
   deps: KohakuHostDeps,
@@ -541,10 +467,12 @@ async function finishStream(
   // received phase:"cancelled" from the composer.
   await hostCore.recordComposedResult(
     result,
-    async () => {
-      await recordComposed(deps, result, session, specHash);
-      await recordFallbackIfAny(deps, result, session, specHash);
-    },
+    () =>
+      hostCore.recordComposedAndFallback(deps.recorder, result, {
+        surface: session.surface,
+        specHash,
+        ...sessionMeta(session),
+      }),
     (e) => reportHostError(deps, call.endpoint, call.requestId, e),
   );
   await stream.writeSSE({
