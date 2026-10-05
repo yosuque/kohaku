@@ -467,3 +467,42 @@ def summarize_usage(
             row_for(e).unfixated += 1
 
     return sorted(rows.values(), key=lambda r: (r.day, r.tenant.encode("utf-16-be")))
+
+
+def merge_usage_rows(a: Sequence[UsageRow], b: Sequence[UsageRow]) -> list[UsageRow]:
+    """Add two row lists key by key (`day`, `tenant`) (port of TS `mergeUsageRows`).
+
+    Rows with the same key are summed field by field, the rest are kept; the result is ordered like
+    `summarize_usage`'s. Neither input is modified (rows are copied before being accumulated into). It
+    makes the summary foldable: merging the summaries of two pages equals summarizing both together.
+    """
+    merged: dict[tuple[str, str], UsageRow] = {}
+    for row in [*a, *b]:
+        key = (row.day, row.tenant)
+        into = merged.get(key)
+        if into is None:
+            merged[key] = UsageRow(
+                day=row.day,
+                tenant=row.tenant,
+                composed=row.composed,
+                cache=dict(row.cache),
+                tiers=dict(row.tiers),
+                l2Generated=row.l2Generated,
+                fallbacks=row.fallbacks,
+                tokens=dict(row.tokens),
+                fixated=row.fixated,
+                unfixated=row.unfixated,
+            )
+            continue
+        into.composed += row.composed
+        for k in ("hit", "miss", "bypass", "fixated"):
+            into.cache[k] += row.cache[k]
+        for k in ("L0", "L1", "L2"):
+            into.tiers[k] += row.tiers[k]
+        into.l2Generated += row.l2Generated
+        into.fallbacks += row.fallbacks
+        into.tokens["input"] += row.tokens["input"]
+        into.tokens["output"] += row.tokens["output"]
+        into.fixated += row.fixated
+        into.unfixated += row.unfixated
+    return sorted(merged.values(), key=lambda r: (r.day, r.tenant.encode("utf-16-be")))

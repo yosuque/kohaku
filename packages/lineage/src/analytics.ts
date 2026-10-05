@@ -582,9 +582,44 @@ export function summarizeUsage(
     }
   }
 
-  return [...rows.values()].sort((a, b) =>
-    a.day !== b.day ? (a.day < b.day ? -1 : 1) : a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0,
-  );
+  return [...rows.values()].sort(compareUsageRows);
+}
+
+function compareUsageRows(a: UsageRow, b: UsageRow): number {
+  return a.day !== b.day ? (a.day < b.day ? -1 : 1) : a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0;
+}
+
+/**
+ * Adds two row lists key by key (`day`, `tenant`): rows with the same key are summed field by field, the rest
+ * are kept; the result is ordered like `summarizeUsage`'s. Neither input is modified. It makes the summary
+ * foldable: `mergeUsageRows(summarizeUsage(pageA), summarizeUsage(pageB))` equals `summarizeUsage` of both pages
+ * together, so an exporter can page through a whole log and keep only the (small) row list in memory.
+ */
+export function mergeUsageRows(a: readonly UsageRow[], b: readonly UsageRow[]): UsageRow[] {
+  const merged = new Map<string, UsageRow>();
+  for (const row of [...a, ...b]) {
+    const key = `${row.day}\u0000${row.tenant}`;
+    const into = merged.get(key);
+    if (into == null) {
+      merged.set(key, {
+        ...row,
+        cache: { ...row.cache },
+        tiers: { ...row.tiers },
+        tokens: { ...row.tokens },
+      });
+      continue;
+    }
+    into.composed += row.composed;
+    for (const k of ["hit", "miss", "bypass", "fixated"] as const) into.cache[k] += row.cache[k];
+    for (const k of ["L0", "L1", "L2"] as const) into.tiers[k] += row.tiers[k];
+    into.l2Generated += row.l2Generated;
+    into.fallbacks += row.fallbacks;
+    into.tokens.input += row.tokens.input;
+    into.tokens.output += row.tokens.output;
+    into.fixated += row.fixated;
+    into.unfixated += row.unfixated;
+  }
+  return [...merged.values()].sort(compareUsageRows);
 }
 
 /** Nearest-rank percentile of an ascending-sorted array (null if empty). */

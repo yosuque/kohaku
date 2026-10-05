@@ -1,7 +1,7 @@
 /**
  * kohaku usage export: the CSV format (fixed header, RFC 4180 quoting), --data-dir (a FileStoragePort written
  * into a mkdtemp directory, exhaustive paging over more than one page), --rest (Hono's app.request as the
- * client transport, scoped by the x-kohaku-tenant header), and usage errors (exit 2 via EvidenceUsageError).
+ * client transport, scoped by the x-kohaku-tenant header), and usage errors (exit 2 via CliUsageError).
  */
 
 import { spawnSync } from "node:child_process";
@@ -25,6 +25,7 @@ import { createFileStoragePort, createMemoryStoragePort } from "@kohaku-ui/stora
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { EvidenceUsageError } from "../src/evidence/window.js";
+import { CliUsageError } from "../src/lineage-window.js";
 import { formatUsageCsv, USAGE_CSV_HEADER } from "../src/usage/csv.js";
 import { runUsageExport } from "../src/usage/export.js";
 
@@ -150,6 +151,24 @@ describe("formatUsageCsv", () => {
     expect(csv.split("\n")[1]).toBe("2026-07-01,acme,9,1,2,3,4,5,6,7,8,10,11,12,13,14");
   });
 
+  it("prefixes a tenant that starts with a formula character with an apostrophe (CSV injection)", () => {
+    const csv = formatUsageCsv([
+      row({ tenant: "=HYPERLINK(1)" }),
+      row({ tenant: "+1" }),
+      row({ tenant: "-1" }),
+      row({ tenant: "@SUM" }),
+      row({ tenant: "\tx" }),
+      row({ tenant: "a=b" }), // not at the start: untouched
+      row({ tenant: "=a,b" }), // the guard and the RFC 4180 quoting compose
+    ]);
+    const tenants = csv
+      .split("\n")
+      .slice(1, 8)
+      .map((line) => line.split(",")[1]);
+    expect(tenants).toEqual(["'=HYPERLINK(1)", "'+1", "'-1", "'@SUM", "'\tx", "a=b", "\"'=a"]);
+    expect(csv).toContain('2026-07-01,"\'=a,b",0');
+  });
+
   it("quotes a tenant containing a comma, a double quote or a newline (RFC 4180)", () => {
     const csv = formatUsageCsv([
       row({ tenant: "a,b" }),
@@ -217,6 +236,42 @@ describe("kohaku usage export --data-dir", () => {
     expect(rows[0]?.composed).toBe(1200);
   });
 
+  it("refuses a page cursor that does not advance instead of paging forever", async () => {
+    const dataDir = tmp("kohaku-usage-data-");
+    const stuck: StoragePort = {
+      ...createMemoryStoragePort(),
+      async pageLineage() {
+        return { events: [composed({ ts: "2026-07-03T00:00:00.000Z" })], nextCursor: "same" };
+      },
+    };
+    await expect(runUsageExport({ dataDir, storage: stuck, ...window })).rejects.toThrow(/same nextCursor/);
+  });
+
+  it("folds pages as they arrive: the rows equal one pass over every event", async () => {
+    const dataDir = tmp("kohaku-usage-data-");
+    const many: LineageEventRecord[] = [];
+    for (let i = 0; i < 1500; i++) {
+      many.push(
+        composed({
+          ts: `2026-07-0${(i % 2) + 1}T00:00:00.000Z`,
+          tenant: i % 3 === 0 ? "acme" : "globex",
+          tier: "L2",
+          usage: { inputTokens: 2, outputTokens: 1 },
+        }),
+      );
+    }
+    await seed(createFileStoragePort(dataDir), many);
+    const { rows } = await runUsageExport({ dataDir, ...window });
+    expect(rows.map((r) => `${r.day}/${r.tenant}`)).toEqual([
+      "2026-07-01/acme",
+      "2026-07-01/globex",
+      "2026-07-02/acme",
+      "2026-07-02/globex",
+    ]);
+    expect(rows.reduce((n, r) => n + r.composed, 0)).toBe(1500);
+    expect(rows.reduce((n, r) => n + r.tokens.input, 0)).toBe(3000);
+  });
+
   it("yields the header only for an empty window", async () => {
     const dataDir = tmp("kohaku-usage-data-");
     const { rows, text } = await runUsageExport({ dataDir, ...window });
@@ -274,13 +329,69 @@ describe("kohaku usage export usage errors", () => {
     ).rejects.toBeInstanceOf(EvidenceUsageError);
   });
 
-  it("requires exactly one of --data-dir / --rest", async () => {
+  it("requires exactly one of --data-dir / --rest (usage errors)", async () => {
     const w = { since: "2026-07-01", until: "2026-07-31" };
     await expect(runUsageExport(w)).rejects.toThrow(/Specify either --data-dir/);
+    await expect(runUsageExport(w)).rejects.toBeInstanceOf(CliUsageError);
     await expect(runUsageExport({ ...w, dataDir: "x", rest: "http://localhost:1" })).rejects.toThrow(
       /only one of --data-dir or --rest/,
     );
+    await expect(runUsageExport({ ...w, dataDir: "x", rest: "http://localhost:1" })).rejects.toBeInstanceOf(
+      CliUsageError,
+    );
   });
+
+  it("rejects a --data-dir that does not exist instead of creating it and exporting nothing", async () => {
+    const missing = join(tmp("kohaku-usage-missing-"), "no-such-dir");
+    const w = { since: "2026-07-01", until: "2026-07-31" };
+    await expect(runUsageExport({ dataDir: missing, ...w })).rejects.toBeInstanceOf(CliUsageError);
+    await expect(runUsageExport({ dataDir: missing, ...w })).rejects.toThrow(/not an existing directory/);
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  it("the CLI exits 2 for a --data-dir that does not exist", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        bin,
+        "usage",
+        "export",
+        "--data-dir",
+        join(tmp("kohaku-usage-missing-"), "no-such-dir"),
+        "--since",
+        "2026-07-01",
+        "--until",
+        "2026-07-31",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("not an existing directory");
+  }, 30_000);
+
+  it("the CLI exits 2 when --tenant disagrees with the x-kohaku-tenant header", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        bin,
+        "usage",
+        "export",
+        "--rest",
+        "http://127.0.0.1:1/api/kohaku",
+        "--header",
+        "x-kohaku-tenant:acme",
+        "--tenant",
+        "globex",
+        "--since",
+        "2026-07-01",
+        "--until",
+        "2026-07-31",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("conflicts with the x-kohaku-tenant header");
+  }, 30_000);
 
   it("the CLI exits 2 with a message for an invalid --since", () => {
     const result = spawnSync(
@@ -302,10 +413,12 @@ describe("kohaku usage export usage errors", () => {
     expect(result.stderr).toContain("--since must be an ISO 8601 date");
   }, 30_000);
 
-  it("the CLI help states that --rest sees only the session's tenant", () => {
+  it("the CLI help says the header decides the tenant and that no header reads every tenant", () => {
     const result = spawnSync(process.execPath, [bin, "usage", "export", "--help"], { encoding: "utf8" });
     expect(result.status).toBe(0);
-    expect(result.stdout.replace(/\s+/g, " ")).toContain("Only the tenant of the session is visible");
+    const help = result.stdout.replace(/\s+/g, " ");
+    expect(help).toContain("--header decides the tenant");
+    expect(help).toContain("without the header every tenant is read (legacy, unscoped hosts)");
   }, 30_000);
 });
 
@@ -403,5 +516,25 @@ describe("kohaku usage export --rest (in-process host-rest app)", () => {
         ...window,
       }),
     ).rejects.toThrow(/conflicts with the x-kohaku-tenant header/);
+    await expect(
+      runUsageExport({
+        rest: "/api/kohaku",
+        transport,
+        headers: ["x-kohaku-tenant:acme"],
+        tenant: "globex",
+        ...window,
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("rejects a --tenant that has no x-kohaku-tenant header to back it (usage error)", async () => {
+    await expect(
+      runUsageExport({
+        rest: "http://127.0.0.1:1/api/kohaku",
+        tenant: "acme",
+        since: "2026-07-01",
+        until: "2026-07-31",
+      }),
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 });

@@ -2,6 +2,7 @@ export {
   type IntentUsage,
   type L2IntentGap,
   type LineageSummary,
+  mergeUsageRows,
   type SchemaEditGap,
   type SummarizeLineageOptions,
   type SummarizeUsageOptions,

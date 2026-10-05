@@ -1,6 +1,6 @@
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { summarizeLineage, summarizeUsage } from "../src/index.js";
+import { mergeUsageRows, summarizeLineage, summarizeUsage } from "../src/index.js";
 
 // Tests for the pure aggregation summarizeLineage of usage analytics:
 // - view.composed count / tier distribution / cache breakdown / durationMs quantiles / top frequent intents
@@ -499,6 +499,41 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
     expect(summarizeUsage(rest, { bucket: "day" })[0]?.fallbacks).toBe(1);
     // A bare view.fallback with no composed record opens no row at all.
     expect(summarizeUsage([ev("view.fallback", { kind: "generation" })], { bucket: "day" })).toEqual([]);
+  });
+
+  it("mergeUsageRows folds per-page summaries into the same rows as one pass over every event", () => {
+    const events = [
+      metered({ tier: "L2", cache: "miss", tenant: "acme", usage: { inputTokens: 10, outputTokens: 1 } }),
+      metered({ tier: "L1", cache: "hit", tenant: "acme" }),
+      composed({ tier: "L2", cache: "miss", tenant: "acme", fallback: { from: "L2", reason: "x" } }),
+      metered({ tier: "L0", cache: "fixated", tenant: "globex", ts: "2026-07-02T09:00:00.000Z" }),
+      metered({ tier: "L2", cache: "bypass", usage: { inputTokens: 5, outputTokens: 2 } }),
+      ev("intent.fixated", {}, { tenant: "acme" }),
+      ev("intent.unfixated", {}, { tenant: "acme", ts: "2026-07-02T10:00:00.000Z" }),
+      metered({ tier: "L2", cache: "miss", tenant: "acme", usage: { inputTokens: 1, outputTokens: 1 } }),
+    ];
+    const opts = { bucket: "day" } as const;
+    // Any split of the stream into pages gives the whole-stream rows, whichever order the pages arrive in.
+    for (const cut of [1, 3, 5, 7]) {
+      const pages = [events.slice(0, cut), events.slice(cut)];
+      const folded = pages.reduce<ReturnType<typeof summarizeUsage>>(
+        (acc, page) => mergeUsageRows(acc, summarizeUsage(page, opts)),
+        [],
+      );
+      expect(folded).toEqual(summarizeUsage(events, opts));
+    }
+  });
+
+  it("mergeUsageRows does not modify its inputs and tolerates empty lists", () => {
+    const a = summarizeUsage([metered({ tier: "L2", tenant: "acme" })], { bucket: "day" });
+    const b = summarizeUsage([metered({ tier: "L2", tenant: "acme" })], { bucket: "day" });
+    const snapshot = JSON.stringify(a);
+    const merged = mergeUsageRows(a, b);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ composed: 2, l2Generated: 2 });
+    expect(JSON.stringify(a)).toBe(snapshot);
+    expect(mergeUsageRows([], [])).toEqual([]);
+    expect(mergeUsageRows(a, [])).toEqual(a);
   });
 
   it("narrows by tenant / since / until", () => {

@@ -27,6 +27,15 @@ function csvField(value: string | number): string {
 }
 
 /**
+ * The tenant column carries a value the host's callers chose, and a spreadsheet reads a cell that starts with
+ * `=`, `+`, `-` or `@` (or a tab / carriage return) as a formula. A leading apostrophe makes it plain text
+ * there (the usual CSV-injection guard); the quoting above still applies on top.
+ */
+function tenantField(tenant: string): string {
+  return /^[=+\-@\t\r]/.test(tenant) ? `'${tenant}` : tenant;
+}
+
+/**
  * Formats usage rows as CSV: the fixed header, then one line per row (lines end in LF, with a trailing
  * newline). An empty row list yields the header alone.
  */
@@ -36,7 +45,7 @@ export function formatUsageCsv(rows: readonly UsageRow[]): string {
     lines.push(
       [
         r.day,
-        r.tenant,
+        tenantField(r.tenant),
         r.composed,
         r.cache.hit,
         r.cache.miss,

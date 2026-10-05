@@ -13,6 +13,8 @@ from kohaku.lineage import (
     IntentUsage,
     SummarizeLineageOptions,
     SummarizeUsageOptions,
+    UsageRow,
+    merge_usage_rows,
     summarize_lineage,
     summarize_usage,
 )
@@ -375,6 +377,36 @@ def test_usage_counts_fallbacks_from_view_composed_alone() -> None:
     assert summarize_usage(rest)[0].fallbacks == 1  # a REST host's extra view.fallback is not doubled
     # A bare view.fallback with no composed record opens no row at all.
     assert summarize_usage([ev("view.fallback", {"kind": "generation"})]) == []
+
+
+def test_merge_usage_rows_folds_per_page_summaries_into_one_pass_rows() -> None:
+    events = [
+        metered(tier="L2", cache="miss", tenant="acme", usage={"inputTokens": 10, "outputTokens": 1}),
+        metered(tier="L1", cache="hit", tenant="acme"),
+        composed(tier="L2", cache="miss", tenant="acme", fallback={"from": "L2", "reason": "x"}),
+        metered(tier="L0", cache="fixated", tenant="globex", ts="2026-07-02T09:00:00.000Z"),
+        metered(tier="L2", cache="bypass", usage={"inputTokens": 5, "outputTokens": 2}),
+        ev("intent.fixated", {}, tenant="acme"),
+        ev("intent.unfixated", {}, tenant="acme", ts="2026-07-02T10:00:00.000Z"),
+        metered(tier="L2", cache="miss", tenant="acme", usage={"inputTokens": 1, "outputTokens": 1}),
+    ]
+    for cut in (1, 3, 5, 7):
+        folded: list[UsageRow] = []
+        for page in (events[:cut], events[cut:]):
+            folded = merge_usage_rows(folded, summarize_usage(page))
+        assert folded == summarize_usage(events)
+
+
+def test_merge_usage_rows_does_not_modify_its_inputs_and_tolerates_empty_lists() -> None:
+    a = summarize_usage([metered(tier="L2", tenant="acme")])
+    b = summarize_usage([metered(tier="L2", tenant="acme")])
+    before = [(r.composed, r.l2Generated, dict(r.cache)) for r in a]
+    merged = merge_usage_rows(a, b)
+    assert len(merged) == 1
+    assert (merged[0].composed, merged[0].l2Generated) == (2, 2)
+    assert [(r.composed, r.l2Generated, dict(r.cache)) for r in a] == before
+    assert merge_usage_rows([], []) == []
+    assert merge_usage_rows(a, []) == a
 
 
 def test_usage_narrowing_options() -> None:

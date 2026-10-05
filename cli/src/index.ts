@@ -470,8 +470,9 @@ usage
   .option("--data-dir <dir>", "Read from a local StoragePort data directory (mutually exclusive with --rest)")
   .option(
     "--rest <baseUrl>",
-    "Read over REST from a running host (mutually exclusive with --data-dir). Only the tenant of the " +
-      "session is visible: the x-kohaku-tenant --header scopes the request, so export each tenant with its own header",
+    "Read over REST from a running host (mutually exclusive with --data-dir). The x-kohaku-tenant " +
+      "--header decides the tenant (export each tenant with its own header); without the header every " +
+      "tenant is read (legacy, unscoped hosts)",
   )
   .option(
     "--header <name:value>",
@@ -505,7 +506,7 @@ usage
       format: string;
       out?: string;
     }) => {
-      const { EvidenceUsageError } = await import("./evidence/index.js");
+      const { CliUsageError } = await import("./lineage-window.js");
       const { runUsageExport } = await import("./usage/index.js");
       let result: Awaited<ReturnType<typeof runUsageExport>>;
       try {
@@ -520,9 +521,9 @@ usage
           ...(opts.out != null ? { out: opts.out } : {}),
         });
       } catch (e) {
-        // A bad window / format is a usage error (exit 2, like `evidence export`); anything else is 1.
+        // A bad argument (window, format, source, data dir, tenant) is a usage error (exit 2); anything else is 1.
         program.error(e instanceof Error ? e.message : String(e), {
-          exitCode: e instanceof EvidenceUsageError ? 2 : 1,
+          exitCode: e instanceof CliUsageError ? 2 : 1,
         });
         return;
       }

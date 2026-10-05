@@ -13,6 +13,7 @@ from .analytics import (
     SummarizeLineageOptions,
     SummarizeUsageOptions,
     UsageRow,
+    merge_usage_rows,
     summarize_lineage,
     summarize_usage,
 )
@@ -251,6 +252,7 @@ __all__ = [
     "is_terminal",
     "make_event",
     "may_have_projection",
+    "merge_usage_rows",
     "now_iso",
     "query_template_from_wire",
     "sign_bytes",
