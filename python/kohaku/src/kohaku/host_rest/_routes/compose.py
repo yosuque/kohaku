@@ -23,6 +23,7 @@ from kohaku.composer import ComposeOptions, ComposeResult, IntentComposeInput, c
 from kohaku.composer.compose_stream import StreamPatchEvent, StreamSpecEvent
 from kohaku.composer.fixation import FixationCheck
 from kohaku.host_core import (
+    LLM_PROVIDER_UNAVAILABLE_MESSAGE,
     ActionManifestEntry,
     ComposeFixationContext,
     FixationDeliveryHost,
@@ -31,6 +32,7 @@ from kohaku.host_core import (
     IntentSourceIntent,
     IntentSourceNl,
     build_action_manifest,
+    classify_host_error,
     is_typed_host_error,
 )
 from kohaku.host_core import WriteScopeDroppedError as _WriteScopeDroppedError
@@ -549,15 +551,21 @@ async def _compose_stream_body(
 
 
 def _intent_invalid(e: BaseException, request_id: str) -> Response:
-    """Map an Intent-resolution failure to the INTENT_INVALID 422 response body.
+    """Map an Intent-resolution failure to its error response. Port of TS compose.ts's
+    `intentResolutionFailure`.
 
-    Shared by /intent/normalize, /compose, /compose/stream and /events: all four call this with the same
-    two-line mapping (typed host errors pass their own message through; anything else collapses to
-    _INTENT_INVALID_MESSAGE). Reporting the error to the observability hook (report_host_error, endpoint- and
-    trace-context-specific per call site) stays the caller's responsibility — this helper only builds the
-    response.
+    Shared by /intent/normalize, /compose, /compose/stream, /events and /fixations/approve. Intent resolution
+    cannot degrade without an LLM, so an LLM-provider failure (host_core's classify_host_error ->
+    "upstream_unavailable": LlmError PROVIDER / CONFIG / ABORTED) is the operator's problem, not the client's:
+    503 INTERNAL with the fixed LLM_PROVIDER_UNAVAILABLE_MESSAGE. Everything else keeps 422 INTENT_INVALID
+    (typed host errors pass their own message through; anything else collapses to _INTENT_INVALID_MESSAGE).
+    Reporting the error to the observability hook (report_host_error, endpoint- and trace-context-specific
+    per call site) stays the caller's responsibility — this helper only builds the response.
     """
-    client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
+    cls = classify_host_error(e)
+    if cls.kind == "upstream_unavailable":
+        return _error("INTERNAL", LLM_PROVIDER_UNAVAILABLE_MESSAGE, 503, request_id)
+    client_message = _message(e) if cls.kind == "typed" else _INTENT_INVALID_MESSAGE
     return _error("INTENT_INVALID", client_message, 422, request_id)
 
 

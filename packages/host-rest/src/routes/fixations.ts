@@ -5,7 +5,7 @@ import { errorBody } from "../errors.js";
 import type { GovernanceOperation } from "../governance-policy.js";
 import { withFixationLock } from "../keyed-mutex.js";
 import type { FixationsApi } from "../types.js";
-import { COMPOSE_FAILED_MESSAGE, composeForRest, INTENT_INVALID_MESSAGE } from "./compose.js";
+import { COMPOSE_FAILED_MESSAGE, composeForRest, intentResolutionFailure } from "./compose.js";
 import { ComposeBodySchema } from "./schemas.js";
 import {
   message,
@@ -93,8 +93,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
         ));
       } catch (e) {
         await reportHostError(deps, call.endpoint, call.requestId, e);
-        const clientMessage = clientMessageFor(e, INTENT_INVALID_MESSAGE);
-        return c.json(errorBody("INTENT_INVALID", clientMessage, requestId), 422);
+        return intentResolutionFailure(c, e, requestId);
       }
       try {
         // Fetch the current composition result (should be cached) and fix its structure. The fixation is stamped onto this tenant.
