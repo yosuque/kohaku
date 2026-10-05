@@ -83,6 +83,15 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
   if (opts.dataDir != null && opts.rest != null) {
     throw new CliUsageError("Specify only one of --data-dir or --rest, not both");
   }
+  if (opts.tenant === "") {
+    // A StoragePort reads an empty tenant as "no filter", so `--tenant ""` would not select the rows whose
+    // tenant column is empty; it would export everything. Say so rather than export the wrong thing silently.
+    throw new CliUsageError(
+      '--tenant must not be empty: an empty tenant means "no tenant filter". Usage that carries no tenant ' +
+        "(every compose through an MCP host, which resolves none) is part of the unfiltered export, as the " +
+        "rows whose tenant column is empty",
+    );
+  }
   const format = opts.format ?? "csv";
   if (format !== "csv" && format !== "json") {
     throw new CliUsageError(`--format must be "csv" or "json", got "${String(format)}"`);

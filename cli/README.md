@@ -49,7 +49,9 @@ Spec and succeeded (a fallback Spec of a failed or budget-skipped generation and
 follower are not counted; a negotiation downgrade of a Spec that was generated is, because its tokens
 were spent), `cache_fixated` the composes served from a fixation, `fallbacks` the composes that carry a
 fallback, and `fixations_created` / `fixations_removed` how many times a fixation was created / removed (operations,
-not composes). A bad argument exits 2: a bad window or format, both or neither of `--data-dir` /
+not composes). A compose through an MCP host cannot be attributed to a tenant (the MCP profile resolves none), so
+its usage lands in the rows whose tenant column is empty; an unfiltered export includes them, and an
+empty `--tenant` is rejected because it would read as no filter. A bad argument exits 2: a bad window or format, both or neither of `--data-dir` /
 `--rest`, a `--data-dir` that does not exist, or a `--tenant` that disagrees with (or has no)
 `x-kohaku-tenant` header.
 

@@ -318,6 +318,40 @@ describe("kohaku usage export usage errors", () => {
     expect(existsSync(join(dataDir, "lineage.jsonl"))).toBe(false);
   });
 
+  it("rejects an empty --tenant (it would read as no filter) and says where tenant-less usage lands", async () => {
+    const w = { since: "2026-07-01", until: "2026-07-31" };
+    const dataDir = tmp("kohaku-usage-data-");
+    await expect(runUsageExport({ dataDir, tenant: "", ...w })).rejects.toBeInstanceOf(CliUsageError);
+    await expect(runUsageExport({ dataDir, tenant: "", ...w })).rejects.toThrow(
+      /rows whose tenant column is empty/,
+    );
+    await expect(runUsageExport({ rest: "http://127.0.0.1:1", tenant: "", ...w })).rejects.toBeInstanceOf(
+      CliUsageError,
+    );
+  });
+
+  it("the CLI exits 2 for --tenant with an empty value", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        bin,
+        "usage",
+        "export",
+        "--data-dir",
+        tmp("kohaku-usage-data-"),
+        "--tenant",
+        "",
+        "--since",
+        "2026-07-01",
+        "--until",
+        "2026-07-31",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--tenant must not be empty");
+  }, 30_000);
+
   it("rejects an unknown --format with EvidenceUsageError", async () => {
     await expect(
       runUsageExport({

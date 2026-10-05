@@ -435,6 +435,26 @@ def test_usage_narrowing_options() -> None:
     assert [f"{r.day}/{r.tenant}" for r in rows] == ["2026-07-03/acme"]
 
 
+def test_usage_reads_an_empty_tenant_option_as_no_filter() -> None:
+    # An MCP host never resolves a tenant: every one of its composes is a record with no tenant, which the
+    # `tenant: ""` row of the export stands for.
+    events = [
+        metered(ts="2026-07-01T00:00:00.000Z"),
+        metered(tenant="acme", ts="2026-07-01T00:00:00.000Z"),
+    ]
+
+    def keyed(rows: list[UsageRow]) -> list[str]:
+        return [f"{r.day}/{r.tenant}/{r.composed}" for r in rows]
+
+    assert keyed(summarize_usage(events, SummarizeUsageOptions(tenant=""))) == [
+        "2026-07-01//1",
+        "2026-07-01/acme/1",
+    ]
+    assert keyed(summarize_usage(events)) == keyed(summarize_usage(events, SummarizeUsageOptions(tenant="")))
+    assert keyed(summarize_usage(events, SummarizeUsageOptions(tenant="acme"))) == ["2026-07-01/acme/1"]
+    assert summarize_lineage(events, SummarizeLineageOptions(tenant="")).composed == 2
+
+
 def test_lineage_summary_usage_follows_the_summary_window_and_empty_is_empty_list() -> None:
     assert summarize_lineage([]).usage == []
     events = [

@@ -1,4 +1,4 @@
-import type { LineageEventRecord } from "@kohaku-ui/spec-core";
+import { type LineageEventRecord, normalizeTenant } from "@kohaku-ui/spec-core";
 
 /**
  * Usage analytics. A pure function that folds the raw lineage event stream (the LineageEventRecord[]
@@ -195,7 +195,11 @@ export interface UsageRow {
 export interface SummarizeUsageOptions {
   /** The bucket width. Only "day" (UTC) exists. */
   bucket: "day";
-  /** Aggregate only records whose record.tenant matches. */
+  /**
+   * Aggregate only records whose record.tenant matches. Read like a StoragePort's `LineageFilter.tenant`
+   * (`normalizeTenant`): the empty string means no filter, so it keeps every record, including the ones that
+   * carry no tenant (an MCP host never resolves one, so its composes always land in the `tenant: ""` row).
+   */
   tenant?: string;
   /** Aggregate only events at or after this time (record.ts >= since). */
   since?: string;
@@ -205,7 +209,11 @@ export interface SummarizeUsageOptions {
 
 /** Narrowing and shaping options for summarizeLineage. */
 export interface SummarizeLineageOptions {
-  /** Narrow by tenant (aggregate only records whose record.tenant matches). Older events without a recorded tenant are excluded as non-matching. */
+  /**
+   * Narrow by tenant (aggregate only records whose record.tenant matches). Older events without a recorded
+   * tenant are excluded as non-matching. The empty string means no filter (`normalizeTenant`, as in a
+   * StoragePort's `LineageFilter`).
+   */
   tenant?: string;
   /** Aggregate only events at or after this time (record.ts >= since). Expects canonical ISO8601 (the route normalizes before passing). */
   since?: string;
@@ -218,6 +226,16 @@ export interface SummarizeLineageOptions {
 const TOP_INTENTS_DEFAULT = 10;
 const TOP_INTENTS_MAX = 50;
 const SCHEMA_EDIT_TOP_FIELDS = 5;
+
+/**
+ * Whether a record's tenant passes a `tenant` option, read the way a StoragePort reads `LineageFilter.tenant`:
+ * `normalizeTenant` on both sides, so `undefined` and `""` mean "no filter" on the option side and "no tenant"
+ * on the record side.
+ */
+function tenantMatches(wanted: string | undefined, recordTenant: string | undefined): boolean {
+  const filter = normalizeTenant(wanted);
+  return filter == null || normalizeTenant(recordTenant) === filter;
+}
 
 /** A view.composed record that carries `payload.fallback`: a fallback Spec was served for it. */
 function hasFallback(payload: Readonly<Record<string, unknown>>): boolean {
@@ -253,7 +271,7 @@ export function summarizeLineage(
   opts: SummarizeLineageOptions = {},
 ): LineageSummary {
   const scoped = events.filter((e) => {
-    if (opts.tenant != null && e.tenant !== opts.tenant) return false;
+    if (!tenantMatches(opts.tenant, e.tenant)) return false;
     if (opts.since != null && e.ts < opts.since) return false;
     if (opts.until != null && e.ts > opts.until) return false;
     return true;
@@ -556,7 +574,7 @@ export function summarizeUsage(
   };
 
   for (const e of events) {
-    if (opts.tenant != null && e.tenant !== opts.tenant) continue;
+    if (!tenantMatches(opts.tenant, e.tenant)) continue;
     if (opts.since != null && e.ts < opts.since) continue;
     if (opts.until != null && e.ts > opts.until) continue;
     switch (e.type) {

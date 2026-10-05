@@ -190,6 +190,17 @@ def _quantile(sorted_values: list[float], p: float) -> float | None:
     return sorted_values[idx]
 
 
+def _tenant_matches(wanted: str | None, record_tenant: str | None) -> bool:
+    """Whether a record's tenant passes a `tenant` option, read like a StoragePort's `LineageFilter.tenant`.
+
+    `None` and `""` both mean "no filter" on the option side and "no tenant" on the record side (TS
+    `normalizeTenant`), so `tenant=""` keeps every record, including the ones that carry no tenant.
+    """
+    if wanted is None or wanted == "":
+        return True
+    return (record_tenant if record_tenant != "" else None) == wanted
+
+
 def _has_fallback(payload: dict[str, Any]) -> bool:
     """A view.composed record that carries `payload.fallback`: a fallback Spec was served for it."""
     return payload.get("fallback") is not None
@@ -222,7 +233,7 @@ def summarize_lineage(
     opts = opts if opts is not None else SummarizeLineageOptions()
     scoped: list[LineageEventRecord] = []
     for e in events:
-        if opts.tenant is not None and e.tenant != opts.tenant:
+        if not _tenant_matches(opts.tenant, e.tenant):
             continue
         if opts.since is not None and e.ts < opts.since:
             continue
@@ -450,7 +461,7 @@ def summarize_usage(
         return row
 
     for e in events:
-        if opts.tenant is not None and e.tenant != opts.tenant:
+        if not _tenant_matches(opts.tenant, e.tenant):
             continue
         if opts.since is not None and e.ts < opts.since:
             continue

@@ -565,6 +565,26 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
     expect(rows.map((r) => `${r.day}/${r.tenant}`)).toEqual(["2026-07-03/acme"]);
   });
 
+  it("reads an empty tenant option like a StoragePort does (no filter), so tenant-less records are kept", () => {
+    // An MCP host never resolves a tenant: every one of its composes is a record with no tenant, which the
+    // `tenant: ""` row of the export stands for.
+    const events = [
+      metered({ ts: "2026-07-01T00:00:00.000Z" }),
+      metered({ tenant: "acme", ts: "2026-07-01T00:00:00.000Z" }),
+    ];
+    const keyed = (rows: { day: string; tenant: string; composed: number }[]) =>
+      rows.map((r) => `${r.day}/${r.tenant}/${r.composed}`);
+    expect(keyed(summarizeUsage(events, { bucket: "day", tenant: "" }))).toEqual([
+      "2026-07-01//1",
+      "2026-07-01/acme/1",
+    ]);
+    expect(keyed(summarizeUsage(events, { bucket: "day" }))).toEqual(
+      keyed(summarizeUsage(events, { bucket: "day", tenant: "" })),
+    );
+    expect(keyed(summarizeUsage(events, { bucket: "day", tenant: "acme" }))).toEqual(["2026-07-01/acme/1"]);
+    expect(summarizeLineage(events, { tenant: "" }).composed).toBe(2);
+  });
+
   it("LineageSummary.usage follows the same window as the rest of the summary; empty input gives []", () => {
     expect(summarizeLineage([]).usage).toEqual([]);
     const events = [
