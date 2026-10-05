@@ -85,10 +85,12 @@ export function errorMessage(e: unknown): string {
  * The client-visible message for a caught exception: the error's own message when it is a "typed" host
  * error (see isTypedHostError's doc comment for the safe/unsafe distinction), otherwise `fallback` — an
  * arbitrary/unexpected exception's message must never reach the client verbatim (it may carry internals such
- * as SQL fragments, stack-trace text, or library-internal wording). Shared building block for both host
- * profiles' failure-path responses (REST's per-route INTENT_INVALID / COMPOSE_FAILED / FIXATION_INTERNAL_ERROR
- * fallbacks, MCP's TOOL_INTERNAL_ERROR fallback); the original error still reaches the observability hook via
- * notifyHook/reportHostError regardless, so nothing is lost for diagnosis.
+ * as SQL fragments, stack-trace text, or library-internal wording). Used by host-rest's failure paths that
+ * answer a fixed-fallback message (compose and compose/stream's COMPOSE_FAILED in routes/compose.ts, the
+ * fixation routes' COMPOSE_FAILED and FIXATION_INTERNAL_ERROR in routes/fixations.ts); the original error still
+ * reaches the observability hook via notifyHook/reportHostError regardless, so nothing is lost for diagnosis.
+ * A path that must also tell "the upstream LLM is unavailable" (a 503 rather than a generic failure) uses
+ * {@link classifyHostError} instead, which adds that third outcome on top of the same typed / untyped split.
  */
 export function clientMessageFor(e: unknown, fallback: string): string {
   return isTypedHostError(e) ? errorMessage(e) : fallback;
