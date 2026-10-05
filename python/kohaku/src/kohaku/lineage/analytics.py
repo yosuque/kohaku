@@ -82,8 +82,10 @@ class UsageRow:
     Field order is the wire key order (`to_jsonable` follows it), identical to the TS object. `tenant`
     is the empty string for a record that carries none. `l2Generated` counts the composes that actually
     generated an L2 Spec and succeeded: view.composed of tier L2 whose cache was miss or bypass, other than
-    a record carrying `payload.fallback` (a failed or budget-skipped generation keeps the L2 label on its
-    fallback Spec) and a single-flight follower (`decision.coalesced`). `fallbacks` counts view.composed
+    a record whose `payload.fallback` has kind "generation" or no kind (a failed or budget-skipped generation
+    keeps the L2 label on its fallback Spec) and a single-flight follower (`decision.coalesced`). A
+    negotiation downgrade (`payload.fallback.kind` "negotiation") is applied to a Spec that was generated, so
+    it still counts. `fallbacks` counts view.composed
     records that carry `payload.fallback`, whatever their tier (MCP hosts write no `view.fallback`, REST
     hosts write one next to the composed record, so the composed record is the one place both agree).
     `tokens` sums `payload.decision.usage` (a single-flight follower carries none).
@@ -107,8 +109,10 @@ class L2IntentGap:
 
     Mutable on purpose: `summarize_lineage` accumulates into its rows while folding. `intentHash` is the
     first one seen for the canonical. `generated` counts the composes that actually generated an L2 Spec
-    and succeeded (a record carrying `payload.fallback` and a single-flight follower are not generations);
-    `fallbacks` counts the fallback records, read from the view.composed record itself (not `view.fallback`).
+    and succeeded (a record whose `payload.fallback` has kind "generation" or no kind, and a single-flight
+    follower, are not generations; a negotiation downgrade is applied to a generated Spec, so it is one);
+    `fallbacks` counts every record carrying `payload.fallback`, read from the view.composed record itself
+    (not `view.fallback`).
     """
 
     canonical: str
@@ -187,6 +191,19 @@ def _quantile(sorted_values: list[float], p: float) -> float | None:
 def _has_fallback(payload: dict[str, Any]) -> bool:
     """A view.composed record that carries `payload.fallback`: a fallback Spec was served for it."""
     return payload.get("fallback") is not None
+
+
+def _is_generation_fallback(payload: dict[str, Any]) -> bool:
+    """A `payload.fallback` that marks a failed or budget-skipped generation (kind "generation" or no kind).
+
+    A negotiation downgrade (kind "negotiation") is applied to a Spec that was generated and consumed its
+    tokens, so it is not one and that compose still counts as a generation.
+    """
+    fallback = payload.get("fallback")
+    if fallback is None:
+        return False
+    kind = fallback.get("kind") if isinstance(fallback, dict) else None
+    return kind is None or kind == "generation"
 
 
 def _is_coalesced(payload: dict[str, Any]) -> bool:
@@ -278,7 +295,7 @@ def summarize_lineage(
                     gap.intentHash = intent_hash
                 if _has_fallback(e.payload):
                     gap.fallbacks += 1
-                elif not _is_coalesced(e.payload):
+                if not _is_generation_fallback(e.payload) and not _is_coalesced(e.payload):
                     gap.generated += 1
         elif e.type == "view.fallback":
             fallback_total += 1
@@ -449,7 +466,7 @@ def summarize_usage(
             if (
                 tier == "L2"
                 and cache_key in ("miss", "bypass")
-                and not _has_fallback(e.payload)
+                and not _is_generation_fallback(e.payload)
                 and not _is_coalesced(e.payload)
             ):
                 row.l2Generated += 1

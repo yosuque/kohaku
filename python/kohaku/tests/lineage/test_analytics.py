@@ -359,6 +359,17 @@ def test_usage_keeps_a_fallback_spec_out_of_l2_generated_and_counts_it_in_fallba
     assert rows[0].tiers == {"L0": 0, "L1": 1, "L2": 3}
 
 
+def test_usage_counts_a_negotiation_downgrade_as_a_generation() -> None:
+    rows = summarize_usage(
+        [
+            composed(tier="L2", cache="miss", fallback={"from": "L2", "reason": "x", "kind": "negotiation"}),
+            composed(tier="L2", cache="miss", fallback={"from": "L2", "reason": "x", "kind": "generation"}),
+            composed(tier="L2", cache="bypass", fallback={"from": "L2", "reason": "x"}),  # no kind
+        ]
+    )
+    assert (rows[0].composed, rows[0].l2Generated, rows[0].fallbacks) == (3, 1, 3)
+
+
 def test_usage_keeps_a_single_flight_follower_out_of_l2_generated() -> None:
     rows = summarize_usage(
         [
@@ -513,6 +524,24 @@ def test_l2_by_intent_separates_generations_from_fallbacks_and_followers() -> No
         ("sales.broken", "sha256:b1", 0, 1),
     ]
     assert s.fallback.total == 1  # the overall view.fallback counters are untouched
+
+
+def test_l2_by_intent_counts_a_negotiation_downgrade_as_a_generation() -> None:
+    def at(fallback: dict[str, Any]) -> LineageEventRecord:
+        return composed(
+            tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1", fallback=fallback
+        )
+
+    s = summarize_lineage(
+        [
+            at({"from": "L2", "reason": "x", "kind": "negotiation"}),
+            at({"from": "L2", "reason": "x", "kind": "generation"}),
+            at({"from": "L2", "reason": "x"}),
+        ]
+    )
+    assert [(r.canonical, r.intentHash, r.generated, r.fallbacks) for r in s.l2ByIntent] == [
+        ("sales.custom", "sha256:c1", 1, 3),
+    ]
 
 
 def test_catalog_gaps_honor_top_intents_limit() -> None:

@@ -21,7 +21,7 @@ function composed(
     tenant?: string;
     ts?: string;
     /** `payload.fallback`: a fallback Spec was served (it keeps the failed tier / cache label). */
-    fallback?: { from: string; reason: string };
+    fallback?: { from: string; reason: string; kind?: string };
     /** `payload.decision.coalesced`: a single-flight follower. */
     coalesced?: boolean;
   } = {},
@@ -480,6 +480,18 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
     expect(rows[0]?.tiers).toEqual({ L0: 0, L1: 1, L2: 3 });
   });
 
+  it("keeps only a generation fallback (or one with no kind) out of l2Generated; a negotiation downgrade of a generated Spec counts", () => {
+    const rows = summarizeUsage(
+      [
+        composed({ tier: "L2", cache: "miss", fallback: { from: "L2", reason: "x", kind: "negotiation" } }),
+        composed({ tier: "L2", cache: "miss", fallback: { from: "L2", reason: "x", kind: "generation" } }),
+        composed({ tier: "L2", cache: "bypass", fallback: { from: "L2", reason: "x" } }), // no kind
+      ],
+      { bucket: "day" },
+    );
+    expect(rows[0]).toMatchObject({ composed: 3, l2Generated: 1, fallbacks: 3 });
+  });
+
   it("keeps a single-flight follower out of l2Generated", () => {
     const rows = summarizeUsage(
       [
@@ -638,6 +650,25 @@ describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; de
     ]);
     // The overall view.fallback counters are untouched.
     expect(s.fallback.total).toBe(1);
+  });
+
+  it("l2ByIntent counts a negotiation downgrade as a generation but a generation fallback or kind-less one as a failure", () => {
+    const at = (fallback?: { from: string; reason: string; kind?: string }) =>
+      composed({
+        tier: "L2",
+        cache: "miss",
+        canonical: "sales.custom",
+        intentHash: "sha256:c1",
+        ...(fallback != null ? { fallback } : {}),
+      });
+    const s = summarizeLineage([
+      at({ from: "L2", reason: "x", kind: "negotiation" }),
+      at({ from: "L2", reason: "x", kind: "generation" }),
+      at({ from: "L2", reason: "x" }),
+    ]);
+    expect(s.l2ByIntent).toEqual([
+      { canonical: "sales.custom", intentHash: "sha256:c1", generated: 1, fallbacks: 3 },
+    ]);
   });
 
   it("l2ByIntent and schemaEditsByComponent honor topIntentsLimit", () => {

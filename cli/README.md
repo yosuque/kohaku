@@ -45,8 +45,9 @@ same rows as an array. Without `--out` the result goes to stdout.
 
 Columns: `l2` counts the composes delivered as an L2 Spec (including ones served from the cache and
 fallback Specs that kept the L2 label), `l2_generated` only those that actually generated an L2
-Spec and succeeded (a fallback Spec and a single-flight follower are not counted),
-`cache_fixated` the composes served from a fixation, `fallbacks` the composes that carry a
+Spec and succeeded (a fallback Spec of a failed or budget-skipped generation and a single-flight
+follower are not counted; a negotiation downgrade of a Spec that was generated is, because its tokens
+were spent), `cache_fixated` the composes served from a fixation, `fallbacks` the composes that carry a
 fallback, and `fixated` / `unfixated` how many times a fixation was created / removed (operations,
 not composes). A bad argument exits 2: a bad window or format, both or neither of `--data-dir` /
 `--rest`, a `--data-dir` that does not exist, or a `--tenant` that disagrees with (or has no)
