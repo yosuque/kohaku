@@ -519,8 +519,8 @@ function registerRendererResource(ctx: ToolContext): void {
 
 /**
  * Casts a task-branch return value (`startComposeTask`'s `CreateTaskResult`) to line up, for the type
- * checker only, with `composeAndPackage`'s inferred return type — used at each task-capable tool's
- * `if (taskCapable(ctx, extra)) return …` branch below instead of giving that branch its own precise
+ * checker only, with `composeAndPackage`'s inferred return type — used at `composeOrStartTask`'s task
+ * branch below instead of giving that branch its own precise
  * type. Both `safeTool`'s own `T` and `registerTool`'s `cb` parameter are inferred generics; once the two
  * branches of an if/return inside that callback present TS with genuinely different literal shapes (or an
  * explicit named union type standing in for them), the installed TypeScript 7 compiler was observed to
@@ -533,6 +533,26 @@ function registerRendererResource(ctx: ToolContext): void {
  */
 function asComposePackage<T>(value: unknown): T {
   return value as T;
+}
+
+/**
+ * The shared tail of every task-capable compose-family handler (`${prefix}_compose` and the intent tools):
+ * the async/task branch when this request may take it (`taskCapable`: the `AttachOptions.tasksEnabled` kill
+ * switch AND the per-request opt-in), otherwise the plain synchronous `composeAndPackage`. Kept as one
+ * function so each `registerTool` callback ends in a single return expression of this fixed type (see
+ * `asComposePackage` for why that matters to the installed TypeScript 7 compiler's overload inference).
+ */
+function composeOrStartTask(
+  call: ToolCallContext,
+  extra: ServerContext,
+  input: ComposeSource,
+): ReturnType<typeof composeAndPackage> {
+  if (taskCapable(call, extra)) {
+    return asComposePackage<ReturnType<typeof composeAndPackage>>(
+      Promise.resolve(startComposeTask(call, input)),
+    );
+  }
+  return composeAndPackage(call, input);
 }
 
 /**
@@ -565,13 +585,7 @@ function registerComposeTool(ctx: ToolContext): void {
       safeTool(ctx.deps, `${ctx.prefix}_compose`, extra, async () => {
         const call = await beginCall(ctx, extra, "compose", locale);
         if ("isError" in call) return call;
-        const input: ComposeSource = { kind: "nl", text: question };
-        if (taskCapable(ctx, extra)) {
-          return asComposePackage<ReturnType<typeof composeAndPackage>>(
-            Promise.resolve(startComposeTask(call, input)),
-          );
-        }
-        return composeAndPackage(call, input);
+        return composeOrStartTask(call, extra, { kind: "nl", text: question });
       }),
   );
 }
@@ -657,13 +671,10 @@ function registerIntentTools(ctx: ToolContext): void {
           const { locale, ...params } = args as JsonObject & { locale?: string };
           const call = await beginCall(ctx, extra, "compose", locale);
           if ("isError" in call) return call;
-          const input: ComposeSource = { kind: "intent", intent: tool.toIntent(params as JsonObject) };
-          if (taskCapable(ctx, extra)) {
-            return asComposePackage<ReturnType<typeof composeAndPackage>>(
-              Promise.resolve(startComposeTask(call, input)),
-            );
-          }
-          return composeAndPackage(call, input);
+          return composeOrStartTask(call, extra, {
+            kind: "intent",
+            intent: tool.toIntent(params as JsonObject),
+          });
         }),
     );
   }
