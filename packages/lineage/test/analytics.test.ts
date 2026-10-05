@@ -1,6 +1,6 @@
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { summarizeLineage } from "../src/index.js";
+import { summarizeLineage, summarizeUsage } from "../src/index.js";
 
 // Tests for the pure aggregation summarizeLineage of usage analytics:
 // - view.composed count / tier distribution / cache breakdown / durationMs quantiles / top frequent intents
@@ -354,5 +354,135 @@ describe("summarizeLineage: review turnaround and suggestion acceptance", () => 
     const s = summarizeLineage(events);
     expect(s.promotions.schemaEdited).toBe(3);
     expect(s.review.acceptedAsIs).toBe(1);
+  });
+});
+
+describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, design.md #74)", () => {
+  /** A view.composed with an optional decision.usage, shaped like lineage.ts's recorded payload. */
+  function metered(
+    args: {
+      tier?: "L0" | "L1" | "L2";
+      cache?: string;
+      tenant?: string;
+      ts?: string;
+      usage?: { inputTokens: number; outputTokens: number };
+      decision?: unknown;
+    } = {},
+  ): LineageEventRecord {
+    const base = composed({
+      ...(args.tier != null ? { tier: args.tier } : {}),
+      ...(args.cache != null ? { cache: args.cache } : {}),
+      ...(args.tenant != null ? { tenant: args.tenant } : {}),
+      ...(args.ts != null ? { ts: args.ts } : {}),
+    });
+    const decision =
+      args.decision !== undefined
+        ? args.decision
+        : args.usage != null
+          ? { attempts: [], usage: args.usage }
+          : undefined;
+    return decision !== undefined ? { ...base, payload: { ...base.payload, decision } } : base;
+  }
+
+  it("counts l2Generated only for tier L2 with cache miss or bypass (hit and fixated excluded)", () => {
+    const rows = summarizeUsage(
+      [
+        metered({ tier: "L2", cache: "miss" }),
+        metered({ tier: "L2", cache: "bypass" }),
+        metered({ tier: "L2", cache: "hit" }),
+        metered({ tier: "L2", cache: "fixated" }),
+        metered({ tier: "L1", cache: "miss" }), // not L2
+      ],
+      { bucket: "day" },
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.composed).toBe(5);
+    expect(rows[0]?.l2Generated).toBe(2);
+    expect(rows[0]?.tiers).toEqual({ L0: 0, L1: 1, L2: 4 });
+    expect(rows[0]?.cache).toEqual({ hit: 1, miss: 2, bypass: 1, fixated: 1 });
+  });
+
+  it("sums decision.usage tokens, ignoring missing or non-numeric usage", () => {
+    const rows = summarizeUsage(
+      [
+        metered({ usage: { inputTokens: 100, outputTokens: 20 } }),
+        metered({ usage: { inputTokens: 50, outputTokens: 5 } }),
+        metered({}), // no decision at all (a cache hit / L0)
+        metered({ decision: { attempts: [] } }), // a single-flight follower: no usage
+        metered({ decision: { attempts: [], usage: { inputTokens: "x", outputTokens: null } } }),
+      ],
+      { bucket: "day" },
+    );
+    expect(rows[0]?.tokens).toEqual({ input: 150, output: 25 });
+  });
+
+  it("keys an unrecorded tenant as the empty string and splits rows per tenant", () => {
+    const rows = summarizeUsage([metered({}), metered({ tenant: "acme" }), metered({ tenant: "acme" })], {
+      bucket: "day",
+    });
+    expect(rows.map((r) => [r.tenant, r.composed])).toEqual([
+      ["", 1],
+      ["acme", 2],
+    ]);
+  });
+
+  it("buckets by the UTC day of ts and orders rows by day then tenant", () => {
+    const rows = summarizeUsage(
+      [
+        metered({ tenant: "b", ts: "2026-07-02T00:00:00.000Z" }),
+        metered({ tenant: "a", ts: "2026-07-02T23:59:59.999Z" }),
+        metered({ tenant: "z", ts: "2026-07-01T23:59:59.999Z" }),
+        metered({ tenant: "a", ts: "2026-07-01T00:00:00.000Z" }),
+      ],
+      { bucket: "day" },
+    );
+    expect(rows.map((r) => `${r.day}/${r.tenant}`)).toEqual([
+      "2026-07-01/a",
+      "2026-07-01/z",
+      "2026-07-02/a",
+      "2026-07-02/b",
+    ]);
+  });
+
+  it("counts view.fallback, intent.fixated and intent.unfixated into their day / tenant row", () => {
+    const rows = summarizeUsage(
+      [
+        metered({ tenant: "acme" }),
+        ev("view.fallback", { kind: "generation" }, { tenant: "acme" }),
+        ev("view.fallback", { kind: "negotiation" }, { tenant: "acme" }),
+        ev("intent.fixated", { intentHash: "sha256:a" }, { tenant: "acme" }),
+        ev("intent.unfixated", { intentHash: "sha256:a" }, { tenant: "acme" }),
+        ev("intent.unfixated", { intentHash: "sha256:b" }, { tenant: "acme" }),
+        ev("component.generated", { artifactId: "a" }, { tenant: "acme" }), // ignored
+      ],
+      { bucket: "day" },
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ composed: 1, fallbacks: 2, fixated: 1, unfixated: 2 });
+  });
+
+  it("narrows by tenant / since / until", () => {
+    const events = [
+      metered({ tenant: "acme", ts: "2026-07-01T00:00:00.000Z" }),
+      metered({ tenant: "acme", ts: "2026-07-03T00:00:00.000Z" }),
+      metered({ tenant: "globex", ts: "2026-07-01T00:00:00.000Z" }),
+    ];
+    const rows = summarizeUsage(events, {
+      bucket: "day",
+      tenant: "acme",
+      since: "2026-07-02T00:00:00.000Z",
+    });
+    expect(rows.map((r) => `${r.day}/${r.tenant}`)).toEqual(["2026-07-03/acme"]);
+  });
+
+  it("LineageSummary.usage follows the same window as the rest of the summary; empty input gives []", () => {
+    expect(summarizeLineage([]).usage).toEqual([]);
+    const events = [
+      metered({ tenant: "acme", ts: "2026-07-01T10:00:00.000Z" }),
+      metered({ tenant: "globex", ts: "2026-07-01T10:00:00.000Z" }),
+    ];
+    const s = summarizeLineage(events, { tenant: "acme" });
+    expect(s.usage.map((r) => r.tenant)).toEqual(["acme"]);
+    expect(s.usage[0]?.composed).toBe(s.composed);
   });
 });

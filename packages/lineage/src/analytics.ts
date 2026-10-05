@@ -110,6 +110,46 @@ export interface LineageSummary {
   };
   /** Fixation event counts (intent.fixated / intent.unfixated). */
   fixations: { fixated: number; unfixated: number };
+  /**
+   * Per-day, per-tenant usage rows over the same window (`summarizeUsage(scoped, { bucket: "day" })`). Day
+   * ascending, tenant ascending; an unrecorded tenant is the empty string.
+   */
+  usage: UsageRow[];
+}
+
+/**
+ * One metering row: everything countable about one tenant on one UTC day, derived purely from lineage
+ * (design.md #74). `l2Generated` counts view.composed events of tier L2 whose cache was miss or bypass (an L2
+ * Spec that was actually generated rather than served from the cache or a fixation); `tokens` sums
+ * `view.composed`'s `payload.decision.usage` (a single-flight follower carries no usage, so it never double-counts).
+ */
+export interface UsageRow {
+  /** UTC calendar day, `YYYY-MM-DD` (the first 10 characters of the record's `ts`). */
+  day: string;
+  /** The record's tenant; the empty string when the record carries none. */
+  tenant: string;
+  composed: number;
+  cache: { hit: number; miss: number; bypass: number; fixated: number };
+  tiers: { L0: number; L1: number; L2: number };
+  l2Generated: number;
+  /** view.fallback records. */
+  fallbacks: number;
+  tokens: { input: number; output: number };
+  /** intent.fixated / intent.unfixated records. */
+  fixated: number;
+  unfixated: number;
+}
+
+/** Options for summarizeUsage. */
+export interface SummarizeUsageOptions {
+  /** The bucket width. Only "day" (UTC) exists. */
+  bucket: "day";
+  /** Aggregate only records whose record.tenant matches. */
+  tenant?: string;
+  /** Aggregate only events at or after this time (record.ts >= since). */
+  since?: string;
+  /** Aggregate only events at or before this time (record.ts <= until). */
+  until?: string;
 }
 
 /** Narrowing and shaping options for summarizeLineage. */
@@ -322,7 +362,91 @@ export function summarizeLineage(
       acceptedAsIs,
     },
     fixations,
+    usage: summarizeUsage(scoped, { bucket: "day" }),
   };
+}
+
+/**
+ * Folds the lineage stream into per-day, per-tenant metering rows (pure, read-only). Reads only
+ * view.composed / view.fallback / intent.fixated / intent.unfixated; every other event type is ignored.
+ */
+export function summarizeUsage(
+  events: readonly LineageEventRecord[],
+  opts: SummarizeUsageOptions,
+): UsageRow[] {
+  // `opts.bucket` is "day" today (the field keeps the signature open for wider buckets).
+  const rows = new Map<string, UsageRow>();
+  const rowFor = (e: LineageEventRecord): UsageRow => {
+    const day = e.ts.slice(0, 10);
+    const tenant = e.tenant ?? "";
+    const key = `${day}\u0000${tenant}`;
+    let row = rows.get(key);
+    if (row == null) {
+      row = {
+        day,
+        tenant,
+        composed: 0,
+        cache: { hit: 0, miss: 0, bypass: 0, fixated: 0 },
+        tiers: { L0: 0, L1: 0, L2: 0 },
+        l2Generated: 0,
+        fallbacks: 0,
+        tokens: { input: 0, output: 0 },
+        fixated: 0,
+        unfixated: 0,
+      };
+      rows.set(key, row);
+    }
+    return row;
+  };
+
+  for (const e of events) {
+    if (opts.tenant != null && e.tenant !== opts.tenant) continue;
+    if (opts.since != null && e.ts < opts.since) continue;
+    if (opts.until != null && e.ts > opts.until) continue;
+    switch (e.type) {
+      case "view.composed": {
+        const row = rowFor(e);
+        row.composed++;
+        const tier = e.payload["tier"];
+        if (tier === "L0" || tier === "L1" || tier === "L2") row.tiers[tier]++;
+        const cacheKey = e.payload["cache"];
+        if (cacheKey === "hit" || cacheKey === "miss" || cacheKey === "bypass" || cacheKey === "fixated") {
+          row.cache[cacheKey]++;
+        }
+        if (tier === "L2" && (cacheKey === "miss" || cacheKey === "bypass")) row.l2Generated++;
+        const decision = e.payload["decision"];
+        const usage =
+          decision != null && typeof decision === "object"
+            ? (decision as Record<string, unknown>)["usage"]
+            : undefined;
+        if (usage != null && typeof usage === "object") {
+          const u = usage as Record<string, unknown>;
+          if (typeof u["inputTokens"] === "number" && Number.isFinite(u["inputTokens"])) {
+            row.tokens.input += u["inputTokens"];
+          }
+          if (typeof u["outputTokens"] === "number" && Number.isFinite(u["outputTokens"])) {
+            row.tokens.output += u["outputTokens"];
+          }
+        }
+        break;
+      }
+      case "view.fallback":
+        rowFor(e).fallbacks++;
+        break;
+      case "intent.fixated":
+        rowFor(e).fixated++;
+        break;
+      case "intent.unfixated":
+        rowFor(e).unfixated++;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return [...rows.values()].sort((a, b) =>
+    a.day !== b.day ? (a.day < b.day ? -1 : 1) : a.tenant < b.tenant ? -1 : a.tenant > b.tenant ? 1 : 0,
+  );
 }
 
 /** Nearest-rank percentile of an ascending-sorted array (null if empty). */

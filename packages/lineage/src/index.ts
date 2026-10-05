@@ -2,7 +2,10 @@ export {
   type IntentUsage,
   type LineageSummary,
   type SummarizeLineageOptions,
+  type SummarizeUsageOptions,
   summarizeLineage,
+  summarizeUsage,
+  type UsageRow,
 } from "./analytics.js";
 export {
   ACTION_EVENT_TYPES,
