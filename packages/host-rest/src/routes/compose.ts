@@ -1,4 +1,4 @@
-import { type ComposeResult, composeStream, type TraceContext, withTenantCatalog } from "@kohaku-ui/composer";
+import { type ComposeResult, composeStream, type TraceContext } from "@kohaku-ui/composer";
 import * as hostCore from "@kohaku-ui/host-core";
 import {
   type CanonicalIntent,
@@ -12,11 +12,15 @@ import type { Context, Hono } from "hono";
 import { type SSEStreamingApi, streamSSE } from "hono/streaming";
 import type { z } from "zod";
 import { errorBody } from "../errors.js";
-import { withFixationLock } from "../keyed-mutex.js";
 import type { KohakuHostDeps } from "../types.js";
+import {
+  COMPOSE_FAILED_MESSAGE,
+  composeForRest,
+  intentResolutionFailure,
+  resolveFixatedForRest,
+} from "./compose-pipeline.js";
 import { ComposeBodySchema, EventsBodySchema } from "./schemas.js";
 import {
-  errorReporterFor,
   operationIndex,
   parseBody,
   type RestCallContext,
@@ -31,43 +35,6 @@ import {
 
 /** SSE heartbeat (comment line) send interval. Kept shorter than the idle timeout (~60s) of LBs / reverse proxies. */
 const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
-
-/**
- * The client-visible message for an untyped composition failure (COMPOSE_FAILED). An arbitrary exception
- * (a downstream library failure, an unexpected bug) may carry internals unsafe to echo back, so only a
- * "typed" host error (SpecError / ComposeError — see host-core's isTypedHostError) has its own message pass
- * through; anything else collapses to this fixed text. The original error still reaches the observability
- * hook (onError) via reportHostError, so nothing is lost for diagnosis.
- */
-export const COMPOSE_FAILED_MESSAGE = "composition failed; see the observability hook (onError) for details";
-
-/**
- * The client-visible message for an untyped Intent-resolution failure (INTENT_INVALID). Same rationale as
- * COMPOSE_FAILED_MESSAGE above: a raw exception's message may leak internals, so it collapses to this fixed
- * text unless it is a "typed" host error (see host-core's isTypedHostError), whose own message is safe to
- * pass through. The original error still reaches the observability hook (onError) via reportHostError.
- */
-export const INTENT_INVALID_MESSAGE =
-  "intent normalization failed; see the observability hook (onError) for details";
-
-/**
- * The response for a failed Intent resolution (the caller has already reported `e` through reportHostError).
- * Intent resolution cannot degrade without an LLM, so an LLM-provider failure (host-core's
- * classifyHostError → "upstreamUnavailable": LlmError PROVIDER / CONFIG / ABORTED) is the operator's problem,
- * not the client's: 503 INTERNAL with the fixed LLM_PROVIDER_UNAVAILABLE_MESSAGE (the same shape as the
- * capability-verification-unavailable 503). Everything else keeps 422 INTENT_INVALID, with a typed error's
- * own message passed through and anything untyped collapsed to INTENT_INVALID_MESSAGE.
- */
-export function intentResolutionFailure(c: Context, e: unknown, requestId: string): Response {
-  const cls = hostCore.classifyHostError(e);
-  if (cls.kind === "upstreamUnavailable") {
-    return c.json(errorBody("INTERNAL", cls.message, requestId), 503);
-  }
-  return c.json(
-    errorBody("INTENT_INVALID", cls.kind === "typed" ? cls.message : INTENT_INVALID_MESSAGE, requestId),
-    422,
-  );
-}
 
 /** Composition routes (/intent/normalize, /compose, /compose/stream, /events). */
 export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
@@ -84,7 +51,8 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
     const session = toSession(body.session, await getPrincipal(c), await resolveTenant(c, deps));
     try {
       const input = body.input as SemanticInput;
-      const intent = await resolveSemanticInput(input, session, deps);
+      // The same resolveIntent sequence as resolveIntentFromBody's raw-input branch (see its doc comment).
+      const { intent } = await hostCore.resolveIntent(deps.compose.semantic, input, session);
       return c.json({
         intent,
         source: input.kind === "nl" ? "llm" : "deterministic",
@@ -146,7 +114,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       // params in `current` too — the same closed gap as body.intent on /compose.
       ({ intent: current } = await hostCore.resolveIntent(
         deps.compose.semantic,
-        { kind: "intent", intent: { canonical: body.intent.canonical, params: body.intent.params } },
+        { kind: "intent", intent: body.intent },
         session,
       ));
       // Intent resolution (host-core's resolveIntent, shared with the MCP profile's compose-tool nl/intent branch).
@@ -266,9 +234,9 @@ async function deliverComposed(
   },
 ): Promise<Response> {
   const { intent, session, principal, deps, call, beforeRecord } = args;
-  // Used twice below (the audit-recording failure callback and the outer catch), hence errorReporterFor
+  // Used twice below (the audit-recording failure callback and the outer catch), hence a local binding
   // rather than two direct reportHostError(deps, call.endpoint, call.requestId, e) calls.
-  const { report } = errorReporterFor(deps, call);
+  const report = (e: unknown) => reportHostError(deps, call.endpoint, call.requestId, e);
   try {
     // Propagate client-disconnect / timeout aborts through to compose (the L1/L2 LLM calls; call.signal).
     const result = await composeForRest(intent, session, deps, call);
@@ -344,68 +312,10 @@ async function deliverComposedStream(
       // detection) returns null = fall through to the streaming generation path below.
       const fixated = await resolveFixatedForRest(intent, session, deps, call);
       if (fixated != null) {
-        const capability = await issueSpecCapability(fixated.spec, principal, deps, call);
-        const actions = await actionsFor(deps, fixated.spec, call);
-        await stream.writeSSE({
-          event: "spec",
-          data: JSON.stringify({
-            spec: fixated.spec,
-            capability,
-            final: true,
-            ...(actions != null ? { actions } : {}),
-          }),
-        });
-        await finishStream(deps, stream, fixated, session, call);
+        await streamFixated(stream, fixated, { session, principal, deps, call });
         return;
       }
-
-      // L1/L2 path: skeleton (final:false) -> patch -> done. The capability is issued exactly once on the
-      // first event.
-      //
-      // final:true (cache hit / L0 fixed Spec — composeStream can complete in a single event without ever
-      // emitting a skeleton) is issued from the Spec itself, via the same issueSpecCapability wrapper as
-      // the fixation shortcut above: collectCapabilityScopes covers both the $ref/bind-variant read scopes
-      // and any action.invoke write scope the final Spec declares, and enforces MAX_BIND_VARIANTS (an
-      // overflow throws into the catch below -> event: error COMPOSE_FAILED). A final Spec can declare
-      // action.invoke (e.g. presentForm submit) — without this, that write scope would never be
-      // issued and /binding/action would always 403 for a stream-delivered final Spec.
-      //
-      // final:false (the skeleton) has no $ref yet, so it is issued read-only from composeStream's resolved
-      // refs instead (host-core's issueCapabilityForRefs). bind (two-way binding, [Draft]) is declared only
-      // on the final Spec and is not opened up to L1/L2 generation (generation:excluded), so a skeleton never
-      // needs bind variants; consequently an L1/L2-generated Spec delivered via patches after this skeleton
-      // carries no write scope either (documented limitation — only a single-event final:true response can
-      // carry action.invoke over the stream).
-      let capability: string | undefined;
-      let final: ComposeResult | undefined;
-      for await (const ev of composeStream({ kind: "intent", intent }, deps.compose, {
-        session,
-        abort,
-        correlationId: requestId,
-        ...(traceContext != null ? { traceContext } : {}),
-      })) {
-        if (ev.kind === "spec") {
-          capability ??= ev.final
-            ? await issueSpecCapability(ev.spec, principal, deps, call)
-            : await hostCore.issueCapabilityForRefs(deps.authz, principal, ev.refs, capabilityTtl(deps));
-          const actions = await actionsFor(deps, ev.spec, call);
-          await stream.writeSSE({
-            event: "spec",
-            data: JSON.stringify({
-              spec: ev.spec,
-              capability,
-              final: ev.final,
-              ...(actions != null ? { actions } : {}),
-            }),
-          });
-        } else if (ev.kind === "patch") {
-          await stream.writeSSE({ event: "patch", data: JSON.stringify({ patch: ev.patch }) });
-        } else {
-          final = ev.result;
-        }
-      }
-      // recorder / view.fallback runs exactly once against the final Spec (the skeleton is not recorded).
-      if (final != null) await finishStream(deps, stream, final, session, call);
+      await streamGenerated(stream, { intent, session, principal, deps, call, abort });
     } catch (e) {
       // A client disconnect / request timeout surfaces here too (composeStream's for-await loop / a
       // stream.writeSSE call above rejects once the underlying connection is gone). That is not a
@@ -435,105 +345,95 @@ async function deliverComposedStream(
 }
 
 /**
- * Adapts a REST KohakuHostDeps into the FixationDeliveryHost surface host-core's fixation helpers consume.
- * serialize wires the per-(tenant, intentHash) fixation lock (withFixationLock) so self-heal's
- * read-modify-write cannot interleave with the management plane's fixate/unfixate. onSelfHealError
- * fires the failure-path observability hook fire-and-forget (a throw/rejection from the hook is swallowed
- * inside reportHostError, never surfaced to the caller).
- *
- * Cached per deps (analogous to keyed-mutex.ts's fixationMutexByDeps): deps is fixed for the lifetime of a
- * createKohakuRoutes app instance, and this object holds no per-request state, so building it once per deps
- * and reusing it avoids reallocating on every /compose, /compose/stream, /events, and /fixations/approve call
- * (the last of which calls composeForRest directly with `deps`, outside any single RouteContext-scoped
- * closure, hence caching by deps rather than by a route-local ctx).
+ * The fixation-shortcut leg of deliverComposedStream: a single final:true spec event followed by done. The
+ * capability is issued from the $ref inside the fixed Spec (no skeleton is involved, so refs-based issuance
+ * is unnecessary). Any failure propagates to deliverComposedStream's abort-aware catch.
  */
-const fixationHostByDeps = new WeakMap<KohakuHostDeps, hostCore.FixationDeliveryHost>();
-function fixationHost(deps: KohakuHostDeps): hostCore.FixationDeliveryHost {
-  let host = fixationHostByDeps.get(deps);
-  if (host == null) {
-    host = {
-      // fixationLookup (deprecated) takes priority when wired (backward compatible); otherwise fall back to
-      // the plain read on FixationsApi.get, with delivery gating handled separately by `admit` below.
-      lookup:
-        deps.fixationLookup ??
-        (deps.fixations?.get != null
-          ? (intentHash, session) =>
-              deps.fixations!.get!(
-                intentHash,
-                session.tenant != null ? { tenant: session.tenant } : undefined,
-              )
-          : undefined),
-      admit: deps.fixationAdmit,
-      fixations: deps.fixations,
-      serialize: (scope, fn) => withFixationLock(deps, scope.tenant, scope.intentHash, fn),
-      // requestId is threaded in by resolveFixatedForRest/composeForRest below from the triggering request;
-      // the crypto.randomUUID() fallback only guards a hypothetical future caller that omits it.
-      // globalThis.crypto (not node:crypto) so this file has no Node-only import: Node >= 19 and every
-      // evergreen browser both expose the same Web Crypto randomUUID() on globalThis.crypto.
-      onSelfHealError: (endpoint, error, requestId) => {
-        void reportHostError(deps, endpoint, requestId ?? globalThis.crypto.randomUUID(), error);
-      },
-    };
-    fixationHostByDeps.set(deps, host);
+async function streamFixated(
+  stream: SSEStreamingApi,
+  fixated: ComposeResult,
+  args: { session: SessionContext; principal: Principal; deps: KohakuHostDeps; call: RestCallContext },
+): Promise<void> {
+  const { session, principal, deps, call } = args;
+  const capability = await issueSpecCapability(fixated.spec, principal, deps, call);
+  const actions = await actionsFor(deps, fixated.spec, call);
+  await stream.writeSSE({
+    event: "spec",
+    data: JSON.stringify({
+      spec: fixated.spec,
+      capability,
+      final: true,
+      ...(actions != null ? { actions } : {}),
+    }),
+  });
+  await finishStream(deps, stream, fixated, session, call);
+}
+
+/**
+ * The streaming-generation leg of deliverComposedStream (no fixation hit): skeleton (final:false) -> patch ->
+ * done. Any failure (including an abort surfacing from composeStream or a write) propagates to
+ * deliverComposedStream's abort-aware catch. `abort` is the same client-disconnect / timeout signal as
+ * `call.signal`, passed explicitly because the latter is optional on RestCallContext.
+ */
+async function streamGenerated(
+  stream: SSEStreamingApi,
+  args: {
+    intent: CanonicalIntent;
+    session: SessionContext;
+    principal: Principal;
+    deps: KohakuHostDeps;
+    call: RestCallContext;
+    abort: AbortSignal;
+  },
+): Promise<void> {
+  const { intent, session, principal, deps, call, abort } = args;
+  // L1/L2 path: skeleton (final:false) -> patch -> done. The capability is issued exactly once on the
+  // first event.
+  //
+  // final:true (cache hit / L0 fixed Spec — composeStream can complete in a single event without ever
+  // emitting a skeleton) is issued from the Spec itself, via the same issueSpecCapability wrapper as
+  // streamFixated: collectCapabilityScopes covers both the $ref/bind-variant read scopes
+  // and any action.invoke write scope the final Spec declares, and enforces MAX_BIND_VARIANTS (an
+  // overflow throws into deliverComposedStream's catch -> event: error COMPOSE_FAILED). A final Spec can declare
+  // action.invoke (e.g. presentForm submit) — without this, that write scope would never be
+  // issued and /binding/action would always 403 for a stream-delivered final Spec.
+  //
+  // final:false (the skeleton) has no $ref yet, so it is issued read-only from composeStream's resolved
+  // refs instead (host-core's issueCapabilityForRefs). bind (two-way binding, [Draft]) is declared only
+  // on the final Spec and is not opened up to L1/L2 generation (generation:excluded), so a skeleton never
+  // needs bind variants; consequently an L1/L2-generated Spec delivered via patches after this skeleton
+  // carries no write scope either (documented limitation — only a single-event final:true response can
+  // carry action.invoke over the stream).
+  let capability: string | undefined;
+  let final: ComposeResult | undefined;
+  for await (const ev of composeStream({ kind: "intent", intent }, deps.compose, {
+    session,
+    abort,
+    correlationId: call.requestId,
+    ...(call.traceContext != null ? { traceContext: call.traceContext } : {}),
+  })) {
+    if (ev.kind === "spec") {
+      capability ??= ev.final
+        ? await issueSpecCapability(ev.spec, principal, deps, call)
+        : await hostCore.issueCapabilityForRefs(deps.authz, principal, ev.refs, capabilityTtl(deps));
+      const actions = await actionsFor(deps, ev.spec, call);
+      await stream.writeSSE({
+        event: "spec",
+        data: JSON.stringify({
+          spec: ev.spec,
+          capability,
+          final: ev.final,
+          ...(actions != null ? { actions } : {}),
+        }),
+      });
+    } else if (ev.kind === "patch") {
+      await stream.writeSSE({ event: "patch", data: JSON.stringify({ patch: ev.patch }) });
+    } else {
+      final = ev.result;
+    }
   }
-  return host;
-}
-
-/**
- * Resolves the L0 fixation shortcut (L0 fixation = pinning an L1-generated spec down to a fixed L0 spec, L1->L0).
- * This is the single source of truth shared by composeForRest (used by /compose and /events) and the
- * fixation shortcut in /compose/stream. Delegates the materialize/settle sequence to host-core, sharing it with
- * host-mcp-apps. Revalidation uses the tenant's catalog (when promotion splits catalogs per tenant,
- * validating against the global catalog would cause a fingerprint mismatch and an unnecessary stale verdict; a
- * no-op when catalogFor is not wired). No fixation / stale (staleness detection; self-healing is fired by
- * host-core's settleFixation) returns null, and the caller falls back to normal compose / streaming generation.
- */
-async function resolveFixatedForRest(
-  intent: CanonicalIntent,
-  session: SessionContext,
-  deps: KohakuHostDeps,
-  call: RestCallContext,
-): Promise<ComposeResult | null> {
-  return hostCore.resolveFixatedResult(
-    intent,
-    session,
-    withTenantCatalog(deps.compose, session.tenant),
-    fixationHost(deps),
-    call.requestId,
-  );
-}
-
-/**
- * Fixation shortcut -> normal compose (shared by /compose, /events, and /fixations/approve). call.requestId is
- * threaded into host-core's fixation self-healing (FixationDeliveryHost.onSelfHealError) so a self-heal
- * failure can be tied back to the request that triggered it. call.traceContext, when present (the
- * `traceparent` request header via shared.ts's traceContextOf), is threaded into the normal-compose fallback
- * as ComposeOptions.traceContext -- additive/opt-in, same as requestId/correlationId (see host-core's
- * composeWithFixation doc comment). call.signal is the client-disconnect / timeout abort signal.
- * call.endpoint is accepted for a uniform call-site shape shared with resolveFixatedForRest /
- * issueSpecCapability / finishStream, though composeForRest itself has no direct use for it (its callers
- * report their own failures via errorReporterFor / reportHostError).
- */
-export async function composeForRest(
-  intent: CanonicalIntent,
-  session: SessionContext,
-  deps: KohakuHostDeps,
-  call: RestCallContext,
-): Promise<ComposeResult> {
-  // materialize validates against the tenant catalog; the normal-compose fallback runs against the untenanted
-  // deps.compose (compose() re-applies tenant/session internally).
-  return hostCore.composeWithFixation(
-    intent,
-    session,
-    {
-      materialize: withTenantCatalog(deps.compose, session.tenant),
-      compose: deps.compose,
-      ...(call.signal != null ? { abort: call.signal } : {}),
-    },
-    fixationHost(deps),
-    call.requestId,
-    call.traceContext,
-  );
+  // recorder / view.fallback runs exactly once against the final Spec (the skeleton is not recorded).
+  if (final != null) await finishStream(deps, stream, final, session, call);
 }
 
 /**
@@ -659,59 +559,21 @@ async function finishStream(
 
 /**
  * Resolves a CanonicalIntent from the ComposeBody (shared by /compose and /compose/stream).
- * If body.intent is present, resolved directly (host-core's "intent" source); otherwise delegated to
- * resolveSemanticInput. Failures (INTENT_INVALID) are mapped to 422 by the caller, so throws are passed
- * through here.
+ * If body.intent is present, resolved directly (host-core's "intent" source); otherwise the raw SemanticInput
+ * (NLQuery | GuiAction) goes through the same resolveIntent helper — the sequence shared with
+ * /intent/normalize, the MCP profile's compose-tool nl branch and REST/MCP's own "gui" event paths.
+ * host-core's "gui" IntentSource variant takes `current` as optional (mirroring GuiAction), so a currentless
+ * GuiAction (a fresh gui action against no prior Intent) also resolves through resolveIntent — no direct
+ * semantic.normalize bypass is needed here. Failures (INTENT_INVALID) are mapped to 422 by the caller, so
+ * throws are passed through here.
  */
 async function resolveIntentFromBody(
   body: z.infer<typeof ComposeBodySchema>,
   session: SessionContext,
   deps: KohakuHostDeps,
 ): Promise<CanonicalIntent> {
-  if (body.intent != null) {
-    const { intent } = await hostCore.resolveIntent(
-      deps.compose.semantic,
-      {
-        kind: "intent",
-        intent: { canonical: body.intent.canonical, params: body.intent.params },
-      },
-      session,
-    );
-    return intent;
-  }
-  return resolveSemanticInput(body.input as SemanticInput, session, deps);
-}
-
-/**
- * Resolves a CanonicalIntent from a raw SemanticInput (NLQuery | GuiAction) via host-core's shared
- * resolveIntent helper — shared by /intent/normalize and resolveIntentFromBody so both go through the same
- * normalization/finalization sequence as the MCP profile's compose-tool nl branch and REST/MCP's own "gui"
- * event paths. host-core's "gui" IntentSource variant takes `current` as optional (mirroring GuiAction), so
- * a currentless GuiAction (a fresh gui action against no prior Intent) also resolves through resolveIntent —
- * no direct semantic.normalize bypass is needed here.
- */
-async function resolveSemanticInput(
-  input: SemanticInput,
-  session: SessionContext,
-  deps: KohakuHostDeps,
-): Promise<CanonicalIntent> {
-  if (input.kind === "nl") {
-    const { intent } = await hostCore.resolveIntent(
-      deps.compose.semantic,
-      { kind: "nl", text: input.text, ...(input.locale != null ? { locale: input.locale } : {}) },
-      session,
-    );
-    return intent;
-  }
-  const { intent } = await hostCore.resolveIntent(
-    deps.compose.semantic,
-    {
-      kind: "gui",
-      action: input.action,
-      params: input.params,
-      ...(input.current != null ? { current: input.current } : {}),
-    },
-    session,
-  );
+  const source: hostCore.IntentSource =
+    body.intent != null ? { kind: "intent", intent: body.intent } : (body.input as SemanticInput);
+  const { intent } = await hostCore.resolveIntent(deps.compose.semantic, source, session);
   return intent;
 }

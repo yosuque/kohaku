@@ -94,15 +94,31 @@ function mcpSession(locale: string | undefined, principal?: Principal): SessionC
 const MCP_APP_SURFACE = "mcp-app" as const;
 
 /**
- * Builds this call's `ToolCallContext` from the attach-level `ToolContext` plus the `Principal` already
- * resolved for this specific call (via `ctx.principalOf(extra)`). A shallow spread is enough — `principal` is
- * the only field a call needs to add on top of the shared attach-level context (see `ToolCallContext`'s doc
- * comment in types.ts for why the two are kept as distinct types rather than mutating `principal` onto
- * `ToolContext` directly: it makes passing the un-resolved attach-level `ctx` into the compose pipeline a type
- * error instead of a latent "which principal did this call actually use" bug).
+ * The shared preamble of the compose-family tool handlers (compose / render_snapshot / intent tools / event):
+ * resolves this call's principal (`ctx.principalOf(extra)`), runs the rate-limit check for `routeClass`, and
+ * builds the call's `ToolCallContext` — the attach-level `ToolContext` plus the resolved `Principal` and the
+ * call's request data (`requestContextOf(extra)`'s `abort` / `requestId`, the tool input's `locale`, and
+ * `traceContextOf(extra)`). A shallow spread is enough (see `ToolCallContext`'s doc comment in types.ts for
+ * why the two are kept as distinct types rather than mutating `principal` onto `ToolContext` directly: it
+ * makes passing the un-resolved attach-level `ctx` into the compose pipeline a type error instead of a
+ * latent "which principal did this call actually use" bug). Returns the structured `RATE_LIMITED` tool error
+ * instead when the limiter denies, which the handler returns as-is (narrow it with `"isError" in call`).
+ *
+ * The order is the one every handler used inline: principal first (a throw from `resolvePrincipal` fails the
+ * call closed in the handler's `safeTool`), then the rate-limit check, then the request-data reads. A handler
+ * that must run another check ahead of the principal (`_action`'s abort check and payload parse) or needs no
+ * `ToolCallContext` (`_resolve_binding`) does not use this.
  */
-function forCall(ctx: ToolContext, principal: Principal): ToolCallContext {
-  return { ...ctx, principal };
+async function beginCall(
+  ctx: ToolContext,
+  extra: ServerContext,
+  routeClass: "compose" | "action" | "resolve",
+  locale: string | undefined,
+): Promise<ToolCallContext | ReturnType<typeof rateLimitToolError>> {
+  const principal = await ctx.principalOf(extra);
+  const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, routeClass);
+  if (rateLimited != null) return rateLimited;
+  return { ...ctx, principal, ...requestContextOf(extra), locale, traceContext: traceContextOf(extra) };
 }
 
 /**
@@ -114,9 +130,8 @@ function forCall(ctx: ToolContext, principal: Principal): ToolCallContext {
  * (`extra.mcpReq.signal` / `extra.mcpReq.id`); this function is a thin projection of that shape, plus
  * `mcpCorrelationId`'s formatting of the two into one id (see its doc comment).
  *
- * Named `abort` (not `signal`) on the returned object so `{ ...requestContextOf(extra), locale, traceContext:
- * traceContextOf(extra) }` is directly a `ComposeCallContext` — every compose-family tool handler builds its
- * `ComposeCallContext` this way (see that type's doc comment).
+ * Named `abort` (not `signal`) on the returned object so it spreads directly onto a `ToolCallContext`
+ * (see `beginCall`, which builds every compose-family tool handler's call context this way).
  */
 function requestContextOf(extra: ServerContext): { abort: AbortSignal; requestId: string } {
   return {
@@ -176,22 +191,6 @@ function mcpCorrelationId(extra: ServerContext): string {
     correlationIdsByCall.set(extra, id);
   }
   return id;
-}
-
-/**
- * The compose-pipeline call context: everything about a single tool call (beyond the already-resolved
- * `ToolCallContext.principal`) that composeAndAudit / composeAndPackage / startComposeTask / buildSnapshot /
- * composeForTool need to thread through to host-core's composeWithFixation, bundled into one options bag
- * instead of separate positional parameters. Every call site builds one via `{ ...requestContextOf(extra),
- * locale, traceContext: traceContextOf(extra) }` (requestContextOf's returned `{abort, requestId}` already
- * matches this type's field names by construction, so the spread needs only `locale` and `traceContext`
- * added).
- */
-interface ComposeCallContext {
-  locale?: string;
-  abort?: AbortSignal;
-  requestId?: string;
-  traceContext?: TraceContext;
 }
 
 /**
@@ -260,28 +259,28 @@ function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
  * wired, that alone is called (no fallback recording — the old, narrower contract). `recorder` takes priority
  * when both are present.
  *
- * `abort`, when passed, propagates the tool call's cancellation (SDK's `extra.mcpReq.signal`) into composeForTool ->
+ * `ctx.abort`, when set, propagates the tool call's cancellation (SDK's `extra.mcpReq.signal`) into composeForTool ->
  * composeWithFixation -> the composer's L1/L2 LLM generation, so a cancelled MCP tool call stops doing
  * generation work the caller has already given up on (parity with the REST profile's abort wiring via
  * `c.req.raw.signal`).
  *
- * `requestId`, when passed (`mcpCorrelationId(extra)` — `mcp:<sessionId or per-call uuid>:<jsonrpc id>`),
+ * `ctx.requestId`, when set (`mcpCorrelationId(extra)` — `mcp:<sessionId or per-call uuid>:<jsonrpc id>`),
  * is forwarded into composeForTool ->
  * composeWithFixation as both the fixation self-heal correlation id (already threaded through
  * resolveFixatedResult) and, additively, ComposeOptions.correlationId, so a degraded/failed delivery's
  * observer.onError call and ComposeTrace can be tied back to this tool call the same way host-rest ties them
  * back to X-Request-Id.
  *
- * `traceContext` (from `_meta.traceparent` via traceContextOf), when passed, is forwarded the same way as
+ * `ctx.traceContext` (from `_meta.traceparent` via traceContextOf), when set, is forwarded the same way as
  * ComposeOptions.traceContext (additive/opt-in, see composeForTool's doc comment).
  */
 async function composeAndAudit(
   ctx: ToolCallContext,
   input: ComposeSource,
   endpoint: string,
-  options?: ComposeCallContext & { afterCompose?: (result: ComposeResult) => Promise<void> },
+  options?: { afterCompose?: (result: ComposeResult) => Promise<void> },
 ): Promise<ComposeResult> {
-  const result = await composeForTool(ctx, input, options);
+  const result = await composeForTool(ctx, input);
   if (options?.afterCompose != null) await options.afterCompose(result);
   // The audit record is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the REST
   // profile's deliverComposed/finishStream): a recording failure is swallowed so it does not drag down UI
@@ -306,7 +305,7 @@ async function composeAndAudit(
         await ctx.deps.onComposed?.(result.spec, result.trace);
       }
     },
-    (e) => reportMcpError(ctx.deps, endpoint, e, options?.requestId),
+    (e) => reportMcpError(ctx.deps, endpoint, e, ctx.requestId),
   );
   return result;
 }
@@ -314,7 +313,6 @@ async function composeAndAudit(
 async function composeAndPackage(
   ctx: ToolCallContext,
   input: ComposeSource,
-  callCtx?: ComposeCallContext,
   // Optional peek at the raw ComposeResult right after composeAndAudit resolves, before packaging. The only
   // consumer today is startComposeTask below, which needs `result.trace.cancelled` to tell a genuine
   // tasks/cancel-driven cancellation apart from an ordinary completion/fallback when deciding which status
@@ -326,7 +324,6 @@ async function composeAndPackage(
   let capability!: string;
   let actions: hostCore.ActionManifest | undefined;
   const result = await composeAndAudit(ctx, input, "compose", {
-    ...callCtx,
     afterCompose: async (composed) => {
       // host-core's issueSpecCapabilitySafely applies the scope-collection rule (SPEC §5 A1;
       // collectCapabilityScopes is the single source of truth), shared with the REST profile so both profiles
@@ -373,7 +370,7 @@ async function composeAndPackage(
   // below so the legacyUiResource co-emission (which needs the identical ref set) does not re-invoke
   // domain.invoke for refs already resolved here.
   const { data: initialData, resolved: preresolvedRefs } = await preresolveInitialData(result.spec, ctx);
-  const requestId = result.trace.correlationId ?? callCtx?.requestId;
+  const requestId = result.trace.correlationId ?? ctx.requestId;
   // content[0] is always the text fallback (MCPAPP-FBK-001). The legacy UIResource comes after.
   const content: Array<
     | { type: "text"; text: string }
@@ -442,11 +439,7 @@ const COMPOSE_TASK_POLL_INTERVAL_MS = 2_000;
  * The compose is deliberately NOT awaited here — it runs to completion (or cancellation, or failure) in the
  * background, and the tool call returns immediately with the task descriptor.
  */
-function startComposeTask(
-  ctx: ToolCallContext,
-  input: ComposeSource,
-  callCtx: ComposeCallContext,
-): { resultType: "task" } & DetailedTask {
+function startComposeTask(ctx: ToolCallContext, input: ComposeSource): { resultType: "task" } & DetailedTask {
   const { taskId, abort, task } = ctx.tasks.create({
     ttlMs: COMPOSE_TASK_TTL_MS,
     pollIntervalMs: COMPOSE_TASK_POLL_INTERVAL_MS,
@@ -455,7 +448,7 @@ function startComposeTask(
   // The task's own AbortController (not the synchronous tool call's own abort signal, which is meaningless
   // once the tool call has already returned a CreateTaskResult) drives cancellation here — see this
   // function's doc comment on tasks/cancel wiring into the same client-abort path.
-  void composeAndPackage(ctx, input, { ...callCtx, abort: abort.signal }, (result) => {
+  void composeAndPackage({ ...ctx, abort: abort.signal }, input, (result) => {
     cancelled = result.trace.cancelled === true;
   })
     .then((packaged) => {
@@ -463,11 +456,11 @@ function startComposeTask(
       else ctx.tasks.complete(taskId, packaged as unknown as JsonObject);
     })
     .catch((e) => {
-      // Same correlation id the tool call's compose pipeline recorded (callCtx.requestId is
-      // mcpCorrelationId(extra), set by the tool handler), and the same client-visible classification as
+      // Same correlation id the tool call's compose pipeline recorded (ctx.requestId is
+      // mcpCorrelationId(extra), set by beginCall), and the same client-visible classification as
       // safeTool: a task's failure message reaches the client through tasks/get, so a raw provider SDK
       // message (e.g. an LlmError naming the missing API key) must not be stored there.
-      void reportMcpError(ctx.deps, "tasks.compose", e, callCtx.requestId);
+      void reportMcpError(ctx.deps, "tasks.compose", e, ctx.requestId);
       ctx.tasks.fail(taskId, { message: clientFailureMessage(e) });
     });
   return createTaskResult(task);
@@ -481,10 +474,9 @@ function startComposeTask(
 async function buildSnapshot(
   ctx: ToolCallContext,
   input: ComposeSource,
-  callCtx?: ComposeCallContext,
 ): Promise<{ spec: UISpec; html: string }> {
   // The audit record is fail-open symmetrically with the existing compose: a recording failure does not drag down HTML generation.
-  const result = await composeAndAudit(ctx, input, "render_snapshot", callCtx);
+  const result = await composeAndAudit(ctx, input, "render_snapshot");
   // HTML assembly is shared with the legacy UIResource co-emission path via snapshotHtmlFor (bounded
   // concurrency + an overall deadline, see snapshotHtmlFor's doc). Here the snapshot is the deliverable itself
   // (no other resolution pass to share with), so a resolution failure or timeout is propagated rather than
@@ -527,8 +519,8 @@ function registerRendererResource(ctx: ToolContext): void {
 
 /**
  * Casts a task-branch return value (`startComposeTask`'s `CreateTaskResult`) to line up, for the type
- * checker only, with `composeAndPackage`'s inferred return type — used at each task-capable tool's
- * `if (taskCapable(ctx, extra)) return …` branch below instead of giving that branch its own precise
+ * checker only, with `composeAndPackage`'s inferred return type — used at `composeOrStartTask`'s task
+ * branch below instead of giving that branch its own precise
  * type. Both `safeTool`'s own `T` and `registerTool`'s `cb` parameter are inferred generics; once the two
  * branches of an if/return inside that callback present TS with genuinely different literal shapes (or an
  * explicit named union type standing in for them), the installed TypeScript 7 compiler was observed to
@@ -541,6 +533,26 @@ function registerRendererResource(ctx: ToolContext): void {
  */
 function asComposePackage<T>(value: unknown): T {
   return value as T;
+}
+
+/**
+ * The shared tail of every task-capable compose-family handler (`${prefix}_compose` and the intent tools):
+ * the async/task branch when this request may take it (`taskCapable`: the `AttachOptions.tasksEnabled` kill
+ * switch AND the per-request opt-in), otherwise the plain synchronous `composeAndPackage`. Kept as one
+ * function so each `registerTool` callback ends in a single return expression of this fixed type (see
+ * `asComposePackage` for why that matters to the installed TypeScript 7 compiler's overload inference).
+ */
+function composeOrStartTask(
+  call: ToolCallContext,
+  extra: ServerContext,
+  input: ComposeSource,
+): ReturnType<typeof composeAndPackage> {
+  if (taskCapable(call, extra)) {
+    return asComposePackage<ReturnType<typeof composeAndPackage>>(
+      Promise.resolve(startComposeTask(call, input)),
+    );
+  }
+  return composeAndPackage(call, input);
 }
 
 /**
@@ -571,22 +583,9 @@ function registerComposeTool(ctx: ToolContext): void {
     },
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_compose`, extra, async () => {
-        const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
-        if (rateLimited != null) return rateLimited;
-        const call = forCall(ctx, principal);
-        const callCtx: ComposeCallContext = {
-          ...requestContextOf(extra),
-          locale,
-          traceContext: traceContextOf(extra),
-        };
-        const input: ComposeSource = { kind: "nl", text: question };
-        if (taskCapable(ctx, extra)) {
-          return asComposePackage<ReturnType<typeof composeAndPackage>>(
-            Promise.resolve(startComposeTask(call, input, callCtx)),
-          );
-        }
-        return composeAndPackage(call, input, callCtx);
+        const call = await beginCall(ctx, extra, "compose", locale);
+        if ("isError" in call) return call;
+        return composeOrStartTask(call, extra, { kind: "nl", text: question });
       }),
   );
 }
@@ -616,19 +615,9 @@ function registerRenderSnapshotTool(ctx: ToolContext): void {
     },
     async ({ question, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_render_snapshot`, extra, async () => {
-        const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
-        if (rateLimited != null) return rateLimited;
-        const call = forCall(ctx, principal);
-        const { spec, html } = await buildSnapshot(
-          call,
-          { kind: "nl", text: question },
-          {
-            ...requestContextOf(extra),
-            locale,
-            traceContext: traceContextOf(extra),
-          },
-        );
+        const call = await beginCall(ctx, extra, "compose", locale);
+        if ("isError" in call) return call;
+        const { spec, html } = await buildSnapshot(call, { kind: "nl", text: question });
         // The file name is derived from the intent hash (identical displays coalesce into the same file and do not collide).
         // The return value is a locator = local path or public URL (branching in snapshotWriter's implementation = host responsibility).
         const locator = await snapshotWriter(`snapshot-${spec.intent.hash}.html`, html);
@@ -677,25 +666,15 @@ function registerIntentTools(ctx: ToolContext): void {
       },
       async (args, extra) =>
         safeTool(ctx.deps, tool.name, extra, async () => {
-          const principal = await ctx.principalOf(extra);
-          const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
-          if (rateLimited != null) return rateLimited;
-          const call = forCall(ctx, principal);
           // Pull the shared language input out before it reaches the intent params (it must not
           // pollute the canonical intent / intent hash).
           const { locale, ...params } = args as JsonObject & { locale?: string };
-          const callCtx: ComposeCallContext = {
-            ...requestContextOf(extra),
-            locale,
-            traceContext: traceContextOf(extra),
-          };
-          const input: ComposeSource = { kind: "intent", intent: tool.toIntent(params as JsonObject) };
-          if (taskCapable(ctx, extra)) {
-            return asComposePackage<ReturnType<typeof composeAndPackage>>(
-              Promise.resolve(startComposeTask(call, input, callCtx)),
-            );
-          }
-          return composeAndPackage(call, input, callCtx);
+          const call = await beginCall(ctx, extra, "compose", locale);
+          if ("isError" in call) return call;
+          return composeOrStartTask(call, extra, {
+            kind: "intent",
+            intent: tool.toIntent(params as JsonObject),
+          });
         }),
     );
   }
@@ -769,10 +748,8 @@ function registerEventTool(ctx: ToolContext): void {
     },
     async ({ intent, on, payload, locale }, extra) =>
       safeTool(ctx.deps, `${ctx.prefix}_event`, extra, async () => {
-        const principal = await ctx.principalOf(extra);
-        const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "compose");
-        if (rateLimited != null) return rateLimited;
-        const call = forCall(ctx, principal);
+        const call = await beginCall(ctx, extra, "compose", locale);
+        if ("isError" in call) return call;
         const session = mcpSession(locale, call.principal);
         // Resolved through host-core's resolveIntent (the "intent" source), not a bare finalizeIntent, so a
         // SemanticPort.validateIntent implementation gets a chance to reject an unknown canonical or invalid
@@ -810,15 +787,7 @@ function registerEventTool(ctx: ToolContext): void {
         // Pass the already-resolved CanonicalIntent through as-is ("canonical" kind) rather than
         // re-destructuring it into a plain `{canonical, params}` literal — composeForTool then skips a
         // redundant second normalize+finalize pass over the same Intent (see ComposeSource's doc comment).
-        return composeAndPackage(
-          call,
-          { kind: "canonical", intent: resolved },
-          {
-            ...requestContextOf(extra),
-            locale,
-            traceContext: traceContextOf(extra),
-          },
-        );
+        return composeAndPackage(call, { kind: "canonical", intent: resolved });
       }),
   );
 }
@@ -829,45 +798,6 @@ function registerEventTool(ctx: ToolContext): void {
  * against the action's `paramsSchema`, ACT-PRM-001).
  */
 const MAX_ACTION_PAYLOAD_BYTES = 64 * 1024;
-
-/**
- * Maps one `ActionGate.check` outcome onto the MCP tool result (design.md #62/#63; the REST profile's
- * `handleActionGateResult`, packages/host-rest/src/routes/binding.ts, is its wire-mapping counterpart). The
- * audit trail and the client-visible messages are host-core's `recordActionGateResult`, shared with REST;
- * this keeps only the tool-error mapping. Returns the structured tool error to return as-is (`invalid` /
- * `approvalRequired` / `denied`), or `null` when the gate allowed the invoke and the caller should proceed to
- * `domain.invoke`. This profile performs no tenant resolution, so no `tenant` is ever passed to the recorder
- * (mirrors every other recorder call in this file).
- */
-async function handleActionGateResult(
-  deps: McpHostDeps,
-  gateResult: hostCore.ActionGateResult,
-  args: {
-    action: string;
-    payload: JsonObject;
-    principal: Principal;
-    endpoint: string;
-    correlationId: string;
-  },
-): Promise<ReturnType<typeof toolError> | null> {
-  const { action, payload, principal, endpoint, correlationId } = args;
-  const outcome = await hostCore.recordActionGateResult(gateResult, {
-    recorder: deps.actionAuditRecorder,
-    action,
-    payload,
-    principal,
-    correlationId,
-    report: (e) => reportMcpError(deps, `${endpoint}.audit`, e),
-  });
-  switch (outcome.kind) {
-    case "invalid":
-      return actionParamsInvalidToolError(outcome.issues);
-    case "approvalRequired":
-      return approvalRequiredToolError(outcome.message, outcome.approval);
-    case "proceed":
-      return null;
-  }
-}
 
 /**
  * Registers `${prefix}_action` (app-only): direct write path (presentForm submit / action.button).
@@ -970,13 +900,20 @@ function registerActionTool(ctx: ToolContext): void {
           await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError, requestId);
           return toolError("action parameter schema unavailable");
         }
+        // This profile performs no tenant resolution, so no `tenant` is ever passed to the recorder. The audit
+        // context is built once for both audit sites below; the undeclared-action denial overrides `report` to
+        // also carry the call's correlation id (the gate-result audit has never passed one).
+        const auditContext: hostCore.ActionAuditContext = {
+          recorder: ctx.deps.actionAuditRecorder,
+          action,
+          payload: payload as JsonObject,
+          principal: resolvedPrincipal,
+          correlationId: requestId,
+          report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
+        };
         if (entry == null) {
           await hostCore.recordUndeclaredActionDenial({
-            recorder: ctx.deps.actionAuditRecorder,
-            action,
-            payload: payload as JsonObject,
-            principal: resolvedPrincipal,
-            correlationId: requestId,
+            ...auditContext,
             report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e, requestId),
           });
           return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
@@ -992,14 +929,20 @@ function registerActionTool(ctx: ToolContext): void {
                 approval,
                 requesterId: resolvedPrincipal.id,
               });
-        const gated = await handleActionGateResult(ctx.deps, gateResult, {
-          action,
-          payload: payload as JsonObject,
-          principal: resolvedPrincipal,
-          endpoint: `${ctx.prefix}_action`,
-          correlationId: requestId,
-        });
-        if (gated != null) return gated;
+        // Maps one `ActionGate.check` outcome onto the MCP tool result (design.md #62/#63; the REST profile's
+        // inline switch in packages/host-rest/src/routes/binding.ts is its wire-mapping counterpart). The audit
+        // trail and the client-visible messages are host-core's `recordActionGateResult`, shared with REST; this
+        // keeps only the structured tool-error mapping (`invalid` / `approvalRequired` / `denied`), and
+        // `proceed` falls through to `domain.invoke`.
+        const outcome = await hostCore.recordActionGateResult(gateResult, auditContext);
+        switch (outcome.kind) {
+          case "invalid":
+            return actionParamsInvalidToolError(outcome.issues);
+          case "approvalRequired":
+            return approvalRequiredToolError(outcome.message, outcome.approval);
+          case "proceed":
+            break;
+        }
 
         const result = await ctx.deps.domain.invoke(action, payload as JsonObject, {
           principal: resolvedPrincipal,
@@ -1095,7 +1038,7 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
   // (one store per McpServer instance) rather than per tool call — see tasks.ts's createTaskStore doc comment.
   // principalOf, unlike the old attach-time `principal` field it replaces, is resolved per tool call (see
   // McpHostDeps.resolvePrincipal's doc comment) — each handler calls it once, inside its own safeTool body,
-  // and builds a ToolCallContext (via forCall) to carry the resolved value through the compose pipeline.
+  // and builds a ToolCallContext (via beginCall) to carry the resolved value through the compose pipeline.
   // One memoized operation index per DomainPort (see sharedOperationIndex); the allowed-action set (capability
   // write-scope filter) is derived from it rather than from a second, independently memoized `listOperations()`
   // call, so the two can never disagree about which actions exist.
@@ -1245,26 +1188,22 @@ function fixationHost(deps: McpHostDeps): hostCore.FixationDeliveryHost {
  * policy (ComposeContext.policyFor) all see it. The MCP profile has a single ComposeContext (deps.compose), so
  * it is passed as both the materialize and (by omission, defaulting to materialize) the normal-compose context.
  *
- * `abort`, when passed, propagates into composeWithFixation's normal-compose fallback (the fixation shortcut
+ * `ctx.abort`, when set, propagates into composeWithFixation's normal-compose fallback (the fixation shortcut
  * itself never calls the LLM, so it has nothing to cancel) — see composeAndAudit's doc comment for why tool
  * handlers thread the SDK's `extra.mcpReq.signal` through here.
  *
- * `requestId`, when passed (`mcpCorrelationId(extra)` — see its doc comment for the exact format), is
+ * `ctx.requestId`, when set (`mcpCorrelationId(extra)` — see its doc comment for the exact format), is
  * forwarded to composeWithFixation as the correlation id — see composeAndAudit's doc comment.
  *
- * `traceContext` (from `_meta.traceparent`, see traceContextOf), when passed, is forwarded to
+ * `ctx.traceContext` (from `_meta.traceparent`, see traceContextOf), when set, is forwarded to
  * composeWithFixation the same way, additively (ComposeOptions.traceContext).
  */
-async function composeForTool(
-  ctx: ToolCallContext,
-  input: ComposeSource,
-  callCtx?: ComposeCallContext,
-): Promise<ComposeResult> {
+async function composeForTool(ctx: ToolCallContext, input: ComposeSource): Promise<ComposeResult> {
   // Attach ctx.principal (this call's already-resolved principal — see McpHostDeps.resolvePrincipal's doc
   // comment), symmetric with registerEventTool's mcpSession(locale, call.principal) call — without it,
   // SemanticPort.normalize / policyFor / the fixation lookup would see an anonymous session on the compose
   // path only, diverging from the kohaku_event path for the same resolved principal.
-  const session = mcpSession(callCtx?.locale, ctx.principal);
+  const session = mcpSession(ctx.locale, ctx.principal);
   const intent =
     input.kind === "canonical"
       ? input.intent
@@ -1272,10 +1211,10 @@ async function composeForTool(
   return hostCore.composeWithFixation(
     intent,
     session,
-    { materialize: ctx.deps.compose, ...(callCtx?.abort != null ? { abort: callCtx.abort } : {}) },
+    { materialize: ctx.deps.compose, ...(ctx.abort != null ? { abort: ctx.abort } : {}) },
     ctx.fixationHost,
-    callCtx?.requestId,
-    callCtx?.traceContext,
+    ctx.requestId,
+    ctx.traceContext,
   );
 }
 
@@ -1313,6 +1252,20 @@ function toolError(message: string) {
 }
 
 /**
+ * The shared shape of the structured tool errors below: the text content is the message, and
+ * `structuredContent.error` is `{ code, message, ...extra }` (spec-core's `HostErrorCode` / `ErrorEnvelope`
+ * wire vocabulary, with the code-specific fields spread after `message`).
+ */
+function structuredToolError(code: string, message: string, extra: Record<string, unknown>) {
+  return {
+    content: [{ type: "text" as const, text: message }],
+    isError: true,
+    resultType: "complete" as const,
+    structuredContent: { error: { code, message, ...extra } },
+  };
+}
+
+/**
  * A structured `RATE_LIMITED` tool error (SPEC §6.1, REST-RL-001's MCP counterpart). Unlike the generic
  * `toolError`, this also carries `structuredContent.error` (spec-core's `HostErrorCode`/`ErrorEnvelope`
  * wire vocabulary) so a client can identify the failure programmatically rather than by matching the
@@ -1320,18 +1273,9 @@ function toolError(message: string) {
  * `retryAfterMs` (when the limiter reports one) travel in `structuredContent` instead.
  */
 function rateLimitToolError(retryAfterMs: number | undefined) {
-  return {
-    content: [{ type: "text" as const, text: "rate limit exceeded" }],
-    isError: true,
-    resultType: "complete" as const,
-    structuredContent: {
-      error: {
-        code: "RATE_LIMITED",
-        message: "rate limit exceeded",
-        ...(retryAfterMs != null ? { retryAfterMs } : {}),
-      },
-    },
-  };
+  return structuredToolError("RATE_LIMITED", "rate limit exceeded", {
+    ...(retryAfterMs != null ? { retryAfterMs } : {}),
+  });
 }
 
 /**
@@ -1342,14 +1286,7 @@ function rateLimitToolError(retryAfterMs: number | undefined) {
  * field(s) programmatically rather than by parsing the text message.
  */
 function actionParamsInvalidToolError(issues: ActionParamIssue[]) {
-  return {
-    content: [{ type: "text" as const, text: "action parameters failed validation" }],
-    isError: true,
-    resultType: "complete" as const,
-    structuredContent: {
-      error: { code: "ACTION_PARAMS_INVALID", message: "action parameters failed validation", issues },
-    },
-  };
+  return structuredToolError("ACTION_PARAMS_INVALID", "action parameters failed validation", { issues });
 }
 
 /**
@@ -1358,15 +1295,10 @@ function actionParamsInvalidToolError(issues: ActionParamIssue[]) {
  * satisfied, either because nothing was presented yet (`approvalRequired`) or a presented approval token
  * did not verify (`denied`) -- both map to this same structured error, distinguished only by `message`
  * and, upstream, by which `action.*` lineage event was recorded for the attempt (see
- * `handleActionGateResult` below).
+ * the gate-outcome switch in `registerActionTool`).
  */
 function approvalRequiredToolError(message: string, approval: ApprovalRequiredInfo) {
-  return {
-    content: [{ type: "text" as const, text: message }],
-    isError: true,
-    resultType: "complete" as const,
-    structuredContent: { error: { code: "APPROVAL_REQUIRED", message, approval } },
-  };
+  return structuredToolError("APPROVAL_REQUIRED", message, { approval });
 }
 
 /**

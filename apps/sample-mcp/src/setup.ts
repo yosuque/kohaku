@@ -3,11 +3,12 @@
  *
  * It assembles env loading, createApp (Ports + Composition Service), the View Lineage recorder,
  * and the renderer / snapshot wiring once, and returns a factory (createServer) that
- * "creates a fresh attached McpServer per session".
+ * "creates a fresh attached McpServer per call".
  *
  * - stdio (src/index.ts) calls createServer() once and connects it to the stdio transport.
- * - Streamable HTTP (src/http.ts) calls createServer() per connection (session) and connects
- *   each to a separate transport. The result of createApp (Ports, .data, catalog) is shared across all sessions.
+ * - Streamable HTTP (src/http.ts) hands createServer to the SDK's stateless createMcpHandler, which calls it
+ *   for each request and connects that McpServer to the request's own transport (there is no session).
+ *   The result of createApp (Ports, .data, catalog) is shared across every createServer() call.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -55,10 +56,9 @@ const DEFAULT_DATA_DIR = join(APP_DIR, "../../sample-api/.data");
 const DEFAULT_SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Sweep cadence (ms) for expired snapshot files. Chosen to match the session idle-TTL sweep's cadence
- * (http.ts's SWEEP_INTERVAL_MS) so both periodic cleanup passes run at the same rate; the two timers are
- * otherwise independent (setup.ts has no dependency on http.ts, and this sweep also runs for the stdio path,
- * which has no session sweep at all).
+ * Sweep cadence (ms) for expired snapshot files: one pass per minute. The sweep timer lives here rather than
+ * in http.ts because both transports write into the snapshot directory, so it runs for the stdio path too
+ * (http.ts keeps no timer of its own).
  */
 const SNAPSHOT_SWEEP_INTERVAL_MS = 60 * 1000;
 
@@ -71,7 +71,7 @@ export function snapshotTtlMs(env: NodeJS.ProcessEnv = process.env): number {
 
 /**
  * Pure function returning the names of files whose mtime is older than `now - ttlMs` (exported for
- * testability; mirrors http.ts's findExpiredSessions).
+ * testability; the pure decision half of `sweepSnapshotDir` below).
  */
 export function findExpiredSnapshotFiles(
   files: { name: string; mtimeMs: number }[],
@@ -152,7 +152,7 @@ export interface KohakuMcpSetupOptions {
 
 export interface KohakuMcpSetup {
   /**
-   * Create one attached McpServer. Can be called per session (connection).
+   * Create one attached McpServer. Can be called as often as needed (the HTTP entry calls it per request).
    * The result of createApp, the catalog, and the recorder are shared within this setup.
    */
   createServer(): McpServer;
@@ -214,7 +214,7 @@ export function makeRendererHtmlLoader(args: {
 }
 
 /**
- * Run the common setup once and return a per-session McpServer factory.
+ * Run the common setup once and return an McpServer factory (one attached server per createServer() call).
  * createApp is async because it reconciles at startup (snapshot authority → projection).
  */
 export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}): Promise<KohakuMcpSetup> {
@@ -299,11 +299,11 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
   );
   snapshotSweepTimer.unref?.();
   // Finalize the Intent catalog once (core 7 + promoted intents merged from the .data/promotions.json snapshot at startup).
-  // Every session's McpServer exposes the same tool set (static at startup).
+  // Every McpServer this setup creates exposes the same tool set (static at startup).
   const intentTools = intentToolsFromCatalog(intentCatalog.list());
 
   // Renderer HTML loader that memoizes only successful reads, avoiding synchronous re-reads on every
-  // resource read / snapshot generation. Shared across all sessions (createServer) (RENDERER_PATH is fixed).
+  // resource read / snapshot generation. Shared across every createServer() call (RENDERER_PATH is fixed).
   const loadRendererHtml = makeRendererHtmlLoader({
     exists: () => existsSync(RENDERER_PATH),
     read: () => readFileSync(RENDERER_PATH, "utf8"),

@@ -1,14 +1,13 @@
-import { clientMessageFor, resolveIntent } from "@kohaku-ui/host-core";
+import { clientMessageFor, errorMessage, resolveIntent } from "@kohaku-ui/host-core";
 import { type CanonicalIntent, GOVERNANCE_ERROR_DISCRIMINATORS } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { GovernanceOperation } from "../governance-policy.js";
 import { withFixationLock } from "../keyed-mutex.js";
 import type { FixationsApi } from "../types.js";
-import { COMPOSE_FAILED_MESSAGE, composeForRest, intentResolutionFailure } from "./compose.js";
+import { COMPOSE_FAILED_MESSAGE, composeForRest, intentResolutionFailure } from "./compose-pipeline.js";
 import { ComposeBodySchema } from "./schemas.js";
 import {
-  message,
   parseBody,
   type RestCallContext,
   type RouteContext,
@@ -23,7 +22,7 @@ import {
 
 /**
  * The client-visible message for an unexpected fixation-removal failure (INTERNAL 500). See
- * COMPOSE_FAILED_MESSAGE's doc (compose.ts) for the rationale (an arbitrary exception's message may leak
+ * COMPOSE_FAILED_MESSAGE's doc (compose-pipeline.ts) for the rationale (an arbitrary exception's message may leak
  * internals; the original error still reaches the observability hook via reportHostError).
  */
 const FIXATION_INTERNAL_ERROR_MESSAGE =
@@ -88,7 +87,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
       try {
         ({ intent } = await resolveIntent(
           deps.compose.semantic,
-          { kind: "intent", intent: { canonical: body.intent.canonical, params: body.intent.params } },
+          { kind: "intent", intent: body.intent },
           session,
         ));
       } catch (e) {
@@ -162,7 +161,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
           // unexpected maps to 500 with a fixed message (the raw message may leak internals; the original error still
           // reaches onError via reportHostError).
           if ((e as { code?: unknown }).code === GOVERNANCE_ERROR_DISCRIMINATORS.fixationUnsupportedCode) {
-            return c.json(errorBody("NOT_IMPLEMENTED", message(e)), 501);
+            return c.json(errorBody("NOT_IMPLEMENTED", errorMessage(e)), 501);
           }
           const requestId = requestIdOf(c, deps);
           await reportHostError(deps, "fixations/remove", requestId, e);

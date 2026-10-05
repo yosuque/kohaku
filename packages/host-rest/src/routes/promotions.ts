@@ -1,4 +1,4 @@
-import { DEFAULT_CAPABILITY_TTL_SECONDS } from "@kohaku-ui/host-core";
+import { DEFAULT_CAPABILITY_TTL_SECONDS, errorMessage } from "@kohaku-ui/host-core";
 import { type ErrorEnvelope, GOVERNANCE_ERROR_DISCRIMINATORS, type Principal } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
@@ -7,7 +7,6 @@ import type { GovernanceOperation, GovernanceOperationKind } from "../governance
 import type { KohakuHostDeps, PromotionsApi } from "../types.js";
 import { ComponentDraftSchema, PromotionActionSchema } from "./schemas.js";
 import {
-  message,
   parseBody,
   type RouteContext,
   reportHostError,
@@ -399,26 +398,26 @@ async function promotionError(
     const envelope: ErrorEnvelope = {
       error: {
         code: "PROMOTION_NOT_PUBLISHED",
-        message: message(e),
+        message: errorMessage(e),
         ...(typeof status === "string" ? { status } : {}),
       },
     };
     return c.json(envelope, 409);
   }
   if ((e as { name?: unknown }).name === GOVERNANCE_ERROR_DISCRIMINATORS.transitionName) {
-    return c.json(errorBody("PROMOTION_INVALID", message(e)), 422);
+    return c.json(errorBody("PROMOTION_INVALID", errorMessage(e)), 422);
   }
   // The reject bundle transition did not reach rejected (PromotionNotRejectedError). Rather than importing from
   // lineage, discriminate by name via duck-typing (the same approach as PromotionNotPublishedError). To avoid
   // growing the set of error codes in SPEC §6.1, add no dedicated code and map it to PROMOTION_INVALID (422) as a
   // "transition did not take effect" (the reached state is included in the exception message).
   if ((e as { name?: unknown }).name === GOVERNANCE_ERROR_DISCRIMINATORS.notRejectedName) {
-    return c.json(errorBody("PROMOTION_INVALID", message(e)), 422);
+    return c.json(errorBody("PROMOTION_INVALID", errorMessage(e)), 422);
   }
   // candidate-store's require() throws this when get is unimplemented and the pre-check (ensureArtifact)
   // could not run. Discriminated by code (not a message-text match, which a wording change could break).
   if ((e as { code?: unknown }).code === GOVERNANCE_ERROR_DISCRIMINATORS.artifactNotFoundCode) {
-    return c.json(errorBody("NOT_FOUND", message(e)), 404);
+    return c.json(errorBody("NOT_FOUND", errorMessage(e)), 404);
   }
   // An unexpected failure. The raw message never reaches the client (it may leak internals); the original
   // error still reaches onError via reportHostError.
