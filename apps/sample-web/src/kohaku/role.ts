@@ -8,9 +8,11 @@ import { useEffect, useState } from "react";
  *
  * "admin" maps to "no header = server default (treated as admin)" (a regression of existing demo behavior; it reproduces
  * with the admin role the legacy behavior where the governance surface let anyone through). reviewer / viewer are sent with
- * the header, and approval/deletion operations return 403.
+ * the header, and approval/deletion operations return 403. "approver" may only issue approval tokens for governed
+ * Actions (Admin › Approvals) and read lineage; demo principal ids are `demo-${role}`, so an approver is never the
+ * requester of a viewer's action (the self-approval check refuses admin approving an admin-composed action).
  */
-export const ROLES = ["admin", "reviewer", "viewer"] as const;
+export const ROLES = ["admin", "reviewer", "approver", "viewer"] as const;
 export type Role = (typeof ROLES)[number];
 
 const STORAGE_KEY = "kohaku.role";

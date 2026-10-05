@@ -261,15 +261,16 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
         },
         # A second write action, "approve"-tier (design.md #62/#63's governed-actions demo). Its DomainPort
         # operation (publish, sales_api/app.py's SalesDomainPort) requires a bound approval token obtained
-        # out of band (POST /approvals) -- this demo intentionally adds no approver-facing UI of its own
-        # (out of scope), so pressing this button without one just leaves phase "awaitingApproval" (no
-        # visible change); the end-to-end proof is the E2E test that presents a real approval token
-        # directly to POST /binding/action / kohaku_action.
+        # out of band (POST /approvals). The first press reaches the server without one (phase
+        # "awaitingApproval", recorded as action.approvalRequested); an approver mints the token in the
+        # admin console and the requester presents it on the next press. The action name travels in the
+        # event payload (see publishBtn.press below), not in props: action.button's propsSchema has no
+        # `action`, so a props.action would be dropped by the post-processing and the compose-derived
+        # capability would never get the publish write scope.
         {
             "id": "publishBtn",
             "type": "action.button",
             "props": {
-                "action": "publish",
                 "label": "レポートを公開" if ja else "Publish report",
                 "variant": "secondary",
             },
@@ -328,13 +329,14 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
     # - noteDialog.close -> state.set(noteOpen=false): closes itself on Esc / x button / background click.
     # - noteForm.submit -> action.invoke(annotate): payload.note is the single input field,
     #   payload.refs is the table's $ref below (action_effects invalidates this reference with the new data version -> the table re-resolves).
-    # - publishBtn.press -> action.invoke(publish): no payload (design.md #62/#63's "approve"-tier demo; see
+    # - publishBtn.press -> action.invoke(publish): the action name is payload.action (the fallback for
+    #   action.button) and publish declares no paramsSchema (design.md #62/#63's "approve"-tier demo; see
     #   the publishBtn component's own comment above).
     events: list[dict[str, Any]] = [
         {"on": "openNote.press", "emit": "state.set", "payload": {"key": "noteOpen", "value": True}},
         {"on": "noteDialog.close", "emit": "state.set", "payload": {"key": "noteOpen", "value": False}},
         {"on": "noteForm.submit", "emit": "action.invoke", "payload": {"note": "$value.note", "refs": [ref]}},
-        {"on": "publishBtn.press", "emit": "action.invoke", "payload": {}},
+        {"on": "publishBtn.press", "emit": "action.invoke", "payload": {"action": "publish"}},
     ]
     return _template(intent, components, events, {"noteOpen": False})
 

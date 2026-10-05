@@ -367,4 +367,166 @@ describe("useInvokeAction: governed actions (design.md #62/#63)", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(onActionResult).not.toHaveBeenCalled();
   });
+
+  describe("default requestApproval hook (globalThis.prompt, design.md #72)", () => {
+    const APPROVAL = {
+      requestId: "req-42",
+      action: "annotate",
+      tier: "approve",
+      payloadHash: `sha256:${"ab".repeat(32)}`,
+    } as const;
+
+    /** invokeAction that answers APPROVAL_REQUIRED until it is given an approval token, then succeeds. */
+    function gatedBinding() {
+      const invokeAction = vi.fn(async (_action: string, _payload: unknown, opts?: { approval?: string }) => {
+        if (opts?.approval == null) {
+          throw new BindingError("APPROVAL_REQUIRED", "this action requires an approval token", {
+            status: 403,
+            approval: APPROVAL,
+          });
+        }
+        return { result: { ok: true } } as ActionResult;
+      });
+      const binding: BindingClient = {
+        resolve: async () => {
+          throw new Error("not used in these tests");
+        },
+        invokeAction: invokeAction as BindingClient["invokeAction"],
+      };
+      return { binding, invokeAction };
+    }
+
+    const manifest: ActionManifest = { annotate: { tier: "approve" } };
+    // The notice is on screen and the invoke that produced it has fully settled (phase back to awaitingApproval).
+    const settled = async () => {
+      await screen.findByRole("status");
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    const click = (container: HTMLElement) =>
+      fireEvent.click(container.querySelector('[data-kohaku="b1"]') as HTMLButtonElement);
+
+    it("does not prompt on the first click: the request reaches the server exactly once, without a token", async () => {
+      const prompt = vi.fn(() => "should-not-be-used");
+      vi.stubGlobal("prompt", prompt);
+      const { binding, invokeAction } = gatedBinding();
+      const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+      click(container);
+      await waitFor(() => expect(invokeAction).toHaveBeenCalledTimes(1));
+      await screen.findByRole("status");
+      expect(prompt).not.toHaveBeenCalled();
+      expect(invokeAction).toHaveBeenCalledWith(
+        "annotate",
+        { note: "hi" },
+        { confirmed: undefined, approval: undefined },
+      );
+    });
+
+    it("prompts on the click after awaitingApproval and sends the pasted token as `approval`", async () => {
+      const prompt = vi.fn(() => "  kohaku-approval.v1.pasted  ");
+      vi.stubGlobal("prompt", prompt);
+      const { binding, invokeAction } = gatedBinding();
+      const onActionResult = vi.fn();
+      const { container } = renderSpec(actionButtonSpec(), {
+        binding,
+        actionManifest: manifest,
+        onActionResult,
+      });
+      click(container);
+      await screen.findByRole("status");
+      click(container);
+      await waitFor(() => expect(invokeAction).toHaveBeenCalledTimes(2));
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(prompt).toHaveBeenCalledWith(
+        'Paste the approval token for "annotate" (ask an approver; see Admin › Approvals)',
+      );
+      expect(invokeAction).toHaveBeenLastCalledWith(
+        "annotate",
+        { note: "hi" },
+        { confirmed: undefined, approval: "kohaku-approval.v1.pasted" },
+      );
+      await waitFor(() =>
+        expect(onActionResult).toHaveBeenCalledWith(
+          expect.objectContaining({ action: "annotate", phase: "succeeded" }),
+        ),
+      );
+    });
+
+    it("resends without a token when the prompt is cancelled (or left empty)", async () => {
+      const prompt = vi.fn((): string | null => null);
+      vi.stubGlobal("prompt", prompt);
+      const { binding, invokeAction } = gatedBinding();
+      const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+      click(container);
+      await screen.findByRole("status");
+      click(container);
+      await waitFor(() => expect(invokeAction).toHaveBeenCalledTimes(2));
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(invokeAction).toHaveBeenLastCalledWith(
+        "annotate",
+        { note: "hi" },
+        { confirmed: undefined, approval: undefined },
+      );
+      prompt.mockReturnValueOnce("   ");
+      await settled();
+      click(container);
+      await waitFor(() => expect(invokeAction).toHaveBeenCalledTimes(3));
+      expect(invokeAction).toHaveBeenLastCalledWith(
+        "annotate",
+        { note: "hi" },
+        { confirmed: undefined, approval: undefined },
+      );
+    });
+
+    it("falls back to the tokenless request when prompt throws or is missing", async () => {
+      const { binding, invokeAction } = gatedBinding();
+      const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+      click(container);
+      await screen.findByRole("status");
+      vi.stubGlobal("prompt", () => {
+        throw new Error("blocked in a sandboxed iframe");
+      });
+      click(container);
+      await waitFor(() => expect(invokeAction).toHaveBeenCalledTimes(2));
+      await settled();
+      vi.stubGlobal("prompt", undefined);
+      click(container);
+      await waitFor(() => expect(invokeAction).toHaveBeenCalledTimes(3));
+      for (const call of invokeAction.mock.calls) {
+        expect(call[2]).toEqual({ confirmed: undefined, approval: undefined });
+      }
+    });
+
+    it("a host-supplied requestApproval wins over the default and is asked every time", async () => {
+      const prompt = vi.fn(() => "from-prompt");
+      vi.stubGlobal("prompt", prompt);
+      const { binding, invokeAction } = gatedBinding();
+      const requestApproval = vi.fn(async () => "from-host");
+      const { container } = renderSpec(actionButtonSpec(), {
+        binding,
+        actionManifest: manifest,
+        requestApproval,
+      });
+      click(container);
+      await waitFor(() => expect(invokeAction).toHaveBeenCalledTimes(1));
+      expect(requestApproval).toHaveBeenCalledTimes(1);
+      expect(invokeAction).toHaveBeenLastCalledWith(
+        "annotate",
+        { note: "hi" },
+        { confirmed: undefined, approval: "from-host" },
+      );
+      expect(prompt).not.toHaveBeenCalled();
+    });
+
+    it("the awaiting notice names the request and the payload hash for the approver", async () => {
+      const { binding } = gatedBinding();
+      const { container } = renderSpec(actionButtonSpec(), { binding, actionManifest: manifest });
+      click(container);
+      const notice = await screen.findByRole("status");
+      expect(notice.textContent).toContain("request req-42");
+      expect(notice.textContent).toContain(
+        `payload ${APPROVAL.payloadHash.replace(/^sha256:/, "").slice(0, 12)}`,
+      );
+      expect(notice.textContent).not.toContain(APPROVAL.payloadHash);
+    });
+  });
 });

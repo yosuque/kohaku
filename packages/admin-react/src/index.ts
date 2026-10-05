@@ -1,9 +1,10 @@
-// Governance console (lineage / analytics / promotion review / fixation) for kohaku hosts.
+// Governance console (lineage / analytics / promotion review / fixation / approvals) for kohaku hosts.
 // Public entry point: the AdminProvider/useAdmin context, the data-fetching hooks, the
 // KohakuAdmin shell and its per-domain tabs, the default English UI copy, and the design
 // tokens — the domain API only. The generic UI primitives the tabs are built from live on
 // the separate `@kohaku-ui/admin-react/ui` subpath. See the package README for usage patterns.
 
+export { derivePendingApprovals, type PendingApproval } from "./approvals.js";
 export {
   type AdminContextValue,
   AdminProvider,
@@ -11,7 +12,13 @@ export {
   useAdmin,
   useAdminNotice,
 } from "./context.js";
-export { useAnalyticsSummary, useFixations, useLineage, usePromotions } from "./hooks.js";
+export {
+  useAnalyticsSummary,
+  useApprovalInbox,
+  useFixations,
+  useLineage,
+  usePromotions,
+} from "./hooks.js";
 export {
   type AdminExtraTab,
   type AdminTabKey,
@@ -21,6 +28,7 @@ export {
 export { type AdminMessages, defaultAdminMessages } from "./messages.js";
 export { describeDeniedOperation } from "./rbac.js";
 export { AnalyticsTab } from "./tabs/AnalyticsTab.js";
+export { ApprovalsTab } from "./tabs/ApprovalsTab.js";
 export { FixationsTab } from "./tabs/FixationsTab.js";
 export { LineageTab } from "./tabs/LineageTab.js";
 export {

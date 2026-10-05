@@ -182,9 +182,12 @@ export interface RendererContextValue {
    */
   confirm?: (args: { action: string; message?: string }) => boolean | Promise<boolean>;
   /**
-   * Approval-token hook for an "approve"-tier action (design.md #63). No default is provided (an approval
-   * token is obtained out of band — e.g. the host's `POST /approvals` or an approver-facing surface —
-   * there is no generic browser-native equivalent of `globalThis.confirm` for it).
+   * Approval-token hook for an "approve"-tier action (design.md #63). When unset, defaults (design.md #72) to a
+   * `globalThis.prompt` asking the requester to paste the token an approver issued (e.g. from the admin
+   * console's Approvals tab) — consulted only once the node is already awaiting approval, so the first
+   * attempt still reaches the server and is recorded as a pending approval; a cancelled prompt, or an
+   * environment without a usable `prompt` (SSR, a sandboxed iframe), sends the invoke without a token as
+   * before. Pass your own to replace the native prompt with an in-app one.
    */
   requestApproval?: (args: {
     action: string;
