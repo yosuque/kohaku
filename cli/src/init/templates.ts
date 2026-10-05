@@ -218,6 +218,9 @@ import { DATA_VERSION } from "./dataset.js";
 import { createDomainPort, shapeOf } from "./domain-port.js";
 import { createFixedSpecs } from "./fixed-specs.js";
 import { INTENT_DEFINITIONS, SOURCE } from "./intents.js";
+// Before production (README "Before production"): uncomment this import together with the auth /
+// authorizeGovernance block inside createKohakuHost({ routes }) below.
+// import { governancePolicyFromRoles } from "@kohaku-ui/host";
 
 export interface PortDeps {
   llm: LlmPort;
@@ -256,20 +259,21 @@ export function createPorts(deps: PortDeps): KohakuHost {
     // Set KOHAKU_DEBUG=1 (see .env.example) for the full cause chain + stack trace on every logged failure,
     // instead of a one-line summary -- useful when a compose falls back and you need to know why.
     debug: process.env["KOHAKU_DEBUG"] === "1",
-    // Development mode (every npm run dev; turned off by NODE_ENV=production): the two production-facing startup
-    // warnings -- no auth, no authorizeGovernance -- fold into one console.info line. Nothing else changes.
-    dev: process.env["NODE_ENV"] !== "production",
-    // Before production (README "Before production"): uncomment and adapt. With both wired and NODE_ENV=production,
-    // the startup warnings are gone for the right reason.
-    // import { governancePolicyFromRoles } from "@kohaku-ui/host";   <- add it to the import at the top of this file
-    // routes: {
-    //   auth: async (c) => ({ id: c.req.header("x-user-id") ?? "anonymous", roles: ["viewer"] }),
-    //   authorizeGovernance: governancePolicyFromRoles(() => ({
-    //     admin: ["*"],
-    //     reviewer: ["promotion.*", "lineage.read", "analytics.read"],
-    //     viewer: ["lineage.read", "analytics.read"],
-    //   })),
-    // },
+    routes: {
+      // Development mode (every npm run dev; turned off by NODE_ENV=production): the two production-facing startup
+      // warnings -- no auth, no authorizeGovernance -- fold into one line on stderr. Nothing else about the routes
+      // changes. This is deliberately routes.dev, not createKohakuHost's top-level dev: that one would also let a
+      // missing KOHAKU_CAPABILITY_SECRET fall back to a temporary secret instead of failing fast (see above).
+      dev: process.env["NODE_ENV"] !== "production",
+      // Before production (README "Before production"): uncomment and adapt these two.
+      // INSECURE placeholder: the client controls this header. Replace with real verification (e.g. @kohaku-ui/authz-jwt) before production.
+      // auth: async (c) => ({ id: c.req.header("x-user-id") ?? "anonymous", roles: ["viewer"] }),
+      // authorizeGovernance: governancePolicyFromRoles(() => ({
+      //   admin: ["*"],
+      //   reviewer: ["promotion.*", "lineage.read", "analytics.read"],
+      //   viewer: ["lineage.read", "analytics.read"],
+      // })),
+    },
   });
 }
 `;

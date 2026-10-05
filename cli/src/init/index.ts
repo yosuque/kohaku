@@ -55,6 +55,17 @@ export interface InitIo {
   log?: (line: string) => void;
 }
 
+/**
+ * The environment of a child process: `overrides` laid over `base`, where a key whose override value is
+ * `undefined` is removed. spawn ignores `undefined` values on POSIX, but they are deleted explicitly here so
+ * Windows behaves the same (and so the result can be asserted on).
+ */
+export function buildChildEnv(base: NodeJS.ProcessEnv, overrides?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ...overrides };
+  for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+  return env;
+}
+
 function defaultRun(
   cmd: string,
   args: string[],
@@ -62,9 +73,7 @@ function defaultRun(
   opts?: { env?: NodeJS.ProcessEnv },
 ): Promise<number> {
   return new Promise((resolvePromise, reject) => {
-    const env: NodeJS.ProcessEnv = { ...process.env, ...opts?.env };
-    // spawn ignores undefined values on POSIX, but delete them explicitly so Windows behaves the same.
-    for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
+    const env = buildChildEnv(process.env, opts?.env);
     const child = spawn(cmd, args, { cwd, env, stdio: "inherit", shell: process.platform === "win32" });
     child.on("error", reject);
     child.on("exit", (code) => resolvePromise(code ?? 1));
