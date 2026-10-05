@@ -34,17 +34,20 @@ import { readFile } from "node:fs/promises";
 import type { Server, ServerResponse } from "node:http";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  createMcpHttpServer as createMcpHttpScaffold,
+  DEFAULT_MAX_BODY_BYTES,
+} from "@kohaku-ui/host/mcp-http";
 // The graceful-shutdown handler is shared with sample-api's index.ts (@kohaku-ui-sample/api/app/shutdown) --
 // see that module's own doc comment for why it lives there and why this subpath is framework-free (no hono
 // / host-rest import), so importing it here does not pull the REST framework into this profile.
 import { createGracefulShutdownHandler, shutdownGraceMs } from "@kohaku-ui-sample/api/app/shutdown";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { createMcpHttpServer as createMcpHttpScaffold, DEFAULT_MAX_BODY_BYTES } from "./mcp-http-server.js";
 import { createKohakuMcpSetup, type KohakuMcpSetup } from "./setup.js";
 
 // The size-limited body reader lives with the shared scaffold; re-exported so its size-limit branches stay
 // verifiable from this entry point's tests.
-export { readJsonBody } from "./mcp-http-server.js";
+export { readJsonBody } from "@kohaku-ui/host/mcp-http";
 
 /** Path of the MCP endpoint (default). */
 const MCP_PATH = "/mcp";

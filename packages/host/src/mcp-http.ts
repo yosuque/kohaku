@@ -1,12 +1,17 @@
 /**
- * The Streamable-HTTP scaffold behind this app's MCP HTTP entry point: Host / Origin guards (DNS rebinding
- * protection), echoed-Origin CORS, the OPTIONS preflight, a size-capped body pre-read, and the stateless
- * `createMcpHandler` + `toNodeHandler` wiring. It owns nothing app-specific (no snapshot serving, no env
- * parsing, no shutdown): `http.ts` supplies those through the options below.
+ * `@kohaku-ui/host/mcp-http`: the shared Streamable-HTTP scaffold for an MCP server -- Host / Origin guards
+ * (DNS rebinding protection), echoed-Origin CORS, the OPTIONS preflight, a size-capped body pre-read, and the
+ * stateless `createMcpHandler` + `toNodeHandler` wiring. It owns nothing product-specific (no static routes, no
+ * env parsing, no shutdown): the caller supplies those through the options below and decides the port.
+ *
+ * A separate subpath rather than part of `./mcp` because it needs `node:http` and `@modelcontextprotocol/node`
+ * (plus `@modelcontextprotocol/server`'s `createMcpHandler`), and a `./mcp` consumer that attaches to its own
+ * transport must not be forced to install `@modelcontextprotocol/node`. Both are optional peer dependencies of
+ * this package, needed only for this subpath; neither `src/index.ts` nor `src/mcp.ts` imports this module.
  *
  * Defaults follow the server `kohaku init --mcp` generates (400 / -32700 on a malformed body, only the four
- * standard CORS headers, every path served by the MCP handler); every place where this app's `http.ts`
- * answers differently is an explicit option, so nothing is unified silently.
+ * standard CORS headers, every path served by the MCP handler); every place where a product answers
+ * differently (sample-mcp's `http.ts` does) is an explicit option, so nothing is unified silently.
  */
 
 import {
