@@ -831,45 +831,6 @@ function registerEventTool(ctx: ToolContext): void {
 const MAX_ACTION_PAYLOAD_BYTES = 64 * 1024;
 
 /**
- * Maps one `ActionGate.check` outcome onto the MCP tool result (design.md #62/#63; the REST profile's
- * `handleActionGateResult`, packages/host-rest/src/routes/binding.ts, is its wire-mapping counterpart). The
- * audit trail and the client-visible messages are host-core's `recordActionGateResult`, shared with REST;
- * this keeps only the tool-error mapping. Returns the structured tool error to return as-is (`invalid` /
- * `approvalRequired` / `denied`), or `null` when the gate allowed the invoke and the caller should proceed to
- * `domain.invoke`. This profile performs no tenant resolution, so no `tenant` is ever passed to the recorder
- * (mirrors every other recorder call in this file).
- */
-async function handleActionGateResult(
-  deps: McpHostDeps,
-  gateResult: hostCore.ActionGateResult,
-  args: {
-    action: string;
-    payload: JsonObject;
-    principal: Principal;
-    endpoint: string;
-    correlationId: string;
-  },
-): Promise<ReturnType<typeof toolError> | null> {
-  const { action, payload, principal, endpoint, correlationId } = args;
-  const outcome = await hostCore.recordActionGateResult(gateResult, {
-    recorder: deps.actionAuditRecorder,
-    action,
-    payload,
-    principal,
-    correlationId,
-    report: (e) => reportMcpError(deps, `${endpoint}.audit`, e),
-  });
-  switch (outcome.kind) {
-    case "invalid":
-      return actionParamsInvalidToolError(outcome.issues);
-    case "approvalRequired":
-      return approvalRequiredToolError(outcome.message, outcome.approval);
-    case "proceed":
-      return null;
-  }
-}
-
-/**
  * Registers `${prefix}_action` (app-only): direct write path (presentForm submit / action.button).
  * Symmetric with the REST surface's /binding/action (SPEC MCPAPP-ACT-001). Callable only from the iframe
  * (widget) (visibility ["app"]). On hosts where ext-apps' app-originated tools/call is broken it may fail,
@@ -970,13 +931,20 @@ function registerActionTool(ctx: ToolContext): void {
           await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError, requestId);
           return toolError("action parameter schema unavailable");
         }
+        // This profile performs no tenant resolution, so no `tenant` is ever passed to the recorder. The audit
+        // context is built once for both audit sites below; the undeclared-action denial overrides `report` to
+        // also carry the call's correlation id (the gate-result audit has never passed one).
+        const auditContext: hostCore.ActionAuditContext = {
+          recorder: ctx.deps.actionAuditRecorder,
+          action,
+          payload: payload as JsonObject,
+          principal: resolvedPrincipal,
+          correlationId: requestId,
+          report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
+        };
         if (entry == null) {
           await hostCore.recordUndeclaredActionDenial({
-            recorder: ctx.deps.actionAuditRecorder,
-            action,
-            payload: payload as JsonObject,
-            principal: resolvedPrincipal,
-            correlationId: requestId,
+            ...auditContext,
             report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e, requestId),
           });
           return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
@@ -992,14 +960,20 @@ function registerActionTool(ctx: ToolContext): void {
                 approval,
                 requesterId: resolvedPrincipal.id,
               });
-        const gated = await handleActionGateResult(ctx.deps, gateResult, {
-          action,
-          payload: payload as JsonObject,
-          principal: resolvedPrincipal,
-          endpoint: `${ctx.prefix}_action`,
-          correlationId: requestId,
-        });
-        if (gated != null) return gated;
+        // Maps one `ActionGate.check` outcome onto the MCP tool result (design.md #62/#63; the REST profile's
+        // inline switch in packages/host-rest/src/routes/binding.ts is its wire-mapping counterpart). The audit
+        // trail and the client-visible messages are host-core's `recordActionGateResult`, shared with REST; this
+        // keeps only the structured tool-error mapping (`invalid` / `approvalRequired` / `denied`), and
+        // `proceed` falls through to `domain.invoke`.
+        const outcome = await hostCore.recordActionGateResult(gateResult, auditContext);
+        switch (outcome.kind) {
+          case "invalid":
+            return actionParamsInvalidToolError(outcome.issues);
+          case "approvalRequired":
+            return approvalRequiredToolError(outcome.message, outcome.approval);
+          case "proceed":
+            break;
+        }
 
         const result = await ctx.deps.domain.invoke(action, payload as JsonObject, {
           principal: resolvedPrincipal,
@@ -1358,7 +1332,7 @@ function actionParamsInvalidToolError(issues: ActionParamIssue[]) {
  * satisfied, either because nothing was presented yet (`approvalRequired`) or a presented approval token
  * did not verify (`denied`) -- both map to this same structured error, distinguished only by `message`
  * and, upstream, by which `action.*` lineage event was recorded for the attempt (see
- * `handleActionGateResult` below).
+ * the gate-outcome switch in `registerActionTool`).
  */
 function approvalRequiredToolError(message: string, approval: ApprovalRequiredInfo) {
   return {
