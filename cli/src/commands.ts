@@ -329,6 +329,11 @@ export async function runSmokeL2(input: SmokeL2Input): Promise<SmokeL2Output> {
   return { issues };
 }
 
+/** The exact stdout of a successful smoke-l2 run: one JSON line, newline-terminated (written with `process.stdout.write`). */
+export function formatSmokeL2Output(output: SmokeL2Output): string {
+  return `${JSON.stringify(output)}\n`;
+}
+
 export interface ComponentValidationIssue {
   field: string;
   message: string;
@@ -477,4 +482,9 @@ export function exportDataset(options: ExportDatasetOptions): ExportDatasetResul
   mkdirSync(dirname(options.outPath), { recursive: true });
   writeFileSync(options.outPath, jsonl);
   return { fixations: includedFixations, golden: golden?.length ?? 0, outPath: options.outPath, skipped };
+}
+
+/** The one line `kohaku dataset export` prints after a successful export (the caller does a single `console.log`). */
+export function formatDatasetExportResult(result: ExportDatasetResult): string {
+  return `Wrote ${result.fixations + result.golden} record(s) (fixations=${result.fixations}, golden=${result.golden}, skipped=${result.skipped}) to ${result.outPath}`;
 }

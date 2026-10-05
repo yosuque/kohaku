@@ -213,7 +213,7 @@ program
       process.exitCode = 1;
       return;
     }
-    const { parseSmokeL2Input, runSmokeL2 } = await import("./commands.js");
+    const { formatSmokeL2Output, parseSmokeL2Input, runSmokeL2 } = await import("./commands.js");
     let output: SmokeL2Output;
     try {
       output = await runSmokeL2(parseSmokeL2Input(raw));
@@ -222,7 +222,7 @@ program
       process.exitCode = 1;
       return;
     }
-    process.stdout.write(`${JSON.stringify(output)}\n`);
+    process.stdout.write(formatSmokeL2Output(output));
   });
 
 const component = program.command("component").description("Operations on component packages");
@@ -277,7 +277,7 @@ dataset
   )
   .requiredOption("--out <path>", "Output JSONL file path")
   .action(async (opts: { fixations: string; golden?: string; tenant?: string; out: string }) => {
-    const { exportDataset } = await import("./commands.js");
+    const { exportDataset, formatDatasetExportResult } = await import("./commands.js");
     let result: ExportDatasetResult;
     try {
       result = exportDataset({
@@ -289,9 +289,7 @@ dataset
     } catch (e) {
       fail(e);
     }
-    console.log(
-      `Wrote ${result.fixations + result.golden} record(s) (fixations=${result.fixations}, golden=${result.golden}, skipped=${result.skipped}) to ${result.outPath}`,
-    );
+    console.log(formatDatasetExportResult(result));
   });
 
 const evidence = program
