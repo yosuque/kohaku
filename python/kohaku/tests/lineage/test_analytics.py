@@ -9,7 +9,13 @@ from __future__ import annotations
 import itertools
 from typing import Any
 
-from kohaku.lineage import IntentUsage, SummarizeLineageOptions, summarize_lineage
+from kohaku.lineage import (
+    IntentUsage,
+    SummarizeLineageOptions,
+    SummarizeUsageOptions,
+    summarize_lineage,
+    summarize_usage,
+)
 from kohaku.spec import LineageActor, LineageEventRecord
 
 _seq = itertools.count()
@@ -234,3 +240,148 @@ def test_empty_input_zero_summary() -> None:
     assert s.fallback.total == 0
     assert s.fallback.rate == 0
     assert s.topIntents == []
+
+
+# --- summarize_usage / LineageSummary.usage (per-day per-tenant metering, design.md #74) ---
+
+
+def metered(
+    *,
+    tier: str = "L1",
+    cache: str = "miss",
+    tenant: str | None = None,
+    ts: str = "2026-07-01T00:00:00.000Z",
+    usage: dict[str, Any] | None = None,
+    decision: Any = None,
+) -> LineageEventRecord:
+    base = composed(tier=tier, cache=cache, tenant=tenant, ts=ts)
+    payload = dict(base.payload)
+    if decision is not None:
+        payload["decision"] = decision
+    elif usage is not None:
+        payload["decision"] = {"attempts": [], "usage": usage}
+    return LineageEventRecord(
+        id=base.id,
+        ts=base.ts,
+        actor=base.actor,
+        type=base.type,
+        payload=payload,
+        tenant=tenant,
+    )
+
+
+def test_usage_l2_generated_only_for_l2_miss_or_bypass() -> None:
+    rows = summarize_usage(
+        [
+            metered(tier="L2", cache="miss"),
+            metered(tier="L2", cache="bypass"),
+            metered(tier="L2", cache="hit"),
+            metered(tier="L2", cache="fixated"),
+            metered(tier="L1", cache="miss"),  # not L2
+        ]
+    )
+    assert len(rows) == 1
+    assert rows[0].composed == 5
+    assert rows[0].l2Generated == 2
+    assert rows[0].tiers == {"L0": 0, "L1": 1, "L2": 4}
+    assert rows[0].cache == {"hit": 1, "miss": 2, "bypass": 1, "fixated": 1}
+
+
+def test_usage_sums_decision_usage_tokens_ignoring_non_numeric() -> None:
+    rows = summarize_usage(
+        [
+            metered(usage={"inputTokens": 100, "outputTokens": 20}),
+            metered(usage={"inputTokens": 50, "outputTokens": 5}),
+            metered(),  # no decision (a cache hit / L0)
+            metered(decision={"attempts": []}),  # a single-flight follower: no usage
+            metered(decision={"attempts": [], "usage": {"inputTokens": "x", "outputTokens": None}}),
+            metered(decision={"attempts": [], "usage": {"inputTokens": True, "outputTokens": 1}}),
+        ]
+    )
+    assert rows[0].tokens == {"input": 150, "output": 26}
+
+
+def test_usage_unrecorded_tenant_is_empty_string_and_rows_split_per_tenant() -> None:
+    rows = summarize_usage([metered(), metered(tenant="acme"), metered(tenant="acme")])
+    assert [(r.tenant, r.composed) for r in rows] == [("", 1), ("acme", 2)]
+
+
+def test_usage_buckets_by_utc_day_ordered_by_day_then_tenant() -> None:
+    rows = summarize_usage(
+        [
+            metered(tenant="b", ts="2026-07-02T00:00:00.000Z"),
+            metered(tenant="a", ts="2026-07-02T23:59:59.999Z"),
+            metered(tenant="z", ts="2026-07-01T23:59:59.999Z"),
+            metered(tenant="a", ts="2026-07-01T00:00:00.000Z"),
+        ]
+    )
+    assert [f"{r.day}/{r.tenant}" for r in rows] == [
+        "2026-07-01/a",
+        "2026-07-01/z",
+        "2026-07-02/a",
+        "2026-07-02/b",
+    ]
+
+
+def test_usage_counts_fallbacks_and_fixations() -> None:
+    rows = summarize_usage(
+        [
+            metered(tenant="acme"),
+            ev("view.fallback", {"kind": "generation"}, tenant="acme"),
+            ev("view.fallback", {"kind": "negotiation"}, tenant="acme"),
+            ev("intent.fixated", {"intentHash": "sha256:a"}, tenant="acme"),
+            ev("intent.unfixated", {"intentHash": "sha256:a"}, tenant="acme"),
+            ev("intent.unfixated", {"intentHash": "sha256:b"}, tenant="acme"),
+            ev("component.generated", {"artifactId": "a"}, tenant="acme"),  # ignored
+        ]
+    )
+    assert len(rows) == 1
+    assert (rows[0].composed, rows[0].fallbacks, rows[0].fixated, rows[0].unfixated) == (1, 2, 1, 2)
+
+
+def test_usage_narrowing_options() -> None:
+    events = [
+        metered(tenant="acme", ts="2026-07-01T00:00:00.000Z"),
+        metered(tenant="acme", ts="2026-07-03T00:00:00.000Z"),
+        metered(tenant="globex", ts="2026-07-01T00:00:00.000Z"),
+    ]
+    rows = summarize_usage(
+        events, SummarizeUsageOptions(tenant="acme", since="2026-07-02T00:00:00.000Z")
+    )
+    assert [f"{r.day}/{r.tenant}" for r in rows] == ["2026-07-03/acme"]
+
+
+def test_lineage_summary_usage_follows_the_summary_window_and_empty_is_empty_list() -> None:
+    assert summarize_lineage([]).usage == []
+    events = [
+        metered(tenant="acme", ts="2026-07-01T10:00:00.000Z"),
+        metered(tenant="globex", ts="2026-07-01T10:00:00.000Z"),
+    ]
+    s = summarize_lineage(events, SummarizeLineageOptions(tenant="acme"))
+    assert [r.tenant for r in s.usage] == ["acme"]
+    assert s.usage[0].composed == s.composed
+
+
+def test_usage_wire_shape_key_order_matches_ts() -> None:
+    """The wire keys of a usage row are in the TS object's order (to_jsonable follows field order)."""
+    from kohaku.host_rest.serialize import to_jsonable
+
+    wire = to_jsonable(summarize_lineage([metered(tier="L2", usage={"inputTokens": 3, "outputTokens": 4})]))
+    assert list(wire.keys())[-1] == "usage"
+    row = wire["usage"][0]
+    assert list(row.keys()) == [
+        "day",
+        "tenant",
+        "composed",
+        "cache",
+        "tiers",
+        "l2Generated",
+        "fallbacks",
+        "tokens",
+        "fixated",
+        "unfixated",
+    ]
+    assert list(row["cache"].keys()) == ["hit", "miss", "bypass", "fixated"]
+    assert list(row["tiers"].keys()) == ["L0", "L1", "L2"]
+    assert row["tokens"] == {"input": 3, "output": 4}
+    assert row["tenant"] == ""

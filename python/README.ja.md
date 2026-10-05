@@ -509,7 +509,8 @@ failed catalog/structure validation」という文言とは別物にし、この
 - **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
   `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
   フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
-  `schemaSuggested` / `schemaEdited` カウンタ、TS 側の rubric 0.4(Python の
+  `schemaSuggested` / `schemaEdited` カウンタ(一方 analytics の `usage` 行は反映済み:
+  `summarize_usage`、design.md #74。`review` ブロックは引き続き未反映)、TS 側の rubric 0.4(Python の
   `kohaku.evals.judge.l2_promotion_rubric` はまだバージョン "0.3" で `suggestion_fidelity`
   を欠く)、`CapabilityRevocationStore` と jti ベースの capability 失効、
   `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`semantic-llm`、

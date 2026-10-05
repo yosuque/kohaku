@@ -554,7 +554,8 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
   the lineage events `component.schemaSuggested` / `component.schemaEdited` (including the
   `acknowledged` payload field) and their rubric variants; the analytics `review` block and
-  the `schemaSuggested` / `schemaEdited` counters; rubric 0.4 on the TS side (Python's
+  the `schemaSuggested` / `schemaEdited` counters (the analytics `usage` rows, by contrast, are
+  mirrored: `summarize_usage`, design.md #74; the `review` block stays unported); rubric 0.4 on the TS side (Python's
   `kohaku.evals.judge.l2_promotion_rubric` is still at version "0.3", missing
   `suggestion_fidelity`); `CapabilityRevocationStore` and jti-based capability revocation;
   the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters; `semantic-llm`;

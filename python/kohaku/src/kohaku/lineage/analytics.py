@@ -69,9 +69,46 @@ class DurationSummary:
         }
 
 
+@dataclass
+class UsageRow:
+    """One metering row: one tenant on one UTC day (design.md #74; port of TS `UsageRow`).
+
+    Mutable on purpose: `summarize_usage` accumulates into its rows while folding, then returns them.
+    Field order is the wire key order (`to_jsonable` follows it), identical to the TS object. `tenant`
+    is the empty string for a record that carries none. `l2Generated` counts view.composed of tier L2
+    whose cache was miss or bypass; `tokens` sums `payload.decision.usage` (a single-flight follower
+    carries none).
+    """
+
+    day: str
+    tenant: str
+    composed: int
+    cache: dict[str, int]
+    tiers: dict[str, int]
+    l2Generated: int
+    fallbacks: int
+    tokens: dict[str, int | float]
+    fixated: int
+    unfixated: int
+
+
+@dataclass(frozen=True)
+class SummarizeUsageOptions:
+    """Options for summarize_usage. `bucket` is "day" (UTC), the only bucket."""
+
+    bucket: str = "day"
+    tenant: str | None = None
+    since: str | None = None
+    until: str | None = None
+
+
 @dataclass(frozen=True)
 class LineageSummary:
-    """Lineage aggregate summary (the body of the analytics.read response)."""
+    """Lineage aggregate summary (the body of the analytics.read response).
+
+    Only `usage` of the TS `review` / schemaSuggested / schemaEdited additions is mirrored here; the
+    `review` block and those counters remain a known gap (docs/design.md, python/README.md).
+    """
 
     events: int
     composed: int
@@ -82,6 +119,7 @@ class LineageSummary:
     topIntents: list[IntentUsage]
     promotions: dict[str, int]
     fixations: dict[str, int]
+    usage: list[UsageRow]
 
 
 @dataclass(frozen=True)
@@ -222,4 +260,77 @@ def summarize_lineage(
         topIntents=top_intents,
         promotions=promotions,
         fixations=fixations,
+        usage=summarize_usage(scoped, SummarizeUsageOptions(bucket="day")),
     )
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def summarize_usage(
+    events: Sequence[LineageEventRecord],
+    opts: SummarizeUsageOptions | None = None,
+) -> list[UsageRow]:
+    """Fold the lineage stream into per-day, per-tenant metering rows (pure function, read-only).
+
+    Reads only view.composed / view.fallback / intent.fixated / intent.unfixated. Rows are ordered by day,
+    then tenant, ascending (compared by UTF-16 code units, as the TS string comparison does).
+    """
+    opts = opts if opts is not None else SummarizeUsageOptions()
+    rows: dict[tuple[str, str], UsageRow] = {}
+
+    def row_for(e: LineageEventRecord) -> UsageRow:
+        day = e.ts[:10]
+        tenant = e.tenant if e.tenant is not None else ""
+        key = (day, tenant)
+        row = rows.get(key)
+        if row is None:
+            row = UsageRow(
+                day=day,
+                tenant=tenant,
+                composed=0,
+                cache={"hit": 0, "miss": 0, "bypass": 0, "fixated": 0},
+                tiers={"L0": 0, "L1": 0, "L2": 0},
+                l2Generated=0,
+                fallbacks=0,
+                tokens={"input": 0, "output": 0},
+                fixated=0,
+                unfixated=0,
+            )
+            rows[key] = row
+        return row
+
+    for e in events:
+        if opts.tenant is not None and e.tenant != opts.tenant:
+            continue
+        if opts.since is not None and e.ts < opts.since:
+            continue
+        if opts.until is not None and e.ts > opts.until:
+            continue
+        if e.type == "view.composed":
+            row = row_for(e)
+            row.composed += 1
+            tier = e.payload.get("tier")
+            cache_key = e.payload.get("cache")
+            if tier in ("L0", "L1", "L2"):
+                row.tiers[tier] += 1
+            if cache_key in ("hit", "miss", "bypass", "fixated"):
+                row.cache[cache_key] += 1
+            if tier == "L2" and cache_key in ("miss", "bypass"):
+                row.l2Generated += 1
+            decision = e.payload.get("decision")
+            usage = decision.get("usage") if isinstance(decision, dict) else None
+            if isinstance(usage, dict):
+                if _is_number(usage.get("inputTokens")):
+                    row.tokens["input"] += usage["inputTokens"]
+                if _is_number(usage.get("outputTokens")):
+                    row.tokens["output"] += usage["outputTokens"]
+        elif e.type == "view.fallback":
+            row_for(e).fallbacks += 1
+        elif e.type == "intent.fixated":
+            row_for(e).fixated += 1
+        elif e.type == "intent.unfixated":
+            row_for(e).unfixated += 1
+
+    return sorted(rows.values(), key=lambda r: (r.day, r.tenant.encode("utf-16-be")))
