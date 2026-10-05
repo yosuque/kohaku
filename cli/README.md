@@ -24,7 +24,7 @@ in the user guide for what it produces.
 
 `usage export` derives per-day, per-tenant usage (compositions, cache outcomes, tiers, L2
 generations, fallbacks, LLM tokens, fixations) from the **whole** lineage log in a window, for
-metering or cost review. It pages the log exhaustively, unlike the bounded sample behind the admin
+metering or cost review. It reads the log exhaustively, unlike the bounded sample behind the admin
 Analytics tab (`GET /analytics/summary`).
 
 ```bash
@@ -34,7 +34,9 @@ npx @kohaku-ui/cli usage export --rest http://localhost:8787/api/kohaku \
 ```
 
 `--data-dir` reads a local directory in the file layout of `createFileStoragePort` (every tenant,
-unless `--tenant` narrows it; a Redis or Postgres deployment is read through `--rest` instead);
+unless `--tenant` narrows it; a Redis or Postgres deployment is read through `--rest` instead). It
+streams only `lineage.jsonl`, line by line, and writes nothing into the directory, so it is safe
+against a data directory a host is using; a malformed line is skipped and reported on stderr;
 `--rest` reads over REST, where the `x-kohaku-tenant` header decides the tenant (export each tenant
 with its own header; a host that sends no header, a legacy unscoped one, returns every tenant). A
 date-only `--until` includes that whole UTC day. The CSV has the

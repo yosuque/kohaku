@@ -5,7 +5,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,7 @@ import { EvidenceUsageError } from "../src/evidence/window.js";
 import { CliUsageError } from "../src/lineage-window.js";
 import { formatUsageCsv, USAGE_CSV_HEADER } from "../src/usage/csv.js";
 import { runUsageExport } from "../src/usage/export.js";
+import { streamLineageChunks } from "../src/usage/lineage-file.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bin = join(here, "../bin/kohaku.js");
@@ -303,6 +304,123 @@ describe("kohaku usage export --data-dir", () => {
     expect(result.stdout.split("\n")[0]).toBe(EXPECTED_HEADER);
     expect(result.stdout).toContain("2026-07-01,acme,3,");
   }, 30_000);
+});
+
+describe("kohaku usage export --data-dir reads lineage.jsonl as a read-only stream", () => {
+  const window = { since: "2026-07-01", until: "2026-07-31" };
+
+  /** Writes raw lines (valid or not) as a data directory's lineage.jsonl. */
+  function writeLineage(dataDir: string, lines: string[]): void {
+    writeFileSync(join(dataDir, "lineage.jsonl"), `${lines.join("\n")}\n`);
+  }
+
+  it("reads a hand-written lineage.jsonl, skipping and counting a malformed or invalid line and warning on stderr", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    writeLineage(dataDir, [
+      JSON.stringify(composed({ ts: "2026-07-01T10:00:00.000Z", tenant: "acme", tier: "L2" })),
+      "{not json", // a line cut off by a crash
+      "",
+      JSON.stringify({ id: "x", type: "view.composed" }), // JSON, but not a LineageEventRecord
+      JSON.stringify(composed({ ts: "2026-07-01T11:00:00.000Z", tenant: "acme", tier: "L1" })),
+      JSON.stringify(other("component.generated", "2026-07-01T12:00:00.000Z", "acme")), // not a metering event
+      JSON.stringify(composed({ ts: "2026-08-15T00:00:00.000Z", tenant: "acme" })), // outside the window
+    ]);
+    const warnings: string[] = [];
+    const result = await runUsageExport({ dataDir, ...window, warn: (m) => warnings.push(m) });
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]).toMatchObject({ day: "2026-07-01", tenant: "acme", composed: 2 });
+    expect(result.skippedLines).toBe(2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Skipped 2 malformed or invalid line(s)");
+    expect(warnings[0]).toContain("lineage.jsonl");
+  });
+
+  it("does not warn when every line is valid", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    writeLineage(dataDir, [JSON.stringify(composed({ ts: "2026-07-01T10:00:00.000Z" }))]);
+    const warnings: string[] = [];
+    const result = await runUsageExport({ dataDir, ...window, warn: (m) => warnings.push(m) });
+    expect(result.skippedLines).toBe(0);
+    expect(warnings).toEqual([]);
+  });
+
+  it("leaves the data directory exactly as it found it, even with a corrupt promotions.json / fixations.json", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    writeLineage(dataDir, [JSON.stringify(composed({ ts: "2026-07-01T10:00:00.000Z", tenant: "acme" }))]);
+    writeFileSync(join(dataDir, "promotions.json"), "{ this is not json");
+    writeFileSync(join(dataDir, "fixations.json"), "[1, 2, 3]"); // parses, but is not a {key -> record} object
+    const before = Object.fromEntries(
+      readdirSync(dataDir).map((f) => [f, readFileSync(join(dataDir, f), "utf8")]),
+    );
+
+    const result = await runUsageExport({ dataDir, ...window });
+    expect(result.rows).toHaveLength(1);
+
+    // createFileStoragePort would have renamed both snapshots to *.corrupt; the export never opens them.
+    const after = Object.fromEntries(
+      readdirSync(dataDir).map((f) => [f, readFileSync(join(dataDir, f), "utf8")]),
+    );
+    expect(after).toEqual(before);
+    expect(readdirSync(dataDir).some((f) => f.endsWith(".corrupt"))).toBe(false);
+  });
+
+  it("treats a data directory without a lineage.jsonl as an empty log and creates nothing in it", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    const result = await runUsageExport({ dataDir, ...window });
+    expect(result.rows).toEqual([]);
+    expect(readdirSync(dataDir)).toEqual([]);
+  });
+
+  it("hands the rows over in chunks of at most 500 matching events, never the whole log at once", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    const lines: string[] = [];
+    for (let i = 0; i < 1203; i++) lines.push(JSON.stringify(composed({ ts: "2026-07-03T00:00:00.000Z" })));
+    for (let i = 0; i < 40; i++)
+      lines.push(JSON.stringify(other("component.used", "2026-07-03T00:00:00.000Z")));
+    writeLineage(dataDir, lines);
+    const stats = { skippedLines: 0 };
+    const sizes: number[] = [];
+    for await (const chunk of streamLineageChunks(
+      join(dataDir, "lineage.jsonl"),
+      { type: ["view.composed"], since: "2026-07-01T00:00:00.000Z", until: "2026-07-31T23:59:59.999Z" },
+      stats,
+    )) {
+      sizes.push(chunk.length);
+    }
+    expect(sizes).toEqual([500, 500, 203]);
+    expect(stats.skippedLines).toBe(0);
+  });
+
+  it("applies the type, window and tenant filter the way a StoragePort does", async () => {
+    const dataDir = tmp("kohaku-usage-stream-");
+    writeLineage(dataDir, [
+      JSON.stringify(composed({ ts: "2026-07-01T00:00:00.000Z", tenant: "acme" })),
+      JSON.stringify(composed({ ts: "2026-07-01T00:00:00.000Z", tenant: "globex" })),
+      JSON.stringify(composed({ ts: "2026-07-01T00:00:00.000Z" })), // no tenant
+      JSON.stringify(composed({ ts: "2026-06-30T23:59:59.999Z", tenant: "acme" })), // before the window
+      JSON.stringify(composed({ ts: "2026-07-31T23:59:59.999Z", tenant: "acme" })), // the last instant: included
+    ]);
+    const path = join(dataDir, "lineage.jsonl");
+    const read = async (tenant?: string): Promise<number> => {
+      let n = 0;
+      for await (const chunk of streamLineageChunks(
+        path,
+        {
+          type: ["view.composed"],
+          since: "2026-07-01T00:00:00.000Z",
+          until: "2026-07-31T23:59:59.999Z",
+          ...(tenant != null ? { tenant } : {}),
+        },
+        { skippedLines: 0 },
+      )) {
+        n += chunk.length;
+      }
+      return n;
+    };
+    expect(await read()).toBe(4);
+    expect(await read("acme")).toBe(2);
+    expect(await read("globex")).toBe(1);
+  });
 });
 
 describe("kohaku usage export usage errors", () => {
