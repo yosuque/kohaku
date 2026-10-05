@@ -2,7 +2,7 @@
 
 English | [日本語](react-dashboard.ja.md)
 
-kohaku puts LLM-generated UI under control in production: the same request gets the same screen, the model never touches your data, and whatever it invents is reviewed first.
+kohaku keeps LLM-generated UI under control in production; this path uses only the part of it that needs no model: a UI Spec that renders the same way every time, with your data bound by reference.
 
 **Who this is for:** a product team that wants Server-Driven UI now and LLM composition later (or never). You write a UI Spec by hand or serve it from your API; `@kohaku-ui/renderer-react` draws it. Nothing in this path calls a model.
 

@@ -2,7 +2,7 @@
 
 English | [日本語](mcp-apps.ja.md)
 
-kohaku puts LLM-generated UI under control in production: the same request gets the same screen, the model never touches your data, and whatever it invents is reviewed first.
+kohaku puts LLM-generated UI under control in production: the same request gets the same screen, no row of your data ever enters the model's context, and whatever it invents has to pass review before it becomes an official part.
 
 **Who this is for:** the author of an MCP server who wants their tools to answer with a *screen*, not a wall of text — in Claude Desktop, claude.ai or ChatGPT — and wants that screen to be the same one every time. You do not need a web app; the chat host is your UI.
 

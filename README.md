@@ -8,14 +8,13 @@ English | [日本語](README.ja.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-kohaku is a library for putting LLM-generated UI under control in production: the same request gets the same screen, the model never touches your data, and whatever the model invents passes review before it becomes a part of your product. (It is the governance layer that takes Generative UI to production.)
+kohaku is the governance layer that takes Generative UI to production: the same request always gets the same screen, no row of your data ever enters the model's context, every screen is on an audit trail, and whatever the model invents has to pass review before it becomes a part of your product.
 
 - **Identical display is structural, not statistical** — chat and GUI requests normalize to one Intent and one cached UI Spec.
 - **The model builds the plumbing; the water never flows through it** — a Spec carries `query://` references, never data values.
 - **Freedom is allowed, then governed** — free-form output runs in a sandbox; what is worth keeping is reviewed and promoted to an official part.
 
 Try it on your own CSV / JSON / SQLite file:
-
 ```bash
 npx @kohaku-ui/cli init --from data.csv --out my-dashboard
 cd my-dashboard && npm run dev

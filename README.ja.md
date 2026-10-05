@@ -8,14 +8,13 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-kohaku は、LLM が生成した UI を本番で統制下に置くためのライブラリです。同じ要求には同じ画面を返し、モデルはデータに触れず、モデルが発明したものはレビューを通ってから製品の部品になります。(Generative UI を本番に出すための統制層です。)
+kohaku は Generative UI を本番に出すための統制層です。同じ要求には同じ画面を返し、行データはモデルに渡らず、表示された画面は監査証跡に残り、モデルが発明したものは正式な部品になる前にレビューを通ります。
 
 - **同一表示は統計ではなく構造で保証する** — チャットの質問も GUI 操作も、1 つの Intent と 1 つのキャッシュ済み UI Spec に正規化される。
-- **モデルは配管を組む。水は通さない** — Spec が持つのは `query://` 参照だけで、データの値は持たない。
-- **自由は許し、そのあとで統制する** — 自由生成は sandbox の中で動き、残す価値のあるものはレビューを経て正式な部品に昇格する。
+- **モデルが組むのは配管で、水は流れない** — Spec が持つのは `query://` 参照だけで、データの値は持たない。
+- **自由を許し、そのうえで統制する** — 自由生成は sandbox の中で動き、残す価値のあるものはレビューを経て正式な部品に昇格する。
 
 自分の CSV / JSON / SQLite ファイルで試す:
-
 ```bash
 npx @kohaku-ui/cli init --from data.csv --out my-dashboard
 cd my-dashboard && npm run dev
