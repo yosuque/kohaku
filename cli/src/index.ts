@@ -4,31 +4,10 @@ import type { ExplainReport } from "@kohaku-ui/client";
 import type { VerifyEvidencePackResult } from "@kohaku-ui/lineage";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
 import { Command, type CommanderError } from "commander";
-import {
-  type ExportDatasetResult,
-  exportDataset,
-  formatExplainReport,
-  formatReport,
-  parseSmokeL2Input,
-  runExplain,
-  runRestConformance,
-  runSelfConformance,
-  runSmokeL2,
-  type SmokeL2Output,
-  scaffoldGolden,
-  scaffoldPorts,
-  validateComponentFile,
-} from "./commands.js";
-import {
-  type EvidenceExportResult,
-  type EvidenceKeygenResult,
-  EvidenceUsageError,
-  runEvidenceExport,
-  runEvidenceKeygen,
-  runEvidenceVerify,
-} from "./evidence/index.js";
-import { type InitResult, initProject } from "./init/index.js";
-import { type MigrateApplyOptions, type MigratePlanOptions, migrateApply, migratePlan } from "./migrate.js";
+import type { ExportDatasetResult, SmokeL2Output } from "./commands.js";
+import type { EvidenceExportResult, EvidenceKeygenResult } from "./evidence/index.js";
+import type { InitResult } from "./init/index.js";
+import type { MigrateApplyOptions, MigratePlanOptions } from "./migrate.js";
 import { CLI_VERSION } from "./version.js";
 
 /** Reads stdin to completion and returns it as a string (the smoke-l2 sidecar's one-request-one-process contract). */
@@ -56,6 +35,7 @@ program
     if (opts.rest == null && opts.self !== true) {
       program.error("Specify either --self or --rest <baseUrl>");
     }
+    const { formatReport, runRestConformance, runSelfConformance } = await import("./commands.js");
     let report: ConformanceReport;
     try {
       report =
@@ -92,6 +72,7 @@ program
   .option("--spec <file>", "Path to a UISpec JSON file; adds capability scopes to the report")
   .action(
     async (requestId: string, opts: { rest: string; header: string[]; json?: boolean; spec?: string }) => {
+      const { formatExplainReport, runExplain } = await import("./commands.js");
       let report: ExplainReport;
       try {
         report = await runExplain(requestId, {
@@ -112,26 +93,26 @@ program
   .argument("<what>", '"ports" or "golden"')
   .option("--out <dir>", "Output directory (default depends on the target)")
   .description("Generate scaffolds for product-side Port implementations / Golden regression tests")
-  .action((what: string, opts: { out?: string }) => {
-    // Switch the default output directory and the post-generation "next steps" per target.
-    const targets: Record<string, { defaultOut: string; scaffold: (out: string) => string[]; next: string }> =
-      {
-        ports: {
-          defaultOut: "./kohaku-ports",
-          scaffold: scaffoldPorts,
-          next: "Implement the TODOs in ports.ts and intents.ts, then start server.ts.",
-        },
-        golden: {
-          defaultOut: "./kohaku-golden",
-          scaffold: scaffoldGolden,
-          next: "Wire up makeContext in golden.test.ts, add *.json files under golden/, then generate the expected specs with KOHAKU_GOLDEN_UPDATE=1.",
-        },
-      };
-    const target = targets[what];
+  .action(async (what: string, opts: { out?: string }) => {
+    // Switch the default output directory and the post-generation "next steps" per target. Validate the target
+    // before loading `commands.js` so that a typo does not pay for (or fail on) the heavy module import.
+    const targets: Record<string, { defaultOut: string; next: string }> = {
+      ports: {
+        defaultOut: "./kohaku-ports",
+        next: "Implement the TODOs in ports.ts and intents.ts, then start server.ts.",
+      },
+      golden: {
+        defaultOut: "./kohaku-golden",
+        next: "Wire up makeContext in golden.test.ts, add *.json files under golden/, then generate the expected specs with KOHAKU_GOLDEN_UPDATE=1.",
+      },
+    };
+    const target = Object.hasOwn(targets, what) ? targets[what] : undefined;
     if (target == null) program.error(`Unknown scaffold target: ${what} (allowed: ports / golden)`);
+    const { scaffoldGolden, scaffoldPorts } = await import("./commands.js");
+    const scaffold = what === "ports" ? scaffoldPorts : scaffoldGolden;
     let written: string[];
     try {
-      written = target!.scaffold(opts.out ?? target!.defaultOut);
+      written = scaffold(opts.out ?? target!.defaultOut);
     } catch (e) {
       // As with the conformance action, show failures such as existing-file collisions as a single line (no raw stack).
       program.error(e instanceof Error ? e.message : String(e));
@@ -167,6 +148,7 @@ program
       install: boolean;
       mcp?: boolean;
     }) => {
+      const { initProject } = await import("./init/index.js");
       let result: InitResult;
       try {
         result = await initProject(opts);
@@ -232,6 +214,7 @@ program
       process.exitCode = 1;
       return;
     }
+    const { parseSmokeL2Input, runSmokeL2 } = await import("./commands.js");
     let output: SmokeL2Output;
     try {
       output = await runSmokeL2(parseSmokeL2Input(raw));
@@ -249,7 +232,8 @@ component
   .command("validate")
   .argument("<file>", "JSON file of a ComponentDefinition")
   .description("Validate a component definition (JSON-serialized form)")
-  .action((file: string) => {
+  .action(async (file: string) => {
+    const { validateComponentFile } = await import("./commands.js");
     const issues = validateComponentFile(file);
     if (issues.length === 0) {
       console.log(`✓ ${file} is a valid ComponentDefinition`);
@@ -293,7 +277,8 @@ dataset
     "Restrict the export to this tenant's fixations. Without it, the output spans every tenant present in --fixations",
   )
   .requiredOption("--out <path>", "Output JSONL file path")
-  .action((opts: { fixations: string; golden?: string; tenant?: string; out: string }) => {
+  .action(async (opts: { fixations: string; golden?: string; tenant?: string; out: string }) => {
+    const { exportDataset } = await import("./commands.js");
     let result: ExportDatasetResult;
     try {
       result = exportDataset({
@@ -340,6 +325,7 @@ evidence
     "Overwrite an existing key file (permanently invalidates every pack signed with the old key)",
   )
   .action(async (opts: { outDir: string; force?: boolean }) => {
+    const { runEvidenceKeygen } = await import("./evidence/index.js");
     let result: EvidenceKeygenResult;
     try {
       result = await runEvidenceKeygen(opts.outDir, { force: opts.force === true });
@@ -404,6 +390,7 @@ evidence
       out: string;
       allowIncomplete?: boolean;
     }) => {
+      const { EvidenceUsageError, runEvidenceExport } = await import("./evidence/index.js");
       let result: EvidenceExportResult;
       try {
         result = await runEvidenceExport({
@@ -447,6 +434,7 @@ evidence
     // Exit codes: 0 = valid, 1 = invalid, 2 = usage error (bad --public-key, missing/malformed pack
     // directory, and commander's own option errors via exitUsageErrorAsTwo) -- program.error() is not
     // used here since its default exit code (1) would collide with "invalid".
+    const { runEvidenceVerify } = await import("./evidence/index.js");
     let result: VerifyEvidencePackResult;
     try {
       result = await runEvidenceVerify(dir, opts.publicKey);
@@ -495,6 +483,7 @@ migrate
       outPath: opts.out,
       ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
     };
+    const { migratePlan } = await import("./migrate.js");
     let result: Awaited<ReturnType<typeof migratePlan>>;
     try {
       result = await migratePlan(options);
@@ -547,6 +536,7 @@ migrate
       approver: opts.approver,
       catalogModule: opts.catalog,
     };
+    const { migrateApply } = await import("./migrate.js");
     let result: Awaited<ReturnType<typeof migrateApply>>;
     try {
       result = await migrateApply(options);
