@@ -2,11 +2,12 @@
 import type { ExplainReport } from "@kohaku-ui/client";
 import type { ConformanceReport } from "@kohaku-ui/spec/conformance";
 import { Command } from "commander";
+import { register as registerDataset } from "./cli/dataset.js";
 import { register as registerEvidence } from "./cli/evidence.js";
 import { register as registerMigrate } from "./cli/migrate.js";
 import { errorMessage, fail, headerOption } from "./cli/shared.js";
 import { register as registerUsage } from "./cli/usage.js";
-import type { ExportDatasetResult, SmokeL2Output } from "./commands.js";
+import type { SmokeL2Output } from "./commands.js";
 import type { InitResult } from "./init/index.js";
 import { CLI_VERSION } from "./version.js";
 
@@ -205,42 +206,7 @@ component
     process.exitCode = 1;
   });
 
-const dataset = program.command("dataset").description("Operations on distillation datasets");
-
-dataset
-  .command("export")
-  .description(
-    "Export fixated (and optionally golden) Specs as a JSONL distillation dataset " +
-      "(one canonical-JSON line per Spec: {intent, refs, shape?, target: {components, events}, source, meta})",
-  )
-  .requiredOption(
-    "--fixations <path>",
-    "fixations.json snapshot ({key -> FixationRecord}; sample-api's .data/fixations.json can be passed directly)",
-  )
-  .option(
-    "--golden <dir>",
-    "Directory of golden fixture JSON files ({name, input, drafts, expected}) or plain UISpec JSON files",
-  )
-  .option(
-    "--tenant <id>",
-    "Restrict the export to this tenant's fixations. Without it, the output spans every tenant present in --fixations",
-  )
-  .requiredOption("--out <path>", "Output JSONL file path")
-  .action(async (opts: { fixations: string; golden?: string; tenant?: string; out: string }) => {
-    const { exportDataset, formatDatasetExportResult } = await import("./commands.js");
-    let result: ExportDatasetResult;
-    try {
-      result = exportDataset({
-        fixationsPath: opts.fixations,
-        ...(opts.golden != null ? { goldenDir: opts.golden } : {}),
-        ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
-        outPath: opts.out,
-      });
-    } catch (e) {
-      fail(program, e);
-    }
-    console.log(formatDatasetExportResult(result));
-  });
+registerDataset(program);
 
 registerEvidence(program);
 
