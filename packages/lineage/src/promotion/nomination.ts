@@ -2,7 +2,7 @@ import type { StoragePort } from "@kohaku-ui/spec-core";
 import { NOMINATED_SCAN_WINDOW } from "../constants.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
-import { recordFailOpen } from "./audit.js";
+import { createFailOpenAudit } from "./audit.js";
 import type { PromotionCandidate, PromotionPolicy } from "./candidate.js";
 import { mapWithConcurrency } from "./concurrency.js";
 import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
@@ -49,6 +49,7 @@ export function createNomination(opts: {
   ): Promise<PromotionCandidate[]>;
 } {
   const { storage, lineage, policy, persistMany, onError, suggestSchema, suggestConcurrency } = opts;
+  const auditFailOpen = createFailOpenAudit(lineage, onError);
 
   /**
    * Side-effecting nominate step: for candidates still in_use that satisfy the policy thresholds and are not
@@ -153,29 +154,26 @@ export function createNomination(opts: {
     // nor undo the already-persisted status transition (the candidate's snapshot has a draft-free `candidate`
     // status either way, whether or not the audit record actually landed).
     for (const { candidate } of toPersist) {
-      await recordFailOpen(
-        lineage,
-        onError,
-        "promotion.nominate.audit",
-        "component.nominated",
-        { artifactId: candidate.artifactId, by: "policy" },
-        undefined,
-        { tenant, artifactId: candidate.artifactId },
-      );
+      await auditFailOpen({
+        endpoint: "promotion.nominate.audit",
+        type: "component.nominated",
+        payload: { artifactId: candidate.artifactId, by: "policy" },
+        tenant,
+        artifactId: candidate.artifactId,
+      });
     }
     // Audit the advisory suggestion (if any), after component.nominated -- symmetric fail-open discipline: a
     // storage hiccup here must not undo the already-persisted suggestion or stop auditing the rest of the batch.
     for (const { candidate } of toPersist) {
       if (candidate.suggestion == null) continue;
-      await recordFailOpen(
-        lineage,
-        onError,
-        "promotion.suggest.audit",
-        "component.schemaSuggested",
-        { artifactId: candidate.artifactId, suggestion: candidate.suggestion },
-        { kind: "model" },
-        { tenant, artifactId: candidate.artifactId },
-      );
+      await auditFailOpen({
+        endpoint: "promotion.suggest.audit",
+        type: "component.schemaSuggested",
+        payload: { artifactId: candidate.artifactId, suggestion: candidate.suggestion },
+        actor: { kind: "model" },
+        tenant,
+        artifactId: candidate.artifactId,
+      });
     }
     return candidates.map((c) => c.candidate);
   }

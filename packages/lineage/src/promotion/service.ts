@@ -3,7 +3,7 @@ import { GENERATED_SCAN_WINDOW, RECONCILE_AUDIT_SCAN_WINDOW } from "../constants
 import type { ActorKind, LineageEventType } from "../events.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
-import { recordFailOpen } from "./audit.js";
+import { createFailOpenAudit } from "./audit.js";
 import type { PromotionCandidate, PromotionPolicy } from "./candidate.js";
 import { createCandidateStore } from "./candidate-store.js";
 import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
@@ -397,6 +397,7 @@ export function createPromotions(opts: {
   const policy: PromotionPolicy = { ...DEFAULT_PROMOTION_POLICY, ...opts.policy };
   const usage = createUsageIndex(opts.storage);
   const store = createCandidateStore({ storage: opts.storage, usage, onError: opts.onError });
+  const auditFailOpen = createFailOpenAudit(opts.lineage, opts.onError);
   const { nominateEligible } = createNomination({
     storage: opts.storage,
     lineage: opts.lineage,
@@ -455,20 +456,18 @@ export function createPromotions(opts: {
     //    block the projection below (the whole point of publishing), so it is reported via onError rather than
     //    thrown. The snapshot is already published (step 2), so `reconcile`'s audit backfill (below) later
     //    detects the missing component.published event and re-records it (with reconciled:true).
-    await recordFailOpen(
-      opts.lineage,
-      opts.onError,
-      "promotion.publish.audit",
-      "component.published",
-      {
+    await auditFailOpen({
+      endpoint: "promotion.publish.audit",
+      type: "component.published",
+      payload: {
         artifactId,
         componentType: candidate.draft.componentType,
         version: action.version,
         intentName: candidate.draft.intentName,
       },
-      undefined,
-      { tenant, artifactId },
-    );
+      tenant,
+      artifactId,
+    });
     // 4. Projection application (idempotent). A failure is a "not-reflected" against the snapshot authority, and reconcile converges it.
     await opts.onPublish?.(publishArgs(candidate, tenant));
     // publish already persisted above (do not run the common persist at the end twice).
@@ -505,20 +504,19 @@ export function createPromotions(opts: {
     //    own audit record: a storage hiccup here must not block the projection removal below (the whole point of
     //    unpublishing). The snapshot is already withdrawn (step 1), so `reconcile`'s audit backfill later detects
     //    the missing component.withdrawn (from:"published") event and re-records it (with reconciled:true).
-    await recordFailOpen(
-      opts.lineage,
-      opts.onError,
-      "promotion.unpublish.audit",
-      "component.withdrawn",
-      {
+    await auditFailOpen({
+      endpoint: "promotion.unpublish.audit",
+      type: "component.withdrawn",
+      payload: {
         artifactId,
         from: "published",
         by: actor.id,
         ...(action.reason != null ? { reason: action.reason } : {}),
       },
-      { kind: "user", id: actor.id },
-      { tenant, artifactId },
-    );
+      actor: { kind: "user", id: actor.id },
+      tenant,
+      artifactId,
+    });
     // 3. Projection removal (idempotent; reconcile re-runs it against any lingering projection).
     await opts.onUnpublish?.({
       artifactId,
@@ -698,12 +696,10 @@ export function createPromotions(opts: {
         // publish. Fail-open like the audit record it feeds: report and skip the diff instead of throwing.
         try {
           const diff = diffDraft(candidate.suggestion.draft, draft);
-          await recordFailOpen(
-            opts.lineage,
-            opts.onError,
-            "promotion.approve.audit",
-            "component.schemaEdited",
-            {
+          await auditFailOpen({
+            endpoint: "promotion.approve.audit",
+            type: "component.schemaEdited",
+            payload: {
               artifactId,
               reviewer: reviewer.id,
               extractorId: candidate.suggestion.extractorId,
@@ -716,9 +712,10 @@ export function createPromotions(opts: {
               // acknowledgedSuggestion in the approve request is recorded as false, not omitted.
               acknowledged: acknowledgedSuggestion,
             },
-            { kind: "user", id: reviewer.id },
-            { tenant, artifactId },
-          );
+            actor: { kind: "user", id: reviewer.id },
+            tenant,
+            artifactId,
+          });
         } catch (e) {
           notifyPromotionError(
             opts.onError,
@@ -880,21 +877,19 @@ export function createPromotions(opts: {
         // all) and falls through unchanged to the "unrecoverable" skip+onError path below.
         if (candidate != null && candidate.status !== "published") continue;
         if (candidate?.draft != null && !publishedAuditKeys.has(key)) {
-          await recordFailOpen(
-            opts.lineage,
-            opts.onError,
-            "promotion.reconcile.audit",
-            "component.published",
-            {
+          await auditFailOpen({
+            endpoint: "promotion.reconcile.audit",
+            type: "component.published",
+            payload: {
               artifactId: state.artifactId,
               componentType: candidate.draft.componentType,
               version: candidate.draft.version,
               intentName: candidate.draft.intentName,
               reconciled: true,
             },
-            undefined,
-            { tenant: state.tenant, artifactId: state.artifactId },
-          );
+            tenant: state.tenant,
+            artifactId: state.artifactId,
+          });
         }
         if (opts.onPublish == null) continue;
         // The projection cannot be reconstructed unless both draft (state, or the snapshot's own duplicate) and
@@ -938,15 +933,13 @@ export function createPromotions(opts: {
       // by `from: "published"` so a pre-promotion withdraw's own (unrelated) withdrawn event does not suppress
       // this backfill.
       if (!withdrawnFromPublishedAuditKeys.has(key)) {
-        await recordFailOpen(
-          opts.lineage,
-          opts.onError,
-          "promotion.reconcile.audit",
-          "component.withdrawn",
-          { artifactId: state.artifactId, from: "published", reconciled: true },
-          undefined,
-          { tenant: state.tenant, artifactId: state.artifactId },
-        );
+        await auditFailOpen({
+          endpoint: "promotion.reconcile.audit",
+          type: "component.withdrawn",
+          payload: { artifactId: state.artifactId, from: "published", reconciled: true },
+          tenant: state.tenant,
+          artifactId: state.artifactId,
+        });
       }
       await opts.onUnpublish({
         artifactId: state.artifactId,
