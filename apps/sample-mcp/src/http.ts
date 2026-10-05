@@ -31,43 +31,25 @@
  */
 
 import { readFile } from "node:fs/promises";
-import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import type { Server, ServerResponse } from "node:http";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 // The graceful-shutdown handler is shared with sample-api's index.ts (@kohaku-ui-sample/api/app/shutdown) --
 // see that module's own doc comment for why it lives there and why this subpath is framework-free (no hono
 // / host-rest import), so importing it here does not pull the REST framework into this profile.
 import { createGracefulShutdownHandler, shutdownGraceMs } from "@kohaku-ui-sample/api/app/shutdown";
-import { hostHeaderValidation, originValidation, toNodeHandler } from "@modelcontextprotocol/node";
-import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHttpServer as createMcpHttpScaffold, DEFAULT_MAX_BODY_BYTES } from "./mcp-http-server.js";
 import { createKohakuMcpSetup, type KohakuMcpSetup } from "./setup.js";
+
+// The size-limited body reader lives with the shared scaffold; re-exported so its size-limit branches stay
+// verifiable from this entry point's tests.
+export { readJsonBody } from "./mcp-http-server.js";
 
 /** Path of the MCP endpoint (default). */
 const MCP_PATH = "/mcp";
 /** Path prefix for static snapshot serving (default). */
 const SNAPSHOT_PATH = "/snapshots";
-/**
- * In-memory limit on the POST body. JSON-RPC bodies are usually a few KB. Sends larger than
- * a few hundred KB are not expected, so reading is cut off at a 4 MiB limit and a 413-equivalent
- * error is returned (do not read the whole body into memory unbounded). Enforced by this app's own
- * `readJsonBody` rather than by the SDK's node adapter (`toNodeHandler`/`toWebRequest` impose no
- * body-size limit of their own) — the pre-read, size-checked body is then handed to the adapter as
- * its `parsedBody` argument, so nothing is read from `req` a second time.
- */
-const MAX_BODY_BYTES = 4 * 1024 * 1024;
-
-/** Sentinel error indicating the POST body exceeded {@link MAX_BODY_BYTES} (the caller converts it to 413). */
-class BodyTooLargeError extends Error {
-  constructor() {
-    super(`Request body exceeds the limit (${MAX_BODY_BYTES} bytes)`);
-    this.name = "BodyTooLargeError";
-  }
-}
 
 export interface McpHttpServerOptions {
   /** Factory that creates a fresh attached McpServer per request (usually setup.createServer). */
@@ -96,8 +78,6 @@ export interface McpHttpServerOptions {
   allowedOrigins?: string[];
 }
 
-const LOCAL_HOSTNAMES = ["localhost", "127.0.0.1", "[::1]"];
-
 /**
  * The bare hostname of an allow-list entry, as the SDK's guards expect it: a leading scheme and a trailing
  * `:port` are dropped (`https://x.example:8443` and `x.example:8443` both become `x.example`; `[::1]:8788`
@@ -111,133 +91,42 @@ export function allowedHostnameOf(entry: string): string {
 }
 
 /**
- * Build a Streamable HTTP MCP server on top of node:http (no express dependency), stateless
- * (protocol version 2026-07-28 removed protocol-level sessions): `createMcpHandler` builds a fresh
- * `McpServer` from `options.createServer` for each exchange (each legacy/2025-era request, or each
- * modern/2026-era request), so there is no session state to route on. Since it is hit from browser
- * hosts (claude.ai / ChatGPT), CORS and OPTIONS are handled.
+ * Build this app's Streamable HTTP MCP server: the shared scaffold (`./mcp-http-server.ts` — Host / Origin
+ * guards, CORS, body cap, stateless `createMcpHandler`) plus this entry point's own behavior, passed as
+ * options so the wire answers stay exactly what they were: the static snapshot route, a 404 for any other
+ * path, JSON-RPC 500 / -32603 for a malformed body or an unexpected failure, the extra `Last-Event-ID` /
+ * `Access-Control-Max-Age` CORS entries, and `[kohaku-mcp-http]`-prefixed error logs.
  *
  * Does not listen (the caller decides the port and listens). A pure factory so it can be reused from tests.
  */
 export function createMcpHttpServer(options: McpHttpServerOptions): Server {
-  const path = options.path ?? MCP_PATH;
   const snapshotPath = options.snapshotPath ?? SNAPSHOT_PATH;
-  // DNS rebinding protection is always on: localhost names by default, plus whatever the caller lists.
-  const validateHost = hostHeaderValidation([
-    ...LOCAL_HOSTNAMES,
-    ...(options.allowedHosts ?? []).map(allowedHostnameOf),
-  ]);
-  const validateOrigin = originValidation([
-    ...LOCAL_HOSTNAMES,
-    ...(options.allowedOrigins ?? []).map(allowedHostnameOf),
-  ]);
-
-  // One handler for the whole server's lifetime (not "per session" — createMcpHandler itself builds a
-  // fresh per-request McpServer instance from options.createServer). onerror observes failures the
-  // fetch-level handler itself reports (routing/dispatch failures); toNodeHandler's own onerror below
-  // observes the narrower node<->fetch adapter failures (request conversion, handler.fetch throwing).
-  // Production hook: `options.createServer` (setup.createServer, built by createKohakuMcpSetup) already
-  // wires McpHostDeps.resolvePrincipal to derive the caller from this request's own bearer token under
-  // KOHAKU_AUTHZ=jwt (or runs every call as the anonymous principal under the default hmac scheme) — see
-  // setup.ts's own doc comment. A real deployment overrides this via `KohakuMcpSetupOptions.resolvePrincipal`
-  // if its identity resolution needs to differ from that default.
-  const mcpHandler = createMcpHandler(() => options.createServer(), {
-    onerror: (err) => console.error("[kohaku-mcp-http] MCP handler error:", err),
-  });
-  const handleMcp = toNodeHandler(mcpHandler, {
-    onerror: (err) => console.error("[kohaku-mcp-http] node adapter error:", err),
-  });
-
-  const httpServer = createHttpServer(async (req, res) => {
-    // DNS rebinding / CSRF protection, at a common point before routing (snapshot / mcp) so it also guards
-    // the static snapshot serving that bypasses the MCP handler's own routing. Each guard has already
-    // answered with a 403 when it returns false.
-    if (!validateHost(req, res)) return;
-    if (!validateOrigin(req, res)) return;
-    applyCors(req, res);
-    // Browser preflight. Return only the CORS headers and finish.
-    if (req.method === "OPTIONS") {
-      res.writeHead(204).end();
-      return;
-    }
-
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-
-    // Static snapshot serving (so remote MCP can open them by URL too). Branch before the /mcp check.
+  const internalError = { status: 500, code: -32603, message: "Internal error" };
+  return createMcpHttpScaffold({
+    createServer: options.createServer,
+    path: options.path ?? MCP_PATH,
+    allowedHosts: (options.allowedHosts ?? []).map(allowedHostnameOf),
+    allowedOrigins: (options.allowedOrigins ?? []).map(allowedHostnameOf),
+    bodyTooLargeMessage: `Request body exceeds the limit (${DEFAULT_MAX_BODY_BYTES} bytes)`,
+    corsAllowHeaders: ["Last-Event-ID"],
+    corsMaxAgeSeconds: 86400,
+    invalidJson: internalError,
+    internalError,
+    // Static snapshot serving (so remote MCP can open them by URL too). Tried before the /mcp path check.
     // GET only and only when starting with `${snapshotPath}/`. The last segment is basename-validated and confined to snapshotDir.
-    if (req.method === "GET" && url.pathname.startsWith(`${snapshotPath}/`)) {
-      await serveSnapshot(res, options.snapshotDir, url.pathname.slice(snapshotPath.length + 1));
-      return;
-    }
-
-    if (url.pathname !== path) {
-      sendJsonError(res, 404, -32601, `Not found: ${url.pathname}`);
-      return;
-    }
-
-    try {
-      if (req.method === "POST") {
-        // Pre-read the body under this app's own size limit (see MAX_BODY_BYTES's doc comment), then
-        // hand it to the SDK's node adapter as parsedBody so it reads nothing from req itself.
-        let body: unknown;
-        try {
-          body = await readJsonBody(req);
-        } catch (err) {
-          if (err instanceof BodyTooLargeError) {
-            // Close the connection after the response since we cut off reading the rest (Connection: close).
-            res.setHeader("Connection", "close");
-            sendJsonError(res, 413, -32000, err.message);
-            return;
-          }
-          throw err; // JSON parse failures etc. are delegated to the outer catch (500)
-        }
-        await handleMcp(req, res, body);
-        return;
+    routes: async (req, res, url) => {
+      if (req.method === "GET" && url.pathname.startsWith(`${snapshotPath}/`)) {
+        await serveSnapshot(res, options.snapshotDir, url.pathname.slice(snapshotPath.length + 1));
+        return true;
       }
-
-      // GET (standalone SSE stream) and DELETE (session end) are 2025-era session operations with no
-      // stateless equivalent — createMcpHandler's default legacy:"stateless" answers both with 405, the
-      // same way protocol-level sessions being removed makes them meaningless under 2026-era serving.
-      // Any other method (HEAD, PUT, ...) is likewise left to the handler's own routing/rejection.
-      await handleMcp(req, res);
-    } catch (err) {
-      console.error("[kohaku-mcp-http] Error while handling request:", err);
-      if (!res.headersSent) sendJsonError(res, 500, -32603, "Internal error");
-    }
+      return false;
+    },
+    onError: (stage, err) => {
+      if (stage === "handler") console.error("[kohaku-mcp-http] MCP handler error:", err);
+      else if (stage === "adapter") console.error("[kohaku-mcp-http] node adapter error:", err);
+      else console.error("[kohaku-mcp-http] Error while handling request:", err);
+    },
   });
-
-  // On server stop, tear down the modern-era leg (aborts in-flight modern exchanges and closes their
-  // per-request instances; the legacy stateless fallback holds nothing between exchanges to close).
-  httpServer.on("close", () => {
-    void mcpHandler.close();
-  });
-
-  return httpServer;
-}
-
-/**
- * CORS headers so browser MCP hosts can hit us. Only an Origin that already passed `originValidation` is ever
- * echoed back (with `Vary: Origin`); a request with no Origin gets no CORS headers at all, never `*`.
- */
-function applyCors(req: IncomingMessage, res: ServerResponse): void {
-  const origin = req.headers.origin;
-  if (origin == null) return;
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-  // mcp-protocol-version is a custom header the SDK's modern-era classification reads from the browser
-  // request, so allow it explicitly (mcp-session-id is no longer part of the wire contract — protocol
-  // version 2026-07-28 removed protocol-level sessions).
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Accept, Authorization, mcp-protocol-version, Last-Event-ID",
-  );
-  res.setHeader("Access-Control-Max-Age", "86400");
-}
-
-function sendJsonError(res: ServerResponse, status: number, code: number, message: string): void {
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ jsonrpc: "2.0", error: { code, message }, id: null }));
 }
 
 function sendPlainError(res: ServerResponse, status: number, message: string): void {
@@ -291,72 +180,6 @@ async function serveSnapshot(res: ServerResponse, snapshotDir: string, rawName: 
     "Content-Length": body.byteLength,
   });
   res.end(body);
-}
-
-/**
- * Read the POST body to completion and parse it as JSON. An empty body is undefined.
- * Limit the body size to {@link MAX_BODY_BYTES}. Overflow is detected both by the Content-Length
- * pre-check and by the cumulative check during stream reception; on overflow, reception is cut off
- * and {@link BodyTooLargeError} is thrown (the caller converts it into a 413-equivalent error).
- * It is written with event subscription rather than for-await so that, on overflow detection, the
- * subscription can be canceled midway to stop the rest of reception (so nothing more piles up in memory).
- * Exported so the two size-limit branches (Content-Length pre-check / cumulative) can be verified deterministically.
- */
-export function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    // Content-Length pre-check (if the sender is honest, we can reject before reception).
-    const declared = Number(req.headers["content-length"]);
-    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
-      req.pause();
-      reject(new BodyTooLargeError());
-      return;
-    }
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-    const cleanup = (): void => {
-      req.off("data", onData);
-      req.off("end", onEnd);
-      req.off("error", onError);
-    };
-    const onData = (chunk: Buffer): void => {
-      if (settled) return;
-      total += chunk.byteLength;
-      // Cumulative size exceeds the limit. Stop reception and cut off (the rest is discarded by the caller's Connection: close).
-      if (total > MAX_BODY_BYTES) {
-        settled = true;
-        cleanup();
-        req.pause();
-        reject(new BodyTooLargeError());
-        return;
-      }
-      chunks.push(chunk);
-    };
-    const onEnd = (): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      const raw = Buffer.concat(chunks).toString("utf8").trim();
-      if (raw === "") {
-        resolve(undefined);
-        return;
-      }
-      try {
-        resolve(JSON.parse(raw));
-      } catch (e) {
-        reject(e);
-      }
-    };
-    const onError = (err: Error): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(err);
-    };
-    req.on("data", onData);
-    req.on("end", onEnd);
-    req.on("error", onError);
-  });
 }
 
 /** Parse a comma-separated allow-list env value (undefined if empty). Exported for testability. */
