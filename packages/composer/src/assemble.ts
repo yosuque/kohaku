@@ -7,7 +7,7 @@ import {
   type UISpec,
 } from "@kohaku-ui/spec-core";
 import { COMPOSER_ID } from "./constants.js";
-import type { ComposeContext } from "./context.js";
+import type { ComposeContext, ComposePolicy } from "./context.js";
 import { ComposeError } from "./errors.js";
 import { postProcess } from "./post/index.js";
 import type { ResolvedRefs } from "./refs.js";
@@ -20,6 +20,23 @@ export function refVersionsField(
   refs: Pick<ResolvedRefs, "versionsByRef">,
 ): { refVersions: ResolvedRefs["versionsByRef"] } | Record<string, never> {
   return Object.keys(refs.versionsByRef).length > 0 ? { refVersions: refs.versionsByRef } : {};
+}
+
+/**
+ * The `generatorVersion` / `kit` provenance stamps derived from the compose policy, as a fragment to spread
+ * into `assembleSpec`'s arguments. Each key is present only when the policy supplies it (the presence rule
+ * `assembleSpec` documents on those two fields), and `kit` carries id/version only.
+ */
+export function provenanceStampsOf(policy?: ComposePolicy): {
+  generatorVersion?: string;
+  kit?: { id: string; version: string };
+} {
+  return {
+    ...(policy?.generatorVersion != null ? { generatorVersion: policy.generatorVersion } : {}),
+    ...(policy?.designSystem?.kit != null
+      ? { kit: { id: policy.designSystem.kit.id, version: policy.designSystem.kit.version } }
+      : {}),
+  };
 }
 
 export function assembleSpec(args: {
