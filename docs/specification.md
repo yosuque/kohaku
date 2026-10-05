@@ -103,7 +103,7 @@ The common envelope for data responses, **TabularData**:
 
 ## 4. Port interfaces (the four the product implements)
 
-Definitions: `packages/spec-core/src/ports.ts`. Reference implementations: `apps/sample-api/src/ports/`.
+Definitions: `packages/spec-core/src/ports.ts` (a barrel over `src/ports/*.ts`, one file per Port). Reference implementations: `apps/sample-api/src/ports/`.
 
 ### 4.1 DomainPort — business API (the product's core)
 
@@ -182,14 +182,14 @@ Implementation: `createLlmFromEnv()` (environment variables §9). For tests: Fak
 
 The Spec envelope **has no theme** (SPEC-ENV-003 — a UI Spec is structure only). The theme is resolved on the Renderer side. Where the related types and values live:
 
-- **Types**: `KnownThemeTokens` in `packages/spec-core/src/ports.ts` (the vocabulary of known tokens; all keys optional) + `ThemeTokens = KnownThemeTokens & Record<string, string | number>` (an open index signature also permits custom tokens = backward compatible).
+- **Types**: `KnownThemeTokens` in `packages/spec-core/src/theme-tokens.ts` (also re-exported through the `src/ports.ts` barrel; the vocabulary of known tokens; all keys optional) + `ThemeTokens = KnownThemeTokens & Record<string, string | number>` (an open index signature also permits custom tokens = backward compatible).
 - **Defaults**: `defaultLightTheme` / `defaultDarkTheme` in `@kohaku-ui/renderer-core` (spec-core is environment-neutral, so it holds no values). Resolution is done by `resolveToken(theme, name[, fallback])`, which falls back in the order `theme[name] → alias table → explicit fallback (3rd argument) → defaultLightTheme` (placing the explicit fallback ahead of the default net preserves the old API semantics of "respect a fallback that differs from the default"; a 2-argument call that omits the fallback falls into the default net). By type, the 2-argument version takes `keyof KnownThemeTokens` (known tokens; always resolved by the default net or an alias), and arbitrary string tokens are allowed only via the 3-argument version, which requires a fallback (closing the undefined-leak of the 2-argument path at the type level). Because both renderers (React `useToken` / WC `tokenStr`) draw from the same default net, for the same `ThemeTokens`, React = WC match pixel-for-pixel (SPEC-A2 parity).
 - **Aliases**: `color.danger`→`color.negative`, `color.focus`→`color.primary` (they have no concrete entry in the default theme and resolve solely via the alias table).
 - For the full list of tokens, the light/dark defaults, and the dark-mode WCAG AA policy, see [design.md §7.2](design.md). Apps use it composed as base + brand delta in the form `{ ...defaultDarkTheme, ...brand }`.
 
 ### 4.7 Optional governance Ports (ApprovalPort / ApprovalStore / RateLimitStore)
 
-Not among the four Ports a product must implement: each is optional, wired through `KohakuHostDeps` (REST) / `McpHostDeps` (MCP Apps), and defined in `packages/spec-core/src/ports.ts`.
+Not among the four Ports a product must implement: each is optional, wired through `KohakuHostDeps` (REST) / `McpHostDeps` (MCP Apps), and defined in `packages/spec-core/src/ports.ts` (a barrel over `src/ports/*.ts`, one file per Port).
 
 ```ts
 interface ApprovalPort {  // design.md #63
