@@ -87,7 +87,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
       try {
         ({ intent } = await resolveIntent(
           deps.compose.semantic,
-          { kind: "intent", intent: { canonical: body.intent.canonical, params: body.intent.params } },
+          { kind: "intent", intent: body.intent },
           session,
         ));
       } catch (e) {

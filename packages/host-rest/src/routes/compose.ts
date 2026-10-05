@@ -83,7 +83,8 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
     const session = toSession(body.session, await getPrincipal(c), await resolveTenant(c, deps));
     try {
       const input = body.input as SemanticInput;
-      const intent = await resolveSemanticInput(input, session, deps);
+      // The same resolveIntent sequence as resolveIntentFromBody's raw-input branch (see its doc comment).
+      const { intent } = await hostCore.resolveIntent(deps.compose.semantic, input, session);
       return c.json({
         intent,
         source: input.kind === "nl" ? "llm" : "deterministic",
@@ -145,7 +146,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       // params in `current` too — the same closed gap as body.intent on /compose.
       ({ intent: current } = await hostCore.resolveIntent(
         deps.compose.semantic,
-        { kind: "intent", intent: { canonical: body.intent.canonical, params: body.intent.params } },
+        { kind: "intent", intent: body.intent },
         session,
       ));
       // Intent resolution (host-core's resolveIntent, shared with the MCP profile's compose-tool nl/intent branch).
@@ -658,59 +659,21 @@ async function finishStream(
 
 /**
  * Resolves a CanonicalIntent from the ComposeBody (shared by /compose and /compose/stream).
- * If body.intent is present, resolved directly (host-core's "intent" source); otherwise delegated to
- * resolveSemanticInput. Failures (INTENT_INVALID) are mapped to 422 by the caller, so throws are passed
- * through here.
+ * If body.intent is present, resolved directly (host-core's "intent" source); otherwise the raw SemanticInput
+ * (NLQuery | GuiAction) goes through the same resolveIntent helper — the sequence shared with
+ * /intent/normalize, the MCP profile's compose-tool nl branch and REST/MCP's own "gui" event paths.
+ * host-core's "gui" IntentSource variant takes `current` as optional (mirroring GuiAction), so a currentless
+ * GuiAction (a fresh gui action against no prior Intent) also resolves through resolveIntent — no direct
+ * semantic.normalize bypass is needed here. Failures (INTENT_INVALID) are mapped to 422 by the caller, so
+ * throws are passed through here.
  */
 async function resolveIntentFromBody(
   body: z.infer<typeof ComposeBodySchema>,
   session: SessionContext,
   deps: KohakuHostDeps,
 ): Promise<CanonicalIntent> {
-  if (body.intent != null) {
-    const { intent } = await hostCore.resolveIntent(
-      deps.compose.semantic,
-      {
-        kind: "intent",
-        intent: { canonical: body.intent.canonical, params: body.intent.params },
-      },
-      session,
-    );
-    return intent;
-  }
-  return resolveSemanticInput(body.input as SemanticInput, session, deps);
-}
-
-/**
- * Resolves a CanonicalIntent from a raw SemanticInput (NLQuery | GuiAction) via host-core's shared
- * resolveIntent helper — shared by /intent/normalize and resolveIntentFromBody so both go through the same
- * normalization/finalization sequence as the MCP profile's compose-tool nl branch and REST/MCP's own "gui"
- * event paths. host-core's "gui" IntentSource variant takes `current` as optional (mirroring GuiAction), so
- * a currentless GuiAction (a fresh gui action against no prior Intent) also resolves through resolveIntent —
- * no direct semantic.normalize bypass is needed here.
- */
-async function resolveSemanticInput(
-  input: SemanticInput,
-  session: SessionContext,
-  deps: KohakuHostDeps,
-): Promise<CanonicalIntent> {
-  if (input.kind === "nl") {
-    const { intent } = await hostCore.resolveIntent(
-      deps.compose.semantic,
-      { kind: "nl", text: input.text, ...(input.locale != null ? { locale: input.locale } : {}) },
-      session,
-    );
-    return intent;
-  }
-  const { intent } = await hostCore.resolveIntent(
-    deps.compose.semantic,
-    {
-      kind: "gui",
-      action: input.action,
-      params: input.params,
-      ...(input.current != null ? { current: input.current } : {}),
-    },
-    session,
-  );
+  const source: hostCore.IntentSource =
+    body.intent != null ? { kind: "intent", intent: body.intent } : (body.input as SemanticInput);
+  const { intent } = await hostCore.resolveIntent(deps.compose.semantic, source, session);
   return intent;
 }
