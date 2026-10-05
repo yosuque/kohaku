@@ -2,6 +2,8 @@
 
 English | [日本語](mcp-apps.ja.md)
 
+kohaku puts LLM-generated UI under control in production: the same request gets the same screen, the model never touches your data, and whatever it invents is reviewed first.
+
 **Who this is for:** the author of an MCP server who wants their tools to answer with a *screen*, not a wall of text — in Claude Desktop, claude.ai or ChatGPT — and wants that screen to be the same one every time. You do not need a web app; the chat host is your UI.
 
 **Time:** about 20 minutes to a typed tool that renders a widget, given a data API you can call. Already

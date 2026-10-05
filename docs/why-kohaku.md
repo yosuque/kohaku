@@ -2,7 +2,7 @@
 
 English | [日本語](why-kohaku.ja.md)
 
-kohaku is not a faster way to generate screens. It is a way to put LLM-generated UI **into production under control**: the same request always shows the same screen, the model never touches your data, and whatever the model invents has to pass review before it becomes part of your product.
+kohaku is a library for putting LLM-generated UI under control in production: the same request gets the same screen, the model never touches your data, and whatever the model invents passes review before it becomes a part of your product. It is not a faster way to generate screens; it is the governance layer that takes Generative UI to production.
 
 If you evaluate Generative UI on "how quickly can the model draw something", most tools look alike. kohaku is built for the questions that come after the demo: *Will it show the same thing tomorrow? Can I audit what it showed? What happens when the model is wrong?*
 

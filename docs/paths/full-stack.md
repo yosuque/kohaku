@@ -2,6 +2,8 @@
 
 English | [日本語](full-stack.ja.md)
 
+kohaku puts LLM-generated UI under control in production: the same request gets the same screen, the model never touches your data, and whatever it invents is reviewed first.
+
 **Who this is for:** a product team that wants the model to compose screens from a governed catalog (L1), to invent new ones when the catalog falls short (L2), and a review loop that turns the good inventions into official parts — plus the audit trail to run it in production.
 
 **Time:** about 30 minutes to a REST host that composes with your LLM; an afternoon to walk the promotion loop end to end with the sample.

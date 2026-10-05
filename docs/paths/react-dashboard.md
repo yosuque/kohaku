@@ -2,6 +2,8 @@
 
 English | [日本語](react-dashboard.ja.md)
 
+kohaku puts LLM-generated UI under control in production: the same request gets the same screen, the model never touches your data, and whatever it invents is reviewed first.
+
 **Who this is for:** a product team that wants Server-Driven UI now and LLM composition later (or never). You write a UI Spec by hand or serve it from your API; `@kohaku-ui/renderer-react` draws it. Nothing in this path calls a model.
 
 **Time:** about 10 minutes to the first screen, 20 to a screen fed by a running host.
