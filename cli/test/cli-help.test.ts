@@ -20,6 +20,7 @@ describe("kohaku --help", () => {
       "component",
       "dataset",
       "evidence",
+      "usage",
       "migrate",
     ]) {
       expect(result.stdout).toContain(name);
@@ -88,7 +89,13 @@ describe("cli/src/index.ts imports", () => {
   // import; anything else loaded at startup would pull it back into the help path. The allowlist below is the
   // whole set of modules `index.ts` may load statically.
   const source = readFileSync(join(here, "../src/index.ts"), "utf8");
-  const lazyModules = ["./commands.js", "./evidence/index.js", "./migrate.js", "./init/index.js"];
+  const lazyModules = [
+    "./commands.js",
+    "./evidence/index.js",
+    "./migrate.js",
+    "./init/index.js",
+    "./usage/index.js",
+  ];
   const allowedStartup = (specifier: string): boolean =>
     specifier === "commander" || specifier === "./version.js" || specifier.startsWith("node:");
 

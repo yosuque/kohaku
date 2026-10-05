@@ -455,6 +455,84 @@ evidence
     process.exitCode = result.ok ? 0 : 1;
   });
 
+const usage = program
+  .command("usage")
+  .description("Usage metering derived from the lineage log (design.md #74)");
+
+usage
+  .command("export")
+  .exitOverride(exitUsageErrorAsTwo)
+  .description(
+    "Export per-day, per-tenant usage (compositions, cache, tiers, L2 generations, fallbacks, tokens, " +
+      "fixations) from the whole lineage log of a local StoragePort data directory or a REST host",
+  )
+  .option("--data-dir <dir>", "Read from a local StoragePort data directory (mutually exclusive with --rest)")
+  .option(
+    "--rest <baseUrl>",
+    "Read over REST from a running host (mutually exclusive with --data-dir). Only the tenant of the " +
+      "session is visible: the x-kohaku-tenant --header scopes the request, so export each tenant with its own header",
+  )
+  .option(
+    "--header <name:value>",
+    "Extra REST request header, e.g. tenant or auth (repeatable; --rest only)",
+    (value: string, prev: string[]) => [...prev, value],
+    [] as string[],
+  )
+  .option(
+    "--tenant <id>",
+    "Restrict the export to this tenant (--data-dir; omitted = every tenant, one row per day and tenant). " +
+      "In --rest mode this must match the x-kohaku-tenant --header",
+  )
+  .requiredOption(
+    "--since <iso8601>",
+    "Inclusive lower bound: a date (YYYY-MM-DD, start of that UTC day) or a timestamp with a Z / ±hh:mm offset",
+  )
+  .requiredOption(
+    "--until <iso8601>",
+    "Inclusive upper bound: a date (YYYY-MM-DD, which INCLUDES that whole UTC day) or a timestamp with a Z / ±hh:mm offset",
+  )
+  .option("--format <csv|json>", "Output format", "csv")
+  .option("--out <file>", "Write to this file instead of stdout")
+  .action(
+    async (opts: {
+      dataDir?: string;
+      rest?: string;
+      header: string[];
+      tenant?: string;
+      since: string;
+      until: string;
+      format: string;
+      out?: string;
+    }) => {
+      const { EvidenceUsageError } = await import("./evidence/index.js");
+      const { runUsageExport } = await import("./usage/index.js");
+      let result: Awaited<ReturnType<typeof runUsageExport>>;
+      try {
+        result = await runUsageExport({
+          ...(opts.dataDir != null ? { dataDir: opts.dataDir } : {}),
+          ...(opts.rest != null ? { rest: opts.rest } : {}),
+          headers: opts.header,
+          ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
+          since: opts.since,
+          until: opts.until,
+          format: opts.format as "csv" | "json",
+          ...(opts.out != null ? { out: opts.out } : {}),
+        });
+      } catch (e) {
+        // A bad window / format is a usage error (exit 2, like `evidence export`); anything else is 1.
+        program.error(e instanceof Error ? e.message : String(e), {
+          exitCode: e instanceof EvidenceUsageError ? 2 : 1,
+        });
+        return;
+      }
+      if (result.outPath != null) {
+        console.error(`Wrote ${result.rows.length} usage row(s) to ${result.outPath}`);
+      } else {
+        process.stdout.write(result.text);
+      }
+    },
+  );
+
 const migrate = program
   .command("migrate")
   .description("Catalog migration: rewrite fixated Specs off a deprecated part (design.md #65)");
