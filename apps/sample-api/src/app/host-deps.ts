@@ -2,6 +2,7 @@ import type { ComposeContext } from "@kohaku-ui/composer";
 import { formatErrorChain, type PolicyRateLimiter } from "@kohaku-ui/host-core";
 import { createGovernancePolicy, type KohakuHostDeps } from "@kohaku-ui/host-rest";
 import {
+  createActionAuditRecorder,
   createViewRecorder,
   type Fixations,
   type Lineage,
@@ -70,6 +71,11 @@ export function createHostDeps(args: {
         // analytics.read (usage analytics) is a read operation, so admin/reviewer/viewer can all view it.
         admin: ["*"],
         reviewer: ["promotion.*", "lineage.read", "analytics.read"],
+        // approver=the human who approves "approve"-tier governed Actions (design.md #62/#72): may issue approval
+        // tokens (POST /approvals) and read the lineage tail the console's Approvals tab derives its inbox from.
+        // analytics.read is needed because the console fetches /analytics/summary on every tab (re)load. Note
+        // lineage.read exposes the whole event log to this role — acceptable for the demo, a product scopes it.
+        approver: ["action.approve", "lineage.read", "analytics.read"],
         viewer: [
           "lineage.read",
           "analytics.read",
@@ -86,6 +92,12 @@ export function createHostDeps(args: {
     // responsibility (specification.md §4.4 / §7).
     tenant: identity.tenant,
     recorder: createViewRecorder(lineage),
+    // Governed-action audit trail (design.md #62/#63): action.invoked / denied / approvalRequested / approved events.
+    // `recordPayload: true` is a DEMO choice: it stores the action's payload in lineage so the console's
+    // Approvals tab can show the approver what is being approved. Business data then lands in the event log
+    // (a PII trade-off, and readable by every role with lineage.read) — production keeps the default
+    // hash-only recorder and shows the approver the payload from the requester's own system instead.
+    actionAuditRecorder: createActionAuditRecorder(lineage, { recordPayload: true }),
     // Observability hook for the failure path (the demo is console-based). When wired, a requestId is issued that
     // matches error.requestId in the error response, letting you correlate logs with the client's error.
     // Failures that are "swallowed while the response stays successful", such as a recorder (lineage recording) failure, also reach here.

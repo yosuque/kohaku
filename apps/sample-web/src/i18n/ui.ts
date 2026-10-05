@@ -31,7 +31,7 @@ export interface UIStrings {
     themeDark: string;
     roleLabel: string;
     roleSwitchAria: string;
-    roleOptions: { admin: string; reviewer: string; viewer: string };
+    roleOptions: { admin: string; reviewer: string; approver: string; viewer: string };
     tenantLabel: string;
     tenantSwitchAria: string;
     tenantDefaultLabel: string;
@@ -112,6 +112,7 @@ const EN: UIStrings = {
     roleOptions: {
       admin: "admin (full access)",
       reviewer: "reviewer (promotion)",
+      approver: "approver (action approval)",
       viewer: "viewer (read-only)",
     },
     tenantLabel: "Tenant",
@@ -194,6 +195,7 @@ const JA: UIStrings = {
     roleOptions: {
       admin: "admin(フルアクセス)",
       reviewer: "reviewer(昇格レビュー)",
+      approver: "approver(Action の承認)",
       viewer: "viewer(読み取り専用)",
     },
     tenantLabel: "テナント",

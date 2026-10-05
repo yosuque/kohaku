@@ -1,7 +1,15 @@
 import { createHmacApprovalPort, createHmacAuthzPort } from "@kohaku-ui/authz-hmac";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
-import type { FixationRecord, SpecPatch, TabularData, UISpec } from "@kohaku-ui/spec-core";
+import type {
+  FixationRecord,
+  LineageEventRecord,
+  SpecPatch,
+  StoragePort,
+  TabularData,
+  UISpec,
+} from "@kohaku-ui/spec-core";
 import { actionPayloadHash, applyPatch, parseSpec } from "@kohaku-ui/spec-core";
+import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 
@@ -31,9 +39,8 @@ function trendDraft(): unknown {
   };
 }
 
-async function makeTestApp(objects: unknown[] = []) {
+async function makeTestApp(objects: unknown[] = [], storage: StoragePort = makeMemoryStorage()) {
   const llm = new FakeLlm({ objects });
-  const storage = makeMemoryStorage();
   const authz = createHmacAuthzPort("test-secret");
   // Governed actions (design.md #62/#63): wired by default so every test exercises the same shape the
   // real demo does (index.ts wires createHmacApprovalPort the same way, off the same secret).
@@ -336,7 +343,8 @@ describe("sample-api E2E", () => {
   });
 
   it("governed actions: publish (tier approve) requires a bound approval token issued to a different principal (design.md #62/#63)", async () => {
-    const { app } = await makeTestApp();
+    // A real (in-memory) StoragePort, not the stub: this test reads the action audit trail back from lineage.
+    const { app } = await makeTestApp([], createMemoryStoragePort());
     const authz = createHmacAuthzPort("test-secret");
     // The requester's capability, distinct from the approver identity used below.
     const requesterCap = await authz.issueCapability({ id: "demo-user", roles: ["user"] }, [
@@ -351,30 +359,52 @@ describe("sample-api E2E", () => {
     });
     expect(noApproval.status).toBe(403);
     const noApprovalBody = (await noApproval.json()) as {
-      error: { code: string; approval: { action: string; tier: string; payloadHash: string } };
+      error: {
+        code: string;
+        approval: { requestId: string; action: string; tier: string; payloadHash: string };
+      };
     };
     expect(noApprovalBody.error.code).toBe("APPROVAL_REQUIRED");
     expect(noApprovalBody.error.approval).toMatchObject({ action: "publish", tier: "approve" });
 
-    // Self-approval rejection itself is already proven at the host-rest layer
-    // (packages/host-rest/test/approvals.test.ts) — this demo's own governance RBAC (host-deps.ts's
-    // authorizeGovernance) only grants action.approve to "admin", and this identity scheme derives a
-    // principal's id from its role (demo-${role}), so there is no role combination here that is both
-    // "admin" (able to call POST /approvals) and "demo-user" (the requester) at once to re-demonstrate it
-    // through this E2E path specifically.
-
-    // The default header identity resolves no x-kohaku-role header to "admin" (id "demo-admin"), distinct
-    // from the "demo-user" requester above, and the demo's governance RBAC grants admin every operation
-    // kind (including action.approve) — see apps/sample-api/src/app/host-deps.ts's authorizeGovernance.
-    const approveRes = await app.request("/api/kohaku/approvals", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    // The refused attempt is on the audit trail, which is what the console's Approvals inbox derives its
+    // pending list from (design.md #72): one "approve"-tier approvalRequested, attributed to the requester
+    // (actor.id = the capability's principal) with the payload recorded (host-deps.ts: recordPayload, demo only).
+    const requestedRes = await app.request("/api/kohaku/lineage?type=action.approvalRequested&limit=1000");
+    expect(requestedRes.status).toBe(200);
+    const requested = ((await requestedRes.json()) as { events: LineageEventRecord[] }).events.filter(
+      (e) => e.payload.tier === "approve",
+    );
+    expect(requested).toHaveLength(1);
+    expect(requested[0]).toMatchObject({
+      type: "action.approvalRequested",
+      actor: { kind: "user", id: "demo-user" },
+      payload: {
         action: "publish",
         payloadHash: await actionPayloadHash(payload),
-        requesterId: "demo-user",
-      }),
+        tier: "approve",
+        requestId: noApprovalBody.error.approval.requestId,
+        payload,
+      },
     });
+
+    const approvalBody = async (requesterId: string) =>
+      JSON.stringify({ action: "publish", payloadHash: await actionPayloadHash(payload), requesterId });
+    const issueAs = async (role: string, requesterId: string) =>
+      app.request("/api/kohaku/approvals", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-kohaku-role": role },
+        body: await approvalBody(requesterId),
+      });
+
+    // Only roles holding action.approve can mint a token: a viewer (the usual requester in the demo) cannot,
+    // and an approver cannot approve their own request (admin = "demo-admin" approving "demo-admin" is 400).
+    expect((await issueAs("viewer", "demo-user")).status).toBe(403);
+    expect((await issueAs("admin", "demo-admin")).status).toBe(400);
+
+    // The demo's "approver" role (id "demo-approver", distinct from the "demo-user" requester above) holds
+    // action.approve — see apps/sample-api/src/app/host-deps.ts's authorizeGovernance.
+    const approveRes = await issueAs("approver", "demo-user");
     expect(approveRes.status).toBe(200);
     const { approval } = (await approveRes.json()) as { approval: string };
     expect(approval.startsWith("kohaku-approval.v2.")).toBe(true);
@@ -389,8 +419,26 @@ describe("sample-api E2E", () => {
     expect(approvedBody.result.ok).toBe(true);
     expect(approvedBody.result.published).toBe(1);
 
-    // This demo wires no ApprovalStore (single-use enforcement is optional per design.md #63), so the
-    // same token verifies again for a second invoke of the identical (action, payload, requester) triple
+    // Consuming the token is audited: action.approved names both principals, which is what settles the
+    // pending row in the inbox (the invoke itself is an action.invoked of the same tier).
+    const approvedEvents = (
+      (await (await app.request("/api/kohaku/lineage?type=action.approved&limit=1000")).json()) as {
+        events: LineageEventRecord[];
+      }
+    ).events;
+    expect(approvedEvents).toHaveLength(1);
+    expect(approvedEvents[0]).toMatchObject({
+      type: "action.approved",
+      payload: {
+        action: "publish",
+        payloadHash: await actionPayloadHash(payload),
+        approverId: "demo-approver",
+        requesterId: "demo-user",
+      },
+    });
+
+    // This demo wires no ApprovalStore, so single-use enforcement (optional per design.md #63) is off and
+    // the same token verifies again for a second invoke of the identical (action, payload, requester) triple
     // — a product that wants single-use tokens configures an ApprovalStore (packages/authz-hmac's
     // createMemoryApprovalStore or its own), which this demo intentionally does not (out of scope).
     const replay = await app.request("/api/kohaku/binding/action", {
