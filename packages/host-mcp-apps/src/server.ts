@@ -254,8 +254,8 @@ function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
  * afterCompose runs immediately before the audit record (preserving composeAndPackage's capability-issuance ordering).
  *
  * Audit recording is symmetric with the REST profile: when `deps.recorder` (ViewRecorder) is wired, both
- * `composed` and `fallback` (host-core's recordViewFallback, shared with REST's recordFallbackIfAny) are
- * recorded here, matching REST's deliverComposed/finishStream. When only the legacy `deps.onComposed` is
+ * `composed` and `fallback` (host-core's recordComposedAndFallback, shared with REST's
+ * deliverComposed/finishStream) are recorded here. When only the legacy `deps.onComposed` is
  * wired, that alone is called (no fallback recording — the old, narrower contract). `recorder` takes priority
  * when both are present.
  *
@@ -312,7 +312,11 @@ async function composeAndPackage(
   // that distinction. Unused by every synchronous caller, so this is purely additive.
   onComposeResult?: (result: ComposeResult) => void,
 ) {
-  // The compose → capability → audit-record (fail-open) order is intentional; do not reorder.
+  // The compose → capability → action manifest → audit-record (fail-open) order is intentional; do not
+  // reorder. It is this profile's own order (REST's /compose runs capability → record → manifest, its stream
+  // route capability → manifest → write → record): the steps are host-core's order-neutral helpers
+  // (issueSpecCapabilitySafely, buildActionManifestSafely, recordComposedResult + recordComposedAndFallback)
+  // and each host keeps its own sequence and onError endpoint names.
   let capability!: string;
   let actions: hostCore.ActionManifest | undefined;
   const result = await composeAndAudit(ctx, input, "compose", {

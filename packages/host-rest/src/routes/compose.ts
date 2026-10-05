@@ -136,7 +136,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       principal,
       deps,
       call: { requestId, endpoint: "events", signal: c.req.raw.signal, traceContext },
-      // /events-specific: record interacted before recordComposed (preserve execution order).
+      // /events-specific: record interacted before the composed record (preserve execution order).
       beforeRecord: async () => {
         await deps.recorder?.interacted({
           intentHash: current.hash,
@@ -220,9 +220,13 @@ async function resolveComposeRequest(
 
 /**
  * Shared skeleton for the latter half of /compose and /events: composeForRest -> capability issuance ->
- * audit recording (fail-open) -> JSON response.
+ * audit recording (fail-open) -> action manifest -> JSON response. The step order is this REST route's own
+ * (the MCP profile and the stream route order the same steps differently); the steps themselves are host-core's
+ * order-neutral helpers (issueSpecCapabilitySafely via issueSpecCapability, recordComposedResult +
+ * recordComposedAndFallback, buildActionManifestSafely via actionsFor).
  * Failures are COMPOSE_FAILED 500. The endpoint name (call.endpoint) is passed as-is to logs / error reporting.
- * beforeRecord runs inside recordComposedResult's record callback, before recordComposed (for /events' interacted).
+ * beforeRecord runs inside recordComposedResult's record callback, before recordComposedAndFallback
+ * (for /events' interacted).
  */
 async function deliverComposed(
   c: Context,
@@ -443,7 +447,8 @@ async function streamGenerated(
 
 /**
  * SSE stream termination handling. Records lineage exactly once against the final Spec (the skeleton is not
- * recorded), writes the done event ({specHash, tier, cache}), and terminates.
+ * recorded; host-core's recordComposedResult + recordComposedAndFallback, the same pair deliverComposed uses),
+ * writes the done event ({specHash, tier, cache}), and terminates.
  */
 async function finishStream(
   deps: KohakuHostDeps,

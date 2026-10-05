@@ -68,7 +68,8 @@ export interface ViewRecorder {
  * deliverComposed/finishStream and the MCP profile's composeAndAudit): a cancelled compose (the caller's
  * abort fired) is not a generation failure and observer.onError already received phase:"cancelled" from the
  * composer, so `record` is skipped entirely — a client disconnect/timeout must not inflate view.composed /
- * view.fallback counts. Otherwise `record` (the host's own composed -> fallback recording, in that order) runs
+ * view.fallback counts. Otherwise `record` (the host's own composed -> fallback recording, in that order --
+ * `recordComposedAndFallback` below is that pair) runs
  * fail-open (host-core's failOpen): a recording failure must not take down an otherwise-successful delivery,
  * and is instead reported to `onError`. Caveat: this only protects `record`; `onError` itself must not throw
  * (a throwing `onError` is not caught here and would escape to the caller).
@@ -91,8 +92,9 @@ export async function recordComposedResult(
  * spec.provenance.fallback the downgrade on the cache-hit path would be missed. A missing `kind` is treated as
  * "generation" (compatible with older records that predate the field).
  *
- * Shared by both host profiles (REST's recordFallbackIfAny and the MCP profile's composeAndAudit) so the
- * fallback-detection rule lives in exactly one place instead of two independently-drifting copies.
+ * Both host profiles reach this through `recordComposedAndFallback` below (REST's deliverComposed/finishStream
+ * and the MCP profile's composeAndAudit), so the fallback-detection rule lives in exactly one place instead
+ * of two independently-drifting copies.
  */
 export async function recordViewFallback(
   recorder: ViewRecorder | undefined,
