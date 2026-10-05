@@ -115,6 +115,39 @@ export interface LineageSummary {
    * ascending, tenant ascending; an unrecorded tenant is the empty string.
    */
   usage: UsageRow[];
+  /**
+   * Catalog gap: the Intents that fell to free-form L2 generation (view.composed of tier L2 with cache miss or
+   * bypass), aggregated per `canonical` and ordered by `generated` descending (top N, N as for `topIntents`).
+   * `intentHash` is the first one seen for that canonical (a representative; the same canonical can recur
+   * with different params). `fallbacks` counts the `view.fallback` records whose intentHash maps back to this
+   * canonical through the window's view.composed records (a fallback for an intent never composed in the
+   * window cannot be attributed and is not counted). A canonical with no L2 generation has no row.
+   */
+  l2ByIntent: L2IntentGap[];
+  /**
+   * Catalog gap: where reviewers had to correct the machine's schema suggestion. Counts `component.schemaEdited`
+   * records whose `changed` is non-empty, grouped by the component type the reviewer finally proposed (the
+   * `draft.componentType` of the same artifact's `component.schemaProposed`; the artifactId when none is
+   * recorded in the window), ordered by `count` descending (top N, N as for `topIntents`). `topFields` is the
+   * five most-changed draft fields of that group.
+   */
+  schemaEditsByComponent: SchemaEditGap[];
+}
+
+/** One row of `LineageSummary.l2ByIntent`. */
+export interface L2IntentGap {
+  canonical: string;
+  intentHash: string;
+  generated: number;
+  fallbacks: number;
+}
+
+/** One row of `LineageSummary.schemaEditsByComponent`. */
+export interface SchemaEditGap {
+  /** The final component type, or the artifactId when no `component.schemaProposed` names one. */
+  key: string;
+  count: number;
+  topFields: { field: string; count: number }[];
 }
 
 /**
@@ -160,12 +193,13 @@ export interface SummarizeLineageOptions {
   since?: string;
   /** Aggregate only events at or before this time (record.ts <= until). Expects canonical ISO8601. */
   until?: string;
-  /** N for topIntents. Default 10, clamped to 1..50. */
+  /** N for topIntents, l2ByIntent and schemaEditsByComponent. Default 10, clamped to 1..50. */
   topIntentsLimit?: number;
 }
 
 const TOP_INTENTS_DEFAULT = 10;
 const TOP_INTENTS_MAX = 50;
+const SCHEMA_EDIT_TOP_FIELDS = 5;
 
 /** Folds the raw lineage event stream into an aggregate summary (pure, read-only). */
 export function summarizeLineage(
@@ -197,6 +231,16 @@ export function summarizeLineage(
   const durations: number[] = [];
   // intentHash → { canonical (first seen), count }. Preserves insertion order while taking the top items by descending count.
   const intents = new Map<string, { canonical: string; count: number }>();
+  // Catalog-gap inputs. canonical -> L2 generation row; intentHash -> canonical (from every view.composed, so a
+  // view.fallback, which carries only the hash, can be attributed); the fallbacks' hashes, resolved after the
+  // pass so the result does not depend on whether a fallback sorts before its composed record.
+  const l2Rows = new Map<string, L2IntentGap>();
+  const canonicalOfHash = new Map<string, string>();
+  const fallbackHashes: string[] = [];
+  // (tenant, artifactId) -> the final component type of the latest component.schemaProposed; and the edits
+  // (non-empty `changed`) to group once that map is complete.
+  const proposedType = new Map<string, string>();
+  const schemaEdits: { key: string; artifactId: string; fields: string[] }[] = [];
 
   let composed = 0;
   let fallbackTotal = 0;
@@ -236,9 +280,29 @@ export function summarizeLineage(
           if (prev != null) prev.count++;
           else intents.set(intentHash, { canonical: String(e.payload["canonical"] ?? ""), count: 1 });
         }
+        const canonical = String(e.payload["canonical"] ?? "");
+        if (typeof intentHash === "string" && intentHash.length > 0 && !canonicalOfHash.has(intentHash)) {
+          canonicalOfHash.set(intentHash, canonical);
+        }
+        if (tier === "L2" && (cacheKey === "miss" || cacheKey === "bypass")) {
+          const row = l2Rows.get(canonical);
+          if (row != null) {
+            row.generated++;
+            if (row.intentHash === "" && typeof intentHash === "string") row.intentHash = intentHash;
+          } else {
+            l2Rows.set(canonical, {
+              canonical,
+              intentHash: typeof intentHash === "string" ? intentHash : "",
+              generated: 1,
+              fallbacks: 0,
+            });
+          }
+        }
         break;
       }
       case "view.fallback": {
+        const fallbackHash = e.payload["intentHash"];
+        if (typeof fallbackHash === "string" && fallbackHash.length > 0) fallbackHashes.push(fallbackHash);
         fallbackTotal++;
         const kind = e.payload["kind"];
         if (kind === "generation" || kind === "negotiation") byKind[kind]++;
@@ -296,6 +360,29 @@ export function summarizeLineage(
         if (Array.isArray(changed) && changed.length === 0 && e.payload["acknowledged"] === true) {
           acceptedAsIs++;
         }
+        if (Array.isArray(changed) && changed.length > 0) {
+          const artifactId = String(e.payload["artifactId"] ?? "");
+          schemaEdits.push({
+            key: reviewKey(e),
+            artifactId,
+            fields: changed
+              .map((c) =>
+                c != null && typeof c === "object" ? (c as Record<string, unknown>)["field"] : undefined,
+              )
+              .filter((f): f is string => typeof f === "string"),
+          });
+        }
+        break;
+      }
+      case "component.schemaProposed": {
+        const draft = e.payload["draft"];
+        const componentType =
+          draft != null && typeof draft === "object"
+            ? (draft as Record<string, unknown>)["componentType"]
+            : undefined;
+        if (typeof componentType === "string" && componentType.length > 0) {
+          proposedType.set(reviewKey(e), componentType);
+        }
         break;
       }
       case "component.published":
@@ -333,6 +420,36 @@ export function summarizeLineage(
     .sort((a, b) => b.count - a.count)
     .slice(0, topN);
 
+  for (const hash of fallbackHashes) {
+    const canonical = canonicalOfHash.get(hash);
+    const row = canonical != null ? l2Rows.get(canonical) : undefined;
+    if (row != null) row.fallbacks++;
+  }
+  const l2ByIntent = [...l2Rows.values()].sort((a, b) => b.generated - a.generated).slice(0, topN);
+
+  const editGroups = new Map<string, { count: number; fields: Map<string, number> }>();
+  for (const edit of schemaEdits) {
+    const key = proposedType.get(edit.key) ?? edit.artifactId;
+    let group = editGroups.get(key);
+    if (group == null) {
+      group = { count: 0, fields: new Map() };
+      editGroups.set(key, group);
+    }
+    group.count++;
+    for (const field of edit.fields) group.fields.set(field, (group.fields.get(field) ?? 0) + 1);
+  }
+  const schemaEditsByComponent: SchemaEditGap[] = [...editGroups.entries()]
+    .map(([key, g]) => ({
+      key,
+      count: g.count,
+      topFields: [...g.fields.entries()]
+        .map(([field, count]) => ({ field, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, SCHEMA_EDIT_TOP_FIELDS),
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, topN);
+
   return {
     events: scoped.length,
     composed,
@@ -363,6 +480,8 @@ export function summarizeLineage(
     },
     fixations,
     usage: summarizeUsage(scoped, { bucket: "day" }),
+    l2ByIntent,
+    schemaEditsByComponent,
   };
 }
 

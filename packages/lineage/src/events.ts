@@ -217,6 +217,13 @@ export interface ComponentSchemaEditedPayload {
   extractorVersion: string;
   changed: DraftFieldChange[];
   unchanged: DraftDiffField[];
+  /**
+   * Whether the reviewer ticked the "I reviewed the suggestion" acknowledgement (recorded, never enforced;
+   * a missing `acknowledgedSuggestion` in the approve request is recorded as false). Records written before
+   * this field existed have no value, which readers treat the same as false (see summarizeLineage's
+   * `acceptedAsIs`).
+   */
+  acknowledged: boolean;
 }
 
 /**

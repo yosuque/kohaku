@@ -486,3 +486,199 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
     expect(s.usage[0]?.composed).toBe(s.composed);
   });
 });
+
+describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; design.md #73)", () => {
+  /** A view.fallback carrying the intentHash, as host-rest records it. */
+  function fallbackFor(intentHash: string, ts = "2026-07-01T00:00:00.000Z"): LineageEventRecord {
+    return ev("view.fallback", { kind: "generation", reason: "x", intentHash }, { ts });
+  }
+
+  it("is empty for empty input", () => {
+    const s = summarizeLineage([]);
+    expect(s.l2ByIntent).toEqual([]);
+    expect(s.schemaEditsByComponent).toEqual([]);
+  });
+
+  it("l2ByIntent counts only L2 miss/bypass, per canonical, most generated first", () => {
+    const s = summarizeLineage([
+      composed({ tier: "L2", cache: "miss", canonical: "sales.custom", intentHash: "sha256:c1" }),
+      composed({ tier: "L2", cache: "bypass", canonical: "sales.custom", intentHash: "sha256:c2" }),
+      composed({ tier: "L2", cache: "hit", canonical: "sales.custom", intentHash: "sha256:c1" }), // served from cache
+      composed({ tier: "L2", cache: "fixated", canonical: "sales.custom" }), // not generated
+      composed({ tier: "L1", cache: "miss", canonical: "sales.trend" }), // not L2
+      composed({ tier: "L2", cache: "miss", canonical: "sales.heatmap", intentHash: "sha256:h1" }),
+      composed({ tier: "L2", cache: "miss", canonical: "sales.heatmap", intentHash: "sha256:h1" }),
+      composed({ tier: "L2", cache: "miss", canonical: "sales.heatmap", intentHash: "sha256:h1" }),
+    ]);
+    expect(s.l2ByIntent).toEqual([
+      { canonical: "sales.heatmap", intentHash: "sha256:h1", generated: 3, fallbacks: 0 },
+      // intentHash is the first one seen for the canonical
+      { canonical: "sales.custom", intentHash: "sha256:c1", generated: 2, fallbacks: 0 },
+    ]);
+  });
+
+  it("l2ByIntent joins view.fallback to a canonical through the composed intentHash (order-independent)", () => {
+    const s = summarizeLineage([
+      // The fallback sorts before its composed record: the join still resolves.
+      fallbackFor("sha256:c1", "2026-07-01T00:00:00.000Z"),
+      composed({
+        tier: "L2",
+        cache: "miss",
+        canonical: "sales.custom",
+        intentHash: "sha256:c1",
+        ts: "2026-07-01T00:00:01.000Z",
+      }),
+      fallbackFor("sha256:c1", "2026-07-01T00:00:02.000Z"),
+      fallbackFor("sha256:unknown"), // never composed in the window: cannot be attributed
+      // An L1 intent that only fell back has no L2 generation, so it gets no row.
+      composed({ tier: "L1", cache: "miss", canonical: "sales.trend", intentHash: "sha256:t1" }),
+      fallbackFor("sha256:t1"),
+      ev("view.fallback", { kind: "generation" }), // no intentHash at all (MCP does not record one)
+    ]);
+    expect(s.l2ByIntent).toEqual([
+      { canonical: "sales.custom", intentHash: "sha256:c1", generated: 1, fallbacks: 2 },
+    ]);
+    // The overall fallback counters are untouched by the join.
+    expect(s.fallback.total).toBe(5);
+  });
+
+  it("l2ByIntent and schemaEditsByComponent honor topIntentsLimit", () => {
+    const events: LineageEventRecord[] = [];
+    for (let i = 0; i < 4; i++) {
+      for (let n = 0; n <= i; n++)
+        events.push(composed({ tier: "L2", canonical: `c${i}`, intentHash: `sha256:${i}` }));
+      events.push(
+        ev("component.schemaEdited", {
+          artifactId: `art-${i}`,
+          changed: [{ field: "description", suggested: "a", final: "b" }],
+          unchanged: [],
+          acknowledged: true,
+        }),
+      );
+    }
+    const s = summarizeLineage(events, { topIntentsLimit: 2 });
+    expect(s.l2ByIntent.map((r) => r.canonical)).toEqual(["c3", "c2"]);
+    expect(s.schemaEditsByComponent).toHaveLength(2);
+  });
+
+  it("schemaEditsByComponent groups edits by the component type of the proposed draft", () => {
+    const edit = (artifactId: string, fields: string[], tenant?: string) =>
+      ev(
+        "component.schemaEdited",
+        {
+          artifactId,
+          reviewer: "r",
+          changed: fields.map((field) => ({ field, suggested: "a", final: "b" })),
+          unchanged: [],
+          acknowledged: true,
+        },
+        tenant != null ? { tenant } : {},
+      );
+    const proposed = (artifactId: string, componentType: string, tenant?: string) =>
+      ev(
+        "component.schemaProposed",
+        { artifactId, draft: { componentType, version: "1.0.0" } },
+        tenant != null ? { tenant } : {},
+      );
+    const s = summarizeLineage([
+      // Two artifacts resolve to the same final component type and are merged.
+      edit("a1", ["description", "intentName"]),
+      proposed("a1", "sales.heatmap"),
+      edit("a2", ["description"]),
+      proposed("a2", "sales.heatmap"),
+      edit("a3", ["paramsJsonSchema"]),
+      proposed("a3", "sales.gauge"),
+      // The proposal arrives only after a later one for the same artifact: the latest wins.
+      proposed("a4", "sales.old"),
+      proposed("a4", "sales.newer"),
+      edit("a4", ["version"]),
+    ]);
+    expect(s.schemaEditsByComponent).toEqual([
+      {
+        key: "sales.heatmap",
+        count: 2,
+        topFields: [
+          { field: "description", count: 2 },
+          { field: "intentName", count: 1 },
+        ],
+      },
+      { key: "sales.gauge", count: 1, topFields: [{ field: "paramsJsonSchema", count: 1 }] },
+      { key: "sales.newer", count: 1, topFields: [{ field: "version", count: 1 }] },
+    ]);
+  });
+
+  it("schemaEditsByComponent ignores zero-edit records, falls back to the artifactId, and keeps tenants apart", () => {
+    const s = summarizeLineage([
+      // accepted as-is: not a correction
+      ev("component.schemaEdited", {
+        artifactId: "a1",
+        changed: [],
+        unchanged: ["componentType"],
+        acknowledged: true,
+      }),
+      // no proposal in the window: grouped under the artifactId
+      ev("component.schemaEdited", {
+        artifactId: "orphan",
+        changed: [{ field: "queryTemplate", suggested: 1, final: 2 }],
+        unchanged: [],
+        acknowledged: false,
+      }),
+      // the same artifactId under another tenant must not borrow this tenant's proposal
+      ev(
+        "component.schemaProposed",
+        { artifactId: "shared", draft: { componentType: "sales.a" } },
+        { tenant: "t1" },
+      ),
+      ev(
+        "component.schemaEdited",
+        {
+          artifactId: "shared",
+          changed: [{ field: "description", suggested: "a", final: "b" }],
+          unchanged: [],
+        },
+        { tenant: "t2" },
+      ),
+      // a proposal without a usable componentType does not name a group either
+      ev("component.schemaProposed", { artifactId: "bad", draft: {} }),
+      ev("component.schemaEdited", {
+        artifactId: "bad",
+        changed: [{ field: "version", suggested: "1", final: "2" }],
+        unchanged: [],
+      }),
+    ]);
+    expect(s.schemaEditsByComponent.map((r) => [r.key, r.count])).toEqual([
+      ["orphan", 1],
+      ["shared", 1],
+      ["bad", 1],
+    ]);
+  });
+
+  it("topFields keeps the five most-changed fields", () => {
+    const fields = [
+      "componentType",
+      "version",
+      "intentName",
+      "description",
+      "paramsJsonSchema",
+      "queryTemplate",
+    ];
+    const s = summarizeLineage(
+      fields.map((_, i) =>
+        ev("component.schemaEdited", {
+          artifactId: "a",
+          // edit i changes the first (6 - i) fields, so field 0 is changed 6 times and the last once
+          changed: fields.slice(0, 6 - i).map((field) => ({ field, suggested: 1, final: 2 })),
+          unchanged: [],
+        }),
+      ),
+    );
+    expect(s.schemaEditsByComponent).toHaveLength(1);
+    expect(s.schemaEditsByComponent[0]?.topFields).toEqual([
+      { field: "componentType", count: 6 },
+      { field: "version", count: 5 },
+      { field: "intentName", count: 4 },
+      { field: "description", count: 3 },
+      { field: "paramsJsonSchema", count: 2 },
+    ]);
+  });
+});
