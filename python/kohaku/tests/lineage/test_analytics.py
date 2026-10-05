@@ -30,6 +30,8 @@ def composed(
     canonical: str = "sales.trend",
     tenant: str | None = None,
     ts: str = "2026-07-01T00:00:00.000Z",
+    fallback: dict[str, Any] | None = None,
+    coalesced: bool = False,
 ) -> LineageEventRecord:
     payload: dict[str, Any] = {
         "tier": tier,
@@ -39,6 +41,10 @@ def composed(
     }
     if duration_ms is not None:
         payload["durationMs"] = duration_ms
+    if fallback is not None:
+        payload["fallback"] = fallback  # a fallback Spec was served (keeps the failed tier / cache label)
+    if coalesced:
+        payload["decision"] = {"attempts": [], "coalesced": True}  # a single-flight follower
     return LineageEventRecord(
         id=f"ev-{next(_seq)}",
         ts=ts,
@@ -323,12 +329,10 @@ def test_usage_buckets_by_utc_day_ordered_by_day_then_tenant() -> None:
     ]
 
 
-def test_usage_counts_fallbacks_and_fixations() -> None:
+def test_usage_counts_fixations() -> None:
     rows = summarize_usage(
         [
             metered(tenant="acme"),
-            ev("view.fallback", {"kind": "generation"}, tenant="acme"),
-            ev("view.fallback", {"kind": "negotiation"}, tenant="acme"),
             ev("intent.fixated", {"intentHash": "sha256:a"}, tenant="acme"),
             ev("intent.unfixated", {"intentHash": "sha256:a"}, tenant="acme"),
             ev("intent.unfixated", {"intentHash": "sha256:b"}, tenant="acme"),
@@ -336,7 +340,41 @@ def test_usage_counts_fallbacks_and_fixations() -> None:
         ]
     )
     assert len(rows) == 1
-    assert (rows[0].composed, rows[0].fallbacks, rows[0].fixated, rows[0].unfixated) == (1, 2, 1, 2)
+    assert (rows[0].composed, rows[0].fallbacks, rows[0].fixated, rows[0].unfixated) == (1, 0, 1, 2)
+
+
+def test_usage_keeps_a_fallback_spec_out_of_l2_generated_and_counts_it_in_fallbacks() -> None:
+    rows = summarize_usage(
+        [
+            composed(tier="L2", cache="miss"),  # generated
+            composed(tier="L2", cache="miss", fallback={"from": "L2", "reason": "generation failed"}),
+            composed(tier="L2", cache="bypass", fallback={"from": "L2", "reason": "budget"}),
+            composed(tier="L1", cache="miss", fallback={"from": "L1", "reason": "L1 failed"}),
+        ]
+    )
+    assert len(rows) == 1
+    assert (rows[0].composed, rows[0].l2Generated, rows[0].fallbacks) == (4, 1, 3)
+    assert rows[0].tiers == {"L0": 0, "L1": 1, "L2": 3}
+
+
+def test_usage_keeps_a_single_flight_follower_out_of_l2_generated() -> None:
+    rows = summarize_usage(
+        [
+            composed(tier="L2", cache="miss"),  # the leader
+            composed(tier="L2", cache="miss", coalesced=True),  # rode on the leader's generation
+            composed(tier="L2", cache="miss", coalesced=True, fallback={"from": "L2", "reason": "x"}),
+        ]
+    )
+    assert (rows[0].composed, rows[0].l2Generated, rows[0].fallbacks) == (3, 1, 1)
+
+
+def test_usage_counts_fallbacks_from_view_composed_alone() -> None:
+    mcp = [composed(tier="L2", fallback={"from": "L2", "reason": "x"})]  # MCP writes no view.fallback
+    rest = [*mcp, ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:aaa"})]
+    assert summarize_usage(mcp)[0].fallbacks == 1
+    assert summarize_usage(rest)[0].fallbacks == 1  # a REST host's extra view.fallback is not doubled
+    # A bare view.fallback with no composed record opens no row at all.
+    assert summarize_usage([ev("view.fallback", {"kind": "generation"})]) == []
 
 
 def test_usage_narrowing_options() -> None:
@@ -390,10 +428,6 @@ def test_usage_wire_shape_key_order_matches_ts() -> None:
 # --- catalog gaps: l2ByIntent / schemaEditsByComponent (design.md #73) ---
 
 
-def fallback_for(intent_hash: str, ts: str = "2026-07-01T00:00:00.000Z") -> LineageEventRecord:
-    return ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": intent_hash}, ts=ts)
-
-
 def test_catalog_gaps_are_empty_for_empty_input() -> None:
     s = summarize_lineage([])
     assert s.l2ByIntent == []
@@ -419,26 +453,34 @@ def test_l2_by_intent_counts_only_l2_miss_or_bypass_per_canonical() -> None:
     ]
 
 
-def test_l2_by_intent_joins_fallbacks_through_the_composed_hash_order_independent() -> None:
+def test_l2_by_intent_separates_generations_from_fallbacks_and_followers() -> None:
+    failed = {"from": "L2", "reason": "generation failed"}
     s = summarize_lineage(
         [
-            fallback_for("sha256:c1", "2026-07-01T00:00:00.000Z"),  # sorts before its composed record
+            composed(tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1"),
+            composed(tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1", fallback=failed),
+            composed(tier="L2", cache="bypass", canonical="sales.custom", intent_hash="sha256:c1", fallback=failed),
+            # A single-flight follower rode on another request's generation: not a generation of its own.
+            composed(tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1", coalesced=True),
+            # An intent whose L2 only ever failed still gets a row (that is the gap), with nothing generated.
+            composed(tier="L2", cache="miss", canonical="sales.broken", intent_hash="sha256:b1", fallback=failed),
+            # An L1 failure is not an L2 gap.
             composed(
-                tier="L2",
+                tier="L1",
                 cache="miss",
-                canonical="sales.custom",
-                intent_hash="sha256:c1",
-                ts="2026-07-01T00:00:01.000Z",
+                canonical="sales.trend",
+                intent_hash="sha256:t1",
+                fallback={"from": "L1", "reason": "x"},
             ),
-            fallback_for("sha256:c1", "2026-07-01T00:00:02.000Z"),
-            fallback_for("sha256:unknown"),  # never composed: cannot be attributed
-            composed(tier="L1", cache="miss", canonical="sales.trend", intent_hash="sha256:t1"),
-            fallback_for("sha256:t1"),  # an L1 intent has no L2 row
-            ev("view.fallback", {"kind": "generation"}),  # no intentHash at all
+            # view.fallback rows are not read here (REST writes one per fallback; MCP writes none).
+            ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:c1"}),
         ]
     )
-    assert [(r.canonical, r.generated, r.fallbacks) for r in s.l2ByIntent] == [("sales.custom", 1, 2)]
-    assert s.fallback.total == 5
+    assert [(r.canonical, r.intentHash, r.generated, r.fallbacks) for r in s.l2ByIntent] == [
+        ("sales.custom", "sha256:c1", 1, 2),
+        ("sales.broken", "sha256:b1", 0, 1),
+    ]
+    assert s.fallback.total == 1  # the overall view.fallback counters are untouched
 
 
 def test_catalog_gaps_honor_top_intents_limit() -> None:

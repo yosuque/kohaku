@@ -10,7 +10,7 @@ import { parseHeaderArgs } from "../header-args.js";
 import { formatUsageCsv } from "./csv.js";
 
 /** The lineage event types a usage summary reads (everything else is skipped at the source). */
-const USAGE_EVENT_TYPES = ["view.composed", "view.fallback", "intent.fixated", "intent.unfixated"];
+const USAGE_EVENT_TYPES = ["view.composed", "intent.fixated", "intent.unfixated"];
 
 export interface UsageExportOptions {
   /** Read from a local StoragePort data directory (mutually exclusive with `rest`). All tenants unless `tenant` is set. */

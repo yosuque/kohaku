@@ -61,6 +61,8 @@ function composed(args: {
   tier?: "L0" | "L1" | "L2";
   cache?: string;
   usage?: { inputTokens: number; outputTokens: number };
+  /** `payload.fallback`: a fallback Spec was served (it keeps the failed tier / cache label). */
+  fallback?: { from: string; reason: string };
 }): LineageEventRecord {
   return {
     id: `usage-ev-${seq++}`,
@@ -73,6 +75,7 @@ function composed(args: {
       intentHash: "sha256:aaa",
       canonical: "sales.trend",
       ...(args.usage != null ? { decision: { attempts: [], usage: args.usage } } : {}),
+      ...(args.fallback != null ? { fallback: args.fallback } : {}),
     },
     ...(args.tenant != null ? { tenant: args.tenant } : {}),
   };
@@ -101,6 +104,14 @@ const EVENTS: LineageEventRecord[] = [
     usage: { inputTokens: 100, outputTokens: 10 },
   }),
   composed({ ts: "2026-07-01T11:00:00.000Z", tenant: "acme", tier: "L1", cache: "hit" }),
+  // The fallback Spec is counted off its view.composed record (it keeps tier L2, so it is not a generation) ...
+  composed({
+    ts: "2026-07-01T12:00:00.000Z",
+    tenant: "acme",
+    tier: "L2",
+    fallback: { from: "L2", reason: "generation failed" },
+  }),
+  // ... and the REST host's extra view.fallback record is neither read nor double-counted.
   other("view.fallback", "2026-07-01T12:00:00.000Z", "acme"),
   other("intent.fixated", "2026-07-02T09:00:00.000Z", "acme"),
   composed({
@@ -168,11 +179,11 @@ describe("kohaku usage export --data-dir", () => {
     ]);
     const acme1 = rows[0]!;
     expect(acme1).toMatchObject({
-      composed: 2,
+      composed: 3,
       l2Generated: 1,
       fallbacks: 1,
       tokens: { input: 100, output: 10 },
-      cache: { hit: 1, miss: 1, bypass: 0, fixated: 0 },
+      cache: { hit: 1, miss: 2, bypass: 0, fixated: 0 },
     });
     expect(rows[2]).toMatchObject({ composed: 0, fixated: 1 });
     expect(rows[3]).toMatchObject({ composed: 1, l2Generated: 1, tokens: { input: 7, output: 3 } });
@@ -235,7 +246,7 @@ describe("kohaku usage export --data-dir", () => {
     );
     expect(result.status).toBe(0);
     expect(result.stdout.split("\n")[0]).toBe(EXPECTED_HEADER);
-    expect(result.stdout).toContain("2026-07-01,acme,2,");
+    expect(result.stdout).toContain("2026-07-01,acme,3,");
   }, 30_000);
 });
 
@@ -363,7 +374,7 @@ describe("kohaku usage export --rest (in-process host-rest app)", () => {
     });
     expect(acme.rows.map((r) => `${r.day}/${r.tenant}`)).toEqual(["2026-07-01/acme", "2026-07-02/acme"]);
     expect(acme.rows[0]).toMatchObject({
-      composed: 2,
+      composed: 3,
       l2Generated: 1,
       fallbacks: 1,
       tokens: { input: 100, output: 10 },

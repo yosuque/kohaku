@@ -20,6 +20,10 @@ function composed(
     canonical?: string;
     tenant?: string;
     ts?: string;
+    /** `payload.fallback`: a fallback Spec was served (it keeps the failed tier / cache label). */
+    fallback?: { from: string; reason: string };
+    /** `payload.decision.coalesced`: a single-flight follower. */
+    coalesced?: boolean;
   } = {},
 ): LineageEventRecord {
   return {
@@ -33,6 +37,8 @@ function composed(
       intentHash: args.intentHash ?? "sha256:aaa",
       canonical: args.canonical ?? "sales.trend",
       ...(args.durationMs != null ? { durationMs: args.durationMs } : {}),
+      ...(args.fallback != null ? { fallback: args.fallback } : {}),
+      ...(args.coalesced === true ? { decision: { attempts: [], coalesced: true } } : {}),
     },
     ...(args.tenant != null ? { tenant: args.tenant } : {}),
   };
@@ -444,12 +450,10 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
     ]);
   });
 
-  it("counts view.fallback, intent.fixated and intent.unfixated into their day / tenant row", () => {
+  it("counts intent.fixated and intent.unfixated into their day / tenant row", () => {
     const rows = summarizeUsage(
       [
         metered({ tenant: "acme" }),
-        ev("view.fallback", { kind: "generation" }, { tenant: "acme" }),
-        ev("view.fallback", { kind: "negotiation" }, { tenant: "acme" }),
         ev("intent.fixated", { intentHash: "sha256:a" }, { tenant: "acme" }),
         ev("intent.unfixated", { intentHash: "sha256:a" }, { tenant: "acme" }),
         ev("intent.unfixated", { intentHash: "sha256:b" }, { tenant: "acme" }),
@@ -458,7 +462,43 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
       { bucket: "day" },
     );
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ composed: 1, fallbacks: 2, fixated: 1, unfixated: 2 });
+    expect(rows[0]).toMatchObject({ composed: 1, fallbacks: 0, fixated: 1, unfixated: 2 });
+  });
+
+  it("keeps a fallback Spec out of l2Generated and counts it in fallbacks (it still carries the L2 label)", () => {
+    const rows = summarizeUsage(
+      [
+        composed({ tier: "L2", cache: "miss" }), // generated
+        composed({ tier: "L2", cache: "miss", fallback: { from: "L2", reason: "generation failed" } }),
+        composed({ tier: "L2", cache: "bypass", fallback: { from: "L2", reason: "budget" } }),
+        composed({ tier: "L1", cache: "miss", fallback: { from: "L1", reason: "L1 failed" } }),
+      ],
+      { bucket: "day" },
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ composed: 4, l2Generated: 1, fallbacks: 3 });
+    expect(rows[0]?.tiers).toEqual({ L0: 0, L1: 1, L2: 3 });
+  });
+
+  it("keeps a single-flight follower out of l2Generated", () => {
+    const rows = summarizeUsage(
+      [
+        composed({ tier: "L2", cache: "miss" }), // the leader
+        composed({ tier: "L2", cache: "miss", coalesced: true }), // rode on the leader's generation
+        composed({ tier: "L2", cache: "miss", coalesced: true, fallback: { from: "L2", reason: "x" } }),
+      ],
+      { bucket: "day" },
+    );
+    expect(rows[0]).toMatchObject({ composed: 3, l2Generated: 1, fallbacks: 1 });
+  });
+
+  it("counts fallbacks from view.composed alone: an MCP host (no view.fallback) is counted, a REST host is not doubled", () => {
+    const mcp = [composed({ tier: "L2", fallback: { from: "L2", reason: "x" } })];
+    const rest = [...mcp, ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:aaa" })];
+    expect(summarizeUsage(mcp, { bucket: "day" })[0]?.fallbacks).toBe(1);
+    expect(summarizeUsage(rest, { bucket: "day" })[0]?.fallbacks).toBe(1);
+    // A bare view.fallback with no composed record opens no row at all.
+    expect(summarizeUsage([ev("view.fallback", { kind: "generation" })], { bucket: "day" })).toEqual([]);
   });
 
   it("narrows by tenant / since / until", () => {
@@ -488,11 +528,6 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
 });
 
 describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; design.md #73)", () => {
-  /** A view.fallback carrying the intentHash, as host-rest records it. */
-  function fallbackFor(intentHash: string, ts = "2026-07-01T00:00:00.000Z"): LineageEventRecord {
-    return ev("view.fallback", { kind: "generation", reason: "x", intentHash }, { ts });
-  }
-
   it("is empty for empty input", () => {
     const s = summarizeLineage([]);
     expect(s.l2ByIntent).toEqual([]);
@@ -517,29 +552,57 @@ describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; de
     ]);
   });
 
-  it("l2ByIntent joins view.fallback to a canonical through the composed intentHash (order-independent)", () => {
+  it("l2ByIntent separates real generations from fallbacks and followers, reading fallbacks off view.composed", () => {
+    const failed = { from: "L2", reason: "generation failed" };
     const s = summarizeLineage([
-      // The fallback sorts before its composed record: the join still resolves.
-      fallbackFor("sha256:c1", "2026-07-01T00:00:00.000Z"),
+      composed({ tier: "L2", cache: "miss", canonical: "sales.custom", intentHash: "sha256:c1" }), // generated
       composed({
         tier: "L2",
         cache: "miss",
         canonical: "sales.custom",
         intentHash: "sha256:c1",
-        ts: "2026-07-01T00:00:01.000Z",
+        fallback: failed,
       }),
-      fallbackFor("sha256:c1", "2026-07-01T00:00:02.000Z"),
-      fallbackFor("sha256:unknown"), // never composed in the window: cannot be attributed
-      // An L1 intent that only fell back has no L2 generation, so it gets no row.
-      composed({ tier: "L1", cache: "miss", canonical: "sales.trend", intentHash: "sha256:t1" }),
-      fallbackFor("sha256:t1"),
-      ev("view.fallback", { kind: "generation" }), // no intentHash at all (MCP does not record one)
+      composed({
+        tier: "L2",
+        cache: "bypass",
+        canonical: "sales.custom",
+        intentHash: "sha256:c1",
+        fallback: failed,
+      }),
+      // A single-flight follower rode on another request's generation: not a generation of its own.
+      composed({
+        tier: "L2",
+        cache: "miss",
+        canonical: "sales.custom",
+        intentHash: "sha256:c1",
+        coalesced: true,
+      }),
+      // An intent whose L2 only ever failed still gets a row (that is the gap), with nothing generated.
+      composed({
+        tier: "L2",
+        cache: "miss",
+        canonical: "sales.broken",
+        intentHash: "sha256:b1",
+        fallback: failed,
+      }),
+      // An L1 failure is not an L2 gap.
+      composed({
+        tier: "L1",
+        cache: "miss",
+        canonical: "sales.trend",
+        intentHash: "sha256:t1",
+        fallback: { from: "L1", reason: "x" },
+      }),
+      // view.fallback rows are not read here (REST writes one per fallback; MCP writes none).
+      ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:c1" }),
     ]);
     expect(s.l2ByIntent).toEqual([
       { canonical: "sales.custom", intentHash: "sha256:c1", generated: 1, fallbacks: 2 },
+      { canonical: "sales.broken", intentHash: "sha256:b1", generated: 0, fallbacks: 1 },
     ]);
-    // The overall fallback counters are untouched by the join.
-    expect(s.fallback.total).toBe(5);
+    // The overall view.fallback counters are untouched.
+    expect(s.fallback.total).toBe(1);
   });
 
   it("l2ByIntent and schemaEditsByComponent honor topIntentsLimit", () => {

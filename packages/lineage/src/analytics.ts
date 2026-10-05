@@ -116,12 +116,16 @@ export interface LineageSummary {
    */
   usage: UsageRow[];
   /**
-   * Catalog gap: the Intents that fell to free-form L2 generation (view.composed of tier L2 with cache miss or
-   * bypass), aggregated per `canonical` and ordered by `generated` descending (top N, N as for `topIntents`).
-   * `intentHash` is the first one seen for that canonical (a representative; the same canonical can recur
-   * with different params). `fallbacks` counts the `view.fallback` records whose intentHash maps back to this
-   * canonical through the window's view.composed records (a fallback for an intent never composed in the
-   * window cannot be attributed and is not counted). A canonical with no L2 generation has no row.
+   * Catalog gap: the Intents that went to free-form L2 generation (view.composed of tier L2 with cache miss or
+   * bypass), aggregated per `canonical` and ordered by `generated` descending, then `fallbacks` descending (top
+   * N, N as for `topIntents`). `generated` counts the composes that actually generated an L2 Spec and succeeded:
+   * a record carrying `payload.fallback` (the generation failed, or the budget skipped L2, and a fallback Spec
+   * was served under the same tier / cache label) and a single-flight follower (`decision.coalesced`, which
+   * rode on another request's generation) are not generations. `fallbacks` counts those fallback records, read
+   * from the view.composed record itself (not from `view.fallback`, which MCP hosts never write and REST hosts
+   * write in addition, so counting both would double-count). `intentHash` is the first one seen for that
+   * canonical (a representative; the same canonical can recur with different params). A canonical with no
+   * L2-labelled compose has no row.
    */
   l2ByIntent: L2IntentGap[];
   /**
@@ -152,9 +156,13 @@ export interface SchemaEditGap {
 
 /**
  * One metering row: everything countable about one tenant on one UTC day, derived purely from lineage
- * (design.md #74). `l2Generated` counts view.composed events of tier L2 whose cache was miss or bypass (an L2
- * Spec that was actually generated rather than served from the cache or a fixation); `tokens` sums
- * `view.composed`'s `payload.decision.usage` (a single-flight follower carries no usage, so it never double-counts).
+ * (design.md #74). `l2Generated` counts the composes that actually generated an L2 Spec and succeeded:
+ * view.composed events of tier L2 whose cache was miss or bypass, other than a record carrying
+ * `payload.fallback` (a failed or budget-skipped generation keeps the L2 label on its fallback Spec) and a
+ * single-flight follower (`decision.coalesced`). `fallbacks` counts view.composed records that carry
+ * `payload.fallback`, whatever their tier (MCP hosts write no `view.fallback`, REST hosts write one next to the
+ * composed record, so the composed record is the one place both agree). `tokens` sums `view.composed`'s
+ * `payload.decision.usage` (a single-flight follower carries no usage, so it never double-counts).
  */
 export interface UsageRow {
   /** UTC calendar day, `YYYY-MM-DD` (the first 10 characters of the record's `ts`). */
@@ -165,7 +173,7 @@ export interface UsageRow {
   cache: { hit: number; miss: number; bypass: number; fixated: number };
   tiers: { L0: number; L1: number; L2: number };
   l2Generated: number;
-  /** view.fallback records. */
+  /** view.composed records that carry `payload.fallback`. */
   fallbacks: number;
   tokens: { input: number; output: number };
   /** intent.fixated / intent.unfixated records. */
@@ -201,6 +209,21 @@ const TOP_INTENTS_DEFAULT = 10;
 const TOP_INTENTS_MAX = 50;
 const SCHEMA_EDIT_TOP_FIELDS = 5;
 
+/** A view.composed record that carries `payload.fallback`: a fallback Spec was served for it. */
+function hasFallback(payload: Readonly<Record<string, unknown>>): boolean {
+  return payload["fallback"] != null;
+}
+
+/** A view.composed record of a single-flight follower (`payload.decision.coalesced`): it rode on another generation. */
+function isCoalesced(payload: Readonly<Record<string, unknown>>): boolean {
+  const decision = payload["decision"];
+  return (
+    decision != null &&
+    typeof decision === "object" &&
+    (decision as Record<string, unknown>)["coalesced"] === true
+  );
+}
+
 /** Folds the raw lineage event stream into an aggregate summary (pure, read-only). */
 export function summarizeLineage(
   events: readonly LineageEventRecord[],
@@ -231,12 +254,8 @@ export function summarizeLineage(
   const durations: number[] = [];
   // intentHash → { canonical (first seen), count }. Preserves insertion order while taking the top items by descending count.
   const intents = new Map<string, { canonical: string; count: number }>();
-  // Catalog-gap inputs. canonical -> L2 generation row; intentHash -> canonical (from every view.composed, so a
-  // view.fallback, which carries only the hash, can be attributed); the fallbacks' hashes, resolved after the
-  // pass so the result does not depend on whether a fallback sorts before its composed record.
+  // Catalog-gap input: canonical -> the L2 row (generations and fallbacks of the composes labelled tier L2).
   const l2Rows = new Map<string, L2IntentGap>();
-  const canonicalOfHash = new Map<string, string>();
-  const fallbackHashes: string[] = [];
   // (tenant, artifactId) -> the final component type of the latest component.schemaProposed; and the edits
   // (non-empty `changed`) to group once that map is complete.
   const proposedType = new Map<string, string>();
@@ -280,29 +299,26 @@ export function summarizeLineage(
           if (prev != null) prev.count++;
           else intents.set(intentHash, { canonical: String(e.payload["canonical"] ?? ""), count: 1 });
         }
-        const canonical = String(e.payload["canonical"] ?? "");
-        if (typeof intentHash === "string" && intentHash.length > 0 && !canonicalOfHash.has(intentHash)) {
-          canonicalOfHash.set(intentHash, canonical);
-        }
         if (tier === "L2" && (cacheKey === "miss" || cacheKey === "bypass")) {
-          const row = l2Rows.get(canonical);
-          if (row != null) {
-            row.generated++;
-            if (row.intentHash === "" && typeof intentHash === "string") row.intentHash = intentHash;
-          } else {
-            l2Rows.set(canonical, {
+          const canonical = String(e.payload["canonical"] ?? "");
+          let row = l2Rows.get(canonical);
+          if (row == null) {
+            row = {
               canonical,
               intentHash: typeof intentHash === "string" ? intentHash : "",
-              generated: 1,
+              generated: 0,
               fallbacks: 0,
-            });
+            };
+            l2Rows.set(canonical, row);
+          } else if (row.intentHash === "" && typeof intentHash === "string") {
+            row.intentHash = intentHash;
           }
+          if (hasFallback(e.payload)) row.fallbacks++;
+          else if (!isCoalesced(e.payload)) row.generated++;
         }
         break;
       }
       case "view.fallback": {
-        const fallbackHash = e.payload["intentHash"];
-        if (typeof fallbackHash === "string" && fallbackHash.length > 0) fallbackHashes.push(fallbackHash);
         fallbackTotal++;
         const kind = e.payload["kind"];
         if (kind === "generation" || kind === "negotiation") byKind[kind]++;
@@ -420,12 +436,9 @@ export function summarizeLineage(
     .sort((a, b) => b.count - a.count)
     .slice(0, topN);
 
-  for (const hash of fallbackHashes) {
-    const canonical = canonicalOfHash.get(hash);
-    const row = canonical != null ? l2Rows.get(canonical) : undefined;
-    if (row != null) row.fallbacks++;
-  }
-  const l2ByIntent = [...l2Rows.values()].sort((a, b) => b.generated - a.generated).slice(0, topN);
+  const l2ByIntent = [...l2Rows.values()]
+    .sort((a, b) => b.generated - a.generated || b.fallbacks - a.fallbacks)
+    .slice(0, topN);
 
   const editGroups = new Map<string, { count: number; fields: Map<string, number> }>();
   for (const edit of schemaEdits) {
@@ -487,7 +500,8 @@ export function summarizeLineage(
 
 /**
  * Folds the lineage stream into per-day, per-tenant metering rows (pure, read-only). Reads only
- * view.composed / view.fallback / intent.fixated / intent.unfixated; every other event type is ignored.
+ * view.composed / intent.fixated / intent.unfixated; every other event type (view.fallback included: the
+ * fallback count comes from view.composed's `payload.fallback`) is ignored.
  */
 export function summarizeUsage(
   events: readonly LineageEventRecord[],
@@ -532,7 +546,15 @@ export function summarizeUsage(
         if (cacheKey === "hit" || cacheKey === "miss" || cacheKey === "bypass" || cacheKey === "fixated") {
           row.cache[cacheKey]++;
         }
-        if (tier === "L2" && (cacheKey === "miss" || cacheKey === "bypass")) row.l2Generated++;
+        if (
+          tier === "L2" &&
+          (cacheKey === "miss" || cacheKey === "bypass") &&
+          !hasFallback(e.payload) &&
+          !isCoalesced(e.payload)
+        ) {
+          row.l2Generated++;
+        }
+        if (hasFallback(e.payload)) row.fallbacks++;
         const decision = e.payload["decision"];
         const usage =
           decision != null && typeof decision === "object"
@@ -549,9 +571,6 @@ export function summarizeUsage(
         }
         break;
       }
-      case "view.fallback":
-        rowFor(e).fallbacks++;
-        break;
       case "intent.fixated":
         rowFor(e).fixated++;
         break;

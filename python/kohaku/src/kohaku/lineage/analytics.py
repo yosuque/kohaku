@@ -80,9 +80,13 @@ class UsageRow:
 
     Mutable on purpose: `summarize_usage` accumulates into its rows while folding, then returns them.
     Field order is the wire key order (`to_jsonable` follows it), identical to the TS object. `tenant`
-    is the empty string for a record that carries none. `l2Generated` counts view.composed of tier L2
-    whose cache was miss or bypass; `tokens` sums `payload.decision.usage` (a single-flight follower
-    carries none).
+    is the empty string for a record that carries none. `l2Generated` counts the composes that actually
+    generated an L2 Spec and succeeded: view.composed of tier L2 whose cache was miss or bypass, other than
+    a record carrying `payload.fallback` (a failed or budget-skipped generation keeps the L2 label on its
+    fallback Spec) and a single-flight follower (`decision.coalesced`). `fallbacks` counts view.composed
+    records that carry `payload.fallback`, whatever their tier (MCP hosts write no `view.fallback`, REST
+    hosts write one next to the composed record, so the composed record is the one place both agree).
+    `tokens` sums `payload.decision.usage` (a single-flight follower carries none).
     """
 
     day: str
@@ -102,8 +106,9 @@ class L2IntentGap:
     """One row of `LineageSummary.l2ByIntent` (design.md #73; port of TS `L2IntentGap`).
 
     Mutable on purpose: `summarize_lineage` accumulates into its rows while folding. `intentHash` is the
-    first one seen for the canonical; `fallbacks` counts the view.fallback records whose intentHash maps
-    back to this canonical through the window's view.composed records.
+    first one seen for the canonical. `generated` counts the composes that actually generated an L2 Spec
+    and succeeded (a record carrying `payload.fallback` and a single-flight follower are not generations);
+    `fallbacks` counts the fallback records, read from the view.composed record itself (not `view.fallback`).
     """
 
     canonical: str
@@ -154,7 +159,7 @@ class LineageSummary:
     fixations: dict[str, int]
     usage: list[UsageRow]
     l2ByIntent: list[L2IntentGap]
-    """Catalog gap: Intents that fell to L2 generation, per canonical, most generated first."""
+    """Catalog gap: Intents that went to L2 generation, per canonical, most generated first (then most fallbacks)."""
     schemaEditsByComponent: list[SchemaEditGap]
     """Catalog gap: reviewer corrections of the schema proposal, per final component type."""
 
@@ -176,6 +181,17 @@ def _quantile(sorted_values: list[float], p: float) -> float | None:
     rank = math.ceil((p / 100) * len(sorted_values))
     idx = min(max(rank - 1, 0), len(sorted_values) - 1)
     return sorted_values[idx]
+
+
+def _has_fallback(payload: dict[str, Any]) -> bool:
+    """A view.composed record that carries `payload.fallback`: a fallback Spec was served for it."""
+    return payload.get("fallback") is not None
+
+
+def _is_coalesced(payload: dict[str, Any]) -> bool:
+    """A single-flight follower (`payload.decision.coalesced`): it rode on another request's generation."""
+    decision = payload.get("decision")
+    return isinstance(decision, dict) and decision.get("coalesced") is True
 
 
 def summarize_lineage(
@@ -212,13 +228,10 @@ def summarize_lineage(
     intent_counts: dict[str, int] = {}
     intent_canonical: dict[str, str] = {}
 
-    # Catalog-gap inputs (design.md #73), as in TS: canonical -> L2 generation row; intentHash -> canonical (from
-    # every view.composed, so a view.fallback that carries only the hash can be attributed); the fallbacks'
-    # hashes, resolved after the pass; (tenant, artifactId) -> the latest proposed component type; the edits
+    # Catalog-gap inputs (design.md #73), as in TS: canonical -> the L2 row (generations and fallbacks of the
+    # composes labelled tier L2); (tenant, artifactId) -> the latest proposed component type; the edits
     # (non-empty `changed`) to group once that map is complete.
     l2_rows: dict[str, L2IntentGap] = {}
-    canonical_of_hash: dict[str, str] = {}
-    fallback_hashes: list[str] = []
     proposed_type: dict[tuple[str, str], str] = {}
     schema_edits: list[tuple[tuple[str, str], str, list[str]]] = []
 
@@ -249,30 +262,24 @@ def summarize_lineage(
                 else:
                     intent_counts[intent_hash] = 1
                     intent_canonical[intent_hash] = str(e.payload.get("canonical") or "")
-            canonical = str(e.payload.get("canonical") or "")
-            if (
-                isinstance(intent_hash, str)
-                and len(intent_hash) > 0
-                and intent_hash not in canonical_of_hash
-            ):
-                canonical_of_hash[intent_hash] = canonical
             if tier == "L2" and cache_key in ("miss", "bypass"):
+                canonical = str(e.payload.get("canonical") or "")
                 gap = l2_rows.get(canonical)
-                if gap is not None:
-                    gap.generated += 1
-                    if gap.intentHash == "" and isinstance(intent_hash, str):
-                        gap.intentHash = intent_hash
-                else:
-                    l2_rows[canonical] = L2IntentGap(
+                if gap is None:
+                    gap = L2IntentGap(
                         canonical=canonical,
                         intentHash=intent_hash if isinstance(intent_hash, str) else "",
-                        generated=1,
+                        generated=0,
                         fallbacks=0,
                     )
+                    l2_rows[canonical] = gap
+                elif gap.intentHash == "" and isinstance(intent_hash, str):
+                    gap.intentHash = intent_hash
+                if _has_fallback(e.payload):
+                    gap.fallbacks += 1
+                elif not _is_coalesced(e.payload):
+                    gap.generated += 1
         elif e.type == "view.fallback":
-            fallback_hash = e.payload.get("intentHash")
-            if isinstance(fallback_hash, str) and len(fallback_hash) > 0:
-                fallback_hashes.append(fallback_hash)
             fallback_total += 1
             kind = e.payload.get("kind")
             if kind in ("generation", "negotiation"):
@@ -329,12 +336,9 @@ def summarize_lineage(
         reverse=True,
     )[:top_n]
 
-    for fallback_hash in fallback_hashes:
-        fallback_canonical = canonical_of_hash.get(fallback_hash)
-        gap = l2_rows.get(fallback_canonical) if fallback_canonical is not None else None
-        if gap is not None:
-            gap.fallbacks += 1
-    l2_by_intent = sorted(l2_rows.values(), key=lambda r: r.generated, reverse=True)[:top_n]
+    l2_by_intent = sorted(
+        l2_rows.values(), key=lambda r: (r.generated, r.fallbacks), reverse=True
+    )[:top_n]
 
     edit_groups: dict[str, tuple[int, dict[str, int]]] = {}
     for edit_key, artifact_id, edit_fields in schema_edits:
@@ -397,8 +401,9 @@ def summarize_usage(
 ) -> list[UsageRow]:
     """Fold the lineage stream into per-day, per-tenant metering rows (pure function, read-only).
 
-    Reads only view.composed / view.fallback / intent.fixated / intent.unfixated. Rows are ordered by day,
-    then tenant, ascending (compared by UTF-16 code units, as the TS string comparison does).
+    Reads only view.composed / intent.fixated / intent.unfixated (view.fallback is ignored: the fallback
+    count comes from view.composed's `payload.fallback`). Rows are ordered by day, then tenant, ascending
+    (compared by UTF-16 code units, as the TS string comparison does).
     """
     opts = opts if opts is not None else SummarizeUsageOptions()
     rows: dict[tuple[str, str], UsageRow] = {}
@@ -440,8 +445,15 @@ def summarize_usage(
                 row.tiers[tier] += 1
             if cache_key in ("hit", "miss", "bypass", "fixated"):
                 row.cache[cache_key] += 1
-            if tier == "L2" and cache_key in ("miss", "bypass"):
+            if (
+                tier == "L2"
+                and cache_key in ("miss", "bypass")
+                and not _has_fallback(e.payload)
+                and not _is_coalesced(e.payload)
+            ):
                 row.l2Generated += 1
+            if _has_fallback(e.payload):
+                row.fallbacks += 1
             decision = e.payload.get("decision")
             usage = decision.get("usage") if isinstance(decision, dict) else None
             if isinstance(usage, dict):
@@ -449,8 +461,6 @@ def summarize_usage(
                     row.tokens["input"] += usage["inputTokens"]
                 if _is_number(usage.get("outputTokens")):
                     row.tokens["output"] += usage["outputTokens"]
-        elif e.type == "view.fallback":
-            row_for(e).fallbacks += 1
         elif e.type == "intent.fixated":
             row_for(e).fixated += 1
         elif e.type == "intent.unfixated":
