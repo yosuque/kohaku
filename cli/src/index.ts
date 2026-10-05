@@ -73,6 +73,7 @@ program
   .action(
     async (requestId: string, opts: { rest: string; header: string[]; json?: boolean; spec?: string }) => {
       const { formatExplainReport, runExplain } = await import("./commands.js");
+      const { CliUsageError } = await import("./usage-error.js");
       let report: ExplainReport;
       try {
         report = await runExplain(requestId, {
@@ -81,7 +82,10 @@ program
           ...(opts.spec != null ? { specPath: opts.spec } : {}),
         });
       } catch (e) {
-        program.error(e instanceof Error ? e.message : String(e));
+        // A malformed --header is a usage error (exit 2); anything else is 1.
+        program.error(e instanceof Error ? e.message : String(e), {
+          exitCode: e instanceof CliUsageError ? 2 : 1,
+        });
         return;
       }
       console.log(opts.json === true ? JSON.stringify(report, null, 2) : formatExplainReport(report));

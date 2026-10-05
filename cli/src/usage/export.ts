@@ -17,7 +17,10 @@ const USAGE_EVENT_TYPES = ["view.composed", "intent.fixated", "intent.unfixated"
 export interface UsageExportOptions {
   /** Read from a local StoragePort data directory (mutually exclusive with `rest`). All tenants unless `tenant` is set. */
   dataDir?: string;
-  /** Read over REST from a running host (mutually exclusive with `dataDir`). Only the session's tenant is visible. */
+  /**
+   * Read over REST from a running host (mutually exclusive with `dataDir`). The `x-kohaku-tenant` header
+   * decides the tenant scope; a host without tenant scoping returns every tenant.
+   */
   rest?: string;
   /** Extra REST request headers ("name:value", repeatable) -- e.g. tenant / auth. REST mode only. */
   headers?: string[];

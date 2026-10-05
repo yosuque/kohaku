@@ -1,15 +1,9 @@
 import { parseIso8601 } from "@kohaku-ui/spec-core";
+import { CliUsageError } from "./usage-error.js";
 
-/**
- * A bad command-line argument of a lineage-reading subcommand (`evidence export`, `usage export`): the CLI
- * exits 2 for it, like commander's own usage errors, so it can be told apart from a runtime failure (exit 1).
- */
-export class CliUsageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CliUsageError";
-  }
-}
+// A bad command-line argument of a lineage-reading subcommand (`evidence export`, `usage export`) is a
+// `CliUsageError` (exit 2); the class itself lives in the dependency-free ./usage-error.ts.
+export { CliUsageError };
 
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 

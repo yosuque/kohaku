@@ -637,6 +637,45 @@ def test_schema_edits_group_by_the_final_component_type() -> None:
     ]
 
 
+def test_schema_edits_take_the_latest_proposal_by_ts_even_when_the_array_order_is_the_reverse() -> None:
+    def proposed(component_type: str, ts: str) -> LineageEventRecord:
+        return ev(
+            "component.schemaProposed",
+            {"artifactId": "a1", "draft": {"componentType": component_type, "version": "1.0.0"}},
+            ts=ts,
+        )
+
+    edited = ev(
+        "component.schemaEdited",
+        {
+            "artifactId": "a1",
+            "changed": [{"field": "version", "suggested": "a", "final": "b"}],
+            "unchanged": [],
+        },
+        ts="2026-07-01T00:00:03.000Z",
+    )
+    # The newer proposal is listed first, the older one after it: array order says "old wins", ts order says "newer wins".
+    newer_first = [
+        proposed("sales.newer", "2026-07-01T00:00:02.000Z"),
+        proposed("sales.older", "2026-07-01T00:00:01.000Z"),
+        edited,
+    ]
+    assert [g.key for g in summarize_lineage(newer_first).schemaEditsByComponent] == ["sales.newer"]
+    # And in the natural order (older listed first) the same proposal wins, so the result does not depend on it.
+    assert [g.key for g in summarize_lineage(list(reversed(newer_first))).schemaEditsByComponent] == [
+        "sales.newer"
+    ]
+    # Equal timestamps keep the array order (a stable sort): the one listed last wins.
+    tied = "2026-07-01T00:00:01.000Z"
+    keys = [
+        g.key
+        for g in summarize_lineage(
+            [proposed("sales.first", tied), proposed("sales.second", tied), edited]
+        ).schemaEditsByComponent
+    ]
+    assert keys == ["sales.second"]
+
+
 def test_schema_edits_ignore_zero_edit_fall_back_to_artifact_id_and_keep_tenants_apart() -> None:
     s = summarize_lineage(
         [

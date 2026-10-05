@@ -759,6 +759,45 @@ describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; de
     ]);
   });
 
+  it("schemaEditsByComponent takes the latest proposal by ts even when the array order is the reverse", () => {
+    const proposed = (componentType: string, ts: string) =>
+      ev(
+        "component.schemaProposed",
+        { artifactId: "a1", draft: { componentType, version: "1.0.0" } },
+        { ts },
+      );
+    const edited = ev(
+      "component.schemaEdited",
+      {
+        artifactId: "a1",
+        changed: [{ field: "version", suggested: "a", final: "b" }],
+        unchanged: [],
+        acknowledged: true,
+      },
+      { ts: "2026-07-01T00:00:03.000Z" },
+    );
+    // The newer proposal is listed first, the older one after it: array order says "old wins", ts order says "newer wins".
+    const newerFirst = [
+      proposed("sales.newer", "2026-07-01T00:00:02.000Z"),
+      proposed("sales.older", "2026-07-01T00:00:01.000Z"),
+      edited,
+    ];
+    expect(summarizeLineage(newerFirst).schemaEditsByComponent.map((g) => g.key)).toEqual(["sales.newer"]);
+    // And in the natural order (older listed first) the same proposal wins, so the result does not depend on it.
+    expect(summarizeLineage([...newerFirst].reverse()).schemaEditsByComponent.map((g) => g.key)).toEqual([
+      "sales.newer",
+    ]);
+    // Equal timestamps keep the array order (a stable sort): the one listed last wins.
+    const tied = "2026-07-01T00:00:01.000Z";
+    expect(
+      summarizeLineage([
+        proposed("sales.first", tied),
+        proposed("sales.second", tied),
+        edited,
+      ]).schemaEditsByComponent.map((g) => g.key),
+    ).toEqual(["sales.second"]);
+  });
+
   it("schemaEditsByComponent ignores zero-edit records, falls back to the artifactId, and keeps tenants apart", () => {
     const s = summarizeLineage([
       // accepted as-is: not a correction

@@ -25,7 +25,6 @@ import type {
 import { createFileStoragePort, createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import { EvidenceUsageError } from "../src/evidence/window.js";
 import { CliUsageError } from "../src/lineage-window.js";
 import { formatUsageCsv, USAGE_CSV_HEADER } from "../src/usage/csv.js";
 import { runUsageExport } from "../src/usage/export.js";
@@ -473,14 +472,14 @@ describe("kohaku usage export --data-dir reads lineage.jsonl as a read-only stre
 });
 
 describe("kohaku usage export usage errors", () => {
-  it("rejects a bad window with EvidenceUsageError before touching storage", async () => {
+  it("rejects a bad window with CliUsageError before touching storage", async () => {
     const dataDir = tmp("kohaku-usage-data-");
     await expect(runUsageExport({ dataDir, since: "yesterday", until: "2026-07-31" })).rejects.toBeInstanceOf(
-      EvidenceUsageError,
+      CliUsageError,
     );
     await expect(
       runUsageExport({ dataDir, since: "2026-08-01", until: "2026-07-01" }),
-    ).rejects.toBeInstanceOf(EvidenceUsageError);
+    ).rejects.toBeInstanceOf(CliUsageError);
     // The storage was never opened, so nothing was created in the data directory.
     expect(existsSync(join(dataDir, "lineage.jsonl"))).toBe(false);
   });
@@ -519,7 +518,7 @@ describe("kohaku usage export usage errors", () => {
     expect(result.stderr).toContain("--tenant must not be empty");
   }, 30_000);
 
-  it("rejects an unknown --format with EvidenceUsageError", async () => {
+  it("rejects an unknown --format with CliUsageError", async () => {
     await expect(
       runUsageExport({
         dataDir: tmp("kohaku-usage-data-"),
@@ -527,7 +526,7 @@ describe("kohaku usage export usage errors", () => {
         until: "2026-07-31",
         format: "xml" as unknown as "csv",
       }),
-    ).rejects.toBeInstanceOf(EvidenceUsageError);
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 
   it("requires exactly one of --data-dir / --rest (usage errors)", async () => {
@@ -832,6 +831,12 @@ describe("kohaku usage export --rest (in-process host-rest app)", () => {
     ).rejects.toThrow(/took longer than/);
     expect(readFileSync(out, "utf8")).toBe("previous export\n");
     expect(existsSync(`${out}.tmp`)).toBe(false);
+  });
+
+  it("rejects a malformed --header as a usage error (exit 2)", async () => {
+    await expect(
+      runUsageExport({ rest: "/api/kohaku", headers: ["no-colon-here"], ...window }),
+    ).rejects.toBeInstanceOf(CliUsageError);
   });
 
   it("rejects a --tenant that has no x-kohaku-tenant header to back it (usage error)", async () => {
