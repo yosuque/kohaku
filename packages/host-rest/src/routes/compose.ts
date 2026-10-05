@@ -252,12 +252,15 @@ async function deliverComposed(
       result,
       async () => {
         await beforeRecord?.();
-        // Compute specHash exactly once and share it between recordComposed and recordFallbackIfAny
+        // Compute specHash exactly once and share it between the composed and fallback records
         // (mirroring finishStream): without it, each independently hashes the same Spec when a fallback
         // occurred (view.composed always runs; view.fallback additionally runs only on a fallback Spec).
         const specHash = await computeSpecHash(result.spec);
-        await recordComposed(deps, result, session, specHash);
-        await recordFallbackIfAny(deps, result, session, specHash);
+        await hostCore.recordComposedAndFallback(deps.recorder, result, {
+          surface: session.surface,
+          specHash,
+          ...sessionMeta(session),
+        });
       },
       report,
     );
@@ -436,47 +439,6 @@ async function streamGenerated(
   if (final != null) await finishStream(deps, stream, final, session, call);
 }
 
-/**
- * Centralizes the recorder.composed call in one place (shared by /compose, /events, and finishStream; prevents
- * missing spreads of session metadata (sessionId / tenant); isomorphic to the Python implementation's
- * _record_composed). specHash is passed only when the streaming path shares its precomputed value; the
- * non-streaming path computes it exactly once inside the recorder implementation.
- */
-async function recordComposed(
-  deps: KohakuHostDeps,
-  result: ComposeResult,
-  session: SessionContext,
-  specHash?: string,
-): Promise<void> {
-  await deps.recorder?.composed({
-    spec: result.spec,
-    trace: result.trace,
-    surface: session.surface,
-    ...(specHash != null ? { specHash } : {}),
-    ...sessionMeta(session),
-  });
-}
-
-/**
- * Records view.fallback when the spec includes a fallback (deterministic downgrade on generation failure /
- * capability-negotiation downgrade). Delegates the fallback-detection rule (spec.provenance.fallback, not the
- * trace) to host-core's recordViewFallback, shared with the MCP profile's composeAndAudit, so both profiles
- * agree on when a fallback is recorded.
- */
-async function recordFallbackIfAny(
-  deps: KohakuHostDeps,
-  result: ComposeResult,
-  session: SessionContext,
-  specHash?: string,
-): Promise<void> {
-  await hostCore.recordViewFallback(deps.recorder, result.spec, {
-    surface: session.surface,
-    ...(specHash != null ? { specHash } : {}),
-    ...sessionMeta(session),
-    ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
-  });
-}
-
 /** The effective capability TTL: deps.capabilityTtlSeconds when set, otherwise host-core's shared default. */
 function capabilityTtl(deps: KohakuHostDeps): number {
   return deps.capabilityTtlSeconds ?? hostCore.DEFAULT_CAPABILITY_TTL_SECONDS;
@@ -541,10 +503,12 @@ async function finishStream(
   // received phase:"cancelled" from the composer.
   await hostCore.recordComposedResult(
     result,
-    async () => {
-      await recordComposed(deps, result, session, specHash);
-      await recordFallbackIfAny(deps, result, session, specHash);
-    },
+    () =>
+      hostCore.recordComposedAndFallback(deps.recorder, result, {
+        surface: session.surface,
+        specHash,
+        ...sessionMeta(session),
+      }),
     (e) => reportHostError(deps, call.endpoint, call.requestId, e),
   );
   await stream.writeSSE({

@@ -119,3 +119,38 @@ export async function recordViewFallback(
     ...(meta.correlationId != null ? { correlationId: meta.correlationId } : {}),
   });
 }
+
+/**
+ * The composed -> fallback recording pair both host profiles run inside `recordComposedResult`'s record
+ * callback (REST's deliverComposed/finishStream, the MCP profile's composeAndAudit): `recorder.composed`
+ * first, then `recordViewFallback` (a no-op unless the spec carries `provenance.fallback`), and nothing at all
+ * when no `recorder` is wired. Order-neutral about where it sits in a host's delivery sequence and about
+ * cancellation / fail-open handling, which stay with `recordComposedResult` and the caller.
+ *
+ * Optional `meta` keys (`specHash`, `sessionId`, `tenant`) are spread only when present, so the recorder sees
+ * an absent key rather than an `undefined` one: REST passes all of them (a precomputed `specHash` plus its
+ * session metadata), the MCP profile passes only `surface` (it computes no `specHash` and resolves no
+ * session). The fallback record additionally carries the compose trace's `correlationId` when set.
+ */
+export async function recordComposedAndFallback(
+  recorder: ViewRecorder | undefined,
+  result: { spec: UISpec; trace: ComposeTrace },
+  meta: { surface: Surface; specHash?: string; sessionId?: string; tenant?: string },
+): Promise<void> {
+  if (recorder == null) return;
+  await recorder.composed({
+    spec: result.spec,
+    trace: result.trace,
+    surface: meta.surface,
+    ...(meta.specHash != null ? { specHash: meta.specHash } : {}),
+    ...(meta.sessionId != null ? { sessionId: meta.sessionId } : {}),
+    ...(meta.tenant != null ? { tenant: meta.tenant } : {}),
+  });
+  await recordViewFallback(recorder, result.spec, {
+    surface: meta.surface,
+    ...(meta.specHash != null ? { specHash: meta.specHash } : {}),
+    ...(meta.sessionId != null ? { sessionId: meta.sessionId } : {}),
+    ...(meta.tenant != null ? { tenant: meta.tenant } : {}),
+    ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
+  });
+}

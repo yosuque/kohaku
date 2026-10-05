@@ -125,4 +125,9 @@ export {
   type RateLimiterTakeParams,
 } from "./rate-limit.js";
 export { parseTraceContext, TRACEPARENT_RE } from "./trace-context.js";
-export { recordComposedResult, recordViewFallback, type ViewRecorder } from "./view-recorder.js";
+export {
+  recordComposedAndFallback,
+  recordComposedResult,
+  recordViewFallback,
+  type ViewRecorder,
+} from "./view-recorder.js";

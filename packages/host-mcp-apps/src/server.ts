@@ -292,15 +292,7 @@ async function composeAndAudit(
     result,
     async () => {
       if (ctx.deps.recorder != null) {
-        await ctx.deps.recorder.composed({
-          spec: result.spec,
-          trace: result.trace,
-          surface: MCP_APP_SURFACE,
-        });
-        await hostCore.recordViewFallback(ctx.deps.recorder, result.spec, {
-          surface: MCP_APP_SURFACE,
-          ...(result.trace.correlationId != null ? { correlationId: result.trace.correlationId } : {}),
-        });
+        await hostCore.recordComposedAndFallback(ctx.deps.recorder, result, { surface: MCP_APP_SURFACE });
       } else {
         await ctx.deps.onComposed?.(result.spec, result.trace);
       }
