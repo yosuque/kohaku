@@ -1,9 +1,11 @@
 import {
   clampLineagePageSize,
+  DEFAULT_LINEAGE_LIMIT,
   decodeSeqCursor,
   encodeSeqCursor,
   type FixationRecord,
   type LineageEventRecord,
+  type LineageFilter,
   normalizeTenant,
   type PromotionState,
   type StoragePort,
@@ -29,6 +31,36 @@ export interface PostgresStoragePort extends StoragePort {
 
 function correlationForColumn(correlationId: string | null): string | null {
   return correlationId == null ? null : correlationColumnValue(correlationId);
+}
+
+/**
+ * The WHERE predicates (and their `$n` parameters) shared by `listLineage` and `pageLineage`, in a fixed
+ * order: the optional `seq > afterSeq` first, then type / tenant / intentHash / artifactId / specHash /
+ * correlationId / since / until. The caller appends its own trailing parameter (LIMIT).
+ */
+function lineageWhere(
+  filter: Omit<LineageFilter, "limit">,
+  options: { afterSeq?: number } = {},
+): { where: string[]; params: unknown[] } {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const add = (clause: string, value: unknown) => {
+    params.push(value);
+    where.push(clause.replace("?", `$${params.length}`));
+  };
+  if (options.afterSeq !== undefined) add("seq > ?", options.afterSeq);
+  if (filter.type != null) add("type = ANY(?::text[])", filter.type);
+  // `''` behaves exactly like an unspecified tenant (normalizeTenant collapses both), matching
+  // every tenant column's `''`-for-tenant-neutral convention in this schema.
+  const filterTenant = normalizeTenant(filter.tenant);
+  if (filterTenant != null) add("tenant = ?", filterTenant);
+  if (filter.intentHash != null) add("intent_hash = ?", filter.intentHash);
+  if (filter.artifactId != null) add("artifact_id = ?", filter.artifactId);
+  if (filter.specHash != null) add("spec_hash = ?", filter.specHash);
+  if (filter.correlationId != null) add("correlation_id = ?", correlationColumnValue(filter.correlationId));
+  if (filter.since != null) add("ts >= ?", filter.since);
+  if (filter.until != null) add("ts <= ?", filter.until);
+  return { where, params };
 }
 
 /**
@@ -114,26 +146,9 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
     },
     async listLineage(filter = {}) {
       await ready();
-      const limit = filter.limit ?? 200;
+      const limit = filter.limit ?? DEFAULT_LINEAGE_LIMIT;
       if (limit <= 0) return [];
-      const where: string[] = [];
-      const params: unknown[] = [];
-      const add = (clause: string, value: unknown) => {
-        params.push(value);
-        where.push(clause.replace("?", `$${params.length}`));
-      };
-      if (filter.type != null) add("type = ANY(?::text[])", filter.type);
-      // `''` behaves exactly like an unspecified tenant (normalizeTenant collapses both), matching
-      // every tenant column's `''`-for-tenant-neutral convention in this schema.
-      const filterTenant = normalizeTenant(filter.tenant);
-      if (filterTenant != null) add("tenant = ?", filterTenant);
-      if (filter.intentHash != null) add("intent_hash = ?", filter.intentHash);
-      if (filter.artifactId != null) add("artifact_id = ?", filter.artifactId);
-      if (filter.specHash != null) add("spec_hash = ?", filter.specHash);
-      if (filter.correlationId != null)
-        add("correlation_id = ?", correlationColumnValue(filter.correlationId));
-      if (filter.since != null) add("ts >= ?", filter.since);
-      if (filter.until != null) add("ts <= ?", filter.until);
+      const { where, params } = lineageWhere(filter);
       params.push(limit);
       const sql = `SELECT record FROM ${tables.lineage}${where.length > 0 ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY seq DESC LIMIT $${params.length}`;
       // `record` is stored as text -- see schema.ts -- so no jsonb key-reordering between put and get.
@@ -146,22 +161,7 @@ export function createPostgresStoragePort(options: PostgresStoragePortOptions): 
       const pageSize = clampLineagePageSize(req.pageSize);
       // Malformed cursor throws before issuing any query (same contract as pageLineageArray / readLineagePage).
       const afterSeq = req.cursor != null ? decodeSeqCursor(req.cursor) : 0;
-      const where: string[] = [];
-      const params: unknown[] = [];
-      const add = (clause: string, value: unknown) => {
-        params.push(value);
-        where.push(clause.replace("?", `$${params.length}`));
-      };
-      add("seq > ?", afterSeq);
-      if (req.type != null) add("type = ANY(?::text[])", req.type);
-      const filterTenant = normalizeTenant(req.tenant);
-      if (filterTenant != null) add("tenant = ?", filterTenant);
-      if (req.intentHash != null) add("intent_hash = ?", req.intentHash);
-      if (req.artifactId != null) add("artifact_id = ?", req.artifactId);
-      if (req.specHash != null) add("spec_hash = ?", req.specHash);
-      if (req.correlationId != null) add("correlation_id = ?", correlationColumnValue(req.correlationId));
-      if (req.since != null) add("ts >= ?", req.since);
-      if (req.until != null) add("ts <= ?", req.until);
+      const { where, params } = lineageWhere(req, { afterSeq });
       // Read one past pageSize to detect whether a further page exists, mirroring pageLineageArray /
       // readLineagePage's "peek one match ahead" strategy.
       params.push(pageSize + 1);
