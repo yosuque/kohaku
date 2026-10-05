@@ -147,6 +147,15 @@ export interface KohakuHostDeps {
   requestId?: (c: Context) => string;
   capabilityTtlSeconds?: number;
   /**
+   * Development mode: folds the two production-facing startup warnings (governance routes open without
+   * `authorizeGovernance`, and no `auth` so every request is ANONYMOUS) into a single `console.warn` line
+   * (stderr, so a stdio MCP server's stdout stays JSON-RPC only) naming whatever is unwired, and prints
+   * nothing when both are wired. Changes no behavior at all -- only the log output; when false or omitted the
+   * two `console.warn` lines are kept verbatim. `createKohakuHost` (`@kohaku-ui/host`) forwards its own
+   * `dev` option here.
+   */
+  dev?: boolean;
+  /**
    * Overrides the request-body size cap (bytes) createKohakuRoutes applies via Hono's bodyLimit middleware
    * (ops; product responsibility). Default when omitted: 1 MiB (see routes.ts's DEFAULT_MAX_BODY_BYTES). A
    * product that already layers its own bodyLimit in front of the mount point (e.g. the sample host) can
