@@ -1696,7 +1696,6 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "id": "publishBtn",
             "props": {
-              "action": "publish",
               "label": "Publish report",
               "variant": "secondary",
             },
@@ -1780,7 +1779,9 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "emit": "action.invoke",
             "on": "publishBtn.press",
-            "payload": {},
+            "payload": {
+              "action": "publish",
+            },
           },
         ],
         "intent": {
@@ -1857,7 +1858,6 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "id": "publishBtn",
             "props": {
-              "action": "publish",
               "label": "レポートを公開",
               "variant": "secondary",
             },
@@ -1941,7 +1941,9 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "emit": "action.invoke",
             "on": "publishBtn.press",
-            "payload": {},
+            "payload": {
+              "action": "publish",
+            },
           },
         ],
         "intent": {
@@ -2008,7 +2010,6 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "id": "publishBtn",
             "props": {
-              "action": "publish",
               "label": "Publish report",
               "variant": "secondary",
             },
@@ -2092,7 +2093,9 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "emit": "action.invoke",
             "on": "publishBtn.press",
-            "payload": {},
+            "payload": {
+              "action": "publish",
+            },
           },
         ],
         "intent": {
@@ -2151,7 +2154,6 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "id": "publishBtn",
             "props": {
-              "action": "publish",
               "label": "レポートを公開",
               "variant": "secondary",
             },
@@ -2235,7 +2237,9 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "emit": "action.invoke",
             "on": "publishBtn.press",
-            "payload": {},
+            "payload": {
+              "action": "publish",
+            },
           },
         ],
         "intent": {
@@ -2299,7 +2303,6 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "id": "publishBtn",
             "props": {
-              "action": "publish",
               "label": "Publish report",
               "variant": "secondary",
             },
@@ -2383,7 +2386,9 @@ describe("fixed-specs snapshot: sales.records", () => {
           {
             "emit": "action.invoke",
             "on": "publishBtn.press",
-            "payload": {},
+            "payload": {
+              "action": "publish",
+            },
           },
         ],
         "intent": {

@@ -358,11 +358,13 @@ function recordsView(intent: CanonicalIntent, refs: QueryHandle[], lang: OutputL
     // an approver mints the token in Admin > Approvals (POST /approvals, design.md #72) and the requester
     // pastes it into the renderer's default requestApproval prompt on the next press. The end-to-end proof of
     // the "approve" tier is the E2E test that presents a real approval token to POST /binding/action /
-    // kohaku_action directly.
+    // kohaku_action directly. The action name travels in the event payload (see publishBtn.press below), not
+    // in props: action.button's propsSchema has no `action`, so a props.action would be dropped by the
+    // post-processing and the compose-derived capability would never get the publish write scope.
     {
       id: "publishBtn",
       type: "action.button",
-      props: { action: "publish", label: S.publishLabel, variant: "secondary" },
+      props: { label: S.publishLabel, variant: "secondary" },
     },
     {
       id: "noteDialog",
@@ -413,13 +415,14 @@ function recordsView(intent: CanonicalIntent, refs: QueryHandle[], lang: OutputL
   // - noteDialog.close -> state.set(noteOpen=false): closes itself on Esc / x button / background click.
   // - noteForm.submit -> action.invoke(annotate): payload.note is the single input field ($value.note),
   //   payload.refs is the table's $ref below (actionEffects invalidates this reference with the new data version -> the table re-resolves).
-  // - publishBtn.press -> action.invoke(publish): no payload (design.md #62/#63's "approve"-tier demo; see
-  //   the publishBtn component's own doc comment above).
+  // - publishBtn.press -> action.invoke(publish): the action name is payload.action (resolveWriteActionName's
+  //   fallback for action.button) and publish declares no paramsSchema (design.md #62/#63's "approve"-tier
+  //   demo; see the publishBtn component's own doc comment above).
   const events: EventBinding[] = [
     { on: "openNote.press", emit: "state.set", payload: { key: "noteOpen", value: true } },
     { on: "noteDialog.close", emit: "state.set", payload: { key: "noteOpen", value: false } },
     { on: "noteForm.submit", emit: "action.invoke", payload: { note: "$value.note", refs: [ref] } },
-    { on: "publishBtn.press", emit: "action.invoke", payload: {} },
+    { on: "publishBtn.press", emit: "action.invoke", payload: { action: "publish" } },
   ];
   return template(intent, components, events, { noteOpen: false });
 }

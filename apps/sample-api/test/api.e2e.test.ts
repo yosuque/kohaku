@@ -12,7 +12,7 @@ import type {
   TabularData,
   UISpec,
 } from "@kohaku-ui/spec-core";
-import { actionPayloadHash, applyPatch, parseSpec } from "@kohaku-ui/spec-core";
+import { actionPayloadHash, applyPatch, collectWriteActions, parseSpec } from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
@@ -452,6 +452,90 @@ describe("sample-api E2E", () => {
     });
     expect(replay.status).toBe(403);
     expect(((await replay.json()) as { error: { code: string } }).error.code).toBe("APPROVAL_REQUIRED");
+  });
+
+  it("a composed sales.records Spec declares the publish write, so the compose-derived capability can invoke it", async () => {
+    const { app } = await makeTestApp();
+    const { json } = await composeJson(app, {
+      input: { kind: "gui", action: "view.select", params: { intent: "sales.records" } },
+    });
+    // The action name has to survive the compose post-processing (action.button's propsSchema has no `action`,
+    // so it travels in the event payload); otherwise the write scope is never issued and the Publish button
+    // cannot reach the approval gate at all.
+    expect(collectWriteActions(json.spec).sort()).toEqual(["annotate", "publish"]);
+  });
+
+  it("governed actions: the approval round trip starting from a viewer compose (the Demo 5 flow, requester demo-viewer)", async () => {
+    const { app } = await makeTestApp([], createMemoryStoragePort());
+    const asRole = (role: string) => ({ "content-type": "application/json", "x-kohaku-role": role });
+
+    // The requester is whoever composed: the capability's principal is the role of the compose request.
+    const composed = await app.request("/api/kohaku/compose", {
+      method: "POST",
+      headers: asRole("viewer"),
+      body: JSON.stringify({
+        input: { kind: "gui", action: "view.select", params: { intent: "sales.records" } },
+      }),
+    });
+    expect(composed.status).toBe(200);
+    const { spec, capability } = (await composed.json()) as { spec: UISpec; capability: string };
+    // What the renderer sends on a Publish press: the event payload as declared (it carries the action name).
+    const publishEvent = spec.events.find((e) => e.emit === "action.invoke" && e.on.endsWith(".press"))!;
+    const payload = publishEvent.payload as Record<string, unknown>;
+    expect(payload).toEqual({ action: "publish" });
+    const invokePublish = async (approval?: string) =>
+      app.request("/api/kohaku/binding/action", {
+        method: "POST",
+        headers: { authorization: `Bearer ${capability}`, "content-type": "application/json" },
+        body: JSON.stringify({ action: "publish", payload, ...(approval != null ? { approval } : {}) }),
+      });
+
+    // First press: no token yet -> 403 APPROVAL_REQUIRED with the request descriptor.
+    const first = await invokePublish();
+    expect(first.status).toBe(403);
+    const { error } = (await first.json()) as {
+      error: { code: string; approval: { requestId: string; payloadHash: string } };
+    };
+    expect(error.code).toBe("APPROVAL_REQUIRED");
+
+    // The refused attempt is on the audit trail, attributed to the viewer (what the inbox lists).
+    const requested = (
+      (await (await app.request("/api/kohaku/lineage?type=action.approvalRequested&limit=1000")).json()) as {
+        events: LineageEventRecord[];
+      }
+    ).events.filter((e) => e.payload.tier === "approve");
+    expect(requested).toHaveLength(1);
+    expect(requested[0]!.actor.id).toBe("demo-viewer");
+    expect(requested[0]!.payload["requestId"]).toBe(error.approval.requestId);
+
+    // The approver mints the token for exactly that (action, payloadHash, requester).
+    const issued = await app.request("/api/kohaku/approvals", {
+      method: "POST",
+      headers: asRole("approver"),
+      body: JSON.stringify({
+        action: "publish",
+        payloadHash: error.approval.payloadHash,
+        requesterId: "demo-viewer",
+      }),
+    });
+    expect(issued.status).toBe(200);
+    const { approval } = (await issued.json()) as { approval: string };
+
+    // Second press: the viewer carries the token and the write goes through.
+    const second = await invokePublish(approval);
+    expect(second.status).toBe(200);
+
+    const settled = (
+      (await (await app.request("/api/kohaku/lineage?type=action.approved&limit=1000")).json()) as {
+        events: LineageEventRecord[];
+      }
+    ).events;
+    expect(settled).toHaveLength(1);
+    expect(settled[0]!.payload).toMatchObject({
+      action: "publish",
+      approverId: "demo-approver",
+      requesterId: "demo-viewer",
+    });
   });
 
   it("the second compose of the same Intent is a cache hit", async () => {
