@@ -134,9 +134,12 @@ export interface RunInvokeTargetDeps {
    * `confirm`. Returning a token (sync or async) retries the invoke with that `approval` token;
    * `undefined` (or an unset hook) still sends the invoke, without `approval`: the server records the
    * pending approval and answers APPROVAL_REQUIRED, reported as phase "awaitingApproval" carrying the
-   * approval descriptor. This profile exposes no default (an approval token is obtained out of band, e.g. the host's `POST /approvals` or
-   * an approver-facing surface -- there is no generic browser-native equivalent of `globalThis.confirm`
-   * for it).
+   * approval descriptor. This framework-free core supplies no default hook: the token is minted by an
+   * approver (the host's `POST /approvals`, e.g. the admin console's Approvals tab, design.md #72) and
+   * handed to the requester. renderer-react defaults the hook to a `globalThis.prompt` that is consulted
+   * only once the node is already in the "awaitingApproval" phase for an "approve"-tier action, so the first
+   * attempt still reaches the server and is recorded as a pending approval (renderer-wc has no default yet:
+   * its host wires the hook itself).
    */
   requestApproval?: (args: {
     action: string;
@@ -251,8 +254,16 @@ export function actionPhaseNotice(phase: ActionPhase, messages: RendererMessages
   switch (phase.phase) {
     case "invalid":
       return { role: "alert", text: messages.actionInvalid(phase.issues.length) };
-    case "awaitingApproval":
-      return { role: "status", text: messages.actionAwaiting(phase.tier) };
+    case "awaitingApproval": {
+      const base = messages.actionAwaiting(phase.tier);
+      // The server's descriptor (absent for a locally short-circuited preflight) lets the requester name the
+      // request to an approver; the Approvals inbox lists the same requestId / payload hash.
+      const text =
+        phase.approval != null
+          ? `${base} (${messages.actionAwaitingApprovalDetail(phase.approval.requestId, phase.approval.payloadHash)})`
+          : base;
+      return { role: "status", text };
+    }
     default:
       return null;
   }

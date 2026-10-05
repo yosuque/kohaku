@@ -6,6 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { useT } from "../i18n/ui.js";
 import { type ComposeView, composeGui, sendEvent } from "../kohaku/client.js";
 import { ProvenanceBadge } from "../kohaku/ProvenanceBadge.js";
+import { useRole } from "../kohaku/role.js";
 import { SpecJsonDrawer } from "../kohaku/SpecJsonDrawer.js";
 import { SpecSurface } from "../kohaku/SpecSurface.js";
 import { useLatestRequest } from "../kohaku/useLatestRequest.js";
@@ -67,11 +68,15 @@ export function DashboardPage(): ReactNode {
     [run, onComposed, onComposeError],
   );
 
-  // Runs only on the first mount (deps []). Direct URL changes after mount (back/forward, etc.) are not picked up.
+  // Runs on the first mount and again whenever the role changes. The capability a compose returns is issued to
+  // the principal of the role that composed (the requester of every governed action on this surface), so a
+  // role switch has to re-compose or the page would keep acting as the old role. Direct URL changes after
+  // mount (back/forward, etc.) are not picked up.
+  const [role] = useRole();
   useEffect(() => {
     void runCompose(intentName, facetParams);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [role]);
 
   const handleEvent = useCallback(
     (event: SurfaceEvent): Promise<void> => {

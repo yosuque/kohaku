@@ -303,7 +303,9 @@ export function Root(props: {
         onEvent: handleEvent,
         // Governed actions (design.md #62/#63): the compose-issued manifest drives a local preflightAction
         // check (see actionFetcher below); confirm defaults to renderer-react's own globalThis.confirm
-        // fallback (unset here). requestApproval has no default here either -- an "approve"-tier action
+        // fallback (unset here). requestApproval is unset too, so renderer-react's default applies: a
+        // `globalThis.prompt` for the approval token, asked only once the action is already awaiting
+        // approval. An MCP host's sandboxed iframe normally blocks `prompt`, and then an "approve"-tier action
         // gracefully stays gated (phase "awaitingApproval") until a product wires its own approver-facing
         // flow (out of scope: this MCP widget has no approval-request UI of its own).
         ...(view.actions != null ? { actionManifest: view.actions } : {}),

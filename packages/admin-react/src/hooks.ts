@@ -8,6 +8,7 @@ import {
 } from "@kohaku-ui/client";
 import type { LineageEventRecord } from "@kohaku-ui/spec-core";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { derivePendingApprovals, type PendingApproval } from "./approvals.js";
 import { useAdmin } from "./context.js";
 import { PENDING_PROMOTION_STATUSES } from "./pending-statuses.js";
 import { describeDeniedOperation } from "./rbac.js";
@@ -196,4 +197,67 @@ export function useFixations(): {
   }, [client, notify, getMessages, guard]);
   useEffect(reload, [reload]);
   return { proposals, records, fixationMinUses, reload };
+}
+
+/** How far back the inbox looks. Older requests are not shown (and the event cap below applies on top). */
+const APPROVAL_INBOX_WINDOW_MS = 24 * 60 * 60 * 1000;
+/**
+ * Only the two event types the derivation needs. `action.invoked` is deliberately not read: every `"auto"`-tier
+ * write records one, so on a busy host they would crowd the capped tail and push real requests out of it.
+ */
+const APPROVAL_INBOX_EVENT_TYPES = ["action.approvalRequested", "action.approved"];
+/** Tail cap of one inbox read (the largest `limit` GET /lineage accepts). */
+export const APPROVAL_INBOX_EVENT_LIMIT = 1000;
+
+/**
+ * The approver's inbox (design.md #72): reads the lineage tail (GET /lineage, the last 24 hours, at most 1000
+ * `action.approvalRequested` / `action.approved` events) and derives the pending approvals from it with
+ * `derivePendingApprovals` — there is no server-side pending store. `windowFull` is true when the read hit the
+ * cap, so older requests may be missing from the list. A 401 / 403 becomes the role explanation, anything else
+ * the generic fetchFailed text. The previous list stays visible while a reload is in flight so a row's local
+ * state (an issued token) is not lost.
+ */
+export function useApprovalInbox(): {
+  pending: PendingApproval[];
+  reload: () => void;
+  loading: boolean;
+  windowFull: boolean;
+} {
+  const { client, notify, getMessages } = useAdmin();
+  const [pending, setPending] = useState<PendingApproval[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [windowFull, setWindowFull] = useState(false);
+  const guard = useResultGuard();
+  const reload = useCallback(() => {
+    const stillCurrent = guard();
+    setLoading(true);
+    const now = new Date();
+    void client
+      .lineage({
+        type: APPROVAL_INBOX_EVENT_TYPES,
+        since: new Date(now.getTime() - APPROVAL_INBOX_WINDOW_MS).toISOString(),
+        limit: APPROVAL_INBOX_EVENT_LIMIT,
+      })
+      .then(async (events) => ({
+        full: events.length >= APPROVAL_INBOX_EVENT_LIMIT,
+        result: await derivePendingApprovals(events),
+      }))
+      .then(({ full, result }) => {
+        if (!stillCurrent()) return;
+        setPending(result);
+        setWindowFull(full);
+        setLoading(false);
+      })
+      .catch((e: unknown) => {
+        if (!stillCurrent()) return;
+        const m = getMessages();
+        const denied = isKohakuHostError(e) ? describeDeniedOperation(e, m.approvals.opRead, m) : null;
+        notify(denied ?? m.approvals.fetchFailed, "error");
+        setPending([]);
+        setWindowFull(false);
+        setLoading(false);
+      });
+  }, [client, notify, getMessages, guard]);
+  useEffect(reload, [reload]);
+  return { pending, reload, loading, windowFull };
 }

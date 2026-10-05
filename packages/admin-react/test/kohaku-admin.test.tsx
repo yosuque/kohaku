@@ -14,7 +14,7 @@ function Toolbar() {
 }
 
 describe("KohakuAdmin", () => {
-  it("renders the four tabs, switches on click, and shows toolbar notices in the banner", async () => {
+  it("renders the five tabs, switches on click, and shows toolbar notices in the banner", async () => {
     const { client } = stubClient({
       "GET /lineage": () => jsonResponse({ events: [] }),
       "GET /fixations/proposals": () => jsonResponse({ proposals: [] }),
@@ -22,10 +22,27 @@ describe("KohakuAdmin", () => {
     });
     render(<KohakuAdmin client={client} toolbar={<Toolbar />} />);
     await screen.findByText(m.lineage.empty);
+    for (const label of [m.tabLineage, m.tabAnalytics, m.tabPromotions, m.tabFixations, m.tabApprovals]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    fireEvent.click(screen.getByText(m.tabApprovals));
+    await screen.findByText(m.approvals.empty);
     fireEvent.click(screen.getByText(m.tabFixations));
     await screen.findByText(m.fixations.fixatedTitle);
     fireEvent.click(screen.getByText("bump"));
     expect(screen.getByText("bumped")).toBeTruthy();
+  });
+
+  it("leaves out the built-in tabs named in hiddenTabs (a host without an ApprovalPort hides Approvals)", async () => {
+    const { client } = stubClient({ "GET /lineage": () => jsonResponse({ events: [] }) });
+    render(<KohakuAdmin client={client} hiddenTabs={["approvals", "fixations"]} initialTab="approvals" />);
+    // The hidden initialTab falls back to the first visible tab.
+    await screen.findByText(m.lineage.empty);
+    for (const label of [m.tabLineage, m.tabAnalytics, m.tabPromotions]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
+    expect(screen.queryByText(m.tabApprovals)).toBeNull();
+    expect(screen.queryByText(m.tabFixations)).toBeNull();
   });
 
   it("renders error notices with role=alert and applies theme variables on the root", async () => {
