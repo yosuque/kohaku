@@ -323,16 +323,14 @@ evidence
     "Overwrite an existing key file (permanently invalidates every pack signed with the old key)",
   )
   .action(async (opts: { outDir: string; force?: boolean }) => {
-    const { runEvidenceKeygen } = await import("./evidence/index.js");
+    const { formatEvidenceKeygenResult, runEvidenceKeygen } = await import("./evidence/index.js");
     let result: EvidenceKeygenResult;
     try {
       result = await runEvidenceKeygen(opts.outDir, { force: opts.force === true });
     } catch (e) {
       fail(e);
     }
-    console.log(`Generated ${result.privateKeyPath} (mode 0600)`);
-    console.log(`Generated ${result.publicKeyPath}`);
-    console.log(`keyId: ${result.keyId}`);
+    console.log(formatEvidenceKeygenResult(result));
   });
 
 addLineageSourceOptions(
@@ -368,7 +366,7 @@ addLineageSourceOptions(
     async (
       opts: LineageSourceCliOptions & { privateKey: string; out: string; allowIncomplete?: boolean },
     ) => {
-      const { runEvidenceExport } = await import("./evidence/index.js");
+      const { formatEvidenceExportResult, runEvidenceExport } = await import("./evidence/index.js");
       const { CliUsageError } = await import("./usage-error.js");
       let result: EvidenceExportResult;
       try {
@@ -382,16 +380,7 @@ addLineageSourceOptions(
         // A bad --since / --until is a usage error (exit 2, like `evidence verify`); anything else is 1.
         fail(e, e instanceof CliUsageError ? 2 : 1);
       }
-      const c = result.manifest.counts;
-      console.log(`Wrote evidence pack to ${result.outDir}`);
-      console.log(
-        `  events=${c.events} approvals=${c.approvals} promotions=${c.promotions} fixations=${c.fixations} artifacts=${c.artifacts}` +
-          (result.manifest.complete ? "" : " (incomplete)"),
-      );
-      if (result.manifest.warnings.length > 0) {
-        console.log("  warnings:");
-        for (const w of result.manifest.warnings) console.log(`    - ${w}`);
-      }
+      console.log(formatEvidenceExportResult(result));
     },
   );
 
@@ -405,7 +394,7 @@ evidence
     // Exit codes: 0 = valid, 1 = invalid, 2 = usage error (bad --public-key, missing/malformed pack
     // directory, and commander's own option errors via exitUsageErrorAsTwo) -- program.error() is not
     // used here since its default exit code (1) would collide with "invalid".
-    const { runEvidenceVerify } = await import("./evidence/index.js");
+    const { formatEvidenceVerifyResult, runEvidenceVerify } = await import("./evidence/index.js");
     let result: VerifyEvidencePackResult;
     try {
       result = await runEvidenceVerify(dir, opts.publicKey);
@@ -414,16 +403,7 @@ evidence
       process.exitCode = 2;
       return;
     }
-    if (result.ok) {
-      console.log("OK: the evidence pack is valid.");
-    } else {
-      console.log("INVALID:");
-      for (const err of result.errors) console.log(`  - ${err}`);
-    }
-    if (result.mismatches.length > 0) {
-      console.log("Non-fatal artifact mismatches:");
-      for (const m of result.mismatches) console.log(`  - ${m}`);
-    }
+    console.log(formatEvidenceVerifyResult(result));
     process.exitCode = result.ok ? 0 : 1;
   });
 
