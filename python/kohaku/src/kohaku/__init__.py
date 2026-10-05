@@ -5,4 +5,4 @@ the repository's spec/ (SPEC.md + JSON Schema); wire-compatible with the TS refe
 (byte-identical canonical JSON).
 """
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
