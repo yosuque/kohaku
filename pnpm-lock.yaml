@@ -618,6 +618,9 @@ importers:
       '@kohaku-ui/data-binding':
         specifier: workspace:^
         version: link:../../packages/data-binding
+      '@kohaku-ui/host':
+        specifier: workspace:^
+        version: link:../../packages/host
       '@kohaku-ui/host-mcp-apps':
         specifier: workspace:^
         version: link:../../packages/host-mcp-apps
@@ -1123,6 +1126,9 @@ importers:
       '@modelcontextprotocol/client':
         specifier: 'catalog:'
         version: 2.0.0
+      '@modelcontextprotocol/node':
+        specifier: 'catalog:'
+        version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.8)
       '@modelcontextprotocol/server':
         specifier: 'catalog:'
         version: 2.0.0

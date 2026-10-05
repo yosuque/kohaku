@@ -310,6 +310,8 @@ KOHAKU_MCP_ALLOWED_HOSTS=<ランダム>.trycloudflare.com \
 
 トンネルが払い出した `https://<ランダム>.trycloudflare.com` に `/mcp` を付けた URL を、ホストのカスタムコネクタ(claude.ai)/ MCP サーバー(ChatGPT の developer mode)に登録します。ブラウザから呼ぶ側のオリジンを許可するには `KOHAKU_MCP_ALLOWED_ORIGINS`(カンマ区切りのホスト名。スキーム・ポートなし)を追加します。`Origin` を持たないリクエスト(コネクタ自身のサーバー側呼び出し、Claude Desktop)には何も要りません。
 
+このエントリの HTTP 足場(Host / Origin ガード、CORS、ボディ上限、ステートレスなハンドラ)は `@kohaku-ui/host/mcp-http` の `createMcpHttpServer` で、`@modelcontextprotocol/node` は optional peer です。`apps/sample-mcp/src/http.ts` はその上にスナップショット配信と環境変数の解釈を加えています。`kohaku init --mcp` が生成するサーバーは今のところ独自のコピーを持ち、次のリリース後に共有版へ切り替えます。
+
 > ⚠️ **認証なしのデモです。** この HTTP エントリには一切の認証がありません。公開トンネルで露出すると、**URL を知る誰もが売上データを閲覧・操作できます**。信頼できる相手にのみ URL を渡し、機微データを載せないでください。停止したらトンネルも閉じます。ブラウザからの Host 偽装やクロスサイトのリクエストを弾く DNS リバインディング保護は既定で有効です(上記のとおり、`KOHAKU_MCP_ALLOWED_HOSTS` / `KOHAKU_MCP_ALLOWED_ORIGINS` で足さない限り Host と Origin は localhost 名でなければならず、CORS 応答は検証を通った Origin だけを返し `*` は返しません)。従来の `KOHAKU_MCP_HTTP_ALLOWED_HOSTS` は `KOHAKU_MCP_ALLOWED_HOSTS` の非推奨エイリアスとして引き続き使えます。Python サンプル(`sales_api.mcp_http`)も同じ動作です。
 >
 > 実際の認証を組み込むには、単一の静的な `McpHostDeps.principal` ではなく、呼び出し単位で識別情報を解決する `McpHostDeps.resolvePrincipal`(TS)/ `resolve_principal`(Python)を配線してください(例: リクエストからベアラートークンを読み取り対応する `Principal` を引く)。共有 HTTP サーバーではすべての接続が 1 つの `McpHostDeps` を共有するため、静的な `principal` では全呼び出し元が同一の識別情報になってしまいます。
