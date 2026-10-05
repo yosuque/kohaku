@@ -504,11 +504,14 @@ describe("summarizeUsage / LineageSummary.usage (per-day per-tenant metering, de
     expect(rows[0]).toMatchObject({ composed: 3, l2Generated: 1, fallbacks: 1 });
   });
 
-  it("counts fallbacks from view.composed alone: an MCP host (no view.fallback) is counted, a REST host is not doubled", () => {
-    const mcp = [composed({ tier: "L2", fallback: { from: "L2", reason: "x" } })];
-    const rest = [...mcp, ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:aaa" })];
-    expect(summarizeUsage(mcp, { bucket: "day" })[0]?.fallbacks).toBe(1);
-    expect(summarizeUsage(rest, { bucket: "day" })[0]?.fallbacks).toBe(1);
+  it("counts fallbacks from view.composed alone: a compose with no view.fallback is counted, and a recorded view.fallback is not doubled", () => {
+    const composedOnly = [composed({ tier: "L2", fallback: { from: "L2", reason: "x" } })];
+    const withViewFallback = [
+      ...composedOnly,
+      ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:aaa" }),
+    ];
+    expect(summarizeUsage(composedOnly, { bucket: "day" })[0]?.fallbacks).toBe(1);
+    expect(summarizeUsage(withViewFallback, { bucket: "day" })[0]?.fallbacks).toBe(1);
     // A bare view.fallback with no composed record opens no row at all.
     expect(summarizeUsage([ev("view.fallback", { kind: "generation" })], { bucket: "day" })).toEqual([]);
   });
@@ -641,7 +644,7 @@ describe("summarizeLineage: catalog gaps (l2ByIntent, schemaEditsByComponent; de
         intentHash: "sha256:t1",
         fallback: { from: "L1", reason: "x" },
       }),
-      // view.fallback rows are not read here (REST writes one per fallback; MCP writes none).
+      // view.fallback rows are not read here (REST and MCP both write one per fallback next to the composed record).
       ev("view.fallback", { kind: "generation", reason: "x", intentHash: "sha256:c1" }),
     ]);
     expect(s.l2ByIntent).toEqual([

@@ -85,10 +85,10 @@ class UsageRow:
     a record whose `payload.fallback` has kind "generation" or no kind (a failed or budget-skipped generation
     keeps the L2 label on its fallback Spec) and a single-flight follower (`decision.coalesced`). A
     negotiation downgrade (`payload.fallback.kind` "negotiation") is applied to a Spec that was generated, so
-    it still counts. `fallbacks` counts view.composed
-    records that carry `payload.fallback`, whatever their tier (MCP hosts write no `view.fallback`, REST
-    hosts write one next to the composed record, so the composed record is the one place both agree).
-    `tokens` sums `payload.decision.usage` (a single-flight follower carries none).
+    it still counts. `fallbacks` counts view.composed records that carry `payload.fallback`, whatever
+    their tier. It reads the composed record rather than `view.fallback` because the REST and the MCP
+    profile both record a `view.composed` and a `view.fallback` for the same compose (SPEC.md, MCP
+    profile recording points), so counting both would double-count. `tokens` sums `payload.decision.usage` (a single-flight follower carries none).
     """
 
     day: str

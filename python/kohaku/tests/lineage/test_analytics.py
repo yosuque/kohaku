@@ -382,10 +382,13 @@ def test_usage_keeps_a_single_flight_follower_out_of_l2_generated() -> None:
 
 
 def test_usage_counts_fallbacks_from_view_composed_alone() -> None:
-    mcp = [composed(tier="L2", fallback={"from": "L2", "reason": "x"})]  # MCP writes no view.fallback
-    rest = [*mcp, ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:aaa"})]
-    assert summarize_usage(mcp)[0].fallbacks == 1
-    assert summarize_usage(rest)[0].fallbacks == 1  # a REST host's extra view.fallback is not doubled
+    composed_only = [composed(tier="L2", fallback={"from": "L2", "reason": "x"})]
+    with_view_fallback = [
+        *composed_only,
+        ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:aaa"}),
+    ]
+    assert summarize_usage(composed_only)[0].fallbacks == 1
+    assert summarize_usage(with_view_fallback)[0].fallbacks == 1  # the recorded view.fallback is not doubled
     # A bare view.fallback with no composed record opens no row at all.
     assert summarize_usage([ev("view.fallback", {"kind": "generation"})]) == []
 
@@ -515,7 +518,7 @@ def test_l2_by_intent_separates_generations_from_fallbacks_and_followers() -> No
                 intent_hash="sha256:t1",
                 fallback={"from": "L1", "reason": "x"},
             ),
-            # view.fallback rows are not read here (REST writes one per fallback; MCP writes none).
+            # view.fallback rows are not read here (REST and MCP both write one per fallback next to the composed record).
             ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:c1"}),
         ]
     )

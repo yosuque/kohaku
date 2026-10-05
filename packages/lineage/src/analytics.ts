@@ -124,8 +124,9 @@ export interface LineageSummary {
    * (`decision.coalesced`, which rode on another request's generation) are not generations; a negotiation
    * downgrade (`payload.fallback.kind` "negotiation") is applied to a generated Spec, so it is one.
    * `fallbacks` counts every record carrying `payload.fallback`, negotiation included, read
-   * from the view.composed record itself (not from `view.fallback`, which MCP hosts never write and REST hosts
-   * write in addition, so counting both would double-count). `intentHash` is the first one seen for that
+   * from the view.composed record itself (not from `view.fallback`: the REST and the MCP profile both record a
+   * `view.composed` and a `view.fallback` for the same compose, so counting both would double-count).
+   * `intentHash` is the first one seen for that
    * canonical (a representative; the same canonical can recur with different params). A canonical with no
    * L2-labelled compose has no row.
    */
@@ -162,9 +163,11 @@ export interface SchemaEditGap {
  * view.composed events of tier L2 whose cache was miss or bypass, other than a record whose
  * `payload.fallback` has kind "generation" or no kind (a failed or budget-skipped generation keeps the L2 label
  * on its fallback Spec) and a single-flight follower (`decision.coalesced`). A negotiation downgrade
- * (`payload.fallback.kind` "negotiation") is applied to a Spec that was generated, so it still counts. `fallbacks` counts view.composed records that carry
- * `payload.fallback`, whatever their tier (MCP hosts write no `view.fallback`, REST hosts write one next to the
- * composed record, so the composed record is the one place both agree). `tokens` sums `view.composed`'s
+ * (`payload.fallback.kind` "negotiation") is applied to a Spec that was generated, so it still counts.
+ * `fallbacks` counts view.composed records that carry `payload.fallback`, whatever their tier. It reads the
+ * composed record rather than `view.fallback` because the REST and the MCP profile both record a `view.composed`
+ * and a `view.fallback` for the same compose (SPEC.md, MCP profile recording points), so counting both would
+ * double-count. `tokens` sums `view.composed`'s
  * `payload.decision.usage` (a single-flight follower carries no usage, so it never double-counts).
  */
 export interface UsageRow {
