@@ -15,6 +15,7 @@
   "dependencies": {
     "@kohaku-ui/spec-core": "workspace:^",
     "@kohaku-ui/composer": "workspace:^",
+    "@kohaku-ui/llm": "workspace:^",
     "@kohaku-ui/data-binding": "workspace:^",
     "@kohaku-ui/registry": "workspace:^"
   },
@@ -22,7 +23,6 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@kohaku-ui/llm": "workspace:^",
     "@kohaku-ui/port-contracts": "workspace:^",
     "@types/node": "catalog:",
     "typescript": "catalog:",

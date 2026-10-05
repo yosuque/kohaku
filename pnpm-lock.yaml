@@ -1169,6 +1169,9 @@ importers:
       '@kohaku-ui/data-binding':
         specifier: workspace:^
         version: link:../data-binding
+      '@kohaku-ui/llm':
+        specifier: workspace:^
+        version: link:../llm
       '@kohaku-ui/registry':
         specifier: workspace:^
         version: link:../registry
@@ -1176,9 +1179,6 @@ importers:
         specifier: workspace:^
         version: link:../spec-core
     devDependencies:
-      '@kohaku-ui/llm':
-        specifier: workspace:^
-        version: link:../llm
       '@kohaku-ui/port-contracts':
         specifier: workspace:^
         version: link:../port-contracts

@@ -218,6 +218,9 @@ import { DATA_VERSION } from "./dataset.js";
 import { createDomainPort, shapeOf } from "./domain-port.js";
 import { createFixedSpecs } from "./fixed-specs.js";
 import { INTENT_DEFINITIONS, SOURCE } from "./intents.js";
+// Before production (README "Before production"): uncomment this import together with the auth /
+// authorizeGovernance block inside createKohakuHost({ routes }) below.
+// import { governancePolicyFromRoles } from "@kohaku-ui/host";
 
 export interface PortDeps {
   llm: LlmPort;
@@ -256,6 +259,21 @@ export function createPorts(deps: PortDeps): KohakuHost {
     // Set KOHAKU_DEBUG=1 (see .env.example) for the full cause chain + stack trace on every logged failure,
     // instead of a one-line summary -- useful when a compose falls back and you need to know why.
     debug: process.env["KOHAKU_DEBUG"] === "1",
+    routes: {
+      // Development mode (every npm run dev; turned off by NODE_ENV=production): the two production-facing startup
+      // warnings -- no auth, no authorizeGovernance -- fold into one line on stderr. Nothing else about the routes
+      // changes. This is deliberately routes.dev, not createKohakuHost's top-level dev: that one would also let a
+      // missing KOHAKU_CAPABILITY_SECRET fall back to a temporary secret instead of failing fast (see above).
+      dev: process.env["NODE_ENV"] !== "production",
+      // Before production (README "Before production"): uncomment and adapt these two.
+      // INSECURE placeholder: the client controls this header. Replace with real verification (e.g. @kohaku-ui/authz-jwt) before production.
+      // auth: async (c) => ({ id: c.req.header("x-user-id") ?? "anonymous", roles: ["viewer"] }),
+      // authorizeGovernance: governancePolicyFromRoles(() => ({
+      //   admin: ["*"],
+      //   reviewer: ["promotion.*", "lineage.read", "analytics.read"],
+      //   viewer: ["lineage.read", "analytics.read"],
+      // })),
+    },
   });
 }
 `;
@@ -565,7 +583,7 @@ describe("golden regression", () => {
         writeFileSync(path, \`\${JSON.stringify({ ...fixture, expected: spec }, null, 2)}\\n\`);
         return;
       }
-      expect(fixture.expected, \`\${file}: expected not generated. Generate it with KOHAKU_GOLDEN_UPDATE=1 npm test\`).not.toBeNull();
+      expect(fixture.expected, \`\${file}: expected is null. kohaku init normally generates it after npm install; run KOHAKU_GOLDEN_UPDATE=1 npm test once, review the diff, and commit.\`).not.toBeNull();
       const cases: GoldenCase[] = [{ name: fixture.name, input: fixture.input, expected: fixture.expected! }];
       const report = await runGolden(cases, ctx);
       const failed = report.cases.find((c) => !c.pass);
@@ -589,6 +607,8 @@ PORT=8787
 # Set to 1 for verbose error logging (the full cause chain + stack trace on every compose/request failure,
 # instead of a one-line summary) -- see server/ports.ts.
 # KOHAKU_DEBUG=
+
+# NODE_ENV=production   # turns off development mode; wire auth/governance first
 `;
 
 export const GITIGNORE_TEMPLATE = `node_modules/

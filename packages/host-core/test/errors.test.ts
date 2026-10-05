@@ -1,15 +1,21 @@
 import { ComposeError, type ComposeErrorContext } from "@kohaku-ui/composer";
+import { LlmError, type LlmErrorCode } from "@kohaku-ui/llm";
 import { QueryRefError, SpecError } from "@kohaku-ui/spec-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  classifyHostError,
   clientMessageFor,
   createConsoleErrorReporter,
   errorMessage,
   failOpen,
   formatErrorChain,
+  isLlmUnavailableError,
   isTypedHostError,
+  LLM_PROVIDER_UNAVAILABLE_MESSAGE,
   notifyHook,
 } from "../src/errors.js";
+
+const LLM_CODES: LlmErrorCode[] = ["CONFIG", "INVALID_OUTPUT", "PROVIDER", "ABORTED"];
 
 describe("errorMessage", () => {
   it("returns the message of an Error", () => {
@@ -50,6 +56,69 @@ describe("isTypedHostError", () => {
   it("is false for a non-Error value", () => {
     expect(isTypedHostError("boom")).toBe(false);
   });
+
+  it.each(LLM_CODES)(
+    "is false for an LlmError with code %s (the one deny-list entry of the code rule)",
+    (code) => {
+      expect(isTypedHostError(new LlmError(code, "[claude/x] Anthropic API key is missing"))).toBe(false);
+    },
+  );
+
+  it("is false for a duck-typed LlmError from a duplicate install (name check)", () => {
+    const e = Object.assign(new Error("[claude/x] key missing"), { name: "LlmError", code: "CONFIG" });
+    expect(isTypedHostError(e)).toBe(false);
+  });
+});
+
+describe("isLlmUnavailableError", () => {
+  it.each(["PROVIDER", "CONFIG", "ABORTED"] as const)("is true for an LlmError with code %s", (code) => {
+    expect(isLlmUnavailableError(new LlmError(code, "x"))).toBe(true);
+  });
+
+  it("is false for INVALID_OUTPUT (a per-input failure, not an unavailable upstream)", () => {
+    expect(isLlmUnavailableError(new LlmError("INVALID_OUTPUT", "x"))).toBe(false);
+  });
+
+  it("is true for a duck-typed LlmError (name check) and false for an unrelated coded Error", () => {
+    expect(isLlmUnavailableError(Object.assign(new Error("x"), { name: "LlmError", code: "PROVIDER" }))).toBe(
+      true,
+    );
+    expect(isLlmUnavailableError(Object.assign(new Error("x"), { code: "PROVIDER" }))).toBe(false);
+  });
+
+  it("is false for a non-Error value", () => {
+    expect(isLlmUnavailableError("PROVIDER")).toBe(false);
+  });
+});
+
+describe("classifyHostError", () => {
+  it.each(["PROVIDER", "CONFIG", "ABORTED"] as const)(
+    "maps an LlmError %s to upstreamUnavailable with the fixed message",
+    (code) => {
+      expect(classifyHostError(new LlmError(code, "[claude/x] raw sdk wording"))).toEqual({
+        kind: "upstreamUnavailable",
+        message: LLM_PROVIDER_UNAVAILABLE_MESSAGE,
+      });
+    },
+  );
+
+  it("maps an LlmError INVALID_OUTPUT to untyped (its raw wording must not reach the client)", () => {
+    expect(classifyHostError(new LlmError("INVALID_OUTPUT", "raw"))).toEqual({ kind: "untyped" });
+  });
+
+  it("maps a SpecError and a plain Error carrying a string code to typed, with their own message", () => {
+    expect(classifyHostError(new SpecError("PARSE_FAILED", "bad spec"))).toEqual({
+      kind: "typed",
+      message: "bad spec",
+    });
+    const coded = Object.assign(new Error("governance failed"), { code: "PROMOTION_NOT_PUBLISHED" });
+    expect(classifyHostError(coded)).toEqual({ kind: "typed", message: "governance failed" });
+  });
+
+  it("maps a plain Error and a non-Error value to untyped", () => {
+    expect(classifyHostError(new Error("boom"))).toEqual({ kind: "untyped" });
+    expect(classifyHostError("boom")).toEqual({ kind: "untyped" });
+  });
 });
 
 describe("clientMessageFor", () => {
@@ -64,6 +133,12 @@ describe("clientMessageFor", () => {
 
   it("returns the fallback for a non-Error value", () => {
     expect(clientMessageFor("secret", "fb")).toBe("fb");
+  });
+
+  it("returns the fallback for an LlmError (the SDK wording does not leak)", () => {
+    const msg = clientMessageFor(new LlmError("CONFIG", "[claude/x] Anthropic API key is missing"), "fb");
+    expect(msg).toBe("fb");
+    expect(msg).not.toContain("API key");
   });
 });
 

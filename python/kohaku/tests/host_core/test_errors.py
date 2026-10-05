@@ -11,12 +11,18 @@ import pytest
 
 from kohaku.composer import ComposeErrorContext
 from kohaku.host_core import (
+    LLM_PROVIDER_UNAVAILABLE_MESSAGE,
     ConsoleErrorReporterOptions,
+    HostErrorClass,
+    classify_host_error,
     create_console_error_reporter,
     fail_open,
     format_error_chain,
+    is_llm_unavailable_error,
+    is_typed_host_error,
 )
-from kohaku.spec import Intent
+from kohaku.llm import LlmError
+from kohaku.spec import Intent, SpecError
 
 
 class TestFormatErrorChain:
@@ -159,3 +165,78 @@ class TestFailOpen:
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(run())
         assert reported == []
+
+
+_RAW_SDK_MESSAGE = "[claude/x] Anthropic API key is missing. Pass it using the 'apiKey' parameter."
+
+
+class _DuckLlmError(Exception):
+    """A look-alike LlmError from a hypothetical duplicate install: same class name, string `code`."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(_RAW_SDK_MESSAGE)
+        self.code = code
+
+
+_DuckLlmError.__name__ = "LlmError"
+
+
+class TestIsTypedHostErrorLlmDenyList:
+    @pytest.mark.parametrize("code", ["CONFIG", "INVALID_OUTPUT", "PROVIDER", "ABORTED"])
+    def test_an_llm_error_is_never_typed(self, code: str) -> None:
+        assert not is_typed_host_error(LlmError(code, _RAW_SDK_MESSAGE))  # type: ignore[arg-type]
+
+    def test_a_duck_typed_llm_error_is_never_typed(self) -> None:
+        assert not is_typed_host_error(_DuckLlmError("CONFIG"))
+
+    def test_the_general_string_code_rule_is_unchanged_for_other_errors(self) -> None:
+        coded = Exception("governance failed")
+        coded.code = "PROMOTION_NOT_PUBLISHED"  # type: ignore[attr-defined]
+        assert is_typed_host_error(coded)
+        assert is_typed_host_error(SpecError("PARSE_FAILED", "bad spec"))
+        assert not is_typed_host_error(Exception("boom"))
+
+
+class TestIsLlmUnavailableError:
+    @pytest.mark.parametrize("code", ["PROVIDER", "CONFIG", "ABORTED"])
+    def test_is_true_for_provider_config_and_aborted(self, code: str) -> None:
+        assert is_llm_unavailable_error(LlmError(code, "x"))  # type: ignore[arg-type]
+
+    def test_is_false_for_invalid_output(self) -> None:
+        assert not is_llm_unavailable_error(LlmError("INVALID_OUTPUT", "x"))
+
+    def test_is_true_for_a_duck_typed_llm_error_and_false_for_an_unrelated_coded_error(self) -> None:
+        assert is_llm_unavailable_error(_DuckLlmError("PROVIDER"))
+        unrelated = Exception("x")
+        unrelated.code = "PROVIDER"  # type: ignore[attr-defined]
+        assert not is_llm_unavailable_error(unrelated)
+
+    def test_is_false_for_a_non_exception_value(self) -> None:
+        assert not is_llm_unavailable_error("PROVIDER")
+
+
+class TestClassifyHostError:
+    @pytest.mark.parametrize("code", ["PROVIDER", "CONFIG", "ABORTED"])
+    def test_maps_an_unavailable_llm_error_to_the_fixed_message(self, code: str) -> None:
+        cls = classify_host_error(LlmError(code, _RAW_SDK_MESSAGE))  # type: ignore[arg-type]
+        assert cls == HostErrorClass("upstream_unavailable", LLM_PROVIDER_UNAVAILABLE_MESSAGE)
+        assert "API key" not in (cls.message or "")
+
+    def test_maps_invalid_output_to_untyped(self) -> None:
+        assert classify_host_error(LlmError("INVALID_OUTPUT", "raw")) == HostErrorClass("untyped")
+
+    def test_maps_typed_errors_to_their_own_message(self) -> None:
+        assert classify_host_error(SpecError("PARSE_FAILED", "bad spec")) == HostErrorClass("typed", "bad spec")
+        coded = Exception("governance failed")
+        coded.code = "PROMOTION_NOT_PUBLISHED"  # type: ignore[attr-defined]
+        assert classify_host_error(coded) == HostErrorClass("typed", "governance failed")
+
+    def test_maps_a_plain_exception_and_a_non_exception_to_untyped(self) -> None:
+        assert classify_host_error(Exception("boom")) == HostErrorClass("untyped")
+        assert classify_host_error("boom") == HostErrorClass("untyped")
+
+    def test_the_fixed_message_matches_the_typescript_text(self) -> None:
+        assert (
+            LLM_PROVIDER_UNAVAILABLE_MESSAGE
+            == "LLM provider unavailable; see the host's observability hook (onError) for details"
+        )

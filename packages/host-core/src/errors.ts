@@ -1,4 +1,5 @@
 import { ComposeError, type ComposeErrorContext } from "@kohaku-ui/composer";
+import { LlmError } from "@kohaku-ui/llm";
 import { QueryRefError, SpecError } from "@kohaku-ui/spec-core";
 
 /**
@@ -14,10 +15,60 @@ import { QueryRefError, SpecError } from "@kohaku-ui/spec-core";
  * library-internal wording) and must not reach the client verbatim. Shared by both host profiles so a 5xx
  * (REST's INTERNAL/COMPOSE_FAILED) or MCP tool-error response is fixed-text for the untyped case while a
  * typed error's own message still passes through.
+ *
+ * The "any Error with a string `code`" rule is deliberately a general rule with a deny-list of exactly one
+ * entry: `LlmError` (from `@kohaku-ui/llm`) carries a string `code` too, but its message is the provider SDK's
+ * own wording (e.g. "Anthropic API key is missing. Pass it using the 'apiKey' parameter ..."), which is an
+ * operator-side misconfiguration detail and not something to show a client. The rule is not narrowed any
+ * further because the governance, intent and binding errors named above rely on it. The `name` check is a
+ * duck-typed twin of the `instanceof` check so a duplicate install of `@kohaku-ui/llm` is still excluded.
  */
 export function isTypedHostError(e: unknown): boolean {
+  if (isLlmError(e)) return false;
   if (e instanceof SpecError || e instanceof ComposeError || e instanceof QueryRefError) return true;
   return e instanceof Error && typeof (e as { code?: unknown }).code === "string";
+}
+
+function isLlmError(e: unknown): e is Error & { code?: unknown } {
+  return e instanceof LlmError || (e instanceof Error && e.name === "LlmError");
+}
+
+/**
+ * The fixed, client-safe message for a failure caused by the LLM provider being unavailable (API key not
+ * configured, provider error or timeout, aborted call) while a host operation that cannot degrade without an
+ * LLM (Intent resolution) was running. The detail goes to the observability hook (`onError`); the envelope's
+ * requestId correlates the two.
+ */
+export const LLM_PROVIDER_UNAVAILABLE_MESSAGE =
+  "LLM provider unavailable; see the host's observability hook (onError) for details";
+
+/**
+ * True when `e` is an `LlmError` whose code says the provider itself could not serve the call: PROVIDER (the
+ * call failed), CONFIG (no key / unknown provider) or ABORTED (timeout / cancellation). INVALID_OUTPUT (the
+ * model answered, but not in the expected shape) is deliberately not included: that is a per-input failure,
+ * not an unavailable upstream.
+ */
+export function isLlmUnavailableError(e: unknown): boolean {
+  if (!isLlmError(e)) return false;
+  const code = e.code;
+  return code === "PROVIDER" || code === "CONFIG" || code === "ABORTED";
+}
+
+/** What a host should do with a caught exception: map to 503, pass its message through, or use a fixed fallback. */
+export type HostErrorClass =
+  | { kind: "upstreamUnavailable"; message: string }
+  | { kind: "typed"; message: string }
+  | { kind: "untyped" };
+
+/**
+ * Classifies a caught exception for a client-facing failure response. Shared by both host profiles so REST's
+ * 503 and MCP's tool error agree on which failures are "the upstream LLM is unavailable".
+ */
+export function classifyHostError(e: unknown): HostErrorClass {
+  if (isLlmUnavailableError(e))
+    return { kind: "upstreamUnavailable", message: LLM_PROVIDER_UNAVAILABLE_MESSAGE };
+  if (isTypedHostError(e)) return { kind: "typed", message: errorMessage(e) };
+  return { kind: "untyped" };
 }
 
 /**

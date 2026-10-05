@@ -181,7 +181,8 @@ program
         "For chat and the LLM-composed views, edit .env (created for you with a capability secret) " +
           "and set a provider key; .env.example documents every variable.",
       );
-      console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once, then npm test");
+      if (!result.installed)
+        console.log("KOHAKU_GOLDEN_UPDATE=1 npm test   # once after npm install, then npm test");
       if (opts.mcp === true) {
         console.log(
           "\nMCP front door generated. To use it from Claude Desktop, run: npm run mcp:claude-desktop " +

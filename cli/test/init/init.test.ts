@@ -1,8 +1,9 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import * as nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deriveDefaultName, initProject } from "../../src/init/index.js";
+import { buildChildEnv, deriveDefaultName, initProject } from "../../src/init/index.js";
 
 const FIXTURE = join(import.meta.dirname, "fixtures", "sales.csv");
 const noRun = { run: async () => 0 };
@@ -65,20 +66,64 @@ describe("initProject", () => {
     expect(pkgRaw).not.toMatch(/workspace:/);
   });
 
-  it("runs npm install by default through the injected runner", async () => {
-    const calls: string[][] = [];
+  it("runs npm install, then a golden-update vitest run without CI, through the injected runner", async () => {
+    const calls: { argv: string[]; cwd: string; opts?: { env?: NodeJS.ProcessEnv } }[] = [];
+    const logs: string[] = [];
     const out = join(tmp(), "app");
     const result = await initProject(
       { from: FIXTURE, out },
       {
-        run: async (cmd, args) => {
-          calls.push([cmd, ...args]);
+        run: async (cmd, args, cwd, opts) => {
+          calls.push({ argv: [cmd, ...args], cwd, ...(opts != null ? { opts } : {}) });
           return 0;
         },
+        log: (line) => logs.push(line),
       },
     );
     expect(result.installed).toBe(true);
-    expect(calls).toEqual([["npm", "install", "--no-audit", "--no-fund"]]);
+    expect(result.goldenGenerated).toBe(true);
+    expect(calls.map((c) => c.argv)).toEqual([
+      ["npm", "install", "--no-audit", "--no-fund"],
+      ["npx", "vitest", "run"],
+    ]);
+    expect(calls[1]?.cwd).toBe(out);
+    expect(calls[1]?.opts?.env?.["KOHAKU_GOLDEN_UPDATE"]).toBe("1");
+    // CI is explicitly present-and-undefined so the runner strips it from the inherited environment.
+    expect(calls[1]?.opts?.env).toHaveProperty("CI", undefined);
+    expect(logs).toEqual(["golden: wrote test/golden/*.json expected (npm test is green)"]);
+  });
+
+  it.each([
+    ["exits non-zero", async () => 1],
+    [
+      "throws",
+      async () => {
+        throw new Error("spawn npx ENOENT");
+      },
+    ],
+  ])(
+    "does not fail init when the golden-update run %s; it prints the manual command",
+    async (_label, golden) => {
+      const logs: string[] = [];
+      const out = join(tmp(), "app");
+      const result = await initProject(
+        { from: FIXTURE, out },
+        { run: async (cmd) => (cmd === "npm" ? 0 : golden()), log: (line) => logs.push(line) },
+      );
+      expect(result.installed).toBe(true);
+      expect(result.goldenGenerated).toBe(false);
+      expect(logs).toEqual([
+        `golden: could not generate expected; run "KOHAKU_GOLDEN_UPDATE=1 npm test" once in ${out}`,
+      ]);
+    },
+  );
+
+  it("does not run any child process with install: false", async () => {
+    const run = vi.fn(async () => 0);
+    const result = await initProject({ from: FIXTURE, out: join(tmp(), "app"), install: false }, { run });
+    expect(run).not.toHaveBeenCalled();
+    expect(result.installed).toBe(false);
+    expect(result.goldenGenerated).toBe(false);
   });
 
   it("throws when the injected install runner exits non-zero", async () => {
@@ -151,6 +196,67 @@ describe("initProject", () => {
     const pkg = JSON.parse(readFileSync(join(out, "package.json"), "utf8"));
     expect(pkg.dependencies["@kohaku-ui/host"]).toBeDefined();
     expect(pkg.dependencies["@kohaku-ui/host-core"]).toBeUndefined();
+  });
+
+  it("server/ports.ts turns development mode on through routes.dev (not the top-level dev), and carries a commented auth / governance starting point", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    const portsSrc = readFileSync(join(out, "server/ports.ts"), "utf8");
+    expect(portsSrc).toContain('      dev: process.env["NODE_ENV"] !== "production",');
+    // The top-level `dev` would also turn on the temporary-secret fallback; the generated project must keep failing fast.
+    expect(portsSrc).not.toMatch(/^ {4}dev:/m);
+    expect(portsSrc).toMatch(/^ {4}routes: \{$/m);
+    expect(portsSrc).toContain('// import { governancePolicyFromRoles } from "@kohaku-ui/host";');
+    expect(portsSrc).toContain("// auth: async (c) =>");
+    expect(portsSrc).toContain("// authorizeGovernance: governancePolicyFromRoles(() => ({");
+    expect(portsSrc).toContain("INSECURE placeholder: the client controls this header");
+    expect(portsSrc).not.toContain("for the right reason");
+    // The commented import sits with the file's import group, not inside the call's object literal.
+    expect(portsSrc.indexOf("// import { governancePolicyFromRoles }")).toBeLessThan(
+      portsSrc.indexOf("export interface PortDeps"),
+    );
+    // No new environment variable is introduced for any of this.
+    expect(portsSrc).not.toMatch(/KOHAKU_DEV/);
+  });
+
+  it.skipIf(typeof nodeModule.stripTypeScriptTypes !== "function")(
+    "the commented auth / governance block (with its import) is syntactically valid TypeScript once uncommented",
+    async () => {
+      const out = join(tmp(), "app");
+      await initProject({ from: FIXTURE, out, install: false }, noRun);
+      const lines = readFileSync(join(out, "server/ports.ts"), "utf8").split("\n");
+      const marker = lines.findIndex((l) =>
+        l.includes('// Before production (README "Before production"): uncomment and adapt these two.'),
+      );
+      expect(marker).toBeGreaterThan(-1);
+      const uncommented = lines.map((line, i) => {
+        // Prose lines (the marker itself and the INSECURE note) stay comments. The two code candidates are the
+        // commented import (at the top of the file) and the commented lines inside routes: { ... }.
+        if (line.startsWith("// import { governancePolicyFromRoles }")) return line.replace(/^\/\/ /, "");
+        const isBlockLine = i > marker && /^ {6}\/\/ ?/.test(line) && !line.includes("INSECURE");
+        return isBlockLine ? line.replace(/^( {6})\/\/ ?/, "$1") : line;
+      });
+      const source = uncommented.join("\n");
+      // TypeScript 7 ships no JS compiler API, so use Node's own type stripper as a syntax check only: it throws
+      // ERR_INVALID_TYPESCRIPT_SYNTAX on anything that does not parse, but it does NOT type-check. Whether the
+      // uncommented block compiles against the real packages is checked by hand (see the PR notes) and by
+      // pack-smoke's tsc of the generated project for the default, still-commented form.
+      expect(() => nodeModule.stripTypeScriptTypes(source)).not.toThrow();
+      // The block really was uncommented (not silently skipped).
+      expect(source).toMatch(/^import \{ governancePolicyFromRoles \} from "@kohaku-ui\/host";$/m);
+      expect(source).toMatch(/^ {6}auth: async/m);
+      expect(source).toMatch(/^ {6}authorizeGovernance: governancePolicyFromRoles\(/m);
+    },
+  );
+
+  it(".env.example and .env both document NODE_ENV=production as a commented line", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    for (const file of [".env.example", ".env"]) {
+      expect(readFileSync(join(out, file), "utf8"), file).toMatch(
+        /^# NODE_ENV=production {3}# turns off development mode; wire auth\/governance first/m,
+      );
+    }
   });
 
   it(".env.example documents KOHAKU_DEBUG", async () => {
@@ -232,5 +338,27 @@ describe("initProject", () => {
       vi.doUnmock("semver");
       vi.resetModules();
     }
+  });
+});
+
+describe("buildChildEnv", () => {
+  it("drops a key whose override is undefined (CI) and adds the golden update flag, leaving the rest alone", () => {
+    const env = buildChildEnv(
+      { PATH: "/usr/bin", CI: "true", HOME: "/home/u" },
+      { KOHAKU_GOLDEN_UPDATE: "1", CI: undefined },
+    );
+    expect(env).not.toHaveProperty("CI");
+    expect("CI" in env).toBe(false);
+    expect(env["KOHAKU_GOLDEN_UPDATE"]).toBe("1");
+    expect(env["PATH"]).toBe("/usr/bin");
+    expect(env["HOME"]).toBe("/home/u");
+  });
+
+  it("does not mutate its inputs and works with no overrides", () => {
+    const base = { A: "1", CI: "true" };
+    const overrides = { CI: undefined };
+    expect(buildChildEnv(base, overrides)).toEqual({ A: "1" });
+    expect(base).toEqual({ A: "1", CI: "true" });
+    expect(buildChildEnv(base)).toEqual({ A: "1", CI: "true" });
   });
 });

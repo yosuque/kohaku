@@ -50,6 +50,25 @@ export const COMPOSE_FAILED_MESSAGE = "composition failed; see the observability
 export const INTENT_INVALID_MESSAGE =
   "intent normalization failed; see the observability hook (onError) for details";
 
+/**
+ * The response for a failed Intent resolution (the caller has already reported `e` through reportHostError).
+ * Intent resolution cannot degrade without an LLM, so an LLM-provider failure (host-core's
+ * classifyHostError → "upstreamUnavailable": LlmError PROVIDER / CONFIG / ABORTED) is the operator's problem,
+ * not the client's: 503 INTERNAL with the fixed LLM_PROVIDER_UNAVAILABLE_MESSAGE (the same shape as the
+ * capability-verification-unavailable 503). Everything else keeps 422 INTENT_INVALID, with a typed error's
+ * own message passed through and anything untyped collapsed to INTENT_INVALID_MESSAGE.
+ */
+export function intentResolutionFailure(c: Context, e: unknown, requestId: string): Response {
+  const cls = hostCore.classifyHostError(e);
+  if (cls.kind === "upstreamUnavailable") {
+    return c.json(errorBody("INTERNAL", cls.message, requestId), 503);
+  }
+  return c.json(
+    errorBody("INTENT_INVALID", cls.kind === "typed" ? cls.message : INTENT_INVALID_MESSAGE, requestId),
+    422,
+  );
+}
+
 /** Composition routes (/intent/normalize, /compose, /compose/stream, /events). */
 export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
   const { deps, getPrincipal } = ctx;
@@ -72,8 +91,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       });
     } catch (e) {
       await reportHostError(deps, "intent/normalize", requestId, e);
-      const clientMessage = hostCore.clientMessageFor(e, INTENT_INVALID_MESSAGE);
-      return c.json(errorBody("INTENT_INVALID", clientMessage, requestId), 422);
+      return intentResolutionFailure(c, e, requestId);
     }
   });
 
@@ -139,8 +157,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       ));
     } catch (e) {
       await reportHostError(deps, "events", requestId, e);
-      const clientMessage = hostCore.clientMessageFor(e, INTENT_INVALID_MESSAGE);
-      return c.json(errorBody("INTENT_INVALID", clientMessage, requestId), 422);
+      return intentResolutionFailure(c, e, requestId);
     }
 
     return deliverComposed(c, {
@@ -193,7 +210,8 @@ async function actionsFor(
 
 /**
  * Shared preamble of /compose and /compose/stream: body parse/validation -> principal/session resolution ->
- * Intent resolution. Returns a Response on request errors (400 for parse/required-field, 422 INTENT_INVALID).
+ * Intent resolution. Returns a Response on request errors (400 for parse/required-field, 422 INTENT_INVALID,
+ * 503 INTERNAL when the LLM provider is unavailable — see intentResolutionFailure).
  * Kept strictly to the synchronous pre-stream portion: both endpoints must fail before any SSE starts,
  * because the HTTP status cannot be changed once the stream has begun.
  */
@@ -226,8 +244,7 @@ async function resolveComposeRequest(
     return { intent, session, principal, requestId, traceContext };
   } catch (e) {
     await reportHostError(deps, endpoint, requestId, e);
-    const clientMessage = hostCore.clientMessageFor(e, INTENT_INVALID_MESSAGE);
-    return c.json(errorBody("INTENT_INVALID", clientMessage, requestId), 422);
+    return intentResolutionFailure(c, e, requestId);
   }
 }
 

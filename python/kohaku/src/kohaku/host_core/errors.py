@@ -8,9 +8,10 @@ import sys
 import traceback
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from kohaku.composer import ComposeError, ComposeErrorContext
+from kohaku.llm import LlmError
 from kohaku.spec import QueryRefError, SpecError
 
 
@@ -24,10 +25,63 @@ def is_typed_host_error(e: object) -> bool:
     exception (a raw exception surfacing from DomainPort.invoke, a downstream library failure, etc.), whose
     message may leak internals (SQL fragments, stack-trace text, library-internal wording) and must not reach
     the client verbatim. Port of TS host-core's isTypedHostError (errors.ts).
+
+    The "any exception with a string `code`" rule is deliberately a general rule with a deny-list of exactly
+    one entry: `LlmError` (kohaku.llm) carries a string `code` too, but its message is the provider SDK's own
+    wording (e.g. "Anthropic API key is missing. Pass it using ..."), an operator-side misconfiguration detail
+    that must not be shown to a client. The rule is not narrowed further because the governance, intent and
+    binding errors named above rely on it. The class-name check is a duck-typed twin of the isinstance check
+    so a duplicate install of kohaku.llm is still excluded.
     """
+    if _is_llm_error(e):
+        return False
     if isinstance(e, (SpecError, ComposeError, QueryRefError)):
         return True
     return isinstance(e, BaseException) and isinstance(getattr(e, "code", None), str)
+
+
+def _is_llm_error(e: object) -> bool:
+    return isinstance(e, LlmError) or (isinstance(e, BaseException) and type(e).__name__ == "LlmError")
+
+
+LLM_PROVIDER_UNAVAILABLE_MESSAGE = "LLM provider unavailable; see the host's observability hook (onError) for details"
+"""The fixed, client-safe message for a failure caused by the LLM provider being unavailable (API key not
+configured, provider error or timeout, aborted call) while a host operation that cannot degrade without an LLM
+(Intent resolution) was running. The detail goes to the observability hook (`on_error`); the envelope's request
+id correlates the two. Identical to TS host-core's LLM_PROVIDER_UNAVAILABLE_MESSAGE (same wording, including
+the TS-style "(onError)", for wire compatibility, even though the Python hook is named `on_error`)."""
+
+
+def is_llm_unavailable_error(e: object) -> bool:
+    """True when `e` is an `LlmError` whose code says the provider itself could not serve the call: PROVIDER
+    (the call failed), CONFIG (no key / unknown provider) or ABORTED (timeout / cancellation). INVALID_OUTPUT
+    (the model answered, but not in the expected shape) is deliberately not included: that is a per-input
+    failure, not an unavailable upstream. Port of TS host-core's isLlmUnavailableError (errors.ts).
+    """
+    if not _is_llm_error(e):
+        return False
+    return getattr(e, "code", None) in ("PROVIDER", "CONFIG", "ABORTED")
+
+
+@dataclass(frozen=True)
+class HostErrorClass:
+    """What a host should do with a caught exception: map to 503 (`upstream_unavailable`), pass its message
+    through (`typed`), or use a fixed fallback (`untyped`). `message` is set for the first two kinds. Port of
+    TS host-core's HostErrorClass (errors.ts)."""
+
+    kind: Literal["upstream_unavailable", "typed", "untyped"]
+    message: str | None = None
+
+
+def classify_host_error(e: object) -> HostErrorClass:
+    """Classifies a caught exception for a client-facing failure response. Shared by both host profiles so
+    REST's 503 and MCP's tool error agree on which failures are "the upstream LLM is unavailable". Port of TS
+    host-core's classifyHostError (errors.ts)."""
+    if is_llm_unavailable_error(e):
+        return HostErrorClass("upstream_unavailable", LLM_PROVIDER_UNAVAILABLE_MESSAGE)
+    if is_typed_host_error(e):
+        return HostErrorClass("typed", str(e))
+    return HostErrorClass("untyped")
 
 
 async def _resolve(value: object) -> object:
