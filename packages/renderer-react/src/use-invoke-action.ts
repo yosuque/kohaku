@@ -1,4 +1,9 @@
-import { type ActionPhase, resolveInvokeTarget, runInvokeTarget } from "@kohaku-ui/renderer-core";
+import {
+  type ActionPhase,
+  resolveInvokeTarget,
+  runInvokeTarget,
+  shouldPromptForApproval,
+} from "@kohaku-ui/renderer-core";
 import type { ComponentNode, JsonObject } from "@kohaku-ui/spec-core";
 import { useRef, useState } from "react";
 import { useEmitEvent, useMessages, useRenderer, useSpec } from "./context.js";
@@ -33,7 +38,7 @@ function defaultRequestApprovalHook(
   phase: ActionPhase,
   args: { action: string },
 ): string | undefined {
-  if (phase.phase !== "awaitingApproval" || phase.tier !== "approve") return undefined;
+  if (!shouldPromptForApproval(phase)) return undefined;
   if (typeof globalThis.prompt !== "function") return undefined;
   try {
     const token = globalThis.prompt(messages.actionApprovalPrompt(args.action));

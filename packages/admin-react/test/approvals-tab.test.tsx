@@ -1,5 +1,5 @@
-import { actionPayloadHash } from "@kohaku-ui/spec-core";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { actionPayloadHash, DEFAULT_APPROVAL_TTL_SECONDS } from "@kohaku-ui/spec-core";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ApprovalsTab, defaultAdminMessages as m } from "../src/index.js";
 import { jsonResponse, renderInAdmin } from "./helpers.js";
@@ -93,7 +93,10 @@ describe("ApprovalsTab", () => {
       action: "sales.refund",
       payloadHash: "sha256:0123456789abcdef0123",
       requesterId: "demo-viewer",
+      // Sent explicitly, so the countdown below counts the lifetime this console asked for.
+      ttlSeconds: DEFAULT_APPROVAL_TTL_SECONDS,
     });
+    expect(DEFAULT_APPROVAL_TTL_SECONDS).toBe(300);
     expect(view.notices).toEqual([{ text: m.approvals.issuedNotice("sales.refund"), kind: "info" }]);
     expect(view.container.textContent).toContain(m.approvals.issuedAge(0, 300));
     expect(screen.queryByText(m.approvals.reissue)).toBeNull();
@@ -258,7 +261,9 @@ describe("ApprovalsTab", () => {
   });
 
   it("disables Approve while an issued token is valid, and offers only Re-issue once the TTL has passed", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    // Date and the once-a-second interval are faked so the TTL is crossed by advancing the clock, not by
+    // waiting for a real tick. setTimeout stays real: testing-library's waitFor / findBy poll with it.
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     try {
       let issueCalls = 0;
       renderInAdmin(<ApprovalsTab />, {
@@ -278,13 +283,19 @@ describe("ApprovalsTab", () => {
       expect(approve.title).toBe(m.approvals.approveDisabledIssued);
       expect(screen.queryByText(m.approvals.reissue)).toBeNull();
 
-      // Past the 300 s TTL (the row's own once-a-second clock picks the new time up on its next tick).
-      vi.setSystemTime(Date.now() + 301_000);
-      const reissue = await screen.findByText(m.approvals.reissue, undefined, { timeout: 3000 });
+      // Past the 300 s TTL: advancing the faked clock fires the row's once-a-second interval 301 times.
+      await act(async () => {
+        vi.advanceTimersByTime((DEFAULT_APPROVAL_TTL_SECONDS + 1) * 1000);
+      });
+      const reissue = screen.getByText(m.approvals.reissue);
       expect(screen.queryByText(m.approvals.approveButton)).toBeNull();
       fireEvent.click(reissue);
       await waitFor(() => expect(issueCalls).toBe(2));
-      expect((screen.getByLabelText(m.approvals.tokenLabel) as HTMLInputElement).value).toBe("tok.2");
+      // The stub has answered, but the row's state update lands on a later microtask: wait for it rather
+      // than reading the input right away (a slower CI runner showed the old token for one more tick).
+      await waitFor(() =>
+        expect((screen.getByLabelText(m.approvals.tokenLabel) as HTMLInputElement).value).toBe("tok.2"),
+      );
       expect(screen.queryByText(m.approvals.reissue)).toBeNull();
     } finally {
       vi.useRealTimers();

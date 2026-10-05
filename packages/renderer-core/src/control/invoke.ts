@@ -249,6 +249,25 @@ export interface ActionPhaseNotice {
   text: string;
 }
 
+/**
+ * Whether a renderer's default approval hook should ask the requester for a token now: only when the node's
+ * previous attempt already ended in the "awaitingApproval" phase for an `"approve"`-tier action. The first
+ * attempt always reaches the server without a token, so the server records `action.approvalRequested` (what
+ * the Approvals inbox lists) before anyone is prompted. `undefined` (no phase observed yet) is `false`.
+ */
+export function shouldPromptForApproval(phase: ActionPhase | undefined): boolean {
+  return phase?.phase === "awaitingApproval" && phase.tier === "approve";
+}
+
+/**
+ * The payload hash as shown to a person: the hex digest without its `sha256:` prefix, cut to its first 12
+ * characters. The single source of truth for the requester's notice (`actionAwaitingApprovalDetail`) and the
+ * admin console's Approvals row, so both show the same short form of the same hash.
+ */
+export function shortPayloadHash(payloadHash: string): string {
+  return payloadHash.replace(/^sha256:/, "").slice(0, 12);
+}
+
 /** Derives the {@link ActionPhaseNotice} for a phase (localized through `messages`), or `null` when it needs none. */
 export function actionPhaseNotice(phase: ActionPhase, messages: RendererMessages): ActionPhaseNotice | null {
   switch (phase.phase) {
@@ -260,7 +279,7 @@ export function actionPhaseNotice(phase: ActionPhase, messages: RendererMessages
       // request to an approver; the Approvals inbox lists the same requestId / payload hash.
       const text =
         phase.approval != null
-          ? `${base} (${messages.actionAwaitingApprovalDetail(phase.approval.requestId, phase.approval.payloadHash)})`
+          ? `${base} (${messages.actionAwaitingApprovalDetail(phase.approval.requestId, shortPayloadHash(phase.approval.payloadHash))})`
           : base;
       return { role: "status", text };
     }

@@ -103,25 +103,38 @@ export function useAnalyticsSummary(): { data: AnalyticsSummaryView | null; relo
  * the common case there), and an error toast on every visit would be noise. Any other failure (a 5xx, a
  * network error) is told once, not swallowed.
  */
-export function usePendingPromotionCount(): { count: number | null; reload: () => void } {
+export function usePendingPromotionCount(): {
+  count: number | null;
+  /**
+   * Why `count` is what it is: `"loading"` while the reads are in flight, `"ready"` once they all resolved, and
+   * `"unavailable"` when one failed (denied or not). `count === null` alone cannot tell loading from failure.
+   */
+  status: "loading" | "ready" | "unavailable";
+  reload: () => void;
+} {
   const { client, notify, getMessages } = useAdmin();
   const [count, setCount] = useState<number | null>(null);
+  const [countState, setCountState] = useState<"loading" | "ready" | "unavailable">("loading");
   const guard = useResultGuard();
   const reload = useCallback(() => {
     const stillCurrent = guard();
+    setCountState("loading");
     void Promise.all(PENDING_PROMOTION_STATUSES.map((status) => client.promotions.list({ status })))
       .then((lists) => {
-        if (stillCurrent()) setCount(lists.reduce((n, list) => n + list.length, 0));
+        if (!stillCurrent()) return;
+        setCount(lists.reduce((n, list) => n + list.length, 0));
+        setCountState("ready");
       })
       .catch((e: unknown) => {
         if (!stillCurrent()) return;
         setCount(null);
+        setCountState("unavailable");
         const denied = isKohakuHostError(e) && (e.status === 401 || e.status === 403);
         if (!denied) notify(getMessages().analytics.pendingFetchFailed, "error");
       });
   }, [client, notify, getMessages, guard]);
   useEffect(reload, [reload]);
-  return { count, reload };
+  return { count, status: countState, reload };
 }
 
 /**

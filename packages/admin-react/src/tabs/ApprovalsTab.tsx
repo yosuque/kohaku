@@ -1,4 +1,5 @@
 import { isKohakuHostError } from "@kohaku-ui/client";
+import { shortPayloadHash } from "@kohaku-ui/renderer-core";
 import { DEFAULT_APPROVAL_TTL_SECONDS } from "@kohaku-ui/spec-core";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { PendingApproval } from "../approvals.js";
@@ -25,11 +26,6 @@ function useNowMs(active: boolean): number {
   return now;
 }
 
-/** The hex digest without its `sha256:` prefix, cut to 12 characters (the full hash stays in the `title`). */
-function shortHash(payloadHash: string): string {
-  return payloadHash.replace(/^sha256:/, "").slice(0, 12);
-}
-
 /**
  * POST /approvals answers 400 for more than a self-approval (a malformed body, a port-level refusal), so the
  * dedicated self-approval text is chosen from the server's own wording: host-rest's "an approver cannot approve
@@ -48,8 +44,15 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
 
   const issue = () => {
     if (row.requesterId == null) return;
+    // The TTL is sent explicitly, so the countdown shown below counts the lifetime this console asked for
+    // rather than assuming the host's own default happens to equal it (the host may clamp it down further).
     void client.approvals
-      .issue({ action: row.action, payloadHash: row.payloadHash, requesterId: row.requesterId })
+      .issue({
+        action: row.action,
+        payloadHash: row.payloadHash,
+        requesterId: row.requesterId,
+        ttlSeconds: DEFAULT_APPROVAL_TTL_SECONDS,
+      })
       .then((result) => {
         setIssued({ token: result.approval, issuedAt: Date.now() });
         setCopied(false);
@@ -128,7 +131,8 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
       </div>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11.5, color: V.muted }}>
         <span>
-          {t.approvals.payloadHashLabel}: <code title={row.payloadHash}>{shortHash(row.payloadHash)}</code>
+          {t.approvals.payloadHashLabel}:{" "}
+          <code title={row.payloadHash}>{shortPayloadHash(row.payloadHash)}</code>
         </span>
         {row.requestIds.length > 0 && (
           <span>

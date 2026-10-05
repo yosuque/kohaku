@@ -44,7 +44,7 @@ describe("createKohakuMcpSetup: approval tokens are single-use across createServ
     const capability = await createHmacAuthzPort(SECRET).issueCapability(requester, [
       { kind: "write", ref: "publish" },
     ]);
-    const payload = {};
+    const payload = { action: "publish" };
     const approval = await createHmacApprovalPort(SECRET).issueApproval({
       action: "publish",
       payloadHash: await actionPayloadHash(payload),
@@ -87,7 +87,7 @@ describe("createKohakuMcpSetup: approvals issued the way REST issues them, check
     const capability = await createHmacAuthzPort(SECRET).issueCapability(requester, [
       { kind: "write", ref: "publish" },
     ]);
-    const payload = {};
+    const payload = { action: "publish" };
     const approval = await createHmacApprovalPort(SECRET).issueApproval({
       action: "publish",
       payloadHash: await actionPayloadHash(payload),

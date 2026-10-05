@@ -1,6 +1,6 @@
 import type { GenerateObjectRequest } from "@kohaku-ui/llm";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSchemaExtractor,
   extractDataRefs,
@@ -178,6 +178,10 @@ describe("createSchemaExtractor: reviewer-corrected examples (design.md #73)", (
   };
   const SUGGESTED = { ...FINAL, componentType: "sales.gauge", description: "gauge" };
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("adds an examples section with the reviewer's final draft (and the replaced proposal) before the HTML", async () => {
     const llm = new FakeLlm({ objects: [OUTPUT] });
     const examples = async () => [
@@ -342,7 +346,24 @@ describe("createSchemaExtractor: reviewer-corrected examples (design.md #73)", (
     expect(llm.calls[0]!.prompt).not.toContain("Reviewer-corrected examples");
   });
 
-  it("defaults the examples budget to a quarter of timeoutMs, so even a short timeoutMs leaves the LLM call its own", async () => {
+  /**
+   * Replaces `AbortSignal.timeout` with controllable signals, so the budgets are asserted by the arguments
+   * they were created with instead of by how long a real run happens to take. The spy records each requested
+   * duration in call order and hands out a signal that only aborts when the test says so.
+   */
+  function controllableTimeouts() {
+    const controllers: AbortController[] = [];
+    const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+      const controller = new AbortController();
+      controllers.push(controller);
+      return controller.signal;
+    });
+    return { controllers, requestedMs: () => spy.mock.calls.map(([ms]) => ms) };
+  }
+
+  /** Runs one extraction whose examples read never settles, cutting that read once the provider was reached. */
+  async function extractWithStuckProvider(timeoutMs: number) {
+    const { controllers, requestedMs } = controllableTimeouts();
     let llmSignalAbortedAtCall: boolean | undefined;
     const llm = new FakeLlm({
       objects: (req: GenerateObjectRequest<unknown>) => {
@@ -350,18 +371,37 @@ describe("createSchemaExtractor: reviewer-corrected examples (design.md #73)", (
         return OUTPUT;
       },
     });
-    // timeoutMs 2000 -> default examplesTimeoutMs 500: the never-settling read is cut at ~500ms, not 2000ms.
-    // The margins are wide on purpose so a loaded CI runner cannot flip this wall-clock assertion.
-    const extractor = createSchemaExtractor({
-      llm,
-      timeoutMs: 2000,
-      examples: () => new Promise<never>(() => {}),
+    let providerReached!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      providerReached = resolve;
     });
-    const started = Date.now();
-    const result = await extractor.extract(input);
-    const elapsed = Date.now() - started;
+    const extraction = createSchemaExtractor({
+      llm,
+      timeoutMs,
+      examples: () => {
+        providerReached();
+        return new Promise<never>(() => {});
+      },
+    }).extract(input);
+    await reached;
+    // The examples budget elapses: only that signal (the first one created) is aborted.
+    controllers[0]!.abort(new Error("examples budget spent"));
+    const result = await extraction;
+    return { result, requestedMs: requestedMs(), llmSignalAbortedAtCall };
+  }
+
+  it("defaults the examples budget to a quarter of timeoutMs, so even a short timeoutMs leaves the LLM call its own", async () => {
+    // timeoutMs 2000 -> default examplesTimeoutMs 500; the LLM call is created afterwards with its whole 2000.
+    const { result, requestedMs, llmSignalAbortedAtCall } = await extractWithStuckProvider(2000);
     expect(result.draft.componentType).toBe("sales.calendarHeatmap");
-    expect(elapsed).toBeLessThan(1500);
+    expect(requestedMs).toEqual([500, 2000]);
+    expect(llmSignalAbortedAtCall).toBe(false);
+  });
+
+  it("caps the default examples budget at 3000ms however large timeoutMs is", async () => {
+    const { result, requestedMs, llmSignalAbortedAtCall } = await extractWithStuckProvider(20_000);
+    expect(result.draft.componentType).toBe("sales.calendarHeatmap");
+    expect(requestedMs).toEqual([3000, 20_000]);
     expect(llmSignalAbortedAtCall).toBe(false);
   });
 

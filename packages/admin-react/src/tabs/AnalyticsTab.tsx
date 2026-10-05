@@ -268,6 +268,7 @@ export function AnalyticsTab(): ReactNode {
           <StatCard
             label={t.analytics.pendingPromotions}
             value={pending.count ?? "—"}
+            state={pending.status}
             sub={t.analytics.pendingPromotionsSub}
           />
           <div>

@@ -7,7 +7,8 @@ export const actionButton = defineComponent({
   description:
     "Action button. Fires a declared operation (intent.patch / action.invoke / state.set) on the press event. " +
     "Use it to prompt the user for a single action. Has a label and an importance " +
-    "(variant: primary=main action / secondary=secondary action / danger=destructive action).",
+    "(variant: primary=main action / secondary=secondary action / danger=destructive action). " +
+    "A write Action's name is carried by the `action` key of the event payload (this component has no `action` prop; presentForm uses `props.action`).",
   propsSchema: z.object({
     label: z.string().min(1),
     variant: z.enum(["primary", "secondary", "danger"]).default("primary"),

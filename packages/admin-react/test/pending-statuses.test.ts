@@ -1,9 +1,8 @@
+// `@kohaku-ui/lineage` is a devDependency only (never a runtime dependency: boundary.test.ts pins the manifest's
+// `dependencies`). This test is the one place that reads the promotion machine, so that the hand-held status
+// list in src/pending-statuses.ts cannot silently fall behind it.
+import { isTerminal, type PromotionStatus } from "@kohaku-ui/lineage";
 import { describe, expect, it } from "vitest";
-// Reached by a relative path on purpose: `@kohaku-ui/lineage` is not (and must not become) a dependency of this
-// package (see boundary.test.ts); this test is the one place that reads the promotion machine, so that the
-// hand-held status list in src/pending-statuses.ts cannot silently fall behind it. machine.ts itself imports only
-// spec-core.
-import { isTerminal, type PromotionStatus } from "../../lineage/src/promotion/machine.js";
 import { PENDING_PROMOTION_STATUSES } from "../src/pending-statuses.js";
 
 // `Record<PromotionStatus, true>` is exhaustive: adding a status to the machine is a compile error here until it

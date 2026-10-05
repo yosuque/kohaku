@@ -84,7 +84,7 @@ async function payloadHashStateOf(
  * earlier: an `action.approved` (the approval token was verified on invoke, keyed by its `requesterId`). Only
  * the requests newer than the latest `action.approved` count (`count`, `requestIds`, `payload`); a row with none
  * left is not pending. `action.denied` never settles a row (a denied attempt is not an approval), and neither
- * does `action.invoked`: the tab reads only the three event types it needs, and an `"approve"`-tier invoke is
+ * does `action.invoked`: the tab reads only the two event types it needs, and an `"approve"`-tier invoke is
  * always preceded by the `action.approved` that verified its token.
  *
  * `events` may arrive in any order (it is sorted by `ts` here). Tenant is deliberately not part of the key:
