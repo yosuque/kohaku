@@ -1509,7 +1509,14 @@ async function safeTool<T extends object>(
     // observation hook before converting it to a tool error, rather than leaving the failure rate inferable only via the
     // isError response to the model.
     await reportMcpError(deps, endpoint, e, mcpCorrelationId(extra));
-    const clientMessage = hostCore.clientMessageFor(e, TOOL_INTERNAL_ERROR_MESSAGE);
-    return toolError(clientMessage);
+    // An unavailable LLM provider (LlmError PROVIDER / CONFIG / ABORTED) is an operator-side failure whose raw
+    // SDK wording must not reach the model: host-core's classifyHostError gives it the same fixed message the
+    // REST profile answers with on 503. Everything else keeps the typed-passes-through / untyped-collapses rule.
+    const cls = hostCore.classifyHostError(e);
+    return toolError(
+      cls.kind === "upstreamUnavailable"
+        ? cls.message
+        : hostCore.clientMessageFor(e, TOOL_INTERNAL_ERROR_MESSAGE),
+    );
   }
 }
