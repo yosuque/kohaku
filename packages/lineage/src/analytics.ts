@@ -1,4 +1,4 @@
-import { type LineageEventRecord, normalizeTenant } from "@kohaku-ui/spec-core";
+import { type LineageEventRecord, matchesLineageFilter } from "@kohaku-ui/spec-core";
 
 /**
  * Usage analytics. A pure function that folds the raw lineage event stream (the LineageEventRecord[]
@@ -227,16 +227,6 @@ const TOP_INTENTS_DEFAULT = 10;
 const TOP_INTENTS_MAX = 50;
 const SCHEMA_EDIT_TOP_FIELDS = 5;
 
-/**
- * Whether a record's tenant passes a `tenant` option, read the way a StoragePort reads `LineageFilter.tenant`:
- * `normalizeTenant` on both sides, so `undefined` and `""` mean "no filter" on the option side and "no tenant"
- * on the record side.
- */
-function tenantMatches(wanted: string | undefined, recordTenant: string | undefined): boolean {
-  const filter = normalizeTenant(wanted);
-  return filter == null || normalizeTenant(recordTenant) === filter;
-}
-
 /** A view.composed record that carries `payload.fallback`: a fallback Spec was served for it. */
 function hasFallback(payload: Readonly<Record<string, unknown>>): boolean {
   return payload["fallback"] != null;
@@ -265,17 +255,201 @@ function isCoalesced(payload: Readonly<Record<string, unknown>>): boolean {
   );
 }
 
+/**
+ * Classifies a view.composed record's `payload.tier` / `payload.cache` against the known vocabularies
+ * (`tier` / `cache` are undefined for anything else), and whether the record is an L2 generation attempt (tier
+ * L2 whose cache was miss or bypass). `mode` keeps the two callers' existing reads apart: `"coerced"` (what
+ * `summarizeLineage` does) reads each field as `String(value ?? "")`, `"raw"` (what `summarizeUsage` does)
+ * compares the value as it is. The two only differ on a malformed payload (e.g. an array that stringifies to a
+ * known name), and unifying them would change the result there.
+ */
+function classifyComposed(
+  payload: Readonly<Record<string, unknown>>,
+  mode: "coerced" | "raw",
+): {
+  tier: "L0" | "L1" | "L2" | undefined;
+  cache: "hit" | "miss" | "bypass" | "fixated" | undefined;
+  l2Attempt: boolean;
+} {
+  const tierValue: unknown = mode === "coerced" ? String(payload["tier"] ?? "") : payload["tier"];
+  const cacheValue: unknown = mode === "coerced" ? String(payload["cache"] ?? "") : payload["cache"];
+  const tier = tierValue === "L0" || tierValue === "L1" || tierValue === "L2" ? tierValue : undefined;
+  const cache =
+    cacheValue === "hit" || cacheValue === "miss" || cacheValue === "bypass" || cacheValue === "fixated"
+      ? cacheValue
+      : undefined;
+  return { tier, cache, l2Attempt: tier === "L2" && (cache === "miss" || cache === "bypass") };
+}
+
+/** The `(tenant, artifactId)` key shared by the review-turnaround and schema-edit accumulators. */
+function reviewKey(e: LineageEventRecord): string {
+  return `${e.tenant ?? ""}\u0000${String(e.payload["artifactId"] ?? "")}`;
+}
+
+/**
+ * Accumulator for `LineageSummary.review`: pairs each nomination with its closing approve/reject review, and
+ * counts the schema edits accepted as-is.
+ */
+function createReviewTurnaround() {
+  // (tenant, artifactId) -> ts of the latest nomination not yet closed by an approve/reject review.
+  const openNominations = new Map<string, string>();
+  const durations: number[] = [];
+  let acceptedAsIs = 0;
+  return {
+    /** component.nominated */
+    nominated(e: LineageEventRecord): void {
+      // Only open a *fresh* window when none is already open for this (tenant, artifactId): a re-nomination
+      // for a candidate whose window is already open (the "re-submit and approve" flow routes a
+      // changes_requested candidate back through `act(..., { kind: "nominate", by: reviewer }, ...)`,
+      // service.ts, recording a fresh component.nominated milliseconds before its own component.reviewed)
+      // does not restart the measurement -- the original nomination's window stays open, so a re-submitted
+      // candidate is still measured from its original nomination, including the time spent making the
+      // requested changes. This does not key off payload.by (a field docs/specification.md's
+      // component.nominated row does not promise as part of the wire contract): any nomination path can open
+      // the *first* window for a given candidate, including one driven purely through the generic actions
+      // route with no `by: "policy"` sentinel ever recorded.
+      const key = reviewKey(e);
+      if (!openNominations.has(key)) openNominations.set(key, e.ts);
+    },
+    /** component.reviewed */
+    reviewed(e: LineageEventRecord): void {
+      const decision = e.payload["decision"];
+      if (decision === "approve" || decision === "reject") {
+        const key = reviewKey(e);
+        const nominatedAt = openNominations.get(key);
+        if (nominatedAt != null) {
+          const delta = Date.parse(e.ts) - Date.parse(nominatedAt);
+          if (Number.isFinite(delta) && delta >= 0) durations.push(delta);
+          openNominations.delete(key);
+        }
+      }
+    },
+    /** component.schemaEdited */
+    schemaEdited(e: LineageEventRecord): void {
+      const changed = e.payload["changed"];
+      // acceptedAsIs requires BOTH no edits AND an explicit acknowledgement (payload.acknowledged === true).
+      // A record with no acknowledged field at all (written before that field existed) reads as
+      // undefined !== true, the same as an explicit false — neither counts.
+      if (Array.isArray(changed) && changed.length === 0 && e.payload["acknowledged"] === true) {
+        acceptedAsIs++;
+      }
+    },
+    result(): LineageSummary["review"] {
+      durations.sort((a, b) => a - b);
+      return {
+        count: durations.length,
+        durationMs: {
+          p50: quantile(durations, 50),
+          p95: quantile(durations, 95),
+          max: durations.length > 0 ? durations[durations.length - 1]! : null,
+        },
+        acceptedAsIs,
+      };
+    },
+  };
+}
+
+/** Accumulator for `LineageSummary.schemaEditsByComponent`: the reviewer's schema edits grouped by component. */
+function createSchemaEditGaps() {
+  // (tenant, artifactId) -> the final component type of the latest component.schemaProposed; and the edits
+  // (non-empty `changed`) to group once that map is complete.
+  const proposedType = new Map<string, string>();
+  const edits: { key: string; artifactId: string; fields: string[] }[] = [];
+  return {
+    /** component.schemaProposed */
+    proposed(e: LineageEventRecord): void {
+      const draft = e.payload["draft"];
+      const componentType =
+        draft != null && typeof draft === "object"
+          ? (draft as Record<string, unknown>)["componentType"]
+          : undefined;
+      if (typeof componentType === "string" && componentType.length > 0) {
+        proposedType.set(reviewKey(e), componentType);
+      }
+    },
+    /** component.schemaEdited */
+    edited(e: LineageEventRecord): void {
+      const changed = e.payload["changed"];
+      if (Array.isArray(changed) && changed.length > 0) {
+        const artifactId = String(e.payload["artifactId"] ?? "");
+        edits.push({
+          key: reviewKey(e),
+          artifactId,
+          fields: changed
+            .map((c) =>
+              c != null && typeof c === "object" ? (c as Record<string, unknown>)["field"] : undefined,
+            )
+            .filter((f): f is string => typeof f === "string"),
+        });
+      }
+    },
+    result(topN: number): SchemaEditGap[] {
+      const editGroups = new Map<string, { count: number; fields: Map<string, number> }>();
+      for (const edit of edits) {
+        const key = proposedType.get(edit.key) ?? edit.artifactId;
+        let group = editGroups.get(key);
+        if (group == null) {
+          group = { count: 0, fields: new Map() };
+          editGroups.set(key, group);
+        }
+        group.count++;
+        for (const field of edit.fields) group.fields.set(field, (group.fields.get(field) ?? 0) + 1);
+      }
+      return [...editGroups.entries()]
+        .map(([key, g]) => ({
+          key,
+          count: g.count,
+          topFields: [...g.fields.entries()]
+            .map(([field, count]) => ({ field, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, SCHEMA_EDIT_TOP_FIELDS),
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, topN);
+    },
+  };
+}
+
+/** Accumulator for `LineageSummary.l2ByIntent` (catalog-gap input): the generations and fallbacks of the composes labelled tier L2. */
+function createL2Gaps() {
+  // canonical -> the L2 row.
+  const rows = new Map<string, L2IntentGap>();
+  return {
+    /** A view.composed record that `classifyComposed` reports as an L2 generation attempt. */
+    record(payload: Readonly<Record<string, unknown>>): void {
+      const intentHash = payload["intentHash"];
+      const canonical = String(payload["canonical"] ?? "");
+      let row = rows.get(canonical);
+      if (row == null) {
+        row = {
+          canonical,
+          intentHash: typeof intentHash === "string" ? intentHash : "",
+          generated: 0,
+          fallbacks: 0,
+        };
+        rows.set(canonical, row);
+      } else if (row.intentHash === "" && typeof intentHash === "string") {
+        row.intentHash = intentHash;
+      }
+      if (hasFallback(payload)) row.fallbacks++;
+      if (!isGenerationFallback(payload) && !isCoalesced(payload)) row.generated++;
+    },
+    result(topN: number): L2IntentGap[] {
+      return [...rows.values()]
+        .sort((a, b) => b.generated - a.generated || b.fallbacks - a.fallbacks)
+        .slice(0, topN);
+    },
+  };
+}
+
 /** Folds the raw lineage event stream into an aggregate summary (pure, read-only). */
 export function summarizeLineage(
   events: readonly LineageEventRecord[],
   opts: SummarizeLineageOptions = {},
 ): LineageSummary {
-  const scoped = events.filter((e) => {
-    if (!tenantMatches(opts.tenant, e.tenant)) return false;
-    if (opts.since != null && e.ts < opts.since) return false;
-    if (opts.until != null && e.ts > opts.until) return false;
-    return true;
-  });
+  const scoped = events.filter((e) =>
+    matchesLineageFilter(e, { tenant: opts.tenant, since: opts.since, until: opts.until }),
+  );
 
   const tiers = { L0: 0, L1: 0, L2: 0 };
   const cache = { hit: 0, miss: 0, bypass: 0, fixated: 0, other: 0 };
@@ -295,21 +469,12 @@ export function summarizeLineage(
   const durations: number[] = [];
   // intentHash → { canonical (first seen), count }. Preserves insertion order while taking the top items by descending count.
   const intents = new Map<string, { canonical: string; count: number }>();
-  // Catalog-gap input: canonical -> the L2 row (generations and fallbacks of the composes labelled tier L2).
-  const l2Rows = new Map<string, L2IntentGap>();
-  // (tenant, artifactId) -> the final component type of the latest component.schemaProposed; and the edits
-  // (non-empty `changed`) to group once that map is complete.
-  const proposedType = new Map<string, string>();
-  const schemaEdits: { key: string; artifactId: string; fields: string[] }[] = [];
+  const l2Gaps = createL2Gaps();
+  const schemaEditGaps = createSchemaEditGaps();
+  const reviewTurnaround = createReviewTurnaround();
 
   let composed = 0;
   let fallbackTotal = 0;
-  // (tenant, artifactId) -> ts of the latest nomination not yet closed by an approve/reject review.
-  const openNominations = new Map<string, string>();
-  const reviewDurations: number[] = [];
-  let acceptedAsIs = 0;
-  const reviewKey = (e: LineageEventRecord): string =>
-    `${e.tenant ?? ""}\u0000${String(e.payload["artifactId"] ?? "")}`;
 
   // Stable-sort by ts (ties broken by original array position) before the main pass. Every aggregation below
   // other than `review`'s nominated/reviewed pairing is order-independent (plain counts / sums / "first seen"
@@ -324,14 +489,10 @@ export function summarizeLineage(
     switch (e.type) {
       case "view.composed": {
         composed++;
-        const tier = String(e.payload["tier"] ?? "");
-        if (tier === "L0" || tier === "L1" || tier === "L2") tiers[tier]++;
-        const cacheKey = String(e.payload["cache"] ?? "");
-        if (cacheKey === "hit" || cacheKey === "miss" || cacheKey === "bypass" || cacheKey === "fixated") {
-          cache[cacheKey]++;
-        } else {
-          cache.other++;
-        }
+        const { tier, cache: cacheKind, l2Attempt } = classifyComposed(e.payload, "coerced");
+        if (tier != null) tiers[tier]++;
+        if (cacheKind != null) cache[cacheKind]++;
+        else cache.other++;
         const d = e.payload["durationMs"];
         if (typeof d === "number" && Number.isFinite(d)) durations.push(d);
         const intentHash = e.payload["intentHash"];
@@ -340,23 +501,7 @@ export function summarizeLineage(
           if (prev != null) prev.count++;
           else intents.set(intentHash, { canonical: String(e.payload["canonical"] ?? ""), count: 1 });
         }
-        if (tier === "L2" && (cacheKey === "miss" || cacheKey === "bypass")) {
-          const canonical = String(e.payload["canonical"] ?? "");
-          let row = l2Rows.get(canonical);
-          if (row == null) {
-            row = {
-              canonical,
-              intentHash: typeof intentHash === "string" ? intentHash : "",
-              generated: 0,
-              fallbacks: 0,
-            };
-            l2Rows.set(canonical, row);
-          } else if (row.intentHash === "" && typeof intentHash === "string") {
-            row.intentHash = intentHash;
-          }
-          if (hasFallback(e.payload)) row.fallbacks++;
-          if (!isGenerationFallback(e.payload) && !isCoalesced(e.payload)) row.generated++;
-        }
+        if (l2Attempt) l2Gaps.record(e.payload);
         break;
       }
       case "view.fallback": {
@@ -372,76 +517,28 @@ export function summarizeLineage(
       case "component.used":
         promotions.used++;
         break;
-      case "component.nominated": {
+      case "component.nominated":
         promotions.nominated++;
-        // Only open a *fresh* window when none is already open for this (tenant, artifactId): a re-nomination
-        // for a candidate whose window is already open (the "re-submit and approve" flow routes a
-        // changes_requested candidate back through `act(..., { kind: "nominate", by: reviewer }, ...)`,
-        // service.ts, recording a fresh component.nominated milliseconds before its own component.reviewed)
-        // does not restart the measurement -- the original nomination's window stays open, so a re-submitted
-        // candidate is still measured from its original nomination, including the time spent making the
-        // requested changes. This does not key off payload.by (a field docs/specification.md's
-        // component.nominated row does not promise as part of the wire contract): any nomination path can open
-        // the *first* window for a given candidate, including one driven purely through the generic actions
-        // route with no `by: "policy"` sentinel ever recorded.
-        const key = reviewKey(e);
-        if (!openNominations.has(key)) openNominations.set(key, e.ts);
+        reviewTurnaround.nominated(e);
         break;
-      }
       case "component.schemaSuggested":
         promotions.schemaSuggested++;
         break;
       case "component.judged":
         promotions.judged++;
         break;
-      case "component.reviewed": {
+      case "component.reviewed":
         promotions.reviewed++;
-        const decision = e.payload["decision"];
-        if (decision === "approve" || decision === "reject") {
-          const key = reviewKey(e);
-          const nominatedAt = openNominations.get(key);
-          if (nominatedAt != null) {
-            const delta = Date.parse(e.ts) - Date.parse(nominatedAt);
-            if (Number.isFinite(delta) && delta >= 0) reviewDurations.push(delta);
-            openNominations.delete(key);
-          }
-        }
+        reviewTurnaround.reviewed(e);
         break;
-      }
-      case "component.schemaEdited": {
+      case "component.schemaEdited":
         promotions.schemaEdited++;
-        const changed = e.payload["changed"];
-        // acceptedAsIs requires BOTH no edits AND an explicit acknowledgement (payload.acknowledged === true).
-        // A record with no acknowledged field at all (written before that field existed) reads as
-        // undefined !== true, the same as an explicit false — neither counts.
-        if (Array.isArray(changed) && changed.length === 0 && e.payload["acknowledged"] === true) {
-          acceptedAsIs++;
-        }
-        if (Array.isArray(changed) && changed.length > 0) {
-          const artifactId = String(e.payload["artifactId"] ?? "");
-          schemaEdits.push({
-            key: reviewKey(e),
-            artifactId,
-            fields: changed
-              .map((c) =>
-                c != null && typeof c === "object" ? (c as Record<string, unknown>)["field"] : undefined,
-              )
-              .filter((f): f is string => typeof f === "string"),
-          });
-        }
+        reviewTurnaround.schemaEdited(e);
+        schemaEditGaps.edited(e);
         break;
-      }
-      case "component.schemaProposed": {
-        const draft = e.payload["draft"];
-        const componentType =
-          draft != null && typeof draft === "object"
-            ? (draft as Record<string, unknown>)["componentType"]
-            : undefined;
-        if (typeof componentType === "string" && componentType.length > 0) {
-          proposedType.set(reviewKey(e), componentType);
-        }
+      case "component.schemaProposed":
+        schemaEditGaps.proposed(e);
         break;
-      }
       case "component.published":
         // Counts a promotion/reconcile audit backfill (payload.reconciled:true) the same as the original
         // synchronous record — the projection was published exactly once either way, so double-counting the
@@ -466,7 +563,6 @@ export function summarizeLineage(
   }
 
   durations.sort((a, b) => a - b);
-  reviewDurations.sort((a, b) => a - b);
   const denom = composed + fallbackTotal;
   const topN = Math.min(
     Math.max(Math.floor(opts.topIntentsLimit ?? TOP_INTENTS_DEFAULT), 1),
@@ -474,33 +570,6 @@ export function summarizeLineage(
   );
   const topIntents: IntentUsage[] = [...intents.entries()]
     .map(([intentHash, v]) => ({ intentHash, canonical: v.canonical, count: v.count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, topN);
-
-  const l2ByIntent = [...l2Rows.values()]
-    .sort((a, b) => b.generated - a.generated || b.fallbacks - a.fallbacks)
-    .slice(0, topN);
-
-  const editGroups = new Map<string, { count: number; fields: Map<string, number> }>();
-  for (const edit of schemaEdits) {
-    const key = proposedType.get(edit.key) ?? edit.artifactId;
-    let group = editGroups.get(key);
-    if (group == null) {
-      group = { count: 0, fields: new Map() };
-      editGroups.set(key, group);
-    }
-    group.count++;
-    for (const field of edit.fields) group.fields.set(field, (group.fields.get(field) ?? 0) + 1);
-  }
-  const schemaEditsByComponent: SchemaEditGap[] = [...editGroups.entries()]
-    .map(([key, g]) => ({
-      key,
-      count: g.count,
-      topFields: [...g.fields.entries()]
-        .map(([field, count]) => ({ field, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, SCHEMA_EDIT_TOP_FIELDS),
-    }))
     .sort((a, b) => b.count - a.count)
     .slice(0, topN);
 
@@ -523,19 +592,11 @@ export function summarizeLineage(
     },
     topIntents,
     promotions,
-    review: {
-      count: reviewDurations.length,
-      durationMs: {
-        p50: quantile(reviewDurations, 50),
-        p95: quantile(reviewDurations, 95),
-        max: reviewDurations.length > 0 ? reviewDurations[reviewDurations.length - 1]! : null,
-      },
-      acceptedAsIs,
-    },
+    review: reviewTurnaround.result(),
     fixations,
     usage: summarizeUsage(scoped, { bucket: "day" }),
-    l2ByIntent,
-    schemaEditsByComponent,
+    l2ByIntent: l2Gaps.result(topN),
+    schemaEditsByComponent: schemaEditGaps.result(topN),
   };
 }
 
@@ -574,25 +635,15 @@ export function summarizeUsage(
   };
 
   for (const e of events) {
-    if (!tenantMatches(opts.tenant, e.tenant)) continue;
-    if (opts.since != null && e.ts < opts.since) continue;
-    if (opts.until != null && e.ts > opts.until) continue;
+    if (!matchesLineageFilter(e, { tenant: opts.tenant, since: opts.since, until: opts.until })) continue;
     switch (e.type) {
       case "view.composed": {
         const row = rowFor(e);
         row.composed++;
-        const tier = e.payload["tier"];
-        if (tier === "L0" || tier === "L1" || tier === "L2") row.tiers[tier]++;
-        const cacheKey = e.payload["cache"];
-        if (cacheKey === "hit" || cacheKey === "miss" || cacheKey === "bypass" || cacheKey === "fixated") {
-          row.cache[cacheKey]++;
-        }
-        if (
-          tier === "L2" &&
-          (cacheKey === "miss" || cacheKey === "bypass") &&
-          !isGenerationFallback(e.payload) &&
-          !isCoalesced(e.payload)
-        ) {
+        const { tier, cache: cacheKind, l2Attempt } = classifyComposed(e.payload, "raw");
+        if (tier != null) row.tiers[tier]++;
+        if (cacheKind != null) row.cache[cacheKind]++;
+        if (l2Attempt && !isGenerationFallback(e.payload) && !isCoalesced(e.payload)) {
           row.l2Generated++;
         }
         if (hasFallback(e.payload)) row.fallbacks++;
