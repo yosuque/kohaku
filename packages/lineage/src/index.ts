@@ -87,6 +87,7 @@ export {
   createLineage,
   type Lineage,
 } from "./lineage.js";
+export { iterateLineagePages, type LineagePageSource } from "./paging.js";
 export {
   type SchemaEditExample,
   type SchemaEditExamplesOptions,

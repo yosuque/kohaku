@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createKohakuClient, globalTransport, type Transport } from "@kohaku-ui/client";
-import { mergeUsageRows, summarizeUsage, type UsageRow } from "@kohaku-ui/lineage";
+import { iterateLineagePages, mergeUsageRows, summarizeUsage, type UsageRow } from "@kohaku-ui/lineage";
 import type { LineageEventRecord, StoragePort } from "@kohaku-ui/spec-core";
 import { parseHeaderArgs } from "../header-args.js";
 import { CliUsageError, resolveRestTenant, resolveWindow } from "../lineage-window.js";
@@ -43,6 +43,11 @@ export interface UsageExportOptions {
    * `pageLineage`.
    */
   storage?: StoragePort;
+  /**
+   * Requested page size of the paged reads (`--rest`, or a caller's `storage`); the source's own default
+   * applies when omitted, and a source clamps it to its maximum. No effect on the `--data-dir` file stream.
+   */
+  pageSize?: number;
   /** Where a warning goes (a malformed lineage line was skipped). Default: stderr. */
   warn?: (message: string) => void;
 }
@@ -57,10 +62,10 @@ export interface UsageExportResult {
   skippedLines: number;
 }
 
-/** Every page of the lineage log matching the filter, via `pageLineage`'s cursor (refuses a cursor that does not advance). */
-async function* pagesOfStorage(
+/** Every page of the lineage log matching the filter, via the StoragePort's `pageLineage` (see `iterateLineagePages`). */
+function pagesOfStorage(
   storage: StoragePort,
-  filter: { type: string[]; since: string; until: string; tenant?: string },
+  filter: { type: string[]; since: string; until: string; tenant?: string; pageSize?: number },
 ): AsyncGenerator<LineageEventRecord[]> {
   const pageLineage = storage.pageLineage?.bind(storage);
   if (pageLineage == null) {
@@ -68,19 +73,7 @@ async function* pagesOfStorage(
       "The StoragePort does not implement pageLineage; cannot read the lineage log exhaustively",
     );
   }
-  let cursor: string | undefined;
-  for (;;) {
-    const page = await pageLineage({ ...filter, ...(cursor != null ? { cursor } : {}) });
-    yield page.events;
-    if (page.nextCursor == null) return;
-    if (page.nextCursor === cursor) {
-      throw new Error(
-        "pageLineage returned the same nextCursor it was given; refusing to page forever " +
-          "(a StoragePort must advance the cursor)",
-      );
-    }
-    cursor = page.nextCursor;
-  }
+  return iterateLineagePages({ pageLineage }, filter);
 }
 
 /**
@@ -173,6 +166,7 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
       since: window.since,
       until: window.until,
       ...(opts.tenant != null ? { tenant: opts.tenant } : {}),
+      ...(opts.pageSize != null ? { pageSize: opts.pageSize } : {}),
     };
     pages =
       opts.storage != null
@@ -192,6 +186,7 @@ export async function runUsageExport(opts: UsageExportOptions): Promise<UsageExp
       type: USAGE_EVENT_TYPES,
       since: window.since,
       until: window.until,
+      ...(opts.pageSize != null ? { pageSize: opts.pageSize } : {}),
     });
   }
 

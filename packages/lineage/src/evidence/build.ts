@@ -6,6 +6,7 @@ import {
   sha256Hex,
 } from "@kohaku-ui/spec-core";
 import type { LineageEventType } from "../events.js";
+import { iterateLineagePages } from "../paging.js";
 import { artifactClaimFromEventPayload, artifactClaimFromPromotionData } from "./artifacts.js";
 import {
   EVIDENCE_PACK_FORMAT,
@@ -151,25 +152,11 @@ export async function buildEvidencePack(options: BuildEvidencePackOptions): Prom
   let complete: boolean;
   if (source.pageLineage != null) {
     events = [];
-    let cursor: string | undefined;
-    for (;;) {
-      const page = await source.pageLineage({
-        tenant: scope.tenant,
-        since: scope.since,
-        until: scope.until,
-        cursor,
-        pageSize,
-      });
-      events.push(...page.events);
-      if (page.nextCursor == null) break;
-      if (page.nextCursor === cursor) {
-        throw new Error(
-          "EvidenceSource.pageLineage returned the same nextCursor it was given; refusing to page " +
-            "forever (a StoragePort must advance the cursor)",
-        );
-      }
-      cursor = page.nextCursor;
-    }
+    const pages = iterateLineagePages(
+      { pageLineage: source.pageLineage.bind(source) },
+      { tenant: scope.tenant, since: scope.since, until: scope.until, pageSize },
+    );
+    for await (const page of pages) events.push(...page);
     complete = true;
   } else {
     if (!allowIncomplete) {

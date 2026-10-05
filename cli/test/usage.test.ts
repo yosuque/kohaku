@@ -249,6 +249,26 @@ describe("kohaku usage export --data-dir", () => {
     await expect(runUsageExport({ dataDir, storage: stuck, ...window })).rejects.toThrow(/same nextCursor/);
   });
 
+  it("passes pageSize to a StoragePort's pageLineage on every page", async () => {
+    const dataDir = tmp("kohaku-usage-data-");
+    const requests: { pageSize?: number; cursor?: string }[] = [];
+    const base = createMemoryStoragePort();
+    const many: LineageEventRecord[] = [];
+    for (let i = 0; i < 25; i++) many.push(composed({ ts: "2026-07-03T00:00:00.000Z" }));
+    await seed(base, many);
+    const storage: StoragePort = {
+      ...base,
+      async pageLineage(req) {
+        requests.push({ pageSize: req.pageSize, cursor: req.cursor });
+        return base.pageLineage!(req);
+      },
+    };
+    const { rows } = await runUsageExport({ dataDir, storage, pageSize: 10, ...window });
+    expect(rows[0]?.composed).toBe(25);
+    expect(requests.length).toBeGreaterThanOrEqual(3);
+    expect(requests.every((r) => r.pageSize === 10)).toBe(true);
+  });
+
   it("folds pages as they arrive: the rows equal one pass over every event", async () => {
     const dataDir = tmp("kohaku-usage-data-");
     const many: LineageEventRecord[] = [];
@@ -728,6 +748,29 @@ describe("kohaku usage export --rest (in-process host-rest app)", () => {
         ...window,
       }),
     ).rejects.toBeInstanceOf(CliUsageError);
+  });
+
+  it("passes pageSize on every GET /lineage page request", async () => {
+    const storage = createMemoryStoragePort();
+    const many: LineageEventRecord[] = [];
+    for (let i = 0; i < 25; i++) many.push(composed({ ts: "2026-07-03T00:00:00.000Z", tenant: "acme" }));
+    await seed(storage, many);
+    const app = makeRestApp(storage);
+    const urls: string[] = [];
+    const transport: Transport = (url, init) => {
+      urls.push(url);
+      return Promise.resolve(app.request(url, init));
+    };
+    const { rows } = await runUsageExport({
+      rest: "/api/kohaku",
+      transport,
+      headers: ["x-kohaku-tenant:acme"],
+      pageSize: 10,
+      ...window,
+    });
+    expect(rows[0]?.composed).toBe(25);
+    expect(urls.length).toBeGreaterThanOrEqual(3);
+    expect(urls.every((u) => new URL(u, "http://x").searchParams.get("pageSize") === "10")).toBe(true);
   });
 
   it("gives every page request its own time limit, not one for the whole walk", async () => {
