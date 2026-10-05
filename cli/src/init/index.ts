@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
-import { writeScaffold } from "../commands.js";
+import { writeScaffold } from "../scaffold-fs.js";
 import { type DatasetProfile, inferProfile, normalizeRows, slugify } from "./infer.js";
 import { readDataFile } from "./readers.js";
 import {

@@ -19,6 +19,7 @@ import {
   UISpecSchema,
 } from "@kohaku-ui/spec-core";
 import semver from "semver";
+import { parseHeaderArgs, writeScaffold } from "./scaffold-fs.js";
 import {
   GOLDEN_README_TEMPLATE,
   GOLDEN_TEST_TEMPLATE,
@@ -26,6 +27,10 @@ import {
   PORTS_TEMPLATE,
   SERVER_TEMPLATE,
 } from "./templates.js";
+
+// Re-exported for backward compatibility: both now live in the dependency-free `scaffold-fs.ts` so that
+// `init` and `evidence export` do not have to import this (heavy) module.
+export { parseHeaderArgs, writeScaffold };
 
 /** conformance --self: self-check of the Spec format */
 export async function runSelfConformance(): Promise<ConformanceReport> {
@@ -119,22 +124,6 @@ export interface ExplainOptions {
    * client SDK's own default (the global fetch) when omitted, which is what every real CLI invocation gets.
    */
   transport?: Transport;
-}
-
-/**
- * Parses repeated `--header name:value` flags into a headers record. Throws on a malformed entry (no `:`, or
- * an empty name) so a typo is caught at the CLI boundary rather than silently sending a broken header.
- */
-export function parseHeaderArgs(headers: string[] | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const h of headers ?? []) {
-    const idx = h.indexOf(":");
-    if (idx <= 0) {
-      throw new Error(`--header must be given as "name:value" (got "${h}")`);
-    }
-    out[h.slice(0, idx).trim()] = h.slice(idx + 1).trim();
-  }
-  return out;
 }
 
 /**
@@ -263,28 +252,6 @@ export function formatExplainReport(report: ExplainReport): string {
   lines.push(`Lineage events (${report.events.length}):`);
   for (const e of report.events) lines.push(`  ${esc(e.ts)}  ${esc(e.type)}  ${esc(e.id)}`);
   return lines.join("\n");
-}
-
-/**
- * Generate the scaffold files atomically (check-all-then-write).
- * Atomicity is required to honor "never overwrite". Checking existence while writing would, in a
- * directory where only one of the files already exists, leave the other partially generated. So we
- * check every file's existence first (check-all) and only then write (then-write). We create each
- * parent directory on demand so that placement in subdirectories is also allowed.
- */
-export function writeScaffold(files: readonly (readonly [string, string])[]): string[] {
-  for (const [path] of files) {
-    if (existsSync(path)) {
-      throw new Error(`${path} already exists (will not overwrite)`);
-    }
-  }
-  const written: string[] = [];
-  for (const [path, content] of files) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, content);
-    written.push(path);
-  }
-  return written;
 }
 
 /** scaffold ports: generate scaffolds for the DomainPort, an Intent catalog, and a Hono server built on createKohakuHost() */
