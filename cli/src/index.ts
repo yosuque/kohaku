@@ -94,26 +94,25 @@ program
   .option("--out <dir>", "Output directory (default depends on the target)")
   .description("Generate scaffolds for product-side Port implementations / Golden regression tests")
   .action(async (what: string, opts: { out?: string }) => {
-    const { scaffoldGolden, scaffoldPorts } = await import("./commands.js");
-    // Switch the default output directory and the post-generation "next steps" per target.
-    const targets: Record<string, { defaultOut: string; scaffold: (out: string) => string[]; next: string }> =
-      {
-        ports: {
-          defaultOut: "./kohaku-ports",
-          scaffold: scaffoldPorts,
-          next: "Implement the TODOs in ports.ts and intents.ts, then start server.ts.",
-        },
-        golden: {
-          defaultOut: "./kohaku-golden",
-          scaffold: scaffoldGolden,
-          next: "Wire up makeContext in golden.test.ts, add *.json files under golden/, then generate the expected specs with KOHAKU_GOLDEN_UPDATE=1.",
-        },
-      };
-    const target = targets[what];
+    // Switch the default output directory and the post-generation "next steps" per target. Validate the target
+    // before loading `commands.js` so that a typo does not pay for (or fail on) the heavy module import.
+    const targets: Record<string, { defaultOut: string; next: string }> = {
+      ports: {
+        defaultOut: "./kohaku-ports",
+        next: "Implement the TODOs in ports.ts and intents.ts, then start server.ts.",
+      },
+      golden: {
+        defaultOut: "./kohaku-golden",
+        next: "Wire up makeContext in golden.test.ts, add *.json files under golden/, then generate the expected specs with KOHAKU_GOLDEN_UPDATE=1.",
+      },
+    };
+    const target = Object.hasOwn(targets, what) ? targets[what] : undefined;
     if (target == null) program.error(`Unknown scaffold target: ${what} (allowed: ports / golden)`);
+    const { scaffoldGolden, scaffoldPorts } = await import("./commands.js");
+    const scaffold = what === "ports" ? scaffoldPorts : scaffoldGolden;
     let written: string[];
     try {
-      written = target!.scaffold(opts.out ?? target!.defaultOut);
+      written = scaffold(opts.out ?? target!.defaultOut);
     } catch (e) {
       // As with the conformance action, show failures such as existing-file collisions as a single line (no raw stack).
       program.error(e instanceof Error ? e.message : String(e));

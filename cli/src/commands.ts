@@ -19,7 +19,8 @@ import {
   UISpecSchema,
 } from "@kohaku-ui/spec-core";
 import semver from "semver";
-import { parseHeaderArgs, writeScaffold } from "./scaffold-fs.js";
+import { parseHeaderArgs } from "./header-args.js";
+import { writeScaffold } from "./scaffold-fs.js";
 import {
   GOLDEN_README_TEMPLATE,
   GOLDEN_TEST_TEMPLATE,
@@ -27,10 +28,6 @@ import {
   PORTS_TEMPLATE,
   SERVER_TEMPLATE,
 } from "./templates.js";
-
-// Re-exported for backward compatibility: both now live in the dependency-free `scaffold-fs.ts` so that
-// `init` and `evidence export` do not have to import this (heavy) module.
-export { parseHeaderArgs, writeScaffold };
 
 /** conformance --self: self-check of the Spec format */
 export async function runSelfConformance(): Promise<ConformanceReport> {
