@@ -4,7 +4,7 @@
  * candidate) nor terminal (`published` / `rejected` / `withdrawn`).
  *
  * `PromotionCandidateView.status` is a plain `string` and `GET /promotions?status=` takes one status at a time,
- * so the list is held here and the count is taken client-side from one unfiltered list call. The statuses
+ * so the list is held here and `usePendingPromotionCount` issues one narrowed list call per status. The statuses
  * themselves belong to `@kohaku-ui/lineage`'s `PromotionStatus` machine, which this package may not import;
  * `test/pending-statuses.test.ts` pins this list against that machine so a new status cannot slip by.
  */

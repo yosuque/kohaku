@@ -14,13 +14,22 @@ function formatDuration(ms: number | null): string {
   return `${(ms / 60_000).toFixed(1)} min`;
 }
 
-type UsageColumn = "composed" | "hit" | "miss" | "l2Generated" | "tokensIn" | "tokensOut" | "fixated";
+type UsageColumn =
+  | "composed"
+  | "hit"
+  | "miss"
+  | "cacheFixated"
+  | "l2Generated"
+  | "tokensIn"
+  | "tokensOut"
+  | "fixated";
 
 type UsageHeaderKey = Extract<
   keyof AdminMessages["analytics"],
   | "usageComposed"
   | "usageHit"
   | "usageMiss"
+  | "usageCacheFixated"
   | "usageL2Generated"
   | "usageTokensIn"
   | "usageTokensOut"
@@ -32,6 +41,7 @@ const usageNumericColumns: readonly [UsageColumn, UsageHeaderKey][] = [
   ["composed", "usageComposed"],
   ["hit", "usageHit"],
   ["miss", "usageMiss"],
+  ["cacheFixated", "usageCacheFixated"],
   ["l2Generated", "usageL2Generated"],
   ["tokensIn", "usageTokensIn"],
   ["tokensOut", "usageTokensOut"],
@@ -48,6 +58,8 @@ function usageValue(row: UsageRowView, column: UsageColumn): number {
       return row.cache.hit;
     case "miss":
       return row.cache.miss;
+    case "cacheFixated":
+      return row.cache.fixated;
     case "l2Generated":
       return row.l2Generated;
     case "tokensIn":

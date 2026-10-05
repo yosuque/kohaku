@@ -226,8 +226,12 @@ export interface UsageRowView {
   composed: number;
   cache: { hit: number; miss: number; bypass: number; fixated: number };
   tiers: { L0: number; L1: number; L2: number };
-  /** view.composed of tier L2 whose cache was miss or bypass (an L2 Spec actually generated). */
+  /**
+   * The composes that actually generated an L2 Spec and succeeded: view.composed of tier L2 whose cache was
+   * miss or bypass, except a record carrying `payload.fallback` and a single-flight follower.
+   */
   l2Generated: number;
+  /** view.composed records that carry `payload.fallback`. */
   fallbacks: number;
   tokens: { input: number; output: number };
   fixated: number;
@@ -276,12 +280,21 @@ export interface AnalyticsSummaryView {
       durationMs: { p50: number | null; p95: number | null; max: number | null };
       acceptedAsIs: number;
     };
-    /** Per-day, per-tenant metering rows over the same (tail-window) sample as the rest of the summary. */
-    usage: UsageRowView[];
-    /** Catalog gap: Intents that fell to free-form L2 generation, most generated first (top N of the sample). */
-    l2ByIntent: { canonical: string; intentHash: string; generated: number; fallbacks: number }[];
-    /** Catalog gap: reviewer corrections of the machine's schema suggestion, per final component type. */
-    schemaEditsByComponent: {
+    /**
+     * Per-day, per-tenant metering rows over the same (tail-window) sample as the rest of the summary. Absent
+     * from a host that predates the field (the admin UI renders its empty state).
+     */
+    usage?: UsageRowView[];
+    /**
+     * Catalog gap: Intents that went to free-form L2 generation, most generated first (top N of the sample); a
+     * row with `generated: 0` is an Intent whose L2 only ever failed. Absent from a host that predates the field.
+     */
+    l2ByIntent?: { canonical: string; intentHash: string; generated: number; fallbacks: number }[];
+    /**
+     * Catalog gap: reviewer corrections of the machine's schema suggestion, per final component type. Absent from
+     * a host that predates the field.
+     */
+    schemaEditsByComponent?: {
       key: string;
       count: number;
       topFields: { field: string; count: number }[];

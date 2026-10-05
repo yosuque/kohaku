@@ -94,28 +94,31 @@ export function useAnalyticsSummary(): { data: AnalyticsSummaryView | null; relo
 
 /**
  * The number of promotion candidates still awaiting action (see `PENDING_PROMOTION_STATUSES`): one
- * unfiltered GET /promotions, filtered client-side (the route narrows by one status at a time). `count` is null
- * until the call resolves and stays null when it fails. Failure is deliberately silent (no notice, unlike the
- * Promotions tab): this feeds one card on the Analytics tab, and a role that may read analytics but not list
- * promotions (a viewer) would otherwise get an error toast on every visit; the card shows "—" instead.
+ * `GET /promotions?status=` per pending status, in parallel, summed. The route narrows by one status at a time,
+ * and a status-narrowed read is lighter than listing every candidate, including the long tail of published /
+ * rejected ones; the count is of all time, not of the Analytics sample window. `count` is null until the calls
+ * resolve and stays null when one fails ("—" on the card). A 401 / 403 is silent: a host's policy may let a
+ * role read analytics without granting it `promotion.list` (the sample's viewer role has both, so this is not
+ * the common case there), and an error toast on every visit would be noise. Any other failure (a 5xx, a
+ * network error) is told once, not swallowed.
  */
 export function usePendingPromotionCount(): { count: number | null; reload: () => void } {
-  const { client } = useAdmin();
+  const { client, notify, getMessages } = useAdmin();
   const [count, setCount] = useState<number | null>(null);
   const guard = useResultGuard();
   const reload = useCallback(() => {
     const stillCurrent = guard();
-    void client.promotions
-      .list()
-      .then((candidates) => {
-        if (stillCurrent()) {
-          setCount(candidates.filter((c) => PENDING_PROMOTION_STATUSES.includes(c.status)).length);
-        }
+    void Promise.all(PENDING_PROMOTION_STATUSES.map((status) => client.promotions.list({ status })))
+      .then((lists) => {
+        if (stillCurrent()) setCount(lists.reduce((n, list) => n + list.length, 0));
       })
-      .catch(() => {
-        if (stillCurrent()) setCount(null);
+      .catch((e: unknown) => {
+        if (!stillCurrent()) return;
+        setCount(null);
+        const denied = isKohakuHostError(e) && (e.status === 401 || e.status === 403);
+        if (!denied) notify(getMessages().analytics.pendingFetchFailed, "error");
       });
-  }, [client, guard]);
+  }, [client, notify, getMessages, guard]);
   useEffect(reload, [reload]);
   return { count, reload };
 }

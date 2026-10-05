@@ -144,8 +144,9 @@ class SummarizeUsageOptions:
 class LineageSummary:
     """Lineage aggregate summary (the body of the analytics.read response).
 
-    Only `usage` of the TS `review` / schemaSuggested / schemaEdited additions is mirrored here; the
-    `review` block and those counters remain a known gap (docs/design.md, python/README.md).
+    Of the TS additions only `usage`, `l2ByIntent` and `schemaEditsByComponent` (design.md #73 / #74) are
+    mirrored here; the `review` block and the `schemaSuggested` / `schemaEdited` counters remain a known gap
+    (docs/design.md, python/README.md).
     """
 
     events: int
