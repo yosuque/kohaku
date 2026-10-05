@@ -3,7 +3,6 @@ import {
   type ActionGate,
   createActionGate,
   createOperationIndex,
-  errorMessage,
   notifyHook,
   type OperationIndex,
   parseTraceContext,
@@ -125,11 +124,6 @@ export async function tenantScope(
   deps: KohakuHostDeps,
 ): Promise<{ tenant?: string } | undefined> {
   return tenantScopeOf(await resolveTenant(c, deps));
-}
-
-/** Thin alias of host-core's errorMessage, kept so its many importers here are untouched by this refactor. */
-export function message(e: unknown): string {
-  return errorMessage(e);
 }
 
 /**
@@ -271,22 +265,6 @@ export interface RestCallContext {
   endpoint: string;
   signal?: AbortSignal;
   traceContext?: TraceContext;
-}
-
-/**
- * Builds a `report(e)` bound to a fixed (endpoint, requestId) pair — the per-handler shorthand for
- * `reportHostError(deps, call.endpoint, call.requestId, e)` where a handler calls it two or more times
- * (leaving a single use as a direct reportHostError call; see the call sites in compose.ts / fixations.ts).
- * Only wraps reportHostError: this package's former safeRecord helper (also once part of this shape) was
- * removed when its call sites moved into host-core's recordComposedResult, so it has no counterpart here.
- */
-export function errorReporterFor(
-  deps: KohakuHostDeps,
-  call: Pick<RestCallContext, "endpoint" | "requestId">,
-): { report(e: unknown): Promise<void> } {
-  return {
-    report: (e: unknown) => reportHostError(deps, call.endpoint, call.requestId, e),
-  };
 }
 
 /**

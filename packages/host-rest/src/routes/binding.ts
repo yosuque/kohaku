@@ -3,6 +3,7 @@ import {
   type ActionGateResult,
   applyActionEffects,
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
+  errorMessage,
   type ParsedInvokableRef,
   parseInvokableRef,
   recordActionGateResult,
@@ -27,7 +28,6 @@ import { ActionBodySchema } from "./schemas.js";
 import {
   ANONYMOUS,
   actionGateFor,
-  message,
   operationIndex,
   parseBody,
   type RouteContext,
@@ -123,7 +123,7 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     try {
       parsed = parseInvokableRef(refParam, deps.querySource);
     } catch (e) {
-      return c.json(errorBody("BAD_REQUEST", message(e)), 400);
+      return c.json(errorBody("BAD_REQUEST", errorMessage(e)), 400);
     }
     if (parsed.kind === "source_mismatch") {
       return c.json(

@@ -1,4 +1,4 @@
-import { clientMessageFor, resolveIntent } from "@kohaku-ui/host-core";
+import { clientMessageFor, errorMessage, resolveIntent } from "@kohaku-ui/host-core";
 import { type CanonicalIntent, GOVERNANCE_ERROR_DISCRIMINATORS } from "@kohaku-ui/spec-core";
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
@@ -8,7 +8,6 @@ import type { FixationsApi } from "../types.js";
 import { COMPOSE_FAILED_MESSAGE, composeForRest, intentResolutionFailure } from "./compose.js";
 import { ComposeBodySchema } from "./schemas.js";
 import {
-  message,
   parseBody,
   type RestCallContext,
   type RouteContext,
@@ -162,7 +161,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
           // unexpected maps to 500 with a fixed message (the raw message may leak internals; the original error still
           // reaches onError via reportHostError).
           if ((e as { code?: unknown }).code === GOVERNANCE_ERROR_DISCRIMINATORS.fixationUnsupportedCode) {
-            return c.json(errorBody("NOT_IMPLEMENTED", message(e)), 501);
+            return c.json(errorBody("NOT_IMPLEMENTED", errorMessage(e)), 501);
           }
           const requestId = requestIdOf(c, deps);
           await reportHostError(deps, "fixations/remove", requestId, e);

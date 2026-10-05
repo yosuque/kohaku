@@ -16,7 +16,6 @@ import { withFixationLock } from "../keyed-mutex.js";
 import type { KohakuHostDeps } from "../types.js";
 import { ComposeBodySchema, EventsBodySchema } from "./schemas.js";
 import {
-  errorReporterFor,
   operationIndex,
   parseBody,
   type RestCallContext,
@@ -266,9 +265,9 @@ async function deliverComposed(
   },
 ): Promise<Response> {
   const { intent, session, principal, deps, call, beforeRecord } = args;
-  // Used twice below (the audit-recording failure callback and the outer catch), hence errorReporterFor
+  // Used twice below (the audit-recording failure callback and the outer catch), hence a local binding
   // rather than two direct reportHostError(deps, call.endpoint, call.requestId, e) calls.
-  const { report } = errorReporterFor(deps, call);
+  const report = (e: unknown) => reportHostError(deps, call.endpoint, call.requestId, e);
   try {
     // Propagate client-disconnect / timeout aborts through to compose (the L1/L2 LLM calls; call.signal).
     const result = await composeForRest(intent, session, deps, call);
@@ -512,7 +511,7 @@ async function resolveFixatedForRest(
  * composeWithFixation doc comment). call.signal is the client-disconnect / timeout abort signal.
  * call.endpoint is accepted for a uniform call-site shape shared with resolveFixatedForRest /
  * issueSpecCapability / finishStream, though composeForRest itself has no direct use for it (its callers
- * report their own failures via errorReporterFor / reportHostError).
+ * report their own failures via reportHostError).
  */
 export async function composeForRest(
   intent: CanonicalIntent,
