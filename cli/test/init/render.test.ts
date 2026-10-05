@@ -205,6 +205,34 @@ describe("renderReadme", () => {
     expect(readme).toContain(".env.example` documents every variable");
   });
 
+  it("has a Before production section covering auth, governance, secret, NODE_ENV and storage", async () => {
+    const { profile } = await profileOf();
+    const readme = renderReadme(profile);
+    const section = readme.slice(readme.indexOf("## Before production"), readme.indexOf("## Next steps"));
+    expect(section).toContain("## Before production");
+    for (const needle of [
+      "auth",
+      "authorizeGovernance",
+      "KOHAKU_CAPABILITY_SECRET",
+      "NODE_ENV=production",
+      "@kohaku-ui/storage-redis",
+      "@kohaku-ui/storage-postgres",
+    ]) {
+      expect(section, needle).toContain(needle);
+    }
+  });
+
+  it("mentions the absolute paths in claude_desktop_config.example.json only when mcp is on", async () => {
+    const { profile } = await profileOf();
+    expect(renderReadme(profile)).not.toContain("process.execPath");
+    expect(renderReadme(profile)).not.toContain("claude_desktop_config.example.json");
+    const mcp = renderReadme(profile, { mcp: true });
+    const section = mcp.slice(mcp.indexOf("## Before production"), mcp.indexOf("## Next steps"));
+    expect(section).toContain("claude_desktop_config.example.json");
+    expect(section).toContain("process.execPath");
+    expect(section).toContain("npm run mcp:claude-desktop");
+  });
+
   it("no longer asks the reader to update the golden fixture first (init generates it after install)", async () => {
     const { profile } = await profileOf();
     const readme = renderReadme(profile);
@@ -215,6 +243,12 @@ describe("renderReadme", () => {
 });
 
 describe("renderEnvFile", () => {
+  it("documents NODE_ENV=production as a commented line", () => {
+    expect(renderEnvFile("s")).toMatch(
+      /^# NODE_ENV=production {3}# turns off development mode; wire auth\/governance first/m,
+    );
+  });
+
   it("writes the given secret as KOHAKU_CAPABILITY_SECRET", () => {
     const env = renderEnvFile("shh-its-a-secret");
     expect(env).toContain("KOHAKU_CAPABILITY_SECRET=shh-its-a-secret");

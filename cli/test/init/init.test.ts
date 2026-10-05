@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import * as nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -195,6 +196,56 @@ describe("initProject", () => {
     const pkg = JSON.parse(readFileSync(join(out, "package.json"), "utf8"));
     expect(pkg.dependencies["@kohaku-ui/host"]).toBeDefined();
     expect(pkg.dependencies["@kohaku-ui/host-core"]).toBeUndefined();
+  });
+
+  it("server/ports.ts turns development mode on unless NODE_ENV=production, and carries a commented auth / governance starting point", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    const portsSrc = readFileSync(join(out, "server/ports.ts"), "utf8");
+    expect(portsSrc).toContain('dev: process.env["NODE_ENV"] !== "production",');
+    expect(portsSrc).toContain('// import { governancePolicyFromRoles } from "@kohaku-ui/host";');
+    expect(portsSrc).toContain("//   auth: async (c) =>");
+    expect(portsSrc).toContain("//   authorizeGovernance: governancePolicyFromRoles(() => ({");
+    // No new environment variable is introduced for any of this.
+    expect(portsSrc).not.toMatch(/KOHAKU_DEV/);
+  });
+
+  it.skipIf(typeof nodeModule.stripTypeScriptTypes !== "function")(
+    "the commented auth / governance block is syntactically valid TypeScript once uncommented",
+    async () => {
+      const out = join(tmp(), "app");
+      await initProject({ from: FIXTURE, out, install: false }, noRun);
+      const lines = readFileSync(join(out, "server/ports.ts"), "utf8").split("\n");
+      const marker = lines.findIndex((l) => l.includes('// Before production (README "Before production")'));
+      expect(marker).toBeGreaterThan(-1);
+      const importLine = 'import { governancePolicyFromRoles } from "@kohaku-ui/host";';
+      const uncommented: string[] = [];
+      for (const [i, line] of lines.entries()) {
+        // The two prose lines at the marker stay comments; every following `    // ` line up to the call's
+        // closing `  });` is code. The import is hoisted to the top of the file, where an import must live.
+        const isBlockLine = i > marker + 1 && /^ {4}\/\/ /.test(line);
+        if (isBlockLine && line.includes("import { governancePolicyFromRoles }")) continue;
+        uncommented.push(isBlockLine ? line.replace(/^( {4})\/\/ ?/, "$1") : line);
+      }
+      const source = [importLine, ...uncommented].join("\n");
+      // TypeScript 7 ships no JS compiler API, so use Node's own type stripper as the syntax check: it throws
+      // ERR_INVALID_TYPESCRIPT_SYNTAX on anything that does not parse (it does not type-check; the real
+      // type-check of this block is done by hand and by pack-smoke's tsc of the generated project).
+      expect(() => nodeModule.stripTypeScriptTypes(source)).not.toThrow();
+      // The block really was uncommented (not silently skipped).
+      expect(source).toContain("  routes: {");
+      expect(source).toContain("authorizeGovernance: governancePolicyFromRoles(");
+    },
+  );
+
+  it(".env.example and .env both document NODE_ENV=production as a commented line", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    for (const file of [".env.example", ".env"]) {
+      expect(readFileSync(join(out, file), "utf8"), file).toMatch(
+        /^# NODE_ENV=production {3}# turns off development mode; wire auth\/governance first/m,
+      );
+    }
   });
 
   it(".env.example documents KOHAKU_DEBUG", async () => {

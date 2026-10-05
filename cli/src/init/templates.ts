@@ -256,6 +256,20 @@ export function createPorts(deps: PortDeps): KohakuHost {
     // Set KOHAKU_DEBUG=1 (see .env.example) for the full cause chain + stack trace on every logged failure,
     // instead of a one-line summary -- useful when a compose falls back and you need to know why.
     debug: process.env["KOHAKU_DEBUG"] === "1",
+    // Development mode (every npm run dev; turned off by NODE_ENV=production): the two production-facing startup
+    // warnings -- no auth, no authorizeGovernance -- fold into one console.info line. Nothing else changes.
+    dev: process.env["NODE_ENV"] !== "production",
+    // Before production (README "Before production"): uncomment and adapt. With both wired and NODE_ENV=production,
+    // the startup warnings are gone for the right reason.
+    // import { governancePolicyFromRoles } from "@kohaku-ui/host";   <- add it to the import at the top of this file
+    // routes: {
+    //   auth: async (c) => ({ id: c.req.header("x-user-id") ?? "anonymous", roles: ["viewer"] }),
+    //   authorizeGovernance: governancePolicyFromRoles(() => ({
+    //     admin: ["*"],
+    //     reviewer: ["promotion.*", "lineage.read", "analytics.read"],
+    //     viewer: ["lineage.read", "analytics.read"],
+    //   })),
+    // },
   });
 }
 `;
@@ -589,6 +603,8 @@ PORT=8787
 # Set to 1 for verbose error logging (the full cause chain + stack trace on every compose/request failure,
 # instead of a one-line summary) -- see server/ports.ts.
 # KOHAKU_DEBUG=
+
+# NODE_ENV=production   # turns off development mode; wire auth/governance first
 `;
 
 export const GITIGNORE_TEMPLATE = `node_modules/
