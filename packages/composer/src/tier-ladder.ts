@@ -1,12 +1,12 @@
 import { LlmError } from "@kohaku-ui/llm";
 import type { ComponentNode, EventBinding } from "@kohaku-ui/spec-core";
-import { checkBudget, createDeadlineGuard, sumSpentTokens } from "./budget.js";
+import { createDeadlineGuard } from "./budget.js";
 import type { PreparedCompose } from "./compose.js";
-import type { ComposeContext, ComposePolicy } from "./context.js";
+import type { ComposeContext } from "./context.js";
 import { reportBudgetCheckError } from "./observer.js";
 import { generateL1 } from "./tiers/l1-generate.js";
 import { generateL2 } from "./tiers/l2-generate.js";
-import type { TierResult } from "./tiers/shared.js";
+import { type BudgetGate, createBudgetGate, type TierRequest, type TierResult } from "./tiers/shared.js";
 import type { ComposeAttempt } from "./trace.js";
 
 /**
@@ -114,8 +114,8 @@ type BudgetCheckErrorReporterFor = ((failedTier: "L1" | "L2") => (error: unknown
  * both stages (Introduce Parameter Object).
  * - `route`: the tier decided by policy.routeTier for this compose (L1 unless L2 direct entry).
  * - `from`: the "stage that actually failed" default, fixed as L2 only once L2 actually runs and fails.
- * - `reportBudgetCheckError`: the same factory as the former `budgetCheckErrorReporterFor` local
- *   (a tier → handler factory, distinct from generateL1/L2's onBudgetCheckError which is the handler itself).
+ * - `budgetGate`: the budget guard shared by the pre-L2 check and both generation calls (it owns the
+ *   tier → error-handler factory, which is distinct from the handler itself).
  */
 interface TierRun {
   prepared: PreparedCompose;
@@ -123,18 +123,24 @@ interface TierRun {
   attempts: ComposeAttempt[];
   route: "L1" | "L2";
   from: "L1" | "L2";
-  budget: ComposePolicy["budget"];
-  reportBudgetCheckError: BudgetCheckErrorReporterFor;
+  budgetGate: BudgetGate;
   onDraftPartial?: (raw: unknown) => void;
   /**
    * The signal to pass to L1/L2 LLM calls, in place of `prepared.abort` directly: `createDeadlineGuard`'s
    * output (`prepared.abort` combined with a deadline timer when `budget.deadlineMs` is set, or
-   * `prepared.abort` unchanged otherwise — see budget.ts).
+   * `prepared.abort` unchanged otherwise — see budget.ts). `createDeadlineGuard`'s `deadlineSignal` lives on
+   * `budgetGate`, for mid-call abort classification.
    */
   signal: AbortSignal | undefined;
-  /** `createDeadlineGuard`'s `deadlineSignal` — see its doc. Forwarded to generateL1/generateL2 for
-   * mid-call abort classification. Undefined whenever `budget.deadlineMs` is unset. */
-  deadlineSignal: AbortSignal | undefined;
+}
+
+/**
+ * The TierRequest fields common to the L1 and L2 generation calls (Extract Function); the L1-only extras
+ * (`onDraftPartial`, `l1Schema`) are added by runL1Stage.
+ */
+function tierRequestFor(run: TierRun): TierRequest {
+  const { prepared, ctx, budgetGate, signal } = run;
+  return { intent: prepared.intent, refs: prepared.refs, ctx, signal, budgetGate };
 }
 
 /**
@@ -184,10 +190,14 @@ export async function runTierGeneration(
       attempts,
       route,
       from,
-      budget,
-      reportBudgetCheckError: budgetCheckErrorReporterFor,
+      budgetGate: createBudgetGate({
+        budget,
+        tenant: prepared.tenant,
+        startedAt: prepared.startedAt,
+        deadlineSignal: deadlineGuard.deadlineSignal,
+        reportFor: budgetCheckErrorReporterFor,
+      }),
       signal: deadlineGuard.signal,
-      deadlineSignal: deadlineGuard.deadlineSignal,
       ...(onDraftPartial != null ? { onDraftPartial } : {}),
     };
 
@@ -262,32 +272,12 @@ function settleL1Failure(l1: TierResult, canL2: boolean, from: "L1" | "L2"): Tie
  * route=L2 direct entry does not generate and only passes the allowL2 decision.
  */
 async function runL1Stage(run: TierRun): Promise<TierOutcome | null> {
-  const {
-    prepared,
-    ctx,
-    attempts,
-    route,
-    from,
-    budget,
-    reportBudgetCheckError,
-    onDraftPartial,
-    signal,
-    deadlineSignal,
-  } = run;
-  const { intent, refs, policy } = prepared;
-  const canL2 = policy.allowL2 ?? false;
+  const { prepared, attempts, route, from, onDraftPartial } = run;
+  const canL2 = prepared.policy.allowL2 ?? false;
 
   if (route === "L1") {
     const l1 = await generateL1({
-      intent,
-      refs,
-      ctx,
-      signal,
-      startedAt: prepared.startedAt,
-      deadlineSignal,
-      budget,
-      tenant: prepared.tenant,
-      onBudgetCheckError: reportBudgetCheckError?.("L1"),
+      ...tierRequestFor(run),
       onDraftPartial,
       l1Schema: prepared.getL1Schema,
     });
@@ -312,20 +302,11 @@ async function runL1Stage(run: TierRun): Promise<TierOutcome | null> {
  * (one of success / budget overage / generation failure).
  */
 async function runL2Stage(run: TierRun): Promise<TierOutcome> {
-  const { prepared, ctx, attempts, from, budget, reportBudgetCheckError, signal, deadlineSignal } = run;
-  const { intent, refs } = prepared;
+  const { attempts, from, budgetGate } = run;
 
   // The budget check before L2. Both L2 direct entry (route=L2) and L1(invalid)→L2 promotion are checked
   // here in one place. spentTokens is the usage consumed at L1 (the accumulation of attempts). When budget is unspecified, do not check and enter the conventional path.
-  const elapsedMs = budget?.deadlineMs != null ? Date.now() - prepared.startedAt : undefined;
-  const l2Verdict =
-    budget != null
-      ? checkBudget(
-          budget,
-          { tenant: prepared.tenant, tier: "L2", spentTokens: sumSpentTokens(attempts), elapsedMs },
-          reportBudgetCheckError?.("L2"),
-        )
-      : { allow: true };
+  const l2Verdict = budgetGate.verdict("L2", attempts);
   if (!l2Verdict.allow) {
     // Skip L2 due to budget overage. from is "L2" if route=L2, or stays "L1" if suppressing an L1→L2
     // promotion (since L2 does not actually run, "the stage that actually failed" is L1 if it stopped at L1).
@@ -335,17 +316,7 @@ async function runL2Stage(run: TierRun): Promise<TierOutcome> {
     });
   }
 
-  const l2 = await generateL2({
-    intent,
-    refs,
-    ctx,
-    signal,
-    startedAt: prepared.startedAt,
-    deadlineSignal,
-    budget,
-    tenant: prepared.tenant,
-    onBudgetCheckError: reportBudgetCheckError?.("L2"),
-  });
+  const l2 = await generateL2(tierRequestFor(run));
   attempts.push(...l2.attempts);
   if (l2.ok) {
     return okOutcome("L2", l2);
