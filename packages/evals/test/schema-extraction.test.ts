@@ -282,7 +282,7 @@ describe("createSchemaExtractor: reviewer-corrected examples (design.md #73)", (
     expect(llm.calls[0]!.prompt).not.toContain("acme");
   });
 
-  it("gives the provider the extraction's own timeout signal, shared with the LLM call", async () => {
+  it("gives the provider its own examples signal, separate from the LLM call's timeoutMs signal", async () => {
     let providerSignal: AbortSignal | undefined;
     let llmSignal: AbortSignal | undefined;
     const llm = new FakeLlm({
@@ -298,31 +298,70 @@ describe("createSchemaExtractor: reviewer-corrected examples (design.md #73)", (
         return [];
       },
     }).extract(input);
-    expect(providerSignal).toBeDefined();
-    expect(providerSignal).toBe(llmSignal);
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    expect(llmSignal).toBeInstanceOf(AbortSignal);
+    expect(providerSignal).not.toBe(llmSignal);
   });
 
-  it("treats an examples read that outlives the budget as no examples (the read is inside the timeout)", async () => {
-    const llm = new FakeLlm({ objects: [OUTPUT] });
+  it("extracts without examples when the provider outlives examplesTimeoutMs, and the LLM call keeps its whole budget", async () => {
+    let llmSignalAbortedAtCall: boolean | undefined;
+    const llm = new FakeLlm({
+      objects: (req: GenerateObjectRequest<unknown>) => {
+        llmSignalAbortedAtCall = req.abort?.aborted;
+        return OUTPUT;
+      },
+    });
     const extractor = createSchemaExtractor({
       llm,
-      timeoutMs: 20,
-      // Ignores the signal on purpose: the extractor must stop waiting for it anyway.
-      examples: () =>
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error("too late")), 200);
-        }),
+      timeoutMs: 5_000,
+      examplesTimeoutMs: 20,
+      // Ignores the signal and never settles: the extractor must stop waiting for it anyway.
+      examples: () => new Promise<never>(() => {}),
     });
     const started = Date.now();
-    // The budget is spent by the read; whatever the (already aborted) LLM call then does, the extraction must
-    // neither wait for the provider's 200ms nor surface the provider's own error.
-    const outcome = await extractor.extract(input).then(
-      () => undefined,
-      (e: unknown) => e,
-    );
-    expect(Date.now() - started).toBeLessThan(150);
-    expect(outcome instanceof Error && outcome.message === "too late").toBe(false);
-    expect(llm.calls[0]?.prompt ?? "").not.toContain("Reviewer-corrected examples");
+    const result = await extractor.extract(input);
+    expect(result.draft.componentType).toBe("sales.calendarHeatmap");
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // The examples budget was spent (20ms) but the LLM call's own signal was created after it, untouched.
+    expect(llmSignalAbortedAtCall).toBe(false);
+    expect(llm.calls[0]!.prompt).not.toContain("Reviewer-corrected examples");
+  });
+
+  it("extracts without examples when a signal-aware provider rejects on the examples abort", async () => {
+    const llm = new FakeLlm({ objects: [OUTPUT] });
+    const result = await createSchemaExtractor({
+      llm,
+      timeoutMs: 5_000,
+      examplesTimeoutMs: 20,
+      examples: (_i, { signal }) =>
+        new Promise<never>((_, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    }).extract(input);
+    expect(result.draft.componentType).toBe("sales.calendarHeatmap");
+    expect(llm.calls[0]!.prompt).not.toContain("Reviewer-corrected examples");
+  });
+
+  it("defaults the examples budget to a quarter of timeoutMs, so even a short timeoutMs leaves the LLM call its own", async () => {
+    let llmSignalAbortedAtCall: boolean | undefined;
+    const llm = new FakeLlm({
+      objects: (req: GenerateObjectRequest<unknown>) => {
+        llmSignalAbortedAtCall = req.abort?.aborted;
+        return OUTPUT;
+      },
+    });
+    // timeoutMs 400 -> default examplesTimeoutMs 100: the never-settling read is cut at ~100ms, not 400ms.
+    const extractor = createSchemaExtractor({
+      llm,
+      timeoutMs: 400,
+      examples: () => new Promise<never>(() => {}),
+    });
+    const started = Date.now();
+    const result = await extractor.extract(input);
+    const elapsed = Date.now() - started;
+    expect(result.draft.componentType).toBe("sales.calendarHeatmap");
+    expect(elapsed).toBeLessThan(350);
+    expect(llmSignalAbortedAtCall).toBe(false);
   });
 
   it("never carries more than 5 examples, whatever maxExamples asks for", async () => {

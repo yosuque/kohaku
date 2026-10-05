@@ -46,6 +46,8 @@ const MAX_EXAMPLES_CAP = 5;
  * lock never releases."
  */
 const DEFAULT_EXTRACTION_TIMEOUT_MS = 20_000;
+/** Ceiling of the default examples-read budget (milliseconds); see `createSchemaExtractor`'s `examplesTimeoutMs`. */
+const DEFAULT_EXAMPLES_TIMEOUT_CAP_MS = 3_000;
 
 const QueryTemplateSchema = z.object({
   path: z.string().min(1),
@@ -136,15 +138,25 @@ const SYSTEM_PROMPT = [
 export function createSchemaExtractor(opts: {
   llm: LlmPort;
   now?: () => Date;
-  /** Per-call extraction budget in milliseconds (default `DEFAULT_EXTRACTION_TIMEOUT_MS`, 20s). See its own doc. */
+  /**
+   * Per-call budget of the LLM call in milliseconds (default `DEFAULT_EXTRACTION_TIMEOUT_MS`, 20s). The whole
+   * of it goes to the LLM call: the examples read has its own budget (`examplesTimeoutMs`) and cannot eat it.
+   */
   timeoutMs?: number;
   /**
+   * Budget of the examples read in milliseconds (default `Math.min(3000, Math.floor(timeoutMs / 4))`). Separate
+   * from `timeoutMs` on purpose: a slow examples source costs at most this much and the extraction then goes on
+   * with no examples, instead of leaving the LLM call an already-spent budget and failing the whole suggestion.
+   * The longest an extraction can take is therefore `examplesTimeoutMs + timeoutMs`.
+   */
+  examplesTimeoutMs?: number;
+  /**
    * Supplies reviewer-corrected examples for the prompt (design.md #73). Called once per extraction with the
-   * extraction input (`input.tenant` says whose corrections may be read) and the extraction's own timeout
-   * signal, so the read counts against `timeoutMs` like the LLM call does; a provider that ignores the signal
-   * is abandoned when it fires. A throw, a rejection or an abort is swallowed and treated as "no examples" (the
-   * same convention as composer's few-shot provider: a failing examples source must never fail the extraction
-   * it only decorates). With no examples the prompt has no examples section at all.
+   * extraction input (`input.tenant` says whose corrections may be read) and a signal that fires after
+   * `examplesTimeoutMs`; a provider that ignores the signal is abandoned when it fires. A throw, a rejection or
+   * an abort is swallowed and treated as "no examples" (the same convention as composer's few-shot provider: a
+   * failing examples source must never fail the extraction it only decorates). With no examples the prompt has
+   * no examples section at all.
    */
   examples?: (
     input: SchemaExtractionInput,
@@ -155,6 +167,10 @@ export function createSchemaExtractor(opts: {
 }): SchemaExtractor {
   const now = (): Date => opts.now?.() ?? new Date();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_EXTRACTION_TIMEOUT_MS;
+  const examplesTimeoutMs = Math.max(
+    0,
+    opts.examplesTimeoutMs ?? Math.min(DEFAULT_EXAMPLES_TIMEOUT_CAP_MS, Math.floor(timeoutMs / 4)),
+  );
   const maxExamples = Math.min(
     MAX_EXAMPLES_CAP,
     Math.max(0, Math.floor(opts.maxExamples ?? DEFAULT_MAX_EXAMPLES)),
@@ -208,8 +224,7 @@ export function createSchemaExtractor(opts: {
     return [`## Reviewer-corrected examples\n${blocks.join("\n\n")}`];
   }
 
-  async function buildPrompt(input: SchemaExtractionInput, signal: AbortSignal): Promise<string> {
-    const examples = await loadExamples(input, signal);
+  function buildPrompt(input: SchemaExtractionInput, examples: readonly SchemaExtractionExample[]): string {
     const html = input.html.slice(0, HTML_PROMPT_BUDGET);
     const refs = extractDataRefs(input.html);
     const issues = collectL2Issues(input.html);
@@ -237,16 +252,17 @@ export function createSchemaExtractor(opts: {
 
   return {
     async extract(input) {
-      // One budget for the whole extraction: created before the prompt is built so the examples read counts
-      // against it too (the lock-holding worst case is `timeoutMs`, not `timeoutMs` plus a slow examples read).
-      const abort = AbortSignal.timeout(timeoutMs);
+      // Two budgets, in sequence: the examples read gets its own short one, and the LLM call's `timeoutMs` signal
+      // is created only afterwards so a slow (or timed-out) read cannot spend any of it. The lock-holding worst
+      // case is `examplesTimeoutMs + timeoutMs`.
+      const examples = await loadExamples(input, AbortSignal.timeout(examplesTimeoutMs));
       const result = await opts.llm.generateObject({
         schema: SchemaSuggestionOutputSchema,
         schemaName: "schema_suggestion",
         system: SYSTEM_PROMPT,
-        prompt: await buildPrompt(input, abort),
+        prompt: buildPrompt(input, examples),
         temperature: 0,
-        abort,
+        abort: AbortSignal.timeout(timeoutMs),
       });
       const out = result.object;
       return {
