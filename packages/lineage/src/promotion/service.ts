@@ -1,5 +1,5 @@
 import { GOVERNANCE_ERROR_DISCRIMINATORS, type Principal, type StoragePort } from "@kohaku-ui/spec-core";
-import { GENERATED_SCAN_WINDOW, RECONCILE_AUDIT_SCAN_WINDOW } from "../constants.js";
+import { RECONCILE_AUDIT_SCAN_WINDOW } from "../constants.js";
 import type { ActorKind, LineageEventType } from "../events.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
@@ -17,7 +17,7 @@ import {
 } from "./machine.js";
 import { createNomination } from "./nomination.js";
 import { diffDraft, type SchemaSuggestion } from "./suggestion.js";
-import { createUsageIndex, indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
+import { createUsageIndex, usageIndexKey } from "./usage.js";
 
 export type { PromotionCandidate, PromotionOrigin, PromotionPolicy } from "./candidate.js";
 // The error-hook and candidate types live in their own modules so candidate-store / nomination / audit never
@@ -829,10 +829,10 @@ export function createPromotions(opts: {
    * is retried on the next reconcile). The race-driven skips described above are deliberately not counted here
    * (they are not failures).
    *
-   * N+1 avoidance: before the loop, this builds the same kind of bulk indexes `scanCandidatesWithTenant` /
-   * `listByStatus` already build once instead of once per candidate — a usage index (`usage.index`), the latest
-   * `component.generated` per `(tenant, artifactId)` (fed into `store.load` as `generatedEvent`, falling back to
-   * `loadCandidate`'s own per-artifact lookup for anything outside `GENERATED_SCAN_WINDOW`), and an
+   * N+1 avoidance: before the loop, this builds the same bulk indexes `scanCandidatesWithTenant` /
+   * `listByStatus` build once instead of once per candidate (`store.bulkLoader`: a usage index, and the latest
+   * `component.generated` per `(tenant, artifactId)`, falling back to `loadCandidate`'s own per-artifact lookup
+   * for anything outside `GENERATED_SCAN_WINDOW`), plus an
    * existing-audit-record index for both `component.published` and `component.withdrawn(from:"published")` (so
    * the per-candidate backfill check below is a Set lookup rather than its own `listLineage` round trip).
    */
@@ -841,12 +841,7 @@ export function createPromotions(opts: {
     if (opts.onPublish == null && opts.onUnpublish == null) return summary;
     // Scan snapshots across all tenants (listPromotionStates with tenant omitted returns all). Each state has .tenant.
     const states = await opts.storage.listPromotionStates();
-    const usedByArtifact = await usage.index(undefined);
-    const generatedEvents = await opts.storage.listLineage({
-      type: ["component.generated"],
-      limit: GENERATED_SCAN_WINDOW,
-    });
-    const latestGeneratedByKey = indexLatestGenerated(generatedEvents);
+    const loader = await store.bulkLoader(undefined);
     const publishedAuditKeys = new Set(
       (
         await opts.storage.listLineage({ type: ["component.published"], limit: RECONCILE_AUDIT_SCAN_WINDOW })
@@ -863,13 +858,8 @@ export function createPromotions(opts: {
       // cast to PromotionStatus the same way candidate-store.ts's loadCandidate already does for this field.
       if (!mayHaveProjection(state.status as PromotionStatus)) continue;
       const key = usageIndexKey(state.tenant, state.artifactId);
-      const loadOptions = {
-        tenant: state.tenant,
-        usageStats: tallyUsage(usedByArtifact.get(key) ?? []),
-        generatedEvent: latestGeneratedByKey.get(key),
-      };
       if (state.status === "published") {
-        const candidate = await store.load(state.artifactId, loadOptions);
+        const candidate = await loader.load(state.artifactId, state.tenant);
         // Re-check the freshest status right after the load (see this function's doc on the scan/load race): a
         // *real* candidate whose status has since moved off "published" is a stale scan entry, not a failure,
         // so skip it uncounted and without onError -- the withdrawn branch converges it (this reconcile or the
@@ -919,7 +909,7 @@ export function createPromotions(opts: {
       // mayHaveProjection admits only "published" (handled above) and "withdrawn", so only withdrawn reaches
       // here: re-apply the projection removal for a withdrawal whose onUnpublish failed partway.
       if (opts.onUnpublish == null) continue;
-      const candidate = await store.load(state.artifactId, loadOptions);
+      const candidate = await loader.load(state.artifactId, state.tenant);
       // Re-check the freshest status for the same race as the published branch above (see this function's own
       // doc): a *real* candidate that has since been re-published is a stale scan entry, not a failure, so it
       // is skipped uncounted and without onError rather than incorrectly unpublished -- the published branch
