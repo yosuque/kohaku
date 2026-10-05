@@ -328,7 +328,11 @@ export function createCandidateStore(opts: {
       const all = await scanCandidates(tenant);
       return all.filter((c) => c.status === "in_use");
     }
-    const states = await storage.listPromotionStates(tenant);
+    // Narrow to the requested status first. An empty match returns before any lineage read: the common case for
+    // a poll of an empty queue (admin-react lists several statuses per refresh) must not pay for the
+    // component.used / component.generated window reads below.
+    const states = (await storage.listPromotionStates(tenant)).filter((state) => state.status === status);
+    if (states.length === 0) return [];
     // Inject usage into loadCandidate using the same component.used index as scanCandidates
     // (for the window-drift known constraint, see the usage.index doc).
     const usedByArtifact = await usage.index(tenant);
@@ -345,7 +349,6 @@ export function createCandidateStore(opts: {
     const latestGeneratedByKey = indexLatestGenerated(generated);
     const candidates: PromotionCandidate[] = [];
     for (const state of states) {
-      if (state.status !== status) continue;
       // Use each state's own recorded tenant (state.tenant), not the call-level `tenant` (#10): when `tenant`
       // is left unspecified (an all-tenant scan), listPromotionStates(undefined) returns every tenant's states
       // mixed together, and loading a tenant-owned state with tenant:undefined would miss its

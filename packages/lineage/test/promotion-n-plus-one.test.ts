@@ -132,3 +132,33 @@ describe("listByStatus() の listLineage 呼び出し回数は候補数に比例
     expect(storage.listLineageCalls).toBe(2);
   });
 });
+
+describe("listByStatus() は該当 status の候補が 0 件なら lineage を読まない", () => {
+  it("一致する state が無いとき listLineage を 1 回も呼ばず [] を返す", async () => {
+    const storage = countingStorage();
+    // Only published states exist; asking for a different status matches nothing.
+    seedPublishedCandidates(storage, 5);
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage });
+
+    storage.listLineageCalls = 0;
+    const readTypes: string[] = [];
+    const inner = storage.listLineage.bind(storage);
+    storage.listLineage = async (filter) => {
+      readTypes.push(...(filter?.type ?? []));
+      return inner(filter);
+    };
+    expect(await promotions.listByStatus("changes_requested")).toEqual([]);
+    expect(storage.listLineageCalls).toBe(0);
+    expect(readTypes).not.toContain("component.used");
+    expect(readTypes).not.toContain("component.generated");
+  });
+
+  it("promotion state が 1 件も無い場合も lineage を読まない", async () => {
+    const storage = countingStorage();
+    const promotions = createPromotions({ lineage: createLineage({ storage }), storage });
+
+    storage.listLineageCalls = 0;
+    expect(await promotions.listByStatus("candidate")).toEqual([]);
+    expect(storage.listLineageCalls).toBe(0);
+  });
+});
