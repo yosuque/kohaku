@@ -1,8 +1,6 @@
 import { actionPayloadHash, type LineageEventRecord } from "@kohaku-ui/spec-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { derivePendingApprovals } from "../src/index.js";
-
-const NOW = new Date("2026-10-05T12:00:00.000Z");
 
 let seq = 0;
 function ev(
@@ -43,23 +41,24 @@ const approved = (ts: string, requesterId: string | null = "demo-viewer") =>
 const invoked = (ts: string, tier = "approve") =>
   ev("action.invoked", ts, { action: "sales.refund", payloadHash: "sha256:aaa", tier });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("derivePendingApprovals", () => {
   it("drops the confirm tier (it also emits approvalRequested)", async () => {
-    const out = await derivePendingApprovals(
-      [
-        requested("2026-10-05T10:00:00.000Z", { tier: "confirm" }),
-        requested("2026-10-05T10:01:00.000Z", { action: "sales.other" }),
-      ],
-      NOW,
-    );
+    const out = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z", { tier: "confirm" }),
+      requested("2026-10-05T10:01:00.000Z", { action: "sales.other" }),
+    ]);
     expect(out.map((r) => r.action)).toEqual(["sales.other"]);
   });
 
   it("folds repeated requests of the same (requester, action, payloadHash) into one row", async () => {
-    const out = await derivePendingApprovals(
-      [requested("2026-10-05T10:00:00.000Z"), requested("2026-10-05T10:05:00.000Z")],
-      NOW,
-    );
+    const out = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z"),
+      requested("2026-10-05T10:05:00.000Z"),
+    ]);
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({
       key: "demo-viewer|sales.refund|sha256:aaa",
@@ -71,46 +70,52 @@ describe("derivePendingApprovals", () => {
   });
 
   it("keeps different requesters apart", async () => {
-    const out = await derivePendingApprovals(
-      [requested("2026-10-05T10:00:00.000Z"), requested("2026-10-05T10:01:00.000Z", {}, "demo-admin")],
-      NOW,
-    );
+    const out = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z"),
+      requested("2026-10-05T10:01:00.000Z", {}, "demo-admin"),
+    ]);
     expect(out.map((r) => r.requesterId).sort()).toEqual(["demo-admin", "demo-viewer"]);
   });
 
   it("is settled by a later action.approved", async () => {
-    const out = await derivePendingApprovals(
-      [requested("2026-10-05T10:00:00.000Z"), approved("2026-10-05T10:10:00.000Z")],
-      NOW,
-    );
+    const out = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z"),
+      approved("2026-10-05T10:10:00.000Z"),
+    ]);
     expect(out).toEqual([]);
   });
 
-  it("is pending again when a new request comes after the approved event", async () => {
-    const out = await derivePendingApprovals(
-      [
-        requested("2026-10-05T10:00:00.000Z"),
-        approved("2026-10-05T10:10:00.000Z"),
-        requested("2026-10-05T10:20:00.000Z"),
-      ],
-      NOW,
-    );
+  it("is pending again when a new request comes after the approved event, counting only that request", async () => {
+    const out = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z"),
+      requested("2026-10-05T10:05:00.000Z"),
+      approved("2026-10-05T10:10:00.000Z"),
+      requested("2026-10-05T10:20:00.000Z"),
+    ]);
     expect(out).toHaveLength(1);
-    expect(out[0]!.latestTs).toBe("2026-10-05T10:20:00.000Z");
+    expect(out[0]).toMatchObject({
+      latestTs: "2026-10-05T10:20:00.000Z",
+      count: 1,
+      requestIds: ["r-2026-10-05T10:20:00.000Z"],
+    });
   });
 
-  it("is settled by an approve-tier action.invoked, but not by a confirm-tier one", async () => {
+  it("takes the recorded payload only from the requests that are still open", async () => {
+    const out = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z", { payload: { amount: 1 } }),
+      approved("2026-10-05T10:10:00.000Z"),
+      requested("2026-10-05T10:20:00.000Z", { payload: { amount: 2 } }),
+    ]);
+    expect(out[0]!.payload).toEqual({ amount: 2 });
+  });
+
+  it("is not settled by action.invoked (the tab does not even read that event type)", async () => {
     expect(
-      await derivePendingApprovals(
-        [requested("2026-10-05T10:00:00.000Z"), invoked("2026-10-05T10:10:00.000Z")],
-        NOW,
-      ),
-    ).toEqual([]);
-    expect(
-      await derivePendingApprovals(
-        [requested("2026-10-05T10:00:00.000Z"), invoked("2026-10-05T10:10:00.000Z", "confirm")],
-        NOW,
-      ),
+      await derivePendingApprovals([
+        requested("2026-10-05T10:00:00.000Z"),
+        invoked("2026-10-05T10:10:00.000Z"),
+        invoked("2026-10-05T10:11:00.000Z", "confirm"),
+      ]),
     ).toHaveLength(1);
   });
 
@@ -120,68 +125,69 @@ describe("derivePendingApprovals", () => {
       payloadHash: "sha256:aaa",
       reason: "x",
     });
-    expect(await derivePendingApprovals([requested("2026-10-05T10:00:00.000Z"), denied], NOW)).toHaveLength(
-      1,
-    );
+    expect(await derivePendingApprovals([requested("2026-10-05T10:00:00.000Z"), denied])).toHaveLength(1);
   });
 
   it("accepts events in any order", async () => {
-    const out = await derivePendingApprovals(
-      [approved("2026-10-05T10:10:00.000Z"), requested("2026-10-05T10:00:00.000Z")],
-      NOW,
-    );
+    const out = await derivePendingApprovals([
+      approved("2026-10-05T10:10:00.000Z"),
+      requested("2026-10-05T10:00:00.000Z"),
+    ]);
     expect(out).toEqual([]);
   });
 
   it("leaves requesterId undefined when the record has no actor.id, and matches approved with no requesterId", async () => {
-    const out = await derivePendingApprovals([requested("2026-10-05T10:00:00.000Z", {}, null)], NOW);
+    const out = await derivePendingApprovals([requested("2026-10-05T10:00:00.000Z", {}, null)]);
     expect(out).toHaveLength(1);
     expect(out[0]!.requesterId).toBeUndefined();
     expect("requesterId" in out[0]!).toBe(false);
     expect(out[0]!.key).toBe("|sales.refund|sha256:aaa");
     expect(
-      await derivePendingApprovals(
-        [requested("2026-10-05T10:00:00.000Z", {}, null), approved("2026-10-05T10:10:00.000Z", null)],
-        NOW,
-      ),
+      await derivePendingApprovals([
+        requested("2026-10-05T10:00:00.000Z", {}, null),
+        approved("2026-10-05T10:10:00.000Z", null),
+      ]),
     ).toEqual([]);
   });
 
   it("sorts newest request first", async () => {
-    const out = await derivePendingApprovals(
-      [
-        requested("2026-10-05T10:00:00.000Z", { action: "a.one" }),
-        requested("2026-10-05T10:30:00.000Z", { action: "a.two" }),
-        requested("2026-10-05T10:15:00.000Z", { action: "a.three" }),
-      ],
-      NOW,
-    );
+    const out = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z", { action: "a.one" }),
+      requested("2026-10-05T10:30:00.000Z", { action: "a.two" }),
+      requested("2026-10-05T10:15:00.000Z", { action: "a.three" }),
+    ]);
     expect(out.map((r) => r.action)).toEqual(["a.two", "a.three", "a.one"]);
   });
 
   it("carries the first recorded payload and flags a payload that does not hash to payloadHash", async () => {
     const payload = { orderId: "o-1", amount: 10 };
     const hash = await actionPayloadHash(payload);
-    const ok = await derivePendingApprovals(
-      [requested("2026-10-05T10:00:00.000Z", { payloadHash: hash, payload })],
-      NOW,
-    );
+    const ok = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z", { payloadHash: hash, payload }),
+    ]);
     expect(ok[0]!.payload).toEqual(payload);
-    expect(ok[0]!.payloadHashMismatch).toBeUndefined();
+    expect(ok[0]!.payloadHashState).toBe("ok");
 
-    const bad = await derivePendingApprovals(
-      [
-        requested("2026-10-05T10:00:00.000Z", {
-          payloadHash: hash,
-          payload: { orderId: "o-1", amount: 9999 },
-        }),
-      ],
-      NOW,
-    );
-    expect(bad[0]!.payloadHashMismatch).toBe(true);
+    const bad = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z", { payloadHash: hash, payload: { orderId: "o-1", amount: 9999 } }),
+    ]);
+    expect(bad[0]!.payloadHashState).toBe("mismatch");
 
-    const none = await derivePendingApprovals([requested("2026-10-05T10:00:00.000Z")], NOW);
+    const none = await derivePendingApprovals([requested("2026-10-05T10:00:00.000Z")]);
     expect(none[0]!.payload).toBeUndefined();
-    expect(none[0]!.payloadHashMismatch).toBeUndefined();
+    expect(none[0]!.payloadHashState).toBeUndefined();
+  });
+
+  it("marks only the row whose payload cannot be re-hashed as unverifiable instead of failing the whole inbox", async () => {
+    const payload = { orderId: "o-1" };
+    vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValue(new Error("no WebCrypto"));
+    const out = await derivePendingApprovals([
+      requested("2026-10-05T10:00:00.000Z", { action: "a.with-payload", payload }),
+      requested("2026-10-05T10:01:00.000Z", { action: "a.without-payload" }),
+    ]);
+    expect(out.map((r) => [r.action, r.payloadHashState])).toEqual([
+      ["a.without-payload", undefined],
+      ["a.with-payload", "unverifiable"],
+    ]);
   });
 });

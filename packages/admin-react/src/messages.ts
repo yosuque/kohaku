@@ -80,7 +80,15 @@ export interface AdminMessages {
     payloadHashLabel: string;
     payloadLabel: string;
     payloadMismatch: string;
+    /** Shown when the recorded payload could not be re-hashed at all (nothing can be said about it either way). */
+    payloadUnverifiable: string;
+    /** Notice shown when the inbox read reached its event cap, so older requests may be missing. */
+    windowFull: (limit: number) => string;
     approveButton: string;
+    /** Title of the disabled Approve button on a row whose recorded payload does not match its hash. */
+    approveDisabledMismatch: string;
+    /** Title of the disabled Approve button while an issued token is still within its TTL. */
+    approveDisabledIssued: string;
     /** Info notice after a token is minted. */
     issuedNotice: (action: string) => string;
     tokenLabel: string;
@@ -89,7 +97,8 @@ export interface AdminMessages {
     copyButton: string;
     copied: string;
     reissue: string;
-    issueFailed: string;
+    /** Generic failure of POST /approvals: the server's own message and the host's requestId, when there are any. */
+    issueFailed: (message?: string, requestId?: string) => string;
     selfApproval: string;
     notConfigured: string;
     opIssue: string;
@@ -226,7 +235,7 @@ export const defaultAdminMessages: AdminMessages = {
   },
   approvals: {
     description:
-      "Governed Actions that need a human approval and were attempted without a valid token. Approving mints a short-lived token bound to the requester, the action and the exact payload; hand it to the requester, who pastes it when they retry. Derived from the lineage tail (the last 24 hours, up to 1000 events), so a very old request can fall out of this list.",
+      "Governed Actions that need a human approval and were attempted without a valid token. Approving mints a short-lived token bound to the requester, the action and the exact payload; hand it to the requester, who pastes it when they retry. Derived from the lineage tail (the last 24 hours, up to 1000 approval events), so a very old request can fall out of this list.",
     empty: "No pending approvals.",
     requester: "requester",
     requesterUnknown:
@@ -243,7 +252,15 @@ export const defaultAdminMessages: AdminMessages = {
     payloadLabel: "Recorded payload",
     payloadMismatch:
       "The recorded payload does not match the payload hash. Do not approve based on the displayed payload.",
+    payloadUnverifiable:
+      "The recorded payload could not be checked against the payload hash (hashing is unavailable here). Verify it elsewhere before approving.",
+    windowFull: (limit) =>
+      `Only the most recent ${limit} events were read, so older requests may not be shown.`,
     approveButton: "Approve",
+    approveDisabledMismatch:
+      "The recorded payload does not match the payload hash, so this request cannot be approved from here.",
+    approveDisabledIssued:
+      "A token was already issued and is still valid. Hand it to the requester, or re-issue it after it expires.",
     issuedNotice: (action) =>
       `Approval token issued for ${action}. Copy it and hand it to the requester; it is a bearer secret.`,
     tokenLabel: "Approval token",
@@ -251,7 +268,8 @@ export const defaultAdminMessages: AdminMessages = {
     copyButton: "Copy",
     copied: "Copied",
     reissue: "Re-issue",
-    issueFailed: "Failed to issue the approval token",
+    issueFailed: (message, requestId) =>
+      `Failed to issue the approval token${message != null && message !== "" ? `: ${message}` : ""}${requestId != null ? ` (requestId ${requestId})` : ""}`,
     selfApproval:
       "You cannot approve your own request. Switch to a different approver (the requester and the approver must differ).",
     notConfigured: "This host does not issue approvals (no ApprovalPort / authorizeGovernance is wired).",

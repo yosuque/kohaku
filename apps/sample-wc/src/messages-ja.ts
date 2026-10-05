@@ -47,5 +47,5 @@ export const JA_MESSAGES: RendererMessages = {
   actionApprovalPrompt: (action) =>
     `「${action}」の承認トークンを貼り付けてください(承認者に依頼してください。管理画面の「承認」タブを参照)`,
   actionAwaitingApprovalDetail: (requestId, payloadHash) =>
-    `リクエスト ${requestId} ・ ペイロード ${payloadHash.slice(0, 12)}`,
+    `リクエスト ${requestId} ・ ペイロード ${payloadHash.replace(/^sha256:/, "").slice(0, 12)}`,
 };

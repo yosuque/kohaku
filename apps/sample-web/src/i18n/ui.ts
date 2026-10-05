@@ -310,7 +310,7 @@ const JA: UIStrings = {
     },
     approvals: {
       description:
-        "人間の承認が必要な統制 Action のうち、有効なトークン無しで実行が試みられたものです。承認すると、要求者・Action・ペイロードに束縛された短命のトークンを発行します。それを要求者に渡し、要求者が再実行時に貼り付けます。lineage の末尾(直近 24 時間・最大 1000 イベント)から導出するため、ごく古い要求は一覧から外れることがあります。",
+        "人間の承認が必要な統制 Action のうち、有効なトークン無しで実行が試みられたものです。承認すると、要求者・Action・ペイロードに束縛された短命のトークンを発行します。それを要求者に渡し、要求者が再実行時に貼り付けます。lineage の末尾(直近 24 時間・最大 1000 件の承認イベント)から導出するため、ごく古い要求は一覧から外れることがあります。",
       empty: "承認待ちはありません。",
       requester: "要求者",
       requesterUnknown:
@@ -327,7 +327,15 @@ const JA: UIStrings = {
       payloadLabel: "記録されたペイロード",
       payloadMismatch:
         "記録されたペイロードがペイロードハッシュと一致しません。表示されたペイロードを根拠に承認しないでください。",
+      payloadUnverifiable:
+        "記録されたペイロードをペイロードハッシュと照合できませんでした(この環境ではハッシュ計算が使えません)。承認する前に別の方法で確認してください。",
+      windowFull: (limit) =>
+        `直近 ${limit} イベントのみを読み込んだため、古い要求は表示されていない可能性があります。`,
       approveButton: "承認する",
+      approveDisabledMismatch:
+        "記録されたペイロードがペイロードハッシュと一致しないため、ここからは承認できません。",
+      approveDisabledIssued:
+        "トークンは発行済みで、まだ有効です。要求者に渡すか、期限切れ後に再発行してください。",
       issuedNotice: (action) =>
         `${action} の承認トークンを発行しました。コピーして要求者に渡してください(持参人トークンです)。`,
       tokenLabel: "承認トークン",
@@ -335,7 +343,8 @@ const JA: UIStrings = {
       copyButton: "コピー",
       copied: "コピーしました",
       reissue: "再発行",
-      issueFailed: "承認トークンの発行に失敗しました",
+      issueFailed: (message, requestId) =>
+        `承認トークンの発行に失敗しました${message != null && message !== "" ? `: ${message}` : ""}${requestId != null ? ` (requestId ${requestId})` : ""}`,
       selfApproval:
         "自分自身の要求は承認できません。別の承認者に切り替えてください(要求者と承認者は別人である必要があります)。",
       notConfigured:

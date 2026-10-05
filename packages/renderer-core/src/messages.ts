@@ -148,5 +148,5 @@ export const DEFAULT_MESSAGES: RendererMessages = {
   actionApprovalPrompt: (action) =>
     `Paste the approval token for "${action}" (ask an approver; see Admin › Approvals)`,
   actionAwaitingApprovalDetail: (requestId, payloadHash) =>
-    `request ${requestId} · payload ${payloadHash.slice(0, 12)}`,
+    `request ${requestId} · payload ${payloadHash.replace(/^sha256:/, "").slice(0, 12)}`,
 };

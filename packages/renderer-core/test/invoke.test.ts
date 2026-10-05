@@ -469,7 +469,7 @@ describe("actionPhaseNotice", () => {
     );
     expect(notice).toEqual({
       role: "status",
-      text: `${DEFAULT_MESSAGES.actionAwaiting("approve")} (request req-7 · payload sha256:cdcdc)`,
+      text: `${DEFAULT_MESSAGES.actionAwaiting("approve")} (request req-7 · payload cdcdcdcdcdcd)`,
     });
     expect(DEFAULT_MESSAGES.actionApprovalPrompt("annotate")).toContain('"annotate"');
   });

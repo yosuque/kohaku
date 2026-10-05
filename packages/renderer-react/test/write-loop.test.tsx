@@ -523,7 +523,9 @@ describe("useInvokeAction: governed actions (design.md #62/#63)", () => {
       click(container);
       const notice = await screen.findByRole("status");
       expect(notice.textContent).toContain("request req-42");
-      expect(notice.textContent).toContain(`payload ${APPROVAL.payloadHash.slice(0, 12)}`);
+      expect(notice.textContent).toContain(
+        `payload ${APPROVAL.payloadHash.replace(/^sha256:/, "").slice(0, 12)}`,
+      );
       expect(notice.textContent).not.toContain(APPROVAL.payloadHash);
     });
   });

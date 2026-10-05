@@ -3,7 +3,7 @@ import { DEFAULT_APPROVAL_TTL_SECONDS } from "@kohaku-ui/spec-core";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { PendingApproval } from "../approvals.js";
 import { useAdmin } from "../context.js";
-import { useApprovalInbox } from "../hooks.js";
+import { APPROVAL_INBOX_EVENT_LIMIT, useApprovalInbox } from "../hooks.js";
 import { describeDeniedOperation } from "../rbac.js";
 import { V } from "../theme.js";
 import { card, smallButton } from "../ui.js";
@@ -25,6 +25,20 @@ function useNowMs(active: boolean): number {
   return now;
 }
 
+/** The hex digest without its `sha256:` prefix, cut to 12 characters (the full hash stays in the `title`). */
+function shortHash(payloadHash: string): string {
+  return payloadHash.replace(/^sha256:/, "").slice(0, 12);
+}
+
+/**
+ * POST /approvals answers 400 for more than a self-approval (a malformed body, a port-level refusal), so the
+ * dedicated self-approval text is chosen from the server's own wording: host-rest's "an approver cannot approve
+ * their own request", or the HMAC port's "approverId must differ from requesterId".
+ */
+function isSelfApprovalMessage(message: string): boolean {
+  return /own request|must differ from requesterId/i.test(message);
+}
+
 function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
   const { client, messages: t, notify, getMessages } = useAdmin();
   const [issued, setIssued] = useState<IssuedToken | null>(null);
@@ -43,11 +57,16 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
       })
       .catch((e: unknown) => {
         const m = getMessages();
-        const denied = isKohakuHostError(e) ? describeDeniedOperation(e, m.approvals.opIssue, m) : null;
+        if (!isKohakuHostError(e)) {
+          return notify(m.approvals.issueFailed(e instanceof Error ? e.message : undefined), "error");
+        }
+        const denied = describeDeniedOperation(e, m.approvals.opIssue, m);
         if (denied != null) return notify(denied, "error");
-        if (isKohakuHostError(e) && e.status === 400) return notify(m.approvals.selfApproval, "error");
-        if (isKohakuHostError(e) && e.status === 501) return notify(m.approvals.notConfigured, "error");
-        notify(m.approvals.issueFailed, "error");
+        if (e.status === 400 && isSelfApprovalMessage(e.message)) {
+          return notify(m.approvals.selfApproval, "error");
+        }
+        if (e.status === 501) return notify(m.approvals.notConfigured, "error");
+        notify(m.approvals.issueFailed(e.message, e.requestId), "error");
       });
   };
 
@@ -67,7 +86,18 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
   const requestAgeSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(row.latestTs)) / 1000));
   const issuedAgeSeconds = issued != null ? Math.max(0, Math.floor((now - issued.issuedAt) / 1000)) : 0;
   const expired = issued != null && issuedAgeSeconds >= DEFAULT_APPROVAL_TTL_SECONDS;
-  const approveDisabled = row.requesterId == null;
+  // Why Approve is unavailable, if it is: no requester to bind the token to, a recorded payload that is not the
+  // one the hash covers, or a token that was already issued and is still valid (a new one would only confuse).
+  const disabledReason =
+    row.requesterId == null
+      ? t.approvals.requesterUnknown
+      : row.payloadHashState === "mismatch"
+        ? t.approvals.approveDisabledMismatch
+        : issued != null && !expired
+          ? t.approvals.approveDisabledIssued
+          : null;
+  // After the TTL only Re-issue (next to the token) is offered.
+  const showApprove = !expired;
 
   return (
     <div style={{ ...card, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -80,23 +110,25 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
         {row.count > 1 && (
           <span style={{ color: V.muted, fontSize: 12 }}>{t.approvals.requestCount(row.count)}</span>
         )}
-        <button
-          type="button"
-          onClick={issue}
-          disabled={approveDisabled}
-          title={approveDisabled ? t.approvals.requesterUnknown : undefined}
-          style={{
-            ...smallButton,
-            marginLeft: "auto",
-            ...(approveDisabled ? { opacity: 0.5, cursor: "not-allowed" } : {}),
-          }}
-        >
-          {t.approvals.approveButton}
-        </button>
+        {showApprove && (
+          <button
+            type="button"
+            onClick={issue}
+            disabled={disabledReason != null}
+            title={disabledReason ?? undefined}
+            style={{
+              ...smallButton,
+              marginLeft: "auto",
+              ...(disabledReason != null ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+            }}
+          >
+            {t.approvals.approveButton}
+          </button>
+        )}
       </div>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11.5, color: V.muted }}>
         <span>
-          {t.approvals.payloadHashLabel}: <code title={row.payloadHash}>{row.payloadHash.slice(0, 12)}</code>
+          {t.approvals.payloadHashLabel}: <code title={row.payloadHash}>{shortHash(row.payloadHash)}</code>
         </span>
         {row.requestIds.length > 0 && (
           <span>
@@ -104,9 +136,14 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
           </span>
         )}
       </div>
-      {row.payloadHashMismatch === true && (
+      {row.payloadHashState === "mismatch" && (
         <div role="alert" style={{ color: V.negativeText, fontSize: 12.5 }}>
           {t.approvals.payloadMismatch}
+        </div>
+      )}
+      {row.payloadHashState === "unverifiable" && (
+        <div role="status" style={{ color: V.muted, fontSize: 12.5 }}>
+          {t.approvals.payloadUnverifiable}
         </div>
       )}
       {row.payload !== undefined && (
@@ -172,7 +209,7 @@ function ApprovalRow({ row }: { row: PendingApproval }): ReactNode {
  */
 export function ApprovalsTab(): ReactNode {
   const { messages: t } = useAdmin();
-  const { pending, reload, loading } = useApprovalInbox();
+  const { pending, reload, loading, windowFull } = useApprovalInbox();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -182,6 +219,11 @@ export function ApprovalsTab(): ReactNode {
           {t.refresh}
         </button>
       </div>
+      {windowFull && (
+        <div role="status" style={{ ...card, fontSize: 12.5, color: V.muted }}>
+          {t.approvals.windowFull(APPROVAL_INBOX_EVENT_LIMIT)}
+        </div>
+      )}
       {!loading && pending.length === 0 && (
         <div style={{ ...card, fontSize: 12.5, color: V.muted }}>{t.approvals.empty}</div>
       )}

@@ -41,6 +41,12 @@ export interface KohakuAdminProps {
   /** Product controls rendered at the right of the tab bar (may call useAdminNotice). */
   toolbar?: ReactNode;
   extraTabs?: AdminExtraTab[];
+  /**
+   * Built-in tabs to leave out. A host that does not wire an `ApprovalPort` (so `POST /approvals` answers 501)
+   * can hide `"approvals"` rather than show a tab that cannot do anything. A hidden `initialTab` falls back to
+   * the first visible tab.
+   */
+  hiddenTabs?: AdminTabKey[];
   promotionDefaults?: PromotionDefaults;
   /** Observes notices in addition to the built-in banner. */
   onNotice?: NotifyFn;
@@ -66,7 +72,7 @@ export function KohakuAdmin(props: KohakuAdminProps): ReactNode {
     onNoticeRef.current?.(text, kind);
   }, []);
 
-  const tabs: { key: string; label: string; render: () => ReactNode }[] = [
+  const builtinTabs: { key: AdminTabKey; label: string; render: () => ReactNode }[] = [
     { key: "lineage", label: t.tabLineage, render: () => <LineageTab /> },
     { key: "analytics", label: t.tabAnalytics, render: () => <AnalyticsTab /> },
     {
@@ -78,6 +84,10 @@ export function KohakuAdmin(props: KohakuAdminProps): ReactNode {
     },
     { key: "fixations", label: t.tabFixations, render: () => <FixationsTab /> },
     { key: "approvals", label: t.tabApprovals, render: () => <ApprovalsTab /> },
+  ];
+  const hidden = props.hiddenTabs ?? [];
+  const tabs: { key: string; label: string; render: () => ReactNode }[] = [
+    ...builtinTabs.filter((x) => !hidden.includes(x.key)),
     ...(props.extraTabs ?? []),
   ];
   const active = tabs.find((x) => x.key === tab) ?? tabs[0]!;

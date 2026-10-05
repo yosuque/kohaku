@@ -1,6 +1,6 @@
 import { actionPayloadHash } from "@kohaku-ui/spec-core";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApprovalsTab, defaultAdminMessages as m } from "../src/index.js";
 import { jsonResponse, renderInAdmin } from "./helpers.js";
 
@@ -34,11 +34,13 @@ describe("ApprovalsTab", () => {
     expect(view.container.textContent).toContain(m.approvals.requestCount(2));
     expect(view.container.textContent).toContain("req-1, req-2");
     expect(view.container.textContent).toContain("1m ago");
-    const hash = screen.getByText("sha256:01234");
+    // The `sha256:` prefix is not shown (it would eat 7 of the 12 characters): 12 hex digits, full hash in title.
+    const hash = screen.getByText("0123456789ab");
     expect(hash.getAttribute("title")).toBe("sha256:0123456789abcdef0123");
     const lineageCall = view.calls.find((c) => c.url.includes("/lineage"))!;
     const params = new URL(lineageCall.url, "http://x").searchParams;
-    expect(params.get("type")).toBe("action.approvalRequested,action.invoked,action.approved");
+    // action.invoked is not read: every auto-tier write records one and would crowd the 1000-event tail.
+    expect(params.get("type")).toBe("action.approvalRequested,action.approved");
     expect(params.get("limit")).toBe("1000");
     expect(Date.parse(params.get("since")!)).toBeLessThan(Date.now() - 23 * 3600_000);
   });
@@ -146,13 +148,38 @@ describe("ApprovalsTab", () => {
     const view = renderInAdmin(<ApprovalsTab />, {
       handlers: {
         "GET /lineage": lineage([requestedEvent()]),
-        "POST /approvals": () => jsonResponse({ error: { code: "BAD_REQUEST", message: "self" } }, 400),
+        "POST /approvals": () =>
+          jsonResponse(
+            { error: { code: "BAD_REQUEST", message: "an approver cannot approve their own request" } },
+            400,
+          ),
       },
     });
     await screen.findByText("sales.refund");
     fireEvent.click(screen.getByText(m.approvals.approveButton));
     await waitFor(() => expect(view.notices).toHaveLength(1));
     expect(view.notices[0]).toEqual({ text: m.approvals.selfApproval, kind: "error" });
+  });
+
+  it("does not call every 400 a self-approval: another 400 shows the server's message and the requestId", async () => {
+    const view = renderInAdmin(<ApprovalsTab />, {
+      handlers: {
+        "GET /lineage": lineage([requestedEvent()]),
+        "POST /approvals": () =>
+          jsonResponse(
+            { error: { code: "BAD_REQUEST", message: "payloadHash is malformed", requestId: "req-400" } },
+            400,
+          ),
+      },
+    });
+    await screen.findByText("sales.refund");
+    fireEvent.click(screen.getByText(m.approvals.approveButton));
+    await waitFor(() => expect(view.notices).toHaveLength(1));
+    expect(view.notices[0]).toEqual({
+      text: m.approvals.issueFailed("payloadHash is malformed", "req-400"),
+      kind: "error",
+    });
+    expect(view.notices[0]!.text).toContain("req-400");
   });
 
   it("explains a host with no approvals wired (501)", async () => {
@@ -178,7 +205,7 @@ describe("ApprovalsTab", () => {
     await screen.findByText("sales.refund");
     fireEvent.click(screen.getByText(m.approvals.approveButton));
     await waitFor(() => expect(view.notices).toHaveLength(1));
-    expect(view.notices[0]).toEqual({ text: m.approvals.issueFailed, kind: "error" });
+    expect(view.notices[0]).toEqual({ text: m.approvals.issueFailed("boom", undefined), kind: "error" });
   });
 
   it("disables Approve for a row with no recorded requester", async () => {
@@ -207,6 +234,73 @@ describe("ApprovalsTab", () => {
     expect(document.body.textContent).toContain('"orderId": "o-1"');
     expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(screen.getByText(m.approvals.payloadMismatch)).toBeTruthy();
+    // Approve is refused (with the reason as its title) only on the row whose payload does not match its hash.
+    const buttons = screen.getAllByText(m.approvals.approveButton) as HTMLButtonElement[];
+    expect(buttons.map((b) => b.disabled)).toEqual([false, true]);
+    expect(buttons[1]!.title).toBe(m.approvals.approveDisabledMismatch);
+  });
+
+  it("says so (without blocking Approve) when the recorded payload cannot be re-hashed", async () => {
+    vi.spyOn(globalThis.crypto.subtle, "digest").mockRejectedValue(new Error("no WebCrypto"));
+    try {
+      renderInAdmin(<ApprovalsTab />, {
+        handlers: {
+          "GET /lineage": lineage([requestedEvent({ payload: { orderId: "o-1" } })]),
+        },
+      });
+      await screen.findByText("sales.refund");
+      expect(screen.getByText(m.approvals.payloadUnverifiable)).toBeTruthy();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect((screen.getByText(m.approvals.approveButton) as HTMLButtonElement).disabled).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("disables Approve while an issued token is valid, and offers only Re-issue once the TTL has passed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      let issueCalls = 0;
+      renderInAdmin(<ApprovalsTab />, {
+        handlers: {
+          "GET /lineage": lineage([requestedEvent()]),
+          "POST /approvals": () => {
+            issueCalls += 1;
+            return jsonResponse({ approval: `tok.${issueCalls}` });
+          },
+        },
+      });
+      await screen.findByText("sales.refund");
+      fireEvent.click(screen.getByText(m.approvals.approveButton));
+      await screen.findByLabelText(m.approvals.tokenLabel);
+      const approve = screen.getByText(m.approvals.approveButton) as HTMLButtonElement;
+      expect(approve.disabled).toBe(true);
+      expect(approve.title).toBe(m.approvals.approveDisabledIssued);
+      expect(screen.queryByText(m.approvals.reissue)).toBeNull();
+
+      // Past the 300 s TTL (the row's own once-a-second clock picks the new time up on its next tick).
+      vi.setSystemTime(Date.now() + 301_000);
+      const reissue = await screen.findByText(m.approvals.reissue, undefined, { timeout: 3000 });
+      expect(screen.queryByText(m.approvals.approveButton)).toBeNull();
+      fireEvent.click(reissue);
+      await waitFor(() => expect(issueCalls).toBe(2));
+      expect((screen.getByLabelText(m.approvals.tokenLabel) as HTMLInputElement).value).toBe("tok.2");
+      expect(screen.queryByText(m.approvals.reissue)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("warns that older requests may be missing when the read reached its event cap", async () => {
+    const events = Array.from({ length: 1000 }, (_, i) => requestedEvent({ requestId: `req-${i}` }));
+    renderInAdmin(<ApprovalsTab />, { handlers: { "GET /lineage": lineage(events) } });
+    await screen.findByText(m.approvals.windowFull(1000));
+  });
+
+  it("shows no cap warning for a short read", async () => {
+    renderInAdmin(<ApprovalsTab />, { handlers: { "GET /lineage": lineage([requestedEvent()]) } });
+    await screen.findByText("sales.refund");
+    expect(screen.queryByText(m.approvals.windowFull(1000))).toBeNull();
   });
 
   it("explains a denied lineage read", async () => {

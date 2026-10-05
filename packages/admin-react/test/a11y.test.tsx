@@ -1,3 +1,4 @@
+import { actionPayloadHash } from "@kohaku-ui/spec-core";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import axe from "axe-core";
 import { describe, expect, it } from "vitest";
@@ -82,6 +83,8 @@ describe("a11y (axe structural rules) per tab", () => {
   });
 
   it("ApprovalsTab (a pending row, then an issued token)", async () => {
+    const recorded = { orderId: "o-1" };
+    const recordedHash = await actionPayloadHash(recorded);
     const { container } = renderInAdmin(<ApprovalsTab />, {
       handlers: {
         ...handlers,
@@ -95,10 +98,10 @@ describe("a11y (axe structural rules) per tab", () => {
                 actor: { kind: "user", id: "demo-viewer" },
                 payload: {
                   action: "sales.refund",
-                  payloadHash: "sha256:0123456789abcdef0123",
+                  payloadHash: recordedHash,
                   tier: "approve",
                   requestId: "req-1",
-                  payload: { orderId: "o-1" },
+                  payload: recorded,
                 },
               },
             ],

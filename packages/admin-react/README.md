@@ -36,11 +36,12 @@ export function AdminPage() {
   `promotion.evaluate`; the status filter itself, including "all", is always a read-only `promotion.list`).
 - `theme` — renderer-core `ThemeTokens`; the console follows `--kohaku-color-*` (light fallbacks when omitted).
 - `toolbar` / `extraTabs` — product-specific controls and tabs rendered inside the same provider.
+- `hiddenTabs` — built-in tabs to leave out, e.g. `["approvals"]` for a host that wires no `ApprovalPort` (where `POST /approvals` answers 501).
 - `promotionDefaults` — prefill / `queryTemplate.path` choices for the promotion approval form.
 - The published promotion card has an **Unpublish** action (`PromotionActionKind: "unpublish"`; copy in
   `messages.promotions.opUnpublish` / `unpublishedNotice`) alongside approve/reject/withdraw/request-changes.
 - The **Approvals** tab is the approver's inbox for `"approve"`-tier governed Actions (design.md #72). It derives
-  the pending requests from the lineage tail (`GET /lineage`, last 24 hours, at most 1000 events; also exported
+  the pending requests from the lineage tail (`GET /lineage`, last 24 hours, at most 1000 `action.approvalRequested` / `action.approved` events, with a notice when that cap is reached; also exported
   as `derivePendingApprovals` / `useApprovalInbox`) and mints a bearer token with `POST /approvals` that the
   approver copies and hands to the requester. It needs `lineage.read` and `action.approve`; a host that records
   only hashes (the default) shows the payload hash, one that records payloads
