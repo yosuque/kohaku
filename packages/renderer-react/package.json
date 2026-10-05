@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/renderer-react",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "React renderer for kohaku UI Specs, with the core component implementations.",
   "type": "module",
   "exports": {
