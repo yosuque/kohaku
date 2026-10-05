@@ -353,7 +353,9 @@ npm run dev                                      # API :8787 + web :5173
 
 `init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。
 
-`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。
+`init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。`npm run dev` は開発モードで動き(未配線の `auth` / `authorizeGovernance` に関する本番向け警告 2 件の代わりに、起動時の警告が 1 行出ます)、生成された README の「Before production」節に、本番前に配線するものが挙がっています(§7「開発モードと本番向け警告」参照)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。
+
+`init` は `npm install` の後に、生成された golden テストを update モードで 1 回実行して(決定的で LLM は使いません)fixture の `expected` を書き込むため、`npm test` は最初から緑になります。この手順が失敗しても `init` 自体は成功し、手動で実行する 1 コマンド(`KOHAKU_GOLDEN_UPDATE=1 npm test`)が表示されます。`--no-install` ではこの手順をスキップします。
 
 Chat は生成された Intent カタログの範囲内でのみ回答し、範囲外の質問には `NO_MATCH` を返します(`server/ports.ts` の `createKohakuHost` に `fallbackIntent`(カタログ内の、`request` パラメータを取る Intent 名)を渡すと範囲を広げられます)。生成物はすべて出発点であり、DomainPort はプロダクト側の責務のままです(設計書 §2)。各ファイルには他に何を置き換えるべきか(`createKohakuHost` の他の既定値を含め)が書かれています。
 
@@ -815,6 +817,7 @@ const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
 
 ## 7. 運用の勘どころ
 
+- **開発モードと本番向け警告(`dev`)**: `auth` も `authorizeGovernance` も配線していないと、`createKohakuRoutes` は起動時に `console.warn` を 2 行出します(全リクエストが共有の ANONYMOUS principal として扱われること、governance / audit ルートが開いていること)。本番では正しい警告ですが、ローカル作業ではうるさいため、`KohakuHostDeps.dev: true` を渡すと、配線されていないものとその帰結を挙げた 1 行の `console.warn` に畳まれます(両方配線済みなら何も出ません。stdio MCP サーバーの stdout を JSON-RPC 専用に保つため、出力先は stderr のままです)。挙動は同一でログだけが変わり、`dev` なしでは 2 件の警告は従来のままです。`createKohakuHost({ dev })`(`@kohaku-ui/host`)がこれを転送し(`routes.dev` で上書き可)、加えて capability secret が未設定のときに限って一時 secret を許可します(常に `KOHAKU_CAPABILITY_SECRET` を設定しているプロジェクトには影響しません)。`kohaku init` が生成する `server/ports.ts` は `routes: { dev: process.env["NODE_ENV"] !== "production" }` を渡します(npm の慣例に従い、新しい環境変数は作りません)。トップレベルの `dev` ではなく `routes.dev` を使うのは意図的で、一時 secret へのフォールバックを有効にせず、`KOHAKU_CAPABILITY_SECRET` が無ければ従来どおり起動時に失敗させるためです。本番前に `routes.auth`(`Principal` は `{ id, roles }`)と `routes.authorizeGovernance`(`governancePolicyFromRoles` は `@kohaku-ui/host` から再 export されています)を配線し、`KOHAKU_CAPABILITY_SECRET` を固定して、`NODE_ENV=production` を設定してください。生成プロジェクトの README(「Before production」)と `server/ports.ts` にコメントアウトされた雛形があります。
 - **キャッシュとデータ更新**: Spec キャッシュのキーは intent + dataVersion + カタログ指紋(+ 任意の generatorVersion)。`SemanticPort.dataVersion` の粒度(全体 / テーブル単位 / イベント駆動)がそのまま無効化戦略になります。サンプルは全体一括 + bump。
 - **キャッシュの無効化と上限**: キーに dataVersion / カタログ指紋 / generatorVersion が入るため、データ更新・部品公開・プロンプト改訂はキー変化で自動的に別エントリになります。したがって能動的なキャッシュ無効化(削除)は原則不要です。TTL は鮮度制御ではなくメモリ回収の保険で、指定しなければ無期限に保持します。サンプルの `StoragePort` はインメモリ Map で、エントリ上限(既定 500)を超えると最も長く参照されていないキーから LRU で落とします。上限の目安は「同時に生きている intent × dataVersion の組」を十分覆う値にし、恒久保持や大量エントリが必要なら `@kohaku-ui/storage-redis` / `@kohaku-ui/storage-postgres`(下記)に差し替えてバックエンド側にエントリを持たせてください。
 - **キャッシュバックエンド障害(`ComposePolicy.cacheFailure`)**: Spec キャッシュを支える `StoragePort` 自体が使えない場合(Redis 障害など)、`getSpecCache`/`putSpecCache` の例外送出は既定で fail-open(`cacheFailure` 未指定 = `"open"` 相当)です。lookup の失敗はミス扱い、store の失敗はスキップとして扱われ、生成は継続して Spec は配信されます。発生ごとに `observer.onError` に `phase:"cache"` で通知されます。同一表示保証を厳密にし、キャッシュ障害時にリクエストを失敗させたい場合は `cacheFailure: "closed"` を指定してください。
@@ -926,6 +929,7 @@ const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
 |---|---|
 | 画面に「Could not render this request」(presentMarkdown) | L1 生成が 2 回とも検証に落ちた決定的フォールバック。LLM 設定(キー・モデル)を確認。ollama なら非思考モデルへ変更。**予算ガード(`ComposePolicy.budget`)配線時は予算超過でも同じ画面**になる(`fallback.reason` の英語文言「budget exceeded」/ `observer.onError` の `budgetExceeded` で判別) |
 | `fallback.reason` が「the LLM provider was unavailable」と言っている | LLM が一度も応答しなかった(provider/config の一時的な障害)ケースで、「failed catalog/structure validation」(LLM は応答したが出力が検証に落ちた)とは異なる。`KOHAKU_LLM_PROVIDER` と provider の API キーを確認 — 上記の `KOHAKU_DEBUG` と、`observer.onError` の `ComposeErrorContext.failure` / `error` で根本原因を調べられる |
+| Chat / `/intent/normalize` が 503 `INTERNAL` "LLM provider unavailable" を返す | LLM provider が Intent 解決を処理できなかった(API キー未設定・provider の失敗・タイムアウト・中断)。Spec 生成は決定的な Spec へ縮退できるが、Intent 解決は LLM 無しには縮退できない。`KOHAKU_LLM_PROVIDER` と provider の API キーを確認。原因は `onError` / `KOHAKU_DEBUG=1` のサーバーログに、応答の `requestId` 付きで出る |
 | Chat が常に L2(橙)になる | NL 正規化が既知 Intent にマップできていない。`/api/health` の `intents` と質問の噛み合わせ、モデル品質を確認 |
 | `cache:HIT` にならない | params が完全一致しているか(チップの hash を比較)。bump 後は dataVersion が変わるので MISS が正しい |
 | データ部分だけ「データが更新されています」 | STALE_VERSION(Spec が古い)。再操作で新しい dataVersion の Spec に切り替わる |

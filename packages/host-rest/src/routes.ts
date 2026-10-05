@@ -93,24 +93,46 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
     }),
   );
 
-  // Startup warning for the fail-open default of the governance/audit plane (allowed without authorization when not wired).
-  // The fail-open default itself is intentional (backward compatible; governance authorization is a
-  // product responsibility), but since it is dangerous to silently miss an unprotected public exposure, warn exactly
-  // once. If already protected by external middleware (a reverse proxy, etc.), this is expected.
-  if (deps.authorizeGovernance == null) {
-    console.warn(
-      "[kohaku] Governance/audit routes (/lineage, /telemetry, /promotions*, /fixations*) are exposed without authorization. " +
-        "In production, wiring deps.authorizeGovernance or protecting them with external middleware is mandatory.",
-    );
-  }
-  // Symmetric startup warning: without deps.auth, every request is treated as the demo principal (ANONYMOUS),
-  // so capability issuance, governance authorization, and audit records are all attributed to one shared
-  // identity rather than the real caller. Fine for local development/demos, dangerous left unwired in production.
-  if (deps.auth == null) {
-    console.warn(
-      "[kohaku] deps.auth is not wired. Every request will be treated as the demo principal (ANONYMOUS). " +
-        "In production, wiring deps.auth to real authentication is mandatory.",
-    );
+  if (deps.dev === true) {
+    // Development mode (deps.dev): the two production-facing warnings below fold into one line, and only
+    // when something is actually unwired. Behavior is identical either way; only the log output differs.
+    // It goes to stderr (console.warn), not stdout (console.info): a stdio MCP server (host-mcp-apps over a
+    // generated project's server/mcp-server.ts) reserves stdout for JSON-RPC, so any stdout line corrupts the
+    // stream. The two warnings this replaces are stderr too.
+    const consequences = [
+      ...(deps.auth == null ? ["every request runs as the ANONYMOUS principal"] : []),
+      ...(deps.authorizeGovernance == null ? ["the governance routes are open to every caller"] : []),
+    ];
+    if (consequences.length > 0) {
+      const unwired = [
+        ...(deps.auth == null ? ["deps.auth"] : []),
+        ...(deps.authorizeGovernance == null ? ["deps.authorizeGovernance"] : []),
+      ];
+      console.warn(
+        `[kohaku] development mode: ${unwired.join(" / ")} not wired — ${consequences.join(" and ")}. ` +
+          "Wire them before production (https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#7-operational-tips).",
+      );
+    }
+  } else {
+    // Startup warning for the fail-open default of the governance/audit plane (allowed without authorization when not wired).
+    // The fail-open default itself is intentional (backward compatible; governance authorization is a
+    // product responsibility), but since it is dangerous to silently miss an unprotected public exposure, warn exactly
+    // once. If already protected by external middleware (a reverse proxy, etc.), this is expected.
+    if (deps.authorizeGovernance == null) {
+      console.warn(
+        "[kohaku] Governance/audit routes (/lineage, /telemetry, /promotions*, /fixations*) are exposed without authorization. " +
+          "In production, wiring deps.authorizeGovernance or protecting them with external middleware is mandatory.",
+      );
+    }
+    // Symmetric startup warning: without deps.auth, every request is treated as the demo principal (ANONYMOUS),
+    // so capability issuance, governance authorization, and audit records are all attributed to one shared
+    // identity rather than the real caller. Fine for local development/demos, dangerous left unwired in production.
+    if (deps.auth == null) {
+      console.warn(
+        "[kohaku] deps.auth is not wired. Every request will be treated as the demo principal (ANONYMOUS). " +
+          "In production, wiring deps.auth to real authentication is mandatory.",
+      );
+    }
   }
   const getPrincipal = memoizePrincipal(
     async (c: Context): Promise<Principal> => (await deps.auth?.(c)) ?? ANONYMOUS,

@@ -74,12 +74,16 @@ export {
 export {
   type ConsoleErrorReporter,
   type ConsoleErrorReporterOptions,
+  classifyHostError,
   clientMessageFor,
   createConsoleErrorReporter,
   errorMessage,
   failOpen,
   formatErrorChain,
+  type HostErrorClass,
+  isLlmUnavailableError,
   isTypedHostError,
+  LLM_PROVIDER_UNAVAILABLE_MESSAGE,
   notifyHook,
 } from "./errors.js";
 export {

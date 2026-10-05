@@ -19,7 +19,7 @@ from kohaku.spec import GovernanceErrorDiscriminators
 from ..bodies import SessionBody, parse_compose_body
 from ..deps import KohakuHostDeps
 from ..governance_policy import GovernanceOperation
-from .compose import _COMPOSE_FAILED_MESSAGE, _INTENT_INVALID_MESSAGE, compose_with_fixation
+from .compose import _COMPOSE_FAILED_MESSAGE, _intent_invalid, compose_with_fixation
 from .shared import (
     _error,
     _fixation_key,
@@ -91,8 +91,7 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             intent = resolved.intent
         except BaseException as e:
             await report_host_error(deps, "fixations/approve", request_id, e)
-            client_message = _message(e) if is_typed_host_error(e) else _INTENT_INVALID_MESSAGE
-            return _error("INTENT_INVALID", client_message, 422, request_id)
+            return _intent_invalid(e, request_id)
         try:
             result = await compose_with_fixation(
                 intent,

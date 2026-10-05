@@ -29,6 +29,7 @@ from kohaku.composer import (
 )
 from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
+    LLM_PROVIDER_UNAVAILABLE_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
     ActionGateRequest,
@@ -44,7 +45,7 @@ from kohaku.host_core import (
     TraceContext,
     apply_action_effects,
     build_action_manifest,
-    is_typed_host_error,
+    classify_host_error,
     parse_invokable_ref,
     parse_trace_context,
     record_action_gate_result,
@@ -650,7 +651,8 @@ def attach_kohaku_to_mcp_server(
 
         An arbitrary/untyped exception's message never reaches the caller (it may leak internals); a typed
         host error (kohaku.host_core.is_typed_host_error — SpecError/ComposeError/QueryRefError, or any
-        exception carrying a string `code`) still has its own message pass through.
+        exception carrying a string `code`, except an LlmError) still has its own message pass through. An
+        LlmError PROVIDER / CONFIG / ABORTED becomes host_core's fixed LLM_PROVIDER_UNAVAILABLE_MESSAGE.
 
         Also where the tool call's request-id correlation id (_correlation_id_of) and trace context
         (_trace_context_of) — both read off this call's own `ctx` — are attached to a reported failure.
@@ -665,7 +667,12 @@ def attach_kohaku_to_mcp_server(
                 correlation_id=_correlation_id_of(ctx),
                 trace_context=_trace_context_of(ctx),
             )
-            message = str(exc) if is_typed_host_error(exc) else _TOOL_INTERNAL_ERROR_MESSAGE
+            # An unavailable LLM provider (LlmError PROVIDER / CONFIG / ABORTED) gets host_core's fixed message
+            # (the same text the REST profile answers with on 503); its raw SDK wording must not reach the model.
+            cls = classify_host_error(exc)
+            if cls.kind == "upstream_unavailable":
+                return _tool_error(LLM_PROVIDER_UNAVAILABLE_MESSAGE)
+            message = str(exc) if cls.kind == "typed" else _TOOL_INTERNAL_ERROR_MESSAGE
             return _tool_error(message)
 
     async def _compose_and_package(
