@@ -19,11 +19,24 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-const program = new Command("kohaku")
+// The explicit `Command` annotation is load-bearing: TypeScript only treats a call to a `never`-returning
+// function as ending control flow when the callee expression has an explicit type annotation, which is what
+// lets `program.error(...)` / `fail(...)` below narrow the code after a failed `try` without a `return`.
+const program: Command = new Command("kohaku")
   .description(
     "CLI for kohaku: protocol conformance checks, scaffolding, project generation and component validation",
   )
   .version(CLI_VERSION);
+
+/** The one-line message shown for a caught failure (no stack trace). */
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Prints `e`'s message and exits with `exitCode` through commander (which calls `process.exit`). */
+function fail(e: unknown, exitCode = 1): never {
+  return program.error(errorMessage(e), { exitCode });
+}
 
 program
   .command("conformance")
@@ -42,11 +55,8 @@ program
         opts.rest != null ? await runRestConformance(opts.rest, opts.intent) : await runSelfConformance();
     } catch (e) {
       // Show a malformed --intent shape or a network failure as a single line rather than a stack trace.
-      // program.error calls process.exit internally, so this return is never reached at runtime.
-      // However, the type system does not learn that process.exit is `never`, and without the return
-      // report could be undefined downstream, so we keep the return purely to satisfy the types.
-      program.error(e instanceof Error ? e.message : String(e));
-      return;
+      // `fail` is typed `never`, so the compiler knows `report` is assigned after this try/catch.
+      fail(e);
     }
     console.log(formatReport(report));
     process.exitCode = report.pass ? 0 : 1;
@@ -83,10 +93,7 @@ program
         });
       } catch (e) {
         // A malformed --header is a usage error (exit 2); anything else is 1.
-        program.error(e instanceof Error ? e.message : String(e), {
-          exitCode: e instanceof CliUsageError ? 2 : 1,
-        });
-        return;
+        fail(e, e instanceof CliUsageError ? 2 : 1);
       }
       console.log(opts.json === true ? JSON.stringify(report, null, 2) : formatExplainReport(report));
     },
@@ -116,15 +123,14 @@ program
     const scaffold = what === "ports" ? scaffoldPorts : scaffoldGolden;
     let written: string[];
     try {
-      written = scaffold(opts.out ?? target!.defaultOut);
+      written = scaffold(opts.out ?? target.defaultOut);
     } catch (e) {
       // As with the conformance action, show failures such as existing-file collisions as a single line (no raw stack).
-      program.error(e instanceof Error ? e.message : String(e));
-      return; // The type of `written` must be settled (process.exit of program.error cannot be conveyed to the types).
+      fail(e);
     }
     console.log("Generated:");
     for (const path of written) console.log(`  ${path}`);
-    console.log(`\nNext steps: ${target!.next}`);
+    console.log(`\nNext steps: ${target.next}`);
   });
 
 program
@@ -157,8 +163,7 @@ program
       try {
         result = await initProject(opts);
       } catch (e) {
-        program.error(e instanceof Error ? e.message : String(e));
-        return;
+        fail(e);
       }
       const p = result.profile;
       console.log(`Generated ${result.written.length} files in ${result.outDir}`);
@@ -212,9 +217,7 @@ program
     try {
       raw = await readStdin();
     } catch (e) {
-      process.stderr.write(
-        `smoke-l2: failed to read stdin (${e instanceof Error ? e.message : String(e)})\n`,
-      );
+      process.stderr.write(`smoke-l2: failed to read stdin (${errorMessage(e)})\n`);
       process.exitCode = 1;
       return;
     }
@@ -223,7 +226,7 @@ program
     try {
       output = await runSmokeL2(parseSmokeL2Input(raw));
     } catch (e) {
-      process.stderr.write(`smoke-l2: ${e instanceof Error ? e.message : String(e)}\n`);
+      process.stderr.write(`smoke-l2: ${errorMessage(e)}\n`);
       process.exitCode = 1;
       return;
     }
@@ -292,8 +295,7 @@ dataset
         outPath: opts.out,
       });
     } catch (e) {
-      program.error(e instanceof Error ? e.message : String(e));
-      return;
+      fail(e);
     }
     console.log(
       `Wrote ${result.fixations + result.golden} record(s) (fixations=${result.fixations}, golden=${result.golden}, skipped=${result.skipped}) to ${result.outPath}`,
@@ -334,8 +336,7 @@ evidence
     try {
       result = await runEvidenceKeygen(opts.outDir, { force: opts.force === true });
     } catch (e) {
-      program.error(e instanceof Error ? e.message : String(e));
-      return;
+      fail(e);
     }
     console.log(`Generated ${result.privateKeyPath} (mode 0600)`);
     console.log(`Generated ${result.publicKeyPath}`);
@@ -411,10 +412,7 @@ evidence
         });
       } catch (e) {
         // A bad --since / --until is a usage error (exit 2, like `evidence verify`); anything else is 1.
-        program.error(e instanceof Error ? e.message : String(e), {
-          exitCode: e instanceof CliUsageError ? 2 : 1,
-        });
-        return;
+        fail(e, e instanceof CliUsageError ? 2 : 1);
       }
       const c = result.manifest.counts;
       console.log(`Wrote evidence pack to ${result.outDir}`);
@@ -444,7 +442,7 @@ evidence
     try {
       result = await runEvidenceVerify(dir, opts.publicKey);
     } catch (e) {
-      console.error(e instanceof Error ? e.message : String(e));
+      console.error(errorMessage(e));
       process.exitCode = 2;
       return;
     }
@@ -537,10 +535,7 @@ usage
         });
       } catch (e) {
         // A bad argument (window, format, source, data dir, tenant) is a usage error (exit 2); anything else is 1.
-        program.error(e instanceof Error ? e.message : String(e), {
-          exitCode: e instanceof CliUsageError ? 2 : 1,
-        });
-        return;
+        fail(e, e instanceof CliUsageError ? 2 : 1);
       }
       if (result.outPath != null) {
         console.error(`Wrote ${result.rows.length} usage row(s) to ${result.outPath}`);
@@ -582,8 +577,7 @@ migrate
     try {
       result = await migratePlan(options);
     } catch (e) {
-      program.error(e instanceof Error ? e.message : String(e));
-      return;
+      fail(e);
     }
     const { plan } = result;
     console.log(`Wrote ${result.outPath} (planHash: ${plan.planHash})`);
@@ -635,8 +629,7 @@ migrate
     try {
       result = await migrateApply(options);
     } catch (e) {
-      program.error(e instanceof Error ? e.message : String(e));
-      return;
+      fail(e);
     }
     console.log(
       `Applied ${result.applied.length}, skipped ${result.skipped.length}, blocked ${result.blocked.length}`,
