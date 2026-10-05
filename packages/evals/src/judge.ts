@@ -405,6 +405,18 @@ export interface Judge {
 }
 
 /**
+ * Rounds a computed weight to 4 decimal places. Floating-point arithmetic on the tenths/hundredths that
+ * rubric weights are always written in (e.g. `0.05 + 0.1`) does not land on an exact binary value (it
+ * comes out `0.15000000000000002`), and that raw value would otherwise be interpolated verbatim into the
+ * criterion list `rubricSystem` sends the model (`weight ${c.weight}`) -- a cosmetic defect there, but one
+ * that also risks reading to the model as a deliberately, suspiciously precise number. Four decimal places
+ * is more precision than any rubric weight in this file is ever written with.
+ */
+function roundWeight(weight: number): number {
+  return Math.round(weight * 10_000) / 10_000;
+}
+
+/**
  * Builds the "no-schema" rubric variant `judge()` scores against when its input carries neither `draft` nor
  * `suggestion` (see `l2PromotionRubric`'s `suggestion_fidelity` criterion and `JudgeVerdict.rubricVariant`):
  * drops that criterion and renormalizes the remaining weights to sum to 1.
@@ -421,18 +433,6 @@ export interface Judge {
  * renormalization of its remaining weights (sum to 1). Returns `rubric` unchanged if it has no
  * `suggestion_fidelity` criterion at all (the caller only invokes this after confirming one exists).
  */
-/**
- * Rounds a computed weight to 4 decimal places. Floating-point arithmetic on the tenths/hundredths that
- * rubric weights are always written in (e.g. `0.05 + 0.1`) does not land on an exact binary value (it
- * comes out `0.15000000000000002`), and that raw value would otherwise be interpolated verbatim into the
- * criterion list `rubricSystem` sends the model (`weight ${c.weight}`) -- a cosmetic defect there, but one
- * that also risks reading to the model as a deliberately, suspiciously precise number. Four decimal places
- * is more precision than any rubric weight in this file is ever written with.
- */
-function roundWeight(weight: number): number {
-  return Math.round(weight * 10_000) / 10_000;
-}
-
 function noSchemaRubricVariant(rubric: Rubric): Rubric {
   const remaining = rubric.criteria.filter((c) => c.id !== "suggestion_fidelity");
   if (remaining.length === rubric.criteria.length) return rubric;
@@ -450,6 +450,97 @@ function noSchemaRubricVariant(rubric: Rubric): Rubric {
           }));
         })();
   return { id: rubric.id, version: rubric.version, criteria };
+}
+
+/** One sampled judge response, as `scoreWithRubric` collects it from the LLM port. */
+type JudgeRun = { object: z.infer<typeof JudgeOutputSchema>; model: string };
+
+/**
+ * Combines the sampled responses into a verdict: multi-sample average → weight normalization → veto →
+ * version stamping. Pure (no LLM, no clock), so the scoring arithmetic is testable apart from sampling.
+ * `runs` is non-empty (one entry per sample, so `samples` is `runs.length`).
+ */
+function aggregateVerdict(activeRubric: Rubric, runs: JudgeRun[], passScore: number): JudgeVerdict {
+  // Average per criterion, then combine with weights
+  const byId = new Map<string, { total: number; count: number; reasoning: string }>();
+  for (const run of runs) {
+    for (const item of run.object.criteria) {
+      const acc = byId.get(item.id) ?? { total: 0, count: 0, reasoning: item.reasoning };
+      acc.total += item.score;
+      acc.count += 1;
+      // Take the reasoning from the last sample (prevents the averaged score from diverging from the first sample's explanation).
+      acc.reasoning = item.reasoning;
+      byId.set(item.id, acc);
+    }
+  }
+  const criteria = activeRubric.criteria.map((c) => {
+    const acc = byId.get(c.id);
+    const score = acc != null ? acc.total / acc.count : 0;
+    return { id: c.id, score, reasoning: acc?.reasoning ?? "(not evaluated)" };
+  });
+  // Index the per-criterion scores once (rubric ids are unique — validateRubric rejects duplicates).
+  const scoreById = new Map(criteria.map((item) => [item.id, item.score]));
+  // Normalize by the weight sum so that even a custom rubric (sum≠1.0) keeps score within [0,1].
+  // The default rubrics sum to 1.0, so the result is unchanged.
+  const sumWeights = activeRubric.criteria.reduce((sum, c) => sum + c.weight, 0);
+  const weighted = activeRubric.criteria.reduce((sum, c) => sum + scoreById.get(c.id)! * c.weight, 0);
+  // Defensively clamp to [0,1]. validateRubric already forces weights to be finite/non-negative/positive-sum
+  // and VerdictItemSchema already forces each criterion score to [0,1], so it is normally already in range,
+  // but this is a final guard against future input variation.
+  const score = clamp01(sumWeights > 0 ? weighted / sumWeights : 0);
+
+  // Per-criterion floor (veto): a criterion with a `floor` whose averaged score falls
+  // strictly below it fails the verdict outright, regardless of whether the weighted-average `score`
+  // above clears `passScore` — see Rubric.criteria's own doc for the rationale. A rubric with no
+  // `floor` set on any criterion (every rubric before per-criterion floors existed, and every criterion but `safety` on the
+  // current one) always computes `vetoedBy: []` here, leaving `pass` exactly the classic
+  // `score >= passScore` it was before this field existed.
+  const vetoedBy = activeRubric.criteria
+    .filter((c) => c.floor != null && scoreById.get(c.id)! < c.floor)
+    .map((c) => c.id);
+
+  return {
+    pass: score >= passScore && vetoedBy.length === 0,
+    score: Math.round(score * 1000) / 1000,
+    criteria,
+    vetoedBy,
+    // summary also comes from the last sample (identical to runs[0] when samples=1).
+    summary: runs[runs.length - 1]!.object.summary,
+    samples: runs.length,
+    model: runs[runs.length - 1]!.model,
+    rubricId: activeRubric.id,
+    rubricVersion: activeRubric.version,
+  };
+}
+
+/** The user prompt `judge()` sends for an L2 promotion review (the data under review is wrapped as untrusted). */
+function buildL2JudgePrompt(input: JudgeInput): string {
+  return [
+    // The request and HTML are untrusted. Wrap them in delimiters and copy HTML in with a fence-break-resistant fence.
+    `## Original request\n${untrustedBlock("REQUEST", input.request)}`,
+    `## Usage\nuses=${input.usage.uses}, sessions=${input.usage.sessions}`,
+    ...(input.telemetry != null
+      ? [
+          `## Runtime telemetry (observed real renders)\nrendered=${input.telemetry.renderedCount}, errors=${input.telemetry.errorCount}`,
+        ]
+      : []),
+    ...(input.catalogSummary != null
+      ? [`## Existing catalog (for duplicate checking)\n${input.catalogSummary}`]
+      : []),
+    // The schema actually being registered (when known) is the source of truth for suggestion_fidelity;
+    // the machine suggestion, when also present, is shown as context only (it is not what gets published).
+    ...(input.draft != null
+      ? [
+          `## Schema being registered (verify this against the HTML for schema fidelity)\n${untrustedBlock("DRAFT", JSON.stringify(input.draft, null, 2), "json")}`,
+        ]
+      : []),
+    ...(input.suggestion != null
+      ? [
+          `## Proposed schema (machine-extracted${input.draft != null ? "; context only — the schema being registered above is the one actually published" : "; verify it against the HTML"})\n${untrustedBlock("SUGGESTION", JSON.stringify(input.suggestion, null, 2), "json")}`,
+        ]
+      : []),
+    `## HTML under review\n${untrustedBlock("HTML", input.html.slice(0, 12_000), "html")}`,
+  ].join("\n\n");
 }
 
 export function createJudge(opts: {
@@ -496,7 +587,7 @@ export function createJudge(opts: {
     system: string,
     prompt: string,
   ): Promise<JudgeVerdict> {
-    const runs = [];
+    const runs: JudgeRun[] = [];
     for (let i = 0; i < samples; i++) {
       const result = await opts.llm.generateObject({
         schema: JudgeOutputSchema,
@@ -507,58 +598,7 @@ export function createJudge(opts: {
       });
       runs.push(result);
     }
-
-    // Average per criterion, then combine with weights
-    const byId = new Map<string, { total: number; count: number; reasoning: string }>();
-    for (const run of runs) {
-      for (const item of run.object.criteria) {
-        const acc = byId.get(item.id) ?? { total: 0, count: 0, reasoning: item.reasoning };
-        acc.total += item.score;
-        acc.count += 1;
-        // Take the reasoning from the last sample (prevents the averaged score from diverging from the first sample's explanation).
-        acc.reasoning = item.reasoning;
-        byId.set(item.id, acc);
-      }
-    }
-    const criteria = activeRubric.criteria.map((c) => {
-      const acc = byId.get(c.id);
-      const score = acc != null ? acc.total / acc.count : 0;
-      return { id: c.id, score, reasoning: acc?.reasoning ?? "(not evaluated)" };
-    });
-    // Normalize by the weight sum so that even a custom rubric (sum≠1.0) keeps score within [0,1].
-    // The default rubrics sum to 1.0, so the result is unchanged.
-    const sumWeights = activeRubric.criteria.reduce((sum, c) => sum + c.weight, 0);
-    const weighted = activeRubric.criteria.reduce((sum, c) => {
-      const item = criteria.find((x) => x.id === c.id)!;
-      return sum + item.score * c.weight;
-    }, 0);
-    // Defensively clamp to [0,1]. validateRubric already forces weights to be finite/non-negative/positive-sum
-    // and VerdictItemSchema already forces each criterion score to [0,1], so it is normally already in range,
-    // but this is a final guard against future input variation.
-    const score = clamp01(sumWeights > 0 ? weighted / sumWeights : 0);
-
-    // Per-criterion floor (veto): a criterion with a `floor` whose averaged score falls
-    // strictly below it fails the verdict outright, regardless of whether the weighted-average `score`
-    // above clears `passScore` — see Rubric.criteria's own doc for the rationale. A rubric with no
-    // `floor` set on any criterion (every rubric before per-criterion floors existed, and every criterion but `safety` on the
-    // current one) always computes `vetoedBy: []` here, leaving `pass` exactly the classic
-    // `score >= passScore` it was before this field existed.
-    const vetoedBy = activeRubric.criteria
-      .filter((c) => c.floor != null && criteria.find((x) => x.id === c.id)!.score < c.floor)
-      .map((c) => c.id);
-
-    return {
-      pass: score >= passScore && vetoedBy.length === 0,
-      score: Math.round(score * 1000) / 1000,
-      criteria,
-      vetoedBy,
-      // summary also comes from the last sample (identical to runs[0] when samples=1).
-      summary: runs[runs.length - 1]!.object.summary,
-      samples,
-      model: runs[runs.length - 1]!.model,
-      rubricId: activeRubric.id,
-      rubricVersion: activeRubric.version,
-    };
+    return aggregateVerdict(activeRubric, runs, passScore);
   }
 
   return {
@@ -576,32 +616,7 @@ export function createJudge(opts: {
         activeRubric,
         "You are the promotion reviewer for generated UI components. Score the sandbox HTML component on the following criteria with a score from 0 to 1.",
       );
-      const prompt = [
-        // The request and HTML are untrusted. Wrap them in delimiters and copy HTML in with a fence-break-resistant fence.
-        `## Original request\n${untrustedBlock("REQUEST", input.request)}`,
-        `## Usage\nuses=${input.usage.uses}, sessions=${input.usage.sessions}`,
-        ...(input.telemetry != null
-          ? [
-              `## Runtime telemetry (observed real renders)\nrendered=${input.telemetry.renderedCount}, errors=${input.telemetry.errorCount}`,
-            ]
-          : []),
-        ...(input.catalogSummary != null
-          ? [`## Existing catalog (for duplicate checking)\n${input.catalogSummary}`]
-          : []),
-        // The schema actually being registered (when known) is the source of truth for suggestion_fidelity;
-        // the machine suggestion, when also present, is shown as context only (it is not what gets published).
-        ...(input.draft != null
-          ? [
-              `## Schema being registered (verify this against the HTML for schema fidelity)\n${untrustedBlock("DRAFT", JSON.stringify(input.draft, null, 2), "json")}`,
-            ]
-          : []),
-        ...(input.suggestion != null
-          ? [
-              `## Proposed schema (machine-extracted${input.draft != null ? "; context only — the schema being registered above is the one actually published" : "; verify it against the HTML"})\n${untrustedBlock("SUGGESTION", JSON.stringify(input.suggestion, null, 2), "json")}`,
-            ]
-          : []),
-        `## HTML under review\n${untrustedBlock("HTML", input.html.slice(0, 12_000), "html")}`,
-      ].join("\n\n");
+      const prompt = buildL2JudgePrompt(input);
       const verdict = await scoreWithRubric(activeRubric, system, prompt);
       return hasFidelityCriterion ? { ...verdict, rubricVariant } : verdict;
     },
