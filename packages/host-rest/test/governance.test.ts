@@ -345,4 +345,60 @@ describe("startup warnings for unwired security-relevant hooks", () => {
     expect(spy.mock.calls.some((args) => String(args[0]).includes("deps.auth is not wired"))).toBe(false);
     spy.mockRestore();
   });
+
+  it("dev: true folds both warnings into one console.info naming both unwired hooks, and warns nothing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    createKohakuRoutes(makeDeps({ dev: true }));
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledTimes(1);
+    const line = String(info.mock.calls[0]?.[0]);
+    expect(line).toContain("development mode");
+    expect(line).toContain("deps.auth");
+    expect(line).toContain("deps.authorizeGovernance");
+    expect(line).toContain("ANONYMOUS");
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
+  it("dev: true names only the hook that is still unwired", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    createKohakuRoutes(makeDeps({ dev: true, auth: async () => ({ id: "u", roles: ["user"] }) }));
+    expect(info).toHaveBeenCalledTimes(1);
+    const line = String(info.mock.calls[0]?.[0]);
+    expect(line).toContain("deps.authorizeGovernance");
+    expect(line).not.toContain("deps.auth /");
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
+  it("dev: true with both hooks wired prints nothing at all", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    createKohakuRoutes(
+      makeDeps({
+        dev: true,
+        authorizeGovernance: () => true,
+        auth: async () => ({ id: "u", roles: ["user"] }),
+      }),
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+    warn.mockRestore();
+    info.mockRestore();
+  });
+
+  it("without dev, both original warnings are kept and no info line is printed", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    createKohakuRoutes(makeDeps({}));
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("Governance/audit routes");
+    expect(String(warn.mock.calls[1]?.[0])).toContain("deps.auth is not wired");
+    expect(info).not.toHaveBeenCalled();
+    warn.mockRestore();
+    info.mockRestore();
+  });
 });

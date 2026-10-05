@@ -132,11 +132,16 @@ export interface CreateKohakuHostOptions {
   /** Verbose mode for the default console error reporter (see `createConsoleErrorReporter`'s `debug` option). Default false. */
   debug?: boolean;
   /**
-   * Development convenience: when true and no capability secret can be resolved (see `capabilitySecret`),
-   * generates a temporary random one for this process instead of throwing, and warns on `console.warn`. Never
-   * enable this in production -- a secret that changes every restart invalidates every capability token
-   * issued before the restart, and a fresh one is trivially guessable by nobody only because nobody else
-   * knows it either (it is not persisted anywhere).
+   * Development mode. Two effects, both for local development only:
+   * 1. When no capability secret can be resolved (see `capabilitySecret`), generates a temporary random one for
+   *    this process instead of throwing, and warns on `console.warn`. Never enable this in production -- a
+   *    secret that changes every restart invalidates every capability token issued before the restart, and a
+   *    fresh one is trivially guessable by nobody only because nobody else knows it either (it is not
+   *    persisted anywhere). This only matters when no secret is given: a project that always sets
+   *    `KOHAKU_CAPABILITY_SECRET` (as `kohaku init`'s generated `.env` does) is unaffected by `dev` here.
+   * 2. Forwarded to `createKohakuRoutes` (`KohakuHostDeps.dev`), which folds its two production-facing startup
+   *    warnings (no `authorizeGovernance`, no `auth`) into one `console.info` line. No behavior changes.
+   *    `routes.dev` overrides this forwarded value.
    */
   dev?: boolean;
   /** Where `app` mounts `createKohakuRoutes`. Default `"/api/kohaku"`. */
@@ -290,6 +295,7 @@ export function createKohakuHost(options: CreateKohakuHostOptions): KohakuHost {
   app.route(
     options.basePath ?? DEFAULT_BASE_PATH,
     createKohakuRoutes({
+      dev: options.dev === true,
       ...options.routes,
       compose,
       domain: options.domain,

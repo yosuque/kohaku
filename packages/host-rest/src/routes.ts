@@ -93,24 +93,39 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
     }),
   );
 
-  // Startup warning for the fail-open default of the governance/audit plane (allowed without authorization when not wired).
-  // The fail-open default itself is intentional (backward compatible; governance authorization is a
-  // product responsibility), but since it is dangerous to silently miss an unprotected public exposure, warn exactly
-  // once. If already protected by external middleware (a reverse proxy, etc.), this is expected.
-  if (deps.authorizeGovernance == null) {
-    console.warn(
-      "[kohaku] Governance/audit routes (/lineage, /telemetry, /promotions*, /fixations*) are exposed without authorization. " +
-        "In production, wiring deps.authorizeGovernance or protecting them with external middleware is mandatory.",
-    );
-  }
-  // Symmetric startup warning: without deps.auth, every request is treated as the demo principal (ANONYMOUS),
-  // so capability issuance, governance authorization, and audit records are all attributed to one shared
-  // identity rather than the real caller. Fine for local development/demos, dangerous left unwired in production.
-  if (deps.auth == null) {
-    console.warn(
-      "[kohaku] deps.auth is not wired. Every request will be treated as the demo principal (ANONYMOUS). " +
-        "In production, wiring deps.auth to real authentication is mandatory.",
-    );
+  if (deps.dev === true) {
+    // Development mode (deps.dev): the two production-facing warnings below fold into one info line, and only
+    // when something is actually unwired. Behavior is identical either way; only the log output differs.
+    const unwired = [
+      ...(deps.auth == null ? ["deps.auth"] : []),
+      ...(deps.authorizeGovernance == null ? ["deps.authorizeGovernance"] : []),
+    ];
+    if (unwired.length > 0) {
+      console.info(
+        `[kohaku] development mode: ${unwired.join(" / ")} not wired — every request runs as the ANONYMOUS principal and the governance routes are open. ` +
+          "Wire them before production (docs/user-guide.md §7 Operational tips).",
+      );
+    }
+  } else {
+    // Startup warning for the fail-open default of the governance/audit plane (allowed without authorization when not wired).
+    // The fail-open default itself is intentional (backward compatible; governance authorization is a
+    // product responsibility), but since it is dangerous to silently miss an unprotected public exposure, warn exactly
+    // once. If already protected by external middleware (a reverse proxy, etc.), this is expected.
+    if (deps.authorizeGovernance == null) {
+      console.warn(
+        "[kohaku] Governance/audit routes (/lineage, /telemetry, /promotions*, /fixations*) are exposed without authorization. " +
+          "In production, wiring deps.authorizeGovernance or protecting them with external middleware is mandatory.",
+      );
+    }
+    // Symmetric startup warning: without deps.auth, every request is treated as the demo principal (ANONYMOUS),
+    // so capability issuance, governance authorization, and audit records are all attributed to one shared
+    // identity rather than the real caller. Fine for local development/demos, dangerous left unwired in production.
+    if (deps.auth == null) {
+      console.warn(
+        "[kohaku] deps.auth is not wired. Every request will be treated as the demo principal (ANONYMOUS). " +
+          "In production, wiring deps.auth to real authentication is mandatory.",
+      );
+    }
   }
   const getPrincipal = memoizePrincipal(
     async (c: Context): Promise<Principal> => (await deps.auth?.(c)) ?? ANONYMOUS,

@@ -187,6 +187,59 @@ describe("createKohakuHost", () => {
     }
   });
 
+  it("dev: true with a secret is forwarded to the routes: no secret warning, and the two production warnings fold into one info", () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      createKohakuHost({
+        domain,
+        querySource: "test",
+        llm: new FakeLlm(),
+        intents: [testIntentDef],
+        dataVersion: () => "v1",
+        dev: true,
+      });
+      expect(warn).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(String(info.mock.calls[0]?.[0])).toContain("development mode");
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  it("without dev, the routes keep their two production warnings; routes.dev overrides the forwarded value", () => {
+    process.env[SECRET_ENV] = "test-secret-of-decent-length";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const base = {
+        domain,
+        querySource: "test",
+        llm: new FakeLlm(),
+        intents: [testIntentDef],
+        dataVersion: () => "v1",
+      };
+      createKohakuHost(base);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(info).not.toHaveBeenCalled();
+      warn.mockClear();
+      createKohakuHost({ ...base, dev: true, routes: { dev: false } });
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  it("re-exports the governance policy builders from the package entry", async () => {
+    const entry = await import("../src/index.js");
+    expect(typeof entry.governancePolicyFromRoles).toBe("function");
+    expect(typeof entry.createGovernancePolicy).toBe("function");
+  });
+
   it("throws a clear error when neither `semantic` nor `intents` is supplied", () => {
     process.env[SECRET_ENV] = "test-secret-of-decent-length";
     expect(() =>
