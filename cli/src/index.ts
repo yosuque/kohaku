@@ -445,7 +445,7 @@ addLineageSourceOptions(
   )
   .action(async (opts: LineageSourceCliOptions & { timeoutMs: string; format: string; out?: string }) => {
     const { CliUsageError } = await import("./usage-error.js");
-    const { runUsageExport } = await import("./usage/index.js");
+    const { formatUsageExportResult, runUsageExport } = await import("./usage/index.js");
     let result: Awaited<ReturnType<typeof runUsageExport>>;
     try {
       result = await runUsageExport({
@@ -459,9 +459,9 @@ addLineageSourceOptions(
       fail(e, e instanceof CliUsageError ? 2 : 1);
     }
     if (result.outPath != null) {
-      console.error(`Wrote ${result.rows.length} usage row(s) to ${result.outPath}`);
+      console.error(formatUsageExportResult(result));
     } else {
-      process.stdout.write(result.text);
+      process.stdout.write(formatUsageExportResult(result));
     }
   });
 
