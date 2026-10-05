@@ -1,4 +1,4 @@
-import type { ComposeContext, ComposeTrace } from "@kohaku-ui/composer";
+import type { ComposeContext, ComposeTrace, TraceContext } from "@kohaku-ui/composer";
 import type {
   ActionAuditRecorder,
   ActionEffects,
@@ -321,7 +321,7 @@ export interface AttachOptions {
  * per tool call (see `McpHostDeps.resolvePrincipal`'s doc comment), so `ToolContext` — built once per attach,
  * shared by every call on this connection — carries only the resolver, not a resolved value. The resolved
  * `Principal` for one specific call lives on `ToolCallContext` below, built fresh inside that call's `safeTool`
- * body via `forCall`. This split is deliberate: it is a type error to pass this attach-level `ToolContext` into
+ * body via `beginCall`. This split is deliberate: it is a type error to pass this attach-level `ToolContext` into
  * `preresolveInitialData` / `snapshotHtmlFor` / `composeForTool` (all of which need an actual resolved
  * `principal`), catching at compile time a call site that forgot to resolve the per-call principal first.
  */
@@ -344,13 +344,26 @@ export interface ToolContext {
 
 /**
  * `ToolContext` plus the `Principal` already resolved for one specific tool call (via `ToolContext.principalOf`,
- * see its doc comment). Built once per tool call by `forCall` (a shallow spread — cheap, and there is nothing on
- * `ToolContext` a call needs to override besides this field), and threaded through the compose pipeline
+ * see its doc comment), and the per-call request data the compose pipeline threads through to host-core's
+ * composeWithFixation. Built once per tool call by `beginCall` (a shallow spread — cheap, and there is nothing on
+ * `ToolContext` a call needs to override besides these fields), and threaded through the compose pipeline
  * (`composeAndAudit` / `composeAndPackage` / `startComposeTask` / `buildSnapshot` / `composeForTool` /
  * `preresolveInitialData` / `snapshotHtmlFor`) instead of the plain `ToolContext` those functions used to take —
  * so passing the attach-level `ToolContext` into any of them is a type error, not a latent bug where the wrong
  * (or no) principal silently rides through.
+ *
+ * The request-data fields are all optional: a context built without a tool call at hand (a test stub, say)
+ * simply omits them. `beginCall` fills all four for the compose-family tool handlers (`requestId` and `abort`
+ * from `requestContextOf`, `traceContext` from `traceContextOf`, `locale` from the tool input).
  */
 export interface ToolCallContext extends ToolContext {
   principal: Principal;
+  /** The caller-provided language tag; rides `SessionContext.locale` into normalization, the fixation gate and the compose policy. */
+  locale?: string;
+  /** The SDK's per-call abort signal (`extra.mcpReq.signal`), propagated into the compose pipeline's LLM calls. */
+  abort?: AbortSignal;
+  /** The call's correlation id (`mcpCorrelationId`), forwarded as the fixation self-heal id and `ComposeOptions.correlationId`. */
+  requestId?: string;
+  /** The W3C trace context parsed from `_meta.traceparent` (`traceContextOf`), forwarded as `ComposeOptions.traceContext`. */
+  traceContext?: TraceContext;
 }
