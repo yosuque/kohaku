@@ -699,7 +699,7 @@ class Promotions:
         actor: Principal,
         tenant: str | None = None,
     ) -> PromotionCandidate:
-        """Execute a single transition (load -> transition -> record -> persist).
+        """Execute a single transition (load -> transition -> persist -> record).
 
         Idempotency contract (3-13a): **act is not idempotent**. Serializing concurrent / retried calls is the caller's responsibility.
         When tenant is given, if the owning tenant does not match it is treated as "unknown artifact".
@@ -711,10 +711,15 @@ class Promotions:
         # Invalid transitions from a terminal state are rejected by the machine side (transition) with a TransitionError.
         candidate.status = transition(candidate.status, action, self._machine_policy)
 
+        # Every action kind other than publish / unpublish shares the same order: persist the snapshot (the
+        # state authority), then record the audit event (if the action kind has one) -- the same state-first,
+        # audit-second order as the Publish / Unpublish branches and the fixation service, so a failing persist
+        # never leaves an audit event describing a transition that did not happen. Each branch below only
+        # prepares the event; it is recorded after the common persist at the end.
+        audit: tuple[str, dict[str, Any], LineageActor | None] | None = None
+
         if isinstance(action, Nominate):
-            await self._lineage.record(
-                "component.nominated", {"artifactId": artifact_id, "by": actor.id}, None, tenant
-            )
+            audit = ("component.nominated", {"artifactId": artifact_id, "by": actor.id}, None)
         elif isinstance(action, Review):
             payload: dict[str, Any] = {
                 "artifactId": artifact_id,
@@ -723,16 +728,13 @@ class Promotions:
             }
             if action.comment is not None:
                 payload["comment"] = action.comment
-            await self._lineage.record(
-                "component.reviewed", payload, LineageActor(kind="user", id=actor.id), tenant
-            )
+            audit = ("component.reviewed", payload, LineageActor(kind="user", id=actor.id))
         elif isinstance(action, SchemaPropose):
             candidate.draft = action.draft
-            await self._lineage.record(
+            audit = (
                 "component.schemaProposed",
                 {"artifactId": artifact_id, "draft": action.draft.to_wire()},
                 None,
-                tenant,
             )
         elif isinstance(action, Publish):
             if candidate.draft is None:
@@ -794,7 +796,7 @@ class Promotions:
             withdraw_payload: dict[str, Any] = {"artifactId": artifact_id}
             if action.reason is not None:
                 withdraw_payload["reason"] = action.reason
-            await self._lineage.record("component.withdrawn", withdraw_payload, None, tenant)
+            audit = ("component.withdrawn", withdraw_payload, None)
         elif isinstance(action, Unpublish):
             # transition succeeded = the original state is confirmed to be published (the machine rejects anything but published).
             # A published record without a draft is a state inconsistency, so fail-fast.
@@ -844,15 +846,17 @@ class Promotions:
             return candidate
         elif isinstance(action, JudgeResult):
             candidate.verdict = action.verdict
-            await self._lineage.record(
+            audit = (
                 "component.judged",
                 {"artifactId": artifact_id, "verdict": action.verdict},
                 None,
-                tenant,
             )
         # JudgeStart / ReviewStart record nothing (state transition only).
 
         await self._persist(candidate, tenant)
+        if audit is not None:
+            audit_type, audit_payload, audit_actor = audit
+            await self._lineage.record(audit_type, audit_payload, audit_actor, tenant)
         return candidate
 
     async def _run_judge(

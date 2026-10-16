@@ -556,7 +556,7 @@ export function createPromotions(opts: {
   }
 
   /**
-   * Executes a single transition (load -> transition -> record -> persist).
+   * Executes a single transition (load -> transition -> persist -> record).
    *
    * Idempotency contract: **act is not idempotent**. There is no optimistic lock on the candidate's
    * read-modify-write, and there is no serialization here like the component.nominated duplicate guard of
@@ -586,15 +586,16 @@ export function createPromotions(opts: {
     if (action.kind === "publish") return handlePublish(candidate, action, tenant);
     if (action.kind === "unpublish") return handleUnpublish(candidate, action, actor, tenant);
 
-    // Every other action kind shares the same order: copy any action-carried data onto the candidate, record the
-    // audit event (if the action kind has one), then persist once at the end.
+    // Every other action kind shares the same order: copy any action-carried data onto the candidate, persist
+    // the snapshot (the state authority), then record the audit event (if the action kind has one). State
+    // first, audit second -- the same order as handlePublish and the fixation service -- so a failing persist
+    // never leaves an audit event describing a transition that did not happen.
     applyActionData(candidate, action);
     const event = auditEventFor(action, artifactId, actor);
+    await store.persist(candidate, tenant);
     if (event != null) {
       await opts.lineage.record(event.type, event.payload, event.actor, tenant);
     }
-
-    await store.persist(candidate, tenant);
     return candidate;
   }
 
