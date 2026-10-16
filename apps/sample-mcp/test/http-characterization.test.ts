@@ -93,7 +93,7 @@ describe("createMcpHttpServer: wire-level characterization", () => {
     expect(res.headers["vary"]).toBe("Origin");
     expect(res.headers["access-control-allow-methods"]).toBe("GET, POST, DELETE, OPTIONS");
     expect(res.headers["access-control-allow-headers"]).toBe(
-      "Content-Type, Accept, Authorization, mcp-protocol-version, Last-Event-ID",
+      "Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name, Last-Event-ID",
     );
     expect(res.headers["access-control-max-age"]).toBe("86400");
     expect(res.headers["content-type"]).toBeUndefined();

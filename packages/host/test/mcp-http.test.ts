@@ -60,7 +60,7 @@ afterEach(async () => {
 });
 
 describe("createMcpHttpServer (defaults follow the kohaku init --mcp server)", () => {
-  it("answers an OPTIONS preflight with 204 and the four default CORS headers only", async () => {
+  it("answers an OPTIONS preflight with 204 and the six default CORS headers only", async () => {
     const port = await start();
     const res = await send(port, "OPTIONS", "/mcp", { Origin: "http://localhost:5173" });
     expect(res.status).toBe(204);
@@ -69,9 +69,24 @@ describe("createMcpHttpServer (defaults follow the kohaku init --mcp server)", (
     expect(res.headers["vary"]).toBe("Origin");
     expect(res.headers["access-control-allow-methods"]).toBe("GET, POST, DELETE, OPTIONS");
     expect(res.headers["access-control-allow-headers"]).toBe(
-      "Content-Type, Accept, Authorization, mcp-protocol-version",
+      "Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name",
     );
     expect(res.headers["access-control-max-age"]).toBeUndefined();
+  });
+
+  it("allows the standard Mcp-Method / Mcp-Name request headers in a preflight, and no Mcp-Param-* wildcard", async () => {
+    const port = await start();
+    const res = await send(port, "OPTIONS", "/mcp", {
+      Origin: "http://localhost:5173",
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "content-type, mcp-method, mcp-name",
+    });
+    expect(res.status).toBe(204);
+    const allowed = String(res.headers["access-control-allow-headers"])
+      .split(",")
+      .map((h) => h.trim().toLowerCase());
+    expect(allowed).toEqual(expect.arrayContaining(["mcp-method", "mcp-name"]));
+    expect(allowed.some((h) => h.startsWith("mcp-param"))).toBe(false);
   });
 
   it("emits no CORS headers without an Origin, and rejects a disallowed Origin with 403", async () => {
@@ -168,7 +183,7 @@ describe("createMcpHttpServer options", () => {
     });
     const preflight = await send(port, "OPTIONS", "/mcp", { Origin: "http://localhost:5173" });
     expect(preflight.headers["access-control-allow-headers"]).toBe(
-      "Content-Type, Accept, Authorization, mcp-protocol-version, Last-Event-ID",
+      "Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name, Last-Event-ID",
     );
     expect(preflight.headers["access-control-max-age"]).toBe("600");
 
