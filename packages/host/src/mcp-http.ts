@@ -67,7 +67,12 @@ export interface McpHttpServerOptions {
   maxBodyBytes?: number;
   /** Message of the 413 answer for an over-limit body (default `Request body too large`). */
   bodyTooLargeMessage?: string;
-  /** Headers appended to the default `Access-Control-Allow-Headers` list (`Content-Type, Accept, Authorization, mcp-protocol-version`). */
+  /**
+   * Headers appended to the default `Access-Control-Allow-Headers` list (`Content-Type, Accept, Authorization,
+   * mcp-protocol-version, mcp-method, mcp-name`). A product whose tools declare `x-mcp-header` in their
+   * `inputSchema` must list the matching `Mcp-Param-<Name>` headers here: the SDK client sends those, and a
+   * CORS allow-list cannot wildcard a prefix, so they are not part of the default.
+   */
   corsAllowHeaders?: readonly string[];
   /** When set, emits `Access-Control-Max-Age` with this value (seconds). */
   corsMaxAgeSeconds?: number;
@@ -107,6 +112,8 @@ export function createMcpHttpServer(options: McpHttpServerOptions): Server {
     "Accept",
     "Authorization",
     "mcp-protocol-version",
+    "mcp-method",
+    "mcp-name",
     ...(options.corsAllowHeaders ?? []),
   ].join(", ");
   // DNS rebinding protection is always on: localhost names by default, plus whatever the caller lists.
@@ -212,8 +219,11 @@ function applyCors(
   res.setHeader("Vary", "Origin");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
   // mcp-protocol-version is a custom header the SDK's modern-era classification reads from the browser
-  // request, so it is part of the default list (mcp-session-id is no longer part of the wire contract —
-  // protocol version 2026-07-28 removed protocol-level sessions).
+  // request, and mcp-method / mcp-name are the standard request headers (SEP-2243) the SDK client sends and
+  // the server's HTTP entry validates, so all three are part of the default list (mcp-session-id is no
+  // longer part of the wire contract — protocol version 2026-07-28 removed protocol-level sessions).
+  // Mcp-Param-<Name> headers (sent only for tools declaring `x-mcp-header`) are deliberately absent: an
+  // allow-list cannot wildcard a prefix, so a product that declares one adds it via corsAllowHeaders.
   res.setHeader("Access-Control-Allow-Headers", allowHeaders);
   if (maxAgeSeconds != null) res.setHeader("Access-Control-Max-Age", String(maxAgeSeconds));
 }

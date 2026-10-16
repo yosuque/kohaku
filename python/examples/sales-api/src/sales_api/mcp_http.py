@@ -188,6 +188,9 @@ def build_starlette_app(
             "Authorization",
             "mcp-session-id",
             "mcp-protocol-version",
+            # The standard request headers (SEP-2243) the MCP SDK client sends on modern-era requests.
+            "mcp-method",
+            "mcp-name",
             "Last-Event-ID",
         ],
         expose_headers=["mcp-session-id"],
