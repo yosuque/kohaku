@@ -150,6 +150,9 @@ describe("renderPackageJson", () => {
       ),
     ).toBe(false);
     expect(pkg.scripts["dev"]).toBe("node dev.mjs");
+    // `start` runs the server without a watcher; tsx is a declared devDependency of the generated project.
+    expect(pkg.scripts["start"]).toBe("node --import tsx server/main.ts");
+    expect(pkg.devDependencies["tsx"]).toBeDefined();
   });
 });
 
@@ -220,6 +223,15 @@ describe("renderReadme", () => {
     ]) {
       expect(section, needle).toContain(needle);
     }
+  });
+
+  it("documents npm start and its graceful shutdown in the Run section", async () => {
+    const { profile } = await profileOf();
+    const readme = renderReadme(profile);
+    const run = readme.slice(readme.indexOf("## Run"), readme.indexOf("## What was generated"));
+    expect(run).toContain("npm start");
+    expect(run).toContain("KOHAKU_SHUTDOWN_GRACE_MS");
+    expect(run).toContain("/api/health answers 503");
   });
 
   it("mentions the absolute paths in claude_desktop_config.example.json only when mcp is on", async () => {

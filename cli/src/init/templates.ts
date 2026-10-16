@@ -291,7 +291,12 @@ export type AppDeps = PortDeps;
  * The REST front door: server/ports.ts's createPorts builds the host (Ports + compose), and this adds the
  * two extra routes the generated dashboard uses (facet-views for the selector UI, health for a smoke check).
  */
-export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContext } {
+export function createApp(deps: AppDeps): {
+  app: Hono;
+  composeCtx: ComposeContext;
+  /** Flips /api/health to 503 so a load balancer stops routing here; server/main.ts calls it on SIGINT / SIGTERM. */
+  setShuttingDown: (value: boolean) => void;
+} {
   // Load .env here too (not just in server/main.ts): this function is also called directly by
   // test/golden.test.ts and by anyone scripting against the generated project without going through
   // main.ts, and it must see the same KOHAKU_CAPABILITY_SECRET either way. process.loadEnvFile never
@@ -300,10 +305,30 @@ export function createApp(deps: AppDeps): { app: Hono; composeCtx: ComposeContex
   const { app, compose } = createPorts(deps);
   // Facet descriptors for the dashboard's selectors, derived from the same Intent definitions (no codegen step).
   app.get("/api/app/facet-views", (c) => c.json({ views: INTENT_DEFINITIONS.map((d) => d.toFacetView()).filter((v) => v.facets.length > 0) }));
-  app.get("/api/health", (c) => c.json({ ok: true, llm: { provider: deps.llm.provider, model: deps.llm.modelId }, dataVersion: DATA_VERSION }));
-  return { app, composeCtx: compose };
+  // Readiness flag for graceful shutdown: once server/main.ts sees SIGINT / SIGTERM it flips this, so a load balancer
+  // polling /api/health stops sending new traffic while in-flight requests drain. Scoped to this createApp instance.
+  let shuttingDown = false;
+  app.get("/api/health", (c) => {
+    if (shuttingDown) return c.json({ ok: false, reason: "shutting down" }, 503);
+    return c.json({ ok: true, llm: { provider: deps.llm.provider, model: deps.llm.modelId }, dataVersion: DATA_VERSION });
+  });
+  return {
+    app,
+    composeCtx: compose,
+    setShuttingDown: (value: boolean) => {
+      shuttingDown = value;
+    },
+  };
 }
 `;
+
+/**
+ * The drain window shared by server/main.ts and server/mcp-http.ts: KOHAKU_SHUTDOWN_GRACE_MS parsed as a positive
+ * integer, anything else (unset, empty, non-numeric, <= 0) falling back to 10s. Inlined into both templates because a
+ * generated project resolves the published packages, which have no shutdown helper to import.
+ */
+const SHUTDOWN_GRACE_SNIPPET = `const graceEnv = Number.parseInt(process.env["KOHAKU_SHUTDOWN_GRACE_MS"] ?? "", 10);
+const SHUTDOWN_GRACE_MS = Number.isFinite(graceEnv) && graceEnv > 0 ? graceEnv : 10_000;`;
 
 export const MAIN_TEMPLATE = `import { existsSync } from "node:fs";
 import { serve } from "@hono/node-server";
@@ -314,11 +339,29 @@ if (existsSync(".env")) process.loadEnvFile(".env");
 
 // Without an API key the L0 view (the summary dashboard) still renders; chat and the L1 views need one — see README.md.
 const llm = createLlmFromEnv();
-const { app } = createApp({ llm });
+const { app, setShuttingDown } = createApp({ llm });
 const port = Number(process.env["PORT"] ?? 8787);
-serve({ fetch: app.fetch, port }, (info) => {
+const server = serve({ fetch: app.fetch, port }, (info) => {
   console.log(\`kohaku host: http://localhost:\${info.port}/api/kohaku (LLM: \${llm.provider} / \${llm.modelId})\`);
 });
+
+// Graceful shutdown (also what a tsx watch restart triggers under npm run dev): SIGINT / SIGTERM flip
+// /api/health to 503, stop accepting connections and let in-flight requests finish. A bounded drain window
+// (KOHAKU_SHUTDOWN_GRACE_MS, default 10s) precedes a forced exit 1; a clean drain lets the process end on its own.
+${SHUTDOWN_GRACE_SNIPPET}
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    console.error(\`kohaku host: \${signal} received, draining connections\`);
+    setShuttingDown(true);
+    setTimeout(() => {
+      console.error("kohaku host: drain window elapsed, forcing exit");
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS).unref();
+    server.close();
+    // serve() returns a node:http (or http2) server; only the former has closeIdleConnections.
+    (server as { closeIdleConnections?: () => void }).closeIdleConnections?.();
+  });
+}
 `;
 
 export const WEB_MAIN_TEMPLATE = `import { createKohakuClient, type ComposeView } from "@kohaku-ui/client";
@@ -823,7 +866,7 @@ httpServer.on("close", () => {
 // Graceful shutdown: SIGINT / SIGTERM close the server, which fires the 'close' cleanup above. An open stream
 // can hold it open, so a bounded drain window (KOHAKU_SHUTDOWN_GRACE_MS, default 10s) precedes a forced exit.
 // A clean drain lets the process end on its own; a forced one exits 1.
-const SHUTDOWN_GRACE_MS = Number(process.env["KOHAKU_SHUTDOWN_GRACE_MS"] ?? 10_000);
+${SHUTDOWN_GRACE_SNIPPET}
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     console.error(\`__NAME__ MCP server: \${signal} received, draining connections\`);

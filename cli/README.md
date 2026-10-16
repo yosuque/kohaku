@@ -12,12 +12,26 @@ npx @kohaku-ui/cli conformance --self
 npx @kohaku-ui/cli init --from sales.csv
 ```
 
+Commands (`kohaku --help` lists them, `kohaku <command> --help` shows the options):
+
+- `conformance` runs the specification conformance suite (SPEC.md §7), against this implementation (`--self`) or a REST host (`--rest`).
+- `explain <requestId>` explains why a compose came out the way it did: tier, cache, cache-key breakdown, decision flow and related lineage events.
+- `scaffold <what>` generates scaffolds for product-side Port implementations (`ports`) and Golden regression tests (`golden`).
+- `init` generates a runnable app (server, dashboard, chat) from a data file, then runs `npm install`.
+- `smoke-l2` validates the L2 HTML read from stdin and prints the issues as JSON, for implementations without a JS runtime.
+- `component` operates on component packages.
+- `dataset` operates on distillation datasets (for example `dataset export`).
+- `evidence` operates on Compliance Evidence Packs.
+- `usage` derives usage metering from the lineage log (`usage export`, below).
+- `migrate` rewrites fixated Specs off a deprecated part when the catalog changes.
+
 `init` reads a `.csv` / `.json` (array of objects) / `.sqlite` file (SQLite needs Node >= 22.13),
 infers which columns are categories, measures and a time axis, and generates a runnable project
 (DomainPort, Intent catalog, an L0 fixed Spec, a Dashboard + Chat web app, a golden regression
 test) that depends only on the published `@kohaku-ui/*` packages, then runs `npm install`. It
 also writes a `.env` with a freshly generated capability secret, so add only a provider key to it
-— never copy `.env.example` over it. See
+— never copy `.env.example` over it. `init --mcp` adds a stdio and a Streamable HTTP MCP server,
+so the same data is reachable from an MCP host such as Claude Desktop, plus a Claude Desktop config. See
 `--out`, `--source`, `--name`, `--table` and `--no-install` in `--help`, and the
 [Zero-Port quickstart](https://github.com/yosuque/kohaku/blob/main/docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code)
 in the user guide for what it produces.
