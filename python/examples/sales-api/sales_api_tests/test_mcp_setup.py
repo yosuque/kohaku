@@ -204,7 +204,9 @@ class TestBuildStarletteApp:
             )
             assert denied.headers.get("access-control-allow-origin") is None
 
-    def test_cors_preflight_allows_the_standard_mcp_method_and_name_headers(self, tmp_path: Path) -> None:
+    def test_cors_preflight_allows_the_standard_mcp_method_and_name_headers(
+        self, tmp_path: Path
+    ) -> None:
         from starlette.testclient import TestClient
 
         setup = self._setup(tmp_path)
@@ -219,7 +221,9 @@ class TestBuildStarletteApp:
                 },
             )
             assert res.status_code == 200
-            allowed = {h.strip().lower() for h in res.headers["access-control-allow-headers"].split(",")}
+            allowed = {
+                h.strip().lower() for h in res.headers["access-control-allow-headers"].split(",")
+            }
             assert {"mcp-method", "mcp-name"} <= allowed
 
     def test_host_and_origin_are_validated_by_default_on_both_routes(self, tmp_path: Path) -> None:
