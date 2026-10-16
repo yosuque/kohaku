@@ -117,6 +117,25 @@ def test_rest_bnd_002_returns_tabular_envelope(client: TestClient) -> None:
     assert data["dataVersion"] == expected
 
 
+# --- REST-BND-003 -----------------------------------------------------------
+
+
+def test_rest_bnd_003_action_requires_write_capability(client: TestClient) -> None:
+    """/binding/action (the write counterpart of BND-001/002): no capability is 401, and the compose result's
+    read-only capability is 403. Verification happens before any domain.invoke, so this never performs a write."""
+    probe = {"action": "conformance-probe.no-such-action", "payload": {}}
+    no_cap = client.post(_url("/binding/action"), json=probe)
+    assert no_cap.status_code == 401
+    assert _is_error_envelope(no_cap.json())
+
+    capability = client.post(_url("/compose"), json={"intent": INTENT_BODY}).json()["capability"]
+    read_only = client.post(
+        _url("/binding/action"), json=probe, headers={"authorization": f"Bearer {capability}"}
+    )
+    assert read_only.status_code == 403
+    assert _is_error_envelope(read_only.json())
+
+
 # --- REST-CAT-001 -----------------------------------------------------------
 
 
