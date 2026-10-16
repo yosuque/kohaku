@@ -161,8 +161,8 @@ describe("an unavailable LLM provider during Intent resolution is a structured t
 /**
  * Starts a task-backed `kohaku_compose` (tasksEnabled on, request declares the extension) whose Intent
  * resolution throws `error`, waits for the background compose to settle, and returns the stored task.
- * `tasks/get` itself is unreachable on the installed SDK (see tasks.test.ts), so the task is read from the
- * store directly -- the same object a `tasks/get` handler would serialize to the client.
+ * The task is read from the store directly -- the same object a `tasks/get` handler serializes to the client
+ * (tasks.test.ts drives the real `tasks/get` over the wire).
  */
 async function failedTaskFor(error: Error): Promise<{
   task: ReturnType<NonNullable<ReturnType<typeof __getTaskStoreForTest>>["get"]>;

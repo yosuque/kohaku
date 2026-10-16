@@ -597,7 +597,7 @@ attach / deps インスタンスごとにメモ化したものから `allowedAct
 - **`kohaku_action`(app 専用。書き込み直結路)**: REST の `POST /binding/action` に対称な書き込み口。`{action, payload?, capability, confirmed?, approval?}` を受け、`payload` を canonical JSON で 64KB 上限にし(超過は `isError`)、**write スコープ**(`{kind:"write", ref:action}`)で capability を検証する。続いて `action` を DomainPort の operation インデックス(host-core の `createOperationIndex`。`issueCapabilityForSpec` の write スコープ絞り込みが使う許可 action 集合もこの同じメモ化済みインデックスから導出するため、両者が食い違うことはない)で引き、そこに無い名前は `action.denied` として監査記録したうえで `capability denied` のツールエラーで拒否する(REST と同一。SPEC MCPAPP-ACT-001・LIN-ACT-001)。さらに共有の `ActionGate`(`paramsSchema` による params 検証、続いて `confirmed` / `approval` による tier。決定 62/63)を通してから `domain.invoke(action, payload)` する。監査記録と tier のメッセージは host-core の `recordActionGateResult` / `recordUndeclaredActionDenial` で REST と共有しており、各ホストが持つのはワイヤーへの写像だけである。capability 発行スコープの収集(read = 全 `$ref` + bind variant、write = UI が宣言した書き込み action 名)は spec-core の `collectCapabilityScopes` に一元化し、host-core の `issueCapabilityForSpec` がそれを消費する。REST と MCP はいずれもこれを直接呼ぶため、3 層とも発行規則が一致する。応答 `structuredContent` は `{result, invalidates?, refVersions?}` で、`invalidates` / `refVersions` は副作用宣言フック `McpHostDeps.actionEffects` 配線時のみ載る(未配線なら `{result}` のみ = 後方互換。data-binding の `parseActionResult` が両形を読む)。TS(`packages/host-mcp-apps/src/server.ts`)/ Python(`python/kohaku/src/kohaku/host_mcp/server.py`)双方に実装。
 - **REST と対称な View Lineage 監査(`McpHostDeps.recorder`)**: host-core の `ViewRecorder` インターフェース(両プロファイルで契約を共有するため host-rest から移設)を REST プロファイルと同じ形で配線する — compose 系ツール呼び出しのたびに `composed` + `fallback`(`spec.provenance.fallback` から判定する `recordViewFallback`。REST と共有する `recordComposedAndFallback` 経由)を記録し、`kohaku_event` は再合成前に `interacted` を記録する(`interacted` を `composed` より先に記録する REST の `/events` と対称)。レガシーの `McpHostDeps.onComposed`(spec と trace のみ。`interacted`/`fallback` は記録しない)は `recorder` 未配線時のみ引き続き呼ばれ、両方配線されていれば `recorder` を優先する(移行中のプロダクトが二重記録しないため)。Python はローカル宣言の `ViewRecorderProtocol` で対称化する(2 プロファイルは import-linter のレイヤー契約上の独立した兄弟なので `host_rest` からは import しない)。
 - **ツール呼び出しのキャンセル伝搬(TS のみ)**: `kohaku_compose` / `kohaku_render_snapshot` / intent tools / `kohaku_event` は MCP SDK のツール呼び出しごとの `extra.signal` を受け取り、`composeWithFixation` に `abort` として通す — クライアントがキャンセルしたツール呼び出しは REST の `c.req.raw.signal` と同様に L1/L2 の LLM 生成を止める(`trace.cancelled` が立つと監査記録をスキップする。上の「クライアントの abort は生成フォールバックと区別する」参照)。`kohaku_action` は書き込み実行前に `extra.signal.aborted` を確認する(その先には `DomainPort.invoke` にキャンセル手段が無いためこれ以上のキャンセル伝搬はできない)。導入済みの Python mcp SDK の `ServerRequestContext`(全ての低レベルリクエストハンドラに渡される。mcp 2.x — 下の「Python `mcp` 2.x 移行」参照)は依然としてツール呼び出しごとのキャンセルオブジェクトを持たず、既存の `ComposeFixationContext.abort` へ通せない(より豊富な `mcp.server.context.Context` にはキャンセルオブジェクトがあるが、ランナーは低レベルハンドラ向けにこれを構築しない)— 代わりに構造的にキャンセルが起きる(SDK のリクエストディスパッチャがクライアントの `notifications/cancelled` を、そのリクエストを実行しているタスクの cancel として適用し、ハンドラが待機中の `await` をどこであれ巻き戻す)。この事情は移植せず `host_mcp/server.py` の `_call_tool` 直上の NOTE コメントとして記録する。
-- **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`、2026-07-28 dated-stable、TS のみ)**: `kohaku_compose` と intent tools は、リクエストごとにオプトインした場合(`_meta["io.modelcontextprotocol/clientCapabilities"].extensions["io.modelcontextprotocol/tasks"]`)にタスク対応になり、L1/L2 生成をブロックする代わりに `CreateTaskResult` を返す。`tasks/get`/`tasks/cancel` は SDK が文書化している拡張手段に対して実装済みだが、導入済みの SDK バージョンでは現状ワイヤ越しに到達不能(検証済みの SDK バージョン制約であり kohaku 側のバグではない)— 設計全体とその制約の詳細は下の「MCP Tasks 拡張」節を参照。
+- **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`、2026-07-28 dated-stable、TS のみ)**: `kohaku_compose` と intent tools は、リクエストごとにオプトインした場合(`_meta["io.modelcontextprotocol/clientCapabilities"].extensions["io.modelcontextprotocol/tasks"]`)にタスク対応になり、L1/L2 生成をブロックする代わりに `CreateTaskResult` を返す。`tasks/get`/`tasks/cancel` は SDK が文書化している拡張手段に対して実装済み。SDK 2.0.0 ではワイヤ越しに到達不能だった(SDK バージョン上のギャップであり kohaku 側のバグではない)が、SDK 2.3.0 以降は到達可能 — 設計全体と到達可能性の詳細は下の「MCP Tasks 拡張」節を参照。
 - 全ツール結果に `specToText(spec)` のテキストフォールバック(content[0])を必ず格納 — UI 非対応ホストでも意味が通る(MCP Apps のオプショナル拡張思想)。**`specToText` の定義元は spec-core**(`spec-text.ts`。widget の `ui/update-model-context` 還流と共有するため。host-mcp-apps は後方互換の再エクスポート)。
 - **リソース側 `_meta.ui`(SEP-1865)**: 共有レンダラーリソースに csp を空 allowlist で明示宣言(`resourceUiMeta()`。外部オリジン不要 = 最も厳しいサンドボックスをホストに許可)。csp / permissions はツール側 `_meta.ui` には置けない(ext-apps 型は `never` で拒否 — 型整合は `test/ext-apps-interop.test.ts` が devDependency の ext-apps 公開型と突き合わせて固定)。resources/list と read contents の両方に同値で載せる(contents 優先の規定)。TS / Python 対称。
 - **mcp-ui レガシー UIResource 併記(`AttachOptions.legacyUiResource`・既定 off)**: SEP-1865 未対応で `ui://` プレフィックス検出だけの mcp-ui レガシーホスト(LibreChat / Smithery / Nanobot 等)向けに、compose 系ツール結果の content[] へ自己完結スナップショット HTML(`snapshotHtmlFor` — render_snapshot と共有)を `{type:"resource", …}` で後置する。静的表示(自己完結スナップショットの思想)・組み立て失敗は fail-open で併記なし・約 1MB/結果のため modern ホストでは無効のまま。sample-mcp は `KOHAKU_MCP_LEGACY_UI=1` で opt-in。TS / Python 対称。
@@ -781,12 +781,15 @@ Tasks 拡張は、時間のかかるツール呼び出しを JSON-RPC のやり�
 - **`AttachOptions.tasksEnabled`(既定 `false`)— 拡張全体が既定オフ**: リクエストが拡張を宣言していても、
   `tasksEnabled` を明示的に設定しない限り `kohaku_compose`/intent tools は完全に同期のまま、今日とバイト単位
   で不変である。オプションがオフの間はサーバも `ServerCapabilities.extensions` に拡張を宣言せず、
-  `tasks/get`/`tasks/cancel` も一切登録されない。これは仕様が要求するものの上に乗せた意図的なプロダクト判断
-  である(仕様自体が要求しているわけではない): `tasks/get` が到達不能である間(下の既知の制限を参照)、宣言し
-  たクライアントに `CreateTaskResult` を渡すことは、決してポーリングできないタスクハンドルを渡すことになり
-  — ハンドルが無いより悪い。しかもそれは、拡張を宣言するだけの高度さを持つクライアントからこそ、動作する同
-  期呼び出しを奪うことになる。オンに切り替える前に行うべき確認は `AttachOptions.tasksEnabled` 自身の doc コ
-  メント(`packages/host-mcp-apps/src/types.ts`)を参照 — この節が以下で記録するのと同じ再現手順である。
+  `tasks/get`/`tasks/cancel` も一切登録されない(SDK は `-32601` で応答する)。これは仕様が要求するものの上に
+  乗せた意図的なプロダクト判断である(仕様自体が要求しているわけではない)。導入の理由は、SDK 2.0.0 で
+  `tasks/get` が到達不能だったこと(下の「SDK での到達可能性」を参照)にある。当時、宣言したクライアントに
+  `CreateTaskResult` を渡すことは、決してポーリングできないタスクハンドルを渡すことになり、ハンドルが無いより
+  悪かった。しかもそれは、拡張を宣言するだけの高度さを持つクライアントからこそ、動作する同期呼び出しを奪うこ
+  とになる。**この理由は peer の floor になった SDK ≥ 2.3.0 では成り立たなくなったが、既定値はそれに合わせて
+  変えていない**: 宣言したすべてのクライアントにタスクハンドルを渡すかどうかは依然としてプロダクト判断であり、
+  この拡張をポーリングすると検証された実ホストもまだ無い(最後の項目)。`AttachOptions.tasksEnabled` 自身の doc
+  コメント(`packages/host-mcp-apps/src/types.ts`)も参照。
 - **タスクストア**(エクスポートされている `createTaskStore`)はインメモリで、`attachKohakuToMcpServer` の呼び出し
   1 回につき 1 つ。`StoragePort`/`.data` へは意図的に永続化しない: 計算したプロセスより長生きするタスクは無意味
   であり(kohaku の compose はシリアライズされた状態から再開できない — L0/L1/L2 はタスク ID ではなく内容でキャ
@@ -814,56 +817,61 @@ Tasks 拡張は、時間のかかるツール呼び出しを JSON-RPC のやり�
   力を集めるためのものであり、kohaku の compose は途中入力を取らない — Intent のパラメータは事前にすべて渡され
   ており、composition パイプラインのどこにも「クライアントからの追加入力を待っている」状態は存在せず、フックす
   る先がない。
-- **既知の制限(実測で検証済み — 2026-09-14 に `@modelcontextprotocol/server` 2.0.0 に対して観測した SDK バージ
-  ョン上のギャップであり、kohaku 側の欠陥でも SDK の設計への評価でもない)**: `tasks/get`/`tasks/cancel` は
-  (SDK が文書化しているコンシューマ所有の拡張手段 — `Server.setRequestHandler(method, {params, result?},
-  handler)` の 3 引数形。この 2 つのメソッド名は型付き 2 引数 `RequestMethod` の対象から除外されているため、こ
-  の形を使わざるを得ない)経由で正しく登録されるが、2026-07-28 でネゴシエートされた接続上では**一切ディスパッ
-  チされない**。
+- **`tasks/get`/`tasks/cancel` の SDK での到達可能性 — SDK 2.0.0 では SDK バージョン上のギャップ(2026-09-14
+  に観測)だったが、SDK ≥ 2.3.0 では解消(2026-10-17 に `@modelcontextprotocol/server` 2.3.1 で再検証)。
+  kohaku 側の欠陥でも SDK の設計への評価でもない**: 2 メソッドとも SDK が文書化しているコンシューマ所有の拡
+  張手段 `Server.setRequestHandler(method, {params, result?}, handler)` の 3 引数形で登録する(この 2 つのメ
+  ソッド名は型付き 2 引数 `RequestMethod` の対象から除外されているため、この形を使わざるを得ない)。
 
-  **根本原因**: SDK の受信リクエストルーティング(ベースの `Protocol` クラス内部、`_requestHandlers.get(method)`
-  より前)は `isSpecRequestMethod(method) && !codec.hasRequestMethod(method)` を実行し、真であれば登録済みハン
-  ドラ(こちらのものも含め)を一切参照せずに `-32601 Method not found` を返す。`isSpecRequestMethod` は
-  `ALL_CODECS = [rev2025Codec, rev2026Codec]`、つまりネゴシエートしたエラだけでなくすべてのプロトコルエラ自身
-  の凍結済みワイヤメソッドテーブルを横断してメンバーシップを確認する。`tasks/get`/`tasks/cancel` はそこに含ま
-  れている — 廃止された 2025-11-25 語彙自身の予約済みメソッド名として(`@modelcontextprotocol/server` は
-  `GetTaskRequestSchema`/`CancelTaskRequestSchema` 等を `@deprecated … no SDK runtime` と明記しつつ、相互運用の
-  型付けのためだけにエクスポートしている)。しかし*ネゴシエートされた*2026-07-28 コアコーデック自身のテーブルに
-  はこれらが含まれない(この拡張はコア仕様ではないため)ので、ゲート条件は真になり、登録・宣言された
-  capabilities/extensions・使われた登録形式にかかわらず、リクエストは無条件に拒否される。このバージョンの SDK
-  には、ネゴシエートされたエラのメソッドテーブルを外部から拡張・上書きする手段(`ProtocolOptions` の
-  `supportedProtocolVersions` / `enforceStrictCapabilities` / `debouncedNotificationMethods` — 当該 SDK バージ
-  ョンでの全フィールド)は存在しない。
+  **SDK 2.0.0(2.1 と 2.2 にも同じ例外は無い)**: ハンドラは、2026-07-28 でネゴシエートされた接続上では**一
+  切ディスパッチされなかった**。SDK の受信リクエストルーティング(ベースの `Protocol` クラス内部、
+  `_requestHandlers.get(method)` より前)は `isSpecRequestMethod(method) && !codec.hasRequestMethod(method)`
+  を実行し、真であれば登録済みハンドラ(こちらのものも含め)を一切参照せずに `-32601 Method not found` を返し
+  ていた。`isSpecRequestMethod` は `ALL_CODECS = [rev2025Codec, rev2026Codec]`、つまりネゴシエートしたエラだけ
+  でなくすべてのプロトコルエラ自身の凍結済みワイヤメソッドテーブルを横断してメンバーシップを確認する。
+  `tasks/get`/`tasks/cancel` は、廃止された 2025-11-25 語彙自身の予約済みメソッド名としてその和集合に含まれる
+  一方、ネゴシエートされた 2026-07-28 コアコーデックのテーブルには含まれない(この拡張はコア仕様ではないた
+  め)。そのためリクエストは、登録・宣言された capabilities/extensions・登録形式にかかわらず無条件に拒否され
+  た。本当に新規のメソッド名(例: `acme/customTaskGet`)は同じ手段で問題なくディスパッチされ、これでこのゲート
+  が純粋に名前ベースであることが示された。
 
-  **これをどう実証したか**(同一の envelope/ヘッダ設定のもとで変数を 1 つずつ切り分けた 3 つの実験): (1) 本当
-  に新規のメソッド名(例: `acme/customTaskGet`。どのエラのテーブルとも衝突しない)は `setRequestHandler` で登録
-  したハンドラへ問題なくディスパッチされる。(2) メソッド名だけを `tasks/get` に差し替え、他はバイト単位で同一
-  にすると、毎回 `-32601` が再現する。(3) `tasks/get` リクエストの前に
-  `Server.registerCapabilities({ tasks: {...}, extensions: { "io.modelcontextprotocol/tasks": {} } })` を呼んで
-  も何も変わらない — このゲートは純粋に名前ベースであり capability ベースではない。
+  **SDK ≥ 2.3.0(2026-10-02 公開。2.3.1 で検証)**: SEP-2663(Tasks 拡張)がこの 2 つの名前を再定義し、SDK は
+  `isExtensionReusedRequestMethod(method)`(`tasks/get` と `tasks/cancel` に限り真)を追加した。同じルーティン
+  グ判定は `isSpecRequestMethod(method) && !codec.hasRequestMethod(method) &&
+  !(isExtensionReusedRequestMethod(method) && this._customSchemaRequestMethods.has(method))` になり、
+  `_customSchemaRequestMethods` は 3 引数のスキーマ明示形 `setRequestHandler` で埋まる。これはまさに
+  `registerTaskMethods` が使う形である。したがって `tasksEnabled: true` では 2 メソッドとも kohaku のハンドラ
+  にディスパッチされ、何も登録されない場合(`tasksEnabled` オフ)は従来どおり `-32601` で応答する。SDK の
+  Streamable HTTP ラダーは加えて SEP-2663 のヘッダ束縛も強制する: `tasks/get` / `tasks/update` /
+  `tasks/cancel` は `Mcp-Name: <params.taskId>` を付けなければならない(テーブル `MCP_NAME_HEADER_SOURCE`。SDK
+  のクライアントトランスポートが送出し、サーバのラダーが検証する)。これを省くとディスパッチ前に `-32020`
+  (HeaderMismatch、HTTP 400)で拒否されるため、手書きのクライアントはヘッダを写す必要がある。
+  `@modelcontextprotocol/client` の `callTool()` のデコーダは今も `resultType: "task"` を
+  `UNSUPPORTED_RESULT_TYPE` として拒否するため、型付きクライアントでは `CreateTaskResult` を読めない。テスト
+  では素の JSON-RPC を使う。
 
-  **将来の SDK バージョンでこの確認を数分で再実行する方法**(テストハーネス不要。導入済みの
-  `@modelcontextprotocol/server` に対するスタンドアロンの Node スクリプトでよい): `createMcpHandler` で、
-  `server.server.setRequestHandler("tasks/get", { params: z.object({ taskId: z.string() }) }, async (p) =>
-  ({ taskId: p.taskId, status: "working" }))` を呼ぶファクトリからサーバを構築し、`await handler.fetch(new
-  Request(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json,
-  text/event-stream", "mcp-method": "tasks/get", "mcp-protocol-version": "2026-07-28" }, body:
-  JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tasks/get", params: { taskId: "x", _meta: {
-  "io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": {
-  extensions: { "io.modelcontextprotocol/tasks": {} } } } } }) }))` を送る。`200` でハンドラ自身の応答が返れば
-  `tasks/get` は到達可能になっている(`AttachOptions.tasksEnabled` をオンにして安全)。`code: -32601` の
-  JSON-RPC エラーなら制限はまだ有効。`packages/host-mcp-apps/test/tasks.test.ts` の「known SDK limitation」
-  describe ブロックは、`sendRawModern` テストヘルパー経由でまさにこの形の確認を `pnpm test` のたびに自動実行す
-  るトリップワイヤであり、到達可能になった瞬間に赤くなる。
+  **SDK 2.3.1 での観測**(`packages/host-mcp-apps/test/tasks.test.ts` の「SDK reachability」ブロック):
 
-  この拡張のサーバ側 capability 宣言(`ServerCapabilities.extensions["io.modelcontextprotocol/tasks"]`、
-  `server/discover` で提示)と `kohaku_compose`/intent tool の `CreateTaskResult` 応答は、この SDK 側のゲートそ
-  のものからは技術的には影響を受けない — 影響を受けるのはポーリング/キャンセルの 2 メソッドだけである。しかし
-  上の `AttachOptions.tasksEnabled` を参照: `tasks/get` をポーリングできない間、本リポジトリはこれら 2 つのど
-  ちらも露出しない — SDK が技術的に許すことの上に乗せたプロダクト判断としてである。`tasks/get`/`tasks/cancel`
-  の登録コードはそれでも残している: 仕様に忠実であり、この予約を撤廃するか公式の Tasks ランタイムを出荷する将
-  来の SDK リリースに対して前方互換だからである。アップストリームへの報告は行っていない — 実ホストに対して運
-  用する人が、報告するかどうか・どう報告するかを判断すべきであり、本リポジトリで決めることではない。
+  | リクエスト(2026-07-28 接続、`_meta` で拡張を宣言) | `tasksEnabled: true` | `tasksEnabled` 未設定 |
+  |---|---|---|
+  | 既知のタスクに対し `Mcp-Name: <taskId>` つきの `tasks/get` / `tasks/cancel` | `200`、タスクのスナップショット / `{}` の ack | `404` `-32601` |
+  | 同上、未知または期限切れの `taskId` | `-32602`(InvalidParams) | `404` `-32601` |
+  | 同上、`Mcp-Name` を省略 | `400` `-32020`(SDK のラダー) | `400` `-32020`(SDK のラダー) |
+
+  **将来の SDK バージョンでこの確認を数分で再実行する方法**: `packages/host-mcp-apps/test/connect-modern.ts` の
+  `sendRawModern` ヘルパーがそれを行う(`createMcpHandler` でサーバを構築し、`mcp-method`・`mcp-name`・
+  `mcp-protocol-version: 2026-07-28` の各ヘッダと `io.modelcontextprotocol/protocolVersion` /
+  `clientCapabilities` の `_meta` エンベロープを付けて素の `tasks/get` を `POST` する)。「SDK reachability」
+  describe ブロックはまさにこれを `pnpm test` のたびに自動実行するトリップワイヤであり、2 つの名前がディスパッ
+  チされなくなった場合(または未登録時の `-32601` が成り立たなくなった場合)に赤くなる。キャンセルは、2.0.0
+  時代のテストが必要としていた `__getTaskStoreForTest` 経由の近道ではなく、実際の `tasks/cancel` で駆動して
+  いる。アップストリームへの報告は行っていない。2.3 の変更は、SDK が自力で SEP-2663 に追いついたものである。
+
+  **公開済みの kohaku 0.4.0 への影響**: その peer 範囲は `^2.0.0` だったため、利用者はすでに SDK 2.3.x を解決
+  している。`tasksEnabled` が未設定(既定)なら何も変わらない: 拡張は宣言も登録もされず、compose 系は同期の
+  まま。`tasksEnabled: true` の場合は、`tasks/get`/`tasks/cancel` が黙って到達不能から動作する状態に変わった
+  (`Mcp-Name` を送るクライアントは、実際のタスク状態を受け取れる)。
+
 - **実ホストでの検証は未実施** — Claude Desktop / claude.ai / ChatGPT の MCP クライアントが
   `io.modelcontextprotocol/tasks`(あるいは影響を受けない `CreateTaskResult` 形状そのもの)に対してどう振る舞う
   かは未検証。この確認と、SDK をアップグレードするたびに `tasks/get`/`tasks/cancel` の到達可能性を再検証すること
@@ -878,6 +886,8 @@ Request/Response ↔ `node:http` アダプタ。`apps/sample-mcp/src/http.ts` �
 4 パッケージすべて `pnpm-workspace.yaml` の catalog に固定した(旧 `@modelcontextprotocol/sdk` の catalog
 エントリは削除)。**Python もその後 `mcp` 2.x へ移行済み**である(`kohaku-ui[mcp]` の floor `>=2.2`。この TS の
 切替とは別に、より後になって行われた — 下の「Python `mcp` 2.x 移行」参照)。
+
+**その後の 2.3 系への更新**(`server`/`client`/`core` ^2.3.1、`node` ^2.1.1、`ext-apps` ^2.0.3。`kohaku init` の `EXTERNAL_VERSIONS` にも反映): 型のためのソース変更は不要だった。観測された挙動変化は「MCP Tasks 拡張」で述べた Tasks のものだけである(`tasks/get`/`tasks/cancel` が到達可能になった)。
 
 - **機械的な部分**: ベンダー codemod(`npx @modelcontextprotocol/codemod v1-to-v2`)が import パスを書き換え
   (`@modelcontextprotocol/sdk/server/mcp.js` → `@modelcontextprotocol/server` 等)、生の shape 形式の
@@ -1109,7 +1119,7 @@ Python は `mcp` 1.28.1 から 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)へ、
 | 37 | `ComposeBudget.deadlineMs`(compose 全体の壁時計デッドライン)を `perCompose` の兄弟概念として追加し、呼び出し間の判定に加えて実行中の呼び出しも中断させる | LLM 呼び出し単位のタイムアウト(`KOHAKU_LLM_TIMEOUT_MS`)は compose 全体を縛らない(L1 + 修復 + L2 がそれぞれ自分のタイムアウト内に収まっていても、合計の待ち時間は際限なく伸び得る)。実行中中断の場合も既存のトークン予算降格の形(`TierResult.failure: "budget"`、`ctx.budgetExceeded: true`)を再利用する — デッドライン由来の `ABORTED` と本物の呼び出し元キャンセルの見分けは、`LlmError` 自体を調べるのではなく分類箇所で行う(他の何によっても発火しない、より狭い第二のシグナル `deadlineSignal`)。そのためデッドラインはオペレーターが監視する fallback レート分析に加算され、実際のクライアント切断は引き続き加算されない |
 | 38 | TS を `@modelcontextprotocol/sdk` 1.x から分割 v2 パッケージ(`server`/`client`/`core`/`node` 2.0.0)と `ext-apps` 2.0.0 へ一括で移行し、`apps/sample-mcp` のステートフルな HTTP セッションレジストリを(ベンダー codemod の機械的出力が行うような)`@modelcontextprotocol/node` の `NodeStreamableHTTPServerTransport` への移植ではなく完全撤去とした | プロトコルバージョン 2026-07-28 はプロトコルレベルのセッションをそもそも廃止しており、`createMcpHandler` は SDK 自身のステートレス提供エントリ(exchange ごとに新しい `McpServer` を生成し、まだ 2025-era の旧クライアント向けにステートレスフォールバックも内蔵する)である — 手組みのセッションレジストリ(掃除タイマー・セッション上限・`Mcp-Session-Id` 処理)をその隣に残すのは、利益なく 2 つの競合するステート管理モデルを保守することになり、しかもこのレジストリの撤去自体がこの移行に着手する前からここに「いずれ不要になる」と記録済みだった。`resultType: "complete"` の手動スタンプ(`safeTool`)は SDK 自身の 2026-era コーデックのスタンプに任せず維持した — `InMemoryTransport` も、現行の実機ホストが話す HTTP のステートレスフォールバックも、これを剥ぎ取りも上書きもしないことを配線バイトの傍受で確認した |
 | 39 | TS に `ttlMs`/`cacheScope`(SEP-2549)を実装する: *値*は `host-mcp-apps`(`defaultMcpListCacheHints()`。Python の `tools/list`/`resources/list` のヒントと厳密に一致)に置きつつ、`McpServer` を構築する呼び出し元(`apps/sample-mcp/src/setup.ts`)が `ServerOptions.cacheHints` へ渡す形にする。加えて共有レンダラーリソースの `resources/read`(`registerResource(..., {cacheHint})`)をカバーし、そのキャッシュ TTL は 5 分として `KOHAKU_MCP_SNAPSHOT_TTL_MS` とは独立に決めた(無関係なリソースのため)— この決定が着手した時点では Python `mcp` 1.x の `read_resource()` デコレータには `resources/read` に同等のフックが無かったが、決定 #41 の後の Python `mcp` 2.x 移行で Python 側もこのギャップを解消した(ただし値はこの決定の TS 固有の 5 分ではなく、list 系ヒントと共有する 60 秒) | `ServerOptions.cacheHints` はコンストラクタ時専用(SDK v2 に事後差し替え手段はない)であり、`attachKohakuToMcpServer` は自ら `McpServer` を構築しないため、host-mcp-apps はリソース単位のヒントのように自己配線できない — それでも*値*自体はライブラリに置くことで(各呼び出し元での重複を避け)言語間の単一の情報源であり続けつつ、配線そのものは SDK の API 制約であってプロダクト側の意思決定ではないことを尊重する。検証は `versionNegotiation: {mode:"auto"}` と `createMcpHandler` のインプロセス fetch ブリッジで行った — このバージョンの SDK では手動構築した `McpServer.connect(InMemoryTransport)` は(transport レベルの分類がないため)`supportedProtocolVersions` を何に設定しても modern era を交渉できない |
-| 40 | MCP Tasks 拡張(`io.modelcontextprotocol/tasks`、2026-07-28 dated-stable)を kohaku 独自の型(`packages/host-mcp-apps/src/tasks.ts`)で実装し、SDK の廃止済み 2025-11-25 `Task`/`GetTaskRequest`/`CreateTaskResult` 語彙は使わない。タスク対応にするのは `kohaku_compose` と生成された intent tools のみ。`tasks/cancel` は既存のクライアント abort 経路(`ComposeOptions.abort` → `trace.cancelled`)に配線し第二のキャンセル概念にはしない。インメモリの `TaskStore` は遅延評価によるオンアクセス期限切れでタイマーを持たない。**拡張全体を `AttachOptions.tasksEnabled`(既定 `false`)の背後にゲートする** — オフの間は、リクエストが拡張を宣言していても compose 系は本作業以前とバイト単位で不変の同期のままであり、サーバも拡張を宣言せず `tasks/get`/`tasks/cancel` も一切登録しない | SDK 自身の task 型は互換性のない別のワイヤ形状を持つ別拡張(ランタイムなし)のものであり、土台にすべきではない。タスク対応をcompose 系に絞ることは実際のレイテンシの所在(L1/L2 生成)と一致し、マウント済みウィジェット自身の同期呼び出しにポーリング実装を要求せずに済む。abort 経路を再利用する(並行する新経路を発明しない)ことで、単一の既検証済みキャンセル分類を保てる。タイマーを持たないストアは、SDK v2 移行で一度修正した経緯のあるキープアライブタイマーの落とし穴(撤去したセッションスイープタイマー)を最初から回避する — **本実装中に実測で発見**: `tasks/get`/`tasks/cancel` は SDK の文書化された拡張手段で登録されるが、導入済みの `@modelcontextprotocol/server` 2.0.0 自身の受信リクエストルーティングにより、kohaku のハンドラに到達する前に無条件で拒否される(`-32601`)。両メソッド名が廃止済みだが依然認識される 2025-11-25 語彙自身の予約名と衝突しているためであり、検証済みの SDK バージョン上のギャップ(トリップワイヤテストと、数分で再実行できる再確認手順つきで固定)であって kohaku 側のバグではない。`kohaku_compose`/intent tool の `CreateTaskResult` 応答経路はこの影響を受けず、エンドツーエンドで検証済み。**既定オフのゲートはその発見の上に乗せた別個の意図的な判断である**: `tasks/get` をポーリングできない間、`CreateTaskResult` は宣言したクライアントが決して解決できないタスクハンドルであり — ハンドルが無いより悪く、しかも拡張を宣言するだけの高度さを持つクライアントからこそ、動作する同期呼び出しを奪うことになる |
+| 40 | MCP Tasks 拡張(`io.modelcontextprotocol/tasks`、2026-07-28 dated-stable)を kohaku 独自の型(`packages/host-mcp-apps/src/tasks.ts`)で実装し、SDK の廃止済み 2025-11-25 `Task`/`GetTaskRequest`/`CreateTaskResult` 語彙は使わない。タスク対応にするのは `kohaku_compose` と生成された intent tools のみ。`tasks/cancel` は既存のクライアント abort 経路(`ComposeOptions.abort` → `trace.cancelled`)に配線し第二のキャンセル概念にはしない。インメモリの `TaskStore` は遅延評価によるオンアクセス期限切れでタイマーを持たない。**拡張全体を `AttachOptions.tasksEnabled`(既定 `false`)の背後にゲートする** — オフの間は、リクエストが拡張を宣言していても compose 系は本作業以前とバイト単位で不変の同期のままであり、サーバも拡張を宣言せず `tasks/get`/`tasks/cancel` も一切登録しない | SDK 自身の task 型は互換性のない別のワイヤ形状を持つ別拡張(ランタイムなし)のものであり、土台にすべきではない。タスク対応をcompose 系に絞ることは実際のレイテンシの所在(L1/L2 生成)と一致し、マウント済みウィジェット自身の同期呼び出しにポーリング実装を要求せずに済む。abort 経路を再利用する(並行する新経路を発明しない)ことで、単一の既検証済みキャンセル分類を保てる。タイマーを持たないストアは、SDK v2 移行で一度修正した経緯のあるキープアライブタイマーの落とし穴(撤去したセッションスイープタイマー)を最初から回避する — **本実装中に実測で発見**: `tasks/get`/`tasks/cancel` は SDK の文書化された拡張手段で登録されるが、導入済みの `@modelcontextprotocol/server` 2.0.0 自身の受信リクエストルーティングにより、kohaku のハンドラに到達する前に無条件で拒否される(`-32601`)。両メソッド名が廃止済みだが依然認識される 2025-11-25 語彙自身の予約名と衝突しているためであり、検証済みの SDK バージョン上のギャップ(トリップワイヤテストと、数分で再実行できる再確認手順つきで固定)であって kohaku 側のバグではない。`kohaku_compose`/intent tool の `CreateTaskResult` 応答経路はこの影響を受けず、エンドツーエンドで検証済み。**既定オフのゲートはその発見の上に乗せた別個の意図的な判断である**: `tasks/get` をポーリングできない間、`CreateTaskResult` は宣言したクライアントが決して解決できないタスクハンドルであり — ハンドルが無いより悪く、しかも拡張を宣言するだけの高度さを持つクライアントからこそ、動作する同期呼び出しを奪うことになる — **2026-10-17 追記**: SDK 2.3.0(SEP-2663)は、スキーマ明示のハンドラが登録されている場合に `tasks/get`/`tasks/cancel` をそのゲートから除外するようになった。そのため上記の発見は、サポート範囲の SDK(peer の floor は `^2.3.1`)では成り立たない。トリップワイヤのテストは到達可能性のテストに反転し、キャンセルは実際の `tasks/cancel` で駆動するようにした。既定オフのゲートは意図的にそのままにしている(プロダクト判断。「MCP Tasks 拡張」参照) |
 | 41 | Python を `mcp` 1.28.1 から 2.x SDK(`kohaku-ui[mcp]` の floor `>=2.2`)へ移行する。`attach_kohaku_to_mcp_server` の公開シグネチャは変更せず、廃止されたデコレータ API の代わりに同じ 4 メソッドを `Server.add_request_handler` で再登録し、廃止された `request_ctx` contextvar の代わりに `ServerRequestContext` を全ハンドラへ通し、`result_type`/`ttl_ms`/`cache_scope` が実の宣言済みフィールドになったことで `mcp` 1.x の `model_copy(update={"resultType": ...})` スタンプを廃止する。サンプル HTTP ホストでは、手組みの `StreamableHTTPSessionManager` + `Mount` + `lifespan` 配線を `Server.streamable_http_app(...)` に置き換える | 登録層・リクエストコンテキストの形・1.x のテストヘルパー(`create_connected_server_and_client_session`。2.x で削除)はいずれも 1.x と 2.x で構造的に非互換であり、1.x を 2.x と併存させたまま移行の手数を減らす道は無かった — floor は直接 `>=2.2` へ引き上げた。`attach_kohaku_to_mcp_server` のシグネチャを維持したことで、この移行は `host_mcp` 内部 + サンプルホストの変更にとどまり、`mcp_setup.py` の `McpHostDeps` 配線への波及は `resolve_principal` のパラメータ型以外に生じなかった。`resources/read` が 2.x で `CacheableResult` 対応を得たのは(決定 #39 参照)この移行の副産物であり目的ではない。検証: `kohaku/tests/host_mcp` のスイート全体が(属性名と接続ヘルパーの機構だけを更新した状態で)意図を変えずに通過し、加えて `ttl_ms`/`cache_scope` を配線上で観測するためだけに `mode="2026-07-28"` 接続を追加した(legacy でネゴシエートした接続の配線モデルはそれらを篩い落とす — 上の `ttlMs`/`cacheScope` の項参照)。サンプル HTTP ホストの ASGI app は、実サーバを起動せず Starlette の `TestClient` でインプロセス構築して検証した |
 | 42 | `storage-redis` / `storage-postgres` / `authz-jwt` をプロトコル外の参考実装アダプタパッケージとして提供し、ドライバ SDK(`ioredis`, `pg`)は peer dependency とし、JWT identity 解決は HMAC capability 発行と厳密に分離する | ファイル `StoragePort` のプロセス内 Spec キャッシュでは同一表示保証(R5)がインスタンス単位でしか成立しない。複数インスタンス運用にはバックエンド共有が必要になる。これを実現するのに `ports.ts` を拡張する必要は無かったため(§11「本番用アダプタ」)、これらのパッケージは追加的かつ差し替え可能なものにとどまる。peer ドライバは LLM プロバイダ SDK / MCP SDK と同じ考え方に従う。JWT を identity 専用(capability には決してならない)に保つことで、capability token は依然として `exp` 前に失効できない(`authz-hmac` に deny list もキーローテーションも無い)という帰結を受け入れる — 回避せず、参考実装の性質として明記する。**決定 #43 により差し替え(supersede)された**。この判断を下した時点の障害が解消されたため、決定 #43 で失効を追加している |
 | 43 | 事前失効(`jti` を全発行トークンに付与 + 差し替え可能な `CapabilityRevocationStore`)を追加する。`AuthzPort` 自体は変更しない | 決定 #42 の「失効できない」という結論を差し替える(supersede)ものであり、その判断根拠を否定するものではない: #42 が下された時点では、`authz-hmac` は未マージのブランチに属しており、そこに失効機能を実装するとそのブランチのスコープを広げてしまうため、決定として正しかった。そのブランチはその後マージされた。変わったのはこの点であり、それが今回この決定を可能にしている——差し替えられているのは #42 が受け入れたトレードオフそのものであって、当時の判断の妥当性ではない。失効は `AuthzPort` を変更せず、具象ポートの拡張メソッド(`HmacAuthzPort.revokeCapability`)として提供する。これは `storage-postgres` が `ready()` を提供しているのと同じ流儀である。`CapabilityRevocationStore` 自体は `authz-hmac` ではなく spec-core の `ports.ts` に定義する: `spec/test/dependency-direction.test.ts` が同一レイヤーへの依存を禁じており、`storage-redis` / `storage-postgres` / `port-contracts` がいずれもこの型を必要としながら `authz-hmac` と同じレイヤーを共有しているため、それら全部より厳密に下のレイヤーである spec-core にしか置けない。`authz-jwt` はストアとメソッドの両方をそのまま通す。これは発行・検証をすでに委譲しているのと同じ扱いである。この変更より前に発行されたトークンには `jti` が無く、失効可能にはせず自然に満了させる。これによりローリングデプロイで旧インスタンスのトークンが無効化されることはない |

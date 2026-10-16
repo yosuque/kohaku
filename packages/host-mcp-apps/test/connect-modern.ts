@@ -70,12 +70,16 @@ export async function connectModern(
  *     entirely, which is also a faithful stand-in for how a real Tasks-aware client (which this SDK version
  *     does not ship) would actually need to read the wire.
  *
- * `createMcpHandler`'s SEP-2243 pre-dispatch validation additionally requires the `Mcp-Method` (and, for
- * `tools/call`, `Mcp-Name`) headers to agree with the JSON-RPC body — this helper fills them in from `body`.
+ * `createMcpHandler`'s SEP-2243 pre-dispatch validation additionally requires the `Mcp-Method` header, and
+ * `Mcp-Name` for the methods that mirror a body field into it (`tools/call` → `params.name`; since SDK 2.3,
+ * `tasks/get` / `tasks/update` / `tasks/cancel` → `params.taskId`, per SEP-2663's Streamable HTTP binding), to
+ * agree with the JSON-RPC body — this helper fills them in from `body`. `options.omitNameHeader` leaves
+ * `Mcp-Name` out so a test can pin the `-32020` rejection a client that forgets it would see.
  */
 export async function sendRawModern(
   buildServer: () => McpServer,
   body: { jsonrpc: "2.0"; id: number | string; method: string; params?: Record<string, unknown> },
+  options: { omitNameHeader?: boolean } = {},
 ): Promise<{ status: number; json: Record<string, unknown> }> {
   const handler = createMcpHandler(buildServer);
   try {
@@ -87,6 +91,9 @@ export async function sendRawModern(
     };
     const toolName = (body.params as { name?: unknown } | undefined)?.name;
     if (typeof toolName === "string") headers["mcp-name"] = toolName;
+    const taskId = (body.params as { taskId?: unknown } | undefined)?.taskId;
+    if (typeof taskId === "string") headers["mcp-name"] = taskId;
+    if (options.omitNameHeader === true) delete headers["mcp-name"];
     const res = await handler.fetch(
       new Request("http://in-process.kohaku-test.invalid/mcp", {
         method: "POST",
