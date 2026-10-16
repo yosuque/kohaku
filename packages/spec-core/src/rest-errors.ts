@@ -88,9 +88,11 @@ export interface ErrorEnvelope {
     code: HostErrorCode;
     message: string;
     /**
-     * Correlation ID. Issued and attached only when the failure-path observability hook (host-side
-     * onError) is wired, and equal to the requestId passed to onError (so logs and client errors can be
-     * correlated). If the hook is not wired, it is not attached = the response is unchanged.
+     * Correlation ID. The host mints one for every request whether or not the failure-path observability
+     * hook (host-side onError) is wired, and sets it as the `X-Request-Id` response header on every
+     * response. It is attached here on the envelopes of failures the host reports, and equals the requestId
+     * passed to onError when that hook is wired (so logs and client errors can be correlated). An envelope
+     * for a client error the host does not report (e.g. a missing bearer token) may omit it.
      */
     requestId?: string;
     /**

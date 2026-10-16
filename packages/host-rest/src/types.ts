@@ -218,7 +218,9 @@ export interface KohakuHostDeps {
    * converting an exception into an error envelope, passing endpoint, requestId, and the causing exception. The
    * requestId matches error.requestId of the same response, correlating logs with the client's error. Throws /
    * rejections from the hook are swallowed and do not propagate to the error response.
-   * **If not wired, silent — no requestId is issued either (the legacy response is unchanged).**
+   * **If not wired, the hook is simply skipped. The requestId is still minted for every request (see
+   * `requestId`): it still goes out as the `X-Request-Id` response header and on the envelope's
+   * `error.requestId`, so the response is the same whether or not this hook is wired.**
    */
   onError?: (info: { endpoint: string; requestId: string; error: unknown }) => void | Promise<void>;
   /**
