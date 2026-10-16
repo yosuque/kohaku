@@ -34,7 +34,7 @@ LLM キーが無くても始められます。L0 の固定 Spec(`pnpm test` が�
 - 単一パッケージのテスト: `pnpm vitest run --project <name>`(名前は各パッケージの `vitest.config.ts` の `name` から取得)。
 - `python/` 配下を触った場合:
   ```bash
-  cd python && uv run ruff check && uv run mypy && uv run lint-imports && uv run pytest
+  cd python && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest
   ```
 - 仕様(`spec/`)に触れた場合はセルフチェックを実行してください: `node cli/bin/kohaku.js conformance --self`。
 

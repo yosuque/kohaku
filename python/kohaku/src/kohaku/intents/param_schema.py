@@ -191,7 +191,9 @@ class ObjectSchema:
                 elif field_schema.is_optional:
                     continue
                 else:
-                    issues.append(ParamFieldIssue(path=key, message=f'missing required parameter "{key}"'))
+                    issues.append(
+                        ParamFieldIssue(path=key, message=f'missing required parameter "{key}"')
+                    )
                 continue
             try:
                 out[key] = field_schema._coerce(raw[key])

@@ -35,13 +35,9 @@ def create_fixation_fewshot(storage: StoragePort) -> FewShotPolicy:
     return FewShotPolicy(examples=examples)
 
 
-def _sort_fixations(
-    fixations: Sequence[FixationRecord], canonical: str
-) -> list[FixationRecord]:
+def _sort_fixations(fixations: Sequence[FixationRecord], canonical: str) -> list[FixationRecord]:
     """Fixations matching the given canonical first, then ascending intentHash (unique, derived from sha256)."""
-    return sorted(
-        fixations, key=lambda f: (0 if f.canonical == canonical else 1, f.intentHash)
-    )
+    return sorted(fixations, key=lambda f: (0 if f.canonical == canonical else 1, f.intentHash))
 
 
 __all__ = ["create_fixation_fewshot"]

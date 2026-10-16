@@ -22,9 +22,7 @@ class QueryTemplate:
     fixedParams: dict[str, str] | None = None
 
 
-def compile_query_template(
-    source: str, template: QueryTemplate, params: JsonObject
-) -> QueryHandle:
+def compile_query_template(source: str, template: QueryTemplate, params: JsonObject) -> QueryHandle:
     """Expand a QueryTemplate + params into a canonical query:// URI (QueryHandle).
 
     Canonicalization (key sorting, etc.) is delegated to data-binding's format_query_ref (= spec-core's canonical
@@ -36,6 +34,4 @@ def compile_query_template(
         # TS's `value != null && value !== ""`. Missing (None) and empty string are not added.
         if value is not None and value != "":
             query_params[query_param] = js_string(value)
-    return QueryHandle(
-        uri=format_query_ref(source=source, path=template.path, params=query_params)
-    )
+    return QueryHandle(uri=format_query_ref(source=source, path=template.path, params=query_params))

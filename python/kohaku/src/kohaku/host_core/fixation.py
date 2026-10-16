@@ -163,9 +163,7 @@ async def settle_fixation(
             guard["ifCatalogFingerprint"] = target.fixation.catalogFingerprint
 
         async def _invalidate() -> None:
-            await fixations.invalidate(
-                target.intent_hash, "stale", detail, target.tenant, guard
-            )
+            await fixations.invalidate(target.intent_hash, "stale", detail, target.tenant, guard)
 
         await host.run_self_heal(target.tenant, target.intent_hash, _invalidate, "invalidate")
     return None

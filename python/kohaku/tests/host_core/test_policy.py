@@ -129,7 +129,11 @@ class TestBudget:
     def test_per_compose_and_deadline_from_file_override_base(self) -> None:
         runtime = create_policy_runtime(
             make_file(
-                defaults={"compose": {"budget": {"perCompose": {"stopAfterTokens": 10}, "deadlineMs": 5000}}}
+                defaults={
+                    "compose": {
+                        "budget": {"perCompose": {"stopAfterTokens": 10}, "deadlineMs": 5000}
+                    }
+                }
             ),
             base_policy_for=lambda _t: ComposePolicy(
                 budget=ComposeBudget(per_compose_stop_after_tokens=999, deadline_ms=999)
@@ -204,12 +208,23 @@ class TestBudget:
         stop_after_tokens = 1000
         runtime = create_policy_runtime(
             make_file(
-                defaults={"compose": {"budget": {"dailyTokens": 1, "perCompose": {"stopAfterTokens": stop_after_tokens}}}}
+                defaults={
+                    "compose": {
+                        "budget": {
+                            "dailyTokens": 1,
+                            "perCompose": {"stopAfterTokens": stop_after_tokens},
+                        }
+                    }
+                }
             ),
             ledger=ledger,
         )
         budget = runtime.policy_for(SessionContext(surface="web", tenant="t1")).budget
-        assert budget is not None and budget.check_with_context is not None and budget.on_usage is not None
+        assert (
+            budget is not None
+            and budget.check_with_context is not None
+            and budget.on_usage is not None
+        )
         concurrent_generations = 3
 
         # All N in-flight generations call check_with_context() while the ledger still reads 0
@@ -231,7 +246,9 @@ class TestBudget:
         runtime = create_policy_runtime(
             make_file(defaults={"compose": {"budget": {"dailyTokens": 1_000_000}}}),
             base_policy_for=lambda _t: ComposePolicy(
-                budget=ComposeBudget(check=lambda: BudgetVerdict(allow=False, reason="base says no"))
+                budget=ComposeBudget(
+                    check=lambda: BudgetVerdict(allow=False, reason="base says no")
+                )
             ),
             ledger=ledger,
         )
@@ -266,16 +283,22 @@ class _RecordingStore:
         self.allow = allow
         self.calls: list[dict[str, Any]] = []
 
-    async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+    async def take(
+        self, key: str, cost: int, rule: RateLimitRule, now_ms: float
+    ) -> RateLimitResult:
         self.calls.append({"key": key, "cost": cost, "rule": rule, "now_ms": now_ms})
         return RateLimitResult(allow=self.allow)
 
 
 class TestRateLimiter:
-    def test_always_allows_without_a_rate_limit_store_when_the_file_declares_no_rate_limits(self) -> None:
+    def test_always_allows_without_a_rate_limit_store_when_the_file_declares_no_rate_limits(
+        self,
+    ) -> None:
         async def run() -> None:
             runtime = create_policy_runtime(make_file())
-            result = await runtime.rate_limiter.take(PolicyRateLimiterTakeParams(routeClass="compose"))
+            result = await runtime.rate_limiter.take(
+                PolicyRateLimiterTakeParams(routeClass="compose")
+            )
             assert result == RateLimitResult(allow=True)
 
         asyncio.run(run())
@@ -284,10 +307,14 @@ class TestRateLimiter:
         async def run() -> None:
             store: RateLimitStore = _RecordingStore(allow=False)
             runtime = create_policy_runtime(
-                make_file(defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}}),
+                make_file(
+                    defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}}
+                ),
                 rate_limit_store=store,
             )
-            result = await runtime.rate_limiter.take(PolicyRateLimiterTakeParams(routeClass="action"))
+            result = await runtime.rate_limiter.take(
+                PolicyRateLimiterTakeParams(routeClass="action")
+            )
             assert result == RateLimitResult(allow=True)
 
         asyncio.run(run())
@@ -298,7 +325,11 @@ class TestRateLimiter:
             runtime = create_policy_runtime(
                 make_file(
                     defaults={"rateLimits": {"compose": {"capacity": 5, "refillPerSecond": 1}}},
-                    tenants={"tenant-a": {"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 2}}}},
+                    tenants={
+                        "tenant-a": {
+                            "rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 2}}
+                        }
+                    },
                 ),
                 rate_limit_store=store,
             )
@@ -306,7 +337,9 @@ class TestRateLimiter:
                 PolicyRateLimiterTakeParams(tenant="tenant-a", principal="p1", routeClass="compose")
             )
             assert len(store.calls) == 1
-            assert store.calls[0]["key"] == json.dumps(["tenant-a", "p1", "compose"], separators=(",", ":"))
+            assert store.calls[0]["key"] == json.dumps(
+                ["tenant-a", "p1", "compose"], separators=(",", ":")
+            )
             assert store.calls[0]["rule"] == RateLimitRule(capacity=1, refillPerSecond=2)
 
         asyncio.run(run())
@@ -316,13 +349,17 @@ class TestRateLimiter:
         mirrors the TS test of the same intent."""
 
         class _ThrowingStore:
-            async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+            async def take(
+                self, key: str, cost: int, rule: RateLimitRule, now_ms: float
+            ) -> RateLimitResult:
                 raise RuntimeError("store outage")
 
         async def run() -> None:
             errors: list[RateLimiterErrorInfo] = []
             runtime = create_policy_runtime(
-                make_file(defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}}),
+                make_file(
+                    defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}}
+                ),
                 rate_limit_store=_ThrowingStore(),
                 on_rate_limit_error=errors.append,
             )
@@ -378,7 +415,9 @@ class TestReload:
             assert event.version == 1
             assert event.label == "v2"
             assert event.tenants == ["tenant-a"]
-            assert sorted(event.changedPaths) == sorted(["label", "defaults.compose.allowL2", "tenants"])
+            assert sorted(event.changedPaths) == sorted(
+                ["label", "defaults.compose.allowL2", "tenants"]
+            )
 
         asyncio.run(run())
 
@@ -460,11 +499,19 @@ class TestReloadDedupAndValidation:
             runtime = create_policy_runtime(make_file(defaults={"compose": {"allowL2": False}}))
             before = runtime.policy_id
             with pytest.raises(ValueError, match=r"dailyTokens.*ledger"):
-                await runtime.reload(make_file(defaults={"compose": {"budget": {"dailyTokens": 10}}}))
-            with pytest.raises(ValueError, match=r"tenants\.tenant-a\.rateLimits.*rate_limit_store"):
+                await runtime.reload(
+                    make_file(defaults={"compose": {"budget": {"dailyTokens": 10}}})
+                )
+            with pytest.raises(
+                ValueError, match=r"tenants\.tenant-a\.rateLimits.*rate_limit_store"
+            ):
                 await runtime.reload(
                     make_file(
-                        tenants={"tenant-a": {"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}}}
+                        tenants={
+                            "tenant-a": {
+                                "rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}
+                            }
+                        }
                     )
                 )
             assert runtime.policy_id == before
@@ -474,7 +521,9 @@ class TestReloadDedupAndValidation:
 
 
 class TestStartupAudit:
-    def test_audit_startup_fires_once_for_the_starting_file_with_no_previous_policy_and_no_actor(self) -> None:
+    def test_audit_startup_fires_once_for_the_starting_file_with_no_previous_policy_and_no_actor(
+        self,
+    ) -> None:
         async def run() -> None:
             calls: list[tuple[PolicyAppliedEvent, str | None]] = []
             runtime = create_policy_runtime(
@@ -535,7 +584,9 @@ class TestDeclaredDependencies:
     def test_raises_when_rate_limits_declare_a_rule_but_no_store_is_supplied(self) -> None:
         with pytest.raises(ValueError, match=r"defaults\.rateLimits.*rate_limit_store"):
             create_policy_runtime(
-                make_file(defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}})
+                make_file(
+                    defaults={"rateLimits": {"compose": {"capacity": 1, "refillPerSecond": 1}}}
+                )
             )
 
     def test_does_not_raise_for_an_empty_rate_limits_section_or_when_the_dependencies_are_supplied(

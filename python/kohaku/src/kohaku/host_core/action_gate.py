@@ -76,7 +76,9 @@ class ActionGateDenied:
     kind: Literal["denied"] = "denied"
 
 
-type ActionGateResult = ActionGateAllow | ActionGateInvalid | ActionGateApprovalRequired | ActionGateDenied
+type ActionGateResult = (
+    ActionGateAllow | ActionGateInvalid | ActionGateApprovalRequired | ActionGateDenied
+)
 
 
 @dataclass(frozen=True)

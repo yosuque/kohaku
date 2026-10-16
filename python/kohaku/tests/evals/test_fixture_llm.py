@@ -100,9 +100,7 @@ def test_corrupt_fixture_raises(tmp_path: Path) -> None:
     async def run() -> None:
         live = FakeLlm(objects=[{"n": 3}])
         rec = FixtureLlm(tmp_path, record=True, live=live)
-        await rec.generate_object(
-            GenerateObjectRequest(schema=_Shape, schema_name="s", prompt="p")
-        )
+        await rec.generate_object(GenerateObjectRequest(schema=_Shape, schema_name="s", prompt="p"))
         # Corrupt the recorded fixture.
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1

@@ -89,13 +89,21 @@ def resolve_catalog(core: Catalog, *contributions: Catalog) -> ResolvedCatalog:
             by_type[definition.type] = definition
 
     for definition in by_type.values():
-        replaced_by = definition.deprecated.replacedBy if definition.deprecated is not None else None
+        replaced_by = (
+            definition.deprecated.replacedBy if definition.deprecated is not None else None
+        )
         if replaced_by is None:
             continue
         target = by_type.get(replaced_by.type)
-        label = f"{replaced_by.type}@{replaced_by.version}" if replaced_by.version is not None else replaced_by.type
+        label = (
+            f"{replaced_by.type}@{replaced_by.version}"
+            if replaced_by.version is not None
+            else replaced_by.type
+        )
         if target is None:
-            raise CatalogConflictError(f'"{definition.type}" deprecated.replacedBy "{label}" does not resolve in the catalog')
+            raise CatalogConflictError(
+                f'"{definition.type}" deprecated.replacedBy "{label}" does not resolve in the catalog'
+            )
         if replaced_by.version is not None and target.version != replaced_by.version:
             raise CatalogConflictError(
                 f'"{definition.type}" deprecated.replacedBy "{label}" does not resolve:'

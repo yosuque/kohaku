@@ -73,7 +73,10 @@ def test_rejects_an_unknown_key_inside_defaults_compose() -> None:
 def test_rejects_a_negative_rate_limit_capacity() -> None:
     try:
         KohakuPolicyFile.model_validate(
-            {"version": 1, "defaults": {"rateLimits": {"compose": {"capacity": -1, "refillPerSecond": 1}}}}
+            {
+                "version": 1,
+                "defaults": {"rateLimits": {"compose": {"capacity": -1, "refillPerSecond": 1}}},
+            }
         )
     except ValidationError:
         return
@@ -82,7 +85,9 @@ def test_rejects_a_negative_rate_limit_capacity() -> None:
 
 def test_has_no_field_for_a_function_shaped_compose_policy_setting() -> None:
     try:
-        KohakuPolicyFile.model_validate({"version": 1, "defaults": {"compose": {"routeTier": "L2"}}})
+        KohakuPolicyFile.model_validate(
+            {"version": 1, "defaults": {"compose": {"routeTier": "L2"}}}
+        )
     except ValidationError:
         return
     raise AssertionError("expected ValidationError")
@@ -109,9 +114,9 @@ def test_merge_recurses_into_nested_objects_rather_than_replacing_the_whole_obje
 
 
 def test_merge_scalar_override_replaces_bases_value() -> None:
-    assert merge_policy_sections({"compose": {"allowL2": False}}, {"compose": {"allowL2": True}}) == {
-        "compose": {"allowL2": True}
-    }
+    assert merge_policy_sections(
+        {"compose": {"allowL2": False}}, {"compose": {"allowL2": True}}
+    ) == {"compose": {"allowL2": True}}
 
 
 def test_merge_array_on_override_replaces_bases_array_wholesale() -> None:
@@ -134,7 +139,9 @@ def test_merge_empty_override_returns_bases_shape_unchanged() -> None:
 
 
 def test_compute_policy_id_is_deterministic_for_the_same_content() -> None:
-    file = KohakuPolicyFile.model_validate({"version": 1, "defaults": {"compose": {"allowL2": True}}})
+    file = KohakuPolicyFile.model_validate(
+        {"version": 1, "defaults": {"compose": {"allowL2": True}}}
+    )
     assert compute_policy_id(file) == compute_policy_id(file)
 
 

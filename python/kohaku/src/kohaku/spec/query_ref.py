@@ -37,9 +37,7 @@ class QueryRef:
 _REF_RE = re.compile(r"^query://([a-z0-9_-]+)/([^?#]+)(?:\?(.*))?$")
 
 # Characters encodeURIComponent does not escape (RFC 2396 unreserved + !*'()).
-_UNRESERVED = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
-)
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
 
 _PERCENT_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 

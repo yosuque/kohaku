@@ -40,6 +40,6 @@ Key points that are easy to miss:
 
 Verification:
 ```bash
-cd python && uv run pytest && uv run mypy && uv run ruff check && uv run lint-imports
+cd python && uv run pytest && uv run mypy && uv run ruff check && uv run ruff format --check && uv run lint-imports
 pnpm vitest run --project spec-conformance  # cross-language golden, TS side
 ```

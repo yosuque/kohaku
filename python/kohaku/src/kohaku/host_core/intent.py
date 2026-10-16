@@ -93,7 +93,11 @@ async def resolve_intent(
     """
     if isinstance(source, IntentSourceIntent):
         validate_intent = getattr(semantic, "validate_intent", None)
-        validated = source.intent if validate_intent is None else await validate_intent(source.intent, session)
+        validated = (
+            source.intent
+            if validate_intent is None
+            else await validate_intent(source.intent, session)
+        )
         return ResolvedIntent(intent=finalize_intent(validated))
     if isinstance(source, IntentSourceNl):
         normalized = await semantic.normalize(

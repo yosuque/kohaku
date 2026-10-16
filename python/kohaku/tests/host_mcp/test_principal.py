@@ -158,11 +158,15 @@ class TestPerCallPrincipalResolution:
             )
             async with connect(deps, _OPTIONS) as client:
                 alice = await client.call_tool(
-                    "kohaku_compose", {"question": "Monthly sales trend"}, meta=request_meta(principal="alice")
+                    "kohaku_compose",
+                    {"question": "Monthly sales trend"},
+                    meta=request_meta(principal="alice"),
                 )
                 assert not alice.is_error
                 bob = await client.call_tool(
-                    "kohaku_compose", {"question": "Monthly sales trend"}, meta=request_meta(principal="bob")
+                    "kohaku_compose",
+                    {"question": "Monthly sales trend"},
+                    meta=request_meta(principal="bob"),
                 )
                 assert not bob.is_error
 
@@ -265,7 +269,9 @@ class TestFallbackOrder:
                 query_source="sales",
             )
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert not result.is_error
 
             assert authz.issued_for == ["mcp-user"]
@@ -285,7 +291,9 @@ class TestFallbackOrder:
                 principal=Principal(id="svc-account"),
             )
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert not result.is_error
 
             assert authz.issued_for == ["svc-account"]
@@ -328,7 +336,9 @@ class TestFailClosed:
                 on_error=lambda info: on_error_calls.append(info),
             )
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
 
             assert result.is_error is True
             # A plain (untyped) raised exception never echoes its own message back to the caller

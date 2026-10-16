@@ -153,7 +153,9 @@ def resolve_llm_env(env: Mapping[str, str] | None = None) -> LlmConfig:
         raise LlmError("CONFIG", "KOHAKU_LLM_TEMPERATURE must be a non-negative number")
 
     max_output_tokens = _require_int(
-        e.get("KOHAKU_LLM_MAX_OUTPUT_TOKENS", "4096"), "KOHAKU_LLM_MAX_OUTPUT_TOKENS", allow_zero=False
+        e.get("KOHAKU_LLM_MAX_OUTPUT_TOKENS", "4096"),
+        "KOHAKU_LLM_MAX_OUTPUT_TOKENS",
+        allow_zero=False,
     )
 
     structured_mode_raw = e.get("KOHAKU_LLM_STRUCTURED_MODE", "auto")
@@ -162,7 +164,10 @@ def resolve_llm_env(env: Mapping[str, str] | None = None) -> LlmConfig:
     structured_mode = cast("StructuredMode", structured_mode_raw)
 
     timeout_ms = _require_int(
-        e.get("KOHAKU_LLM_TIMEOUT_MS", "60000"), "KOHAKU_LLM_TIMEOUT_MS", allow_zero=False, suffix=" (milliseconds)"
+        e.get("KOHAKU_LLM_TIMEOUT_MS", "60000"),
+        "KOHAKU_LLM_TIMEOUT_MS",
+        allow_zero=False,
+        suffix=" (milliseconds)",
     )
 
     max_retries = _require_int(

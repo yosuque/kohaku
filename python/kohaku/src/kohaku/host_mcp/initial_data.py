@@ -129,7 +129,8 @@ async def _resolve_ref_bounded(
         if deadline.exceeded:
             # Resolved successfully, but too late: the caller already stopped waiting and moved on.
             await _host_core_notify_hook(
-                deps.on_error, McpErrorInfo(endpoint="compose.initialData", error=_discard_error(ref))
+                deps.on_error,
+                McpErrorInfo(endpoint="compose.initialData", error=_discard_error(ref)),
             )
             return
         if resolved is None:

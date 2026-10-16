@@ -174,9 +174,7 @@ class CountingStorage(FileStoragePort):
         super().__init__(data_dir)
         self.generated_lookups = 0
 
-    async def list_lineage(
-        self, filter: LineageFilter | None = None
-    ) -> list[LineageEventRecord]:
+    async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
         if filter is not None and filter.type is not None and "component.generated" in filter.type:
             self.generated_lookups += 1
         return await super().list_lineage(filter)

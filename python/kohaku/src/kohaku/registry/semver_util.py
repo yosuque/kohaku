@@ -359,5 +359,7 @@ def satisfies(version: str, version_range: str) -> bool:
     except (ValueError, re.error):
         return False  # an invalid range falls to the safe side (non-match)
     if sets is None:
-        return False  # if even one clause is unparseable, the whole range is non-match (fail-closed)
+        return (
+            False  # if even one clause is unparseable, the whole range is non-match (fail-closed)
+        )
     return any(_set_test(comps, v) for comps in sets)

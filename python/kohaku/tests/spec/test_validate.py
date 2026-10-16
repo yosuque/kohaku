@@ -87,8 +87,16 @@ def test_multiple_sandbox_nodes_is_warning() -> None:
     spec = _spec(
         components=[
             {"id": "root", "type": "layout.stack", "children": ["a", "b"]},
-            {"id": "a", "type": "sandbox.html", "artifact": {"inline": "<p>a</p>", "sha256": sha256}},
-            {"id": "b", "type": "sandbox.html", "artifact": {"inline": "<p>b</p>", "sha256": sha256}},
+            {
+                "id": "a",
+                "type": "sandbox.html",
+                "artifact": {"inline": "<p>a</p>", "sha256": sha256},
+            },
+            {
+                "id": "b",
+                "type": "sandbox.html",
+                "artifact": {"inline": "<p>b</p>", "sha256": sha256},
+            },
         ]
     )
     issues = validate_spec_structure(spec)
@@ -101,7 +109,11 @@ def test_single_sandbox_node_has_no_warning() -> None:
     spec = _spec(
         components=[
             {"id": "root", "type": "layout.stack", "children": ["a"]},
-            {"id": "a", "type": "sandbox.html", "artifact": {"inline": "<p>a</p>", "sha256": sha256}},
+            {
+                "id": "a",
+                "type": "sandbox.html",
+                "artifact": {"inline": "<p>a</p>", "sha256": sha256},
+            },
         ]
     )
     assert "MULTIPLE_SANDBOX_NODES" not in _codes(spec)
@@ -163,9 +175,7 @@ def test_state_set_invalid_template_key() -> None:
 def test_state_set_undeclared_key() -> None:
     spec = _spec(
         state={"tab": "a"},
-        events=[
-            {"on": "root.click", "emit": "state.set", "payload": {"key": "other", "value": 1}}
-        ],
+        events=[{"on": "root.click", "emit": "state.set", "payload": {"key": "other", "value": 1}}],
     )
     assert "STATE_SET_INVALID" in _codes(spec)
 

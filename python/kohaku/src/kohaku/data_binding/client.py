@@ -198,18 +198,26 @@ class BindingClient:
             resp = await self._fetcher(ref, FetchInit(capability=cap, signal=o.signal))
             status = resp.status
             if status in (401, 403):
-                raise BindingError("UNAUTHORIZED", f"binding resolve denied for {ref.raw}", status=status)
+                raise BindingError(
+                    "UNAUTHORIZED", f"binding resolve denied for {ref.raw}", status=status
+                )
             if status == 404:
                 raise BindingError("REF_NOT_FOUND", f"no data source for {ref.raw}", status=status)
             if status == 429:
-                raise _rate_limited_error(f"binding resolve rate limited for {ref.raw}", status, resp.body)
+                raise _rate_limited_error(
+                    f"binding resolve rate limited for {ref.raw}", status, resp.body
+                )
             if status < 200 or status >= 300:
                 raise BindingError(
-                    "RESOLVE_FAILED", f"binding resolve failed ({status}) for {ref.raw}", status=status
+                    "RESOLVE_FAILED",
+                    f"binding resolve failed ({status}) for {ref.raw}",
+                    status=status,
                 )
             body = resp.body
-            if not isinstance(body, dict) or not isinstance(body.get("rows"), list) or not isinstance(
-                body.get("columns"), list
+            if (
+                not isinstance(body, dict)
+                or not isinstance(body.get("rows"), list)
+                or not isinstance(body.get("columns"), list)
             ):
                 raise BindingError("RESOLVE_FAILED", f"malformed tabular payload for {ref.raw}")
             # Shallowly validate only column.key, which the renderer always references (deep validation is excessive, so we do not do it).
@@ -263,7 +271,10 @@ class BindingClient:
             action,
             payload,
             FetchInit(
-                capability=self._capability(), signal=o.signal, confirmed=o.confirmed, approval=o.approval
+                capability=self._capability(),
+                signal=o.signal,
+                confirmed=o.confirmed,
+                approval=o.approval,
             ),
         )
         # Governed actions (design.md #62/#63): a 422/403 carrying the host's structured envelope maps to
@@ -274,11 +285,17 @@ class BindingClient:
         envelope = _action_error_envelope(resp.body)
         if resp.status == 422 and envelope is not None and envelope.code == "ACTION_PARAMS_INVALID":
             raise BindingError(
-                "ACTION_PARAMS_INVALID", envelope.message, status=resp.status, issues=envelope.issues
+                "ACTION_PARAMS_INVALID",
+                envelope.message,
+                status=resp.status,
+                issues=envelope.issues,
             )
         if resp.status == 403 and envelope is not None and envelope.code == "APPROVAL_REQUIRED":
             raise BindingError(
-                "APPROVAL_REQUIRED", envelope.message, status=resp.status, approval=envelope.approval
+                "APPROVAL_REQUIRED",
+                envelope.message,
+                status=resp.status,
+                approval=envelope.approval,
             )
         if resp.status == 429:
             raise _rate_limited_error(f'action "{action}" rate limited', resp.status, resp.body)
@@ -428,7 +445,9 @@ def _parse_action_result(body: Any) -> ActionResult:
             entries = {k: v for k, v in rv.items() if isinstance(v, str)}
             if entries:
                 ref_versions = entries
-        return ActionResult(result=body["result"], invalidates=invalidates, refVersions=ref_versions)
+        return ActionResult(
+            result=body["result"], invalidates=invalidates, refVersions=ref_versions
+        )
     return ActionResult(result=body if body is not None else None)
 
 

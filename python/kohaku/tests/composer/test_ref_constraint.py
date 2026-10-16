@@ -91,7 +91,9 @@ class TestRefConstraintValidation:
 
         asyncio.run(run())
 
-    def test_default_schema_mode_still_flags_out_of_set_ref_as_invalid_ref(self, tmp_path: Any) -> None:
+    def test_default_schema_mode_still_flags_out_of_set_ref_as_invalid_ref(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             evil = "query://sales/evil?fy=2026"
             llm = FakeLlm(objects=[_draft_with_ref(evil), _l1_draft()])

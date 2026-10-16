@@ -83,7 +83,8 @@ class FixtureLlm:
         except json.JSONDecodeError as err:
             # Do not throw a raw exception on a corrupted fixture; fail explicitly, following the same philosophy as a schema mismatch.
             raise LlmError(
-                "INVALID_OUTPUT", f"FixtureLlm: fixture {key}.json is corrupted (re-recording required)"
+                "INVALID_OUTPUT",
+                f"FixtureLlm: fixture {key}.json is corrupted (re-recording required)",
             ) from err
 
     def _write(self, key: str, value: object) -> None:

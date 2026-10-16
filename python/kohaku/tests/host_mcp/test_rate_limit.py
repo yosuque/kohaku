@@ -79,7 +79,9 @@ class _RecordingDomain:
 def _base_deps(tmp_path: Path, **overrides: Any) -> McpHostDeps:
     return McpHostDeps(
         compose=make_compose_ctx(tmp_path),
-        domain=_RecordingDomain(operations=[OperationDescriptor(name="annotate", description="write")]),
+        domain=_RecordingDomain(
+            operations=[OperationDescriptor(name="annotate", description="write")]
+        ),
         authz=_SimpleAuthz(),
         query_source="sales",
         **overrides,
@@ -87,26 +89,38 @@ def _base_deps(tmp_path: Path, **overrides: Any) -> McpHostDeps:
 
 
 class TestBackwardCompatibility:
-    def test_does_not_affect_kohaku_compose_when_rate_limiter_is_unset(self, tmp_path: Path) -> None:
+    def test_does_not_affect_kohaku_compose_when_rate_limiter_is_unset(
+        self, tmp_path: Path
+    ) -> None:
         async def run() -> None:
             deps = _base_deps(tmp_path)
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert not result.is_error
 
         asyncio.run(run())
 
 
 class TestDenial:
-    def test_returns_a_structured_rate_limited_tool_error_with_retry_after_ms(self, tmp_path: Path) -> None:
+    def test_returns_a_structured_rate_limited_tool_error_with_retry_after_ms(
+        self, tmp_path: Path
+    ) -> None:
         async def run() -> None:
             limiter = _StubRateLimiter(RateLimitResult(allow=False, retryAfterMs=2500))
             deps = _base_deps(tmp_path, rate_limiter=limiter)
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert result.is_error is True
                 assert result.structured_content == {
-                    "error": {"code": "RATE_LIMITED", "message": "rate limit exceeded", "retryAfterMs": 2500}
+                    "error": {
+                        "code": "RATE_LIMITED",
+                        "message": "rate limit exceeded",
+                        "retryAfterMs": 2500,
+                    }
                 }
 
         asyncio.run(run())
@@ -118,7 +132,9 @@ class TestDenial:
             limiter = _StubRateLimiter(RateLimitResult(allow=False))
             deps = _base_deps(tmp_path, rate_limiter=limiter)
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert result.is_error is True
                 assert result.structured_content == {
                     "error": {"code": "RATE_LIMITED", "message": "rate limit exceeded"}
@@ -177,7 +193,9 @@ class TestAllow:
             limiter = _StubRateLimiter(RateLimitResult(allow=True))
             deps = _base_deps(tmp_path, rate_limiter=limiter)
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert not result.is_error
                 spec = result.structured_content["spec"]
                 assert spec["provenance"]["tier"] == "L0"
@@ -251,10 +269,14 @@ class TestRateLimitKeyHook:
             )
             async with connect(deps, _OPTIONS) as client:
                 await client.call_tool(
-                    "kohaku_compose", {"question": "Monthly sales trend"}, meta=request_meta(ip="10.0.0.1")
+                    "kohaku_compose",
+                    {"question": "Monthly sales trend"},
+                    meta=request_meta(ip="10.0.0.1"),
                 )
                 await client.call_tool(
-                    "kohaku_compose", {"question": "Monthly sales trend"}, meta=request_meta(ip="10.0.0.2")
+                    "kohaku_compose",
+                    {"question": "Monthly sales trend"},
+                    meta=request_meta(ip="10.0.0.2"),
                 )
             assert [c.principal for c in limiter.calls] == ["ip:10.0.0.1", "ip:10.0.0.2"]
 
@@ -269,10 +291,15 @@ class TestRateLimitKeyHook:
                 raise RuntimeError("key lookup down")
 
             deps = _base_deps(
-                tmp_path, rate_limiter=limiter, rate_limit_key=rate_limit_key, on_error=errors.append
+                tmp_path,
+                rate_limiter=limiter,
+                rate_limit_key=rate_limit_key,
+                on_error=errors.append,
             )
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
             assert result.is_error is True
             assert limiter.calls == []
             assert len(errors) == 1
@@ -327,7 +354,9 @@ class TestUnkeyedLimiterWarning:
             server_module._warn_unkeyed_rate_limiter(_base_deps(tmp_path, rate_limiter=limiter))
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            server_module._warn_unkeyed_rate_limiter(_base_deps(tmp_path, rate_limiter=limiter))  # second: silent
+            server_module._warn_unkeyed_rate_limiter(
+                _base_deps(tmp_path, rate_limiter=limiter)
+            )  # second: silent
 
     def test_stays_silent_when_the_limiter_is_keyed_or_absent(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -61,7 +61,9 @@ class TestBuildL1PromptParts:
         )
         assert parts.rest == ""
 
-    def test_with_repair_feedback_cacheable_stays_static_and_rest_carries_only_feedback(self) -> None:
+    def test_with_repair_feedback_cacheable_stays_static_and_rest_carries_only_feedback(
+        self,
+    ) -> None:
         from kohaku.registry import core_catalog, resolve_catalog
 
         catalog = resolve_catalog(core_catalog())
@@ -95,7 +97,9 @@ class TestBuildL2PromptParts:
                 intent=intent, refs=["query://x"], shapes_by_ref={}, repair_feedback=feedback
             )
             assert parts.cacheable + parts.rest == expected
-            assert parts.cacheable == build_l2_prompt_static(intent=intent, refs=["query://x"], shapes_by_ref={})
+            assert parts.cacheable == build_l2_prompt_static(
+                intent=intent, refs=["query://x"], shapes_by_ref={}
+            )
 
 
 class _CaptureLlm:
@@ -111,14 +115,18 @@ class _CaptureLlm:
     async def generate_object(self, req: GenerateObjectRequest) -> GenerateObjectResult:
         self.requests.append(req)
         obj = self._objects.pop(0)
-        return GenerateObjectResult(object=obj, usage=LlmUsage(input_tokens=0, output_tokens=0), model=self.model_id)
+        return GenerateObjectResult(
+            object=obj, usage=LlmUsage(input_tokens=0, output_tokens=0), model=self.model_id
+        )
 
     async def generate_text(self, req: GenerateTextRequest) -> GenerateTextResult:
         raise AssertionError("capture stub: generate_text not supported")
 
 
 class TestGenerateL1PromptPartsAcrossRepairAttempts:
-    def test_cacheable_prefix_is_identical_across_attempts_only_rest_differs(self, tmp_path: Any) -> None:
+    def test_cacheable_prefix_is_identical_across_attempts_only_rest_differs(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             bad: dict[str, Any] = {"components": [], "events": []}
             llm = _CaptureLlm([bad, _l1_draft()])

@@ -127,11 +127,15 @@ class TestTelemetryBodyLengthCaps:
         assert events is None
 
     def test_component_used_artifact_id_at_128_is_accepted(self) -> None:
-        events = parse_telemetry_body({"events": [{"kind": "componentUsed", "artifactId": "a" * 128}]})
+        events = parse_telemetry_body(
+            {"events": [{"kind": "componentUsed", "artifactId": "a" * 128}]}
+        )
         assert events is not None
 
     def test_component_used_artifact_id_over_128_is_rejected(self) -> None:
-        events = parse_telemetry_body({"events": [{"kind": "componentUsed", "artifactId": "a" * 129}]})
+        events = parse_telemetry_body(
+            {"events": [{"kind": "componentUsed", "artifactId": "a" * 129}]}
+        )
         assert events is None
 
     def test_component_used_surface_over_64_is_rejected(self) -> None:

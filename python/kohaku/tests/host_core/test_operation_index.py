@@ -126,7 +126,12 @@ def test_discards_the_cached_rejection_so_the_next_call_retries() -> None:
 
 def test_allowed_actions_from_index_shares_one_list_operations_read() -> None:
     domain_impl = _FakeDomain(
-        [[OperationDescriptor(name="annotate", description="d"), OperationDescriptor(name="publish", description="d")]]
+        [
+            [
+                OperationDescriptor(name="annotate", description="d"),
+                OperationDescriptor(name="publish", description="d"),
+            ]
+        ]
     )
     domain: DomainPort = domain_impl
     index = create_operation_index(domain)
@@ -141,8 +146,12 @@ def test_allowed_actions_from_index_shares_one_list_operations_read() -> None:
     assert domain_impl.calls == 1
 
 
-def test_allowed_actions_from_index_keeps_an_operation_with_a_bad_schema_and_propagates_a_rejection() -> None:
-    bad = OperationDescriptor(name="annotate", description="d", paramsSchema={"type": "string", "pattern": "x"})
+def test_allowed_actions_from_index_keeps_an_operation_with_a_bad_schema_and_propagates_a_rejection() -> (
+    None
+):
+    bad = OperationDescriptor(
+        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "x"}
+    )
     publish = OperationDescriptor(name="publish", description="d")
     domain: DomainPort = _FakeDomain([RuntimeError("down"), [bad, publish]])
     allowed = allowed_actions_from_index(create_operation_index(domain))
@@ -156,7 +165,9 @@ def test_allowed_actions_from_index_keeps_an_operation_with_a_bad_schema_and_pro
 
 
 def test_start_operation_index_validation_reports_a_failure_in_the_background() -> None:
-    bad = OperationDescriptor(name="annotate", description="d", paramsSchema={"type": "string", "pattern": "x"})
+    bad = OperationDescriptor(
+        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "x"}
+    )
     domain: DomainPort = _FakeDomain([[bad]])
     reported: list[BaseException] = []
 

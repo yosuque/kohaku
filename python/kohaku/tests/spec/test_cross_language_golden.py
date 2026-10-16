@@ -111,8 +111,12 @@ def test_action_params(cross_language_fixture: dict[str, Any]) -> None:
     (schema, payload) pair."""
     for case in cross_language_fixture["actionParams"]:
         issues = validate_action_params(case["schema"], case["payload"])
-        got = [{"path": issue.path, "code": issue.code, "message": issue.message} for issue in issues]
-        assert got == case["issues"], f"issues mismatch for schema={case['schema']!r} payload={case['payload']!r}"
+        got = [
+            {"path": issue.path, "code": issue.code, "message": issue.message} for issue in issues
+        ]
+        assert got == case["issues"], (
+            f"issues mismatch for schema={case['schema']!r} payload={case['payload']!r}"
+        )
         assert action_payload_hash(case["payload"]) == case["payloadHash"]
 
 
@@ -122,7 +126,9 @@ def test_action_payload_scan(cross_language_fixture: dict[str, Any]) -> None:
     assert cross_language_fixture["actionPayloadScan"]
     for case in cross_language_fixture["actionPayloadScan"]:
         issues = find_unsafe_action_param_keys(case["payload"])
-        got = [{"path": issue.path, "code": issue.code, "message": issue.message} for issue in issues]
+        got = [
+            {"path": issue.path, "code": issue.code, "message": issue.message} for issue in issues
+        ]
         assert got == case["issues"], f"scan mismatch for payload={case['payload']!r}"
 
 

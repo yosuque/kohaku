@@ -202,7 +202,9 @@ class Fixations:
             return validated
         _notify_fixation_error(
             self._on_error,
-            FixationErrorContext(endpoint="storage.record.invalid", intentHash=intent_hash, tenant=tenant),
+            FixationErrorContext(
+                endpoint="storage.record.invalid", intentHash=intent_hash, tenant=tenant
+            ),
             ValueError(f"fixation record for {intent_hash} failed schema validation"),
         )
         return None
@@ -382,9 +384,7 @@ class Fixations:
         payload: dict[str, Any] = {"intentHash": intent_hash, "reason": reason}
         if detail is not None:
             payload["detail"] = detail
-        await self._lineage.record(
-            "intent.unfixated", payload, LineageActor(kind="system"), tenant
-        )
+        await self._lineage.record("intent.unfixated", payload, LineageActor(kind="system"), tenant)
 
     async def refresh_fingerprint(
         self, intent_hash: str, catalog_fingerprint: str, tenant: str | None = None
@@ -460,7 +460,9 @@ class Fixations:
             revision=_generate_revision(),
             approver=approver,
             catalogFingerprint=(
-                self._catalog_for(tenant).fingerprint if self._catalog_for is not None else existing.catalogFingerprint
+                self._catalog_for(tenant).fingerprint
+                if self._catalog_for is not None
+                else existing.catalogFingerprint
             ),
         )
         # if_present=True guards the same race refresh_fingerprint's own write does (a concurrent unfixate

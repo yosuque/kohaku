@@ -132,6 +132,7 @@ class PromotionsApi(Protocol):
         tenant: str | None = ...,
     ) -> Any: ...
     async def reconcile(self) -> Any: ...
+
     """Projection recovery from snapshot authority (#11), scanning across every tenant (no tenant argument —
     it is not a per-tenant operation). Used by POST /promotions/reconcile, an operator escape hatch to force
     convergence on demand (the same recovery kohaku.lineage's Promotions already runs at startup)."""
@@ -299,12 +300,16 @@ class KohakuHostDeps:
     """Observer called (fire-and-forget: never awaited, a raise is swallowed) each time rate_limiter denies
     a request, with the tenant, principal and route class the limit was keyed on and the request's
     requestId (the same value as the 429 response's X-Request-Id header and error.requestId)."""
-    _allowed_actions_fn: AllowedActions | None = field(default=None, init=False, repr=False, compare=False)
+    _allowed_actions_fn: AllowedActions | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
     """Memoized `AllowedActions` closure (host_core's `create_allowed_actions`, write-scope hardening; see
     _routes.shared.allowed_actions). Not part of the public constructor — built lazily on first capability
     issuance, one per `KohakuHostDeps` instance (list_operations is async and must not be re-awaited on every
     compose)."""
-    _operation_index_fn: OperationIndex | None = field(default=None, init=False, repr=False, compare=False)
+    _operation_index_fn: OperationIndex | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
     """Memoized `OperationIndex` closure (host_core's `create_operation_index`, design.md #62/#63; see
     _routes.shared.operation_index). Not part of the public constructor — built lazily on first use, one
     per `KohakuHostDeps` instance (list_operations is async and must not be re-awaited on every action

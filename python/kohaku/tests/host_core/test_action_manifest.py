@@ -26,7 +26,9 @@ def _spec_with_actions(*actions: str) -> UISpec:
 
 
 def _index_of(*descriptors: OperationDescriptor) -> dict[str, OperationIndexEntry]:
-    return {d.name: OperationIndexEntry(descriptor=d, params_schema=d.paramsSchema) for d in descriptors}
+    return {
+        d.name: OperationIndexEntry(descriptor=d, params_schema=d.paramsSchema) for d in descriptors
+    }
 
 
 def test_returns_none_when_the_spec_declares_no_write_actions() -> None:
@@ -50,7 +52,10 @@ def test_builds_one_entry_per_declared_write_action_that_is_a_real_domain_operat
     assert manifest is not None
     assert manifest["annotate"].tier == "confirm"
     assert manifest["annotate"].confirmMessage == "Are you sure?"
-    assert manifest["annotate"].paramsSchema == {"type": "object", "properties": {"note": {"type": "string"}}}
+    assert manifest["annotate"].paramsSchema == {
+        "type": "object",
+        "properties": {"note": {"type": "string"}},
+    }
     assert manifest["publish"].tier == "auto"
     assert manifest["publish"].paramsSchema is None
 

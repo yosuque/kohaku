@@ -148,7 +148,7 @@ fixation written by a Python host) without a language-specific translation layer
 ## Verification
 
 ```bash
-cd python && uv sync && uv run ruff check && uv run mypy && uv run lint-imports && uv run pytest
+cd python && uv sync && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest
 ```
 
 `lint-imports` (import-linter) enforces the layer-direction contract declared in

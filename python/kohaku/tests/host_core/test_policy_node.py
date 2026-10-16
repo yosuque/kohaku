@@ -15,7 +15,9 @@ from kohaku.host_core import load_policy_file
 def test_reads_parses_and_validates_a_policy_file_from_disk(tmp_path: Path) -> None:
     async def run() -> None:
         path = tmp_path / "kohaku.policy.json"
-        path.write_text(json.dumps({"version": 1, "defaults": {"compose": {"allowL2": True}}}), encoding="utf-8")
+        path.write_text(
+            json.dumps({"version": 1, "defaults": {"compose": {"allowL2": True}}}), encoding="utf-8"
+        )
         parsed = await load_policy_file(path)
         assert parsed.file.defaults.compose is not None
         assert parsed.file.defaults.compose.allowL2 is True

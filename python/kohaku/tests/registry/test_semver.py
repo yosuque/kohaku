@@ -172,7 +172,10 @@ _PRERELEASE_EXCLUDE: list[tuple[str, str]] = [
     (">=1.2.3", "1.2.3-beta"),
     ("1.2.x", "1.2.3-beta"),
     ("2.x", "2.0.0-pre"),
-    ("^1.2.3", "1.2.3-pre"),  # a prerelease smaller than the target version is rejected by the lower bound
+    (
+        "^1.2.3",
+        "1.2.3-pre",
+    ),  # a prerelease smaller than the target version is rejected by the lower bound
     ("^1.2.3", "2.0.0-pre"),  # a next-major prerelease is rejected by the upper bound <2.0.0-0
     (">=1.2.3-alpha", "1.2.4-beta"),  # a prerelease of a different tuple is not allowed
 ]

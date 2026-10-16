@@ -175,8 +175,12 @@ class TestNlPromptClock:
         assert '"last year"/"prior fiscal year" (前年/昨年度) = fiscalYear=2025' in system
 
     def test_quarter_boundary(self) -> None:
-        assert '"this quarter" (今四半期) = quarter=1 (now 2026-6)' in self._system_at(datetime(2026, 6, 30))
-        assert '"this quarter" (今四半期) = quarter=2 (now 2026-7)' in self._system_at(datetime(2026, 7, 1))
+        assert '"this quarter" (今四半期) = quarter=1 (now 2026-6)' in self._system_at(
+            datetime(2026, 6, 30)
+        )
+        assert '"this quarter" (今四半期) = quarter=2 (now 2026-7)' in self._system_at(
+            datetime(2026, 7, 1)
+        )
 
     def test_year_boundary(self) -> None:
         system = self._system_at(datetime(2027, 1, 15))
@@ -279,7 +283,9 @@ class TestResolveAndShape:
     def test_resolve_query(self) -> None:
         port = _make_port(_FixedLlm({}))
         intent = finalize_intent(
-            IntentInput(canonical="sales.trend", params={"metric": "revenue", "granularity": "month"})
+            IntentInput(
+                canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}
+            )
         )
         handles = asyncio.run(port.resolve_query(intent))  # type: ignore[attr-defined]
         assert [h.uri for h in handles] == ["query://sales/trend?granularity=month&metric=revenue"]
@@ -297,7 +303,9 @@ class TestResolveAndShape:
         # Identical to the TS UnknownIntentError message.
         assert str(error) == 'unknown intent "sales.nope"'
 
-    def test_compose_reports_the_unknown_intent_name_in_semantic_failed(self, tmp_path: Any) -> None:
+    def test_compose_reports_the_unknown_intent_name_in_semantic_failed(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             ctx = ComposeContext(
                 catalog=resolve_catalog(core_catalog()),
@@ -306,7 +314,9 @@ class TestResolveAndShape:
                 llm=_FixedLlm({}),
             )
             input = IntentComposeInput(intent=IntentInput(canonical="sales.nope", params={}))
-            with pytest.raises(ComposeError, match=r'^query resolution failed: unknown intent "sales\.nope"$') as info:
+            with pytest.raises(
+                ComposeError, match=r'^query resolution failed: unknown intent "sales\.nope"$'
+            ) as info:
                 await compose(input, ctx)
             assert info.value.code == "SEMANTIC_FAILED"
 
@@ -341,7 +351,9 @@ class TestValidateIntent:
         port = _make_port(_FixedLlm({}))
         result = asyncio.run(
             port.validate_intent(  # type: ignore[attr-defined]
-                IntentInput(canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}),
+                IntentInput(
+                    canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}
+                ),
                 CTX,
             )
         )
@@ -349,7 +361,9 @@ class TestValidateIntent:
             canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}
         )
 
-    def test_fills_in_a_schema_default_the_caller_omitted_this_changes_the_hash_by_design(self) -> None:
+    def test_fills_in_a_schema_default_the_caller_omitted_this_changes_the_hash_by_design(
+        self,
+    ) -> None:
         port = _make_port(_FixedLlm({}))
         result = asyncio.run(
             port.validate_intent(IntentInput(canonical="sales.trend", params={}), CTX)  # type: ignore[attr-defined]
@@ -380,7 +394,8 @@ class TestValidateIntent:
         try:
             asyncio.run(
                 port.validate_intent(  # type: ignore[attr-defined]
-                    IntentInput(canonical="sales.trend", params={"metric": "revenue", "bogus": 1}), CTX
+                    IntentInput(canonical="sales.trend", params={"metric": "revenue", "bogus": 1}),
+                    CTX,
                 )
             )
         except IntentValidationError as e:

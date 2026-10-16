@@ -122,9 +122,10 @@ def chart_kind(spec: UISpec, ctx: PostProcessContext) -> UISpec:
         x_col = next((c for c in shape.columns if c.name == props.get("x")), None)
         if x_col is not None and (x_col.role == "time" or x_col.type == "date"):
             props["kind"] = "line"
-        elif props.get("kind") == "pie" and (
-            shape.rowCountHint if shape.rowCountHint is not None else math.inf
-        ) > 6:
+        elif (
+            props.get("kind") == "pie"
+            and (shape.rowCountHint if shape.rowCountHint is not None else math.inf) > 6
+        ):
             # An unknown row count is treated as Infinity, erring on the safe side and turning pie into bar.
             props["kind"] = "bar"
         components.append(node.model_copy(update={"props": props}))
@@ -172,9 +173,7 @@ def canonical_props(spec: UISpec, ctx: PostProcessContext) -> UISpec:
     components = [
         ComponentNode.model_validate(normalize_json_value(node)) for node in result.normalized
     ]
-    events = [
-        EventBinding.model_validate(normalize_json_value(e.to_wire())) for e in spec.events
-    ]
+    events = [EventBinding.model_validate(normalize_json_value(e.to_wire())) for e in spec.events]
     return spec.model_copy(update={"components": components, "events": events})
 
 

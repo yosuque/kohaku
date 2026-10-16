@@ -100,7 +100,9 @@ class TestGenerationPropsSchema:
         assert "$schema" not in out
         assert out["required"] == ["a", "b"]
         assert out["additionalProperties"] is False
-        assert out["properties"]["a"] == {"type": "string"}  # default removed; required passes through
+        assert out["properties"]["a"] == {
+            "type": "string"
+        }  # default removed; required passes through
         assert out["properties"]["b"] == {"anyOf": [{"type": "number"}, {"type": "null"}]}
 
 

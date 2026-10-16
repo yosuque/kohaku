@@ -102,7 +102,9 @@ def _validate(schema: object, value: object, path: str) -> object:
                     return _validate(branch, value, path)
                 except PropsValidationError as e:
                     errors.append(str(e))
-            raise PropsValidationError(path, f"does not match any union branch: {'; '.join(errors)}")
+            raise PropsValidationError(
+                path, f"does not match any union branch: {'; '.join(errors)}"
+            )
 
     if "const" in schema and value != schema["const"]:
         raise PropsValidationError(path, f"does not match const {schema['const']!r}")

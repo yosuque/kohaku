@@ -140,5 +140,9 @@ class TestPublishGovernance:
         body = res.json()
         assert body["error"]["code"] == "ACTION_PARAMS_INVALID"
         assert body["error"]["issues"] == [
-            {"path": "extra", "code": "additionalProperties", "message": 'unexpected property "extra"'}
+            {
+                "path": "extra",
+                "code": "additionalProperties",
+                "message": 'unexpected property "extra"',
+            }
         ]

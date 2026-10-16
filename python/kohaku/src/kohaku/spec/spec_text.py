@@ -38,7 +38,9 @@ def spec_to_text(spec: UISpec) -> str:
                 y = ", ".join(js_string(v) for v in y_raw)
             else:
                 y = _prop_or(props, "y", "")
-            lines.append(f"[Chart: {kind}] {y} by {x} (data ref: `{ref if ref is not None else '-'}`)")
+            lines.append(
+                f"[Chart: {kind}] {y} by {x} (data ref: `{ref if ref is not None else '-'}`)"
+            )
         elif node.type == "presentSpreadsheet":
             lines.append(f"[Table] data ref: `{ref if ref is not None else '-'}`")
         elif node.type == "presentMarkdown":

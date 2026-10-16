@@ -66,7 +66,12 @@ def test_public_import_surface_unchanged() -> None:
     assert callable(to_mcp_tool_name)
     assert IntentToolsOptions().name_prefix is None
     assert INITIAL_DATA_BUDGET_CHARS == 100_000
-    assert CAPABILITY_META_KEY and INITIAL_DATA_META_KEY and RENDERER_RESOURCE_URI and RESOURCE_MIME_TYPE
+    assert (
+        CAPABILITY_META_KEY
+        and INITIAL_DATA_META_KEY
+        and RENDERER_RESOURCE_URI
+        and RESOURCE_MIME_TYPE
+    )
     assert RESOURCE_URI_META_KEY and UI_META_KEY and VISIBILITY_META_KEY
     assert IntentToolDef is not None
     assert IntentToolSource is not None

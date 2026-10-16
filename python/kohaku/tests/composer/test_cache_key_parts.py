@@ -21,11 +21,17 @@ from kohaku.storage import FileStoragePort
 from .test_compose import _FakeSemantic, _l1_draft
 
 _CATALOG = resolve_catalog(core_catalog())
-_INTENT_INPUT = IntentComposeInput(intent=IntentInput(canonical="sales.summary", params={"fy": 2026}))
+_INTENT_INPUT = IntentComposeInput(
+    intent=IntentInput(canonical="sales.summary", params={"fy": 2026})
+)
 
 
-def _ctx(llm: LlmPort, storage: FileStoragePort, policy: ComposePolicy | None = None) -> ComposeContext:
-    return ComposeContext(catalog=_CATALOG, semantic=_FakeSemantic(), storage=storage, llm=llm, policy=policy)
+def _ctx(
+    llm: LlmPort, storage: FileStoragePort, policy: ComposePolicy | None = None
+) -> ComposeContext:
+    return ComposeContext(
+        catalog=_CATALOG, semantic=_FakeSemantic(), storage=storage, llm=llm, policy=policy
+    )
 
 
 class TestCacheKeyParts:
@@ -104,13 +110,13 @@ class TestComposeOptionsCorrelationId:
 
         asyncio.run(run())
 
-    def test_carried_through_to_the_delivered_trace_on_a_normal_compose(self, tmp_path: Any) -> None:
+    def test_carried_through_to_the_delivered_trace_on_a_normal_compose(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             storage = FileStoragePort(tmp_path)
             ctx = _ctx(FakeLlm(objects=[_l1_draft()]), storage)
-            result = await compose(
-                _INTENT_INPUT, ctx, ComposeOptions(correlation_id="req-abc")
-            )
+            result = await compose(_INTENT_INPUT, ctx, ComposeOptions(correlation_id="req-abc"))
             assert result.trace.correlationId == "req-abc"
 
         asyncio.run(run())

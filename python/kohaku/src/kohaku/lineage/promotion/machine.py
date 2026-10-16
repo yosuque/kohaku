@@ -92,9 +92,7 @@ def component_draft_from_wire(data: dict[str, Any]) -> ComponentDraft:
         description=str(data.get("description", "")),
         paramsJsonSchema=data.get("paramsJsonSchema"),
         queryTemplate=(
-            query_template_from_wire(query_template)
-            if isinstance(query_template, dict)
-            else None
+            query_template_from_wire(query_template) if isinstance(query_template, dict) else None
         ),
     )
 

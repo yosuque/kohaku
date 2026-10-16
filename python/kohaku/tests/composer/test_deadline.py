@@ -34,19 +34,24 @@ from kohaku.storage import FileStoragePort
 
 from .test_compose import _INTENT_INPUT, _ctx, _l1_draft
 
-_BAD: dict[str, Any] = {"components": [], "events": []}  # empty components = catalog/structural-validation failure (repair-target invalid)
+_BAD: dict[str, Any] = {
+    "components": [],
+    "events": [],
+}  # empty components = catalog/structural-validation failure (repair-target invalid)
 
 
 class TestCheckBudgetDeadlineUnit:
     def test_allows_when_elapsed_below_deadline(self) -> None:
         verdict = check_budget(
-            ComposeBudget(deadline_ms=1000), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=500)
+            ComposeBudget(deadline_ms=1000),
+            BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=500),
         )
         assert verdict.allow is True
 
     def test_rejects_with_deadline_specific_reason_once_elapsed_reaches_deadline(self) -> None:
         verdict = check_budget(
-            ComposeBudget(deadline_ms=1000), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=1000)
+            ComposeBudget(deadline_ms=1000),
+            BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=1000),
         )
         assert verdict.allow is False
         assert verdict.reason is not None
@@ -55,23 +60,33 @@ class TestCheckBudgetDeadlineUnit:
 
     def test_deadline_reason_distinguishable_from_token_threshold_reason(self) -> None:
         token_verdict = check_budget(
-            ComposeBudget(per_compose_stop_after_tokens=10), BudgetCheckContext(tier="L1", spent_tokens=10)
+            ComposeBudget(per_compose_stop_after_tokens=10),
+            BudgetCheckContext(tier="L1", spent_tokens=10),
         )
         deadline_verdict = check_budget(
-            ComposeBudget(deadline_ms=1000), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=1000)
+            ComposeBudget(deadline_ms=1000),
+            BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=1000),
         )
         assert token_verdict.reason != deadline_verdict.reason
-        assert token_verdict.reason is not None and "token threshold" in token_verdict.reason.lower()
-        assert deadline_verdict.reason is not None and "token threshold" not in deadline_verdict.reason.lower()
+        assert (
+            token_verdict.reason is not None and "token threshold" in token_verdict.reason.lower()
+        )
+        assert (
+            deadline_verdict.reason is not None
+            and "token threshold" not in deadline_verdict.reason.lower()
+        )
 
     def test_does_not_check_deadline_when_elapsed_ms_not_supplied(self) -> None:
         verdict = check_budget(
-            ComposeBudget(deadline_ms=0), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=None)
+            ComposeBudget(deadline_ms=0),
+            BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=None),
         )
         assert verdict.allow is True
 
     def test_does_not_check_deadline_when_deadline_ms_unset(self) -> None:
-        verdict = check_budget(ComposeBudget(), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=999_999))
+        verdict = check_budget(
+            ComposeBudget(), BudgetCheckContext(tier="L1", spent_tokens=0, elapsed_ms=999_999)
+        )
         assert verdict.allow is True
 
     def test_simultaneous_token_threshold_overage_takes_precedence(self) -> None:
@@ -117,7 +132,9 @@ class TestCreateDeadlineGuardUnit:
             try:
                 assert guard.deadline_signal is not None
                 event = asyncio.get_running_loop().create_future()
-                guard.deadline_signal.add_listener(lambda: event.set_result(None) if not event.done() else None)
+                guard.deadline_signal.add_listener(
+                    lambda: event.set_result(None) if not event.done() else None
+                )
                 await asyncio.wait_for(event, timeout=5)
                 assert guard.deadline_signal.aborted is True
             finally:
@@ -139,7 +156,9 @@ class TestCreateDeadlineGuardUnit:
             try:
                 assert guard.deadline_signal is not None
                 event = asyncio.get_running_loop().create_future()
-                guard.deadline_signal.add_listener(lambda: event.set_result(None) if not event.done() else None)
+                guard.deadline_signal.add_listener(
+                    lambda: event.set_result(None) if not event.done() else None
+                )
                 await asyncio.wait_for(event, timeout=5)
                 assert guard.deadline_signal.aborted is True
             finally:
@@ -181,7 +200,9 @@ class TestComposeDeadlineGuardBackwardCompatibility:
             storage = FileStoragePort(tmp_path)
             llm = FakeLlm(objects=[_BAD, _l1_draft()])
             ctx = _ctx(
-                llm, storage, ComposePolicy(budget=ComposeBudget(per_compose_stop_after_tokens=1_000_000))
+                llm,
+                storage,
+                ComposePolicy(budget=ComposeBudget(per_compose_stop_after_tokens=1_000_000)),
             )
             result = await compose(_INTENT_INPUT, ctx)
             assert len(result.trace.attempts) == 2
@@ -227,7 +248,9 @@ class TestComposeDeadlineGuardBetweenCallEnforcement:
 
         asyncio.run(run())
 
-    def test_deadline_ms_zero_with_route_l2_direct_entry_falls_back_from_l2(self, tmp_path: Any) -> None:
+    def test_deadline_ms_zero_with_route_l2_direct_entry_falls_back_from_l2(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             from kohaku.llm import FakeLlm
 
@@ -236,7 +259,9 @@ class TestComposeDeadlineGuardBetweenCallEnforcement:
             ctx = _ctx(
                 llm,
                 storage,
-                ComposePolicy(allowL2=True, routeTier=lambda _i: "L2", budget=ComposeBudget(deadline_ms=0)),
+                ComposePolicy(
+                    allowL2=True, routeTier=lambda _i: "L2", budget=ComposeBudget(deadline_ms=0)
+                ),
             )
             result = await compose(_INTENT_INPUT, ctx)
 
@@ -294,9 +319,13 @@ class TestComposeDeadlineGuardBetweenCallEnforcement:
                 async def generate_object(self, req: GenerateObjectRequest) -> GenerateObjectResult:
                     nonlocal calls
                     calls += 1
-                    clock["value"] += 0.06  # exceeds the 50ms deadline before the next attempt's check runs
+                    clock["value"] += (
+                        0.06  # exceeds the 50ms deadline before the next attempt's check runs
+                    )
                     return GenerateObjectResult(
-                        object=_BAD, usage=LlmUsage(input_tokens=0, output_tokens=0), model="clock-model"
+                        object=_BAD,
+                        usage=LlmUsage(input_tokens=0, output_tokens=0),
+                        model="clock-model",
                     )
 
                 async def generate_text(self, req: GenerateTextRequest) -> GenerateTextResult:
@@ -352,7 +381,9 @@ class TestComposeDeadlineGuardInFlightAbort:
             captured: list[ComposeErrorContext] = []
             storage = FileStoragePort(tmp_path)
             base = _ctx(
-                _HangingUntilAbortLlm(), storage, ComposePolicy(budget=ComposeBudget(deadline_ms=20))
+                _HangingUntilAbortLlm(),
+                storage,
+                ComposePolicy(budget=ComposeBudget(deadline_ms=20)),
             )
             ctx: ComposeContext = ComposeContext(
                 catalog=base.catalog,
@@ -375,14 +406,19 @@ class TestComposeDeadlineGuardInFlightAbort:
             # cancelled (that is reserved for a genuine caller AbortSignal / client disconnect) so hosts do
             # not skip lineage recording for it, and it must count toward the fallback-rate analytics.
             assert result.trace.cancelled is False
-            assert result.trace.fallback_reason is not None and "deadline" in result.trace.fallback_reason.lower()
+            assert (
+                result.trace.fallback_reason is not None
+                and "deadline" in result.trace.fallback_reason.lower()
+            )
             assert len(captured) == 1
             assert captured[0].phase == "fallback"
             assert captured[0].budgetExceeded is True
 
         asyncio.run(asyncio.wait_for(run(), timeout=10))
 
-    def test_genuine_caller_abort_firing_first_is_still_classified_as_cancelled(self, tmp_path: Any) -> None:
+    def test_genuine_caller_abort_firing_first_is_still_classified_as_cancelled(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             from kohaku.composer import ComposeOptions
 
@@ -391,7 +427,9 @@ class TestComposeDeadlineGuardInFlightAbort:
             controller = AbortController()
             # A deadline generous enough that it would not fire before the caller's own abort below.
             base = _ctx(
-                _HangingUntilAbortLlm(), storage, ComposePolicy(budget=ComposeBudget(deadline_ms=60_000))
+                _HangingUntilAbortLlm(),
+                storage,
+                ComposePolicy(budget=ComposeBudget(deadline_ms=60_000)),
             )
             ctx: ComposeContext = ComposeContext(
                 catalog=base.catalog,
@@ -402,7 +440,9 @@ class TestComposeDeadlineGuardInFlightAbort:
                 observer=ComposeObserver(onError=lambda c, _e: captured.append(c)),
             )
 
-            compose_task = asyncio.ensure_future(compose(_INTENT_INPUT, ctx, ComposeOptions(abort=controller.signal)))
+            compose_task = asyncio.ensure_future(
+                compose(_INTENT_INPUT, ctx, ComposeOptions(abort=controller.signal))
+            )
             controller.abort()  # the caller cancels almost immediately, well before the 60s deadline
             result = await compose_task
 
@@ -417,7 +457,9 @@ class TestComposeDeadlineGuardInFlightAbort:
 
 
 class TestComposeStreamDeadlineGuard:
-    def test_deadline_ms_zero_downgrade_flows_as_skeleton_to_fallback_patch(self, tmp_path: Any) -> None:
+    def test_deadline_ms_zero_downgrade_flows_as_skeleton_to_fallback_patch(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             from kohaku.llm import FakeLlm
 

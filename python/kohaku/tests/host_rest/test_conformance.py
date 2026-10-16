@@ -144,7 +144,10 @@ def test_rest_evt_001_events_recompose(client: TestClient) -> None:
     res = client.post(
         _url("/events"),
         json={
-            "intent": {"canonical": spec["intent"]["canonical"], "params": spec["intent"]["params"]},
+            "intent": {
+                "canonical": spec["intent"]["canonical"],
+                "params": spec["intent"]["params"],
+            },
             "event": {"on": event["on"], "payload": {}},
         },
     )
@@ -340,12 +343,12 @@ def test_rest_str_002_patch_equivalence(client: TestClient) -> None:
     non_stream = parse_spec(
         client.post(_url("/compose"), json={"intent": INTENT_BODY}).json()["spec"]
     )
-    assert canonical_stringify(
-        [c.to_wire() for c in streamed.components]
-    ) == canonical_stringify([c.to_wire() for c in non_stream.components])
-    assert canonical_stringify(
-        [e.to_wire() for e in streamed.events]
-    ) == canonical_stringify([e.to_wire() for e in non_stream.events])
+    assert canonical_stringify([c.to_wire() for c in streamed.components]) == canonical_stringify(
+        [c.to_wire() for c in non_stream.components]
+    )
+    assert canonical_stringify([e.to_wire() for e in streamed.events]) == canonical_stringify(
+        [e.to_wire() for e in non_stream.events]
+    )
 
 
 def test_rest_str_003_single_terminator(client: TestClient) -> None:

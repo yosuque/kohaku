@@ -218,9 +218,7 @@ def test_fallback_omits_session_id_when_absent(tmp_path: Path) -> None:
         await recorder.fallback(
             spec=spec, reason=spec.provenance.fallback.reason, kind="generation", surface="chat"
         )
-        payload = next(
-            e for e in await storage.list_lineage() if e.type == "view.fallback"
-        ).payload
+        payload = next(e for e in await storage.list_lineage() if e.type == "view.fallback").payload
         assert payload["kind"] == "generation"
         assert "sessionId" not in payload
 
@@ -373,7 +371,12 @@ def test_view_composed_records_correlation_id_cache_key_and_decision(tmp_path: P
                 {"kind": "l2", "ok": True},
             ],
             "downgrades": [
-                {"id": "sandbox1", "from_": "sandbox.html", "to": "presentMarkdown", "reason": "unsupported"}
+                {
+                    "id": "sandbox1",
+                    "from_": "sandbox.html",
+                    "to": "presentMarkdown",
+                    "reason": "unsupported",
+                }
             ],
             "coalesced": True,
             "usage": {"inputTokens": 10, "outputTokens": 20},
@@ -409,7 +412,9 @@ def test_thrown_exception_attempts_never_record_the_raw_message_only_a_fixed_err
     asyncio.run(run())
 
 
-def test_validation_failed_attempts_without_error_code_keep_their_issues_as_is(tmp_path: Path) -> None:
+def test_validation_failed_attempts_without_error_code_keep_their_issues_as_is(
+    tmp_path: Path,
+) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         lineage = create_lineage(storage)
@@ -469,7 +474,10 @@ def test_component_generated_and_used_record_correlation_id_kit_and_generator_ve
         spec_with_kit = spec.model_copy(
             update={
                 "provenance": spec.provenance.model_copy(
-                    update={"kit": ProvenanceKit(id="default", version="1"), "generatorVersion": "gen-1"}
+                    update={
+                        "kit": ProvenanceKit(id="default", version="1"),
+                        "generatorVersion": "gen-1",
+                    }
                 )
             }
         )
@@ -499,9 +507,7 @@ def test_fallback_records_correlation_id_when_given(tmp_path: Path) -> None:
             surface="web",
             correlation_id="req-fallback",
         )
-        payload = next(
-            e for e in await storage.list_lineage() if e.type == "view.fallback"
-        ).payload
+        payload = next(e for e in await storage.list_lineage() if e.type == "view.fallback").payload
         assert payload["correlationId"] == "req-fallback"
 
     asyncio.run(run())
@@ -517,9 +523,7 @@ def test_fallback_omits_correlation_id_when_absent(tmp_path: Path) -> None:
         await recorder.fallback(
             spec=spec, reason=spec.provenance.fallback.reason, kind="negotiation", surface="web"
         )
-        payload = next(
-            e for e in await storage.list_lineage() if e.type == "view.fallback"
-        ).payload
+        payload = next(e for e in await storage.list_lineage() if e.type == "view.fallback").payload
         assert "correlationId" not in payload
 
     asyncio.run(run())

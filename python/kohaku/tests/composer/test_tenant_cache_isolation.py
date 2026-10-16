@@ -38,7 +38,9 @@ def test_disallowed_l2_tenant_never_receives_another_tenants_cached_l2_spec(tmp_
             policy=ComposePolicy(allowL2=True, routeTier=lambda _i: "L2"),
         )
         result_b = await compose(
-            _INTENT_INPUT, tenant_b_ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-b"))
+            _INTENT_INPUT,
+            tenant_b_ctx,
+            ComposeOptions(session=SessionContext(surface="web", tenant="tenant-b")),
         )
         assert result_b.trace.tier == "L2"
         assert any(c.type == "sandbox.html" for c in result_b.spec.components)
@@ -52,7 +54,9 @@ def test_disallowed_l2_tenant_never_receives_another_tenants_cached_l2_spec(tmp_
             policy=ComposePolicy(allowL2=False),
         )
         result_a = await compose(
-            _INTENT_INPUT, tenant_a_ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-a"))
+            _INTENT_INPUT,
+            tenant_a_ctx,
+            ComposeOptions(session=SessionContext(surface="web", tenant="tenant-a")),
         )
 
         # Must NOT be a cache hit against tenant-b's L2 entry: distinct cache keys (the tierGate
@@ -73,18 +77,30 @@ def test_two_tenants_with_the_identical_tier_gate_shape_share_a_cache_entry(tmp_
         policy = ComposePolicy(allowL2=True, routeTier=lambda _i: "L2")
 
         first_ctx = ComposeContext(
-            catalog=_CATALOG, semantic=semantic, storage=storage, llm=FakeLlm(texts=[_L2_HTML]), policy=policy
+            catalog=_CATALOG,
+            semantic=semantic,
+            storage=storage,
+            llm=FakeLlm(texts=[_L2_HTML]),
+            policy=policy,
         )
         first = await compose(
-            _INTENT_INPUT, first_ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-b"))
+            _INTENT_INPUT,
+            first_ctx,
+            ComposeOptions(session=SessionContext(surface="web", tenant="tenant-b")),
         )
         assert first.trace.cache == "miss"
 
         second_ctx = ComposeContext(
-            catalog=_CATALOG, semantic=semantic, storage=storage, llm=FakeLlm(texts=[_L2_HTML]), policy=policy
+            catalog=_CATALOG,
+            semantic=semantic,
+            storage=storage,
+            llm=FakeLlm(texts=[_L2_HTML]),
+            policy=policy,
         )
         second = await compose(
-            _INTENT_INPUT, second_ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-c"))
+            _INTENT_INPUT,
+            second_ctx,
+            ComposeOptions(session=SessionContext(surface="web", tenant="tenant-c")),
         )
         assert second.trace.cache == "hit"
         assert second.trace.cacheKey == first.trace.cacheKey

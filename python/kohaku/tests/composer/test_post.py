@@ -50,8 +50,12 @@ def test_normalize_ids_renames_dfs_and_events() -> None:
 
 def test_chart_kind_time_axis_forces_line() -> None:
     shape = DataShape.model_validate(
-        {"columns": [{"name": "month", "type": "date", "role": "time"},
-                     {"name": "revenue", "type": "number", "role": "measure"}]}
+        {
+            "columns": [
+                {"name": "month", "type": "date", "role": "time"},
+                {"name": "revenue", "type": "number", "role": "measure"},
+            ]
+        }
     )
     spec = _spec(
         [
@@ -71,8 +75,7 @@ def test_chart_kind_time_axis_forces_line() -> None:
 
 def test_chart_kind_pie_with_many_rows_becomes_bar() -> None:
     shape = DataShape.model_validate(
-        {"columns": [{"name": "region", "type": "string", "role": "dimension"}],
-         "rowCountHint": 12}
+        {"columns": [{"name": "region", "type": "string", "role": "dimension"}], "rowCountHint": 12}
     )
     spec = _spec(
         [
@@ -92,13 +95,22 @@ def test_chart_kind_pie_with_many_rows_becomes_bar() -> None:
 
 def test_sort_order_fills_default_sort() -> None:
     shape = DataShape.model_validate(
-        {"columns": [{"name": "region", "type": "string", "role": "dimension"},
-                     {"name": "revenue", "type": "number", "role": "measure"}]}
+        {
+            "columns": [
+                {"name": "region", "type": "string", "role": "dimension"},
+                {"name": "revenue", "type": "number", "role": "measure"},
+            ]
+        }
     )
     spec = _spec(
         [
             {"id": "root", "type": "layout.stack", "props": {}, "children": ["t1"]},
-            {"id": "t1", "type": "presentSpreadsheet", "props": {}, "data": {"$ref": "query://s/p"}},
+            {
+                "id": "t1",
+                "type": "presentSpreadsheet",
+                "props": {},
+                "data": {"$ref": "query://s/p"},
+            },
         ]
     )
     out = post_process(spec, _ctx({"query://s/p": shape}))

@@ -75,8 +75,12 @@ class ValidatingSemantic:
         group_by = intent.params.get("groupBy", "region")
         if group_by not in ("region", "product", "channel"):
             message = 'param "groupBy": expected one of region, product, channel'
-            raise IntentValidationError(message, [IntentValidationIssue(path="groupBy", message=message)])
-        return IntentInput(canonical=intent.canonical, params={**intent.params, "groupBy": group_by})
+            raise IntentValidationError(
+                message, [IntentValidationIssue(path="groupBy", message=message)]
+            )
+        return IntentInput(
+            canonical=intent.canonical, params={**intent.params, "groupBy": group_by}
+        )
 
 
 def _deps(tmp_path: Path, semantic: ValidatingSemantic | None = None) -> McpHostDeps:

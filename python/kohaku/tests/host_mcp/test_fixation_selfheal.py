@@ -39,9 +39,7 @@ def _spec(component_type: str) -> UISpec:
     return UISpec.model_validate(
         {
             "kohaku": "0.1",
-            "intent": finalize_intent(
-                IntentInput(canonical="sales.trend", params={})
-            ).to_wire(),
+            "intent": finalize_intent(IntentInput(canonical="sales.trend", params={})).to_wire(),
             "dataVersion": "x",
             "components": [
                 {"id": "root", "type": "layout.stack", "props": {}, "children": ["t"]},
@@ -161,7 +159,9 @@ def test_mcp_fixation_admit_false_falls_back_to_normal_compose(tmp_path: Path) -
             return admitted if h == _intent_hash() else None
 
         fixations = _SignalingFixations(
-            create_fixations(lineage=create_lineage(FileStoragePort(tmp_path)), storage=FileStoragePort(tmp_path))
+            create_fixations(
+                lineage=create_lineage(FileStoragePort(tmp_path)), storage=FileStoragePort(tmp_path)
+            )
         )
 
         deps = McpHostDeps(

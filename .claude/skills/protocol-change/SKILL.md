@@ -27,5 +27,5 @@ Verification:
 ```bash
 pnpm test && pnpm typecheck
 node cli/bin/kohaku.js conformance --self
-cd python && uv run pytest && uv run mypy && uv run ruff check && uv run lint-imports
+cd python && uv run pytest && uv run mypy && uv run ruff check && uv run ruff format --check && uv run lint-imports
 ```

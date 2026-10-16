@@ -165,7 +165,10 @@ async def _promotion_error(
             error["status"] = status_val
         return _json({"error": error}, 409)
     name = getattr(e, "name", None) or type(e).__name__
-    if name in (GovernanceErrorDiscriminators.TRANSITION_NAME, GovernanceErrorDiscriminators.NOT_REJECTED_NAME):
+    if name in (
+        GovernanceErrorDiscriminators.TRANSITION_NAME,
+        GovernanceErrorDiscriminators.NOT_REJECTED_NAME,
+    ):
         return _error("PROMOTION_INVALID", _message(e), 422)
     # candidate/artifact lookup failure (ArtifactNotFoundError). Discriminated by code (not a message-text
     # match, which a wording change could break) — a safeguard for when get is unimplemented and
@@ -234,7 +237,9 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
 
     @router.post("/promotions/evaluate")
     async def promotions_evaluate(request: Request) -> Response:
-        ctx = await _enter_promotion_route(deps, request, "promotion.evaluate", need_principal=False)
+        ctx = await _enter_promotion_route(
+            deps, request, "promotion.evaluate", need_principal=False
+        )
         if isinstance(ctx, Response):
             return ctx
         async with _get_lock(deps, _promotion_key(ctx.tenant)):
@@ -263,7 +268,11 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         # principal only conditionally (below, when the candidate has a ref) -- that condition is data-
         # dependent and only known after this call returns, so it cannot be expressed as a ctx field here.
         ctx = await _enter_promotion_route(
-            deps, request, "promotion.preview", governance_artifact_id=artifact_id, need_principal=False
+            deps,
+            request,
+            "promotion.preview",
+            governance_artifact_id=artifact_id,
+            need_principal=False,
         )
         if isinstance(ctx, Response):
             return ctx
@@ -274,9 +283,7 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         sha256 = getattr(candidate, "sha256", None)
         ref = getattr(candidate, "ref", None)
         if html is None or sha256 is None:
-            return _error(
-                "NOT_FOUND", "no previewable artifact (html/sha256) is recorded", 404
-            )
+            return _error("NOT_FOUND", "no previewable artifact (html/sha256) is recorded", 404)
         capability: str | None = None
         if ref is not None:
             capability = await deps.authz.issue_capability(
@@ -299,7 +306,9 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         # docstring. _ensure_artifact below reproduces that check in its original position.
         # governance_artifact_id is still the real id, unchanged. need_principal / need_tenant default True:
         # this route always resolved both.
-        ctx = await _enter_promotion_route(deps, request, "promotion.approve", governance_artifact_id=artifact_id)
+        ctx = await _enter_promotion_route(
+            deps, request, "promotion.approve", governance_artifact_id=artifact_id
+        )
         if isinstance(ctx, Response):
             return ctx
         assert ctx.principal is not None  # need_principal defaults True above
@@ -339,7 +348,9 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         assert ctx.principal is not None  # need_principal defaults True above
         try:
             async with _get_lock(deps, _promotion_key(ctx.tenant)):
-                candidate = await ctx.promotions.reject(artifact_id, ctx.principal, tenant=ctx.tenant)
+                candidate = await ctx.promotions.reject(
+                    artifact_id, ctx.principal, tenant=ctx.tenant
+                )
             return _json({"candidate": candidate})
         except BaseException as e:
             return await _promotion_error(deps, request, "promotions.reject", e)
@@ -347,7 +358,9 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     @router.post("/promotions/{artifact_id}/withdraw")
     async def promotions_withdraw(request: Request, artifact_id: str) -> Response:
         # Same reasoning as promotions_approve above: the optional reason body must be validated first.
-        ctx = await _enter_promotion_route(deps, request, "promotion.withdraw", governance_artifact_id=artifact_id)
+        ctx = await _enter_promotion_route(
+            deps, request, "promotion.withdraw", governance_artifact_id=artifact_id
+        )
         if isinstance(ctx, Response):
             return ctx
         assert ctx.principal is not None  # need_principal defaults True above
@@ -373,7 +386,9 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     async def promotions_actions(request: Request, artifact_id: str) -> Response:
         # Same reasoning as promotions_approve above: the action body (and the extra kind-scoped governance
         # check it may trigger) must run before the artifact-existence check.
-        ctx = await _enter_promotion_route(deps, request, "promotion.act", governance_artifact_id=artifact_id)
+        ctx = await _enter_promotion_route(
+            deps, request, "promotion.act", governance_artifact_id=artifact_id
+        )
         if isinstance(ctx, Response):
             return ctx
         assert ctx.principal is not None  # need_principal defaults True above
@@ -396,7 +411,9 @@ def register_promotion_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             return not_found
         try:
             async with _get_lock(deps, _promotion_key(ctx.tenant)):
-                candidate = await ctx.promotions.act(artifact_id, action, ctx.principal, tenant=ctx.tenant)
+                candidate = await ctx.promotions.act(
+                    artifact_id, action, ctx.principal, tenant=ctx.tenant
+                )
             return _json({"candidate": candidate})
         except BaseException as e:
             return await _promotion_error(deps, request, "promotions.actions", e)

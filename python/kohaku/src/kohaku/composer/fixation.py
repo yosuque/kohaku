@@ -119,7 +119,9 @@ async def materialize_fixation(
         kind, uri = drift
         return None, FixationCheck(
             kind="stale",
-            issues=[f"The fixed Spec's reference set does not match the current Intent's resolution result ({kind}: {uri})"],
+            issues=[
+                f"The fixed Spec's reference set does not match the current Intent's resolution result ({kind}: {uri})"
+            ],
         )
 
     # pinnedSpec's refVersions is the old version at fixation time, so always drop it and re-fill with the latest version.

@@ -129,7 +129,9 @@ class TestPolicyFingerprint:
 
         bare_fp = policy_fingerprint(ComposePolicy(routeTier=bare))
         id_fp = policy_fingerprint(ComposePolicy(routeTier=with_id))
-        assert bare_fp != ""  # routeTier being set at all activates the row, even with allowL2 unset
+        assert (
+            bare_fp != ""
+        )  # routeTier being set at all activates the row, even with allowL2 unset
         assert bare_fp != id_fp
         assert policy_fingerprint(ComposePolicy(routeTier=same_id_different_behavior)) == id_fp
 
@@ -140,7 +142,9 @@ class TestPolicyFingerprint:
     def test_ref_constraint_default_schema_is_the_empty_string(self) -> None:
         """Unset and explicit "schema" (the default) must fingerprint identically to unset — no cache-key
         perturbation for existing callers (port of the TS refConstraint fingerprint test)."""
-        assert policy_fingerprint(ComposePolicy()) == policy_fingerprint(ComposePolicy(refConstraint="schema"))
+        assert policy_fingerprint(ComposePolicy()) == policy_fingerprint(
+            ComposePolicy(refConstraint="schema")
+        )
         assert policy_fingerprint(ComposePolicy(refConstraint="schema")) == ""
 
     def test_ref_constraint_validate_changes_the_fingerprint(self) -> None:
@@ -151,10 +155,14 @@ class TestPolicyFingerprint:
 
     def test_deterministic(self) -> None:
         a = policy_fingerprint(
-            ComposePolicy(outputLanguage="Japanese", designSystem=DesignSystemGuide(guidelines=["x"]))
+            ComposePolicy(
+                outputLanguage="Japanese", designSystem=DesignSystemGuide(guidelines=["x"])
+            )
         )
         b = policy_fingerprint(
-            ComposePolicy(outputLanguage="Japanese", designSystem=DesignSystemGuide(guidelines=["x"]))
+            ComposePolicy(
+                outputLanguage="Japanese", designSystem=DesignSystemGuide(guidelines=["x"])
+            )
         )
         assert a == b
 
@@ -170,11 +178,15 @@ class TestPolicyFingerprint:
 
     def test_few_shot_without_id_fingerprints_as_anonymous(self) -> None:
         a = policy_fingerprint(ComposePolicy(fewShot=FewShotPolicy(examples=_empty_examples)))
-        b = policy_fingerprint(ComposePolicy(fewShot=FewShotPolicy(examples=_empty_examples, maxExamples=5)))
+        b = policy_fingerprint(
+            ComposePolicy(fewShot=FewShotPolicy(examples=_empty_examples, maxExamples=5))
+        )
         assert a == b  # maxExamples does not participate — only the id (or its "anonymous" default)
 
     def test_few_shot_id_changes_fingerprint(self) -> None:
-        anonymous = policy_fingerprint(ComposePolicy(fewShot=FewShotPolicy(examples=_empty_examples)))
+        anonymous = policy_fingerprint(
+            ComposePolicy(fewShot=FewShotPolicy(examples=_empty_examples))
+        )
         named = policy_fingerprint(
             ComposePolicy(fewShot=FewShotPolicy(examples=_empty_examples, id="v2"))
         )
@@ -241,7 +253,9 @@ class TestPolicyFingerprint:
         reshuffled effort's material bytes while preserving every relative inequality would pass the
         existing tests and silently invalidate every effort-using caller's compose cache. If this goes
         red, fix the code so the bytes don't change — never re-pin this value."""
-        assert policy_fingerprint(ComposePolicy(effort=EffortPolicy(l1="high"))) == "76b12e4c25cbdf74"
+        assert (
+            policy_fingerprint(ComposePolicy(effort=EffortPolicy(l1="high"))) == "76b12e4c25cbdf74"
+        )
 
     def test_effort_both_tiers_pinned_to_exact_value(self) -> None:
         assert (
@@ -260,7 +274,9 @@ class TestPolicyFingerprint:
         TS's `tierLlmFingerprintMaterial` (context.ts) only ever assigns the tiers `llmByTier` actually
         sets, leaving an unset tier's key genuinely absent. Same category of expected divergence as
         `enforceTokenColors`'s differing default — see policy_fingerprint's own docstring."""
-        tier_llm = TierLlmFingerprintMaterial(l1=TierModelIdentity(provider="openai", model_id="gpt-4"))
+        tier_llm = TierLlmFingerprintMaterial(
+            l1=TierModelIdentity(provider="openai", model_id="gpt-4")
+        )
         assert policy_fingerprint(ComposePolicy(), tier_llm) == "326747975e703454"
 
     def test_cache_key_unchanged_when_no_fingerprinted_field_set(self, tmp_path: Any) -> None:
@@ -276,7 +292,9 @@ class TestPolicyFingerprint:
     def test_cache_key_changes_once_a_fingerprinted_field_is_set(self, tmp_path: Any) -> None:
         async def run() -> None:
             storage1 = FileStoragePort(tmp_path / "a")
-            bare_ctx = _ctx(FakeLlm(objects=[_l1_draft()]), storage1, ComposePolicy(generatorVersion="gv1"))
+            bare_ctx = _ctx(
+                FakeLlm(objects=[_l1_draft()]), storage1, ComposePolicy(generatorVersion="gv1")
+            )
             bare = await compose(_INTENT_INPUT, bare_ctx)
 
             storage2 = FileStoragePort(tmp_path / "b")
@@ -332,7 +350,9 @@ class TestDesignKitFingerprint:
         fp_original = policy_fingerprint(
             ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY))
         )
-        fp_reordered = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=reordered)))
+        fp_reordered = policy_fingerprint(
+            ComposePolicy(designSystem=DesignSystemGuide(kit=reordered))
+        )
         assert fp_reordered == fp_original
 
     def test_two_kits_differing_only_in_version_produce_different_fingerprints(self) -> None:
@@ -344,17 +364,25 @@ class TestDesignKitFingerprint:
             namespaces=DEFAULT_KIT_VOCABULARY.namespaces,
             skeleton=DEFAULT_KIT_VOCABULARY.skeleton,
         )
-        fp_v1 = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))
+        fp_v1 = policy_fingerprint(
+            ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY))
+        )
         fp_v2 = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=kit_v2)))
         assert fp_v1 != fp_v2
 
     def test_enforce_kit_classes_false_differs_true_is_indistinguishable_from_unset(self) -> None:
-        unset = policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))
+        unset = policy_fingerprint(
+            ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY))
+        )
         explicit_true = policy_fingerprint(
-            ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=True))
+            ComposePolicy(
+                designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=True)
+            )
         )
         explicit_false = policy_fingerprint(
-            ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=False))
+            ComposePolicy(
+                designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=False)
+            )
         )
         assert explicit_true == unset
         assert explicit_false != unset
@@ -381,7 +409,9 @@ class TestDesignKitFingerprint:
         `policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))`
         against the current code) — do not re-pin it again after this."""
         assert (
-            policy_fingerprint(ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)))
+            policy_fingerprint(
+                ComposePolicy(designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY))
+            )
             == "9f4c7c51828fe1f7"
         )
 
@@ -392,7 +422,9 @@ class TestDesignKitFingerprint:
         assert (
             policy_fingerprint(
                 ComposePolicy(
-                    designSystem=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=False)
+                    designSystem=DesignSystemGuide(
+                        kit=DEFAULT_KIT_VOCABULARY, enforceKitClasses=False
+                    )
                 )
             )
             == "9009a75d672e2372"
@@ -413,7 +445,9 @@ class TestDesignKitFingerprint:
         assert (
             policy_fingerprint(
                 ComposePolicy(
-                    designSystem=DesignSystemGuide(tokens={"color.primary": "brand"}, guidelines=["a"])
+                    designSystem=DesignSystemGuide(
+                        tokens={"color.primary": "brand"}, guidelines=["a"]
+                    )
                 )
             )
             == "65df86e493a4cb0c"

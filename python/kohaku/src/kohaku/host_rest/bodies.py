@@ -221,9 +221,7 @@ def parse_events_body(data: Any) -> EventsBody | None:
     session = parse_session(body.get("session"))
     if session is None:
         return None
-    return EventsBody(
-        intent=intent_value, event=EventBody(on=on, payload=payload), session=session
-    )
+    return EventsBody(intent=intent_value, event=EventBody(on=on, payload=payload), session=session)
 
 
 # ---------------------------------------------------------------------------
@@ -363,10 +361,16 @@ def parse_telemetry_body(data: Any) -> list[TelemetryEvent] | None:
             if spec_hash is None:
                 return None
             surface_raw = item.get("surface")
-            if surface_raw is not None and _as_bounded_str(surface_raw, MAX_SHORT_STRING_LEN) is None:
+            if (
+                surface_raw is not None
+                and _as_bounded_str(surface_raw, MAX_SHORT_STRING_LEN) is None
+            ):
                 return None
             renderer_raw = item.get("renderer")
-            if renderer_raw is not None and _as_bounded_str(renderer_raw, MAX_SHORT_STRING_LEN) is None:
+            if (
+                renderer_raw is not None
+                and _as_bounded_str(renderer_raw, MAX_SHORT_STRING_LEN) is None
+            ):
                 return None
             duration = item.get("durationMs")
             if duration is not None and not isinstance(duration, int | float):
@@ -384,7 +388,10 @@ def parse_telemetry_body(data: Any) -> list[TelemetryEvent] | None:
             if artifact_id is None:
                 return None
             surface_raw = item.get("surface")
-            if surface_raw is not None and _as_bounded_str(surface_raw, MAX_SHORT_STRING_LEN) is None:
+            if (
+                surface_raw is not None
+                and _as_bounded_str(surface_raw, MAX_SHORT_STRING_LEN) is None
+            ):
                 return None
             outcome = item.get("outcome")
             if outcome is not None and outcome not in ("ok", "error"):
@@ -432,9 +439,7 @@ def parse_component_draft(raw: Any) -> ComponentDraft | None:
             return None
         if param_map is not None and not isinstance(param_map, dict):
             return None
-        query_template = QueryTemplate(
-            path=path, fixedParams=fixed_params, paramMap=param_map
-        )
+        query_template = QueryTemplate(path=path, fixedParams=fixed_params, paramMap=param_map)
     return ComponentDraft(
         componentType=component_type,
         version=version,

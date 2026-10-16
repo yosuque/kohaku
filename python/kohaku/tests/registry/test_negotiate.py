@@ -22,9 +22,7 @@ def _spec(components: list[dict[str, Any]], **overrides: Any) -> UISpec:
     return UISpec.model_validate(base)
 
 
-_FULL_SURFACE = SurfaceCapabilities(
-    supports={d.type: "*" for d in core_catalog().components}
-)
+_FULL_SURFACE = SurfaceCapabilities(supports={d.type: "*" for d in core_catalog().components})
 
 
 def test_no_downgrade_when_all_supported() -> None:
@@ -124,9 +122,7 @@ def test_unsupported_without_chain_falls_to_terminal() -> None:
 
 def test_sandbox_html_respects_max_tier() -> None:
     artifact = {"inline": "<html></html>", "sha256": "0" * 64}
-    spec = _spec(
-        [{"id": "root", "type": "sandbox.html", "props": {}, "artifact": artifact}]
-    )
+    spec = _spec([{"id": "root", "type": "sandbox.html", "props": {}, "artifact": artifact}])
     # On an L2-allowed surface it stays as-is
     ok = negotiate(spec, _CATALOG, SurfaceCapabilities(supports={}, maxTier="L2"))
     assert ok.downgrades == []
@@ -149,8 +145,6 @@ def test_semver_range_check() -> None:
             }
         ]
     )
-    surface = SurfaceCapabilities(
-        supports={"presentSpreadsheet": "~1.0.0", "presentMarkdown": "*"}
-    )
+    surface = SurfaceCapabilities(supports={"presentSpreadsheet": "~1.0.0", "presentMarkdown": "*"})
     result = negotiate(spec, _CATALOG, surface)
     assert result.spec.components[0].type == "presentMarkdown"

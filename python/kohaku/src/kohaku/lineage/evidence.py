@@ -639,7 +639,9 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise _DuplicateKeyError(f"manifest.json contains the duplicate object key {json.dumps(key)}")
+            raise _DuplicateKeyError(
+                f"manifest.json contains the duplicate object key {json.dumps(key)}"
+            )
         result[key] = value
     return result
 
@@ -838,9 +840,15 @@ async def verify_evidence_pack(
     # since a signature over the manifest cannot itself notice an addition to the directory).
     listed_paths = {entry.path for entry in manifest.files}
     actual_paths = await reader.list_files()
-    unexpected = [p for p in actual_paths if p not in ("manifest.json", "manifest.sig") and p not in listed_paths]
+    unexpected = [
+        p
+        for p in actual_paths
+        if p not in ("manifest.json", "manifest.sig") and p not in listed_paths
+    ]
     if unexpected:
-        errors.append(f"unexpected file(s) present in the pack but not listed in the manifest: {', '.join(unexpected)}")
+        errors.append(
+            f"unexpected file(s) present in the pack but not listed in the manifest: {', '.join(unexpected)}"
+        )
 
     for entry in manifest.files:
         # Defense in depth: EvidenceFileEntry already constrains `path` to a closed set of safe shapes,
@@ -862,7 +870,9 @@ async def verify_evidence_pack(
             continue
         actual_size = await _try_size(reader, entry.path)
         if actual_size is not None and actual_size != entry.bytes:
-            errors.append(f"{entry.path}: is {actual_size} bytes on disk, manifest records {entry.bytes}")
+            errors.append(
+                f"{entry.path}: is {actual_size} bytes on disk, manifest records {entry.bytes}"
+            )
             continue
         try:
             content = await reader.read_file(entry.path)

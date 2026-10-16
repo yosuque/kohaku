@@ -65,14 +65,20 @@ class TestCacheKey:
     def test_empty_policy_fingerprint_treated_as_omitted(self) -> None:
         base = CacheKeyParts(intentHash="sha256:aaa", dataVersion="v1", catalogFingerprint="cat1")
         with_empty = CacheKeyParts(
-            intentHash="sha256:aaa", dataVersion="v1", catalogFingerprint="cat1", policyFingerprint=""
+            intentHash="sha256:aaa",
+            dataVersion="v1",
+            catalogFingerprint="cat1",
+            policyFingerprint="",
         )
         assert cache_key(with_empty) == cache_key(base)
 
     def test_generator_version_alone_still_legacy_six_segments(self) -> None:
         key = cache_key(
             CacheKeyParts(
-                intentHash="sha256:aaa", dataVersion="v1", catalogFingerprint="cat1", generatorVersion="gv1"
+                intentHash="sha256:aaa",
+                dataVersion="v1",
+                catalogFingerprint="cat1",
+                generatorVersion="gv1",
             )
         )
         assert key == "kohaku:0.2:sha256:aaa:v1:cat1:gv1"
@@ -80,7 +86,10 @@ class TestCacheKey:
     def test_policy_fingerprint_alone_inserts_dash_placeholder(self) -> None:
         key = cache_key(
             CacheKeyParts(
-                intentHash="sha256:aaa", dataVersion="v1", catalogFingerprint="cat1", policyFingerprint="pf1"
+                intentHash="sha256:aaa",
+                dataVersion="v1",
+                catalogFingerprint="cat1",
+                policyFingerprint="pf1",
             )
         )
         assert key == "kohaku:0.2:sha256:aaa:v1:cat1:-:pf1"
@@ -100,12 +109,18 @@ class TestCacheKey:
     def test_no_collision_between_generator_version_only_and_policy_fingerprint_only(self) -> None:
         by_generator_version = cache_key(
             CacheKeyParts(
-                intentHash="sha256:aaa", dataVersion="v1", catalogFingerprint="cat1", generatorVersion="pf1"
+                intentHash="sha256:aaa",
+                dataVersion="v1",
+                catalogFingerprint="cat1",
+                generatorVersion="pf1",
             )
         )
         by_policy_fingerprint = cache_key(
             CacheKeyParts(
-                intentHash="sha256:aaa", dataVersion="v1", catalogFingerprint="cat1", policyFingerprint="pf1"
+                intentHash="sha256:aaa",
+                dataVersion="v1",
+                catalogFingerprint="cat1",
+                policyFingerprint="pf1",
             )
         )
         assert by_generator_version != by_policy_fingerprint

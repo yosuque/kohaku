@@ -58,7 +58,9 @@ _UNKNOWN_HTML = _widget(
     '<div class="k-panel p-4 text-gray-700"><span class="k-kpi-value">1</span></div>',
     'var el=document.createElement("div");el.className="k-tile";el.classList.add("rounded-xl");',
 )
-_INTENT_INPUT = IntentComposeInput(intent=IntentInput(canonical="sales.summary", params={"fy": 2026}))
+_INTENT_INPUT = IntentComposeInput(
+    intent=IntentInput(canonical="sales.summary", params={"fy": 2026})
+)
 
 
 class TestVocabularyAndFragment:
@@ -80,10 +82,14 @@ class TestVocabularyAndFragment:
     def test_skeleton_uses_only_vocabulary_classes_and_is_a_body_fragment(self) -> None:
         import re
 
-        known = set(DEFAULT_KIT_VOCABULARY.classes) | set(DEFAULT_KIT_VOCABULARY.utilities) | {
-            "is-up",
-            "is-down",
-        }
+        known = (
+            set(DEFAULT_KIT_VOCABULARY.classes)
+            | set(DEFAULT_KIT_VOCABULARY.utilities)
+            | {
+                "is-up",
+                "is-down",
+            }
+        )
         for m in re.finditer(r'class="([^"]*)"', DEFAULT_KIT_SKELETON):
             for cls in m.group(1).split():
                 assert cls in known, cls
@@ -106,7 +112,8 @@ class TestVocabularyAndFragment:
         assert fragment.split("\n")[0] == "## Design kit (acme v3)"
         assert "  - k-tile: tile" in fragment
         assert (
-            "- Utilities (exactly these names exist; any other utility name has no effect): flex" in fragment
+            "- Utilities (exactly these names exist; any other utility name has no effect): flex"
+            in fragment
         )
         assert '  <div class="k-tile">x</div>' in fragment
         assert "Sales by region" not in fragment
@@ -220,8 +227,10 @@ class TestVocabularyAndFragment:
             shapes_by_ref={},
             design_system=DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY),
         )
-        assert prompt.index("## Design system") < prompt.index("## Design kit") < prompt.index(
-            "## Output language"
+        assert (
+            prompt.index("## Design system")
+            < prompt.index("## Design kit")
+            < prompt.index("## Output language")
         )
         assert _EXPECTED_KIT_FRAGMENT in prompt
         without = build_l2_prompt(
@@ -312,25 +321,31 @@ class TestUnknownClassLint:
             namespaces: tuple[str, ...]
 
         bare = _BareKit(classes={"k-thing": "a thing"}, utilities=("gap-2",), namespaces=("k-",))
-        assert collect_unknown_kit_classes(_widget('<div class="k-thing k-ghost"></div>'), bare) == [
-            "k-ghost"
-        ]
+        assert collect_unknown_kit_classes(
+            _widget('<div class="k-thing k-ghost"></div>'), bare
+        ) == ["k-ghost"]
         assert collect_unknown_kit_classes(_widget('<div class="k-thing gap-2"></div>'), bare) == []
         issues = collect_l2_issues(_widget('<div class="k-ghost"></div>'), kit=bare)
         assert len(issues) == 1 and issues[0].startswith("L2_UNKNOWN_CLASS")
 
 
 class TestComposeWiring:
-    def _ctx(self, llm: FakeLlm, storage: FileStoragePort, guide: DesignSystemGuide) -> ComposeContext:
+    def _ctx(
+        self, llm: FakeLlm, storage: FileStoragePort, guide: DesignSystemGuide
+    ) -> ComposeContext:
         policy = ComposePolicy(allowL2=True, routeTier=lambda _i: "L2", designSystem=guide)
-        return ComposeContext(catalog=_CATALOG, semantic=_FakeSemantic(), storage=storage, llm=llm, policy=policy)
+        return ComposeContext(
+            catalog=_CATALOG, semantic=_FakeSemantic(), storage=storage, llm=llm, policy=policy
+        )
 
     def test_unknown_class_is_repaired(self, tmp_path: Any) -> None:
         async def run() -> None:
             llm = FakeLlm(texts=[_UNKNOWN_HTML, _KIT_HTML])
             result = await compose(
                 _INTENT_INPUT,
-                self._ctx(llm, FileStoragePort(tmp_path), DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)),
+                self._ctx(
+                    llm, FileStoragePort(tmp_path), DesignSystemGuide(kit=DEFAULT_KIT_VOCABULARY)
+                ),
             )
             assert len(llm.calls) == 2
             assert "## Design kit (kohaku v1)" in llm.calls[0].prompt

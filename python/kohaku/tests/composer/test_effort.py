@@ -55,7 +55,9 @@ class TestEffort:
             ctx = _ctx(
                 llm,
                 storage,
-                ComposePolicy(allowL2=True, routeTier=lambda _i: "L2", effort=EffortPolicy(l2="low")),
+                ComposePolicy(
+                    allowL2=True, routeTier=lambda _i: "L2", effort=EffortPolicy(l2="low")
+                ),
             )
             await compose(_INTENT_INPUT, ctx)
             assert len(llm.calls) == 1
@@ -71,7 +73,9 @@ class TestEffort:
             ctx = _ctx(
                 llm,
                 storage,
-                ComposePolicy(allowL2=True, routeTier=lambda _i: "L2", effort=EffortPolicy(l1="max")),
+                ComposePolicy(
+                    allowL2=True, routeTier=lambda _i: "L2", effort=EffortPolicy(l1="max")
+                ),
             )
             await compose(_INTENT_INPUT, ctx)
             assert llm.calls[0].effort is None

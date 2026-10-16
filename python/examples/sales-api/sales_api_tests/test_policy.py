@@ -47,7 +47,12 @@ def _custom_body() -> dict[str, Any]:
     attempt), so this is the only intent that exercises both the allowL2 gate and the L2 budget check
     without any grammar-constrained L1 step in between. Sent as a direct {intent} (not NL text), so the
     semantic port's normalize is never called either -- fully LLM-free regardless of outcome."""
-    return {"intent": {"canonical": "sales.custom", "params": {"request": "Sales as a calendar heatmap"}}}
+    return {
+        "intent": {
+            "canonical": "sales.custom",
+            "params": {"request": "Sales as a calendar heatmap"},
+        }
+    }
 
 
 def _kpi_overview_body() -> dict[str, Any]:
@@ -76,7 +81,9 @@ class TestPolicyAsCodeE2E:
     def test_a_tenant_the_policy_file_does_not_mention_is_unaffected(self) -> None:
         client, _app = _build(_load_policy())
         res = client.post(
-            "/api/kohaku/compose", json=_kpi_overview_body(), headers={"x-kohaku-tenant": "tenant-c"}
+            "/api/kohaku/compose",
+            json=_kpi_overview_body(),
+            headers={"x-kohaku-tenant": "tenant-c"},
         )
         assert res.status_code == 200
         spec = res.json()["spec"]
@@ -90,7 +97,9 @@ class TestPolicyAsCodeE2E:
 
         def compose() -> dict[str, Any]:
             res = client.post(
-                "/api/kohaku/compose", json=_kpi_overview_body(), headers={"x-kohaku-tenant": "tenant-a"}
+                "/api/kohaku/compose",
+                json=_kpi_overview_body(),
+                headers={"x-kohaku-tenant": "tenant-a"},
             )
             assert res.status_code == 200
             spec: dict[str, Any] = res.json()["spec"]
@@ -114,7 +123,9 @@ class TestPolicyAsCodeE2E:
         assert compose()["provenance"]["cache"] == "miss"
         assert compose()["provenance"]["cache"] == "hit"
 
-    def test_records_a_policy_applied_lineage_event_at_startup_without_actor_or_previous_policy(self) -> None:
+    def test_records_a_policy_applied_lineage_event_at_startup_without_actor_or_previous_policy(
+        self,
+    ) -> None:
         file = _load_policy()
         _client, app = _build(file)
         assert app.policy_runtime is not None

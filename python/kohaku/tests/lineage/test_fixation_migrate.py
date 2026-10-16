@@ -48,13 +48,17 @@ def test_replace_returns_none_and_records_nothing_when_absent(tmp_path: Path) ->
     asyncio.run(run())
 
 
-def test_replace_with_no_guard_unconditionally_replaces_and_records_intent_migrated(tmp_path: Path) -> None:
+def test_replace_with_no_guard_unconditionally_replaces_and_records_intent_migrated(
+    tmp_path: Path,
+) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         await storage.put_fixation(_record(l1_spec()))
         fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
 
-        result = await fixations.replace(INTENT_HASH, l2_spec(), approver=APPROVER, plan_id="plan-1")
+        result = await fixations.replace(
+            INTENT_HASH, l2_spec(), approver=APPROVER, plan_id="plan-1"
+        )
         assert result is not None
         stored = await storage.get_fixation(INTENT_HASH)
         assert stored is not None
@@ -206,7 +210,10 @@ def test_replace_guard_if_structure_hash_mismatch_does_not_replace(tmp_path: Pat
         fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
 
         result = await fixations.replace(
-            INTENT_HASH, l2_spec(), approver=APPROVER, guard={"ifStructureHash": "sha256:" + "3" * 64}
+            INTENT_HASH,
+            l2_spec(),
+            approver=APPROVER,
+            guard={"ifStructureHash": "sha256:" + "3" * 64},
         )
         assert result is None
         stored = await storage.get_fixation(INTENT_HASH)
@@ -224,7 +231,10 @@ def test_replace_guard_if_structure_hash_match_replaces(tmp_path: Path) -> None:
         fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
 
         result = await fixations.replace(
-            INTENT_HASH, l2_spec(), approver=APPROVER, guard={"ifStructureHash": record.structureHash}
+            INTENT_HASH,
+            l2_spec(),
+            approver=APPROVER,
+            guard={"ifStructureHash": record.structureHash},
         )
         assert result is not None
         assert len(await storage.list_lineage()) == 1

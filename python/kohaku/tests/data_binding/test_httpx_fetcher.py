@@ -66,13 +66,17 @@ def test_httpx_action_fetcher_posts_action_and_parses_result() -> None:
         seen["method"] = request.method
         seen["content_type"] = request.headers.get("content-type")
         seen["body"] = request.content.decode()
-        return httpx.Response(200, json={"result": {"ok": True}, "invalidates": ["query://sales/summary?fy=2026"]})
+        return httpx.Response(
+            200, json={"result": {"ok": True}, "invalidates": ["query://sales/summary?fy=2026"]}
+        )
 
     action_fetcher = create_httpx_action_fetcher(
         "http://host/api/kohaku", transport=httpx.MockTransport(handler)
     )
     client = create_binding_client(
-        BindingClientConfig(capability="cap", base_url="http://host/api/kohaku", action_fetcher=action_fetcher)
+        BindingClientConfig(
+            capability="cap", base_url="http://host/api/kohaku", action_fetcher=action_fetcher
+        )
     )
     res = asyncio.run(client.invoke_action("annotate", {"note": "x"}))
 

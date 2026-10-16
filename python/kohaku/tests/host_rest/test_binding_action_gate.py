@@ -20,7 +20,11 @@ from kohaku.spec import (
 
 from .conftest import PREFIX, build_harness
 
-NOTE_SCHEMA = {"type": "object", "properties": {"note": {"type": "string", "maxLength": 5}}, "required": ["note"]}
+NOTE_SCHEMA = {
+    "type": "object",
+    "properties": {"note": {"type": "string", "maxLength": 5}},
+    "required": ["note"],
+}
 
 
 def _url(path: str) -> str:
@@ -112,7 +116,9 @@ class TestParamsValidation:
         )
         harness = build_harness(tmp_path, domain=domain)
         token = harness.issue([Scope(kind="write", ref="annotate")])
-        res = _post_action(harness, {"action": "annotate", "payload": {"note": "way too long"}}, token)
+        res = _post_action(
+            harness, {"action": "annotate", "payload": {"note": "way too long"}}, token
+        )
         assert res.status_code == 422
         body = res.json()
         assert body["error"]["code"] == "ACTION_PARAMS_INVALID"
@@ -141,7 +147,11 @@ class TestParamsValidation:
         body = res.json()
         assert body["error"]["code"] == "ACTION_PARAMS_INVALID"
         assert body["error"]["issues"] == [
-            {"path": "constructor", "code": "unsafeKey", "message": 'the property name "constructor" is not allowed'}
+            {
+                "path": "constructor",
+                "code": "unsafeKey",
+                "message": 'the property name "constructor" is not allowed',
+            }
         ]
         assert domain.invoke_calls == []
 
@@ -226,7 +236,9 @@ class TestTierApprove:
         domain = _EchoDomain(OperationDescriptor(name="delete", description="d", tier="approve"))
         harness = build_harness(tmp_path, domain=domain)
         token = harness.issue([Scope(kind="write", ref="delete")])
-        res = _post_action(harness, {"action": "delete", "payload": {}, "approval": "some-token"}, token)
+        res = _post_action(
+            harness, {"action": "delete", "payload": {}, "approval": "some-token"}, token
+        )
         assert res.status_code == 403
 
     def test_without_an_approval_port_configured_and_no_token_either_still_denies_with_a_clear_reason(
@@ -241,7 +253,9 @@ class TestTierApprove:
         assert body["error"]["code"] == "APPROVAL_REQUIRED"
         assert body["error"]["message"] == "no ApprovalPort is configured for this host"
 
-    def test_with_a_valid_token_invokes_the_domain_and_records_approved(self, tmp_path: Path) -> None:
+    def test_with_a_valid_token_invokes_the_domain_and_records_approved(
+        self, tmp_path: Path
+    ) -> None:
         domain = _EchoDomain(OperationDescriptor(name="delete", description="d", tier="approve"))
 
         async def verify(_token: str, **kwargs: Any) -> ApprovalVerifyResult:
@@ -302,7 +316,9 @@ class TestTierApprove:
 class TestGateInfrastructureFailures:
     """Fail-closed with the SPEC envelope when the gate cannot decide (SPEC ACT-APR-001)."""
 
-    def test_a_list_operations_failure_answers_503_internal_and_records_denied(self, tmp_path: Path) -> None:
+    def test_a_list_operations_failure_answers_503_internal_and_records_denied(
+        self, tmp_path: Path
+    ) -> None:
         class _BrokenDomain(_EchoDomain):
             async def list_operations(self) -> list[OperationDescriptor]:
                 raise RuntimeError("db-primary.internal refused")
@@ -372,7 +388,9 @@ class TestOperationIndexValidationAtAttach:
                 tmp_path,
                 domain=_EchoDomain(
                     OperationDescriptor(
-                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                        name="annotate",
+                        description="d",
+                        paramsSchema={"type": "string", "pattern": "^a$"},
                     )
                 ),
                 on_error=seen.append,
@@ -392,14 +410,20 @@ class TestOperationIndexValidationAtAttach:
             OperationDescriptor(name="publish", description="d"),
         )
         harness = build_harness(tmp_path, domain=domain)
-        token = harness.issue([Scope(kind="write", ref="annotate"), Scope(kind="write", ref="publish")])
+        token = harness.issue(
+            [Scope(kind="write", ref="annotate"), Scope(kind="write", ref="publish")]
+        )
         # A raised schema error surfaces as a 500 (the TS route's outcome); the test client must not re-raise it.
         client = TestClient(harness.client.app, raise_server_exceptions=False)
         headers = {"authorization": f"Bearer {token}"}
-        broken = client.post(_url("/binding/action"), json={"action": "annotate", "payload": {}}, headers=headers)
+        broken = client.post(
+            _url("/binding/action"), json={"action": "annotate", "payload": {}}, headers=headers
+        )
         assert broken.status_code == 500
         assert broken.json()["error"]["code"] == "INTERNAL"
-        ok = client.post(_url("/binding/action"), json={"action": "publish", "payload": {}}, headers=headers)
+        ok = client.post(
+            _url("/binding/action"), json={"action": "publish", "payload": {}}, headers=headers
+        )
         assert ok.status_code == 200
         assert [op for op, _ in domain.invoke_calls] == ["publish"]
 
@@ -428,7 +452,9 @@ class TestOperationIndexValidationAtAttach:
             tmp_path,
             domain=_EchoDomain(
                 OperationDescriptor(
-                    name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                    name="annotate",
+                    description="d",
+                    paramsSchema={"type": "string", "pattern": "^a$"},
                 )
             ),
             on_error=seen.append,

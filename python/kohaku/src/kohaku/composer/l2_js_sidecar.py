@@ -146,7 +146,13 @@ class L2JsSidecar:
         # RecursionError: CPython's json decoder recurses per nesting level, so a pathologically deep sidecar
         # response raises this instead of JSONDecodeError -- fail open (no issues reported) the same way as
         # any other malformed result, rather than letting it escape as an unhandled exception.
-        except (json.JSONDecodeError, KeyError, ValueError, UnicodeDecodeError, RecursionError) as e:
+        except (
+            json.JSONDecodeError,
+            KeyError,
+            ValueError,
+            UnicodeDecodeError,
+            RecursionError,
+        ) as e:
             self._warn(f"failed to interpret the verification result ({e})")
             return []
 

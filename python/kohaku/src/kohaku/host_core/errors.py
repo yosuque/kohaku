@@ -41,10 +41,14 @@ def is_typed_host_error(e: object) -> bool:
 
 
 def _is_llm_error(e: object) -> bool:
-    return isinstance(e, LlmError) or (isinstance(e, BaseException) and type(e).__name__ == "LlmError")
+    return isinstance(e, LlmError) or (
+        isinstance(e, BaseException) and type(e).__name__ == "LlmError"
+    )
 
 
-LLM_PROVIDER_UNAVAILABLE_MESSAGE = "LLM provider unavailable; see the host's observability hook (onError) for details"
+LLM_PROVIDER_UNAVAILABLE_MESSAGE = (
+    "LLM provider unavailable; see the host's observability hook (onError) for details"
+)
 """The fixed, client-safe message for a failure caused by the LLM provider being unavailable (API key not
 configured, provider error or timeout, aborted call) while a host operation that cannot degrade without an LLM
 (Intent resolution) was running. The detail goes to the observability hook (`on_error`); the envelope's request
@@ -261,7 +265,11 @@ def create_console_error_reporter(
         # A "fallback"/"cancelled" phase carries no raised exception (error is None for most failure kinds)
         # -- the failure is described by ctx.reason instead. "hard"/"cache" always carry the causing
         # exception in `error`. See ComposeErrorContext's own doc for the full phase/field contract.
-        detail: object = error if error is not None else (ctx.reason if ctx.reason is not None else "unknown failure")
+        detail: object = (
+            error
+            if error is not None
+            else (ctx.reason if ctx.reason is not None else "unknown failure")
+        )
         # Tier and intent are what let an operator tell which generation this line is about. (Unlike the TS
         # port, Python's ComposeErrorContext carries no correlation id, so none is printed.)
         parts = [

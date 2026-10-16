@@ -40,7 +40,9 @@ _GUIDE = DesignSystemGuide(
 # The generator's own DESIGN_SYSTEM_GUIDE is the identical shape as _GUIDE above, so
 # design_system_prompt_fragment(_GUIDE) below is expected to reproduce this exactly — a mismatch means
 # _GUIDE and the generator's DESIGN_SYSTEM_GUIDE drifted apart and the fixture needs regenerating.
-_EXPECTED_FRAGMENT: str = load_cross_language_fixture()["promptFragments"]["designSystem"]["fragment"]
+_EXPECTED_FRAGMENT: str = load_cross_language_fixture()["promptFragments"]["designSystem"][
+    "fragment"
+]
 
 _TOKEN_HTML = (
     "<!DOCTYPE html><html><head><title>Custom</title>"
@@ -56,7 +58,9 @@ _RAW_COLOR_HTML = _TOKEN_HTML.replace(
     "background:#ffffff;color:rgb(26, 26, 46);",
 )
 
-_INTENT_INPUT = IntentComposeInput(intent=IntentInput(canonical="sales.summary", params={"fy": 2026}))
+_INTENT_INPUT = IntentComposeInput(
+    intent=IntentInput(canonical="sales.summary", params={"fy": 2026})
+)
 
 
 class TestDesignSystemPromptFragment:

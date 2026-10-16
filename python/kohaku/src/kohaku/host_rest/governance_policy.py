@@ -157,8 +157,8 @@ def governance_policy_from_roles(
     def evaluate(
         principal: Principal, operation: GovernanceOperation, tenant: str | None = None
     ) -> bool:
-        return create_governance_policy(GovernancePolicy(roles=roles_for(tenant), tenant_of=tenant_of))(
-            principal, operation, tenant
-        )
+        return create_governance_policy(
+            GovernancePolicy(roles=roles_for(tenant), tenant_of=tenant_of)
+        )(principal, operation, tenant)
 
     return evaluate

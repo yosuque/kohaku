@@ -19,9 +19,7 @@ def test_returns_scripted_objects_in_order_and_records_calls() -> None:
     async def run() -> None:
         fake = FakeLlm(objects=[{"a": 1}, {"a": 2}])
         r1 = await fake.generate_object(GenerateObjectRequest(schema=_A, prompt="p1"))
-        r2 = await fake.generate_object(
-            GenerateObjectRequest(schema=_A, prompt="p2", system="s")
-        )
+        r2 = await fake.generate_object(GenerateObjectRequest(schema=_A, prompt="p2", system="s"))
         assert r1.object == _A(a=1)
         assert r2.object == _A(a=2)
         assert fake.calls == [
