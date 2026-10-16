@@ -1,5 +1,5 @@
 import {
-  applyLineageLimit,
+  DEFAULT_LINEAGE_LIMIT,
   type LineageEventRecord,
   type LineageFilter,
   matchesLineageFilter,
@@ -31,15 +31,25 @@ export function listByTenant<T extends { tenant?: string }>(map: Map<string, T>,
 }
 
 /**
- * Applies a LineageFilter to an append-ordered event list and returns the tail `limit` entries
- * (spec-core's matchesLineageFilter / applyLineageLimit; default DEFAULT_LINEAGE_LIMIT).
+ * Applies a LineageFilter to an append-ordered event list and returns the tail `limit` entries, oldest
+ * first (spec-core's matchesLineageFilter; default DEFAULT_LINEAGE_LIMIT). Equivalent to filtering the whole
+ * list and then `applyLineageLimit`, but scans from the newest event backwards and stops once `limit`
+ * matches are found, so a small tail window over a long log does not evaluate the filter on every event.
  */
 export function filterLineage(
   events: readonly LineageEventRecord[],
   filter: LineageFilter = {},
 ): LineageEventRecord[] {
-  return applyLineageLimit(
-    events.filter((e) => matchesLineageFilter(e, filter)),
-    filter.limit,
-  );
+  const limit = filter.limit ?? DEFAULT_LINEAGE_LIMIT;
+  if (limit <= 0) return [];
+  // `applyLineageLimit` is `slice(-limit)`, which truncates the limit toward zero and treats a result of 0
+  // (NaN, or a fraction below 1) as "no bound"; keep that behaviour exactly.
+  const truncated = Math.trunc(limit);
+  const bound = truncated > 0 ? truncated : Number.POSITIVE_INFINITY;
+  const newestFirst: LineageEventRecord[] = [];
+  for (let i = events.length - 1; i >= 0 && newestFirst.length < bound; i--) {
+    const event = events[i];
+    if (event != null && matchesLineageFilter(event, filter)) newestFirst.push(event);
+  }
+  return newestFirst.reverse();
 }
