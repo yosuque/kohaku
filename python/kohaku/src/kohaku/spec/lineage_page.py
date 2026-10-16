@@ -16,6 +16,10 @@ from typing import Any
 
 from .ports import LineageEventRecord, LineagePage, LineagePageRequest
 
+DEFAULT_LINEAGE_LIMIT = 200
+"""Default tail-window size for `StoragePort.list_lineage` when `LineageFilter.limit` is omitted (twin of
+packages/spec-core/src/lineage-filter.ts's DEFAULT_LINEAGE_LIMIT)."""
+
 DEFAULT_LINEAGE_PAGE_SIZE = 500
 """LineagePageRequest.pageSize's default when omitted."""
 

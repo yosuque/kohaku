@@ -114,6 +114,30 @@ class TestExpiryAndMalformed:
 
         asyncio.run(run())
 
+    def test_token_expires_exactly_at_its_exp_instant(self) -> None:
+        """TS isExpired is `exp <= now`: a token is expired at the boundary second, not only after it."""
+
+        async def run() -> None:
+            clock = {"t": 1000.0}
+            authz = create_hmac_authz_port("test-secret", now=lambda: clock["t"])
+            cap = await authz.issue_capability(
+                PRINCIPAL, [Scope(kind="read", ref="query://sales/kpi")], ttl_seconds=10
+            )
+            req = VerifyRequest(kind="read", ref="query://sales/kpi")
+
+            clock["t"] = 1009.0  # exp - 1: still valid
+            assert (await authz.verify(cap, req)).ok is True
+
+            clock["t"] = 1010.5  # the same second as exp (the clock is floored): expired
+            at_boundary = await authz.verify(cap, req)
+            assert at_boundary.ok is False
+            assert at_boundary.reason == "capability expired"
+
+            clock["t"] = 1011.0
+            assert (await authz.verify(cap, req)).ok is False
+
+        asyncio.run(run())
+
     def test_malformed_token(self) -> None:
         async def run() -> None:
             authz = create_hmac_authz_port("test-secret")

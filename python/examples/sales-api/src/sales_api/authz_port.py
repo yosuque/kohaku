@@ -82,7 +82,9 @@ class HmacAuthzPort:
         exp = claims.get("exp")
         if not isinstance(exp, (int, float)) or isinstance(exp, bool):
             return VerifyResult(ok=False, reason="malformed payload")
-        if exp < int(self._now()):
+        if exp <= int(
+            self._now()
+        ):  # expired at the boundary instant, like TS isExpired (exp <= now)
             return VerifyResult(ok=False, reason="capability expired")
 
         # Claim types are checked before use (the secret may be shared with another token kind), so a

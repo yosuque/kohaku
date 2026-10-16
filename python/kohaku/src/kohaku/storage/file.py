@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from kohaku.spec import (
+    DEFAULT_LINEAGE_LIMIT,
     FixationRecord,
     LineageActor,
     LineageEventRecord,
@@ -70,14 +71,23 @@ _MAX_SPEC_CACHE_ENTRIES = 500
 """Entry cap of the in-memory Spec cache. On overflow, drop the oldest (approximate LRU)."""
 
 
+def _normalize_tenant(tenant: str | None) -> str | None:
+    """None and "" both collapse to None ("unspecified"); any other tenant passes through. Twin of TS's
+    normalizeTenant (spec-core ports/storage.ts): every get / put / list / filter on a tenant goes through
+    this, so "" and None can never be keyed or filtered inconsistently against each other."""
+    return tenant if tenant else None
+
+
 def _fixation_key(tenant: str | None, intent_hash: str) -> str:
     """Composite key of (tenant, intentHash). Without a tenant, it is intentHash itself (byte-identical to the
     old file's key = compatible load). The NUL separator does not collide."""
-    return f"{tenant}\x00{intent_hash}" if tenant else intent_hash
+    normalized = _normalize_tenant(tenant)
+    return f"{normalized}\x00{intent_hash}" if normalized is not None else intent_hash
 
 
 def _promotion_key(tenant: str | None, artifact_id: str) -> str:
-    return f"{tenant}\x00{artifact_id}" if tenant else artifact_id
+    normalized = _normalize_tenant(tenant)
+    return f"{normalized}\x00{artifact_id}" if normalized is not None else artifact_id
 
 
 def _lineage_to_wire(event: LineageEventRecord) -> dict[str, Any]:
@@ -256,27 +266,38 @@ class FileStoragePort:
 
     async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
         f = filter or LineageFilter()
-        result = self._lineage
-        if f.type is not None:
-            allowed = set(f.type)
-            result = [e for e in result if e.type in allowed]
-        if f.tenant is not None:
-            result = [e for e in result if e.tenant == f.tenant]
-        if f.intentHash is not None:
-            result = [e for e in result if e.payload.get("intentHash") == f.intentHash]
-        if f.artifactId is not None:
-            result = [e for e in result if e.payload.get("artifactId") == f.artifactId]
-        if f.specHash is not None:
-            result = [e for e in result if e.payload.get("specHash") == f.specHash]
-        if f.correlationId is not None:
-            result = [e for e in result if e.payload.get("correlationId") == f.correlationId]
-        if f.since is not None:
-            result = [e for e in result if e.ts >= f.since]
-        # Apply until "before" the tail slice (otherwise the latest limit items would be entirely excluded and the window would be nearly empty).
-        if f.until is not None:
-            result = [e for e in result if e.ts <= f.until]
-        limit = f.limit if f.limit is not None else 200
-        return result[-limit:] if limit > 0 else []
+        limit = f.limit if f.limit is not None else DEFAULT_LINEAGE_LIMIT
+        if limit <= 0:
+            return []
+        allowed_types = set(f.type) if f.type is not None else None
+        tenant = _normalize_tenant(f.tenant)
+        # Every condition is a per-event predicate (including since / until, which therefore always apply
+        # "before" the tail window: the latest `limit` matches, never the latest `limit` events filtered
+        # afterwards). So scan from the tail and stop as soon as `limit` matches are found, instead of
+        # filtering the whole log first; the result keeps append order (oldest first).
+        matched: list[LineageEventRecord] = []
+        for e in reversed(self._lineage):
+            if allowed_types is not None and e.type not in allowed_types:
+                continue
+            if tenant is not None and _normalize_tenant(e.tenant) != tenant:
+                continue
+            if f.intentHash is not None and e.payload.get("intentHash") != f.intentHash:
+                continue
+            if f.artifactId is not None and e.payload.get("artifactId") != f.artifactId:
+                continue
+            if f.specHash is not None and e.payload.get("specHash") != f.specHash:
+                continue
+            if f.correlationId is not None and e.payload.get("correlationId") != f.correlationId:
+                continue
+            if f.since is not None and e.ts < f.since:
+                continue
+            if f.until is not None and e.ts > f.until:
+                continue
+            matched.append(e)
+            if len(matched) >= limit:
+                break
+        matched.reverse()
+        return matched
 
     async def page_lineage(self, req: LineagePageRequest) -> LineagePage:
         """StoragePort's optional forward-paging extension (design.md #53) -- a genuinely optional method,
@@ -326,7 +347,12 @@ class FileStoragePort:
 
     async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]:
         values = list(self._promotions.values())
-        return values if tenant is None else [s for s in values if s.tenant == tenant]
+        wanted = _normalize_tenant(tenant)
+        return (
+            values
+            if wanted is None
+            else [s for s in values if _normalize_tenant(s.tenant) == wanted]
+        )
 
     async def get_fixation(
         self, intent_hash: str, tenant: str | None = None
@@ -346,7 +372,12 @@ class FileStoragePort:
 
     async def list_fixations(self, tenant: str | None = None) -> list[FixationRecord]:
         values = list(self._fixations.values())
-        return values if tenant is None else [f for f in values if f.tenant == tenant]
+        wanted = _normalize_tenant(tenant)
+        return (
+            values
+            if wanted is None
+            else [f for f in values if _normalize_tenant(f.tenant) == wanted]
+        )
 
     async def delete_fixation(self, intent_hash: str, tenant: str | None = None) -> None:
         key = _fixation_key(tenant, intent_hash)
