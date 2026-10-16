@@ -43,6 +43,7 @@ from .errors import (
 )
 from .intent import IntentInput, compute_intent_hash, finalize_intent, normalize_intent
 from .lineage_page import (
+    DEFAULT_LINEAGE_LIMIT,
     DEFAULT_LINEAGE_PAGE_SIZE,
     MAX_LINEAGE_PAGE_SIZE,
     LineageCursorError,
@@ -192,6 +193,7 @@ __all__ = [
     "ALWAYS_DENIED_ATTRS",
     "APPROVAL_ISSUE_ERROR_CODE",
     "DEFAULT_APPROVAL_TTL_SECONDS",
+    "DEFAULT_LINEAGE_LIMIT",
     "DEFAULT_LINEAGE_PAGE_SIZE",
     "DEFAULT_MAX_DOM_DEPTH",
     "DEFAULT_MAX_DOM_NODES",
