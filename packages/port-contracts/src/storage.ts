@@ -20,13 +20,38 @@ export interface StorageContractOptions {
    */
   clock?: "fake" | "real";
   /**
-   * When true, `pageLineage` (StoragePort's optional forward-paging extension, design.md #53) MUST be
-   * implemented -- the suite fails if it is missing, instead of silently skipping the paging tests the
-   * way an adapter that omits any other optional extension (`deleteFixation`, `putPromotionStates`) does.
-   * Default false (paging tests run only when `port.pageLineage` happens to exist, and are a no-op
-   * otherwise).
+   * Opts into the `pageLineage` cases (StoragePort's optional forward-paging extension, design.md #53).
+   * Explicit rather than feature-detected (`port.pageLineage != null`): a guard like that turns every case
+   * into a zero-assertion pass for a port that omits the method, which is indistinguishable from a real
+   * pass in the report. When true, the port MUST implement the method (a port missing it fails the cases
+   * instead of being skipped); when false or omitted, the cases are registered as skipped so the report
+   * shows they did not run. The same pattern as `AuthzContractOptions.revocation`.
    */
   requirePaging?: boolean;
+  /**
+   * Opts into the `putPromotionStates` case (the optional batch write). Same explicit opt-in as
+   * `requirePaging`: true makes the method mandatory, omitted shows the case as skipped.
+   */
+  requirePutPromotionStates?: boolean;
+  /**
+   * Opts into the `deleteFixation` case (the optional delete). Same explicit opt-in as `requirePaging`:
+   * true makes the method mandatory, omitted shows the case as skipped.
+   */
+  requireDeleteFixation?: boolean;
+}
+
+/** The failure for a case whose optional StoragePort method the suite required but the port lacks. */
+function missingExtension(method: string): Error {
+  return new Error(
+    `StoragePort.${method} is required by this suite's options but the port does not implement it`,
+  );
+}
+
+/** `port.pageLineage`, bound to `port`, or a failure when the port does not implement it. */
+function requirePageLineage(port: StoragePort): NonNullable<StoragePort["pageLineage"]> {
+  const pageLineage = port.pageLineage;
+  if (pageLineage == null) throw missingExtension("pageLineage");
+  return pageLineage.bind(port);
 }
 
 function spec(id: string): UISpec {
@@ -90,6 +115,11 @@ export function describeStoragePortContract(
   options: StorageContractOptions = {},
 ): void {
   const clock = options.clock ?? "fake";
+  // Each optional extension's cases are registered but skipped unless the caller opted in, so a skipped
+  // case is visible in the report instead of passing without a single assertion.
+  const pagingIt = it.skipIf(options.requirePaging !== true);
+  const putPromotionStatesIt = it.skipIf(options.requirePutPromotionStates !== true);
+  const deleteFixationIt = it.skipIf(options.requireDeleteFixation !== true);
 
   describe(`StoragePort contract: ${name}`, () => {
     let fixture: ContractFixture<StoragePort>;
@@ -207,18 +237,16 @@ export function describeStoragePortContract(
         expect(listed.map((e) => e.id)).toEqual([withLong.id]);
         expect(listed[0]?.payload["correlationId"]).toBe(long);
         expect((await port.listLineage({ correlationId: other })).map((e) => e.id)).toEqual([withOther.id]);
-        if (port.pageLineage != null) {
-          const page = await port.pageLineage({ correlationId: long });
+        if (options.requirePaging === true) {
+          const page = await requirePageLineage(port)({ correlationId: long });
           expect(page.events.map((e) => e.id)).toEqual([withLong.id]);
         }
       });
     });
 
     describe("pageLineage (optional forward-paging extension, design.md #53)", () => {
-      it("is implemented when this suite requires it", () => {
-        if (options.requirePaging === true) {
-          expect(port.pageLineage).toBeTypeOf("function");
-        }
+      pagingIt("is implemented by the port under test", () => {
+        expect(port.pageLineage).toBeTypeOf("function");
       });
 
       const p1 = event(
@@ -253,66 +281,72 @@ export function describeStoragePortContract(
         await port.appendLineage(p4);
       });
 
-      it("returns pages in ascending append order with no gaps or duplicates", async () => {
-        if (port.pageLineage == null) return; // optional extension not implemented
-        const page1 = await port.pageLineage({ pageSize: 2 });
+      pagingIt("returns pages in ascending append order with no gaps or duplicates", async () => {
+        const pageLineage = requirePageLineage(port);
+        const page1 = await pageLineage({ pageSize: 2 });
         expect(page1.events.map((e) => e.id)).toEqual([p1.id, p2.id]);
         expect(page1.nextCursor).toBeDefined();
-        const page2 = await port.pageLineage({ pageSize: 2, cursor: page1.nextCursor });
+        const page2 = await pageLineage({ pageSize: 2, cursor: page1.nextCursor });
         expect(page2.events.map((e) => e.id)).toEqual([p3.id, p4.id]);
         expect(page2.nextCursor).toBeUndefined();
       });
 
-      it("an event appended between two page reads is visible on a later page without disturbing earlier ones", async () => {
-        if (port.pageLineage == null) return; // optional extension not implemented
-        const page1 = await port.pageLineage({ pageSize: 3 });
-        expect(page1.events.map((e) => e.id)).toEqual([p1.id, p2.id, p3.id]);
-        expect(page1.nextCursor).toBeDefined();
-        const p5 = event("view.composed", { intentHash: "h5" }, "2026-01-05T00:00:00.000Z");
-        await port.appendLineage(p5);
-        const page2 = await port.pageLineage({ pageSize: 3, cursor: page1.nextCursor });
-        expect(page2.events.map((e) => e.id)).toEqual([p4.id, p5.id]);
-        expect(page2.nextCursor).toBeUndefined();
-      });
+      pagingIt(
+        "an event appended between two page reads is visible on a later page without disturbing earlier ones",
+        async () => {
+          const pageLineage = requirePageLineage(port);
+          const page1 = await pageLineage({ pageSize: 3 });
+          expect(page1.events.map((e) => e.id)).toEqual([p1.id, p2.id, p3.id]);
+          expect(page1.nextCursor).toBeDefined();
+          const p5 = event("view.composed", { intentHash: "h5" }, "2026-01-05T00:00:00.000Z");
+          await port.appendLineage(p5);
+          const page2 = await pageLineage({ pageSize: 3, cursor: page1.nextCursor });
+          expect(page2.events.map((e) => e.id)).toEqual([p4.id, p5.id]);
+          expect(page2.nextCursor).toBeUndefined();
+        },
+      );
 
-      it("combines with a filter predicate (correlationId)", async () => {
-        if (port.pageLineage == null) return; // optional extension not implemented
-        const page = await port.pageLineage({ correlationId: "c1" });
+      pagingIt("combines with a filter predicate (correlationId)", async () => {
+        const pageLineage = requirePageLineage(port);
+        const page = await pageLineage({ correlationId: "c1" });
         expect(page.events.map((e) => e.id)).toEqual([p1.id, p3.id]);
         expect(page.nextCursor).toBeUndefined();
       });
 
-      it("combines with the tenant filter", async () => {
-        if (port.pageLineage == null) return; // optional extension not implemented
-        const page = await port.pageLineage({ tenant: "t1" });
+      pagingIt("combines with the tenant filter", async () => {
+        const pageLineage = requirePageLineage(port);
+        const page = await pageLineage({ tenant: "t1" });
         expect(page.events.map((e) => e.id)).toEqual([p1.id, p3.id, p4.id]);
       });
 
-      it("truncates an oversized pageSize to the 1000 cap instead of rejecting it", async () => {
-        if (port.pageLineage == null) return; // optional extension not implemented
-        const page = await port.pageLineage({ pageSize: 1_000_000 });
+      pagingIt("truncates an oversized pageSize to the 1000 cap instead of rejecting it", async () => {
+        const pageLineage = requirePageLineage(port);
+        const page = await pageLineage({ pageSize: 1_000_000 });
         expect(page.events).toHaveLength(4);
         expect(page.nextCursor).toBeUndefined();
       });
 
-      it("floors a fractional pageSize to an integer", async () => {
-        if (port.pageLineage == null) return; // optional extension not implemented
-        const page = await port.pageLineage({ pageSize: 2.5 });
+      pagingIt("floors a fractional pageSize to an integer", async () => {
+        const pageLineage = requirePageLineage(port);
+        const page = await pageLineage({ pageSize: 2.5 });
         expect(page.events).toHaveLength(2);
         expect(page.nextCursor).toBeDefined();
       });
 
-      it("throws for a malformed cursor instead of restarting or skipping silently", async () => {
-        if (port.pageLineage == null) return; // optional extension not implemented
-        await expect(port.pageLineage({ cursor: "not-a-real-cursor" })).rejects.toThrow();
+      pagingIt("throws for a malformed cursor instead of restarting or skipping silently", async () => {
+        const pageLineage = requirePageLineage(port);
+        await expect(pageLineage({ cursor: "not-a-real-cursor" })).rejects.toThrow();
       });
 
-      it("rejects a well-formed cursor whose seq is fractional, negative or beyond the safe-integer range", async () => {
-        if (port.pageLineage == null) return; // optional extension not implemented
-        for (const seq of [0.5, -1, 2 ** 53, 1e300]) {
-          await expect(port.pageLineage({ cursor: encodeSeqCursor(seq) })).rejects.toThrow();
-        }
-      });
+      pagingIt(
+        "rejects a well-formed cursor whose seq is fractional, negative or beyond the safe-integer range",
+        async () => {
+          const pageLineage = requirePageLineage(port);
+          for (const seq of [0.5, -1, 2 ** 53, 1e300]) {
+            await expect(pageLineage({ cursor: encodeSeqCursor(seq) })).rejects.toThrow();
+          }
+        },
+      );
     });
 
     describe("promotion states", () => {
@@ -333,8 +367,8 @@ export function describeStoragePortContract(
         expect((await port.listPromotionStates()).map((s) => s.artifactId).sort()).toEqual(["x", "y"]);
       });
 
-      it("putPromotionStates (optional) is equivalent to putting each state", async () => {
-        if (port.putPromotionStates == null) return; // optional extension not implemented
+      putPromotionStatesIt("putPromotionStates (optional) is equivalent to putting each state", async () => {
+        if (port.putPromotionStates == null) throw missingExtension("putPromotionStates");
         await port.putPromotionStates([promotion("x", "a"), promotion("y", "a")]);
         expect((await port.listPromotionStates("a")).map((s) => s.artifactId).sort()).toEqual(["x", "y"]);
       });
@@ -368,8 +402,8 @@ export function describeStoragePortContract(
         expect((await port.getFixation("h", "a"))?.revision).toBe("2");
       });
 
-      it("deleteFixation (optional) removes only that (tenant, intentHash)", async () => {
-        if (port.deleteFixation == null) return; // optional extension not implemented
+      deleteFixationIt("deleteFixation (optional) removes only that (tenant, intentHash)", async () => {
+        if (port.deleteFixation == null) throw missingExtension("deleteFixation");
         await port.putFixation(fixation("h", "a"));
         await port.putFixation(fixation("h", "b"));
         await port.deleteFixation("h", "a");
