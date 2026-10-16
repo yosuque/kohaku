@@ -223,6 +223,11 @@ class Fixations:
             # L2 is the promotion pipeline's domain, L0 is already fixated — only L1 is subject to fixation
             if tier != "L1":
                 continue
+            # A fallback Spec must never be fixated (SPEC §8; fixate() rejects it with FixationNotAllowedError).
+            # The composer records a fallback with `tier: from` ("L1") plus a `fallback` payload, so without this
+            # skip an Intent that always falls back would be proposed at 100% stability and then 422 on approve.
+            if event.payload.get("fallback") is not None:
+                continue
             intent_hash = str(event.payload.get("intentHash") or "")
             if intent_hash == "" or intent_hash in fixated:
                 continue

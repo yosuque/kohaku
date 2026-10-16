@@ -60,8 +60,9 @@ function composed(args: {
   sessionId?: string;
   structureHash?: string;
   canonical?: string;
+  fallback?: { reason: string; from: string };
 }): LineageEventRecord {
-  const { intentHash, tier = "L1", sessionId, structureHash, canonical = "sales.trend" } = args;
+  const { intentHash, tier = "L1", sessionId, structureHash, canonical = "sales.trend", fallback } = args;
   return {
     id: `c-${intentHash}-${sessionId ?? ""}-${structureHash ?? ""}-${++composedSeq}`,
     ts: new Date().toISOString(),
@@ -73,6 +74,7 @@ function composed(args: {
       canonical,
       ...(sessionId != null ? { sessionId } : {}),
       ...(structureHash != null ? { structureHash } : {}),
+      ...(fallback != null ? { fallback } : {}),
     },
   };
 }
@@ -148,6 +150,33 @@ describe("Fixations.proposals の閾値ロジック(直接ユニットテスト)
     }
 
     expect(await fixations.proposals()).toEqual([]);
+  });
+
+  it("fallback Spec(payload.fallback あり)は tier=L1 でも集計対象から除外する(SPEC §8)", async () => {
+    const storage = memoryStorage();
+    const fixations = createFixations({ lineage: createLineage({ storage }), storage, policy });
+    // hF always falls back: the composer records it with tier "L1" plus a fallback payload. It would be
+    // proposed at 100% stability if the fallback were not skipped, then 422 on approve.
+    for (const sessionId of ["s1", "s2", "s3"]) {
+      await storage.appendLineage(
+        composed({
+          intentHash: "hF",
+          sessionId,
+          structureHash: "stF",
+          fallback: { reason: "generation-failed", from: "L1" },
+        }),
+      );
+    }
+    expect(await fixations.proposals()).toEqual([]);
+
+    // A fallback event does not poison an Intent that also composes normally: only the real L1 uses count.
+    await storage.appendLineage(composed({ intentHash: "hF", sessionId: "s1", structureHash: "st1" }));
+    await storage.appendLineage(composed({ intentHash: "hF", sessionId: "s2", structureHash: "st1" }));
+    expect(await fixations.proposals()).toEqual([]);
+    await storage.appendLineage(composed({ intentHash: "hF", sessionId: "s3", structureHash: "st1" }));
+    const proposals = await fixations.proposals();
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0]).toMatchObject({ intentHash: "hF", uses: 3, stability: 1 });
   });
 
   it("既に固定化済みの intentHash は閾値を満たしても候補から除外する", async () => {
