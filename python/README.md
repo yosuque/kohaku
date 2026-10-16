@@ -10,13 +10,24 @@ repository's [`spec/`](../spec/SPEC.md) (SPEC.md + JSON Schema), and it is
 wire-compatible with the TS implementation — because canonical JSON is byte-identical,
 intent.hash / specHash / cache keys / catalogFingerprint match across languages.
 
-**conformance**: passes **MUST 19/19 = CONFORMANT** under the black-box inspection of
-the TS-side CLI (`node cli/bin/kohaku.js conformance --rest`) (including the SHOULD
-streaming check; CI's `conformance-python` job inspects it on every commit). The 19 are
-the black-box-verifiable MUSTs of the 37 in the conformance manifest; the remaining 18
-reference MUSTs (MCPAPP-* / SBX-* / ACT-PRM-001 / ACT-APR-001, and six documentary norms
-guaranteed by the TS renderer/composer package tests) are covered by package tests (pytest
-on this side).
+**conformance**: the TS-side CLI (`node cli/bin/kohaku.js conformance --rest`) reports
+`MUST: 19/19 passed → CONFORMANT` against this implementation, and CI's `conformance-python`
+job runs it on every commit. The 19 are
+the black-box-verifiable MUSTs of the 37 in the conformance manifest, and they are not all
+checks of the Python host:
+
+- 9 `SPEC-*` MUSTs run against the CLI's own example Spec with the TS `spec-core`. They
+  are a self-check of the Spec format and never touch the Python host.
+- 9 `REST-*` MUSTs, plus 7 SHOULDs including the streaming checks, send requests to the
+  Python host. These are the checks that exercise it.
+- `LIN-PRM-001` reads `GET /lineage`. It passes as skipped while no `component.published`
+  event exists, so it checks something only after a promotion has been published.
+
+Of the 37, the remaining 18
+reference MUSTs (MCPAPP-* / SBX-* / ACT-PRM-001 / ACT-APR-001, and six documentary
+norms) have no black-box check. The sandbox (SBX-*) and renderer-side norms have no Python
+implementation at all. The TS package tests pin them, and pytest on this side covers the
+ones that have a Python counterpart.
 
 ## Setup & verification
 
