@@ -362,10 +362,6 @@ npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファ�
 npm run dev                                      # API :8787 + web :5173
 ```
 
-> **バージョンに関する注記**: 以下は `@kohaku-ui/cli` と `@kohaku-ui/host` の 0.4.1 以降の挙動です。公開版 0.4.0 では、golden fixture の自動生成も、1 行の開発モード通知も、`usage export` もありません。
-
-<!-- remove after 0.4.1 -->
-
 `init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。
 
 `init` は生成し立ての capability secret を書いた `.env` も作成するので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。`npm run dev` は開発モードで動き(未配線の `auth` / `authorizeGovernance` に関する本番向け警告 2 件の代わりに、起動時の警告が 1 行出ます)、生成された README の「Before production」節に、本番前に配線するものが挙がっています(§7「開発モードと本番向け警告」参照)。**Summary** ビューは LLM 未設定でも描画されます。Chat と L1 ビューには `.env` にプロバイダを設定してください。

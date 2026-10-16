@@ -362,10 +362,6 @@ npx @kohaku-ui/cli init --from ../sales.csv     # or a .json array / a .sqlite f
 npm run dev                                      # API :8787 + web :5173
 ```
 
-> **Version note**: what follows describes `@kohaku-ui/cli` and `@kohaku-ui/host` 0.4.1 and later. The published 0.4.0 does not generate the golden fixture automatically, prints no single-line development notice, and has no `usage export`.
-
-<!-- remove after 0.4.1 -->
-
 `init` reads the file, infers which columns are categories (→ vocabularies), measures (→ metrics) and time (→ granularity), and generates a project that only depends on the published `@kohaku-ui/*` packages: a DomainPort over the data (sum / avg / count × group by × time window; `describeShape` exposes column metadata only — rows never enter the model), an Intent catalog (`defineVocabulary` / `defineIntent`), an L0 fixed Spec for `<source>.summary`, a Dashboard + Chat web app and a golden regression test — all wired together with `@kohaku-ui/host`'s `createKohakuHost()` (design doc #52), which supplies the SemanticPort (`@kohaku-ui/semantic-llm`), storage (`@kohaku-ui/storage-memory`) and capability tokens (`@kohaku-ui/authz-hmac`) as defaults.
 
 `init` also writes a `.env` with a freshly generated capability secret, so add only a provider key to it — never copy `.env.example` over it. `npm run dev` runs in development mode (one startup warning line instead of the two production warnings about the unwired `auth` / `authorizeGovernance`); the generated README's "Before production" section lists what to wire first (see §7 "Development mode and the production warnings"). The **Summary** view renders with no LLM configured; set a provider in `.env` for Chat and the L1 views.
