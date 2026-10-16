@@ -120,7 +120,7 @@ pnpm vitest run --project renderer-react
 pnpm vitest run --project renderer-wc
 node cli/bin/kohaku.js component validate <definition.json>   # validates a ComponentDefinition JSON file
 
-cd python && uv run ruff check && uv run mypy && uv run lint-imports && uv run pytest
+cd python && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest
 ```
 
 ## Note: blast radius

@@ -26,10 +26,11 @@ uv sync            # 依存インストール(uv workspace)
 uv run pytest      # 全テスト(クロス言語 golden 含む。実 LLM 不要で全部通る)
 uv run mypy        # 型検査(strict)
 uv run ruff check  # lint
+uv run ruff format --check  # フォーマット検査(直すには `uv run ruff format`)
 uv run lint-imports # レイヤ依存方向(逆流禁止)の契約検査(import-linter)
 ```
 
-CI(`.github/workflows/ci.yml` の `python` ジョブ)も `ruff check` / `mypy` / `lint-imports` / `pytest` の順で、
+CI(`.github/workflows/ci.yml` の `python` ジョブ)も `ruff check` / `ruff format --check` / `mypy` / `lint-imports` / `pytest` の順で、
 Python 3.12 と 3.13 の両方で全部を実行する。
 
 この uv workspace で作業するのではなく公開パッケージをインストールする場合: `pip install kohaku-ui`(core)、

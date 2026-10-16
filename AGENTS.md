@@ -38,7 +38,7 @@ KOHAKU_LLM_PROVIDER=ollama KOHAKU_LLM_MODEL=gemma4:e4b pnpm --filter @kohaku-ui-
 **Python implementation (python/)**: a wire-compatible full port of the TS implementation (conformance CONFORMANT). Details: [python/README.md](python/README.md).
 
 ```bash
-cd python && uv sync && uv run pytest && uv run mypy && uv run ruff check && uv run lint-imports  # full Python verification (lint-imports is the layer-direction contract check)
+cd python && uv sync && uv run pytest && uv run mypy && uv run ruff check && uv run ruff format --check && uv run lint-imports  # full Python verification (lint-imports is the layer-direction contract check)
 cd python && uv run python -m sales_api            # Python sample REST host (:8790; the default is a deterministic pseudo-LLM. Requires cd python)
 cd python && uv run python -m sales_api.mcp_http   # Python MCP over Streamable HTTP (:8791; stdio is sales_api.mcp_main)
 pnpm --filter @kohaku-ui/spec run generate-cross-language-fixtures  # regenerate cross-language canonical-JSON goldens (CI checks for drift)

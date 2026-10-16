@@ -28,11 +28,12 @@ uv sync            # install dependencies (uv workspace)
 uv run pytest      # all tests (incl. cross-language golden; all pass without a real LLM)
 uv run mypy        # type check (strict)
 uv run ruff check  # lint
+uv run ruff format --check  # formatting (run `uv run ruff format` to fix)
 uv run lint-imports # contract check of layer dependency direction (no back-flow) (import-linter)
 ```
 
 CI (the `python` job in `.github/workflows/ci.yml`) also runs everything in the order
-`ruff check` / `mypy` / `lint-imports` / `pytest`, on Python 3.12 and 3.13.
+`ruff check` / `ruff format --check` / `mypy` / `lint-imports` / `pytest`, on Python 3.12 and 3.13.
 
 Installing the published package (rather than working in this uv workspace): `pip install kohaku-ui`
 (core), or `pip install "kohaku-ui[all]"` for every optional feature set (rest, mcp, llm, claude,
