@@ -44,6 +44,9 @@ import { createSemanticPort } from "./ports/semantic-port.js";
  */
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 
+/** The data-plane routes (`/binding/resolve`, `/binding/action`) the identity middleware must not run on (see its mount). */
+const BINDING_PATH_PREFIX = "/api/kohaku/binding/";
+
 /**
  * Nomination threshold for fixation candidates (an L1 view must have been rendered this many times before it
  * is offered for L0 fixation). Exported so GET /analytics/summary's `promotionPolicy` (bundled below) is the
@@ -308,7 +311,18 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
   // When identity requires JWT verification, authenticate the request before it reaches the routes (401
   // CAPABILITY_DENIED on a missing/invalid token — see createJwtRequestIdentity's doc comment). Absent for the
   // default header-based identity (behavior unchanged).
-  if (identity.middleware != null) app.use("/api/kohaku/*", identity.middleware);
+  //
+  // The data plane (`/binding/resolve`, `/binding/action`) is deliberately excluded: there the data-binding
+  // client sends the HMAC *capability* (two base64url segments, not a JWS) in the same `Authorization: Bearer`
+  // header, so a JWT verification would always fail with 401 and kill the data plane in JWT mode. host-rest
+  // verifies the capability on those routes itself (fail-closed), so the identity middleware stays on every
+  // other route. The JWT resolver is intentionally not made tolerant of non-JWS tokens instead.
+  const identityMiddleware = identity.middleware;
+  if (identityMiddleware != null) {
+    app.use("/api/kohaku/*", (c, next) =>
+      c.req.path.startsWith(BINDING_PATH_PREFIX) ? next() : identityMiddleware(c, next),
+    );
+  }
   // Bundle the nomination thresholds into GET /analytics/summary's response: sample-web's i18n copy
   // ("N or more times") reads the number from here instead of duplicating FIXATION_MIN_USES / PROMOTION_MIN_USES
   // as string literals. host-rest's route itself carries no notion of these product-specific policies, so this
@@ -333,7 +347,8 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
   // deny-by-default, and it fails closed (denied) if authorizeGovernance is somehow unwired, unlike host-rest's
   // own fail-open default: unlike the read/write routes host-rest already protects, this is a pure "spend the
   // product's LLM budget" lever, so treating "no policy wired" as "allowed" would be the wrong default here.
-  if (deps.demoAdminRoutes ?? deps.identity == null) {
+  const demoAdminRoutes = deps.demoAdminRoutes ?? deps.identity == null;
+  if (demoAdminRoutes) {
     app.post("/api/kohaku/admin/bump-data-version", async (c) => {
       const principal: Principal | null = await identity.auth(c);
       if (principal == null) {
@@ -375,13 +390,6 @@ export async function createApp(deps: AppDeps): Promise<SampleApp> {
       promoted: registry.allPromotedComponentTypes(),
     });
   });
-
-  // The demo cache-bust route now lives at POST /api/kohaku/admin/bump-data-version (identity + governance
-  // RBAC below), registered above ahead of the host-rest mount — see AppDeps.demoAdminRoutes.
-
-  // Promotion approve/reject/withdraw have been elevated to first-class host-rest named routes
-  // (POST /api/kohaku/promotions/:id/approve|reject|withdraw).
-  // reviewer/actor are injected from the server-side principal (host-rest's getPrincipal).
 
   // intentCatalog exposes base (tenant-neutral + the default tenant's promotions) (used by sample-mcp at startup to
   // bulk-generate MCP tools via intentToolsFromCatalog(list()). For a single-tenant MCP, base is sufficient).
