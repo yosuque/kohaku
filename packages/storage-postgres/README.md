@@ -41,6 +41,8 @@ This package implements the whole of `StoragePort`: the Spec cache (`getSpecCach
 
 **Known limitation**: expired Spec-cache rows are treated as a miss on read (the `WHERE expires_at IS NULL OR expires_at > now()` clause), but they are not deleted automatically — `sweepExpiredSpecCache()` performs that deletion and is meant to be invoked from a cron / scheduled job, not on every read.
 
+**Known limitation**: a Spec-cache row stored without `ttlSeconds` has `expires_at IS NULL`, so `sweepExpiredSpecCache()` never removes it. Because the cache key includes the data version, every data update leaves the previous version's rows behind. Set `ComposePolicy.ttlSeconds` so rows expire, or sweep by last use yourself.
+
 ## Production
 
 `createPostgresStoragePort` / `createPostgresRevocationStore` share a connection lifecycle (`connection.ts`'s `createPostgresPool`, itself a public export usable on its own if you want one shared pool wired into both without going through either factory):
