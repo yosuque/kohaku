@@ -19,7 +19,7 @@
     "meta:sync": "tsx scripts/sync-package-meta.ts",
     "test": "vitest run --project \"!playground-drift\"",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --project \"!playground-drift\"",
     "seed": "pnpm --filter @kohaku-ui-sample/api run seed",
     "smoke:pack": "node scripts/pack-smoke.mjs",
     "release:notes": "node scripts/release-notes.mjs",
