@@ -58,9 +58,7 @@ def _deps(tmp_path: Path, llm: FakeLlm) -> KohakuHostDeps:
     storage = FileStoragePort(tmp_path)
     catalog = resolve_catalog(core_catalog())
     ctx = ComposeContext(catalog=catalog, semantic=FakeSemantic(), storage=storage, llm=llm)
-    return KohakuHostDeps(
-        compose=ctx, domain=FakeDomain(), authz=FakeAuthz(), query_source="sales"
-    )
+    return KohakuHostDeps(compose=ctx, domain=FakeDomain(), authz=FakeAuthz(), query_source="sales")
 
 
 def _deps_with_recorder(tmp_path: Path, llm: FakeLlm) -> tuple[KohakuHostDeps, Lineage]:
@@ -155,6 +153,7 @@ def test_compose_route_aborts_generation_on_disconnect(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Disconnecting via /compose aborts LLM generation and returns a fallback Spec (end-to-end)."""
+
     # Treat every request as disconnected (the monitor task fires at the first await inside compose).
     async def _always_disconnected(_self: Request) -> bool:
         return True
@@ -235,7 +234,9 @@ def _failing_cache_deps(tmp_path: Path, on_error: Any) -> KohakuHostDeps:
     compose_stream failure, unlike a semantic.resolve_query failure (which the composer wraps into a typed
     ComposeError before it ever reaches host_rest)."""
     harness = build_harness(tmp_path, on_error=on_error)
-    harness.deps.compose = dataclasses.replace(harness.ctx, policy=ComposePolicy(cacheFailure="closed"))
+    harness.deps.compose = dataclasses.replace(
+        harness.ctx, policy=ComposePolicy(cacheFailure="closed")
+    )
 
     async def _boom(*_args: Any, **_kwargs: Any) -> None:
         raise RuntimeError("secret storage backend detail")

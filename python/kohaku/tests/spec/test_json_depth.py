@@ -47,7 +47,9 @@ def test_component_props_value_beyond_the_depth_limit_is_rejected(depth: int) ->
     """One level past the limit -- and the pathological depths that would otherwise reach pydantic-core's
     own recursion -- is a ValidationError, never accepted and never an uncaught RecursionError."""
     with pytest.raises(ValidationError, match="nested too deeply"):
-        ComponentNode.model_validate({"id": "root", "type": "x", "props": {"a": nested_object(depth)}})
+        ComponentNode.model_validate(
+            {"id": "root", "type": "x", "props": {"a": nested_object(depth)}}
+        )
 
 
 def test_component_props_depth_cap_applies_to_every_value_and_to_arrays() -> None:

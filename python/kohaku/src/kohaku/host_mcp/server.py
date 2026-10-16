@@ -157,6 +157,7 @@ def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 
         return all(_json_depth_ok(v, limit, depth + 1) for v in value)
     return True
 
+
 # The client-visible message for an untyped tool failure (an exception _safe_tool catches that no explicit
 # _tool_error(...) call inside the tool body already produced). Port of TS host-mcp-apps'
 # TOOL_INTERNAL_ERROR_MESSAGE (server.ts).
@@ -182,7 +183,9 @@ def _mcp_session(locale: str | None, principal: Principal | None = None) -> Sess
     return SessionContext(surface="mcp-app", locale=locale, principal=principal)
 
 
-async def _mcp_rate_limit_key(deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]) -> str:
+async def _mcp_rate_limit_key(
+    deps: McpHostDeps, principal: Principal, ctx: ServerRequestContext[Any]
+) -> str:
     """The bucket-key "principal" component for a rate-limit check (this profile has no tenant -- see
     `McpHostDeps.rate_limiter`'s doc comment, and `PolicyRateLimiterTakeParams.tenant` is always left
     `None` here). Every unauthenticated call resolves to the same constant fallback principal
@@ -220,7 +223,11 @@ def _warn_unkeyed_rate_limiter(deps: McpHostDeps) -> None:
     global _warned_unkeyed_rate_limiter
     if _warned_unkeyed_rate_limiter:
         return
-    if deps.rate_limiter is None or deps.resolve_principal is not None or deps.rate_limit_key is not None:
+    if (
+        deps.rate_limiter is None
+        or deps.resolve_principal is not None
+        or deps.rate_limit_key is not None
+    ):
         return
     _warned_unkeyed_rate_limiter = True
     warnings.warn(
@@ -321,7 +328,9 @@ class _SharedOperationIndex:
         self.validated = False
 
 
-_operation_indexes_by_domain: weakref.WeakKeyDictionary[Any, _SharedOperationIndex] = weakref.WeakKeyDictionary()
+_operation_indexes_by_domain: weakref.WeakKeyDictionary[Any, _SharedOperationIndex] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _shared_operation_index(deps: McpHostDeps) -> Any:
@@ -454,9 +463,7 @@ async def _principal_of(
 # ---------------------------------------------------------------------------
 
 
-def attach_kohaku_to_mcp_server(
-    server: Server, deps: McpHostDeps, options: AttachOptions
-) -> None:
+def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: AttachOptions) -> None:
     """Wire kohaku's MCP Apps profile into a low-level mcp Server.
 
     Registers the tools (compose / resolve_binding / event / action / render_snapshot / intent-tools) and the
@@ -629,7 +636,9 @@ def attach_kohaku_to_mcp_server(
         if deps.rate_limiter is None:
             return None
         key = await _mcp_rate_limit_key(deps, principal, ctx)
-        result = await deps.rate_limiter.take(PolicyRateLimiterTakeParams(principal=key, routeClass=route_class))
+        result = await deps.rate_limiter.take(
+            PolicyRateLimiterTakeParams(principal=key, routeClass=route_class)
+        )
         if result.allow:
             return None
         _host_core_notify_hook_nowait(
@@ -714,7 +723,9 @@ def attach_kohaku_to_mcp_server(
         # `preresolved_refs` is the full pre-budget map of every ref already resolved here — handed to
         # _snapshot_html_for below so the legacyUiResource co-emission (which needs the identical ref
         # set) does not re-invoke domain.invoke for refs already resolved here.
-        initial_data, preresolved_refs = await _preresolve_initial_data(result.spec, deps, principal)
+        initial_data, preresolved_refs = await _preresolve_initial_data(
+            result.spec, deps, principal
+        )
         # The capability token is co-embedded in _meta for the same reason as INITIAL_DATA_META_KEY (see
         # CAPABILITY_META_KEY's doc comment): structured_content enters the model's context, so a bearer write
         # token must never ride there.
@@ -728,9 +739,7 @@ def attach_kohaku_to_mcp_server(
             **({REQUEST_ID_META_KEY: correlation_id} if correlation_id is not None else {}),
         }
         # content[0] is always the text fallback (MCPAPP-FBK-001). The legacy UIResource is placed after.
-        content: list[Any] = [
-            mcp_types.TextContent(type="text", text=spec_to_text(result.spec))
-        ]
+        content: list[Any] = [mcp_types.TextContent(type="text", text=spec_to_text(result.spec))]
         if options.legacy_ui_resource:
             # Static-snapshot co-emission for mcp-ui legacy hosts. An assembly failure (unbuilt renderer, data
             # resolution failure) is swallowed, reported to the observation hook, and falls back to a normal response
@@ -761,7 +770,10 @@ def attach_kohaku_to_mcp_server(
 
     # --- Tool definitions (name -> Tool + handler) --------------------------
     registered: list[
-        tuple[mcp_types.Tool, Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]]]
+        tuple[
+            mcp_types.Tool,
+            Callable[[ServerRequestContext[Any], JsonObject], Awaitable[mcp_types.CallToolResult]],
+        ]
     ] = []
 
     # model-visible: natural language -> UI
@@ -887,7 +899,11 @@ def attach_kohaku_to_mcp_server(
                     _meta=tool_ui_meta(resource_uri=RENDERER_RESOURCE_URI, visibility=["model"]),
                 ),
                 _make_intent_handler(
-                    tool, _safe_tool, _compose_and_package, _current_principal, _check_mcp_rate_limit
+                    tool,
+                    _safe_tool,
+                    _compose_and_package,
+                    _current_principal,
+                    _check_mcp_rate_limit,
                 ),
             )
         )
@@ -912,24 +928,18 @@ def attach_kohaku_to_mcp_server(
                 return _tool_error(f'unknown query source "{parsed.source}"')
             base, params = parsed.ref.base, parsed.ref.params
             capability = _arg_str(args, "capability")
-            verdict = await deps.authz.verify(
-                capability, VerifyRequest(kind="read", ref=base.raw)
-            )
+            verdict = await deps.authz.verify(capability, VerifyRequest(kind="read", ref=base.raw))
             if not verdict.ok:
                 return _tool_error(f"capability denied: {verdict.reason or ''}")
             data = await deps.domain.invoke(
                 base.path,
                 params,
-                InvocationContext(
-                    principal=verdict.principal or principal, capability=capability
-                ),
+                InvocationContext(principal=verdict.principal or principal, capability=capability),
             )
             rows = len(data.rows) if isinstance(data, TabularData) else 0
             return mcp_types.CallToolResult(
                 content=[
-                    mcp_types.TextContent(
-                        type="text", text=f"resolved {rows} rows from {base.raw}"
-                    )
+                    mcp_types.TextContent(type="text", text=f"resolved {rows} rows from {base.raw}")
                 ],
                 structured_content={"data": _to_wire_data(data)},
             )
@@ -972,7 +982,9 @@ def attach_kohaku_to_mcp_server(
             # payload already is) — the Python mcp SDK's tool schemas are JSON Schema hints only (no runtime
             # validator wired in), so the depth cap is enforced here instead.
             if not _json_depth_ok(intent_params) or not _json_depth_ok(payload):
-                return _tool_error(f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})")
+                return _tool_error(
+                    f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})"
+                )
             locale = _locale_of(args)
             session = _mcp_session(locale, principal)
             # Resolved through host-core's resolve_intent (the "intent" source), not a bare finalize_intent, so
@@ -982,7 +994,9 @@ def attach_kohaku_to_mcp_server(
             current_resolved = await _host_core_resolve_intent(
                 deps.compose.semantic,
                 IntentSourceIntent(
-                    intent=IntentInput(canonical=_arg_str(intent_arg, "canonical"), params=intent_params)
+                    intent=IntentInput(
+                        canonical=_arg_str(intent_arg, "canonical"), params=intent_params
+                    )
                 ),
                 session,
             )
@@ -1077,7 +1091,9 @@ def attach_kohaku_to_mcp_server(
             # input-schema layer, before the handler ever runs) — the Python mcp SDK's tool schemas are JSON
             # Schema hints only (no runtime validator wired in), so the depth cap is enforced here instead.
             if not _json_depth_ok(payload):
-                return _tool_error(f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})")
+                return _tool_error(
+                    f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})"
+                )
             payload_bytes = len(canonical_stringify(payload).encode("utf-8"))
             if payload_bytes > MAX_ACTION_PAYLOAD_BYTES:
                 return _tool_error(
@@ -1143,9 +1159,7 @@ def attach_kohaku_to_mcp_server(
             result = await deps.domain.invoke(
                 action,
                 payload,
-                InvocationContext(
-                    principal=resolved_principal, capability=capability
-                ),
+                InvocationContext(principal=resolved_principal, capability=capability),
             )
             # Side-effect declaration (optional): put the refs the write invalidates and the per-ref new versions
             # into the response (same shape as REST). The write is already committed; a side-effect-declaration
@@ -1163,9 +1177,7 @@ def attach_kohaku_to_mcp_server(
                 wide_catch=False,
             )
             return mcp_types.CallToolResult(
-                content=[
-                    mcp_types.TextContent(type="text", text=f"Executed action {action}")
-                ],
+                content=[mcp_types.TextContent(type="text", text=f"Executed action {action}")],
                 structured_content=structured,
             )
 
@@ -1215,7 +1227,9 @@ def attach_kohaku_to_mcp_server(
         # same enhancement was skipped there). tools_list is registration order (deterministic; see the
         # "MCP 2026-07-28 minor #3" test).
         return mcp_types.ListToolsResult(
-            tools=tools_list, ttl_ms=_CACHEABLE_RESULT_TTL_MS, cache_scope=_CACHEABLE_RESULT_CACHE_SCOPE
+            tools=tools_list,
+            ttl_ms=_CACHEABLE_RESULT_TTL_MS,
+            cache_scope=_CACHEABLE_RESULT_CACHE_SCOPE,
         )
 
     # NOTE on tool-call cancellation (parity gap with the TS profile's `extra.signal`, tracked deliberately
@@ -1278,7 +1292,10 @@ def attach_kohaku_to_mcp_server(
         return mcp_types.ReadResourceResult(
             contents=[
                 mcp_types.TextResourceContents(
-                    uri=RENDERER_RESOURCE_URI, mime_type=RESOURCE_MIME_TYPE, text=html, _meta=resource_ui_meta()
+                    uri=RENDERER_RESOURCE_URI,
+                    mime_type=RESOURCE_MIME_TYPE,
+                    text=html,
+                    _meta=resource_ui_meta(),
                 )
             ],
             ttl_ms=_CACHEABLE_RESULT_TTL_MS,
@@ -1288,7 +1305,9 @@ def attach_kohaku_to_mcp_server(
     server.add_request_handler("tools/list", mcp_types.PaginatedRequestParams, _list_tools)
     server.add_request_handler("tools/call", mcp_types.CallToolRequestParams, _call_tool)
     server.add_request_handler("resources/list", mcp_types.PaginatedRequestParams, _list_resources)
-    server.add_request_handler("resources/read", mcp_types.ReadResourceRequestParams, _read_resource)
+    server.add_request_handler(
+        "resources/read", mcp_types.ReadResourceRequestParams, _read_resource
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1320,7 +1339,9 @@ def _fixation_host(deps: McpHostDeps) -> FixationDeliveryHost:
         kind: Any,
     ) -> None:
         endpoint = (
-            "fixation.refreshFingerprint" if kind == "refresh_fingerprint" else "fixation.invalidate"
+            "fixation.refreshFingerprint"
+            if kind == "refresh_fingerprint"
+            else "fixation.invalidate"
         )
 
         async def _locked() -> None:
@@ -1415,7 +1436,12 @@ async def _report_mcp_error(
     keeps reporting None, unchanged from before either parameter existed."""
     await _host_core_notify_hook(
         deps.on_error,
-        McpErrorInfo(endpoint=endpoint, error=error, correlation_id=correlation_id, trace_context=trace_context),
+        McpErrorInfo(
+            endpoint=endpoint,
+            error=error,
+            correlation_id=correlation_id,
+            trace_context=trace_context,
+        ),
     )
 
 
@@ -1638,7 +1664,10 @@ def _make_intent_handler(
             if rate_limited is not None:
                 return rate_limited
             return await compose_and_package(
-                _IntentSource(intent=tool.to_intent(params)), locale, principal, _correlation_id_of(ctx)
+                _IntentSource(intent=tool.to_intent(params)),
+                locale,
+                principal,
+                _correlation_id_of(ctx),
             )
 
         return await safe_tool(tool.name, ctx, _run)

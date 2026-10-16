@@ -192,7 +192,10 @@ class TestBuildStarletteApp:
             assert allowed.headers.get("access-control-allow-origin") == "https://claude.ai"
             local = client.options(
                 "/mcp",
-                headers={"Origin": "http://localhost:5173", "Access-Control-Request-Method": "POST"},
+                headers={
+                    "Origin": "http://localhost:5173",
+                    "Access-Control-Request-Method": "POST",
+                },
             )
             assert local.headers.get("access-control-allow-origin") == "http://localhost:5173"
             denied = client.options(
@@ -208,10 +211,17 @@ class TestBuildStarletteApp:
         app = build_starlette_app(setup, allowed_hosts=["tunnel.example"], host="127.0.0.1")
         with TestClient(app, base_url="http://localhost") as client:
             # A bad Host is rejected on the snapshot route too (streamable_http_app only guards /mcp).
-            assert client.get("/snapshots/x.html", headers={"Host": "evil.example"}).status_code == 421
-            assert client.get("/snapshots/x.html", headers={"Host": "tunnel.example"}).status_code == 404
             assert (
-                client.get("/snapshots/x.html", headers={"Origin": "https://evil.example"}).status_code
+                client.get("/snapshots/x.html", headers={"Host": "evil.example"}).status_code == 421
+            )
+            assert (
+                client.get("/snapshots/x.html", headers={"Host": "tunnel.example"}).status_code
+                == 404
+            )
+            assert (
+                client.get(
+                    "/snapshots/x.html", headers={"Origin": "https://evil.example"}
+                ).status_code
                 == 403
             )
             body = {
@@ -227,7 +237,9 @@ class TestBuildStarletteApp:
             accept = {"Accept": "application/json, text/event-stream"}
             bad_host = client.post("/mcp", json=body, headers={**accept, "Host": "evil.example"})
             assert bad_host.status_code == 421
-            bad_origin = client.post("/mcp", json=body, headers={**accept, "Origin": "https://evil.example"})
+            bad_origin = client.post(
+                "/mcp", json=body, headers={**accept, "Origin": "https://evil.example"}
+            )
             assert bad_origin.status_code == 403
             ok = client.post("/mcp", json=body, headers=accept)
             assert ok.status_code == 200

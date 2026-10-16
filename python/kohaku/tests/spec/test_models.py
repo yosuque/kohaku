@@ -44,9 +44,7 @@ def test_defaults_are_filled(example_spec_data: dict[str, Any]) -> None:
 
 def test_unknown_keys_are_stripped() -> None:
     """Equivalent to zod strip: unknown keys on a non-strict model are silently dropped."""
-    node = ComponentNode.model_validate(
-        {"id": "root", "type": "x", "unknownKey": 1, "props": {}}
-    )
+    node = ComponentNode.model_validate({"id": "root", "type": "x", "unknownKey": 1, "props": {}})
     assert "unknownKey" not in node.to_wire()
 
 

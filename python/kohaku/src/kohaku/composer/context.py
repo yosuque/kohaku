@@ -199,9 +199,7 @@ def _fp_output_language(
     return policy.outputLanguage
 
 
-def _fp_design_system(
-    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
-) -> object:
+def _fp_design_system(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
     design_system = policy.designSystem
     if design_system is None:
         return None
@@ -246,7 +244,9 @@ def _fp_select_components_id(
     return select_id if select_id is not None else "anonymous"
 
 
-def _fp_ref_constraint(policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None) -> object:
+def _fp_ref_constraint(
+    policy: ComposePolicy, tier_llm: TierLlmFingerprintMaterial | None
+) -> object:
     return "validate" if policy.refConstraint == "validate" else None
 
 
@@ -390,7 +390,9 @@ def policy_fingerprint(
     e.g. DesignSystemGuide.enforceTokenColors defaults to True in Python vs. unset (None) in TS. Only the
     empty-string-iff-nothing-set invariant is a cross-language contract.
     """
-    material: dict[str, object] = {key: extract(policy, tier_llm) for key, extract in _FINGERPRINTED}
+    material: dict[str, object] = {
+        key: extract(policy, tier_llm) for key, extract in _FINGERPRINTED
+    }
     # `tierGate` (_fp_tier_gate) is the first top-level row whose own default is UNDEFINED (an absent
     # key) rather than None -- every other row's default is None (see the docstring above for why that
     # pre-existing convention is safe to keep for them but not for a newly added row). `v is UNDEFINED`

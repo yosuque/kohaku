@@ -84,9 +84,7 @@ class _Semantic:
             return IntentInput(canonical=self._canonical, params=base)
         return IntentInput(canonical=self._canonical, params={})
 
-    async def resolve_query(
-        self, intent: Intent, *, tenant: str | None = None
-    ) -> QueryHandle:
+    async def resolve_query(self, intent: Intent, *, tenant: str | None = None) -> QueryHandle:
         return QueryHandle(uri=self._ref)
 
     async def data_version(self, handle: QueryHandle) -> str:
@@ -115,7 +113,11 @@ def trend_spec_builder(intent_arg: Intent, handles: list[QueryHandle]) -> UISpec
             "dataVersion": "x",
             "components": [
                 {"id": "root", "type": "layout.stack", "props": {}, "children": ["t", "c"]},
-                {"id": "t", "type": "text.heading", "props": {"level": 2, "text": "Monthly sales trend"}},
+                {
+                    "id": "t",
+                    "type": "text.heading",
+                    "props": {"level": 2, "text": "Monthly sales trend"},
+                },
                 {
                     "id": "c",
                     "type": "presentChart",

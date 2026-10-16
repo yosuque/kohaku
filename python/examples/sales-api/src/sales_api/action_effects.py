@@ -42,7 +42,11 @@ def _data_version_of(result: object) -> str | None:
     """Extracts dataVersion from result (TabularData / dict / any object with a dataVersion attribute)."""
     if isinstance(result, TabularData):
         return result.dataVersion
-    value = result.get("dataVersion") if isinstance(result, dict) else getattr(result, "dataVersion", None)
+    value = (
+        result.get("dataVersion")
+        if isinstance(result, dict)
+        else getattr(result, "dataVersion", None)
+    )
     return value if isinstance(value, str) else None
 
 

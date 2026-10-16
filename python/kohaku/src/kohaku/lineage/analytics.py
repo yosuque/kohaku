@@ -272,7 +272,10 @@ def summarize_lineage(
     # Stable sort by ts (ties keep input order), like TS: "latest proposal wins" below needs time order.
     ordered = sorted(scoped, key=lambda e: e.ts)
     for e in ordered:
-        review_key = (e.tenant if e.tenant is not None else "", str(e.payload.get("artifactId") or ""))
+        review_key = (
+            e.tenant if e.tenant is not None else "",
+            str(e.payload.get("artifactId") or ""),
+        )
         if e.type == "view.composed":
             composed += 1
             tier = str(e.payload.get("tier") or "")
@@ -367,9 +370,9 @@ def summarize_lineage(
         reverse=True,
     )[:top_n]
 
-    l2_by_intent = sorted(
-        l2_rows.values(), key=lambda r: (r.generated, r.fallbacks), reverse=True
-    )[:top_n]
+    l2_by_intent = sorted(l2_rows.values(), key=lambda r: (r.generated, r.fallbacks), reverse=True)[
+        :top_n
+    ]
 
     edit_groups: dict[str, tuple[int, dict[str, int]]] = {}
     for edit_key, artifact_id, edit_fields in schema_edits:

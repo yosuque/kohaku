@@ -218,12 +218,8 @@ def build_harness(
         authz=authz,
         query_source="sales",
         recorder=create_view_recorder(lineage) if with_recorder else None,
-        promotions=create_promotions(lineage=lineage, storage=storage)
-        if with_promotions
-        else None,
-        fixations=create_fixations(
-            lineage=lineage, storage=storage, catalog_for=lambda _t: catalog
-        )
+        promotions=create_promotions(lineage=lineage, storage=storage) if with_promotions else None,
+        fixations=create_fixations(lineage=lineage, storage=storage, catalog_for=lambda _t: catalog)
         if with_fixations
         else None,
         analytics_summarizer=summarize_lineage if with_analytics else None,

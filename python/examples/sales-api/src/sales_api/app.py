@@ -335,9 +335,7 @@ async def create_app(
     registry = PromotedRegistry(build_catalog, core_intent_names)
 
     # NL normalization / resolve_query look up the tenant's Intent catalog (vocabulary separation of promoted Intents).
-    semantic = create_semantic_port(
-        repo=repo, catalog_for=registry.intent_catalog_for, llm=llm
-    )
+    semantic = create_semantic_port(repo=repo, catalog_for=registry.intent_catalog_for, llm=llm)
 
     # --- Lineage / promotion / fixation ---
     lineage = create_lineage(storage)
@@ -498,9 +496,7 @@ async def create_app(
         demotion of L1/L2 and hard failures (Spec not delivered). It is a fire-and-forget contract, so it does not
         affect the result of compose.
         """
-        intent_label = (
-            f"(intent={err_ctx.intent.canonical})" if err_ctx.intent is not None else ""
-        )
+        intent_label = f"(intent={err_ctx.intent.canonical})" if err_ctx.intent is not None else ""
         if err_ctx.phase == "fallback":
             _logger.warning(
                 "[compose] %s generation failed and was demoted to the deterministic fallback%s: %s",
@@ -536,7 +532,9 @@ async def create_app(
         if sidecar.is_available():
             l2_script_syntax = sidecar.lint
             l2_smoke = sidecar.smoke
-            _logger.info("[compose] Enabled the L2 verification JS sidecar (cli=%s)", sidecar.cli_path)
+            _logger.info(
+                "[compose] Enabled the L2 verification JS sidecar (cli=%s)", sidecar.cli_path
+            )
         else:
             _logger.info(
                 "[compose] The L2 verification JS sidecar is disabled (Node not co-located / CLI absent). "

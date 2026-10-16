@@ -73,11 +73,13 @@ class TestRecordsPaging:
     def test_sort_dir_column_sort(self) -> None:
         repo = SalesRepo()
         desc = [
-            r["revenue"] for r in records(repo, {"_limit": "8", "_sort": "revenue", "_dir": "desc"}).rows
+            r["revenue"]
+            for r in records(repo, {"_limit": "8", "_sort": "revenue", "_dir": "desc"}).rows
         ]
         assert _sorted_desc(desc) == desc  # type: ignore[arg-type]
         asc = [
-            r["revenue"] for r in records(repo, {"_limit": "8", "_sort": "revenue", "_dir": "asc"}).rows
+            r["revenue"]
+            for r in records(repo, {"_limit": "8", "_sort": "revenue", "_dir": "asc"}).rows
         ]
         assert sorted(asc) == asc  # type: ignore[type-var]
 
@@ -140,7 +142,12 @@ class TestRecordsPaging:
         default_page1 = records(repo, {"_limit": "10"})
         crossed = records(
             repo,
-            {"_limit": "10", "_sort": "revenue", "_dir": "asc", "_cursor": default_page1.nextCursor},
+            {
+                "_limit": "10",
+                "_sort": "revenue",
+                "_dir": "asc",
+                "_cursor": default_page1.nextCursor,
+            },
         )
         asc_page1 = records(repo, {"_limit": "10", "_sort": "revenue", "_dir": "asc"})
         assert crossed.rows == asc_page1.rows

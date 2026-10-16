@@ -124,9 +124,7 @@ def test_correlation_id_is_forwarded_when_given_u2() -> None:
     )
 
     async def run() -> None:
-        await record_view_fallback(
-            recorder, _spec(fallback), surface="web", correlation_id="req-1"
-        )
+        await record_view_fallback(recorder, _spec(fallback), surface="web", correlation_id="req-1")
         assert recorder.calls[0]["correlation_id"] == "req-1"
 
     asyncio.run(run())

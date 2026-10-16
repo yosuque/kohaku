@@ -91,7 +91,10 @@ def _ok_text(text: str) -> GeminiResponse:
 
 def _api_error(*, is_retryable: bool, status_code: int) -> ApiCallError:
     return ApiCallError(
-        f"api {status_code}", is_retryable=is_retryable, status_code=status_code, response_headers={}
+        f"api {status_code}",
+        is_retryable=is_retryable,
+        status_code=status_code,
+        response_headers={},
     )
 
 
@@ -176,7 +179,11 @@ def test_aborted_propagates_without_retry_or_fallback() -> None:
 def test_strict_mode_does_not_fall_back() -> None:
     async def run() -> None:
         cfg = resolve_llm_env(
-            {"KOHAKU_LLM_PROVIDER": "gemini", "KOHAKU_LLM_API_KEY": "k", "KOHAKU_LLM_STRUCTURED_MODE": "strict"}
+            {
+                "KOHAKU_LLM_PROVIDER": "gemini",
+                "KOHAKU_LLM_API_KEY": "k",
+                "KOHAKU_LLM_STRUCTURED_MODE": "strict",
+            }
         )
         transport = FakeGeminiTransport()
         transport.object_repeat = _api_error(is_retryable=False, status_code=400)

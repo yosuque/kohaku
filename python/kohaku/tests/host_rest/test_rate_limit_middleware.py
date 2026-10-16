@@ -84,12 +84,16 @@ def test_denies_binding_resolve_with_route_class_resolve(tmp_path: Path) -> None
 
 def test_denies_intent_normalize_under_the_compose_route_class(tmp_path: Path) -> None:
     harness, limiter = _harness_with(tmp_path, RateLimitResult(allow=False, retryAfterMs=1000))
-    res = harness.client.post(_url("/intent/normalize"), json={"input": {"kind": "nl", "text": "revenue by month"}})
+    res = harness.client.post(
+        _url("/intent/normalize"), json={"input": {"kind": "nl", "text": "revenue by month"}}
+    )
     assert res.status_code == 429
     assert limiter.calls[0].routeClass == "compose"
 
 
-def test_carries_the_request_id_in_the_429_envelope_and_notifies_on_rate_limited(tmp_path: Path) -> None:
+def test_carries_the_request_id_in_the_429_envelope_and_notifies_on_rate_limited(
+    tmp_path: Path,
+) -> None:
     seen: list[RateLimitedInfo] = []
 
     def tenant(_request: Request) -> str:
@@ -109,7 +113,9 @@ def test_carries_the_request_id_in_the_429_envelope_and_notifies_on_rate_limited
     assert res.headers["X-Request-Id"] == "req-rl-1"
     assert res.json()["error"]["requestId"] == "req-rl-1"
     assert seen == [
-        RateLimitedInfo(routeClass="compose", requestId="req-rl-1", tenant="tenant-a", principal="alice")
+        RateLimitedInfo(
+            routeClass="compose", requestId="req-rl-1", tenant="tenant-a", principal="alice"
+        )
     ]
 
 
@@ -122,7 +128,10 @@ def test_on_rate_limited_is_not_called_for_an_allowed_request_and_a_raising_obse
         rate_limiter=_StubRateLimiter(RateLimitResult(allow=True)),
         on_rate_limited=seen.append,
     )
-    assert allowed.client.post(_url("/compose"), json={"intent": allowed.intent_body}).status_code == 200
+    assert (
+        allowed.client.post(_url("/compose"), json={"intent": allowed.intent_body}).status_code
+        == 200
+    )
     assert seen == []
 
     def boom(_info: RateLimitedInfo) -> None:
@@ -133,10 +142,14 @@ def test_on_rate_limited_is_not_called_for_an_allowed_request_and_a_raising_obse
         rate_limiter=_StubRateLimiter(RateLimitResult(allow=False)),
         on_rate_limited=boom,
     )
-    assert denied.client.post(_url("/compose"), json={"intent": denied.intent_body}).status_code == 429
+    assert (
+        denied.client.post(_url("/compose"), json={"intent": denied.intent_body}).status_code == 429
+    )
 
 
-def test_does_not_apply_to_governance_routes_even_when_the_limiter_always_denies(tmp_path: Path) -> None:
+def test_does_not_apply_to_governance_routes_even_when_the_limiter_always_denies(
+    tmp_path: Path,
+) -> None:
     harness, _limiter = _harness_with(tmp_path, RateLimitResult(allow=False, retryAfterMs=1000))
     res = harness.client.get(_url("/lineage"))
     assert res.status_code != 429

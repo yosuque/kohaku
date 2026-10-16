@@ -45,7 +45,9 @@ def _bilingual(en: dict[str, str], ja: dict[str, str]) -> dict[str, VocabularyEn
 # and drilldown reverse-lookup all draw from it). Mirrors TS sample-api's vocab.ts.
 region: Vocabulary = define_vocabulary(
     "region",
-    _bilingual(REGION_LABELS, {"japan": "日本", "north_america": "北米", "europe": "欧州", "apac": "APAC"}),
+    _bilingual(
+        REGION_LABELS, {"japan": "日本", "north_america": "北米", "europe": "欧州", "apac": "APAC"}
+    ),
 )
 channel: Vocabulary = define_vocabulary(
     "channel",
@@ -92,7 +94,9 @@ quarter = number(integer=True, minimum=1, maximum=4)
 # defining it here and importing it back into domain.py would be a circular import. It is kept equal to
 # FISCAL_YEAR_MAX (2026) by convention. The quarter defaults have no such constraint (domain.py never needs them),
 # so they are single-sourced here as usual.
-assert DEMO_FISCAL_YEAR == FISCAL_YEAR_MAX, "DEMO_FISCAL_YEAR (domain.py) must track FISCAL_YEAR_MAX"
+assert DEMO_FISCAL_YEAR == FISCAL_YEAR_MAX, (
+    "DEMO_FISCAL_YEAR (domain.py) must track FISCAL_YEAR_MAX"
+)
 # sales.quarterly_summary and sales.target_attainment intentionally default to different quarters. Both quarters
 # have complete records and targets in the seed for every fiscal year (no data-completeness reason for the
 # split); the difference is a demo choice — each intent's default quarter matches the quarter used in its own
@@ -203,9 +207,18 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
                 "Q2のチャネル別実績",
             ],
             facets=[
-                FacetSpec(param="fiscalYear", label="Fiscal year", labels=_JA_FISCAL_YEAR, options=_FY_OPTIONS),
-                FacetSpec(param="quarter", label="Quarter", labels=_JA_QUARTER, options=_QUARTER_OPTIONS),
-                FacetSpec(param="groupBy", label="Group by", labels={"ja": "集計軸"}, options=group_by),
+                FacetSpec(
+                    param="fiscalYear",
+                    label="Fiscal year",
+                    labels=_JA_FISCAL_YEAR,
+                    options=_FY_OPTIONS,
+                ),
+                FacetSpec(
+                    param="quarter", label="Quarter", labels=_JA_QUARTER, options=_QUARTER_OPTIONS
+                ),
+                FacetSpec(
+                    param="groupBy", label="Group by", labels={"ja": "集計軸"}, options=group_by
+                ),
                 FacetSpec(
                     param="region",
                     label="Region",
@@ -272,7 +285,12 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
                     emptyLabels=_JA_ALL_REGIONS,
                 ),
                 FacetSpec(param="metric", label="Metric", labels={"ja": "指標"}, options=metric),
-                FacetSpec(param="granularity", label="Granularity", labels={"ja": "粒度"}, options=granularity),
+                FacetSpec(
+                    param="granularity",
+                    label="Granularity",
+                    labels={"ja": "粒度"},
+                    options=granularity,
+                ),
             ],
             queries=[
                 QueryTemplate(
@@ -314,7 +332,12 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
             ],
             # metric is not surfaced as a facet (NL only). topN is a curated subset of the numeric range.
             facets=[
-                FacetSpec(param="fiscalYear", label="Fiscal year", labels=_JA_FISCAL_YEAR, options=_FY_OPTIONS),
+                FacetSpec(
+                    param="fiscalYear",
+                    label="Fiscal year",
+                    labels=_JA_FISCAL_YEAR,
+                    options=_FY_OPTIONS,
+                ),
                 FacetSpec(
                     param="quarter",
                     label="Quarter",
@@ -369,7 +392,12 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
                 "業績のハイライトを見せて",
             ],
             facets=[
-                FacetSpec(param="fiscalYear", label="Fiscal year", labels=_JA_FISCAL_YEAR, options=_FY_OPTIONS),
+                FacetSpec(
+                    param="fiscalYear",
+                    label="Fiscal year",
+                    labels=_JA_FISCAL_YEAR,
+                    options=_FY_OPTIONS,
+                ),
                 FacetSpec(
                     param="quarter",
                     label="Quarter",
@@ -466,7 +494,10 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
             viewLabel="Target Attainment",
             viewLabels={"ja": "目標達成"},
             params=object_schema(
-                {"fiscalYear": fiscal_year.default(DEMO_FISCAL_YEAR), "quarter": quarter.default(DEMO_QUARTER_ATTAINMENT)}
+                {
+                    "fiscalYear": fiscal_year.default(DEMO_FISCAL_YEAR),
+                    "quarter": quarter.default(DEMO_QUARTER_ATTAINMENT),
+                }
             ),
             examples=[
                 "What's the Q2 target attainment?",
@@ -476,9 +507,14 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
             ],
             facets=[
                 FacetSpec(
-                    param="fiscalYear", label="Fiscal year", labels=_JA_FISCAL_YEAR, options=_FY_OPTIONS
+                    param="fiscalYear",
+                    label="Fiscal year",
+                    labels=_JA_FISCAL_YEAR,
+                    options=_FY_OPTIONS,
                 ),
-                FacetSpec(param="quarter", label="Quarter", labels=_JA_QUARTER, options=_QUARTER_OPTIONS),
+                FacetSpec(
+                    param="quarter", label="Quarter", labels=_JA_QUARTER, options=_QUARTER_OPTIONS
+                ),
             ],
             queries=[
                 QueryTemplate(path="targets", paramMap={"fiscalYear": "fy", "quarter": "q"}),
@@ -575,7 +611,8 @@ class IntentCatalog:
         def_ = self._defs.get(name)
         if def_ is None:
             return ParamsValidation(
-                ok=False, issues=[IntentValidationIssue(path="", message=f'unknown intent "{name}"')]
+                ok=False,
+                issues=[IntentValidationIssue(path="", message=f'unknown intent "{name}"')],
             )
         shape = def_.params.shape
         issues = [
@@ -589,7 +626,9 @@ class IntentCatalog:
             return ParamsValidation(ok=True, params=result.data)
         for issue in result.issues:
             issues.append(
-                IntentValidationIssue(path=issue.path, message=f'param "{issue.path}": {issue.message}')
+                IntentValidationIssue(
+                    path=issue.path, message=f'param "{issue.path}": {issue.message}'
+                )
             )
         return ParamsValidation(ok=False, issues=issues)
 

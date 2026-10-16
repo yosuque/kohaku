@@ -88,7 +88,9 @@ def test_normal_case_invalidates_and_ref_versions_from_action_effects_pass_throu
     asyncio.run(run())
 
 
-def test_fail_open_when_action_effects_raises_on_effects_error_is_called_and_response_still_succeeds() -> None:
+def test_fail_open_when_action_effects_raises_on_effects_error_is_called_and_response_still_succeeds() -> (
+    None
+):
     boom = RuntimeError("effects boom")
 
     async def action_effects(action: str, payload: JsonObject, result: object) -> _FakeEffects:

@@ -14,7 +14,9 @@ from kohaku.storage import FileStoragePort
 PRINCIPAL = Principal(id="u1", roles=["user"])
 
 
-def test_action_invoked_records_the_full_payload_and_omits_correlation_id_when_unset(tmp_path: Path) -> None:
+def test_action_invoked_records_the_full_payload_and_omits_correlation_id_when_unset(
+    tmp_path: Path,
+) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         lineage = create_lineage(storage=storage)
@@ -61,7 +63,12 @@ def test_action_denied_records_the_reason(tmp_path: Path) -> None:
         lineage = create_lineage(storage=storage)
 
         await lineage.action_denied(
-            {"action": "delete", "payloadHash": "sha256:bbb", "tier": "approve", "reason": "approval already used"}
+            {
+                "action": "delete",
+                "payloadHash": "sha256:bbb",
+                "tier": "approve",
+                "reason": "approval already used",
+            }
         )
 
         events = await storage.list_lineage()
@@ -77,13 +84,20 @@ def test_action_denied_records_the_reason(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_action_approval_requested_omits_payload_by_default_and_includes_it_when_given(tmp_path: Path) -> None:
+def test_action_approval_requested_omits_payload_by_default_and_includes_it_when_given(
+    tmp_path: Path,
+) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         lineage = create_lineage(storage=storage)
 
         await lineage.action_approval_requested(
-            {"action": "delete", "payloadHash": "sha256:ccc", "tier": "approve", "requestId": "req-1"}
+            {
+                "action": "delete",
+                "payloadHash": "sha256:ccc",
+                "tier": "approve",
+                "requestId": "req-1",
+            }
         )
         events = await storage.list_lineage()
         assert events[0].payload == {
@@ -156,7 +170,11 @@ def test_recorder_invoked_stamps_actor_as_user_with_principal_id(tmp_path: Path)
         recorder = create_action_audit_recorder(lineage)
 
         await recorder.invoked(
-            action="annotate", payload_hash="sha256:x", tier="auto", principal=PRINCIPAL, tenant="tenant-a"
+            action="annotate",
+            payload_hash="sha256:x",
+            tier="auto",
+            principal=PRINCIPAL,
+            tenant="tenant-a",
         )
 
         events = await storage.list_lineage()
@@ -207,10 +225,14 @@ def test_recorder_approval_requested_omits_the_payload_by_default(tmp_path: Path
     asyncio.run(run())
 
 
-def test_recorder_approval_requested_includes_the_payload_when_record_payload_true(tmp_path: Path) -> None:
+def test_recorder_approval_requested_includes_the_payload_when_record_payload_true(
+    tmp_path: Path,
+) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
-        recorder = create_action_audit_recorder(create_lineage(storage=storage), record_payload=True)
+        recorder = create_action_audit_recorder(
+            create_lineage(storage=storage), record_payload=True
+        )
 
         await recorder.approval_requested(
             action="annotate",

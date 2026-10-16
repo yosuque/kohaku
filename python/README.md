@@ -282,9 +282,15 @@ pip install 'kohaku-ui[evidence]'
 
 ```python
 from kohaku.lineage import (
-    EvidenceManifestSigner, EvidencePackScope, build_evidence_pack, create_storage_evidence_source,
-    derive_ed25519_key_id, export_ed25519_public_key_raw, generate_ed25519_keypair,
-    sign_manifest, verify_evidence_pack,
+    EvidenceManifestSigner,
+    EvidencePackScope,
+    build_evidence_pack,
+    create_storage_evidence_source,
+    derive_ed25519_key_id,
+    export_ed25519_public_key_raw,
+    generate_ed25519_keypair,
+    sign_manifest,
+    verify_evidence_pack,
 )
 
 keypair = generate_ed25519_keypair()  # or import_ed25519_private_key_pkcs8(...)

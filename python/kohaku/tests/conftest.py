@@ -16,9 +16,7 @@ SPEC_DIR = REPO_ROOT / "spec"
 
 @pytest.fixture(scope="session")
 def example_spec_data() -> dict[str, Any]:
-    data = json.loads(
-        (SPEC_DIR / "examples/quarterly-sales.spec.json").read_text(encoding="utf-8")
-    )
+    data = json.loads((SPEC_DIR / "examples/quarterly-sales.spec.json").read_text(encoding="utf-8"))
     assert isinstance(data, dict)
     return data
 

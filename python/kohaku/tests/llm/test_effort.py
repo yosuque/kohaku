@@ -54,7 +54,9 @@ class _ChatTransport:
     def __init__(self) -> None:
         self.calls: list[ChatRequest] = []
 
-    async def __call__(self, req: ChatRequest, *, timeout_ms: float, signal: AbortSignal) -> ChatResponse:
+    async def __call__(
+        self, req: ChatRequest, *, timeout_ms: float, signal: AbortSignal
+    ) -> ChatResponse:
         self.calls.append(req)
         text = '{"ok": true}' if req.response_format is not None else "ok"
         return ChatResponse(text=text, usage=LlmUsage(input_tokens=1, output_tokens=1))
@@ -168,7 +170,9 @@ def test_openai_compat_structured_output_also_carries_effort() -> None:
         config = resolve_llm_env({"KOHAKU_LLM_PROVIDER": "openai", "KOHAKU_LLM_API_KEY": "k"})
         transport = _ChatTransport()
         llm = create_openai_compat_llm(config, transport=transport, deps=DEPS)
-        req = GenerateObjectRequest(schema=JsonSchema({"type": "object"}), prompt="p", effort="high")
+        req = GenerateObjectRequest(
+            schema=JsonSchema({"type": "object"}), prompt="p", effort="high"
+        )
         await llm.generate_object(req)
         assert transport.calls[0].reasoning_effort == "high"
 

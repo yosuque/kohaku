@@ -73,9 +73,7 @@ class _StubStorage:
     async def append_lineage(self, event: LineageEventRecord) -> None:
         return None
 
-    async def list_lineage(
-        self, filter: LineageFilter | None = None
-    ) -> list[LineageEventRecord]:
+    async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
         return []
 
     async def get_promotion_state(
@@ -151,6 +149,4 @@ class TestFixationFewShot:
         first = _examples(policy)
         second = _examples(policy)
         assert [e.canonical for e in first] == ["sales.trend", "sales.trend"]
-        assert [(e.canonical, e.params) for e in first] == [
-            (e.canonical, e.params) for e in second
-        ]
+        assert [(e.canonical, e.params) for e in first] == [(e.canonical, e.params) for e in second]

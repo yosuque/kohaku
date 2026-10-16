@@ -43,8 +43,7 @@ class TestCanonicalStringify:
     def test_array_index_keys_come_first_in_numeric_order(self) -> None:
         # ES OrdinaryOwnPropertyKeys: "2" < "10" (numeric order) comes before non-index keys
         assert (
-            canonical_stringify({"b": 1, "10": 2, "2": 3, "a": 4})
-            == '{"2":3,"10":2,"a":4,"b":1}'
+            canonical_stringify({"b": 1, "10": 2, "2": 3, "a": 4}) == '{"2":3,"10":2,"a":4,"b":1}'
         )
         # a leading zero ("01") or >= 2^32-1 is not an array index
         assert canonical_stringify({"01": 1, "1": 2}) == '{"1":2,"01":1}'

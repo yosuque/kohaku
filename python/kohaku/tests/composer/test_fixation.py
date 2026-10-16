@@ -252,7 +252,9 @@ def test_provenance_kit_is_pinned_at_fixation_time_independent_of_the_current_po
         )
         # The runtime ctx's own policy has since moved to kit v2 — materialize_fixation must not consult
         # it at all for a fixation delivery.
-        v2_kit = DesignKitVocabulary(id="kohaku", version="2", classes={}, utilities=(), namespaces=())
+        v2_kit = DesignKitVocabulary(
+            id="kohaku", version="2", classes={}, utilities=(), namespaces=()
+        )
         policy = ComposePolicy(
             generatorVersion="p2/gpt-6", designSystem=DesignSystemGuide(kit=v2_kit)
         )

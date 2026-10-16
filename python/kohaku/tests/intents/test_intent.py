@@ -57,14 +57,23 @@ def summary_intent() -> IntentDefinition:
             ),
             examples=["this quarter's sales by region"],
             facets=[
-                FacetSpec(param="fiscalYear", label="Fiscal year", options=[{"value": "2026", "label": "FY2026"}]),
+                FacetSpec(
+                    param="fiscalYear",
+                    label="Fiscal year",
+                    options=[{"value": "2026", "label": "FY2026"}],
+                ),
                 FacetSpec(param="groupBy", label="Group by", options=group_by),
                 FacetSpec(param="region", label="Region", options=region, emptyLabel="All regions"),
             ],
             queries=[
                 QueryTemplate(
                     path="summary",
-                    paramMap={"fiscalYear": "fy", "quarter": "q", "groupBy": "groupBy", "region": "region"},
+                    paramMap={
+                        "fiscalYear": "fy",
+                        "quarter": "q",
+                        "groupBy": "groupBy",
+                        "region": "region",
+                    },
                 )
             ],
             drilldown=_summary_drilldown,
@@ -99,7 +108,9 @@ class TestToIntentDef:
 class TestToQueries:
     def test_expands_param_map_and_drops_missing(self) -> None:
         def_ = summary_intent().to_intent_def()
-        uris = [q.uri for q in def_.to_queries({"fiscalYear": 2026, "quarter": 3, "groupBy": "region"})]
+        uris = [
+            q.uri for q in def_.to_queries({"fiscalYear": 2026, "quarter": 3, "groupBy": "region"})
+        ]
         # region missing → excluded. Keys are sorted.
         assert uris == ["query://sales/summary?fy=2026&groupBy=region&q=3"]
 
@@ -288,9 +299,15 @@ class TestToFacetView:
                 params=object_schema({"a": string().optional(), "b": string().optional()}),
                 examples=[],
                 facets=[
-                    FacetSpec(param="a", label="A", order=2, options=[{"value": "1", "label": "one"}]),
                     FacetSpec(
-                        param="b", label="B", order=1, control="radio", options=[{"value": "2", "label": "two"}]
+                        param="a", label="A", order=2, options=[{"value": "1", "label": "one"}]
+                    ),
+                    FacetSpec(
+                        param="b",
+                        label="B",
+                        order=1,
+                        control="radio",
+                        options=[{"value": "2", "label": "two"}],
                     ),
                 ],
                 queries=[QueryTemplate(path="p")],
@@ -308,7 +325,11 @@ class TestToFacetView:
                     source="sales",
                     params=object_schema({"a": string().optional()}),
                     examples=[],
-                    facets=[FacetSpec(param="missing", label="M", options=[{"value": "1", "label": "one"}])],
+                    facets=[
+                        FacetSpec(
+                            param="missing", label="M", options=[{"value": "1", "label": "one"}]
+                        )
+                    ],
                     queries=[QueryTemplate(path="p")],
                 )
             ).to_facet_view()
@@ -401,7 +422,9 @@ class TestFacetViewLocaleOverlays:
                     FacetSpec(
                         param="fiscalYear",
                         label="Fiscal year",
-                        options=[{"value": "2026", "label": "FY2026", "labels": {"ja": "2026年度"}}],
+                        options=[
+                            {"value": "2026", "label": "FY2026", "labels": {"ja": "2026年度"}}
+                        ],
                     ),
                 ],
                 queries=[QueryTemplate(path="p")],

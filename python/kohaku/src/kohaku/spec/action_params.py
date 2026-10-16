@@ -76,7 +76,9 @@ _ALLOWED_KEYWORDS: frozenset[str] = frozenset(
         "x-message",
     }
 )
-_ALLOWED_TYPES: frozenset[str] = frozenset({"object", "array", "string", "number", "integer", "boolean"})
+_ALLOWED_TYPES: frozenset[str] = frozenset(
+    {"object", "array", "string", "number", "integer", "boolean"}
+)
 
 # Object-key names that are always rejected as a payload property, at any nesting depth, regardless of
 # the schema's own additionalProperties setting. Python dicts have no prototype chain, so `key not in
@@ -140,7 +142,9 @@ def _scan_unsafe_keys(value: JsonValue, path: str, issues: list[ActionParamIssue
         if key in _UNSAFE_PROPERTY_KEYS:
             issues.append(
                 ActionParamIssue(
-                    path=key_path, code="unsafeKey", message=f'the property name "{key}" is not allowed'
+                    path=key_path,
+                    code="unsafeKey",
+                    message=f'the property name "{key}" is not allowed',
                 )
             )
             continue
@@ -160,7 +164,9 @@ def _is_integer(value: object) -> bool:
     return isinstance(value, float) and value.is_integer()
 
 
-def validate_action_params(schema: ActionParamsSchema, payload: JsonObject) -> list[ActionParamIssue]:
+def validate_action_params(
+    schema: ActionParamsSchema, payload: JsonObject
+) -> list[ActionParamIssue]:
     """Validate `payload` against `schema` and return every problem found (an empty list = valid).
 
     Assumes `schema` has already been checked for unknown/disallowed keywords

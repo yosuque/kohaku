@@ -68,7 +68,11 @@ def _record_to_json(record: DistillationRecord) -> dict[str, Any]:
     }
     if record.shape is not None:
         out["shape"] = [
-            {k: v for k, v in (("name", s.name), ("type", s.type), ("description", s.description)) if v is not None}
+            {
+                k: v
+                for k, v in (("name", s.name), ("type", s.type), ("description", s.description))
+                if v is not None
+            }
             for s in record.shape
         ]
     return out
@@ -117,7 +121,9 @@ def export_distillation_dataset(
     """
     keyed: list[tuple[str, DistillationRecord]] = []
 
-    selected_fixations = [r for r in fixations if r.tenant == tenant] if tenant is not None else fixations
+    selected_fixations = (
+        [r for r in fixations if r.tenant == tenant] if tenant is not None else fixations
+    )
 
     for record in selected_fixations:
         spec = record.pinnedSpec

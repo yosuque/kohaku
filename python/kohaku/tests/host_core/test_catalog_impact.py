@@ -56,8 +56,12 @@ def _fixation(pinned_spec: UISpec) -> FixationRecord:
     )
 
 
-def _promotion(artifact_id: str, status: str = "in_use", data: dict[str, Any] | None = None) -> PromotionState:
-    return PromotionState(artifactId=artifact_id, status=status, updatedAt="2026-01-01T00:00:00Z", data=data or {})
+def _promotion(
+    artifact_id: str, status: str = "in_use", data: dict[str, Any] | None = None
+) -> PromotionState:
+    return PromotionState(
+        artifactId=artifact_id, status=status, updatedAt="2026-01-01T00:00:00Z", data=data or {}
+    )
 
 
 def _replacement_def() -> ComponentDefinition:
@@ -66,7 +70,9 @@ def _replacement_def() -> ComponentDefinition:
             type=REPLACEMENT_TYPE,
             version="1.0.0",
             description="replacement",
-            propsSchema=PropsSchema({"type": "object", "properties": {"label": {"type": "string"}}}),
+            propsSchema=PropsSchema(
+                {"type": "object", "properties": {"label": {"type": "string"}}}
+            ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
         )
     )
@@ -87,7 +93,9 @@ def _deprecated_def() -> ComponentDefinition:
             type=DEPRECATED_TYPE,
             version="1.0.0",
             description="old kpi card",
-            propsSchema=PropsSchema({"type": "object", "properties": {"label": {"type": "string"}}}),
+            propsSchema=PropsSchema(
+                {"type": "object", "properties": {"label": {"type": "string"}}}
+            ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
             deprecated=_deprecated_decl(),
         )
@@ -95,7 +103,9 @@ def _deprecated_def() -> ComponentDefinition:
 
 
 def _deprecated_catalog() -> ResolvedCatalog:
-    return resolve_catalog(core_catalog(), Catalog(components=[_replacement_def(), _deprecated_def()]))
+    return resolve_catalog(
+        core_catalog(), Catalog(components=[_replacement_def(), _deprecated_def()])
+    )
 
 
 class _StubStorage:
@@ -148,8 +158,12 @@ def test_returns_every_list_empty_when_nothing_is_wrong() -> None:
     storage = _StubStorage(
         {
             "": {
-                "fixations": [_fixation(_fixed_spec([{"id": "root", "type": "layout.stack", "props": {}}]))],
-                "promotions": [_promotion("a1", status="published", data={"componentType": "layout.stack"})],
+                "fixations": [
+                    _fixation(_fixed_spec([{"id": "root", "type": "layout.stack", "props": {}}]))
+                ],
+                "promotions": [
+                    _promotion("a1", status="published", data={"componentType": "layout.stack"})
+                ],
             }
         }
     )
@@ -164,7 +178,13 @@ def test_returns_every_list_empty_when_nothing_is_wrong() -> None:
 def test_fixation_issues_for_a_pinned_spec_referencing_an_unknown_type() -> None:
     catalog = resolve_catalog(core_catalog())
     storage = _StubStorage(
-        {"": {"fixations": [_fixation(_fixed_spec([{"id": "root", "type": "no.such.type", "props": {}}]))]}}
+        {
+            "": {
+                "fixations": [
+                    _fixation(_fixed_spec([{"id": "root", "type": "no.such.type", "props": {}}]))
+                ]
+            }
+        }
     )
 
     async def run() -> CatalogImpactReport:
@@ -186,7 +206,12 @@ def test_deprecated_usage_aggregates_fixations_and_promotions_of_any_status() ->
                     _fixation(
                         _fixed_spec(
                             [
-                                {"id": "root", "type": "layout.stack", "props": {}, "children": ["k"]},
+                                {
+                                    "id": "root",
+                                    "type": "layout.stack",
+                                    "props": {},
+                                    "children": ["k"],
+                                },
                                 {
                                     "id": "k",
                                     "type": DEPRECATED_TYPE,
@@ -217,7 +242,9 @@ def test_deprecated_usage_aggregates_fixations_and_promotions_of_any_status() ->
     assert entry.type == DEPRECATED_TYPE
     assert entry.deprecated.reason == "superseded by sales.kpiCardNew"
     assert entry.deprecated.sunset == "2026-12-31"
-    assert [dataclasses.asdict(f) for f in entry.fixations] == [{"intentHash": INTENT_HASH, "tenant": None}]
+    assert [dataclasses.asdict(f) for f in entry.fixations] == [
+        {"intentHash": INTENT_HASH, "tenant": None}
+    ]
     assert [dataclasses.asdict(p) for p in entry.promotions] == [
         {"artifactId": "candidate-1", "tenant": None, "status": "candidate"}
     ]
@@ -228,7 +255,13 @@ def test_deprecated_usage_aggregates_fixations_and_promotions_of_any_status() ->
 def test_published_promotion_issues_reason_deprecated() -> None:
     catalog = _deprecated_catalog()
     storage = _StubStorage(
-        {"": {"promotions": [_promotion("pub-1", status="published", data={"componentType": DEPRECATED_TYPE})]}}
+        {
+            "": {
+                "promotions": [
+                    _promotion("pub-1", status="published", data={"componentType": DEPRECATED_TYPE})
+                ]
+            }
+        }
     )
 
     async def run() -> CatalogImpactReport:
@@ -246,7 +279,13 @@ def test_published_promotion_issues_reason_deprecated() -> None:
 def test_published_promotion_issues_reason_removed() -> None:
     catalog = resolve_catalog(core_catalog())  # "vanished.type" never existed here
     storage = _StubStorage(
-        {"": {"promotions": [_promotion("pub-2", status="published", data={"componentType": "vanished.type"})]}}
+        {
+            "": {
+                "promotions": [
+                    _promotion("pub-2", status="published", data={"componentType": "vanished.type"})
+                ]
+            }
+        }
     )
 
     async def run() -> CatalogImpactReport:
@@ -255,12 +294,17 @@ def test_published_promotion_issues_reason_removed() -> None:
     report = asyncio.run(run())
     assert report.publishedPromotionIssues == [
         dataclasses.replace(
-            report.publishedPromotionIssues[0], artifactId="pub-2", componentType="vanished.type", reason="removed"
+            report.publishedPromotionIssues[0],
+            artifactId="pub-2",
+            componentType="vanished.type",
+            reason="removed",
         )
     ]
 
 
-def test_origin_kit_mismatches_flags_a_published_candidate_generated_under_a_different_kit() -> None:
+def test_origin_kit_mismatches_flags_a_published_candidate_generated_under_a_different_kit() -> (
+    None
+):
     catalog = resolve_catalog(core_catalog())
     storage = _StubStorage(
         {
@@ -269,12 +313,18 @@ def test_origin_kit_mismatches_flags_a_published_candidate_generated_under_a_dif
                     _promotion(
                         "pub-3",
                         status="published",
-                        data={"componentType": "layout.stack", "origin": {"kit": {"id": "default", "version": "1.0.0"}}},
+                        data={
+                            "componentType": "layout.stack",
+                            "origin": {"kit": {"id": "default", "version": "1.0.0"}},
+                        },
                     ),
                     _promotion(
                         "pub-4",
                         status="published",
-                        data={"componentType": "layout.stack", "origin": {"kit": {"id": "default", "version": "2.0.0"}}},
+                        data={
+                            "componentType": "layout.stack",
+                            "origin": {"kit": {"id": "default", "version": "2.0.0"}},
+                        },
                     ),
                 ]
             }
@@ -283,7 +333,9 @@ def test_origin_kit_mismatches_flags_a_published_candidate_generated_under_a_dif
 
     async def run() -> CatalogImpactReport:
         return await analyze_catalog_impact(
-            storage=storage, catalog_for=lambda _t: catalog, current_kit={"id": "default", "version": "2.0.0"}
+            storage=storage,
+            catalog_for=lambda _t: catalog,
+            current_kit={"id": "default", "version": "2.0.0"},
         )
 
     report = asyncio.run(run())
@@ -303,7 +355,10 @@ def test_skips_origin_kit_check_entirely_when_current_kit_is_omitted() -> None:
                     _promotion(
                         "pub-5",
                         status="published",
-                        data={"componentType": "layout.stack", "origin": {"kit": {"id": "default", "version": "1.0.0"}}},
+                        data={
+                            "componentType": "layout.stack",
+                            "origin": {"kit": {"id": "default", "version": "1.0.0"}},
+                        },
                     )
                 ]
             }
@@ -325,24 +380,39 @@ def test_sweeps_every_tenant_tagging_each_finding_with_its_own_tenant() -> None:
                 "fixations": [
                     _fixation(
                         _fixed_spec(
-                            [{"id": "k", "type": DEPRECATED_TYPE, "props": {"label": "x"}, "data": {"$ref": "query://sales/x"}}]
+                            [
+                                {
+                                    "id": "k",
+                                    "type": DEPRECATED_TYPE,
+                                    "props": {"label": "x"},
+                                    "data": {"$ref": "query://sales/x"},
+                                }
+                            ]
                         )
                     )
                 ]
             },
             "acme": {
-                "promotions": [_promotion("acme-1", status="published", data={"componentType": DEPRECATED_TYPE})]
+                "promotions": [
+                    _promotion(
+                        "acme-1", status="published", data={"componentType": DEPRECATED_TYPE}
+                    )
+                ]
             },
         }
     )
 
     async def run() -> CatalogImpactReport:
-        return await analyze_catalog_impact(storage=storage, catalog_for=lambda _t: catalog, tenants=[None, "acme"])
+        return await analyze_catalog_impact(
+            storage=storage, catalog_for=lambda _t: catalog, tenants=[None, "acme"]
+        )
 
     report = asyncio.run(run())
     assert len(report.deprecatedUsage) == 1
     entry = report.deprecatedUsage[0]
-    assert [dataclasses.asdict(f) for f in entry.fixations] == [{"intentHash": INTENT_HASH, "tenant": None}]
+    assert [dataclasses.asdict(f) for f in entry.fixations] == [
+        {"intentHash": INTENT_HASH, "tenant": None}
+    ]
     assert [dataclasses.asdict(p) for p in entry.promotions] == [
         {"artifactId": "acme-1", "tenant": "acme", "status": "published"}
     ]

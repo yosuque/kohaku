@@ -520,7 +520,9 @@ class _JudgeImpl:
             )
         if input.catalog_summary is not None:
             parts.append(f"## Existing catalog (for duplicate checking)\n{input.catalog_summary}")
-        parts.append(f"## HTML under review\n{_untrusted_block('HTML', input.html[:12000], 'html')}")
+        parts.append(
+            f"## HTML under review\n{_untrusted_block('HTML', input.html[:12000], 'html')}"
+        )
         prompt = "\n\n".join(parts)
         return await self._score_with_rubric(self._rubric, system, prompt)
 

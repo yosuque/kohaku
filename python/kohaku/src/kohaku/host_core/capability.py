@@ -60,5 +60,7 @@ async def issue_capability_for_spec(
     (list_operations()) are dropped before issuance — hardening against an LLM-generated action.invoke action
     name flowing unvalidated into a bearer write scope. Read scopes are untouched by this filter.
     """
-    scopes = _filter_allowed_scopes(collect_capability_scopes(spec), allowed_actions, on_dropped_action)
+    scopes = _filter_allowed_scopes(
+        collect_capability_scopes(spec), allowed_actions, on_dropped_action
+    )
     return await authz.issue_capability(principal, scopes, ttl_seconds=ttl_seconds)

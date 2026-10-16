@@ -158,7 +158,9 @@ def _fire_and_forget(invoke: Callable[[], Any]) -> None:
         result = invoke()
         if inspect.isawaitable(result):
             task = asyncio.ensure_future(result)
-            task.add_done_callback(lambda t: t.exception())  # absorb rejects (prevent unobserved warnings)
+            task.add_done_callback(
+                lambda t: t.exception()
+            )  # absorb rejects (prevent unobserved warnings)
     except Exception:  # noqa: BLE001,S110 — a broken hook must not break compose
         pass
 
@@ -249,6 +251,10 @@ def create_deadline_guard(
     remaining_ms = max(0.0, deadline_ms - elapsed_ms)
     deadline_signal = AbortSignal.timeout(remaining_ms)
     signal = (
-        AbortSignal.any([caller_signal, deadline_signal]) if caller_signal is not None else deadline_signal
+        AbortSignal.any([caller_signal, deadline_signal])
+        if caller_signal is not None
+        else deadline_signal
     )
-    return DeadlineGuard(signal=signal, deadline_signal=deadline_signal, dispose=deadline_signal.cancel_timer)
+    return DeadlineGuard(
+        signal=signal, deadline_signal=deadline_signal, dispose=deadline_signal.cancel_timer
+    )

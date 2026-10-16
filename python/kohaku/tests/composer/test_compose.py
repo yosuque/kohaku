@@ -126,7 +126,9 @@ def _ctx(
     )
 
 
-_INTENT_INPUT = IntentComposeInput(intent=IntentInput(canonical="sales.summary", params={"fy": 2026}))
+_INTENT_INPUT = IntentComposeInput(
+    intent=IntentInput(canonical="sales.summary", params={"fy": 2026})
+)
 
 
 class TestComposeL1:
@@ -231,7 +233,9 @@ class TestComposeL1:
 
         asyncio.run(run())
 
-    def test_transient_failure_with_l2_disabled_names_the_provider_outage(self, tmp_path: Any) -> None:
+    def test_transient_failure_with_l2_disabled_names_the_provider_outage(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             storage = FileStoragePort(tmp_path)
 
@@ -251,7 +255,9 @@ class TestComposeL1:
 
         asyncio.run(run())
 
-    def test_invalid_failure_with_l2_disabled_keeps_the_plain_validation_reason(self, tmp_path: Any) -> None:
+    def test_invalid_failure_with_l2_disabled_keeps_the_plain_validation_reason(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             storage = FileStoragePort(tmp_path)
             errors: list[tuple[ComposeErrorContext, BaseException | None]] = []
@@ -300,9 +306,7 @@ class TestComposeL2:
             storage = FileStoragePort(tmp_path)
             broken = _L2_HTML.replace("window.kohaku.ready();", "window.kohaku.onReady();")
             llm = FakeLlm(texts=[broken, _L2_HTML])
-            ctx = _ctx(
-                llm, storage, policy=ComposePolicy(allowL2=True, routeTier=lambda _i: "L2")
-            )
+            ctx = _ctx(llm, storage, policy=ComposePolicy(allowL2=True, routeTier=lambda _i: "L2"))
 
             result = await compose(_INTENT_INPUT, ctx)
             assert result.spec.provenance.tier == "L2"
@@ -365,9 +369,7 @@ class TestComposeL2:
             result = await compose(_INTENT_INPUT, ctx)
             assert result.spec.provenance.tier == "L2"
             assert len(result.trace.attempts) == 2
-            assert any(
-                "L2_SCRIPT_SYNTAX" in i for i in result.trace.attempts[0].issues or []
-            )
+            assert any("L2_SCRIPT_SYNTAX" in i for i in result.trace.attempts[0].issues or [])
 
         asyncio.run(run())
 
@@ -425,9 +427,7 @@ class TestBudget:
             def _broken() -> Any:
                 raise RuntimeError("budget store connection failed")
 
-            ctx = _ctx(
-                llm, storage, policy=ComposePolicy(budget=ComposeBudget(check=_broken))
-            )
+            ctx = _ctx(llm, storage, policy=ComposePolicy(budget=ComposeBudget(check=_broken)))
             result = await compose(_INTENT_INPUT, ctx)
             # fail-open: generation continues and a normal Spec is returned
             assert result.spec.provenance.fallback is None
@@ -453,7 +453,9 @@ class TestBudget:
                 policy=ComposePolicy(allowL2=True, budget=ComposeBudget(check_with_context=_check)),
             )
             result = await compose(
-                _INTENT_INPUT, ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-x"))
+                _INTENT_INPUT,
+                ctx,
+                ComposeOptions(session=SessionContext(surface="web", tenant="tenant-x")),
             )
 
             assert result.spec.provenance.tier == "L2"
@@ -465,7 +467,9 @@ class TestBudget:
 
         asyncio.run(run())
 
-    def test_check_with_context_takes_priority_over_check_when_both_are_set(self, tmp_path: Any) -> None:
+    def test_check_with_context_takes_priority_over_check_when_both_are_set(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             from kohaku.composer import BudgetCheckContext, BudgetVerdict
 
@@ -495,7 +499,9 @@ class TestBudget:
 
         asyncio.run(run())
 
-    def test_on_usage_fires_once_after_a_compose_that_actually_generated(self, tmp_path: Any) -> None:
+    def test_on_usage_fires_once_after_a_compose_that_actually_generated(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             from kohaku.composer import TokenUsage
 
@@ -505,9 +511,15 @@ class TestBudget:
             ctx = _ctx(
                 llm,
                 storage,
-                policy=ComposePolicy(budget=ComposeBudget(on_usage=lambda t, u: calls.append((t, u)))),
+                policy=ComposePolicy(
+                    budget=ComposeBudget(on_usage=lambda t, u: calls.append((t, u)))
+                ),
             )
-            await compose(_INTENT_INPUT, ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-y")))
+            await compose(
+                _INTENT_INPUT,
+                ctx,
+                ComposeOptions(session=SessionContext(surface="web", tenant="tenant-y")),
+            )
 
             assert len(calls) == 1
             assert calls[0][0] == "tenant-y"
@@ -531,7 +543,9 @@ class TestBudget:
 
         asyncio.run(run())
 
-    def test_on_usage_does_not_fire_when_nothing_was_actually_generated(self, tmp_path: Any) -> None:
+    def test_on_usage_does_not_fire_when_nothing_was_actually_generated(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             storage = FileStoragePort(tmp_path)
             calls: list[Any] = []
@@ -608,7 +622,9 @@ class TestProvenanceKitStamping:
                     "kohaku": "0.2",
                     "intent": {"canonical": "x.y", "params": {}, "hash": "sha256:" + "0" * 64},
                     "dataVersion": "ignored",
-                    "components": [{"id": "root", "type": "presentMarkdown", "props": {"markdown": "x"}}],
+                    "components": [
+                        {"id": "root", "type": "presentMarkdown", "props": {"markdown": "x"}}
+                    ],
                     "provenance": {"tier": "L0", "composedBy": "t", "cache": "miss"},
                 }
             )
@@ -750,9 +766,7 @@ class TestL0AndSingleFlight:
 
         asyncio.run(run())
 
-    def _voting_harness(
-        self, storage: Any
-    ) -> tuple[Any, asyncio.Event, asyncio.Event, Any]:
+    def _voting_harness(self, storage: Any) -> tuple[Any, asyncio.Event, asyncio.Event, Any]:
         """Shared harness for the abort-voting tests (a gated, abort-respecting LLM + ctx).
 
         Returns (ctx, started, release, call_count_getter). The LLM throws ABORTED if req.abort is expired,
@@ -770,9 +784,7 @@ class TestL0AndSingleFlight:
             return _l1_draft()
 
         llm = FakeLlm(objects=_respect_abort)
-        ctx = ComposeContext(
-            catalog=_CATALOG, semantic=_FakeSemantic(), storage=storage, llm=llm
-        )
+        ctx = ComposeContext(catalog=_CATALOG, semantic=_FakeSemantic(), storage=storage, llm=llm)
         original = llm.generate_object
 
         async def _gated(req: Any) -> Any:
@@ -818,7 +830,9 @@ class TestL0AndSingleFlight:
             release.set()
             r_leader, r_follower = await asyncio.gather(task_leader, task_follower)
 
-            assert call_count() == 1  # generation runs once and completes normally (the abort does not reach the vote)
+            assert (
+                call_count() == 1
+            )  # generation runs once and completes normally (the abort does not reach the vote)
             assert r_leader.spec.provenance.fallback is None
             assert r_follower.spec.provenance.fallback is None
 
@@ -947,7 +961,9 @@ class TestComposeStreamProvisional:
             folded = first.spec
             for p in patches:
                 folded = apply_patch(folded, p.patch)
-                assert canonical_stringify(folded.to_wire()) == canonical_stringify(p.spec.to_wire())
+                assert canonical_stringify(folded.to_wire()) == canonical_stringify(
+                    p.spec.to_wire()
+                )
             done = events[-1]
             assert isinstance(done, StreamDoneEvent)
             assert canonical_stringify(folded.to_wire()) == canonical_stringify(
@@ -964,7 +980,9 @@ class TestComposeStreamProvisional:
 
     def test_final_form_byte_matches_non_stream_compose(self, tmp_path: Any) -> None:
         async def run() -> None:
-            composed = await compose(_INTENT_INPUT, _ctx(FakeLlm(objects=[_l1_draft()]), FileStoragePort(tmp_path / "a")))
+            composed = await compose(
+                _INTENT_INPUT, _ctx(FakeLlm(objects=[_l1_draft()]), FileStoragePort(tmp_path / "a"))
+            )
             events = [
                 e
                 async for e in compose_stream(
@@ -1015,11 +1033,18 @@ class TestComposeStreamProvisional:
                         "garbage",  # cannot decode
                         {  # root not yet arrived (only the heading)
                             "components": [
-                                {"id": "h", "type": "text.heading", "props": {"level": 2, "text": "x"}}
+                                {
+                                    "id": "h",
+                                    "type": "text.heading",
+                                    "props": {"level": 2, "text": "x"},
+                                }
                             ],
                             "events": [],
                         },
-                        {"components": [comps[0]], "events": []},  # root only (zero real components)
+                        {
+                            "components": [comps[0]],
+                            "events": [],
+                        },  # root only (zero real components)
                     ]
                 ],
             )
@@ -1033,9 +1058,7 @@ class TestComposeStreamProvisional:
 class TestL2Smoke:
     """Wiring of the pre-delivery L2 smoke-verification hook (ComposePolicy.l2Smoke). Same shape as the TS l2-generate wiring."""
 
-    def _l2_ctx(
-        self, storage: FileStoragePort, l2_smoke: Any, texts: list[str]
-    ) -> ComposeContext:
+    def _l2_ctx(self, storage: FileStoragePort, l2_smoke: Any, texts: list[str]) -> ComposeContext:
         return _ctx(
             FakeLlm(texts=texts),
             storage,
@@ -1144,7 +1167,9 @@ class TestRecompose:
 
         asyncio.run(run())
 
-    def test_recompose_never_pins_l2_when_the_resolved_policy_disallows_it(self, tmp_path: Any) -> None:
+    def test_recompose_never_pins_l2_when_the_resolved_policy_disallows_it(
+        self, tmp_path: Any
+    ) -> None:
         """design.md #70: respect_prev_tier must never override a resolved policy's own allowL2 -- a
         tenant whose Policy as Code disallows L2 keeps that gate even for an interaction against a Spec
         that was already L2 under a since-changed policy (mirrors the TS test of the same intent)."""
@@ -1191,7 +1216,9 @@ class _ThrowingGetStorage(FileStoragePort):
 class _ThrowingPutStorage(FileStoragePort):
     """A FileStoragePort whose put_spec_cache always raises (simulates a cache-backend outage)."""
 
-    async def put_spec_cache(self, key: str, spec: UISpec, *, ttl_seconds: int | None = None) -> None:
+    async def put_spec_cache(
+        self, key: str, spec: UISpec, *, ttl_seconds: int | None = None
+    ) -> None:
         raise RuntimeError("cache backend unavailable(test)")
 
 
@@ -1206,9 +1233,7 @@ class TestSpecCacheFailOpen:
             ctx = _ctx(
                 llm,
                 storage,
-                observer=ComposeObserver(
-                    onError=lambda c, error: captured.append((c, error))
-                ),
+                observer=ComposeObserver(onError=lambda c, error: captured.append((c, error))),
             )
 
             result = await compose(_INTENT_INPUT, ctx)
@@ -1229,9 +1254,7 @@ class TestSpecCacheFailOpen:
             ctx = _ctx(
                 llm,
                 storage,
-                observer=ComposeObserver(
-                    onError=lambda c, error: captured.append((c, error))
-                ),
+                observer=ComposeObserver(onError=lambda c, error: captured.append((c, error))),
             )
 
             result = await compose(_INTENT_INPUT, ctx)
@@ -1253,7 +1276,9 @@ class TestSpecCacheFailOpen:
 
         asyncio.run(run())
 
-    def test_cache_failure_closed_still_charges_spent_tokens_before_the_put_raises(self, tmp_path: Any) -> None:
+    def test_cache_failure_closed_still_charges_spent_tokens_before_the_put_raises(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             from kohaku.composer import TokenUsage
 
@@ -1271,7 +1296,9 @@ class TestSpecCacheFailOpen:
 
             with pytest.raises(RuntimeError, match="cache backend unavailable"):
                 await compose(
-                    _INTENT_INPUT, ctx, ComposeOptions(session=SessionContext(surface="web", tenant="tenant-y"))
+                    _INTENT_INPUT,
+                    ctx,
+                    ComposeOptions(session=SessionContext(surface="web", tenant="tenant-y")),
                 )
 
             assert len(calls) == 1
@@ -1296,7 +1323,11 @@ class TestSemanticFailedCauseEnrichment:
 
             llm = FakeLlm(objects=[_l1_draft()])
             ctx = replace(
-                _ctx(llm, storage, observer=ComposeObserver(onError=lambda c, e: captured.append((c, e)))),
+                _ctx(
+                    llm,
+                    storage,
+                    observer=ComposeObserver(onError=lambda c, e: captured.append((c, e))),
+                ),
                 semantic=_FailingSemantic(),
             )
 
@@ -1328,11 +1359,17 @@ class TestSemanticFailedCauseEnrichment:
 
             llm = FakeLlm(objects=[_l1_draft()])
             ctx = replace(
-                _ctx(llm, storage, observer=ComposeObserver(onError=lambda c, e: captured.append((c, e)))),
+                _ctx(
+                    llm,
+                    storage,
+                    observer=ComposeObserver(onError=lambda c, e: captured.append((c, e))),
+                ),
                 semantic=_FailingSemantic(),
             )
 
-            with pytest.raises(ComposeError, match=r'query resolution failed: unknown intent "sales\.nope"'):
+            with pytest.raises(
+                ComposeError, match=r'query resolution failed: unknown intent "sales\.nope"'
+            ):
                 await compose(_INTENT_INPUT, ctx)
             await asyncio.sleep(0)
             assert len(captured) == 1
@@ -1365,7 +1402,11 @@ class TestSemanticFailedCauseEnrichment:
 
             llm = FakeLlm(objects=[_l1_draft()])
             ctx = replace(
-                _ctx(llm, storage, observer=ComposeObserver(onError=lambda c, e: captured.append((c, e)))),
+                _ctx(
+                    llm,
+                    storage,
+                    observer=ComposeObserver(onError=lambda c, e: captured.append((c, e))),
+                ),
                 semantic=_FailingSemantic(),
             )
 
@@ -1404,9 +1445,7 @@ class TestAbortPropagation:
                 observer=ComposeObserver(onError=lambda c, _e: captured.append(c)),
             )
 
-            result = await compose(
-                _INTENT_INPUT, ctx, ComposeOptions(abort=controller.signal)
-            )
+            result = await compose(_INTENT_INPUT, ctx, ComposeOptions(abort=controller.signal))
             fb = result.spec.provenance.fallback
             assert fb is not None  # ABORTED → immediate fallback without repair or L2
             assert len([c for c in llm.calls if c.kind == "object"]) == 1

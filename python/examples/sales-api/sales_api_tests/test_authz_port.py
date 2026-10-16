@@ -164,9 +164,13 @@ class TestExpiryAndMalformed:
                 {"sub": "u", "exp": 9999999999},
             ):
                 payload = (
-                    base64.urlsafe_b64encode(json.dumps(claims).encode("utf-8")).rstrip(b"=").decode("ascii")
+                    base64.urlsafe_b64encode(json.dumps(claims).encode("utf-8"))
+                    .rstrip(b"=")
+                    .decode("ascii")
                 )
-                digest = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
+                digest = hmac.new(
+                    secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+                ).digest()
                 sig = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
                 result = await create_hmac_authz_port(secret).verify(
                     f"{payload}.{sig}", VerifyRequest(kind="read", ref="query://sales/kpi")

@@ -30,7 +30,9 @@ def _make_spec(intent_hash: str, ref: str) -> UISpec:
                     "data": {"$ref": ref},
                 },
             ],
-            "events": [{"on": "chart.click", "emit": "intent.patch", "payload": {"drill": "$row.region"}}],
+            "events": [
+                {"on": "chart.click", "emit": "intent.patch", "payload": {"drill": "$row.region"}}
+            ],
             "provenance": {"tier": "L1", "composedBy": "composer@0.1.0", "cache": "hit"},
         }
     )
@@ -74,7 +76,9 @@ def test_emits_one_line_per_spec_sorted_by_intent_hash_ascending() -> None:
 
 
 def test_records_only_components_and_events_under_target() -> None:
-    jsonl = export_distillation_dataset([_make_fixation(_HASH_A, "query://ledger/a", "2026-01-01T00:00:00Z")])
+    jsonl = export_distillation_dataset(
+        [_make_fixation(_HASH_A, "query://ledger/a", "2026-01-01T00:00:00Z")]
+    )
     record = json.loads(jsonl.strip())
     assert record["source"] == "fixation"
     assert record["intent"] == {"canonical": "sales.trend", "params": {"range": "q3"}}
@@ -83,7 +87,13 @@ def test_records_only_components_and_events_under_target() -> None:
         "fixatedAt": "2026-01-01T00:00:00Z",
         "structureHash": "sha256:" + _HASH_A.split(":")[1],
     }
-    assert list(record.keys()) == ["intent", "meta", "refs", "source", "target"]  # canonical key order (deep-sorted)
+    assert list(record.keys()) == [
+        "intent",
+        "meta",
+        "refs",
+        "source",
+        "target",
+    ]  # canonical key order (deep-sorted)
     assert list(record["target"].keys()) == ["components", "events"]
     assert len(record["target"]["components"]) == 2
     assert len(record["target"]["events"]) == 1
@@ -116,8 +126,18 @@ def test_dedupes_refs_across_components_preserving_first_occurrence_order() -> N
             "dataVersion": spec.dataVersion,
             "components": [
                 *[c.to_wire() for c in spec.components],
-                {"id": "table", "type": "presentSpreadsheet", "props": {}, "data": {"$ref": "query://ledger/a"}},
-                {"id": "chart2", "type": "presentChart", "props": {}, "data": {"$ref": "query://ledger/z"}},
+                {
+                    "id": "table",
+                    "type": "presentSpreadsheet",
+                    "props": {},
+                    "data": {"$ref": "query://ledger/a"},
+                },
+                {
+                    "id": "chart2",
+                    "type": "presentChart",
+                    "props": {},
+                    "data": {"$ref": "query://ledger/z"},
+                },
             ],
             "events": [e.to_wire() for e in spec.events],
             "provenance": spec.provenance.to_wire(),
@@ -131,9 +151,11 @@ def test_dedupes_refs_across_components_preserving_first_occurrence_order() -> N
 def test_adds_shape_only_when_describe_shape_returns_a_value() -> None:
     jsonl = export_distillation_dataset(
         [_make_fixation(_HASH_A, "query://ledger/a", "2026-01-01T00:00:00Z")],
-        describe_shape=lambda intent: [ColumnMeta(name="region", type="string")]
-        if intent.canonical == "sales.trend"
-        else None,
+        describe_shape=lambda intent: (
+            [ColumnMeta(name="region", type="string")]
+            if intent.canonical == "sales.trend"
+            else None
+        ),
     )
     record = json.loads(jsonl.strip())
     assert record["shape"] == [{"name": "region", "type": "string"}]
@@ -158,13 +180,19 @@ def test_deterministic_same_input_reproduces_byte_identical_output() -> None:
         _make_fixation(_HASH_A, "query://ledger/a", "2026-01-01T00:00:00Z"),
     ]
     golden = [_make_spec(_HASH_C, "query://ledger/c")]
-    assert export_distillation_dataset(fixations, golden) == export_distillation_dataset(fixations, golden)
+    assert export_distillation_dataset(fixations, golden) == export_distillation_dataset(
+        fixations, golden
+    )
 
 
 def test_populates_meta_tenant_and_catalog_fingerprint_when_present() -> None:
     fixations = [
         _make_fixation(
-            _HASH_A, "query://ledger/a", "2026-01-01T00:00:00Z", tenant="tenant-a", catalog_fingerprint="cat-1"
+            _HASH_A,
+            "query://ledger/a",
+            "2026-01-01T00:00:00Z",
+            tenant="tenant-a",
+            catalog_fingerprint="cat-1",
         )
     ]
     record = json.loads(export_distillation_dataset(fixations).strip())

@@ -116,7 +116,9 @@ def intent_tools_from_catalog(
     rejected with an error (deterministic).
     """
     options = options if options is not None else IntentToolsOptions()
-    by_tool_name: dict[str, str] = {}  # normalized tool name -> originating canonical (for collision detection)
+    by_tool_name: dict[
+        str, str
+    ] = {}  # normalized tool name -> originating canonical (for collision detection)
     tools: list[IntentToolDef] = []
     for source in defs:
         name = to_mcp_tool_name(source.name, options.name_prefix)

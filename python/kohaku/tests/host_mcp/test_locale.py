@@ -219,9 +219,7 @@ class TestEventAndFixationLocale:
 
         async def run() -> None:
             ctx, _ = _make_lang_ctx(tmp_path)
-            async with connect(
-                _deps(ctx, fixation_lookup=fixation_lookup), _OPTIONS
-            ) as client:
+            async with connect(_deps(ctx, fixation_lookup=fixation_lookup), _OPTIONS) as client:
                 await client.call_tool(
                     "kohaku_compose", {"question": "売上の月次推移", "locale": "ja"}
                 )

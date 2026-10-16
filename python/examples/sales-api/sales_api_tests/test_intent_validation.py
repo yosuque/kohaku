@@ -110,7 +110,9 @@ class TestDirectIntentValidationAcrossComposeEventsFixationsApprove:
         # Hash compatibility: params that fully specify every schema default hash exactly like the plain,
         # unvalidated Intent always would have (validation does not perturb an already-normalized request).
         expected_hash = compute_intent_hash(
-            IntentInput(canonical="sales.trend", params={"metric": "revenue", "granularity": "month"})
+            IntentInput(
+                canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}
+            )
         )
         assert body["spec"]["intent"]["hash"] == expected_hash
 
@@ -130,7 +132,9 @@ class TestDirectIntentValidationAcrossComposeEventsFixationsApprove:
         # this endpoint now actually returns, since validate_intent fills the schema defaults in.
         hash_of_empty_params = compute_intent_hash(IntentInput(canonical="sales.trend", params={}))
         hash_of_explicit_defaults = compute_intent_hash(
-            IntentInput(canonical="sales.trend", params={"metric": "revenue", "granularity": "month"})
+            IntentInput(
+                canonical="sales.trend", params={"metric": "revenue", "granularity": "month"}
+            )
         )
         assert hash_of_empty_params != hash_of_explicit_defaults
         assert body["spec"]["intent"]["hash"] == hash_of_explicit_defaults

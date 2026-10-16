@@ -34,7 +34,9 @@ class _Cat:
     fingerprint: str
 
 
-def _record(catalog_fingerprint: str | None = None, *, pinned: UISpec | None = None) -> FixationRecord:
+def _record(
+    catalog_fingerprint: str | None = None, *, pinned: UISpec | None = None
+) -> FixationRecord:
     return FixationRecord(
         intentHash="sha256:" + "2" * 64,
         canonical="sales.trend",
@@ -97,7 +99,11 @@ def test_fixate_rejects_a_spec_carrying_fallback(tmp_path: Path) -> None:
         storage = FileStoragePort(tmp_path)
         fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
         wire = l1_spec().model_dump(mode="json", by_alias=True, exclude_none=True)
-        wire["provenance"]["fallback"] = {"from": "root", "reason": "generation exhausted", "kind": "generation"}
+        wire["provenance"]["fallback"] = {
+            "from": "root",
+            "reason": "generation exhausted",
+            "kind": "generation",
+        }
         pinned = UISpec.model_validate(wire)
 
         with pytest.raises(FixationNotAllowedError) as info:
@@ -259,7 +265,11 @@ def test_invalidate_guard_match_deletes(tmp_path: Path) -> None:
         fixations = create_fixations(lineage=create_lineage(storage), storage=storage)
 
         await fixations.invalidate(
-            record.intentHash, "stale", "verification failed", None, {"ifCatalogFingerprint": "fp-old"}
+            record.intentHash,
+            "stale",
+            "verification failed",
+            None,
+            {"ifCatalogFingerprint": "fp-old"},
         )
         assert await storage.get_fixation(record.intentHash) is None
         assert _types_of(await storage.list_lineage()) == ["intent.unfixated"]
@@ -319,7 +329,9 @@ def test_invalidate_guard_fixated_at_match_deletes(tmp_path: Path) -> None:
 # --- invalidate's guard: ifRevision takes priority over ifFixatedAt ---
 
 
-def test_invalidate_guard_revision_mismatch_skips_even_if_fixated_at_matches(tmp_path: Path) -> None:
+def test_invalidate_guard_revision_mismatch_skips_even_if_fixated_at_matches(
+    tmp_path: Path,
+) -> None:
     """A re-approved fixation that lands in the same millisecond as the judged one shares the same
     fixatedAt but gets a fresh revision — ifRevision must be checked (and take priority) so ifFixatedAt
     alone does not falsely match."""

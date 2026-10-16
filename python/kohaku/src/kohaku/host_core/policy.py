@@ -136,7 +136,9 @@ def _assert_dependencies_for(
     `compose.budget.dailyTokens` needs a `ledger`, a `rateLimits` rule needs a `rate_limit_store`. Without
     this check such a section would be accepted and then silently never enforced."""
     sections: list[tuple[str, PolicySection]] = [("defaults", file.defaults)]
-    sections.extend((f"tenants.{tenant}", section) for tenant, section in (file.tenants or {}).items())
+    sections.extend(
+        (f"tenants.{tenant}", section) for tenant, section in (file.tenants or {}).items()
+    )
     for where, section in sections:
         budget = section.compose.budget if section.compose is not None else None
         if ledger is None and budget is not None and budget.dailyTokens is not None:
@@ -162,9 +164,15 @@ def _assert_dependencies_for(
 def _resolve_section(file: KohakuPolicyFile, tenant: str | None) -> PolicySection:
     """The merged `PolicySection` (`defaults` deep-merged with `tenants[tenant]`, tenant override
     winning) for one tenant. `None` tenant resolves to `defaults` alone."""
-    tenant_section = file.tenants.get(tenant) if file.tenants is not None and tenant is not None else None
+    tenant_section = (
+        file.tenants.get(tenant) if file.tenants is not None and tenant is not None else None
+    )
     base = file.defaults.model_dump(by_alias=True, exclude_none=True)
-    override = tenant_section.model_dump(by_alias=True, exclude_none=True) if tenant_section is not None else {}
+    override = (
+        tenant_section.model_dump(by_alias=True, exclude_none=True)
+        if tenant_section is not None
+        else {}
+    )
     return PolicySection.model_validate(merge_policy_sections(base, override))
 
 
@@ -275,7 +283,13 @@ def _build_effective_budget(
         check = None  # folded into check_with_context above -- see this function's own docstring
         on_usage = _combine_on_usage(on_usage, daily_on_usage)
 
-    if per_compose is None and deadline_ms is None and check is None and check_with_context is None and on_usage is None:
+    if (
+        per_compose is None
+        and deadline_ms is None
+        and check is None
+        and check_with_context is None
+        and on_usage is None
+    ):
         return None
     return ComposeBudget(
         per_compose_stop_after_tokens=per_compose,
@@ -312,7 +326,9 @@ def _build_effective_policy(
             overrides["cacheFailure"] = data.cacheFailure
         if data.ttlSeconds is not None:
             overrides["ttlSeconds"] = data.ttlSeconds
-    budget = _build_effective_budget(base.budget, data.budget if data is not None else None, tenant, ledger)
+    budget = _build_effective_budget(
+        base.budget, data.budget if data is not None else None, tenant, ledger
+    )
     if budget is not None:
         overrides["budget"] = budget
     return replace(base, **overrides) if overrides else base
@@ -360,7 +376,9 @@ class PolicyRateLimiter:
     limiting is opt-in per route class) or when no `RateLimitStore` was supplied to
     `create_policy_runtime` at all."""
 
-    def __init__(self, section_for: Callable[[str | None], PolicySection], inner: RateLimiter | None) -> None:
+    def __init__(
+        self, section_for: Callable[[str | None], PolicySection], inner: RateLimiter | None
+    ) -> None:
         self._section_for = section_for
         self._inner = inner
 
@@ -415,7 +433,9 @@ class PolicyRuntime:
                 rate_limit_store,
                 on_rate_limit_error,
                 timeout_ms=(
-                    rate_limit_timeout_ms if rate_limit_timeout_ms is not None else DEFAULT_RATE_LIMIT_TIMEOUT_MS
+                    rate_limit_timeout_ms
+                    if rate_limit_timeout_ms is not None
+                    else DEFAULT_RATE_LIMIT_TIMEOUT_MS
                 ),
             )
             if rate_limit_store is not None
@@ -442,7 +462,9 @@ class PolicyRuntime:
         `DEFAULT_MAX_MEMORY_ENTRIES`."""
         tenant = session.tenant if session is not None else None
         key = tenant or ""
-        base = self._base_policy_for(tenant) if self._base_policy_for is not None else ComposePolicy()
+        base = (
+            self._base_policy_for(tenant) if self._base_policy_for is not None else ComposePolicy()
+        )
         cached = self._memo.get(key)
         if cached is not None and cached.base is base and cached.policy_id == self._policy_id:
             del self._memo[key]  # reinsert to mark as most-recently-used
@@ -453,7 +475,9 @@ class PolicyRuntime:
         if len(self._memo) >= DEFAULT_MAX_MEMORY_ENTRIES:
             # A dict iterates in insertion order, so the first key is the least recently used.
             del self._memo[next(iter(self._memo))]
-        self._memo[key] = _PolicyForMemoEntry(base=base, policy_id=self._policy_id, effective=effective)
+        self._memo[key] = _PolicyForMemoEntry(
+            base=base, policy_id=self._policy_id, effective=effective
+        )
         return effective
 
     def roles_for(self, tenant: str | None = None) -> dict[str, list[str]]:
@@ -502,7 +526,9 @@ class PolicyRuntime:
             return  # dedup: same canonical content is a no-op, no event, memos kept
         # Audit first, commit only on success: an unauditable policy change is not applied, and a retry
         # with the same file is not deduped away (it would otherwise never record its event).
-        await self._fire_audit(_build_applied_event(self._file, self._policy_id, file, policy_id), actor)
+        await self._fire_audit(
+            _build_applied_event(self._file, self._policy_id, file, policy_id), actor
+        )
         self._file = file
         self._policy_id = policy_id
         self._memo.clear()
@@ -523,7 +549,9 @@ def _build_applied_event(
         version=file.version,
         label=file.label,
         changedPaths=_diff_policy_paths(
-            previous_file.model_dump(by_alias=True, exclude_none=True) if previous_file is not None else {},
+            previous_file.model_dump(by_alias=True, exclude_none=True)
+            if previous_file is not None
+            else {},
             file.model_dump(by_alias=True, exclude_none=True),
         ),
         tenants=list(file.tenants.keys()) if file.tenants is not None else [],
@@ -577,5 +605,11 @@ def create_policy_runtime(
     """
     _assert_dependencies_for(file, ledger, rate_limit_store)
     return PolicyRuntime(
-        file, base_policy_for, ledger, rate_limit_store, audit, on_rate_limit_error, rate_limit_timeout_ms
+        file,
+        base_policy_for,
+        ledger,
+        rate_limit_store,
+        audit,
+        on_rate_limit_error,
+        rate_limit_timeout_ms,
     )

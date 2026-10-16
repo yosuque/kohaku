@@ -86,7 +86,9 @@ def fiscal_period_of(date: datetime) -> FiscalPeriod:
     """
     year = date.year
     month = date.month  # 1 to 12
-    return FiscalPeriod(fiscal_year=fiscal_year_of(year, month), quarter=quarter_of(month), year=year, month=month)
+    return FiscalPeriod(
+        fiscal_year=fiscal_year_of(year, month), quarter=quarter_of(month), year=year, month=month
+    )
 
 
 def _clamp_fiscal_year(year: int) -> int:
@@ -157,7 +159,9 @@ class SalesSemanticPort:
         if result.ok:
             assert result.params is not None
             return IntentInput(canonical=intent.canonical, params=result.params)
-        raise IntentValidationError("; ".join(issue.message for issue in result.issues), result.issues)
+        raise IntentValidationError(
+            "; ".join(issue.message for issue in result.issues), result.issues
+        )
 
 
 def create_semantic_port(
@@ -268,7 +272,7 @@ async def _normalize_nl(
         [
             "You are the Intent normalizer for a business app. Map the user's question to exactly one Intent in the catalog below and",
             "extract its params. Rules:",
-            f'- The fiscal year starts in April (FY{current_fiscal_year} = {current_fiscal_year}-04 to '
+            f"- The fiscal year starts in April (FY{current_fiscal_year} = {current_fiscal_year}-04 to "
             f'{current_fiscal_year + 1}-03). "this period"/"this fiscal year" (今期/今年度) = fiscalYear={current_fiscal_year}; '
             f'"this quarter" (今四半期) = quarter={period.quarter} (now {period.year}-{period.month}).',
             f'- "last year"/"prior fiscal year" (前年/昨年度) = fiscalYear={prev_fiscal_year}',

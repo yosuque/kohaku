@@ -153,7 +153,9 @@ def request_id_of(request: Request, deps: KohakuHostDeps) -> str:
     if deps.request_id is not None:
         request_id = deps.request_id(request)
     else:
-        request_id = _sanitize_inbound_request_id(request.headers.get("x-request-id")) or str(uuid.uuid4())
+        request_id = _sanitize_inbound_request_id(request.headers.get("x-request-id")) or str(
+            uuid.uuid4()
+        )
     request.state.request_id = request_id
     return request_id
 
@@ -167,7 +169,9 @@ def trace_context_of(request: Request) -> TraceContext | None:
     ComposeOptions sink -- it is used only by report_host_error's `trace_context` (HostErrorInfo.trace_context)
     today. Not memoized (unlike request_id_of): header parsing is cheap and this is read at most once per
     request."""
-    return _parse_trace_context(request.headers.get("traceparent"), request.headers.get("tracestate"))
+    return _parse_trace_context(
+        request.headers.get("traceparent"), request.headers.get("tracestate")
+    )
 
 
 class RequestIdASGIMiddleware:
@@ -320,7 +324,9 @@ async def report_host_error(
     every other call site keeps reporting None, unchanged from before this parameter existed."""
     await _host_core_notify_hook(
         deps.on_error,
-        HostErrorInfo(endpoint=endpoint, request_id=request_id, error=error, trace_context=trace_context),
+        HostErrorInfo(
+            endpoint=endpoint, request_id=request_id, error=error, trace_context=trace_context
+        ),
     )
 
 
@@ -470,12 +476,15 @@ def _error(
     approval: dict[str, str] | None = None,
 ) -> Response:
     return JSONResponse(
-        content=error_body(code, message, request_id, issues=issues, approval=approval), status_code=status
+        content=error_body(code, message, request_id, issues=issues, approval=approval),
+        status_code=status,
     )
 
 
 def _rate_limited(retry_after_ms: float | None, request_id: str) -> Response:
-    headers = {"Retry-After": str(ceil(retry_after_ms / 1000))} if retry_after_ms is not None else None
+    headers = (
+        {"Retry-After": str(ceil(retry_after_ms / 1000))} if retry_after_ms is not None else None
+    )
     return JSONResponse(
         content=error_body(
             "RATE_LIMITED",
@@ -513,7 +522,9 @@ async def check_rate_limit(
         return None
     _host_core_notify_hook_nowait(
         deps.on_rate_limited,
-        RateLimitedInfo(routeClass=route_class, requestId=request_id, tenant=tenant, principal=principal.id),
+        RateLimitedInfo(
+            routeClass=route_class, requestId=request_id, tenant=tenant, principal=principal.id
+        ),
     )
     return _rate_limited(result.retryAfterMs, request_id)
 

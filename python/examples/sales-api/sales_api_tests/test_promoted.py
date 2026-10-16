@@ -93,9 +93,7 @@ class TestPromotedIntentDefault:
         params = intent.params.parse({"region": "japan"})
         assert params == {"fiscalYear": 2026, "region": "japan"}
         uris = [q.uri for q in intent.to_queries(params)]
-        assert uris == [
-            "query://sales/trend?fy=2026&granularity=month&metric=revenue&region=japan"
-        ]
+        assert uris == ["query://sales/trend?fy=2026&granularity=month&metric=revenue&region=japan"]
 
 
 class TestPromotedIntentBooleanCoerce:

@@ -198,8 +198,12 @@ _RAW_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(")
 # (packages/composer/src/tiers/l2-generate.ts).
 _CLASS_ATTR_RE = re.compile(r"\bclass\s*=\s*([\"'])([^\"']*)\1")
 _CLASS_NAME_ASSIGN_RE = re.compile(r"\bclassName\s*=\s*([\"'`])([^\"'`]*)\1")
-_CLASS_LIST_MUTATION_RE = re.compile(r"\bclassList\s*\.\s*(?:add|toggle|remove|replace)\s*\(([^)]*)\)")
-_SET_CLASS_ATTR_RE = re.compile(r"\bsetAttribute\s*\(\s*([\"'])class\1\s*,\s*([\"'`])([^\"'`]*)\2\s*\)")
+_CLASS_LIST_MUTATION_RE = re.compile(
+    r"\bclassList\s*\.\s*(?:add|toggle|remove|replace)\s*\(([^)]*)\)"
+)
+_SET_CLASS_ATTR_RE = re.compile(
+    r"\bsetAttribute\s*\(\s*([\"'])class\1\s*,\s*([\"'`])([^\"'`]*)\2\s*\)"
+)
 _STRING_LITERAL_RE = re.compile(r"([\"'`])([^\"'`]*)\1")
 
 
@@ -253,8 +257,10 @@ def extract_html_document(text: str) -> str:
     body = (fenced.group(1) if fenced is not None else text).strip()
     doctype = _DOCTYPE_RE.search(body)
     html_open = _HTML_OPEN_RE.search(body) if doctype is None else None
-    start = doctype.start() if doctype is not None else (
-        html_open.start() if html_open is not None else -1
+    start = (
+        doctype.start()
+        if doctype is not None
+        else (html_open.start() if html_open is not None else -1)
     )
     candidate = body[start:] if start >= 0 else body
     # Trailing postscript (explanatory text, etc.) is cut off at the last </html> (greedy match = last closing tag).

@@ -91,7 +91,9 @@ class ActionGateProceedOutcome:
     kind: Literal["proceed"] = "proceed"
 
 
-type ActionGateOutcome = ActionGateInvalidOutcome | ActionGateApprovalRequiredOutcome | ActionGateProceedOutcome
+type ActionGateOutcome = (
+    ActionGateInvalidOutcome | ActionGateApprovalRequiredOutcome | ActionGateProceedOutcome
+)
 
 
 async def record_action_gate_result(

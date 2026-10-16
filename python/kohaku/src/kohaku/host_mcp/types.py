@@ -176,9 +176,7 @@ class McpHostDeps:
     Prefer keeping this a plain read and expressing any delivery gate via `fixation_admit` instead — the
     same gate function can then be shared verbatim with the REST profile's `KohakuHostDeps.fixation_admit`
     rather than being duplicated in both hosts' `fixation_lookup` implementations."""
-    fixation_admit: (
-        Callable[[FixationRecord, SessionContext], Awaitable[bool] | bool] | None
-    ) = None
+    fixation_admit: Callable[[FixationRecord, SessionContext], Awaitable[bool] | bool] | None = None
     """Delivery-admission gate consulted, when set, after a fixation is found via `fixation_lookup` and
     before it is checked for staleness (kohaku.host_core's `FixationDeliveryHost.admit`). See
     `fixation_lookup`'s doc — the same function can be shared with the REST profile's

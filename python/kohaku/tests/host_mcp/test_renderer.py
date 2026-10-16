@@ -25,7 +25,9 @@ def test_placeholder_is_a_readable_html_document() -> None:
 def test_given_path_reads_that_file(tmp_path: Path) -> None:
     renderer_path = tmp_path / "renderer.html"
     renderer_path.write_text("<html><body>real renderer</body></html>", encoding="utf-8")
-    assert load_default_renderer_html(str(renderer_path)) == "<html><body>real renderer</body></html>"
+    assert (
+        load_default_renderer_html(str(renderer_path)) == "<html><body>real renderer</body></html>"
+    )
 
 
 def test_given_path_is_a_string_not_a_path_object(tmp_path: Path) -> None:

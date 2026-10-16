@@ -85,7 +85,9 @@ async def generate_l2(
     # valve as TS's kitForLint in tiers/l2-generate.ts).
     kit_for_lint = (
         design_system.kit
-        if design_system is not None and design_system.kit is not None and design_system.enforceKitClasses
+        if design_system is not None
+        and design_system.kit is not None
+        and design_system.enforceKitClasses
         else None
     )
     feedback: list[str] = []
@@ -101,7 +103,9 @@ async def generate_l2(
     last_error: BaseException | None = None
     # ComposeContext.llmByTier resolution (additive; resolves to ctx.llm when unset — see resolve_tier_llm's doc).
     llm = resolve_tier_llm(ctx, "L2")
-    effort = ctx.policy.effort.l2 if ctx.policy is not None and ctx.policy.effort is not None else None
+    effort = (
+        ctx.policy.effort.l2 if ctx.policy is not None and ctx.policy.effort is not None else None
+    )
 
     for attempt in range(max_attempts):
         # Budget verdict: on the first (attempt 0) the compose-side "before L2" verdict was just made, so do not
@@ -116,7 +120,10 @@ async def generate_l2(
             verdict = check_budget(
                 budget,
                 BudgetCheckContext(
-                    tier="L2", spent_tokens=sum_spent_tokens(attempts), tenant=tenant, elapsed_ms=elapsed_ms
+                    tier="L2",
+                    spent_tokens=sum_spent_tokens(attempts),
+                    tenant=tenant,
+                    elapsed_ms=elapsed_ms,
                 ),
                 on_budget_check_error,
             )
@@ -178,7 +185,9 @@ async def generate_l2(
         except Exception as e:  # noqa: BLE001 — LLM-call failures branch by kind
             last_error = e
             error_code = e.code if isinstance(e, LlmError) else "UNKNOWN"
-            attempts.append(ComposeAttempt(kind="l2", ok=False, issues=[str(e)], errorCode=error_code))
+            attempts.append(
+                ComposeAttempt(kind="l2", ok=False, issues=[str(e)], errorCode=error_code)
+            )
             if isinstance(e, LlmError) and e.code == "ABORTED":
                 # deadline_signal fires only from budget.py's create_deadline_guard, never from the caller's
                 # own AbortSignal — see generate_l1's identical branch for the full rationale.
@@ -201,7 +210,9 @@ async def generate_l2(
             failure = "invalid"
             continue
 
-        issues = collect_l2_issues(html, enforce_token_colors=enforce_token_colors, kit=kit_for_lint)
+        issues = collect_l2_issues(
+            html, enforce_token_colors=enforce_token_colors, kit=kit_for_lint
+        )
         # JS syntax check (L2_SCRIPT_SYNTAX): Python has no JS runtime, so it is injectable (TS builds it into
         # collect_l2_issues via new Function). Call it only when wired, and merge the returned issues into the
         # existing lint (into the same repair loop). A throw is fail-open (check skipped = classic behavior).
@@ -218,7 +229,9 @@ async def generate_l2(
         if len(issues) == 0 and ctx.policy is not None and ctx.policy.l2Smoke is not None:
             shape = refs.shapesByRef.get(primary_ref) if primary_ref is not None else None
             try:
-                issues = await ctx.policy.l2Smoke(html, L2SmokeContext(ref=primary_ref, shape=shape))
+                issues = await ctx.policy.l2Smoke(
+                    html, L2SmokeContext(ref=primary_ref, shape=shape)
+                )
             except Exception:  # noqa: BLE001,S110 — a verifier failure must not stop L2 delivery (fail-open)
                 issues = []
         if len(issues) == 0:
@@ -244,7 +257,9 @@ async def generate_l2(
                     **({"data": {"$ref": primary_ref}} if primary_ref is not None else {}),
                 },
             ]
-            return L2Result(ok=True, components=components, events=[], model=model, attempts=attempts)
+            return L2Result(
+                ok=True, components=components, events=[], model=model, attempts=attempts
+            )
         # A bridge-contract lint failure is a repair target. Send the issues back as feedback to the next
         # attempt. This attempt returned a response (no raise), so clear last_error rather than leaving an
         # earlier attempt's raised error attached to a failure it did not actually cause.
@@ -254,5 +269,10 @@ async def generate_l2(
         feedback = issues
 
     return L2Result(
-        ok=False, attempts=attempts, failure=failure, model=model, budgetReason=budget_reason, last_error=last_error
+        ok=False,
+        attempts=attempts,
+        failure=failure,
+        model=model,
+        budgetReason=budget_reason,
+        last_error=last_error,
     )

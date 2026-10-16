@@ -137,9 +137,7 @@ def test_run_golden_composer_output_matches(
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         llm = FakeLlm(objects=[_raw_draft(("root", "a", "b", "c"))])
-        ctx = ComposeContext(
-            catalog=_CATALOG, semantic=_GoldenSemantic(), storage=storage, llm=llm
-        )
+        ctx = ComposeContext(catalog=_CATALOG, semantic=_GoldenSemantic(), storage=storage, llm=llm)
         # Match the expected value to the catalog-default-filled form (this ctx's describe_shape is None, so
         # automatic sortBy filling does not run).
         normalized = _CATALOG.validate(example_spec_data["components"]).normalized

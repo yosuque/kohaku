@@ -72,7 +72,9 @@ class FakeLlm:
         # Notify the corresponding scripted partial sequence in order before the final response. Swallow a throw
         # from on_partial (port contract: a consumer exception must not break generation). generate_object advances
         # the index (the current _object_index here matches what generate_object will consume).
-        scripted = self.partials[self._object_index] if self._object_index < len(self.partials) else []
+        scripted = (
+            self.partials[self._object_index] if self._object_index < len(self.partials) else []
+        )
         for partial in scripted:
             try:
                 on_partial(partial)

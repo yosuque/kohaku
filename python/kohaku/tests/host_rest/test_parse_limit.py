@@ -22,10 +22,22 @@ MAX_LIMIT = 1000
         ("0", None),
         ("-1", None),
         ("abc", None),
-        ("0x10", None),  # hex: not a decimal-digit string (int("0x10", 16) would accept it; float() rejects it).
-        ("1_000", None),  # numeric-separator underscore: float("1_000") is 1000.0, but this is not a decimal-digit string.
-        ("1e3", None),  # scientific notation: float("1e3") is 1000.0, but this is not a decimal-digit string.
-        ("1.9", 1),  # a valid decimal is floored (int() truncation, equivalent to floor for positives).
+        (
+            "0x10",
+            None,
+        ),  # hex: not a decimal-digit string (int("0x10", 16) would accept it; float() rejects it).
+        (
+            "1_000",
+            None,
+        ),  # numeric-separator underscore: float("1_000") is 1000.0, but this is not a decimal-digit string.
+        (
+            "1e3",
+            None,
+        ),  # scientific notation: float("1e3") is 1000.0, but this is not a decimal-digit string.
+        (
+            "1.9",
+            1,
+        ),  # a valid decimal is floored (int() truncation, equivalent to floor for positives).
         ("500", 500),
         ("5000", MAX_LIMIT),  # over the limit is clamped, not rejected.
     ],

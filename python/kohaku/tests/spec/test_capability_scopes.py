@@ -225,9 +225,7 @@ def test_over_the_limit_throws_before_enumeration() -> None:
         kohaku="0.2",
     )
 
-    with mock.patch(
-        "kohaku.spec.capability_scopes.enumerate_bind_variants"
-    ) as enumerate_mock:
+    with mock.patch("kohaku.spec.capability_scopes.enumerate_bind_variants") as enumerate_mock:
         with pytest.raises(ValueError, match="total bind variants 160000 exceed the limit 256"):
             collect_capability_scopes(spec)
         enumerate_mock.assert_not_called()

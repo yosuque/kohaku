@@ -40,7 +40,7 @@ SpecBuilder = Callable[[Intent, list[QueryHandle]], UISpec]
 
 
 def _group_by_phrase(group_by: str, lang: OutputLang) -> str:
-    """"by Region" (EN title fragment) / "地域別" (JA, straight from the groupBy vocabulary)."""
+    """ "by Region" (EN title fragment) / "地域別" (JA, straight from the groupBy vocabulary)."""
     if lang == "ja":
         return group_by_vocab.label(group_by, "ja")
     # domain.GROUP_AXIS_LABELS is the single source (matches TS domain/types.ts's GROUP_AXIS_LABELS, which
@@ -76,7 +76,9 @@ def _quarterly_summary(intent: Intent, refs: list[QueryHandle], lang: OutputLang
     p = intent.params
     group_by = str(p.get("groupBy", "region"))
     if lang == "ja":
-        title = f"{_period(p, lang)} 売上({_group_by_phrase(group_by, lang)}){_region_suffix(p, lang)}"
+        title = (
+            f"{_period(p, lang)} 売上({_group_by_phrase(group_by, lang)}){_region_suffix(p, lang)}"
+        )
     else:
         title = f"{_period(p, lang)} Sales ({_group_by_phrase(group_by, lang)}){_region_suffix(p, lang)}"
     # Assumes catalog's sales.quarterly_summary.to_queries returns only the single [summary].
@@ -102,7 +104,12 @@ def _quarterly_summary(intent: Intent, refs: list[QueryHandle], lang: OutputLang
             "props": {"kind": "bar", "x": group_by, "y": "revenue"},
             "data": {"$ref": ref},
         },
-        {"id": "g", "type": "presentSpreadsheet", "props": {"editable": False}, "data": {"$ref": ref}},
+        {
+            "id": "g",
+            "type": "presentSpreadsheet",
+            "props": {"editable": False},
+            "data": {"$ref": ref},
+        },
     ]
     events: list[dict[str, Any]] = (
         [{"on": "g.rowClick", "emit": "intent.patch", "payload": {"drilldown": "$row.region"}}]
@@ -126,7 +133,9 @@ def _cross_filter_summary(
     # Binding that replaces the region parameter with $state.region. values = the sole source of truth for authorization and enumeration.
     region_bind = {"region": {"$state": "region", "values": region_vocab.bind_values()}}
     if lang == "ja":
-        heading = f"{_period(p, lang)} 地域クロスフィルター({_group_by_phrase(group_by, lang)}の内訳)"
+        heading = (
+            f"{_period(p, lang)} 地域クロスフィルター({_group_by_phrase(group_by, lang)}の内訳)"
+        )
         hint = (
             "地域を切り替えると、compose の往復(サーバー往復 / LLM)**なし**にチャートと表が再解決されます — "
             "`data.bind` によりクライアント内部で実効 ref が差し替わります。"
@@ -179,7 +188,11 @@ def _cross_filter_summary(
     ]
     # filter.change -> state.set(region). Completed inside the Renderer (nothing sent to the server); the bound parts are re-resolved.
     events: list[dict[str, Any]] = [
-        {"on": "filter.change", "emit": "state.set", "payload": {"key": "region", "value": "$value"}}
+        {
+            "on": "filter.change",
+            "emit": "state.set",
+            "payload": {"key": "region", "value": "$value"},
+        }
     ]
     return _template(intent, components, events, {"region": region})
 
@@ -225,11 +238,7 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
                 else ("全期間" if ja else "All periods")
             ),
             f"Q{p['quarter']}" if p.get("quarter") is not None else None,
-            (
-                region_vocab.label(str(p["region"]), lang)
-                if p.get("region") is not None
-                else None
-            ),
+            (region_vocab.label(str(p["region"]), lang) if p.get("region") is not None else None),
         ]
         if s
     )
@@ -252,7 +261,10 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
         {
             "id": "t",
             "type": "text.heading",
-            "props": {"level": 2, "text": f"売上明細({scope})" if ja else f"Sales Records ({scope})"},
+            "props": {
+                "level": 2,
+                "text": f"売上明細({scope})" if ja else f"Sales Records ({scope})",
+            },
         },
         {
             "id": "openNote",
@@ -305,7 +317,9 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
                         "name": "note",
                         "type": "text",
                         "label": "この明細へのメモ" if ja else "Note for these records",
-                        "placeholder": "例: 北米の成長を確認" if ja else "e.g. Check North America's growth",
+                        "placeholder": "例: 北米の成長を確認"
+                        if ja
+                        else "e.g. Check North America's growth",
                         "required": True,
                         "maxLength": 500,
                     }
@@ -333,9 +347,21 @@ def _records_view(intent: Intent, refs: list[QueryHandle], lang: OutputLang) -> 
     #   action.button) and publish declares no paramsSchema (design.md #62/#63's "approve"-tier demo; see
     #   the publishBtn component's own comment above).
     events: list[dict[str, Any]] = [
-        {"on": "openNote.press", "emit": "state.set", "payload": {"key": "noteOpen", "value": True}},
-        {"on": "noteDialog.close", "emit": "state.set", "payload": {"key": "noteOpen", "value": False}},
-        {"on": "noteForm.submit", "emit": "action.invoke", "payload": {"note": "$value.note", "refs": [ref]}},
+        {
+            "on": "openNote.press",
+            "emit": "state.set",
+            "payload": {"key": "noteOpen", "value": True},
+        },
+        {
+            "on": "noteDialog.close",
+            "emit": "state.set",
+            "payload": {"key": "noteOpen", "value": False},
+        },
+        {
+            "on": "noteForm.submit",
+            "emit": "action.invoke",
+            "payload": {"note": "$value.note", "refs": [ref]},
+        },
         {"on": "publishBtn.press", "emit": "action.invoke", "payload": {"action": "publish"}},
     ]
     return _template(intent, components, events, {"noteOpen": False})
@@ -367,7 +393,12 @@ def _target_attainment(intent: Intent, refs: list[QueryHandle], lang: OutputLang
             "props": {"kind": "bar", "x": "region", "y": ["actual", "target"]},
             "data": {"$ref": refs[0].uri},
         },
-        {"id": "g", "type": "presentSpreadsheet", "props": {"editable": False}, "data": {"$ref": refs[0].uri}},
+        {
+            "id": "g",
+            "type": "presentSpreadsheet",
+            "props": {"editable": False},
+            "data": {"$ref": refs[0].uri},
+        },
     ]
     return _template(intent, components, [])
 

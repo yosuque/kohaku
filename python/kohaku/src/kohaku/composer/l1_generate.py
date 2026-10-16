@@ -217,7 +217,10 @@ async def generate_l1(
             verdict = check_budget(
                 budget,
                 BudgetCheckContext(
-                    tier="L1", spent_tokens=sum_spent_tokens(attempts), tenant=tenant, elapsed_ms=elapsed_ms
+                    tier="L1",
+                    spent_tokens=sum_spent_tokens(attempts),
+                    tenant=tenant,
+                    elapsed_ms=elapsed_ms,
                 ),
                 on_budget_check_error,
             )
@@ -274,7 +277,9 @@ async def generate_l1(
         except Exception as e:  # noqa: BLE001 — LLM-call failures branch by kind
             last_error = e
             error_code = e.code if isinstance(e, LlmError) else "UNKNOWN"
-            attempts.append(ComposeAttempt(kind="l1", ok=False, issues=[str(e)], errorCode=error_code))
+            attempts.append(
+                ComposeAttempt(kind="l1", ok=False, issues=[str(e)], errorCode=error_code)
+            )
             if isinstance(e, LlmError) and e.code == "ABORTED":
                 # deadline_signal fires only from budget.py's create_deadline_guard, never from the caller's
                 # own AbortSignal — so this reliably tells the two abort sources apart regardless of which
@@ -324,7 +329,9 @@ async def generate_l1(
             # L1Result.last_error's doc).
             failure = "invalid"
             last_error = None
-            attempts[-1] = ComposeAttempt(kind="l1", ok=False, issues=issues, usage=attempts[-1].usage)
+            attempts[-1] = ComposeAttempt(
+                kind="l1", ok=False, issues=issues, usage=attempts[-1].usage
+            )
             feedback = issues
         except ValueError as e:
             # A defensive throw from decode (not an array / a non-object element / on・emit not a string) is
@@ -339,7 +346,12 @@ async def generate_l1(
             feedback = [message]
 
     return L1Result(
-        ok=False, attempts=attempts, failure=failure, model=model, budgetReason=budget_reason, last_error=last_error
+        ok=False,
+        attempts=attempts,
+        failure=failure,
+        model=model,
+        budgetReason=budget_reason,
+        last_error=last_error,
     )
 
 

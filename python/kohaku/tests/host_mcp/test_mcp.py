@@ -220,7 +220,9 @@ class TestComposeTool:
 
         async def run() -> None:
             async with connect(_deps(tmp_path), _OPTIONS) as client:
-                composed = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                composed = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 capability = _capability_of(composed)
 
                 ok = await client.call_tool(
@@ -247,7 +249,9 @@ class TestMcpCorrelationId:
     why this always includes a session segment (even for a single-session stdio-shaped connection) rather
     than TS's own session-less `mcp:<jsonrpc id>` form."""
 
-    def test_correlation_id_reaches_the_compose_trace_with_the_mcp_prefix(self, tmp_path: Path) -> None:
+    def test_correlation_id_reaches_the_compose_trace_with_the_mcp_prefix(
+        self, tmp_path: Path
+    ) -> None:
         correlation_ids: list[str | None] = []
 
         async def _on_composed(spec: Any, trace: Any) -> None:
@@ -267,7 +271,9 @@ class TestMcpCorrelationId:
         # Different calls -> different correlation ids (each carries its own JSON-RPC request id).
         assert correlation_ids[0] != correlation_ids[1]
 
-    def test_result_meta_carries_the_correlation_id_recorded_on_the_trace(self, tmp_path: Path) -> None:
+    def test_result_meta_carries_the_correlation_id_recorded_on_the_trace(
+        self, tmp_path: Path
+    ) -> None:
         correlation_ids: list[str | None] = []
         meta_ids: list[Any] = []
 
@@ -277,7 +283,9 @@ class TestMcpCorrelationId:
         async def run() -> None:
             deps = _deps(tmp_path, on_composed=_on_composed)
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert result.meta is not None
                 meta_ids.append(result.meta.get(REQUEST_ID_META_KEY))
                 assert REQUEST_ID_META_KEY == "kohaku/requestId"
@@ -339,7 +347,9 @@ class TestMcpCorrelationId:
                 await client_a.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
                 await client_b.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
                 # A second call on session A: the session prefix must stay the same as A's first call.
-                await client_a.call_tool("kohaku_compose", {"question": "Monthly sales trend take 2"})
+                await client_a.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend take 2"}
+                )
 
         asyncio.run(run())
         assert len(session_a_ids) == 2
@@ -404,7 +414,9 @@ class TestResultType:
     def test_success_result_has_result_type_complete(self, tmp_path: Path) -> None:
         async def run() -> None:
             async with connect(_deps(tmp_path), _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert not result.is_error
                 assert result.result_type == "complete"
 
@@ -455,7 +467,9 @@ class TestListResultCacheHints:
         async def run() -> None:
             async with connect(_deps(tmp_path), _OPTIONS, mode="2026-07-28") as client:
                 resources = await client.list_resources()
-                renderer = next(r for r in resources.resources if str(r.uri) == RENDERER_RESOURCE_URI)
+                renderer = next(
+                    r for r in resources.resources if str(r.uri) == RENDERER_RESOURCE_URI
+                )
                 result = await client.read_resource(renderer.uri)
                 assert result.ttl_ms == 60_000
                 assert result.cache_scope == "private"
@@ -471,7 +485,9 @@ class TestTraceparentCorrelation:
     server.py. Trace correlation (linking a call's OTel span to the caller's own trace) flows separately,
     through trace_context -- see TestTraceContextPropagation below."""
 
-    def test_two_calls_sharing_the_same_traceparent_get_different_correlation_ids(self, tmp_path: Path) -> None:
+    def test_two_calls_sharing_the_same_traceparent_get_different_correlation_ids(
+        self, tmp_path: Path
+    ) -> None:
         async def run() -> None:
             seen: list[McpErrorInfo] = []
 
@@ -507,7 +523,9 @@ class TestTraceparentCorrelation:
 
         asyncio.run(run())
 
-    def test_malformed_traceparent_still_yields_a_correlation_id_without_raising(self, tmp_path: Path) -> None:
+    def test_malformed_traceparent_still_yields_a_correlation_id_without_raising(
+        self, tmp_path: Path
+    ) -> None:
         async def run() -> None:
             seen: list[McpErrorInfo] = []
 
@@ -596,7 +614,9 @@ class TestAuditFailOpen:
 
             deps = _deps(tmp_path, on_composed=_on_composed, on_error=_on_error)
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 # Even if the audit record fails, the result is normal.
                 assert not result.is_error
                 assert parse_spec(result.structured_content["spec"]).provenance.tier == "L0"
@@ -632,9 +652,7 @@ class TestRenderSnapshot:
                 written.append((file_name, html))
                 return f"/abs/snapshots/{file_name}"
 
-            options = AttachOptions(
-                renderer_html=RENDERER_HTML_SNAPSHOT, snapshot_writer=_writer
-            )
+            options = AttachOptions(renderer_html=RENDERER_HTML_SNAPSHOT, snapshot_writer=_writer)
             async with connect(_deps(tmp_path), options) as client:
                 result = await client.call_tool(
                     "kohaku_render_snapshot", {"question": "Monthly sales trend"}
@@ -675,9 +693,7 @@ class TestRenderSnapshot:
                                 {"key": "month", "type": "string"},
                                 {"key": "revenue", "type": "number"},
                             ],
-                            "rows": [
-                                {"month": "</script><script>alert(1)</script>", "revenue": 1}
-                            ],
+                            "rows": [{"month": "</script><script>alert(1)</script>", "revenue": 1}],
                             "dataVersion": "sales@seed-1",
                         }
                     )
@@ -688,12 +704,12 @@ class TestRenderSnapshot:
                 written.append(html)
                 return "/abs/snapshots/x.html"
 
-            options = AttachOptions(
-                renderer_html=RENDERER_HTML_SNAPSHOT, snapshot_writer=_writer
-            )
+            options = AttachOptions(renderer_html=RENDERER_HTML_SNAPSHOT, snapshot_writer=_writer)
             deps = _deps(tmp_path, domain=XssDomain())
             async with connect(deps, options) as client:
-                await client.call_tool("kohaku_render_snapshot", {"question": "Monthly sales trend"})
+                await client.call_tool(
+                    "kohaku_render_snapshot", {"question": "Monthly sales trend"}
+                )
                 html = written[0]
                 embedded = self._read_embedded(html)
                 assert (
@@ -702,7 +718,9 @@ class TestRenderSnapshot:
                 )
                 # Only `<` is escaped (> is unchanged), so the escaped form becomes </script>.
                 assert "\\u003c/script>" in html  # the escaped form is present in the body
-                assert "</script><script>alert(1)" not in html  # the raw variant does not appear in the body
+                assert (
+                    "</script><script>alert(1)" not in html
+                )  # the raw variant does not appear in the body
 
         asyncio.run(run())
 
@@ -743,7 +761,10 @@ class TestBindVariantCapability:
         """A1: fully enumerate data.bind's values cartesian product with a read scope, and the switched-to variant also resolves."""
 
         async def run() -> None:
-            deps = _deps(tmp_path, compose=make_compose_ctx(tmp_path, builder=bind_spec_builder, ref=BIND_REF_US))
+            deps = _deps(
+                tmp_path,
+                compose=make_compose_ctx(tmp_path, builder=bind_spec_builder, ref=BIND_REF_US),
+            )
             async with connect(deps, _OPTIONS) as client:
                 composed = await client.call_tool(
                     "kohaku_compose", {"question": "Trend with region switch"}
@@ -778,7 +799,9 @@ class TestInitialDataMeta:
 
         async def run() -> None:
             async with connect(_deps(tmp_path), _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
                 assert len(initial[TREND_REF]["rows"]) == 2
@@ -813,7 +836,9 @@ class TestInitialDataMeta:
                 domain=BigDomain(),
             )
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Trend with region switch"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Trend with region switch"}
+                )
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
                 # Of the 3 variants, only the initial variant (us) fits the budget = partial embedding.
@@ -846,25 +871,23 @@ class TestInitialDataMeta:
                 on_error=_on_error,
             )
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Trend with region switch"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Trend with region switch"}
+                )
                 assert not result.is_error
                 assert result.meta is not None
                 initial = result.meta[INITIAL_DATA_META_KEY]
                 keys = list(initial.keys())
                 assert BIND_REF_US in keys
                 assert "query://sales/trend?granularity=month&metric=revenue&region=jp" in keys
-                assert (
-                    "query://sales/trend?granularity=month&metric=revenue&region=eu" not in keys
-                )
+                assert "query://sales/trend?granularity=month&metric=revenue&region=eu" not in keys
                 assert len(seen) == 1
                 assert seen[0].endpoint == "compose.initialData"
                 assert isinstance(seen[0].error, Exception)
 
         asyncio.run(run())
 
-    def test_per_ref_timeout_skips_slow_ref(
-        self, tmp_path: Path, monkeypatch: Any
-    ) -> None:
+    def test_per_ref_timeout_skips_slow_ref(self, tmp_path: Path, monkeypatch: Any) -> None:
         """per-ref timeout: even with a ref whose resolution never returns, the compose response returns and that ref is not co-embedded."""
         # PRERESOLVE_TIMEOUT_S is read (as a module global) by kohaku.host_mcp.initial_data's
         # _preresolve_initial_data / _resolve_ref_bounded, not by kohaku.host_mcp.server — patch it there
@@ -887,7 +910,9 @@ class TestInitialDataMeta:
 
                 async def invoke(self, op: str, args: Any, ctx: Any) -> object:
                     if args.get("region") == "eu":
-                        await asyncio.sleep(3600)  # effectively never returns (cut off by the timeout)
+                        await asyncio.sleep(
+                            3600
+                        )  # effectively never returns (cut off by the timeout)
                     return DATA
 
             def _on_error(info: McpErrorInfo) -> None:
@@ -900,7 +925,9 @@ class TestInitialDataMeta:
                 on_error=_on_error,
             )
             async with connect(deps, _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Trend with region switch"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Trend with region switch"}
+                )
                 # Even with a slow ref, the compose response itself returns.
                 assert not result.is_error
                 assert result.meta is not None
@@ -1059,9 +1086,7 @@ class TestActionWritePath:
         data_version = result.get("dataVersion") if isinstance(result, dict) else None
         if len(refs) == 0 or not isinstance(data_version, str):
             return ActionEffects(invalidates=refs)
-        return ActionEffects(
-            invalidates=refs, refVersions={r: data_version for r in refs}
-        )
+        return ActionEffects(invalidates=refs, refVersions={r: data_version for r in refs})
 
     def _write_deps(self, tmp_path: Path, *, with_effects: bool) -> McpHostDeps:
         return _deps(
@@ -1380,7 +1405,11 @@ class TestGovernedActions:
                 error = cast(dict[str, Any], sc["error"])
                 assert error["code"] == "ACTION_PARAMS_INVALID"
                 assert error["issues"] == [
-                    {"path": "note", "code": "maxLength", "message": "expected at most 5 characters"}
+                    {
+                        "path": "note",
+                        "code": "maxLength",
+                        "message": "expected at most 5 characters",
+                    }
                 ]
                 assert len(domain.invocations) == 0
 
@@ -1396,7 +1425,12 @@ class TestGovernedActions:
             async with connect(deps, _OPTIONS) as client:
                 result = await client.call_tool(
                     "kohaku_action",
-                    {"action": "ghost", "payload": {}, "capability": "cap:ghost", "confirmed": True},
+                    {
+                        "action": "ghost",
+                        "payload": {},
+                        "capability": "cap:ghost",
+                        "confirmed": True,
+                    },
                 )
                 assert result.is_error is True
                 assert (
@@ -1431,7 +1465,12 @@ class TestGovernedActions:
             async with connect(deps, _OPTIONS) as client:
                 await client.call_tool(
                     "kohaku_action",
-                    {"action": "ghost", "payload": {"note": "x"}, "capability": "cap:ghost", "confirmed": True},
+                    {
+                        "action": "ghost",
+                        "payload": {"note": "x"},
+                        "capability": "cap:ghost",
+                        "confirmed": True,
+                    },
                 )
                 assert len(denied) == 1
                 assert denied[0]["action"] == "ghost"
@@ -1442,7 +1481,9 @@ class TestGovernedActions:
 
         asyncio.run(run())
 
-    def test_undeclared_action_is_still_rejected_when_the_audit_recorder_raises(self, tmp_path: Path) -> None:
+    def test_undeclared_action_is_still_rejected_when_the_audit_recorder_raises(
+        self, tmp_path: Path
+    ) -> None:
         """Recording is fail-open: a raising recorder is reported through on_error, the call still fails
         closed."""
 
@@ -1475,7 +1516,9 @@ class TestGovernedActions:
 
         asyncio.run(run())
 
-    def test_reports_an_invalid_params_schema_through_on_error_at_attach(self, tmp_path: Path) -> None:
+    def test_reports_an_invalid_params_schema_through_on_error_at_attach(
+        self, tmp_path: Path
+    ) -> None:
         """attach_kohaku_to_mcp_server validates the operation index in the background (it runs inside this
         test's event loop), reporting a paramsSchema outside the closed subset at endpoint
         "attach.operationIndex" instead of only at the first invoke."""
@@ -1484,7 +1527,9 @@ class TestGovernedActions:
             async def list_operations(self) -> list[Any]:
                 return [
                     OperationDescriptor(
-                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                        name="annotate",
+                        description="d",
+                        paramsSchema={"type": "string", "pattern": "^a$"},
                     )
                 ]
 
@@ -1504,7 +1549,9 @@ class TestGovernedActions:
                     await asyncio.sleep(0)
                 attach_errors = [info for info in seen if info.endpoint == "attach.operationIndex"]
                 assert len(attach_errors) == 1
-                assert 'operation "annotate" has an invalid paramsSchema' in str(attach_errors[0].error)
+                assert 'operation "annotate" has an invalid paramsSchema' in str(
+                    attach_errors[0].error
+                )
 
         asyncio.run(run())
 
@@ -1520,7 +1567,9 @@ class TestGovernedActions:
                 list_calls += 1
                 return [
                     OperationDescriptor(
-                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                        name="annotate",
+                        description="d",
+                        paramsSchema={"type": "string", "pattern": "^a$"},
                     )
                 ]
 
@@ -1551,7 +1600,9 @@ class TestGovernedActions:
             async def list_operations(self) -> list[Any]:
                 return [
                     OperationDescriptor(
-                        name="annotate", description="d", paramsSchema={"type": "string", "pattern": "^a$"}
+                        name="annotate",
+                        description="d",
+                        paramsSchema={"type": "string", "pattern": "^a$"},
                     ),
                     OperationDescriptor(name="publish", description="d"),
                 ]
@@ -1575,7 +1626,12 @@ class TestGovernedActions:
                 assert "publish" in capability
                 broken = await client.call_tool(
                     "kohaku_action",
-                    {"action": "annotate", "payload": {}, "capability": capability, "confirmed": True},
+                    {
+                        "action": "annotate",
+                        "payload": {},
+                        "capability": capability,
+                        "confirmed": True,
+                    },
                 )
                 assert broken.is_error is True
                 assert broken.content[0].text == "action parameter schema unavailable"  # type: ignore[union-attr]
@@ -1589,7 +1645,7 @@ class TestGovernedActions:
         asyncio.run(run())
 
     def test_rejects_a2ui_forward_action(self, tmp_path: Path) -> None:
-        """"a2ui.forward" (host_a2ui's A2UI_FORWARD_ACTION) must never be a real registered operation
+        """ "a2ui.forward" (host_a2ui's A2UI_FORWARD_ACTION) must never be a real registered operation
         (decision #60) -- a GovernedDomain that never declares it rejects it: the compose-issued
         capability carries no write scope for it, so capability verification denies it before the operation
         index is consulted."""
@@ -1600,7 +1656,8 @@ class TestGovernedActions:
                 composed = await client.call_tool("kohaku_compose", {"question": "Annotation form"})
                 capability = _capability_of(composed)
                 result = await client.call_tool(
-                    "kohaku_action", {"action": "a2ui.forward", "payload": {}, "capability": capability}
+                    "kohaku_action",
+                    {"action": "a2ui.forward", "payload": {}, "capability": capability},
                 )
                 assert result.is_error is True
                 assert domain.invocations == []
@@ -1784,7 +1841,11 @@ class TestEventActionPayloadDepthCap:
 
                 action_result = await client.call_tool(
                     "kohaku_action",
-                    {"action": "annotate", "payload": _nested_object(200), "capability": capability},
+                    {
+                        "action": "annotate",
+                        "payload": _nested_object(200),
+                        "capability": capability,
+                    },
                 )
                 assert action_result.is_error
                 assert "nesting exceeds the maximum depth (32)" in action_result.content[0].text  # type: ignore[union-attr]
@@ -1869,11 +1930,11 @@ class TestLegacyUiResource:
         """When enabled, content[1] co-emits a ui:// UIResource (self-contained snapshot)."""
 
         async def run() -> None:
-            options = AttachOptions(
-                renderer_html=RENDERER_HTML_SNAPSHOT, legacy_ui_resource=True
-            )
+            options = AttachOptions(renderer_html=RENDERER_HTML_SNAPSHOT, legacy_ui_resource=True)
             async with connect(_deps(tmp_path), options) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert not result.is_error
                 # content[0] is the unchanged text fallback (MCPAPP-FBK-001).
                 assert result.content[0].type == "text"
@@ -1900,7 +1961,9 @@ class TestLegacyUiResource:
 
         async def run() -> None:
             async with connect(_deps(tmp_path), _OPTIONS) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 assert len(result.content) == 1
 
         asyncio.run(run())
@@ -1917,7 +1980,9 @@ class TestLegacyUiResource:
             deps = _deps(tmp_path, on_error=_on_error)
             options = AttachOptions(renderer_html=RENDERER_HTML_PLAIN, legacy_ui_resource=True)
             async with connect(deps, options) as client:
-                result = await client.call_tool("kohaku_compose", {"question": "Monthly sales trend"})
+                result = await client.call_tool(
+                    "kohaku_compose", {"question": "Monthly sales trend"}
+                )
                 # A normal response with no co-emission (compose itself stays a success).
                 assert not result.is_error
                 assert len(result.content) == 1

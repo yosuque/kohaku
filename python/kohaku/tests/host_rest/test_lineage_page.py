@@ -102,7 +102,9 @@ def test_bad_request_for_an_order_value_other_than_asc(tmp_path: Path) -> None:
 def test_bad_request_for_a_malformed_cursor(tmp_path: Path) -> None:
     harness = build_harness(tmp_path)
     _seed(harness, _event("e0", "2026-01-01T00:00:00.000Z"))
-    res = harness.client.get(_url("/lineage"), params={"order": "asc", "cursor": "not-a-real-cursor"})
+    res = harness.client.get(
+        _url("/lineage"), params={"order": "asc", "cursor": "not-a-real-cursor"}
+    )
     assert res.status_code == 400
     assert res.json()["error"]["code"] == "BAD_REQUEST"
 

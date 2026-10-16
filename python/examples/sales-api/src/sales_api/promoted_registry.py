@@ -81,9 +81,13 @@ class PromotedRegistry:
         """
         intent_name = entry.draft.intentName
         if intent_name in self._core_intent_names:
-            raise ValueError(f'Intent name "{intent_name}" collides with a core Intent and cannot be promoted')
+            raise ValueError(
+                f'Intent name "{intent_name}" collides with a core Intent and cannot be promoted'
+            )
         if any(e.draft.intentName == intent_name for e in self.entries_for(tenant)):
-            raise ValueError(f'Intent name "{intent_name}" collides with an existing promoted Intent and cannot be promoted')
+            raise ValueError(
+                f'Intent name "{intent_name}" collides with an existing promoted Intent and cannot be promoted'
+            )
         # A component_type collision is thrown by build_component_catalog (detected in a dry-run before the transition).
         self._build_component_catalog([*self.entries_for(tenant), entry])
 
@@ -111,7 +115,9 @@ class PromotedRegistry:
             return
         nxt = [*current, entry]
         try:
-            self._build_component_catalog(nxt)  # component_type collision detection (validate-then-commit)
+            self._build_component_catalog(
+                nxt
+            )  # component_type collision detection (validate-then-commit)
         except Exception as err:  # noqa: BLE001 - skip applying and warn; convergence is left to reconcile
             _logger.warning(
                 "[promoted] %s (%s) skipped due to a catalog collision: %s",

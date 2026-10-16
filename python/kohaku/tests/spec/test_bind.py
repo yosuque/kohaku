@@ -13,7 +13,9 @@ def _ref(data: dict[str, Any]) -> DataRef:
 
 class TestResolveBoundRef:
     def test_no_bind_returns_ref_as_is(self) -> None:
-        ref = _ref({"$ref": "query://s/p?b=2&a=1"})  # returns as-is even when non-canonical (key order)
+        ref = _ref(
+            {"$ref": "query://s/p?b=2&a=1"}
+        )  # returns as-is even when non-canonical (key order)
         assert resolve_bound_ref(ref, {}) == "query://s/p?b=2&a=1"
 
     def test_initial_variant_returns_ref_byte_identical(self) -> None:

@@ -161,7 +161,9 @@ async def analyze_catalog_impact(
             issues = _fixation_issues_for(catalog, fixation)
             if len(issues) > 0:
                 fixation_issues.append(
-                    CatalogFixationIssue(intentHash=fixation.intentHash, tenant=tenant, issues=issues)
+                    CatalogFixationIssue(
+                        intentHash=fixation.intentHash, tenant=tenant, issues=issues
+                    )
                 )
             for node in fixation.pinnedSpec.components:
                 deprecated = deprecated_types.get(node.type)
@@ -182,7 +184,8 @@ async def analyze_catalog_impact(
             deprecated = deprecated_types.get(component_type)
             if deprecated is not None:
                 entry = deprecated_by_type.setdefault(
-                    component_type, CatalogDeprecatedUsageEntry(type=component_type, deprecated=deprecated)
+                    component_type,
+                    CatalogDeprecatedUsageEntry(type=component_type, deprecated=deprecated),
                 )
                 entry.promotions.append(
                     CatalogDeprecatedUsagePromotion(
@@ -215,10 +218,15 @@ async def analyze_catalog_impact(
 
             if current_kit is not None:
                 kit = _origin_kit_of(state)
-                if kit is not None and (kit["id"] != current_kit["id"] or kit["version"] != current_kit["version"]):
+                if kit is not None and (
+                    kit["id"] != current_kit["id"] or kit["version"] != current_kit["version"]
+                ):
                     origin_kit_mismatches.append(
                         CatalogOriginKitMismatch(
-                            artifactId=state.artifactId, tenant=tenant, kit=kit, currentKit=current_kit
+                            artifactId=state.artifactId,
+                            tenant=tenant,
+                            kit=kit,
+                            currentKit=current_kit,
                         )
                     )
 

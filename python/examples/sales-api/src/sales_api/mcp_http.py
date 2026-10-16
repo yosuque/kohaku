@@ -63,7 +63,9 @@ def allowed_hostname_of(entry: str) -> str:
 
 def _hostnames(extra: list[str] | None) -> list[str]:
     """The always-allowed localhost names plus any extra allow-listed hostnames (deduplicated, in order)."""
-    return list(dict.fromkeys([*_LOCAL_HOSTNAMES, *(allowed_hostname_of(e) for e in (extra or []))]))
+    return list(
+        dict.fromkeys([*_LOCAL_HOSTNAMES, *(allowed_hostname_of(e) for e in (extra or []))])
+    )
 
 
 def allowed_host_patterns(extra_hosts: list[str] | None) -> list[str]:
@@ -94,13 +96,7 @@ def _serve_snapshot_body(snapshot_dir: Path, raw_name: str) -> tuple[int, str, b
     (2) confirm the resolved destination stays under snapshot_dir. Unauthenticated (anyone who knows this URL can view it; demo policy).
     """
     name = raw_name
-    if (
-        name == ""
-        or "/" in name
-        or "\\" in name
-        or ".." in name
-        or "\0" in name
-    ):
+    if name == "" or "/" in name or "\\" in name or ".." in name or "\0" in name:
         return 400, "text/plain; charset=utf-8", b"Invalid file name"
     base = snapshot_dir.resolve()
     full = (base / name).resolve()
@@ -221,13 +217,18 @@ def main() -> None:
             "kohaku-sales-sample MCP server: KOHAKU_MCP_HTTP_ALLOWED_HOSTS is deprecated, use KOHAKU_MCP_ALLOWED_HOSTS",
             file=sys.stderr,
         )
-    allowed_hosts = [*parse_allowed_hosts(os.environ.get("KOHAKU_MCP_ALLOWED_HOSTS")), *deprecated_hosts]
+    allowed_hosts = [
+        *parse_allowed_hosts(os.environ.get("KOHAKU_MCP_ALLOWED_HOSTS")),
+        *deprecated_hosts,
+    ]
     allowed_origins = parse_allowed_hosts(os.environ.get("KOHAKU_MCP_ALLOWED_ORIGINS"))
 
     import asyncio
 
     setup = asyncio.run(create_kohaku_mcp_setup(snapshot_base_url=public_url))
-    app = build_starlette_app(setup, allowed_hosts=allowed_hosts, allowed_origins=allowed_origins, host=host)
+    app = build_starlette_app(
+        setup, allowed_hosts=allowed_hosts, allowed_origins=allowed_origins, host=host
+    )
 
     print(
         f"kohaku-sales-sample MCP server: ready (Streamable HTTP) at http://{host}:{port}{_MCP_PATH}",
