@@ -433,6 +433,40 @@ def test_approve_publishes_error_on_failed_judge_blocking(tmp_path: Path) -> Non
     asyncio.run(run())
 
 
+def test_approve_forwards_the_draft_and_tenant_to_the_judge(tmp_path: Path) -> None:
+    """The judge scores the schema actually being registered: approve()'s draft reaches JudgeContext.draft
+    (TS's context.draft), alongside the tenant."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await _seed_generated(storage, "a1", html="<html></html>", tenant="acme")
+        seen: list[JudgeContext] = []
+
+        async def judge(candidate: PromotionCandidate, context: JudgeContext) -> dict[str, Any]:
+            seen.append(context)
+            return {"pass": True, "score": 0.9}
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=PromotionPolicy(minUses=1, minDistinctSessions=1, judgeBlocking=True),
+            judge=judge,
+        )
+
+        await promotions.approve("a1", DRAFT, REVIEWER, "acme")
+
+        assert len(seen) == 1
+        assert seen[0].draft == DRAFT
+        assert seen[0].tenant == "acme"
+
+    asyncio.run(run())
+
+
+def test_judge_context_draft_defaults_to_none() -> None:
+    """Additive field: a JudgeContext built outside approve() keeps working without a draft."""
+    assert JudgeContext(tenant="acme").draft is None
+
+
 def test_reapprove_published_is_idempotent(tmp_path: Path) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)

@@ -154,9 +154,14 @@ class PromotionCandidate:
 
 @dataclass(frozen=True)
 class JudgeContext:
-    """Propagates the tenant passed to approve into the judge (for per-tenant aggregation of telemetry, etc.)."""
+    """Propagates the tenant passed to approve into the judge (for per-tenant aggregation of telemetry, etc.).
+
+    `draft` is approve()'s own draft argument (TS's `context.draft`), so the judge can score the schema actually
+    being registered rather than only the candidate's own machine suggestion. It is None only for a judge
+    context built outside approve() (additive field; a judge that ignores it is unaffected)."""
 
     tenant: str | None = None
+    draft: ComponentDraft | None = None
 
 
 # The judge receives a candidate and returns pass/fail and a score ({ pass, score, reason?, rubricId?, rubricVersion? }).
@@ -860,9 +865,12 @@ class Promotions:
         return candidate
 
     async def _run_judge(
-        self, candidate: PromotionCandidate, tenant: str | None = None
+        self, candidate: PromotionCandidate, tenant: str | None, draft: ComponentDraft
     ) -> dict[str, Any]:
         """Resolve the judge verdict for `candidate` (port of TS's `runJudge`).
+
+        `draft` (approve()'s own draft argument, always known by the time this runs) is forwarded to the judge
+        as `JudgeContext.draft`, so it can score the schema actually being registered.
 
         judge unset (no review hook) is treated as a pass with no advice -> straight to human review. Whether
         promotion is allowed is delegated to the machine's judgeBlocking policy at the judge.result transition
@@ -872,7 +880,7 @@ class Promotions:
         if self._judge is None:
             return {"pass": True, "score": 0}
         try:
-            return await self._judge(candidate, JudgeContext(tenant=tenant))
+            return await self._judge(candidate, JudgeContext(tenant=tenant, draft=draft))
         except Exception as e:
             # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
             # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.
@@ -936,7 +944,7 @@ class Promotions:
             candidate = await self.act(artifact_id, Nominate(by=reviewer), reviewer, tenant)
         if candidate.status == "candidate":
             candidate = await self.act(artifact_id, JudgeStart(), reviewer, tenant)
-            verdict = await self._run_judge(candidate, tenant)
+            verdict = await self._run_judge(candidate, tenant, draft)
             candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
         # Resumes a candidate persisted at "judging" (e.g. the process died between judge.start and
         # judge.result): the machine's judging --judge.result--> in_review | judge_failed edge exists, but until
@@ -945,7 +953,7 @@ class Promotions:
         # the block above is unaffected here: judge.result already advanced it to in_review/judge_failed by the
         # time this runs, so this if's own condition is false for that path (no double-judge).
         if candidate.status == "judging":
-            verdict = await self._run_judge(candidate, tenant)
+            verdict = await self._run_judge(candidate, tenant, draft)
             candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
         if candidate.status == "in_review":
             candidate = await self.act(
