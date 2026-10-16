@@ -15,7 +15,7 @@ The requirement keywords MUST / SHOULD / MAY follow RFC 2119. The machine-readab
 | **UI Spec** | Declarative JSON describing the structure and semantics of UI. Data, not code |
 | **Surface** | A host that accepts input and renders (web / chat / mcp-app / …) |
 | **Intent (normalized Intent)** | Natural language and GUI interactions normalized into a single representation. The source of the cache key. Its wire name is `CanonicalIntent` (§6.1) |
-| **Intent catalog** | The set of registered Intent definitions (canonical name, param schema, query mapping) an application declares — distinct from the **Catalog** below (a set of UI *components*). The reference implementation's `IntentCatalog` (`apps/sample-api/src/intents/catalog.ts`) |
+| **Intent catalog** | The set of registered Intent definitions (canonical name, param schema, query mapping) an application declares — distinct from the **Catalog** below (a set of UI *components*). The reference implementation's `IntentCatalog` (`packages/semantic-llm/src/catalog.ts`) |
 | **Catalog** | A set of typed UI components (ComponentDefinition). Merged in a federated manner (§3) |
 | **Binding** | Pass-by-reference data resolution via `query://` URIs |
 | **Lineage** | Audit records of Views (why this screen appeared) and Components (component provenance) |
