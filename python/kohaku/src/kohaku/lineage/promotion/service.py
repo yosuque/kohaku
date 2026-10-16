@@ -923,11 +923,20 @@ class Promotions:
         if candidate is None:
             raise ArtifactNotFoundError(artifact_id)
         if candidate.status == "published":
-            if (
-                self._on_publish is not None
-                and candidate.draft is not None
-                and candidate.html is not None
-            ):
+            if self._on_publish is not None:
+                # Fail fast like the Publish / Unpublish branches of `act`: a published snapshot without its
+                # draft or html is a state inconsistency, not something to skip silently. (`reconcile`, a
+                # best-effort startup sweep, skips-and-reports instead.)
+                if candidate.draft is None:
+                    raise ValueError(
+                        "re-approve of a published artifact requires the persisted schema draft "
+                        f"(artifact {artifact_id})"
+                    )
+                if candidate.html is None:
+                    raise ValueError(
+                        "re-approve of a published artifact requires the artifact html "
+                        f"(artifact {artifact_id})"
+                    )
                 await self._on_publish(
                     PublishContext(
                         artifactId=artifact_id,

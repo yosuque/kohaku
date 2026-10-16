@@ -487,6 +487,63 @@ def test_reapprove_published_is_idempotent(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        ({"html": "<html></html>"}, "requires the persisted schema draft (artifact a1)"),
+        ({"draft": DRAFT.to_wire()}, "requires the artifact html (artifact a1)"),
+    ],
+)
+def test_reapprove_published_fails_fast_when_draft_or_html_is_missing(
+    tmp_path: Path, data: dict[str, Any], message: str
+) -> None:
+    """A published snapshot without its draft or html is a state inconsistency: re-approve fails fast
+    instead of silently skipping the projection re-application (mirrors TS)."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        # No html on component.generated either: the snapshot's own data is the only possible source.
+        await _seed_generated(storage, "a1")
+        await storage.put_promotion_state(
+            PromotionState(
+                artifactId="a1", status="published", updatedAt="2026-07-17T00:00:00Z", data=data
+            )
+        )
+        calls: list[PublishContext] = []
+
+        async def on_publish(ctx: PublishContext) -> None:
+            calls.append(ctx)
+
+        promotions = create_promotions(
+            lineage=create_lineage(storage), storage=storage, on_publish=on_publish
+        )
+
+        with pytest.raises(ValueError, match="re-approve of a published artifact") as exc:
+            await promotions.approve("a1", DRAFT, REVIEWER)
+        assert message in str(exc.value)
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_reapprove_published_without_on_publish_needs_no_draft_or_html(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        await _seed_generated(storage, "a1")
+        await storage.put_promotion_state(
+            PromotionState(
+                artifactId="a1", status="published", updatedAt="2026-07-17T00:00:00Z", data={}
+            )
+        )
+        promotions = create_promotions(lineage=create_lineage(storage), storage=storage)
+
+        result = await promotions.approve("a1", DRAFT, REVIEWER)
+
+        assert result.status == "published"
+
+    asyncio.run(run())
+
+
 def test_judge_throw_blocking_fails_closed(tmp_path: Path) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)

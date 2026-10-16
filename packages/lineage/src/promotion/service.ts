@@ -722,7 +722,22 @@ export function createPromotions(opts: {
     const acknowledgedSuggestion = scope?.acknowledgedSuggestion === true;
     let candidate = await store.require(artifactId, tenant);
     if (candidate.status === "published") {
-      await opts.onPublish?.(publishArgs(candidate, tenant));
+      if (opts.onPublish != null) {
+        // Fail fast like handlePublish / handleUnpublish: a published snapshot without its draft or html is a
+        // state inconsistency, and publishArgs must never be handed a null (it would pass `undefined` on to
+        // the projection). reconcile, by contrast, skips-and-reports because it is a best-effort startup sweep.
+        if (candidate.draft == null) {
+          throw new Error(
+            `re-approve of a published artifact requires the persisted schema draft (artifact ${artifactId})`,
+          );
+        }
+        if (candidate.html == null) {
+          throw new Error(
+            `re-approve of a published artifact requires the artifact html (artifact ${artifactId})`,
+          );
+        }
+        await opts.onPublish(publishArgs(candidate, tenant));
+      }
       return candidate;
     }
     // in_use (not yet nominated), changes_requested (sent back for changes), and judge_failed (a blocking judge
