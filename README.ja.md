@@ -141,7 +141,7 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/otel` | 薄い opt-in OpenTelemetry 層(`createOtelComposeObserver`。composer の `composeObservers` で束ねて使う)。依存は composer のみ(peer: `@opentelemetry/api`)、exporter/SDK 配線は無い |
 | `packages/host-a2ui` | A2UI 互換プロファイル骨子(UISpec/SpecPatch → A2UI メッセージ。spec-core のみの独立リーフ)[Draft] |
 | `packages/client` | 型付きホストクライアント SDK(spec-core + data-binding のみに依存。host-rest 非依存) |
-| `packages/admin-react` | 統制コンソール(Lineage / Analytics / 昇格レビュー / 固定化)を `client` の上に組み込み可能な React コンポーネントとして提供(sample の Admin 画面は薄いラッパ) |
+| `packages/admin-react` | 統制コンソール(Lineage / Analytics / 昇格レビュー / 固定化 / 承認)を `client` の上に組み込み可能な React コンポーネントとして提供(sample の Admin 画面は薄いラッパ) |
 | `packages/storage-redis` | Redis バックエンドの StoragePort 参考アダプタ(Spec cache・lineage・promotion state・fixation・テナントスコープ)。`ioredis` は peer dependency |
 | `packages/storage-postgres` | PostgreSQL バックエンドの StoragePort 参考アダプタ(storage-redis と同等のカバレッジ、idempotent なスキーマ)。`pg` は peer dependency |
 | `packages/authz-jwt` | JWT / OIDC の AuthzPort 参考アダプタ(claim から principal / roles / tenant を解決。共有シークレットまたは JWKS)。capability token は `authz-hmac` に委譲し、`jose` に依存 |
@@ -151,7 +151,7 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `apps/sample-mcp` | サンプル: 外部チャット向け MCP サーバー + 共有レンダラー |
 | `apps/sample-parts` | サンプル: 売上ドメイン固有のコンポーネント定義(`defineComponent`)。sample-api・sample-web・sample-mcp が共有する単一の情報源 |
 | `apps/playground` | サンプル: sample-web を静的・サーバーレスにビルドし、sample-api のホストをブラウザタブ内で動かして録画済みの LLM 応答を再生する |
-| `cli/` | `kohaku conformance / scaffold / init / explain / evidence / migrate / dataset / component validate` |
+| `cli/` | `kohaku conformance / scaffold / init / explain / evidence / migrate / dataset / usage / smoke-l2 / component validate` |
 | `python/` | **Python 参照実装** — TS `packages/*` のワイヤ互換フル移植(spec / registry / composer / lineage / host-rest / host-mcp)+ サンプル sales-api。conformance CONFORMANT。詳細は [python/README.ja.md](python/README.ja.md) |
 
 ## 開発

@@ -9,7 +9,7 @@ Part of [kohaku](https://github.com/yosuque/kohaku), a reference implementation 
 (a declarative UI Spec), with generation separated from rendering.
 
 ```bash
-npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic @hono/node-server zod
+npm install @kohaku-ui/host @kohaku-ui/llm @kohaku-ui/intents @kohaku-ui/spec-core @ai-sdk/anthropic @hono/node-server zod
 ```
 
 (`@ai-sdk/anthropic` is the provider SDK for Claude, used by `createLlmFromEnv()`; swap it for the provider you configure.)
