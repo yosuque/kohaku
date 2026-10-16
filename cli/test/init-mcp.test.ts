@@ -120,6 +120,8 @@ describe("kohaku init --mcp", () => {
     expect(http.indexOf("validateOrigin(req, res)")).toBeLessThan(http.indexOf("handleMcp(req, res"));
     // Never a wildcard CORS origin: only a validated Origin is echoed back.
     expect(http).not.toMatch(/Access-Control-Allow-Origin",\s*"\*"/);
+    // The preflight allows the standard request headers the MCP SDK client sends (SEP-2243).
+    expect(http).toContain("Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name");
     expect(http).toContain("MAX_BODY_BYTES = 4 * 1024 * 1024");
     expect(http).toMatch(/httpServer\.on\("close", \(\) => \{\s*void mcpHandler\.close\(\);/);
   });
