@@ -262,6 +262,13 @@ function collectExternalPeers(packages, workspaceYaml) {
       peers[name] = range;
     }
   }
+  // react and react-dom both come from the catalog: React refuses to run with mismatched versions, and the
+  // packages' own peer range for react (^19.0.0) would otherwise let npm resolve a newer react than the
+  // catalog's exact react-dom pin (e.g. react 19.3.1 against react-dom 19.3.0). Only pin react when some
+  // package actually peer-depends on it.
+  if (peers["react"]) {
+    peers["react"] = readCatalogVersion(workspaceYaml, "react") ?? peers["react"];
+  }
   peers["react-dom"] = readCatalogVersion(workspaceYaml, "react-dom") ?? peers["react-dom"] ?? "^19.0.0";
   if (!peers["jsdom"]) {
     peers["jsdom"] = readCatalogVersion(workspaceYaml, "jsdom") ?? "*";
