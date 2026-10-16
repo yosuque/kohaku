@@ -154,9 +154,14 @@ class PromotionCandidate:
 
 @dataclass(frozen=True)
 class JudgeContext:
-    """Propagates the tenant passed to approve into the judge (for per-tenant aggregation of telemetry, etc.)."""
+    """Propagates the tenant passed to approve into the judge (for per-tenant aggregation of telemetry, etc.).
+
+    `draft` is approve()'s own draft argument (TS's `context.draft`), so the judge can score the schema actually
+    being registered rather than only the candidate's own machine suggestion. It is None only for a judge
+    context built outside approve() (additive field; a judge that ignores it is unaffected)."""
 
     tenant: str | None = None
+    draft: ComponentDraft | None = None
 
 
 # The judge receives a candidate and returns pass/fail and a score ({ pass, score, reason?, rubricId?, rubricVersion? }).
@@ -699,7 +704,7 @@ class Promotions:
         actor: Principal,
         tenant: str | None = None,
     ) -> PromotionCandidate:
-        """Execute a single transition (load -> transition -> record -> persist).
+        """Execute a single transition (load -> transition -> persist -> record).
 
         Idempotency contract (3-13a): **act is not idempotent**. Serializing concurrent / retried calls is the caller's responsibility.
         When tenant is given, if the owning tenant does not match it is treated as "unknown artifact".
@@ -711,10 +716,15 @@ class Promotions:
         # Invalid transitions from a terminal state are rejected by the machine side (transition) with a TransitionError.
         candidate.status = transition(candidate.status, action, self._machine_policy)
 
+        # Every action kind other than publish / unpublish shares the same order: persist the snapshot (the
+        # state authority), then record the audit event (if the action kind has one) -- the same state-first,
+        # audit-second order as the Publish / Unpublish branches and the fixation service, so a failing persist
+        # never leaves an audit event describing a transition that did not happen. Each branch below only
+        # prepares the event; it is recorded after the common persist at the end.
+        audit: tuple[str, dict[str, Any], LineageActor | None] | None = None
+
         if isinstance(action, Nominate):
-            await self._lineage.record(
-                "component.nominated", {"artifactId": artifact_id, "by": actor.id}, None, tenant
-            )
+            audit = ("component.nominated", {"artifactId": artifact_id, "by": actor.id}, None)
         elif isinstance(action, Review):
             payload: dict[str, Any] = {
                 "artifactId": artifact_id,
@@ -723,16 +733,13 @@ class Promotions:
             }
             if action.comment is not None:
                 payload["comment"] = action.comment
-            await self._lineage.record(
-                "component.reviewed", payload, LineageActor(kind="user", id=actor.id), tenant
-            )
+            audit = ("component.reviewed", payload, LineageActor(kind="user", id=actor.id))
         elif isinstance(action, SchemaPropose):
             candidate.draft = action.draft
-            await self._lineage.record(
+            audit = (
                 "component.schemaProposed",
                 {"artifactId": artifact_id, "draft": action.draft.to_wire()},
                 None,
-                tenant,
             )
         elif isinstance(action, Publish):
             if candidate.draft is None:
@@ -794,7 +801,7 @@ class Promotions:
             withdraw_payload: dict[str, Any] = {"artifactId": artifact_id}
             if action.reason is not None:
                 withdraw_payload["reason"] = action.reason
-            await self._lineage.record("component.withdrawn", withdraw_payload, None, tenant)
+            audit = ("component.withdrawn", withdraw_payload, None)
         elif isinstance(action, Unpublish):
             # transition succeeded = the original state is confirmed to be published (the machine rejects anything but published).
             # A published record without a draft is a state inconsistency, so fail-fast.
@@ -844,21 +851,26 @@ class Promotions:
             return candidate
         elif isinstance(action, JudgeResult):
             candidate.verdict = action.verdict
-            await self._lineage.record(
+            audit = (
                 "component.judged",
                 {"artifactId": artifact_id, "verdict": action.verdict},
                 None,
-                tenant,
             )
         # JudgeStart / ReviewStart record nothing (state transition only).
 
         await self._persist(candidate, tenant)
+        if audit is not None:
+            audit_type, audit_payload, audit_actor = audit
+            await self._lineage.record(audit_type, audit_payload, audit_actor, tenant)
         return candidate
 
     async def _run_judge(
-        self, candidate: PromotionCandidate, tenant: str | None = None
+        self, candidate: PromotionCandidate, tenant: str | None, draft: ComponentDraft
     ) -> dict[str, Any]:
         """Resolve the judge verdict for `candidate` (port of TS's `runJudge`).
+
+        `draft` (approve()'s own draft argument, always known by the time this runs) is forwarded to the judge
+        as `JudgeContext.draft`, so it can score the schema actually being registered.
 
         judge unset (no review hook) is treated as a pass with no advice -> straight to human review. Whether
         promotion is allowed is delegated to the machine's judgeBlocking policy at the judge.result transition
@@ -868,7 +880,7 @@ class Promotions:
         if self._judge is None:
             return {"pass": True, "score": 0}
         try:
-            return await self._judge(candidate, JudgeContext(tenant=tenant))
+            return await self._judge(candidate, JudgeContext(tenant=tenant, draft=draft))
         except Exception as e:
             # A judge that cannot run (LLM trouble, etc.) does not fail-open but falls to "cannot decide = fail".
             # Whether promotion is allowed is delegated to the machine's judgeBlocking policy. Keep the reason in the verdict.
@@ -911,11 +923,20 @@ class Promotions:
         if candidate is None:
             raise ArtifactNotFoundError(artifact_id)
         if candidate.status == "published":
-            if (
-                self._on_publish is not None
-                and candidate.draft is not None
-                and candidate.html is not None
-            ):
+            if self._on_publish is not None:
+                # Fail fast like the Publish / Unpublish branches of `act`: a published snapshot without its
+                # draft or html is a state inconsistency, not something to skip silently. (`reconcile`, a
+                # best-effort startup sweep, skips-and-reports instead.)
+                if candidate.draft is None:
+                    raise ValueError(
+                        "re-approve of a published artifact requires the persisted schema draft "
+                        f"(artifact {artifact_id})"
+                    )
+                if candidate.html is None:
+                    raise ValueError(
+                        "re-approve of a published artifact requires the artifact html "
+                        f"(artifact {artifact_id})"
+                    )
                 await self._on_publish(
                     PublishContext(
                         artifactId=artifact_id,
@@ -932,7 +953,7 @@ class Promotions:
             candidate = await self.act(artifact_id, Nominate(by=reviewer), reviewer, tenant)
         if candidate.status == "candidate":
             candidate = await self.act(artifact_id, JudgeStart(), reviewer, tenant)
-            verdict = await self._run_judge(candidate, tenant)
+            verdict = await self._run_judge(candidate, tenant, draft)
             candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
         # Resumes a candidate persisted at "judging" (e.g. the process died between judge.start and
         # judge.result): the machine's judging --judge.result--> in_review | judge_failed edge exists, but until
@@ -941,7 +962,7 @@ class Promotions:
         # the block above is unaffected here: judge.result already advanced it to in_review/judge_failed by the
         # time this runs, so this if's own condition is false for that path (no double-judge).
         if candidate.status == "judging":
-            verdict = await self._run_judge(candidate, tenant)
+            verdict = await self._run_judge(candidate, tenant, draft)
             candidate = await self.act(artifact_id, JudgeResult(verdict=verdict), reviewer, tenant)
         if candidate.status == "in_review":
             candidate = await self.act(

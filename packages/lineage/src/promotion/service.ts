@@ -556,7 +556,7 @@ export function createPromotions(opts: {
   }
 
   /**
-   * Executes a single transition (load -> transition -> record -> persist).
+   * Executes a single transition (load -> transition -> persist -> record).
    *
    * Idempotency contract: **act is not idempotent**. There is no optimistic lock on the candidate's
    * read-modify-write, and there is no serialization here like the component.nominated duplicate guard of
@@ -586,15 +586,16 @@ export function createPromotions(opts: {
     if (action.kind === "publish") return handlePublish(candidate, action, tenant);
     if (action.kind === "unpublish") return handleUnpublish(candidate, action, actor, tenant);
 
-    // Every other action kind shares the same order: copy any action-carried data onto the candidate, record the
-    // audit event (if the action kind has one), then persist once at the end.
+    // Every other action kind shares the same order: copy any action-carried data onto the candidate, persist
+    // the snapshot (the state authority), then record the audit event (if the action kind has one). State
+    // first, audit second -- the same order as handlePublish and the fixation service -- so a failing persist
+    // never leaves an audit event describing a transition that did not happen.
     applyActionData(candidate, action);
     const event = auditEventFor(action, artifactId, actor);
+    await store.persist(candidate, tenant);
     if (event != null) {
       await opts.lineage.record(event.type, event.payload, event.actor, tenant);
     }
-
-    await store.persist(candidate, tenant);
     return candidate;
   }
 
@@ -721,7 +722,22 @@ export function createPromotions(opts: {
     const acknowledgedSuggestion = scope?.acknowledgedSuggestion === true;
     let candidate = await store.require(artifactId, tenant);
     if (candidate.status === "published") {
-      await opts.onPublish?.(publishArgs(candidate, tenant));
+      if (opts.onPublish != null) {
+        // Fail fast like handlePublish / handleUnpublish: a published snapshot without its draft or html is a
+        // state inconsistency, and publishArgs must never be handed a null (it would pass `undefined` on to
+        // the projection). reconcile, by contrast, skips-and-reports because it is a best-effort startup sweep.
+        if (candidate.draft == null) {
+          throw new Error(
+            `re-approve of a published artifact requires the persisted schema draft (artifact ${artifactId})`,
+          );
+        }
+        if (candidate.html == null) {
+          throw new Error(
+            `re-approve of a published artifact requires the artifact html (artifact ${artifactId})`,
+          );
+        }
+        await opts.onPublish(publishArgs(candidate, tenant));
+      }
       return candidate;
     }
     // in_use (not yet nominated), changes_requested (sent back for changes), and judge_failed (a blocking judge

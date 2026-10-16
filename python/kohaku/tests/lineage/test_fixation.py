@@ -431,5 +431,63 @@ def test_proposals_tenant_scoped(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+def test_proposals_skip_fallback_specs(tmp_path: Path) -> None:
+    """A fallback Spec must not be fixated (SPEC §8), so its view.composed events (tier L1 + a fallback
+    payload) must not be aggregated into a proposal either."""
+
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        fixations = create_fixations(
+            lineage=create_lineage(storage),
+            storage=storage,
+            policy=FixationPolicy(minUses=3, minDistinctSessions=2, structuralStability=0.9),
+        )
+        for s in ("s1", "s2", "s3"):
+            await seed(
+                storage,
+                "view.composed",
+                {
+                    "tier": "L1",
+                    "intentHash": "hF",
+                    "canonical": "sales.f",
+                    "sessionId": s,
+                    "structureHash": "stF",
+                    "fallback": {"reason": "generation-failed", "from": "L1"},
+                },
+            )
+        assert await fixations.proposals() == []
+
+        # Two normal uses are not enough on their own: the fallback events must not count towards minUses.
+        for s in ("s1", "s2"):
+            await seed(
+                storage,
+                "view.composed",
+                {
+                    "tier": "L1",
+                    "intentHash": "hF",
+                    "canonical": "sales.f",
+                    "sessionId": s,
+                    "structureHash": "st1",
+                },
+            )
+        assert await fixations.proposals() == []
+
+        await seed(
+            storage,
+            "view.composed",
+            {
+                "tier": "L1",
+                "intentHash": "hF",
+                "canonical": "sales.f",
+                "sessionId": "s3",
+                "structureHash": "st1",
+            },
+        )
+        proposals = await fixations.proposals()
+        assert [(p.intentHash, p.uses, p.stability) for p in proposals] == [("hF", 3, 1.0)]
+
+    asyncio.run(run())
+
+
 def _types_of(records: list[LineageEventRecord]) -> list[str]:
     return [e.type for e in records]
