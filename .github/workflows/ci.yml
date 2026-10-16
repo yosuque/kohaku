@@ -15,6 +15,12 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # The Redis / Postgres adapter suites need a backend, and the dedicated `adapters` job below runs them
+      # against real service containers with KOHAKU_ADAPTER_TESTS=require. Without this override both matrix
+      # legs would find the runner's Docker daemon, start testcontainers, and run those suites a second (and
+      # third) time. `skip` short-circuits the backend resolution (packages/port-contracts/src/backend.ts).
+      KOHAKU_ADAPTER_TESTS: skip
     strategy:
       matrix:
         # package.json's engines.node floor (">=22") is only actually exercised if something in CI runs on
