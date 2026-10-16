@@ -10,7 +10,7 @@ If you evaluate Generative UI on "how quickly can the model draw something", mos
 
 ### 1. Identical display is structural, not statistical
 
-Chat questions and GUI operations are both normalized into one **canonical Intent** (`sales.quarterly_summary` + sorted params). The Intent, the data version and the component-catalog fingerprint form the cache key of a **UI Spec** — a JSON document, not code. Same request → same key → the same Spec, byte for byte, whether it came from a chat bubble or a facet panel, and on every renderer (React, Web Components, an MCP Apps widget). Temperature 0 helps; the cache is the guarantee. Screens people use often are **fixated** to L0 and stop involving the model at all.
+Chat questions and GUI operations are both normalized into one **canonical Intent** (`sales.quarterly_summary` + sorted params). The Intent, the data version and the component-catalog fingerprint form the cache key of a **UI Spec** — a JSON document, not code. Same request → same key → the same components and events, whether it came from a chat bubble or a facet panel, and on every renderer (React, Web Components, an MCP Apps widget). Temperature 0 helps; the cache is the guarantee. Screens people use often are **fixated** to L0 and stop involving the model at all.
 
 ### 2. The model builds the plumbing; the water never flows through it
 

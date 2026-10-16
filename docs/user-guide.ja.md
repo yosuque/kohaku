@@ -4,7 +4,7 @@
 
 | 項目 | 内容 |
 |---|---|
-| 最終更新 | 2026-09-27 |
+| 最終更新 | 2026-10-17 |
 | 対象 | ① サンプルアプリを動かして概念を体験したい人 ② 自分のプロダクトに kohaku を組み込みたい人 |
 | 関連 | 仕組みの解説は [design.ja.md](design.ja.md)、API の詳細は [specification.ja.md](specification.ja.md) |
 
@@ -350,7 +350,7 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 導入ラダー(設計書 §12「サンプル実装の設計」)に沿って段階導入できます。
 
-**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host @kohaku-ui/llm @ai-sdk/anthropic zod`(`@kohaku-ui/host` の `createKohakuHost()` は `@kohaku-ui/host-rest` を包む one-call ファサードです。詳細は後述。その `@kohaku-ui/host/mcp` サブパスを使うには追加で `@kohaku-ui/host-mcp-apps` と `@modelcontextprotocol/server` が要り、どちらも上のコマンドではインストールされない optional peer です——[パス (a)](paths/mcp-apps.ja.md)参照。`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。
+**依存方法**: `@kohaku-ui/*` パッケージは npm に公開済みです。単体アプリでは `npm install @kohaku-ui/host @kohaku-ui/llm @kohaku-ui/intents @kohaku-ui/spec-core @ai-sdk/anthropic zod`(`@kohaku-ui/host` の `createKohakuHost()` は `@kohaku-ui/host-rest` を包む one-call ファサードです。詳細は後述。その `@kohaku-ui/host/mcp` サブパスを使うには追加で `@kohaku-ui/host-mcp-apps` と `@modelcontextprotocol/server` が要り、どちらも上のコマンドではインストールされない optional peer です——[パス (a)](paths/mcp-apps.ja.md)参照。`@ai-sdk/anthropic` は Claude 用のプロバイダ SDK で `@kohaku-ui/llm` の任意 peer dependency です。使うプロバイダに応じて `@ai-sdk/openai` / `@ai-sdk/google` / `@ai-sdk/openai-compatible` に読み替えてください)(後続ステップに進んだら `@kohaku-ui/composer` や `@kohaku-ui/renderer-react react react-dom` なども追加)して通常どおり import するだけで動きます — 各パッケージの `publishConfig` が `exports` を `dist` ビルドへ向けているため、モノレポ外でも追加設定なしで動作します。
 
 逆に**このモノレポの中**でアプリを組む(本体への貢献や、ビルドを挟まず `src` に対して直接開発したい)場合は、`apps/<your-app>` に自分のアプリを追加し、その `package.json` で各パッケージを `workspace:*` として参照し、`tsx` で実行します(この場合パッケージは `.ts` を直接 export します — `dist` ビルドはモノレポ外からの消費専用です)。以下で生成される `server.ts` は npm install 経路を前提にしています。モノレポ経路を取る場合はコメントの依存関係の行を `workspace:*` に読み替えてください。
 
@@ -361,10 +361,6 @@ mkdir my-app && cd my-app
 npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファイルも可(SQLite は Node >= 22.13)
 npm run dev                                      # API :8787 + web :5173
 ```
-
-> **バージョンに関する注記**: 以下は `@kohaku-ui/cli` と `@kohaku-ui/host` の 0.4.1 以降の挙動です。公開版 0.4.0 では、golden fixture の自動生成も、1 行の開発モード通知も、`usage export` もありません。
-
-<!-- remove after 0.4.1 -->
 
 `init` はファイルを読み、どの列がカテゴリ(→ 語彙)・数値(→ metric)・時間(→ 粒度)かを推論し、公開済みの `@kohaku-ui/*` パッケージだけに依存するプロジェクトを生成します: データ上の DomainPort(sum / avg / count × group by × 期間ウィンドウ、`describeShape` は列メタデータのみ公開 — 行データがモデルに入ることはありません)、Intent カタログ(`defineVocabulary` / `defineIntent`)、`<source>.summary` の L0 固定 Spec、Dashboard + Chat の Web アプリ、golden regression テスト — これらすべてを `@kohaku-ui/host` の `createKohakuHost()`(設計書 #52)で配線し、SemanticPort(`@kohaku-ui/semantic-llm`)・ストレージ(`@kohaku-ui/storage-memory`)・capability token(`@kohaku-ui/authz-hmac`)は既定値として供給されます。
 
@@ -857,6 +853,9 @@ const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
   `--data-dir` が読めるのは `createFileStoragePort` のファイル形式だけです(Redis / Postgres の構成は `--rest` で書き出します)。読むのは `lineage.jsonl` だけで、1 行ずつストリームで読むので、ログ全体をメモリに載せません。また、ストアを開く場合と違い、稼働中かもしれないデータディレクトリにファイルを書いたり移動したりしません。壊れた行は読み飛ばし、件数を標準エラー出力に報告します。存在しないパスは空のファイルを作らず終了コード 2 で止まります。
 
   `--rest` の各リクエストには時間制限があり(`--timeout-ms`、既定 30000)、止まったままの host でも書き出しがハングせず失敗します。`--out` は `<out>.tmp` に書いてから rename するので、失敗した書き出しが途中で切れたファイルを残し、課金処理がそれを拾うことはありません。
+
+### 予算とレート制限
+
 - **コスト/トークン予算ガード(暴走コストの安全弁)**: `ComposePolicy.budget` を配線すると、LLM を呼ぶ直前(L1 生成前・修復前・L2 前)に予算を判定し、拒否時は修復再試行・L2 昇格を諦めて決定的フォールバック(`presentMarkdown`)へ降格します。`perCompose.stopAfterTokens` は**追加の呼び出しを止める累積トークン閾値**で、合計トークンのハード上限ではありません(単一呼び出しの超過は事前に止められず `trace.usage` に事後記録)。`check()` は日次/テナント別などプロダクト側で保持するグローバル予算のフックです(**状態の保持先はフレームワークが決めない** — Redis のカウンタ等はプロダクト実装)。降格 Spec はキャッシュされず、`observer.onError`(`phase:"fallback"` の `budgetExceeded:true`)で観測できます。予算フック `check()` が `throw` したときは素通し(fail-open)に倒しつつ、その発火を `observer.onBudgetCheckError` に転写するので、予算フックの故障を無観測にしません。`budget` 未指定なら挙動・性能とも完全不変。
 
   ```ts
@@ -901,6 +900,9 @@ const { spec, cache, losses } = await ingest.ingest(vendorMessages, {
   - **試してみる**: `apps/sample-api/policy/kohaku.policy.json`(Python は `python/examples/sales-api/policy/kohaku.policy.json`)は `tenant-a: {allowL2: false}` / `tenant-b: {budget: {dailyTokens: 0}}` を生きたデモとして同梱しています——`x-kohaku-tenant: tenant-a` と、本来なら L2 に到達するはずのリクエスト(例えば自由形式の質問)でサンプルに compose すると、代わりにフォールバックする様子が見られます。`tenant-b` ならすべての呼び出しが即座に予算超過でフォールバックします(`dailyTokens: 0` は LLM 呼び出しの前段階で必ず拒否する)。サンプルが起動時に読み込むパスは `KOHAKU_POLICY_FILE` で上書きでき、値が文字列 `"0"` のときは完全に無効化します。
   - **今回のリリースでは対象外**: YAML ポリシーファイル、ファイル監視による自動再読み込み(自前の設定管理フックなどから自分で `reload()` を呼んでください)、ポリシー編集 UI、Redis 版のレート制限ストア(複数インスタンスで共有したい場合は自前の `RateLimitStore` 実装を用意してください)、MCP 側でのテナント解決(MCP Apps プロファイルは設計上テナントを一切解決しません——specification.md の MCP プロファイルの節を参照)。
 - **compose 全体のデッドライン(遅延/ハングした LLM 呼び出しへの安全弁)**: サンプルは `KOHAKU_COMPOSE_DEADLINE_MS` 経由で `ComposePolicy.budget.deadlineMs` を配線しており(`apps/sample-api/src/app/compose-context.ts` の `composeDeadlineMs`。既定 240000ms)、1 回の `compose`/`composeStream` 呼び出しが無期限にハングすることはない — 期限超過時は実行中の LLM 呼び出しを中断し、`perCompose` のトークン予算超過と全く同じ決定的フォールバックへ降格する。既定値は L2 直行 1 回分(`sales.custom` の、既定の 3 倍 `outputBudgetFactor` で広がった `KOHAKU_LLM_TIMEOUT_MS` による ~180 秒の L2 タイムアウト)+ repair 再試行分の余白を見込んだもの。自分の L2 プロンプトが常態的にこれより長くかかるなら広げること。Python サンプルは `python/examples/sales-api/src/sales_api/app.py` の `ComposePolicy(budget=ComposeBudget(deadline_ms=...))` で同様にミラーする。
+
+### その他の運用の勘どころ
+
 - **プロンプトキャッシュ・`refConstraint` に触る前に計測する**: kohaku の既定の `data.$ref` 強制(`ComposePolicy.refConstraint: "schema"`)は L1 生成スキーマで `data.$ref` を intent ごとの enum に固定する — これは同時に、構造化出力の文法コンパイルをキャッシュするプロバイダ(Anthropic)がほぼ全ての異なる intent で再コンパイルし、以前のコンパイル結果を再利用できないことも意味する。独立した 2 つの opt-in の逃げ道があり、どちらも既定 off で、自分のモデル/プロバイダ/トラフィックの組み合わせで計測せずに切り替えるべきではない:
   - `KOHAKU_LLM_PROMPT_CACHE=1`(Anthropic の `claude` のみ。他プロバイダは no-op)は L1/L2 プロンプトのバイト不変な接頭辞(末尾の修復フィードバック節を除く全体)に `cache_control` を付け、同一 compose 内の修復再試行がそのキャッシュ済み接頭辞を再処理せず再利用できるようにする。Anthropic はモデルごとの最小サイズ(モデルにもよるがおおよそ 1,000 トークン前後以上)に満たない接頭辞へのキャッシュブレークポイントを黙って無視する — 無害ではあるが、few-shot 例を含まない小さなカタログではキャッシュ対象の接頭辞がその最小値を下回ることがあり、その場合フラグを有効にしても効果が全く測定されない。「効果が無い」と判断する前に、自分のモデルの最小値と実際の接頭辞トークン数を確認すること。
   - `ComposePolicy.refConstraint: "validate"` は生成スキーマの `data.$ref` をプレーンな文字列に緩和し(修復再試行間だけでなく compose 間でも再利用可能な intent 非依存の文法になる)、代わりに生成後に明示的に集合所属を検証する(`DATA_REF_UNRESOLVED`。既存の修復ループに送り返す)。

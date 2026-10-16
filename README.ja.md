@@ -83,10 +83,6 @@ cd my-dashboard && npm run dev
 
 自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。あわせて、生成し立ての capability secret を書いた `.env` も作られるので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。手元にデータがなければ、このページの冒頭で案内している同梱サンプル CSV([`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv))を使えます。このセクションの残りはモノレポ自体の開発セットアップです。
 
-> **バージョンに関する注記**: ここと利用ガイドで説明している生成プロジェクトの挙動(インストール後の golden fixture の自動生成、1 行の開発モード通知、`usage export`)は、`@kohaku-ui/cli` と `@kohaku-ui/host` の 0.4.1 以降のものです。公開版 0.4.0 にはいずれもありません。
-
-<!-- remove after 0.4.1 -->
-
 前提: Node >= 22(SQLite 入力は >= 22.13)、pnpm 12。CI は Node 22 と 24 で検証しています。
 
 ```bash
@@ -145,7 +141,7 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `packages/otel` | 薄い opt-in OpenTelemetry 層(`createOtelComposeObserver`。composer の `composeObservers` で束ねて使う)。依存は composer のみ(peer: `@opentelemetry/api`)、exporter/SDK 配線は無い |
 | `packages/host-a2ui` | A2UI 互換プロファイル骨子(UISpec/SpecPatch → A2UI メッセージ。spec-core のみの独立リーフ)[Draft] |
 | `packages/client` | 型付きホストクライアント SDK(spec-core + data-binding のみに依存。host-rest 非依存) |
-| `packages/admin-react` | 統制コンソール(Lineage / Analytics / 昇格レビュー / 固定化)を `client` の上に組み込み可能な React コンポーネントとして提供(sample の Admin 画面は薄いラッパ) |
+| `packages/admin-react` | 統制コンソール(Lineage / Analytics / 昇格レビュー / 固定化 / 承認)を `client` の上に組み込み可能な React コンポーネントとして提供(sample の Admin 画面は薄いラッパ) |
 | `packages/storage-redis` | Redis バックエンドの StoragePort 参考アダプタ(Spec cache・lineage・promotion state・fixation・テナントスコープ)。`ioredis` は peer dependency |
 | `packages/storage-postgres` | PostgreSQL バックエンドの StoragePort 参考アダプタ(storage-redis と同等のカバレッジ、idempotent なスキーマ)。`pg` は peer dependency |
 | `packages/authz-jwt` | JWT / OIDC の AuthzPort 参考アダプタ(claim から principal / roles / tenant を解決。共有シークレットまたは JWKS)。capability token は `authz-hmac` に委譲し、`jose` に依存 |
@@ -155,7 +151,7 @@ LLM なしでも Dashboard の定番 4 ビュー(L0 固定 Spec)は完全動作�
 | `apps/sample-mcp` | サンプル: 外部チャット向け MCP サーバー + 共有レンダラー |
 | `apps/sample-parts` | サンプル: 売上ドメイン固有のコンポーネント定義(`defineComponent`)。sample-api・sample-web・sample-mcp が共有する単一の情報源 |
 | `apps/playground` | サンプル: sample-web を静的・サーバーレスにビルドし、sample-api のホストをブラウザタブ内で動かして録画済みの LLM 応答を再生する |
-| `cli/` | `kohaku conformance / scaffold / init / explain / evidence / migrate / dataset / component validate` |
+| `cli/` | `kohaku conformance / scaffold / init / explain / evidence / migrate / dataset / usage / smoke-l2 / component validate` |
 | `python/` | **Python 参照実装** — TS `packages/*` のワイヤ互換フル移植(spec / registry / composer / lineage / host-rest / host-mcp)+ サンプル sales-api。conformance CONFORMANT。詳細は [python/README.ja.md](python/README.ja.md) |
 
 ## 開発

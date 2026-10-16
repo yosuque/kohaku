@@ -9,12 +9,21 @@ Kohaku Protocol v0.1 の Python 参照実装(TS 参照実装 `packages/*` の対
 TS 実装とはワイヤ互換 — canonical JSON がバイト一致するため intent.hash / specHash /
 キャッシュキー / catalogFingerprint が言語をまたいで一致する。
 
-**conformance**: TS 側 CLI の黒箱検査(`node cli/bin/kohaku.js conformance --rest`)で
-**MUST 19/19 = CONFORMANT** を通過済み(SHOULD のストリーミング検査を含む。CI の
-`conformance-python` ジョブが毎コミット検査する)。19 は conformance manifest の全 37
-MUST のうち黒箱検査可能なもので、残り 18 件の reference MUST(MCPAPP-* / SBX-* /
-ACT-PRM-001 / ACT-APR-001、および TS のレンダラー/composer パッケージテストで
-担保される文書規範 6 件)はパッケージテスト(この側では pytest)で担保する。
+**conformance**: TS 側 CLI(`node cli/bin/kohaku.js conformance --rest`)は、この実装に対して
+`MUST: 19/19 passed → CONFORMANT` を報告し、CI の `conformance-python` ジョブが毎コミット
+これを実行する。19 は conformance manifest の全 37 MUST のうち黒箱検査可能なものだが、
+そのすべてが Python ホストへの検査というわけではない:
+
+- `SPEC-*` の MUST 9 件は、CLI 自身の例示 Spec を TS の `spec-core` で検査する。Spec 形式の
+  自己検査であり、Python ホストには触れない。
+- `REST-*` の MUST 9 件(ストリーミング検査を含む SHOULD 7 件を併せて)は Python ホストに
+  リクエストを送る。Python ホストを実際に検査しているのはこの部分である。
+- `LIN-PRM-001` は `GET /lineage` を読む。`component.published` が 1 件もない間は skip として
+  通過するため、昇格を公開したあとでなければ何も検査しない。
+
+残り 18 件の reference MUST(MCPAPP-* / SBX-* / ACT-PRM-001 / ACT-APR-001、および文書規範 6 件)
+には黒箱検査がない。sandbox(SBX-*)とレンダラー側の規範には Python 実装自体がない。これらは
+TS のパッケージテストが固定し、この側では Python 側の対応物があるものを pytest で担保する。
 
 ## セットアップ・検証
 
