@@ -35,6 +35,15 @@ const READY_RETRY_MAX_DELAY_MS = 60000;
 /** How often a migrator waiting for another one re-tries the migration lock. */
 const MIGRATION_LOCK_POLL_MS = 250;
 
+/**
+ * How long a migrator waits for the migration advisory lock before `ready()` rejects. Another instance can
+ * hold the lock for a long time (a `CREATE INDEX CONCURRENTLY` over a large lineage table) or indefinitely
+ * (a hung process whose session stays open); without a bound the waiter would hang silently before the
+ * host starts listening. A rejected `ready()` is retried with backoff, so a slow-but-live holder that
+ * finishes later still lets a later attempt through.
+ */
+export const MIGRATION_LOCK_WAIT_MS = 60000;
+
 /** What `pg.Pool` and `pg.PoolClient` share and the catalog helpers below need. */
 interface Queryable {
   query<R extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<R>>;
@@ -302,14 +311,27 @@ async function correlationIndexState(
  * Takes a session-level advisory lock by polling `pg_try_advisory_lock`. A blocking `pg_advisory_lock`
  * would leave the waiter inside a running statement while the holder's `CREATE INDEX CONCURRENTLY` waits
  * for every older transaction to finish: a deadlock. Each try is a statement of its own.
+ *
+ * The wait is bounded by `MIGRATION_LOCK_WAIT_MS`: once that much time has passed without getting the lock
+ * it rejects, naming the lock key and the elapsed time, instead of polling forever.
  */
 async function acquireSessionLock(client: Queryable, key: string): Promise<void> {
+  const startedAt = Date.now();
   for (;;) {
     const { rows } = await client.query<{ locked: boolean }>(
       "SELECT pg_try_advisory_lock(hashtext($1)) AS locked",
       [key],
     );
     if (rows[0]?.locked === true) return;
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= MIGRATION_LOCK_WAIT_MS) {
+      throw new Error(
+        `@kohaku-ui/storage-postgres: timed out after ${elapsedMs} ms waiting for the migration advisory lock ` +
+          `"${key}" (pg_try_advisory_lock(hashtext('${key}'))). Another instance holds it -- a slow ` +
+          `CREATE INDEX CONCURRENTLY or a hung migrator. Check pg_locks (locktype = 'advisory') and ` +
+          `pg_stat_activity for the holder, or run the migration yourself and start with migrate: false.`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, MIGRATION_LOCK_POLL_MS));
   }
 }

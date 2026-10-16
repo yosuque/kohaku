@@ -18,7 +18,7 @@ await storage.close();
 
 ## Schema
 
-`postgresSchemaSql(schema?)` returns the whole schema as one idempotent script (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` only), safe to run on every start. `createPostgresStoragePort` runs it (plus `CREATE SCHEMA IF NOT EXISTS`) once, lazily, before the first query, unless `migrate: false`. The migration is guarded by a Postgres advisory lock keyed by the schema name, so two instances migrating the same fresh schema concurrently serialize on the DDL instead of racing it.
+`postgresSchemaSql(schema?)` returns the whole schema as one idempotent script (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` only), safe to run on every start. `createPostgresStoragePort` runs it (plus `CREATE SCHEMA IF NOT EXISTS`) once, lazily, before the first query, unless `migrate: false`. The migration is guarded by a Postgres advisory lock keyed by the schema name, so two instances migrating the same fresh schema concurrently serialize on the DDL instead of racing it. A migrator waits at most 60 s for that lock (`MIGRATION_LOCK_WAIT_MS`); if another instance still holds it (a long `CREATE INDEX CONCURRENTLY`, or a hung process), `ready()` rejects with an error that names the lock key and the elapsed time instead of hanging, and it is retried with the usual backoff.
 
 | table | key | notes |
 |---|---|---|
