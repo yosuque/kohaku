@@ -239,9 +239,7 @@ async def compose(
         return finish(outcome.spec, outcome.trace, ctx)
     except BaseException as e:
         # Notify the observer hook of a hard failure (an exception in normalize / reference resolution / final validation) and re-raise.
-        report_compose_error(
-            ctx, ComposeErrorContext(phase="hard", input=to_trace_input(input)), e
-        )
+        report_compose_error(ctx, ComposeErrorContext(phase="hard", input=to_trace_input(input)), e)
         raise
 
 
@@ -301,7 +299,9 @@ async def prepare_compose(
     if policy.cacheMode == "default":
         hit = await _get_spec_cache_safely(ctx, policy, trace_base, intent, key)
         if hit is not None:
-            spec = hit.model_copy(update={"provenance": hit.provenance.model_copy(update={"cache": "hit"})})
+            spec = hit.model_copy(
+                update={"provenance": hit.provenance.model_copy(update={"cache": "hit"})}
+            )
             trace = ComposeTrace(
                 input=trace_base.input,
                 intent=intent,
@@ -442,7 +442,11 @@ def _tier_fallback(
 ) -> _TierOutcomeFallback:
     """Constructs the fallback form of a _TierOutcome (mirrors TS's `fallback()` helper)."""
     return _TierOutcomeFallback(
-        from_tier=from_tier, reason=reason, budget_exceeded=budget_exceeded, failure=failure, error=error
+        from_tier=from_tier,
+        reason=reason,
+        budget_exceeded=budget_exceeded,
+        failure=failure,
+        error=error,
     )
 
 
@@ -525,7 +529,9 @@ async def _get_spec_cache_safely(
         return None
 
 
-async def _put_spec_cache_safely(ctx: ComposeContext, prepared: PreparedCompose, spec: UISpec) -> None:
+async def _put_spec_cache_safely(
+    ctx: ComposeContext, prepared: PreparedCompose, spec: UISpec
+) -> None:
     """Fail-open wrapper around ctx.storage.put_spec_cache, mirroring _get_spec_cache_safely: a raised
     error is reported (phase "cache") and swallowed (the Spec was already generated and is still
     delivered), unless policy.cacheFailure == "closed", in which case it re-raises."""
@@ -767,7 +773,9 @@ def _settle_l1_failure(
         # L1 was cut off due to budget overrun (first-attempt skip or repair skip). Not escalated to L2 either.
         return _tier_fallback(
             initial_from,
-            l1.budgetReason if l1.budgetReason is not None else "Generation stopped: token budget exceeded",
+            l1.budgetReason
+            if l1.budgetReason is not None
+            else "Generation stopped: token budget exceeded",
             True,
             failure="budget",
             error=l1.last_error,
@@ -830,7 +838,9 @@ async def _run_l1_stage(
             ctx,
             signal,
             budget,
-            budget_check_error_reporter_for("L1") if budget_check_error_reporter_for is not None else None,
+            budget_check_error_reporter_for("L1")
+            if budget_check_error_reporter_for is not None
+            else None,
             prepared.on_draft_partial,
             started_at=prepared.started_at,
             deadline_signal=deadline_signal,
@@ -851,7 +861,9 @@ async def _run_l1_stage(
 
     if not can_l2:
         # Only route=L2 direct entry reaches here (L1 success/failure has already returned above).
-        return _tier_fallback(initial_from, "L2 (free-form generation) is disabled in this environment")
+        return _tier_fallback(
+            initial_from, "L2 (free-form generation) is disabled in this environment"
+        )
 
     return None
 
@@ -883,9 +895,14 @@ async def _run_l2_stage(
         check_budget(
             budget,
             BudgetCheckContext(
-                tier="L2", spent_tokens=sum_spent_tokens(attempts), tenant=prepared.tenant, elapsed_ms=elapsed_ms
+                tier="L2",
+                spent_tokens=sum_spent_tokens(attempts),
+                tenant=prepared.tenant,
+                elapsed_ms=elapsed_ms,
             ),
-            budget_check_error_reporter_for("L2") if budget_check_error_reporter_for is not None else None,
+            budget_check_error_reporter_for("L2")
+            if budget_check_error_reporter_for is not None
+            else None,
         )
         if budget is not None
         else None
@@ -894,7 +911,9 @@ async def _run_l2_stage(
         # Skip L2 due to budget overrun. from_tier stays L1 if it stopped at L1 (L2 never actually ran).
         return _tier_fallback(
             initial_from,
-            l2_verdict.reason if l2_verdict.reason is not None else "Skipped L2 escalation: token budget exceeded",
+            l2_verdict.reason
+            if l2_verdict.reason is not None
+            else "Skipped L2 escalation: token budget exceeded",
             True,
             failure="budget",
         )
@@ -905,7 +924,9 @@ async def _run_l2_stage(
         ctx,
         signal,
         budget,
-        budget_check_error_reporter_for("L2") if budget_check_error_reporter_for is not None else None,
+        budget_check_error_reporter_for("L2")
+        if budget_check_error_reporter_for is not None
+        else None,
         started_at=prepared.started_at,
         deadline_signal=deadline_signal,
         tenant=prepared.tenant,
@@ -932,7 +953,9 @@ async def _run_l2_stage(
         # L2's repair retry was cut off by budget. The "stage that actually failed" is L2.
         return _tier_fallback(
             "L2",
-            l2.budgetReason if l2.budgetReason is not None else "Skipped L2 repair retry: token budget exceeded",
+            l2.budgetReason
+            if l2.budgetReason is not None
+            else "Skipped L2 repair retry: token budget exceeded",
             True,
             failure="budget",
             error=l2.last_error,
@@ -940,7 +963,9 @@ async def _run_l2_stage(
     # Tried L2 and failed (align from_tier with reality). failure mirrors l2.failure ("transient" or
     # "invalid") so an observer can tell a provider outage apart from an L2 validation/lint failure the same
     # way L1 does.
-    return _tier_fallback("L2", "L2 free-form generation failed", failure=l2.failure, error=l2.last_error)
+    return _tier_fallback(
+        "L2", "L2 free-form generation failed", failure=l2.failure, error=l2.last_error
+    )
 
 
 def _build_trace(
@@ -1059,7 +1084,9 @@ def _fire_and_forget(invoke: Callable[[], Any]) -> None:
         result = invoke()
         if inspect.isawaitable(result):
             task = asyncio.ensure_future(result)
-            task.add_done_callback(lambda t: t.exception())  # absorb rejects (prevent unobserved warnings)
+            task.add_done_callback(
+                lambda t: t.exception()
+            )  # absorb rejects (prevent unobserved warnings)
     except Exception:  # noqa: BLE001,S110 — do not override the result with an observer-only hook's exception
         pass
 
@@ -1120,9 +1147,7 @@ async def recompose(
         .with_policy_override(opts.policy_override)
         .policy
     ) or ComposePolicy()
-    can_respect_l2 = (
-        respect_prev_tier and prev.provenance.tier == "L2" and resolved_policy.allowL2
-    )
+    can_respect_l2 = respect_prev_tier and prev.provenance.tier == "L2" and resolved_policy.allowL2
     # The L2 pin is passed as a policy_override rather than folded into ctx up front, so that it
     # survives ComposeContext.with_policy_override's placement after with_session_policy even when
     # ctx.policyFor is wired (a session policy resolved from scratch would otherwise silently discard
@@ -1141,9 +1166,7 @@ async def recompose(
     return result, diff_spec(prev, result.spec)
 
 
-async def _resolve_refs(
-    intent: Intent, ctx: ComposeContext, tenant: str | None
-) -> ResolvedRefs:
+async def _resolve_refs(intent: Intent, ctx: ComposeContext, tenant: str | None) -> ResolvedRefs:
     try:
         resolved = await ctx.semantic.resolve_query(intent, tenant=tenant)
     except Exception as e:

@@ -79,7 +79,9 @@ def test_rest_and_mcp_drop_the_same_write_scope_with_allowed_actions(tmp_path: A
     harness = build_harness(tmp_path)
     spec = _mixed_spec()
     principal = Principal(id="tester", roles=["user"])
-    allowed_actions: frozenset[str] = frozenset()  # "annotate" is not allowed -> its write scope is dropped
+    allowed_actions: frozenset[str] = (
+        frozenset()
+    )  # "annotate" is not allowed -> its write scope is dropped
 
     async def run() -> None:
         rest_dropped: list[str] = []

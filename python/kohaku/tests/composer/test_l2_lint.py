@@ -203,9 +203,7 @@ class TestRawColorLint:
         assert any(i.startswith("L2_RAW_COLOR") for i in issues)
 
     def test_detects_hsl(self) -> None:
-        html = _VALID_HTML.replace(
-            "<head>", "<head><style>body{color:hsl(220, 10%, 20%);}</style>"
-        )
+        html = _VALID_HTML.replace("<head>", "<head><style>body{color:hsl(220, 10%, 20%);}</style>")
         issues = collect_l2_issues(html, enforce_token_colors=True)
         assert any(i.startswith("L2_RAW_COLOR") for i in issues)
 

@@ -73,7 +73,9 @@ class _CorruptedFixationStorage(FileStoragePort):
         super().__init__(data_dir)
         self._corrupted = corrupted
 
-    async def get_fixation(self, intent_hash: str, tenant: str | None = None) -> FixationRecord | None:
+    async def get_fixation(
+        self, intent_hash: str, tenant: str | None = None
+    ) -> FixationRecord | None:
         return self._corrupted
 
 
@@ -158,14 +160,19 @@ class _CorruptedPromotionStorage(FileStoragePort):
         return self._corrupted
 
 
-def test_load_candidate_treats_corrupted_state_as_absent_and_falls_back_to_in_use(tmp_path: Path) -> None:
+def test_load_candidate_treats_corrupted_state_as_absent_and_falls_back_to_in_use(
+    tmp_path: Path,
+) -> None:
     async def run() -> None:
         # data is not an object (a corrupted record) — status/updatedAt/artifactId being plain strings
         # would otherwise round-trip unchanged through PromotionState's dataclass, so `data` is the one
         # field a corrupted on-disk record could plausibly break without FileStoragePort's own (very
         # loose) _promotion_from_wire silently coercing it back into a valid shape.
         corrupted = PromotionState(
-            artifactId="art1", status="in_use", updatedAt="2026-07-17T00:00:00Z", data=cast(Any, "not-an-object")
+            artifactId="art1",
+            status="in_use",
+            updatedAt="2026-07-17T00:00:00Z",
+            data=cast(Any, "not-an-object"),
         )
         storage = _CorruptedPromotionStorage(tmp_path, corrupted)
         await storage.append_lineage(
@@ -198,7 +205,10 @@ def test_load_candidate_treats_corrupted_state_as_absent_and_falls_back_to_in_us
 def test_load_candidate_no_on_error_wired_is_silent_fail_open(tmp_path: Path) -> None:
     async def run() -> None:
         corrupted = PromotionState(
-            artifactId="art1", status="in_use", updatedAt="2026-07-17T00:00:00Z", data=cast(Any, "not-an-object")
+            artifactId="art1",
+            status="in_use",
+            updatedAt="2026-07-17T00:00:00Z",
+            data=cast(Any, "not-an-object"),
         )
         storage = _CorruptedPromotionStorage(tmp_path, corrupted)
         await storage.append_lineage(

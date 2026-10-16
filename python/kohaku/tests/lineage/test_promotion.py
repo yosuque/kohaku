@@ -179,7 +179,10 @@ def test_candidate_exposes_origin_from_component_generated(tmp_path: Path) -> No
 
         candidate = await promotions.get("a1")
         assert candidate is not None
-        assert candidate.origin == {"kit": {"id": "default", "version": "1.0.0"}, "generatorVersion": "l2-2026-09"}
+        assert candidate.origin == {
+            "kit": {"id": "default", "version": "1.0.0"},
+            "generatorVersion": "l2-2026-09",
+        }
 
         await promotions.act("a1", Nominate(by=REVIEWER), REVIEWER)
         persisted = await storage.get_promotion_state("a1")
@@ -995,7 +998,10 @@ def test_publish_audit_failure_does_not_block_projection(tmp_path: Path) -> None
             errors.append((ctx.endpoint, ctx.artifactId))
 
         promotions = create_promotions(
-            lineage=create_lineage(storage), storage=storage, on_publish=on_publish, on_error=on_error
+            lineage=create_lineage(storage),
+            storage=storage,
+            on_publish=on_publish,
+            on_error=on_error,
         )
 
         # The audit record raise must not block the transition or the projection.
@@ -1016,7 +1022,9 @@ def test_publish_audit_failure_does_not_block_projection(tmp_path: Path) -> None
 
         # A second reconcile finds the backfilled event and does not duplicate it.
         await promotions.reconcile()
-        assert len([e for e in await storage.list_lineage() if e.type == "component.published"]) == 1
+        assert (
+            len([e for e in await storage.list_lineage() if e.type == "component.published"]) == 1
+        )
 
     asyncio.run(run())
 
@@ -1043,7 +1051,10 @@ def test_reconcile_backfills_published_event(tmp_path: Path) -> None:
             errors.append((ctx.endpoint, ctx.artifactId))
 
         promotions = create_promotions(
-            lineage=create_lineage(storage), storage=storage, on_publish=on_publish, on_error=on_error
+            lineage=create_lineage(storage),
+            storage=storage,
+            on_publish=on_publish,
+            on_error=on_error,
         )
 
         # The audit backfill still fails during this reconcile (fail_for is still set), but on_publish must run anyway.
@@ -1158,8 +1169,12 @@ def test_evaluate_and_list_tenant_scoped(tmp_path: Path) -> None:
             policy=PromotionPolicy(minUses=2, minDistinctSessions=1, judgeBlocking=False),
         )
         await _seed_generated(storage, "a1", tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "a1", "sessionId": "s1"}, tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "a1", "sessionId": "s2"}, tenant="acme")
+        await seed(
+            storage, "component.used", {"artifactId": "a1", "sessionId": "s1"}, tenant="acme"
+        )
+        await seed(
+            storage, "component.used", {"artifactId": "a1", "sessionId": "s2"}, tenant="acme"
+        )
         await _seed_generated(storage, "b1", tenant="globex")
         await seed(
             storage, "component.used", {"artifactId": "b1", "sessionId": "s3"}, tenant="globex"
@@ -1257,10 +1272,21 @@ def test_scan_same_artifact_id_across_tenants_does_not_mix(tmp_path: Path) -> No
         storage = FileStoragePort(tmp_path)
         await _seed_generated(storage, "shared-x", tenant="acme")
         await _seed_generated(storage, "shared-x", tenant="globex")
-        await seed(storage, "component.used", {"artifactId": "shared-x", "sessionId": "s1"}, tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "shared-x", "sessionId": "s1"}, tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "shared-x", "sessionId": "s1"}, tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "shared-x", "sessionId": "s1"}, tenant="globex")
+        await seed(
+            storage, "component.used", {"artifactId": "shared-x", "sessionId": "s1"}, tenant="acme"
+        )
+        await seed(
+            storage, "component.used", {"artifactId": "shared-x", "sessionId": "s1"}, tenant="acme"
+        )
+        await seed(
+            storage, "component.used", {"artifactId": "shared-x", "sessionId": "s1"}, tenant="acme"
+        )
+        await seed(
+            storage,
+            "component.used",
+            {"artifactId": "shared-x", "sessionId": "s1"},
+            tenant="globex",
+        )
         promotions = create_promotions(lineage=create_lineage(storage), storage=storage)
         await promotions.act("shared-x", Nominate(by=REVIEWER), REVIEWER, "acme")
 
@@ -1300,9 +1326,15 @@ def test_evaluate_and_list_tenant_mismatch_skips_persist(tmp_path: Path) -> None
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         await _seed_generated(storage, "acme-art", tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "acme-art", "sessionId": "s1"}, tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "acme-art", "sessionId": "s1"}, tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "acme-art", "sessionId": "s1"}, tenant="acme")
+        await seed(
+            storage, "component.used", {"artifactId": "acme-art", "sessionId": "s1"}, tenant="acme"
+        )
+        await seed(
+            storage, "component.used", {"artifactId": "acme-art", "sessionId": "s1"}, tenant="acme"
+        )
+        await seed(
+            storage, "component.used", {"artifactId": "acme-art", "sessionId": "s1"}, tenant="acme"
+        )
         await _seed_generated(storage, "neutral-art")
         await seed(storage, "component.used", {"artifactId": "neutral-art", "sessionId": "s1"})
         await seed(storage, "component.used", {"artifactId": "neutral-art", "sessionId": "s1"})
@@ -1334,7 +1366,9 @@ def test_evaluate_and_list_tenant_mismatch_skips_persist(tmp_path: Path) -> None
 # --- nominate's idempotency guard is a (tenant, artifactId) composite key ---
 
 
-def test_nominate_tenant_composite_key_does_not_suppress_cross_tenant_nominate(tmp_path: Path) -> None:
+def test_nominate_tenant_composite_key_does_not_suppress_cross_tenant_nominate(
+    tmp_path: Path,
+) -> None:
     """nominate's idempotency guard must be keyed by (tenant, artifactId), not artifactId alone (#10, mirroring
     candidate-store's own composite key): a past nominate recorded under tenant "acme" for artifactId
     "shared-z" must not suppress an independently eligible tenant-neutral candidate for that same
@@ -1343,7 +1377,12 @@ def test_nominate_tenant_composite_key_does_not_suppress_cross_tenant_nominate(t
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         # acme already nominated "shared-z" in the past (a component.nominated event tagged tenant="acme").
-        await seed(storage, "component.nominated", {"artifactId": "shared-z", "by": "policy"}, tenant="acme")
+        await seed(
+            storage,
+            "component.nominated",
+            {"artifactId": "shared-z", "by": "policy"},
+            tenant="acme",
+        )
         # A tenant-neutral candidate for the *same* globally-unique artifactId, independently eligible.
         await _seed_generated(storage, "shared-z")
         await seed(storage, "component.used", {"artifactId": "shared-z", "sessionId": "s1"})
@@ -1368,7 +1407,9 @@ def test_nominate_tenant_composite_key_does_not_suppress_cross_tenant_nominate(t
     asyncio.run(run())
 
 
-def test_nominate_tenant_composite_key_still_suppresses_same_tenant_reevaluation(tmp_path: Path) -> None:
+def test_nominate_tenant_composite_key_still_suppresses_same_tenant_reevaluation(
+    tmp_path: Path,
+) -> None:
     """A tenant's own past nominate must still suppress its own re-evaluation (no regression from the
     composite-key fix): the idempotency guard is event-log-driven precisely so GET-style repeated calls don't
     double-record, even when no promotion state was ever persisted for it in this test (a pre-existing
@@ -1376,11 +1417,22 @@ def test_nominate_tenant_composite_key_still_suppresses_same_tenant_reevaluation
 
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
-        await seed(storage, "component.nominated", {"artifactId": "shared-w", "by": "policy"}, tenant="acme")
+        await seed(
+            storage,
+            "component.nominated",
+            {"artifactId": "shared-w", "by": "policy"},
+            tenant="acme",
+        )
         await _seed_generated(storage, "shared-w", tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s1"}, tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s2"}, tenant="acme")
-        await seed(storage, "component.used", {"artifactId": "shared-w", "sessionId": "s3"}, tenant="acme")
+        await seed(
+            storage, "component.used", {"artifactId": "shared-w", "sessionId": "s1"}, tenant="acme"
+        )
+        await seed(
+            storage, "component.used", {"artifactId": "shared-w", "sessionId": "s2"}, tenant="acme"
+        )
+        await seed(
+            storage, "component.used", {"artifactId": "shared-w", "sessionId": "s3"}, tenant="acme"
+        )
 
         promotions = create_promotions(
             lineage=create_lineage(storage),
@@ -1391,7 +1443,9 @@ def test_nominate_tenant_composite_key_still_suppresses_same_tenant_reevaluation
         await promotions.evaluate_and_list(tenant="acme")
         nominated = [
             e
-            for e in await storage.list_lineage(LineageFilter(type=["component.nominated"], tenant="acme"))
+            for e in await storage.list_lineage(
+                LineageFilter(type=["component.nominated"], tenant="acme")
+            )
             if e.payload.get("artifactId") == "shared-w"
         ]
         assert len(nominated) == 1
@@ -1503,7 +1557,9 @@ def test_reapprove_published_reruns_on_publish(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_reapprove_converges_a_failed_on_publish_without_waiting_for_reconcile(tmp_path: Path) -> None:
+def test_reapprove_converges_a_failed_on_publish_without_waiting_for_reconcile(
+    tmp_path: Path,
+) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         await _seed_generated(storage, "a1", html="<html></html>")
@@ -1634,7 +1690,10 @@ async def _assert_approve_calls_judge_once(storage: FileStoragePort, artifact_id
         return {"pass": True, "score": 1.0}
 
     promotions = create_promotions(
-        lineage=create_lineage(storage), storage=storage, judge=judge, on_publish=lambda ctx: _noop()
+        lineage=create_lineage(storage),
+        storage=storage,
+        judge=judge,
+        on_publish=lambda ctx: _noop(),
     )
 
     result = await promotions.approve(artifact_id, DRAFT, REVIEWER)
@@ -1681,7 +1740,10 @@ def test_unpublish_audit_failure_is_fail_open_and_reconcile_backfills(tmp_path: 
             errors.append((ctx.endpoint, ctx.artifactId))
 
         promotions = create_promotions(
-            lineage=create_lineage(storage), storage=storage, on_unpublish=on_unpublish, on_error=on_error
+            lineage=create_lineage(storage),
+            storage=storage,
+            on_unpublish=on_unpublish,
+            on_error=on_error,
         )
 
         # unpublish's own audit record raise must not block the projection removal.
@@ -1728,7 +1790,10 @@ def test_reconcile_returns_summary_and_reports_projection_skip(tmp_path: Path) -
         # reconcile has no source to rebuild the projection from.
         await storage.put_promotion_state(
             PromotionState(
-                artifactId="art-orphan", status="published", updatedAt="t", data={"draft": DRAFT.to_wire()}
+                artifactId="art-orphan",
+                status="published",
+                updatedAt="t",
+                data={"draft": DRAFT.to_wire()},
             )
         )
 
@@ -1742,7 +1807,10 @@ def test_reconcile_returns_summary_and_reports_projection_skip(tmp_path: Path) -
             errors.append((ctx.endpoint, ctx.artifactId))
 
         promotions = create_promotions(
-            lineage=create_lineage(storage), storage=storage, on_publish=on_publish, on_error=on_error
+            lineage=create_lineage(storage),
+            storage=storage,
+            on_publish=on_publish,
+            on_error=on_error,
         )
 
         summary = await promotions.reconcile()
@@ -1755,7 +1823,9 @@ def test_reconcile_returns_summary_and_reports_projection_skip(tmp_path: Path) -
     asyncio.run(run())
 
 
-def test_reconcile_rebuilds_published_projection_from_snapshot_after_lineage_loss(tmp_path: Path) -> None:
+def test_reconcile_rebuilds_published_projection_from_snapshot_after_lineage_loss(
+    tmp_path: Path,
+) -> None:
     """#9: once published, the snapshot's own html/sha256/ref/componentType duplicate lets reconcile rebuild
     the projection even if lineage.jsonl (and hence component.generated) is lost or replaced."""
 
@@ -2050,7 +2120,9 @@ async def _seed_published_candidates(storage: FileStoragePort, count: int) -> No
 
 
 @pytest.mark.parametrize("count", [3, 30])
-def test_reconcile_list_lineage_calls_do_not_scale_with_candidate_count(tmp_path: Path, count: int) -> None:
+def test_reconcile_list_lineage_calls_do_not_scale_with_candidate_count(
+    tmp_path: Path, count: int
+) -> None:
     async def run() -> None:
         storage = _CountingListLineageStorage(tmp_path)
         await _seed_published_candidates(storage, count)
@@ -2059,7 +2131,9 @@ def test_reconcile_list_lineage_calls_do_not_scale_with_candidate_count(tmp_path
         async def on_publish(ctx: PublishContext) -> None:
             applied.append(ctx.artifactId)
 
-        promotions = create_promotions(lineage=create_lineage(storage), storage=storage, on_publish=on_publish)
+        promotions = create_promotions(
+            lineage=create_lineage(storage), storage=storage, on_publish=on_publish
+        )
 
         storage.list_lineage_calls = 0
         summary = await promotions.reconcile()
@@ -2074,7 +2148,9 @@ def test_reconcile_list_lineage_calls_do_not_scale_with_candidate_count(tmp_path
 
 
 @pytest.mark.parametrize("count", [3, 30])
-def test_list_by_status_list_lineage_calls_do_not_scale_with_candidate_count(tmp_path: Path, count: int) -> None:
+def test_list_by_status_list_lineage_calls_do_not_scale_with_candidate_count(
+    tmp_path: Path, count: int
+) -> None:
     async def run() -> None:
         storage = _CountingListLineageStorage(tmp_path)
         await _seed_published_candidates(storage, count)
@@ -2140,7 +2216,9 @@ def test_index_latest_generated_keeps_entries_separate_across_distinct_keys() ->
 
 
 def test_index_latest_generated_skips_events_whose_artifact_id_is_not_a_string() -> None:
-    missing = dataclasses.replace(_generated_event("2026-01-01T00:00:00.000Z", "acme", None), payload={})
+    missing = dataclasses.replace(
+        _generated_event("2026-01-01T00:00:00.000Z", "acme", None), payload={}
+    )
     wrong_type = _generated_event("2026-01-02T00:00:00.000Z", "acme", 42)
     valid = _generated_event("2026-01-03T00:00:00.000Z", "acme", "art-1")
     result = _index_latest_generated([missing, wrong_type, valid])

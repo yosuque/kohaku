@@ -22,7 +22,9 @@ from kohaku.spec import QueryRefError
 QUERY_SOURCE = "sales"
 
 
-def test_ref_with_reserved_parameters_splits_base_and_merges_params_in_base_then_reserved_order() -> None:
+def test_ref_with_reserved_parameters_splits_base_and_merges_params_in_base_then_reserved_order() -> (
+    None
+):
     # Mirrors binding-resolve.test.ts's "even for a ref with reserved parameters, verifies the capability
     # against the base and merges reserved into domain".
     parsed = parse_invokable_ref(

@@ -70,9 +70,13 @@ def _domain_with(*ops: OperationDescriptor) -> Any:
     return _Domain()
 
 
-def test_includes_an_entry_per_declared_write_action_present_in_the_operation_index(tmp_path: Path) -> None:
+def test_includes_an_entry_per_declared_write_action_present_in_the_operation_index(
+    tmp_path: Path,
+) -> None:
     domain = _domain_with(
-        OperationDescriptor(name="annotate", description="d", tier="confirm", confirmMessage="Are you sure?"),
+        OperationDescriptor(
+            name="annotate", description="d", tier="confirm", confirmMessage="Are you sure?"
+        ),
         OperationDescriptor(name="publish", description="d"),
     )
     harness = build_harness(tmp_path, domain=domain)
@@ -127,7 +131,9 @@ def test_does_not_affect_spec_hash(tmp_path: Path) -> None:
     _with_fixed_spec(harness_without, SPEC_WITH_ACTIONS)
 
     body_with = harness_with.client.post(_url("/compose"), json={"intent": INTENT_BODY}).json()
-    body_without = harness_without.client.post(_url("/compose"), json={"intent": INTENT_BODY}).json()
+    body_without = harness_without.client.post(
+        _url("/compose"), json={"intent": INTENT_BODY}
+    ).json()
 
     spec_with = UISpec.model_validate(body_with["spec"])
     spec_without = UISpec.model_validate(body_without["spec"])

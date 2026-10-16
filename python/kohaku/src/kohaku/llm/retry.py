@@ -41,7 +41,9 @@ class ApiCallError(Exception):
         super().__init__(message)
         self.is_retryable = is_retryable
         self.status_code = status_code
-        self.response_headers: dict[str, str] = response_headers if response_headers is not None else {}
+        self.response_headers: dict[str, str] = (
+            response_headers if response_headers is not None else {}
+        )
         self.url = url
 
 

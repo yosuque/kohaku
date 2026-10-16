@@ -54,7 +54,9 @@ class MemoryRateLimitStore:
         self._max_entries = max_entries
         self._buckets: dict[str, _Bucket] = {}
 
-    async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+    async def take(
+        self, key: str, cost: int, rule: RateLimitRule, now_ms: float
+    ) -> RateLimitResult:
         existing = self._buckets.get(key)
         if existing is not None:
             del self._buckets[key]  # reinsert below to mark as most-recently-used
@@ -77,7 +79,9 @@ class MemoryRateLimitStore:
             bucket.tokens -= cost
             return RateLimitResult(allow=True)
         shortfall = cost - bucket.tokens
-        return RateLimitResult(allow=False, retryAfterMs=math.ceil((shortfall / rule.refillPerSecond) * 1000))
+        return RateLimitResult(
+            allow=False, retryAfterMs=math.ceil((shortfall / rule.refillPerSecond) * 1000)
+        )
 
 
 def create_memory_rate_limit_store(max_entries: int = DEFAULT_MAX_MEMORY_ENTRIES) -> RateLimitStore:
@@ -131,7 +135,9 @@ class RateLimiter:
         self._store = store
         self._on_error = on_error
         self._now = now
-        self._timeout_s: float | None = timeout_ms / 1000 if math.isfinite(timeout_ms) and timeout_ms > 0 else None
+        self._timeout_s: float | None = (
+            timeout_ms / 1000 if math.isfinite(timeout_ms) and timeout_ms > 0 else None
+        )
 
     async def take(self, params: RateLimiterTakeParams) -> RateLimitResult:
         key = json.dumps(
@@ -156,7 +162,10 @@ class RateLimiter:
         notify_hook_nowait(
             self._on_error,
             RateLimiterErrorInfo(
-                error=error, tenant=params.tenant, principal=params.principal, routeClass=params.routeClass
+                error=error,
+                tenant=params.tenant,
+                principal=params.principal,
+                routeClass=params.routeClass,
             ),
         )
         return RateLimitResult(allow=True)

@@ -80,8 +80,12 @@ class TestParseTraceContext:
 
     def test_carries_a_tracestate_at_exactly_the_512_character_cap(self) -> None:
         tracestate = "a" * 512
-        assert parse_trace_context(VALID, tracestate) == TraceContext(traceparent=VALID, tracestate=tracestate)
+        assert parse_trace_context(VALID, tracestate) == TraceContext(
+            traceparent=VALID, tracestate=tracestate
+        )
 
-    def test_drops_a_tracestate_longer_than_512_characters_but_still_carries_the_traceparent(self) -> None:
+    def test_drops_a_tracestate_longer_than_512_characters_but_still_carries_the_traceparent(
+        self,
+    ) -> None:
         tracestate = "a" * 513
         assert parse_trace_context(VALID, tracestate) == TraceContext(traceparent=VALID)

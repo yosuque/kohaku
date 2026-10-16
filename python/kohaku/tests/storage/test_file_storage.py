@@ -105,12 +105,16 @@ class TestLineage:
             # A cursor taken before a restart means the same position after it.
             page = await port.page_lineage(LineagePageRequest(pageSize=10))
             reloaded = FileStoragePort(tmp_path)
-            resumed = await reloaded.page_lineage(LineagePageRequest(pageSize=10, cursor=page.nextCursor))
+            resumed = await reloaded.page_lineage(
+                LineagePageRequest(pageSize=10, cursor=page.nextCursor)
+            )
             assert [e.id for e in resumed.events] == in_memory[10:20]
 
             # Idempotent across a reload too: an id loaded from disk is not appended again.
             await reloaded.append_lineage(_event(ids[0]))
-            assert len((tmp_path / "lineage.jsonl").read_text(encoding="utf-8").splitlines()) == len(ids)
+            assert len(
+                (tmp_path / "lineage.jsonl").read_text(encoding="utf-8").splitlines()
+            ) == len(ids)
 
         asyncio.run(run())
 
@@ -126,7 +130,9 @@ class TestLineage:
         asyncio.run(run())
 
     def test_corrupt_jsonl_line_is_skipped(self, tmp_path: Path) -> None:
-        (tmp_path / "lineage.jsonl").write_text('{"id":"ok","ts":"t","actor":{"kind":"system"},"type":"x","payload":{}}\n{broken\n')
+        (tmp_path / "lineage.jsonl").write_text(
+            '{"id":"ok","ts":"t","actor":{"kind":"system"},"type":"x","payload":{}}\n{broken\n'
+        )
         port = FileStoragePort(tmp_path)
         events = asyncio.run(port.list_lineage())
         assert [e.id for e in events] == ["ok"]
@@ -135,7 +141,9 @@ class TestLineage:
 class TestPageLineage:
     """FileStoragePort.page_lineage (design.md #53) -- StoragePort's optional forward-paging extension."""
 
-    def test_pages_forward_in_ascending_order_with_no_gaps_or_duplicates(self, tmp_path: Path) -> None:
+    def test_pages_forward_in_ascending_order_with_no_gaps_or_duplicates(
+        self, tmp_path: Path
+    ) -> None:
         async def run() -> None:
             port = FileStoragePort(tmp_path)
             for i in range(5):
@@ -227,7 +235,9 @@ class TestPromotionAndFixation:
             s2 = await port.get_promotion_state("a1", "t2")
             assert s1 is not None and s1.status == "draft"
             assert s2 is not None and s2.status == "published"
-            assert await port.get_promotion_state("a1") is None  # the tenant-neutral key is separate
+            assert (
+                await port.get_promotion_state("a1") is None
+            )  # the tenant-neutral key is separate
             assert len(await port.list_promotion_states("t1")) == 1
 
         asyncio.run(run())
@@ -324,7 +334,9 @@ class TestPromotionAndFixation:
 
             # port_b's stale copy attempts an if_present-guarded refresh; since the key is absent from the
             # freshly re-read disk snapshot, the write is a no-op and does not resurrect it anywhere.
-            stale = await FileStoragePort(tmp_path).get_fixation(record_hash)  # None on a fresh load too
+            stale = await FileStoragePort(tmp_path).get_fixation(
+                record_hash
+            )  # None on a fresh load too
             assert stale is None
             existing = FixationRecord(
                 intentHash=record_hash,
@@ -358,7 +370,9 @@ class TestSnapshotEntryTolerance:
             "fixatedAt": "2026-07-17T00:00:00Z",
             "approver": {"id": "admin"},
         }
-        broken = {"intentHash": "sha256:" + "3" * 64}  # missing pinnedSpec -> UISpec.model_validate raises
+        broken = {
+            "intentHash": "sha256:" + "3" * 64
+        }  # missing pinnedSpec -> UISpec.model_validate raises
         (tmp_path / "fixations.json").write_text(
             json.dumps({good_hash: good, "sha256:broken": broken}), encoding="utf-8"
         )

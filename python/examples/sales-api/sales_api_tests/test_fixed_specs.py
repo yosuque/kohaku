@@ -32,7 +32,9 @@ async def _compose(canonical: str, params: JsonObject) -> UISpec:
 class TestFixedSpecsAreL0:
     def test_quarterly_summary_is_l0(self) -> None:
         spec = asyncio.run(
-            _compose("sales.quarterly_summary", {"fiscalYear": 2026, "quarter": 3, "groupBy": "region"})
+            _compose(
+                "sales.quarterly_summary", {"fiscalYear": 2026, "quarter": 3, "groupBy": "region"}
+            )
         )
         assert spec.provenance.tier == "L0"
         # The per-region summary has an intent.patch event for row-click drilldown.
@@ -51,9 +53,7 @@ class TestFixedSpecsAreL0:
         assert spec.state is not None and spec.state.get("region") == "apac"
         # filter change -> state.set(region) is wired (because post_process normalizes component IDs, we judge by
         # emit + payload.key rather than an exact match on `on`).
-        assert any(
-            e.emit == "state.set" and e.payload.get("key") == "region" for e in spec.events
-        )
+        assert any(e.emit == "state.set" and e.payload.get("key") == "region" for e in spec.events)
         # There is a part with bind (data.bind) (re-resolution without a compose round-trip).
         assert any(c.data is not None and c.data.bind is not None for c in spec.components)
 
@@ -65,7 +65,9 @@ class TestFixedSpecsAreL0:
 
     def test_records_is_l0_with_note_dialog(self) -> None:
         spec = asyncio.run(
-            _compose("sales.records", {"fiscalYear": 2026, "quarter": 2, "region": "apac", "limit": 50})
+            _compose(
+                "sales.records", {"fiscalYear": 2026, "quarter": 2, "region": "apac", "limit": 50}
+            )
         )
         assert spec.provenance.tier == "L0"
         # The note dialog (overlay.dialog + presentForm) + the noteOpen initial state.
@@ -88,7 +90,9 @@ class TestFixedSpecsAreL0:
         # compose post-processing (action.button's propsSchema has no `action`, so it travels in the event
         # payload); otherwise the write scope is never issued and the Publish button cannot reach the approval gate.
         spec = asyncio.run(
-            _compose("sales.records", {"fiscalYear": 2026, "quarter": 2, "region": "apac", "limit": 50})
+            _compose(
+                "sales.records", {"fiscalYear": 2026, "quarter": 2, "region": "apac", "limit": 50}
+            )
         )
         assert sorted(collect_write_actions(spec)) == ["annotate", "publish"]
 

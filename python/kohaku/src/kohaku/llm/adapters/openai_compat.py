@@ -276,7 +276,9 @@ def _build_httpx_transport(config: LlmConfig) -> ChatTransport:
         raise LlmError("CONFIG", f'provider "{config.provider}" requires a base_url')
     api_key = config.api_key or "not-required"
 
-    async def transport(req: ChatRequest, *, timeout_ms: float, signal: AbortSignal) -> ChatResponse:
+    async def transport(
+        req: ChatRequest, *, timeout_ms: float, signal: AbortSignal
+    ) -> ChatResponse:
         # Check for abort before the call. An abort during execution is caught by httpx's request timeout (remaining budget).
         signal.throw_if_aborted()
         body: dict[str, Any] = {
@@ -367,9 +369,7 @@ def _build_httpx_stream_transport(config: LlmConfig) -> StreamingChatTransport:
                     ) as http_resp:
                         if http_resp.status_code >= 400:
                             await http_resp.aread()
-                            retryable = (
-                                http_resp.status_code == 429 or http_resp.status_code >= 500
-                            )
+                            retryable = http_resp.status_code == 429 or http_resp.status_code >= 500
                             raise ApiCallError(
                                 f"HTTP {http_resp.status_code}: {http_resp.text[:200]}",
                                 is_retryable=retryable,

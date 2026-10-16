@@ -265,32 +265,25 @@ export interface AttachOptions {
    * compose-family tools (`${prefix}_compose` and `intentTools`) and this profile's `tasks/get`/
    * `tasks/cancel` methods. **Default `false` (unset).**
    *
-   * MUST NOT be enabled until `tasks/get` is actually dispatchable on the installed
-   * `@modelcontextprotocol/server` version — see docs/design.md §11's "MCP Tasks extension" subsection for
-   * why it currently is NOT: a verified, reproducible SDK-version limitation where `tasks/get`/
-   * `tasks/cancel` collide with the deprecated 2025-11-25 vocabulary's own reserved method names and are
-   * rejected by the SDK's own inbound routing with `-32601` before ever reaching kohaku's handler,
-   * regardless of registration, declared capabilities, or which registration form is used.
+   * Enabling it also declares the extension on `server/discover` and makes the server answer
+   * `tasks/get` / `tasks/cancel`. On `@modelcontextprotocol/server` 2.0.0 those two methods were never
+   * dispatched to (the SDK's inbound routing rejected them with `-32601` before kohaku's handler ran — a name
+   * collision with its deprecated 2025-11-25 vocabulary), which is why this option was originally introduced
+   * as a kill switch. On SDK >= 2.3.0 (SEP-2663; verified on 2.3.1) they are reachable: see
+   * docs/design.md §11's "MCP Tasks extension" subsection and `test/tasks.test.ts`'s "SDK reachability"
+   * describe block. A client must send the `Mcp-Name: <taskId>` header on them (SDK clients do), otherwise the
+   * SDK rejects the request with `-32020` before dispatch.
    *
    * **Left at its default (`false`/unset)**:
-   *  - the server does not declare the extension in `ServerCapabilities.extensions` (`server/discover`
-   *    does not claim support it could not fulfil),
-   *  - `tasks/get` / `tasks/cancel` are not registered at all,
+   *  - the server does not declare the extension in `ServerCapabilities.extensions`,
+   *  - `tasks/get` / `tasks/cancel` are not registered at all (the SDK answers `-32601`),
    *  - `${prefix}_compose` / the intent tools execute synchronously exactly as they did before this
    *    extension existed — byte-identical, even for a request that declares the extension capability on
    *    itself. A client that declared it gets exactly what a client that did not declared it gets.
    *
-   * This is deliberate, not a conservative-default nicety: while `tasks/get` is unreachable, a
-   * `CreateTaskResult` handed to a client is a task handle it can never poll — worse than no task handle
-   * at all, and it would take away a working synchronous call from exactly the clients sophisticated
-   * enough to have declared the extension in the first place.
-   *
-   * **How to check whether it is now safe to enable**: re-run the reproduction documented in
-   * docs/design.md §11 against the installed SDK version (send a raw `tasks/get` request over a
-   * negotiated 2026-07-28 connection and see whether it still answers `-32601`).
-   * `packages/host-mcp-apps/test/tasks.test.ts`'s "known SDK limitation" describe block is the same check,
-   * wired as an automatic tripwire — if it starts failing (the `-32601` assertion no longer holds),
-   * `tasks/get` has become reachable and this option is safe to flip on.
+   * Whether to turn it on is a product decision: a `CreateTaskResult` replaces the synchronous result for
+   * every client that declares the extension, and no real MCP host has been verified to poll
+   * `io.modelcontextprotocol/tasks` yet (docs/design.md §11).
    */
   tasksEnabled?: boolean;
 }

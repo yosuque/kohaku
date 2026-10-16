@@ -51,7 +51,9 @@ class _Recorder:
         self.calls.append(("approved", kwargs))
 
 
-def _ctx(recorder: Any, reported: list[BaseException] | None = None, tenant: str | None = None) -> ActionAuditContext:
+def _ctx(
+    recorder: Any, reported: list[BaseException] | None = None, tenant: str | None = None
+) -> ActionAuditContext:
     sink = reported if reported is not None else []
 
     async def report(exc: BaseException) -> None:
@@ -70,8 +72,12 @@ def _ctx(recorder: Any, reported: list[BaseException] | None = None, tenant: str
 
 def test_invalid_records_nothing_and_returns_the_issues() -> None:
     recorder = _Recorder()
-    issues = [ActionParamIssue(path="note", code="maxLength", message="expected at most 5 characters")]
-    outcome = asyncio.run(record_action_gate_result(ActionGateInvalid(issues=issues), _ctx(recorder)))
+    issues = [
+        ActionParamIssue(path="note", code="maxLength", message="expected at most 5 characters")
+    ]
+    outcome = asyncio.run(
+        record_action_gate_result(ActionGateInvalid(issues=issues), _ctx(recorder))
+    )
     assert outcome.kind == "invalid"
     assert outcome.issues == issues
     assert recorder.calls == []
@@ -132,7 +138,12 @@ def test_denied_by_a_host_with_no_approval_port_keeps_its_fixed_diagnosis() -> N
 def test_allow_records_invoked_and_approved_when_a_grant_was_consumed() -> None:
     recorder = _Recorder()
     grant = ApprovalGrant(
-        action="annotate", payloadHash=HASH, approverId="boss", requesterId="u1", exp=4102444800, jti="j1"
+        action="annotate",
+        payloadHash=HASH,
+        approverId="boss",
+        requesterId="u1",
+        exp=4102444800,
+        jti="j1",
     )
     outcome = asyncio.run(
         record_action_gate_result(
@@ -166,7 +177,12 @@ def test_a_failing_invoked_write_does_not_drop_the_approved_record() -> None:
     reported: list[BaseException] = []
     recorder = _Recorder(fail_invoked=True)
     grant = ApprovalGrant(
-        action="annotate", payloadHash=HASH, approverId="boss", requesterId="u1", exp=4102444800, jti="j1"
+        action="annotate",
+        payloadHash=HASH,
+        approverId="boss",
+        requesterId="u1",
+        exp=4102444800,
+        jti="j1",
     )
     outcome = asyncio.run(
         record_action_gate_result(
@@ -204,7 +220,9 @@ def test_undeclared_denial_is_fail_open() -> None:
     assert len(reported) == 1
 
 
-def test_unavailable_denial_records_action_denied_with_the_fixed_reason_and_defaults_to_tier_auto() -> None:
+def test_unavailable_denial_records_action_denied_with_the_fixed_reason_and_defaults_to_tier_auto() -> (
+    None
+):
     recorder = _Recorder()
     asyncio.run(record_action_gate_unavailable_denial(_ctx(recorder, tenant="t1")))
     assert len(recorder.calls) == 1

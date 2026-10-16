@@ -48,7 +48,9 @@ def test_memoizes_list_operations_across_calls() -> None:
     asyncio.run(run())
 
 
-def test_propagates_a_list_operations_rejection_to_the_caller_and_notifies_the_optional_on_error_hook() -> None:
+def test_propagates_a_list_operations_rejection_to_the_caller_and_notifies_the_optional_on_error_hook() -> (
+    None
+):
     boom = RuntimeError("domain unavailable")
     domain: DomainPort = _FakeDomain([boom])
     seen: list[BaseException] = []

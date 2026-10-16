@@ -117,7 +117,10 @@ def _new_type_def() -> ComponentDefinition:
             propsSchema=PropsSchema(
                 {
                     "type": "object",
-                    "properties": {"label": {"type": "string"}, "format": {"enum": ["currency", "percent"]}},
+                    "properties": {
+                        "label": {"type": "string"},
+                        "format": {"enum": ["currency", "percent"]},
+                    },
                     "required": ["label", "format"],
                 }
             ),
@@ -133,10 +136,16 @@ def _old_clean_type_def() -> ComponentDefinition:
             version="1.0.0",
             description="old kpi card (migrates cleanly, modulo missing migrateProps -- see below)",
             propsSchema=PropsSchema(
-                {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+                {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}},
+                    "required": ["label"],
+                }
             ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
-            deprecated=DeprecationDecl(reason="superseded", replacedBy=DeprecationReplacedBy(type=NEW_TYPE)),
+            deprecated=DeprecationDecl(
+                reason="superseded", replacedBy=DeprecationReplacedBy(type=NEW_TYPE)
+            ),
         )
     )
 
@@ -148,17 +157,24 @@ def _old_bad_type_def() -> ComponentDefinition:
             version="1.0.0",
             description="old kpi card (also ends up missing NEW_TYPE's required format)",
             propsSchema=PropsSchema(
-                {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+                {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}},
+                    "required": ["label"],
+                }
             ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
-            deprecated=DeprecationDecl(reason="superseded", replacedBy=DeprecationReplacedBy(type=NEW_TYPE)),
+            deprecated=DeprecationDecl(
+                reason="superseded", replacedBy=DeprecationReplacedBy(type=NEW_TYPE)
+            ),
         )
     )
 
 
 def _migration_catalog() -> ResolvedCatalog:
     return resolve_catalog(
-        core_catalog(), Catalog(components=[_new_type_def(), _old_clean_type_def(), _old_bad_type_def()])
+        core_catalog(),
+        Catalog(components=[_new_type_def(), _old_clean_type_def(), _old_bad_type_def()]),
     )
 
 
@@ -167,7 +183,14 @@ def _clean_fixation() -> FixationRecord:
         INTENT_HASH_CLEAN,
         _fixed_spec(
             INTENT_HASH_CLEAN,
-            [{"id": "kpi1", "type": OLD_CLEAN_TYPE, "props": {"label": "Revenue"}, "data": {"$ref": "query://sales/revenue"}}],
+            [
+                {
+                    "id": "kpi1",
+                    "type": OLD_CLEAN_TYPE,
+                    "props": {"label": "Revenue"},
+                    "data": {"$ref": "query://sales/revenue"},
+                }
+            ],
         ),
         structureHash="clean-before",
         revision="rev-clean",
@@ -180,7 +203,14 @@ def _blocked_fixation() -> FixationRecord:
         INTENT_HASH_BLOCKED,
         _fixed_spec(
             INTENT_HASH_BLOCKED,
-            [{"id": "kpi2", "type": OLD_BAD_TYPE, "props": {"label": "Cost"}, "data": {"$ref": "query://sales/cost"}}],
+            [
+                {
+                    "id": "kpi2",
+                    "type": OLD_BAD_TYPE,
+                    "props": {"label": "Cost"},
+                    "data": {"$ref": "query://sales/cost"},
+                }
+            ],
         ),
         structureHash="blocked-before",
     )
@@ -225,7 +255,11 @@ def test_rewrites_type_and_version_even_without_migrate_props() -> None:
             version="2.0.0",
             description="new kpi card (label only)",
             propsSchema=PropsSchema(
-                {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+                {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}},
+                    "required": ["label"],
+                }
             ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
         )
@@ -265,7 +299,9 @@ def test_skips_a_fixation_referencing_no_deprecated_type_entirely() -> None:
     assert plan.blocked == []
 
 
-def test_rewrites_lists_every_deprecated_with_replacement_type_even_with_no_matching_fixations() -> None:
+def test_rewrites_lists_every_deprecated_with_replacement_type_even_with_no_matching_fixations() -> (
+    None
+):
     catalog = _migration_catalog()
     storage = _StubStorage({None: []})
 
@@ -297,7 +333,9 @@ def test_plan_hash_is_deterministic_and_reacts_to_content_changes() -> None:
     catalog = _migration_catalog()
 
     async def run(fixations: list[FixationRecord]) -> CatalogMigrationPlan:
-        return await plan_catalog_migration(storage=_StubStorage({None: fixations}), catalog_for=lambda _t: catalog)
+        return await plan_catalog_migration(
+            storage=_StubStorage({None: fixations}), catalog_for=lambda _t: catalog
+        )
 
     a = asyncio.run(run([_clean_fixation()]))
     b = asyncio.run(run([_clean_fixation()]))
@@ -340,7 +378,14 @@ def test_omits_before_catalog_fingerprint_for_a_legacy_fixation() -> None:
         INTENT_HASH_CLEAN,
         _fixed_spec(
             INTENT_HASH_CLEAN,
-            [{"id": "kpi1", "type": OLD_CLEAN_TYPE, "props": {"label": "Revenue"}, "data": {"$ref": "query://sales/revenue"}}],
+            [
+                {
+                    "id": "kpi1",
+                    "type": OLD_CLEAN_TYPE,
+                    "props": {"label": "Revenue"},
+                    "data": {"$ref": "query://sales/revenue"},
+                }
+            ],
         ),
     )
     storage = _StubStorage({None: [legacy]})
@@ -359,17 +404,25 @@ def test_sweeps_every_tenant_tagging_steps_and_blocked() -> None:
             version="2.0.0",
             description="new kpi card (label only)",
             propsSchema=PropsSchema(
-                {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+                {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}},
+                    "required": ["label"],
+                }
             ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
         )
     )
-    catalog = resolve_catalog(core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def()]))
+    catalog = resolve_catalog(
+        core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def()])
+    )
     acme_fixation = replace(_clean_fixation(), tenant="acme")
     storage = _StubStorage({"acme": [acme_fixation]})
 
     async def run() -> CatalogMigrationPlan:
-        return await plan_catalog_migration(storage=storage, catalog_for=lambda _t: catalog, tenants=[None, "acme"])
+        return await plan_catalog_migration(
+            storage=storage, catalog_for=lambda _t: catalog, tenants=[None, "acme"]
+        )
 
     plan = asyncio.run(run())
     assert len(plan.steps) == 1
@@ -430,7 +483,8 @@ def test_a_plan_whose_step_pinned_spec_alone_was_hand_edited_fails_verification(
             pinnedSpec=s.pinnedSpec.model_copy(
                 update={
                     "components": [
-                        node.model_copy(update={"type": "tampered.part"}) for node in s.pinnedSpec.components
+                        node.model_copy(update={"type": "tampered.part"})
+                        for node in s.pinnedSpec.components
                     ]
                 }
             ),
@@ -461,7 +515,14 @@ class _FakeReplacer:
         plan_id: str | None = None,
     ) -> FixationRecord | None:
         self.calls.append(
-            {"intentHash": intent_hash, "pinnedSpec": pinned_spec, "approver": approver, "tenant": tenant, "guard": guard, "planId": plan_id}
+            {
+                "intentHash": intent_hash,
+                "pinnedSpec": pinned_spec,
+                "approver": approver,
+                "tenant": tenant,
+                "guard": guard,
+                "planId": plan_id,
+            }
         )
         if intent_hash in self.returns_none_for:
             return None
@@ -483,12 +544,18 @@ def _no_extra_fields_catalog() -> ResolvedCatalog:
             version="2.0.0",
             description="new kpi card (label only)",
             propsSchema=PropsSchema(
-                {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+                {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}},
+                    "required": ["label"],
+                }
             ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
         )
     )
-    return resolve_catalog(core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def()]))
+    return resolve_catalog(
+        core_catalog(), Catalog(components=[new_type_no_extra_fields, _old_clean_type_def()])
+    )
 
 
 def _no_extra_fields_catalog_with_extra_component() -> ResolvedCatalog:
@@ -501,7 +568,11 @@ def _no_extra_fields_catalog_with_extra_component() -> ResolvedCatalog:
             version="2.0.0",
             description="new kpi card (label only)",
             propsSchema=PropsSchema(
-                {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+                {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}},
+                    "required": ["label"],
+                }
             ),
             capabilities=CapabilityDecl(events=[], data="required", children="none"),
         )
@@ -561,7 +632,10 @@ def test_apply_calls_replace_with_guard_and_plan_hash() -> None:
 
     async def run() -> CatalogMigrationApplyResult:
         return await apply_catalog_migration(
-            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: _no_extra_fields_catalog()
+            plan=plan,
+            fixations=replacer,
+            approver=APPROVER,
+            catalog_for=lambda _t: _no_extra_fields_catalog(),
         )
 
     result = asyncio.run(run())
@@ -584,11 +658,16 @@ def test_apply_calls_replace_with_guard_and_plan_hash() -> None:
 
 def test_apply_reports_a_guard_mismatch_as_skipped() -> None:
     plan = _build_plan()
-    replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for={INTENT_HASH_CLEAN}, calls=[])
+    replacer: CatalogMigrationFixationReplacer = _FakeReplacer(
+        returns_none_for={INTENT_HASH_CLEAN}, calls=[]
+    )
 
     async def run() -> CatalogMigrationApplyResult:
         return await apply_catalog_migration(
-            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: _no_extra_fields_catalog()
+            plan=plan,
+            fixations=replacer,
+            approver=APPROVER,
+            catalog_for=lambda _t: _no_extra_fields_catalog(),
         )
 
     result = asyncio.run(run())
@@ -598,7 +677,9 @@ def test_apply_reports_a_guard_mismatch_as_skipped() -> None:
 
 
 def test_apply_never_calls_replace_for_a_step_already_in_plan_blocked() -> None:
-    catalog = _migration_catalog()  # NEW_TYPE here requires `format`, so the clean fixation is blocked too
+    catalog = (
+        _migration_catalog()
+    )  # NEW_TYPE here requires `format`, so the clean fixation is blocked too
     storage = _StubStorage({None: [_blocked_fixation()]})
 
     async def run_plan() -> CatalogMigrationPlan:
@@ -623,7 +704,9 @@ def test_apply_never_calls_replace_for_a_step_already_in_plan_blocked() -> None:
 # --- apply_catalog_migration: catalog drift (the catalog changed between plan and apply) ---
 
 
-def test_apply_refuses_a_step_when_the_live_catalogs_fingerprint_differs_from_the_plans_target() -> None:
+def test_apply_refuses_a_step_when_the_live_catalogs_fingerprint_differs_from_the_plans_target() -> (
+    None
+):
     plan = _build_plan()
     drifted_catalog = _no_extra_fields_catalog_with_extra_component()
     replacer: CatalogMigrationFixationReplacer = _FakeReplacer(returns_none_for=set(), calls=[])
@@ -645,7 +728,9 @@ def test_apply_refuses_a_step_when_the_live_catalogs_fingerprint_differs_from_th
     assert entry.issues == []
 
 
-def test_apply_refuses_a_step_whose_pinned_spec_fails_revalidation_even_though_the_fingerprint_is_unchanged() -> None:
+def test_apply_refuses_a_step_whose_pinned_spec_fails_revalidation_even_though_the_fingerprint_is_unchanged() -> (
+    None
+):
     plan = _build_plan()
     tightened_catalog = _no_extra_fields_catalog_tightened()
     # Sanity: this is exactly the case fingerprint comparison alone cannot catch.
@@ -654,7 +739,10 @@ def test_apply_refuses_a_step_whose_pinned_spec_fails_revalidation_even_though_t
 
     async def run() -> CatalogMigrationApplyResult:
         return await apply_catalog_migration(
-            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: tightened_catalog
+            plan=plan,
+            fixations=replacer,
+            approver=APPROVER,
+            catalog_for=lambda _t: tightened_catalog,
         )
 
     result = asyncio.run(run())
@@ -675,7 +763,10 @@ def test_apply_applies_cleanly_when_the_live_catalog_matches_the_plans_target_ex
 
     async def run() -> CatalogMigrationApplyResult:
         return await apply_catalog_migration(
-            plan=plan, fixations=replacer, approver=APPROVER, catalog_for=lambda _t: _no_extra_fields_catalog()
+            plan=plan,
+            fixations=replacer,
+            approver=APPROVER,
+            catalog_for=lambda _t: _no_extra_fields_catalog(),
         )
 
     result = asyncio.run(run())

@@ -89,21 +89,30 @@ class FakeAnthropicTransport:
 
 
 def _ok_object(payload: dict[str, object]) -> AnthropicResponse:
-    return AnthropicResponse(tool_input=payload, text="", usage=LlmUsage(input_tokens=1, output_tokens=2))
+    return AnthropicResponse(
+        tool_input=payload, text="", usage=LlmUsage(input_tokens=1, output_tokens=2)
+    )
 
 
 def _no_tool_block() -> AnthropicResponse:
     # Forced via tool_choice yet no tool_use = the trigger for INVALID_OUTPUT.
-    return AnthropicResponse(tool_input=None, text="", usage=LlmUsage(input_tokens=1, output_tokens=0))
+    return AnthropicResponse(
+        tool_input=None, text="", usage=LlmUsage(input_tokens=1, output_tokens=0)
+    )
 
 
 def _ok_text(text: str) -> AnthropicResponse:
-    return AnthropicResponse(tool_input=None, text=text, usage=LlmUsage(input_tokens=0, output_tokens=0))
+    return AnthropicResponse(
+        tool_input=None, text=text, usage=LlmUsage(input_tokens=0, output_tokens=0)
+    )
 
 
 def _api_error(*, is_retryable: bool, status_code: int) -> ApiCallError:
     return ApiCallError(
-        f"api {status_code}", is_retryable=is_retryable, status_code=status_code, response_headers={}
+        f"api {status_code}",
+        is_retryable=is_retryable,
+        status_code=status_code,
+        response_headers={},
     )
 
 
@@ -203,10 +212,16 @@ def test_aborted_propagates_without_retry_or_fallback() -> None:
 def test_strict_mode_does_not_fall_back() -> None:
     async def run() -> None:
         cfg = resolve_llm_env(
-            {"KOHAKU_LLM_PROVIDER": "claude", "KOHAKU_LLM_API_KEY": "k", "KOHAKU_LLM_STRUCTURED_MODE": "strict"}
+            {
+                "KOHAKU_LLM_PROVIDER": "claude",
+                "KOHAKU_LLM_API_KEY": "k",
+                "KOHAKU_LLM_STRUCTURED_MODE": "strict",
+            }
         )
         transport = FakeAnthropicTransport()
-        transport.object_repeat = _no_tool_block()  # under strict, INVALID_OUTPUT also fails immediately
+        transport.object_repeat = (
+            _no_tool_block()
+        )  # under strict, INVALID_OUTPUT also fails immediately
         llm = create_anthropic_native_llm(cfg, transport=transport, deps=DEPS)
         with pytest.raises(LlmError) as exc:
             await llm.generate_object(_JSON_SCHEMA_REQ)
@@ -339,7 +354,9 @@ def test_create_llm_claude_missing_sdk_raises_config(monkeypatch: pytest.MonkeyP
 
 
 def test_tool_params_sets_strict_true() -> None:
-    tool = AnthropicTool(name="response", input_schema={"type": "object", "additionalProperties": False})
+    tool = AnthropicTool(
+        name="response", input_schema={"type": "object", "additionalProperties": False}
+    )
     req = AnthropicRequest(
         model="m", system=None, prompt="p", temperature=0, max_tokens=10, tool=tool
     )
@@ -350,7 +367,9 @@ def test_tool_params_sets_strict_true() -> None:
 
 
 def test_tool_params_empty_without_tool() -> None:
-    req = AnthropicRequest(model="m", system=None, prompt="p", temperature=0, max_tokens=10, tool=None)
+    req = AnthropicRequest(
+        model="m", system=None, prompt="p", temperature=0, max_tokens=10, tool=None
+    )
     assert _tool_params(req) == {}
 
 
@@ -371,7 +390,10 @@ def test_sanitize_strips_numeric_and_string_constraints_into_description() -> No
     assert "minLength" not in sanitized["properties"]["s"]
     assert "maxLength" not in sanitized["properties"]["s"]
     assert "pattern" not in sanitized["properties"]["s"]
-    assert sanitized["properties"]["s"]["description"] == "min length: 3; max length: 5; pattern: ^[a-z]+$."
+    assert (
+        sanitized["properties"]["s"]["description"]
+        == "min length: 3; max length: 5; pattern: ^[a-z]+$."
+    )
     # additionalProperties is forced to false on every object node.
     assert sanitized["additionalProperties"] is False
     assert sanitized["required"] == ["n", "s"]
@@ -384,7 +406,13 @@ def test_sanitize_prepends_constraint_description_to_existing_description() -> N
 
 
 def test_sanitize_array_min_items_max_items_and_unique_items() -> None:
-    schema = {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 5, "uniqueItems": True}
+    schema = {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 1,
+        "maxItems": 5,
+        "uniqueItems": True,
+    }
     sanitized = _sanitize_for_anthropic(schema)
     assert "minItems" not in sanitized
     assert "maxItems" not in sanitized
@@ -431,7 +459,10 @@ def test_sanitize_recurses_into_any_of_one_of_all_of_defs_and_definitions() -> N
     assert sanitized["definitions"]["Bar"]["description"] == "pattern: x."
     # oneOf is folded into anyOf (matching @ai-sdk/anthropic); a schema cannot carry both, so oneOf wins here
     # only when anyOf is absent — this schema has both, so anyOf (checked first) takes precedence.
-    assert sanitized["anyOf"] == [{"type": "integer", "description": "minimum: 0."}, {"type": "null"}]
+    assert sanitized["anyOf"] == [
+        {"type": "integer", "description": "minimum: 0."},
+        {"type": "null"},
+    ]
     # additionalProperties: false is forced on the allOf branch's own object node (its "a" property is a
     # plain string leaf, so it gets no additionalProperties of its own).
     assert sanitized["allOf"][0]["additionalProperties"] is False
@@ -439,7 +470,9 @@ def test_sanitize_recurses_into_any_of_one_of_all_of_defs_and_definitions() -> N
 
 
 def test_sanitize_items_array_form_and_object_form() -> None:
-    object_form = _sanitize_for_anthropic({"type": "array", "items": {"type": "string", "minLength": 1}})
+    object_form = _sanitize_for_anthropic(
+        {"type": "array", "items": {"type": "string", "minLength": 1}}
+    )
     assert object_form["items"]["description"] == "min length: 1."
 
     array_form = _sanitize_for_anthropic(
@@ -582,7 +615,9 @@ def test_user_content_prompt_cache_on_but_no_prompt_parts_returns_plain_prompt()
     assert _user_content(areq, PROMPT_CACHE_CONFIG) == "just a string"
 
 
-def test_user_content_prompt_cache_on_splits_into_two_blocks_with_cache_control_on_the_leading_one() -> None:
+def test_user_content_prompt_cache_on_splits_into_two_blocks_with_cache_control_on_the_leading_one() -> (
+    None
+):
     areq = AnthropicRequest(
         model="m",
         system=None,
@@ -626,7 +661,9 @@ def test_user_content_inconsistent_prompt_parts_falls_back_to_plain_prompt() -> 
     assert _user_content(areq, PROMPT_CACHE_CONFIG) == "ACTUAL"
 
 
-def test_generate_object_and_generate_text_thread_prompt_parts_through_to_anthropic_request() -> None:
+def test_generate_object_and_generate_text_thread_prompt_parts_through_to_anthropic_request() -> (
+    None
+):
     """GenerateObjectRequest/GenerateTextRequest.prompt_parts reaches the AnthropicRequest the transport
     receives (the plumbing _user_content itself is unit-tested above; this confirms the wiring end to end)."""
 
@@ -638,7 +675,9 @@ def test_generate_object_and_generate_text_thread_prompt_parts_through_to_anthro
 
         parts = PromptParts(cacheable="STATIC", rest="REST")
         await llm.generate_object(
-            GenerateObjectRequest(schema=JsonSchema({"type": "object"}), prompt="STATICREST", prompt_parts=parts)
+            GenerateObjectRequest(
+                schema=JsonSchema({"type": "object"}), prompt="STATICREST", prompt_parts=parts
+            )
         )
         assert transport.object_calls[0].prompt_parts == parts
 

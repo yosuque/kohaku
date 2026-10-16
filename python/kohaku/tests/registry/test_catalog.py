@@ -21,9 +21,7 @@ from kohaku.registry import (
 )
 
 
-def _def(
-    type_: str = "x.widget", version: str = "1.0.0", **kwargs: Any
-) -> ComponentDefinition:
+def _def(type_: str = "x.widget", version: str = "1.0.0", **kwargs: Any) -> ComponentDefinition:
     return define_component(
         ComponentDefinition(
             type=type_,
@@ -220,7 +218,14 @@ class TestValidateAgainstCatalog:
     def test_children_not_supported(self) -> None:
         resolved = resolve_catalog(core_catalog())
         result = resolved.validate(
-            [{"id": "a", "type": "text.heading", "props": {"level": 1, "text": "t"}, "children": ["b"]}]
+            [
+                {
+                    "id": "a",
+                    "type": "text.heading",
+                    "props": {"level": 1, "text": "t"},
+                    "children": ["b"],
+                }
+            ]
         )
         assert [i.code for i in result.issues] == ["CHILDREN_NOT_SUPPORTED"]
 

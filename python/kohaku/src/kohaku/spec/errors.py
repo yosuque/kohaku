@@ -132,7 +132,8 @@ class ErrorEnvelope:
             error["retryAfterMs"] = self.retryAfterMs
         if self.issues is not None:
             error["issues"] = [
-                {"path": issue.path, "code": issue.code, "message": issue.message} for issue in self.issues
+                {"path": issue.path, "code": issue.code, "message": issue.message}
+                for issue in self.issues
             ]
         if self.approval is not None:
             error["approval"] = {

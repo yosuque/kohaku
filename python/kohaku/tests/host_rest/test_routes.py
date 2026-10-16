@@ -141,7 +141,9 @@ def test_binding_action_denied_for_unknown_token(client: Any) -> None:
 class _AuthzOkNoPrincipal:
     """authz.verify always returns ok=True with no principal (a capability-issuer misconfiguration to guard against)."""
 
-    async def issue_capability(self, principal: Any, scopes: Any, *, ttl_seconds: Any = None) -> str:
+    async def issue_capability(
+        self, principal: Any, scopes: Any, *, ttl_seconds: Any = None
+    ) -> str:
         return "cap"
 
     async def verify(self, token: str, req: Any) -> Any:
@@ -398,7 +400,9 @@ def test_governance_denies_promotion_but_allows_lineage(tmp_path: Path) -> None:
 
 def test_governance_evaluator_direct() -> None:
     policy = create_governance_policy(
-        GovernancePolicy(roles={"reviewer": ["promotion.*", "lineage.read"], "viewer": ["lineage.read"]})
+        GovernancePolicy(
+            roles={"reviewer": ["promotion.*", "lineage.read"], "viewer": ["lineage.read"]}
+        )
     )
     reviewer = Principal(id="r", roles=["reviewer"])
     viewer = Principal(id="v", roles=["viewer"])
@@ -406,7 +410,10 @@ def test_governance_evaluator_direct() -> None:
     assert policy(viewer, GovernanceOperation(kind="promotion.approve"), None) is False
     assert policy(viewer, GovernanceOperation(kind="lineage.read"), None) is True
     # Unknown role / out of permissions is denied (deny-by-default).
-    assert policy(Principal(id="x", roles=["ghost"]), GovernanceOperation(kind="lineage.read"), None) is False
+    assert (
+        policy(Principal(id="x", roles=["ghost"]), GovernanceOperation(kind="lineage.read"), None)
+        is False
+    )
 
 
 def test_governance_evaluator_tenant_of_denies_cross_tenant_even_for_wildcard_role() -> None:
@@ -457,9 +464,7 @@ def test_governance_unwired_emits_startup_warning(tmp_path: Path, caplog: Any) -
     # If authorize_governance is unwired (default), emit the fail-open startup warning once (Major-2, partial).
     with caplog.at_level(logging.WARNING, logger=_GOV_LOGGER):
         build_harness(tmp_path)
-    warnings = [
-        r for r in caplog.records if "deps.authorize_governance" in r.getMessage()
-    ]
+    warnings = [r for r in caplog.records if "deps.authorize_governance" in r.getMessage()]
     assert len(warnings) == 1
     assert warnings[0].levelno == logging.WARNING
 
@@ -489,7 +494,9 @@ def test_promotion_act_alone_cannot_reach_kind_scoped_actions(tmp_path: Path) ->
     # candidate) is the prerequisite for judge.start / review.start (candidate -> judging / in_review), so each
     # is exercised on its own freshly-seeded artifact via a nominate -> {judge.start|review.start} pair.
     def act(artifact_id: str, action: dict[str, Any]) -> int:
-        res = harness.client.post(_url(f"/promotions/{artifact_id}/actions"), json={"action": action})
+        res = harness.client.post(
+            _url(f"/promotions/{artifact_id}/actions"), json={"action": action}
+        )
         return int(res.status_code)
 
     _seed_generated(harness, "art-nominate")
@@ -525,9 +532,7 @@ def test_governance_wired_no_startup_warning(tmp_path: Path, caplog: Any) -> Non
     policy = create_governance_policy(GovernancePolicy(roles={"user": ["lineage.read"]}))
     with caplog.at_level(logging.WARNING, logger=_GOV_LOGGER):
         build_harness(tmp_path, authorize_governance=policy)
-    assert not any(
-        "deps.authorize_governance" in r.getMessage() for r in caplog.records
-    )
+    assert not any("deps.authorize_governance" in r.getMessage() for r in caplog.records)
 
 
 def test_auth_unwired_emits_startup_warning(tmp_path: Path, caplog: Any) -> None:
@@ -616,7 +621,9 @@ def test_promotions_reconcile_501_when_promotions_not_configured(tmp_path: Path)
 def test_promotions_reconcile_denied_by_governance(tmp_path: Path) -> None:
     harness = build_harness(
         tmp_path,
-        authorize_governance=lambda principal, operation, tenant: operation.kind != "promotion.reconcile",
+        authorize_governance=lambda principal, operation, tenant: (
+            operation.kind != "promotion.reconcile"
+        ),
     )
     res = harness.client.post(_url("/promotions/reconcile"))
     assert res.status_code == 403
@@ -646,7 +653,9 @@ class _FakePromotionsRaisingNotPublished:
     async def evaluate_and_list(self, *, tenant: str | None = None) -> list[Any]:
         return []
 
-    async def act(self, artifact_id: str, action: Any, actor: Principal, tenant: str | None = None) -> Any:
+    async def act(
+        self, artifact_id: str, action: Any, actor: Principal, tenant: str | None = None
+    ) -> Any:
         raise NotImplementedError
 
     async def approve(
@@ -658,7 +667,11 @@ class _FakePromotionsRaisingNotPublished:
         raise NotImplementedError
 
     async def withdraw(
-        self, artifact_id: str, actor: Principal, reason: str | None = None, tenant: str | None = None
+        self,
+        artifact_id: str,
+        actor: Principal,
+        reason: str | None = None,
+        tenant: str | None = None,
     ) -> Any:
         raise NotImplementedError
 
@@ -736,7 +749,13 @@ def test_promotion_routes_governance_artifact_id_matches_url(tmp_path: Path) -> 
         ("POST", "/promotions/art-gov/approve", {"draft": _DRAFT}, "promotion.approve", "art-gov"),
         ("POST", "/promotions/art-gov/reject", None, "promotion.reject", "art-gov"),
         ("POST", "/promotions/art-gov/withdraw", None, "promotion.withdraw", "art-gov"),
-        ("POST", "/promotions/art-gov/actions", {"action": {"kind": "nominate"}}, "promotion.act", "art-gov"),
+        (
+            "POST",
+            "/promotions/art-gov/actions",
+            {"action": {"kind": "nominate"}},
+            "promotion.act",
+            "art-gov",
+        ),
     ]
 
     for method, path, body, expected_kind, expected_artifact_id in cases:
@@ -801,7 +820,9 @@ def test_promotion_routes_auth_and_tenant_call_profile(tmp_path: Path) -> None:
         else:
             harness.client.post(_url(path), json=body)
         assert auth_calls == expected_auth, f"{path}: auth calls {auth_calls} != {expected_auth}"
-        assert tenant_calls == expected_tenant, f"{path}: tenant calls {tenant_calls} != {expected_tenant}"
+        assert tenant_calls == expected_tenant, (
+            f"{path}: tenant calls {tenant_calls} != {expected_tenant}"
+        )
 
 
 # --- Fixation (L1->L0) ------------------------------------------------------
@@ -850,7 +871,9 @@ def test_fixation_approve_rejects_fallback_spec(tmp_path: Path) -> None:
         domain=FakeDomain(),
         authz=FakeAuthz(),
         query_source="sales",
-        fixations=create_fixations(lineage=lineage, storage=storage, catalog_for=lambda _t: catalog),
+        fixations=create_fixations(
+            lineage=lineage, storage=storage, catalog_for=lambda _t: catalog
+        ),
     )
     app = FastAPI()
     attach_kohaku_routes(app, deps)
@@ -880,14 +903,18 @@ def test_fixation_approve_rejects_l2_spec(tmp_path: Path) -> None:
         domain=FakeDomain(),
         authz=FakeAuthz(),
         query_source="sales",
-        fixations=create_fixations(lineage=lineage, storage=storage, catalog_for=lambda _t: catalog),
+        fixations=create_fixations(
+            lineage=lineage, storage=storage, catalog_for=lambda _t: catalog
+        ),
     )
 
     # Precompute the same cache key /fixations/approve's compose path will look up (FakeSemantic returns
     # data_version "v1" for the single resolved handle) and seed it with an already-composed L2 result.
     intent = finalize_intent(IntentInput(canonical="sales.summary", params={"fy": 2026}))
     key = cache_key(
-        CacheKeyParts(intentHash=intent.hash, dataVersion="v1", catalogFingerprint=catalog.fingerprint)
+        CacheKeyParts(
+            intentHash=intent.hash, dataVersion="v1", catalogFingerprint=catalog.fingerprint
+        )
     )
     l2_spec = UISpec(
         kohaku="0.1",
@@ -999,11 +1026,25 @@ def _annotate_fixed_spec() -> UISpec:
             {
                 "id": "f",
                 "type": "presentForm",
-                "props": {"action": "annotate", "fields": [{"name": "note", "type": "text", "label": "Note"}]},
+                "props": {
+                    "action": "annotate",
+                    "fields": [{"name": "note", "type": "text", "label": "Note"}],
+                },
             },
-            {"id": "t", "type": "presentSpreadsheet", "props": {"editable": False}, "data": {"$ref": REF}},
+            {
+                "id": "t",
+                "type": "presentSpreadsheet",
+                "props": {"editable": False},
+                "data": {"$ref": REF},
+            },
         ],
-        "events": [{"on": "f.submit", "emit": "action.invoke", "payload": {"note": "$value.note", "refs": [REF]}}],
+        "events": [
+            {
+                "on": "f.submit",
+                "emit": "action.invoke",
+                "payload": {"note": "$value.note", "refs": [REF]},
+            }
+        ],
         "provenance": {"tier": "L0", "composedBy": "fixture", "cache": "miss"},
     }
     return UISpec.model_validate(data)
@@ -1200,7 +1241,9 @@ def test_serialize_lock_survives_while_contended(harness: Harness) -> None:
 # and well-formed) is echoed as the X-Request-Id response header and reused for error.requestId; a missing or
 # malformed header falls back to a freshly minted uuid4. See _routes/shared.py's request_id_of.
 
-_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
+)
 
 
 def test_request_id_echoed_on_success_response(client: Any) -> None:
@@ -1305,8 +1348,12 @@ def test_intent_normalize_trace_context_reaches_on_error(tmp_path: Path) -> None
 
     storage = FileStoragePort(tmp_path)
     catalog = resolve_catalog(core_catalog())
-    ctx = ComposeContext(catalog=catalog, semantic=RaisingSemantic(), storage=storage, llm=FakeLlm())
-    deps = KohakuHostDeps(compose=ctx, domain=FakeDomain(), authz=FakeAuthz(), query_source="sales", on_error=on_error)
+    ctx = ComposeContext(
+        catalog=catalog, semantic=RaisingSemantic(), storage=storage, llm=FakeLlm()
+    )
+    deps = KohakuHostDeps(
+        compose=ctx, domain=FakeDomain(), authz=FakeAuthz(), query_source="sales", on_error=on_error
+    )
     app = FastAPI()
     attach_kohaku_routes(app, deps)
     client = TestClient(app)
@@ -1336,8 +1383,12 @@ def test_intent_normalize_malformed_traceparent_leaves_trace_context_none(tmp_pa
 
     storage = FileStoragePort(tmp_path)
     catalog = resolve_catalog(core_catalog())
-    ctx = ComposeContext(catalog=catalog, semantic=RaisingSemantic(), storage=storage, llm=FakeLlm())
-    deps = KohakuHostDeps(compose=ctx, domain=FakeDomain(), authz=FakeAuthz(), query_source="sales", on_error=on_error)
+    ctx = ComposeContext(
+        catalog=catalog, semantic=RaisingSemantic(), storage=storage, llm=FakeLlm()
+    )
+    deps = KohakuHostDeps(
+        compose=ctx, domain=FakeDomain(), authz=FakeAuthz(), query_source="sales", on_error=on_error
+    )
     app = FastAPI()
     attach_kohaku_routes(app, deps)
     client = TestClient(app)

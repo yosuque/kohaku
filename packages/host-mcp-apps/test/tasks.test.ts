@@ -2,26 +2,27 @@
  * Tests for the MCP Tasks extension (io.modelcontextprotocol/tasks, 2026-07-28 dated-stable) — see
  * ../src/tasks.ts and ../src/server.ts's `registerTaskMethods` / `taskExtensionDeclared` / `startComposeTask`.
  *
- * Three things this file cannot test, and why (see registerTaskMethods's doc comment in server.ts for the
- * full writeup, verified empirically against the installed @modelcontextprotocol/server 2.0.0):
- *  - `tasks/get` and `tasks/cancel` are registered via the SDK's documented consumer-owned extension seam,
- *    but the SDK's own inbound-request routing rejects both method names with -32601 on a 2026-07-28
- *    connection before our handler ever runs (a name collision with the SDK's own deprecated, no-runtime
- *    2025-11-25 `tasks/*` vocabulary). The "known SDK limitation" describe block below locks this in with a
- *    reproduction, so a future SDK upgrade that fixes it turns this test red as a signal to revisit.
- *  - Because of that, this file cannot drive cancellation through a real `tasks/cancel` call. It instead
- *    reaches the exact same `TaskStore.requestCancel` a real `tasks/cancel` handler would call, via the
- *    test-only `__getTaskStoreForTest` escape hatch (same style as `__setPreresolveTimeoutMsForTest`).
+ * Two things worth knowing before reading the rest (see registerTaskMethods's doc comment in server.ts for the
+ * full writeup, verified empirically against @modelcontextprotocol/server 2.0.0 and 2.3.1):
+ *  - `tasks/get` and `tasks/cancel` are registered via the SDK's consumer-owned extension seam
+ *    (`setRequestHandler(method, schemas, handler)`). On SDK 2.0.0 the SDK's own inbound routing rejected both
+ *    method names with -32601 on a 2026-07-28 connection before our handler ever ran (a name collision with its
+ *    deprecated, no-runtime 2025-11-25 `tasks/*` vocabulary), and this file pinned that as a tripwire. Since
+ *    SDK 2.3.0 (SEP-2663) the SDK lets the two names through when — and only when — a consumer registered a
+ *    schema-explicit handler for them, so they are reachable now. The one new wire requirement is the
+ *    Streamable HTTP binding's `Mcp-Name: <taskId>` header, which `sendRawModern` fills in; a request without
+ *    it is rejected with -32020 before dispatch. The "SDK reachability" describe block below pins all of this
+ *    so a future SDK change turns it red.
  *  - `@modelcontextprotocol/client`'s `Client.callTool()` cannot receive a `resultType: "task"` result at
- *    all (its own decoder rejects any `resultType` other than `"complete"`/`"input_required"`), so the
- *    task-returning assertions below go through `sendRawModern` (raw JSON-RPC over the same in-process
- *    `createMcpHandler` bridge `connectModern` uses) rather than the typed client.
+ *    all (its own decoder rejects any `resultType` other than `"complete"`/`"input_required"`; unchanged in
+ *    2.3), so the task-returning assertions below go through `sendRawModern` (raw JSON-RPC over the same
+ *    in-process `createMcpHandler` bridge `connectModern` uses) rather than the typed client.
  *
- * Because `AttachOptions.tasksEnabled` defaults to off (see its doc comment — a direct consequence of the
- * `tasks/get` limitation above: never hand back a task handle a client can never poll), most `describe`
- * blocks below build their test server with `tasksEnabled: true` via `buildAttached`'s default parameter to
- * actually exercise the extension's behavior. The "AttachOptions.tasksEnabled default-off kill switch"
- * describe block is the one that deliberately leaves it unset, to verify the shipped default.
+ * `AttachOptions.tasksEnabled` still defaults to off (a product decision independent of the SDK finding above
+ * — see its doc comment), so most `describe` blocks below build their test server with `tasksEnabled: true` via
+ * `buildAttached`'s default parameter to actually exercise the extension's behavior. The "AttachOptions.tasksEnabled
+ * default-off kill switch" describe block is the one that deliberately leaves it unset, to verify the shipped
+ * default.
  */
 import type { ComposeContext } from "@kohaku-ui/composer";
 import {
@@ -232,9 +233,8 @@ function noFixedComposeCtx(llm: LlmPort): ComposeContext {
 /**
  * `tasksEnabled: true` by default here: most of this file's tests are specifically about the Tasks
  * extension's behavior, which only runs when it is on (see `AttachOptions.tasksEnabled`'s doc comment —
- * default off, because `tasks/get` is currently unreachable on the installed SDK, see the "known SDK
- * limitation" describe block below). The "tasksEnabled default-off kill switch" describe block builds its
- * own server with `tasksEnabled` deliberately left unset to verify the shipped default.
+ * default off). The "tasksEnabled default-off kill switch" describe block builds its own server with
+ * `tasksEnabled` deliberately left unset to verify the shipped default.
  */
 function buildAttached(composeCtx: ComposeContext = fixedSpecComposeCtx(), tasksEnabled = true): McpServer {
   const server = new McpServer({ name: "kohaku-tasks-test", version: "0.1.0" });
@@ -397,7 +397,7 @@ describe("Per-request opt-in gate, with tasksEnabled:true (spec MUST: a server M
   });
 });
 
-describe("AttachOptions.tasksEnabled default-off kill switch (team decision: never hand back a task handle while tasks/get is unreachable — see AttachOptions.tasksEnabled's doc comment)", () => {
+describe("AttachOptions.tasksEnabled default-off kill switch (see AttachOptions.tasksEnabled's doc comment)", () => {
   it("with tasksEnabled unset, a request that DOES declare the extension still gets today's synchronous result (not a CreateTaskResult)", async () => {
     const server = buildAttached(fixedSpecComposeCtx(), false);
     const buildServer = () => server;
@@ -431,50 +431,124 @@ describe("AttachOptions.tasksEnabled default-off kill switch (team decision: nev
     }
   });
 
-  it("with tasksEnabled unset, tasks/get and tasks/cancel are not registered at all (Method not found for a reason unrelated to the SDK-gate limitation)", async () => {
+  it("with tasksEnabled unset, tasks/get and tasks/cancel are not registered at all (the SDK's own gate answers Method not found)", async () => {
     const server = buildAttached(fixedSpecComposeCtx(), false);
-    const { json } = await sendRawModern(() => server, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tasks/get",
-      params: { taskId: "whatever", _meta: taskExtensionEnvelope() },
-    });
-    const error = json["error"] as { code?: number } | undefined;
-    expect(error?.code).toBe(-32601);
+    for (const method of ["tasks/get", "tasks/cancel"]) {
+      const { status, json } = await sendRawModern(() => server, {
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        // sendRawModern adds the matching `Mcp-Name: <taskId>` header, so the request gets past the SDK's
+        // header/body cross-check and the -32601 below is the routing decision itself.
+        params: { taskId: "whatever", _meta: taskExtensionEnvelope() },
+      });
+      // SDK >= 2.3 (SEP-2663) lets `tasks/get` / `tasks/cancel` through only when a consumer registered a
+      // schema-explicit handler for the name (Protocol._customSchemaRequestMethods); with none registered it
+      // falls through to the same -32601 the SDK 2.0.0 answered unconditionally. This is what "off" means:
+      // an unregistered method, byte-identical to a server that never heard of the extension.
+      expect(status).toBe(404);
+      expect((json["error"] as { code?: number } | undefined)?.code).toBe(-32601);
+    }
   });
 });
 
-describe("known SDK limitation (verified, not a kohaku bug — see registerTaskMethods's doc comment in server.ts)", () => {
-  it("tasks/get is registered but unreachable over a 2026-07-28 connection with this SDK version (-32601)", async () => {
+describe("SDK reachability of tasks/get and tasks/cancel (flipped from a -32601 tripwire on SDK 2.0.0 to a reachability pin on SDK >= 2.3 — see registerTaskMethods's doc comment in server.ts)", () => {
+  it("tasks/get reaches kohaku's handler and returns the task snapshot", async () => {
     const server = buildAttached();
     const { taskId } = __getTaskStoreForTest(server)!.create({ ttlMs: 60_000 });
-    const { json } = await sendRawModern(() => server, {
+    const { status, json } = await sendRawModern(() => server, {
       jsonrpc: "2.0",
       id: 1,
       method: "tasks/get",
       params: { taskId, _meta: taskExtensionEnvelope() },
     });
-    const error = json["error"] as { code?: number } | undefined;
-    // If this ever starts succeeding, the SDK has changed its era-method table for tasks/get — go update
-    // registerTaskMethods's doc comment and docs/design.md, this test is the tripwire.
-    expect(error?.code).toBe(-32601);
+    // If this ever regresses to -32601 the SDK has stopped letting the extension-reused names through again —
+    // go update registerTaskMethods's doc comment and docs/design.md; this test is the tripwire.
+    expect(status).toBe(200);
+    expect(json["error"]).toBeUndefined();
+    expect(json["result"]).toMatchObject({ taskId, status: "working", ttlMs: 60_000 });
   });
 
-  it("tasks/cancel is likewise registered but unreachable (-32601)", async () => {
+  it("tasks/cancel reaches kohaku's handler, acks, and fires the task's abort signal", async () => {
     const server = buildAttached();
-    const { taskId } = __getTaskStoreForTest(server)!.create({ ttlMs: 60_000 });
-    const { json } = await sendRawModern(() => server, {
+    const { taskId, abort } = __getTaskStoreForTest(server)!.create({ ttlMs: 60_000 });
+    const { status, json } = await sendRawModern(() => server, {
       jsonrpc: "2.0",
       id: 1,
       method: "tasks/cancel",
       params: { taskId, _meta: taskExtensionEnvelope() },
     });
-    const error = json["error"] as { code?: number } | undefined;
-    expect(error?.code).toBe(-32601);
+    expect(status).toBe(200);
+    expect(json["error"]).toBeUndefined();
+    expect(abort.signal.aborted).toBe(true);
+  });
+
+  it("an unknown or expired taskId is InvalidParams (-32602) for both methods, not Method not found", async () => {
+    const server = buildAttached();
+    for (const method of ["tasks/get", "tasks/cancel"]) {
+      const { json } = await sendRawModern(() => server, {
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params: { taskId: "no-such-task", _meta: taskExtensionEnvelope() },
+      });
+      expect((json["error"] as { code?: number } | undefined)?.code).toBe(-32602);
+    }
+  });
+
+  it("a request without the Mcp-Name header is rejected with -32020 (HeaderMismatch) before dispatch (SEP-2663's HTTP binding)", async () => {
+    const server = buildAttached();
+    const { taskId } = __getTaskStoreForTest(server)!.create({ ttlMs: 60_000 });
+    for (const method of ["tasks/get", "tasks/cancel"]) {
+      const { status, json } = await sendRawModern(
+        () => server,
+        { jsonrpc: "2.0", id: 1, method, params: { taskId, _meta: taskExtensionEnvelope() } },
+        { omitNameHeader: true },
+      );
+      // This is the SDK's pre-dispatch ladder, not kohaku's handler: it is what a client that does not mirror
+      // params.taskId into `Mcp-Name` sees (SDK >= 2.3 clients emit the header themselves).
+      expect(status).toBe(400);
+      expect((json["error"] as { code?: number } | undefined)?.code).toBe(-32020);
+    }
+  });
+
+  it("polling tasks/get after a task-backed tools/call observes working -> completed with the packaged result", async () => {
+    const server = buildAttached();
+    const { json } = await sendRawModern(() => server, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "kohaku_compose",
+        arguments: { question: "Monthly revenue trend" },
+        _meta: taskExtensionEnvelope(),
+      },
+    });
+    const created = json["result"] as Record<string, unknown>;
+    expect(created["resultType"]).toBe("task");
+    const taskId = created["taskId"] as string;
+
+    let polled: Record<string, unknown> | undefined;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const res = await sendRawModern(() => server, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tasks/get",
+        params: { taskId, _meta: taskExtensionEnvelope() },
+      });
+      polled = res.json["result"] as Record<string, unknown>;
+      if (polled["status"] !== "working") break;
+      await tick(2);
+    }
+    expect(polled).toMatchObject({ taskId, status: "completed" });
+    // The completed task carries the same packaged result a synchronous call would have returned.
+    expect(
+      (polled?.["result"] as { structuredContent?: unknown } | undefined)?.structuredContent,
+    ).toHaveProperty("spec");
   });
 });
 
-describe("cancellation wiring: tasks/cancel's logic (TaskStore.requestCancel) rides the composer's existing client-abort path", () => {
+describe("cancellation wiring: a real tasks/cancel rides the composer's existing client-abort path", () => {
   it("cancelling a task-backed compose mid-generation settles the task as cancelled, not completed or failed", async () => {
     let started: () => void;
     const startedPromise = new Promise<void>((resolve) => {
@@ -504,12 +578,25 @@ describe("cancellation wiring: tasks/cancel's logic (TaskStore.requestCancel) ri
     // Wait until the LLM call is actually in flight before cancelling (see pendingUntilAbortLlm's doc comment
     // in mcp.test.ts's sibling test — a pre-abort would never exercise the in-flight abort path).
     await startedPromise;
-    // This is exactly what a real tasks/cancel handler does (see registerTaskMethods) — invoked directly here
-    // because tasks/cancel itself is unreachable over the wire on this SDK version (see the describe block above).
-    expect(__getTaskStoreForTest(server)?.requestCancel(taskId)).toEqual({ ok: true });
+    const cancelled = await sendRawModern(buildServer, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tasks/cancel",
+      params: { taskId, _meta: taskExtensionEnvelope() },
+    });
+    expect(cancelled.json["error"]).toBeUndefined();
 
     await tick();
     const finalTask = __getTaskStoreForTest(server)?.get(taskId);
     expect(finalTask?.status).toBe("cancelled");
+
+    // And a client polling over the wire sees the same terminal state.
+    const polled = await sendRawModern(buildServer, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tasks/get",
+      params: { taskId, _meta: taskExtensionEnvelope() },
+    });
+    expect(polled.json["result"]).toMatchObject({ taskId, status: "cancelled" });
   });
 });

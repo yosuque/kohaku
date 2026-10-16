@@ -40,7 +40,9 @@ from .shared import (
 # arbitrary port error (a store/DB failure, say) may carry internals, so only an exception the port marked as
 # client-caused (APPROVAL_ISSUE_ERROR_CODE) has its own message shown; the original still reaches the
 # observability hook via report_host_error.
-_APPROVAL_INTERNAL_ERROR_MESSAGE = "approval issuance failed; see the observability hook (on_error) for details"
+_APPROVAL_INTERNAL_ERROR_MESSAGE = (
+    "approval issuance failed; see the observability hook (on_error) for details"
+)
 
 # The 501 message for POST /approvals on a host that has not wired authorize_governance.
 _APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE = (
@@ -126,7 +128,9 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                     request_id,
                 )
 
-        events = await deps.compose.storage.list_lineage(LineageFilter(limit=limit, **filter_kwargs))
+        events = await deps.compose.storage.list_lineage(
+            LineageFilter(limit=limit, **filter_kwargs)
+        )
         return _json({"events": events})
 
     # --- Usage analytics -----------------------------------------------
@@ -168,7 +172,9 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     # --- Telemetry ------------------------------------------------------------
     @router.post("/telemetry")
     async def telemetry_route(request: Request) -> Response:
-        denied = await require_governance(deps, request, GovernanceOperation(kind="telemetry.write"))
+        denied = await require_governance(
+            deps, request, GovernanceOperation(kind="telemetry.write")
+        )
         if denied is not None:
             return denied
         request_id = request_id_of(request, deps)

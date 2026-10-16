@@ -84,7 +84,9 @@ class TestLlmByTier:
 
         asyncio.run(run())
 
-    def test_l2_trace_model_is_the_tier_ports_model_id_the_bug_this_fixes(self, tmp_path: Any) -> None:
+    def test_l2_trace_model_is_the_tier_ports_model_id_the_bug_this_fixes(
+        self, tmp_path: Any
+    ) -> None:
         async def run() -> None:
             storage = FileStoragePort(tmp_path)
             base_llm = FakeLlm(objects=[_l1_draft()], model_id="base-model")
@@ -116,13 +118,20 @@ class TestLlmByTier:
 
         def test_llm_by_tier_matching_base_no_fingerprint_contribution(self, tmp_path: Any) -> None:
             async def run() -> None:
-                base_llm = FakeLlm(objects=[_l1_draft()], model_id="same-model", provider="same-provider")
-                same_llm = FakeLlm(objects=[_l1_draft()], model_id="same-model", provider="same-provider")
+                base_llm = FakeLlm(
+                    objects=[_l1_draft()], model_id="same-model", provider="same-provider"
+                )
+                same_llm = FakeLlm(
+                    objects=[_l1_draft()], model_id="same-model", provider="same-provider"
+                )
                 storage1 = FileStoragePort(tmp_path / "a")
                 without_override = _ctx(base_llm, storage1, ComposePolicy(generatorVersion="gv1"))
                 storage2 = FileStoragePort(tmp_path / "b")
                 with_matching_override = _ctx(
-                    base_llm, storage2, ComposePolicy(generatorVersion="gv1"), llmByTier=TierLlm(L1=same_llm)
+                    base_llm,
+                    storage2,
+                    ComposePolicy(generatorVersion="gv1"),
+                    llmByTier=TierLlm(L1=same_llm),
                 )
                 assert tier_llm_fingerprint_material(with_matching_override) is None
 
@@ -159,7 +168,9 @@ class TestLlmByTier:
         def test_policy_fingerprint_empty_only_when_tier_llm_is_none_too(self) -> None:
             from kohaku.composer.context import TierLlmFingerprintMaterial, TierModelIdentity
 
-            material = TierLlmFingerprintMaterial(l1=TierModelIdentity(provider="p", model_id="distilled"))
+            material = TierLlmFingerprintMaterial(
+                l1=TierModelIdentity(provider="p", model_id="distilled")
+            )
             with_material = policy_fingerprint(ComposePolicy(), material)
             without_material = policy_fingerprint(ComposePolicy())
             assert without_material == ""

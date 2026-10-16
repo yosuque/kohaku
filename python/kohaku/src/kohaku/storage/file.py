@@ -317,7 +317,11 @@ class FileStoragePort:
                 base[_promotion_key(state.tenant, state.artifactId)] = _promotion_to_wire(state)
 
         await self._merge_mutate(
-            self._promotions_path, self._promotions, _promotion_to_wire, _promotion_from_wire, _mutate
+            self._promotions_path,
+            self._promotions,
+            _promotion_to_wire,
+            _promotion_from_wire,
+            _mutate,
         )
 
     async def list_promotion_states(self, tenant: str | None = None) -> list[PromotionState]:
@@ -350,7 +354,9 @@ class FileStoragePort:
         def _do() -> None:
             loaded, corrupted = _load_json_snapshot(self._fixations_path, {})
             base = (
-                {k: _fixation_to_wire(v) for k, v in self._fixations.items()} if corrupted else loaded
+                {k: _fixation_to_wire(v) for k, v in self._fixations.items()}
+                if corrupted
+                else loaded
             )
             base.pop(key, None)
             _write_json_atomic(self._fixations_path, base)
@@ -529,9 +535,7 @@ def _load_records[T](path: Path, from_wire: Callable[[dict[str, Any]], T]) -> di
     return result
 
 
-def _load_json_snapshot(
-    path: Path, fallback: dict[str, Any]
-) -> tuple[dict[str, Any], bool]:
+def _load_json_snapshot(path: Path, fallback: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     """Read a snapshot JSON and return it along with whether corruption was detected.
 
     On corruption, move it aside to .corrupt so it is noticeable, then return fallback.
@@ -547,7 +551,10 @@ def _load_json_snapshot(
             backup = path.with_name(f"{path.name}.{int(time.time() * 1000)}.corrupt")
             path.replace(backup)
             # stdout would pollute the stdio MCP JSON-RPC channel, so use stderr (equivalent to TS's console.warn).
-            print(f"[storage] {path} was corrupted, so it was moved aside to {backup}", file=sys.stderr)
+            print(
+                f"[storage] {path} was corrupted, so it was moved aside to {backup}",
+                file=sys.stderr,
+            )
         except OSError:
             print(f"[storage] {path} is corrupted", file=sys.stderr)
         return fallback, True

@@ -55,7 +55,9 @@ _FALLBACK_HTML = (
 )
 
 
-def make_snapshot_locator(*, snapshot_base_url: str | None, snapshot_dir: Path, file_name: str) -> str:
+def make_snapshot_locator(
+    *, snapshot_base_url: str | None, snapshot_dir: Path, file_name: str
+) -> str:
     """A pure function that decides the snapshot locator (the string returned to the model) (port of TS makeSnapshotLocator).
 
     - If snapshot_base_url is present, a public URL (`${base}/snapshots/${quote(file_name)}`).
@@ -123,7 +125,11 @@ async def create_kohaku_mcp_setup(
     # KOHAKU_DATA_DIR overrides the persistence directory (mirrors __main__.py's REST-side handling and
     # TS sample-api's; e.g. a mktemp'd directory for CI/conformance runs so they never touch the checked-out
     # repo's local demo state). An explicit data_dir argument still wins over the environment variable.
-    resolved_data_dir = data_dir if data_dir is not None else Path(os.environ.get("KOHAKU_DATA_DIR", _DEFAULT_DATA_DIR))
+    resolved_data_dir = (
+        data_dir
+        if data_dir is not None
+        else Path(os.environ.get("KOHAKU_DATA_DIR", _DEFAULT_DATA_DIR))
+    )
     storage = FileStoragePort(resolved_data_dir)
     capability_secret = os.environ.get("KOHAKU_CAPABILITY_SECRET", "dev-secret-change-me")
     authz = create_hmac_authz_port(capability_secret)
@@ -154,9 +160,7 @@ async def create_kohaku_mcp_setup(
     load_renderer_html = make_renderer_html_loader()
     legacy_ui_resource = os.environ.get("KOHAKU_MCP_LEGACY_UI") == "1"
 
-    async def fixation_lookup(
-        intent_hash: str, session: SessionContext
-    ) -> FixationRecord | None:
+    async def fixation_lookup(intent_hash: str, session: SessionContext) -> FixationRecord | None:
         # A plain read: delivery gating (the demo's EN-only language policy) is separated out into
         # admit_fixation_for_locale below, shared verbatim with the REST side's wiring in app.py, so this
         # stays a plain read (kohaku.host_core.FixationDeliveryHost.admit is what actually applies the

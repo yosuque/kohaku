@@ -94,9 +94,7 @@ def test_apply_patch_structural_failure(example_spec_data: dict[str, Any]) -> No
     from kohaku.spec import SpecPatch
 
     prev = _spec(example_spec_data)
-    patch = SpecPatch.model_validate(
-        {"baseIntentHash": prev.intent.hash, "remove": ["root"]}
-    )
+    patch = SpecPatch.model_validate({"baseIntentHash": prev.intent.hash, "remove": ["root"]})
     with pytest.raises(SpecError) as e:
         apply_patch(prev, patch)
     assert e.value.code == "PATCH_APPLY_FAILED"
@@ -110,7 +108,9 @@ def test_order_components_dfs_then_orphans(example_spec_data: dict[str, Any]) ->
     assert [c.id for c in ordered] == ["root", "title", "chart1", "table1"]
 
 
-def test_diff_apply_round_trip_version_upgrade_with_state(example_spec_data: dict[str, Any]) -> None:
+def test_diff_apply_round_trip_version_upgrade_with_state(
+    example_spec_data: dict[str, Any],
+) -> None:
     """A 0.1 -> 0.2 patch that also introduces `state` carries the version change (SPEC-PATCH-001)."""
     prev_data = copy.deepcopy(example_spec_data)
     prev_data["kohaku"] = "0.1"

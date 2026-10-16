@@ -197,7 +197,9 @@ async def plan_catalog_migration(
             if len(rewritten_node_ids) == 0:
                 continue  # this fixation does not reference any migrated type
 
-            new_pinned_spec = fixation.pinnedSpec.model_copy(update={"components": rewritten_components})
+            new_pinned_spec = fixation.pinnedSpec.model_copy(
+                update={"components": rewritten_components}
+            )
             result = catalog.validate(
                 [c.to_wire() for c in new_pinned_spec.components],
                 [e.to_wire() for e in new_pinned_spec.events],
@@ -230,7 +232,10 @@ async def plan_catalog_migration(
 
     rewrites = list(rewrite_by_type.values())
     return CatalogMigrationPlan(
-        planHash=_compute_plan_hash(rewrites, steps, blocked), rewrites=rewrites, steps=steps, blocked=blocked
+        planHash=_compute_plan_hash(rewrites, steps, blocked),
+        rewrites=rewrites,
+        steps=steps,
+        blocked=blocked,
     )
 
 
@@ -317,7 +322,10 @@ async def apply_catalog_migration(
             )
             continue
 
-        guard: dict[str, Any] = {"ifFixatedAt": step.beforeFixatedAt, "ifStructureHash": step.beforeStructureHash}
+        guard: dict[str, Any] = {
+            "ifFixatedAt": step.beforeFixatedAt,
+            "ifStructureHash": step.beforeStructureHash,
+        }
         if step.beforeRevision is not None:
             guard["ifRevision"] = step.beforeRevision
         if step.beforeCatalogFingerprint is not None:

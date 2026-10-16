@@ -214,7 +214,9 @@ DRILL_CASES: list[tuple[str, JsonObject, JsonObject, JsonObject, JsonObject]] = 
 ]
 
 
-@pytest.mark.parametrize(("intent", "current", "payload", "drill_params", "normalized"), DRILL_CASES)
+@pytest.mark.parametrize(
+    ("intent", "current", "payload", "drill_params", "normalized"), DRILL_CASES
+)
 def test_drilldown_parity(
     intent: str,
     current: JsonObject,
@@ -258,7 +260,9 @@ class TestExamplePlacement:
 
 
 @pytest.mark.parametrize("key", ["constructor", "toString", "__proto__", "bogus"])
-def test_validate_params_reports_every_unknown_key_including_object_prototype_names(key: str) -> None:
+def test_validate_params_reports_every_unknown_key_including_object_prototype_names(
+    key: str,
+) -> None:
     """Parity with the TS IntentCatalog.validateParams: an unrecognized key is reported as an issue even
     when its name is an Object.prototype member in JS (`in` would have let those through there)."""
     result = catalog.validate_params("sales.trend", {"metric": "revenue", key: 1})

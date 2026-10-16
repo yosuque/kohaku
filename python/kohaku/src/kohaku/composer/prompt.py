@@ -117,8 +117,7 @@ def shape_prompt_fragment(shapes_by_ref: dict[str, DataShape]) -> str:
     lines: list[str] = []
     for ref, shape in shapes_by_ref.items():
         cols = ", ".join(
-            f"{c.name}:{c.type}{f'({c.role})' if c.role is not None else ''}"
-            for c in shape.columns
+            f"{c.name}:{c.type}{f'({c.role})' if c.role is not None else ''}" for c in shape.columns
         )
         rows = f" approx. rows={shape.rowCountHint}" if shape.rowCountHint is not None else ""
         lines.append(f"- {ref}\n  columns: {cols}{rows}")
@@ -254,7 +253,9 @@ def few_shot_prompt_fragment(examples: Sequence[FewShotExample]) -> str:
         )
         for ex in examples
     )
-    return f"## Examples of good composition (follow this form; data must be $ref references)\n{body}"
+    return (
+        f"## Examples of good composition (follow this form; data must be $ref references)\n{body}"
+    )
 
 
 L2_SYSTEM_PROMPT = "\n".join(
@@ -273,7 +274,7 @@ L2_SYSTEM_PROMPT = "\n".join(
         "  4. window.kohaku.onProps(callback): void — only when you want to subscribe to props updates from the parent",
         "- Always call the APIs directly in the form window.kohaku.methodName (no destructuring, no assigning to another variable, no writing method names that do not exist)",
         "- Basic script shape: an async function that fetchData → renders the DOM → finally calls window.kohaku.ready()",
-        '- Write complete JavaScript with no syntax errors. In particular, never put a raw newline inside a string literal (\' or ") — use a template literal (`) when a multi-line string is needed',
+        "- Write complete JavaScript with no syntax errors. In particular, never put a raw newline inside a string literal (' or \") — use a template literal (`) when a multi-line string is needed",
         "- Always output the document completely through </html> (do not truncate)",
         "- Render only from the actual data (columns / rows) returned by fetchData. Do not fabricate dimensions or values that are not in the data. Fake rendering via Math.random() or fixed dummy values is forbidden (it breaks the same-data → same-display determinism)",
         "- If the columns lack what the requested breakdown (e.g. by region) needs, use the closest available column and add a short note inside the chart about what is missing",

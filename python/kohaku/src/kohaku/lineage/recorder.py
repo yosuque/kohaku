@@ -161,7 +161,11 @@ class ActionAuditRecorder:
         event: dict[str, object] = {"action": action, "payloadHash": payload_hash, "tier": tier}
         if correlation_id is not None:
             event["correlationId"] = correlation_id
-        await self._lineage.action_invoked(event, LineageActor(kind="user", id=principal.id), tenant)  # type: ignore[arg-type]
+        await self._lineage.action_invoked(
+            event,  # type: ignore[arg-type]
+            LineageActor(kind="user", id=principal.id),
+            tenant,
+        )
 
     async def denied(
         self,
@@ -230,8 +234,14 @@ class ActionAuditRecorder:
         }
         if correlation_id is not None:
             event["correlationId"] = correlation_id
-        await self._lineage.action_approved(event, LineageActor(kind="user", id=principal.id), tenant)  # type: ignore[arg-type]
+        await self._lineage.action_approved(
+            event,  # type: ignore[arg-type]
+            LineageActor(kind="user", id=principal.id),
+            tenant,
+        )
 
 
-def create_action_audit_recorder(lineage: Lineage, *, record_payload: bool = False) -> ActionAuditRecorder:
+def create_action_audit_recorder(
+    lineage: Lineage, *, record_payload: bool = False
+) -> ActionAuditRecorder:
     return ActionAuditRecorder(lineage, record_payload=record_payload)

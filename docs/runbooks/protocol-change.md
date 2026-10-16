@@ -106,7 +106,7 @@ cd python && KOHAKU_DATA_DIR=$(mktemp -d) PORT=8790 uv run python -m sales_api
 node cli/bin/kohaku.js conformance --rest http://localhost:8790/api/kohaku
 
 # Python suite
-cd python && uv run ruff check && uv run mypy && uv run lint-imports && uv run pytest
+cd python && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest
 ```
 
 ## 10. Sync documentation

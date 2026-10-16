@@ -47,7 +47,9 @@ def test_unexpected_property_when_additional_properties_false() -> None:
 
 def test_type_mismatch_at_property_path() -> None:
     issues = validate_action_params(NOTE_SCHEMA, {"note": 42})
-    assert [(i.path, i.code, i.message) for i in issues] == [("note", "type", 'expected a string at "note"')]
+    assert [(i.path, i.code, i.message) for i in issues] == [
+        ("note", "type", 'expected a string at "note"')
+    ]
 
 
 def test_min_length_and_max_length() -> None:
@@ -77,12 +79,17 @@ def test_minimum_maximum_and_integer_rejection() -> None:
     assert issues_for(-1) == [("n", "minimum", "expected at least 0")]
     assert issues_for(11) == [("n", "maximum", "expected at most 10")]
     assert issues_for(1.5) == [("n", "type", 'expected an integer at "n"')]
-    assert issues_for(True) == [("n", "type", 'expected an integer at "n"')]  # bool must not pass as a number
+    assert issues_for(True) == [
+        ("n", "type", 'expected an integer at "n"')
+    ]  # bool must not pass as a number
     assert issues_for(5) == []
 
 
 def test_enum_violation() -> None:
-    schema: ActionParamsSchema = {"type": "object", "properties": {"s": {"type": "string", "enum": ["a", "b"]}}}
+    schema: ActionParamsSchema = {
+        "type": "object",
+        "properties": {"s": {"type": "string", "enum": ["a", "b"]}},
+    }
     issues = validate_action_params(schema, {"s": "c"})
     assert [(i.path, i.code, i.message) for i in issues] == [
         ("s", "enum", 'expected one of ["a","b"]')
@@ -126,7 +133,9 @@ def test_x_message_override() -> None:
         "properties": {"note": {"type": "string", "maxLength": 3, "x-message": "note is too long"}},
     }
     issues = validate_action_params(schema, {"note": "abcd"})
-    assert [(i.path, i.code, i.message) for i in issues] == [("note", "maxLength", "note is too long")]
+    assert [(i.path, i.code, i.message) for i in issues] == [
+        ("note", "maxLength", "note is too long")
+    ]
 
 
 def test_boolean_type_and_type_mismatch() -> None:
@@ -149,7 +158,9 @@ def test_assert_valid_action_params_schema_rejects_pattern() -> None:
 
 def test_assert_valid_action_params_schema_rejects_additional_properties_true() -> None:
     with pytest.raises(ActionParamsSchemaError):
-        assert_valid_action_params_schema("annotate", {"type": "object", "additionalProperties": True})
+        assert_valid_action_params_schema(
+            "annotate", {"type": "object", "additionalProperties": True}
+        )
 
 
 def test_action_payload_hash_is_deterministic_and_key_order_independent() -> None:
@@ -215,7 +226,9 @@ def test_length_keywords_count_unicode_code_points() -> None:
         ("s", "minLength", "expected at least 3 characters")
     ]
     issues = validate_action_params(schema("maxLength", 1), {"s": "😀😀"})
-    assert [(i.path, i.code, i.message) for i in issues] == [("s", "maxLength", "expected at most 1 characters")]
+    assert [(i.path, i.code, i.message) for i in issues] == [
+        ("s", "maxLength", "expected at most 1 characters")
+    ]
 
 
 def test_find_unsafe_action_param_keys_clean_payload() -> None:

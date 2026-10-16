@@ -98,7 +98,9 @@ _COMPOSE_FAILED_MESSAGE = "composition failed; see the observability hook (on_er
 # text unless it is a "typed" host error (see is_typed_host_error), whose own message is safe to pass
 # through. The original error still reaches the observability hook (on_error) via report_host_error. Port of
 # TS compose.ts's INTENT_INVALID_MESSAGE.
-_INTENT_INVALID_MESSAGE = "intent normalization failed; see the observability hook (on_error) for details"
+_INTENT_INVALID_MESSAGE = (
+    "intent normalization failed; see the observability hook (on_error) for details"
+)
 
 
 # --- capability issuance ------------------------------------------------------
@@ -249,7 +251,9 @@ def _fixation_host(deps: KohakuHostDeps, request_id: str | None) -> FixationDeli
         kind: Any,
     ) -> None:
         endpoint = (
-            "fixation.refresh_fingerprint" if kind == "refresh_fingerprint" else "fixation.invalidate"
+            "fixation.refresh_fingerprint"
+            if kind == "refresh_fingerprint"
+            else "fixation.invalidate"
         )
         await _run_fixation_selfheal(
             deps, tenant, intent_hash, fn, endpoint, request_id or str(uuid.uuid4())
@@ -326,7 +330,9 @@ async def settle_fixation(
         FixationTarget(
             intent_hash=intent.hash,
             tenant=session.tenant,
-            catalog_fingerprint=deps.compose.with_tenant_catalog(session.tenant).catalog.fingerprint,
+            catalog_fingerprint=deps.compose.with_tenant_catalog(
+                session.tenant
+            ).catalog.fingerprint,
             fixation=fixation,
         ),
         _fixation_host(deps, request_id),
@@ -596,8 +602,12 @@ async def _deliver_composed(
     try:
         # Monitor for client disconnect and, on disconnect, vote to abort generation (single-flight quorum).
         async with _disconnect_abort(request) as abort:
-            result = await compose_with_fixation(intent, session, deps, abort=abort, request_id=request_id)
-            capability = await issue_capability_for_spec(result.spec, principal, deps, endpoint, request_id)
+            result = await compose_with_fixation(
+                intent, session, deps, abort=abort, request_id=request_id
+            )
+            capability = await issue_capability_for_spec(
+                result.spec, principal, deps, endpoint, request_id
+            )
 
             async def _rec() -> None:
                 if pre_record is not None:
@@ -616,7 +626,9 @@ async def _deliver_composed(
                 response["actions"] = actions
             return _json(response)
     except BaseException as e:
-        await report_host_error(deps, endpoint, request_id, e, trace_context=trace_context_of(request))
+        await report_host_error(
+            deps, endpoint, request_id, e, trace_context=trace_context_of(request)
+        )
         # An arbitrary exception's message never reaches the client (it may leak internals); a typed host
         # error (SpecError/ComposeError) still passes its own message through.
         client_message = _message(e) if is_typed_host_error(e) else _COMPOSE_FAILED_MESSAGE
@@ -744,9 +756,13 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         try:
             intent = await resolve_intent_from_body(body, session, deps)
         except BaseException as e:
-            await report_host_error(deps, "compose", request_id, e, trace_context=trace_context_of(request))
+            await report_host_error(
+                deps, "compose", request_id, e, trace_context=trace_context_of(request)
+            )
             return _intent_invalid(e, request_id)
-        return await _deliver_composed(request, deps, intent, session, principal, request_id, "compose")
+        return await _deliver_composed(
+            request, deps, intent, session, principal, request_id, "compose"
+        )
 
     # --- Compose streaming (SSE) --------------------------------------------
     @router.post("/compose/stream")
@@ -805,7 +821,9 @@ def register_compose_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
             )
             intent = resolved.intent
         except BaseException as e:
-            await report_host_error(deps, "events", request_id, e, trace_context=trace_context_of(request))
+            await report_host_error(
+                deps, "events", request_id, e, trace_context=trace_context_of(request)
+            )
             return _intent_invalid(e, request_id)
 
         async def _record_interaction() -> None:

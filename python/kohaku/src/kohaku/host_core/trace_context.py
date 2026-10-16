@@ -66,7 +66,9 @@ def parse_trace_context(traceparent: object, tracestate: object = None) -> Trace
         return None
     state = (
         tracestate
-        if isinstance(tracestate, str) and tracestate != "" and len(tracestate) <= _MAX_TRACESTATE_LENGTH
+        if isinstance(tracestate, str)
+        and tracestate != ""
+        and len(tracestate) <= _MAX_TRACESTATE_LENGTH
         else None
     )
     return TraceContext(traceparent=traceparent, tracestate=state)

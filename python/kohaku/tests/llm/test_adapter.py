@@ -385,9 +385,7 @@ def test_generate_text_retry_deadline_also_scales_with_factor() -> None:
         transport2.text_repeat = _api_error(is_retryable=True, status_code=503)
         llm2 = create_openai_compat_llm(cfg, transport=transport2, deps=DEPS)
         with pytest.raises(LlmError) as exc2:
-            await llm2.generate_text(
-                GenerateTextRequest(prompt="p", output_budget_factor=3)
-            )
+            await llm2.generate_text(GenerateTextRequest(prompt="p", output_budget_factor=3))
         assert exc2.value.code == "PROVIDER"
         assert len(transport2.text_calls) == 2
 
@@ -417,7 +415,9 @@ def test_prompt_mode_skips_native_channel() -> None:
             {"KOHAKU_LLM_PROVIDER": "ollama", "KOHAKU_LLM_STRUCTURED_MODE": "prompt"}
         )
         transport = FakeTransport()
-        transport.text_script.append(_ok_text('here is the answer ```json\n{"ok": 2}\n``` that is all.'))
+        transport.text_script.append(
+            _ok_text('here is the answer ```json\n{"ok": 2}\n``` that is all.')
+        )
         llm = create_openai_compat_llm(cfg, transport=transport, deps=DEPS)
         r = await llm.generate_object(_JSON_SCHEMA_REQ)
         assert r.object == {"ok": 2}
@@ -564,9 +564,7 @@ def test_stream_object_accumulates_partials_and_validates_final() -> None:
     async def run() -> None:
         seen: list[object] = []
         transport = FakeTransport()
-        stream_transport = FakeStreamTransport(
-            ['{"components": [', '{"id": "a"}', "]}"]
-        )
+        stream_transport = FakeStreamTransport(['{"components": [', '{"id": "a"}', "]}"])
         llm = create_openai_compat_llm(
             CONFIG, transport=transport, stream_transport=stream_transport, deps=DEPS
         )

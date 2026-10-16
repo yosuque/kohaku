@@ -74,12 +74,16 @@ class TestCreateConsoleErrorReporter:
     def test_debug_false_logs_a_one_line_summary_for_the_host_hook(self) -> None:
         lines: list[str] = []
         reporter = create_console_error_reporter(ConsoleErrorReporterOptions(log=lines.append))
-        reporter.host(_HostErrorInfo(endpoint="/compose", request_id="r1", error=RuntimeError("boom")))
+        reporter.host(
+            _HostErrorInfo(endpoint="/compose", request_id="r1", error=RuntimeError("boom"))
+        )
         assert lines == ["[kohaku] /compose (request r1): boom"]
 
     def test_debug_true_logs_the_full_cause_chain_and_the_traceback_as_separate_lines(self) -> None:
         lines: list[str] = []
-        reporter = create_console_error_reporter(ConsoleErrorReporterOptions(debug=True, log=lines.append))
+        reporter = create_console_error_reporter(
+            ConsoleErrorReporterOptions(debug=True, log=lines.append)
+        )
         try:
             try:
                 raise RuntimeError("root cause")
@@ -90,7 +94,10 @@ class TestCreateConsoleErrorReporter:
 
         assert len(lines) == 1
         line = lines[0]
-        assert "[kohaku] /compose (request r1): RuntimeError: top failure <- RuntimeError: root cause" in line
+        assert (
+            "[kohaku] /compose (request r1): RuntimeError: top failure <- RuntimeError: root cause"
+            in line
+        )
         assert "Traceback" in line
 
     def test_compose_a_fallback_with_no_raised_error_logs_ctx_reason_instead(self) -> None:
@@ -117,7 +124,9 @@ class TestCreateConsoleErrorReporter:
             reason="generation failed",
         )
         reporter.compose(ctx, None)
-        assert lines == ["[kohaku] compose fallback (tier L1, intent sales.overview): generation failed"]
+        assert lines == [
+            "[kohaku] compose fallback (tier L1, intent sales.overview): generation failed"
+        ]
 
     def test_compose_a_hard_failure_logs_the_raised_error(self) -> None:
         lines: list[str] = []
@@ -130,7 +139,9 @@ class TestCreateConsoleErrorReporter:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         reporter = create_console_error_reporter()
-        reporter.host(_HostErrorInfo(endpoint="/compose", request_id="r1", error=RuntimeError("boom")))
+        reporter.host(
+            _HostErrorInfo(endpoint="/compose", request_id="r1", error=RuntimeError("boom"))
+        )
         captured = capsys.readouterr()
         assert captured.err.strip() == "[kohaku] /compose (request r1): boom"
         assert captured.out == ""
@@ -205,7 +216,9 @@ class TestIsLlmUnavailableError:
     def test_is_false_for_invalid_output(self) -> None:
         assert not is_llm_unavailable_error(LlmError("INVALID_OUTPUT", "x"))
 
-    def test_is_true_for_a_duck_typed_llm_error_and_false_for_an_unrelated_coded_error(self) -> None:
+    def test_is_true_for_a_duck_typed_llm_error_and_false_for_an_unrelated_coded_error(
+        self,
+    ) -> None:
         assert is_llm_unavailable_error(_DuckLlmError("PROVIDER"))
         unrelated = Exception("x")
         unrelated.code = "PROVIDER"  # type: ignore[attr-defined]
@@ -226,7 +239,9 @@ class TestClassifyHostError:
         assert classify_host_error(LlmError("INVALID_OUTPUT", "raw")) == HostErrorClass("untyped")
 
     def test_maps_typed_errors_to_their_own_message(self) -> None:
-        assert classify_host_error(SpecError("PARSE_FAILED", "bad spec")) == HostErrorClass("typed", "bad spec")
+        assert classify_host_error(SpecError("PARSE_FAILED", "bad spec")) == HostErrorClass(
+            "typed", "bad spec"
+        )
         coded = Exception("governance failed")
         coded.code = "PROMOTION_NOT_PUBLISHED"  # type: ignore[attr-defined]
         assert classify_host_error(coded) == HostErrorClass("typed", "governance failed")

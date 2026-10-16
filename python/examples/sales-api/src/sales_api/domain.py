@@ -102,7 +102,9 @@ class Product:
 @dataclass(frozen=True)
 class SalesRecord:
     id: str
-    fiscal_year: int  # Fiscal year (starts in April; labeled by start year. FY2026 = 2026-04 to 2027-03)
+    fiscal_year: (
+        int  # Fiscal year (starts in April; labeled by start year. FY2026 = 2026-04 to 2027-03)
+    )
     quarter: int  # Q1=Apr-Jun, Q2=Jul-Sep, Q3=Oct-Dec, Q4=Jan-Mar
     month: str  # Calendar month "2026-04"
     region: str
@@ -142,9 +144,7 @@ def _load(seed_dir: Path, name: str) -> Any:
     try:
         return json.loads((seed_dir / name).read_text(encoding="utf-8"))
     except OSError as e:  # noqa: TRY003 -- matches the TS message
-        raise RuntimeError(
-            f"Cannot read seed data {name}. Run `pnpm seed` first ({e})"
-        ) from e
+        raise RuntimeError(f"Cannot read seed data {name}. Run `pnpm seed` first ({e})") from e
 
 
 def _read_seed_content_hash(seed_dir: Path) -> str | None:
@@ -169,9 +169,7 @@ class SalesRepo:
     def __init__(self, seed_dir: Path | None = None) -> None:
         d = seed_dir if seed_dir is not None else default_seed_dir()
         self.products: list[Product] = [
-            Product(
-                id=p["id"], name=p["name"], category=p["category"], unit_price=p["unitPrice"]
-            )
+            Product(id=p["id"], name=p["name"], category=p["category"], unit_price=p["unitPrice"])
             for p in _load(d, "products.json")
         ]
         self.records: list[SalesRecord] = [
@@ -362,8 +360,12 @@ def _summary_columns(group_by: str) -> list[_ColumnSpec]:
 
 def _trend_columns(granularity: str, metric: str) -> list[_ColumnSpec]:
     return [
-        _ColumnSpec(granularity, "Month" if granularity == "month" else "Quarter", "string", "time"),
-        _ColumnSpec(metric, "Revenue (JPY)" if metric == "revenue" else "Units", "number", "measure"),
+        _ColumnSpec(
+            granularity, "Month" if granularity == "month" else "Quarter", "string", "time"
+        ),
+        _ColumnSpec(
+            metric, "Revenue (JPY)" if metric == "revenue" else "Units", "number", "measure"
+        ),
     ]
 
 
@@ -463,9 +465,7 @@ def records(repo: SalesRepo, args: QueryArgs) -> TabularData:
     """Records (supports server-side paging/sorting). With reserved parameters unspecified, identical to the legacy behavior."""
     data_version = repo.data_version()
     # Default stable sort (month -> region -> productId). Applied first regardless of whether a reserved sort is present.
-    matched = sorted(
-        _filter_records(repo, args), key=lambda r: (r.month, r.region, r.product_id)
-    )
+    matched = sorted(_filter_records(repo, args), key=lambda r: (r.month, r.region, r.product_id))
     cols = _records_columns()
     mapped: list[JsonObject] = [
         {
@@ -516,9 +516,7 @@ def records(repo: SalesRepo, args: QueryArgs) -> TabularData:
     )
     offset = _parse_cursor_offset(_str(args.get("_cursor")), data_version, sort_sig)
     next_offset = offset + limit
-    next_cursor = (
-        f"{next_offset}:{sort_sig}:{data_version}" if next_offset < total else None
-    )
+    next_cursor = f"{next_offset}:{sort_sig}:{data_version}" if next_offset < total else None
     return TabularData(
         columns=_to_columns(cols),
         rows=mapped[offset:next_offset],

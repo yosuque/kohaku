@@ -25,7 +25,9 @@ from kohaku.spec import (
 SESSION = SessionContext(surface="web")
 
 
-def test_kind_intent_with_no_validate_intent_finalizes_the_given_intent_input_directly_unchecked() -> None:
+def test_kind_intent_with_no_validate_intent_finalizes_the_given_intent_input_directly_unchecked() -> (
+    None
+):
     """Backward compatible: a `semantic` without `validate_intent` keeps the historical unchecked-finalize
     behavior, and `normalize` is never called for a directly-specified Intent either way."""
     calls: list[SemanticInput] = []
@@ -37,7 +39,9 @@ def test_kind_intent_with_no_validate_intent_finalizes_the_given_intent_input_di
     async def run() -> None:
         result = await resolve_intent(
             _FakeSemantic(normalize),
-            IntentSourceIntent(intent=IntentInput(canonical="sales.trend", params={"fiscalYear": 2026})),
+            IntentSourceIntent(
+                intent=IntentInput(canonical="sales.trend", params={"fiscalYear": 2026})
+            ),
             SESSION,
         )
         assert calls == []
@@ -49,7 +53,9 @@ def test_kind_intent_with_no_validate_intent_finalizes_the_given_intent_input_di
     asyncio.run(run())
 
 
-def test_kind_intent_with_validate_intent_calls_it_before_finalizing_and_finalizes_its_return_value() -> None:
+def test_kind_intent_with_validate_intent_calls_it_before_finalizing_and_finalizes_its_return_value() -> (
+    None
+):
     normalize_calls: list[SemanticInput] = []
     validate_calls: list[tuple[IntentInput, SessionContext]] = []
 
@@ -60,12 +66,16 @@ def test_kind_intent_with_validate_intent_calls_it_before_finalizing_and_finaliz
     async def validate_intent(intent: IntentInput, ctx: SessionContext) -> IntentInput:
         validate_calls.append((intent, ctx))
         # Simulates a catalog filling in a schema default the caller omitted.
-        return IntentInput(canonical=intent.canonical, params={"metric": "revenue", **intent.params})
+        return IntentInput(
+            canonical=intent.canonical, params={"metric": "revenue", **intent.params}
+        )
 
     async def run() -> None:
         result = await resolve_intent(
             _FakeSemantic(normalize, validate_intent),
-            IntentSourceIntent(intent=IntentInput(canonical="sales.trend", params={"fiscalYear": 2026})),
+            IntentSourceIntent(
+                intent=IntentInput(canonical="sales.trend", params={"fiscalYear": 2026})
+            ),
             SESSION,
         )
         assert normalize_calls == []
@@ -156,7 +166,9 @@ def test_kind_gui_normalizes_the_delta_against_current_finalizes_and_echoes_back
             SESSION,
         )
         assert seen == [
-            GuiAction(kind="gui", action="view.drilldown", params={"region": "japan"}, current=current)
+            GuiAction(
+                kind="gui", action="view.drilldown", params={"region": "japan"}, current=current
+            )
         ]
         assert result.intent.canonical == "sales.trend"
         assert result.intent.params == {"region": "japan"}
@@ -195,7 +207,8 @@ class _FakeSemantic:
     def __init__(
         self,
         normalize: Callable[[SemanticInput, SessionContext], Awaitable[IntentInput]],
-        validate_intent: Callable[[IntentInput, SessionContext], Awaitable[IntentInput]] | None = None,
+        validate_intent: Callable[[IntentInput, SessionContext], Awaitable[IntentInput]]
+        | None = None,
     ) -> None:
         self._normalize = normalize
         if validate_intent is not None:

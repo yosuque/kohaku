@@ -180,7 +180,16 @@ ALWAYS_DENIED_ATTRS: frozenset[str] = frozenset(
 )
 
 ALLOWED_PROPERTY_OPS: frozenset[str] = frozenset(
-    {"value", "checked", "disabled", "selected", "scrollTop", "scrollLeft", "hidden", "indeterminate"}
+    {
+        "value",
+        "checked",
+        "disabled",
+        "selected",
+        "scrollTop",
+        "scrollLeft",
+        "hidden",
+        "indeterminate",
+    }
 )
 
 ALLOWED_STYLE_PROPS: frozenset[str] = frozenset(

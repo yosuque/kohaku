@@ -117,7 +117,9 @@ def promoted_intent(entry: PromotedEntry) -> IntentDef:
             query_params["region"] = js_string(p["region"])
         query_params["metric"] = "revenue"
         query_params["granularity"] = "month"
-        return [QueryHandle(uri=format_query_ref(source="sales", path="trend", params=query_params))]
+        return [
+            QueryHandle(uri=format_query_ref(source="sales", path="trend", params=query_params))
+        ]
 
     return IntentDef(
         name=draft.intentName,

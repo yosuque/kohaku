@@ -252,9 +252,7 @@ def _tally_usage(used: list[Any]) -> tuple[int, int]:
     Telemetry-sourced ones (source:"telemetry") can be spoofed, so they are excluded from the aggregation.
     """
     counted = [e for e in used if e.payload.get("source") != "telemetry"]
-    sessions = {
-        s for s in (e.payload.get("sessionId") for e in counted) if isinstance(s, str)
-    }
+    sessions = {s for s in (e.payload.get("sessionId") for e in counted) if isinstance(s, str)}
     return len(counted), max(len(sessions), 1 if len(counted) > 0 else 0)
 
 
@@ -376,7 +374,9 @@ class Promotions:
             return validated
         _notify_promotion_error(
             self._on_error,
-            PromotionErrorContext(endpoint="storage.record.invalid", artifactId=artifact_id, tenant=tenant),
+            PromotionErrorContext(
+                endpoint="storage.record.invalid", artifactId=artifact_id, tenant=tenant
+            ),
             ValueError(f"promotion state for {artifact_id} failed schema validation"),
         )
         return None
@@ -431,9 +431,7 @@ class Promotions:
             uses=uses,
             sessions=sessions,
             verdict=state_data.get("verdict"),
-            draft=(
-                component_draft_from_wire(draft_wire) if isinstance(draft_wire, dict) else None
-            ),
+            draft=(component_draft_from_wire(draft_wire) if isinstance(draft_wire, dict) else None),
             origin=origin,
             updatedAt=state.updatedAt if state is not None else generated[0].ts,
         )
@@ -690,9 +688,7 @@ class Promotions:
                 candidates.append(candidate)
         return sorted(candidates, key=lambda c: c.uses, reverse=True)
 
-    async def get(
-        self, artifact_id: str, tenant: str | None = None
-    ) -> PromotionCandidate | None:
+    async def get(self, artifact_id: str, tenant: str | None = None) -> PromotionCandidate | None:
         """Single fetch. When tenant is given, only candidates whose owning tenant matches (non-match is None)."""
         return await self._load_candidate(artifact_id, None, tenant)
 
@@ -842,9 +838,7 @@ class Promotions:
             # 3. Projection removal (idempotent; reconcile re-runs it against any lingering projection).
             if self._on_unpublish is not None:
                 await self._on_unpublish(
-                    UnpublishContext(
-                        artifactId=artifact_id, draft=candidate.draft, tenant=tenant
-                    )
+                    UnpublishContext(artifactId=artifact_id, draft=candidate.draft, tenant=tenant)
                 )
             # unpublish already persisted above (do not run the common persist at the end twice).
             return candidate
@@ -861,7 +855,9 @@ class Promotions:
         await self._persist(candidate, tenant)
         return candidate
 
-    async def _run_judge(self, candidate: PromotionCandidate, tenant: str | None = None) -> dict[str, Any]:
+    async def _run_judge(
+        self, candidate: PromotionCandidate, tenant: str | None = None
+    ) -> dict[str, Any]:
         """Resolve the judge verdict for `candidate` (port of TS's `runJudge`).
 
         judge unset (no review hook) is treated as a pass with no advice -> straight to human review. Whether
@@ -915,7 +911,11 @@ class Promotions:
         if candidate is None:
             raise ArtifactNotFoundError(artifact_id)
         if candidate.status == "published":
-            if self._on_publish is not None and candidate.draft is not None and candidate.html is not None:
+            if (
+                self._on_publish is not None
+                and candidate.draft is not None
+                and candidate.html is not None
+            ):
                 await self._on_publish(
                     PublishContext(
                         artifactId=artifact_id,
@@ -998,9 +998,7 @@ class Promotions:
         if candidate is None:
             raise ArtifactNotFoundError(artifact_id)
         action: PromotionAction = (
-            Unpublish(reason=reason)
-            if candidate.status == "published"
-            else Withdraw(reason=reason)
+            Unpublish(reason=reason) if candidate.status == "published" else Withdraw(reason=reason)
         )
         return await self.act(artifact_id, action, actor, tenant)
 
@@ -1100,7 +1098,11 @@ class Promotions:
                 # "unrecoverable" skip+on_error path below.
                 if candidate is not None and candidate.status != "published":
                     continue
-                if candidate is not None and candidate.draft is not None and key not in published_audit_keys:
+                if (
+                    candidate is not None
+                    and candidate.draft is not None
+                    and key not in published_audit_keys
+                ):
                     try:
                         await self._lineage.record(
                             "component.published",
@@ -1204,7 +1206,9 @@ class Promotions:
                 )
             )
             withdrawn_count += 1
-        return ReconcileSummary(published=published_count, withdrawn=withdrawn_count, skipped=skipped_count)
+        return ReconcileSummary(
+            published=published_count, withdrawn=withdrawn_count, skipped=skipped_count
+        )
 
 
 def create_promotions(

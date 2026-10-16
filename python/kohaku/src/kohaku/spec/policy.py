@@ -163,7 +163,9 @@ def merge_policy_sections(base: dict[str, Any], override: dict[str, Any]) -> dic
     ComposePolicy.
     """
     merged = _merge_deep(base, override)
-    assert isinstance(merged, dict)  # base/override are both dicts, so mergeDeep's dict branch always fires
+    assert isinstance(
+        merged, dict
+    )  # base/override are both dicts, so mergeDeep's dict branch always fires
     return merged
 
 

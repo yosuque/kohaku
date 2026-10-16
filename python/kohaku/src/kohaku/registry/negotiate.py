@@ -65,7 +65,9 @@ def negotiate(
                 node.id,
                 _TERMINAL_FALLBACK,
                 ver(_TERMINAL_FALLBACK),
-                {"markdown": "(Free-form generated components cannot be displayed on this surface)"},
+                {
+                    "markdown": "(Free-form generated components cannot be displayed on this surface)"
+                },
             )
 
         if _supports(surface, node.type, node.version):
@@ -98,9 +100,8 @@ def negotiate(
             fb_def = catalog.get(fb.type)
             # Drop children / data if the downgrade target does not accept them (capabilities is "none").
             # Leaving them would produce CHILDREN_NOT_SUPPORTED / DATA_FORBIDDEN in structural validation.
-            keep_children = (
-                current.children is not None
-                and (fb_def is None or fb_def.capabilities.children != "none")
+            keep_children = current.children is not None and (
+                fb_def is None or fb_def.capabilities.children != "none"
             )
             keep_data = current.data is not None and (
                 fb_def is None or fb_def.capabilities.data != "none"

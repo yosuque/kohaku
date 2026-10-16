@@ -44,7 +44,9 @@ def composed(
     if duration_ms is not None:
         payload["durationMs"] = duration_ms
     if fallback is not None:
-        payload["fallback"] = fallback  # a fallback Spec was served (keeps the failed tier / cache label)
+        payload["fallback"] = (
+            fallback  # a fallback Spec was served (keeps the failed tier / cache label)
+        )
     if coalesced:
         payload["decision"] = {"attempts": [], "coalesced": True}  # a single-flight follower
     return LineageEventRecord(
@@ -233,9 +235,7 @@ def test_since_until_bounds_inclusive() -> None:
     ]
     s = summarize_lineage(
         events,
-        SummarizeLineageOptions(
-            since="2026-07-01T00:00:00.000Z", until="2026-07-31T23:59:59.000Z"
-        ),
+        SummarizeLineageOptions(since="2026-07-01T00:00:00.000Z", until="2026-07-31T23:59:59.000Z"),
     )
     assert s.composed == 3
 
@@ -342,14 +342,21 @@ def test_usage_counts_fixations() -> None:
         ]
     )
     assert len(rows) == 1
-    assert (rows[0].composed, rows[0].fallbacks, rows[0].fixationsCreated, rows[0].fixationsRemoved) == (1, 0, 1, 2)
+    assert (
+        rows[0].composed,
+        rows[0].fallbacks,
+        rows[0].fixationsCreated,
+        rows[0].fixationsRemoved,
+    ) == (1, 0, 1, 2)
 
 
 def test_usage_keeps_a_fallback_spec_out_of_l2_generated_and_counts_it_in_fallbacks() -> None:
     rows = summarize_usage(
         [
             composed(tier="L2", cache="miss"),  # generated
-            composed(tier="L2", cache="miss", fallback={"from": "L2", "reason": "generation failed"}),
+            composed(
+                tier="L2", cache="miss", fallback={"from": "L2", "reason": "generation failed"}
+            ),
             composed(tier="L2", cache="bypass", fallback={"from": "L2", "reason": "budget"}),
             composed(tier="L1", cache="miss", fallback={"from": "L1", "reason": "L1 failed"}),
         ]
@@ -362,8 +369,16 @@ def test_usage_keeps_a_fallback_spec_out_of_l2_generated_and_counts_it_in_fallba
 def test_usage_counts_a_negotiation_downgrade_as_a_generation() -> None:
     rows = summarize_usage(
         [
-            composed(tier="L2", cache="miss", fallback={"from": "L2", "reason": "x", "kind": "negotiation"}),
-            composed(tier="L2", cache="miss", fallback={"from": "L2", "reason": "x", "kind": "generation"}),
+            composed(
+                tier="L2",
+                cache="miss",
+                fallback={"from": "L2", "reason": "x", "kind": "negotiation"},
+            ),
+            composed(
+                tier="L2",
+                cache="miss",
+                fallback={"from": "L2", "reason": "x", "kind": "generation"},
+            ),
             composed(tier="L2", cache="bypass", fallback={"from": "L2", "reason": "x"}),  # no kind
         ]
     )
@@ -375,7 +390,9 @@ def test_usage_keeps_a_single_flight_follower_out_of_l2_generated() -> None:
         [
             composed(tier="L2", cache="miss"),  # the leader
             composed(tier="L2", cache="miss", coalesced=True),  # rode on the leader's generation
-            composed(tier="L2", cache="miss", coalesced=True, fallback={"from": "L2", "reason": "x"}),
+            composed(
+                tier="L2", cache="miss", coalesced=True, fallback={"from": "L2", "reason": "x"}
+            ),
         ]
     )
     assert (rows[0].composed, rows[0].l2Generated, rows[0].fallbacks) == (3, 1, 1)
@@ -388,21 +405,27 @@ def test_usage_counts_fallbacks_from_view_composed_alone() -> None:
         ev("view.fallback", {"kind": "generation", "reason": "x", "intentHash": "sha256:aaa"}),
     ]
     assert summarize_usage(composed_only)[0].fallbacks == 1
-    assert summarize_usage(with_view_fallback)[0].fallbacks == 1  # the recorded view.fallback is not doubled
+    assert (
+        summarize_usage(with_view_fallback)[0].fallbacks == 1
+    )  # the recorded view.fallback is not doubled
     # A bare view.fallback with no composed record opens no row at all.
     assert summarize_usage([ev("view.fallback", {"kind": "generation"})]) == []
 
 
 def test_merge_usage_rows_folds_per_page_summaries_into_one_pass_rows() -> None:
     events = [
-        metered(tier="L2", cache="miss", tenant="acme", usage={"inputTokens": 10, "outputTokens": 1}),
+        metered(
+            tier="L2", cache="miss", tenant="acme", usage={"inputTokens": 10, "outputTokens": 1}
+        ),
         metered(tier="L1", cache="hit", tenant="acme"),
         composed(tier="L2", cache="miss", tenant="acme", fallback={"from": "L2", "reason": "x"}),
         metered(tier="L0", cache="fixated", tenant="globex", ts="2026-07-02T09:00:00.000Z"),
         metered(tier="L2", cache="bypass", usage={"inputTokens": 5, "outputTokens": 2}),
         ev("intent.fixated", {}, tenant="acme"),
         ev("intent.unfixated", {}, tenant="acme", ts="2026-07-02T10:00:00.000Z"),
-        metered(tier="L2", cache="miss", tenant="acme", usage={"inputTokens": 1, "outputTokens": 1}),
+        metered(
+            tier="L2", cache="miss", tenant="acme", usage={"inputTokens": 1, "outputTokens": 1}
+        ),
     ]
     for cut in (1, 3, 5, 7):
         folded: list[UsageRow] = []
@@ -450,8 +473,12 @@ def test_usage_reads_an_empty_tenant_option_as_no_filter() -> None:
         "2026-07-01//1",
         "2026-07-01/acme/1",
     ]
-    assert keyed(summarize_usage(events)) == keyed(summarize_usage(events, SummarizeUsageOptions(tenant="")))
-    assert keyed(summarize_usage(events, SummarizeUsageOptions(tenant="acme"))) == ["2026-07-01/acme/1"]
+    assert keyed(summarize_usage(events)) == keyed(
+        summarize_usage(events, SummarizeUsageOptions(tenant=""))
+    )
+    assert keyed(summarize_usage(events, SummarizeUsageOptions(tenant="acme"))) == [
+        "2026-07-01/acme/1"
+    ]
     assert summarize_lineage(events, SummarizeLineageOptions(tenant="")).composed == 2
 
 
@@ -470,7 +497,9 @@ def test_usage_wire_shape_key_order_matches_ts() -> None:
     """The wire keys of a usage row are in the TS object's order (to_jsonable follows field order)."""
     from kohaku.host_rest.serialize import to_jsonable
 
-    wire = to_jsonable(summarize_lineage([metered(tier="L2", usage={"inputTokens": 3, "outputTokens": 4})]))
+    wire = to_jsonable(
+        summarize_lineage([metered(tier="L2", usage={"inputTokens": 3, "outputTokens": 4})])
+    )
     assert list(wire.keys())[-3] == "usage"
     row = wire["usage"][0]
     assert list(row.keys()) == [
@@ -524,12 +553,36 @@ def test_l2_by_intent_separates_generations_from_fallbacks_and_followers() -> No
     s = summarize_lineage(
         [
             composed(tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1"),
-            composed(tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1", fallback=failed),
-            composed(tier="L2", cache="bypass", canonical="sales.custom", intent_hash="sha256:c1", fallback=failed),
+            composed(
+                tier="L2",
+                cache="miss",
+                canonical="sales.custom",
+                intent_hash="sha256:c1",
+                fallback=failed,
+            ),
+            composed(
+                tier="L2",
+                cache="bypass",
+                canonical="sales.custom",
+                intent_hash="sha256:c1",
+                fallback=failed,
+            ),
             # A single-flight follower rode on another request's generation: not a generation of its own.
-            composed(tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1", coalesced=True),
+            composed(
+                tier="L2",
+                cache="miss",
+                canonical="sales.custom",
+                intent_hash="sha256:c1",
+                coalesced=True,
+            ),
             # An intent whose L2 only ever failed still gets a row (that is the gap), with nothing generated.
-            composed(tier="L2", cache="miss", canonical="sales.broken", intent_hash="sha256:b1", fallback=failed),
+            composed(
+                tier="L2",
+                cache="miss",
+                canonical="sales.broken",
+                intent_hash="sha256:b1",
+                fallback=failed,
+            ),
             # An L1 failure is not an L2 gap.
             composed(
                 tier="L1",
@@ -552,7 +605,11 @@ def test_l2_by_intent_separates_generations_from_fallbacks_and_followers() -> No
 def test_l2_by_intent_counts_a_negotiation_downgrade_as_a_generation() -> None:
     def at(fallback: dict[str, Any]) -> LineageEventRecord:
         return composed(
-            tier="L2", cache="miss", canonical="sales.custom", intent_hash="sha256:c1", fallback=fallback
+            tier="L2",
+            cache="miss",
+            canonical="sales.custom",
+            intent_hash="sha256:c1",
+            fallback=fallback,
         )
 
     s = summarize_lineage(
@@ -587,9 +644,7 @@ def test_catalog_gaps_honor_top_intents_limit() -> None:
     assert len(s.schemaEditsByComponent) == 2
 
 
-def _edit(
-    artifact_id: str, fields: list[str], tenant: str | None = None
-) -> LineageEventRecord:
+def _edit(artifact_id: str, fields: list[str], tenant: str | None = None) -> LineageEventRecord:
     return ev(
         "component.schemaEdited",
         {
@@ -637,7 +692,9 @@ def test_schema_edits_group_by_the_final_component_type() -> None:
     ]
 
 
-def test_schema_edits_take_the_latest_proposal_by_ts_even_when_the_array_order_is_the_reverse() -> None:
+def test_schema_edits_take_the_latest_proposal_by_ts_even_when_the_array_order_is_the_reverse() -> (
+    None
+):
     def proposed(component_type: str, ts: str) -> LineageEventRecord:
         return ev(
             "component.schemaProposed",
@@ -662,9 +719,9 @@ def test_schema_edits_take_the_latest_proposal_by_ts_even_when_the_array_order_i
     ]
     assert [g.key for g in summarize_lineage(newer_first).schemaEditsByComponent] == ["sales.newer"]
     # And in the natural order (older listed first) the same proposal wins, so the result does not depend on it.
-    assert [g.key for g in summarize_lineage(list(reversed(newer_first))).schemaEditsByComponent] == [
-        "sales.newer"
-    ]
+    assert [
+        g.key for g in summarize_lineage(list(reversed(newer_first))).schemaEditsByComponent
+    ] == ["sales.newer"]
     # Equal timestamps keep the array order (a stable sort): the one listed last wins.
     tied = "2026-07-01T00:00:01.000Z"
     keys = [

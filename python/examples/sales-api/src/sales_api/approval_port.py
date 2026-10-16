@@ -50,7 +50,10 @@ def _b64url_decode(s: str) -> bytes:
 def _claims_well_formed(claims: dict[str, object]) -> bool:
     exp = claims.get("exp")
     return (
-        all(isinstance(claims.get(k), str) for k in ("action", "payloadHash", "approverId", "requesterId", "jti"))
+        all(
+            isinstance(claims.get(k), str)
+            for k in ("action", "payloadHash", "approverId", "requesterId", "jti")
+        )
         and isinstance(claims.get("tenant"), (str, type(None)))
         and isinstance(exp, (int, float))
         and not isinstance(exp, bool)
@@ -102,8 +105,12 @@ class HmacApprovalPort:
         store: ApprovalStore | None = None,
         now: Callable[[], float] | None = None,
     ) -> None:
-        self._max_ttl = max_ttl_seconds if max_ttl_seconds is not None else DEFAULT_MAX_APPROVAL_TTL_SECONDS
-        self._key = hmac.new(secret.encode("utf-8"), APPROVAL_KEY_LABEL.encode("utf-8"), hashlib.sha256).digest()
+        self._max_ttl = (
+            max_ttl_seconds if max_ttl_seconds is not None else DEFAULT_MAX_APPROVAL_TTL_SECONDS
+        )
+        self._key = hmac.new(
+            secret.encode("utf-8"), APPROVAL_KEY_LABEL.encode("utf-8"), hashlib.sha256
+        ).digest()
         self._default_ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_APPROVAL_TTL_SECONDS
         self._store = store
         self._now = now if now is not None else time.time
@@ -125,7 +132,9 @@ class HmacApprovalPort:
     ) -> str:
         if approver_id == requester_id:
             # design.md #63: reject issuing a self-approval rather than leave the check to the caller.
-            raise ApprovalIssueError("cannot issue an approval: approverId must differ from requesterId")
+            raise ApprovalIssueError(
+                "cannot issue an approval: approverId must differ from requesterId"
+            )
         claims = {
             "action": action,
             "payloadHash": payload_hash,
@@ -142,7 +151,13 @@ class HmacApprovalPort:
         return f"{APPROVAL_TOKEN_PREFIX}{payload}.{self._sign(payload)}"
 
     async def verify_approval(
-        self, token: str, *, action: str, payload_hash: str, requester_id: str, tenant: str | None = None
+        self,
+        token: str,
+        *,
+        action: str,
+        payload_hash: str,
+        requester_id: str,
+        tenant: str | None = None,
     ) -> ApprovalVerifyResult:
         if not token.startswith(APPROVAL_TOKEN_PREFIX):
             return ApprovalVerifyResult(ok=False, reason="not an approval token")
@@ -177,7 +192,9 @@ class HmacApprovalPort:
         if claims.get("payloadHash") != payload_hash:
             return ApprovalVerifyResult(ok=False, reason="approval is bound to a different payload")
         if claims.get("requesterId") != requester_id:
-            return ApprovalVerifyResult(ok=False, reason="approval is bound to a different requester")
+            return ApprovalVerifyResult(
+                ok=False, reason="approval is bound to a different requester"
+            )
         # `claims.get("tenant")` (not `or None`): dict.get already returns None for both a missing key and
         # an explicit JSON null, matching TS's `claims.tenant ?? undefined`. `or None` additionally folded
         # an empty-string tenant to None, silently treating "tenant: ''" as "no tenant" and letting a token

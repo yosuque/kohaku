@@ -54,7 +54,12 @@ def test_omits_previous_policy_id_and_label_when_unset(tmp_path: Path) -> None:
         )
 
         events = await storage.list_lineage()
-        assert sorted(events[0].payload.keys()) == ["changedPaths", "policyId", "tenants", "version"]
+        assert sorted(events[0].payload.keys()) == [
+            "changedPaths",
+            "policyId",
+            "tenants",
+            "version",
+        ]
 
     asyncio.run(run())
 
@@ -81,7 +86,9 @@ def test_defaults_to_a_system_actor_when_none_is_given(tmp_path: Path) -> None:
         storage = FileStoragePort(tmp_path)
         lineage = create_lineage(storage=storage)
 
-        await lineage.policy_applied({"policyId": "sha256:x", "version": 1, "changedPaths": [], "tenants": []})
+        await lineage.policy_applied(
+            {"policyId": "sha256:x", "version": 1, "changedPaths": [], "tenants": []}
+        )
 
         events = await storage.list_lineage()
         assert events[0].actor == LineageActor(kind="system")
@@ -93,7 +100,9 @@ def test_is_retrievable_via_list_lineage_filtered_by_type(tmp_path: Path) -> Non
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
         lineage = create_lineage(storage=storage)
-        await lineage.policy_applied({"policyId": "sha256:x", "version": 1, "changedPaths": [], "tenants": []})
+        await lineage.policy_applied(
+            {"policyId": "sha256:x", "version": 1, "changedPaths": [], "tenants": []}
+        )
         await lineage.record("view.composed", {"specHash": "irrelevant"})
 
         events = await storage.list_lineage(LineageFilter(type=["policy.applied"]))

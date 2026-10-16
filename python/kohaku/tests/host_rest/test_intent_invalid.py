@@ -66,7 +66,9 @@ class ValidatingSemantic:
         metric = intent.params.get("metric", "revenue")
         if metric not in ("revenue", "units"):
             message = 'param "metric": expected one of revenue, units'
-            raise IntentValidationError(message, [IntentValidationIssue(path="metric", message=message)])
+            raise IntentValidationError(
+                message, [IntentValidationIssue(path="metric", message=message)]
+            )
         return IntentInput(canonical=intent.canonical, params={**intent.params, "metric": metric})
 
 
@@ -86,7 +88,9 @@ def _build(tmp_path: Path) -> tuple[TestClient, FileStoragePort]:
         authz=FakeAuthz(),
         query_source="sales",
         recorder=create_view_recorder(lineage),
-        fixations=create_fixations(lineage=lineage, storage=storage, catalog_for=lambda _t: catalog),
+        fixations=create_fixations(
+            lineage=lineage, storage=storage, catalog_for=lambda _t: catalog
+        ),
     )
     app = FastAPI()
     attach_kohaku_routes(app, deps)
@@ -106,7 +110,9 @@ class TestComposeRejectsAnInvalidDirectlySpecifiedIntent:
         self, tmp_path: Path
     ) -> None:
         client, storage = _build(tmp_path)
-        res = client.post(_url("/compose"), json={"intent": {"canonical": "sales.bogus", "params": {}}})
+        res = client.post(
+            _url("/compose"), json={"intent": {"canonical": "sales.bogus", "params": {}}}
+        )
         assert res.status_code == 422
         body: dict[str, Any] = res.json()
         assert body["error"]["code"] == "INTENT_INVALID"
@@ -127,7 +133,9 @@ class TestComposeRejectsAnInvalidDirectlySpecifiedIntent:
         assert "metric" in body["error"]["message"]
         assert _composed_count(storage) == 0
 
-    def test_a_valid_directly_specified_intent_still_composes_normally(self, tmp_path: Path) -> None:
+    def test_a_valid_directly_specified_intent_still_composes_normally(
+        self, tmp_path: Path
+    ) -> None:
         client, _storage = _build(tmp_path)
         res = client.post(
             _url("/compose"),
@@ -156,7 +164,9 @@ class TestEventsRejectsAnInvalidCurrentIntent:
 
 
 class TestFixationsApproveRejectsAnInvalidIntent:
-    def test_an_invalid_intent_is_422_and_the_fixation_is_never_written(self, tmp_path: Path) -> None:
+    def test_an_invalid_intent_is_422_and_the_fixation_is_never_written(
+        self, tmp_path: Path
+    ) -> None:
         client, storage = _build(tmp_path)
         res = client.post(
             _url("/fixations/approve"), json={"intent": {"canonical": "sales.bogus", "params": {}}}

@@ -92,7 +92,9 @@ def _build_definition(entry: dict[str, Any]) -> ComponentDefinition:
             reason=deprecated_entry["reason"],
             since=deprecated_entry.get("since"),
             replacedBy=(
-                DeprecationReplacedBy(type=replaced_by_entry["type"], version=replaced_by_entry.get("version"))
+                DeprecationReplacedBy(
+                    type=replaced_by_entry["type"], version=replaced_by_entry.get("version")
+                )
                 if replaced_by_entry is not None
                 else None
             ),

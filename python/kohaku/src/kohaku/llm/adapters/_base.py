@@ -348,9 +348,7 @@ class StructuredLlmBase:
         # The signal is created once at the entry point and shared by the native attempt and the auto-fallback
         # prompt attempt. Creating it per attempt would create a new timeout and could linger for up to 2×timeout_ms.
         timeout_sig = AbortSignal.timeout(timeout_ms)
-        signal = (
-            AbortSignal.any([req.abort, timeout_sig]) if req.abort is not None else timeout_sig
-        )
+        signal = AbortSignal.any([req.abort, timeout_sig]) if req.abort is not None else timeout_sig
         deadline = self._retry_deps.now() + timeout_ms
         try:
             if mode != "prompt":
@@ -403,9 +401,7 @@ class StructuredLlmBase:
             else _round_half_up(config.max_output_tokens * factor)
         )
         timeout_sig = AbortSignal.timeout(timeout_ms)
-        signal = (
-            AbortSignal.any([req.abort, timeout_sig]) if req.abort is not None else timeout_sig
-        )
+        signal = AbortSignal.any([req.abort, timeout_sig]) if req.abort is not None else timeout_sig
         deadline = self._retry_deps.now() + timeout_ms
         try:
             try:
@@ -444,9 +440,7 @@ class StructuredLlmBase:
             else _round_half_up(config.max_output_tokens * factor)
         )
         timeout_sig = AbortSignal.timeout(timeout_ms)
-        signal = (
-            AbortSignal.any([req.abort, timeout_sig]) if req.abort is not None else timeout_sig
-        )
+        signal = AbortSignal.any([req.abort, timeout_sig]) if req.abort is not None else timeout_sig
         deadline = self._retry_deps.now() + timeout_ms
         try:
             result = await with_provider_retry(

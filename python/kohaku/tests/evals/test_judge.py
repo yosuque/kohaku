@@ -63,7 +63,9 @@ def l1_spec(example_spec_data: dict[str, Any]) -> UISpec:
 class TestJudgePromotion:
     def test_weighted_average_and_rubric_stamp(self) -> None:
         async def run() -> None:
-            llm = FakeLlm(objects=[_uniform_verdict(l2_promotion_rubric, 0.8, "worthy of promotion")])
+            llm = FakeLlm(
+                objects=[_uniform_verdict(l2_promotion_rubric, 0.8, "worthy of promotion")]
+            )
             judge = create_judge(llm=llm, pass_score=0.5)
             verdict = await judge.judge(
                 JudgeInput(
@@ -199,7 +201,11 @@ class TestJudgeAbnormal:
                                 {"id": c.id, "score": 0.5, "reasoning": c.id}
                                 for c in l2_promotion_rubric.criteria
                             ],
-                            {"id": "unknown_extra", "score": 1, "reasoning": "mixed-in unknown criterion"},
+                            {
+                                "id": "unknown_extra",
+                                "score": 1,
+                                "reasoning": "mixed-in unknown criterion",
+                            },
                         ],
                         "summary": "has unknown criterion",
                     }
@@ -210,9 +216,7 @@ class TestJudgeAbnormal:
                 JudgeInput(html="<html></html>", request="r", usage=JudgeUsage(uses=1, sessions=1))
             )
             # Only the rubric's criteria are scored. The unknown id does not appear in verdict.criteria.
-            assert [c.id for c in verdict.criteria] == [
-                c.id for c in l2_promotion_rubric.criteria
-            ]
+            assert [c.id for c in verdict.criteria] == [c.id for c in l2_promotion_rubric.criteria]
             # All criteria 0.5, so the combination is also 0.5 (the unknown criterion's full mark 1.0 is ignored).
             assert verdict.score == 0.5
             # safety's own score (0.5) equals its floor (0.5) exactly — the floor only vetoes a score
@@ -224,7 +228,9 @@ class TestJudgeAbnormal:
 
 
 class TestRubricValidation:
-    _base = Rubric(id="custom", version="1", criteria=[Criterion(id="a", description="a", weight=1)])
+    _base = Rubric(
+        id="custom", version="1", criteria=[Criterion(id="a", description="a", weight=1)]
+    )
 
     def _empty_llm(self) -> FakeLlm:
         return FakeLlm(objects=[])
@@ -234,7 +240,9 @@ class TestRubricValidation:
             create_judge(
                 llm=self._empty_llm(),
                 spec_rubric=Rubric(
-                    id="custom", version="1", criteria=[Criterion(id="a", description="a", weight=-1)]
+                    id="custom",
+                    version="1",
+                    criteria=[Criterion(id="a", description="a", weight=-1)],
                 ),
             )
 
@@ -255,7 +263,9 @@ class TestRubricValidation:
             create_judge(
                 llm=self._empty_llm(),
                 rubric=Rubric(
-                    id="custom", version="1", criteria=[Criterion(id="a", description="a", weight=0)]
+                    id="custom",
+                    version="1",
+                    criteria=[Criterion(id="a", description="a", weight=0)],
                 ),
             )
 
@@ -275,7 +285,9 @@ class TestRubricValidation:
 
     def test_rejects_empty_criteria(self) -> None:
         with pytest.raises(ValueError, match="criteria"):
-            create_judge(llm=self._empty_llm(), rubric=Rubric(id="custom", version="1", criteria=[]))
+            create_judge(
+                llm=self._empty_llm(), rubric=Rubric(id="custom", version="1", criteria=[])
+            )
 
     def test_default_rubrics_pass_validation(self) -> None:
         create_judge(llm=self._empty_llm())  # must not raise
@@ -293,7 +305,9 @@ class TestScoreRoundingHalfUp:
                 id="c", version="1", criteria=[Criterion(id="a", description="a", weight=1.0)]
             )
             llm = FakeLlm(
-                objects=[{"criteria": [{"id": "a", "score": raw, "reasoning": "a"}], "summary": "s"}]
+                objects=[
+                    {"criteria": [{"id": "a", "score": raw, "reasoning": "a"}], "summary": "s"}
+                ]
             )
             judge = create_judge(llm=llm, rubric=custom, pass_score=0.5)
             verdict = await judge.judge(
@@ -399,7 +413,14 @@ class TestL2PromotionRubric:
         assert sum(weights) == pytest.approx(1.0)
 
     def test_only_safety_has_a_floor(self) -> None:
-        assert [c.floor for c in l2_promotion_rubric.criteria] == [0.5, None, None, None, None, None]
+        assert [c.floor for c in l2_promotion_rubric.criteria] == [
+            0.5,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
 
     def test_visual_quality_description_covers_loading_fluid_width_and_countable_color_wording(
         self,
@@ -407,7 +428,9 @@ class TestL2PromotionRubric:
         visual_quality = next(c for c in l2_promotion_rubric.criteria if c.id == "visual_quality")
         # n-6: previously-unscored brief items now named explicitly.
         assert "loading" in visual_quality.description
-        assert "never use fixed pixel widths — fill the container width" in visual_quality.description
+        assert (
+            "never use fixed pixel widths — fill the container width" in visual_quality.description
+        )
         # n-8: "restrained color" (2 words, not scorable from markup) replaced by the L2 brief's own
         # countable wording (prompt.py's L2_SYSTEM_PROMPT design-brief bullet, verbatim).
         assert "restrained color" not in visual_quality.description

@@ -138,7 +138,9 @@ def test_passes_the_action_being_approved_to_authorize_governance(tmp_path: Path
     assert len(approvals.issue_calls) == 1
 
 
-def test_does_not_consult_authorize_governance_for_a_body_that_fails_validation(tmp_path: Path) -> None:
+def test_does_not_consult_authorize_governance_for_a_body_that_fails_validation(
+    tmp_path: Path,
+) -> None:
     calls: list[Any] = []
 
     def record(_principal: Any, operation: Any, _tenant: Any) -> bool:
@@ -146,7 +148,9 @@ def test_does_not_consult_authorize_governance_for_a_body_that_fails_validation(
         return True
 
     authorize: AuthorizeGovernanceHook = record
-    harness = build_harness(tmp_path, approvals=_RecordingApprovals(), authorize_governance=authorize)
+    harness = build_harness(
+        tmp_path, approvals=_RecordingApprovals(), authorize_governance=authorize
+    )
     res = harness.client.post(_url("/approvals"), json={"action": "delete"})
     assert res.status_code == 400
     assert calls == []

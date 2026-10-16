@@ -34,7 +34,7 @@ An LLM key is not required to get started: the L0 fixed Specs (and everything `p
 - To run a single package's tests: `pnpm vitest run --project <name>` (the name comes from that package's `vitest.config.ts`).
 - If you touched anything under `python/`:
   ```bash
-  cd python && uv run ruff check && uv run mypy && uv run lint-imports && uv run pytest
+  cd python && uv run ruff check && uv run ruff format --check && uv run mypy && uv run lint-imports && uv run pytest
   ```
 - If you touched the protocol (`spec/`), run a self-check: `node cli/bin/kohaku.js conformance --self`.
 

@@ -38,7 +38,9 @@ from .shared import (
 # The client-visible message for an unexpected fixation-removal failure (INTERNAL 500). See
 # _COMPOSE_FAILED_MESSAGE's doc (compose.py) for the rationale (an arbitrary exception's message may leak
 # internals; the original error still reaches the observability hook via report_host_error).
-_FIXATION_INTERNAL_ERROR_MESSAGE = "fixation removal failed; see the observability hook (on_error) for details"
+_FIXATION_INTERNAL_ERROR_MESSAGE = (
+    "fixation removal failed; see the observability hook (on_error) for details"
+)
 
 
 def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
@@ -58,7 +60,9 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
     async def fixations_proposals(request: Request) -> Response:
         if deps.fixations is None:
             return _error("NOT_IMPLEMENTED", "fixations are not configured", 501)
-        denied = await require_governance(deps, request, GovernanceOperation(kind="fixation.proposals"))
+        denied = await require_governance(
+            deps, request, GovernanceOperation(kind="fixation.proposals")
+        )
         if denied is not None:
             return denied
         tenant = await _resolve_tenant(deps, request)
@@ -69,7 +73,9 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         if deps.fixations is None:
             return _error("NOT_IMPLEMENTED", "fixations are not configured", 501)
         fixations = deps.fixations
-        denied = await require_governance(deps, request, GovernanceOperation(kind="fixation.approve"))
+        denied = await require_governance(
+            deps, request, GovernanceOperation(kind="fixation.approve")
+        )
         if denied is not None:
             return denied
         request_id = request_id_of(request, deps)
@@ -149,6 +155,8 @@ def register_fixation_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                 return _error("NOT_IMPLEMENTED", _message(e), 501)
             request_id = request_id_of(request, deps)
             await report_host_error(deps, "fixations/remove", request_id, e)
-            client_message = _message(e) if is_typed_host_error(e) else _FIXATION_INTERNAL_ERROR_MESSAGE
+            client_message = (
+                _message(e) if is_typed_host_error(e) else _FIXATION_INTERNAL_ERROR_MESSAGE
+            )
             return _error("INTERNAL", client_message, 500, request_id)
         return _json({"ok": True})

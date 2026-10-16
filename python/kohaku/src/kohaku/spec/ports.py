@@ -286,7 +286,13 @@ class ApprovalPort(Protocol):
         ...
 
     async def verify_approval(
-        self, token: str, *, action: str, payload_hash: str, requester_id: str, tenant: str | None = None
+        self,
+        token: str,
+        *,
+        action: str,
+        payload_hash: str,
+        requester_id: str,
+        tenant: str | None = None,
     ) -> ApprovalVerifyResult:
         """Verify `token` against the exact (action, payload_hash, requester_id, tenant) it is presented
         for. A denial (expired, malformed, wrong binding, already consumed) is a normal outcome and MUST
@@ -445,7 +451,9 @@ def validate_fixation_record(raw: object) -> FixationRecord | None:
         structureHash=model.structureHash,
         pinnedSpec=model.pinnedSpec,
         fixatedAt=model.fixatedAt,
-        approver=Principal(id=model.approver.id, name=model.approver.name, roles=model.approver.roles),
+        approver=Principal(
+            id=model.approver.id, name=model.approver.name, roles=model.approver.roles
+        ),
         catalogFingerprint=model.catalogFingerprint,
         tenant=model.tenant,
         revision=model.revision,
@@ -523,7 +531,9 @@ class StoragePort(Protocol):
 
     async def append_lineage(self, event: LineageEventRecord) -> None: ...
 
-    async def list_lineage(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]: ...
+    async def list_lineage(
+        self, filter: LineageFilter | None = None
+    ) -> list[LineageEventRecord]: ...
 
     # `page_lineage` (forward, append-order paging; design.md #53) is a *genuinely optional* StoragePort
     # extension, like `put_promotion_states` above -- and for the same reason, deliberately **not** declared
@@ -627,7 +637,9 @@ class RateLimitStore(Protocol):
     inside that bound and must not rely on a slow call being awaited to completion.
     """
 
-    async def take(self, key: str, cost: int, rule: RateLimitRule, now_ms: float) -> RateLimitResult:
+    async def take(
+        self, key: str, cost: int, rule: RateLimitRule, now_ms: float
+    ) -> RateLimitResult:
         """Attempts to consume `cost` tokens from the bucket identified by `key`, under `rule`. `now_ms`
         is the caller-supplied wall-clock time (epoch milliseconds) — the store never reads the clock
         itself, keeping `take` a pure/deterministic function of its arguments, so a caller can inject a

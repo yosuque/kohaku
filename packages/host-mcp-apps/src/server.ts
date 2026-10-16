@@ -237,12 +237,12 @@ function taskExtensionDeclared(extra: ServerContext): boolean {
 /**
  * Whether a task-capable tool call should actually take the async/task branch for THIS request: the
  * product-level `AttachOptions.tasksEnabled` kill switch (default off) AND the per-request opt-in
- * (`taskExtensionDeclared`) both have to hold. `tasksEnabled` exists because `tasks/get` is currently
- * unreachable over the wire on the installed SDK (see `registerTaskMethods`'s doc comment) — while that is
- * true, handing back a `CreateTaskResult` would give a declaring client a task handle it can never poll,
- * which is worse than no handle at all, so the default keeps every compose-family tool synchronous
- * regardless of what a request declares. See `AttachOptions.tasksEnabled`'s own doc comment for the full
- * reasoning and how to tell when it is safe to flip on.
+ * (`taskExtensionDeclared`) both have to hold. `tasksEnabled` was introduced because `tasks/get` was
+ * unreachable over the wire on SDK 2.0.0 (see `registerTaskMethods`'s doc comment): handing back a
+ * `CreateTaskResult` then would have given a declaring client a task handle it could never poll. It stays
+ * a default-off product decision on SDK >= 2.3.0, where `tasks/get` is reachable, so the default keeps every
+ * compose-family tool synchronous regardless of what a request declares. See `AttachOptions.tasksEnabled`'s
+ * own doc comment for the full reasoning.
  */
 function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
   return ctx.options.tasksEnabled === true && taskExtensionDeclared(extra);
@@ -558,7 +558,7 @@ function composeOrStartTask(
  * L1→repair→L2 takes. A client that declared the extension on this specific request gets a `CreateTaskResult`
  * back immediately and polls `tasks/get` instead of holding the connection open — **but only once
  * `tasksEnabled` is on**; by default this executes synchronously regardless of what a request declares (see
- * `AttachOptions.tasksEnabled`'s doc comment for why: `tasks/get` is currently unreachable on the installed SDK).
+ * `AttachOptions.tasksEnabled`'s doc comment for why it is off by default).
  */
 function registerComposeTool(ctx: ToolContext): void {
   ctx.server.registerTool(
@@ -1006,8 +1006,7 @@ function sharedOperationIndex(deps: McpHostDeps): hostCore.OperationIndex {
  * - ui://kohaku/renderer.html: the shared renderer of text/html;profile=mcp-app
  * - MCP Tasks extension (io.modelcontextprotocol/tasks, 2026-07-28 dated-stable): kohaku_compose and the
  *   intent tools become task-capable for a request that opts in, but only when `AttachOptions.tasksEnabled`
- *   is also set (default false — see that option's doc comment for why: tasks/get is currently unreachable
- *   over the wire on the installed SDK).
+ *   is also set (default false — see that option's doc comment for why).
  */
 export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, options: AttachOptions): void {
   const prefix = options.toolPrefix ?? "kohaku";
@@ -1061,9 +1060,8 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
   registerActionTool(ctx);
   // tasks/get and tasks/cancel are not tools (no tools/list visibility), so their registration is not subject
   // to the ordering constraint above. Gated behind AttachOptions.tasksEnabled (default off) — see its doc
-  // comment and registerTaskMethods' doc comment for why: while tasks/get is unreachable on the installed
-  // SDK, declaring the extension / registering these methods at all would be pure surface area with no
-  // corresponding capability, so leave the server silent about the extension entirely by default.
+  // comment: the default is a product decision (whether to hand a declaring client a task handle at all),
+  // not an SDK workaround any more; leave the server silent about the extension entirely unless asked.
   if (options.tasksEnabled === true) registerTaskMethods(ctx);
 }
 
@@ -1076,27 +1074,30 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
  * extension has nothing to hook onto and is omitted rather than stubbed.
  *
  * Uses the SDK's documented consumer-owned extension seam: `Server.setRequestHandler(method, {params,
- * result?}, handler)` (the 3-arg form; verified against the installed `@modelcontextprotocol/server` 2.0.0
+ * result?}, handler)` (the 3-arg form; verified against the `@modelcontextprotocol/server` 2.0.0
  * `.d.mts` — `tasks/get`/`tasks/cancel` are excluded from the typed 2-arg `RequestMethod` surface precisely
- * because they collide with the deprecated vocabulary's own method names, forcing this form). Declares the
+ * because they collide with the deprecated vocabulary's own method names, forcing this form; on SDK >= 2.3 it is
+ * also the form the SDK keys its reachability exemption on, see below). Declares the
  * extension in `ServerCapabilities.extensions` via `registerCapabilities` (mergeable post-construction,
  * unlike `ServerOptions.cacheHints` which is constructor-only — see cache-hints.ts's doc comment for that
  * asymmetry — so this package CAN self-wire the capability declaration, no caller-side change needed).
  *
- * *** KNOWN LIMITATION (verified empirically, not a kohaku bug — see docs/design.md §11's "MCP Tasks
- * extension" section for the full writeup, and test/tasks.test.ts's "known SDK limitation" describe block
- * for the reproduction/tripwire) ***: with the installed
- * `@modelcontextprotocol/server` 2.0.0, these two handlers are registered correctly but are NEVER DISPATCHED
- * TO on a 2026-07-28-negotiated connection. The SDK's inbound-request routing rejects any method name that
- * (a) is recognized somewhere across its own frozen per-era wire tables — `tasks/get`/`tasks/cancel` ARE
- * recognized, as the deprecated 2025-11-25 vocabulary's own method names — but (b) is not in the *negotiated*
- * era's own table (the 2026-07-28 core codec has no core `tasks/*` methods; this extension isn't core spec).
- * That check runs before handler lookup, so it answers -32601 Method not found unconditionally, regardless of
- * registration, declared capabilities/extensions, or which registration form is used. A genuinely novel
- * method name (no collision) dispatches fine through the identical seam — this is specifically a name
- * collision with the SDK's own reserved (if inert) legacy vocabulary. Kept registered anyway: the code is
- * spec-correct and forward-compatible with a future SDK release that either drops the reservation or ships
- * an official Tasks runtime — re-verify this limitation when upgrading @modelcontextprotocol/server.
+ * *** SDK REACHABILITY (verified empirically against the installed `@modelcontextprotocol/server`; see
+ * docs/design.md §11's "MCP Tasks extension" section for the full writeup, and test/tasks.test.ts's "SDK
+ * reachability" describe block for the reproduction, which doubles as the tripwire) ***:
+ *  - SDK 2.0.0: these two handlers were registered correctly but NEVER DISPATCHED TO on a 2026-07-28
+ *    connection. The base `Protocol` inbound routing answered -32601 whenever a method name was recognized in
+ *    ANY era's frozen wire table (`isSpecRequestMethod`: `tasks/get`/`tasks/cancel` are the deprecated
+ *    2025-11-25 vocabulary's own names) but missing from the negotiated era's table, before handler lookup.
+ *  - SDK 2.1 and 2.2: unchanged (-32601; checked by grepping the published tarballs). SDK >= 2.3.0
+ *    (SEP-2663, behavior verified on 2.3.1): the same check now exempts the two names
+ *    (`isExtensionReusedRequestMethod`) when a consumer registered a schema-explicit handler for them
+ *    (`Protocol._customSchemaRequestMethods`, populated by exactly the 3-arg `setRequestHandler` form used
+ *    here), so they dispatch to the handlers below. With nothing registered they still answer -32601, which is
+ *    what `tasksEnabled` off relies on. The one new wire requirement is SEP-2663's Streamable HTTP binding:
+ *    `tasks/get` / `tasks/update` / `tasks/cancel` must carry `Mcp-Name: <params.taskId>`, or the SDK's
+ *    pre-dispatch ladder rejects with -32020 (HeaderMismatch) before this code runs; SDK clients emit it.
+ * The peer floor (`@modelcontextprotocol/server` ^2.3.1) assumes the second behavior; re-verify when upgrading.
  */
 function registerTaskMethods(ctx: ToolContext): void {
   const protocol = ctx.server.server;
@@ -1129,18 +1130,19 @@ const fixationMutexByDeps = new WeakMap<McpHostDeps, hostCore.KeyedMutex>();
 
 /**
  * Side channel from an `McpServer` instance to the in-memory `TaskStore` `attachKohakuToMcpServer` built for
- * it, read by `__getTaskStoreForTest` below. Exists because `tasks/get`/`tasks/cancel` are currently
- * unreachable over the wire on this SDK version (see `registerTaskMethods`'s doc comment) — without it,
- * nothing outside this module could exercise `requestCancel`'s propagation into a running compose's
- * `AbortController` at all, since `ToolContext` and `startComposeTask` are both module-private.
+ * it, read by `__getTaskStoreForTest` below. Exists so a test can seed a task (or inspect one) without going
+ * through a task-backed tool call, since `ToolContext` and `startComposeTask` are both module-private. (It
+ * originally also covered `requestCancel`'s propagation into a running compose's `AbortController`, back when
+ * `tasks/cancel` was unreachable over the wire on SDK 2.0.0 — see `registerTaskMethods`'s doc comment; the
+ * cancellation test now drives a real `tasks/cancel` instead.)
  */
 const taskStoresByServer = new WeakMap<McpServer, TaskStore>();
 
 /**
  * Test-only escape hatch (not part of the public `index.ts` surface, same style as
  * `__setPreresolveTimeoutMsForTest`): returns the `TaskStore` `attachKohakuToMcpServer` built for `server`,
- * so a test can call `requestCancel` directly on the exact same store `tasks/get`/`tasks/cancel` would
- * consult if they were reachable — see `registerTaskMethods`'s doc comment for why they currently are not.
+ * so a test can create a task directly, or read back its state, on the exact same store `tasks/get`/
+ * `tasks/cancel` consult.
  */
 export function __getTaskStoreForTest(server: McpServer): TaskStore | undefined {
   return taskStoresByServer.get(server);

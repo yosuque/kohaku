@@ -54,7 +54,9 @@ class _AttemptLike(Protocol):
     @property
     def issues(self) -> list[str] | None: ...
     @property
-    def errorCode(self) -> Literal["CONFIG", "INVALID_OUTPUT", "PROVIDER", "ABORTED", "UNKNOWN"] | None: ...
+    def errorCode(
+        self,
+    ) -> Literal["CONFIG", "INVALID_OUTPUT", "PROVIDER", "ABORTED", "UNKNOWN"] | None: ...
 
 
 class _DowngradeLike(Protocol):
@@ -123,7 +125,9 @@ def truncate_issues(issues: list[str] | None) -> list[str] | None:
         return None
     capped = issues[:_MAX_DECISION_ISSUES]
     return [
-        f"{issue[:_MAX_DECISION_ISSUE_LENGTH]}…" if len(issue) > _MAX_DECISION_ISSUE_LENGTH else issue
+        f"{issue[:_MAX_DECISION_ISSUE_LENGTH]}…"
+        if len(issue) > _MAX_DECISION_ISSUE_LENGTH
+        else issue
         for issue in capped
     ]
 
@@ -162,7 +166,12 @@ def build_decision(trace: ComposeTraceLike) -> ViewComposedDecision | None:
     which should not grow a `decision` key at all."""
     attempts = trace.attempts or []
     downgrades = trace.downgrades or []
-    if len(attempts) == 0 and len(downgrades) == 0 and trace.coalesced is not True and trace.usage is None:
+    if (
+        len(attempts) == 0
+        and len(downgrades) == 0
+        and trace.coalesced is not True
+        and trace.usage is None
+    ):
         return None
     decision_attempts: list[ViewDecisionAttempt] = []
     for a in attempts:
@@ -182,12 +191,16 @@ def build_decision(trace: ComposeTraceLike) -> ViewComposedDecision | None:
     decision: ViewComposedDecision = {"attempts": decision_attempts}
     if len(downgrades) > 0:
         decision["downgrades"] = [
-            ViewDecisionDowngrade(id=d.id, from_=d.from_, to=d.to, reason=d.reason) for d in downgrades
+            ViewDecisionDowngrade(id=d.id, from_=d.from_, to=d.to, reason=d.reason)
+            for d in downgrades
         ]
     if trace.coalesced is True:
         decision["coalesced"] = True
     if trace.usage is not None:
-        decision["usage"] = {"inputTokens": trace.usage.inputTokens, "outputTokens": trace.usage.outputTokens}
+        decision["usage"] = {
+            "inputTokens": trace.usage.inputTokens,
+            "outputTokens": trace.usage.outputTokens,
+        }
     return decision
 
 
@@ -209,7 +222,9 @@ def _ulid() -> str:
     """
     timestamp = int(time.time() * 1000) & ((1 << 48) - 1)
     randomness = int.from_bytes(os.urandom(10), "big")  # 80-bit
-    value = (timestamp << 80) | randomness  # 128-bit (low 80 bits = randomness / next 48 bits = timestamp)
+    value = (
+        timestamp << 80
+    ) | randomness  # 128-bit (low 80 bits = randomness / next 48 bits = timestamp)
     chars = [""] * 26
     # Take 5 bits at a time from the low end (chars[10:26] = randomness / chars[0:10] = timestamp. 26*5=130 bits,
     # so the top 2 bits are 0-padded).
@@ -329,7 +344,11 @@ class Lineage:
         )
 
         # Component Lineage for L2 parts: auto-record the first generation and use (the input source for promotion)
-        if sandbox_node is not None and sandbox_node.artifact is not None and artifact_id is not None:
+        if (
+            sandbox_node is not None
+            and sandbox_node.artifact is not None
+            and artifact_id is not None
+        ):
             # Record component.generated on first sighting per tenant. The Spec cache is tenant-neutral,
             # so tenants after the first may receive the same Spec as cache:hit. Regardless of cache, "record if not
             # yet recorded for this tenant" (the artifact inline is on the spec, so even cache:hit has recording material).
@@ -466,7 +485,11 @@ class Lineage:
         source: str | None = None,
         tenant: str | None = None,
     ) -> None:
-        payload: dict[str, Any] = {"artifactId": artifact_id, "surface": surface, "outcome": outcome}
+        payload: dict[str, Any] = {
+            "artifactId": artifact_id,
+            "surface": surface,
+            "outcome": outcome,
+        }
         if session_id is not None:
             payload["sessionId"] = session_id
         if intent_hash is not None:
@@ -577,9 +600,7 @@ class Lineage:
             LineageFilter(artifactId=artifact_id, type=list(COMPONENT_EVENT_TYPES))
         )
 
-    async def list_events(
-        self, filter: LineageFilter | None = None
-    ) -> list[LineageEventRecord]:
+    async def list_events(self, filter: LineageFilter | None = None) -> list[LineageEventRecord]:
         # Corresponds to TS's Lineage.list. Renamed to list_events to avoid clashing with the Python built-in
         # `list` (under mypy strict, a `list[...]` annotation would be misread as the method) (an intentional difference).
         return await self._storage.list_lineage(filter)

@@ -96,7 +96,13 @@ class TestResolve:
         assert ei.value.code == "UNAUTHORIZED"
 
     def test_429_rate_limited_carries_the_envelopes_retry_after_ms(self) -> None:
-        envelope = {"error": {"code": "RATE_LIMITED", "message": "rate limit exceeded", "retryAfterMs": 2500}}
+        envelope = {
+            "error": {
+                "code": "RATE_LIMITED",
+                "message": "rate limit exceeded",
+                "retryAfterMs": 2500,
+            }
+        }
         client = create_binding_client(BindingClientConfig(fetcher=_const_fetcher(429, envelope)))
         with pytest.raises(BindingError) as ei:
             asyncio.run(client.resolve("query://sales/summary"))
@@ -112,10 +118,17 @@ class TestResolve:
         assert ei.value.retry_after_ms is None
 
     def test_429_on_invoke_action_is_rate_limited(self) -> None:
-        envelope = {"error": {"code": "RATE_LIMITED", "message": "rate limit exceeded", "retryAfterMs": 1000}}
+        envelope = {
+            "error": {
+                "code": "RATE_LIMITED",
+                "message": "rate limit exceeded",
+                "retryAfterMs": 1000,
+            }
+        }
         client = create_binding_client(
             BindingClientConfig(
-                fetcher=_const_fetcher(200, _DATA), action_fetcher=_const_action_fetcher(429, envelope)
+                fetcher=_const_fetcher(200, _DATA),
+                action_fetcher=_const_action_fetcher(429, envelope),
             )
         )
         with pytest.raises(BindingError) as ei:
@@ -131,7 +144,9 @@ class TestResolve:
 
     def test_stale_version_mismatch(self) -> None:
         client = create_binding_client(
-            BindingClientConfig(fetcher=_const_fetcher(200, {**_DATA, "dataVersion": "sales@seed-2"}))
+            BindingClientConfig(
+                fetcher=_const_fetcher(200, {**_DATA, "dataVersion": "sales@seed-2"})
+            )
         )
         with pytest.raises(BindingError) as ei:
             asyncio.run(
@@ -156,7 +171,9 @@ class TestResolve:
         assert called is False
 
     def test_malformed_payload(self) -> None:
-        client = create_binding_client(BindingClientConfig(fetcher=_const_fetcher(200, {"rows": "x"})))
+        client = create_binding_client(
+            BindingClientConfig(fetcher=_const_fetcher(200, {"rows": "x"}))
+        )
         with pytest.raises(BindingError) as ei:
             asyncio.run(client.resolve("query://sales/summary"))
         assert ei.value.code == "RESOLVE_FAILED"
@@ -200,7 +217,9 @@ class TestInflightDedup:
             client = create_binding_client(BindingClientConfig(fetcher=fetcher))
             # Even with notation variance (key order), if the normalized ref is identical it is shared.
             p1 = asyncio.ensure_future(client.resolve("query://sales/summary?q=3&fy=2026"))
-            p2 = asyncio.ensure_future(client.resolve({"$ref": "query://sales/summary?fy=2026&q=3"}))
+            p2 = asyncio.ensure_future(
+                client.resolve({"$ref": "query://sales/summary?fy=2026&q=3"})
+            )
             await asyncio.sleep(0)  # let the fetcher start
             gate.set()
             d1, d2 = await asyncio.gather(p1, p2)
@@ -277,7 +296,9 @@ class TestInflightDedup:
                     status=200, body={**_DATA, "dataVersion": f"sales@{init.capability}"}
                 )
 
-            client = create_binding_client(BindingClientConfig(capability=lambda: cap, fetcher=fetcher))
+            client = create_binding_client(
+                BindingClientConfig(capability=lambda: cap, fetcher=fetcher)
+            )
             p1 = asyncio.ensure_future(client.resolve("query://sales/summary"))
             # A coroutine evaluates its capability getter only once scheduled, so let the first resolve
             # start (and register its in-flight entry under cap-a) before switching the tenant.
@@ -471,7 +492,13 @@ class TestInvokeActionGovernedErrors:
             "error": {
                 "code": "ACTION_PARAMS_INVALID",
                 "message": "action parameters failed validation",
-                "issues": [{"path": "note", "code": "maxLength", "message": "expected at most 5 characters"}],
+                "issues": [
+                    {
+                        "path": "note",
+                        "code": "maxLength",
+                        "message": "expected at most 5 characters",
+                    }
+                ],
             }
         }
         client = create_binding_client(

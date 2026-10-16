@@ -182,9 +182,7 @@ def test_max_retries_zero_gives_up_after_one_attempt() -> None:
             raise _api_error(is_retryable=True)
 
         sleeps, deps = _make_deps()
-        policy = RetryPolicy(
-            max_retries=0, initial_delay_ms=250, backoff_factor=2.0, jitter=0.25
-        )
+        policy = RetryPolicy(max_retries=0, initial_delay_ms=250, backoff_factor=2.0, jitter=0.25)
         with pytest.raises(ApiCallError):
             await with_provider_retry(
                 fn, policy=policy, signal=_fresh_signal(), deadline=1_000_000, deps=deps

@@ -36,7 +36,13 @@ def _spec_with_ref_and_action() -> UISpec:
                 "data": {"$ref": "query://sales/summary?fy=2026"},
             },
         ],
-        "events": [{"on": "root.submit", "emit": "action.invoke", "payload": {"action": "sales.updateTarget"}}],
+        "events": [
+            {
+                "on": "root.submit",
+                "emit": "action.invoke",
+                "payload": {"action": "sales.updateTarget"},
+            }
+        ],
         "provenance": {"tier": "L0", "composedBy": "fixture", "cache": "miss"},
     }
     return UISpec.model_validate(data)

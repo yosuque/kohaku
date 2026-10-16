@@ -78,7 +78,10 @@ class TestSeqCursorCodec:
 
 class TestPageLineageEvents:
     def _events(self) -> list[LineageEventRecord]:
-        return [_event(f"e{i}", f"2026-01-0{i + 1}T00:00:00.000Z", intentHash=f"h{i + 1}") for i in range(5)]
+        return [
+            _event(f"e{i}", f"2026-01-0{i + 1}T00:00:00.000Z", intentHash=f"h{i + 1}")
+            for i in range(5)
+        ]
 
     def test_returns_everything_in_one_page_with_no_next_cursor(self) -> None:
         events = self._events()

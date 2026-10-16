@@ -92,9 +92,7 @@ class TestMissingKeyWarning:
     It is not a hard fail (the L0 deterministic path works without a key). Wire / exception behavior is unchanged.
     """
 
-    def test_warns_and_does_not_pollute_stdout(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_warns_and_does_not_pollute_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
         config = resolve_llm_env({"KOHAKU_LLM_PROVIDER": "openai"})
         captured = capsys.readouterr()
         assert "No API key configured" in captured.err
