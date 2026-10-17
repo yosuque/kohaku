@@ -40,3 +40,9 @@ export interface PromotionCandidate {
   origin?: PromotionOrigin;
   updatedAt: string;
 }
+
+/**
+ * A candidate paired with the tenant it is scoped to: the candidate's own owning tenant on the read side
+ * (candidate-store's `scanWithTenant`) and the tenant to persist it under on the write side (`persistMany`).
+ */
+export type ScopedCandidate = { candidate: PromotionCandidate; tenant?: string };

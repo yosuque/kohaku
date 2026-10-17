@@ -8,7 +8,7 @@ import {
 import { GENERATED_SCAN_WINDOW } from "../constants.js";
 import { notifyFailOpen } from "../fail-open.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
-import type { PromotionCandidate, PromotionOrigin } from "./candidate.js";
+import type { PromotionCandidate, PromotionOrigin, ScopedCandidate } from "./candidate.js";
 import type { PromotionErrorContext } from "./errors.js";
 import type { ComponentDraft, PromotionStatus } from "./machine.js";
 import type { SchemaSuggestion } from "./suggestion.js";
@@ -16,6 +16,13 @@ import type { createUsageIndex } from "./usage.js";
 import { indexLatestGenerated, tallyUsage, usageIndexKey } from "./usage.js";
 
 type UsageIndex = ReturnType<typeof createUsageIndex>;
+
+/** Options of `CandidateStore.load`: the owning tenant, plus the usage tally and `component.generated` event a bulk caller injects to avoid per-candidate lookups. */
+export interface LoadCandidateOptions {
+  tenant?: string;
+  usageStats?: { uses: number; sessions: number };
+  generatedEvent?: { ts: string; payload: Record<string, unknown> };
+}
 
 /**
  * Extracts PromotionOrigin (kit / generatorVersion / model) from a `component.generated` payload.
@@ -44,14 +51,7 @@ function originFromPayload(payload: Record<string, unknown> | undefined): Promot
  * + audit) on top of `load` / `persist` / `require`.
  */
 export interface CandidateStore {
-  load(
-    artifactId: string,
-    options?: {
-      tenant?: string;
-      usageStats?: { uses: number; sessions: number };
-      generatedEvent?: { ts: string; payload: Record<string, unknown> };
-    },
-  ): Promise<PromotionCandidate | null>;
+  load(artifactId: string, options?: LoadCandidateOptions): Promise<PromotionCandidate | null>;
   persist(candidate: PromotionCandidate, tenant?: string): Promise<void>;
   /**
    * Batch counterpart of `persist`: persists several candidates in as few storage round trips as the
@@ -59,7 +59,7 @@ export interface CandidateStore {
    * the whole batch); otherwise falls back to calling `persist` once per candidate (legacy behavior, unchanged).
    * A no-op for an empty list.
    */
-  persistMany(items: { candidate: PromotionCandidate; tenant?: string }[]): Promise<void>;
+  persistMany(items: ScopedCandidate[]): Promise<void>;
   scan(tenant?: string): Promise<PromotionCandidate[]>;
   /**
    * Same population as `scan`, but each candidate is paired with its own owning tenant (the tenant recorded on
@@ -67,7 +67,7 @@ export interface CandidateStore {
    * detect a candidate whose owning tenant does not match the call-level scope (#10; see nomination.ts's
    * tenant-mismatch skip). `scan` itself does not need this (it is read-only).
    */
-  scanWithTenant(tenant?: string): Promise<{ candidate: PromotionCandidate; tenant?: string }[]>;
+  scanWithTenant(tenant?: string): Promise<ScopedCandidate[]>;
   require(artifactId: string, tenant?: string): Promise<PromotionCandidate>;
   listByStatus(status: PromotionStatus, scope?: TenantScope): Promise<PromotionCandidate[]>;
   /**
@@ -136,11 +136,7 @@ export function createCandidateStore(opts: {
    */
   async function loadCandidate(
     artifactId: string,
-    options?: {
-      tenant?: string;
-      usageStats?: { uses: number; sessions: number };
-      generatedEvent?: { ts: string; payload: Record<string, unknown> };
-    },
+    options?: LoadCandidateOptions,
   ): Promise<PromotionCandidate | null> {
     const { tenant, generatedEvent } = options ?? {};
     let usageStats = options?.usageStats;
@@ -249,7 +245,7 @@ export function createCandidateStore(opts: {
    * `putPromotionStates` call (StoragePort implements the batch extension) or falls back to the legacy
    * one-`putPromotionState`-call-per-state loop. A no-op for an empty list.
    */
-  async function persistMany(items: { candidate: PromotionCandidate; tenant?: string }[]): Promise<void> {
+  async function persistMany(items: ScopedCandidate[]): Promise<void> {
     if (items.length === 0) return;
     const states = items.map(({ candidate, tenant }) => buildPromotionState(candidate, tenant));
     if (storage.putPromotionStates != null) {
@@ -294,9 +290,7 @@ export function createCandidateStore(opts: {
    * `scanCandidates` / `list` / `listByStatus`'s in_use branch, and `evaluateAndList`'s read step (before
    * `nominateEligible`'s side effects, which needs the per-candidate tenant to detect a tenant mismatch, #10).
    */
-  async function scanCandidatesWithTenant(
-    tenant?: string,
-  ): Promise<{ candidate: PromotionCandidate; tenant?: string }[]> {
+  async function scanCandidatesWithTenant(tenant?: string): Promise<ScopedCandidate[]> {
     // Aggregation covers only the most recent GENERATED_SCAN_WINDOW component.generated events. Anything beyond is dropped.
     // In the future, move toward a since window or an aggregate query (DB backend).
     // When tenant is given, scan only that tenant's records (unset = all = legacy behavior).
@@ -307,7 +301,7 @@ export function createCandidateStore(opts: {
     // one, silently mixing their state. `e.tenant` is each event's own recorded tenant (equal to `tenant` when a
     // specific tenant was requested; the record's own value otherwise).
     const loader = await bulkLoader(tenant);
-    const candidates: { candidate: PromotionCandidate; tenant?: string }[] = [];
+    const candidates: ScopedCandidate[] = [];
     for (const event of loader.latestGenerated.values()) {
       const artifactId = event.payload["artifactId"] as string;
       const recordTenant = event.tenant;

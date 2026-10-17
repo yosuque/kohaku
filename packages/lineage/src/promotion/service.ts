@@ -165,6 +165,18 @@ function auditEventFor(
   }
 }
 
+/** The argument of `onPublish` (projection application): what `publishArgs` builds. */
+export type PublishProjectionArgs = {
+  artifactId: string;
+  draft: ComponentDraft;
+  html: string;
+  request?: string;
+  tenant?: string;
+};
+
+/** The argument of `onUnpublish` (projection removal): what `unpublishArgs` builds. */
+export type UnpublishProjectionArgs = { artifactId: string; draft: ComponentDraft; tenant?: string };
+
 /**
  * Builds the onPublish projection argument object (draft/html required, request/tenant included only when
  * non-null). Shared by `handlePublish` (the publish transition) and `reconcile` (projection recovery from
@@ -173,10 +185,7 @@ function auditEventFor(
  * Pure (no closure dependency on createPromotions' opts/store, moved to module scope for direct
  * unit testing).
  */
-export function publishArgs(
-  candidate: PromotionCandidate,
-  tenant?: string,
-): { artifactId: string; draft: ComponentDraft; html: string; request?: string; tenant?: string } {
+export function publishArgs(candidate: PromotionCandidate, tenant?: string): PublishProjectionArgs {
   return {
     artifactId: candidate.artifactId,
     draft: candidate.draft!,
@@ -192,10 +201,7 @@ export function publishArgs(
  * authority) so the two call sites cannot drift. Callers must only invoke this once candidate.draft is
  * confirmed non-null (handleUnpublish's fail-fast guard; reconcile's `continue` guard).
  */
-function unpublishArgs(
-  candidate: PromotionCandidate,
-  tenant?: string,
-): { artifactId: string; draft: ComponentDraft; tenant?: string } {
+function unpublishArgs(candidate: PromotionCandidate, tenant?: string): UnpublishProjectionArgs {
   return {
     artifactId: candidate.artifactId,
     draft: candidate.draft!,
@@ -341,19 +347,8 @@ interface ReconcileContext {
   withdrawnFromPublishedAuditKeys: Set<string>;
 }
 
-/**
- * Application service for the promotion pipeline (L2->L1).
- * State is dual-recorded in the StoragePort (snapshot) + Lineage events, but the "source of truth" of the two is
- * split by role:
- * - **The read source of truth is the snapshot** (getPromotionState / listPromotionStates). Both state
- *   transitions (load->transition->persist) and the per-status list (listByStatus) use the snapshot as the index.
- * - **Lineage is the audit source of truth** (an append-only log of who / when / which version judged/approved).
- * A path to recover state by reconstructing (replaying) from Lineage events when the snapshot is lost is
- * **not implemented** (a known constraint, out of scope). Therefore the snapshot's persistence (promotions.json)
- * is the ultimate state authority. publish's side effects (reflecting into the Registry / Intent catalog) are
- * implemented by the product via onPublish.
- */
-export function createPromotions(opts: {
+/** Options of `createPromotions`; each field's doc is the contract for that hook. */
+export interface CreatePromotionsOptions {
   lineage: Lineage;
   storage: StoragePort;
   policy?: Partial<PromotionPolicy>;
@@ -364,25 +359,14 @@ export function createPromotions(opts: {
    * (collision checks belong in validatePublish). tenant is the projection's owning tenant (the value passed
    * to the approve/act that called publish).
    */
-  onPublish?: (args: {
-    artifactId: string;
-    draft: ComponentDraft;
-    html: string;
-    request?: string;
-    tenant?: string;
-  }) => Promise<void>;
+  onPublish?: (args: PublishProjectionArgs) => Promise<void>;
   /**
    * Pre-check for publish (product responsibility, optional): checks catalog/Intent name collisions etc. and
    * throws if publishing is not allowed. A check gate called **before the state transition (persist)**: if it
    * throws here, the snapshot does not transition to published and never reaches the projection (onPublish). It
    * must carry no side effects (a pure check). tenant narrows the check.
    */
-  validatePublish?: (args: {
-    artifactId: string;
-    draft: ComponentDraft;
-    html: string;
-    tenant?: string;
-  }) => Promise<void>;
+  validatePublish?: (args: Omit<PublishProjectionArgs, "request">) => Promise<void>;
   /**
    * Side effect at unpublish (withdrawal from published) time (product responsibility): removal from the
    * catalog/Intent. Symmetric with onPublish, and **must be idempotent** for the same reason: it runs after the
@@ -391,7 +375,7 @@ export function createPromotions(opts: {
    * still has a persisted draft, so an already-removed (tenant, artifactId) projection must be a no-op.
    * tenant is the removal target's owning tenant.
    */
-  onUnpublish?: (args: { artifactId: string; draft: ComponentDraft; tenant?: string }) => Promise<void>;
+  onUnpublish?: (args: UnpublishProjectionArgs) => Promise<void>;
   /** Promotion review called from the candidate state on the approve path. If unset, the review is skipped (straight to human review with no advice). */
   judge?: PromotionJudge;
   /**
@@ -427,7 +411,21 @@ export function createPromotions(opts: {
    * itself is swallowed and never propagates) — see `notifyFailOpen`.
    */
   onError?: (ctx: PromotionErrorContext, error: unknown) => void;
-}): Promotions {
+}
+
+/**
+ * Application service for the promotion pipeline (L2->L1).
+ * State is dual-recorded in the StoragePort (snapshot) + Lineage events, but the "source of truth" of the two is
+ * split by role:
+ * - **The read source of truth is the snapshot** (getPromotionState / listPromotionStates). Both state
+ *   transitions (load->transition->persist) and the per-status list (listByStatus) use the snapshot as the index.
+ * - **Lineage is the audit source of truth** (an append-only log of who / when / which version judged/approved).
+ * A path to recover state by reconstructing (replaying) from Lineage events when the snapshot is lost is
+ * **not implemented** (a known constraint, out of scope). Therefore the snapshot's persistence (promotions.json)
+ * is the ultimate state authority. publish's side effects (reflecting into the Registry / Intent catalog) are
+ * implemented by the product via onPublish.
+ */
+export function createPromotions(opts: CreatePromotionsOptions): Promotions {
   const policy: PromotionPolicy = { ...DEFAULT_PROMOTION_POLICY, ...opts.policy };
   const usage = createUsageIndex(opts.storage);
   const store = createCandidateStore({ storage: opts.storage, usage, onError: opts.onError });
