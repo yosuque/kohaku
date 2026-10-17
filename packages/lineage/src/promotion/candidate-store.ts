@@ -126,7 +126,7 @@ export function createCandidateStore(opts: {
    * evaluateAndList computes usage for all artifacts at once from a single listLineage and injects it, avoiding
    * the N+1 (O(K×N)) of linearly scanning the append-only lineage per candidate.
    * component.generated can similarly be injected via generatedEvent: scanCandidates always injects it (from its
-   * own component.generated scan), and both listByStatus (below) and reconcile (service.ts) also inject it from
+   * own component.generated scan), and both listByStatus (below) and reconcile (reconcile.ts) also inject it from
    * their own single bulk `listLineage({ type: ["component.generated"] })` fetch, keyed the same way
    * (`usageIndexKey`). A candidate whose generated event has aged out of GENERATED_SCAN_WINDOW (rare -- the
    * window is large) is simply absent from that bulk fetch, so generatedEvent comes through as `undefined` and
@@ -257,7 +257,7 @@ export function createCandidateStore(opts: {
 
   /**
    * Performs the two bulk index reads the N+1-avoiding callers (scanCandidatesWithTenant, listByStatus and
-   * service.ts's reconcile) each need exactly once — the (tenant, artifactId)-keyed component.used index (for the
+   * reconcile.ts's reconcile) each need exactly once — the (tenant, artifactId)-keyed component.used index (for the
    * window-drift known constraint, see the usage.index doc) and a single fetch of the most recent
    * GENERATED_SCAN_WINDOW component.generated events reduced to the latest per key — and returns a `load` that
    * hydrates one candidate from them. A candidate whose generated event has aged out of that window is simply

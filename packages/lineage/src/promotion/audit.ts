@@ -6,8 +6,8 @@ import type { PromotionErrorContext, PromotionErrorEndpoint } from "./errors.js"
 
 /**
  * Shared fail-open audit-record helper for the promotion pipeline (H7). Five call sites (handlePublish's
- * component.published, handleUnpublish's component.withdrawn, reconcile's published/withdrawn backfill in
- * service.ts, and nomination.ts's component.nominated) each record a lineage audit event whose own failure must
+ * component.published and handleUnpublish's component.withdrawn in service.ts, reconcile.ts's
+ * published/withdrawn backfill, and nomination.ts's component.nominated) each record a lineage audit event whose own failure must
  * not block the surrounding transition/projection -- the audit record is reported via `onError` instead of
  * thrown. This is a verbatim extraction of that repeated try/catch: argument order, the payload/actor passed to
  * `lineage.record`, and the `onError` context shape are unchanged from the five original sites.
