@@ -1,20 +1,16 @@
 import {
   ACTION_GATE_UNAVAILABLE_MESSAGE,
-  type ActionGateResult,
   applyActionEffects,
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
   errorMessage,
   type ParsedInvokableRef,
   parseInvokableRef,
-  recordActionGateResult,
-  recordActionGateUnavailableDenial,
-  recordUndeclaredActionDenial,
+  runActionGate,
   UNDECLARED_ACTION_MESSAGE,
   verifyCapabilitySafely,
 } from "@kohaku-ui/host-core";
 import {
   type ActionParamIssue,
-  type ActionTier,
   findUnsafeActionParamKeys,
   type JsonObject,
   type Principal,
@@ -213,54 +209,31 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
       correlationId: requestId,
       report: (e: unknown) => reportHostError(deps, "binding/action.audit", requestId, e),
     };
-    const gateUnavailable = async (e: unknown, tier?: ActionTier): Promise<Response> => {
-      await reportHostError(deps, "binding/action", requestId, e);
-      await recordActionGateUnavailableDenial({ ...auditContext, ...(tier != null ? { tier } : {}) });
-      return c.json(errorBody("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, requestId), 503);
-    };
-    let index: Awaited<ReturnType<typeof operationIndex>>;
-    try {
-      index = await operationIndex(deps);
-    } catch (e) {
-      return gateUnavailable(e);
-    }
-    const entry = index.get(body.action);
-    if (entry == null) {
-      await recordUndeclaredActionDenial(auditContext);
-      return c.json(errorBody("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE), 403);
-    }
-    // A declared operation whose paramsSchema failed validation must never be invoked: fail closed (500), the
-    // same outcome a schema error had before the index confined it to one operation.
-    if (entry.schemaError != null) {
-      await reportHostError(deps, "binding/action", requestId, entry.schemaError);
-      return c.json(errorBody("INTERNAL", ACTION_DECLARATION_INVALID_MESSAGE, requestId), 500);
-    }
-    const gate = actionGateFor(deps);
-    const rawUnsafeKeyIssues = await rawPayloadUnsafeKeyIssues(c);
-    let gateResult: ActionGateResult;
-    if (rawUnsafeKeyIssues.length > 0) {
-      gateResult = { kind: "invalid", issues: rawUnsafeKeyIssues };
-    } else {
-      try {
-        gateResult = await gate.check({
-          descriptor: entry.descriptor,
-          paramsSchema: entry.paramsSchema,
-          payload,
-          confirmed: body.confirmed,
-          approval: body.approval,
-          requesterId: principal.id,
-          tenant,
-        });
-      } catch (e) {
-        return gateUnavailable(e, entry.descriptor.tier ?? "auto");
-      }
-    }
-    // Maps one `ActionGate.check` outcome onto the REST response (design.md #62/#63). The audit trail and the
-    // client-visible messages are host-core's `recordActionGateResult` (shared with the MCP profile); this keeps
-    // only the wire mapping: `invalid` -> 422, `approvalRequired` / `denied` -> 403, and `proceed` falls through
-    // to `domain.invoke`.
-    const outcome = await recordActionGateResult(gateResult, auditContext);
+    const reportGate = (e: unknown) => reportHostError(deps, "binding/action", requestId, e);
+    // The sequence itself (operation index -> undeclared / schema checks -> raw unsafe-key scan -> gate ->
+    // audit) is host-core's `runActionGate`, shared with the MCP profile; this keeps only the wire mapping
+    // (design.md #62/#63): `indexUnavailable` / `gateUnavailable` -> 503, `undeclared` -> 403,
+    // `schemaInvalid` -> 500, `invalid` -> 422, `approvalRequired` -> 403, and `proceed` falls through to
+    // `domain.invoke`. The audit trail and the client-visible messages are host-core's too.
+    const outcome = await runActionGate({
+      operationIndex: () => operationIndex(deps),
+      gate: actionGateFor(deps),
+      audit: auditContext,
+      confirmed: body.confirmed,
+      approval: body.approval,
+      unsafeKeyIssues: () => rawPayloadUnsafeKeyIssues(c),
+      report: { indexFailure: reportGate, schemaError: reportGate, gateFailure: reportGate },
+    });
     switch (outcome.kind) {
+      case "indexUnavailable":
+      case "gateUnavailable":
+        return c.json(errorBody("INTERNAL", ACTION_GATE_UNAVAILABLE_MESSAGE, requestId), 503);
+      case "undeclared":
+        return c.json(errorBody("CAPABILITY_DENIED", UNDECLARED_ACTION_MESSAGE), 403);
+      // A declared operation whose paramsSchema failed validation must never be invoked: fail closed (500),
+      // the same outcome a schema error had before the index confined it to one operation.
+      case "schemaInvalid":
+        return c.json(errorBody("INTERNAL", ACTION_DECLARATION_INVALID_MESSAGE, requestId), 500);
       case "invalid":
         return c.json(
           errorBody(

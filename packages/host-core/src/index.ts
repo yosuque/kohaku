@@ -26,6 +26,11 @@ export {
   UNDECLARED_ACTION_MESSAGE,
 } from "./action-gate-outcome.js";
 export {
+  type ActionGateSequenceOutcome,
+  type RunActionGateInput,
+  runActionGate,
+} from "./action-gate-sequence.js";
+export {
   type ActionManifest,
   type ActionManifestEntry,
   buildActionManifest,
