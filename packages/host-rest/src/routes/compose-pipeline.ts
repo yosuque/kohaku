@@ -3,9 +3,8 @@ import * as hostCore from "@kohaku-ui/host-core";
 import type { CanonicalIntent, Principal, SessionContext, UISpec } from "@kohaku-ui/spec-core";
 import type { Context } from "hono";
 import { errorBody } from "../errors.js";
-import { withFixationLock } from "../keyed-mutex.js";
 import type { KohakuHostDeps } from "../types.js";
-import { operationIndex, type RestCallContext, reportHostError } from "./shared.js";
+import { type RestCallContext, type RouteContext, reportHostError } from "./shared.js";
 
 // The compose pipeline shared by the route registrars (compose.ts, fixations.ts): the client-visible failure
 // messages, the Intent-resolution failure response, the fixation shortcut -> normal compose sequence, and the
@@ -51,47 +50,40 @@ export function intentResolutionFailure(c: Context, e: unknown, requestId: strin
 
 /**
  * Adapts a REST KohakuHostDeps into the FixationDeliveryHost surface host-core's fixation helpers consume.
- * serialize wires the per-(tenant, intentHash) fixation lock (withFixationLock) so self-heal's
- * read-modify-write cannot interleave with the management plane's fixate/unfixate. onSelfHealError
- * fires the failure-path observability hook fire-and-forget (a throw/rejection from the hook is swallowed
- * inside reportHostError, never surfaced to the caller).
+ * serialize wires the per-(tenant, intentHash) fixation lock (`withFixationLock`, the RouteContext field built
+ * over the createKohakuRoutes app's own keyed mutex) so self-heal's read-modify-write cannot interleave with
+ * the management plane's fixate/unfixate. onSelfHealError fires the failure-path observability hook
+ * fire-and-forget (a throw/rejection from the hook is swallowed inside reportHostError, never surfaced to the
+ * caller).
  *
- * Cached per deps (analogous to keyed-mutex.ts's fixationMutexByDeps): deps is fixed for the lifetime of a
- * createKohakuRoutes app instance, and this object holds no per-request state, so building it once per deps
- * and reusing it avoids reallocating on every /compose, /compose/stream, /events, and /fixations/approve call
- * (the last of which calls composeForRest directly with `deps`, outside any single RouteContext-scoped
- * closure, hence caching by deps rather than by a route-local ctx).
+ * createKohakuRoutes builds this exactly once per app instance and stores it on RouteContext.fixationHost: the
+ * object holds no per-request state, so building it once avoids reallocating on every /compose,
+ * /compose/stream, /events, and /fixations/approve call.
  */
-const fixationHostByDeps = new WeakMap<KohakuHostDeps, hostCore.FixationDeliveryHost>();
-function fixationHost(deps: KohakuHostDeps): hostCore.FixationDeliveryHost {
-  let host = fixationHostByDeps.get(deps);
-  if (host == null) {
-    host = {
-      // fixationLookup (deprecated) takes priority when wired (backward compatible); otherwise fall back to
-      // the plain read on FixationsApi.get, with delivery gating handled separately by `admit` below.
-      lookup:
-        deps.fixationLookup ??
-        (deps.fixations?.get != null
-          ? (intentHash, session) =>
-              deps.fixations!.get!(
-                intentHash,
-                session.tenant != null ? { tenant: session.tenant } : undefined,
-              )
-          : undefined),
-      admit: deps.fixationAdmit,
-      fixations: deps.fixations,
-      serialize: (scope, fn) => withFixationLock(deps, scope.tenant, scope.intentHash, fn),
-      // requestId is threaded in by resolveFixatedForRest/composeForRest below from the triggering request;
-      // the crypto.randomUUID() fallback only guards a hypothetical future caller that omits it.
-      // globalThis.crypto (not node:crypto) so this file has no Node-only import: Node >= 19 and every
-      // evergreen browser both expose the same Web Crypto randomUUID() on globalThis.crypto.
-      onSelfHealError: (endpoint, error, requestId) => {
-        void reportHostError(deps, endpoint, requestId ?? globalThis.crypto.randomUUID(), error);
-      },
-    };
-    fixationHostByDeps.set(deps, host);
-  }
-  return host;
+export function createRestFixationHost(
+  deps: KohakuHostDeps,
+  withFixationLock: RouteContext["withFixationLock"],
+): hostCore.FixationDeliveryHost {
+  return {
+    // fixationLookup (deprecated) takes priority when wired (backward compatible); otherwise fall back to
+    // the plain read on FixationsApi.get, with delivery gating handled separately by `admit` below.
+    lookup:
+      deps.fixationLookup ??
+      (deps.fixations?.get != null
+        ? (intentHash, session) =>
+            deps.fixations!.get!(intentHash, session.tenant != null ? { tenant: session.tenant } : undefined)
+        : undefined),
+    admit: deps.fixationAdmit,
+    fixations: deps.fixations,
+    serialize: (scope, fn) => withFixationLock(scope.tenant, scope.intentHash, fn),
+    // requestId is threaded in by resolveFixatedForRest/composeForRest below from the triggering request;
+    // the crypto.randomUUID() fallback only guards a hypothetical future caller that omits it.
+    // globalThis.crypto (not node:crypto) so this file has no Node-only import: Node >= 19 and every
+    // evergreen browser both expose the same Web Crypto randomUUID() on globalThis.crypto.
+    onSelfHealError: (endpoint, error, requestId) => {
+      void reportHostError(deps, endpoint, requestId ?? globalThis.crypto.randomUUID(), error);
+    },
+  };
 }
 
 /**
@@ -106,14 +98,14 @@ function fixationHost(deps: KohakuHostDeps): hostCore.FixationDeliveryHost {
 export async function resolveFixatedForRest(
   intent: CanonicalIntent,
   session: SessionContext,
-  deps: KohakuHostDeps,
+  ctx: RouteContext,
   call: RestCallContext,
 ): Promise<ComposeResult | null> {
   return hostCore.resolveFixatedResult(
     intent,
     session,
-    withTenantCatalog(deps.compose, session.tenant),
-    fixationHost(deps),
+    withTenantCatalog(ctx.deps.compose, session.tenant),
+    ctx.fixationHost,
     call.requestId,
   );
 }
@@ -132,9 +124,10 @@ export async function resolveFixatedForRest(
 export async function composeForRest(
   intent: CanonicalIntent,
   session: SessionContext,
-  deps: KohakuHostDeps,
+  ctx: RouteContext,
   call: RestCallContext,
 ): Promise<ComposeResult> {
+  const { deps } = ctx;
   // materialize validates against the tenant catalog; the normal-compose fallback runs against the untenanted
   // deps.compose (compose() re-applies tenant/session internally).
   return hostCore.composeWithFixation(
@@ -145,7 +138,7 @@ export async function composeForRest(
       compose: deps.compose,
       ...(call.signal != null ? { abort: call.signal } : {}),
     },
-    fixationHost(deps),
+    ctx.fixationHost,
     call.requestId,
     call.traceContext,
   );
@@ -163,33 +156,35 @@ export function capabilityTtl(deps: KohakuHostDeps): number {
  * collectCapabilityScopes (the single source of truth) so both profiles agree on the issuance rule.
  *
  * Write scopes are additionally restricted to the DomainPort's listOperations() names (hardening against a
- * hallucinated/injected action.invoke action name becoming a bearer write scope): the allowed set is memoized
- * per deps below (listOperations is async and must not be awaited on every compose). issueSpecCapabilitySafely
- * reports a dropped action via the endpoint's onError hook as a WriteScopeDroppedError, and — if listOperations
- * itself rejects — still issues the capability but fail-closed for writes (an empty allowed set), reporting the
- * rejection the same way; delivery proceeds either way.
+ * hallucinated/injected action.invoke action name becoming a bearer write scope): the allowed set is derived
+ * from the app's memoized OperationIndex below (listOperations is async and must not be awaited on every
+ * compose). issueSpecCapabilitySafely reports a dropped action via the endpoint's onError hook as a
+ * WriteScopeDroppedError, and — if listOperations itself rejects — still issues the capability but
+ * fail-closed for writes (an empty allowed set), reporting the rejection the same way; delivery proceeds
+ * either way.
  */
 export async function issueSpecCapability(
   spec: UISpec,
   principal: Principal,
-  deps: KohakuHostDeps,
+  ctx: RouteContext,
   call: RestCallContext,
 ): Promise<string> {
+  const { deps } = ctx;
   return hostCore.issueSpecCapabilitySafely(
     deps.authz,
     principal,
     spec,
-    () => allowedActions(deps),
+    () => allowedActions(ctx),
     (e) => reportHostError(deps, call.endpoint, call.requestId, e),
     capabilityTtl(deps),
   );
 }
 
 /**
- * The write-scope filter for capability issuance, derived from the same per-deps `OperationIndex` the action
- * gate and the `actions` manifest use (routes/shared.ts's `operationIndex`), so the three can never disagree
+ * The write-scope filter for capability issuance, derived from the same per-app `OperationIndex` the action
+ * gate and the `actions` manifest use (RouteContext.operationIndex), so the three can never disagree
  * about which actions exist and `listOperations()` is read (and memoized) once.
  */
-function allowedActions(deps: KohakuHostDeps): Promise<ReadonlySet<string>> {
-  return hostCore.allowedActionsFromIndex(() => operationIndex(deps))();
+function allowedActions(ctx: RouteContext): Promise<ReadonlySet<string>> {
+  return hostCore.allowedActionsFromIndex(ctx.operationIndex)();
 }

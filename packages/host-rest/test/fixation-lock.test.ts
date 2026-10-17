@@ -310,3 +310,30 @@ describe("the operation index is memoized per app (host-rest)", () => {
     expect(listOperations).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("the memoized state is scoped to the createKohakuRoutes app instance (host-rest)", () => {
+  // The instance-scoped contract decided in the 2026-10-17 refactor round: the operation index used to be memoized
+  // per `deps` object (a module-level WeakMap), so mounting the same `deps` object twice shared one
+  // listOperations() read. It now lives on each app's RouteContext, so every app reads it once on its own.
+  it("two apps built from the same deps object each call listOperations once", async () => {
+    const listOperations = vi.fn(async () => [{ name: "annotate", description: "d" }]);
+    const deps: KohakuHostDeps = {
+      compose: composeCtx(),
+      domain: domainWith(listOperations),
+      authz,
+      querySource: "sales",
+    };
+    const apps = [createKohakuRoutes(deps), createKohakuRoutes(deps)];
+    for (const app of apps) {
+      for (let i = 0; i < 2; i++) {
+        const res = await app.request("/binding/action", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer cap" },
+          body: JSON.stringify({ action: "annotate", payload: {} }),
+        });
+        expect(res.status).toBe(200);
+      }
+    }
+    expect(listOperations).toHaveBeenCalledTimes(2);
+  });
+});

@@ -1,5 +1,10 @@
 import { withTenantCatalog } from "@kohaku-ui/composer";
-import { createKeyedMutex, validateOperationIndex } from "@kohaku-ui/host-core";
+import {
+  createActionGate,
+  createKeyedMutex,
+  createOperationIndex,
+  validateOperationIndex,
+} from "@kohaku-ui/host-core";
 import { cachedPropsJsonSchema } from "@kohaku-ui/registry";
 import type { Principal } from "@kohaku-ui/spec-core";
 import { type Context, Hono } from "hono";
@@ -9,6 +14,7 @@ import { errorBody } from "./errors.js";
 import type { GovernanceOperation } from "./governance-policy.js";
 import { registerBindingRoutes } from "./routes/binding.js";
 import { registerComposeRoutes } from "./routes/compose.js";
+import { createRestFixationHost } from "./routes/compose-pipeline.js";
 import { registerFixationRoutes } from "./routes/fixations.js";
 import { registerGovernanceRoutes } from "./routes/governance.js";
 import { registerPromotionRoutes } from "./routes/promotions.js";
@@ -16,7 +22,6 @@ import { createRateLimitMiddleware } from "./routes/rate-limit.js";
 import {
   ANONYMOUS,
   memoizePrincipal,
-  operationIndex,
   type RouteContext,
   reportHostError,
   requestIdOf,
@@ -174,11 +179,31 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
    */
   const promotionMutex = createKeyedMutex();
 
+  /**
+   * A simple mutex that serializes the fixation's read-modify-write (self-healing's refreshFingerprint /
+   * invalidate and the management plane's fixate / unfixate) per (tenant, intentHash) within the process (the
+   * same per-tenant serialization strategy as the promotion lock). Self-healing fires fire-and-forget from the
+   * compose path, so without serialization interleavings such as "refreshFingerprint's get->put right after
+   * unfixate resurrects a deleted fixation" occur. The lock is scoped to each createKohakuRoutes call (= app
+   * instance; in-process only, cross-process serialization is delegated to the StoragePort's single-writer
+   * assumption).
+   */
+  const fixationMutex = createKeyedMutex();
+  const withFixationLock: RouteContext["withFixationLock"] = (tenant, intentHash, fn) =>
+    fixationMutex(`${tenant ?? ""} ${intentHash}`, fn);
+
   const ctx: RouteContext = {
     deps,
     getPrincipal,
     requireGovernance,
     withPromotionLock: (tenant, fn) => promotionMutex(tenant ?? "", fn),
+    // The operation index, the action gate and the fixation host are scoped to this app instance too (they
+    // used to be memoized per `deps` object in module-level WeakMaps): construction is pure (no I/O;
+    // `listOperations()` is still only awaited lazily inside the memoized index).
+    operationIndex: createOperationIndex(deps.domain),
+    actionGate: createActionGate({ approvals: deps.approvals }),
+    withFixationLock,
+    fixationHost: createRestFixationHost(deps, withFixationLock),
   };
 
   // Rate limiting (deps.rateLimiter; SPEC §6.1, REST-RL-001), mounted only on these specific
@@ -206,7 +231,7 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
   // `actions` manifest and `/binding/action` fails for it alone); a rejected `listOperations()` is not
   // memoized, so a later request retries.
   void validateOperationIndex(
-    () => operationIndex(deps),
+    () => ctx.operationIndex(),
     (e) => reportHostError(deps, "attach.operationIndex", globalThis.crypto.randomUUID(), e),
   );
 

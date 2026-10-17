@@ -1,8 +1,7 @@
 import type { TraceContext } from "@kohaku-ui/composer";
 import {
   type ActionGate,
-  createActionGate,
-  createOperationIndex,
+  type FixationDeliveryHost,
   notifyHook,
   type OperationIndex,
   parseTraceContext,
@@ -22,8 +21,9 @@ import type { KohakuHostDeps } from "../types.js";
 
 /**
  * The shared context passed to each route group (compose / binding / governance / promotions / fixations).
- * createKohakuRoutes assembles it exactly once. It bundles the state scoped to the app instance (the promotion lock)
- * and the deps-derived hooks (principal extraction, governance authorization) here, aligning each group's signature.
+ * createKohakuRoutes assembles it exactly once. It bundles the state scoped to the app instance (the promotion
+ * lock, the fixation lock and delivery host, the memoized operation index and the action gate) and the
+ * deps-derived hooks (principal extraction, governance authorization) here, aligning each group's signature.
  */
 export interface RouteContext {
   deps: KohakuHostDeps;
@@ -38,6 +38,31 @@ export interface RouteContext {
    * Per-tenant serialization of the promotion family's read-modify-write. See the createKohakuRoutes side for the granularity rationale.
    */
   withPromotionLock<T>(tenant: string | undefined, fn: () => Promise<T>): Promise<T>;
+  /**
+   * The app's memoized `OperationIndex` (host-core's `createOperationIndex` over `deps.domain`; `listOperations()`
+   * is async and must not be re-awaited on every action invoke / compose). Shared by `/binding/action` (the
+   * `ActionGate` below), the compose routes (the `actions` manifest on the response, SPEC §6.1.1, and the
+   * capability write-scope filter via host-core's `allowedActionsFromIndex`) so all of them consult the exact
+   * same index rather than each memoizing its own. Scoped to the createKohakuRoutes app instance: two apps built
+   * from the same `deps` object each read `listOperations()` once.
+   */
+  operationIndex: OperationIndex;
+  /**
+   * The app's `ActionGate` (host-core's `createActionGate`, design.md #62/#63), consulted by `POST /binding/action`
+   * before `domain.invoke`. Building it is cheap (no I/O); it is built once per app rather than per request.
+   */
+  actionGate: ActionGate;
+  /**
+   * Serializes the fixation's read-modify-write (self-healing's refreshFingerprint / invalidate and the management
+   * plane's fixate / unfixate) per `(tenant, intentHash)` within the process, over a keyed mutex scoped to the
+   * createKohakuRoutes app instance (cross-process serialization is delegated to the StoragePort's single-writer
+   * assumption; the same per-tenant strategy as the promotion lock). Self-healing fires fire-and-forget from the
+   * compose path, so without serialization interleavings such as "refreshFingerprint's get->put right after
+   * unfixate resurrects a deleted fixation" occur.
+   */
+  withFixationLock<T>(tenant: string | undefined, intentHash: string, fn: () => Promise<T>): Promise<T>;
+  /** The `FixationDeliveryHost` host-core's fixation helpers consume, built once per app (compose-pipeline.ts). */
+  fixationHost: FixationDeliveryHost;
 }
 
 export const ANONYMOUS: Principal = { id: "demo-user", roles: ["user"] };
@@ -265,37 +290,4 @@ export interface RestCallContext {
   endpoint: string;
   signal?: AbortSignal;
   traceContext?: TraceContext;
-}
-
-/**
- * Per-deps memoized `OperationIndex` (host-core's `createOperationIndex`; WeakMap-keyed-by-deps, since
- * `listOperations()` is async and must not be re-awaited on every action invoke / compose). Shared by
- * `/binding/action` (the `ActionGate`, below) and the compose routes (the `actions` manifest on the
- * response, SPEC §6.1.1, and the capability write-scope filter via host-core's `allowedActionsFromIndex`) so
- * all of them consult the exact same index rather than each memoizing its own.
- */
-const operationIndexByDeps = new WeakMap<KohakuHostDeps, OperationIndex>();
-export function operationIndex(deps: KohakuHostDeps): ReturnType<OperationIndex> {
-  let fn = operationIndexByDeps.get(deps);
-  if (fn == null) {
-    fn = createOperationIndex(deps.domain);
-    operationIndexByDeps.set(deps, fn);
-  }
-  return fn();
-}
-
-/**
- * Per-deps memoized `ActionGate` (host-core's `createActionGate`, design.md #62/#63), consulted by
- * `POST /binding/action` before `domain.invoke`. Building it is cheap (no I/O), but memoizing keeps one
- * gate instance per deps rather than a fresh closure per request, the same convention as `operationIndex`
- * above.
- */
-const actionGateByDeps = new WeakMap<KohakuHostDeps, ActionGate>();
-export function actionGateFor(deps: KohakuHostDeps): ActionGate {
-  let gate = actionGateByDeps.get(deps);
-  if (gate == null) {
-    gate = createActionGate({ approvals: deps.approvals });
-    actionGateByDeps.set(deps, gate);
-  }
-  return gate;
 }

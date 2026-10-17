@@ -1109,7 +1109,7 @@ function registerTaskMethods(ctx: ToolContext): void {
 
 /**
  * Per-deps keyed mutex for the MCP profile's fixation self-heal serialization (symmetric with host-rest's
- * fixationMutexByDeps in keyed-mutex.ts). The MCP profile never resolves a tenant, so unlike the REST lock
+ * per-app fixation lock on RouteContext). The MCP profile never resolves a tenant, so unlike the REST lock
  * (keyed by `(tenant, intentHash)`) this one is keyed by `intentHash` alone.
  */
 const fixationMutexByDeps = new WeakMap<McpHostDeps, hostCore.KeyedMutex>();

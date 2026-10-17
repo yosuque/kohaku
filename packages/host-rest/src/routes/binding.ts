@@ -23,8 +23,6 @@ import type { KohakuHostDeps } from "../types.js";
 import { ActionBodySchema } from "./schemas.js";
 import {
   ANONYMOUS,
-  actionGateFor,
-  operationIndex,
   parseBody,
   type RouteContext,
   reportHostError,
@@ -216,8 +214,8 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     // `schemaInvalid` -> 500, `invalid` -> 422, `approvalRequired` -> 403, and `proceed` falls through to
     // `domain.invoke`. The audit trail and the client-visible messages are host-core's too.
     const outcome = await runActionGate({
-      operationIndex: () => operationIndex(deps),
-      gate: actionGateFor(deps),
+      operationIndex: () => ctx.operationIndex(),
+      gate: ctx.actionGate,
       audit: auditContext,
       confirmed: body.confirmed,
       approval: body.approval,
