@@ -43,6 +43,31 @@ const KOHAKU_RUNTIME = [
   "spec-core",
 ];
 
+// The external packages the generated package.json lists, typed against EXTERNAL_VERSIONS so a typo or a
+// removed key is a compile error instead of a dependency silently dropped from the generated project.
+type ExternalPackage = keyof typeof EXTERNAL_VERSIONS;
+
+const RUNTIME_EXTERNALS: readonly ExternalPackage[] = [
+  "hono",
+  "@hono/node-server",
+  "zod",
+  "react",
+  "react-dom",
+  "@ai-sdk/anthropic",
+  "@ai-sdk/openai-compatible",
+];
+
+const DEV_EXTERNALS: readonly ExternalPackage[] = [
+  "@types/node",
+  "@types/react",
+  "@types/react-dom",
+  "@vitejs/plugin-react",
+  "tsx",
+  "typescript",
+  "vite",
+  "vitest",
+];
+
 function q(s: string): string {
   return JSON.stringify(s);
 }
@@ -235,34 +260,15 @@ export function renderPackageJson(
 ): string {
   const dependencies: Record<string, string> = {};
   for (const pkg of KOHAKU_RUNTIME) dependencies[`@kohaku-ui/${pkg}`] = `^${CLI_VERSION}`;
-  for (const pkg of [
-    "hono",
-    "@hono/node-server",
-    "zod",
-    "react",
-    "react-dom",
-    "@ai-sdk/anthropic",
-    "@ai-sdk/openai-compatible",
-  ])
-    dependencies[pkg] = EXTERNAL_VERSIONS[pkg]!;
+  for (const pkg of RUNTIME_EXTERNALS) dependencies[pkg] = EXTERNAL_VERSIONS[pkg];
   if (options.mcp === true) {
     dependencies["@kohaku-ui/host-mcp-apps"] = `^${CLI_VERSION}`;
     dependencies["@kohaku-ui/mcp-renderer"] = `^${CLI_VERSION}`;
-    dependencies["@modelcontextprotocol/server"] = EXTERNAL_VERSIONS["@modelcontextprotocol/server"]!;
-    dependencies["@modelcontextprotocol/node"] = EXTERNAL_VERSIONS["@modelcontextprotocol/node"]!;
+    dependencies["@modelcontextprotocol/server"] = EXTERNAL_VERSIONS["@modelcontextprotocol/server"];
+    dependencies["@modelcontextprotocol/node"] = EXTERNAL_VERSIONS["@modelcontextprotocol/node"];
   }
   const devDependencies: Record<string, string> = {};
-  for (const pkg of [
-    "@types/node",
-    "@types/react",
-    "@types/react-dom",
-    "@vitejs/plugin-react",
-    "tsx",
-    "typescript",
-    "vite",
-    "vitest",
-  ])
-    devDependencies[pkg] = EXTERNAL_VERSIONS[pkg]!;
+  for (const pkg of DEV_EXTERNALS) devDependencies[pkg] = EXTERNAL_VERSIONS[pkg];
   return `${JSON.stringify(
     {
       name,
@@ -476,7 +482,7 @@ export function renderProjectFiles(
     { path: "package.json", content: renderPackageJson(options.name, profile, { mcp }) },
     { path: "tsconfig.json", content: TSCONFIG_TEMPLATE },
     { path: "vite.config.ts", content: VITE_CONFIG_TEMPLATE },
-    { path: "index.html", content: INDEX_HTML_TEMPLATE.replaceAll("__NAME__", options.name) },
+    { path: "index.html", content: nameReplaced(INDEX_HTML_TEMPLATE) },
     { path: "dev.mjs", content: DEV_SCRIPT_TEMPLATE },
     { path: ".env.example", content: ENV_EXAMPLE_TEMPLATE },
     { path: ".gitignore", content: mcp ? GITIGNORE_TEMPLATE + GITIGNORE_MCP_EXTRA : GITIGNORE_TEMPLATE },
