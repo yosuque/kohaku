@@ -98,6 +98,27 @@ function resolvePrincipal(deps: KohakuHostDeps, c: Context, verdict: VerifyResul
   return c.json(errorBody("CAPABILITY_DENIED", "capability verified without a principal"), 403);
 }
 
+/**
+ * The shared authorization prologue of the capability-gated routes: verify the bearer token against
+ * `request` (a thrown `verify` is the 503 of `verifyCapability`), deny a `!ok` verdict with 403
+ * CAPABILITY_DENIED (carrying the verdict's own reason), then resolve the principal to act as
+ * (`resolvePrincipal`). Returns the Response to return as-is on any denial, or the resolved Principal.
+ */
+async function authorizeCapability(
+  deps: KohakuHostDeps,
+  c: Context,
+  endpoint: string,
+  token: string,
+  request: VerifyRequest,
+): Promise<Response | Principal> {
+  const verdict = await verifyCapability(deps, c, endpoint, token, request);
+  if (verdict instanceof Response) return verdict;
+  if (!verdict.ok) {
+    return c.json(errorBody("CAPABILITY_DENIED", verdict.reason ?? "capability denied"), 403);
+  }
+  return resolvePrincipal(deps, c, verdict);
+}
+
 /** Reference-passing data resolution / write-through path (/binding/resolve, /binding/action). capability required. */
 export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
   const { deps } = ctx;
@@ -136,15 +157,10 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     }
     const { base, params } = parsed.ref;
 
-    const verdict = await verifyCapability(deps, c, "binding/resolve", token, {
+    const principal = await authorizeCapability(deps, c, "binding/resolve", token, {
       kind: "read",
       ref: base.raw,
     });
-    if (verdict instanceof Response) return verdict;
-    if (!verdict.ok) {
-      return c.json(errorBody("CAPABILITY_DENIED", verdict.reason ?? "capability denied"), 403);
-    }
-    const principal = resolvePrincipal(deps, c, verdict);
     if (principal instanceof Response) return principal;
 
     try {
@@ -173,15 +189,10 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
     if (token == null) {
       return c.json(errorBody("CAPABILITY_REQUIRED", "Authorization: Bearer <capability> is required"), 401);
     }
-    const verdict = await verifyCapability(deps, c, "binding/action", token, {
+    const principal = await authorizeCapability(deps, c, "binding/action", token, {
       kind: "write",
       ref: body.action,
     });
-    if (verdict instanceof Response) return verdict;
-    if (!verdict.ok) {
-      return c.json(errorBody("CAPABILITY_DENIED", verdict.reason ?? "capability denied"), 403);
-    }
-    const principal = resolvePrincipal(deps, c, verdict);
     if (principal instanceof Response) return principal;
     // body.payload is already a validated JsonObject | undefined (ActionBodySchema); no cast needed.
     const payload = body.payload ?? {};
