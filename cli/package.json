@@ -1,6 +1,6 @@
 {
   "name": "@kohaku-ui/cli",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Command-line tools for kohaku: protocol conformance checks, scaffolding, project generation and component validation.",
   "type": "module",
   "bin": {
