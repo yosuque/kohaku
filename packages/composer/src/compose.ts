@@ -367,34 +367,29 @@ export async function generateSpec(
 }
 
 /**
- * The L0 fixed-Spec short-circuit. If lookup hits, runs all the way through assemble → post-processing →
- * cache store → trace, and on a miss returns null (the caller proceeds to the L1/L2 ladder).
+ * The L0 fixed-Spec short-circuit. If lookup hits, the template becomes an ok TierOutcome of tier "L0" and
+ * runs through the same tail as an L1/L2 result (buildSpecFromOutcome → persistAndTrace: assemble →
+ * post-processing → cache store → trace, with no attempts and hence no usage to report), and on a miss
+ * returns null (the caller proceeds to the L1/L2 ladder).
  */
 async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Promise<GenerateOutcome | null> {
-  const { intent, refs, cacheMode } = prepared;
+  const { intent, refs } = prepared;
   // Shared with composeStream's fast-path check via PreparedCompose.getFixedSpec (memoized) — see its doc.
   const fixed = await prepared.getFixedSpec();
   if (fixed == null) return null;
 
-  const cacheLabel = cacheLabelOf(cacheMode);
   const template = typeof fixed === "function" ? fixed(intent, refs.handles) : fixed;
-  const assembled = assembleSpec({
-    intent,
-    refs,
+  const outcome: TierOutcome = {
+    kind: "ok",
+    tier: "L0",
     components: template.components,
     events: template.events,
-    tier: "L0",
-    cache: cacheLabel,
-    ...provenanceStampsOf(ctx.policy),
+    model: undefined,
     // Carry the fixed template's state over to the delivered Spec (preserve visibleWhen's initial state).
     ...(template.state != null ? { state: template.state } : {}),
-  });
-  const l0spec = postAndValidate(assembled, refs, ctx);
-  if (shouldPersist(l0spec, cacheMode)) {
-    await putSpecCacheSafely(ctx, prepared, l0spec);
-  }
-  const trace = buildComposeTrace(prepared, { cache: cacheLabel, tier: "L0", attempts: [] });
-  return { spec: l0spec, trace };
+  };
+  const spec = buildSpecFromOutcome(prepared, ctx, outcome);
+  return persistAndTrace(prepared, ctx, spec, outcome, []);
 }
 
 /**
@@ -415,6 +410,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
       cache: cacheLabel,
       ...(outcome.model != null ? { model: outcome.model } : {}),
       ...provenanceStampsOf(ctx.policy),
+      ...(outcome.state != null ? { state: outcome.state } : {}),
     });
     return postAndValidate(assembled, refs, ctx);
   }
@@ -454,7 +450,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
 
 /**
  * After the cache store (the condition/timing is consolidated in shouldPersist), builds the ComposeTrace
- * for the leader. Because the L0 short-circuit does the equivalent store/trace on the tryFixedSpec side, this is dedicated to the L1/L2/fallback path.
+ * for the leader. Shared by the L0 short-circuit (tryFixedSpec) and the L1/L2/fallback path.
  */
 async function persistAndTrace(
   prepared: PreparedCompose,
@@ -467,8 +463,8 @@ async function persistAndTrace(
   const cacheLabel = cacheLabelOf(cacheMode);
 
   const usage = sumUsage(attempts);
-  // Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
-  // this function at all; a no-attempts fallback has usage:undefined and is excluded by
+  // Fail-open, once per compose that actually generated (a cache hit never reaches this function; an L0
+  // short-circuit and a no-attempts fallback have usage:undefined and are excluded by
   // notifyBudgetUsage's own check) — see ComposeBudget.onUsage's doc. Runs before the cache store: with
   // `cacheFailure: "closed"` a failing put rethrows, and the tokens already spent on generation must
   // still be charged (else every retry during a cache outage would generate uncharged).

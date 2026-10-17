@@ -81,9 +81,9 @@ export function checkBudget(
 
 /**
  * Fail-open call of `ComposeBudget.onUsage`, made exactly once per compose that actually generated
- * (`usage` is `undefined` whenever no attempt reported usage — a cache hit or the L0 fixed-Spec
- * short-circuit never reach the caller of this function at all, and a fallback with zero LLM attempts
- * has nothing to report either, so both are already excluded by this same check). A thrown /
+ * (`usage` is `undefined` whenever no attempt reported usage — a cache hit never reaches the caller
+ * of this function at all, and the L0 fixed-Spec short-circuit and a fallback with zero LLM attempts
+ * have nothing to report, so they are already excluded by this same check). A thrown /
  * rejected-Promise `onUsage` is swallowed via `fireObserverHook`'s fire-and-forget contract, so a
  * broken usage-ledger write can never turn an already-delivered Spec into a hard failure. A no-op
  * (byte-identical to before `onUsage` existed) whenever `budget`/`budget.onUsage` is unset.

@@ -1,5 +1,5 @@
 import { LlmError } from "@kohaku-ui/llm";
-import type { ComponentNode, EventBinding } from "@kohaku-ui/spec-core";
+import type { ComponentNode, EventBinding, UISpec } from "@kohaku-ui/spec-core";
 import { createDeadlineGuard } from "./budget.js";
 import type { PreparedCompose } from "./compose.js";
 import type { ComposeContext } from "./context.js";
@@ -20,17 +20,21 @@ import { composeIdentityOf } from "./trace-identity.js";
 /**
  * The merged result of the generation stage (L1/L2). Instead of threading mutable flags through, expresses
  * which stage settled and how as a discriminated union.
- * - ok: the pre-validation component list (assembleSpec / postAndValidate are on the caller side).
+ * - ok: the pre-validation component list (assembleSpec / postAndValidate are on the caller side). Besides
+ *   L1/L2 results, compose.ts builds one with tier "L0" for a fixed-Spec template (no model, plus the
+ *   template's initial `state`) so L0 shares the same assemble → store → trace tail.
  * - fallback: the recording material for a deterministic downgrade. from is the stage that actually failed;
  *   budgetExceeded is true only for a downgrade due to the token/call budget guard (for observer.onError's machine discrimination).
  */
 export type TierOutcome =
   | {
       kind: "ok";
-      tier: "L1" | "L2";
+      tier: "L0" | "L1" | "L2";
       components: ComponentNode[];
       events: EventBinding[];
       model: string | undefined;
+      /** The fixed template's initial state (tier "L0" only; carried onto the delivered Spec as-is). */
+      state?: UISpec["state"];
     }
   | {
       kind: "fallback";
