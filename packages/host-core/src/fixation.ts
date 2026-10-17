@@ -6,7 +6,7 @@ import {
   materializeFixation,
   type TraceContext,
 } from "@kohaku-ui/composer";
-import type { CanonicalIntent, FixationRecord, SessionContext } from "@kohaku-ui/spec-core";
+import type { CanonicalIntent, FixationRecord, KeyedMutex, SessionContext } from "@kohaku-ui/spec-core";
 
 /**
  * Self-healing hooks for fixation staleness detection. Both the REST profile's FixationsApi and the
@@ -47,9 +47,10 @@ export type FixationSelfHealEndpoint = "fixation.refreshFingerprint" | "fixation
 /**
  * The host-supplied surface settleFixation / resolveFixatedResult / composeWithFixation need: the fixation
  * shortcut lookup, an optional delivery-admission gate (`admit`), the self-healing API, optional
- * serialization for the self-healing read-modify-write (both profiles wire `serialize` to a shared keyed
- * mutex — host-rest keys it by `(tenant, intentHash)`, host-mcp-apps by `intentHash` alone since the MCP
- * profile never resolves a tenant), and an observability callback for self-healing failures.
+ * serialization for the self-healing read-modify-write (both profiles build this host through
+ * createFixationDeliveryHost, which wires `serialize` to a keyed mutex the host owns, keyed by
+ * `(tenant, intentHash)` — the MCP profile never resolves a tenant, so its tenant part is always empty), and an
+ * observability callback for self-healing failures.
  *
  * onSelfHealError is synchronous by design: the self-heal calls below are fire-and-forget (never awaited by
  * the delivery path), so the failure notification they trigger must also not be awaited here — a host that
@@ -80,6 +81,54 @@ export interface FixationDeliveryHost {
     fn: () => Promise<T>,
   ) => Promise<T>;
   onSelfHealError(endpoint: FixationSelfHealEndpoint, error: unknown, requestId?: string): void;
+}
+
+/**
+ * The host-supplied pieces createFixationDeliveryHost assembles into a FixationDeliveryHost. The host's own
+ * wiring (REST's `lookup` fallback onto `FixationsApi.get`, MCP's plain `deps.fixationLookup`, each profile's
+ * `onSelfHealError` reporting) stays with the host; the `serialize` wiring over a keyed mutex is the shared part.
+ */
+export interface FixationDeliveryHostWiring {
+  lookup?: FixationDeliveryHost["lookup"];
+  admit?: FixationDeliveryHost["admit"];
+  fixations?: FixationSelfHealApi;
+  /**
+   * The keyed mutex that serializes self-heal with the host's own fixate/unfixate. The HOST owns it and decides
+   * its lifetime (REST: one per createKohakuRoutes app; MCP: one per McpHostDeps object); host-core never
+   * creates one.
+   */
+  mutex: KeyedMutex;
+  onSelfHealError: FixationDeliveryHost["onSelfHealError"];
+}
+
+/**
+ * Runs `fn` under `mutex`, keyed `${tenant ?? ""} ${intentHash}` — the one key rule both profiles share. The
+ * host's own management-plane writes (fixate / unfixate) take the same lock through this function, so they
+ * cannot interleave with self-healing's refreshFingerprint / invalidate for the same fixation.
+ */
+export function withFixationLock<T>(
+  mutex: KeyedMutex,
+  tenant: string | undefined,
+  intentHash: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return mutex(`${tenant ?? ""} ${intentHash}`, fn);
+}
+
+/**
+ * Builds the FixationDeliveryHost both profiles hand to settleFixation / resolveFixatedResult /
+ * composeWithFixation: the host's `lookup` / `admit` / `fixations` / `onSelfHealError` pass through unchanged
+ * (every key is always present on the result, even when its value is undefined), and `serialize` runs under
+ * `wiring.mutex` via withFixationLock.
+ */
+export function createFixationDeliveryHost(wiring: FixationDeliveryHostWiring): FixationDeliveryHost {
+  return {
+    lookup: wiring.lookup,
+    admit: wiring.admit,
+    fixations: wiring.fixations,
+    serialize: (scope, fn) => withFixationLock(wiring.mutex, scope.tenant, scope.intentHash, fn),
+    onSelfHealError: wiring.onSelfHealError,
+  };
 }
 
 /** Identity serialization fallback for a host that leaves `serialize` unwired (both reference profiles wire it). */
