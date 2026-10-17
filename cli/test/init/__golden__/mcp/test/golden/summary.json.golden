@@ -1,0 +1,12 @@
+{
+  "name": "sales.summary (L0 fixed spec)",
+  "input": {
+    "kind": "intent",
+    "intent": {
+      "canonical": "sales.summary",
+      "params": {}
+    }
+  },
+  "drafts": [],
+  "expected": null
+}

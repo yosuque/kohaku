@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "golden-app": {
+      "command": "/usr/local/bin/node",
+      "args": [
+        "/work/golden-app/node_modules/tsx/dist/cli.mjs",
+        "/work/golden-app/server/mcp.ts"
+      ]
+    }
+  }
+}

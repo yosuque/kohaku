@@ -1,0 +1,43 @@
+import type { FixedSpecSource } from "@kohaku-ui/composer";
+import { type CanonicalIntent, type ComponentNode, type QueryHandle, SPEC_VERSION, type UISpec } from "@kohaku-ui/spec-core";
+import { COLUMNS } from "./dataset.js";
+import { label } from "./domain-port.js";
+
+/**
+ * L0 fixed Specs: "app UI is a solidified L1 Spec". `sales.summary` never goes through the LLM — this template
+ * builds the Spec deterministically (adoption-ladder Step 0). Add more views here as they stabilize, or let the
+ * fixation pipeline (Step 2) pin L1 output for you.
+ */
+export function createFixedSpecs(): FixedSpecSource {
+  const builders: Record<string, (intent: CanonicalIntent, refs: QueryHandle[]) => UISpec> = {
+    "sales.summary": summaryView,
+  };
+  return {
+    async lookup(intent) {
+      return builders[intent.canonical] ?? null;
+    },
+  };
+}
+
+function summaryView(intent: CanonicalIntent, refs: QueryHandle[]): UISpec {
+  const p = intent.params;
+  const groupBy = String(p["groupBy"] ?? COLUMNS.dimensions[0]);
+  const metric = String(p["metric"] ?? COLUMNS.measures[0] ?? "count");
+  const agg = String(p["agg"] ?? "sum");
+  const ref = refs[0]!.uri;
+  const title = `${metric === "count" ? "Row count" : `${agg === "avg" ? "Average" : "Total"} ${label(metric).toLowerCase()}`} by ${label(groupBy).toLowerCase()}`;
+  const components: ComponentNode[] = [
+    { id: "root", type: "layout.stack", props: { direction: "vertical", gap: "md" }, children: ["t", "c", "g"] },
+    { id: "t", type: "text.heading", props: { level: 2, text: title } },
+    { id: "c", type: "presentChart", props: { kind: "bar", x: groupBy, y: metric }, data: { $ref: ref } },
+    { id: "g", type: "presentSpreadsheet", props: { editable: false }, data: { $ref: ref } },
+  ];
+  return {
+    kohaku: SPEC_VERSION,
+    intent,
+    dataVersion: "template",
+    components,
+    events: [],
+    provenance: { tier: "L0", composedBy: "fixed-spec-template", cache: "miss" },
+  };
+}

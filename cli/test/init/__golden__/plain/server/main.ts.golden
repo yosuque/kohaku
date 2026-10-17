@@ -1,0 +1,33 @@
+import { existsSync } from "node:fs";
+import { serve } from "@hono/node-server";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { createApp } from "./app.js";
+
+if (existsSync(".env")) process.loadEnvFile(".env");
+
+// Without an API key the L0 view (the summary dashboard) still renders; chat and the L1 views need one — see README.md.
+const llm = createLlmFromEnv();
+const { app, setShuttingDown } = createApp({ llm });
+const port = Number(process.env["PORT"] ?? 8787);
+const server = serve({ fetch: app.fetch, port }, (info) => {
+  console.log(`kohaku host: http://localhost:${info.port}/api/kohaku (LLM: ${llm.provider} / ${llm.modelId})`);
+});
+
+// Graceful shutdown (also what a tsx watch restart triggers under npm run dev): SIGINT / SIGTERM flip
+// /api/health to 503, stop accepting connections and let in-flight requests finish. A bounded drain window
+// (KOHAKU_SHUTDOWN_GRACE_MS, default 10s) precedes a forced exit 1; a clean drain lets the process end on its own.
+const graceEnv = Number.parseInt(process.env["KOHAKU_SHUTDOWN_GRACE_MS"] ?? "", 10);
+const SHUTDOWN_GRACE_MS = Number.isFinite(graceEnv) && graceEnv > 0 ? graceEnv : 10_000;
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    console.error(`kohaku host: ${signal} received, draining connections`);
+    setShuttingDown(true);
+    setTimeout(() => {
+      console.error("kohaku host: drain window elapsed, forcing exit");
+      process.exit(1);
+    }, SHUTDOWN_GRACE_MS).unref();
+    server.close();
+    // serve() returns a node:http (or http2) server; only the former has closeIdleConnections.
+    (server as { closeIdleConnections?: () => void }).closeIdleConnections?.();
+  });
+}

@@ -1,0 +1,26 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createLlmFromEnv } from "@kohaku-ui/llm";
+import { McpServer } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
+import { attachMcpServer } from "./mcp-server.js";
+import { createPorts } from "./ports.js";
+
+/**
+ * MCP server (stdio) for terminal / desktop hosts (Claude Desktop, Claude Code, Codex CLI, ...). Registered
+ * with Claude Desktop by `npm run mcp:claude-desktop` (see scripts/claude-desktop.mjs); run directly with
+ * `npm run mcp`.
+ *
+ * .env is resolved next to this file (not process.cwd()) because Claude Desktop launches MCP servers from
+ * an arbitrary working directory -- a cwd-relative check (server/app.ts's approach) would silently miss it.
+ */
+const ENV_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", ".env");
+if (existsSync(ENV_PATH)) process.loadEnvFile(ENV_PATH);
+
+const llm = createLlmFromEnv();
+const server = new McpServer({ name: "golden-app", version: "0.1.0" });
+attachMcpServer(server, createPorts({ llm }));
+
+await server.connect(new StdioServerTransport());
+console.error("golden-app MCP server: ready (stdio)");
