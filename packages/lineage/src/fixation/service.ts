@@ -75,20 +75,6 @@ export interface FixationErrorContext {
   tenant?: string;
 }
 
-/**
- * Fires opts.onError fire-and-forget, swallowing any synchronous throw from the hook itself (an
- * observation-only hook must never mask or replace the caller's own error/result). Shares its implementation
- * with promotion's notifyPromotionError through the generic `notifyFailOpen`; only the context type differs
- * (intentHash vs. artifactId).
- */
-export function notifyFixationError(
-  onError: ((ctx: FixationErrorContext, error: unknown) => void) | undefined,
-  ctx: FixationErrorContext,
-  error: unknown,
-): void {
-  notifyFailOpen(onError, ctx, error);
-}
-
 export interface FixationProposal {
   intentHash: string;
   canonical: string;
@@ -264,6 +250,37 @@ export function aggregateL1Usage(
 }
 
 /**
+ * Pure thresholding step of proposals(): turns the per-intentHash accumulators from `aggregateL1Usage` into
+ * the proposals that clear the policy (usage count, distinct-session floor, structural stability). Returned in
+ * accumulator insertion order; the caller sorts.
+ */
+function toProposals(byIntent: Map<string, L1UsageAccumulator>, policy: FixationPolicy): FixationProposal[] {
+  const proposals: FixationProposal[] = [];
+  for (const [intentHash, acc] of byIntent) {
+    const structureCounts = [...acc.structures.values()];
+    const total = structureCounts.reduce((a, b) => a + b, 0);
+    const stability = total > 0 ? Math.max(...structureCounts) / total : 1;
+    const sessions = Math.max(acc.sessions.size, acc.uses > 0 ? 1 : 0);
+    if (
+      acc.uses >= policy.minUses &&
+      sessions >= policy.minDistinctSessions &&
+      stability >= policy.structuralStability
+    ) {
+      proposals.push({
+        intentHash,
+        canonical: acc.canonical,
+        ...(acc.params != null ? { params: acc.params } : {}),
+        uses: acc.uses,
+        sessions,
+        stability: Math.round(stability * 1000) / 1000,
+        tier: acc.tier,
+      });
+    }
+  }
+  return proposals;
+}
+
+/**
  * Generates a coarse ulid-like, per-write revision token: a base36 ms timestamp plus a random suffix. Not the
  * full `ulid` library (no cross-service sortability guarantee is needed here) — only "distinguishable from the
  * previous write even inside the same millisecond" matters, which `fixatedAt` (an ms-precision ISO timestamp)
@@ -290,7 +307,7 @@ export function createFixations(opts: {
   /**
    * Fail-open observability hook (product responsibility, optional): notified when a fixation record read
    * back from storage fails schema validation. See `FixationErrorEndpoint`'s doc. Fired
-   * fire-and-forget (a throw/rejection from the hook itself is swallowed) — see `notifyFixationError`.
+   * fire-and-forget (a throw/rejection from the hook itself is swallowed) — see `notifyFailOpen`.
    */
   onError?: (ctx: FixationErrorContext, error: unknown) => void;
 }): Fixations {
@@ -313,7 +330,7 @@ export function createFixations(opts: {
     if (raw == null) return null;
     const parsed = FixationRecordSchema.safeParse(raw);
     if (parsed.success) return parsed.data as FixationRecord;
-    notifyFixationError(
+    notifyFailOpen(
       opts.onError,
       { endpoint: "storage.record.invalid", intentHash, ...tenantField(tenant) },
       parsed.error,
@@ -373,29 +390,7 @@ export function createFixations(opts: {
 
       const byIntent = aggregateL1Usage(composed, fixated);
 
-      const proposals: FixationProposal[] = [];
-      for (const [intentHash, acc] of byIntent) {
-        const structureCounts = [...acc.structures.values()];
-        const total = structureCounts.reduce((a, b) => a + b, 0);
-        const stability = total > 0 ? Math.max(...structureCounts) / total : 1;
-        const sessions = Math.max(acc.sessions.size, acc.uses > 0 ? 1 : 0);
-        if (
-          acc.uses >= policy.minUses &&
-          sessions >= policy.minDistinctSessions &&
-          stability >= policy.structuralStability
-        ) {
-          proposals.push({
-            intentHash,
-            canonical: acc.canonical,
-            ...(acc.params != null ? { params: acc.params } : {}),
-            uses: acc.uses,
-            sessions,
-            stability: Math.round(stability * 1000) / 1000,
-            tier: acc.tier,
-          });
-        }
-      }
-      return proposals.sort((a, b) => b.uses - a.uses);
+      return toProposals(byIntent, policy).sort((a, b) => b.uses - a.uses);
     },
 
     async list(scope?: TenantScope) {

@@ -1,5 +1,3 @@
-import { notifyFailOpen } from "../fail-open.js";
-
 /**
  * The call sites `createPromotions`' `onError` hook may fire from, named for the observability hook:
  * - `promotion.publish.audit` / `promotion.unpublish.audit`: the fail-open `component.published` /
@@ -41,18 +39,4 @@ export interface PromotionErrorContext {
   endpoint: PromotionErrorEndpoint;
   artifactId: string;
   tenant?: string;
-}
-
-/**
- * Fires opts.onError fire-and-forget, swallowing any synchronous throw from the hook itself (an
- * observation-only hook must never mask or replace the caller's own error/result); see `notifyFailOpen`.
- * Exported so promotion/nomination.ts (the tenant-mismatch skip, #10) can share the same
- * fire-and-forget discipline rather than duplicating it.
- */
-export function notifyPromotionError(
-  onError: ((ctx: PromotionErrorContext, error: unknown) => void) | undefined,
-  ctx: PromotionErrorContext,
-  error: unknown,
-): void {
-  notifyFailOpen(onError, ctx, error);
 }
