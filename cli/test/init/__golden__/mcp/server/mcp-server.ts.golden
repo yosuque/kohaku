@@ -1,0 +1,46 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { KohakuHost } from "@kohaku-ui/host";
+import { attachKohakuMcp } from "@kohaku-ui/host/mcp";
+import { intentToolsFromCatalog } from "@kohaku-ui/host-mcp-apps";
+import { loadRendererHtml } from "@kohaku-ui/mcp-renderer";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { INTENT_DEFINITIONS } from "./intents.js";
+
+/**
+ * Self-contained snapshot HTML (kohaku_render_snapshot, for UI-incapable hosts like Claude Code / Codex
+ * CLI) is saved here, next to this file rather than under process.cwd() -- Claude Desktop launches an MCP
+ * server from an arbitrary working directory, so a cwd-relative path would silently write (or fail to
+ * find) files in the wrong place. Git-ignored (see .gitignore); safe to delete any time.
+ */
+const SNAPSHOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".kohaku", "snapshots");
+
+/**
+ * Attaches the generated project's host (built by createPorts in server/ports.ts -- the same Ports and
+ * compose the REST front door in server/app.ts builds on) to an MCP server, via `@kohaku-ui/host/mcp`'s
+ * `attachKohakuMcp`. "Same request content -> same Spec -> same rendering" holds across both front doors
+ * this way.
+ *
+ * The caller builds the host ONCE per process and passes it in: the Spec cache, fixations, lineage and
+ * single-flight state all live in that host's storage, so building a new one per MCP exchange would throw
+ * them away and regenerate every L1 view on each call.
+ *
+ * `rendererHtml` is `@kohaku-ui/mcp-renderer`'s pre-built, dependency-free core renderer bundle -- swap it
+ * for your own build (see that package's README's "./boot" section) once you have product-specific
+ * component implementations to bake in. `intentTools` exposes every Intent in server/intents.ts as a typed
+ * MCP tool (e.g. `sales_summary` for a project whose data source is named "sales") in addition to the
+ * generic `kohaku_compose`.
+ */
+export function attachMcpServer(server: McpServer, host: KohakuHost): void {
+  attachKohakuMcp(server, host, {
+    rendererHtml: loadRendererHtml,
+    intentTools: intentToolsFromCatalog(INTENT_DEFINITIONS.map((d) => d.toToolSource())),
+    snapshotWriter: async (fileName, html) => {
+      await mkdir(SNAPSHOT_DIR, { recursive: true });
+      const path = join(SNAPSHOT_DIR, fileName);
+      await writeFile(path, html, "utf8");
+      return path;
+    },
+  });
+}

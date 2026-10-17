@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { formatDatasetExportResult, formatSmokeL2Output } from "../src/commands.js";
+import { formatDatasetExportResult } from "../src/dataset.js";
+import { formatSmokeL2Output } from "../src/smoke-l2.js";
 
 describe("formatDatasetExportResult", () => {
   it("sums fixations and golden records and reports the skipped count and output path", () => {

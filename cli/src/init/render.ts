@@ -1,23 +1,26 @@
-import { join } from "node:path";
 import { CLI_VERSION } from "../version.js";
 import type { DatasetProfile } from "./infer.js";
 import { humanize } from "./infer.js";
+import {
+  GITIGNORE_MCP_EXTRA,
+  MCP_README_DESKTOP_CONFIG_NOTE,
+  MCP_README_GENERATED_FILES,
+  MCP_README_SECTION,
+  MCP_SCRIPTS,
+  mcpDependencies,
+  mcpProjectFiles,
+} from "./mcp-addon.js";
 import type { Row } from "./readers.js";
 import {
   APP_TEMPLATE,
-  CLAUDE_DESKTOP_SCRIPT_TEMPLATE,
   DEV_SCRIPT_TEMPLATE,
   DOMAIN_PORT_TEMPLATE,
   ENV_EXAMPLE_TEMPLATE,
   FIXED_SPECS_TEMPLATE,
-  GITIGNORE_MCP_EXTRA,
   GITIGNORE_TEMPLATE,
   GOLDEN_TEST_TEMPLATE_INIT,
   INDEX_HTML_TEMPLATE,
   MAIN_TEMPLATE,
-  MCP_HTTP_TEMPLATE,
-  MCP_SERVER_TEMPLATE,
-  MCP_STDIO_TEMPLATE,
   SERVER_PORTS_TEMPLATE,
   TSCONFIG_TEMPLATE,
   VITE_CONFIG_TEMPLATE,
@@ -30,6 +33,15 @@ export interface ProjectFile {
   content: string;
 }
 
+/** The option every render function shares: whether the `--mcp` addon (see mcp-addon.ts) is included. */
+interface RenderOptions {
+  /** Adds the MCP front door (files, dependencies, scripts, README sections). Default false. */
+  mcp?: boolean;
+}
+
+// Moved to mcp-addon.ts; re-exported so the renderer's callers keep importing it from here.
+export { type ClaudeDesktopConfigOptions, renderClaudeDesktopConfigExample } from "./mcp-addon.js";
+
 const KOHAKU_RUNTIME = [
   "client",
   "composer",
@@ -41,6 +53,31 @@ const KOHAKU_RUNTIME = [
   "renderer-core",
   "renderer-react",
   "spec-core",
+];
+
+// The external packages the generated package.json lists, typed against EXTERNAL_VERSIONS so a typo or a
+// removed key is a compile error instead of a dependency silently dropped from the generated project.
+type ExternalPackage = keyof typeof EXTERNAL_VERSIONS;
+
+const RUNTIME_EXTERNALS: readonly ExternalPackage[] = [
+  "hono",
+  "@hono/node-server",
+  "zod",
+  "react",
+  "react-dom",
+  "@ai-sdk/anthropic",
+  "@ai-sdk/openai-compatible",
+];
+
+const DEV_EXTERNALS: readonly ExternalPackage[] = [
+  "@types/node",
+  "@types/react",
+  "@types/react-dom",
+  "@vitejs/plugin-react",
+  "tsx",
+  "typescript",
+  "vite",
+  "vitest",
 ];
 
 function q(s: string): string {
@@ -67,6 +104,37 @@ const RESERVED_BINDINGS = [
 
 function vocabName(column: string): string {
   return RESERVED_BINDINGS.includes(column) ? `${column}Vocab` : column;
+}
+
+/** One generated `defineIntent({...})` entry of `server/intents.ts`; see `pushIntent` for how each field is emitted. */
+interface IntentBlock {
+  /** The canonical name, emitted as a JSON string literal. */
+  canonical: string;
+  /** The description shown to the model, emitted as a JSON string literal. */
+  description: string;
+  /** The view label, emitted as a JSON string literal. */
+  viewLabel: string;
+  /** The `params` expression (a `z.object(...)` call), emitted as is. */
+  params: string;
+  /** The example questions, each emitted as a JSON string literal. */
+  examples: readonly string[];
+  /** The facet descriptor lines (already indented), emitted as is between `facets: [` and `],`. */
+  facets: readonly string[];
+  /** The single `queries` entry (an object literal), emitted as is inside `queries: [...]`. */
+  queries: string;
+}
+
+/** Appends one `defineIntent({...})` entry (the shape all of the generated Intents share) to `lines`. */
+function pushIntent(lines: string[], intent: IntentBlock): void {
+  lines.push("  defineIntent({");
+  lines.push(`    canonical: ${q(intent.canonical)},`);
+  lines.push(`    description: ${q(intent.description)},`);
+  lines.push("    source: SOURCE,", `    viewLabel: ${q(intent.viewLabel)},`);
+  lines.push(`    params: ${intent.params},`);
+  lines.push(`    examples: [${intent.examples.map(q).join(", ")}],`);
+  lines.push("    facets: [", ...intent.facets, "    ],");
+  lines.push(`    queries: [${intent.queries}],`);
+  lines.push("  }),");
 }
 
 export function renderIntents(profile: DatasetProfile): string {
@@ -121,66 +189,52 @@ export function renderIntents(profile: DatasetProfile): string {
   );
 
   lines.push("export const INTENT_DEFINITIONS: IntentBuilder[] = [");
-  lines.push("  defineIntent({");
-  lines.push(`    canonical: ${q(`${src}.summary`)},`);
-  lines.push(
-    `    description: ${q(`Aggregate ${measureList} by ${dimList} (sum or average), optionally filtered`)},`,
-  );
-  lines.push("    source: SOURCE,", '    viewLabel: "Summary",');
-  lines.push(
-    `    params: z.object({ metric: metric.enum().default(${q(defaultMetric)}), agg: agg.enum().default("sum"), groupBy: groupBy.enum().default(${q(firstDim)}), ...filters${hasTime ? ", ...period" : ""} }),`,
-  );
-  lines.push(
-    `    examples: [${q(`${humanize(defaultMetric)} by ${humanize(firstDim).toLowerCase()}`)}, ${q(`Average ${humanize(defaultMetric).toLowerCase()} by ${humanize(dims[dims.length - 1]!.name).toLowerCase()}`)}, ${q(`How many rows per ${humanize(firstDim).toLowerCase()}?`)}],`,
-  );
-  lines.push(
-    "    facets: [",
-    '      { param: "metric", label: "Metric", options: metric },',
-    '      { param: "agg", label: "Aggregation", options: agg },',
-    '      { param: "groupBy", label: "Group by", options: groupBy },',
-    ...filterFacets,
-    "    ],",
-  );
-  lines.push(
-    `    queries: [{ path: "summary", paramMap: { metric: "metric", agg: "agg", groupBy: "groupBy", ${filterMap}${periodMap} } }],`,
-  );
-  lines.push("  }),");
-  if (hasTime) {
-    lines.push("  defineIntent({");
-    lines.push(`    canonical: ${q(`${src}.trend`)},`);
-    lines.push(
-      `    description: ${q(`Show how ${measureList} changes over time (monthly / quarterly / yearly), optionally filtered`)},`,
-    );
-    lines.push("    source: SOURCE,", '    viewLabel: "Trend",');
-    lines.push(
-      `    params: z.object({ metric: metric.enum().default(${q(defaultMetric)}), agg: agg.enum().default("sum"), granularity: granularity.enum().default("month"), ...filters, ...period }),`,
-    );
-    lines.push(
-      `    examples: [${q(`Monthly ${humanize(defaultMetric).toLowerCase()} trend`)}, ${q(`Quarterly ${humanize(defaultMetric).toLowerCase()}`)}, ${q("How did it change over the year?")}],`,
-    );
-    lines.push(
-      "    facets: [",
+  pushIntent(lines, {
+    canonical: `${src}.summary`,
+    description: `Aggregate ${measureList} by ${dimList} (sum or average), optionally filtered`,
+    viewLabel: "Summary",
+    params: `z.object({ metric: metric.enum().default(${q(defaultMetric)}), agg: agg.enum().default("sum"), groupBy: groupBy.enum().default(${q(firstDim)}), ...filters${hasTime ? ", ...period" : ""} })`,
+    examples: [
+      `${humanize(defaultMetric)} by ${humanize(firstDim).toLowerCase()}`,
+      `Average ${humanize(defaultMetric).toLowerCase()} by ${humanize(dims[dims.length - 1]!.name).toLowerCase()}`,
+      `How many rows per ${humanize(firstDim).toLowerCase()}?`,
+    ],
+    facets: [
       '      { param: "metric", label: "Metric", options: metric },',
-      '      { param: "granularity", label: "Granularity", options: granularity },',
+      '      { param: "agg", label: "Aggregation", options: agg },',
+      '      { param: "groupBy", label: "Group by", options: groupBy },',
       ...filterFacets,
-      "    ],",
-    );
-    lines.push(
-      `    queries: [{ path: "trend", paramMap: { metric: "metric", agg: "agg", granularity: "granularity", ${filterMap}${periodMap} } }],`,
-    );
-    lines.push("  }),");
+    ],
+    queries: `{ path: "summary", paramMap: { metric: "metric", agg: "agg", groupBy: "groupBy", ${filterMap}${periodMap} } }`,
+  });
+  if (hasTime) {
+    pushIntent(lines, {
+      canonical: `${src}.trend`,
+      description: `Show how ${measureList} changes over time (monthly / quarterly / yearly), optionally filtered`,
+      viewLabel: "Trend",
+      params: `z.object({ metric: metric.enum().default(${q(defaultMetric)}), agg: agg.enum().default("sum"), granularity: granularity.enum().default("month"), ...filters, ...period })`,
+      examples: [
+        `Monthly ${humanize(defaultMetric).toLowerCase()} trend`,
+        `Quarterly ${humanize(defaultMetric).toLowerCase()}`,
+        "How did it change over the year?",
+      ],
+      facets: [
+        '      { param: "metric", label: "Metric", options: metric },',
+        '      { param: "granularity", label: "Granularity", options: granularity },',
+        ...filterFacets,
+      ],
+      queries: `{ path: "trend", paramMap: { metric: "metric", agg: "agg", granularity: "granularity", ${filterMap}${periodMap} } }`,
+    });
   }
-  lines.push("  defineIntent({");
-  lines.push(`    canonical: ${q(`${src}.records`)},`);
-  lines.push('    description: "List the raw rows, optionally filtered",');
-  lines.push("    source: SOURCE,", '    viewLabel: "Records",');
-  lines.push(
-    `    params: z.object({ ...filters${hasTime ? ", ...period" : ""}, limit: z.coerce.number().int().min(1).max(500).default(100) }),`,
-  );
-  lines.push('    examples: ["Show me the rows", "List the records"],');
-  lines.push("    facets: [", ...filterFacets, "    ],");
-  lines.push(`    queries: [{ path: "records", paramMap: { ${filterMap}${periodMap}, limit: "limit" } }],`);
-  lines.push("  }),");
+  pushIntent(lines, {
+    canonical: `${src}.records`,
+    description: "List the raw rows, optionally filtered",
+    viewLabel: "Records",
+    params: `z.object({ ...filters${hasTime ? ", ...period" : ""}, limit: z.coerce.number().int().min(1).max(500).default(100) })`,
+    examples: ["Show me the rows", "List the records"],
+    facets: filterFacets,
+    queries: `{ path: "records", paramMap: { ${filterMap}${periodMap}, limit: "limit" } }`,
+  });
   lines.push("];", "");
   return lines.join("\n");
 }
@@ -223,46 +277,17 @@ export function renderFixedSpecs(profile: DatasetProfile): string {
   return FIXED_SPECS_TEMPLATE.replaceAll("__SOURCE__", profile.source);
 }
 
-export interface RenderPackageJsonOptions {
-  /** Adds the MCP front door's dependencies and scripts (kohaku init --mcp). Default false. */
-  mcp?: boolean;
-}
-
 export function renderPackageJson(
   name: string,
   profile: DatasetProfile,
-  options: RenderPackageJsonOptions = {},
+  options: RenderOptions = {},
 ): string {
   const dependencies: Record<string, string> = {};
   for (const pkg of KOHAKU_RUNTIME) dependencies[`@kohaku-ui/${pkg}`] = `^${CLI_VERSION}`;
-  for (const pkg of [
-    "hono",
-    "@hono/node-server",
-    "zod",
-    "react",
-    "react-dom",
-    "@ai-sdk/anthropic",
-    "@ai-sdk/openai-compatible",
-  ])
-    dependencies[pkg] = EXTERNAL_VERSIONS[pkg]!;
-  if (options.mcp === true) {
-    dependencies["@kohaku-ui/host-mcp-apps"] = `^${CLI_VERSION}`;
-    dependencies["@kohaku-ui/mcp-renderer"] = `^${CLI_VERSION}`;
-    dependencies["@modelcontextprotocol/server"] = EXTERNAL_VERSIONS["@modelcontextprotocol/server"]!;
-    dependencies["@modelcontextprotocol/node"] = EXTERNAL_VERSIONS["@modelcontextprotocol/node"]!;
-  }
+  for (const pkg of RUNTIME_EXTERNALS) dependencies[pkg] = EXTERNAL_VERSIONS[pkg];
+  if (options.mcp === true) Object.assign(dependencies, mcpDependencies());
   const devDependencies: Record<string, string> = {};
-  for (const pkg of [
-    "@types/node",
-    "@types/react",
-    "@types/react-dom",
-    "@vitejs/plugin-react",
-    "tsx",
-    "typescript",
-    "vite",
-    "vitest",
-  ])
-    devDependencies[pkg] = EXTERNAL_VERSIONS[pkg]!;
+  for (const pkg of DEV_EXTERNALS) devDependencies[pkg] = EXTERNAL_VERSIONS[pkg];
   return `${JSON.stringify(
     {
       name,
@@ -277,13 +302,7 @@ export function renderPackageJson(
         start: "node --import tsx server/main.ts",
         typecheck: "tsc --noEmit",
         test: "vitest run",
-        ...(options.mcp === true
-          ? {
-              mcp: "tsx server/mcp.ts",
-              "mcp:http": "tsx server/mcp-http.ts",
-              "mcp:claude-desktop": "node scripts/claude-desktop.mjs",
-            }
-          : {}),
+        ...(options.mcp === true ? MCP_SCRIPTS : {}),
       },
       engines: { node: ">=22" },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
@@ -307,31 +326,13 @@ export function renderGoldenFixture(profile: DatasetProfile): string {
   )}\n`;
 }
 
-export interface RenderReadmeOptions {
-  /** Adds the "MCP" section documenting the generated stdio / Streamable HTTP servers. Default false. */
-  mcp?: boolean;
-}
-
-export function renderReadme(profile: DatasetProfile, options: RenderReadmeOptions = {}): string {
+export function renderReadme(profile: DatasetProfile, options: RenderOptions = {}): string {
   const dims = profile.dimensions.map((d) => `\`${d.name}\``).join(", ");
   const measures = profile.measures.map((m) => `\`${m.name}\``).join(", ") || "(none — row counts only)";
-  const mcpSection =
-    options.mcp === true
-      ? `## MCP (Claude Desktop, claude.ai, ChatGPT)
-
-\`\`\`bash
-npm run mcp:claude-desktop           # registers this project with Claude Desktop (backs up its config to .bak first)
-\`\`\`
-
-Restart Claude Desktop, then ask it about your data -- it calls this project's MCP server (\`npm run mcp\`, stdio) and
-renders the same UI Specs the web dashboard does. \`npm run mcp:http\` starts a Streamable HTTP server on :8788 instead,
-for claude.ai / ChatGPT (no authentication -- see server/mcp-http.ts before exposing it beyond localhost; it only accepts
-localhost Host / Origin headers unless you set \`KOHAKU_MCP_ALLOWED_HOSTS\` / \`KOHAKU_MCP_ALLOWED_ORIGINS\`, e.g. behind a tunnel).
-Terminal hosts that cannot render an iframe (Claude Code, Codex CLI) get a self-contained HTML snapshot instead
-(\`kohaku_render_snapshot\`, saved under \`.kohaku/snapshots/\`, git-ignored).
-
-`
-      : "";
+  const mcp = options.mcp === true;
+  const mcpSection = mcp ? MCP_README_SECTION : "";
+  const mcpDesktopConfigNote = mcp ? MCP_README_DESKTOP_CONFIG_NOTE : "";
+  const mcpGeneratedFiles = mcp ? MCP_README_GENERATED_FILES : "";
   const beforeProduction = `## Before production
 
 \`npm run dev\` starts in development mode (\`dev: process.env["NODE_ENV"] !== "production"\` in \`server/ports.ts\`): every request runs as one shared ANONYMOUS principal and the governance routes (lineage, analytics, promotions, fixations) are open, and the startup log says so in a single warning line (on stderr) instead of the two production warnings. Before you expose the server:
@@ -340,13 +341,7 @@ Terminal hosts that cannot render an iframe (Claude Code, Codex CLI) get a self-
 2. Wire \`authorizeGovernance\` (who may read lineage / analytics and act on promotions and fixations) the same way; \`governancePolicyFromRoles\` is re-exported from \`@kohaku-ui/host\`.
 3. Set a fixed, secret \`KOHAKU_CAPABILITY_SECRET\` in your deployment's environment (the generated \`.env\` is git-ignored; do not commit a secret).
 4. Set \`NODE_ENV=production\` to turn development mode off; the production startup warnings then come back for anything still unwired.
-5. Replace the in-memory storage with a shared backend (\`@kohaku-ui/storage-redis\` / \`@kohaku-ui/storage-postgres\`, passed as \`storage\`), so lineage and the Spec cache survive restarts and are shared across instances.${
-    options.mcp === true
-      ? `
-
-\`claude_desktop_config.example.json\` embeds this machine's absolute node path (\`process.execPath\` when \`kohaku init\` ran) and this project's absolute path, because Claude Desktop launches MCP servers with no shell PATH. On another machine, or after upgrading node, update \`command\` and the two \`args\` paths in that file, then run \`npm run mcp:claude-desktop\` again (that script only merges the file's entry into Claude Desktop's config; it does not recompute the paths).`
-      : ""
-  }
+5. Replace the in-memory storage with a shared backend (\`@kohaku-ui/storage-redis\` / \`@kohaku-ui/storage-postgres\`, passed as \`storage\`), so lineage and the Spec cache survive restarts and are shared across instances.${mcpDesktopConfigNote}
 
 `;
   return `# ${profile.source} · kohaku quickstart
@@ -376,13 +371,7 @@ Chat answers only within the generated Intent catalog; a question outside it ret
 - \`server/ports.ts\` — the wiring, via \`@kohaku-ui/host\`'s \`createKohakuHost()\` (in-memory storage + HMAC capabilities + the LLM SemanticPort by default). Every default here is a starting point; the contract is \`@kohaku-ui/spec-core\`'s \`ports.ts\`.
 - \`server/app.ts\` — the REST front door: adds the dashboard's facet-views / health routes on top of \`server/ports.ts\`'s host.
 - \`web/main.tsx\` — Dashboard + Chat on renderer-react.
-- \`test/golden.test.ts\` — golden regression. \`kohaku init\` generates the fixture's \`expected\` after \`npm install\` (commit it); with \`--no-install\`, or if that step failed, run \`KOHAKU_GOLDEN_UPDATE=1 npm test\` once. \`npm test\` asserts it. After an intentional change, regenerate the same way, review the diff and commit.${
-    options.mcp === true
-      ? `
-- \`server/mcp-server.ts\` / \`server/mcp.ts\` / \`server/mcp-http.ts\` — the MCP front door (see the MCP section below).
-- \`scripts/claude-desktop.mjs\` + \`claude_desktop_config.example.json\` — Claude Desktop registration (\`npm run mcp:claude-desktop\`).`
-      : ""
-  }
+- \`test/golden.test.ts\` — golden regression. \`kohaku init\` generates the fixture's \`expected\` after \`npm install\` (commit it); with \`--no-install\`, or if that step failed, run \`KOHAKU_GOLDEN_UPDATE=1 npm test\` once. \`npm test\` asserts it. After an intentional change, regenerate the same way, review the diff and commit.${mcpGeneratedFiles}
 
 ${mcpSection}## Debugging a view
 
@@ -420,55 +409,10 @@ KOHAKU_CAPABILITY_SECRET=${secret}
 `;
 }
 
-export interface ClaudeDesktopConfigOptions {
-  /** Becomes the mcpServers key (and the McpServer name server/mcp.ts registers) -- the project's package name. */
-  name: string;
-  /** The generated project's absolute output directory (kohaku init's resolved --out). */
-  outDir: string;
-  /**
-   * The node binary Claude Desktop should launch (Claude Desktop has no shell PATH of its own, so a bare
-   * "node"/"npx" command would not resolve -- an absolute path is required). Callers pass `process.execPath`;
-   * kept as an explicit parameter (not read internally) so this function stays a pure, deterministic
-   * function of its inputs, testable without mocking `process`.
-   */
-  execPath: string;
-}
-
-/**
- * Renders claude_desktop_config.example.json: the \`mcpServers\` entry a person copies into (or, via
- * scripts/claude-desktop.mjs, has merged into) Claude Desktop's own config, so it launches this project's
- * stdio MCP server (server/mcp.ts) directly. Every path is absolute -- Claude Desktop launches configured
- * servers with no shell PATH of its own, so a bare "node"/"npx"/relative-path command would not resolve --
- * and \`node_modules/tsx/dist/cli.mjs\` (tsx's own bin entry) is used directly rather than \`npx tsx\` for the
- * same reason (npx also depends on a resolvable PATH).
- */
-export function renderClaudeDesktopConfigExample(options: ClaudeDesktopConfigOptions): string {
-  const tsxCli = join(options.outDir, "node_modules", "tsx", "dist", "cli.mjs");
-  const mcpEntry = join(options.outDir, "server", "mcp.ts");
-  return `${JSON.stringify(
-    {
-      mcpServers: {
-        [options.name]: {
-          command: options.execPath,
-          args: [tsxCli, mcpEntry],
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`;
-}
-
-export interface RenderProjectFilesOptions {
-  name: string;
-  /** Adds the MCP front door (server/mcp{,-server,-http}.ts) and its dependencies/scripts. Default false. */
-  mcp?: boolean;
-}
-
 export function renderProjectFiles(
   profile: DatasetProfile,
   rows: Row[],
-  options: RenderProjectFilesOptions,
+  options: RenderOptions & { name: string },
 ): ProjectFile[] {
   const mcp = options.mcp === true;
   const nameReplaced = (template: string): string => template.replaceAll("__NAME__", options.name);
@@ -476,7 +420,7 @@ export function renderProjectFiles(
     { path: "package.json", content: renderPackageJson(options.name, profile, { mcp }) },
     { path: "tsconfig.json", content: TSCONFIG_TEMPLATE },
     { path: "vite.config.ts", content: VITE_CONFIG_TEMPLATE },
-    { path: "index.html", content: INDEX_HTML_TEMPLATE.replaceAll("__NAME__", options.name) },
+    { path: "index.html", content: nameReplaced(INDEX_HTML_TEMPLATE) },
     { path: "dev.mjs", content: DEV_SCRIPT_TEMPLATE },
     { path: ".env.example", content: ENV_EXAMPLE_TEMPLATE },
     { path: ".gitignore", content: mcp ? GITIGNORE_TEMPLATE + GITIGNORE_MCP_EXTRA : GITIGNORE_TEMPLATE },
@@ -488,14 +432,7 @@ export function renderProjectFiles(
     { path: "server/fixed-specs.ts", content: renderFixedSpecs(profile) },
     { path: "server/ports.ts", content: SERVER_PORTS_TEMPLATE },
     { path: "server/app.ts", content: APP_TEMPLATE },
-    ...(mcp
-      ? [
-          { path: "server/mcp-server.ts", content: MCP_SERVER_TEMPLATE },
-          { path: "server/mcp.ts", content: nameReplaced(MCP_STDIO_TEMPLATE) },
-          { path: "server/mcp-http.ts", content: nameReplaced(MCP_HTTP_TEMPLATE) },
-          { path: "scripts/claude-desktop.mjs", content: CLAUDE_DESKTOP_SCRIPT_TEMPLATE },
-        ]
-      : []),
+    ...(mcp ? mcpProjectFiles(options.name) : []),
     { path: "server/main.ts", content: MAIN_TEMPLATE },
     { path: "web/main.tsx", content: WEB_MAIN_TEMPLATE },
     { path: "test/golden.test.ts", content: GOLDEN_TEST_TEMPLATE_INIT },

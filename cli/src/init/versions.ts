@@ -2,7 +2,7 @@
  * Versions the generated project depends on. Mirrors pnpm-workspace.yaml's catalog (a test asserts the match) so a
  * quickstart project runs on exactly what this repository tests against.
  */
-export const EXTERNAL_VERSIONS: Record<string, string> = {
+export const EXTERNAL_VERSIONS = {
   hono: "^4.13.8",
   "@hono/node-server": "^2.1.1",
   zod: "^4.6.5",
@@ -20,4 +20,4 @@ export const EXTERNAL_VERSIONS: Record<string, string> = {
   "@ai-sdk/openai-compatible": "^3.0.53",
   "@modelcontextprotocol/server": "^2.3.1",
   "@modelcontextprotocol/node": "^2.1.1",
-};
+} as const satisfies Record<string, string>;

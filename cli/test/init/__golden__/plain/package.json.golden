@@ -1,0 +1,46 @@
+{
+  "name": "golden-app",
+  "private": true,
+  "type": "module",
+  "description": "kohaku app generated from sales (6 rows)",
+  "scripts": {
+    "dev": "node dev.mjs",
+    "dev:api": "tsx watch server/main.ts",
+    "dev:web": "vite",
+    "start": "node --import tsx server/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.58",
+    "@ai-sdk/openai-compatible": "^3.0.53",
+    "@hono/node-server": "^2.1.1",
+    "@kohaku-ui/client": "^0.4.1",
+    "@kohaku-ui/composer": "^0.4.1",
+    "@kohaku-ui/data-binding": "^0.4.1",
+    "@kohaku-ui/evals": "^0.4.1",
+    "@kohaku-ui/host": "^0.4.1",
+    "@kohaku-ui/intents": "^0.4.1",
+    "@kohaku-ui/llm": "^0.4.1",
+    "@kohaku-ui/renderer-core": "^0.4.1",
+    "@kohaku-ui/renderer-react": "^0.4.1",
+    "@kohaku-ui/spec-core": "^0.4.1",
+    "hono": "^4.13.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tsx": "^4.23.15",
+    "typescript": "7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  }
+}

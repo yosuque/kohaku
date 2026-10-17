@@ -9,7 +9,7 @@ export function register(program: Command): void {
     .argument("<file>", "JSON file of a ComponentDefinition")
     .description("Validate a component definition (JSON-serialized form)")
     .action(async (file: string) => {
-      const { validateComponentFile } = await import("../commands.js");
+      const { validateComponentFile } = await import("../component.js");
       const issues = validateComponentFile(file);
       if (issues.length === 0) {
         console.log(`✓ ${file} is a valid ComponentDefinition`);

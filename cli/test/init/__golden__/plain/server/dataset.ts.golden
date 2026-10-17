@@ -1,0 +1,28 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export type Cell = string | number | boolean | null;
+export type Row = Record<string, Cell>;
+
+export interface Columns {
+  source: string;
+  dimensions: readonly string[];
+  measures: readonly string[];
+  time: string | null;
+}
+
+/** Column roles inferred by `kohaku init`. The intents and the domain port read this; edit it when the data changes. */
+export const COLUMNS: Columns = {
+  source: "sales",
+  dimensions: ["region", "channel", "product"],
+  measures: ["units", "revenue"],
+  time: "month",
+};
+
+const DATA_PATH = join(dirname(fileURLToPath(import.meta.url)), "../data/sales.json");
+const raw = readFileSync(DATA_PATH, "utf8");
+export const ROWS: Row[] = JSON.parse(raw) as Row[];
+/** Changes whenever the data file changes, so a cached Spec composed for old data is re-validated (STALE_VERSION). */
+export const DATA_VERSION = `sales@${createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;
