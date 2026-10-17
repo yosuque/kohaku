@@ -3,13 +3,9 @@ import { randomBytes } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { writeScaffold } from "../scaffold-fs.js";
 import { type DatasetProfile, inferProfile, normalizeRows, slugify } from "./infer.js";
+import { mcpExtraFiles } from "./mcp-addon.js";
 import { readDataFile } from "./readers.js";
-import {
-  type ProjectFile,
-  renderClaudeDesktopConfigExample,
-  renderEnvFile,
-  renderProjectFiles,
-} from "./render.js";
+import { type ProjectFile, renderEnvFile, renderProjectFiles } from "./render.js";
 
 export { formatInitResult, type InitReportOptions } from "./report.js";
 
@@ -160,13 +156,7 @@ export async function initProject(options: InitOptions, io: InitIo = {}): Promis
   // its own, so the paths it launches must already be absolute).
   const extraFiles: ProjectFile[] =
     options.mcp === true
-      ? [
-          envFile,
-          {
-            path: "claude_desktop_config.example.json",
-            content: renderClaudeDesktopConfigExample({ name, outDir, execPath: process.execPath }),
-          },
-        ]
+      ? [envFile, ...mcpExtraFiles({ name, outDir, execPath: process.execPath })]
       : [envFile];
   const written = writeScaffold(
     [...files, ...extraFiles].map((f) => [join(outDir, f.path), f.content] as const),

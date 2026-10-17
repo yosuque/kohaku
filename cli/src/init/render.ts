@@ -1,23 +1,26 @@
-import { join } from "node:path";
 import { CLI_VERSION } from "../version.js";
 import type { DatasetProfile } from "./infer.js";
 import { humanize } from "./infer.js";
+import {
+  GITIGNORE_MCP_EXTRA,
+  MCP_README_DESKTOP_CONFIG_NOTE,
+  MCP_README_GENERATED_FILES,
+  MCP_README_SECTION,
+  MCP_SCRIPTS,
+  mcpDependencies,
+  mcpProjectFiles,
+} from "./mcp-addon.js";
 import type { Row } from "./readers.js";
 import {
   APP_TEMPLATE,
-  CLAUDE_DESKTOP_SCRIPT_TEMPLATE,
   DEV_SCRIPT_TEMPLATE,
   DOMAIN_PORT_TEMPLATE,
   ENV_EXAMPLE_TEMPLATE,
   FIXED_SPECS_TEMPLATE,
-  GITIGNORE_MCP_EXTRA,
   GITIGNORE_TEMPLATE,
   GOLDEN_TEST_TEMPLATE_INIT,
   INDEX_HTML_TEMPLATE,
   MAIN_TEMPLATE,
-  MCP_HTTP_TEMPLATE,
-  MCP_SERVER_TEMPLATE,
-  MCP_STDIO_TEMPLATE,
   SERVER_PORTS_TEMPLATE,
   TSCONFIG_TEMPLATE,
   VITE_CONFIG_TEMPLATE,
@@ -29,6 +32,15 @@ export interface ProjectFile {
   path: string;
   content: string;
 }
+
+/** The option every render function shares: whether the `--mcp` addon (see mcp-addon.ts) is included. */
+interface RenderOptions {
+  /** Adds the MCP front door (files, dependencies, scripts, README sections). Default false. */
+  mcp?: boolean;
+}
+
+// Moved to mcp-addon.ts; re-exported so the renderer's callers keep importing it from here.
+export { type ClaudeDesktopConfigOptions, renderClaudeDesktopConfigExample } from "./mcp-addon.js";
 
 const KOHAKU_RUNTIME = [
   "client",
@@ -265,25 +277,15 @@ export function renderFixedSpecs(profile: DatasetProfile): string {
   return FIXED_SPECS_TEMPLATE.replaceAll("__SOURCE__", profile.source);
 }
 
-export interface RenderPackageJsonOptions {
-  /** Adds the MCP front door's dependencies and scripts (kohaku init --mcp). Default false. */
-  mcp?: boolean;
-}
-
 export function renderPackageJson(
   name: string,
   profile: DatasetProfile,
-  options: RenderPackageJsonOptions = {},
+  options: RenderOptions = {},
 ): string {
   const dependencies: Record<string, string> = {};
   for (const pkg of KOHAKU_RUNTIME) dependencies[`@kohaku-ui/${pkg}`] = `^${CLI_VERSION}`;
   for (const pkg of RUNTIME_EXTERNALS) dependencies[pkg] = EXTERNAL_VERSIONS[pkg];
-  if (options.mcp === true) {
-    dependencies["@kohaku-ui/host-mcp-apps"] = `^${CLI_VERSION}`;
-    dependencies["@kohaku-ui/mcp-renderer"] = `^${CLI_VERSION}`;
-    dependencies["@modelcontextprotocol/server"] = EXTERNAL_VERSIONS["@modelcontextprotocol/server"];
-    dependencies["@modelcontextprotocol/node"] = EXTERNAL_VERSIONS["@modelcontextprotocol/node"];
-  }
+  if (options.mcp === true) Object.assign(dependencies, mcpDependencies());
   const devDependencies: Record<string, string> = {};
   for (const pkg of DEV_EXTERNALS) devDependencies[pkg] = EXTERNAL_VERSIONS[pkg];
   return `${JSON.stringify(
@@ -300,13 +302,7 @@ export function renderPackageJson(
         start: "node --import tsx server/main.ts",
         typecheck: "tsc --noEmit",
         test: "vitest run",
-        ...(options.mcp === true
-          ? {
-              mcp: "tsx server/mcp.ts",
-              "mcp:http": "tsx server/mcp-http.ts",
-              "mcp:claude-desktop": "node scripts/claude-desktop.mjs",
-            }
-          : {}),
+        ...(options.mcp === true ? MCP_SCRIPTS : {}),
       },
       engines: { node: ">=22" },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
@@ -330,44 +326,13 @@ export function renderGoldenFixture(profile: DatasetProfile): string {
   )}\n`;
 }
 
-export interface RenderReadmeOptions {
-  /** Adds the "MCP" section documenting the generated stdio / Streamable HTTP servers. Default false. */
-  mcp?: boolean;
-}
-
-export function renderReadme(profile: DatasetProfile, options: RenderReadmeOptions = {}): string {
+export function renderReadme(profile: DatasetProfile, options: RenderOptions = {}): string {
   const dims = profile.dimensions.map((d) => `\`${d.name}\``).join(", ");
   const measures = profile.measures.map((m) => `\`${m.name}\``).join(", ") || "(none — row counts only)";
   const mcp = options.mcp === true;
-  // The "MCP" section of the README (followed directly by "Debugging a view").
-  const mcpSection = mcp
-    ? `## MCP (Claude Desktop, claude.ai, ChatGPT)
-
-\`\`\`bash
-npm run mcp:claude-desktop           # registers this project with Claude Desktop (backs up its config to .bak first)
-\`\`\`
-
-Restart Claude Desktop, then ask it about your data -- it calls this project's MCP server (\`npm run mcp\`, stdio) and
-renders the same UI Specs the web dashboard does. \`npm run mcp:http\` starts a Streamable HTTP server on :8788 instead,
-for claude.ai / ChatGPT (no authentication -- see server/mcp-http.ts before exposing it beyond localhost; it only accepts
-localhost Host / Origin headers unless you set \`KOHAKU_MCP_ALLOWED_HOSTS\` / \`KOHAKU_MCP_ALLOWED_ORIGINS\`, e.g. behind a tunnel).
-Terminal hosts that cannot render an iframe (Claude Code, Codex CLI) get a self-contained HTML snapshot instead
-(\`kohaku_render_snapshot\`, saved under \`.kohaku/snapshots/\`, git-ignored).
-
-`
-    : "";
-  // Appended to the "Before production" list.
-  const mcpDesktopConfigNote = mcp
-    ? `
-
-\`claude_desktop_config.example.json\` embeds this machine's absolute node path (\`process.execPath\` when \`kohaku init\` ran) and this project's absolute path, because Claude Desktop launches MCP servers with no shell PATH. On another machine, or after upgrading node, update \`command\` and the two \`args\` paths in that file, then run \`npm run mcp:claude-desktop\` again (that script only merges the file's entry into Claude Desktop's config; it does not recompute the paths).`
-    : "";
-  // Appended to the "What was generated" list.
-  const mcpGeneratedFiles = mcp
-    ? `
-- \`server/mcp-server.ts\` / \`server/mcp.ts\` / \`server/mcp-http.ts\` — the MCP front door (see the MCP section below).
-- \`scripts/claude-desktop.mjs\` + \`claude_desktop_config.example.json\` — Claude Desktop registration (\`npm run mcp:claude-desktop\`).`
-    : "";
+  const mcpSection = mcp ? MCP_README_SECTION : "";
+  const mcpDesktopConfigNote = mcp ? MCP_README_DESKTOP_CONFIG_NOTE : "";
+  const mcpGeneratedFiles = mcp ? MCP_README_GENERATED_FILES : "";
   const beforeProduction = `## Before production
 
 \`npm run dev\` starts in development mode (\`dev: process.env["NODE_ENV"] !== "production"\` in \`server/ports.ts\`): every request runs as one shared ANONYMOUS principal and the governance routes (lineage, analytics, promotions, fixations) are open, and the startup log says so in a single warning line (on stderr) instead of the two production warnings. Before you expose the server:
@@ -444,55 +409,10 @@ KOHAKU_CAPABILITY_SECRET=${secret}
 `;
 }
 
-export interface ClaudeDesktopConfigOptions {
-  /** Becomes the mcpServers key (and the McpServer name server/mcp.ts registers) -- the project's package name. */
-  name: string;
-  /** The generated project's absolute output directory (kohaku init's resolved --out). */
-  outDir: string;
-  /**
-   * The node binary Claude Desktop should launch (Claude Desktop has no shell PATH of its own, so a bare
-   * "node"/"npx" command would not resolve -- an absolute path is required). Callers pass `process.execPath`;
-   * kept as an explicit parameter (not read internally) so this function stays a pure, deterministic
-   * function of its inputs, testable without mocking `process`.
-   */
-  execPath: string;
-}
-
-/**
- * Renders claude_desktop_config.example.json: the \`mcpServers\` entry a person copies into (or, via
- * scripts/claude-desktop.mjs, has merged into) Claude Desktop's own config, so it launches this project's
- * stdio MCP server (server/mcp.ts) directly. Every path is absolute -- Claude Desktop launches configured
- * servers with no shell PATH of its own, so a bare "node"/"npx"/relative-path command would not resolve --
- * and \`node_modules/tsx/dist/cli.mjs\` (tsx's own bin entry) is used directly rather than \`npx tsx\` for the
- * same reason (npx also depends on a resolvable PATH).
- */
-export function renderClaudeDesktopConfigExample(options: ClaudeDesktopConfigOptions): string {
-  const tsxCli = join(options.outDir, "node_modules", "tsx", "dist", "cli.mjs");
-  const mcpEntry = join(options.outDir, "server", "mcp.ts");
-  return `${JSON.stringify(
-    {
-      mcpServers: {
-        [options.name]: {
-          command: options.execPath,
-          args: [tsxCli, mcpEntry],
-        },
-      },
-    },
-    null,
-    2,
-  )}\n`;
-}
-
-export interface RenderProjectFilesOptions {
-  name: string;
-  /** Adds the MCP front door (server/mcp{,-server,-http}.ts) and its dependencies/scripts. Default false. */
-  mcp?: boolean;
-}
-
 export function renderProjectFiles(
   profile: DatasetProfile,
   rows: Row[],
-  options: RenderProjectFilesOptions,
+  options: RenderOptions & { name: string },
 ): ProjectFile[] {
   const mcp = options.mcp === true;
   const nameReplaced = (template: string): string => template.replaceAll("__NAME__", options.name);
@@ -512,14 +432,7 @@ export function renderProjectFiles(
     { path: "server/fixed-specs.ts", content: renderFixedSpecs(profile) },
     { path: "server/ports.ts", content: SERVER_PORTS_TEMPLATE },
     { path: "server/app.ts", content: APP_TEMPLATE },
-    ...(mcp
-      ? [
-          { path: "server/mcp-server.ts", content: MCP_SERVER_TEMPLATE },
-          { path: "server/mcp.ts", content: nameReplaced(MCP_STDIO_TEMPLATE) },
-          { path: "server/mcp-http.ts", content: nameReplaced(MCP_HTTP_TEMPLATE) },
-          { path: "scripts/claude-desktop.mjs", content: CLAUDE_DESKTOP_SCRIPT_TEMPLATE },
-        ]
-      : []),
+    ...(mcp ? mcpProjectFiles(options.name) : []),
     { path: "server/main.ts", content: MAIN_TEMPLATE },
     { path: "web/main.tsx", content: WEB_MAIN_TEMPLATE },
     { path: "test/golden.test.ts", content: GOLDEN_TEST_TEMPLATE_INIT },
