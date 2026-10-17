@@ -3123,7 +3123,7 @@ describe("cancellation propagation (host-mcp-apps)", () => {
     // response) — that rejection is expected and is not what this test is verifying.
     await callPromise.catch(() => {});
 
-    // Give the server's still-running handler (composeAndAudit -> composeForTool -> composeWithFixation ->
+    // Give the server's still-running handler (composeForTool -> composeWithFixation ->
     // compose(), which the client-side rejection above does not stop) time to finish in the background.
     for (let i = 0; i < 50; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 

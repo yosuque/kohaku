@@ -340,7 +340,7 @@ export interface ToolContext {
  * see its doc comment), and the per-call request data the compose pipeline threads through to host-core's
  * composeWithFixation. Built once per tool call by `beginCall` (a shallow spread — cheap, and there is nothing on
  * `ToolContext` a call needs to override besides these fields), and threaded through the compose pipeline
- * (`composeAndAudit` / `composeAndPackage` / `startComposeTask` / `buildSnapshot` / `composeForTool` /
+ * (`auditComposed` / `composeForDelivery` / `composeAndPackage` / `startComposeTask` / `buildSnapshot` / `composeForTool` /
  * `preresolveInitialData` / `snapshotHtmlFor`) instead of the plain `ToolContext` those functions used to take —
  * so passing the attach-level `ToolContext` into any of them is a type error, not a latent bug where the wrong
  * (or no) principal silently rides through.

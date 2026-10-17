@@ -248,7 +248,7 @@ async function deliverComposed(
     const result = await composeForRest(intent, session, deps, call);
     const capability = await issueSpecCapability(result.spec, principal, deps, call);
     // Audit recording is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the MCP
-    // profile's composeAndAudit): swallow recorder failures so they do not take down delivery (including
+    // profile's auditComposed): swallow recorder failures so they do not take down delivery (including
     // cached Specs), notify the observability hook (onError) of the failure, and still return a successful
     // response. A cancelled compose (the caller's abort fired) is not a generation failure and observer.onError
     // already received phase:"cancelled" from the composer — recordComposedResult skips lineage recording

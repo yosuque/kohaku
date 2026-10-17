@@ -65,7 +65,7 @@ export interface ViewRecorder {
 
 /**
  * The cancelled-aware, fail-open "record the composed result" sequence shared by both host profiles (REST's
- * deliverComposed/finishStream and the MCP profile's composeAndAudit): a cancelled compose (the caller's
+ * deliverComposed/finishStream and the MCP profile's auditComposed): a cancelled compose (the caller's
  * abort fired) is not a generation failure and observer.onError already received phase:"cancelled" from the
  * composer, so `record` is skipped entirely — a client disconnect/timeout must not inflate view.composed /
  * view.fallback counts. Otherwise `record` (the host's own composed -> fallback recording, in that order --
@@ -93,7 +93,7 @@ export async function recordComposedResult(
  * "generation" (compatible with older records that predate the field).
  *
  * Both host profiles reach this through `recordComposedAndFallback` below (REST's deliverComposed/finishStream
- * and the MCP profile's composeAndAudit), so the fallback-detection rule lives in exactly one place instead
+ * and the MCP profile's auditComposed), so the fallback-detection rule lives in exactly one place instead
  * of two independently-drifting copies.
  */
 export async function recordViewFallback(
@@ -124,7 +124,7 @@ export async function recordViewFallback(
 
 /**
  * The composed -> fallback recording pair both host profiles run inside `recordComposedResult`'s record
- * callback (REST's deliverComposed/finishStream, the MCP profile's composeAndAudit): `recorder.composed`
+ * callback (REST's deliverComposed/finishStream, the MCP profile's auditComposed): `recorder.composed`
  * first, then `recordViewFallback` (a no-op unless the spec carries `provenance.fallback`), and nothing at all
  * when no `recorder` is wired. Order-neutral about where it sits in a host's delivery sequence and about
  * cancellation / fail-open handling, which stay with `recordComposedResult` and the caller.
