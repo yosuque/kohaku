@@ -110,8 +110,8 @@ export interface PreparedCompose {
   tenant?: string;
   /** The caller's abort signal. generateSpec passes it through to the L1/L2 LLM calls. */
   abort?: AbortSignal;
-  /** The Spec on a cache hit (with cache:"hit" applied) + the hit trace. null on miss/bypass. */
-  cached: { spec: UISpec; trace: ComposeTrace } | null;
+  /** The Spec on a cache hit (with cache:"hit" applied) + the hit trace (pre-negotiate). null on miss/bypass. */
+  cached: ComposeResult | null;
   /**
    * Memoized L0 fixed-Spec lookup (`policy.fixedSpecs?.lookup(intent)`, deterministic with respect to the
    * intent per FixedSpecSource's contract). composeStream's fast-path check and generateSpec's
@@ -157,11 +157,12 @@ export interface RunGenerationOptions {
   ) => Promise<GenerateOutcome>;
 }
 
-/** The result of the generation stage (L0/L1/L2/fallback). spec and its trace (the leader version or the follower version). */
-export interface GenerateOutcome {
-  spec: UISpec;
-  trace: ComposeTrace;
-}
+/**
+ * The result of the generation stage (L0/L1/L2/fallback). spec and its trace (the leader version or the
+ * follower version). Same `{ spec, trace }` pair as ComposeResult; the difference is only when it exists:
+ * this is the pre-negotiate form (before `finish` applies surface negotiation), ComposeResult the post-negotiate one.
+ */
+export type GenerateOutcome = ComposeResult;
 
 /**
  * The sole entry point of the UI Composition Service (the implementation of the request sequence).
