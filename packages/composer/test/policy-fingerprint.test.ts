@@ -1,7 +1,6 @@
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import type { GuiAction } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
-import { FINGERPRINTED } from "../src/context.js";
 import {
   type ComposeContext,
   type ComposePolicy,
@@ -10,6 +9,7 @@ import {
   type DesignKitVocabulary,
   policyFingerprint,
 } from "../src/index.js";
+import { FINGERPRINTED } from "../src/policy-fingerprint.js";
 import { catalog, goodRawDraft, makeSemantic, makeStorage } from "./helpers.js";
 
 const GUI_INPUT: GuiAction = {
@@ -38,7 +38,7 @@ describe("policyFingerprint", () => {
     // A policy that touches allowL2/routeTier not at all, or sets allowL2 to its conventional default
     // (false), must produce the exact same "" this test pinned before the tierGate row existed --
     // otherwise every existing allowL2-less policy's compose cache is silently invalidated the moment
-    // this row ships (see fingerprintTierGate's ABSENT-key doc comment in context.ts).
+    // this row ships (see fingerprintTierGate's ABSENT-key doc comment in policy-fingerprint.ts).
     expect(await policyFingerprint({ allowL2: false })).toBe("");
     expect(await policyFingerprint({ allowL2: false, cacheMode: "bypass" })).toBe("");
   });
@@ -201,7 +201,7 @@ describe("policyFingerprint", () => {
     // keys before hashing, so `classes` alone would have hashed two such vocabularies identically even
     // though they emitted different L2 prompt bytes). Task 8/m-15 made designKitPromptFragment present
     // classes sorted by name instead, so the prompt is now a pure function of `classes`' *content*, not
-    // its insertion order — `classesOrder` was removed accordingly (context.ts), and insertion-order-only
+    // its insertion order — `classesOrder` was removed accordingly (policy-fingerprint.ts), and insertion-order-only
     // differences correctly stop separating the cache key too.
     const entries = Object.entries(DEFAULT_KIT_VOCABULARY.classes);
     const reordered: DesignKitVocabulary = {
@@ -252,7 +252,7 @@ describe("policyFingerprint", () => {
     // doesn't; never re-pin this value.
     //
     // Task 8/m-15: re-pinned once when `classesOrder` was dropped from the kit fingerprint material
-    // (context.ts's fingerprintDesignSystem) — designKitPromptFragment now sorts classes by name instead
+    // (policy-fingerprint.ts's fingerprintDesignSystem) — designKitPromptFragment now sorts classes by name instead
     // of relying on `Object.entries` insertion order, so the material carrying that order explicitly no
     // longer corresponds to anything the prompt bytes depend on.
     //
@@ -301,10 +301,10 @@ describe("policyFingerprint", () => {
   });
 
   it("fingerprints exactly the known set of ComposePolicy fields (detects an added/removed material key)", () => {
-    // A new fingerprinted field must add a row to FINGERPRINTED (context.ts) *and* update this list in
+    // A new fingerprinted field must add a row to FINGERPRINTED (policy-fingerprint.ts) *and* update this list in
     // the same change — this test exists so a forgotten update fails loudly instead of silently leaving
     // a field unfingerprinted (or an accidental key rename perturbing every existing cache key
-    // unnoticed). See "the material key set" in context.ts's own doc comment for the M-4 discipline.
+    // unnoticed). See "the material key set" in policy-fingerprint.ts's own doc comment for the M-4 discipline.
     expect(FINGERPRINTED.map(([key]) => key).sort()).toEqual(
       [
         "outputLanguage",

@@ -22,10 +22,11 @@ import {
 import { notifyBudgetUsage } from "./budget.js";
 import { COMPOSER_ID } from "./constants.js";
 import type { ComposeContext, ComposeErrorContext, ComposePolicy, FixedSpecSource } from "./context.js";
-import { policyFingerprint, resolveEntryContext, tierLlmFingerprintMaterial } from "./context.js";
+import { resolveEntryContext } from "./context.js";
 import { ComposeError } from "./errors.js";
 import { buildFallbackSpec } from "./fallback.js";
 import { fireObserverHook, reportComposeError } from "./observer.js";
+import { policyFingerprint, tierLlmFingerprintMaterial } from "./policy-fingerprint.js";
 import type { ResolvedRefs } from "./refs.js";
 import { resolveRefs } from "./refs.js";
 import { runGeneration } from "./single-flight.js";
@@ -223,7 +224,7 @@ export async function prepareCompose(
   const refs = await resolveRefs(intent, ctx, opts.session?.tenant);
 
   // 3. Cache key (generatorVersion is added as the trailing component only when specified; policyFingerprint
-  // is a derived 7th component — see context.ts's policyFingerprint doc — that is likewise omitted (empty
+  // is a derived 7th component — see policy-fingerprint.ts's policyFingerprint doc — that is likewise omitted (empty
   // string) whenever the policy touches none of its fingerprinted fields, keeping the key unchanged).
   const pf = await policyFingerprint(policy, tierLlmFingerprintMaterial(ctx));
   const keyParts: CacheKeyParts = {
