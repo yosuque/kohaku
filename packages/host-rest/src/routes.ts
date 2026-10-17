@@ -3,6 +3,7 @@ import {
   createActionGate,
   createKeyedMutex,
   createOperationIndex,
+  withFixationLock as hostWithFixationLock,
   validateOperationIndex,
 } from "@kohaku-ui/host-core";
 import { cachedPropsJsonSchema } from "@kohaku-ui/registry";
@@ -190,7 +191,7 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
    */
   const fixationMutex = createKeyedMutex();
   const withFixationLock: RouteContext["withFixationLock"] = (tenant, intentHash, fn) =>
-    fixationMutex(`${tenant ?? ""} ${intentHash}`, fn);
+    hostWithFixationLock(fixationMutex, tenant, intentHash, fn);
 
   const ctx: RouteContext = {
     deps,
@@ -203,7 +204,7 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
     operationIndex: createOperationIndex(deps.domain),
     actionGate: createActionGate({ approvals: deps.approvals }),
     withFixationLock,
-    fixationHost: createRestFixationHost(deps, withFixationLock),
+    fixationHost: createRestFixationHost(deps, fixationMutex),
   };
 
   // Rate limiting (deps.rateLimiter; SPEC §6.1, REST-RL-001), mounted only on these specific

@@ -49,12 +49,12 @@ export function intentResolutionFailure(c: Context, e: unknown, requestId: strin
 }
 
 /**
- * Adapts a REST KohakuHostDeps into the FixationDeliveryHost surface host-core's fixation helpers consume.
- * serialize wires the per-(tenant, intentHash) fixation lock (`withFixationLock`, the RouteContext field built
- * over the createKohakuRoutes app's own keyed mutex) so self-heal's read-modify-write cannot interleave with
- * the management plane's fixate/unfixate. onSelfHealError fires the failure-path observability hook
- * fire-and-forget (a throw/rejection from the hook is swallowed inside reportHostError, never surfaced to the
- * caller).
+ * Adapts a REST KohakuHostDeps into the FixationDeliveryHost surface host-core's fixation helpers consume,
+ * through host-core's createFixationDeliveryHost. Its serialize runs under `mutex` — the createKohakuRoutes
+ * app's own keyed mutex, the same one RouteContext.withFixationLock takes — keyed by (tenant, intentHash), so
+ * self-heal's read-modify-write cannot interleave with the management plane's fixate/unfixate. onSelfHealError
+ * fires the failure-path observability hook fire-and-forget (a throw/rejection from the hook is swallowed
+ * inside reportHostError, never surfaced to the caller).
  *
  * createKohakuRoutes builds this exactly once per app instance and stores it on RouteContext.fixationHost: the
  * object holds no per-request state, so building it once avoids reallocating on every /compose,
@@ -62,9 +62,9 @@ export function intentResolutionFailure(c: Context, e: unknown, requestId: strin
  */
 export function createRestFixationHost(
   deps: KohakuHostDeps,
-  withFixationLock: RouteContext["withFixationLock"],
+  mutex: hostCore.KeyedMutex,
 ): hostCore.FixationDeliveryHost {
-  return {
+  return hostCore.createFixationDeliveryHost({
     // fixationLookup (deprecated) takes priority when wired (backward compatible); otherwise fall back to
     // the plain read on FixationsApi.get, with delivery gating handled separately by `admit` below.
     lookup:
@@ -75,7 +75,7 @@ export function createRestFixationHost(
         : undefined),
     admit: deps.fixationAdmit,
     fixations: deps.fixations,
-    serialize: (scope, fn) => withFixationLock(scope.tenant, scope.intentHash, fn),
+    mutex,
     // requestId is threaded in by resolveFixatedForRest/composeForRest below from the triggering request;
     // the crypto.randomUUID() fallback only guards a hypothetical future caller that omits it.
     // globalThis.crypto (not node:crypto) so this file has no Node-only import: Node >= 19 and every
@@ -83,7 +83,7 @@ export function createRestFixationHost(
     onSelfHealError: (endpoint, error, requestId) => {
       void reportHostError(deps, endpoint, requestId ?? globalThis.crypto.randomUUID(), error);
     },
-  };
+  });
 }
 
 /**
