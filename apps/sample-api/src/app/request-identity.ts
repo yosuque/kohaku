@@ -16,7 +16,11 @@ import type { MiddlewareHandler } from "hono";
 
 /** How the REST host turns a request into a principal and a tenant. */
 export interface RequestIdentity {
-  /** Registered on `/api/kohaku/*` ahead of the routes when present (JWT verification + 401). */
+  /**
+   * Registered on `/api/kohaku/*` ahead of the routes when present (JWT verification + 401), except the
+   * data plane `/api/kohaku/binding/*`, where the bearer token is the HMAC capability that host-rest
+   * verifies itself (see the mount in app-core.ts).
+   */
   middleware?: MiddlewareHandler;
   auth: NonNullable<KohakuHostDeps["auth"]>;
   tenant: NonNullable<KohakuHostDeps["tenant"]>;
