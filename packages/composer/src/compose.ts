@@ -34,7 +34,7 @@ import { runTierGeneration, type TierOutcome } from "./tier-ladder.js";
 import { buildL1GenerationSchema } from "./tiers/l1-generate.js";
 import type { ComposeAttempt, ComposeTrace, TraceBase, TraceContext } from "./trace.js";
 import { buildComposeTrace } from "./trace.js";
-import { traceIdentity } from "./trace-identity.js";
+import { composeIdentityOf, traceIdentity } from "./trace-identity.js";
 
 // COMPOSER_ID is defined in constants.js (a leaf module) and re-exported here so it stays resolvable
 // from both "./index.js" and "./compose.js".
@@ -254,7 +254,7 @@ export async function prepareCompose(
   const cacheMode = policy.cacheMode ?? "default";
   let cached: PreparedCompose["cached"] = null;
   if (cacheMode === "default") {
-    const hit = await getSpecCacheSafely(ctx, policy, traceBase, intent, key);
+    const hit = await getSpecCacheSafely(ctx, policy, traceBase);
     if (hit != null) {
       const spec: UISpec = { ...hit, provenance: { ...hit.provenance, cache: "hit" } };
       const trace = buildComposeTrace(
@@ -319,15 +319,13 @@ async function withCacheFailOpen<T>(
 async function getSpecCacheSafely(
   ctx: ComposeContext,
   policy: ComposePolicy,
-  traceBase: Pick<TraceBase, "input" | "correlationId" | "traceContext">,
-  intent: CanonicalIntent,
-  key: string,
+  traceBase: Pick<TraceBase, "input" | "intent" | "cacheKey" | "correlationId" | "traceContext">,
 ): Promise<UISpec | null> {
   return withCacheFailOpen(
     ctx,
     policy,
-    { input: traceBase.input, intent, cacheKey: key, ...traceIdentity(traceBase) },
-    () => ctx.storage.getSpecCache(key),
+    { ...composeIdentityOf(traceBase), ...traceIdentity(traceBase) },
+    () => ctx.storage.getSpecCache(traceBase.cacheKey),
     null,
   );
 }
@@ -341,12 +339,7 @@ async function putSpecCacheSafely(
   await withCacheFailOpen(
     ctx,
     prepared.policy,
-    {
-      input: prepared.traceBase.input,
-      intent: prepared.intent,
-      cacheKey: prepared.key,
-      ...traceIdentity(prepared.traceBase),
-    },
+    { ...composeIdentityOf(prepared.traceBase), ...traceIdentity(prepared.traceBase) },
     () => ctx.storage.putSpecCache(prepared.key, spec, prepared.policy.ttlSeconds),
     undefined,
   );
@@ -409,7 +402,7 @@ async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Pro
  * the deterministic fallback Spec and fires the observation hook exactly once (the once-per-generation contract is fixed here).
  */
 function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, outcome: TierOutcome): UISpec {
-  const { intent, refs, key, cacheMode, traceBase } = prepared;
+  const { intent, refs, cacheMode, traceBase } = prepared;
   const cacheLabel = cacheLabelOf(cacheMode);
 
   if (outcome.kind === "ok") {
@@ -447,9 +440,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
     ctx,
     {
       phase: outcome.cancelled === true ? "cancelled" : "fallback",
-      input: traceBase.input,
-      intent,
-      cacheKey: key,
+      ...composeIdentityOf(traceBase),
       tier: outcome.from,
       reason: outcome.reason,
       ...(outcome.budgetExceeded ? { budgetExceeded: true } : {}),

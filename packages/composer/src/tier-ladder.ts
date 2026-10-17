@@ -15,6 +15,7 @@ import {
   type TierSuccess,
 } from "./tiers/shared.js";
 import type { ComposeAttempt } from "./trace.js";
+import { composeIdentityOf } from "./trace-identity.js";
 
 /**
  * The merged result of the generation stage (L1/L2). Instead of threading mutable flags through, expresses
@@ -161,7 +162,7 @@ export async function runTierGeneration(
   attempts: ComposeAttempt[],
   onDraftPartial?: (raw: unknown) => void,
 ): Promise<TierOutcome> {
-  const { intent, key, traceBase, policy } = prepared;
+  const { intent, traceBase, policy } = prepared;
   const budget = policy.budget;
   // Forward the occurrence of a fail-open-swallowed throw from the budget hook check() to
   // observer.onBudgetCheckError so it is never left unobserved. When budget is unspecified, do not build it
@@ -172,11 +173,7 @@ export async function runTierGeneration(
     budget != null
       ? (failedTier: "L1" | "L2") =>
           (error: unknown): void =>
-            reportBudgetCheckError(
-              ctx,
-              { input: traceBase.input, intent, cacheKey: key, tier: failedTier },
-              error,
-            )
+            reportBudgetCheckError(ctx, { ...composeIdentityOf(traceBase), tier: failedTier }, error)
       : undefined;
 
   // The tier routeTier decided on, which doubles as the default value of "the tier that actually failed"
