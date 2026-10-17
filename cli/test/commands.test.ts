@@ -3,18 +3,11 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import {
-  type ExportDatasetResult,
-  exportDataset,
-  parseIntentArg,
-  parseSmokeL2Input,
-  runRestConformance,
-  runSelfConformance,
-  runSmokeL2,
-  scaffoldGolden,
-  scaffoldPorts,
-  validateComponentFile,
-} from "../src/commands.js";
+import { validateComponentFile } from "../src/component.js";
+import { parseIntentArg, runRestConformance, runSelfConformance } from "../src/conformance.js";
+import { type ExportDatasetResult, exportDataset } from "../src/dataset.js";
+import { scaffoldGolden, scaffoldPorts } from "../src/scaffold.js";
+import { parseSmokeL2Input, runSmokeL2 } from "../src/smoke-l2.js";
 
 const tmpDirs: string[] = [];
 

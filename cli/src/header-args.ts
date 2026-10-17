@@ -1,6 +1,6 @@
 // Dependency-free parser for repeated `--header name:value` flags, shared by `explain`, `evidence export` and
-// `usage export`. It lives apart from `commands.ts` so that importing it does not drag in the heavy workspace
-// packages (client, composer, evals, sandbox, ...) that `commands.ts` pulls in.
+// `usage export`. It lives apart from the per-command runner modules (`explain.ts`, `smoke-l2.ts`, ...) so that
+// importing it does not drag in the heavy workspace packages (client, composer, evals, sandbox, ...) they pull in.
 
 import { CliUsageError } from "./usage-error.js";
 

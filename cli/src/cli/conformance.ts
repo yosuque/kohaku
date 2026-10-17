@@ -14,7 +14,7 @@ export function register(program: Command): void {
       if (opts.rest == null && opts.self !== true) {
         program.error("Specify either --self or --rest <baseUrl>");
       }
-      const { formatReport, runRestConformance, runSelfConformance } = await import("../commands.js");
+      const { formatReport, runRestConformance, runSelfConformance } = await import("../conformance.js");
       let report: ConformanceReport;
       try {
         report =

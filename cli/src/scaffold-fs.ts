@@ -1,6 +1,6 @@
 // Light, dependency-free scaffold writer shared by the scaffold-writing commands (`init`, `scaffold`). It
-// lives apart from `commands.ts` so that importing it does not drag in the heavy workspace packages
-// (client, composer, evals, sandbox, ...) that `commands.ts` pulls in.
+// lives apart from the per-command runner modules (`explain.ts`, `smoke-l2.ts`, ...) so that importing it does
+// not drag in the heavy workspace packages (client, composer, evals, sandbox, ...) that they pull in.
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
