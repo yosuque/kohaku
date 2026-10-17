@@ -3,11 +3,11 @@ import {
   cellDraft,
   chartTableStyle,
   describeSortHeader,
+  describeSpreadsheetFooter,
   effectiveRows,
   formatCell,
   hasDeclaredEvent,
   isActivationKey,
-  localFooterTotal,
   planCellEdit,
   type RowsWorkingCopy,
   resolveColumns,
@@ -158,9 +158,16 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
 
   if (state.status !== "ready") return <DataStateNotice state={state} />;
 
-  // The local (non-serverSide) truncation footer's population count (undefined when nothing was
-  // truncated). serverSide has its own total/pager footer below (data.total is already server-reported).
-  const localTotal = serverSide ? undefined : localFooterTotal(state.data, displayRows.length);
+  // The footer view model: serverSide has its own total/pager bar (data.total is already
+  // server-reported); the local (non-serverSide) truncation notice is null when nothing was truncated.
+  const footer = describeSpreadsheetFooter({
+    data: state.data,
+    shown: displayRows.length,
+    serverSide,
+    cursor,
+    messages,
+    locale,
+  });
 
   return (
     <div data-kohaku={node.id} style={{ width: "100%", overflowX: "auto" }}>
@@ -297,39 +304,31 @@ export function PresentSpreadsheet({ node }: ImplProps): ReactNode {
           ))}
         </tbody>
       </table>
-      {serverSide ? (
+      {footer?.kind === "server" ? (
         // serverSide: total count + paging (back to first / next). Whether a next page exists is judged by nextCursor.
         <div style={spreadsheetFooterBarStyle({ muted }, sizing)}>
-          {state.data.total != null && (
-            <span>
-              {messages.spreadsheetTotal(state.data.total.toLocaleString(locale), displayRows.length)}
-            </span>
-          )}
-          {cursor != null && (
+          {footer.total != null && <span>{footer.total}</span>}
+          {footer.firstPage != null && (
             <button
               type="button"
               onClick={() => ctrl.goFirstPage()}
               style={spreadsheetPagerButtonStyle({ border, accent }, sizing)}
             >
-              {messages.spreadsheetFirstPage}
+              {footer.firstPage}
             </button>
           )}
-          {state.data.nextCursor != null && (
+          {footer.nextPage != null && (
             <button
               type="button"
-              onClick={() => ctrl.goNextPage(state.data.nextCursor!)}
+              onClick={() => ctrl.goNextPage(footer.nextPage!.cursor)}
               style={spreadsheetPagerButtonStyle({ border, accent }, sizing)}
             >
-              {messages.spreadsheetNextPage}
+              {footer.nextPage.label}
             </button>
           )}
         </div>
       ) : (
-        localTotal != null && (
-          <div style={spreadsheetFooterTotalStyle({ muted }, sizing)}>
-            {messages.spreadsheetTotal(localTotal.toLocaleString(locale), displayRows.length)}
-          </div>
-        )
+        footer != null && <div style={spreadsheetFooterTotalStyle({ muted }, sizing)}>{footer.total}</div>
       )}
     </div>
   );

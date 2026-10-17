@@ -1,4 +1,4 @@
-import type { ComponentNode, JsonObject, TabularColumn, UISpec } from "@kohaku-ui/spec-core";
+import type { ComponentNode, JsonObject, TabularColumn, TabularData, UISpec } from "@kohaku-ui/spec-core";
 import { describe, expect, it } from "vitest";
 import {
   type ActionManifest,
@@ -8,6 +8,7 @@ import {
   commitCellEdit,
   compareRows,
   describeSortHeader,
+  describeSpreadsheetFooter,
   effectiveRows,
   formatCell,
   localFooterTotal,
@@ -198,6 +199,80 @@ describe("localFooterTotal", () => {
   it("returns undefined when nothing was truncated", () => {
     expect(localFooterTotal({ total: 2, rows: [{}, {}] }, 2)).toBeUndefined();
     expect(localFooterTotal({ rows: [{}, {}] }, 2)).toBeUndefined();
+  });
+});
+
+describe("describeSpreadsheetFooter", () => {
+  const messages = {
+    spreadsheetTotal: (total: string, shown: number) => `${shown}/${total}`,
+    spreadsheetFirstPage: "FIRST",
+    spreadsheetNextPage: "NEXT",
+  };
+  const base = { shown: 2, cursor: undefined, messages, locale: "en-US" };
+  const table = (rowCount: number, extra: Partial<TabularData> = {}): TabularData => ({
+    columns: [],
+    rows: Array.from({ length: rowCount }, () => ({})),
+    dataVersion: "t@v1",
+    ...extra,
+  });
+
+  it("serverSide: formats the total with the locale, hides pager buttons on a single page", () => {
+    const data = table(2, { total: 12345 });
+    expect(describeSpreadsheetFooter({ ...base, data, serverSide: true })).toEqual({
+      kind: "server",
+      total: "2/12,345",
+      firstPage: undefined,
+      nextPage: undefined,
+    });
+  });
+
+  it("serverSide: an empty bar (all parts undefined) when no total, cursor, or nextCursor exists", () => {
+    const data = table(2);
+    expect(describeSpreadsheetFooter({ ...base, data, serverSide: true })).toEqual({
+      kind: "server",
+      total: undefined,
+      firstPage: undefined,
+      nextPage: undefined,
+    });
+  });
+
+  it("serverSide: a cursor in play adds the first-page label; nextCursor adds the next-page label and cursor", () => {
+    const data = table(2, { nextCursor: "c2" });
+    expect(describeSpreadsheetFooter({ ...base, data, serverSide: true, cursor: "c1" })).toEqual({
+      kind: "server",
+      total: undefined,
+      firstPage: "FIRST",
+      nextPage: { label: "NEXT", cursor: "c2" },
+    });
+  });
+
+  it("serverSide: ignores truncation (local footer rules do not apply)", () => {
+    const data = table(5);
+    expect(describeSpreadsheetFooter({ ...base, data, serverSide: true })).toMatchObject({
+      kind: "server",
+      total: undefined,
+    });
+  });
+
+  it("local: the truncation notice uses localFooterTotal's population and the locale", () => {
+    const data = table(2, { total: 4000 });
+    expect(describeSpreadsheetFooter({ ...base, data, serverSide: false })).toEqual({
+      kind: "local",
+      total: "2/4,000",
+    });
+  });
+
+  it("local: falls back to the full row count when no total was reported", () => {
+    const data = table(5);
+    expect(describeSpreadsheetFooter({ ...base, data, serverSide: false })).toEqual({
+      kind: "local",
+      total: "2/5",
+    });
+  });
+
+  it("local: null when nothing was truncated; a cursor or nextCursor does not matter", () => {
+    const data = table(2, { nextCursor: "c2" });
+    expect(describeSpreadsheetFooter({ ...base, data, serverSide: false, cursor: "c1" })).toBeNull();
   });
 });
 
