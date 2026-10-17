@@ -224,8 +224,8 @@ export interface L1UsageAccumulator {
 }
 
 /**
- * Pure aggregation step of proposals(): folds view.composed events (L1 tier only, excluding intents already
- * fixated) into a per-intentHash accumulator of uses / distinct sessions / structure-hash counts. No I/O and
+ * Pure aggregation step of proposals(): folds view.composed events (L1 tier only, excluding fallback Specs and
+ * intents already fixated) into a per-intentHash accumulator of uses / distinct sessions / structure-hash counts. No I/O and
  * no policy dependency (thresholding happens in proposals() after this returns). Moved to module scope
  * (a God-factory split, step 3 of extracting fixation/service.ts) for direct unit testing, independent of createFixations' opts/policy.
  */
@@ -238,6 +238,10 @@ export function aggregateL1Usage(
     const tier = String(event.payload["tier"] ?? "");
     // L2 is the promotion pipeline's domain, L0 is already fixated — only L1 is subject to fixation
     if (tier !== "L1") continue;
+    // A fallback Spec must never be fixated (SPEC §8; fixate() rejects it with FixationNotAllowedError). The
+    // composer records a fallback with `tier: from` ("L1") plus a `fallback` payload, so without this skip an
+    // Intent that always falls back would be proposed at 100% stability and then 422 on approve.
+    if (event.payload["fallback"] != null) continue;
     const intentHash = String(event.payload["intentHash"] ?? "");
     if (intentHash === "" || fixated.has(intentHash)) continue;
     const acc = byIntent.get(intentHash) ?? {

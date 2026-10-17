@@ -1,5 +1,6 @@
 import { createJwtAuthzPort } from "@kohaku-ui/authz-jwt";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
+import type { UISpec } from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
@@ -89,6 +90,33 @@ describe("sample-api with KOHAKU_AUTHZ=jwt wiring", () => {
     expect(res.status).toBe(200);
     const composed = await storage.listLineage({ type: ["view.composed"] });
     expect(composed[0]!.tenant).toBeUndefined();
+  });
+
+  it("keeps the data plane alive: the HMAC capability from /compose (not a JWS) resolves /binding/resolve, and no Authorization is still 401", async () => {
+    const { app } = await makeApp();
+    const token = await jwt({ sub: "u", roles: ["admin"] });
+    const composeRes = await app.request("/api/kohaku/compose", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(QUARTERLY_GUI),
+    });
+    expect(composeRes.status).toBe(200);
+    const composed = (await composeRes.json()) as { spec: UISpec; capability: string };
+    const ref = composed.spec.components.find((c) => c.data != null)!.data!.$ref;
+    const resolveUrl = `/api/kohaku/binding/resolve?ref=${encodeURIComponent(ref)}`;
+
+    // The data-binding client sends the capability (an HMAC token, not a JWT) in the Authorization header.
+    const ok = await app.request(resolveUrl, { headers: { authorization: `Bearer ${composed.capability}` } });
+    expect(ok.status).toBe(200);
+
+    // The route stays fail-closed: no Authorization at all is rejected by host-rest's own capability check.
+    const missing = await app.request(resolveUrl);
+    expect(missing.status).toBe(401);
+
+    // A bearer that is neither a valid capability nor anything else the data plane accepts is still denied.
+    const bogus = await app.request(resolveUrl, { headers: { authorization: `Bearer ${token}` } });
+    expect(bogus.status).toBeGreaterThanOrEqual(401);
+    expect(bogus.status).toBeLessThan(500);
   });
 
   describe("the demo-only bump-data-version route (opt-in under JWT)", () => {

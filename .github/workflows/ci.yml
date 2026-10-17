@@ -55,6 +55,15 @@ jobs:
       # vitest.config.ts are the gate), the 22 leg runs it plain to prove the declared Node floor.
       - name: Test (with coverage on the primary leg)
         run: ${{ matrix.node-version == 24 && 'pnpm test:coverage' || 'pnpm test' }}
+        env:
+          # The Redis / Postgres adapter suites need a backend, and the dedicated `adapters` job below runs
+          # them against real service containers with KOHAKU_ADAPTER_TESTS=require, so the 22 leg skips them
+          # (`skip` short-circuits the backend resolution in packages/port-contracts/src/backend.ts) rather
+          # than start testcontainers a third time. The 24 leg must NOT skip them: `coverage.include` counts
+          # storage-postgres / storage-redis src toward the global thresholds, and without the adapter suites
+          # the functions figure drops from ~89% to ~87% and fails the 88% floor. An empty value is not
+          # "skip", so the 24 leg keeps the default (env URL -> Docker -> skip) resolution.
+          KOHAKU_ADAPTER_TESTS: ${{ matrix.node-version == 22 && 'skip' || '' }}
       # One leg only: tsc's output depends on the TypeScript version and @types/node (both pinned in the
       # catalog), never on the Node runtime executing it, so the 22 leg would repeat it verbatim.
       - run: pnpm typecheck

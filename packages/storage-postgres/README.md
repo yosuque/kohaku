@@ -18,7 +18,7 @@ await storage.close();
 
 ## Schema
 
-`postgresSchemaSql(schema?)` returns the whole schema as one idempotent script (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` only), safe to run on every start. `createPostgresStoragePort` runs it (plus `CREATE SCHEMA IF NOT EXISTS`) once, lazily, before the first query, unless `migrate: false`. The migration is guarded by a Postgres advisory lock keyed by the schema name, so two instances migrating the same fresh schema concurrently serialize on the DDL instead of racing it.
+`postgresSchemaSql(schema?)` returns the whole schema as one idempotent script (`CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` only), safe to run on every start. `createPostgresStoragePort` runs it (plus `CREATE SCHEMA IF NOT EXISTS`) once, lazily, before the first query, unless `migrate: false`. The migration is guarded by a Postgres advisory lock keyed by the schema name, so two instances migrating the same fresh schema concurrently serialize on the DDL instead of racing it. A migrator waits at most 60 s for that lock (`MIGRATION_LOCK_WAIT_MS`); if another instance still holds it (a long `CREATE INDEX CONCURRENTLY`, or a hung process), `ready()` rejects with an error that names the lock key and the elapsed time instead of hanging, and it is retried with the usual backoff.
 
 | table | key | notes |
 |---|---|---|
@@ -40,6 +40,8 @@ This package implements the whole of `StoragePort`: the Spec cache (`getSpecCach
 `listLineage`'s `limit` defaults to 200 when the caller's `LineageFilter.limit` is omitted (matching `@kohaku-ui/spec-core`'s `DEFAULT_LINEAGE_LIMIT`).
 
 **Known limitation**: expired Spec-cache rows are treated as a miss on read (the `WHERE expires_at IS NULL OR expires_at > now()` clause), but they are not deleted automatically — `sweepExpiredSpecCache()` performs that deletion and is meant to be invoked from a cron / scheduled job, not on every read.
+
+**Known limitation**: a Spec-cache row stored without `ttlSeconds` has `expires_at IS NULL`, so `sweepExpiredSpecCache()` never removes it. Because the cache key includes the data version, every data update leaves the previous version's rows behind. Set `ComposePolicy.ttlSeconds` so rows expire, or sweep by last use yourself.
 
 ## Production
 

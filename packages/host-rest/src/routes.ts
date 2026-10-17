@@ -58,7 +58,7 @@ const UNHANDLED_ERROR_MESSAGE = "internal error";
 export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
   const app = new Hono();
 
-  // Per-request correlation id (ops): resolve it once per request (requestIdOf memoizes on the raw Request)
+  // Per-request correlation id (ops): resolve it once per request (requestIdOf memoizes on the Hono Context's variable bag, not the raw Request)
   // and stamp it on every response of the mounted sub-app, success or failure, so a client/reverse-proxy/log
   // aggregator can correlate this request across the response header, the error envelope's `error.requestId`
   // (see routes/shared.ts's reportHostError), and the onError observability hook. Registered first so it runs
@@ -120,7 +120,7 @@ export function createKohakuRoutes(deps: KohakuHostDeps): Hono {
     // once. If already protected by external middleware (a reverse proxy, etc.), this is expected.
     if (deps.authorizeGovernance == null) {
       console.warn(
-        "[kohaku] Governance/audit routes (/lineage, /telemetry, /promotions*, /fixations*) are exposed without authorization. " +
+        "[kohaku] Governance/audit routes (/lineage, /analytics/summary, /telemetry, /promotions*, /fixations*) are exposed without authorization. " +
           "In production, wiring deps.authorizeGovernance or protecting them with external middleware is mandatory.",
       );
     }

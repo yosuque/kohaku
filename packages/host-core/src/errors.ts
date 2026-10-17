@@ -75,7 +75,7 @@ export function classifyHostError(e: unknown): HostErrorClass {
  * `e.message` for an Error, else its `String()` form. Shared building block for both host profiles'
  * observability-hook payloads and for the "typed error message passes through" half of clientMessageFor
  * below (the same idiom was independently copied at 7 call sites across host-rest / host-mcp-apps before
- * this was extracted — see the H3 finding).
+ * this was extracted).
  */
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -157,10 +157,28 @@ export function formatErrorChain(err: unknown, maxDepth = DEFAULT_MAX_CHAIN_DEPT
   return segments.join(" <- ");
 }
 
+/**
+ * One-line, log-only description of `err` for the non-debug console reporter: `Name[CODE provider/modelId]:
+ * message`. The bracket is present only when the error carries a string `code` (an `LlmError`'s
+ * PROVIDER / CONFIG / ABORTED / INVALID_OUTPUT, a `SpecError`'s code, ...), and its `provider` / `modelId`
+ * parts only when those are strings. Without the name and code an operator reading the line could not tell
+ * an LLM provider outage from any other failure that happens to share a message. The `cause` chain and the
+ * stack stay debug-only. Never used for a client-visible message (that is {@link errorMessage} /
+ * {@link clientMessageFor}); a non-Error value is rendered with `String()` as before.
+ */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const fields = err as Error & { code?: unknown; provider?: unknown; modelId?: unknown };
+  if (typeof fields.code !== "string") return `${err.name}: ${err.message}`;
+  const origin = [fields.provider, fields.modelId].filter((part): part is string => typeof part === "string");
+  const detail = [fields.code, ...(origin.length > 0 ? [origin.join("/")] : [])].join(" ");
+  return `${err.name}[${detail}]: ${err.message}`;
+}
+
 export interface ConsoleErrorReporterOptions {
   /**
    * Verbose mode: each logged line becomes the full `cause` chain (formatErrorChain) plus the top error's
-   * stack trace, instead of a one-line "prefix: message" summary. Default false. This function never reads
+   * stack trace, instead of a one-line "prefix: Name[CODE provider/modelId]: message" summary. Default false. This function never reads
    * an environment variable itself (e.g. KOHAKU_DEBUG) — resolving `debug` from one is the caller's job
    * (see `kohaku init`'s generated app.ts and apps/sample-api's wiring), which keeps this function usable
    * outside a Node/env-var environment too.
@@ -195,7 +213,7 @@ export function createConsoleErrorReporter(options: ConsoleErrorReporterOptions 
 
   function writeLine(prefix: string, error: unknown): void {
     if (!debug) {
-      log(`${prefix}: ${errorMessage(error)}`);
+      log(`${prefix}: ${describeError(error)}`);
       return;
     }
     const lines = [`${prefix}: ${formatErrorChain(error)}`];

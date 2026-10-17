@@ -25,7 +25,7 @@ export interface ScaffoldTarget {
 /** `scaffold ports`: the DomainPort, an Intent catalog, and a Hono server built on createKohakuHost(). */
 export const PORTS_TARGET: ScaffoldTarget = {
   defaultOut: "./kohaku-ports",
-  next: "Implement the TODOs in ports.ts and intents.ts, then start server.ts.",
+  next: "Implement the TODOs in ports.ts and intents.ts, set KOHAKU_CAPABILITY_SECRET (or pass `dev: true` for a local trial), then start server.ts.",
   files: (outDir) => [
     [join(outDir, "ports.ts"), PORTS_TEMPLATE],
     [join(outDir, "intents.ts"), INTENTS_TEMPLATE],

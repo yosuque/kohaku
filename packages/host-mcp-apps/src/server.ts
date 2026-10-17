@@ -843,8 +843,6 @@ function registerActionTool(ctx: ToolContext): void {
         if (abort.aborted) {
           return toolError("cancelled");
         }
-        // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
-        // fallback below when the AuthzPort's verify does not itself return a principal.
         const parsedPayload = JsonObjectSchema.safeParse(rawPayload);
         if (!parsedPayload.success) {
           return toolError("payload must be a JSON object within the maximum nesting depth");
@@ -853,6 +851,8 @@ function registerActionTool(ctx: ToolContext): void {
         // Scanned on the raw value (its depth was just bounded by the parse above): the parsed copy has
         // already lost any own "__proto__" key. Reported as the gate's own `invalid` outcome further down.
         const unsafePayloadKeys = findUnsafeActionParamKeys(rawPayload as JsonObject);
+        // Resolved once for this call (see McpHostDeps.resolvePrincipal's doc comment) — used only as the
+        // fallback below when the AuthzPort's verify does not itself return a principal.
         const principal = await ctx.principalOf(extra);
         const rateLimited = await checkMcpRateLimit(ctx.deps, principal, extra, "action");
         if (rateLimited != null) return rateLimited;
@@ -875,26 +875,13 @@ function registerActionTool(ctx: ToolContext): void {
         // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
         // because the index and DomainPort momentarily disagree, or because the name was never a real
         // operation to begin with (a capability verifying for it is the only way to get this far) -- is
-        // rejected here and audited exactly as REST does, rather than let through ungated (fail-closed;
-        // ACT-PRM-001, MCPAPP-ACT-001). A rejected operation index (listOperations() itself failing) is
-        // likewise fail-closed for this call, and a declared operation whose paramsSchema failed validation
-        // is fail-closed for that operation alone.
-        let index: Awaited<ReturnType<typeof ctx.operationIndex>>;
-        try {
-          index = await ctx.operationIndex();
-        } catch (e) {
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId);
-          return toolError("operation index unavailable");
-        }
-        const entry = index.get(action);
-        if (entry != null && entry.schemaError != null) {
-          // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
-          // this operation alone (REST's 500 counterpart), reported to the observability hook.
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError, requestId);
-          return toolError("action parameter schema unavailable");
-        }
+        // rejected here and audited as REST does (an `action.denied` event), rather than let through ungated
+        // (fail-closed; ACT-PRM-001, MCPAPP-ACT-001). A gate that cannot decide at all (listOperations()
+        // itself failing, or the gate / ApprovalPort throwing) is likewise a fail-closed denial for this call,
+        // audited as `action.denied` through host-core's recordActionGateUnavailableDenial (ACT-APR-001), and
+        // a declared operation whose paramsSchema failed validation is fail-closed for that operation alone.
         // This profile performs no tenant resolution, so no `tenant` is ever passed to the recorder. The audit
-        // context is built once for both audit sites below; the undeclared-action denial overrides `report` to
+        // context is built once for every audit site below; the undeclared-action denial overrides `report` to
         // also carry the call's correlation id (the gate-result audit has never passed one).
         const auditContext: hostCore.ActionAuditContext = {
           recorder: ctx.deps.actionAuditRecorder,
@@ -904,6 +891,21 @@ function registerActionTool(ctx: ToolContext): void {
           correlationId: requestId,
           report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
         };
+        let index: Awaited<ReturnType<typeof ctx.operationIndex>>;
+        try {
+          index = await ctx.operationIndex();
+        } catch (e) {
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId);
+          await hostCore.recordActionGateUnavailableDenial(auditContext);
+          return toolError("operation index unavailable");
+        }
+        const entry = index.get(action);
+        if (entry != null && entry.schemaError != null) {
+          // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
+          // this operation alone (REST's 500 counterpart), reported to the observability hook.
+          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError, requestId);
+          return toolError("action parameter schema unavailable");
+        }
         if (entry == null) {
           await hostCore.recordUndeclaredActionDenial({
             ...auditContext,
@@ -911,17 +913,30 @@ function registerActionTool(ctx: ToolContext): void {
           });
           return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
         }
-        const gateResult: hostCore.ActionGateResult =
-          unsafePayloadKeys.length > 0
-            ? { kind: "invalid", issues: unsafePayloadKeys }
-            : await ctx.actionGate.check({
-                descriptor: entry.descriptor,
-                paramsSchema: entry.paramsSchema,
-                payload: payload as JsonObject,
-                confirmed,
-                approval,
-                requesterId: resolvedPrincipal.id,
-              });
+        let gateResult: hostCore.ActionGateResult;
+        if (unsafePayloadKeys.length > 0) {
+          gateResult = { kind: "invalid", issues: unsafePayloadKeys };
+        } else {
+          try {
+            gateResult = await ctx.actionGate.check({
+              descriptor: entry.descriptor,
+              paramsSchema: entry.paramsSchema,
+              payload: payload as JsonObject,
+              confirmed,
+              approval,
+              requesterId: resolvedPrincipal.id,
+            });
+          } catch (e) {
+            // The gate could not decide (e.g. the ApprovalPort threw): a denial, never an unhandled failure
+            // that skips the audit trail (REST's `gateUnavailable` counterpart).
+            await reportMcpError(ctx.deps, `${ctx.prefix}_action`, e, requestId);
+            await hostCore.recordActionGateUnavailableDenial({
+              ...auditContext,
+              tier: entry.descriptor.tier ?? "auto",
+            });
+            return toolError(hostCore.ACTION_GATE_UNAVAILABLE_MESSAGE);
+          }
+        }
         // Maps one `ActionGate.check` outcome onto the MCP tool result (design.md #62/#63; the REST profile's
         // inline switch in packages/host-rest/src/routes/binding.ts is its wire-mapping counterpart). The audit
         // trail and the client-visible messages are host-core's `recordActionGateResult`, shared with REST; this

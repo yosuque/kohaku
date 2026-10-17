@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from kohaku.spec import (
+    DEFAULT_LINEAGE_LIMIT,
     FixationRecord,
     LineageActor,
     LineageCursorError,
@@ -137,6 +138,73 @@ class TestLineage:
         events = asyncio.run(port.list_lineage())
         assert [e.id for e in events] == ["ok"]
 
+    def test_limit_zero_and_negative_return_nothing(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            await port.append_lineage(_event("e1"))
+            await port.append_lineage(_event("e2"))
+            assert await port.list_lineage(LineageFilter(limit=0)) == []
+            assert await port.list_lineage(LineageFilter(limit=-1)) == []
+
+        asyncio.run(run())
+
+    def test_default_limit_is_the_tail_window_in_append_order(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            total = DEFAULT_LINEAGE_LIMIT + 5
+            for i in range(total):
+                await port.append_lineage(
+                    LineageEventRecord(
+                        id=f"e{i:04d}",
+                        ts="2026-07-17T00:00:00Z",
+                        actor=LineageActor(kind="system"),
+                        type="view.composed",
+                        payload={},
+                    )
+                )
+            events = await port.list_lineage()
+            assert [e.id for e in events] == [f"e{i:04d}" for i in range(5, total)]
+
+        asyncio.run(run())
+
+    def test_limit_applies_to_matches_not_to_the_whole_log(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            await port.append_lineage(_event("e1", intentHash="h"))
+            await port.append_lineage(_event("e2", intentHash="h"))
+            await port.append_lineage(_event("e3", intentHash="other"))
+            await port.append_lineage(_event("e4", intentHash="other"))
+            got = await port.list_lineage(LineageFilter(intentHash="h", limit=1))
+            assert [e.id for e in got] == [
+                "e2"
+            ]  # the latest match, not "the last event, then filtered"
+            both = await port.list_lineage(LineageFilter(intentHash="h", limit=5))
+            assert [e.id for e in both] == ["e1", "e2"]  # oldest first
+
+        asyncio.run(run())
+
+    def test_empty_string_tenant_is_unspecified_in_lineage_filter(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            for event_id, tenant in (("e1", None), ("e2", ""), ("e3", "t1")):
+                await port.append_lineage(
+                    LineageEventRecord(
+                        id=event_id,
+                        ts="2026-07-17T00:00:00Z",
+                        actor=LineageActor(kind="system"),
+                        type="view.composed",
+                        payload={},
+                        tenant=tenant,
+                    )
+                )
+            # A "" filter tenant is "unspecified": no tenant filtering at all (TS matchesLineageFilter).
+            everything = await port.list_lineage(LineageFilter(tenant=""))
+            assert [e.id for e in everything] == ["e1", "e2", "e3"]
+            only_t1 = await port.list_lineage(LineageFilter(tenant="t1"))
+            assert [e.id for e in only_t1] == ["e3"]
+
+        asyncio.run(run())
+
 
 class TestPageLineage:
     """FileStoragePort.page_lineage (design.md #53) -- StoragePort's optional forward-paging extension."""
@@ -239,6 +307,47 @@ class TestPromotionAndFixation:
                 await port.get_promotion_state("a1") is None
             )  # the tenant-neutral key is separate
             assert len(await port.list_promotion_states("t1")) == 1
+
+        asyncio.run(run())
+
+    def test_empty_string_tenant_is_unspecified_for_get_put_and_list(self, tmp_path: Path) -> None:
+        async def run() -> None:
+            port = FileStoragePort(tmp_path)
+            # A state stored under tenant "" is the tenant-neutral one: reachable without a tenant ...
+            await port.put_promotion_state(
+                PromotionState(artifactId="a1", status="draft", updatedAt="t", tenant="")
+            )
+            await port.put_promotion_state(
+                PromotionState(artifactId="a2", status="draft", updatedAt="t", tenant="t1")
+            )
+            assert await port.get_promotion_state("a1") is not None
+            assert await port.get_promotion_state("a1", "") is not None
+            # ... and a "" list filter means "all", exactly like omitting it (not "only tenant-less").
+            assert len(await port.list_promotion_states("")) == 2
+            assert len(await port.list_promotion_states(None)) == 2
+            assert [s.artifactId for s in await port.list_promotion_states("t1")] == ["a2"]
+
+            fixation_hash = "sha256:" + "5" * 64
+            tenant_hash = "sha256:" + "6" * 64
+            for intent_hash, tenant in ((fixation_hash, ""), (tenant_hash, "t1")):
+                await port.put_fixation(
+                    FixationRecord(
+                        intentHash=intent_hash,
+                        canonical="t.v",
+                        structureHash="sha256:" + "7" * 64,
+                        pinnedSpec=_spec(),
+                        fixatedAt="2026-07-17T00:00:00Z",
+                        approver=Principal(id="admin"),
+                        tenant=tenant,
+                    )
+                )
+            assert await port.get_fixation(fixation_hash) is not None
+            assert await port.get_fixation(fixation_hash, "") is not None
+            assert len(await port.list_fixations("")) == 2
+            assert len(await port.list_fixations(None)) == 2
+            assert [f.intentHash for f in await port.list_fixations("t1")] == [tenant_hash]
+            await port.delete_fixation(fixation_hash, "")
+            assert await port.get_fixation(fixation_hash) is None
 
         asyncio.run(run())
 

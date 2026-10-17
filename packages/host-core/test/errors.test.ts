@@ -237,21 +237,21 @@ describe("createConsoleErrorReporter", () => {
     const { lines, log } = captureLines();
     const reporter = createConsoleErrorReporter({ log });
     reporter.host({ endpoint: "/compose", requestId: "r1", error: new Error("boom") });
-    expect(lines).toEqual(["[kohaku] /compose (request r1): boom"]);
+    expect(lines).toEqual(["[kohaku] /compose (request r1): Error: boom"]);
   });
 
   it("mcp(): logs a one-line summary without a correlation id when the failing path has none", () => {
     const { lines, log } = captureLines();
     const reporter = createConsoleErrorReporter({ log });
     reporter.mcp({ endpoint: "kohaku_compose", error: new Error("boom") });
-    expect(lines).toEqual(["[kohaku] mcp kohaku_compose: boom"]);
+    expect(lines).toEqual(["[kohaku] mcp kohaku_compose: Error: boom"]);
   });
 
   it("mcp(): prints the call's correlation id when one is provided", () => {
     const { lines, log } = captureLines();
     const reporter = createConsoleErrorReporter({ log });
     reporter.mcp({ endpoint: "kohaku_action", error: new Error("boom"), correlationId: "mcp:sess:7" });
-    expect(lines).toEqual(["[kohaku] mcp kohaku_action (correlation mcp:sess:7): boom"]);
+    expect(lines).toEqual(["[kohaku] mcp kohaku_action (correlation mcp:sess:7): Error: boom"]);
   });
 
   it("debug:true logs the full cause chain and the stack trace, as separate lines", () => {
@@ -303,7 +303,46 @@ describe("createConsoleErrorReporter", () => {
     const reporter = createConsoleErrorReporter({ log });
     const ctx: ComposeErrorContext = { phase: "hard", input: { kind: "intent" } };
     reporter.compose(ctx, new Error("reference resolution failed"));
-    expect(lines).toEqual(["[kohaku] compose hard: reference resolution failed"]);
+    expect(lines).toEqual(["[kohaku] compose hard: Error: reference resolution failed"]);
+  });
+
+  it("compose(): a hard LlmError logs its name, code, provider and model so an outage is distinguishable", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    const ctx: ComposeErrorContext = { phase: "hard", input: { kind: "intent" }, correlationId: "X" };
+    reporter.compose(
+      ctx,
+      new LlmError("PROVIDER", "upstream 529", { provider: "anthropic", modelId: "claude-sonnet-5" }),
+    );
+    expect(lines).toEqual([
+      "[kohaku] compose hard (correlation X): LlmError[PROVIDER anthropic/claude-sonnet-5]: upstream 529",
+    ]);
+  });
+
+  it("an LlmError without provider / modelId logs just its code; a coded non-Llm error logs its own name and code", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    reporter.host({ endpoint: "/compose", requestId: "r1", error: new LlmError("CONFIG", "key missing") });
+    reporter.host({
+      endpoint: "/compose",
+      requestId: "r2",
+      error: new SpecError("PARSE_FAILED", "bad spec"),
+    });
+    reporter.host({ endpoint: "/compose", requestId: "r3", error: "plain string" });
+    expect(lines).toEqual([
+      "[kohaku] /compose (request r1): LlmError[CONFIG]: key missing",
+      "[kohaku] /compose (request r2): SpecError[PARSE_FAILED]: bad spec",
+      "[kohaku] /compose (request r3): plain string",
+    ]);
+  });
+
+  it("the cause chain and stack stay debug-only: a non-debug LlmError line is a single line without them", () => {
+    const { lines, log } = captureLines();
+    const reporter = createConsoleErrorReporter({ log });
+    const err = new LlmError("PROVIDER", "top", { provider: "p", cause: new Error("root cause") });
+    reporter.mcp({ endpoint: "kohaku_compose", error: err });
+    expect(lines).toEqual(["[kohaku] mcp kohaku_compose: LlmError[PROVIDER p]: top"]);
+    expect(lines[0]).not.toContain("root cause");
   });
 
   it("defaults to console.error when log is not supplied", () => {
@@ -311,7 +350,7 @@ describe("createConsoleErrorReporter", () => {
     try {
       const reporter = createConsoleErrorReporter();
       reporter.host({ endpoint: "/compose", requestId: "r1", error: new Error("boom") });
-      expect(spy).toHaveBeenCalledWith("[kohaku] /compose (request r1): boom");
+      expect(spy).toHaveBeenCalledWith("[kohaku] /compose (request r1): Error: boom");
     } finally {
       spy.mockRestore();
     }

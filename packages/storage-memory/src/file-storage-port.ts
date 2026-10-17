@@ -212,7 +212,7 @@ class TenantSnapshot<T extends { tenant?: string }> {
  * `ifPresent` bailing out because the key is absent). In that case the atomic write-back is skipped (nothing
  * changed, so there is nothing to persist), but the memory Map is still synced to `base` — the freshly
  * re-read disk snapshot (or, on corruption, the pre-existing memory-derived fallback). This is what lets a
- * skipped self-healing put (§2 review finding: a stale in-memory copy racing a concurrent delete) also
+ * skipped self-healing put (a stale in-memory copy racing a concurrent delete) also
  * refresh this process's stale view: the caller's in-memory copy of a record another writer already deleted
  * gets dropped from memory too, rather than lingering there until an unrelated key's put happens to resync it.
  */
@@ -233,8 +233,8 @@ async function mergeMutate<T>(
  * `options.ifPresent`: skip the write-back (memory is still synced to the freshly re-read disk snapshot; see
  * mergeMutate's doc comment) unless `key` is already present there. Used by `Fixations.refreshFingerprint`
  * (via `StoragePort.putFixation`'s options) so a self-healing get→put that races with a concurrent delete
- * does not resurrect an already-removed fixation (§2 review finding: sample-api and sample-mcp sharing one
- * `.data` directory could otherwise revive a fixation deleted by the other process's `unfixate`).
+ * does not resurrect an already-removed fixation (sample-api and sample-mcp sharing one `.data`
+ * directory could otherwise revive a fixation deleted by the other process's `unfixate`).
  */
 function mergePut<T>(
   path: string,

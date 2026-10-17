@@ -85,10 +85,6 @@ cd my-dashboard && npm run dev
 
 Generates a runnable Dashboard + Chat app (DomainPort, Intent catalog, L0 fixed Spec) from your own CSV/JSON/SQLite, plus a `.env` with a freshly generated capability secret (add only a provider key to it — never copy `.env.example` over it) — see the [Zero-Port quickstart](docs/user-guide.md#zero-port-quickstart-from-your-own-data-no-port-code) for what it produces and how to add L1/L2. No data at hand? See the bundled sample CSV at the top of this page ([`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv)). The rest of this section is the monorepo's own dev setup.
 
-> **Version note**: the generated project's behavior described here and in the guide (the golden fixture written automatically after install, the single-line development notice, `usage export`) is that of `@kohaku-ui/cli` and `@kohaku-ui/host` 0.4.1 and later. The published 0.4.0 has none of them.
-
-<!-- remove after 0.4.1 -->
-
 Prerequisites: Node >= 22 (>= 22.13 for SQLite input), pnpm 12. CI verifies on Node 22 and 24.
 
 ```bash
@@ -147,7 +143,7 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `packages/otel` | Thin, opt-in OpenTelemetry layer (`createOtelComposeObserver`, combined via composer's `composeObservers`). Depends only on composer (peer: `@opentelemetry/api`); ships no exporter/SDK setup |
 | `packages/host-a2ui` | A2UI-compatible profile skeleton (UISpec/SpecPatch → A2UI messages; an independent leaf on spec-core only) [Draft] |
 | `packages/client` | Typed host client SDK (depends only on spec-core + data-binding; independent of host-rest) |
-| `packages/admin-react` | Governance console (Lineage / Analytics / Promotion review / Fixation) as embeddable React components on top of `client` (the sample's Admin page is a thin wrapper) |
+| `packages/admin-react` | Governance console (Lineage / Analytics / Promotion review / Fixation / Approvals) as embeddable React components on top of `client` (the sample's Admin page is a thin wrapper) |
 | `packages/storage-redis` | Redis-backed StoragePort reference adapter (Spec cache, lineage, promotion state, fixation, tenant scoping); `ioredis` is a peer dependency |
 | `packages/storage-postgres` | PostgreSQL-backed StoragePort reference adapter (same coverage as storage-redis, idempotent schema); `pg` is a peer dependency |
 | `packages/authz-jwt` | JWT / OIDC AuthzPort reference adapter (principal / roles / tenant from claims, shared secret or JWKS); delegates capability tokens to `authz-hmac`, depends on `jose` |
@@ -157,7 +153,7 @@ Even without an LLM, the four standard Dashboard views (L0 fixed Specs) are full
 | `apps/sample-mcp` | Sample: MCP server for external chat + the shared renderer |
 | `apps/sample-parts` | Sample: the sales-domain product-specific component definitions (`defineComponent`), the single source shared by sample-api, sample-web and sample-mcp |
 | `apps/playground` | Sample: a static, server-free build of sample-web that runs the sample-api host inside the browser tab and replays recorded LLM responses |
-| `cli/` | `kohaku conformance / scaffold / init / explain / evidence / migrate / dataset / component validate` |
+| `cli/` | `kohaku conformance / scaffold / init / explain / evidence / migrate / dataset / usage / smoke-l2 / component validate` |
 | `python/` | **Python reference implementation** — a wire-compatible full port of the TS `packages/*` (spec / registry / composer / lineage / host-rest / host-mcp) + the sales-api sample. Conformance CONFORMANT. Details in [python/README.md](python/README.md) |
 
 ## Development

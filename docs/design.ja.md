@@ -66,7 +66,7 @@ flowchart LR
     SC --> LN["lineage"]
     SC & DB --> CL["client"]
     CP & LL --> EV["evals"]
-    SC & DB & CP --> HC["host-core<br/>(framework-free な共有ホスト核)"]
+    SC & DB & CP & RG & LL --> HC["host-core<br/>(framework-free な共有ホスト核)"]
     HC & RG & DB --> HR["host-rest"]
     HC & DB --> HM["host-mcp-apps"]
     CP --> OT["otel<br/>(peer: @opentelemetry/api)"]
@@ -76,6 +76,8 @@ flowchart LR
     SC --> SR["storage-redis"]
     SC --> SP["storage-postgres"]
     SC & DB & INT & LL --> SL["semantic-llm"]
+    SC --> SM["storage-memory"]
+    SC & DB & CP & RG & LL & INT & LN & SL & SM & AH & HC & HR --> HOST["host<br/>(createKohakuHost facade)"]
     CL & RC & SB & SC --> AR["admin-react"]
     HR & LN & EV & INT & OT & SL --> API["apps/sample-api"]
     RR & SB & DB & CL & INT & AR --> WEBAPP["apps/sample-web"]
@@ -108,7 +110,7 @@ flowchart LR
 | sandbox | L2 隔離実行(3 重防御)・postMessage ブリッジ・SandboxFrame・`./smoke`(配信前スモーク検証ランナー。jsdom は optional peer) | `src/mount.ts` `src/host-bridge.ts` `src/smoke/` |
 | lineage | イベント記録・**昇格状態機械**・固定化・REST 用 Recorder | `src/promotion/machine.ts` `src/lineage.ts` |
 | evals | Golden Spec 回帰(揺らぎ正規化)・LLM-as-Judge(L2 昇格審査 + L1 品質採点)・品質回帰ハーネス・FixtureLlm | `src/golden.ts` `src/judge.ts` `src/quality.ts` |
-| host-core | framework-free な共有ホスト核。host-rest と host-mcp-apps が消費する(renderer-core と renderer-react / renderer-wc の関係と同型 — 単一の正を 2 つの薄いアダプタが消費)。固定化(L1→L0)配信 + 陳腐化自己修復(`composeWithFixation` / `resolveFixatedResult` / `settleFixation`)、capability 発行(生成済み Spec 向け `issueCapabilityForSpec` / ref 一覧向け `issueCapabilityForRefs`。デフォルト TTL 600 秒。加えて両ホストが呼ぶ fail-closed な `issueSpecCapabilitySafely` ラッパ)と、その検証側の対をなす `verifyCapabilitySafely`(`authz.verify` をラップし、投げられた verify を `{ kind: "unavailable" }` に変換する。各ホストはこれを `CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE` を使って自分のプロトコルの 5xx / ツールエラー形に写像する)、`/binding/resolve`・`kohaku_resolve_binding`・初期データ事前解決が共有する read-ref 解析(`parseInvokableRef`: 予約パラメータの分離 + 合流と source 照合。capability 検証とエラー → ステータス写像は各ホストに残る)、書き込み後の副作用応答(`applyActionEffects`。fail-open)、intent 解決(`resolveIntent`)、cancelled を意識した fail-open な合成結果記録(`recordComposedResult`)、クライアント向けエラーメッセージ(`errorMessage` / `clientMessageFor`)、fail-open な観測フックヘルパ(`notifyHook` / `failOpen`)。依存は spec-core + data-binding + composer | `src/fixation.ts` `src/capability.ts` `src/binding-ref.ts` `src/action-effects.ts` `src/intent.ts` `src/errors.ts` `src/view-recorder.ts` |
+| host-core | framework-free な共有ホスト核。host-rest と host-mcp-apps が消費する(renderer-core と renderer-react / renderer-wc の関係と同型 — 単一の正を 2 つの薄いアダプタが消費)。固定化(L1→L0)配信 + 陳腐化自己修復(`composeWithFixation` / `resolveFixatedResult` / `settleFixation`)、capability 発行(生成済み Spec 向け `issueCapabilityForSpec` / ref 一覧向け `issueCapabilityForRefs`。デフォルト TTL 600 秒。加えて両ホストが呼ぶ fail-closed な `issueSpecCapabilitySafely` ラッパ)と、その検証側の対をなす `verifyCapabilitySafely`(`authz.verify` をラップし、投げられた verify を `{ kind: "unavailable" }` に変換する。各ホストはこれを `CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE` を使って自分のプロトコルの 5xx / ツールエラー形に写像する)、`/binding/resolve`・`kohaku_resolve_binding`・初期データ事前解決が共有する read-ref 解析(`parseInvokableRef`: 予約パラメータの分離 + 合流と source 照合。capability 検証とエラー → ステータス写像は各ホストに残る)、書き込み後の副作用応答(`applyActionEffects`。fail-open)、intent 解決(`resolveIntent`)、cancelled を意識した fail-open な合成結果記録(`recordComposedResult`)、クライアント向けエラーメッセージ(`errorMessage` / `clientMessageFor`)、fail-open な観測フックヘルパ(`notifyHook` / `failOpen`)。依存は spec-core + data-binding + composer + registry + llm(registry は `catalog-impact.ts` / `catalog-migration.ts` のカタログ分析、llm は `errors.ts` の `LlmError` 分類のため) | `src/fixation.ts` `src/capability.ts` `src/binding-ref.ts` `src/action-effects.ts` `src/intent.ts` `src/errors.ts` `src/view-recorder.ts` |
 | host-rest | REST プロファイル(Hono)。ルートはグループ別に分割 | `src/routes.ts` `src/routes/` |
 | host-mcp-apps | MCP Apps(SEP-1865)プロファイル | `src/server.ts`(ツール登録)`src/initial-data.ts`(初期データ事前解決)`src/snapshot.ts` |
 | otel | 薄い opt-in OpenTelemetry 層。`createOtelComposeObserver` が `ComposeObserver` の呼び出しをスパンへ変換し、composer の `composeObservers` で製品側の observer と束ねて使う。依存は composer のみ(peer: `@opentelemetry/api`)— exporter/SDK の配線は無い(ホストプロセス自身の責務)。詳細は下記「Trace context / OTel」参照 | `src/observer.ts` |
@@ -120,7 +122,7 @@ flowchart LR
 
 同一プロトコル(Kohaku Protocol v0.1)の **Python フル移植**をモノレポ内に同居させる(`python/` の uv workspace。pnpm workspace 外)。TS 参照実装とは**ワイヤ互換** — canonical JSON がバイト一致するため `intent.hash` / `specHash` / キャッシュキー / `catalogFingerprint` が言語をまたいで一致する。TS ホスト ⇄ Python ホストの conformance 通過が「プロトコルは言語非依存」の実証になる(renderer-react ⇄ renderer-wc の parity が「Spec はレンダラー非依存」の実証であるのと同型)。
 
-- **契約境界は `spec/`**。Python は `spec/`(SPEC.md + JSON Schema)とビルド済みレンダラー HTML にのみ依存し、TS パッケージ内部には触れない。適合状況は conformance **MUST 19/19 = CONFORMANT** — 19 は conformance manifest の全 37 MUST のうち黒箱検査可能なもので、残り 18 件の reference MUST(MCPAPP-* / SBX-* / ACT-PRM-001 / ACT-APR-001、および文書規範 6 件)はパッケージテストで担保(CI の `conformance-ts` ジョブ〈TS ホスト〉と `conformance-python` ジョブ〈Python ホスト〉がそれぞれのサンプルホストを起動して TS 側 CLI の黒箱検査で毎コミット担保)。
+- **契約境界は `spec/`**。Python は `spec/`(SPEC.md + JSON Schema)とビルド済みレンダラー HTML にのみ依存し、TS パッケージ内部には触れない。適合状況は conformance **MUST 19/19 = CONFORMANT** — 19 は conformance manifest の全 37 MUST のうち黒箱検査可能なものだが、Python ホストに実際にリクエストを送るのは `REST-*` の MUST 9 件(と、昇格を公開した後の `LIN-PRM-001`)だけで、`SPEC-*` の MUST 9 件は CLI 自身の例示 Spec に対する Spec 形式の自己検査である(内訳は [python/README.md](../python/README.md) を参照)。残り 18 件の reference MUST(MCPAPP-* / SBX-* / ACT-PRM-001 / ACT-APR-001、および文書規範 6 件)は Python 実装が存在する範囲でパッケージテストが担保する(CI の `conformance-ts` ジョブ〈TS ホスト〉と `conformance-python` ジョブ〈Python ホスト〉がそれぞれのサンプルホストを起動して TS 側 CLI の黒箱検査を毎コミット実行する)。
 - **パッケージ対応**(`python/kohaku/src/kohaku/` のサブモジュールが TS `packages/*` に対応):
 
 | Python サブモジュール | 対応する TS パッケージ |
@@ -164,7 +166,7 @@ cacheKey = "kohaku:0.2:<intentHash>:<dataVersion>:<catalogFingerprint>"
 
 - `canonicalStringify`(キー深ソート + undefined 除去)が決定性の土台。GUI 由来でも NL 由来でも、同じ意味の Intent は同じバイト列 → 同じハッシュになる。
 - `catalogFingerprint`(`type@version` ソート結合の FNV-1a。sandbox-template 分は `#fnv1a64(html)` を付加し、同じ type@version で再公開された別内容の成果物を旧内容と区別する)をキーに含めるのは実装時の追加判断 — 部品改版・昇格でカタログが変わると指紋が変わり、古い Spec を取り違えない。
-- **`generatorVersion`(6 番目・任意)と `policyFingerprint`(7 番目・任意)がキーを拡張する**: `cacheKey = "kohaku:0.2:<intentHash>:<dataVersion>:<catalogFingerprint>[:<generatorVersion>][:<policyFingerprint>]"`。`generatorVersion` は呼び出し側が手動で上げる区切り(後述の few-shot / 出力言語 / design-system 節)。`policyFingerprint`(`packages/composer/src/context.ts` の `policyFingerprint`)は `ComposePolicy.outputLanguage` / `designSystem`(本文全体) / `fewShot.id` / `selectComponents.id` から**導出**する保険的な値(canonical JSON → sha256 先頭 16 hex)で、呼び出し側が手動の `generatorVersion` 更新を忘れてもキャッシュを自動で分離する。この 4 項目がいずれも未設定なら空文字(= 未指定と同義)になり、それらに触れないポリシーのキャッシュキーはこのコンポーネント導入前とバイト単位で不変。非空だが `generatorVersion` が未指定の場合は 6 番目のスロットに `-` プレースホルダを入れ、両者が位置的に衝突しないようにする。ワイヤプロトコルの一部ではなく内部のキャッシュ分割専用の値。
+- **`generatorVersion`(6 番目・任意)と `policyFingerprint`(7 番目・任意)がキーを拡張する**: `cacheKey = "kohaku:0.2:<intentHash>:<dataVersion>:<catalogFingerprint>[:<generatorVersion>][:<policyFingerprint>]"`。`generatorVersion` は呼び出し側が手動で上げる区切り(後述の few-shot / 出力言語 / design-system 節)。`policyFingerprint`(`packages/composer/src/context.ts` の `policyFingerprint`)は `ComposePolicy.outputLanguage` / `designSystem`(`tokens`・`guidelines`・`enforceTokenColors`、設定時は design kit、`enforceKitClasses` は明示的に `false` のときのみ) / `fewShot.id` / `selectComponents.id` / `refConstraint`(`"validate"` 指定時のみ) / `effort`(設定時のみ) / `ComposeContext.llmByTier` のモデルのうち基底 `llm` と実際に異なるものの識別 / tier ゲート(`allowL2` が `true` または `routeTier` が設定されているときのみ。`routeTier` は `id` で識別。SPEC CMP-DET-002、判断 #70)から**導出**する保険的な値(canonical JSON → sha256 先頭 16 hex)で、呼び出し側が手動の `generatorVersion` 更新を忘れてもキャッシュを自動で分離する。これらがいずれも既定値のままなら空文字(= 未指定と同義)になり、それらに触れないポリシーのキャッシュキーはこのコンポーネント導入前とバイト単位で不変。非空だが `generatorVersion` が未指定の場合は 6 番目のスロットに `-` プレースホルダを入れ、両者が位置的に衝突しないようにする。ワイヤプロトコルの一部ではなく内部のキャッシュ分割専用の値。
 
 ### 4.3 SpecPatch(差分モデル)
 

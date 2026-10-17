@@ -38,6 +38,6 @@ describe.skipIf(backend.mode === "skip")("storage-redis contract", () => {
         },
       };
     },
-    { clock: "real", requirePaging: true },
+    { clock: "real", requirePaging: true, requirePutPromotionStates: true, requireDeleteFixation: true },
   );
 });

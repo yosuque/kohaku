@@ -15,7 +15,7 @@
 | **UI Spec** | UI の構造とセマンティクスを記述する宣言的 JSON。コードではなくデータ |
 | **Surface** | 入力受付と描画のホスト(web / chat / mcp-app / …) |
 | **Intent(正規化 Intent)** | 自然言語と GUI 操作を同一表現に正規化したもの。キャッシュキーの源泉。ワイヤ名は `CanonicalIntent`(§6.1) |
-| **Intent catalog** | アプリケーションが宣言する登録済み Intent 定義(正準名・param スキーマ・query 写像)の集合 — 下記の **Catalog**(UI *部品* の集合)とは別概念。参照実装は `IntentCatalog`(`apps/sample-api/src/intents/catalog.ts`) |
+| **Intent catalog** | アプリケーションが宣言する登録済み Intent 定義(正準名・param スキーマ・query 写像)の集合 — 下記の **Catalog**(UI *部品* の集合)とは別概念。参照実装は `IntentCatalog`(`packages/semantic-llm/src/catalog.ts`) |
 | **Catalog** | 型付き UI 部品(ComponentDefinition)の集合。federated にマージされる(§3) |
 | **Binding** | `query://` URI による参照渡しデータ解決 |
 | **Lineage** | View(なぜこの画面が出たか)と Component(部品来歴)の監査記録 |

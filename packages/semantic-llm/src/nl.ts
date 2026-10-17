@@ -51,7 +51,7 @@ export async function normalizeNlQuery(
     );
   }
   const names = catalog.names();
-  if (names.length === 0) throw new SemanticNormalizeError(input.text);
+  if (names.length === 0) throw new SemanticNormalizeError(input.text, "the intent catalog is empty");
   const outputSchema = z.object({
     intent: z.enum(names as [string, ...string[]]),
     params: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),

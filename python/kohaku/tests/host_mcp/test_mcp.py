@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 
+from kohaku.host_core import ACTION_GATE_UNAVAILABLE_MESSAGE
 from kohaku.host_mcp import (
     CAPABILITY_META_KEY,
     INITIAL_DATA_META_KEY,
@@ -1516,6 +1517,134 @@ class TestGovernedActions:
 
         asyncio.run(run())
 
+    def test_gate_that_cannot_decide_is_audited_as_a_denial(self, tmp_path: Path) -> None:
+        """ActionGate.check raising (here the ApprovalPort, consulted for tier "approve") is a fail-closed
+        denial: the tool error carries the fixed ACTION_GATE_UNAVAILABLE_MESSAGE, the underlying error goes
+        to on_error, exactly one action.denied is recorded with the descriptor's tier, and the write never
+        runs (ACT-APR-001; the REST route's gate-unavailable counterpart)."""
+
+        async def run() -> None:
+            denied: list[Any] = []
+            seen: list[McpErrorInfo] = []
+
+            class Recorder:
+                async def invoked(self, **kwargs: Any) -> None:
+                    pass
+
+                async def denied(self, **kwargs: Any) -> None:
+                    denied.append(kwargs)
+
+                async def approval_requested(self, **kwargs: Any) -> None:
+                    pass
+
+                async def approved(self, **kwargs: Any) -> None:
+                    pass
+
+            class BrokenApprovals:
+                async def verify_approval(self, *args: Any, **kwargs: Any) -> Any:
+                    raise RuntimeError("approval backend down")
+
+            class ApproveTierDomain:
+                def __init__(self) -> None:
+                    self.invocations: list[tuple[str, Any]] = []
+
+                async def list_operations(self) -> list[Any]:
+                    return [OperationDescriptor(name="wire", description="d", tier="approve")]
+
+                async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                    self.invocations.append((op, args))
+                    return {"ok": True}
+
+            domain = ApproveTierDomain()
+            deps = _deps(
+                tmp_path,
+                domain=domain,
+                approvals=BrokenApprovals(),
+                action_audit_recorder=Recorder(),
+                on_error=seen.append,
+            )
+            async with connect(deps, _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {
+                        "action": "wire",
+                        "payload": {"amount": 1},
+                        "capability": "cap:wire",
+                        "approval": "some-token",
+                    },
+                )
+                assert result.is_error is True
+                assert result.content[0].text == ACTION_GATE_UNAVAILABLE_MESSAGE  # type: ignore[union-attr]
+                assert domain.invocations == []
+                assert len(denied) == 1
+                assert denied[0]["action"] == "wire"
+                assert denied[0]["tier"] == "approve"
+                assert denied[0]["reason"] == ACTION_GATE_UNAVAILABLE_MESSAGE
+                assert denied[0]["payload_hash"].startswith("sha256:")
+                assert denied[0]["principal"].id == "mcp-user"
+                assert any(info.endpoint == "kohaku_action" for info in seen)
+
+        asyncio.run(run())
+
+    def test_operation_index_that_cannot_be_read_is_audited_as_a_denial(
+        self, tmp_path: Path
+    ) -> None:
+        """A rejected operation index (list_operations() raising) is a fail-closed denial for the call and
+        is audited as action.denied with tier "auto" (the descriptor is unreadable), symmetric with the gate
+        failing (ACT-APR-001)."""
+
+        async def run() -> None:
+            denied: list[Any] = []
+            seen: list[McpErrorInfo] = []
+
+            class Recorder:
+                async def invoked(self, **kwargs: Any) -> None:
+                    pass
+
+                async def denied(self, **kwargs: Any) -> None:
+                    denied.append(kwargs)
+
+                async def approval_requested(self, **kwargs: Any) -> None:
+                    pass
+
+                async def approved(self, **kwargs: Any) -> None:
+                    pass
+
+            class UnreadableIndexDomain:
+                def __init__(self) -> None:
+                    self.invocations: list[tuple[str, Any]] = []
+
+                async def list_operations(self) -> list[Any]:
+                    raise RuntimeError("operation listing down")
+
+                async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                    self.invocations.append((op, args))
+                    return {"ok": True}
+
+            domain = UnreadableIndexDomain()
+            deps = _deps(
+                tmp_path,
+                domain=domain,
+                action_audit_recorder=Recorder(),
+                on_error=seen.append,
+            )
+            async with connect(deps, _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": {"note": "x"}, "capability": "cap:annotate"},
+                )
+                assert result.is_error is True
+                assert result.content[0].text == "operation index unavailable"  # type: ignore[union-attr]
+                assert domain.invocations == []
+                assert len(denied) == 1
+                assert denied[0]["action"] == "annotate"
+                assert denied[0]["tier"] == "auto"
+                assert denied[0]["reason"] == ACTION_GATE_UNAVAILABLE_MESSAGE
+                assert denied[0]["principal"].id == "mcp-user"
+                assert any(info.endpoint == "kohaku_action.operationIndex" for info in seen)
+
+        asyncio.run(run())
+
     def test_reports_an_invalid_params_schema_through_on_error_at_attach(
         self, tmp_path: Path
     ) -> None:
@@ -1744,7 +1873,7 @@ def _nested_object(depth: int) -> dict[str, Any]:
 class TestEventActionPayloadDepthCap:
     """kohaku_event's payload / intent.params and kohaku_action's payload are all capped at
     MAX_JSON_OBJECT_DEPTH (32) — TS validates the same fields via JsonObjectSchema at the SDK's own
-    input-schema layer; Python has no such layer, so server.py's _json_depth_ok enforces it in-handler."""
+    input-schema layer; Python has no such layer, so kohaku.spec.json_depth_ok enforces it in-handler."""
 
     def test_event_payload_over_32_is_rejected(self, tmp_path: Path) -> None:
         async def run() -> None:
@@ -1815,7 +1944,7 @@ class TestEventActionPayloadDepthCap:
         """A depth well past MAX_JSON_OBJECT_DEPTH (32) but still one the reference mcp Python client SDK can
         itself serialize (its own pydantic-core model_dump refuses a payload nested much past ~250-300 levels
         with a ValueError("Circular reference detected (depth exceeded)") of its own -- probed directly, not
-        asserted here, since it is the client's behavior, not this package's). server.py's _json_depth_ok
+        asserted here, since it is the client's behavior, not this package's). kohaku.spec.json_depth_ok
         bounds its own recursion to MAX_JSON_OBJECT_DEPTH + 1 stack frames regardless of the input's actual
         depth (it stops descending the instant depth exceeds the limit), so -- unlike TS's pre-fix
         JsonObjectSchema, which let zod recurse the full depth before ever checking it -- this was never at
@@ -1854,13 +1983,13 @@ class TestEventActionPayloadDepthCap:
 
 
 def test_json_depth_ok_bounds_its_own_recursion() -> None:
-    """Direct, transport-independent pin on server.py's _json_depth_ok at the original report's depths (5000 /
+    """Direct, transport-independent pin on kohaku.spec.json_depth_ok at the original report's depths (5000 /
     100000): it must return False (rejected) without raising, confirming its recursion truly stays bounded to
     MAX_JSON_OBJECT_DEPTH + 1 stack frames no matter how deep the input actually is."""
-    from kohaku.host_mcp.server import MAX_JSON_OBJECT_DEPTH, _json_depth_ok
+    from kohaku.spec import MAX_JSON_OBJECT_DEPTH, json_depth_ok
 
     for depth in (5000, 100_000):
-        assert _json_depth_ok(_nested_object(depth), MAX_JSON_OBJECT_DEPTH) is False
+        assert json_depth_ok(_nested_object(depth), MAX_JSON_OBJECT_DEPTH) is False
 
 
 def test_no_lingering_script_marker_regex() -> None:

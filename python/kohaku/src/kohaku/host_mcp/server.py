@@ -29,6 +29,7 @@ from kohaku.composer import (
 )
 from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
+    ACTION_GATE_UNAVAILABLE_MESSAGE,
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
@@ -49,6 +50,7 @@ from kohaku.host_core import (
     parse_invokable_ref,
     parse_trace_context,
     record_action_gate_result,
+    record_action_gate_unavailable_denial,
     record_undeclared_action_denial,
     to_jsonable,
 )
@@ -66,6 +68,7 @@ from kohaku.host_core import record_view_fallback as _host_core_record_view_fall
 from kohaku.host_core import resolve_intent as _host_core_resolve_intent
 from kohaku.host_core import start_operation_index_validation as _host_core_start_index_validation
 from kohaku.spec import (
+    MAX_JSON_OBJECT_DEPTH,
     ActionParamIssue,
     ActionParamsSchemaError,
     AuthzPort,
@@ -79,6 +82,7 @@ from kohaku.spec import (
     VerifyRequest,
     canonical_stringify,
     enumerate_bind_variants,
+    json_depth_ok,
 )
 
 from . import initial_data as _initial_data
@@ -128,34 +132,13 @@ _ANONYMOUS = Principal(id="mcp-user", roles=["user"])
 # (packages/host-mcp-apps/src/server.ts).
 MAX_ACTION_PAYLOAD_BYTES = 64 * 1024
 
-# Upper bound on a JsonObject's nesting depth (the object itself = depth 1). Mirrors
-# packages/spec-core/src/schema/json.ts's JsonObjectSchema depth cap (also mirrored locally by
-# kohaku.host_rest.bodies' own MAX_JSON_OBJECT_DEPTH / _json_depth_ok — duplicated here rather than imported,
-# since host_rest and host_mcp are independent siblings in the import-linter layer contract, same rationale as
-# this module's local ViewRecorderProtocol). Guards the recursive canonical-JSON serialization (intent-hash
-# computation) and lineage persistence downstream of `kohaku_event`'s `payload` / `intent.params` and
-# `kohaku_action`'s `payload` against a pathologically deep but otherwise well-formed payload. On TS, the
-# same-named fields are validated by JsonObjectSchema at the SDK's own input-schema layer, before the handler
-# ever runs; the Python mcp SDK's tool schemas are JSON Schema hints only (no runtime validator wired in), so
-# this is enforced inside each handler instead.
-MAX_JSON_OBJECT_DEPTH = 32
-
-
-def _json_depth_ok(value: Any, limit: int = MAX_JSON_OBJECT_DEPTH, depth: int = 1) -> bool:
-    """True while `value`'s nesting stays within `limit` (the object/array itself = depth 1). Only descending
-    into a dict/list counts toward depth — a scalar leaf never does, since it cannot nest any further. Mirrors
-    spec-core/schema/json.ts's exceedsMaxJsonDepth (inverted: True = not exceeded) and
-    kohaku.host_rest.bodies._json_depth_ok (structurally identical; see MAX_JSON_OBJECT_DEPTH's doc comment
-    above for why this module carries its own copy)."""
-    if isinstance(value, dict):
-        if depth > limit:
-            return False
-        return all(_json_depth_ok(v, limit, depth + 1) for v in value.values())
-    if isinstance(value, list):
-        if depth > limit:
-            return False
-        return all(_json_depth_ok(v, limit, depth + 1) for v in value)
-    return True
+# The JsonObject nesting-depth cap (`MAX_JSON_OBJECT_DEPTH`) and its checker (`json_depth_ok`) come from
+# kohaku.spec, shared with host_rest's body parsing. They guard the recursive canonical-JSON serialization
+# (intent-hash computation) and lineage persistence downstream of `kohaku_event`'s `payload` /
+# `intent.params` and `kohaku_action`'s `payload` against a pathologically deep but otherwise well-formed
+# payload. On TS, the same-named fields are validated by JsonObjectSchema at the SDK's own input-schema layer,
+# before the handler ever runs; the Python mcp SDK's tool schemas are JSON Schema hints only (no runtime
+# validator wired in), so this is enforced inside each handler instead.
 
 
 # The client-visible message for an untyped tool failure (an exception _safe_tool catches that no explicit
@@ -981,7 +964,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # SDK's own input-schema layer, before the handler ever runs, the same way kohaku_action's
             # payload already is) — the Python mcp SDK's tool schemas are JSON Schema hints only (no runtime
             # validator wired in), so the depth cap is enforced here instead.
-            if not _json_depth_ok(intent_params) or not _json_depth_ok(payload):
+            if not json_depth_ok(intent_params) or not json_depth_ok(payload):
                 return _tool_error(
                     f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})"
                 )
@@ -1090,7 +1073,7 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # Mirrors TS's JsonObjectSchema on kohaku_action's payload (validated there at the SDK's own
             # input-schema layer, before the handler ever runs) — the Python mcp SDK's tool schemas are JSON
             # Schema hints only (no runtime validator wired in), so the depth cap is enforced here instead.
-            if not _json_depth_ok(payload):
+            if not json_depth_ok(payload):
                 return _tool_error(
                     f"payload nesting exceeds the maximum depth ({MAX_JSON_OBJECT_DEPTH})"
                 )
@@ -1112,10 +1095,24 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # rather than let through ungated (fail-closed; ACT-PRM-001, MCPAPP-ACT-001). A rejected
             # operation index (list_operations() raising) is likewise fail-closed for this call, and a declared
             # operation whose paramsSchema failed validation is fail-closed for that operation alone.
+            # The audit context is built once for every denial site below (this profile resolves no tenant).
+            # A gate that cannot decide at all -- the operation index rejecting, or the gate / ApprovalPort
+            # raising -- is audited as `action.denied` through host_core's
+            # record_action_gate_unavailable_denial (ACT-APR-001), REST's `_gate_unavailable` counterpart.
+            audit_context = ActionAuditContext(
+                recorder=deps.action_audit_recorder,
+                action=action,
+                payload=payload,
+                principal=resolved_principal,
+                tenant=None,
+                correlation_id=_correlation_id_of(ctx),
+                report=lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
+            )
             try:
                 index = await _operation_index()
             except Exception as exc:  # noqa: BLE001 — fail-closed for this call, reported below
                 await _report_mcp_error(deps, f"{prefix}_action.operationIndex", exc)
+                await record_action_gate_unavailable_denial(audit_context)
                 return _tool_error("operation index unavailable")
             entry = index.get(action)
             if entry is not None and entry.schema_error is not None:
@@ -1124,29 +1121,28 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 await _report_mcp_error(deps, f"{prefix}_action.operationIndex", entry.schema_error)
                 return _tool_error("action parameter schema unavailable")
             if entry is None:
-                await record_undeclared_action_denial(
-                    ActionAuditContext(
-                        recorder=deps.action_audit_recorder,
-                        action=action,
+                await record_undeclared_action_denial(audit_context)
+                return _tool_error(f"capability denied: {UNDECLARED_ACTION_MESSAGE}")
+            try:
+                gate_result = await _action_gate.check(
+                    ActionGateRequest(
+                        descriptor=entry.descriptor,
+                        params_schema=entry.params_schema,
                         payload=payload,
-                        principal=resolved_principal,
+                        confirmed=confirmed,
+                        approval=approval,
+                        requester_id=resolved_principal.id,
                         tenant=None,
-                        correlation_id=_correlation_id_of(ctx),
-                        report=lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
                     )
                 )
-                return _tool_error(f"capability denied: {UNDECLARED_ACTION_MESSAGE}")
-            gate_result = await _action_gate.check(
-                ActionGateRequest(
-                    descriptor=entry.descriptor,
-                    params_schema=entry.params_schema,
-                    payload=payload,
-                    confirmed=confirmed,
-                    approval=approval,
-                    requester_id=resolved_principal.id,
-                    tenant=None,
+            except Exception as exc:  # noqa: BLE001 — the gate could not decide: a fail-closed denial
+                # E.g. the ApprovalPort raised: a denial, never an unhandled failure that skips the audit
+                # trail (REST's `_gate_unavailable` counterpart).
+                await _report_mcp_error(deps, f"{prefix}_action", exc)
+                await record_action_gate_unavailable_denial(
+                    audit_context, tier=entry.descriptor.tier or "auto"
                 )
-            )
+                return _tool_error(ACTION_GATE_UNAVAILABLE_MESSAGE)
             gated = await _handle_action_gate_result(
                 gate_result,
                 action=action,

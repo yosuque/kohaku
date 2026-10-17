@@ -86,6 +86,9 @@ export interface ComposeResult {
   trace: ComposeTrace;
 }
 
+/** What `FixedSpecSource.lookup` resolves to (an L0 template, a template factory, or null for "no fixed Spec"). */
+type FixedSpecLookup = Awaited<ReturnType<FixedSpecSource["lookup"]>>;
+
 /**
  * The preparation result common to compose / composeStream.
  * Completes the normalized Intent, resolved references, cacheKey, and cache lookup, and passes them to the generation stage (runGeneration).
@@ -116,7 +119,7 @@ export interface PreparedCompose {
    * per compose regardless of how many call sites need the answer. Lazy: a cache hit never calls this, so
    * that path pays nothing extra for it.
    */
-  getFixedSpec(): Promise<Awaited<ReturnType<FixedSpecSource["lookup"]>>>;
+  getFixedSpec(): Promise<FixedSpecLookup>;
   /**
    * Memoized L1 generation-schema builder (`buildL1GenerationSchema(ctx, intent, refs)` — depends only on
    * values already fixed by the time prepareCompose returns). composeStream's provisional-patch decode
@@ -263,8 +266,8 @@ export async function prepareCompose(
   // Lazily memoized so a cache hit / L0 short-circuit never pays for either: both are plain closures over
   // the already-resolved ctx/intent/refs/policy above, queried at most once no matter how many call sites
   // (composeStream's fast-path checks, generateSpec's tryFixedSpec, generateL1) need the answer.
-  let fixedSpecCache: Promise<Awaited<ReturnType<FixedSpecSource["lookup"]>>> | undefined;
-  const getFixedSpec = (): Promise<Awaited<ReturnType<FixedSpecSource["lookup"]>>> =>
+  let fixedSpecCache: Promise<FixedSpecLookup> | undefined;
+  const getFixedSpec = (): Promise<FixedSpecLookup> =>
     (fixedSpecCache ??= policy.fixedSpecs?.lookup(intent) ?? Promise.resolve(null));
 
   let l1SchemaCache: ReturnType<typeof buildL1GenerationSchema> | undefined;

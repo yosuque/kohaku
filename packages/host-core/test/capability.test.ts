@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
   DEFAULT_CAPABILITY_TTL_SECONDS,
+  issueCapabilityForRefs,
   issueCapabilityForSpec,
   issueSpecCapabilitySafely,
   verifyCapabilitySafely,
@@ -137,6 +138,59 @@ describe("issueCapabilityForSpec", () => {
     expect(err.action).toBe("sales.updateTarget");
     expect(err.name).toBe("WriteScopeDroppedError");
     expect(err.message).toContain("sales.updateTarget");
+  });
+});
+
+describe("issueCapabilityForRefs", () => {
+  function recordingAuthz() {
+    const issueCapability = vi.fn(
+      async (_p: Principal, _s: Scope[], _o?: { ttlSeconds?: number }) => "refs-token",
+    );
+    const authz: AuthzPort = {
+      issueCapability,
+      async verify() {
+        return { ok: true, principal: PRINCIPAL };
+      },
+    };
+    return { authz, issueCapability };
+  }
+
+  it("issues one read scope per distinct ref (duplicates collapse) and returns the token", async () => {
+    const { authz, issueCapability } = recordingAuthz();
+    const token = await issueCapabilityForRefs(authz, PRINCIPAL, [
+      "query://sales/trend?metric=revenue",
+      "query://sales/summary?fy=2026",
+      "query://sales/trend?metric=revenue",
+    ]);
+    expect(token).toBe("refs-token");
+    expect(issueCapability).toHaveBeenCalledTimes(1);
+    const [principalArg, scopes] = issueCapability.mock.calls[0]!;
+    expect(principalArg).toBe(PRINCIPAL);
+    expect(scopes).toEqual([
+      { kind: "read", ref: "query://sales/trend?metric=revenue" },
+      { kind: "read", ref: "query://sales/summary?fy=2026" },
+    ]);
+  });
+
+  it("never issues a write scope, whatever the ref looks like", async () => {
+    const { authz, issueCapability } = recordingAuthz();
+    await issueCapabilityForRefs(authz, PRINCIPAL, ["sales.updateTarget", "query://sales/summary"]);
+    const [, scopes] = issueCapability.mock.calls[0]!;
+    expect(scopes.every((s) => s.kind === "read")).toBe(true);
+  });
+
+  it("passes an explicit ttl through to authz.issueCapability, and defaults to the shared TTL", async () => {
+    const { authz, issueCapability } = recordingAuthz();
+    await issueCapabilityForRefs(authz, PRINCIPAL, ["query://sales/summary"], 42);
+    await issueCapabilityForRefs(authz, PRINCIPAL, ["query://sales/summary"]);
+    expect(issueCapability.mock.calls[0]![2]).toEqual({ ttlSeconds: 42 });
+    expect(issueCapability.mock.calls[1]![2]).toEqual({ ttlSeconds: DEFAULT_CAPABILITY_TTL_SECONDS });
+  });
+
+  it("with no refs issues an empty scope set (a capability that verifies for nothing)", async () => {
+    const { authz, issueCapability } = recordingAuthz();
+    await issueCapabilityForRefs(authz, PRINCIPAL, []);
+    expect(issueCapability.mock.calls[0]![1]).toEqual([]);
   });
 });
 

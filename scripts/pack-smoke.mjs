@@ -1116,7 +1116,26 @@ function checkMcpRendererBundle(packages, tmpRoot) {
   if (!rendererHtml.stdout.includes('<meta name="kohaku-renderer" content="core"')) {
     fail('@kohaku-ui/mcp-renderer: packed dist/renderer.html is missing the <meta name="kohaku-renderer" content="core"> marker');
   }
-  log(`  packed dist/renderer.html is a real build (${rendererHtmlBytes} bytes > ${MCP_RENDERER_HTML_MIN_BYTES}, core marker present)`);
+  // The remaining two assertions mirror packages/mcp-renderer/test/built-html.test.ts, which is skipped
+  // whenever dist/renderer.html is absent (a plain `pnpm test` never builds it, and CI does not build it
+  // before testing), so this is the only place in CI that actually checks the built file.
+  // The #kohaku-snapshot slot is what kohaku_render_snapshot fills in; without it the snapshot tool
+  // has nothing to replace.
+  if (!rendererHtml.stdout.includes('<script id="kohaku-snapshot" type="application/json">null</script>')) {
+    fail(
+      '@kohaku-ui/mcp-renderer: packed dist/renderer.html is missing the <script id="kohaku-snapshot" type="application/json">null</script> slot that kohaku_render_snapshot fills in',
+    );
+  }
+  // Single-file build: any external <script src> / <link href> would be fetched from inside the MCP host's
+  // sandboxed iframe, which has no network or base URL to resolve it against.
+  if (/<script[^>]*\ssrc=/i.test(rendererHtml.stdout) || /<link[^>]*\shref=/i.test(rendererHtml.stdout)) {
+    fail(
+      "@kohaku-ui/mcp-renderer: packed dist/renderer.html references an external <script src> or <link href> -- it must be a fully self-contained single-file build",
+    );
+  }
+  log(
+    `  packed dist/renderer.html is a real build (${rendererHtmlBytes} bytes > ${MCP_RENDERER_HTML_MIN_BYTES}, core marker and snapshot slot present, no external script/link)`,
+  );
 
   // --- "." needs zero dependencies: a standalone install of only this package, no peers at all ---
   const localOverrides = Object.fromEntries(packages.map((p) => [p.packedName, `file:${p.tarball}`]));

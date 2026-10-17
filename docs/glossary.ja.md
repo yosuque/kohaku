@@ -28,6 +28,8 @@
 
 **固定化(fixation)** — 頻出かつ構造が安定した L1 Intent を L0 に昇格させることです。構造が固定され、以後 LLM を一切通らなくなる一方、データは参照渡しのまま最新に保たれます。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative) を参照してください。
 
+**固定化の鮮度(fixation freshness)** — 固定化された Spec を配信する直前に毎回行う陳腐化の検査です。構造を固定したあとにカタログや Intent のクエリ対応が変わっている可能性があるためです。結果は 3 つあります。**fresh**: カタログの fingerprint が一致するので、固定した構造を再検証せずにそのまま配信します。**revalidated**: fingerprint は違うものの、固定した構造が現在のカタログに対して引き続き検証を通るので、配信したうえで現在の fingerprint を保存し、次回に備えます。**stale**: 検証を通らなくなった、または解決される `$ref` の URI 集合が Intent のものと食い違うので、配信せず、自己修復として固定化を取り除き、通常の compose にフォールバックします。この除去は、system を actor、理由を `stale` として `intent.unfixated` の Lineage イベントに記録されます。人が固定化を解除する(*unfixate*)ときも同じイベント型で、actor が承認者になります。[SPEC §8](../spec/SPEC.ja.md#8-昇格と-lineage-normative) を参照してください。
+
 **`generatorVersion`** — Spec キャッシュキーの末尾に付く任意の要素で、プロンプトの改訂やモデルの変更をまたいで生成物を世代ごとに分けます。これを上げずにプロンプトやモデルだけを変えると、新しい出力が旧世代用のキャッシュに混ざってしまいます。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative)、[ユーザーガイド §7](user-guide.ja.md#7-運用の勘どころ) を参照してください。
 
 **統制された Action / action tier** — `DomainPort` の操作がゲートの背後に置いた書き込み操作(`action.invoke`)です。**action tier** は `"auto"`(ゲートなし。既定)、`"confirm"`(呼び出し側が `confirmed: true` を送る必要がある)、`"approve"`(先に第二の principal が承認トークンを発行する必要がある)のいずれかです。任意の `paramsSchema` が `DomainPort.invoke` を呼ぶ前にペイロードを検証し、すべての結果は `action.*` の lineage イベントに残ります。**この tier は L0 / L1 / L2(tier ladder) とは無関係**です。後者は Spec がどう作られたかを表し、書き込みがどう認可されるかは表しません。[SPEC §5](../spec/SPEC.ja.md#5-セキュリティ-normative)、[ユーザーガイド「統制された Action」](user-guide.ja.md#統制された-action-tierauto--confirm--approve) を参照してください。
@@ -51,6 +53,8 @@
 **Port(DomainPort / SemanticPort / AuthzPort / StoragePort)** — kohaku のフレームワーク境界をなす 4 つのインタフェースです。DomainPort はあなたのデータ/クエリ API で、どの製品も自分で書く唯一の Port です。SemanticPort は自然言語と GUI の入力を Intent に正規化します。AuthzPort は capability トークンを発行・検証します。StoragePort は Spec キャッシュ・lineage・昇格・固定化を保存します。[AGENTS.md](../AGENTS.md)、[ユーザーガイド §6 Step 0](user-guide.ja.md#step-0--llm-なしの-server-driven-ui) を参照してください。
 
 **昇格(promotion)** — L2 で生成された部品をレビューし、型付きスキーマを与えてカタログにネイティブな L1 部品として迎え入れることです。人間の承認が常に必要で、自動で昇格することはありません。[SPEC §1](../spec/SPEC.ja.md#1-概要と用語-normative) を参照してください。
+
+**昇格ステータス(promotion status)** — 部品が昇格ステートマシンのどこにいるかを表す値です(`packages/lineage/src/promotion/machine.ts` の `PromotionStatus`)。値は 11 個あります: `in_use`(未指名)、`candidate`(ポリシーまたは人が指名)、`judging`(judge が採点中)、`judge_failed`(judging がブロッキングの設定で judge が不合格にした)、`in_review`(人間のレビュー待ち)、`changes_requested`(レビュアーが差し戻した)、`approved`(人間が承認した)、`schema_proposed`(型付きスキーマの草案が付いた)、`published`(カタログに加わった)、`rejected`、`withdrawn`。`published`・`rejected`・`withdrawn` は終端で、以後のアクションを受け付けません。ただし `published` だけは、専用の `unpublish` アクションで `withdrawn` に移れます。`judge_failed` と `changes_requested` は終端ではなく、どちらの状態からも再び指名できます。`approved` を通らずに `published` へ届く経路はなく、これが人間の承認という不変条件(LIN-PRM-001)です。[SPEC §8](../spec/SPEC.ja.md#8-昇格と-lineage-normative) を参照してください。
 
 **provenance** — Spec のエンベロープのうち、その画面がなぜそう見えるかを記録する部分です。tier・cache の状態・モデル・`generatorVersion`・デザインキットの識別情報、発生した fallback や降格が含まれます。[SPEC §2.1](../spec/SPEC.ja.md#21-エンベロープ) を参照してください。
 

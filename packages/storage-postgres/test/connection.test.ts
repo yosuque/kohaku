@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertLineageSchemaCurrent, createPostgresPool } from "../src/connection.js";
+import { assertLineageSchemaCurrent, createPostgresPool, MIGRATION_LOCK_WAIT_MS } from "../src/connection.js";
 import { createPostgresStoragePort } from "../src/postgres-storage-port.js";
 
 // A fully mocked `pg` module: `createPostgresPool` is the single place the owned-`Pool` construction
@@ -199,6 +199,69 @@ describe("createPostgresPool: ready() migration transaction", () => {
     await expect(handle.ready()).resolves.toBeUndefined();
     expect(statements.filter((sql) => sql === "BEGIN")).toHaveLength(2); // the raced attempt, then the retry
     expect(connect).toHaveBeenCalledTimes(1); // both on the connection that holds the migration lock
+  });
+
+  describe("migration advisory lock wait", () => {
+    /** A client whose every `pg_try_advisory_lock` answers `locked: false`, as when another instance holds it. */
+    function lockedClient() {
+      const statements: string[] = [];
+      const query = vi.fn(async (sql: string) => {
+        statements.push(sql);
+        if (sql.includes("pg_try_advisory_lock")) return { rows: [{ locked: false }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      });
+      return { client: { query, release: vi.fn() }, statements };
+    }
+
+    it("rejects once MIGRATION_LOCK_WAIT_MS has passed, naming the lock key and the elapsed time", async () => {
+      vi.useFakeTimers();
+      const { client, statements } = lockedClient();
+      const connect = vi.fn().mockResolvedValue(client);
+      const handle = createPostgresPool({
+        pool: injectedPool({ connect, query: client.query }),
+        schema: "lock_wait_test",
+      });
+
+      let settled = false;
+      const outcome = expect(handle.ready()).rejects.toThrow(
+        /timed out after \d+ ms waiting for the migration advisory lock "kohaku:schema:lock_wait_test"/,
+      );
+      void outcome.finally(() => {
+        settled = true;
+      });
+
+      // Still polling one poll interval before the bound: no rejection yet.
+      await vi.advanceTimersByTimeAsync(MIGRATION_LOCK_WAIT_MS - 250);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(500);
+      await outcome;
+
+      // The migration never started, and the connection went back to the pool (no unlock: it was never taken).
+      expect(statements).not.toContain("BEGIN");
+      expect(statements.some((sql) => sql.includes("pg_advisory_unlock"))).toBe(false);
+      expect(client.release).toHaveBeenCalledTimes(1);
+      expect(statements.filter((sql) => sql.includes("pg_try_advisory_lock")).length).toBeGreaterThan(1);
+    });
+
+    it("is not memoised: the timeout enters the ready() retry backoff like any failed migration", async () => {
+      vi.useFakeTimers();
+      const { client } = lockedClient();
+      const connect = vi.fn().mockResolvedValue(client);
+      const handle = createPostgresPool({
+        pool: injectedPool({ connect, query: client.query }),
+        schema: "lock_retry_test",
+      });
+
+      const first = expect(handle.ready()).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(MIGRATION_LOCK_WAIT_MS + 500);
+      await first;
+      expect(connect).toHaveBeenCalledTimes(1);
+
+      // Inside the 1 s backoff window the last error is returned without touching the database.
+      await expect(handle.ready()).rejects.toThrow(/timed out/);
+      expect(connect).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("retry backoff after a failed ready()", () => {

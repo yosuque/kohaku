@@ -131,9 +131,9 @@ describe("normalize (nl): error classification", () => {
       dataVersion: () => "v1",
       fallbackIntent: "sales.custom",
     });
-    await expect(port.normalize({ kind: "nl", text: "anything" }, CTX)).rejects.toBeInstanceOf(
-      SemanticNormalizeError,
-    );
+    const failure = await port.normalize({ kind: "nl", text: "anything" }, CTX).catch((e) => e);
+    expect(failure).toBeInstanceOf(SemanticNormalizeError);
+    expect((failure as Error).message).toBe("the intent catalog is empty");
     expect(llm.calls).toHaveLength(0);
   });
 

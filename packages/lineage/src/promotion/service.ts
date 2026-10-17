@@ -587,13 +587,17 @@ export function createPromotions(opts: {
     if (action.kind === "unpublish") return handleUnpublish(candidate, action, actor, tenant);
 
     // Every other action kind shares the same order: copy any action-carried data onto the candidate, record the
-    // audit event (if the action kind has one), then persist once at the end.
+    // audit event (if the action kind has one), then persist the snapshot (the state authority).
+    // Audit first, state second, deliberately: if the record throws the transition is not persisted and a retry
+    // re-runs the same action (at worst a duplicated audit event); if the order were reversed a lost
+    // `component.reviewed` could let a retried approve() publish without the human-approval evidence
+    // LIN-PRM-001 requires. handlePublish / unpublish / fixation differ (state first) because their audit
+    // records are fail-open and backfilled by reconcile; the generic path has no backfill.
     applyActionData(candidate, action);
     const event = auditEventFor(action, artifactId, actor);
     if (event != null) {
       await opts.lineage.record(event.type, event.payload, event.actor, tenant);
     }
-
     await store.persist(candidate, tenant);
     return candidate;
   }
@@ -721,7 +725,22 @@ export function createPromotions(opts: {
     const acknowledgedSuggestion = scope?.acknowledgedSuggestion === true;
     let candidate = await store.require(artifactId, tenant);
     if (candidate.status === "published") {
-      await opts.onPublish?.(publishArgs(candidate, tenant));
+      if (opts.onPublish != null) {
+        // Fail fast like handlePublish / handleUnpublish: a published snapshot without its draft or html is a
+        // state inconsistency, and publishArgs must never be handed a null (it would pass `undefined` on to
+        // the projection). reconcile, by contrast, skips-and-reports because it is a best-effort startup sweep.
+        if (candidate.draft == null) {
+          throw new Error(
+            `re-approve of a published artifact requires the persisted schema draft (artifact ${artifactId})`,
+          );
+        }
+        if (candidate.html == null) {
+          throw new Error(
+            `re-approve of a published artifact requires the artifact html (artifact ${artifactId})`,
+          );
+        }
+        await opts.onPublish(publishArgs(candidate, tenant));
+      }
       return candidate;
     }
     // in_use (not yet nominated), changes_requested (sent back for changes), and judge_failed (a blocking judge

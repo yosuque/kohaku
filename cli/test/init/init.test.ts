@@ -249,6 +249,66 @@ describe("initProject", () => {
     },
   );
 
+  it("server/main.ts drains gracefully on SIGINT / SIGTERM, and /api/health answers 503 once shutdown begins", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false }, noRun);
+    const main = readFileSync(join(out, "server/main.ts"), "utf8");
+    expect(main).toContain("const { app, setShuttingDown } = createApp({ llm });");
+    expect(main).toContain("const server = serve(");
+    expect(main).toContain('for (const signal of ["SIGINT", "SIGTERM"] as const)');
+    expect(main).toContain("process.once(signal");
+    // Readiness flips before the server stops accepting connections.
+    expect(main.indexOf("setShuttingDown(true)")).toBeLessThan(main.indexOf("server.close()"));
+    // The forced-exit timer must not keep a cleanly drained process alive.
+    expect(main).toMatch(/SHUTDOWN_GRACE_MS\)\.unref\(\)/);
+    expect(main).toContain("KOHAKU_SHUTDOWN_GRACE_MS");
+    // Published-package constraint: nothing from the monorepo's sample-api (or an unpublished helper) is imported.
+    expect(main).not.toContain("sample-api");
+    const app = readFileSync(join(out, "server/app.ts"), "utf8");
+    expect(app).toContain("let shuttingDown = false;");
+    expect(app).toContain('c.json({ ok: false, reason: "shutting down" }, 503)');
+    expect(app).toContain("setShuttingDown: (value: boolean) => {");
+    // The golden test only needs composeCtx, so the extra return field does not disturb it.
+    expect(readFileSync(join(out, "test/golden.test.ts"), "utf8")).toContain("createApp({ llm: new FakeLlm(");
+  });
+
+  it.skipIf(typeof nodeModule.stripTypeScriptTypes !== "function")(
+    "server/main.ts and server/app.ts parse as TypeScript",
+    async () => {
+      const out = join(tmp(), "app");
+      await initProject({ from: FIXTURE, out, install: false }, noRun);
+      for (const file of ["server/main.ts", "server/app.ts"]) {
+        expect(
+          () => nodeModule.stripTypeScriptTypes(readFileSync(join(out, file), "utf8")),
+          file,
+        ).not.toThrow();
+      }
+    },
+  );
+
+  it("both servers parse KOHAKU_SHUTDOWN_GRACE_MS as a positive integer and fall back to 10s otherwise", async () => {
+    const out = join(tmp(), "app");
+    await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
+    for (const file of ["server/main.ts", "server/mcp-http.ts"]) {
+      const source = readFileSync(join(out, file), "utf8");
+      // The snippet is plain JavaScript (no type annotations), so evaluate it as written against a fake process.env.
+      const start = source.indexOf("const graceEnv");
+      const end = source.indexOf("\n", source.indexOf("const SHUTDOWN_GRACE_MS"));
+      expect(start, file).toBeGreaterThan(-1);
+      const snippet = source.slice(start, end);
+      const graceFor = (value: string | undefined): number =>
+        new Function("process", `${snippet}\nreturn SHUTDOWN_GRACE_MS;`)({
+          env: value === undefined ? {} : { KOHAKU_SHUTDOWN_GRACE_MS: value },
+        }) as number;
+      expect(graceFor(undefined), file).toBe(10_000);
+      expect(graceFor("2500"), file).toBe(2500);
+      for (const bad of ["", "abc", "0", "-5"])
+        expect(graceFor(bad), `${file} ${JSON.stringify(bad)}`).toBe(10_000);
+      // Unparseable-as-a-whole values are not passed straight to setTimeout (which would fire immediately on NaN).
+      expect(source, file).not.toContain('Number(process.env["KOHAKU_SHUTDOWN_GRACE_MS"]');
+    }
+  });
+
   it(".env.example and .env both document NODE_ENV=production as a commented line", async () => {
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false }, noRun);
