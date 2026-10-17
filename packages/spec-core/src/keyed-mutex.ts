@@ -11,9 +11,9 @@ export type KeyedMutex = <T>(key: string, fn: () => Promise<T>) => Promise<T>;
  * Shared by every in-process (tenant, key) / (tenant, artifactId) / file-path serialization site across the
  * reference implementation: host-rest's promotion lock, the sample storage port's per-snapshot-file lock, and
  * the fixation lock both host profiles take through host-core's `withFixationLock` (keyed by
- * `(tenant, intentHash)`; the MCP profile never resolves a tenant) over a mutex each host owns. It only orders calls made *within this
- * process*; see `StoragePort`'s docstring (spec-core) for the cross-process concurrency contract this
- * mechanism sits on top of.
+ * `(tenant, intentHash)`; the MCP profile never resolves a tenant) over a mutex each host owns. It only orders
+ * calls made *within this process*; see `StoragePort`'s docstring (spec-core) for the cross-process concurrency
+ * contract this mechanism sits on top of.
  */
 export function createKeyedMutex(): KeyedMutex {
   const locks = new Map<string, Promise<void>>();

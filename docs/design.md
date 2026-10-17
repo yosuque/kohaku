@@ -574,12 +574,15 @@ host-mcp-apps consume it as thin adapters (mirroring how `renderer-core` is the 
 object (the fixation lookup, the self-heal API, an optional per-`(tenant, intentHash)` serializer, and an
 `onSelfHealError` callback) and host-core's `composeWithFixation` / `resolveFixatedResult` / `settleFixation`
 drive the fixation shortcut → staleness check → self-heal (fire-and-forget) → normal-compose-fallback sequence
-identically for both profiles. Both profiles wire `serialize` to the same `createKeyedMutex` (defined in
-`@kohaku-ui/spec-core` and re-exported by host-core for backward compatibility; the same mechanism host-rest's
-promotion lock and `@kohaku-ui/storage-memory`'s file-backed StoragePort per-file lock use):
-the REST profile's `withFixationLock` keys it by `(tenant, intentHash)` and resolves tenant, while the MCP
-profile keys it by `intentHash` alone and never resolves a tenant (so self-healing calls always carry
-`tenant: undefined`) — it still guards against the same fixate/unfixate/self-heal interleaving within its own
+identically for both profiles. Both profiles build that object through host-core's `createFixationDeliveryHost`,
+which wires `serialize` to a keyed mutex the host owns and keys the lock by `(tenant, intentHash)` (host-core's
+`withFixationLock`, the one key rule the hosts' own fixate/unfixate writes also take). The mutex is
+`createKeyedMutex` (defined in `@kohaku-ui/spec-core` and re-exported by host-core for backward compatibility; the
+same mechanism host-rest's promotion lock and `@kohaku-ui/storage-memory`'s file-backed StoragePort per-file lock
+use). host-core never creates one, so its lifetime is each host's own choice: the REST profile creates one per
+`createKohakuRoutes` app (resolving the tenant per request), while the MCP profile keeps one per `McpHostDeps`
+object and never resolves a tenant (so self-healing calls always carry `tenant: undefined` and the tenant part of
+the key is always empty) — both guard against the same fixate/unfixate/self-heal interleaving within their own
 process.
 `issueCapabilityForSpec` (default TTL 600s) and the `notifyHook` / `failOpen` observability building blocks are
 the other two shared pieces — see the `host-core` row in §3's package table for source files.

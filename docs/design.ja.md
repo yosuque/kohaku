@@ -571,12 +571,15 @@ approve 経路では `schema.propose` の直後に、lineage が提案された 
 `FixationDeliveryHost` オブジェクト(固定化ルックアップ・自己修復 API・任意の `(tenant, intentHash)` 単位の直列化・
 `onSelfHealError` コールバック)を渡すだけで、host-core の `composeWithFixation` / `resolveFixatedResult` /
 `settleFixation` が「固定化短絡 → 陳腐化判定 → 自己修復(fire-and-forget)→ 通常 compose へのフォールバック」の
-一連を両プロファイルで同一に駆動する。両プロファイルとも `serialize` を同じ `createKeyedMutex`
-(`@kohaku-ui/spec-core` で定義され、後方互換のため host-core が再エクスポートする。host-rest の昇格ロックや
-`@kohaku-ui/storage-memory` のファイル永続化 StoragePort のファイル単位ロックも使う同一実装)に配線する — REST プロファイルの
-`withFixationLock` は `(tenant, intentHash)` をキーにしテナントを解決するが、MCP プロファイルは `intentHash` 単独を
-キーにしテナントは一切解決しない(自己修復呼び出しは常に `tenant: undefined`)。それでも自身のプロセス内での
-fixate/unfixate/自己修復の競合は同様にガードする。`issueCapabilityForSpec`(デフォルト TTL 600 秒)と
+一連を両プロファイルで同一に駆動する。両プロファイルともこのオブジェクトを host-core の
+`createFixationDeliveryHost` で組み立てる。これは `serialize` をホストが所有するキー付きミューテックスに配線し、ロックを
+`(tenant, intentHash)` でキー付けする(host-core の `withFixationLock`。ホスト自身の fixate/unfixate の書き込みも同じ
+キー規則を使う)。ミューテックスは `createKeyedMutex`(`@kohaku-ui/spec-core` で定義され、後方互換のため host-core が
+再エクスポートする。host-rest の昇格ロックや `@kohaku-ui/storage-memory` のファイル永続化 StoragePort のファイル単位ロックも
+使う同一実装)。host-core はミューテックスを作らないので、寿命は各ホストの選択になる — REST プロファイルは
+`createKohakuRoutes` の app ごとに 1 つ作りリクエストごとにテナントを解決するが、MCP プロファイルは `McpHostDeps`
+オブジェクトごとに 1 つを保持しテナントは一切解決しない(自己修復呼び出しは常に `tenant: undefined` で、キーのテナント部分は
+常に空)。どちらも自身のプロセス内での fixate/unfixate/自己修復の競合を同様にガードする。`issueCapabilityForSpec`(デフォルト TTL 600 秒)と
 `notifyHook` / `failOpen` の観測ヘルパも同様に共有される — ソースファイルは §3 のパッケージ表の `host-core` 行を参照。
 `issueCapabilityForSpec` は任意で `IssueCapabilityOptions.allowedActions`(`DomainPort.listOperations()` が列挙する
 名前の `Set`)も受け取る: この集合に無いアクションの write スコープは発行前に落とされる(`onDroppedAction` が各ドロップ
