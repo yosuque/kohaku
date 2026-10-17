@@ -757,15 +757,10 @@ export function createPromotions(opts: {
     }
     if (candidate.status === "candidate") {
       candidate = await act(artifactId, { kind: "judge.start" }, reviewer, scope);
-      const verdict = await runJudge(candidate, tenant, draft);
-      candidate = await act(artifactId, { kind: "judge.result", verdict }, reviewer, scope);
     }
-    // Resumes a candidate persisted at "judging" (e.g. the process died between judge.start and judge.result):
-    // machine.ts's judging --judge.result--> in_review | judge_failed edge exists, but until this branch was
-    // added no if above matched "judging," so such a candidate fell straight through to the
-    // "did not reach published" guard below. A candidate that just transitioned candidate -> judging inside the
-    // block above is unaffected here: judge.result already advanced it to in_review/judge_failed by the time
-    // this runs, so this if's own condition is false for that path (no double-judge).
+    // judge.start always lands on "judging", so this one stage serves both a candidate that just started judging
+    // above and one persisted at "judging" (the process died between judge.start and judge.result: no verdict
+    // was recorded, so the judge is run now and judge.result resumes it in place).
     if (candidate.status === "judging") {
       const verdict = await runJudge(candidate, tenant, draft);
       candidate = await act(artifactId, { kind: "judge.result", verdict }, reviewer, scope);
