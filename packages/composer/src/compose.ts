@@ -21,7 +21,13 @@ import {
 } from "./assemble.js";
 import { notifyBudgetUsage } from "./budget.js";
 import { COMPOSER_ID } from "./constants.js";
-import type { ComposeContext, ComposeErrorContext, ComposePolicy, FixedSpecSource } from "./context.js";
+import type {
+  ComposeCachePolicy,
+  ComposeContext,
+  ComposeErrorContext,
+  ComposePolicy,
+  FixedSpecSource,
+} from "./context.js";
 import { resolveEntryContext } from "./context.js";
 import { ComposeError } from "./errors.js";
 import { buildFallbackSpec } from "./fallback.js";
@@ -301,7 +307,7 @@ export async function prepareCompose(
  */
 async function withCacheFailOpen<T>(
   ctx: ComposeContext,
-  policy: ComposePolicy,
+  policy: ComposeCachePolicy,
   errCtx: Omit<ComposeErrorContext, "phase">,
   fn: () => Promise<T>,
   fallback: T,
@@ -318,7 +324,7 @@ async function withCacheFailOpen<T>(
 /** Fail-open ctx.storage.getSpecCache (treats a failure as a cache miss); see withCacheFailOpen. */
 async function getSpecCacheSafely(
   ctx: ComposeContext,
-  policy: ComposePolicy,
+  policy: ComposeCachePolicy,
   traceBase: Pick<TraceBase, "input" | "intent" | "cacheKey" | "correlationId" | "traceContext">,
 ): Promise<UISpec | null> {
   return withCacheFailOpen(
