@@ -878,59 +878,43 @@ function registerActionTool(ctx: ToolContext): void {
           correlationId: requestId,
           report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
         };
-        let index: Awaited<ReturnType<typeof ctx.operationIndex>>;
-        try {
-          index = await ctx.operationIndex();
-        } catch (e) {
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId);
-          await hostCore.recordActionGateUnavailableDenial(auditContext);
-          return toolError("operation index unavailable");
-        }
-        const entry = index.get(action);
-        if (entry != null && entry.schemaError != null) {
-          // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
-          // this operation alone (REST's 500 counterpart), reported to the observability hook.
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError, requestId);
-          return toolError("action parameter schema unavailable");
-        }
-        if (entry == null) {
-          await hostCore.recordUndeclaredActionDenial({
+        // The sequence itself (operation index -> undeclared / schema checks -> unsafe-key outcome -> gate ->
+        // audit) is host-core's `runActionGate`, shared with REST; this keeps only the MCP wire mapping
+        // (design.md #62/#63; the REST profile's switch in packages/host-rest/src/routes/binding.ts is its
+        // counterpart): a plain or structured tool error per outcome, and `proceed` falls through to
+        // `domain.invoke`. The audit trail and the client-visible messages are host-core's too.
+        const outcome = await hostCore.runActionGate({
+          operationIndex: ctx.operationIndex,
+          gate: ctx.actionGate,
+          audit: auditContext,
+          undeclaredAudit: {
             ...auditContext,
             report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e, requestId),
-          });
-          return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
-        }
-        let gateResult: hostCore.ActionGateResult;
-        if (unsafePayloadKeys.length > 0) {
-          gateResult = { kind: "invalid", issues: unsafePayloadKeys };
-        } else {
-          try {
-            gateResult = await ctx.actionGate.check({
-              descriptor: entry.descriptor,
-              paramsSchema: entry.paramsSchema,
-              payload: payload as JsonObject,
-              confirmed,
-              approval,
-              requesterId: resolvedPrincipal.id,
-            });
-          } catch (e) {
+          },
+          confirmed,
+          approval,
+          unsafeKeyIssues: () => unsafePayloadKeys,
+          report: {
+            // The operation index could not be read.
+            indexFailure: (e) =>
+              reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId),
+            // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
+            // this operation alone (REST's 500 counterpart), reported to the observability hook.
+            schemaError: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId),
             // The gate could not decide (e.g. the ApprovalPort threw): a denial, never an unhandled failure
-            // that skips the audit trail (REST's `gateUnavailable` counterpart).
-            await reportMcpError(ctx.deps, `${ctx.prefix}_action`, e, requestId);
-            await hostCore.recordActionGateUnavailableDenial({
-              ...auditContext,
-              tier: entry.descriptor.tier ?? "auto",
-            });
-            return toolError(hostCore.ACTION_GATE_UNAVAILABLE_MESSAGE);
-          }
-        }
-        // Maps one `ActionGate.check` outcome onto the MCP tool result (design.md #62/#63; the REST profile's
-        // inline switch in packages/host-rest/src/routes/binding.ts is its wire-mapping counterpart). The audit
-        // trail and the client-visible messages are host-core's `recordActionGateResult`, shared with REST; this
-        // keeps only the structured tool-error mapping (`invalid` / `approvalRequired` / `denied`), and
-        // `proceed` falls through to `domain.invoke`.
-        const outcome = await hostCore.recordActionGateResult(gateResult, auditContext);
+            // that skips the audit trail (REST's 503 counterpart).
+            gateFailure: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action`, e, requestId),
+          },
+        });
         switch (outcome.kind) {
+          case "indexUnavailable":
+            return toolError("operation index unavailable");
+          case "schemaInvalid":
+            return toolError("action parameter schema unavailable");
+          case "undeclared":
+            return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
+          case "gateUnavailable":
+            return toolError(hostCore.ACTION_GATE_UNAVAILABLE_MESSAGE);
           case "invalid":
             return actionParamsInvalidToolError(outcome.issues);
           case "approvalRequired":
