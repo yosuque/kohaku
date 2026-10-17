@@ -183,6 +183,38 @@ describe("L2 prompt integration", () => {
     );
   });
 
+  /**
+   * `namespaces` is hand-synced with the utility classes (its ORDER is prompt bytes and fingerprint
+   * material, so it is deliberately not derived). This pins the sync as a set equality:
+   *
+   *   namespaces === { "k-" } ∪ { prefix(u) : u is a utility containing a dash } \ KNOWN_UNCOVERED
+   *
+   * where prefix(u) is `u` up to and including its LAST dash ("gap-1" -> "gap-", "flex-col" -> "flex-",
+   * "grid-cols-3" -> "grid-cols-"; a dash-less utility such as "flex", "hidden" or "border" has no
+   * prefix), and "k-" covers every `k-*` kit class (the classes, not the utilities).
+   *
+   * KNOWN_UNCOVERED records a gap on current code rather than a design choice: "tabular-nums" is a dashed
+   * utility but "tabular-" is not a namespace, so a misspelled `tabular-numz` is not caught by
+   * L2_UNKNOWN_CLASS. Adding the namespace changes the Design kit prompt bytes and the policy fingerprint
+   * (PROMPT_REVISION, the cross-language fixtures, Python), so it is left alone here; the last assertion
+   * fails once the gap is closed so the entry gets removed.
+   */
+  it("keeps the namespaces in sync with the utility class prefixes", () => {
+    const KNOWN_UNCOVERED = ["tabular-"];
+    const prefixes = new Set<string>(["k-"]);
+    for (const utility of DEFAULT_KIT_VOCABULARY.utilities) {
+      const lastDash = utility.lastIndexOf("-");
+      if (lastDash >= 0) prefixes.add(utility.slice(0, lastDash + 1));
+    }
+    for (const uncovered of KNOWN_UNCOVERED) prefixes.delete(uncovered);
+
+    expect([...DEFAULT_KIT_VOCABULARY.namespaces].sort()).toEqual([...prefixes].sort());
+    expect(DEFAULT_KIT_VOCABULARY.namespaces).toHaveLength(prefixes.size);
+    for (const uncovered of KNOWN_UNCOVERED) {
+      expect(DEFAULT_KIT_VOCABULARY.namespaces).not.toContain(uncovered);
+    }
+  });
+
   it("without a kit the Design kit section is absent; with a kit it follows the design-system section", () => {
     expect(buildL2Prompt({ ...args, designSystem: {} })).not.toContain("## Design kit");
     const prompt = buildL2Prompt({ ...args, designSystem: { kit: DEFAULT_KIT_VOCABULARY } });
