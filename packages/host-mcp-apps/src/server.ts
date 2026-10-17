@@ -733,21 +733,20 @@ function registerEventTool(ctx: ToolContext): void {
         const call = await beginCall(ctx, extra, "compose", locale);
         if ("isError" in call) return call;
         const session = mcpSession(locale, call.principal);
-        // Resolved through host-core's resolveIntent (the "intent" source), not a bare finalizeIntent, so a
-        // SemanticPort.validateIntent implementation gets a chance to reject an unknown canonical or invalid
-        // params in `current` too (mirroring the REST profile's /events fix for the same gap; safeTool's
-        // catch-all converts a thrown IntentValidationError into a structured tool error).
-        const { intent: current } = await hostCore.resolveIntent(
+        // Resolved through host-core's resolveGuiDelta (shared with the REST profile's /events): `current` goes
+        // through resolveIntent's "intent" source, not a bare finalizeIntent, so a SemanticPort.validateIntent
+        // implementation gets a chance to reject an unknown canonical or invalid params in `current` too
+        // (mirroring the REST profile's /events fix for the same gap; safeTool's catch-all converts a thrown
+        // IntentValidationError into a structured tool error), then the "gui" source yields the post-event
+        // Intent. Keeps the "gui" normalization behavior (and its session, including the attached principal)
+        // in one place rather than a local semantic.normalize copy.
+        const { current, intent: resolved } = await hostCore.resolveGuiDelta(
           ctx.deps.compose.semantic,
-          { kind: "intent", intent: { canonical: intent.canonical, params: intent.params as JsonObject } },
-          session,
-        );
-        // Intent resolution via host-core's resolveIntent (shared with the REST profile's /events GUI-delta
-        // site), rather than a local semantic.normalize copy — keeps the "gui" normalization behavior (and
-        // its session, including the attached principal) in one place.
-        const { intent: resolved } = await hostCore.resolveIntent(
-          ctx.deps.compose.semantic,
-          { kind: "gui", current, action: on, params: payload as JsonObject },
+          {
+            intent: { canonical: intent.canonical, params: intent.params as JsonObject },
+            on,
+            payload: payload as JsonObject,
+          },
           session,
         );
         // Record view.interacted symmetrically with the REST surface's /events (which records it before

@@ -111,18 +111,13 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
     let current: CanonicalIntent;
     let intent: CanonicalIntent;
     try {
-      // Resolved through host-core's resolveIntent (the "intent" source), not a bare finalizeIntent, so a
-      // SemanticPort.validateIntent implementation gets a chance to reject an unknown canonical or invalid
-      // params in `current` too — the same closed gap as body.intent on /compose.
-      ({ intent: current } = await hostCore.resolveIntent(
+      // host-core's resolveGuiDelta (shared with the MCP profile's kohaku_event): `current` goes through
+      // resolveIntent's "intent" source, not a bare finalizeIntent, so a SemanticPort.validateIntent
+      // implementation gets a chance to reject an unknown canonical or invalid params in `current` too — the
+      // same closed gap as body.intent on /compose — then the "gui" source yields the post-event Intent.
+      ({ current, intent } = await hostCore.resolveGuiDelta(
         deps.compose.semantic,
-        { kind: "intent", intent: body.intent },
-        session,
-      ));
-      // Intent resolution (host-core's resolveIntent, shared with the MCP profile's compose-tool nl/intent branch).
-      ({ intent } = await hostCore.resolveIntent(
-        deps.compose.semantic,
-        { kind: "gui", current, action: body.event.on, params: body.event.payload },
+        { intent: body.intent, on: body.event.on, payload: body.event.payload },
         session,
       ));
     } catch (e) {

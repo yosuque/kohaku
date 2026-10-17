@@ -95,7 +95,7 @@ export {
   resolveFixatedResult,
   settleFixation,
 } from "./fixation.js";
-export { type IntentSource, resolveIntent } from "./intent.js";
+export { type IntentSource, resolveGuiDelta, resolveIntent } from "./intent.js";
 export {
   createOperationIndex,
   type OperationIndex,
