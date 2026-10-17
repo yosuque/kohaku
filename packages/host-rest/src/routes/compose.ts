@@ -111,18 +111,13 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
     let current: CanonicalIntent;
     let intent: CanonicalIntent;
     try {
-      // Resolved through host-core's resolveIntent (the "intent" source), not a bare finalizeIntent, so a
-      // SemanticPort.validateIntent implementation gets a chance to reject an unknown canonical or invalid
-      // params in `current` too — the same closed gap as body.intent on /compose.
-      ({ intent: current } = await hostCore.resolveIntent(
+      // host-core's resolveGuiDelta (shared with the MCP profile's kohaku_event): `current` goes through
+      // resolveIntent's "intent" source, not a bare finalizeIntent, so a SemanticPort.validateIntent
+      // implementation gets a chance to reject an unknown canonical or invalid params in `current` too — the
+      // same closed gap as body.intent on /compose — then the "gui" source yields the post-event Intent.
+      ({ current, intent } = await hostCore.resolveGuiDelta(
         deps.compose.semantic,
-        { kind: "intent", intent: body.intent },
-        session,
-      ));
-      // Intent resolution (host-core's resolveIntent, shared with the MCP profile's compose-tool nl/intent branch).
-      ({ intent } = await hostCore.resolveIntent(
-        deps.compose.semantic,
-        { kind: "gui", current, action: body.event.on, params: body.event.payload },
+        { intent: body.intent, on: body.event.on, payload: body.event.payload },
         session,
       ));
     } catch (e) {
@@ -248,7 +243,7 @@ async function deliverComposed(
     const result = await composeForRest(intent, session, deps, call);
     const capability = await issueSpecCapability(result.spec, principal, deps, call);
     // Audit recording is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the MCP
-    // profile's composeAndAudit): swallow recorder failures so they do not take down delivery (including
+    // profile's auditComposed): swallow recorder failures so they do not take down delivery (including
     // cached Specs), notify the observability hook (onError) of the failure, and still return a successful
     // response. A cancelled compose (the caller's abort fired) is not a generation failure and observer.onError
     // already received phase:"cancelled" from the composer — recordComposedResult skips lineage recording

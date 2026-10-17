@@ -249,39 +249,18 @@ function taskCapable(ctx: ToolContext, extra: ServerContext): boolean {
 }
 
 /**
- * compose + audit record (fail-open). The identically-shaped processing at the top of composeAndPackage / buildSnapshot.
- * Only the endpoint name differs; an audit failure is reported to the observation hook and the result returns normally.
- * afterCompose runs immediately before the audit record (preserving composeAndPackage's capability-issuance ordering).
+ * The audit record of a composed result (fail-open). The identically-shaped processing that follows
+ * composeForTool in composeAndPackage / buildSnapshot. Only the endpoint name differs; an audit failure is
+ * reported to the observation hook and the call returns normally. composeAndPackage runs its capability
+ * issuance and action manifest build between composeForTool and this call (that ordering is intentional).
  *
  * Audit recording is symmetric with the REST profile: when `deps.recorder` (ViewRecorder) is wired, both
  * `composed` and `fallback` (host-core's recordComposedAndFallback, shared with REST's
  * deliverComposed/finishStream) are recorded here. When only the legacy `deps.onComposed` is
  * wired, that alone is called (no fallback recording — the old, narrower contract). `recorder` takes priority
  * when both are present.
- *
- * `ctx.abort`, when set, propagates the tool call's cancellation (SDK's `extra.mcpReq.signal`) into composeForTool ->
- * composeWithFixation -> the composer's L1/L2 LLM generation, so a cancelled MCP tool call stops doing
- * generation work the caller has already given up on (parity with the REST profile's abort wiring via
- * `c.req.raw.signal`).
- *
- * `ctx.requestId`, when set (`mcpCorrelationId(extra)` — `mcp:<sessionId or per-call uuid>:<jsonrpc id>`),
- * is forwarded into composeForTool ->
- * composeWithFixation as both the fixation self-heal correlation id (already threaded through
- * resolveFixatedResult) and, additively, ComposeOptions.correlationId, so a degraded/failed delivery's
- * observer.onError call and ComposeTrace can be tied back to this tool call the same way host-rest ties them
- * back to X-Request-Id.
- *
- * `ctx.traceContext` (from `_meta.traceparent` via traceContextOf), when set, is forwarded the same way as
- * ComposeOptions.traceContext (additive/opt-in, see composeForTool's doc comment).
  */
-async function composeAndAudit(
-  ctx: ToolCallContext,
-  input: ComposeSource,
-  endpoint: string,
-  options?: { afterCompose?: (result: ComposeResult) => Promise<void> },
-): Promise<ComposeResult> {
-  const result = await composeForTool(ctx, input);
-  if (options?.afterCompose != null) await options.afterCompose(result);
+async function auditComposed(ctx: ToolCallContext, result: ComposeResult, endpoint: string): Promise<void> {
   // The audit record is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the REST
   // profile's deliverComposed/finishStream): a recording failure is swallowed so it does not drag down UI
   // delivery (including a cached Spec), and the failure is reported to the observation hook (onError) while
@@ -299,59 +278,66 @@ async function composeAndAudit(
     },
     (e) => reportMcpError(ctx.deps, endpoint, e, ctx.requestId),
   );
-  return result;
 }
 
-async function composeAndPackage(
+/**
+ * The compose half of composeAndPackage: compose → capability → action manifest → audit record (fail-open).
+ * Returns the raw ComposeResult beside the capability token and the manifest so a caller can both package
+ * them (packageComposed) and look at the result itself — startComposeTask needs `result.trace.cancelled`
+ * to tell a genuine tasks/cancel-driven cancellation apart from an ordinary completion/fallback when deciding
+ * which status to settle the task at, and the packaged tool result does not carry that distinction.
+ */
+async function composeForDelivery(
   ctx: ToolCallContext,
   input: ComposeSource,
-  // Optional peek at the raw ComposeResult right after composeAndAudit resolves, before packaging. The only
-  // consumer today is startComposeTask below, which needs `result.trace.cancelled` to tell a genuine
-  // tasks/cancel-driven cancellation apart from an ordinary completion/fallback when deciding which status
-  // to settle the task at — composeAndPackage's own return value (the packaged tool result) does not carry
-  // that distinction. Unused by every synchronous caller, so this is purely additive.
-  onComposeResult?: (result: ComposeResult) => void,
-) {
+): Promise<{ result: ComposeResult; capability: string; actions: hostCore.ActionManifest | undefined }> {
   // The compose → capability → action manifest → audit-record (fail-open) order is intentional; do not
   // reorder. It is this profile's own order (REST's /compose runs capability → record → manifest, its stream
   // route capability → manifest → write → record): the steps are host-core's order-neutral helpers
   // (issueSpecCapabilitySafely, buildActionManifestSafely, recordComposedResult + recordComposedAndFallback)
   // and each host keeps its own sequence and onError endpoint names.
-  let capability!: string;
-  let actions: hostCore.ActionManifest | undefined;
-  const result = await composeAndAudit(ctx, input, "compose", {
-    afterCompose: async (composed) => {
-      // host-core's issueSpecCapabilitySafely applies the scope-collection rule (SPEC §5 A1;
-      // collectCapabilityScopes is the single source of truth), shared with the REST profile so both profiles
-      // agree on the issuance rule. Without read enumeration of bind variants, a bind switch (state.set →
-      // effective ref re-resolution) is rejected by resolve_binding's verify (exact match) and the A1
-      // cross-filter fails on the MCP surface only. Without write, ${prefix}_action's verify (write) does not
-      // pass, and form submission / action.button always returns 403 on the MCP surface.
-      //
-      // Write scopes are additionally restricted to DomainPort.listOperations() names (hardening against a
-      // hallucinated/injected action.invoke action name becoming a bearer write scope), symmetric with the
-      // REST profile's issueSpecCapability wrapper. If listOperations rejects, issueSpecCapabilitySafely falls
-      // back to an empty allowed set (fail-closed for writes; delivery proceeds) and reports the rejection.
-      capability = await hostCore.issueSpecCapabilitySafely(
-        ctx.deps.authz,
-        ctx.principal,
-        composed.spec,
-        ctx.allowedActions,
-        (e) => reportMcpError(ctx.deps, "compose.capability", e),
-        undefined,
-      );
-      // The Governed Actions manifest (design.md #62/#64), co-embedded in _meta alongside capability
-      // (ACTIONS_META_KEY). Fail-open on a rejected operationIndex, the same posture
-      // issueSpecCapabilitySafely takes just above for the identical failure (listOperations() itself
-      // rejecting, or a descriptor's paramsSchema failing validation): report it and treat as "no
-      // manifest this time" rather than failing the whole tool call (host-core's buildActionManifestSafely,
-      // shared with the REST profile's actionsFor).
-      actions = await hostCore.buildActionManifestSafely(ctx.operationIndex, composed.spec, (e) =>
-        reportMcpError(ctx.deps, "compose.actions", e),
-      );
-    },
-  });
-  onComposeResult?.(result);
+  const result = await composeForTool(ctx, input);
+  // host-core's issueSpecCapabilitySafely applies the scope-collection rule (SPEC §5 A1;
+  // collectCapabilityScopes is the single source of truth), shared with the REST profile so both profiles
+  // agree on the issuance rule. Without read enumeration of bind variants, a bind switch (state.set →
+  // effective ref re-resolution) is rejected by resolve_binding's verify (exact match) and the A1
+  // cross-filter fails on the MCP surface only. Without write, ${prefix}_action's verify (write) does not
+  // pass, and form submission / action.button always returns 403 on the MCP surface.
+  //
+  // Write scopes are additionally restricted to DomainPort.listOperations() names (hardening against a
+  // hallucinated/injected action.invoke action name becoming a bearer write scope), symmetric with the
+  // REST profile's issueSpecCapability wrapper. If listOperations rejects, issueSpecCapabilitySafely falls
+  // back to an empty allowed set (fail-closed for writes; delivery proceeds) and reports the rejection.
+  const capability = await hostCore.issueSpecCapabilitySafely(
+    ctx.deps.authz,
+    ctx.principal,
+    result.spec,
+    ctx.allowedActions,
+    (e) => reportMcpError(ctx.deps, "compose.capability", e),
+    undefined,
+  );
+  // The Governed Actions manifest (design.md #62/#64), co-embedded in _meta alongside capability
+  // (ACTIONS_META_KEY). Fail-open on a rejected operationIndex, the same posture
+  // issueSpecCapabilitySafely takes just above for the identical failure (listOperations() itself
+  // rejecting, or a descriptor's paramsSchema failing validation): report it and treat as "no
+  // manifest this time" rather than failing the whole tool call (host-core's buildActionManifestSafely,
+  // shared with the REST profile's actionsFor).
+  const actions = await hostCore.buildActionManifestSafely(ctx.operationIndex, result.spec, (e) =>
+    reportMcpError(ctx.deps, "compose.actions", e),
+  );
+  await auditComposed(ctx, result, "compose");
+  return { result, capability, actions };
+}
+
+async function composeAndPackage(ctx: ToolCallContext, input: ComposeSource) {
+  return packageComposed(ctx, await composeForDelivery(ctx, input));
+}
+
+/** The packaging half of composeAndPackage: preresolve the initial data and assemble the tool result. */
+async function packageComposed(
+  ctx: ToolCallContext,
+  { result, capability, actions }: Awaited<ReturnType<typeof composeForDelivery>>,
+) {
   // Preresolve the initial data on the server side and co-embed it in the tool result's _meta. This makes the
   // initial display appear fully even if the host's app-originated tool call (kohaku_resolve_binding) is broken.
   // Putting it in _meta rather than structuredContent is the key point (_meta does not enter the model's context and is
@@ -420,11 +406,11 @@ const COMPOSE_TASK_POLL_INTERVAL_MS = 2_000;
  * has already gated the request — see the compose-family tool handlers below.
  *
  * Cancellation: `tasks/cancel` (see `registerTaskMethods`) fires the same `AbortController` the task store
- * hands back from `create`, which rides straight into `composeAndPackage`'s `abort` parameter — the exact
+ * hands back from `create`, which rides straight into `composeForDelivery`'s `abort` context field — the exact
  * same client-abort path `${prefix}_compose`'s synchronous branch already wires today (see
- * `composeAndAudit`'s doc comment and docs/design.md's "Client aborts are distinguished from generation
+ * `composeForTool`'s doc comment and docs/design.md's "Client aborts are distinguished from generation
  * fallbacks"). This is deliberately the SAME cancellation concept, not a second one: a `tasks/cancel` IS a
- * client abort. `onComposeResult` observes `result.trace.cancelled` to tell a genuine cancellation apart
+ * client abort. The task body observes `result.trace.cancelled` to tell a genuine cancellation apart
  * from an ordinary completion or generation fallback when deciding which terminal status to settle the
  * task at (composeWithFixation never throws for an aborted call — it degrades to the same fallback Spec
  * any other L1/L2 failure would, just marked `trace.cancelled: true` — so this is the only reliable signal).
@@ -437,14 +423,16 @@ function startComposeTask(ctx: ToolCallContext, input: ComposeSource): { resultT
     ttlMs: COMPOSE_TASK_TTL_MS,
     pollIntervalMs: COMPOSE_TASK_POLL_INTERVAL_MS,
   });
-  let cancelled = false;
   // The task's own AbortController (not the synchronous tool call's own abort signal, which is meaningless
   // once the tool call has already returned a CreateTaskResult) drives cancellation here — see this
   // function's doc comment on tasks/cancel wiring into the same client-abort path.
-  void composeAndPackage({ ...ctx, abort: abort.signal }, input, (result) => {
-    cancelled = result.trace.cancelled === true;
-  })
-    .then((packaged) => {
+  const taskCtx = { ...ctx, abort: abort.signal };
+  void (async () => {
+    const delivery = await composeForDelivery(taskCtx, input);
+    const packaged = await packageComposed(taskCtx, delivery);
+    return { packaged, cancelled: delivery.result.trace.cancelled === true };
+  })()
+    .then(({ packaged, cancelled }) => {
       if (cancelled) ctx.tasks.cancelled(taskId);
       else ctx.tasks.complete(taskId, packaged as unknown as JsonObject);
     })
@@ -469,7 +457,8 @@ async function buildSnapshot(
   input: ComposeSource,
 ): Promise<{ spec: UISpec; html: string }> {
   // The audit record is fail-open symmetrically with the existing compose: a recording failure does not drag down HTML generation.
-  const result = await composeAndAudit(ctx, input, "render_snapshot");
+  const result = await composeForTool(ctx, input);
+  await auditComposed(ctx, result, "render_snapshot");
   // HTML assembly is shared with the legacy UIResource co-emission path via snapshotHtmlFor (bounded
   // concurrency + an overall deadline, see snapshotHtmlFor's doc). Here the snapshot is the deliverable itself
   // (no other resolution pass to share with), so a resolution failure or timeout is propagated rather than
@@ -700,16 +689,16 @@ function registerResolveBindingTool(ctx: ToolContext): void {
           return toolError(`unknown query source "${parsed.source}"`);
         }
         const { base, params } = parsed.ref;
-        const verdict = await verifyCapability(ctx.deps, `${ctx.prefix}_resolve_binding`, capability, {
-          kind: "read",
-          ref: base.raw,
-        });
-        if ("isError" in verdict) return verdict;
-        if (!verdict.ok) {
-          return toolError(`capability denied: ${verdict.reason ?? ""}`);
-        }
+        const resolvedPrincipal = await authorizeCapability(
+          ctx.deps,
+          `${ctx.prefix}_resolve_binding`,
+          capability,
+          { kind: "read", ref: base.raw },
+          principal,
+        );
+        if ("isError" in resolvedPrincipal) return resolvedPrincipal;
         const data = await ctx.deps.domain.invoke(base.path, params, {
-          principal: verdict.principal ?? principal,
+          principal: resolvedPrincipal,
           capability,
         });
         const rows = (data as { rows?: unknown[] }).rows?.length ?? 0;
@@ -744,21 +733,20 @@ function registerEventTool(ctx: ToolContext): void {
         const call = await beginCall(ctx, extra, "compose", locale);
         if ("isError" in call) return call;
         const session = mcpSession(locale, call.principal);
-        // Resolved through host-core's resolveIntent (the "intent" source), not a bare finalizeIntent, so a
-        // SemanticPort.validateIntent implementation gets a chance to reject an unknown canonical or invalid
-        // params in `current` too (mirroring the REST profile's /events fix for the same gap; safeTool's
-        // catch-all converts a thrown IntentValidationError into a structured tool error).
-        const { intent: current } = await hostCore.resolveIntent(
+        // Resolved through host-core's resolveGuiDelta (shared with the REST profile's /events): `current` goes
+        // through resolveIntent's "intent" source, not a bare finalizeIntent, so a SemanticPort.validateIntent
+        // implementation gets a chance to reject an unknown canonical or invalid params in `current` too
+        // (mirroring the REST profile's /events fix for the same gap; safeTool's catch-all converts a thrown
+        // IntentValidationError into a structured tool error), then the "gui" source yields the post-event
+        // Intent. Keeps the "gui" normalization behavior (and its session, including the attached principal)
+        // in one place rather than a local semantic.normalize copy.
+        const { current, intent: resolved } = await hostCore.resolveGuiDelta(
           ctx.deps.compose.semantic,
-          { kind: "intent", intent: { canonical: intent.canonical, params: intent.params as JsonObject } },
-          session,
-        );
-        // Intent resolution via host-core's resolveIntent (shared with the REST profile's /events GUI-delta
-        // site), rather than a local semantic.normalize copy — keeps the "gui" normalization behavior (and
-        // its session, including the attached principal) in one place.
-        const { intent: resolved } = await hostCore.resolveIntent(
-          ctx.deps.compose.semantic,
-          { kind: "gui", current, action: on, params: payload as JsonObject },
+          {
+            intent: { canonical: intent.canonical, params: intent.params as JsonObject },
+            on,
+            payload: payload as JsonObject,
+          },
           session,
         );
         // Record view.interacted symmetrically with the REST surface's /events (which records it before
@@ -861,15 +849,14 @@ function registerActionTool(ctx: ToolContext): void {
           return toolError(`payload exceeds the maximum size (${MAX_ACTION_PAYLOAD_BYTES} bytes)`);
         }
         // Verify with the write scope, symmetric with the REST surface (/binding/action). A denial becomes a tool error rather than an RPC exception.
-        const verdict = await verifyCapability(ctx.deps, `${ctx.prefix}_action`, capability, {
-          kind: "write",
-          ref: action,
-        });
-        if ("isError" in verdict) return verdict;
-        if (!verdict.ok) {
-          return toolError(`capability denied: ${verdict.reason ?? ""}`);
-        }
-        const resolvedPrincipal = verdict.principal ?? principal;
+        const resolvedPrincipal = await authorizeCapability(
+          ctx.deps,
+          `${ctx.prefix}_action`,
+          capability,
+          { kind: "write", ref: action },
+          principal,
+        );
+        if ("isError" in resolvedPrincipal) return resolvedPrincipal;
 
         // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
         // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
@@ -891,59 +878,43 @@ function registerActionTool(ctx: ToolContext): void {
           correlationId: requestId,
           report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e),
         };
-        let index: Awaited<ReturnType<typeof ctx.operationIndex>>;
-        try {
-          index = await ctx.operationIndex();
-        } catch (e) {
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId);
-          await hostCore.recordActionGateUnavailableDenial(auditContext);
-          return toolError("operation index unavailable");
-        }
-        const entry = index.get(action);
-        if (entry != null && entry.schemaError != null) {
-          // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
-          // this operation alone (REST's 500 counterpart), reported to the observability hook.
-          await reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, entry.schemaError, requestId);
-          return toolError("action parameter schema unavailable");
-        }
-        if (entry == null) {
-          await hostCore.recordUndeclaredActionDenial({
+        // The sequence itself (operation index -> undeclared / schema checks -> unsafe-key outcome -> gate ->
+        // audit) is host-core's `runActionGate`, shared with REST; this keeps only the MCP wire mapping
+        // (design.md #62/#63; the REST profile's switch in packages/host-rest/src/routes/binding.ts is its
+        // counterpart): a plain or structured tool error per outcome, and `proceed` falls through to
+        // `domain.invoke`. The audit trail and the client-visible messages are host-core's too.
+        const outcome = await hostCore.runActionGate({
+          operationIndex: ctx.operationIndex,
+          gate: ctx.actionGate,
+          audit: auditContext,
+          undeclaredAudit: {
             ...auditContext,
             report: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.audit`, e, requestId),
-          });
-          return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
-        }
-        let gateResult: hostCore.ActionGateResult;
-        if (unsafePayloadKeys.length > 0) {
-          gateResult = { kind: "invalid", issues: unsafePayloadKeys };
-        } else {
-          try {
-            gateResult = await ctx.actionGate.check({
-              descriptor: entry.descriptor,
-              paramsSchema: entry.paramsSchema,
-              payload: payload as JsonObject,
-              confirmed,
-              approval,
-              requesterId: resolvedPrincipal.id,
-            });
-          } catch (e) {
+          },
+          confirmed,
+          approval,
+          unsafeKeyIssues: () => unsafePayloadKeys,
+          report: {
+            // The operation index could not be read.
+            indexFailure: (e) =>
+              reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId),
+            // A declared operation whose paramsSchema failed validation must never be invoked: fail closed for
+            // this operation alone (REST's 500 counterpart), reported to the observability hook.
+            schemaError: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action.operationIndex`, e, requestId),
             // The gate could not decide (e.g. the ApprovalPort threw): a denial, never an unhandled failure
-            // that skips the audit trail (REST's `gateUnavailable` counterpart).
-            await reportMcpError(ctx.deps, `${ctx.prefix}_action`, e, requestId);
-            await hostCore.recordActionGateUnavailableDenial({
-              ...auditContext,
-              tier: entry.descriptor.tier ?? "auto",
-            });
-            return toolError(hostCore.ACTION_GATE_UNAVAILABLE_MESSAGE);
-          }
-        }
-        // Maps one `ActionGate.check` outcome onto the MCP tool result (design.md #62/#63; the REST profile's
-        // inline switch in packages/host-rest/src/routes/binding.ts is its wire-mapping counterpart). The audit
-        // trail and the client-visible messages are host-core's `recordActionGateResult`, shared with REST; this
-        // keeps only the structured tool-error mapping (`invalid` / `approvalRequired` / `denied`), and
-        // `proceed` falls through to `domain.invoke`.
-        const outcome = await hostCore.recordActionGateResult(gateResult, auditContext);
+            // that skips the audit trail (REST's 503 counterpart).
+            gateFailure: (e) => reportMcpError(ctx.deps, `${ctx.prefix}_action`, e, requestId),
+          },
+        });
         switch (outcome.kind) {
+          case "indexUnavailable":
+            return toolError("operation index unavailable");
+          case "schemaInvalid":
+            return toolError("action parameter schema unavailable");
+          case "undeclared":
+            return toolError(`capability denied: ${hostCore.UNDECLARED_ACTION_MESSAGE}`);
+          case "gateUnavailable":
+            return toolError(hostCore.ACTION_GATE_UNAVAILABLE_MESSAGE);
           case "invalid":
             return actionParamsInvalidToolError(outcome.issues);
           case "approvalRequired":
@@ -1198,12 +1169,17 @@ function fixationHost(deps: McpHostDeps): hostCore.FixationDeliveryHost {
  * policy (ComposeContext.policyFor) all see it. The MCP profile has a single ComposeContext (deps.compose), so
  * it is passed as both the materialize and (by omission, defaulting to materialize) the normal-compose context.
  *
- * `ctx.abort`, when set, propagates into composeWithFixation's normal-compose fallback (the fixation shortcut
- * itself never calls the LLM, so it has nothing to cancel) — see composeAndAudit's doc comment for why tool
- * handlers thread the SDK's `extra.mcpReq.signal` through here.
+ * `ctx.abort`, when set, propagates the tool call's cancellation (SDK's `extra.mcpReq.signal`) into
+ * composeWithFixation's normal-compose fallback -> the composer's L1/L2 LLM generation (the fixation shortcut
+ * itself never calls the LLM, so it has nothing to cancel), so a cancelled MCP tool call stops doing
+ * generation work the caller has already given up on (parity with the REST profile's abort wiring via
+ * `c.req.raw.signal`).
  *
- * `ctx.requestId`, when set (`mcpCorrelationId(extra)` — see its doc comment for the exact format), is
- * forwarded to composeWithFixation as the correlation id — see composeAndAudit's doc comment.
+ * `ctx.requestId`, when set (`mcpCorrelationId(extra)` — `mcp:<sessionId or per-call uuid>:<jsonrpc id>`),
+ * is forwarded to composeWithFixation as both the fixation self-heal correlation id (already threaded
+ * through resolveFixatedResult) and, additively, ComposeOptions.correlationId, so a degraded/failed
+ * delivery's observer.onError call and ComposeTrace can be tied back to this tool call the same way
+ * host-rest ties them back to X-Request-Id.
  *
  * `ctx.traceContext` (from `_meta.traceparent`, see traceContextOf), when set, is forwarded to
  * composeWithFixation the same way, additively (ComposeOptions.traceContext).
@@ -1411,6 +1387,28 @@ async function verifyCapability(
     return toolError(hostCore.CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE);
   }
   return result.verdict;
+}
+
+/**
+ * The shared authorization prologue of the app-only tools: verify the capability (`verifyCapability`, whose
+ * unavailable outcome is already a tool error), deny a `!ok` verdict as a `capability denied: <reason>` tool
+ * error, then resolve the principal to act as: the verdict's own, falling back to `fallbackPrincipal` (the
+ * one resolved for this call) when the `AuthzPort`'s verify returns none. Returns the tool error to return
+ * as-is on any denial, or the resolved Principal.
+ */
+async function authorizeCapability(
+  deps: McpHostDeps,
+  endpoint: string,
+  capability: string,
+  req: VerifyRequest,
+  fallbackPrincipal: Principal,
+): Promise<Principal | ReturnType<typeof toolError>> {
+  const verdict = await verifyCapability(deps, endpoint, capability, req);
+  if ("isError" in verdict) return verdict;
+  if (!verdict.ok) {
+    return toolError(`capability denied: ${verdict.reason ?? ""}`);
+  }
+  return verdict.principal ?? fallbackPrincipal;
 }
 
 /**
