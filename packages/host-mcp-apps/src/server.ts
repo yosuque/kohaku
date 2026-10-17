@@ -689,16 +689,16 @@ function registerResolveBindingTool(ctx: ToolContext): void {
           return toolError(`unknown query source "${parsed.source}"`);
         }
         const { base, params } = parsed.ref;
-        const verdict = await verifyCapability(ctx.deps, `${ctx.prefix}_resolve_binding`, capability, {
-          kind: "read",
-          ref: base.raw,
-        });
-        if ("isError" in verdict) return verdict;
-        if (!verdict.ok) {
-          return toolError(`capability denied: ${verdict.reason ?? ""}`);
-        }
+        const resolvedPrincipal = await authorizeCapability(
+          ctx.deps,
+          `${ctx.prefix}_resolve_binding`,
+          capability,
+          { kind: "read", ref: base.raw },
+          principal,
+        );
+        if ("isError" in resolvedPrincipal) return resolvedPrincipal;
         const data = await ctx.deps.domain.invoke(base.path, params, {
-          principal: verdict.principal ?? principal,
+          principal: resolvedPrincipal,
           capability,
         });
         const rows = (data as { rows?: unknown[] }).rows?.length ?? 0;
@@ -849,15 +849,14 @@ function registerActionTool(ctx: ToolContext): void {
           return toolError(`payload exceeds the maximum size (${MAX_ACTION_PAYLOAD_BYTES} bytes)`);
         }
         // Verify with the write scope, symmetric with the REST surface (/binding/action). A denial becomes a tool error rather than an RPC exception.
-        const verdict = await verifyCapability(ctx.deps, `${ctx.prefix}_action`, capability, {
-          kind: "write",
-          ref: action,
-        });
-        if ("isError" in verdict) return verdict;
-        if (!verdict.ok) {
-          return toolError(`capability denied: ${verdict.reason ?? ""}`);
-        }
-        const resolvedPrincipal = verdict.principal ?? principal;
+        const resolvedPrincipal = await authorizeCapability(
+          ctx.deps,
+          `${ctx.prefix}_action`,
+          capability,
+          { kind: "write", ref: action },
+          principal,
+        );
+        if ("isError" in resolvedPrincipal) return resolvedPrincipal;
 
         // Governed actions (design.md #62/#63): validate params and enforce the action's tier before
         // domain.invoke ever runs. An action absent from the DomainPort's own operation index -- whether
@@ -1404,6 +1403,28 @@ async function verifyCapability(
     return toolError(hostCore.CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE);
   }
   return result.verdict;
+}
+
+/**
+ * The shared authorization prologue of the app-only tools: verify the capability (`verifyCapability`, whose
+ * unavailable outcome is already a tool error), deny a `!ok` verdict as a `capability denied: <reason>` tool
+ * error, then resolve the principal to act as: the verdict's own, falling back to `fallbackPrincipal` (the
+ * one resolved for this call) when the `AuthzPort`'s verify returns none. Returns the tool error to return
+ * as-is on any denial, or the resolved Principal.
+ */
+async function authorizeCapability(
+  deps: McpHostDeps,
+  endpoint: string,
+  capability: string,
+  req: VerifyRequest,
+  fallbackPrincipal: Principal,
+): Promise<Principal | ReturnType<typeof toolError>> {
+  const verdict = await verifyCapability(deps, endpoint, capability, req);
+  if ("isError" in verdict) return verdict;
+  if (!verdict.ok) {
+    return toolError(`capability denied: ${verdict.reason ?? ""}`);
+  }
+  return verdict.principal ?? fallbackPrincipal;
 }
 
 /**
