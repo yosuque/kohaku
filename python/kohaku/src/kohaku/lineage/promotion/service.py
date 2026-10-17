@@ -704,7 +704,7 @@ class Promotions:
         actor: Principal,
         tenant: str | None = None,
     ) -> PromotionCandidate:
-        """Execute a single transition (load -> transition -> persist -> record).
+        """Execute a single transition (load -> transition -> record -> persist).
 
         Idempotency contract (3-13a): **act is not idempotent**. Serializing concurrent / retried calls is the caller's responsibility.
         When tenant is given, if the owning tenant does not match it is treated as "unknown artifact".
@@ -716,11 +716,14 @@ class Promotions:
         # Invalid transitions from a terminal state are rejected by the machine side (transition) with a TransitionError.
         candidate.status = transition(candidate.status, action, self._machine_policy)
 
-        # Every action kind other than publish / unpublish shares the same order: persist the snapshot (the
-        # state authority), then record the audit event (if the action kind has one) -- the same state-first,
-        # audit-second order as the Publish / Unpublish branches and the fixation service, so a failing persist
-        # never leaves an audit event describing a transition that did not happen. Each branch below only
-        # prepares the event; it is recorded after the common persist at the end.
+        # Every action kind other than publish / unpublish shares the same order: record the audit event (if the
+        # action kind has one), then persist the snapshot (the state authority).
+        # Audit first, state second, deliberately: if the record throws the transition is not persisted and a
+        # retry re-runs the same action (at worst a duplicated audit event); if the order were reversed a lost
+        # `component.reviewed` could let a retried approve() publish without the human-approval evidence
+        # LIN-PRM-001 requires. Publish / Unpublish / fixation differ (state first) because their audit records
+        # are fail-open and backfilled by reconcile; the generic path has no backfill. Each branch below only
+        # prepares the event; it is recorded just before the common persist at the end.
         audit: tuple[str, dict[str, Any], LineageActor | None] | None = None
 
         if isinstance(action, Nominate):
@@ -858,10 +861,10 @@ class Promotions:
             )
         # JudgeStart / ReviewStart record nothing (state transition only).
 
-        await self._persist(candidate, tenant)
         if audit is not None:
             audit_type, audit_payload, audit_actor = audit
             await self._lineage.record(audit_type, audit_payload, audit_actor, tenant)
+        await self._persist(candidate, tenant)
         return candidate
 
     async def _run_judge(
