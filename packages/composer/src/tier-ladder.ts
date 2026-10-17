@@ -119,8 +119,9 @@ type BudgetCheckErrorReporterFor = ((failedTier: "L1" | "L2") => (error: unknown
 /**
  * One L1/L2 generation attempt's shared parameters, built once by runTierGeneration and threaded through
  * both stages (Introduce Parameter Object).
- * - `route`: the tier decided by policy.routeTier for this compose (L1 unless L2 direct entry).
- * - `from`: the "stage that actually failed" default, fixed as L2 only once L2 actually runs and fails.
+ * - `from`: the tier decided by policy.routeTier for this compose (L1 unless L2 direct entry), which is
+ *   also the "stage that actually failed" default on fallback; settleTierFailure is passed a literal "L2"
+ *   instead only once L2 actually runs and fails.
  * - `budgetGate`: the budget guard shared by the pre-L2 check and both generation calls (it owns the
  *   tier → error-handler factory, which is distinct from the handler itself).
  */
@@ -128,7 +129,6 @@ interface TierRun {
   prepared: PreparedCompose;
   ctx: ComposeContext;
   attempts: ComposeAttempt[];
-  route: "L1" | "L2";
   from: "L1" | "L2";
   budgetGate: BudgetGate;
   onDraftPartial?: (raw: unknown) => void;
@@ -179,10 +179,10 @@ export async function runTierGeneration(
             )
       : undefined;
 
-  const route = policy.routeTier?.(intent) ?? "L1";
-  // The default value of "the tier that actually failed" recorded on fallback. If route is L2 direct
-  // entry, L2 (L1 does not run). Fix it to "L2" only when L2 is actually run and fails (the L2 branch below).
-  const from: "L1" | "L2" = route === "L2" ? "L2" : "L1";
+  // The tier routeTier decided on, which doubles as the default value of "the tier that actually failed"
+  // recorded on fallback. If it is L2 direct entry, L2 (L1 does not run). Fix it to "L2" only when L2 is
+  // actually run and fails (the L2 branch below).
+  const from = policy.routeTier?.(intent) ?? "L1";
 
   // Compose-wide deadline (ComposePolicy.budget.deadlineMs). Armed once for the whole L1→L2 ladder shared
   // below (the initial L1 call, every repair re-attempt, and L2) — not re-armed per attempt — so it bounds
@@ -195,7 +195,6 @@ export async function runTierGeneration(
       prepared,
       ctx,
       attempts,
-      route,
       from,
       budgetGate: createBudgetGate({
         budget,
@@ -322,10 +321,10 @@ function settleL1Failure(l1: TierFailure, canL2: boolean, from: "L1" | "L2"): Ti
  * route=L2 direct entry does not generate and only passes the allowL2 decision.
  */
 async function runL1Stage(run: TierRun): Promise<TierOutcome | null> {
-  const { prepared, attempts, route, from, onDraftPartial } = run;
+  const { prepared, attempts, from, onDraftPartial } = run;
   const canL2 = prepared.policy.allowL2 ?? false;
 
-  if (route === "L1") {
+  if (from === "L1") {
     const l1 = await generateL1({
       ...tierRequestFor(run),
       onDraftPartial,
