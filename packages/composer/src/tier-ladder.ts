@@ -1,5 +1,5 @@
 import { LlmError } from "@kohaku-ui/llm";
-import type { ComponentNode, EventBinding } from "@kohaku-ui/spec-core";
+import type { ComponentNode, EventBinding, UISpec } from "@kohaku-ui/spec-core";
 import { createDeadlineGuard } from "./budget.js";
 import type { PreparedCompose } from "./compose.js";
 import type { ComposeContext } from "./context.js";
@@ -15,21 +15,26 @@ import {
   type TierSuccess,
 } from "./tiers/shared.js";
 import type { ComposeAttempt } from "./trace.js";
+import { composeIdentityOf } from "./trace-identity.js";
 
 /**
  * The merged result of the generation stage (L1/L2). Instead of threading mutable flags through, expresses
  * which stage settled and how as a discriminated union.
- * - ok: the pre-validation component list (assembleSpec / postAndValidate are on the caller side).
+ * - ok: the pre-validation component list (assembleSpec / postAndValidate are on the caller side). Besides
+ *   L1/L2 results, compose.ts builds one with tier "L0" for a fixed-Spec template (no model, plus the
+ *   template's initial `state`) so L0 shares the same assemble → store → trace tail.
  * - fallback: the recording material for a deterministic downgrade. from is the stage that actually failed;
  *   budgetExceeded is true only for a downgrade due to the token/call budget guard (for observer.onError's machine discrimination).
  */
 export type TierOutcome =
   | {
       kind: "ok";
-      tier: "L1" | "L2";
+      tier: "L0" | "L1" | "L2";
       components: ComponentNode[];
       events: EventBinding[];
       model: string | undefined;
+      /** The fixed template's initial state (tier "L0" only; carried onto the delivered Spec as-is). */
+      state?: UISpec["state"];
     }
   | {
       kind: "fallback";
@@ -119,8 +124,9 @@ type BudgetCheckErrorReporterFor = ((failedTier: "L1" | "L2") => (error: unknown
 /**
  * One L1/L2 generation attempt's shared parameters, built once by runTierGeneration and threaded through
  * both stages (Introduce Parameter Object).
- * - `route`: the tier decided by policy.routeTier for this compose (L1 unless L2 direct entry).
- * - `from`: the "stage that actually failed" default, fixed as L2 only once L2 actually runs and fails.
+ * - `from`: the tier decided by policy.routeTier for this compose (L1 unless L2 direct entry), which is
+ *   also the "stage that actually failed" default on fallback; settleTierFailure is passed a literal "L2"
+ *   instead only once L2 actually runs and fails.
  * - `budgetGate`: the budget guard shared by the pre-L2 check and both generation calls (it owns the
  *   tier → error-handler factory, which is distinct from the handler itself).
  */
@@ -128,7 +134,6 @@ interface TierRun {
   prepared: PreparedCompose;
   ctx: ComposeContext;
   attempts: ComposeAttempt[];
-  route: "L1" | "L2";
   from: "L1" | "L2";
   budgetGate: BudgetGate;
   onDraftPartial?: (raw: unknown) => void;
@@ -161,7 +166,7 @@ export async function runTierGeneration(
   attempts: ComposeAttempt[],
   onDraftPartial?: (raw: unknown) => void,
 ): Promise<TierOutcome> {
-  const { intent, key, traceBase, policy } = prepared;
+  const { intent, traceBase, policy } = prepared;
   const budget = policy.budget;
   // Forward the occurrence of a fail-open-swallowed throw from the budget hook check() to
   // observer.onBudgetCheckError so it is never left unobserved. When budget is unspecified, do not build it
@@ -172,17 +177,13 @@ export async function runTierGeneration(
     budget != null
       ? (failedTier: "L1" | "L2") =>
           (error: unknown): void =>
-            reportBudgetCheckError(
-              ctx,
-              { input: traceBase.input, intent, cacheKey: key, tier: failedTier },
-              error,
-            )
+            reportBudgetCheckError(ctx, { ...composeIdentityOf(traceBase), tier: failedTier }, error)
       : undefined;
 
-  const route = policy.routeTier?.(intent) ?? "L1";
-  // The default value of "the tier that actually failed" recorded on fallback. If route is L2 direct
-  // entry, L2 (L1 does not run). Fix it to "L2" only when L2 is actually run and fails (the L2 branch below).
-  const from: "L1" | "L2" = route === "L2" ? "L2" : "L1";
+  // The tier routeTier decided on, which doubles as the default value of "the tier that actually failed"
+  // recorded on fallback. If it is L2 direct entry, L2 (L1 does not run). Fix it to "L2" only when L2 is
+  // actually run and fails (the L2 branch below).
+  const from = policy.routeTier?.(intent) ?? "L1";
 
   // Compose-wide deadline (ComposePolicy.budget.deadlineMs). Armed once for the whole L1→L2 ladder shared
   // below (the initial L1 call, every repair re-attempt, and L2) — not re-armed per attempt — so it bounds
@@ -195,7 +196,6 @@ export async function runTierGeneration(
       prepared,
       ctx,
       attempts,
-      route,
       from,
       budgetGate: createBudgetGate({
         budget,
@@ -322,10 +322,10 @@ function settleL1Failure(l1: TierFailure, canL2: boolean, from: "L1" | "L2"): Ti
  * route=L2 direct entry does not generate and only passes the allowL2 decision.
  */
 async function runL1Stage(run: TierRun): Promise<TierOutcome | null> {
-  const { prepared, attempts, route, from, onDraftPartial } = run;
+  const { prepared, attempts, from, onDraftPartial } = run;
   const canL2 = prepared.policy.allowL2 ?? false;
 
-  if (route === "L1") {
+  if (from === "L1") {
     const l1 = await generateL1({
       ...tierRequestFor(run),
       onDraftPartial,

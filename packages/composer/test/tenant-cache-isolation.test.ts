@@ -15,7 +15,7 @@ const L2_HTML =
 
 /**
  * Regression coverage for SPEC CMP-DET-002 ("a cache entry only reachable via L2 MUST NOT be returned to
- * a session that has L2 disabled") -- the invariant the tierGate policyFingerprint row (context.ts, task
+ * a session that has L2 disabled") -- the invariant the tierGate policyFingerprint row (policy-fingerprint.ts, task
  * 4) exists to guarantee. `tenant` itself is never part of the cache key (SPEC §6.1: `query://` is
  * tenant-neutral) -- before this row existed, `allowL2` was not part of the key either, so two sessions
  * differing only in `allowL2` for the identical intent/dataVersion/catalogFingerprint would collide on

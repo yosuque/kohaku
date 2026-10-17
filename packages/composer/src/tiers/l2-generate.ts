@@ -1,4 +1,4 @@
-import { type ComponentNode, SANDBOX_HTML_TYPE, sha256Hex } from "@kohaku-ui/spec-core";
+import { type CanonicalIntent, type ComponentNode, SANDBOX_HTML_TYPE, sha256Hex } from "@kohaku-ui/spec-core";
 import { resolveTierLlm } from "../context.js";
 import type { DesignKitVocabulary } from "../design-system.js";
 import { errorMessage } from "../error-message.js";
@@ -50,8 +50,11 @@ function canCheckScriptSyntax(): boolean {
  */
 export type L2LintOptions = {
   enforceTokenColors?: boolean;
-  kit?: Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">;
+  kit?: KitLintVocabulary;
 };
+
+/** The slice of a design-kit vocabulary the unknown-class lint reads (internal alias, not exported). */
+type KitLintVocabulary = Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">;
 
 export function collectL2Issues(html: string, opts?: L2LintOptions): string[] {
   // Every check is a row of the rule table (see L2_LINT_RULES below); the issue strings and their order are
@@ -106,10 +109,7 @@ const STRING_LITERAL_RE = /(["'`])([^"'`]*)\1/g;
  * (e.g. apps/sample-web's gallery showcase test) — not for the Python sidecar, which reuses only
  * collectScriptSyntaxIssues (no JS execution engine on that side to run this check against).
  */
-export function collectUnknownKitClasses(
-  html: string,
-  kit: Pick<DesignKitVocabulary, "classes" | "utilities" | "namespaces">,
-): string[] {
+export function collectUnknownKitClasses(html: string, kit: KitLintVocabulary): string[] {
   const known = new Set<string>([...Object.keys(kit.classes), ...kit.utilities]);
   const found = new Set<string>();
   const consider = (list: string): void => {
@@ -344,6 +344,49 @@ export function extractTitle(html: string, fallback: string): string {
 }
 
 /**
+ * The title used when the generated HTML has no usable <title>: the Intent's free-text `request` param
+ * when it is a non-empty string, otherwise "Custom view".
+ */
+function l2FallbackTitle(intent: CanonicalIntent): string {
+  return typeof intent.params["request"] === "string" && intent.params["request"] !== ""
+    ? (intent.params["request"] as string)
+    : "Custom view";
+}
+
+/**
+ * The component tree an accepted L2 document rides on: a vertical stack of a heading and the sandbox node
+ * that carries the HTML inline (+ sha256). The sandbox node declares only `primaryRef` as its `data.$ref`
+ * (the bridge allowlist is that exact ref — see generateL2's primaryRef note).
+ */
+async function buildL2Components(
+  html: string,
+  title: string,
+  primaryRef: string | undefined,
+): Promise<ComponentNode[]> {
+  const sha256 = await sha256Hex(html);
+  return [
+    {
+      id: "root",
+      type: "layout.stack",
+      props: { direction: "vertical", gap: "md" },
+      children: ["title1", "sandbox1"],
+    },
+    {
+      id: "title1",
+      type: "text.heading",
+      props: { level: 2, text: title },
+    },
+    {
+      id: "sandbox1",
+      type: SANDBOX_HTML_TYPE,
+      props: { title },
+      artifact: { inline: html, sha256 },
+      ...(primaryRef != null ? { data: { $ref: primaryRef } } : {}),
+    },
+  ];
+}
+
+/**
  * L2 free generation (the sandbox-limited escape hatch used when the constrained catalog cannot express
  * the request). The generated HTML is contracted to fetch data only via the window.kohaku bridge API and
  * rides on the Spec as an artifact (inline + sha256). Execution is isolated by the sandbox package.
@@ -432,33 +475,8 @@ export async function generateL2(req: TierRequest): Promise<TierResult> {
           }
         }
         if (issues.length === 0) {
-          const fallbackTitle =
-            typeof intent.params["request"] === "string" && intent.params["request"] !== ""
-              ? (intent.params["request"] as string)
-              : "Custom view";
-          const title = extractTitle(html, fallbackTitle);
-          const sha256 = await sha256Hex(html);
-          const components: ComponentNode[] = [
-            {
-              id: "root",
-              type: "layout.stack",
-              props: { direction: "vertical", gap: "md" },
-              children: ["title1", "sandbox1"],
-            },
-            {
-              id: "title1",
-              type: "text.heading",
-              props: { level: 2, text: title },
-            },
-            {
-              id: "sandbox1",
-              type: SANDBOX_HTML_TYPE,
-              props: { title },
-              artifact: { inline: html, sha256 },
-              ...(primaryRef != null ? { data: { $ref: primaryRef } } : {}),
-            },
-          ];
-          return { ok: true, components, events: [] };
+          const title = extractTitle(html, l2FallbackTitle(intent));
+          return { ok: true, components: await buildL2Components(html, title, primaryRef), events: [] };
         }
         // A bridge-contract lint failure is a repair target. Send the issues back into the next attempt's prompt as feedback.
         return { ok: false, issues };

@@ -183,7 +183,7 @@ export interface DesignKitVocabulary {
    * order) while Python dict iteration keeps insertion order, so the two languages could otherwise emit
    * different `designKitPromptFragment` bytes for the identical vocabulary content. Sorting output makes
    * the fragment a pure function of *content*, not *insertion order* — see `designKitPromptFragment`'s
-   * own note and `policyFingerprint`'s `kit` material (context.ts), which dropped its `classesOrder`
+   * own note and `policyFingerprint`'s `kit` material (policy-fingerprint.ts), which dropped its `classesOrder`
    * entry for the same reason.
    */
   classes: Record<string, string>;

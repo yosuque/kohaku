@@ -26,15 +26,8 @@ export type {
   FewShotExample,
   FixedSpecSource,
   ResolvedRefs,
-  TierLlmFingerprintMaterial,
 } from "./context.js";
-export {
-  policyFingerprint,
-  resolveTierLlm,
-  tierLlmFingerprintMaterial,
-  withSessionPolicy,
-  withTenantCatalog,
-} from "./context.js";
+export { resolveTierLlm, withSessionPolicy, withTenantCatalog } from "./context.js";
 export {
   DEFAULT_KIT_SKELETON,
   DEFAULT_KIT_VOCABULARY,
@@ -54,6 +47,11 @@ export { type FixationCheck, type FixationMaterialization, materializeFixation }
 // node-dependent sources such as llm into type resolution and break downstream typecheck).
 export { KOHAKU_API_ALLOWLIST } from "./l2-api.js";
 export { composeObservers } from "./observer.js";
+export {
+  policyFingerprint,
+  type TierLlmFingerprintMaterial,
+  tierLlmFingerprintMaterial,
+} from "./policy-fingerprint.js";
 export {
   canonicalProps,
   chartKind,

@@ -22,10 +22,11 @@ import {
 import { notifyBudgetUsage } from "./budget.js";
 import { COMPOSER_ID } from "./constants.js";
 import type { ComposeContext, ComposeErrorContext, ComposePolicy, FixedSpecSource } from "./context.js";
-import { policyFingerprint, resolveEntryContext, tierLlmFingerprintMaterial } from "./context.js";
+import { resolveEntryContext } from "./context.js";
 import { ComposeError } from "./errors.js";
 import { buildFallbackSpec } from "./fallback.js";
 import { fireObserverHook, reportComposeError } from "./observer.js";
+import { policyFingerprint, tierLlmFingerprintMaterial } from "./policy-fingerprint.js";
 import type { ResolvedRefs } from "./refs.js";
 import { resolveRefs } from "./refs.js";
 import { runGeneration } from "./single-flight.js";
@@ -33,7 +34,7 @@ import { runTierGeneration, type TierOutcome } from "./tier-ladder.js";
 import { buildL1GenerationSchema } from "./tiers/l1-generate.js";
 import type { ComposeAttempt, ComposeTrace, TraceBase, TraceContext } from "./trace.js";
 import { buildComposeTrace } from "./trace.js";
-import { traceIdentity } from "./trace-identity.js";
+import { composeIdentityOf, traceIdentity } from "./trace-identity.js";
 
 // COMPOSER_ID is defined in constants.js (a leaf module) and re-exported here so it stays resolvable
 // from both "./index.js" and "./compose.js".
@@ -110,8 +111,8 @@ export interface PreparedCompose {
   tenant?: string;
   /** The caller's abort signal. generateSpec passes it through to the L1/L2 LLM calls. */
   abort?: AbortSignal;
-  /** The Spec on a cache hit (with cache:"hit" applied) + the hit trace. null on miss/bypass. */
-  cached: { spec: UISpec; trace: ComposeTrace } | null;
+  /** The Spec on a cache hit (with cache:"hit" applied) + the hit trace (pre-negotiate). null on miss/bypass. */
+  cached: ComposeResult | null;
   /**
    * Memoized L0 fixed-Spec lookup (`policy.fixedSpecs?.lookup(intent)`, deterministic with respect to the
    * intent per FixedSpecSource's contract). composeStream's fast-path check and generateSpec's
@@ -157,11 +158,12 @@ export interface RunGenerationOptions {
   ) => Promise<GenerateOutcome>;
 }
 
-/** The result of the generation stage (L0/L1/L2/fallback). spec and its trace (the leader version or the follower version). */
-export interface GenerateOutcome {
-  spec: UISpec;
-  trace: ComposeTrace;
-}
+/**
+ * The result of the generation stage (L0/L1/L2/fallback). spec and its trace (the leader version or the
+ * follower version). Same `{ spec, trace }` pair as ComposeResult; the difference is only when it exists:
+ * this is the pre-negotiate form (before `finish` applies surface negotiation), ComposeResult the post-negotiate one.
+ */
+export type GenerateOutcome = ComposeResult;
 
 /**
  * The sole entry point of the UI Composition Service (the implementation of the request sequence).
@@ -222,7 +224,7 @@ export async function prepareCompose(
   const refs = await resolveRefs(intent, ctx, opts.session?.tenant);
 
   // 3. Cache key (generatorVersion is added as the trailing component only when specified; policyFingerprint
-  // is a derived 7th component — see context.ts's policyFingerprint doc — that is likewise omitted (empty
+  // is a derived 7th component — see policy-fingerprint.ts's policyFingerprint doc — that is likewise omitted (empty
   // string) whenever the policy touches none of its fingerprinted fields, keeping the key unchanged).
   const pf = await policyFingerprint(policy, tierLlmFingerprintMaterial(ctx));
   const keyParts: CacheKeyParts = {
@@ -252,7 +254,7 @@ export async function prepareCompose(
   const cacheMode = policy.cacheMode ?? "default";
   let cached: PreparedCompose["cached"] = null;
   if (cacheMode === "default") {
-    const hit = await getSpecCacheSafely(ctx, policy, traceBase, intent, key);
+    const hit = await getSpecCacheSafely(ctx, policy, traceBase);
     if (hit != null) {
       const spec: UISpec = { ...hit, provenance: { ...hit.provenance, cache: "hit" } };
       const trace = buildComposeTrace(
@@ -317,15 +319,13 @@ async function withCacheFailOpen<T>(
 async function getSpecCacheSafely(
   ctx: ComposeContext,
   policy: ComposePolicy,
-  traceBase: Pick<TraceBase, "input" | "correlationId" | "traceContext">,
-  intent: CanonicalIntent,
-  key: string,
+  traceBase: Pick<TraceBase, "input" | "intent" | "cacheKey" | "correlationId" | "traceContext">,
 ): Promise<UISpec | null> {
   return withCacheFailOpen(
     ctx,
     policy,
-    { input: traceBase.input, intent, cacheKey: key, ...traceIdentity(traceBase) },
-    () => ctx.storage.getSpecCache(key),
+    { ...composeIdentityOf(traceBase), ...traceIdentity(traceBase) },
+    () => ctx.storage.getSpecCache(traceBase.cacheKey),
     null,
   );
 }
@@ -339,12 +339,7 @@ async function putSpecCacheSafely(
   await withCacheFailOpen(
     ctx,
     prepared.policy,
-    {
-      input: prepared.traceBase.input,
-      intent: prepared.intent,
-      cacheKey: prepared.key,
-      ...traceIdentity(prepared.traceBase),
-    },
+    { ...composeIdentityOf(prepared.traceBase), ...traceIdentity(prepared.traceBase) },
     () => ctx.storage.putSpecCache(prepared.key, spec, prepared.policy.ttlSeconds),
     undefined,
   );
@@ -372,34 +367,29 @@ export async function generateSpec(
 }
 
 /**
- * The L0 fixed-Spec short-circuit. If lookup hits, runs all the way through assemble → post-processing →
- * cache store → trace, and on a miss returns null (the caller proceeds to the L1/L2 ladder).
+ * The L0 fixed-Spec short-circuit. If lookup hits, the template becomes an ok TierOutcome of tier "L0" and
+ * runs through the same tail as an L1/L2 result (buildSpecFromOutcome → persistAndTrace: assemble →
+ * post-processing → cache store → trace, with no attempts and hence no usage to report), and on a miss
+ * returns null (the caller proceeds to the L1/L2 ladder).
  */
 async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Promise<GenerateOutcome | null> {
-  const { intent, refs, cacheMode } = prepared;
+  const { intent, refs } = prepared;
   // Shared with composeStream's fast-path check via PreparedCompose.getFixedSpec (memoized) — see its doc.
   const fixed = await prepared.getFixedSpec();
   if (fixed == null) return null;
 
-  const cacheLabel = cacheLabelOf(cacheMode);
   const template = typeof fixed === "function" ? fixed(intent, refs.handles) : fixed;
-  const assembled = assembleSpec({
-    intent,
-    refs,
+  const outcome: TierOutcome = {
+    kind: "ok",
+    tier: "L0",
     components: template.components,
     events: template.events,
-    tier: "L0",
-    cache: cacheLabel,
-    ...provenanceStampsOf(ctx.policy),
+    model: undefined,
     // Carry the fixed template's state over to the delivered Spec (preserve visibleWhen's initial state).
     ...(template.state != null ? { state: template.state } : {}),
-  });
-  const l0spec = postAndValidate(assembled, refs, ctx);
-  if (shouldPersist(l0spec, cacheMode)) {
-    await putSpecCacheSafely(ctx, prepared, l0spec);
-  }
-  const trace = buildComposeTrace(prepared, { cache: cacheLabel, tier: "L0", attempts: [] });
-  return { spec: l0spec, trace };
+  };
+  const spec = buildSpecFromOutcome(prepared, ctx, outcome);
+  return persistAndTrace(prepared, ctx, spec, outcome, []);
 }
 
 /**
@@ -407,7 +397,7 @@ async function tryFixedSpec(prepared: PreparedCompose, ctx: ComposeContext): Pro
  * the deterministic fallback Spec and fires the observation hook exactly once (the once-per-generation contract is fixed here).
  */
 function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, outcome: TierOutcome): UISpec {
-  const { intent, refs, key, cacheMode, traceBase } = prepared;
+  const { intent, refs, cacheMode, traceBase } = prepared;
   const cacheLabel = cacheLabelOf(cacheMode);
 
   if (outcome.kind === "ok") {
@@ -420,6 +410,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
       cache: cacheLabel,
       ...(outcome.model != null ? { model: outcome.model } : {}),
       ...provenanceStampsOf(ctx.policy),
+      ...(outcome.state != null ? { state: outcome.state } : {}),
     });
     return postAndValidate(assembled, refs, ctx);
   }
@@ -445,9 +436,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
     ctx,
     {
       phase: outcome.cancelled === true ? "cancelled" : "fallback",
-      input: traceBase.input,
-      intent,
-      cacheKey: key,
+      ...composeIdentityOf(traceBase),
       tier: outcome.from,
       reason: outcome.reason,
       ...(outcome.budgetExceeded ? { budgetExceeded: true } : {}),
@@ -461,7 +450,7 @@ function buildSpecFromOutcome(prepared: PreparedCompose, ctx: ComposeContext, ou
 
 /**
  * After the cache store (the condition/timing is consolidated in shouldPersist), builds the ComposeTrace
- * for the leader. Because the L0 short-circuit does the equivalent store/trace on the tryFixedSpec side, this is dedicated to the L1/L2/fallback path.
+ * for the leader. Shared by the L0 short-circuit (tryFixedSpec) and the L1/L2/fallback path.
  */
 async function persistAndTrace(
   prepared: PreparedCompose,
@@ -474,8 +463,8 @@ async function persistAndTrace(
   const cacheLabel = cacheLabelOf(cacheMode);
 
   const usage = sumUsage(attempts);
-  // Fail-open, once per compose that actually generated (a cache hit / L0 short-circuit never reaches
-  // this function at all; a no-attempts fallback has usage:undefined and is excluded by
+  // Fail-open, once per compose that actually generated (a cache hit never reaches this function; an L0
+  // short-circuit and a no-attempts fallback have usage:undefined and are excluded by
   // notifyBudgetUsage's own check) — see ComposeBudget.onUsage's doc. Runs before the cache store: with
   // `cacheFailure: "closed"` a failing put rethrows, and the tokens already spent on generation must
   // still be charged (else every retry during a cache outage would generate uncharged).
