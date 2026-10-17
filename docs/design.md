@@ -194,6 +194,8 @@ flowchart TB
     SAVE --> OUT
 ```
 
+`ComposePolicy` is declared as six concern slices (`ComposeCachePolicy` / `ComposeTierPolicy` / `ComposeGenerationPolicy` / `ComposeL1Policy` / `ComposeL2Policy` / `ComposeAssemblePolicy`) merged by interface extension, so a reader of one tier looks at its slice only; the Python port keeps a single `ComposePolicy` dataclass (a type-level split has no runtime counterpart).
+
 ### The two-stage structure of L1 constrained generation
 
 To limit the LLM's role to "selection from the catalog + typed props filling," the generation schema is built dynamically (registry `buildGenerationSchema`):

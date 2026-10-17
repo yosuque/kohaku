@@ -22,7 +22,11 @@ export interface FixedSpecSource {
   ): Promise<UISpec | ((intent: CanonicalIntent, refs: QueryHandle[]) => UISpec) | null>;
 }
 
-export interface ComposePolicy {
+/**
+ * The Spec-cache concern of `ComposePolicy`: how a compose interacts with the Spec cache (`compose.ts`)
+ * and the stamps that identify a generation (`compose.ts` cache key, `assemble.ts` provenance).
+ */
+export interface ComposeCachePolicy {
   // Only "default" | "bypass" are supported: a "refresh" mode (force a miss while keeping the rest of
   // cache behavior) has no caller today, and adding it requires a matching enum addition to
   // provenance.cache, so it is left out until a real use case needs it.
@@ -35,11 +39,23 @@ export interface ComposePolicy {
    * be strict rather than degrade silently.
    */
   cacheFailure?: "open" | "closed";
-  /** Maximum number of repair "re-"attempts on L1 generation failure (default 1; combined with the initial generation, calls the LLM at most 2 times) */
-  maxRepairAttempts?: number;
+  ttlSeconds?: number;
+  /**
+   * The generator version. When specified it becomes the 6th component of the cache key, separating
+   * the cache by generation across prompt revisions and model changes. The default uses the composer's
+   * defaultGeneratorVersion(llm). When unspecified it matches the conventional 5-component key exactly
+   * (backward compatible).
+   */
+  generatorVersion?: string;
+}
+
+/**
+ * The tier-routing concern of `ComposePolicy`: the L0 fixed-Spec entry, whether L2 is reachable, how an
+ * intent is routed to a tier, and the budget guard around the LLM calls (`compose.ts` L0 lookup,
+ * `tier-ladder.ts`).
+ */
+export interface ComposeTierPolicy {
   fixedSpecs?: FixedSpecSource;
-  /** Product-extension rules for deterministic post-processing (applied after the 4 standard rules) */
-  extraRules?: PostRule[];
   /** When false (default), L1 failure = the deterministic fallback Spec with presentMarkdown */
   allowL2?: boolean;
   /**
@@ -54,14 +70,50 @@ export interface ComposePolicy {
    * for why the row is folded in only when non-default.
    */
   routeTier?: ((intent: CanonicalIntent) => "L1" | "L2" | undefined) & { id?: string };
-  ttlSeconds?: number;
   /**
-   * The generator version. When specified it becomes the 6th component of the cache key, separating
-   * the cache by generation across prompt revisions and model changes. The default uses the composer's
-   * defaultGeneratorVersion(llm). When unspecified it matches the conventional 5-component key exactly
-   * (backward compatible).
+   * Cost/token budget guard. When specified, the budget is checked immediately before an LLM call
+   * (before L1 generation, before repair, before L2), and on overage it skips L1 repair re-attempts and
+   * L2 promotion and downgrades to the deterministic fallback (fallback.ts). The downgraded Spec is not
+   * cached (it rides the non-persistence rule for fallbacks). A downgrade can be distinguished from
+   * provenance.fallback's reason and observer.onError (ctx.budgetExceeded / reason).
+   * **When unspecified, both behavior and performance are completely unchanged** (the budget-check code runs only when budget != null).
    */
-  generatorVersion?: string;
+  budget?: ComposeBudget;
+}
+
+/**
+ * The concern of `ComposePolicy` shared by L1 and L2 generation (`tiers/l1-generate.ts` and
+ * `tiers/l2-generate.ts` both read these; `tiers/shared.ts`'s `resolveMaxAttempts` serves both tiers).
+ */
+export interface ComposeGenerationPolicy {
+  /** Maximum number of repair "re-"attempts on L1 generation failure (default 1; combined with the initial generation, calls the LLM at most 2 times) */
+  maxRepairAttempts?: number;
+  /**
+   * The language of user-visible text in generated output (L1 heading titles, L2 widget text).
+   * Inserted into the generation prompts as an "Output language" section. Default "English".
+   * Changing it changes the prompt content — always bump generatorVersion (same rule as designSystem/fewShot).
+   */
+  outputLanguage?: string;
+  /**
+   * Per-tier Adaptive Reasoning effort (`@kohaku-ui/llm`'s `LlmEffort`), threaded to the L1 constrained
+   * generation call (`tiers/l1-generate.ts`) and the L2 free-form HTML call (`tiers/l2-generate.ts`)
+   * respectively as `GenerateObjectRequest`/`GenerateTextRequest.effort`. `l1`/`l2` are independent: L1 is
+   * constrained catalog selection (usually cheap to reason about) while L2 is free-form generation (may
+   * benefit from more effort) — an operator can set either, both, or neither. A tier left unset sends no
+   * `effort` at all for that call (provider default; identical to this field never existing). A port that
+   * does not implement effort control (FakeLlm/FixtureLlm, or a provider `adapters/ai-sdk.ts` has no
+   * matching option for) ignores it.
+   *
+   * Included in `policyFingerprint` whenever this object is set (any `l1`/`l2` combination, including both
+   * left unset) because effort can change the generated output for the same Intent/model. **When
+   * unspecified, `policyFingerprint` and the cacheKey are completely unchanged** (same contract as
+   * `ComposeL1Policy.refConstraint`).
+   */
+  effort?: { l1?: LlmEffort; l2?: LlmEffort };
+}
+
+/** The L1 (constrained catalog generation) concern of `ComposePolicy` (`tiers/l1-generate.ts`). */
+export interface ComposeL1Policy {
   /**
    * Candidate narrowing of the L1 generation vocabulary. Returns the component types to put on
    * the generation schema/prompt depending on the intent.
@@ -79,12 +131,6 @@ export interface ComposePolicy {
   selectComponents?: ((intent: CanonicalIntent, catalog: ResolvedCatalog) => string[] | undefined) & {
     id?: string;
   };
-  /**
-   * The language of user-visible text in generated output (L1 heading titles, L2 widget text).
-   * Inserted into the generation prompts as an "Output language" section. Default "English".
-   * Changing it changes the prompt content — always bump generatorVersion (same rule as designSystem/fewShot).
-   */
-  outputLanguage?: string;
   /**
    * Supply good examples (few-shot) to L1 generation to self-reinforce (3-9). When specified, a
    * "examples of good composition" section is inserted into the generation prompt after the catalog and
@@ -109,34 +155,6 @@ export interface ComposePolicy {
     id?: string;
   };
   /**
-   * Cost/token budget guard. When specified, the budget is checked immediately before an LLM call
-   * (before L1 generation, before repair, before L2), and on overage it skips L1 repair re-attempts and
-   * L2 promotion and downgrades to the deterministic fallback (fallback.ts). The downgraded Spec is not
-   * cached (it rides the non-persistence rule for fallbacks). A downgrade can be distinguished from
-   * provenance.fallback's reason and observer.onError (ctx.budgetExceeded / reason).
-   * **When unspecified, both behavior and performance are completely unchanged** (the budget-check code runs only when budget != null).
-   */
-  budget?: ComposeBudget;
-  /**
-   * Design-system application to L2 free generation (optional). When specified, a "design system" section
-   * (token vocabulary + natural-language rules) is inserted into the L2 prompt, and the output is
-   * contracted to write styles with token references var(--kohaku-*) (the values are injected by the
-   * sandbox at render time — keeping theme independence: styles reference tokens rather than baking in
-   * concrete color values, so cached output survives across light/dark and brand-theme swaps).
-   * enforceTokenColors (default true) lints (L2_RAW_COLOR) raw color values back for repair.
-   * **Changing the content and on/off alter the prompt content, so always bump generatorVersion**
-   * (same rule as few-shot; this value is not included in the cacheKey). When unspecified, both behavior and output bytes are completely unchanged.
-   */
-  designSystem?: DesignSystemGuide;
-  /**
-   * Pre-delivery smoke validation of L2-generated HTML (optional). Called after the static lint
-   * (collectL2Issues) passes; if the return value is non-empty it is sent back as repair issues
-   * ([] = pass). A throw is fail-open (skip the check = conventional behavior; same style as the budget
-   * hook — a validator fault does not stop L2 delivery).
-   * When not wired, behavior is completely unchanged. The implementation is provided by createL2Smoke() of @kohaku-ui/sandbox/smoke (wiring is the app's responsibility).
-   */
-  l2Smoke?: (html: string, ctx: { ref?: string; shape?: DataShape }) => Promise<string[]>;
-  /**
    * How `data.$ref` on L1-generated components is constrained to the resolved QueryHandle set
    * (SPEC §4's "MUST be constrained ... at the schema stage or the validation stage"). Default `"schema"`
    * (unchanged conventional behavior): `buildL1GenerationSchema` pins `data.$ref` to an enum of the
@@ -158,23 +176,56 @@ export interface ComposePolicy {
    * actually sent to the LLM, which can change the generated output for the same Intent.
    */
   refConstraint?: "schema" | "validate";
-  /**
-   * Per-tier Adaptive Reasoning effort (`@kohaku-ui/llm`'s `LlmEffort`), threaded to the L1 constrained
-   * generation call (`tiers/l1-generate.ts`) and the L2 free-form HTML call (`tiers/l2-generate.ts`)
-   * respectively as `GenerateObjectRequest`/`GenerateTextRequest.effort`. `l1`/`l2` are independent: L1 is
-   * constrained catalog selection (usually cheap to reason about) while L2 is free-form generation (may
-   * benefit from more effort) — an operator can set either, both, or neither. A tier left unset sends no
-   * `effort` at all for that call (provider default; identical to this field never existing). A port that
-   * does not implement effort control (FakeLlm/FixtureLlm, or a provider `adapters/ai-sdk.ts` has no
-   * matching option for) ignores it.
-   *
-   * Included in `policyFingerprint` whenever this object is set (any `l1`/`l2` combination, including both
-   * left unset) because effort can change the generated output for the same Intent/model. **When
-   * unspecified, `policyFingerprint` and the cacheKey are completely unchanged** (same contract as
-   * `refConstraint` above).
-   */
-  effort?: { l1?: LlmEffort; l2?: LlmEffort };
 }
+
+/**
+ * The L2 (free-form HTML generation) concern of `ComposePolicy`. `designSystem` is read by
+ * `tiers/l2-generate.ts`, by `assemble.ts`'s `provenanceStampsOf` (the kit stamp) and by
+ * `policy-fingerprint.ts`; `l2Smoke` is read by `tiers/l2-generate.ts` only.
+ */
+export interface ComposeL2Policy {
+  /**
+   * Design-system application to L2 free generation (optional). When specified, a "design system" section
+   * (token vocabulary + natural-language rules) is inserted into the L2 prompt, and the output is
+   * contracted to write styles with token references var(--kohaku-*) (the values are injected by the
+   * sandbox at render time — keeping theme independence: styles reference tokens rather than baking in
+   * concrete color values, so cached output survives across light/dark and brand-theme swaps).
+   * enforceTokenColors (default true) lints (L2_RAW_COLOR) raw color values back for repair.
+   * **Changing the content and on/off alter the prompt content, so always bump generatorVersion**
+   * (same rule as few-shot; this value is not included in the cacheKey). When unspecified, both behavior and output bytes are completely unchanged.
+   */
+  designSystem?: DesignSystemGuide;
+  /**
+   * Pre-delivery smoke validation of L2-generated HTML (optional). Called after the static lint
+   * (collectL2Issues) passes; if the return value is non-empty it is sent back as repair issues
+   * ([] = pass). A throw is fail-open (skip the check = conventional behavior; same style as the budget
+   * hook — a validator fault does not stop L2 delivery).
+   * When not wired, behavior is completely unchanged. The implementation is provided by createL2Smoke() of @kohaku-ui/sandbox/smoke (wiring is the app's responsibility).
+   */
+  l2Smoke?: (html: string, ctx: { ref?: string; shape?: DataShape }) => Promise<string[]>;
+}
+
+/** The deterministic post-processing concern of `ComposePolicy` (`assemble.ts`). */
+export interface ComposeAssemblePolicy {
+  /** Product-extension rules for deterministic post-processing (applied after the 4 standard rules) */
+  extraRules?: PostRule[];
+}
+
+/**
+ * The compose policy: every per-compose / per-session tuning knob, declared as six concern slices
+ * (`ComposeCachePolicy`, `ComposeTierPolicy`, `ComposeGenerationPolicy`, `ComposeL1Policy`,
+ * `ComposeL2Policy`, `ComposeAssemblePolicy`) merged by interface extension, so the reader of one tier
+ * looks at its own slice only. A new field goes into the slice of the module that reads it
+ * (`policy-fingerprint.ts` reads across slices and keeps taking the whole `ComposePolicy`). The slices
+ * are a type-level split only: the runtime object, its defaults and its cache-key material are unchanged.
+ */
+export interface ComposePolicy
+  extends ComposeCachePolicy,
+    ComposeTierPolicy,
+    ComposeGenerationPolicy,
+    ComposeL1Policy,
+    ComposeL2Policy,
+    ComposeAssemblePolicy {}
 
 /**
  * Configuration of the cost/token budget guard. The check runs immediately before an LLM call, and

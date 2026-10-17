@@ -194,6 +194,8 @@ flowchart TB
     SAVE --> OUT
 ```
 
+`ComposePolicy` は 6 つの関心事スライス(`ComposeCachePolicy` / `ComposeTierPolicy` / `ComposeGenerationPolicy` / `ComposeL1Policy` / `ComposeL2Policy` / `ComposeAssemblePolicy`)として宣言され、interface の extends で合成されている。各 tier の読み手は自分のスライスだけを見ればよい。Python 版は単一の `ComposePolicy` dataclass のままである(型レベルの分割には実行時の対応物がないため)。
+
 ### L1 制約付き生成の二段構え
 
 LLM の役割を「カタログからの選択 + 型付き props 充填」に限定するため、生成スキーマを動的構築する(registry `buildGenerationSchema`):
