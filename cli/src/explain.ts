@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { ExplainReport, Transport } from "@kohaku-ui/client";
 import { type UISpec, UISpecSchema } from "@kohaku-ui/spec-core";
+import { errorMessage } from "./error-message.js";
 import { parseHeaderArgs } from "./header-args.js";
 import { createRestClient } from "./rest-client.js";
 
@@ -36,9 +37,7 @@ export async function runExplain(requestId: string, opts: ExplainOptions): Promi
     try {
       raw = JSON.parse(readFileSync(opts.specPath, "utf8"));
     } catch (e) {
-      throw new Error(
-        `Cannot read/parse --spec ${opts.specPath} (${e instanceof Error ? e.message : String(e)})`,
-      );
+      throw new Error(`Cannot read/parse --spec ${opts.specPath} (${errorMessage(e)})`);
     }
     spec = UISpecSchema.parse(raw);
   }

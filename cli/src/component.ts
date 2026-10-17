@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import semver from "semver";
+import { errorMessage } from "./error-message.js";
 
 export interface ComponentValidationIssue {
   field: string;
@@ -14,9 +15,7 @@ export function validateComponentFile(path: string): ComponentValidationIssue[] 
     def = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   } catch (e) {
     // As on the index.ts side, stringify non-Error values with String(e) (unified error formatting).
-    return [
-      { field: "(file)", message: `Cannot read as JSON: ${e instanceof Error ? e.message : String(e)}` },
-    ];
+    return [{ field: "(file)", message: `Cannot read as JSON: ${errorMessage(e)}` }];
   }
 
   if (

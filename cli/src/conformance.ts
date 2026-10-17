@@ -5,6 +5,7 @@ import {
   runRestSuite,
   runSpecFormatSuite,
 } from "@kohaku-ui/spec/conformance";
+import { errorMessage } from "./error-message.js";
 
 /** conformance --self: self-check of the Spec format */
 export async function runSelfConformance(): Promise<ConformanceReport> {
@@ -32,7 +33,7 @@ export function parseIntentArg(json: string): ComposeIntentArg {
     parsed = JSON.parse(json);
   } catch (e) {
     throw new Error(
-      `Cannot parse the --intent JSON (${e instanceof Error ? e.message : String(e)}). Example: --intent '{"canonical":"sales.trend","params":{}}'`,
+      `Cannot parse the --intent JSON (${errorMessage(e)}). Example: --intent '{"canonical":"sales.trend","params":{}}'`,
     );
   }
   const obj = parsed as Record<string, unknown> | null;
@@ -63,7 +64,7 @@ async function checkReachable(base: string, baseUrl: string): Promise<void> {
   try {
     await fetch(`${base}/catalog`);
   } catch (e) {
-    const cause = e instanceof Error ? e.message : String(e);
+    const cause = errorMessage(e);
     throw new Error(
       `Cannot reach ${baseUrl} (${cause}). Is the host running? (pnpm dev / cd python && uv run python -m sales_api)`,
     );

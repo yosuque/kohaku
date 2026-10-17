@@ -1,6 +1,7 @@
 import { collectScriptSyntaxIssues } from "@kohaku-ui/composer";
 import { createL2Smoke } from "@kohaku-ui/sandbox/smoke";
 import type { DataShape } from "@kohaku-ui/spec-core";
+import { errorMessage } from "./error-message.js";
 
 /**
  * Input for the smoke-l2 subcommand (stdin JSON).
@@ -32,7 +33,7 @@ export function parseSmokeL2Input(json: string): SmokeL2Input {
   try {
     parsed = JSON.parse(json);
   } catch (e) {
-    throw new Error(`Cannot parse the smoke-l2 stdin JSON (${e instanceof Error ? e.message : String(e)})`);
+    throw new Error(`Cannot parse the smoke-l2 stdin JSON (${errorMessage(e)})`);
   }
   const obj = parsed as Record<string, unknown> | null;
   if (obj == null || typeof obj !== "object" || Array.isArray(obj)) {
