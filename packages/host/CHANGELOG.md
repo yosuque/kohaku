@@ -1,5 +1,45 @@
 # @kohaku-ui/host
 
+## 0.5.0
+
+### Minor Changes
+
+- [#81](https://github.com/yosuque/kohaku/pull/81) [`7dada20`](https://github.com/yosuque/kohaku/commit/7dada207c923752a410219d26bd073216ee5814d) Thanks [@yosuque](https://github.com/yosuque)! - Structural refactoring, round two (behavior-preserving):
+  
+  - `@kohaku-ui/host/mcp-http` (new subpath): `createMcpHttpServer`, the Streamable-HTTP scaffold (Host/Origin guards, echoed-Origin CORS, OPTIONS preflight, size-capped body pre-read, stateless `createMcpHandler` wiring) that `apps/sample-mcp` used to carry inline. `@modelcontextprotocol/node` becomes an optional peer dependency, needed only for this subpath. Defaults follow the server `kohaku init --mcp` generates; every place the sample answers differently is an explicit option. The init template itself still carries its own copy and switches after this release.
+  - `@kohaku-ui/host-core`: `buildActionManifestSafely` and `recordComposedAndFallback`, the order-neutral delivery helpers both host profiles now call (each host keeps its own step order and `onError` endpoint names; characterization tests pin them).
+  - `@kohaku-ui/spec-core`: `src/ports.ts` is now a barrel over one file per Port under `src/ports/` (plus `theme-tokens.ts`); every exported name and import path is unchanged.
+  - `@kohaku-ui/host-rest`: the compose pipeline helpers (capability issuance, fixation host) live in `routes/compose-pipeline.ts`.
+  - `@kohaku-ui/cli`: one registration module per command under `cli/src/cli/`, result printers next to their runners as `format*` functions; `--help` output and exit codes are unchanged (pinned by a help snapshot test).
+
+### Patch Changes
+
+- [#85](https://github.com/yosuque/kohaku/pull/85) [`b06ee97`](https://github.com/yosuque/kohaku/commit/b06ee972794cb1c64dba2a23114791c13f9de9f6) Thanks [@yosuque](https://github.com/yosuque)! - Raise the MCP TypeScript SDK floor to the 2.3 line: `@modelcontextprotocol/server` / `client` / `core` `^2.3.1` (were `^2.0.0`), `@modelcontextprotocol/node` `^2.1.1`, `@modelcontextprotocol/ext-apps` `^2.0.3`. The peer ranges of `@kohaku-ui/host-mcp-apps` (`server`), `@kohaku-ui/host` (`server`, `node`) and `@kohaku-ui/mcp-renderer` (`ext-apps`) follow, and `kohaku init --mcp` now generates projects that depend on `@modelcontextprotocol/server` `^2.3.1` and `@modelcontextprotocol/node` `^2.1.1`. No source change was needed for the types.
+  
+  Observed behavior change of the Tasks extension (`io.modelcontextprotocol/tasks`) under SDK 2.3 (the published 0.4.0 declares `^2.0.0`, so its users already resolve SDK 2.3.x):
+  
+  - SDK 2.0.0 rejected `tasks/get` / `tasks/cancel` with `-32601` before kohaku's handlers ran. Since SDK 2.3.0 (SEP-2663) the SDK lets those two names through when a schema-explicit handler is registered, which kohaku does, so they are now reachable. The SDK also requires `Mcp-Name: <taskId>` on them (SDK clients send it); a request without it is rejected with `-32020` before dispatch.
+  - `AttachOptions.tasksEnabled` unset (the default, unchanged): no behavior change. The extension is neither declared nor registered, `tasks/get` / `tasks/cancel` still answer `-32601`, and the compose family stays synchronous.
+  - `AttachOptions.tasksEnabled: true`: `tasks/get` and `tasks/cancel` went from unreachable to working. A task-backed `kohaku_compose` can now be polled to `completed` and cancelled over the wire.
+  
+  The `host-mcp-apps` tripwire tests were updated accordingly, and cancellation is now tested through a real `tasks/cancel`. The default of `tasksEnabled` is a separate product decision and is left unchanged.
+
+- [#87](https://github.com/yosuque/kohaku/pull/87) [`184f84f`](https://github.com/yosuque/kohaku/commit/184f84f28ce53aaa241d7df017f3fec13b9e3380) Thanks [@yosuque](https://github.com/yosuque)! - MCP Streamable HTTP CORS: the preflight now also allows the standard `mcp-method` and `mcp-name` request headers (SEP-2243). The MCP SDK client sends them on modern-era requests and the server's HTTP entry validates them, so a cross-origin browser caller was rejected at the preflight before. This applies to `createMcpHttpServer` (`@kohaku-ui/host/mcp-http`) and to the server `kohaku init --mcp` generates. `Mcp-Param-<Name>` headers (sent only for tools declaring `x-mcp-header`) are not in the default list because a CORS allow-list cannot wildcard a prefix; a product that declares one adds it through the `corsAllowHeaders` option.
+- Updated dependencies [[`b06ee97`](https://github.com/yosuque/kohaku/commit/b06ee972794cb1c64dba2a23114791c13f9de9f6), [`7dada20`](https://github.com/yosuque/kohaku/commit/7dada207c923752a410219d26bd073216ee5814d), [`b336fcb`](https://github.com/yosuque/kohaku/commit/b336fcbcefb08f8eb8240f5a61cf45db4a43721e), [`4742970`](https://github.com/yosuque/kohaku/commit/4742970f69c41259e940f656bf7605e42cb3f141), [`2a0bcd6`](https://github.com/yosuque/kohaku/commit/2a0bcd6eb50b5317c79c2e59345f52487b7ca6e6)]:
+  - @kohaku-ui/host-mcp-apps@0.5.0
+  - @kohaku-ui/host-core@0.5.0
+  - @kohaku-ui/spec-core@0.5.0
+  - @kohaku-ui/host-rest@0.5.0
+  - @kohaku-ui/composer@0.5.0
+  - @kohaku-ui/lineage@0.5.0
+  - @kohaku-ui/storage-memory@0.5.0
+  - @kohaku-ui/semantic-llm@0.5.0
+  - @kohaku-ui/authz-hmac@0.5.0
+  - @kohaku-ui/data-binding@0.5.0
+  - @kohaku-ui/intents@0.5.0
+  - @kohaku-ui/llm@0.5.0
+  - @kohaku-ui/registry@0.5.0
+
 ## 0.4.1
 
 ### Patch Changes
