@@ -1,0 +1,153 @@
+import { createKohakuClient, type ComposeView } from "@kohaku-ui/client";
+import { createBindingClient } from "@kohaku-ui/data-binding";
+import { defaultLightTheme } from "@kohaku-ui/renderer-core";
+import { RendererProvider, SpecView, type SurfaceEvent } from "@kohaku-ui/renderer-react";
+import { createCoreRegistry } from "@kohaku-ui/renderer-react/core";
+import { type ReactNode, StrictMode, useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+const client = createKohakuClient({ baseUrl: "/api/kohaku" });
+const impls = createCoreRegistry();
+
+interface FacetView {
+  intent: string;
+  label: string;
+  facets: { key: string; label: string; options: { value: string; label: string }[]; allowEmpty?: string }[];
+}
+
+/** Renders a composed Spec. Both surfaces (dashboard and chat) go through this, so identical Specs render identically. */
+function Surface(props: { view: ComposeView; onEvent?: (e: SurfaceEvent) => void }): ReactNode {
+  const binding = useMemo(() => createBindingClient({ baseUrl: "/api/kohaku", capability: props.view.capability }), [props.view.capability]);
+  const value = useMemo(
+    () => ({ impls, binding, theme: defaultLightTheme, ...(props.onEvent != null ? { onEvent: props.onEvent } : {}) }),
+    [binding, props.onEvent],
+  );
+  return (
+    <RendererProvider value={value}>
+      <SpecView spec={props.view.spec} />
+    </RendererProvider>
+  );
+}
+
+function Dashboard(): ReactNode {
+  const [views, setViews] = useState<FacetView[]>([]);
+  const [intent, setIntent] = useState<string | null>(null);
+  const [params, setParams] = useState<Record<string, string>>({});
+  const [view, setView] = useState<ComposeView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/app/facet-views")
+      .then((r) => r.json())
+      .then((json: { views: FacetView[] }) => {
+        setViews(json.views);
+        setIntent(json.views[0]?.intent ?? null);
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    if (intent == null) return;
+    setError(null);
+    client
+      .compose({ input: { kind: "gui", action: "view.select", params: { intent, ...params } }, session: { surface: "web" } })
+      .then(setView)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, [intent, params]);
+
+  const current = views.find((v) => v.intent === intent);
+  const onEvent = (e: SurfaceEvent): void => {
+    if (view == null) return;
+    client
+      .sendEvent({ intent: { canonical: view.spec.intent.canonical, params: view.spec.intent.params }, on: e.on, payload: e.payload, session: { surface: "web" } })
+      .then(setView)
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 24 }}>
+      <aside style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <label>
+          View
+          <select value={intent ?? ""} onChange={(e) => { setIntent(e.target.value); setParams({}); }}>
+            {views.map((v) => <option key={v.intent} value={v.intent}>{v.label}</option>)}
+          </select>
+        </label>
+        {current?.facets.map((f) => (
+          <label key={f.key}>
+            {f.label}
+            <select value={params[f.key] ?? ""} onChange={(e) => setParams({ ...params, [f.key]: e.target.value })}>
+              {f.allowEmpty != null && <option value="">{f.allowEmpty}</option>}
+              {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </label>
+        ))}
+      </aside>
+      <main>
+        {error != null && <p style={{ color: "#b91c1c" }}>{error}</p>}
+        {view != null && (
+          <>
+            <p style={{ fontSize: 12, color: "#6b7280" }}>
+              {view.spec.provenance.tier} · cache:{view.spec.provenance.cache}
+            </p>
+            <Surface view={view} onEvent={onEvent} />
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function Chat(): ReactNode {
+  const [text, setText] = useState("");
+  const [items, setItems] = useState<{ question: string; intent?: string; view?: ComposeView; error?: string }[]>([]);
+  const ask = async (): Promise<void> => {
+    const question = text.trim();
+    if (question === "") return;
+    setText("");
+    setItems((prev) => [...prev, { question }]);
+    try {
+      const { intent } = await client.normalizeIntent({ input: { kind: "nl", text: question }, session: { surface: "chat" } });
+      const view = await client.compose({ intent: { canonical: intent.canonical, params: intent.params }, session: { surface: "chat" } });
+      setItems((prev) => prev.map((it) => (it.question === question && it.view == null ? { ...it, intent: intent.canonical, view } : it)));
+    } catch (e) {
+      const error = e instanceof Error ? e.message : String(e);
+      setItems((prev) => prev.map((it) => (it.question === question && it.view == null ? { ...it, error } : it)));
+    }
+  };
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {items.map((it, i) => (
+        <div key={i}>
+          <p><strong>You:</strong> {it.question}</p>
+          {it.intent != null && <p style={{ fontSize: 12, color: "#6b7280" }}>→ {it.intent}</p>}
+          {it.error != null && <p style={{ color: "#b91c1c" }}>{it.error}</p>}
+          {it.view != null && <Surface view={it.view} />}
+        </div>
+      ))}
+      <form onSubmit={(e) => { e.preventDefault(); void ask(); }} style={{ display: "flex", gap: 8 }}>
+        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask about your data…" style={{ flex: 1, padding: 8 }} />
+        <button type="submit">Ask</button>
+      </form>
+    </div>
+  );
+}
+
+function App(): ReactNode {
+  const [tab, setTab] = useState<"dashboard" | "chat">("dashboard");
+  return (
+    <div style={{ fontFamily: "system-ui, sans-serif", padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+      <nav style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button type="button" onClick={() => setTab("dashboard")} disabled={tab === "dashboard"}>Dashboard</button>
+        <button type="button" onClick={() => setTab("chat")} disabled={tab === "chat"}>Chat</button>
+      </nav>
+      {tab === "dashboard" ? <Dashboard /> : <Chat />}
+    </div>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);

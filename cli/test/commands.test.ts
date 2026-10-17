@@ -3,18 +3,12 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import {
-  type ExportDatasetResult,
-  exportDataset,
-  parseIntentArg,
-  parseSmokeL2Input,
-  runRestConformance,
-  runSelfConformance,
-  runSmokeL2,
-  scaffoldGolden,
-  scaffoldPorts,
-  validateComponentFile,
-} from "../src/commands.js";
+import { validateComponentFile } from "../src/component.js";
+import { parseIntentArg, runRestConformance, runSelfConformance } from "../src/conformance.js";
+import { type ExportDatasetResult, exportDataset } from "../src/dataset.js";
+import { writeScaffold } from "../src/scaffold-fs.js";
+import { GOLDEN_TARGET, PORTS_TARGET } from "../src/scaffold-targets.js";
+import { parseSmokeL2Input, runSmokeL2 } from "../src/smoke-l2.js";
 
 const tmpDirs: string[] = [];
 
@@ -73,9 +67,9 @@ describe("validateComponentFile", () => {
   });
 });
 
-describe("scaffoldPorts", () => {
+describe("scaffold ports (writeScaffold + PORTS_TARGET)", () => {
   it("generates ports.ts / intents.ts / server.ts in an empty directory", () => {
-    const written = scaffoldPorts(tmp());
+    const written = writeScaffold(PORTS_TARGET.files(tmp()));
     expect(written).toHaveLength(3);
     expect(written.some((p) => p.endsWith("ports.ts"))).toBe(true);
     expect(written.some((p) => p.endsWith("intents.ts"))).toBe(true);
@@ -85,7 +79,7 @@ describe("scaffoldPorts", () => {
   it("throws without overwriting when a file already exists", () => {
     const dir = tmp();
     writeFileSync(join(dir, "ports.ts"), "// existing");
-    expect(() => scaffoldPorts(dir)).toThrow(/already exists/);
+    expect(() => writeScaffold(PORTS_TARGET.files(dir))).toThrow(/already exists/);
   });
 
   it("throws without partially generating ports.ts / intents.ts even when only server.ts exists (atomicity)", () => {
@@ -93,16 +87,16 @@ describe("scaffoldPorts", () => {
     // collision would leave them behind. This guarantees that every file is checked before writing.
     const dir = tmp();
     writeFileSync(join(dir, "server.ts"), "// existing");
-    expect(() => scaffoldPorts(dir)).toThrow(/already exists/);
+    expect(() => writeScaffold(PORTS_TARGET.files(dir))).toThrow(/already exists/);
     expect(existsSync(join(dir, "ports.ts"))).toBe(false);
     expect(existsSync(join(dir, "intents.ts"))).toBe(false);
   });
 });
 
-describe("scaffoldGolden", () => {
+describe("scaffold golden (writeScaffold + GOLDEN_TARGET)", () => {
   it("generates golden.test.ts and golden/README.md", () => {
     const dir = tmp();
-    const written = scaffoldGolden(dir);
+    const written = writeScaffold(GOLDEN_TARGET.files(dir));
     expect(written).toHaveLength(2);
     expect(existsSync(join(dir, "golden.test.ts"))).toBe(true);
     expect(existsSync(join(dir, "golden", "README.md"))).toBe(true);
@@ -110,7 +104,7 @@ describe("scaffoldGolden", () => {
 
   it("the generated golden.test.ts contains runGolden wiring and update instructions", () => {
     const dir = tmp();
-    scaffoldGolden(dir);
+    writeScaffold(GOLDEN_TARGET.files(dir));
     const test = readFileSync(join(dir, "golden.test.ts"), "utf8");
     // The heart of the regression (runGolden) and the deterministic response source (FakeLlm) are wired up
     expect(test).toContain("runGolden");
@@ -125,7 +119,7 @@ describe("scaffoldGolden", () => {
   it("throws without overwriting when a file already exists", () => {
     const dir = tmp();
     writeFileSync(join(dir, "golden.test.ts"), "// existing");
-    expect(() => scaffoldGolden(dir)).toThrow(/already exists/);
+    expect(() => writeScaffold(GOLDEN_TARGET.files(dir))).toThrow(/already exists/);
   });
 
   it("throws without partially generating golden/README.md even when only golden.test.ts exists (atomicity)", () => {
@@ -133,7 +127,7 @@ describe("scaffoldGolden", () => {
     // leave README behind. This guarantees that every file is checked before writing.
     const dir = tmp();
     writeFileSync(join(dir, "golden.test.ts"), "// existing");
-    expect(() => scaffoldGolden(dir)).toThrow(/already exists/);
+    expect(() => writeScaffold(GOLDEN_TARGET.files(dir))).toThrow(/already exists/);
     expect(existsSync(join(dir, "golden", "README.md"))).toBe(false);
   });
 });

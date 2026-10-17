@@ -1,0 +1,169 @@
+#!/usr/bin/env node
+/**
+ * Registers this project's MCP server with Claude Desktop: merges the entry from
+ * claude_desktop_config.example.json (generated alongside this script by `kohaku init --mcp`) into Claude
+ * Desktop's own config file, after backing the existing file up to `<config>.bak`.
+ *
+ * Usage:
+ *   npm run mcp:claude-desktop            # back up (if a config already exists) + write
+ *   npm run mcp:claude-desktop -- --print # print the merged result; write nothing
+ *
+ * Restart Claude Desktop afterwards to pick up the change.
+ *
+ * The config file location is auto-detected per OS (see claudeDesktopConfigPath) -- override it with
+ * --config <path> or the KOHAKU_CLAUDE_DESKTOP_CONFIG environment variable if Claude Desktop's config lives
+ * somewhere nonstandard on your machine.
+ */
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir, platform } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+const PROJECT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const EXAMPLE_CONFIG_PATH = join(PROJECT_ROOT, "claude_desktop_config.example.json");
+
+/**
+ * Claude Desktop's own config file path for the current platform. `env`/`plat` are injectable (tests pass
+ * a temporary HOME so this never touches a real user's config).
+ */
+export function claudeDesktopConfigPath(env = process.env, plat = platform()) {
+  const home = env.HOME ?? homedir();
+  if (plat === "darwin") {
+    return join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json");
+  }
+  if (plat === "win32") {
+    return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
+  }
+  return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Claude", "claude_desktop_config.json");
+}
+
+/**
+ * Reads a JSON config file; an absent file reads as {} (nothing to merge with / into yet). A file that
+ * exists but is not valid JSON, is not a JSON object at the top level (e.g. an array or null), or has a
+ * non-object "mcpServers" field, throws instead of guessing -- silently treating a malformed Claude Desktop
+ * config as {} would merge into an empty object and, once written, drop every one of the person's other
+ * registered MCP servers.
+ */
+export function readJsonConfig(path) {
+  if (!existsSync(path)) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    throw new Error(
+      `${path} is not valid JSON (${e instanceof Error ? e.message : String(e)}). Nothing was written -- fix or remove the file and try again.`,
+    );
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(
+      `${path} must be a JSON object at the top level. Nothing was written -- fix or remove the file and try again.`,
+    );
+  }
+  if (
+    "mcpServers" in parsed &&
+    (parsed.mcpServers === null || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers))
+  ) {
+    throw new Error(
+      `${path}'s "mcpServers" field must be a JSON object. Nothing was written -- fix or remove the file and try again.`,
+    );
+  }
+  return parsed;
+}
+
+/**
+ * Pure merge (no I/O): overlays `example`'s mcpServers entries onto `target`'s. Every other top-level key
+ * in `target`, and every mcpServers entry `example` does not declare, is preserved untouched -- this never
+ * clobbers a person's other MCP server registrations. Running this twice with the same `example` is a
+ * no-op the second time (the merged result already equals `example`'s entries, so re-merging changes
+ * nothing), which is what makes `npm run mcp:claude-desktop` safe to run more than once.
+ */
+export function mergeMcpConfig(target, example) {
+  return {
+    ...target,
+    mcpServers: {
+      ...(target.mcpServers ?? {}),
+      ...(example.mcpServers ?? {}),
+    },
+  };
+}
+
+/**
+ * Does the actual read-merge-(print-or-write) work, parameterized over env/plat (see
+ * claudeDesktopConfigPath) so it is directly callable with a temporary HOME from a test, with no child
+ * process and no risk of ever touching a real Claude Desktop config. Returns what happened rather than
+ * just logging it, so a test can assert on configPath / merged / backedUp directly.
+ *
+ * configPathOverride bypasses claudeDesktopConfigPath's own per-OS detection entirely when given (real
+ * users never need it -- the per-OS default is what they want). It exists so a test driving this through a
+ * real subprocess (main(), below) can pin the exact config path independent of the CI host's actual
+ * platform: env/plat alone are not enough there, since a real child process always reports its own real
+ * platform() regardless of what env.HOME is set to.
+ */
+export function syncClaudeDesktopConfig({
+  env = process.env,
+  plat = platform(),
+  printOnly = false,
+  configPathOverride,
+} = {}) {
+  const example = readJsonConfig(EXAMPLE_CONFIG_PATH);
+  const configPath = configPathOverride ?? claudeDesktopConfigPath(env, plat);
+  const merged = mergeMcpConfig(readJsonConfig(configPath), example);
+
+  if (printOnly) {
+    return { configPath, merged, wrote: false, backedUp: false };
+  }
+
+  mkdirSync(dirname(configPath), { recursive: true });
+  const backedUp = existsSync(configPath);
+  if (backedUp) {
+    writeFileSync(`${configPath}.bak`, readFileSync(configPath, "utf8"));
+  }
+  writeFileSync(configPath, `${JSON.stringify(merged, null, 2)}
+`);
+  return { configPath, merged, wrote: true, backedUp };
+}
+
+/**
+ * The value following a literal "--config" in argv, if present (e.g. ["--config", "/tmp/x.json"] -> the
+ * path). Overrides the per-OS default -- mainly useful for tests driving this script as a real subprocess,
+ * where env.HOME alone cannot pin the config path independent of the host's actual platform().
+ */
+function configPathArg(argv) {
+  const i = argv.indexOf("--config");
+  return i === -1 ? undefined : argv[i + 1];
+}
+
+function main() {
+  const printOnly = process.argv.includes("--print");
+  const configPathOverride = configPathArg(process.argv) ?? process.env.KOHAKU_CLAUDE_DESKTOP_CONFIG;
+  let result;
+  try {
+    result = syncClaudeDesktopConfig({ printOnly, configPathOverride });
+  } catch (e) {
+    console.error(`claude-desktop.mjs: ${e instanceof Error ? e.message : String(e)}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (printOnly) {
+    console.log(JSON.stringify(result.merged, null, 2));
+    return;
+  }
+  console.log(`Registered with Claude Desktop: ${result.configPath}`);
+  console.log("Restart Claude Desktop to pick up the change.");
+}
+
+// Run only when launched directly (npm run mcp:claude-desktop); importing this module (e.g. from a test)
+// has no side effects beyond the pure/read-only exports above. realpathSync matters here: on macOS, the
+// system temp directory is reached through a symlink (/tmp -> /private/tmp, /var -> /private/var), so
+// process.argv[1] (the literal path node was invoked with) and import.meta.url (already resolved through
+// the symlink by the module loader) would otherwise never compare equal, silently skipping main()
+// entirely -- exactly the failure this comment is here to prevent a future edit from reintroducing.
+let isMain = false;
+if (process.argv[1] !== undefined) {
+  try {
+    isMain = import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    isMain = false;
+  }
+}
+if (isMain) main();

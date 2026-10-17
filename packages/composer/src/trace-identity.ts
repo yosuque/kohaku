@@ -1,4 +1,19 @@
-import type { TraceContext } from "./trace.js";
+import type { TraceBase, TraceContext } from "./trace.js";
+
+/**
+ * Picks the `input` / `intent` / `cacheKey` triple that every observer-context object for one compose
+ * starts with (ComposeErrorContext, BudgetCheckErrorContext) out of the compose's TraceBase. Spread it
+ * where the three keys used to be written out by hand (`cacheKey: key` etc.), so each site keeps its own
+ * key order. Deliberately excludes correlationId/traceContext: a site that carries them appends
+ * `traceIdentity(...)` itself, and one that does not (the budget-check error context) must not gain them.
+ */
+export function composeIdentityOf(traceBase: Pick<TraceBase, "input" | "intent" | "cacheKey">): {
+  input: TraceBase["input"];
+  intent: TraceBase["intent"];
+  cacheKey: TraceBase["cacheKey"];
+} {
+  return { input: traceBase.input, intent: traceBase.intent, cacheKey: traceBase.cacheKey };
+}
 
 /**
  * Picks the correlationId/traceContext pair out of a source that carries them (ComposeOptions,

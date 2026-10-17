@@ -1,7 +1,15 @@
 import type { ResolveOptions } from "@kohaku-ui/data-binding";
-import type { ComponentNode, JsonObject, JsonValue, TabularColumn, UISpec } from "@kohaku-ui/spec-core";
+import type {
+  ComponentNode,
+  JsonObject,
+  JsonValue,
+  TabularColumn,
+  TabularData,
+  UISpec,
+} from "@kohaku-ui/spec-core";
 import { type ActionManifest, preflightAction } from "../control/action-manifest.js";
 import { resolveInvokeTarget } from "../control/invoke.js";
+import type { RendererMessages } from "../messages.js";
 import type { SizingTokens } from "../theme.js";
 
 /** Local sort state (column + ascending/descending). */
@@ -442,6 +450,59 @@ export function describeSortHeader(col: TabularColumn, sort: SortState | undefin
     ariaSort,
     arrow,
   };
+}
+
+/**
+ * The footer's fully-derived view model. `server` is the serverSide total/pager bar, which always
+ * renders (even when every field is undefined, in which case it is an empty bar); `local` is the
+ * "N of total" truncation notice; `null` means no footer at all.
+ */
+export type SpreadsheetFooterDescriptor =
+  | {
+      kind: "server";
+      /** The pre-formatted total text; undefined when the source reported no total. */
+      total: string | undefined;
+      /** The "first page" button label; undefined on the first page (no cursor in play). */
+      firstPage: string | undefined;
+      /** The "next page" button label and the cursor to navigate to; undefined on the last page. */
+      nextPage: { label: string; cursor: string } | undefined;
+    }
+  | { kind: "local"; total: string }
+  | null;
+
+/**
+ * Derives the footer view model both renderers branch on, so the decision of which footer parts
+ * exist cannot drift between them. serverSide: total text when data.total was reported, a "first
+ * page" button when a cursor is in play, a "next page" button when data.nextCursor exists. Local:
+ * the truncation notice when localFooterTotal reports one (it is evaluated only when not serverSide).
+ * Label strings are formatted here exactly as the renderers did inline; styles and event wiring stay
+ * with each renderer.
+ */
+export function describeSpreadsheetFooter(args: {
+  data: TabularData;
+  shown: number;
+  serverSide: boolean;
+  cursor: string | undefined;
+  messages: Pick<RendererMessages, "spreadsheetTotal" | "spreadsheetFirstPage" | "spreadsheetNextPage">;
+  locale: string;
+}): SpreadsheetFooterDescriptor {
+  const { data, shown, serverSide, cursor, messages, locale } = args;
+  if (serverSide) {
+    return {
+      kind: "server",
+      total:
+        data.total != null ? messages.spreadsheetTotal(data.total.toLocaleString(locale), shown) : undefined,
+      firstPage: cursor != null ? messages.spreadsheetFirstPage : undefined,
+      nextPage:
+        data.nextCursor != null
+          ? { label: messages.spreadsheetNextPage, cursor: data.nextCursor }
+          : undefined,
+    };
+  }
+  const localTotal = localFooterTotal(data, shown);
+  return localTotal != null
+    ? { kind: "local", total: messages.spreadsheetTotal(localTotal.toLocaleString(locale), shown) }
+    : null;
 }
 
 // --- Style constants/functions shared verbatim by both renderers (React's style prop and WC's setStyle consume the same shape). ---

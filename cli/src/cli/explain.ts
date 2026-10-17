@@ -19,7 +19,7 @@ export function register(program: Command): void {
     .option("--spec <file>", "Path to a UISpec JSON file; adds capability scopes to the report")
     .action(
       async (requestId: string, opts: { rest: string; header: string[]; json?: boolean; spec?: string }) => {
-        const { formatExplainReport, runExplain } = await import("../commands.js");
+        const { formatExplainReport, runExplain } = await import("../explain.js");
         const { CliUsageError } = await import("../usage-error.js");
         let report: ExplainReport;
         try {

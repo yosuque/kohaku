@@ -5,11 +5,11 @@ import {
   chartTableStyle,
   createSpreadsheetRemoteController,
   describeSortHeader,
+  describeSpreadsheetFooter,
   effectiveRows,
   formatCell,
   hasDeclaredEvent,
   isActivationKey,
-  localFooterTotal,
   planCellEdit,
   type RowsWorkingCopy,
   resolveColumns,
@@ -429,32 +429,38 @@ function appendFooter(
 ): void {
   const { border, accent, muted } = opts.colors;
   const sizing = rt.sizing;
-  if (opts.serverSide) {
+  const footer = describeSpreadsheetFooter({
+    data,
+    shown,
+    serverSide: opts.serverSide,
+    cursor: opts.cursor,
+    messages: rt.messages,
+    locale: rt.locale,
+  });
+  if (footer == null) return;
+  if (footer.kind === "server") {
     const bar = el("div", {}, spreadsheetFooterBarStyle({ muted }, sizing));
-    if (data.total != null) {
+    if (footer.total != null) {
       const span = el("span");
-      span.appendChild(text(rt.messages.spreadsheetTotal(data.total.toLocaleString(rt.locale), shown)));
+      span.appendChild(text(footer.total));
       bar.appendChild(span);
     }
-    if (opts.cursor != null) {
-      const b = pagerButton(rt.messages.spreadsheetFirstPage, { border, accent }, sizing);
+    if (footer.firstPage != null) {
+      const b = pagerButton(footer.firstPage, { border, accent }, sizing);
       b.addEventListener("click", () => opts.onFirstPage());
       bar.appendChild(b);
     }
-    if (data.nextCursor != null) {
-      const next = data.nextCursor;
-      const b = pagerButton(rt.messages.spreadsheetNextPage, { border, accent }, sizing);
+    if (footer.nextPage != null) {
+      const next = footer.nextPage.cursor;
+      const b = pagerButton(footer.nextPage.label, { border, accent }, sizing);
       b.addEventListener("click", () => opts.onNextPage(next));
       bar.appendChild(b);
     }
     wrapper.appendChild(bar);
   } else {
-    const localTotal = localFooterTotal(data, shown);
-    if (localTotal != null) {
-      const div = el("div", {}, spreadsheetFooterTotalStyle({ muted }, sizing));
-      div.appendChild(text(rt.messages.spreadsheetTotal(localTotal.toLocaleString(rt.locale), shown)));
-      wrapper.appendChild(div);
-    }
+    const div = el("div", {}, spreadsheetFooterTotalStyle({ muted }, sizing));
+    div.appendChild(text(footer.total));
+    wrapper.appendChild(div);
   }
 }
 

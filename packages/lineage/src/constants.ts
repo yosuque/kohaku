@@ -19,7 +19,7 @@ export const USAGE_SCAN_WINDOW = 10_000;
 export const NOMINATED_SCAN_WINDOW = 10_000;
 
 /**
- * Tail window for `component.published` / `component.withdrawn` when `reconcile` (promotion/service.ts) checks
+ * Tail window for `component.published` / `component.withdrawn` when `reconcile` (promotion/reconcile.ts) checks
  * for an existing audit record before backfilling one. Fetched once per `reconcile()` call (across every
  * artifact/tenant combined) instead of once per published/withdrawn snapshot, avoiding the N+1 of a dedicated
  * `listLineage` round trip per candidate.

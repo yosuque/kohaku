@@ -1,17 +1,15 @@
 import type { LlmEffort, LlmPort } from "@kohaku-ui/llm";
 import type { ResolvedCatalog, SurfaceCapabilities } from "@kohaku-ui/registry";
-import {
-  type CanonicalIntent,
-  canonicalStringify,
-  type DataShape,
-  type JsonObject,
-  type QueryHandle,
-  type SemanticInput,
-  type SemanticPort,
-  type SessionContext,
-  type StoragePort,
-  sha256Hex,
-  type UISpec,
+import type {
+  CanonicalIntent,
+  DataShape,
+  JsonObject,
+  QueryHandle,
+  SemanticInput,
+  SemanticPort,
+  SessionContext,
+  StoragePort,
+  UISpec,
 } from "@kohaku-ui/spec-core";
 import type { DesignSystemGuide } from "./design-system.js";
 import type { PostRule } from "./post/types.js";
@@ -24,7 +22,11 @@ export interface FixedSpecSource {
   ): Promise<UISpec | ((intent: CanonicalIntent, refs: QueryHandle[]) => UISpec) | null>;
 }
 
-export interface ComposePolicy {
+/**
+ * The Spec-cache concern of `ComposePolicy`: how a compose interacts with the Spec cache (`compose.ts`)
+ * and the stamps that identify a generation (`compose.ts` cache key, `assemble.ts` provenance).
+ */
+export interface ComposeCachePolicy {
   // Only "default" | "bypass" are supported: a "refresh" mode (force a miss while keeping the rest of
   // cache behavior) has no caller today, and adding it requires a matching enum addition to
   // provenance.cache, so it is left out until a real use case needs it.
@@ -37,25 +39,6 @@ export interface ComposePolicy {
    * be strict rather than degrade silently.
    */
   cacheFailure?: "open" | "closed";
-  /** Maximum number of repair "re-"attempts on L1 generation failure (default 1; combined with the initial generation, calls the LLM at most 2 times) */
-  maxRepairAttempts?: number;
-  fixedSpecs?: FixedSpecSource;
-  /** Product-extension rules for deterministic post-processing (applied after the 4 standard rules) */
-  extraRules?: PostRule[];
-  /** When false (default), L1 failure = the deterministic fallback Spec with presentMarkdown */
-  allowL2?: boolean;
-  /**
-   * Routing such as skipping L1 and going directly to L2 depending on the intent.
-   *
-   * An optional `id` may be attached to the function value, the same convention as
-   * `selectComponents.id` (`Object.assign` a plain function with `{ id: "..." }`, or declare it as
-   * `((intent) => ...) & { id?: string }`). Together with `allowL2`, it is folded into
-   * `policyFingerprint`'s `tierGate` material (this module's `policyFingerprint`) so that a
-   * tenant/session policy that actually reaches L2 (or swaps to a different `routeTier`) never
-   * shares a cache key with one that cannot (SPEC CMP-DET-002) — see `fingerprintTierGate`'s own doc
-   * for why the row is folded in only when non-default.
-   */
-  routeTier?: ((intent: CanonicalIntent) => "L1" | "L2" | undefined) & { id?: string };
   ttlSeconds?: number;
   /**
    * The generator version. When specified it becomes the 6th component of the cache key, separating
@@ -64,6 +47,73 @@ export interface ComposePolicy {
    * (backward compatible).
    */
   generatorVersion?: string;
+}
+
+/**
+ * The tier-routing concern of `ComposePolicy`: the L0 fixed-Spec entry, whether L2 is reachable, how an
+ * intent is routed to a tier, and the budget guard around the LLM calls (`compose.ts` L0 lookup,
+ * `tier-ladder.ts`).
+ */
+export interface ComposeTierPolicy {
+  fixedSpecs?: FixedSpecSource;
+  /** When false (default), L1 failure = the deterministic fallback Spec with presentMarkdown */
+  allowL2?: boolean;
+  /**
+   * Routing such as skipping L1 and going directly to L2 depending on the intent.
+   *
+   * An optional `id` may be attached to the function value, the same convention as
+   * `selectComponents.id` (`Object.assign` a plain function with `{ id: "..." }`, or declare it as
+   * `((intent) => ...) & { id?: string }`). Together with `allowL2`, it is folded into
+   * `policyFingerprint`'s `tierGate` material (policy-fingerprint.ts's `policyFingerprint`) so that a
+   * tenant/session policy that actually reaches L2 (or swaps to a different `routeTier`) never
+   * shares a cache key with one that cannot (SPEC CMP-DET-002) — see `fingerprintTierGate`'s own doc
+   * for why the row is folded in only when non-default.
+   */
+  routeTier?: ((intent: CanonicalIntent) => "L1" | "L2" | undefined) & { id?: string };
+  /**
+   * Cost/token budget guard. When specified, the budget is checked immediately before an LLM call
+   * (before L1 generation, before repair, before L2), and on overage it skips L1 repair re-attempts and
+   * L2 promotion and downgrades to the deterministic fallback (fallback.ts). The downgraded Spec is not
+   * cached (it rides the non-persistence rule for fallbacks). A downgrade can be distinguished from
+   * provenance.fallback's reason and observer.onError (ctx.budgetExceeded / reason).
+   * **When unspecified, both behavior and performance are completely unchanged** (the budget-check code runs only when budget != null).
+   */
+  budget?: ComposeBudget;
+}
+
+/**
+ * The concern of `ComposePolicy` shared by L1 and L2 generation (`tiers/l1-generate.ts` and
+ * `tiers/l2-generate.ts` both read these; `tiers/shared.ts`'s `resolveMaxAttempts` serves both tiers).
+ */
+export interface ComposeGenerationPolicy {
+  /** Maximum number of repair "re-"attempts on L1 generation failure (default 1; combined with the initial generation, calls the LLM at most 2 times) */
+  maxRepairAttempts?: number;
+  /**
+   * The language of user-visible text in generated output (L1 heading titles, L2 widget text).
+   * Inserted into the generation prompts as an "Output language" section. Default "English".
+   * Changing it changes the prompt content — always bump generatorVersion (same rule as designSystem/fewShot).
+   */
+  outputLanguage?: string;
+  /**
+   * Per-tier Adaptive Reasoning effort (`@kohaku-ui/llm`'s `LlmEffort`), threaded to the L1 constrained
+   * generation call (`tiers/l1-generate.ts`) and the L2 free-form HTML call (`tiers/l2-generate.ts`)
+   * respectively as `GenerateObjectRequest`/`GenerateTextRequest.effort`. `l1`/`l2` are independent: L1 is
+   * constrained catalog selection (usually cheap to reason about) while L2 is free-form generation (may
+   * benefit from more effort) — an operator can set either, both, or neither. A tier left unset sends no
+   * `effort` at all for that call (provider default; identical to this field never existing). A port that
+   * does not implement effort control (FakeLlm/FixtureLlm, or a provider `adapters/ai-sdk.ts` has no
+   * matching option for) ignores it.
+   *
+   * Included in `policyFingerprint` whenever this object is set (any `l1`/`l2` combination, including both
+   * left unset) because effort can change the generated output for the same Intent/model. **When
+   * unspecified, `policyFingerprint` and the cacheKey are completely unchanged** (same contract as
+   * `ComposeL1Policy.refConstraint`).
+   */
+  effort?: { l1?: LlmEffort; l2?: LlmEffort };
+}
+
+/** The L1 (constrained catalog generation) concern of `ComposePolicy` (`tiers/l1-generate.ts`). */
+export interface ComposeL1Policy {
   /**
    * Candidate narrowing of the L1 generation vocabulary. Returns the component types to put on
    * the generation schema/prompt depending on the intent.
@@ -73,7 +123,7 @@ export interface ComposePolicy {
    *
    * An optional `id` may be attached to the function value (a function is an object; `Object.assign` a
    * plain function with `{ id: "..." }`, or declare it as `((intent, catalog) => ...) & { id?: string }`).
-   * When present, `id` is folded into policyFingerprint (this module's `policyFingerprint`) so that
+   * When present, `id` is folded into policyFingerprint (policy-fingerprint.ts's `policyFingerprint`) so that
    * swapping to a different selectComponents implementation for the same policy shape automatically
    * separates the cache key; when absent it fingerprints as `"anonymous"` (not required — existing
    * callers that never set it see no change to the fingerprint or the cache key).
@@ -81,12 +131,6 @@ export interface ComposePolicy {
   selectComponents?: ((intent: CanonicalIntent, catalog: ResolvedCatalog) => string[] | undefined) & {
     id?: string;
   };
-  /**
-   * The language of user-visible text in generated output (L1 heading titles, L2 widget text).
-   * Inserted into the generation prompts as an "Output language" section. Default "English".
-   * Changing it changes the prompt content — always bump generatorVersion (same rule as designSystem/fewShot).
-   */
-  outputLanguage?: string;
   /**
    * Supply good examples (few-shot) to L1 generation to self-reinforce (3-9). When specified, a
    * "examples of good composition" section is inserted into the generation prompt after the catalog and
@@ -104,40 +148,12 @@ export interface ComposePolicy {
     maxExamples?: number;
     /**
      * An optional identifier for this few-shot supply source. When present, it is folded into
-     * policyFingerprint (this module's `policyFingerprint`) so that swapping the example source for the
+     * policyFingerprint (policy-fingerprint.ts's `policyFingerprint`) so that swapping the example source for the
      * same policy shape automatically separates the cache key; when absent it fingerprints as
      * `"anonymous"` (not required — existing callers that never set it see no change).
      */
     id?: string;
   };
-  /**
-   * Cost/token budget guard. When specified, the budget is checked immediately before an LLM call
-   * (before L1 generation, before repair, before L2), and on overage it skips L1 repair re-attempts and
-   * L2 promotion and downgrades to the deterministic fallback (fallback.ts). The downgraded Spec is not
-   * cached (it rides the non-persistence rule for fallbacks). A downgrade can be distinguished from
-   * provenance.fallback's reason and observer.onError (ctx.budgetExceeded / reason).
-   * **When unspecified, both behavior and performance are completely unchanged** (the budget-check code runs only when budget != null).
-   */
-  budget?: ComposeBudget;
-  /**
-   * Design-system application to L2 free generation (optional). When specified, a "design system" section
-   * (token vocabulary + natural-language rules) is inserted into the L2 prompt, and the output is
-   * contracted to write styles with token references var(--kohaku-*) (the values are injected by the
-   * sandbox at render time — keeping theme independence: styles reference tokens rather than baking in
-   * concrete color values, so cached output survives across light/dark and brand-theme swaps).
-   * enforceTokenColors (default true) lints (L2_RAW_COLOR) raw color values back for repair.
-   * **Changing the content and on/off alter the prompt content, so always bump generatorVersion**
-   * (same rule as few-shot; this value is not included in the cacheKey). When unspecified, both behavior and output bytes are completely unchanged.
-   */
-  designSystem?: DesignSystemGuide;
-  /**
-   * Pre-delivery smoke validation of L2-generated HTML (optional). Called after the static lint
-   * (collectL2Issues) passes; if the return value is non-empty it is sent back as repair issues
-   * ([] = pass). A throw is fail-open (skip the check = conventional behavior; same style as the budget
-   * hook — a validator fault does not stop L2 delivery).
-   * When not wired, behavior is completely unchanged. The implementation is provided by createL2Smoke() of @kohaku-ui/sandbox/smoke (wiring is the app's responsibility).
-   */
-  l2Smoke?: (html: string, ctx: { ref?: string; shape?: DataShape }) => Promise<string[]>;
   /**
    * How `data.$ref` on L1-generated components is constrained to the resolved QueryHandle set
    * (SPEC §4's "MUST be constrained ... at the schema stage or the validation stage"). Default `"schema"`
@@ -160,23 +176,56 @@ export interface ComposePolicy {
    * actually sent to the LLM, which can change the generated output for the same Intent.
    */
   refConstraint?: "schema" | "validate";
-  /**
-   * Per-tier Adaptive Reasoning effort (`@kohaku-ui/llm`'s `LlmEffort`), threaded to the L1 constrained
-   * generation call (`tiers/l1-generate.ts`) and the L2 free-form HTML call (`tiers/l2-generate.ts`)
-   * respectively as `GenerateObjectRequest`/`GenerateTextRequest.effort`. `l1`/`l2` are independent: L1 is
-   * constrained catalog selection (usually cheap to reason about) while L2 is free-form generation (may
-   * benefit from more effort) — an operator can set either, both, or neither. A tier left unset sends no
-   * `effort` at all for that call (provider default; identical to this field never existing). A port that
-   * does not implement effort control (FakeLlm/FixtureLlm, or a provider `adapters/ai-sdk.ts` has no
-   * matching option for) ignores it.
-   *
-   * Included in `policyFingerprint` whenever this object is set (any `l1`/`l2` combination, including both
-   * left unset) because effort can change the generated output for the same Intent/model. **When
-   * unspecified, `policyFingerprint` and the cacheKey are completely unchanged** (same contract as
-   * `refConstraint` above).
-   */
-  effort?: { l1?: LlmEffort; l2?: LlmEffort };
 }
+
+/**
+ * The L2 (free-form HTML generation) concern of `ComposePolicy`. `designSystem` is read by
+ * `tiers/l2-generate.ts`, by `assemble.ts`'s `provenanceStampsOf` (the kit stamp) and by
+ * `policy-fingerprint.ts`; `l2Smoke` is read by `tiers/l2-generate.ts` only.
+ */
+export interface ComposeL2Policy {
+  /**
+   * Design-system application to L2 free generation (optional). When specified, a "design system" section
+   * (token vocabulary + natural-language rules) is inserted into the L2 prompt, and the output is
+   * contracted to write styles with token references var(--kohaku-*) (the values are injected by the
+   * sandbox at render time — keeping theme independence: styles reference tokens rather than baking in
+   * concrete color values, so cached output survives across light/dark and brand-theme swaps).
+   * enforceTokenColors (default true) lints (L2_RAW_COLOR) raw color values back for repair.
+   * **Changing the content and on/off alter the prompt content, so always bump generatorVersion**
+   * (same rule as few-shot; this value is not included in the cacheKey). When unspecified, both behavior and output bytes are completely unchanged.
+   */
+  designSystem?: DesignSystemGuide;
+  /**
+   * Pre-delivery smoke validation of L2-generated HTML (optional). Called after the static lint
+   * (collectL2Issues) passes; if the return value is non-empty it is sent back as repair issues
+   * ([] = pass). A throw is fail-open (skip the check = conventional behavior; same style as the budget
+   * hook — a validator fault does not stop L2 delivery).
+   * When not wired, behavior is completely unchanged. The implementation is provided by createL2Smoke() of @kohaku-ui/sandbox/smoke (wiring is the app's responsibility).
+   */
+  l2Smoke?: (html: string, ctx: { ref?: string; shape?: DataShape }) => Promise<string[]>;
+}
+
+/** The deterministic post-processing concern of `ComposePolicy` (`assemble.ts`). */
+export interface ComposeAssemblePolicy {
+  /** Product-extension rules for deterministic post-processing (applied after the 4 standard rules) */
+  extraRules?: PostRule[];
+}
+
+/**
+ * The compose policy: every per-compose / per-session tuning knob, declared as six concern slices
+ * (`ComposeCachePolicy`, `ComposeTierPolicy`, `ComposeGenerationPolicy`, `ComposeL1Policy`,
+ * `ComposeL2Policy`, `ComposeAssemblePolicy`) merged by interface extension, so the reader of one tier
+ * looks at its own slice only. A new field goes into the slice of the module that reads it
+ * (`policy-fingerprint.ts` reads across slices and keeps taking the whole `ComposePolicy`). The slices
+ * are a type-level split only: the runtime object, its defaults and its cache-key material are unchanged.
+ */
+export interface ComposePolicy
+  extends ComposeCachePolicy,
+    ComposeTierPolicy,
+    ComposeGenerationPolicy,
+    ComposeL1Policy,
+    ComposeL2Policy,
+    ComposeAssemblePolicy {}
 
 /**
  * Configuration of the cost/token budget guard. The check runs immediately before an LLM call, and
@@ -443,37 +492,6 @@ export function resolveTierLlm(ctx: ComposeContext, tier: "L1" | "L2"): LlmPort 
   return ctx.llmByTier?.[tier] ?? ctx.llm;
 }
 
-/** The extra `policyFingerprint` material contributed by `ComposeContext.llmByTier` — see `tierLlmFingerprintMaterial`. */
-export interface TierLlmFingerprintMaterial {
-  l1?: { provider: string; modelId: string };
-  l2?: { provider: string; modelId: string };
-}
-
-/**
- * Computes the extra `policyFingerprint` material for `ctx.llmByTier` (see that field's own doc on
- * `ComposeContext`). Returns undefined — meaning "contribute nothing, cacheKey unaffected" — whenever
- * `llmByTier` is unset, or whenever every tier it does set resolves to the same `provider`/`modelId` as the
- * base `ctx.llm` (no actual generation difference to separate the cache for). Only when at least one set
- * tier's model genuinely differs from the base does this return the `{provider, modelId}` pairs for the
- * tiers `llmByTier` sets (a tier `llmByTier` never touched contributes nothing of its own — it already
- * generates with the same `ctx.llm` the rest of the cache key's generatorVersion/fingerprint story covers).
- */
-export function tierLlmFingerprintMaterial(ctx: ComposeContext): TierLlmFingerprintMaterial | undefined {
-  if (ctx.llmByTier == null) return undefined;
-  const base = { provider: ctx.llm.provider, modelId: ctx.llm.modelId };
-  const differsFromBase = (llm: LlmPort | undefined): boolean =>
-    llm != null && (llm.provider !== base.provider || llm.modelId !== base.modelId);
-  if (!differsFromBase(ctx.llmByTier.L1) && !differsFromBase(ctx.llmByTier.L2)) return undefined;
-  const material: TierLlmFingerprintMaterial = {};
-  if (ctx.llmByTier.L1 != null) {
-    material.l1 = { provider: ctx.llmByTier.L1.provider, modelId: ctx.llmByTier.L1.modelId };
-  }
-  if (ctx.llmByTier.L2 != null) {
-    material.l2 = { provider: ctx.llmByTier.L2.provider, modelId: ctx.llmByTier.L2.modelId };
-  }
-  return material;
-}
-
 /**
  * Returns a ComposeContext with the policy swapped for the session's (if policyFor is not wired or
  * returns undefined, returns ctx as-is — byte-identical behavior). Resolved once at the entry of
@@ -512,205 +530,3 @@ export function resolveEntryContext(
 // compose.ts's former resolveRefs, which shares this exact resolution sequence). Re-exported here so
 // index.ts's public surface (which imports ResolvedRefs from "./context.js") is unchanged.
 export type { ResolvedRefs } from "./refs.js";
-
-/**
- * A canonical fingerprint (16 hex characters) of the ComposePolicy fields that change prompt content but
- * were, until now, only enforced by the operational convention of bumping `generatorVersion` by hand
- * (outputLanguage / designSystem / fewShot's supply source / selectComponents' narrowing function) — see
- * each field's own doc comment above. prepareCompose (compose.ts) feeds the result into
- * spec-core's `cacheKey` as the 7th component, so a policy shape that actually varies one of these fields
- * separates the cache automatically, without relying on every caller remembering the manual bump.
- *
- * **Returns the empty string when none of the five fields are set to a non-default value** (`policy` is
- * the "classic" shape with no fingerprinted field at all) — spec-core's `cacheKey` treats an empty
- * policyFingerprint exactly like an omitted one, so a policy that never touches these fields produces a
- * cache key byte-identical to before this function existed (no existing cache entry is invalidated by
- * introducing it).
- *
- * fewShot / selectComponents are functions (their actual behavior cannot be inspected), so only their
- * optional `id` participates (default `"anonymous"` when unset — not required, so existing callers that
- * never set `id` see no change in the fingerprint they already had). designSystem folds in a fixed pick of
- * fields — `tokens`, `guidelines`, `enforceTokenColors` — plus two design-kit fields:
- * `kit` folds in the whole object whenever set (a different `id`, `version`, `classes`, `utilities`,
- * `namespaces` or `skeleton` all separate the cache, matching `designKitPromptFragment`'s effect on the L2
- * prompt), and `enforceKitClasses` folds in **only when explicitly `false`** — the same non-default-only
- * pattern as `refConstraint` below, because both `true` and unset mean "the lint runs" and must stay
- * indistinguishable so a kit-less or already-linted cache key is untouched by this addition.
- * **A field folded in "only when non-default" must be written as an ABSENT key (`?? undefined`), never
- * as an explicit `null`**: `canonicalStringify`'s `sortDeep` (spec-core/canonical-json.ts) drops
- * `undefined` entries but keeps `null` ones, so a `null` default would still change the hashed bytes —
- * and therefore the cache key — for every policy that never touches that field. `refConstraint` below
- * folds to `null` in its default case only because that key has been part of this material's byte
- * layout since this function was introduced; a newly added key does not have that grandfathering and
- * must use `undefined` to stay truly additive.
- *
- * `refConstraint` participates **only when set to `"validate"`** — its default `"schema"` (whether set
- * explicitly or left unset) folds in as `null`, identically to being unset, so introducing this field
- * does not perturb the fingerprint (and therefore the cacheKey / any existing fixation-stability golden)
- * for every caller that has not opted into `"validate"`.
- *
- * `policy.effort` participates in full (both `l1`/`l2`, defaulted to `null` when only one is set)
- * whenever the object is set at all — effort changes generated output for the same Intent/model, so any
- * caller that wires it (even to `{}` with neither tier set — an edge case, but still a distinct policy
- * shape from never wiring the field) gets a separated cache key. Never set is indistinguishable from unset.
- *
- * The optional second argument `tierLlm` (compose.ts computes it via `tierLlmFingerprintMaterial(ctx)`
- * — see that function's own doc) folds in the identity of the models actually used per tier when
- * `ComposeContext.llmByTier` is wired to something that actually differs from the base `ctx.llm`. Passed
- * as `undefined` — its default — whenever `llmByTier` is unset or matches the base model everywhere, so a
- * caller that never touches `llmByTier` sees no change here either.
- *
- * **Which keys fold to `null` vs. an absent key, and why the material below looks inconsistent.** Ten of
- * the keys this function emits — `outputLanguage`, `designSystem` itself, `designSystem.tokens`,
- * `designSystem.guidelines`, `designSystem.enforceTokenColors`, `fewShotId`, `selectComponentsId`,
- * `refConstraint`, `effort`, `tierLlm` — fold to an explicit `null` in their default case. That is safe
- * *only* because all ten have been part of this material's hashed byte layout since the day each field
- * was added: every caller that has ever computed a fingerprint already has those `null` bytes baked into
- * its current cache key, so leaving them `null` changes nothing further. **It is not the pattern to copy**
- * — `fingerprintDesignSystem` below appears to write `?? null` ten times over, but that is historical
- * grandfathering, not a model for a new field. `designSystem.kit` / `designSystem.enforceKitClasses`
- * and the top-level `tierGate` row (`fingerprintTierGate`, Policy as Code) show the correct
- * shape for a field added *after* callers already depend on this material's bytes: fold to `undefined`
- * (an absent key), never `null` — see the ABSENT-key paragraph on their own extractor below.
- * **Any new fingerprinted field must follow `kit`/`enforceKitClasses`/`tierGate`, not the other
- * ten** (`canonicalStringify`'s `sortDeep` drops `undefined` but keeps `null` — see spec-core/canonical-json.ts).
- */
-type PolicyFingerprintExtractor = (
-  policy: ComposePolicy,
-  tierLlm: TierLlmFingerprintMaterial | undefined,
-) => unknown;
-
-function fingerprintOutputLanguage(policy: ComposePolicy): unknown {
-  return policy.outputLanguage ?? null;
-}
-
-function fingerprintDesignSystem(policy: ComposePolicy): unknown {
-  const { designSystem } = policy;
-  if (designSystem == null) return null;
-  return {
-    tokens: designSystem.tokens ?? null,
-    guidelines: designSystem.guidelines ?? null,
-    enforceTokenColors: designSystem.enforceTokenColors ?? null,
-    // Folded in only when non-default, and as an ABSENT key (undefined) rather than an
-    // explicit null: canonicalStringify's sortDeep drops undefined entries but KEEPS null
-    // ones (packages/spec-core/src/canonical-json.ts), so writing `?? null` here would add
-    // "kit":null / "enforceKitClasses":null to the hashed bytes of every existing
-    // designSystem-bearing policy that never touches either field, silently invalidating
-    // its compose cache. `undefined` is the only value that reproduces the pre-existing
-    // byte layout exactly. This is the shape a newly added key must use — see
-    // policyFingerprint's own doc comment above for why the three keys above it get away
-    // with `null` instead.
-    //
-    // `kit.classes` is folded in as-is below. `designKitPromptFragment` used to
-    // iterate `Object.entries(kit.classes)` in insertion order, so two vocabularies differing
-    // only in that insertion order emitted different L2 prompt bytes even though
-    // canonicalStringify's sortDeep (packages/spec-core/src/canonical-json.ts) sorts object
-    // keys before hashing and so would otherwise hash two such vocabularies identically — hence
-    // a `classesOrder` array (which sortDeep does not reorder) used to be carried here to force
-    // the cache key to separate on that difference too. `designKitPromptFragment` now presents classes **sorted by name** instead, so the prompt
-    // itself is now a pure function of `kit.classes`' *content*, not its insertion order —
-    // `classesOrder` no longer corresponds to anything the prompt bytes depend on, so it was
-    // removed (its own regression test, "two kits differing only in the insertion order of
-    // classes", now asserts the opposite: that reordering does NOT change the fingerprint).
-    kit: designSystem.kit != null ? { ...designSystem.kit } : undefined,
-    enforceKitClasses: designSystem.enforceKitClasses === false ? false : undefined,
-  };
-}
-
-/**
- * Whether `allowL2`/`routeTier` (the "tier gate") diverge from their conventional defaults
- * (`allowL2` unset/false, `routeTier` unset) — closes SPEC CMP-DET-002's cache-isolation gap: neither
- * field was part of `policyFingerprint` before this row existed, so two sessions differing only in
- * `allowL2` could otherwise share a cache entry produced under the more permissive one (a tenant with
- * `allowL2:false` receiving an L2 Spec that another tenant's `allowL2:true` session actually
- * generated) — see `tenant-cache-isolation.test.ts`.
- *
- * **Folded in as an ABSENT key (`undefined`), not `null`, whenever `allowL2` is not `true` and
- * `routeTier` is unset** — the overwhelming majority of existing policies touch neither field, and
- * this row is new (added after callers already depend on `policyFingerprint`'s current bytes), so
- * unlike the ten grandfathered `null`-default keys above it (see this file's `policyFingerprint` doc
- * comment), it must reproduce the pre-existing byte layout exactly for every such policy — returning
- * `null` here would add `"tierGate":null` to every existing fingerprint and silently invalidate every
- * existing compose cache the first time this ships.
- *
- * Once the row does activate (`allowL2 === true` or `routeTier` set), the material records **whether**
- * L2 is reachable and, when a `routeTier` function is supplied, **which** one — via its optional `id`
- * (`fewShot.id`/`selectComponents.id`'s convention: `"anonymous"` when the function carries no `id`)
- * — not the function's actual per-intent routing decisions, which are unobservable here (same
- * reasoning as `fingerprintSelectComponentsId`).
- */
-function fingerprintTierGate(policy: ComposePolicy): unknown {
-  const allowL2 = policy.allowL2 === true;
-  const { routeTier } = policy;
-  if (!allowL2 && routeTier == null) return undefined;
-  return { allowL2, routeTierId: routeTier != null ? (routeTier.id ?? "anonymous") : null };
-}
-
-function fingerprintFewShotId(policy: ComposePolicy): unknown {
-  const { fewShot } = policy;
-  return fewShot != null ? (fewShot.id ?? "anonymous") : null;
-}
-
-function fingerprintSelectComponentsId(policy: ComposePolicy): unknown {
-  const { selectComponents } = policy;
-  return selectComponents != null ? (selectComponents.id ?? "anonymous") : null;
-}
-
-function fingerprintRefConstraint(policy: ComposePolicy): unknown {
-  return policy.refConstraint === "validate" ? "validate" : null;
-}
-
-function fingerprintEffort(policy: ComposePolicy): unknown {
-  const { effort } = policy;
-  return effort != null ? { l1: effort.l1 ?? null, l2: effort.l2 ?? null } : null;
-}
-
-function fingerprintTierLlm(
-  _policy: ComposePolicy,
-  tierLlm: TierLlmFingerprintMaterial | undefined,
-): unknown {
-  return tierLlm ?? null;
-}
-
-/**
- * Ordered table of (material key, extractor) driving policyFingerprint() — mirrors Python's
- * `_FINGERPRINTED` (python/kohaku/src/kohaku/composer/context.py). One row per ComposePolicy field
- * that changes prompt content but was, until now, only enforced by the operational convention of
- * bumping `generatorVersion` by hand. Each extractor returns `null` when its field contributes
- * nothing (unset / default) — see `policyFingerprint`'s own doc comment above for which fields do
- * that via `?? null` (grandfathered into the byte layout) vs. via `?? undefined` (newly additive,
- * inside `fingerprintDesignSystem`'s returned object only) — and every row's key is always emitted
- * into `material`, including a `null` value, so the shape of the fingerprinted JSON is stable
- * regardless of which fields are set. Add a new row here (and a new extractor above) to fingerprint
- * another field; do not hand-sync a guard condition and an object literal separately.
- */
-// Exported (but not re-exported from index.ts's public barrel) so the characterization test can
-// assert the material key set directly — see the "detects an added/removed key" test in
-// packages/composer/test/policy-fingerprint.test.ts, which fails if a key is added or removed here
-// without the test being updated in the same change (the same purpose as Python's test reaching
-// into `_FINGERPRINTED`).
-export const FINGERPRINTED: ReadonlyArray<readonly [string, PolicyFingerprintExtractor]> = [
-  ["outputLanguage", fingerprintOutputLanguage],
-  ["designSystem", fingerprintDesignSystem],
-  ["fewShotId", fingerprintFewShotId],
-  ["selectComponentsId", fingerprintSelectComponentsId],
-  ["refConstraint", fingerprintRefConstraint],
-  ["effort", fingerprintEffort],
-  ["tierLlm", fingerprintTierLlm],
-  ["tierGate", fingerprintTierGate],
-];
-
-export async function policyFingerprint(
-  policy: ComposePolicy,
-  tierLlm?: TierLlmFingerprintMaterial,
-): Promise<string> {
-  const material: Record<string, unknown> = {};
-  for (const [key, extract] of FINGERPRINTED) {
-    material[key] = extract(policy, tierLlm);
-  }
-  if (Object.values(material).every((value) => value == null)) {
-    return "";
-  }
-  const hex = await sha256Hex(canonicalStringify(material));
-  return hex.slice(0, 16);
-}

@@ -336,13 +336,10 @@ function createReviewTurnaround() {
     },
     result(): LineageSummary["review"] {
       durations.sort((a, b) => a - b);
+      const { p50, p95, max } = durationStats(durations);
       return {
         count: durations.length,
-        durationMs: {
-          p50: quantile(durations, 50),
-          p95: quantile(durations, 95),
-          max: durations.length > 0 ? durations[durations.length - 1]! : null,
-        },
+        durationMs: { p50, p95, max },
         acceptedAsIs,
       };
     },
@@ -563,6 +560,7 @@ export function summarizeLineage(
   }
 
   durations.sort((a, b) => a - b);
+  const { p50, p95, p99, max } = durationStats(durations);
   const denom = composed + fallbackTotal;
   const topN = Math.min(
     Math.max(Math.floor(opts.topIntentsLimit ?? TOP_INTENTS_DEFAULT), 1),
@@ -583,13 +581,7 @@ export function summarizeLineage(
       byKind,
       rate: denom > 0 ? fallbackTotal / denom : 0,
     },
-    durationMs: {
-      count: durations.length,
-      p50: quantile(durations, 50),
-      p95: quantile(durations, 95),
-      p99: quantile(durations, 99),
-      max: durations.length > 0 ? durations[durations.length - 1]! : null,
-    },
+    durationMs: { count: durations.length, p50, p95, p99, max },
     topIntents,
     promotions,
     review: reviewTurnaround.result(),
@@ -614,7 +606,7 @@ export function summarizeUsage(
   const rowFor = (e: LineageEventRecord): UsageRow => {
     const day = e.ts.slice(0, 10);
     const tenant = e.tenant ?? "";
-    const key = `${day}\u0000${tenant}`;
+    const key = usageRowKey(day, tenant);
     let row = rows.get(key);
     if (row == null) {
       row = {
@@ -690,7 +682,7 @@ function compareUsageRows(a: UsageRow, b: UsageRow): number {
 export function mergeUsageRows(a: readonly UsageRow[], b: readonly UsageRow[]): UsageRow[] {
   const merged = new Map<string, UsageRow>();
   for (const row of [...a, ...b]) {
-    const key = `${row.day}\u0000${row.tenant}`;
+    const key = usageRowKey(row.day, row.tenant);
     const into = merged.get(key);
     if (into == null) {
       merged.set(key, {
@@ -720,4 +712,28 @@ function quantile(sorted: number[], p: number): number | null {
   const rank = Math.ceil((p / 100) * sorted.length);
   const idx = Math.min(Math.max(rank - 1, 0), sorted.length - 1);
   return sorted[idx]!;
+}
+
+/**
+ * The percentile / max values both duration summaries report, from an ascending-sorted array (each null if
+ * empty). Values only: the callers keep their own object literals, since the key set and order of each
+ * summary's `durationMs` is part of the response body.
+ */
+function durationStats(sorted: number[]): {
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  max: number | null;
+} {
+  return {
+    p50: quantile(sorted, 50),
+    p95: quantile(sorted, 95),
+    p99: quantile(sorted, 99),
+    max: sorted.length > 0 ? sorted[sorted.length - 1]! : null,
+  };
+}
+
+/** The `(day, tenant)` key of a usage row (NUL-separated, so no day/tenant text can collide). */
+function usageRowKey(day: string, tenant: string): string {
+  return `${day}\u0000${tenant}`;
 }

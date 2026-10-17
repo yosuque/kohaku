@@ -37,7 +37,7 @@ export function usageIndexKey(tenant: string | undefined, artifactId: string): s
 /**
  * Reduces a set of lineage events (typically `component.generated`) to, per `(tenant, artifactId)` key (see
  * `usageIndexKey`), the single event with the greatest `ts`. Shared by the three call sites that each used to
- * build this same "latest generated per key" index with their own copy of the loop (service.ts's `reconcile`,
+ * build this same "latest generated per key" index with their own copy of the loop (reconcile.ts's `reconcile`,
  * and candidate-store.ts's `scanCandidatesWithTenant` / `listByStatus`). An event whose `payload.artifactId`
  * is not a string is skipped: this matches two of those three sites' pre-existing filter exactly, and is a
  * deliberate behaviour change at the third (`scanCandidatesWithTenant`, which previously used an unchecked

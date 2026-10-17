@@ -1,11 +1,12 @@
 import type { StoragePort } from "@kohaku-ui/spec-core";
 import { NOMINATED_SCAN_WINDOW } from "../constants.js";
+import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { createFailOpenAudit } from "./audit.js";
-import type { PromotionCandidate, PromotionPolicy } from "./candidate.js";
+import type { PromotionCandidate, PromotionPolicy, ScopedCandidate } from "./candidate.js";
 import { mapWithConcurrency } from "./concurrency.js";
-import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
+import type { PromotionErrorContext } from "./errors.js";
 import { transition } from "./machine.js";
 import type { SchemaSuggestion } from "./suggestion.js";
 import { usageIndexKey } from "./usage.js";
@@ -23,7 +24,7 @@ export function createNomination(opts: {
    * Batch persist (candidate-store's `persistMany`), so a scan that nominates many candidates in one pass
    * issues a single storage read-modify-write instead of one per nominated candidate.
    */
-  persistMany: (items: { candidate: PromotionCandidate; tenant?: string }[]) => Promise<void>;
+  persistMany: (items: ScopedCandidate[]) => Promise<void>;
   onError?: (ctx: PromotionErrorContext, error: unknown) => void;
   /**
    * Optional schema extraction hook (see createPromotions' own doc for the full advisory / fail-open
@@ -43,10 +44,7 @@ export function createNomination(opts: {
    * `candidates` pairs each candidate with its own owning tenant (candidate-store's `scanWithTenant`), needed by
    * the tenant-mismatch guard below (#10).
    */
-  nominateEligible(
-    candidates: { candidate: PromotionCandidate; tenant?: string }[],
-    tenant?: string,
-  ): Promise<PromotionCandidate[]>;
+  nominateEligible(candidates: ScopedCandidate[], tenant?: string): Promise<PromotionCandidate[]>;
 } {
   const { storage, lineage, policy, persistMany, onError, suggestSchema, suggestConcurrency } = opts;
   const auditFailOpen = createFailOpenAudit(lineage, onError);
@@ -92,7 +90,7 @@ export function createNomination(opts: {
    * nominate produced, not paired with an artifact-visible side effect like onPublish's projection).
    */
   async function nominateEligible(
-    candidates: { candidate: PromotionCandidate; tenant?: string }[],
+    candidates: ScopedCandidate[],
     tenant?: string,
   ): Promise<PromotionCandidate[]> {
     const nominatedEvents = await storage.listLineage({
@@ -105,7 +103,7 @@ export function createNomination(opts: {
       const artifactId = e.payload["artifactId"];
       if (typeof artifactId === "string") nominatedIds.add(usageIndexKey(e.tenant, artifactId));
     }
-    const toPersist: { candidate: PromotionCandidate; tenant?: string }[] = [];
+    const toPersist: ScopedCandidate[] = [];
     for (const { candidate, tenant: recordTenant } of candidates) {
       // AUTO: on threshold satisfaction, in_use -> candidate (nomination by policy). Already-nominated ones are not re-recorded.
       if (
@@ -115,7 +113,7 @@ export function createNomination(opts: {
         candidate.sessions >= policy.minDistinctSessions
       ) {
         if (tenant == null && recordTenant != null) {
-          notifyPromotionError(
+          notifyFailOpen(
             onError,
             { endpoint: "promotion.nominate.tenant", artifactId: candidate.artifactId, tenant: recordTenant },
             new Error(
@@ -190,7 +188,7 @@ export function createNomination(opts: {
     try {
       return (await suggestSchema!(candidate, tenantField(tenant))) ?? undefined;
     } catch (error) {
-      notifyPromotionError(
+      notifyFailOpen(
         onError,
         { endpoint: "promotion.suggest.schema", artifactId: candidate.artifactId, ...tenantField(tenant) },
         error,

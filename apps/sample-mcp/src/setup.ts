@@ -192,6 +192,48 @@ export function makeSnapshotLocator(args: {
   return join(args.snapshotDir, args.fileName);
 }
 
+/** The snapshot directory, its writer, and its locator, as built by `createSnapshotStore`. */
+export interface SnapshotStore {
+  /** Directory where snapshot HTML is stored (single source of truth; http.ts serves /snapshots from it). */
+  readonly dir: string;
+  /**
+   * Writes the self-contained snapshot HTML into `dir` and returns its locator. The write always goes to
+   * local; the locator returned to the model (public URL or local path) is decided by `makeSnapshotLocator`
+   * (a pure function) based on the presence of snapshotBaseUrl (serving / URL-ification is the host's
+   * responsibility).
+   */
+  write(fileName: string, html: string): Promise<string>;
+  /** The locator for `fileName` (see `makeSnapshotLocator`). */
+  locator(fileName: string): string;
+}
+
+/**
+ * Builds the snapshot store for one setup: the `<dataDir>/snapshots` directory (under the same .data as the
+ * Web app; gitignored), the writer, the locator, and the periodic mtime-TTL cleanup. Each self-contained
+ * snapshot is ~1MB and would otherwise accumulate without bound; the sweep timer is unref'd so it never keeps
+ * the process alive, and it runs for both the stdio and HTTP paths since both write into the directory. The
+ * timer starts when this is called and is never cleared (the setup's `close()` does not touch it).
+ */
+export function createSnapshotStore(args: { dataDir: string; snapshotBaseUrl?: string }): SnapshotStore {
+  const dir = join(args.dataDir, "snapshots");
+  const snapshotSweepTimer = setInterval(
+    () => void sweepSnapshotDir(dir, snapshotTtlMs()),
+    SNAPSHOT_SWEEP_INTERVAL_MS,
+  );
+  snapshotSweepTimer.unref?.();
+  const locator = (fileName: string): string =>
+    makeSnapshotLocator({ snapshotBaseUrl: args.snapshotBaseUrl, snapshotDir: dir, fileName });
+  return {
+    dir,
+    async write(fileName, html) {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, fileName), html, "utf8");
+      return locator(fileName);
+    },
+    locator,
+  };
+}
+
 /**
  * Create the renderer HTML loader. To avoid synchronously re-reading the several-hundred-KB bundle
  * on every resource read / snapshot generation, memoize **only successful reads**. On file absence
@@ -288,16 +330,8 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
   // the Admin Lineage timeline ("shares the same persistence as the Web app").
   const recorder = createViewRecorder(lineage);
 
-  // Save location for self-contained snapshot HTML (under the same .data as the Web app; gitignored).
-  const SNAPSHOT_DIR = join(dataDir, "snapshots");
-  // Periodic mtime-TTL cleanup: each self-contained snapshot is ~1MB and would otherwise accumulate without
-  // bound. The timer is unref'd so it never keeps the process alive; it runs for both the stdio and HTTP paths
-  // since both write into SNAPSHOT_DIR.
-  const snapshotSweepTimer = setInterval(
-    () => void sweepSnapshotDir(SNAPSHOT_DIR, snapshotTtlMs()),
-    SNAPSHOT_SWEEP_INTERVAL_MS,
-  );
-  snapshotSweepTimer.unref?.();
+  // Save location for self-contained snapshot HTML, its writer / locator and its periodic TTL sweep.
+  const snapshots = createSnapshotStore({ dataDir, snapshotBaseUrl: options.snapshotBaseUrl });
   // Finalize the Intent catalog once (core 7 + promoted intents merged from the .data/promotions.json snapshot at startup).
   // Every McpServer this setup creates exposes the same tool set (static at startup).
   const intentTools = intentToolsFromCatalog(intentCatalog.list());
@@ -373,15 +407,7 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
         // If the renderer is not built, injectSnapshot fails because the placeholder is missing and guides the user to build:renderer.
         // The write always goes to local; the locator returned to the model (public URL or local path) is
         // decided by makeSnapshotLocator (a pure function) based on the presence of snapshotBaseUrl (serving / URL-ification is the host's responsibility).
-        snapshotWriter: async (fileName, html) => {
-          await mkdir(SNAPSHOT_DIR, { recursive: true });
-          await writeFile(join(SNAPSHOT_DIR, fileName), html, "utf8");
-          return makeSnapshotLocator({
-            snapshotBaseUrl: options.snapshotBaseUrl,
-            snapshotDir: SNAPSHOT_DIR,
-            fileName,
-          });
-        },
+        snapshotWriter: (fileName, html) => snapshots.write(fileName, html),
         // Expose the entire Intent catalog as typed intent tools. Eliminates the single hand-written duplicate and
         // has the SDK generate inputSchema from the Zod params. Tool names normalize the canonical (sales.quarterly_summary, etc.)
         // to the MCP naming constraints (→ sales_quarterly_summary).
@@ -402,7 +428,7 @@ export async function createKohakuMcpSetup(options: KohakuMcpSetupOptions = {}):
     createServer,
     llm,
     dataDir,
-    snapshotDir: SNAPSHOT_DIR,
+    snapshotDir: snapshots.dir,
     ready: readyFromEnv,
     close: closeFromEnv,
   };

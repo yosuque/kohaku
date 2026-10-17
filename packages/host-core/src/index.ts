@@ -26,6 +26,11 @@ export {
   UNDECLARED_ACTION_MESSAGE,
 } from "./action-gate-outcome.js";
 export {
+  type ActionGateSequenceOutcome,
+  type RunActionGateInput,
+  runActionGate,
+} from "./action-gate-sequence.js";
+export {
   type ActionManifest,
   type ActionManifestEntry,
   buildActionManifest,
@@ -89,13 +94,16 @@ export {
 } from "./errors.js";
 export {
   composeWithFixation,
+  createFixationDeliveryHost,
   type FixationDeliveryHost,
+  type FixationDeliveryHostWiring,
   type FixationSelfHealApi,
   type FixationSelfHealEndpoint,
   resolveFixatedResult,
   settleFixation,
+  withFixationLock,
 } from "./fixation.js";
-export { type IntentSource, resolveIntent } from "./intent.js";
+export { type IntentSource, resolveGuiDelta, resolveIntent } from "./intent.js";
 export {
   createOperationIndex,
   type OperationIndex,

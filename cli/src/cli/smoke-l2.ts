@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import type { SmokeL2Output } from "../commands.js";
+import type { SmokeL2Output } from "../smoke-l2.js";
 import { errorMessage } from "./shared.js";
 
 /** Reads stdin to completion and returns it as a string (the smoke-l2 sidecar's one-request-one-process contract). */
@@ -31,7 +31,7 @@ export function register(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      const { formatSmokeL2Output, parseSmokeL2Input, runSmokeL2 } = await import("../commands.js");
+      const { formatSmokeL2Output, parseSmokeL2Input, runSmokeL2 } = await import("../smoke-l2.js");
       let output: SmokeL2Output;
       try {
         output = await runSmokeL2(parseSmokeL2Input(raw));

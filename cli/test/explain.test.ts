@@ -15,7 +15,7 @@ import type { AuthzPort, DomainPort, SemanticPort } from "@kohaku-ui/spec-core";
 import { createMemoryStoragePort } from "@kohaku-ui/storage-memory";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import { formatExplainReport, runExplain } from "../src/commands.js";
+import { formatExplainReport, runExplain } from "../src/explain.js";
 import { CliUsageError } from "../src/usage-error.js";
 
 const catalog = resolveCatalog(coreCatalog);

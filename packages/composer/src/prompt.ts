@@ -78,7 +78,7 @@ export const PROMPT_REVISION = "13";
  * has no way to observe `ComposeContext.llmByTier` even if it wanted to, and a caller that *does* use this
  * helper is typically also passing a fixed `ComposeContext` object it does not reconstruct per call. The
  * cache separation per-tier models actually need is instead carried automatically by `policyFingerprint`'s
- * `tierLlm` argument (`context.ts`'s `tierLlmFingerprintMaterial`) — computed straight from
+ * `tierLlm` argument (`policy-fingerprint.ts`'s `tierLlmFingerprintMaterial`) — computed straight from
  * `ComposeContext.llmByTier` at the point `compose.ts` builds the cacheKey, with no dependence on whatever
  * string a caller happens to pass as `generatorVersion`. So: `generatorVersion` (via this helper or a
  * caller's own string) keeps answering "which prompt revision / which base model", and the fingerprint

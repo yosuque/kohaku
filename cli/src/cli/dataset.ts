@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import type { ExportDatasetResult } from "../commands.js";
+import type { ExportDatasetResult } from "../dataset.js";
 import { fail } from "./shared.js";
 
 /** Registers `kohaku dataset` (`export`). The runner module is loaded lazily by the action. */
@@ -26,7 +26,7 @@ export function register(program: Command): void {
     )
     .requiredOption("--out <path>", "Output JSONL file path")
     .action(async (opts: { fixations: string; golden?: string; tenant?: string; out: string }) => {
-      const { exportDataset, formatDatasetExportResult } = await import("../commands.js");
+      const { exportDataset, formatDatasetExportResult } = await import("../dataset.js");
       let result: ExportDatasetResult;
       try {
         result = exportDataset({

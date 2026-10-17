@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import type { InitResult } from "./index.js";
+import { MCP_REPORT_HINT } from "./mcp-addon.js";
 
 /** The `kohaku init` command-line flags the report depends on (the commander option bag, narrowed). */
 export interface InitReportOptions {
@@ -43,13 +44,6 @@ export function formatInitResult(result: InitResult, opts: InitReportOptions): s
   );
   if (!result.installed)
     lines.push("KOHAKU_GOLDEN_UPDATE=1 npm test   # once after npm install, then npm test");
-  if (opts.mcp === true) {
-    lines.push(
-      "\nMCP front door generated. To use it from Claude Desktop, run: npm run mcp:claude-desktop " +
-        "(then restart Claude Desktop). `npm run mcp` (stdio) is the command Claude Desktop / Claude Code / " +
-        "Codex CLI launch themselves -- you do not run it by hand. `npm run mcp:http` starts a Streamable HTTP " +
-        "server on :8788 for claude.ai / ChatGPT.",
-    );
-  }
+  if (opts.mcp === true) lines.push(MCP_REPORT_HINT);
   return lines.join("\n");
 }

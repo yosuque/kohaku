@@ -81,3 +81,29 @@ export async function resolveIntent(
     ...(source.current != null ? { current: source.current } : {}),
   };
 }
+
+/**
+ * The shared two-step resolution of a component-event GUI delta: the pre-event Intent first (the "intent"
+ * source, so a `SemanticPort.validateIntent` implementation can reject an unknown canonical or invalid
+ * params in `current` too), then the "gui" source against that `current` to get the post-event Intent. Two
+ * sequential `resolveIntent` awaits and nothing else: there is deliberately no try/catch here, so each host
+ * keeps its own failure mapping (REST: 422 INTENT_INVALID, MCP: a structured tool error) and its own timing
+ * for recording the interaction. Used by host-rest's /events and host-mcp-apps' `${prefix}_event`.
+ */
+export async function resolveGuiDelta(
+  semantic: Pick<SemanticPort, "normalize" | "validateIntent">,
+  event: { intent: IntentInput; on: string; payload: JsonObject },
+  session: SessionContext,
+): Promise<{ current: CanonicalIntent; intent: CanonicalIntent }> {
+  const { intent: current } = await resolveIntent(
+    semantic,
+    { kind: "intent", intent: event.intent },
+    session,
+  );
+  const { intent } = await resolveIntent(
+    semantic,
+    { kind: "gui", current, action: event.on, params: event.payload },
+    session,
+  );
+  return { current, intent };
+}

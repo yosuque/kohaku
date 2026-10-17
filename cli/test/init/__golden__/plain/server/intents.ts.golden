@@ -1,0 +1,91 @@
+import { defineIntent, defineVocabulary, type IntentBuilder } from "@kohaku-ui/intents";
+import { z } from "zod";
+
+export const SOURCE = "sales";
+
+// Vocabularies (value set + label) inferred from the categorical columns. Edit labels freely; values must match the data.
+export const region = defineVocabulary("region", {
+  japan: "Japan",
+  north_america: "North america",
+  europe: "Europe",
+});
+export const channel = defineVocabulary("channel", {
+  direct: "Direct",
+  partner: "Partner",
+  online: "Online",
+});
+export const product = defineVocabulary("product", {
+  "Widget A": "Widget A",
+  "Widget B": "Widget B",
+  "Widget, C": "Widget, C",
+});
+
+export const metric = defineVocabulary("metric", {
+  units: "Units",
+  revenue: "Revenue",
+  count: "Row count",
+});
+export const agg = defineVocabulary("agg", { sum: "Sum", avg: "Average" });
+export const groupBy = defineVocabulary("groupBy", {
+  region: "By region",
+  channel: "By channel",
+  product: "By product",
+});
+export const granularity = defineVocabulary("granularity", { month: "Monthly", quarter: "Quarterly", year: "Yearly" });
+
+const filters = {
+  region: region.enum().optional(),
+  channel: channel.enum().optional(),
+  product: product.enum().optional(),
+};
+const period = { from: z.string().optional(), to: z.string().optional() };
+
+export const INTENT_DEFINITIONS: IntentBuilder[] = [
+  defineIntent({
+    canonical: "sales.summary",
+    description: "Aggregate units, revenue, the row count by region / channel / product (sum or average), optionally filtered",
+    source: SOURCE,
+    viewLabel: "Summary",
+    params: z.object({ metric: metric.enum().default("units"), agg: agg.enum().default("sum"), groupBy: groupBy.enum().default("region"), ...filters, ...period }),
+    examples: ["Units by region", "Average units by product", "How many rows per region?"],
+    facets: [
+      { param: "metric", label: "Metric", options: metric },
+      { param: "agg", label: "Aggregation", options: agg },
+      { param: "groupBy", label: "Group by", options: groupBy },
+      { param: "region", label: "Region", options: region, emptyLabel: "All" },
+      { param: "channel", label: "Channel", options: channel, emptyLabel: "All" },
+      { param: "product", label: "Product", options: product, emptyLabel: "All" },
+    ],
+    queries: [{ path: "summary", paramMap: { metric: "metric", agg: "agg", groupBy: "groupBy", region: "region", channel: "channel", product: "product", from: "from", to: "to" } }],
+  }),
+  defineIntent({
+    canonical: "sales.trend",
+    description: "Show how units, revenue, the row count changes over time (monthly / quarterly / yearly), optionally filtered",
+    source: SOURCE,
+    viewLabel: "Trend",
+    params: z.object({ metric: metric.enum().default("units"), agg: agg.enum().default("sum"), granularity: granularity.enum().default("month"), ...filters, ...period }),
+    examples: ["Monthly units trend", "Quarterly units", "How did it change over the year?"],
+    facets: [
+      { param: "metric", label: "Metric", options: metric },
+      { param: "granularity", label: "Granularity", options: granularity },
+      { param: "region", label: "Region", options: region, emptyLabel: "All" },
+      { param: "channel", label: "Channel", options: channel, emptyLabel: "All" },
+      { param: "product", label: "Product", options: product, emptyLabel: "All" },
+    ],
+    queries: [{ path: "trend", paramMap: { metric: "metric", agg: "agg", granularity: "granularity", region: "region", channel: "channel", product: "product", from: "from", to: "to" } }],
+  }),
+  defineIntent({
+    canonical: "sales.records",
+    description: "List the raw rows, optionally filtered",
+    source: SOURCE,
+    viewLabel: "Records",
+    params: z.object({ ...filters, ...period, limit: z.coerce.number().int().min(1).max(500).default(100) }),
+    examples: ["Show me the rows", "List the records"],
+    facets: [
+      { param: "region", label: "Region", options: region, emptyLabel: "All" },
+      { param: "channel", label: "Channel", options: channel, emptyLabel: "All" },
+      { param: "product", label: "Product", options: product, emptyLabel: "All" },
+    ],
+    queries: [{ path: "records", paramMap: { region: "region", channel: "channel", product: "product", from: "from", to: "to", limit: "limit" } }],
+  }),
+];

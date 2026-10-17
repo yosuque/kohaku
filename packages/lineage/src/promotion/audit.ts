@@ -1,12 +1,13 @@
 import type { ActorKind, LineageEventType } from "../events.js";
+import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
 import { tenantField } from "../tenant-scope.js";
-import { notifyPromotionError, type PromotionErrorContext, type PromotionErrorEndpoint } from "./errors.js";
+import type { PromotionErrorContext, PromotionErrorEndpoint } from "./errors.js";
 
 /**
  * Shared fail-open audit-record helper for the promotion pipeline (H7). Five call sites (handlePublish's
- * component.published, handleUnpublish's component.withdrawn, reconcile's published/withdrawn backfill in
- * service.ts, and nomination.ts's component.nominated) each record a lineage audit event whose own failure must
+ * component.published and handleUnpublish's component.withdrawn in service.ts, reconcile.ts's
+ * published/withdrawn backfill, and nomination.ts's component.nominated) each record a lineage audit event whose own failure must
  * not block the surrounding transition/projection -- the audit record is reported via `onError` instead of
  * thrown. This is a verbatim extraction of that repeated try/catch: argument order, the payload/actor passed to
  * `lineage.record`, and the `onError` context shape are unchanged from the five original sites.
@@ -23,11 +24,7 @@ export async function recordFailOpen(
   try {
     await lineage.record(type, payload, actor, scope.tenant);
   } catch (e) {
-    notifyPromotionError(
-      onError,
-      { endpoint, artifactId: scope.artifactId, ...tenantField(scope.tenant) },
-      e,
-    );
+    notifyFailOpen(onError, { endpoint, artifactId: scope.artifactId, ...tenantField(scope.tenant) }, e);
   }
 }
 

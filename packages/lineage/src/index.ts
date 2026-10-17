@@ -106,6 +106,7 @@ export {
 } from "./promotion/machine.js";
 export {
   type ApproveOptions,
+  type CreatePromotionsOptions,
   createPromotions,
   DEFAULT_PROMOTION_POLICY,
   DEFAULT_SUGGEST_CONCURRENCY,

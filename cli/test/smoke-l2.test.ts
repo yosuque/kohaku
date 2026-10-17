@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { SmokeL2Input, SmokeL2Output } from "../src/commands.js";
+import type { SmokeL2Input, SmokeL2Output } from "../src/smoke-l2.js";
 
 // smoke-l2 is a stdin/stdout contract the Python sidecar depends on, so we spawn the real process
 // (bin/kohaku.js → tsx) and verify it end to end. Because it includes tsx startup + jsdom, one case can take a few seconds.

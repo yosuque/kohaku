@@ -94,7 +94,11 @@ describe("the startup graph of cli/src/index.ts", () => {
   const cliDir = join(srcDir, "cli");
   const indexFile = join(srcDir, "index.ts");
   const lazyModules = [
-    "commands.js",
+    "conformance.js",
+    "explain.js",
+    "smoke-l2.js",
+    "component.js",
+    "dataset.js",
     "evidence/index.js",
     "migrate.js",
     "init/index.js",

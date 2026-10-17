@@ -1,6 +1,6 @@
 // The `kohaku scaffold <what>` targets: default output directory, post-generation "next steps" and the files
 // each one writes. Light on purpose (it imports only the embedded templates), so `index.ts` can load it to
-// validate the target without paying for the heavy `commands.ts`.
+// validate the target without paying for a heavy runner module.
 import { join } from "node:path";
 import {
   GOLDEN_README_TEMPLATE,
