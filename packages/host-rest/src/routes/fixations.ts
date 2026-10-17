@@ -3,7 +3,6 @@ import { type CanonicalIntent, GOVERNANCE_ERROR_DISCRIMINATORS } from "@kohaku-u
 import type { Context, Hono } from "hono";
 import { errorBody } from "../errors.js";
 import type { GovernanceOperation } from "../governance-policy.js";
-import { withFixationLock } from "../keyed-mutex.js";
 import type { FixationsApi } from "../types.js";
 import { COMPOSE_FAILED_MESSAGE, composeForRest, intentResolutionFailure } from "./compose-pipeline.js";
 import { ComposeBodySchema } from "./schemas.js";
@@ -96,7 +95,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
       }
       try {
         // Fetch the current composition result (should be cached) and fix its structure. The fixation is stamped onto this tenant.
-        const result = await composeForRest(intent, session, deps, call);
+        const result = await composeForRest(intent, session, ctx, call);
         // A generation failure must not be pinned as L0 for everyone: a deterministic fallback Spec
         // ("Could not render") is not fixatable.
         const fb = result.spec.provenance.fallback;
@@ -123,7 +122,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
         }
         // The fixation write is serialized under the same (tenant, intentHash) lock as self-healing
         // (refreshFingerprint / invalidate) (interleaving causes resurrection of a deleted fixation / mistaken deletion of a new one).
-        const record = await withFixationLock(deps, tenant, intent.hash, () =>
+        const record = await ctx.withFixationLock(tenant, intent.hash, () =>
           fixations.fixate({
             pinnedSpec: result.spec,
             approver: principal,
@@ -151,7 +150,7 @@ export function registerFixationRoutes(app: Hono, ctx: RouteContext): void {
         const tenant = await resolveTenant(c, deps);
         try {
           // Serialize under the same (tenant, intentHash) lock as self-healing (refreshFingerprint / invalidate).
-          await withFixationLock(deps, tenant, c.req.param("intentHash"), () =>
+          await ctx.withFixationLock(tenant, c.req.param("intentHash"), () =>
             fixations.unfixate(c.req.param("intentHash"), principal, tenantScopeOf(tenant)),
           );
         } catch (e) {

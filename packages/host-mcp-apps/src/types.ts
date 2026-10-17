@@ -296,9 +296,9 @@ export interface AttachOptions {
  * functions read multiple fields off each.
  *
  * `fixationHost` is built once (per attachKohakuToMcpServer call) rather than per tool call: its `serialize`
- * closure holds a per-deps mutex (keyed by `intentHash` alone — unlike the REST profile, the MCP profile
- * never resolves a tenant), not per-request state, so there is nothing to gain from rebuilding it on every
- * compose.
+ * closure runs under a per-deps mutex (one per `McpHostDeps` object, keyed by host-core's `(tenant,
+ * intentHash)` rule — the MCP profile never resolves a tenant, so the tenant part is always empty), not
+ * per-request state, so there is nothing to gain from rebuilding it on every compose.
  *
  * `allowedActions` is derived from `operationIndex` (host-core's `allowedActionsFromIndex`, so the two share
  * one memoized `deps.domain.listOperations()` read, which is async and must not be re-awaited on every

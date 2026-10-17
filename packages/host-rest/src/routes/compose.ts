@@ -23,7 +23,6 @@ import {
 } from "./compose-pipeline.js";
 import { ComposeBodySchema, EventsBodySchema } from "./schemas.js";
 import {
-  operationIndex,
   parseBody,
   type RestCallContext,
   type RouteContext,
@@ -76,7 +75,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       intent,
       session,
       principal,
-      deps,
+      ctx,
       call: { requestId, endpoint: "compose", signal: c.req.raw.signal, traceContext },
     });
   });
@@ -88,7 +87,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
     const resolved = await resolveComposeRequest(c, ctx, "compose/stream");
     if (resolved instanceof Response) return resolved;
     const { intent, session, principal, requestId, traceContext } = resolved;
-    return deliverComposedStream(c, { intent, session, principal, deps, requestId, traceContext });
+    return deliverComposedStream(c, { intent, session, principal, ctx, requestId, traceContext });
   });
 
   // --- Interaction loop (component event -> Intent delta -> recomposition) ---
@@ -129,7 +128,7 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
       intent,
       session,
       principal,
-      deps,
+      ctx,
       call: { requestId, endpoint: "events", signal: c.req.raw.signal, traceContext },
       // /events-specific: record interacted before the composed record (preserve execution order).
       beforeRecord: async () => {
@@ -148,8 +147,8 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
 
 /**
  * The Action manifest for `spec` (design.md #62/#64, SPEC §6.1/§6.1.1), computed from the host's
- * `OperationIndex` (memoized via `operationIndex`, shared with `/binding/action`'s `ActionGate` -- both
- * consult the exact same index). Placed alongside `capability` in the compose response, outside the Spec
+ * `OperationIndex` (`RouteContext.operationIndex`, memoized per app and shared with `/binding/action`'s
+ * `ActionGate` -- both consult the exact same index). Placed alongside `capability` in the compose response, outside the Spec
  * itself, so it never affects `specHash` / the cache key. `undefined` (never `{}`) when the Spec declares
  * no write actions, so every existing response shape (a read-only Spec) is byte-identical to before this
  * field existed once JSON-serialized (the key is simply absent).
@@ -162,14 +161,14 @@ export function registerComposeRoutes(app: Hono, ctx: RouteContext): void {
  * wrapper only supplies the REST profile's own index and endpoint name for the report.
  */
 function actionsFor(
-  deps: KohakuHostDeps,
+  ctx: RouteContext,
   spec: UISpec,
   call: Pick<RestCallContext, "endpoint" | "requestId">,
 ): Promise<hostCore.ActionManifest | undefined> {
   return hostCore.buildActionManifestSafely(
-    () => operationIndex(deps),
+    () => ctx.operationIndex(),
     spec,
-    (e) => reportHostError(deps, call.endpoint, call.requestId, e),
+    (e) => reportHostError(ctx.deps, call.endpoint, call.requestId, e),
   );
 }
 
@@ -229,19 +228,20 @@ async function deliverComposed(
     intent: CanonicalIntent;
     session: SessionContext;
     principal: Principal;
-    deps: KohakuHostDeps;
+    ctx: RouteContext;
     call: RestCallContext;
     beforeRecord?: () => Promise<void>;
   },
 ): Promise<Response> {
-  const { intent, session, principal, deps, call, beforeRecord } = args;
+  const { intent, session, principal, ctx, call, beforeRecord } = args;
+  const { deps } = ctx;
   // Used twice below (the audit-recording failure callback and the outer catch), hence a local binding
   // rather than two direct reportHostError(deps, call.endpoint, call.requestId, e) calls.
   const report = (e: unknown) => reportHostError(deps, call.endpoint, call.requestId, e);
   try {
     // Propagate client-disconnect / timeout aborts through to compose (the L1/L2 LLM calls; call.signal).
-    const result = await composeForRest(intent, session, deps, call);
-    const capability = await issueSpecCapability(result.spec, principal, deps, call);
+    const result = await composeForRest(intent, session, ctx, call);
+    const capability = await issueSpecCapability(result.spec, principal, ctx, call);
     // Audit recording is cancelled-aware and fail-open (host-core's recordComposedResult, shared with the MCP
     // profile's auditComposed): swallow recorder failures so they do not take down delivery (including
     // cached Specs), notify the observability hook (onError) of the failure, and still return a successful
@@ -265,7 +265,7 @@ async function deliverComposed(
       },
       report,
     );
-    const actions = await actionsFor(deps, result.spec, call);
+    const actions = await actionsFor(ctx, result.spec, call);
     return c.json({ spec: result.spec, capability, ...(actions != null ? { actions } : {}) });
   } catch (e) {
     await report(e);
@@ -287,12 +287,13 @@ async function deliverComposedStream(
     intent: CanonicalIntent;
     session: SessionContext;
     principal: Principal;
-    deps: KohakuHostDeps;
+    ctx: RouteContext;
     requestId: string;
     traceContext?: TraceContext;
   },
 ): Promise<Response> {
-  const { intent, session, principal, deps, requestId, traceContext } = args;
+  const { intent, session, principal, ctx, requestId, traceContext } = args;
+  const { deps } = ctx;
   // Propagate client-disconnect / timeout aborts through to composeStream (the L1/L2 LLM calls).
   const abort = c.req.raw.signal;
   // Built once and threaded through resolveFixatedForRest / issueSpecCapability / finishStream below (all
@@ -314,12 +315,12 @@ async function deliverComposedStream(
       // on hit, a single final:true event + done. The capability is issued from the $ref inside the fixed Spec
       // (no skeleton is involved, so refs-based issuance is unnecessary). No fixation / stale (staleness
       // detection) returns null = fall through to the streaming generation path below.
-      const fixated = await resolveFixatedForRest(intent, session, deps, call);
+      const fixated = await resolveFixatedForRest(intent, session, ctx, call);
       if (fixated != null) {
-        await streamFixated(stream, fixated, { session, principal, deps, call });
+        await streamFixated(stream, fixated, { session, principal, ctx, call });
         return;
       }
-      await streamGenerated(stream, { intent, session, principal, deps, call, abort });
+      await streamGenerated(stream, { intent, session, principal, ctx, call, abort });
     } catch (e) {
       // A client disconnect / request timeout surfaces here too (composeStream's for-await loop / a
       // stream.writeSSE call above rejects once the underlying connection is gone). That is not a
@@ -356,11 +357,12 @@ async function deliverComposedStream(
 async function streamFixated(
   stream: SSEStreamingApi,
   fixated: ComposeResult,
-  args: { session: SessionContext; principal: Principal; deps: KohakuHostDeps; call: RestCallContext },
+  args: { session: SessionContext; principal: Principal; ctx: RouteContext; call: RestCallContext },
 ): Promise<void> {
-  const { session, principal, deps, call } = args;
-  const capability = await issueSpecCapability(fixated.spec, principal, deps, call);
-  const actions = await actionsFor(deps, fixated.spec, call);
+  const { session, principal, ctx, call } = args;
+  const { deps } = ctx;
+  const capability = await issueSpecCapability(fixated.spec, principal, ctx, call);
+  const actions = await actionsFor(ctx, fixated.spec, call);
   await stream.writeSSE({
     event: "spec",
     data: JSON.stringify({
@@ -385,12 +387,13 @@ async function streamGenerated(
     intent: CanonicalIntent;
     session: SessionContext;
     principal: Principal;
-    deps: KohakuHostDeps;
+    ctx: RouteContext;
     call: RestCallContext;
     abort: AbortSignal;
   },
 ): Promise<void> {
-  const { intent, session, principal, deps, call, abort } = args;
+  const { intent, session, principal, ctx, call, abort } = args;
+  const { deps } = ctx;
   // L1/L2 path: skeleton (final:false) -> patch -> done. The capability is issued exactly once on the
   // first event.
   //
@@ -418,9 +421,9 @@ async function streamGenerated(
   })) {
     if (ev.kind === "spec") {
       capability ??= ev.final
-        ? await issueSpecCapability(ev.spec, principal, deps, call)
+        ? await issueSpecCapability(ev.spec, principal, ctx, call)
         : await hostCore.issueCapabilityForRefs(deps.authz, principal, ev.refs, capabilityTtl(deps));
-      const actions = await actionsFor(deps, ev.spec, call);
+      const actions = await actionsFor(ctx, ev.spec, call);
       await stream.writeSSE({
         event: "spec",
         data: JSON.stringify({

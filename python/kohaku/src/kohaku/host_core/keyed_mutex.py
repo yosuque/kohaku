@@ -1,16 +1,16 @@
-"""Shared in-process keyed serialization lock (port of packages/host-core/src/keyed-mutex.ts).
+"""Shared in-process keyed serialization lock (port of packages/spec-core/src/keyed-mutex.ts).
 
 Extracted from kohaku.host_rest's `_routes.shared` module (the original site of this implementation — see
 that module's re-export of `_get_lock` / `_locks` for backward compatibility) so kohaku.host_mcp can consume
 the identical mechanism for its fixation self-heal serialization, exactly as TS's `host-mcp-apps/src/server.ts`
-consumes `@kohaku-ui/host-core`'s `createKeyedMutex` (the same relationship this module has with
-`packages/host-rest/src/keyed-mutex.ts`'s re-export).
+consumes `@kohaku-ui/host-core`'s `createKeyedMutex` re-export (host-core's `withFixationLock` /
+`createFixationDeliveryHost` in `packages/host-core/src/fixation.ts` are the TS fixation-lock counterparts).
 
 Unlike the TS port (a factory `createKeyedMutex()` returning a per-instance `KeyedMutex` closure over its own
 `Map`), this is a single process-wide table keyed by `(event loop, owner, key)`: `owner` (typically a
-`KohakuHostDeps` / `McpHostDeps` instance, compared via `id()`) plays the role TS's separate mutex-per-deps
-`WeakMap` plays — scoping locks to one host instance so unrelated hosts sharing a process never contend on the
-same lock — while the loop id makes this safe even for a test client that spans event loops (within the same
+`KohakuHostDeps` / `McpHostDeps` instance, compared via `id()`) plays the role TS host-mcp-apps' per-deps
+`fixationMutexFor` (a `WeakMap` get-or-create) plays — scoping locks to one host instance so unrelated hosts
+sharing a process never contend on the same lock — while the loop id makes this safe even for a test client that spans event loops (within the same
 loop it is serialized).
 
 Serializes the read-modify-write of promotion / fixation state across both host profiles: host_rest's

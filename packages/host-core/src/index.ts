@@ -94,11 +94,14 @@ export {
 } from "./errors.js";
 export {
   composeWithFixation,
+  createFixationDeliveryHost,
   type FixationDeliveryHost,
+  type FixationDeliveryHostWiring,
   type FixationSelfHealApi,
   type FixationSelfHealEndpoint,
   resolveFixatedResult,
   settleFixation,
+  withFixationLock,
 } from "./fixation.js";
 export { type IntentSource, resolveGuiDelta, resolveIntent } from "./intent.js";
 export {

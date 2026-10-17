@@ -4,7 +4,9 @@ import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import {
   type CanonicalIntent,
   computeStructureHash,
+  createKeyedMutex,
   type FixationRecord,
+  type KeyedMutex,
   type SemanticPort,
   type SessionContext,
   type StoragePort,
@@ -13,10 +15,12 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   composeWithFixation,
+  createFixationDeliveryHost,
   type FixationDeliveryHost,
   type FixationSelfHealApi,
   resolveFixatedResult,
   settleFixation,
+  withFixationLock,
 } from "../src/fixation.js";
 
 const catalog = resolveCatalog(coreCatalog);
@@ -399,5 +403,98 @@ describe("settleFixation: serialize", () => {
     );
     await new Promise((r) => setTimeout(r, 0));
     expect(refreshFingerprint).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("withFixationLock / createFixationDeliveryHost", () => {
+  /** A mutex that records the key it is asked for and runs fn immediately. */
+  function recordingMutex(): { mutex: KeyedMutex; keys: string[] } {
+    const keys: string[] = [];
+    const mutex: KeyedMutex = (key, fn) => {
+      keys.push(key);
+      return fn();
+    };
+    return { mutex, keys };
+  }
+
+  it("withFixationLock keys the mutex by the tenant and the intentHash and returns the result", async () => {
+    const { mutex, keys } = recordingMutex();
+
+    expect(await withFixationLock(mutex, undefined, "sha256:x", async () => 1)).toBe(1);
+    expect(await withFixationLock(mutex, "t1", "sha256:x", async () => 2)).toBe(2);
+
+    expect(keys).toEqual([" sha256:x", "t1 sha256:x"]);
+  });
+
+  it("serialize runs under the wiring's mutex with the scope's (tenant, intentHash) key", async () => {
+    const { mutex, keys } = recordingMutex();
+    const host = createFixationDeliveryHost({ mutex, onSelfHealError: () => {} });
+
+    await host.serialize!({ tenant: "t1", intentHash: "sha256:x" }, async () => {});
+    await host.serialize!({ tenant: undefined, intentHash: "sha256:y" }, async () => {});
+
+    expect(keys).toEqual(["t1 sha256:x", " sha256:y"]);
+  });
+
+  it("serializes same-key work and lets different keys overlap (over a real keyed mutex)", async () => {
+    const host = createFixationDeliveryHost({ mutex: createKeyedMutex(), onSelfHealError: () => {} });
+    const order: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+
+    const first = host.serialize!({ tenant: "t1", intentHash: "h" }, async () => {
+      order.push("first-enter");
+      await gate;
+      order.push("first-exit");
+    });
+    const sameKey = host.serialize!({ tenant: "t1", intentHash: "h" }, async () => {
+      order.push("same-key");
+    });
+    const otherKey = host.serialize!({ tenant: "t2", intentHash: "h" }, async () => {
+      order.push("other-key");
+    });
+    await otherKey;
+    expect(order).toEqual(["first-enter", "other-key"]);
+
+    release();
+    await Promise.all([first, sameKey]);
+    expect(order).toEqual(["first-enter", "other-key", "first-exit", "same-key"]);
+  });
+
+  it("passes lookup / admit / fixations / onSelfHealError through by identity", () => {
+    const lookup = vi.fn(async () => null);
+    const admit = vi.fn(() => true);
+    const fixations: FixationSelfHealApi = { refreshFingerprint: async () => {} };
+    const onSelfHealError = vi.fn();
+
+    const host = createFixationDeliveryHost({
+      lookup,
+      admit,
+      fixations,
+      mutex: createKeyedMutex(),
+      onSelfHealError,
+    });
+
+    expect(host.lookup).toBe(lookup);
+    expect(host.admit).toBe(admit);
+    expect(host.fixations).toBe(fixations);
+    expect(host.onSelfHealError).toBe(onSelfHealError);
+  });
+
+  it("keeps every optional key present (undefined) when the wiring omits it", () => {
+    const host = createFixationDeliveryHost({ mutex: createKeyedMutex(), onSelfHealError: () => {} });
+
+    expect(Object.keys(host).sort()).toEqual([
+      "admit",
+      "fixations",
+      "lookup",
+      "onSelfHealError",
+      "serialize",
+    ]);
+    expect(host.lookup).toBeUndefined();
+    expect(host.admit).toBeUndefined();
+    expect(host.fixations).toBeUndefined();
   });
 });

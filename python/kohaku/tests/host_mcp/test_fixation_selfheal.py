@@ -225,9 +225,9 @@ class _ConcurrencyTrackingFixations:
 def test_mcp_selfheal_serializes_concurrent_calls_for_the_same_intent_hash(tmp_path: Path) -> None:
     """Two concurrent tool calls that both judge the same intentHash's fixation stale each fire a
     fire-and-forget self-heal invalidate — kohaku.host_core's shared keyed mutex (wired in
-    host_mcp.server._fixation_host, keyed by intent_hash alone, symmetric with TS server.ts's
-    fixationMutexByDeps) must serialize them so they never run concurrently (a get->put race that could
-    otherwise interleave)."""
+    host_mcp.server._fixation_host, keyed by intent_hash alone, symmetric with TS host-mcp-apps'
+    `fixationMutexFor` / host-core's `createFixationDeliveryHost`) must serialize them so they never run
+    concurrently (a get->put race that could otherwise interleave)."""
 
     async def run() -> None:
         ctx = make_compose_ctx(tmp_path)

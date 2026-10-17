@@ -1320,9 +1320,10 @@ def _fixation_host(deps: McpHostDeps) -> FixationDeliveryHost:
     MCP's own (pre-existing) endpoint-string convention.
 
     The spawned call is itself serialized under kohaku.host_core's shared keyed mutex (symmetric with the
-    REST profile's own fixation lock, and with TS host-mcp-apps' server.ts `fixationMutexByDeps`), keyed by
-    `intent_hash` alone: the MCP profile never resolves a tenant, so unlike the REST lock (keyed by
-    `(tenant, intent_hash)`) there is nothing else to key on. `deps` is passed as the lock's `owner` so this
+    REST profile's own fixation lock, and with TS host-mcp-apps' `fixationMutexFor` feeding host-core's
+    `createFixationDeliveryHost`), keyed by `intent_hash` alone: the MCP profile never resolves a tenant, so
+    unlike the REST lock (keyed by `(tenant, intent_hash)`, as host-core's `withFixationLock` keys both TS
+    profiles) there is nothing else to key on. `deps` is passed as the lock's `owner` so this
     profile's self-heal calls only ever contend with each other (never with the REST profile's own, separate,
     per-deps lock namespace) — a self-heal get->put racing with another self-heal call for the same
     intent_hash in this same process no longer interleaves.
