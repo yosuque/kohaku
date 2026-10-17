@@ -75,20 +75,6 @@ export interface FixationErrorContext {
   tenant?: string;
 }
 
-/**
- * Fires opts.onError fire-and-forget, swallowing any synchronous throw from the hook itself (an
- * observation-only hook must never mask or replace the caller's own error/result). Shares its implementation
- * with promotion's notifyPromotionError through the generic `notifyFailOpen`; only the context type differs
- * (intentHash vs. artifactId).
- */
-export function notifyFixationError(
-  onError: ((ctx: FixationErrorContext, error: unknown) => void) | undefined,
-  ctx: FixationErrorContext,
-  error: unknown,
-): void {
-  notifyFailOpen(onError, ctx, error);
-}
-
 export interface FixationProposal {
   intentHash: string;
   canonical: string;
@@ -290,7 +276,7 @@ export function createFixations(opts: {
   /**
    * Fail-open observability hook (product responsibility, optional): notified when a fixation record read
    * back from storage fails schema validation. See `FixationErrorEndpoint`'s doc. Fired
-   * fire-and-forget (a throw/rejection from the hook itself is swallowed) — see `notifyFixationError`.
+   * fire-and-forget (a throw/rejection from the hook itself is swallowed) — see `notifyFailOpen`.
    */
   onError?: (ctx: FixationErrorContext, error: unknown) => void;
 }): Fixations {
@@ -313,7 +299,7 @@ export function createFixations(opts: {
     if (raw == null) return null;
     const parsed = FixationRecordSchema.safeParse(raw);
     if (parsed.success) return parsed.data as FixationRecord;
-    notifyFixationError(
+    notifyFailOpen(
       opts.onError,
       { endpoint: "storage.record.invalid", intentHash, ...tenantField(tenant) },
       parsed.error,

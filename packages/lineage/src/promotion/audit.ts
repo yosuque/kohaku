@@ -1,7 +1,8 @@
 import type { ActorKind, LineageEventType } from "../events.js";
+import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
 import { tenantField } from "../tenant-scope.js";
-import { notifyPromotionError, type PromotionErrorContext, type PromotionErrorEndpoint } from "./errors.js";
+import type { PromotionErrorContext, PromotionErrorEndpoint } from "./errors.js";
 
 /**
  * Shared fail-open audit-record helper for the promotion pipeline (H7). Five call sites (handlePublish's
@@ -23,11 +24,7 @@ export async function recordFailOpen(
   try {
     await lineage.record(type, payload, actor, scope.tenant);
   } catch (e) {
-    notifyPromotionError(
-      onError,
-      { endpoint, artifactId: scope.artifactId, ...tenantField(scope.tenant) },
-      e,
-    );
+    notifyFailOpen(onError, { endpoint, artifactId: scope.artifactId, ...tenantField(scope.tenant) }, e);
   }
 }
 

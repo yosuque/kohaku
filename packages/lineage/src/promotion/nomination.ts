@@ -1,11 +1,12 @@
 import type { StoragePort } from "@kohaku-ui/spec-core";
 import { NOMINATED_SCAN_WINDOW } from "../constants.js";
+import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { createFailOpenAudit } from "./audit.js";
 import type { PromotionCandidate, PromotionPolicy } from "./candidate.js";
 import { mapWithConcurrency } from "./concurrency.js";
-import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
+import type { PromotionErrorContext } from "./errors.js";
 import { transition } from "./machine.js";
 import type { SchemaSuggestion } from "./suggestion.js";
 import { usageIndexKey } from "./usage.js";
@@ -115,7 +116,7 @@ export function createNomination(opts: {
         candidate.sessions >= policy.minDistinctSessions
       ) {
         if (tenant == null && recordTenant != null) {
-          notifyPromotionError(
+          notifyFailOpen(
             onError,
             { endpoint: "promotion.nominate.tenant", artifactId: candidate.artifactId, tenant: recordTenant },
             new Error(
@@ -190,7 +191,7 @@ export function createNomination(opts: {
     try {
       return (await suggestSchema!(candidate, tenantField(tenant))) ?? undefined;
     } catch (error) {
-      notifyPromotionError(
+      notifyFailOpen(
         onError,
         { endpoint: "promotion.suggest.schema", artifactId: candidate.artifactId, ...tenantField(tenant) },
         error,

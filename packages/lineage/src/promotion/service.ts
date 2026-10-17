@@ -7,12 +7,13 @@ import {
 } from "@kohaku-ui/spec-core";
 import { RECONCILE_AUDIT_SCAN_WINDOW } from "../constants.js";
 import type { ActorKind, LineageEventType } from "../events.js";
+import { notifyFailOpen } from "../fail-open.js";
 import type { Lineage } from "../lineage.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import { createFailOpenAudit } from "./audit.js";
 import type { PromotionCandidate, PromotionPolicy } from "./candidate.js";
 import { type BulkCandidateLoader, createCandidateStore } from "./candidate-store.js";
-import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
+import type { PromotionErrorContext } from "./errors.js";
 import {
   type ComponentDraft,
   type JudgeVerdict,
@@ -28,7 +29,7 @@ import { createUsageIndex, usageIndexKey } from "./usage.js";
 export type { PromotionCandidate, PromotionOrigin, PromotionPolicy } from "./candidate.js";
 // The error-hook and candidate types live in their own modules so candidate-store / nomination / audit never
 // import this file (no import cycle); they are re-exported here to keep this module's surface unchanged.
-export { notifyPromotionError, type PromotionErrorContext, type PromotionErrorEndpoint } from "./errors.js";
+export type { PromotionErrorContext, PromotionErrorEndpoint } from "./errors.js";
 
 /**
  * Base of the batch-transition "did not reach the goal" errors (approve -> published / reject -> rejected),
@@ -423,7 +424,7 @@ export function createPromotions(opts: {
    * Fail-open observability hook (product responsibility, optional): notified on every failure/skip listed on
    * `PromotionErrorEndpoint`'s doc (publish/unpublish audit fail-open, reconcile's audit backfill and projection
    * skip, and evaluateAndList's tenant-mismatch skip). Fired fire-and-forget (a throw / rejection from the hook
-   * itself is swallowed and never propagates) — see `notifyPromotionError` below.
+   * itself is swallowed and never propagates) — see `notifyFailOpen`.
    */
   onError?: (ctx: PromotionErrorContext, error: unknown) => void;
 }): Promotions {
@@ -679,7 +680,7 @@ export function createPromotions(opts: {
         artifactId,
       });
     } catch (e) {
-      notifyPromotionError(
+      notifyFailOpen(
         opts.onError,
         { endpoint: "promotion.approve.audit", artifactId, ...tenantField(tenant) },
         e,
@@ -906,7 +907,7 @@ export function createPromotions(opts: {
     // audit log etc. is skipped (the snapshot remains, so it is retried on the next reconcile) and reported.
     if (candidate?.draft == null || candidate.html == null) {
       ctx.summary.skipped++;
-      notifyPromotionError(
+      notifyFailOpen(
         opts.onError,
         {
           endpoint: "promotion.reconcile.projection",

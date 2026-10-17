@@ -6,9 +6,10 @@ import {
   type StoragePort,
 } from "@kohaku-ui/spec-core";
 import { GENERATED_SCAN_WINDOW } from "../constants.js";
+import { notifyFailOpen } from "../fail-open.js";
 import { type TenantScope, tenantField } from "../tenant-scope.js";
 import type { PromotionCandidate, PromotionOrigin } from "./candidate.js";
-import { notifyPromotionError, type PromotionErrorContext } from "./errors.js";
+import type { PromotionErrorContext } from "./errors.js";
 import type { ComponentDraft, PromotionStatus } from "./machine.js";
 import type { SchemaSuggestion } from "./suggestion.js";
 import type { createUsageIndex } from "./usage.js";
@@ -112,7 +113,7 @@ export function createCandidateStore(opts: {
     if (raw == null) return null;
     const parsed = PromotionStateSchema.safeParse(raw);
     if (parsed.success) return parsed.data as PromotionState;
-    notifyPromotionError(
+    notifyFailOpen(
       onError,
       { endpoint: "storage.record.invalid", artifactId, ...tenantField(tenant) },
       parsed.error,
