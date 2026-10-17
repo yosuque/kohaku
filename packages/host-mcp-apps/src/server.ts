@@ -1028,7 +1028,18 @@ export function attachKohakuToMcpServer(server: McpServer, deps: McpHostDeps, op
     prefix,
     principalOf,
     getRendererHtml,
-    fixationHost: fixationHost(deps),
+    // The FixationDeliveryHost host-core's fixation helpers consume. The MCP profile never resolves a tenant
+    // (self-healing calls always carry `tenant: undefined`); `serialize` runs under this deps object's keyed
+    // mutex so a self-heal get→put racing with this same process's own fixate/unfixate cannot interleave.
+    fixationHost: hostCore.createFixationDeliveryHost({
+      lookup: deps.fixationLookup,
+      admit: deps.fixationAdmit,
+      fixations: deps.fixations,
+      mutex: fixationMutexFor(deps),
+      onSelfHealError: (endpoint, error) => {
+        void reportMcpError(deps, endpoint, error);
+      },
+    }),
     allowedActions: hostCore.allowedActionsFromIndex(operationIndex),
     operationIndex,
     actionGate: hostCore.createActionGate({ approvals: deps.approvals }),
@@ -1108,11 +1119,23 @@ function registerTaskMethods(ctx: ToolContext): void {
 }
 
 /**
- * Per-deps keyed mutex for the MCP profile's fixation self-heal serialization (symmetric with host-rest's
- * per-app fixation lock on RouteContext). The MCP profile never resolves a tenant, so unlike the REST lock
- * (keyed by `(tenant, intentHash)`) this one is keyed by `intentHash` alone.
+ * Per-deps keyed mutex for the MCP profile's fixation self-heal serialization. The lifetime is one mutex per
+ * `McpHostDeps` object, deliberately unlike host-rest's one-per-app lock: a caller that attaches one shared
+ * `deps` object to a fresh McpServer per request (the Streamable-HTTP pattern) still serializes across those
+ * requests. The key is host-core's `(tenant, intentHash)` rule; the MCP profile never resolves a tenant, so
+ * the tenant part is always empty.
  */
 const fixationMutexByDeps = new WeakMap<McpHostDeps, hostCore.KeyedMutex>();
+
+/** Get-or-create `deps`' fixation mutex (see fixationMutexByDeps for the lifetime). */
+function fixationMutexFor(deps: McpHostDeps): hostCore.KeyedMutex {
+  let mutex = fixationMutexByDeps.get(deps);
+  if (mutex == null) {
+    mutex = hostCore.createKeyedMutex();
+    fixationMutexByDeps.set(deps, mutex);
+  }
+  return mutex;
+}
 
 /**
  * Side channel from an `McpServer` instance to the in-memory `TaskStore` `attachKohakuToMcpServer` built for
@@ -1132,32 +1155,6 @@ const taskStoresByServer = new WeakMap<McpServer, TaskStore>();
  */
 export function __getTaskStoreForTest(server: McpServer): TaskStore | undefined {
   return taskStoresByServer.get(server);
-}
-
-/**
- * Adapts McpHostDeps into the FixationDeliveryHost surface host-core's fixation helpers consume. The MCP
- * profile still never resolves a tenant (self-healing calls always carry `tenant: undefined`), but `serialize`
- * is wired to host-core's shared keyed mutex (keyed by `intentHash` alone) so a self-heal get→put racing
- * with this same process's own fixate/unfixate no longer interleaves (the same hardening host-rest already
- * had via `withFixationLock`, narrowed to what the MCP profile can key on).
- */
-function fixationHost(deps: McpHostDeps): hostCore.FixationDeliveryHost {
-  return {
-    lookup: deps.fixationLookup,
-    admit: deps.fixationAdmit,
-    fixations: deps.fixations,
-    serialize: (scope, fn) => {
-      let mutex = fixationMutexByDeps.get(deps);
-      if (mutex == null) {
-        mutex = hostCore.createKeyedMutex();
-        fixationMutexByDeps.set(deps, mutex);
-      }
-      return mutex(scope.intentHash, fn);
-    },
-    onSelfHealError: (endpoint, error) => {
-      void reportMcpError(deps, endpoint, error);
-    },
-  };
 }
 
 /**
