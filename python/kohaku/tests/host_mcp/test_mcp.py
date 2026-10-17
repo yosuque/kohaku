@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 
+from kohaku.host_core import ACTION_GATE_UNAVAILABLE_MESSAGE
 from kohaku.host_mcp import (
     CAPABILITY_META_KEY,
     INITIAL_DATA_META_KEY,
@@ -1513,6 +1514,134 @@ class TestGovernedActions:
                 assert result.is_error is True
                 assert any(info.endpoint == "kohaku_action.audit" for info in seen)
                 assert domain.invocations == []
+
+        asyncio.run(run())
+
+    def test_gate_that_cannot_decide_is_audited_as_a_denial(self, tmp_path: Path) -> None:
+        """ActionGate.check raising (here the ApprovalPort, consulted for tier "approve") is a fail-closed
+        denial: the tool error carries the fixed ACTION_GATE_UNAVAILABLE_MESSAGE, the underlying error goes
+        to on_error, exactly one action.denied is recorded with the descriptor's tier, and the write never
+        runs (ACT-APR-001; the REST route's gate-unavailable counterpart)."""
+
+        async def run() -> None:
+            denied: list[Any] = []
+            seen: list[McpErrorInfo] = []
+
+            class Recorder:
+                async def invoked(self, **kwargs: Any) -> None:
+                    pass
+
+                async def denied(self, **kwargs: Any) -> None:
+                    denied.append(kwargs)
+
+                async def approval_requested(self, **kwargs: Any) -> None:
+                    pass
+
+                async def approved(self, **kwargs: Any) -> None:
+                    pass
+
+            class BrokenApprovals:
+                async def verify_approval(self, *args: Any, **kwargs: Any) -> Any:
+                    raise RuntimeError("approval backend down")
+
+            class ApproveTierDomain:
+                def __init__(self) -> None:
+                    self.invocations: list[tuple[str, Any]] = []
+
+                async def list_operations(self) -> list[Any]:
+                    return [OperationDescriptor(name="wire", description="d", tier="approve")]
+
+                async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                    self.invocations.append((op, args))
+                    return {"ok": True}
+
+            domain = ApproveTierDomain()
+            deps = _deps(
+                tmp_path,
+                domain=domain,
+                approvals=BrokenApprovals(),
+                action_audit_recorder=Recorder(),
+                on_error=seen.append,
+            )
+            async with connect(deps, _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {
+                        "action": "wire",
+                        "payload": {"amount": 1},
+                        "capability": "cap:wire",
+                        "approval": "some-token",
+                    },
+                )
+                assert result.is_error is True
+                assert result.content[0].text == ACTION_GATE_UNAVAILABLE_MESSAGE  # type: ignore[union-attr]
+                assert domain.invocations == []
+                assert len(denied) == 1
+                assert denied[0]["action"] == "wire"
+                assert denied[0]["tier"] == "approve"
+                assert denied[0]["reason"] == ACTION_GATE_UNAVAILABLE_MESSAGE
+                assert denied[0]["payload_hash"].startswith("sha256:")
+                assert denied[0]["principal"].id == "mcp-user"
+                assert any(info.endpoint == "kohaku_action" for info in seen)
+
+        asyncio.run(run())
+
+    def test_operation_index_that_cannot_be_read_is_audited_as_a_denial(
+        self, tmp_path: Path
+    ) -> None:
+        """A rejected operation index (list_operations() raising) is a fail-closed denial for the call and
+        is audited as action.denied with tier "auto" (the descriptor is unreadable), symmetric with the gate
+        failing (ACT-APR-001)."""
+
+        async def run() -> None:
+            denied: list[Any] = []
+            seen: list[McpErrorInfo] = []
+
+            class Recorder:
+                async def invoked(self, **kwargs: Any) -> None:
+                    pass
+
+                async def denied(self, **kwargs: Any) -> None:
+                    denied.append(kwargs)
+
+                async def approval_requested(self, **kwargs: Any) -> None:
+                    pass
+
+                async def approved(self, **kwargs: Any) -> None:
+                    pass
+
+            class UnreadableIndexDomain:
+                def __init__(self) -> None:
+                    self.invocations: list[tuple[str, Any]] = []
+
+                async def list_operations(self) -> list[Any]:
+                    raise RuntimeError("operation listing down")
+
+                async def invoke(self, op: str, args: Any, ctx: Any) -> object:
+                    self.invocations.append((op, args))
+                    return {"ok": True}
+
+            domain = UnreadableIndexDomain()
+            deps = _deps(
+                tmp_path,
+                domain=domain,
+                action_audit_recorder=Recorder(),
+                on_error=seen.append,
+            )
+            async with connect(deps, _OPTIONS) as client:
+                result = await client.call_tool(
+                    "kohaku_action",
+                    {"action": "annotate", "payload": {"note": "x"}, "capability": "cap:annotate"},
+                )
+                assert result.is_error is True
+                assert result.content[0].text == "operation index unavailable"  # type: ignore[union-attr]
+                assert domain.invocations == []
+                assert len(denied) == 1
+                assert denied[0]["action"] == "annotate"
+                assert denied[0]["tier"] == "auto"
+                assert denied[0]["reason"] == ACTION_GATE_UNAVAILABLE_MESSAGE
+                assert denied[0]["principal"].id == "mcp-user"
+                assert any(info.endpoint == "kohaku_action.operationIndex" for info in seen)
 
         asyncio.run(run())
 

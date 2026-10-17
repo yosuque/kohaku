@@ -29,6 +29,7 @@ from kohaku.composer import (
 )
 from kohaku.data_binding import split_reserved_params
 from kohaku.host_core import (
+    ACTION_GATE_UNAVAILABLE_MESSAGE,
     LLM_PROVIDER_UNAVAILABLE_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
@@ -49,6 +50,7 @@ from kohaku.host_core import (
     parse_invokable_ref,
     parse_trace_context,
     record_action_gate_result,
+    record_action_gate_unavailable_denial,
     record_undeclared_action_denial,
     to_jsonable,
 )
@@ -1093,10 +1095,24 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
             # rather than let through ungated (fail-closed; ACT-PRM-001, MCPAPP-ACT-001). A rejected
             # operation index (list_operations() raising) is likewise fail-closed for this call, and a declared
             # operation whose paramsSchema failed validation is fail-closed for that operation alone.
+            # The audit context is built once for every denial site below (this profile resolves no tenant).
+            # A gate that cannot decide at all -- the operation index rejecting, or the gate / ApprovalPort
+            # raising -- is audited as `action.denied` through host_core's
+            # record_action_gate_unavailable_denial (ACT-APR-001), REST's `_gate_unavailable` counterpart.
+            audit_context = ActionAuditContext(
+                recorder=deps.action_audit_recorder,
+                action=action,
+                payload=payload,
+                principal=resolved_principal,
+                tenant=None,
+                correlation_id=_correlation_id_of(ctx),
+                report=lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
+            )
             try:
                 index = await _operation_index()
             except Exception as exc:  # noqa: BLE001 — fail-closed for this call, reported below
                 await _report_mcp_error(deps, f"{prefix}_action.operationIndex", exc)
+                await record_action_gate_unavailable_denial(audit_context)
                 return _tool_error("operation index unavailable")
             entry = index.get(action)
             if entry is not None and entry.schema_error is not None:
@@ -1105,29 +1121,28 @@ def attach_kohaku_to_mcp_server(server: Server, deps: McpHostDeps, options: Atta
                 await _report_mcp_error(deps, f"{prefix}_action.operationIndex", entry.schema_error)
                 return _tool_error("action parameter schema unavailable")
             if entry is None:
-                await record_undeclared_action_denial(
-                    ActionAuditContext(
-                        recorder=deps.action_audit_recorder,
-                        action=action,
+                await record_undeclared_action_denial(audit_context)
+                return _tool_error(f"capability denied: {UNDECLARED_ACTION_MESSAGE}")
+            try:
+                gate_result = await _action_gate.check(
+                    ActionGateRequest(
+                        descriptor=entry.descriptor,
+                        params_schema=entry.params_schema,
                         payload=payload,
-                        principal=resolved_principal,
+                        confirmed=confirmed,
+                        approval=approval,
+                        requester_id=resolved_principal.id,
                         tenant=None,
-                        correlation_id=_correlation_id_of(ctx),
-                        report=lambda exc: _report_mcp_error(deps, f"{prefix}_action.audit", exc),
                     )
                 )
-                return _tool_error(f"capability denied: {UNDECLARED_ACTION_MESSAGE}")
-            gate_result = await _action_gate.check(
-                ActionGateRequest(
-                    descriptor=entry.descriptor,
-                    params_schema=entry.params_schema,
-                    payload=payload,
-                    confirmed=confirmed,
-                    approval=approval,
-                    requester_id=resolved_principal.id,
-                    tenant=None,
+            except Exception as exc:  # noqa: BLE001 — the gate could not decide: a fail-closed denial
+                # E.g. the ApprovalPort raised: a denial, never an unhandled failure that skips the audit
+                # trail (REST's `_gate_unavailable` counterpart).
+                await _report_mcp_error(deps, f"{prefix}_action", exc)
+                await record_action_gate_unavailable_denial(
+                    audit_context, tier=entry.descriptor.tier or "auto"
                 )
-            )
+                return _tool_error(ACTION_GATE_UNAVAILABLE_MESSAGE)
             gated = await _handle_action_gate_result(
                 gate_result,
                 action=action,
