@@ -94,6 +94,37 @@ function vocabName(column: string): string {
   return RESERVED_BINDINGS.includes(column) ? `${column}Vocab` : column;
 }
 
+/** One generated `defineIntent({...})` entry of `server/intents.ts`; see `pushIntent` for how each field is emitted. */
+interface IntentBlock {
+  /** The canonical name, emitted as a JSON string literal. */
+  canonical: string;
+  /** The description shown to the model, emitted as a JSON string literal. */
+  description: string;
+  /** The view label, emitted as a JSON string literal. */
+  viewLabel: string;
+  /** The `params` expression (a `z.object(...)` call), emitted as is. */
+  params: string;
+  /** The example questions, each emitted as a JSON string literal. */
+  examples: readonly string[];
+  /** The facet descriptor lines (already indented), emitted as is between `facets: [` and `],`. */
+  facets: readonly string[];
+  /** The single `queries` entry (an object literal), emitted as is inside `queries: [...]`. */
+  queries: string;
+}
+
+/** Appends one `defineIntent({...})` entry (the shape all of the generated Intents share) to `lines`. */
+function pushIntent(lines: string[], intent: IntentBlock): void {
+  lines.push("  defineIntent({");
+  lines.push(`    canonical: ${q(intent.canonical)},`);
+  lines.push(`    description: ${q(intent.description)},`);
+  lines.push("    source: SOURCE,", `    viewLabel: ${q(intent.viewLabel)},`);
+  lines.push(`    params: ${intent.params},`);
+  lines.push(`    examples: [${intent.examples.map(q).join(", ")}],`);
+  lines.push("    facets: [", ...intent.facets, "    ],");
+  lines.push(`    queries: [${intent.queries}],`);
+  lines.push("  }),");
+}
+
 export function renderIntents(profile: DatasetProfile): string {
   const src = profile.source;
   const dims = profile.dimensions;
@@ -146,66 +177,52 @@ export function renderIntents(profile: DatasetProfile): string {
   );
 
   lines.push("export const INTENT_DEFINITIONS: IntentBuilder[] = [");
-  lines.push("  defineIntent({");
-  lines.push(`    canonical: ${q(`${src}.summary`)},`);
-  lines.push(
-    `    description: ${q(`Aggregate ${measureList} by ${dimList} (sum or average), optionally filtered`)},`,
-  );
-  lines.push("    source: SOURCE,", '    viewLabel: "Summary",');
-  lines.push(
-    `    params: z.object({ metric: metric.enum().default(${q(defaultMetric)}), agg: agg.enum().default("sum"), groupBy: groupBy.enum().default(${q(firstDim)}), ...filters${hasTime ? ", ...period" : ""} }),`,
-  );
-  lines.push(
-    `    examples: [${q(`${humanize(defaultMetric)} by ${humanize(firstDim).toLowerCase()}`)}, ${q(`Average ${humanize(defaultMetric).toLowerCase()} by ${humanize(dims[dims.length - 1]!.name).toLowerCase()}`)}, ${q(`How many rows per ${humanize(firstDim).toLowerCase()}?`)}],`,
-  );
-  lines.push(
-    "    facets: [",
-    '      { param: "metric", label: "Metric", options: metric },',
-    '      { param: "agg", label: "Aggregation", options: agg },',
-    '      { param: "groupBy", label: "Group by", options: groupBy },',
-    ...filterFacets,
-    "    ],",
-  );
-  lines.push(
-    `    queries: [{ path: "summary", paramMap: { metric: "metric", agg: "agg", groupBy: "groupBy", ${filterMap}${periodMap} } }],`,
-  );
-  lines.push("  }),");
-  if (hasTime) {
-    lines.push("  defineIntent({");
-    lines.push(`    canonical: ${q(`${src}.trend`)},`);
-    lines.push(
-      `    description: ${q(`Show how ${measureList} changes over time (monthly / quarterly / yearly), optionally filtered`)},`,
-    );
-    lines.push("    source: SOURCE,", '    viewLabel: "Trend",');
-    lines.push(
-      `    params: z.object({ metric: metric.enum().default(${q(defaultMetric)}), agg: agg.enum().default("sum"), granularity: granularity.enum().default("month"), ...filters, ...period }),`,
-    );
-    lines.push(
-      `    examples: [${q(`Monthly ${humanize(defaultMetric).toLowerCase()} trend`)}, ${q(`Quarterly ${humanize(defaultMetric).toLowerCase()}`)}, ${q("How did it change over the year?")}],`,
-    );
-    lines.push(
-      "    facets: [",
+  pushIntent(lines, {
+    canonical: `${src}.summary`,
+    description: `Aggregate ${measureList} by ${dimList} (sum or average), optionally filtered`,
+    viewLabel: "Summary",
+    params: `z.object({ metric: metric.enum().default(${q(defaultMetric)}), agg: agg.enum().default("sum"), groupBy: groupBy.enum().default(${q(firstDim)}), ...filters${hasTime ? ", ...period" : ""} })`,
+    examples: [
+      `${humanize(defaultMetric)} by ${humanize(firstDim).toLowerCase()}`,
+      `Average ${humanize(defaultMetric).toLowerCase()} by ${humanize(dims[dims.length - 1]!.name).toLowerCase()}`,
+      `How many rows per ${humanize(firstDim).toLowerCase()}?`,
+    ],
+    facets: [
       '      { param: "metric", label: "Metric", options: metric },',
-      '      { param: "granularity", label: "Granularity", options: granularity },',
+      '      { param: "agg", label: "Aggregation", options: agg },',
+      '      { param: "groupBy", label: "Group by", options: groupBy },',
       ...filterFacets,
-      "    ],",
-    );
-    lines.push(
-      `    queries: [{ path: "trend", paramMap: { metric: "metric", agg: "agg", granularity: "granularity", ${filterMap}${periodMap} } }],`,
-    );
-    lines.push("  }),");
+    ],
+    queries: `{ path: "summary", paramMap: { metric: "metric", agg: "agg", groupBy: "groupBy", ${filterMap}${periodMap} } }`,
+  });
+  if (hasTime) {
+    pushIntent(lines, {
+      canonical: `${src}.trend`,
+      description: `Show how ${measureList} changes over time (monthly / quarterly / yearly), optionally filtered`,
+      viewLabel: "Trend",
+      params: `z.object({ metric: metric.enum().default(${q(defaultMetric)}), agg: agg.enum().default("sum"), granularity: granularity.enum().default("month"), ...filters, ...period })`,
+      examples: [
+        `Monthly ${humanize(defaultMetric).toLowerCase()} trend`,
+        `Quarterly ${humanize(defaultMetric).toLowerCase()}`,
+        "How did it change over the year?",
+      ],
+      facets: [
+        '      { param: "metric", label: "Metric", options: metric },',
+        '      { param: "granularity", label: "Granularity", options: granularity },',
+        ...filterFacets,
+      ],
+      queries: `{ path: "trend", paramMap: { metric: "metric", agg: "agg", granularity: "granularity", ${filterMap}${periodMap} } }`,
+    });
   }
-  lines.push("  defineIntent({");
-  lines.push(`    canonical: ${q(`${src}.records`)},`);
-  lines.push('    description: "List the raw rows, optionally filtered",');
-  lines.push("    source: SOURCE,", '    viewLabel: "Records",');
-  lines.push(
-    `    params: z.object({ ...filters${hasTime ? ", ...period" : ""}, limit: z.coerce.number().int().min(1).max(500).default(100) }),`,
-  );
-  lines.push('    examples: ["Show me the rows", "List the records"],');
-  lines.push("    facets: [", ...filterFacets, "    ],");
-  lines.push(`    queries: [{ path: "records", paramMap: { ${filterMap}${periodMap}, limit: "limit" } }],`);
-  lines.push("  }),");
+  pushIntent(lines, {
+    canonical: `${src}.records`,
+    description: "List the raw rows, optionally filtered",
+    viewLabel: "Records",
+    params: `z.object({ ...filters${hasTime ? ", ...period" : ""}, limit: z.coerce.number().int().min(1).max(500).default(100) })`,
+    examples: ["Show me the rows", "List the records"],
+    facets: filterFacets,
+    queries: `{ path: "records", paramMap: { ${filterMap}${periodMap}, limit: "limit" } }`,
+  });
   lines.push("];", "");
   return lines.join("\n");
 }
@@ -321,9 +338,10 @@ export interface RenderReadmeOptions {
 export function renderReadme(profile: DatasetProfile, options: RenderReadmeOptions = {}): string {
   const dims = profile.dimensions.map((d) => `\`${d.name}\``).join(", ");
   const measures = profile.measures.map((m) => `\`${m.name}\``).join(", ") || "(none — row counts only)";
-  const mcpSection =
-    options.mcp === true
-      ? `## MCP (Claude Desktop, claude.ai, ChatGPT)
+  const mcp = options.mcp === true;
+  // The "MCP" section of the README (followed directly by "Debugging a view").
+  const mcpSection = mcp
+    ? `## MCP (Claude Desktop, claude.ai, ChatGPT)
 
 \`\`\`bash
 npm run mcp:claude-desktop           # registers this project with Claude Desktop (backs up its config to .bak first)
@@ -337,7 +355,19 @@ Terminal hosts that cannot render an iframe (Claude Code, Codex CLI) get a self-
 (\`kohaku_render_snapshot\`, saved under \`.kohaku/snapshots/\`, git-ignored).
 
 `
-      : "";
+    : "";
+  // Appended to the "Before production" list.
+  const mcpDesktopConfigNote = mcp
+    ? `
+
+\`claude_desktop_config.example.json\` embeds this machine's absolute node path (\`process.execPath\` when \`kohaku init\` ran) and this project's absolute path, because Claude Desktop launches MCP servers with no shell PATH. On another machine, or after upgrading node, update \`command\` and the two \`args\` paths in that file, then run \`npm run mcp:claude-desktop\` again (that script only merges the file's entry into Claude Desktop's config; it does not recompute the paths).`
+    : "";
+  // Appended to the "What was generated" list.
+  const mcpGeneratedFiles = mcp
+    ? `
+- \`server/mcp-server.ts\` / \`server/mcp.ts\` / \`server/mcp-http.ts\` — the MCP front door (see the MCP section below).
+- \`scripts/claude-desktop.mjs\` + \`claude_desktop_config.example.json\` — Claude Desktop registration (\`npm run mcp:claude-desktop\`).`
+    : "";
   const beforeProduction = `## Before production
 
 \`npm run dev\` starts in development mode (\`dev: process.env["NODE_ENV"] !== "production"\` in \`server/ports.ts\`): every request runs as one shared ANONYMOUS principal and the governance routes (lineage, analytics, promotions, fixations) are open, and the startup log says so in a single warning line (on stderr) instead of the two production warnings. Before you expose the server:
@@ -346,13 +376,7 @@ Terminal hosts that cannot render an iframe (Claude Code, Codex CLI) get a self-
 2. Wire \`authorizeGovernance\` (who may read lineage / analytics and act on promotions and fixations) the same way; \`governancePolicyFromRoles\` is re-exported from \`@kohaku-ui/host\`.
 3. Set a fixed, secret \`KOHAKU_CAPABILITY_SECRET\` in your deployment's environment (the generated \`.env\` is git-ignored; do not commit a secret).
 4. Set \`NODE_ENV=production\` to turn development mode off; the production startup warnings then come back for anything still unwired.
-5. Replace the in-memory storage with a shared backend (\`@kohaku-ui/storage-redis\` / \`@kohaku-ui/storage-postgres\`, passed as \`storage\`), so lineage and the Spec cache survive restarts and are shared across instances.${
-    options.mcp === true
-      ? `
-
-\`claude_desktop_config.example.json\` embeds this machine's absolute node path (\`process.execPath\` when \`kohaku init\` ran) and this project's absolute path, because Claude Desktop launches MCP servers with no shell PATH. On another machine, or after upgrading node, update \`command\` and the two \`args\` paths in that file, then run \`npm run mcp:claude-desktop\` again (that script only merges the file's entry into Claude Desktop's config; it does not recompute the paths).`
-      : ""
-  }
+5. Replace the in-memory storage with a shared backend (\`@kohaku-ui/storage-redis\` / \`@kohaku-ui/storage-postgres\`, passed as \`storage\`), so lineage and the Spec cache survive restarts and are shared across instances.${mcpDesktopConfigNote}
 
 `;
   return `# ${profile.source} · kohaku quickstart
@@ -382,13 +406,7 @@ Chat answers only within the generated Intent catalog; a question outside it ret
 - \`server/ports.ts\` — the wiring, via \`@kohaku-ui/host\`'s \`createKohakuHost()\` (in-memory storage + HMAC capabilities + the LLM SemanticPort by default). Every default here is a starting point; the contract is \`@kohaku-ui/spec-core\`'s \`ports.ts\`.
 - \`server/app.ts\` — the REST front door: adds the dashboard's facet-views / health routes on top of \`server/ports.ts\`'s host.
 - \`web/main.tsx\` — Dashboard + Chat on renderer-react.
-- \`test/golden.test.ts\` — golden regression. \`kohaku init\` generates the fixture's \`expected\` after \`npm install\` (commit it); with \`--no-install\`, or if that step failed, run \`KOHAKU_GOLDEN_UPDATE=1 npm test\` once. \`npm test\` asserts it. After an intentional change, regenerate the same way, review the diff and commit.${
-    options.mcp === true
-      ? `
-- \`server/mcp-server.ts\` / \`server/mcp.ts\` / \`server/mcp-http.ts\` — the MCP front door (see the MCP section below).
-- \`scripts/claude-desktop.mjs\` + \`claude_desktop_config.example.json\` — Claude Desktop registration (\`npm run mcp:claude-desktop\`).`
-      : ""
-  }
+- \`test/golden.test.ts\` — golden regression. \`kohaku init\` generates the fixture's \`expected\` after \`npm install\` (commit it); with \`--no-install\`, or if that step failed, run \`KOHAKU_GOLDEN_UPDATE=1 npm test\` once. \`npm test\` asserts it. After an intentional change, regenerate the same way, review the diff and commit.${mcpGeneratedFiles}
 
 ${mcpSection}## Debugging a view
 
