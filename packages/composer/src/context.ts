@@ -178,7 +178,11 @@ export interface ComposeL1Policy {
   refConstraint?: "schema" | "validate";
 }
 
-/** The L2 (free-form HTML generation) concern of `ComposePolicy` (`tiers/l2-generate.ts`). */
+/**
+ * The L2 (free-form HTML generation) concern of `ComposePolicy`. `designSystem` is read by
+ * `tiers/l2-generate.ts`, by `assemble.ts`'s `provenanceStampsOf` (the kit stamp) and by
+ * `policy-fingerprint.ts`; `l2Smoke` is read by `tiers/l2-generate.ts` only.
+ */
 export interface ComposeL2Policy {
   /**
    * Design-system application to L2 free generation (optional). When specified, a "design system" section
