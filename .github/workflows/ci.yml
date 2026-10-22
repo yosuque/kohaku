@@ -16,13 +16,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
+      # The 24 leg is advisory (the main ruleset requires only `ci (26)`), so a failure there must not
+      # cancel the 26 leg the way the default fail-fast would.
+      fail-fast: false
       matrix:
-        # package.json's engines.node floor (">=22") is only actually exercised if something in CI runs on
-        # it. 26 is the primary version (it is also what conformance-ts / conformance-python / python
-        # run on), 22 proves the declared floor still works. Steps that must run exactly once (coverage
-        # upload, the generated-artefact drift checks) are gated to the 26 leg below so the matrix does not
-        # duplicate or race them.
-        node-version: [22, 26]
+        # 26 is the primary version (it is also what conformance-ts / conformance-python / python run on)
+        # and the only required leg; 24 keeps the previous LTS line in view without blocking a merge.
+        # package.json's engines.node floor (">=22") is not exercised by any job. Steps that must run
+        # exactly once (coverage upload, the generated-artefact drift checks) are gated to the 26 leg
+        # below so the matrix does not duplicate or race them.
+        node-version: [24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No `version:` input here: package.json's `packageManager` field is the single source of
@@ -36,7 +39,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Placed before the test suite so a formatting or lint slip is reported in well under a minute
       # instead of after the full run. Gated to one matrix leg like the steps at the bottom of this job:
-      # Biome ships its own binary and never reads the Node version, so the result is identical on 22 and
+      # Biome ships its own binary and never reads the Node version, so the result is identical on 24 and
       # 26. --error-on-warnings makes biome.jsonc the single source of truth for what blocks CI -- anything
       # that should not block is set to "info" or "off" there, with its measured count and reason, rather
       # than relying on Biome's shipped severities.
@@ -46,32 +49,32 @@ jobs:
       # Report-only: the remaining high-severity findings come from transitive dependencies of jsdom, the MCP SDK,
       # and the sample web app, not from any published package's own runtime dependencies. Kept non-blocking until
       # upstream fixes land; still visible in the job log for tracking.
-      # One leg only: the audit reads the lockfile, not the Node runtime, so the 22 leg would repeat it verbatim.
+      # One leg only: the audit reads the lockfile, not the Node runtime, so the 24 leg would repeat it verbatim.
       - name: Production dependency audit (report only)
         if: matrix.node-version == 26
         run: pnpm audit --prod --audit-level=high
         continue-on-error: true
       # One run of the suite per leg: the 26 leg runs it under coverage (the thresholds in
-      # vitest.config.ts are the gate), the 22 leg runs it plain to prove the declared Node floor.
+      # vitest.config.ts are the gate), the 24 leg runs it plain.
       - name: Test (with coverage on the primary leg)
         run: ${{ matrix.node-version == 26 && 'pnpm test:coverage' || 'pnpm test' }}
         env:
           # The Redis / Postgres adapter suites need a backend, and the dedicated `adapters` job below runs
-          # them against real service containers with KOHAKU_ADAPTER_TESTS=require, so the 22 leg skips them
+          # them against real service containers with KOHAKU_ADAPTER_TESTS=require, so the 24 leg skips them
           # (`skip` short-circuits the backend resolution in packages/port-contracts/src/backend.ts) rather
           # than start testcontainers a third time. The 26 leg must NOT skip them: `coverage.include` counts
           # storage-postgres / storage-redis src toward the global thresholds, and without the adapter suites
           # the functions figure drops from ~89% to ~87% and fails the 88% floor. An empty value is not
           # "skip", so the 26 leg keeps the default (env URL -> Docker -> skip) resolution.
-          KOHAKU_ADAPTER_TESTS: ${{ matrix.node-version == 22 && 'skip' || '' }}
+          KOHAKU_ADAPTER_TESTS: ${{ matrix.node-version == 24 && 'skip' || '' }}
       # One leg only: tsc's output depends on the TypeScript version and @types/node (both pinned in the
-      # catalog), never on the Node runtime executing it, so the 22 leg would repeat it verbatim.
+      # catalog), never on the Node runtime executing it, so the 24 leg would repeat it verbatim.
       - run: pnpm typecheck
         if: matrix.node-version == 26
       - run: node cli/bin/kohaku.js conformance --self
       # Everything below this line must run exactly once per CI run (a coverage upload artifact name
       # collision, or two legs racing to write/verify the same generated files), so it is gated to a single
-      # matrix leg rather than duplicated across node-version 22 and 26.
+      # matrix leg rather than duplicated across node-version 24 and 26.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: matrix.node-version == 26
         with:

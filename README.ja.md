@@ -83,7 +83,7 @@ cd my-dashboard && npm run dev
 
 自分の CSV/JSON/SQLite から動く Dashboard + Chat アプリ(DomainPort・Intent カタログ・L0 固定 Spec)を生成します。あわせて、生成し立ての capability secret を書いた `.env` も作られるので、そこにはプロバイダキーだけ追記してください(`.env.example` で上書きしないこと)。生成物の中身と L1/L2 の追加方法は [Zero-Port quickstart](docs/user-guide.ja.md#zero-port-quickstart自分のデータからport-コードなしで) を参照してください。手元にデータがなければ、このページの冒頭で案内している同梱サンプル CSV([`cli/test/init/fixtures/sales.csv`](cli/test/init/fixtures/sales.csv))を使えます。このセクションの残りはモノレポ自体の開発セットアップです。
 
-前提: Node >= 22(SQLite 入力は >= 22.13)、pnpm 12。CI は Node 22 と 26 で検証しています。
+前提: Node >= 22(SQLite 入力は >= 22.13)、pnpm 12。CI は Node 24 と 26 で検証しています。
 
 ```bash
 cp .env.example .env    # LLM プロバイダ設定(下表)
