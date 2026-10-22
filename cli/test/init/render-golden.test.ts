@@ -9,6 +9,7 @@ import {
   renderEnvFile,
   renderProjectFiles,
 } from "../../src/init/render.js";
+import { CLI_VERSION } from "../../src/version.js";
 
 // Characterization of the generated project: every file `kohaku init` writes (the pure `renderProjectFiles`
 // output plus the two files `initProject` adds on top of it) is byte-compared against a golden under
@@ -16,6 +17,9 @@ import {
 // contract, so a refactor of the renderer must keep them identical. The `.golden` suffix keeps editors,
 // Biome, tsc and git (a golden `.gitignore` / `.env` would otherwise act on the directory it sits in) from
 // treating a golden as a live file.
+//
+// The `@kohaku-ui/*` dependency ranges follow the CLI's own version, which every version pull request bumps,
+// so the goldens store a placeholder in their place (render.test.ts pins the real `^<CLI_VERSION>` wiring).
 //
 // After an INTENTIONAL change to a template, regenerate with `KOHAKU_UPDATE_INIT_GOLDEN=1 pnpm vitest run
 // --project cli render-golden`, review the golden diff, and commit it.
@@ -29,6 +33,12 @@ const NAME = "golden-app";
 const SECRET = "golden-secret-0000";
 const OUT_DIR = "/work/golden-app";
 const EXEC_PATH = "/usr/local/bin/node";
+const VERSION_PLACEHOLDER = '"^<CLI_VERSION>"';
+
+/** Replaces the version-dependent dependency ranges with a placeholder, so a release bump leaves the goldens untouched. */
+function normalize(content: string): string {
+  return content.replaceAll(`"^${CLI_VERSION}"`, VERSION_PLACEHOLDER);
+}
 
 const PLAIN_FILES = [
   "package.json",
@@ -121,11 +131,11 @@ describe.each([
       for (const f of files) {
         const target = join(goldenDir, `${f.path}.golden`);
         mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, f.content);
+        writeFileSync(target, normalize(f.content));
       }
     }
     for (const f of files) {
-      expect(readFileSync(join(goldenDir, `${f.path}.golden`), "utf8"), f.path).toBe(f.content);
+      expect(readFileSync(join(goldenDir, `${f.path}.golden`), "utf8"), f.path).toBe(normalize(f.content));
     }
     expect(goldenFilesOnDisk(goldenDir)).toEqual(files.map((f) => `${f.path}.golden`).sort());
   });
