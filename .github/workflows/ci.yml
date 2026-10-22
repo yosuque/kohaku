@@ -21,10 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         # 26 is the primary version (it is also what conformance-ts / conformance-python / python run on)
-        # and the only required leg; 24 keeps the previous LTS line in view without blocking a merge.
-        # package.json's engines.node floor (">=22") is not exercised by any job. Steps that must run
-        # exactly once (coverage upload, the generated-artefact drift checks) are gated to the 26 leg
-        # below so the matrix does not duplicate or race them.
+        # and the only required leg; 24 exercises the engines.node floor (">=24.22.1"; setup-node resolves
+        # `24` to the latest 24.x) without blocking a merge. Steps that must run exactly once (coverage
+        # upload, the generated-artefact drift checks) are gated to the 26 leg below so the matrix does not
+        # duplicate or race them.
         node-version: [24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

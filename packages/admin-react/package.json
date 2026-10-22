@@ -48,7 +48,7 @@
     "directory": "packages/admin-react"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24.22.1"
   },
   "sideEffects": false,
   "files": [

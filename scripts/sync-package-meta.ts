@@ -103,7 +103,7 @@ for (const dir of PUBLISHED_DIRS) {
   setField(manifest, "homepage", `${HOMEPAGE}/tree/main/${dir}#readme`);
   setField(manifest, "bugs", { url: `${HOMEPAGE}/issues` });
   setField(manifest, "repository", { type: "git", url: REPO_URL, directory: dir });
-  setField(manifest, "engines", { node: ">=22" });
+  setField(manifest, "engines", { node: ">=24.22.1" });
   // Every library module is free of top-level side effects, so bundlers may drop unused ones. The CLI is
   // the exception: it is an executable whose entry parses argv and runs as soon as it is evaluated, which
   // is also why it publishes a bin and no importable entry point at all.
