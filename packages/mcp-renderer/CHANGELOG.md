@@ -1,5 +1,28 @@
 # @kohaku-ui/mcp-renderer
 
+## 0.5.0
+
+### Minor Changes
+
+- [#90](https://github.com/yosuque/kohaku/pull/90) [`ec72334`](https://github.com/yosuque/kohaku/commit/ec723342ee08ec94982950caf0584b79fbd23b83) Thanks [@yosuque](https://github.com/yosuque)! - Raise the minimum Node version from 22 to 24.22.1: every published package's `engines.node` is now `>=24.22.1`, and so is the `package.json` that `kohaku init` generates. Node 22 is no longer tested in CI (the matrix is now Node 24 and 26), so the declared floor follows what is actually verified. Projects still on Node 22 should upgrade Node before taking this release.
+
+### Patch Changes
+
+- [#85](https://github.com/yosuque/kohaku/pull/85) [`b06ee97`](https://github.com/yosuque/kohaku/commit/b06ee972794cb1c64dba2a23114791c13f9de9f6) Thanks [@yosuque](https://github.com/yosuque)! - Raise the MCP TypeScript SDK floor to the 2.3 line: `@modelcontextprotocol/server` / `client` / `core` `^2.3.1` (were `^2.0.0`), `@modelcontextprotocol/node` `^2.1.1`, `@modelcontextprotocol/ext-apps` `^2.0.3`. The peer ranges of `@kohaku-ui/host-mcp-apps` (`server`), `@kohaku-ui/host` (`server`, `node`) and `@kohaku-ui/mcp-renderer` (`ext-apps`) follow, and `kohaku init --mcp` now generates projects that depend on `@modelcontextprotocol/server` `^2.3.1` and `@modelcontextprotocol/node` `^2.1.1`. No source change was needed for the types.
+  
+  Observed behavior change of the Tasks extension (`io.modelcontextprotocol/tasks`) under SDK 2.3 (the published 0.4.0 declares `^2.0.0`, so its users already resolve SDK 2.3.x):
+  
+  - SDK 2.0.0 rejected `tasks/get` / `tasks/cancel` with `-32601` before kohaku's handlers ran. Since SDK 2.3.0 (SEP-2663) the SDK lets those two names through when a schema-explicit handler is registered, which kohaku does, so they are now reachable. The SDK also requires `Mcp-Name: <taskId>` on them (SDK clients send it); a request without it is rejected with `-32020` before dispatch.
+  - `AttachOptions.tasksEnabled` unset (the default, unchanged): no behavior change. The extension is neither declared nor registered, `tasks/get` / `tasks/cancel` still answer `-32601`, and the compose family stays synchronous.
+  - `AttachOptions.tasksEnabled: true`: `tasks/get` and `tasks/cancel` went from unreachable to working. A task-backed `kohaku_compose` can now be polled to `completed` and cancelled over the wire.
+  
+  The `host-mcp-apps` tripwire tests were updated accordingly, and cancellation is now tested through a real `tasks/cancel`. The default of `tasksEnabled` is a separate product decision and is left unchanged.
+- Updated dependencies [[`ec72334`](https://github.com/yosuque/kohaku/commit/ec723342ee08ec94982950caf0584b79fbd23b83), [`7dada20`](https://github.com/yosuque/kohaku/commit/7dada207c923752a410219d26bd073216ee5814d), [`b336fcb`](https://github.com/yosuque/kohaku/commit/b336fcbcefb08f8eb8240f5a61cf45db4a43721e)]:
+  - @kohaku-ui/data-binding@0.5.0
+  - @kohaku-ui/renderer-core@0.5.0
+  - @kohaku-ui/renderer-react@0.5.0
+  - @kohaku-ui/spec-core@0.5.0
+
 ## 0.4.1
 
 ### Patch Changes
