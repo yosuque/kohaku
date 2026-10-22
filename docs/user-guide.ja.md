@@ -48,7 +48,7 @@ L2 で生成されたアーティファクトはそこで終わりではあり�
 
 ## 2. セットアップ
 
-前提: Node >= 22(SQLite 入力は >= 22.13)、pnpm 12(`npm i -g pnpm`)。CI は Node 22 と 24 で検証しています。下限要件は `package.json` の `engines`(`node >= 22`)で、conformance ジョブと Python ジョブは Node 24 のみで実行します。`.node-version`(現在 25.7.0)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは意図的に別です — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 25.7.0` / `fnm install 25.7.0`)か、手元にある Node >= 22 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
+前提: Node >= 24.22.1、pnpm 12(`npm i -g pnpm`)。CI は Node 24 と 26 で検証しています。下限要件は `package.json` の `engines`(`node >= 24.22.1`)で、conformance ジョブと Python ジョブは Node 26 のみで実行します。`.node-version`(現在 26.12.1)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは独立して固定しています — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 26.12.1` / `fnm install 26.12.1`)か、手元にある Node >= 24.22.1 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
 
 ```bash
 git clone https://github.com/yosuque/kohaku.git && cd kohaku
@@ -358,7 +358,7 @@ UI 宣言 `_meta` は modern(ネスト `_meta.ui.{resourceUri,visibility}`)と l
 
 ```bash
 mkdir my-app && cd my-app
-npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファイルも可(SQLite は Node >= 22.13)
+npx @kohaku-ui/cli init --from ../sales.csv     # .json 配列 / .sqlite ファイルも可
 npm run dev                                      # API :8787 + web :5173
 ```
 

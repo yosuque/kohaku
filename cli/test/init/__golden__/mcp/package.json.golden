@@ -15,7 +15,7 @@
     "mcp:claude-desktop": "node scripts/claude-desktop.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24.22.1"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.58",

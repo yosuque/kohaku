@@ -88,7 +88,7 @@ describe("publishable package manifests", () => {
       expect(manifest.license, `${manifest.name} license`).toBe("Apache-2.0");
       expect(manifest.description, `${manifest.name} description`).toBeTruthy();
       expect(manifest.repository?.directory, `${manifest.name} repository.directory`).toBe(dir);
-      expect(manifest.engines?.["node"], `${manifest.name} engines.node`).toBe(">=22");
+      expect(manifest.engines?.["node"], `${manifest.name} engines.node`).toBe(">=24.22.1");
       expect(manifest.files, `${manifest.name} files`).toContain("dist");
       expect(manifest.publishConfig?.access, `${manifest.name} publishConfig.access`).toBe("public");
     }

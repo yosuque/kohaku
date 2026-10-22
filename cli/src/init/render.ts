@@ -304,7 +304,7 @@ export function renderPackageJson(
         test: "vitest run",
         ...(options.mcp === true ? MCP_SCRIPTS : {}),
       },
-      engines: { node: ">=22" },
+      engines: { node: ">=24.22.1" },
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
       devDependencies: Object.fromEntries(Object.entries(devDependencies).sort()),
     },

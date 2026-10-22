@@ -25,7 +25,7 @@ Commands (`kohaku --help` lists them, `kohaku <command> --help` shows the option
 - `usage` derives usage metering from the lineage log (`usage export`, below).
 - `migrate` rewrites fixated Specs off a deprecated part when the catalog changes.
 
-`init` reads a `.csv` / `.json` (array of objects) / `.sqlite` file (SQLite needs Node >= 22.13),
+`init` reads a `.csv` / `.json` (array of objects) / `.sqlite` file,
 infers which columns are categories, measures and a time axis, and generates a runnable project
 (DomainPort, Intent catalog, an L0 fixed Spec, a Dashboard + Chat web app, a golden regression
 test) that depends only on the published `@kohaku-ui/*` packages, then runs `npm install`. It

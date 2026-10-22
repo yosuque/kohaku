@@ -47,7 +47,7 @@
     "directory": "cli"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24.22.1"
   },
   "sideEffects": true,
   "files": [
