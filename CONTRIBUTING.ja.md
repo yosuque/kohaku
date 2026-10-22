@@ -15,7 +15,7 @@ Issue テンプレートはすべて `.github/ISSUE_TEMPLATE/` にあります�
 
 ## 2. 前提条件
 
-- Node >= 22(SQLite 入力は >= 22.13)、pnpm 12。CI は Node 22 と 24 で検証しています。開発者はローカル開発に `.node-version` の指定(25.7.0)を使って構いません。
+- Node >= 22(SQLite 入力は >= 22.13)、pnpm 12。CI は Node 22 と 26 で検証しています。開発者はローカル開発に `.node-version` の指定(26.12.1)を使って構いません。
 - [uv](https://docs.astral.sh/uv/) — `python/` 配下を触る場合のみ必要です。
 
 ## 3. セットアップ
