@@ -48,7 +48,7 @@ L2 で生成されたアーティファクトはそこで終わりではあり�
 
 ## 2. セットアップ
 
-前提: Node >= 24.22.1、pnpm 12(`npm i -g pnpm`)。CI は Node 24 と 26 で検証しています。下限要件は `package.json` の `engines`(`node >= 24.22.1`)で、Node 24 のレーンで検証しています(必須は Node 26 のレーンのみで、Node 24 のレーンは参考扱い)。conformance ジョブと Python ジョブは Node 26 のみで実行します。`.node-version`(現在 26.12.1)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは独立して固定しています — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 26.12.1` / `fnm install 26.12.1`)か、手元にある Node >= 24.22.1 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
+前提: Node >= 24.22.1、pnpm 12(`npm i -g pnpm`)。CI は Node 24 と 26 で検証しています。下限要件は `package.json` の `engines`(`node >= 24.22.1`)で、conformance ジョブと Python ジョブは Node 26 のみで実行します。`.node-version`(現在 26.12.1)はローカル開発環境用のバージョン指定(nodenv などが読む)で、CI が使う版とは独立して固定しています — 下限さえ満たしていればどの版でも動きます。バージョンマネージャがそのバージョンを持っておらず「version not installed」等で失敗する場合は、そのバージョンをインストールする(例: `nodenv install 26.12.1` / `fnm install 26.12.1`)か、手元にある Node >= 24.22.1 をそのまま使ってください — この固定はあえてそのままにしている仕様で、直すべきバグではありません。pnpm のバージョンは `package.json` の `packageManager` で固定しています。
 
 ```bash
 git clone https://github.com/yosuque/kohaku.git && cd kohaku

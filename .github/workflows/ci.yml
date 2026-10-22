@@ -16,15 +16,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
-      # The 24 leg is advisory (the main ruleset requires only `ci (26)`), so a failure there must not
-      # cancel the 26 leg the way the default fail-fast would.
       fail-fast: false
       matrix:
-        # 26 is the primary version (it is also what conformance-ts / conformance-python / python run on)
-        # and the only required leg; 24 exercises the engines.node floor (">=24.22.1"; setup-node resolves
-        # `24` to the latest 24.x) without blocking a merge. Steps that must run exactly once (coverage
-        # upload, the generated-artefact drift checks) are gated to the 26 leg below so the matrix does not
-        # duplicate or race them.
+        # CI checks Node 24 and 26. Steps that must run exactly once (coverage upload, the
+        # generated-artefact drift checks) are gated to the 26 leg below so the matrix does not duplicate
+        # or race them.
         node-version: [24, 26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
