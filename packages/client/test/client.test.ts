@@ -31,7 +31,7 @@ import {
   isKohakuHostError,
   KohakuHostError,
 } from "../src/index.js";
-import { readComposeStream } from "../src/stream.js";
+import { readComposeStream, toComposeStreamEvent } from "../src/stream.js";
 import type { Transport } from "../src/transport.js";
 
 // Exercises the typed client against an in-memory host-rest app.
@@ -941,6 +941,21 @@ describe("readComposeStream SSE framing", () => {
     expect(events.map((e) => e.kind)).toEqual(["spec", "patch", "done"]);
     expect(events[0]).toMatchObject({ kind: "spec", capability: "c", final: false });
     expect(events[2]).toMatchObject({ kind: "done", specHash: "sha256:h", tier: "L1", cache: "miss" });
+  });
+
+  it("surfaces a patch event's optional replacement capability (typed event too)", async () => {
+    const wire = [
+      'event: patch\ndata: {"patch":{"upsert":[]},"capability":"cap-final"}\n\n',
+      'event: patch\ndata: {"patch":{"upsert":[]}}\n\n',
+    ];
+    const events = await collect(readComposeStream(sseStream(wire)));
+    expect(events[0]).toEqual({ kind: "patch", patch: { upsert: [] }, capability: "cap-final" });
+    expect(events[1]).toEqual({ kind: "patch", patch: { upsert: [] } });
+    expect(toComposeStreamEvent(events[0]!)).toEqual({
+      kind: "patch",
+      patch: { upsert: [] },
+      capability: "cap-final",
+    });
   });
 
   it("discriminates the error event", async () => {

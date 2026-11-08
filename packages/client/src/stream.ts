@@ -7,7 +7,7 @@ import type { ActionManifest } from "./types.js";
  */
 export type ComposeStreamWireEvent =
   | { kind: "spec"; spec: unknown; capability?: string; final: boolean; actions?: ActionManifest }
-  | { kind: "patch"; patch: unknown }
+  | { kind: "patch"; patch: unknown; capability?: string }
   | { kind: "done"; specHash: string; tier: string; cache: string }
   | { kind: "error"; error: { code: string; message: string } };
 
@@ -15,6 +15,9 @@ export type ComposeStreamWireEvent =
  * Typed Compose stream event (the shape consumed by SDK users). Corresponds to REST-STR-001..003:
  * - spec: the first event. `final: true` means the final Spec (fast path), `false` means a skeleton followed by patches.
  * - patch: applyPatch in receive order yields a Spec identical to the non-streaming /compose (REST-STR-002).
+ *   `capability?` (only on the last patch, only when the finalized Spec declares `data.bind`, e.g. from the
+ *   host's L1 filter injection) REPLACES the skeleton's capability: it covers every bind variant of the
+ *   finalized Spec. A consumer that ignores it still renders correctly but cannot switch bound variants.
  * - done | error: terminates with exactly one (REST-STR-003). error is the host's in-band termination (a
  *   generation failure after the stream starts), and code is an error code from §6.1. A malformed body before the stream starts (400 etc.) is thrown as an exception.
  *
@@ -23,7 +26,7 @@ export type ComposeStreamWireEvent =
  */
 export type ComposeStreamEvent =
   | { kind: "spec"; spec: UISpec; capability?: string; final: boolean; actions?: ActionManifest }
-  | { kind: "patch"; patch: SpecPatch }
+  | { kind: "patch"; patch: SpecPatch; capability?: string }
   | { kind: "done"; specHash: string; tier: string; cache: string; requestId?: string }
   | { kind: "error"; error: { code: HostErrorCode; message: string } };
 
@@ -113,7 +116,11 @@ function wireEvent(event: string, data: string): ComposeStreamWireEvent | null {
         ...(json["actions"] != null ? { actions: json["actions"] as ActionManifest } : {}),
       };
     case "patch":
-      return { kind: "patch", patch: json["patch"] };
+      return {
+        kind: "patch",
+        patch: json["patch"],
+        ...(typeof json["capability"] === "string" ? { capability: json["capability"] } : {}),
+      };
     case "done":
       return {
         kind: "done",
@@ -148,7 +155,11 @@ export function toComposeStreamEvent(wire: ComposeStreamWireEvent): ComposeStrea
         ...(wire.actions != null ? { actions: wire.actions } : {}),
       };
     case "patch":
-      return { kind: "patch", patch: wire.patch as SpecPatch };
+      return {
+        kind: "patch",
+        patch: wire.patch as SpecPatch,
+        ...(wire.capability != null ? { capability: wire.capability } : {}),
+      };
     case "done":
       return wire;
     case "error":

@@ -9,7 +9,9 @@ import { defineComponent } from "../define.js";
  *
  * generation:"excluded": kept out of the L1 generation vocabulary (same treatment as state / visibleWhen).
  * A structural containment that does not let the LLM decide the bind value-range allowlist. A part for
- * L0 fixed Specs, hand-written Specs, and promotion templates.
+ * L0 fixed Specs, hand-written Specs, and promotion templates -- and for the composer's deterministic
+ * injection into L1 Specs (`ComposePolicy.l1Filters`, `@kohaku-ui/composer`'s `injectFilters`), where the
+ * controls and the bind `values` come from the Intent's facet declaration, never from the model.
  * It holds no data (options are static props; the source of truth for authorization is on the data.bind.values side).
  */
 export const controlSelect = defineComponent({
