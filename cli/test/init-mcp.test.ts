@@ -94,7 +94,7 @@ describe("kohaku init --mcp", () => {
     await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
     const http = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
     expect(http.match(/createPorts\(/g)).toHaveLength(1);
-    const factory = http.slice(http.indexOf("createMcpHandler(() =>"), http.indexOf("const handleMcp"));
+    const factory = http.slice(http.indexOf("createServer: () =>"), http.indexOf("// Graceful shutdown"));
     expect(factory).toContain("attachMcpServer(server, host)");
     expect(factory).not.toContain("createPorts");
     // attachMcpServer takes the host instead of building one itself.
@@ -107,33 +107,34 @@ describe("kohaku init --mcp", () => {
     );
   });
 
-  it("server/mcp-http.ts validates Host and Origin, caps the body, and closes the handler with the server", async () => {
+  it("mcp-http.ts delegates the transport scaffold to @kohaku-ui/host/mcp-http", async () => {
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
-    const http = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
-    expect(http).toContain("hostHeaderValidation(");
-    expect(http).toContain("originValidation(");
-    expect(http).toContain("KOHAKU_MCP_ALLOWED_HOSTS");
-    expect(http).toContain("KOHAKU_MCP_ALLOWED_ORIGINS");
-    // Validation runs before anything else touches the request.
-    expect(http.indexOf("validateHost(req, res)")).toBeLessThan(http.indexOf("handleMcp(req, res"));
-    expect(http.indexOf("validateOrigin(req, res)")).toBeLessThan(http.indexOf("handleMcp(req, res"));
-    // Never a wildcard CORS origin: only a validated Origin is echoed back.
-    expect(http).not.toMatch(/Access-Control-Allow-Origin",\s*"\*"/);
-    // The preflight allows the standard request headers the MCP SDK client sends (SEP-2243).
-    expect(http).toContain("Content-Type, Accept, Authorization, mcp-protocol-version, mcp-method, mcp-name");
-    expect(http).toContain("MAX_BODY_BYTES = 4 * 1024 * 1024");
-    expect(http).toMatch(/httpServer\.on\("close", \(\) => \{\s*void mcpHandler\.close\(\);/);
+    const src = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
+    expect(src).toContain('from "@kohaku-ui/host/mcp-http"');
+    const call = src.slice(src.indexOf("createMcpHttpServer({"), src.indexOf("// Graceful shutdown"));
+    for (const option of ["createServer:", "allowedHosts:", "allowedOrigins:"]) {
+      expect(call, option).toContain(option);
+    }
+    expect(src).toContain('path: "/mcp"');
+    // The guards, CORS and the body cap are the shared scaffold's job now, not copied into the project.
+    expect(src).not.toContain("hostHeaderValidation(");
+    expect(src).not.toContain("originValidation(");
+    expect(src).not.toContain("readJsonBody(");
+    expect(src).not.toContain("createMcpHandler(");
+    expect(src).toContain("KOHAKU_MCP_ALLOWED_HOSTS");
+    expect(src).toContain("KOHAKU_MCP_ALLOWED_ORIGINS");
+    expect(src).toContain("port-agnostic");
+    expect(src.match(/createPorts\(/g)?.length).toBe(1);
   });
 
-  it("server/mcp-http.ts shuts down gracefully on SIGINT / SIGTERM and documents the port-agnostic Origin check", async () => {
+  it("server/mcp-http.ts shuts down gracefully on SIGINT / SIGTERM", async () => {
     const out = join(tmp(), "app");
     await initProject({ from: FIXTURE, out, install: false, mcp: true }, noRun);
     const http = readFileSync(join(out, "server/mcp-http.ts"), "utf8");
     expect(http).toContain('for (const signal of ["SIGINT", "SIGTERM"] as const)');
     expect(http).toContain("httpServer.close();");
     expect(http).toContain("KOHAKU_SHUTDOWN_GRACE_MS");
-    expect(http).toContain("port-agnostic");
   });
 
   it("server/mcp-server.ts exposes the generated Intent catalog as typed MCP tools", async () => {
