@@ -59,6 +59,8 @@ interface TaskRecord {
   abort: AbortController;
   createdAtMs: number;
   ttlMs: number;
+  /** The creator this task is bound to (see createTaskStore's "Ownership" note). */
+  owner: string;
 }
 
 export interface TaskStore {
@@ -68,7 +70,7 @@ export interface TaskStore {
    * with — `requestCancel` fires this same controller (see server.ts's `startComposeTask` for how compose
    * wires it into the composer's existing client-abort path).
    */
-  create(opts: { ttlMs: number; pollIntervalMs?: number }): {
+  create(opts: { owner: string; ttlMs: number; pollIntervalMs?: number }): {
     taskId: string;
     abort: AbortController;
     task: DetailedTask;
@@ -85,18 +87,20 @@ export interface TaskStore {
    */
   cancelled(taskId: string): void;
   /**
-   * Looks up a task by id. Lazily purges expired entries first (see createTaskStore's doc comment), so
-   * this returns `undefined` for both an unknown id and one whose `ttlMs` has elapsed.
+   * Looks up a task by id on behalf of `owner`. Lazily purges expired entries first (see createTaskStore's doc
+   * comment), so this returns `undefined` for an unknown id, one whose `ttlMs` has elapsed, and —
+   * indistinguishably — one that belongs to a different owner (an id alone must not reveal that a task exists).
    */
-  get(taskId: string): DetailedTask | undefined;
+  get(taskId: string, owner: string): DetailedTask | undefined;
   /**
-   * Requests cancellation (spec: non-blocking, non-guaranteed — this only *asks*). Fires the task's
-   * `AbortController` when it is still "working" (idempotent: a second call, or a call after the task
-   * already settled one way or another, does nothing further). Returns `ok:false` only for an
-   * unknown/expired id — an already-terminal task still acks `ok:true` (a late cancel of a task that
-   * already finished is not an error per the spec's non-blocking framing).
+   * Requests cancellation on behalf of `owner` (spec: non-blocking, non-guaranteed — this only *asks*). Fires
+   * the task's `AbortController` when it is still "working" (idempotent: a second call, or a call after the
+   * task already settled one way or another, does nothing further). Returns `ok:false` only for an
+   * unknown/expired id or one owned by someone else (indistinguishable, as in `get`) — an already-terminal
+   * task still acks `ok:true` (a late cancel of a task that already finished is not an error per the spec's
+   * non-blocking framing).
    */
-  requestCancel(taskId: string): { ok: true } | { ok: false };
+  requestCancel(taskId: string, owner: string): { ok: true } | { ok: false };
 }
 
 /**
@@ -115,7 +119,16 @@ export interface TaskStore {
  * session-sweep timer). This store sidesteps the question entirely: every public entry point
  * (`create`/`get`/`requestCancel`) first purges any record whose `ttlMs` has elapsed (lazy, on-access
  * expiry). Memory is bounded because tasks are short-lived (bounded by `COMPOSE_TASK_TTL_MS`, tens of
- * minutes at most) and created only by explicit task-capable tool calls, not by a background process.
+ * minutes at most) and created only by explicit task-capable tool calls, not by a background process. A
+ * still-working task that expires is also aborted (its body must not keep running unobservably).
+ *
+ * Ownership: every task is bound to an `owner` string (server.ts derives it from the same key the rate limiter
+ * uses: `rateLimitKey`, else the resolved principal's id, else the session id, else `"anonymous"`). `get` /
+ * `requestCancel` answer exactly like an unknown id when the caller's owner differs, so a leaked task id alone
+ * neither reveals that the task exists, nor lets its holder read the completed result (which carries the bearer
+ * write capability in `_meta`), nor cancel it. The binding is only as strong as that key: with no
+ * `resolvePrincipal` / `rateLimitKey` wired and no session id (stateless Streamable HTTP, stdio), every caller
+ * is `"anonymous"` and shares an owner.
  */
 export function createTaskStore(now: () => number = Date.now): TaskStore {
   const records = new Map<string, TaskRecord>();
@@ -123,7 +136,10 @@ export function createTaskStore(now: () => number = Date.now): TaskStore {
   function purgeExpired(): void {
     const nowMs = now();
     for (const [id, record] of records) {
-      if (nowMs - record.createdAtMs > record.ttlMs) records.delete(id);
+      if (nowMs - record.createdAtMs > record.ttlMs) {
+        records.delete(id);
+        if (record.task.status === "working") record.abort.abort(new Error("task expired"));
+      }
     }
   }
 
@@ -172,7 +188,7 @@ export function createTaskStore(now: () => number = Date.now): TaskStore {
         ttlMs: opts.ttlMs,
         ...(opts.pollIntervalMs != null ? { pollIntervalMs: opts.pollIntervalMs } : {}),
       };
-      records.set(taskId, { task, abort, createdAtMs: nowMs, ttlMs: opts.ttlMs });
+      records.set(taskId, { task, abort, createdAtMs: nowMs, ttlMs: opts.ttlMs, owner: opts.owner });
       return { taskId, abort, task };
     },
     complete(taskId, result) {
@@ -184,14 +200,15 @@ export function createTaskStore(now: () => number = Date.now): TaskStore {
     cancelled(taskId) {
       transitionIfWorking(taskId, { status: "cancelled" });
     },
-    get(taskId) {
-      purgeExpired();
-      return records.get(taskId)?.task;
-    },
-    requestCancel(taskId) {
+    get(taskId, owner) {
       purgeExpired();
       const record = records.get(taskId);
-      if (record == null) return { ok: false };
+      return record != null && record.owner === owner ? record.task : undefined;
+    },
+    requestCancel(taskId, owner) {
+      purgeExpired();
+      const record = records.get(taskId);
+      if (record == null || record.owner !== owner) return { ok: false };
       if (record.task.status === "working") record.abort.abort(new Error("cancelled via tasks/cancel"));
       return { ok: true };
     },

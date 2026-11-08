@@ -45,6 +45,12 @@ import {
   designSystemPromptFragment,
 } from "../../packages/composer/src/design-system.js";
 import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/prompt.js";
+// Relative (not "@kohaku-ui/domain-mcp") import, same reasoning as the composer import above: spec does not
+// declare domain-mcp as a dependency. These four modules import only spec-core types.
+import { coerceToolArguments } from "../../packages/domain-mcp/src/coerce.js";
+import { projectInputSchema } from "../../packages/domain-mcp/src/schema-projection.js";
+import { shapeFromOutputSchema } from "../../packages/domain-mcp/src/shape.js";
+import { type TabularLimits, toTabularData } from "../../packages/domain-mcp/src/tabular.js";
 // Relative (not "@kohaku-ui/lineage") import, same reasoning as generate-cross-language-fixtures.ts's
 // own lineage import.
 import {
@@ -57,6 +63,17 @@ import {
   signManifest,
   verifyManifestSignature,
 } from "../../packages/lineage/src/index.js";
+// Relative (not "@kohaku-ui/llm") import, same reasoning as generate-cross-language-fixtures.ts's own llm import.
+import { normalizeVendorBaseUrl } from "../../packages/llm/src/base-url.js";
+import type { LlmProvider } from "../../packages/llm/src/env.js";
+// Relative (not "@kohaku-ui/semantic-llm") import, same reasoning as the composer import above.
+import {
+  buildNormalizeSystemPrompt,
+  buildNormalizeUserPrompt,
+  defaultOutputLocale,
+  normalizeGuiAction,
+} from "../../packages/semantic-llm/src/index.js";
+import { createSemanticGuiCatalog, type SemanticGuiCase } from "./semantic-gui-catalog.js";
 
 /**
  * Cross-language golden (TS side). Pins that the TS implementation reproduces the fixture
@@ -84,6 +101,13 @@ interface Fixture {
   actionPayloadScan: { payload: JsonObject; issues: ActionParamIssue[] }[];
   sandboxDom: { tags: string[]; attrs: string[]; styleProps: string[] };
   distillation: { jsonl: string };
+  domainMcp: {
+    schemaProjection: { inputSchema: unknown; expected: unknown }[];
+    schemaProjectionRaw: { json: string; expected: unknown }[];
+    argumentCoercion: { args: unknown; inputSchema: unknown; maxLimit?: number; expected: unknown }[];
+    tabular: { result: unknown; dataVersion: string; limits?: TabularLimits; expected: unknown }[];
+    shape: { outputSchema: unknown; expected: unknown }[];
+  };
   promptFragments: {
     designKit: string;
     designSystem: { guide: DesignSystemGuide; fragment: string };
@@ -107,6 +131,25 @@ interface Fixture {
     prompt: string;
     extractorId: string;
     extractorVersion: string;
+  }[];
+  semanticGui: (SemanticGuiCase & {
+    output?: { canonical: string; params: JsonObject };
+    error?: string;
+  })[];
+  semanticPrompts: {
+    rules: string[];
+    catalogDoc: string;
+    locale: string;
+    text: string;
+    system: string;
+    user: string;
+  }[];
+  semanticLocale: { tag: string | null; label: string }[];
+  llmBaseUrl: {
+    provider: LlmProvider;
+    baseUrl: string;
+    root: string | null;
+    requestUrl: string | null;
   }[];
 }
 
@@ -183,6 +226,51 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     }
   });
 
+  it("@kohaku-ui/domain-mcp's pure functions reproduce the fixture (schema projection, coercion, tabular, shape)", () => {
+    const attempt = <T>(fn: () => T): T | null => {
+      try {
+        return fn();
+      } catch {
+        return null;
+      }
+    };
+    // Compared as canonical JSON: that is the representation both languages are pinned to (true vs 1, 3 vs 3.0).
+    const same = (actual: unknown, expected: unknown) =>
+      expect(canonicalStringify(actual as never)).toBe(canonicalStringify(expected as never));
+    expect(fixture.domainMcp.schemaProjection.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.schemaProjection) {
+      same(projectInputSchema(c.inputSchema), c.expected);
+    }
+    expect(fixture.domainMcp.schemaProjectionRaw.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.schemaProjectionRaw) {
+      same(projectInputSchema(JSON.parse(c.json)), c.expected);
+    }
+    expect(fixture.domainMcp.argumentCoercion.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.argumentCoercion) {
+      same(
+        attempt(() =>
+          coerceToolArguments(
+            c.args as never,
+            c.inputSchema as never,
+            c.maxLimit !== undefined ? { maxLimit: c.maxLimit } : {},
+          ),
+        ),
+        c.expected,
+      );
+    }
+    expect(fixture.domainMcp.tabular.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.tabular) {
+      same(
+        attempt(() => toTabularData(c.result as never, c.dataVersion, undefined, c.limits ?? {})),
+        c.expected,
+      );
+    }
+    expect(fixture.domainMcp.shape.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.shape) {
+      same(shapeFromOutputSchema(c.outputSchema), c.expected);
+    }
+  });
+
   it("the sandbox DOM allowlist (packages/spec-core/src/schema/sandbox-dom.ts) reproduces the fixture", () => {
     expect([...ALLOWED_TAGS].sort()).toEqual(fixture.sandboxDom.tags);
     expect([...ALLOWED_ATTRS].sort()).toEqual(fixture.sandboxDom.attrs);
@@ -209,6 +297,18 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     expect(exportDistillationDataset({ fixations: [record], golden: [spec] })).toBe(
       fixture.distillation.jsonl,
     );
+  });
+});
+
+describe("cross-language golden (KOHAKU_LLM_BASE_URL normalisation)", () => {
+  it("normalizeVendorBaseUrl reproduces the fixture (the real-SDK request URLs are asserted by packages/llm's wire test)", () => {
+    expect(fixture.llmBaseUrl.length).toBeGreaterThan(0);
+    for (const c of fixture.llmBaseUrl) {
+      expect(
+        normalizeVendorBaseUrl(c.provider, c.baseUrl) ?? null,
+        `${c.provider} ${JSON.stringify(c.baseUrl)}`,
+      ).toBe(c.root);
+    }
   });
 });
 
@@ -290,6 +390,50 @@ describe("cross-language golden (schema extractor prompt, design.md #73)", () =>
       expect(call.prompt, c.name).toBe(c.prompt);
       expect(suggestion.extractorId, c.name).toBe(c.extractorId);
       expect(suggestion.extractorVersion, c.name).toBe(c.extractorVersion);
+    }
+  });
+});
+
+describe("cross-language golden (semantic-llm, deterministic pieces)", () => {
+  it("normalizeGuiAction reproduces the fixture (outputs and thrown messages)", async () => {
+    expect(fixture.semanticGui.length).toBeGreaterThan(0);
+    const catalog = createSemanticGuiCatalog();
+    for (const c of fixture.semanticGui) {
+      const current =
+        c.current != null
+          ? {
+              ...c.current,
+              hash: await computeIntentHash({ canonical: c.current.canonical, params: c.current.params }),
+            }
+          : undefined;
+      const input = {
+        kind: "gui" as const,
+        action: c.action,
+        params: c.params,
+        ...(current != null ? { current } : {}),
+      };
+      if (c.error != null) {
+        expect(() => normalizeGuiAction(input, catalog), c.name).toThrow(c.error);
+      } else {
+        expect(normalizeGuiAction(input, catalog), c.name).toEqual(c.output);
+      }
+    }
+  });
+
+  it("buildNormalizeSystemPrompt / buildNormalizeUserPrompt reproduce the fixture byte-for-byte", () => {
+    expect(fixture.semanticPrompts.length).toBeGreaterThan(0);
+    for (const c of fixture.semanticPrompts) {
+      expect(buildNormalizeSystemPrompt(c.rules)).toBe(c.system);
+      expect(buildNormalizeUserPrompt(c.catalogDoc, c.locale, c.text)).toBe(c.user);
+    }
+  });
+});
+
+describe("cross-language golden (semantic-llm, default outputLocale)", () => {
+  it('defaultOutputLocale reproduces the fixture (BCP-47-like tags pass, everything else is "und")', () => {
+    expect(fixture.semanticLocale.length).toBeGreaterThan(0);
+    for (const c of fixture.semanticLocale) {
+      expect(defaultOutputLocale(c.tag ?? undefined), JSON.stringify(c.tag)).toBe(c.label);
     }
   });
 });

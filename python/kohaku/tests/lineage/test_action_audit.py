@@ -149,6 +149,42 @@ def test_action_approved_records_approver_id_and_requester_id(tmp_path: Path) ->
     asyncio.run(run())
 
 
+def test_action_approval_issued_records_the_issuance_without_any_token_id(tmp_path: Path) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        lineage = create_lineage(storage=storage)
+
+        await lineage.action_approval_issued(
+            {
+                "action": "delete",
+                "payloadHash": "sha256:eee",
+                "requesterId": "requester-1",
+                "approverId": "approver-1",
+                "ttlSeconds": 300,
+                "expiresAt": "2026-11-08T00:05:00.000Z",
+            },
+            LineageActor(kind="user", id="approver-1"),
+            "tenant-a",
+        )
+
+        events = await storage.list_lineage()
+        event = events[0]
+        assert event.type == "action.approvalIssued"
+        assert event.actor == LineageActor(kind="user", id="approver-1")
+        assert event.tenant == "tenant-a"
+        assert event.payload == {
+            "action": "delete",
+            "payloadHash": "sha256:eee",
+            "requesterId": "requester-1",
+            "approverId": "approver-1",
+            "ttlSeconds": 300,
+            "expiresAt": "2026-11-08T00:05:00.000Z",
+        }
+        assert "jti" not in event.payload
+
+    asyncio.run(run())
+
+
 def test_is_retrievable_via_list_lineage_filtered_by_type(tmp_path: Path) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)
@@ -273,5 +309,40 @@ def test_recorder_approved_records_the_grants_approver_id_and_requester_id(tmp_p
         assert event.type == "action.approved"
         assert event.payload["approverId"] == "approver-1"
         assert event.payload["requesterId"] == "u1"
+
+    asyncio.run(run())
+
+
+def test_recorder_approval_issued_stamps_the_approver_not_the_requester_as_actor(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        recorder = create_action_audit_recorder(create_lineage(storage=storage))
+
+        await recorder.approval_issued(
+            action="delete",
+            payload_hash="sha256:x",
+            requester_id="u1",
+            approver_id="approver-1",
+            ttl_seconds=60,
+            expires_at="2026-11-08T00:01:00.000Z",
+            principal=Principal(id="approver-1", roles=["approver"]),
+            tenant="tenant-a",
+        )
+
+        events = await storage.list_lineage()
+        event = events[0]
+        assert event.type == "action.approvalIssued"
+        assert event.actor == LineageActor(kind="user", id="approver-1")
+        assert event.tenant == "tenant-a"
+        assert event.payload == {
+            "action": "delete",
+            "payloadHash": "sha256:x",
+            "requesterId": "u1",
+            "approverId": "approver-1",
+            "ttlSeconds": 60,
+            "expiresAt": "2026-11-08T00:01:00.000Z",
+        }
 
     asyncio.run(run())

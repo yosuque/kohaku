@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * Guards the package dependency direction documented in the repository's AGENTS.md ("Layout essentials"):
  *
  *   spec-core -> {registry, data-binding, storage-memory, storage-postgres, storage-redis, authz-hmac,
- *     port-contracts} -> {intents, authz-jwt} -> {composer, renderer-core, semantic-llm} -> host-core
+ *     port-contracts} -> {intents, authz-jwt} -> {composer, renderer-core, semantic-llm, domain-mcp} -> host-core
  *     -> {renderer-react, renderer-wc, sandbox, lineage, evals, host-rest, host-mcp-apps, client, otel, admin-react} -> apps
  *
  * with `llm` and `host-a2ui` documented as independent leaves (llm depends on nothing in the workspace;
@@ -17,7 +17,9 @@ import { describe, expect, it } from "vitest";
  * `authz-jwt` sits one layer above `authz-hmac` (it delegates capability issuance there), in the same
  * layer as `intents`. `semantic-llm` (the default SemanticPort) sits alongside composer and
  * renderer-core: it depends on spec-core + data-binding + intents + llm, the same shape as composer's
- * spec-core + registry + llm. `otel` sits in the same layer as host-rest/host-mcp-apps/etc but (unlike
+ * spec-core + registry + llm. `domain-mcp` (an MCP server as a DomainPort) sits in the same layer for the same
+ * reason: it depends on spec-core + data-binding + intents (the MCP client is an optional peer, never a workspace
+ * edge), and nothing above it depends on it. `otel` sits in the same layer as host-rest/host-mcp-apps/etc but (unlike
  * them) depends only on composer, not host-core.
  *
  * The top-level bullet groups sandbox and renderer-wc into the same final layer, but AGENTS.md's own more
@@ -55,7 +57,7 @@ const LAYERS: string[][] = [
     "port-contracts",
   ],
   ["intents", "authz-jwt"],
-  ["composer", "renderer-core", "semantic-llm"],
+  ["composer", "renderer-core", "semantic-llm", "domain-mcp"],
   ["host-core"],
   ["sandbox", "lineage", "evals", "host-rest", "host-mcp-apps", "client", "otel"],
   ["renderer-react", "renderer-wc", "admin-react"],

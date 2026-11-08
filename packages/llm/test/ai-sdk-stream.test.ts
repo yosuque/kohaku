@@ -130,13 +130,14 @@ describe("createAiSdkLlm streamObject adapter", () => {
       maxRetries: number;
       maxOutputTokens: number;
       abortSignal: AbortSignal;
-      temperature: number;
+      temperature?: number;
       prompt: string;
     };
     expect(call.maxRetries).toBe(0);
     expect(call.maxOutputTokens).toBe(555); // caller-supplied value, not multiplied by outputBudgetFactor
     expect(call.abortSignal).toBeInstanceOf(AbortSignal);
-    expect(call.temperature).toBe(config.temperature);
+    // `config` is the default provider (claude), which sends no sampling params (ADR-0003, see ai-sdk-wire.test.ts).
+    expect(call).not.toHaveProperty("temperature");
     expect(call.prompt).toBe("p");
   });
 

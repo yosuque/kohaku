@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from kohaku.host_rest._routes import governance
 from kohaku.host_rest.deps import AuthorizeGovernanceHook
-from kohaku.spec import ApprovalIssueError
+from kohaku.spec import ApprovalIssueError, Principal
 
 from .conftest import PREFIX, build_harness, role_auth
 
@@ -222,3 +226,164 @@ def test_passes_ttl_seconds_through_when_given(tmp_path: Path) -> None:
     res = harness.client.post(_url("/approvals"), json={**VALID_BODY, "ttlSeconds": 60})
     assert res.status_code == 200
     assert approvals.issue_calls[0]["ttl_seconds"] == 60
+
+
+class _IssuedAuditRecorder:
+    """Records approval_issued calls; the other ActionAuditRecorder methods are unused by POST /approvals."""
+
+    def __init__(self, error: BaseException | None = None) -> None:
+        self.issued_calls: list[dict[str, Any]] = []
+        self._error = error
+
+    async def invoked(self, **kwargs: Any) -> None:
+        pass
+
+    async def denied(self, **kwargs: Any) -> None:
+        pass
+
+    async def approval_requested(self, **kwargs: Any) -> None:
+        pass
+
+    async def approved(self, **kwargs: Any) -> None:
+        pass
+
+    async def approval_issued(self, **kwargs: Any) -> None:
+        if self._error is not None:
+            raise self._error
+        self.issued_calls.append(kwargs)
+
+
+class _RecorderWithoutIssuedHook:
+    async def invoked(self, **kwargs: Any) -> None:
+        pass
+
+    async def denied(self, **kwargs: Any) -> None:
+        pass
+
+    async def approval_requested(self, **kwargs: Any) -> None:
+        pass
+
+    async def approved(self, **kwargs: Any) -> None:
+        pass
+
+
+def _pin_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins the clock POST /approvals stamps `expires_at` from to 2026-11-08T00:00:00Z."""
+    monkeypatch.setattr(governance, "_now", lambda: datetime(2026, 11, 8, tzinfo=UTC))
+
+
+def test_records_one_approval_issued_event_with_the_approver_as_principal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_clock(monkeypatch)
+    approvals = _RecordingApprovals(token="kohaku-approval.v2.secret-token")
+    recorder = _IssuedAuditRecorder()
+    harness = build_harness(
+        tmp_path,
+        approvals=approvals,
+        auth=role_auth("approver"),
+        authorize_governance=_allow_all,
+        action_audit_recorder=recorder,
+        tenant=lambda _request: "tenant-a",
+    )
+    res = harness.client.post(_url("/approvals"), json={**VALID_BODY, "ttlSeconds": 60})
+    assert res.status_code == 200
+
+    assert len(recorder.issued_calls) == 1
+    call = recorder.issued_calls[0]
+    assert call["action"] == "delete"
+    assert call["payload_hash"] == VALID_BODY["payloadHash"]
+    assert call["requester_id"] == "requester-1"
+    assert call["approver_id"] == "demo-approver"
+    assert call["principal"].id == "demo-approver"
+    assert call["ttl_seconds"] == 60
+    assert call["expires_at"] == "2026-11-08T00:01:00.000Z"
+    assert call["tenant"] == "tenant-a"
+    # The token (or anything that could rebuild it) must never reach the audit trail.
+    assert "secret-token" not in repr(call)
+
+
+def test_approval_issued_uses_the_default_ttl_when_the_body_omits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_clock(monkeypatch)
+    recorder = _IssuedAuditRecorder()
+    harness = build_harness(
+        tmp_path,
+        approvals=_RecordingApprovals(),
+        auth=role_auth("approver"),
+        authorize_governance=_allow_all,
+        action_audit_recorder=recorder,
+    )
+    harness.client.post(_url("/approvals"), json=VALID_BODY)
+    assert recorder.issued_calls[0]["ttl_seconds"] == 300
+    assert recorder.issued_calls[0]["expires_at"] == "2026-11-08T00:05:00.000Z"
+
+
+def test_approval_issued_recorder_failure_is_fail_open_and_reported(tmp_path: Path) -> None:
+    errors: list[Any] = []
+
+    def on_error(info: Any) -> None:
+        errors.append(info)
+
+    harness = build_harness(
+        tmp_path,
+        approvals=_RecordingApprovals(token="kohaku-approval.v2.secret-token"),
+        auth=role_auth("approver"),
+        authorize_governance=_allow_all,
+        action_audit_recorder=_IssuedAuditRecorder(error=RuntimeError("lineage store down")),
+        on_error=on_error,
+    )
+    res = harness.client.post(_url("/approvals"), json=VALID_BODY)
+    assert res.status_code == 200
+    assert res.json() == {"approval": "kohaku-approval.v2.secret-token"}
+    assert [e.endpoint for e in errors] == ["approvals.audit"]
+
+
+def test_approval_issued_is_not_recorded_when_issuance_fails_or_is_refused(tmp_path: Path) -> None:
+    recorder = _IssuedAuditRecorder()
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    refused = build_harness(
+        tmp_path / "a",
+        approvals=_ThrowingApprovals(ApprovalIssueError("nope")),
+        auth=role_auth("approver"),
+        authorize_governance=_allow_all,
+        action_audit_recorder=recorder,
+    )
+    assert refused.client.post(_url("/approvals"), json=VALID_BODY).status_code == 400
+
+    self_approval = build_harness(
+        tmp_path / "b",
+        approvals=_RecordingApprovals(),
+        auth=lambda _req: Principal(id="requester-1", roles=["approver"]),
+        authorize_governance=_allow_all,
+        action_audit_recorder=recorder,
+    )
+    assert self_approval.client.post(_url("/approvals"), json=VALID_BODY).status_code == 400
+    assert recorder.issued_calls == []
+
+
+def test_approval_issued_is_skipped_quietly_for_a_recorder_without_the_hook(tmp_path: Path) -> None:
+    harness = build_harness(
+        tmp_path,
+        approvals=_RecordingApprovals(),
+        auth=role_auth("approver"),
+        authorize_governance=_allow_all,
+        action_audit_recorder=_RecorderWithoutIssuedHook(),
+    )
+    assert harness.client.post(_url("/approvals"), json=VALID_BODY).status_code == 200
+
+
+def test_approval_issued_is_not_recorded_on_a_generic_issue_failure(tmp_path: Path) -> None:
+    recorder = _IssuedAuditRecorder()
+    harness = build_harness(
+        tmp_path,
+        approvals=_ThrowingApprovals(RuntimeError("store connection string leaked")),
+        auth=role_auth("approver"),
+        authorize_governance=_allow_all,
+        action_audit_recorder=recorder,
+    )
+    res = harness.client.post(_url("/approvals"), json=VALID_BODY)
+    assert res.status_code == 500
+    assert recorder.issued_calls == []

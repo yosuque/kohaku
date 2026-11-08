@@ -74,6 +74,58 @@ uv run python -m sales_api.mcp_http
 #   pnpm --filter @kohaku-ui-sample/mcp build:renderer
 ```
 
+## Onboard with a coding agent
+
+Paste this into Claude Code, Codex or Cursor at the root of your FastAPI project. It mounts the kohaku REST profile on your existing app, and checks itself against the protocol conformance suite. Replace the `<...>` placeholders before you send it.
+
+```text
+You are adding kohaku (https://github.com/yosuque/kohaku) to an existing FastAPI app. Work in
+small steps and run the project's own tests after each one.
+
+GOAL
+Mount the kohaku REST profile on the app's FastAPI instance, so the frontend can ask for
+UI Specs (GET/POST under /api/kohaku) over the app's EXISTING data access.
+
+INSTALL
+pip install "kohaku-ui[rest,llm]"      # imports as `kohaku`; add [claude] or [gemini] for those providers
+
+RULES
+1. Never put row data in a Spec: Specs carry query:// references, and rows reach the screen
+   only through DomainPort.invoke, with a capability the host issues.
+2. Every write is a DomainPort operation in the operation list, with a paramsSchema and a
+   tier ("auto" | "confirm" | "approve"). Never mutate inside a read operation.
+3. Tests never call a real LLM: use FakeLlm.
+4. Demo auth and dev mode are localhost-only. Before anyone else can reach the host, wire real
+   authentication and governance authorization (else every request runs as ANONYMOUS and the
+   governance routes are open). Never remove auth to make a check pass.
+5. Generate KOHAKU_CAPABILITY_SECRET with openssl rand -base64 32; keep it in the environment,
+   never commit it, never hard-code a fallback.
+
+STEPS
+1. DomainPort (kohaku.spec): list_operations() and invoke(op, args, ctx) wrap EXISTING data access.
+2. The Python library has no one-call facade, so write the other Ports by hand, following
+   https://github.com/yosuque/kohaku/tree/main/python/examples/sales-api/src/sales_api/ :
+   authz_port.py (HmacAuthzPort: fail when the secret is unset, do not copy its dev
+   fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
+   (define_intent from kohaku.intents), fixed_specs.py (L0 Specs: no model, no key).
+   Storage: kohaku.storage.FileStoragePort.
+3. Compose context: ComposeContext(catalog=resolve_catalog(core_catalog()), semantic=...,
+   storage=..., llm=create_llm_from_env()); core_catalog/resolve_catalog are in
+   kohaku.registry, ComposeContext in kohaku.composer, create_llm_from_env in kohaku.llm.
+4. Mount: attach_kohaku_routes(app, KohakuHostDeps(compose=..., domain=..., authz=...,
+   query_source="<source>", auth=<resolve the principal from the app's own identity>,
+   authorize_governance=create_governance_policy(...)), "/api/kohaku") with those names
+   from kohaku.host_rest. query_source must equal the source of every Intent. Leave existing
+   routes untouched; run with the app's usual uvicorn command.
+
+DONE WHEN
+- npx @kohaku-ui/cli conformance --rest http://localhost:<port>/api/kohaku
+  --intent '{"canonical":"<an L0 Intent of yours>","params":{}}' reports CONFORMANT (the CLI
+  sends no credentials: use a dev instance whose auth resolves a fixed dev principal);
+- POST /api/kohaku/compose with an Intent returns a Spec that holds no row values;
+- the project's tests (pytest), mypy and ruff pass.
+```
+
 ## Structure
 
 ```
@@ -85,9 +137,15 @@ python/
 │  │  ├─ data_binding/     # ← packages/data-binding (reserved-parameter splitting)
 │  │  ├─ intents/          # ← packages/intents (Intent DSL)
 │  │  ├─ llm/              # ← packages/llm (OpenAI-compatible adapter / FakeLlm)
+│  │  ├─ semantic_llm/     # ← packages/semantic-llm (default SemanticPort: create_llm_semantic_port +
+│  │  │                    #   IntentCatalog; one module per TS file — the sales sample is built on it)
 │  │  ├─ composer/         # ← packages/composer (L0/L1/L2 / single-flight / repair loop; unlike TS,
 │  │  │                    #   the tier ladder + single-flight + result assembly are not split out of
 │  │  │                    #   compose.py into separate modules — same behavior, coarser file layout)
+│  │  ├─ domain_mcp/       # ← packages/domain-mcp (an MCP server as a DomainPort: port.py,
+│  │  │                    #   schema_projection.py, coerce.py, tabular.py, shape.py, intents.py,
+│  │  │                    #   data_version.py, types.py; the MCP client is passed in, `mcp` is not
+│  │  │                    #   imported here; see "MCP server as a DomainPort" below)
 │  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation);
 │  │  │                    #   evidence.py = the whole Compliance Evidence Pack module
 │  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
@@ -477,7 +535,9 @@ in the same request) and `"approve"` (a bound `ApprovalPort.verify_approval` tok
 `host_rest`'s `POST /binding/action` and `host_mcp`'s `${prefix}_action` both consult before calling
 `DomainPort.invoke`. `kohaku.host_core.action_audit`'s `ActionAuditRecorder` protocol is the optional
 `action.*` lineage event sink (`action.invoked` / `action.denied` / `action.approvalRequested` /
-`action.approved`; fail-open — a recorder failure never blocks the write).
+`action.approved`; fail-open — a recorder failure never blocks the write). The `action.approvalIssued`
+event (recorded by `POST /approvals`, actor = the approver) is the optional
+`ApprovalIssuedRecorder.approval_issued` hook, looked up with `getattr` so a recorder without it is skipped.
 
 The stateless HMAC `ApprovalPort` reference implementation (`HmacApprovalPort` /
 `create_hmac_approval_port` / `MemoryApprovalStore`, the `"kohaku-approval.v2."`-prefixed token TS's
@@ -489,6 +549,31 @@ part of the sample app, not as separately importable packages). `python/examples
 (`"confirm"` tier) and `publish` (`"approve"` tier) operations, and `sales_api_tests/test_governed_actions.py`
 / `test_approval_port.py`, mirror the TS sample's own governed-actions demo (see the [user
 guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full walkthrough).
+
+## MCP server as a DomainPort (`kohaku.domain_mcp`, symmetric with TS)
+
+`kohaku.domain_mcp` mirrors `@kohaku-ui/domain-mcp`: an existing MCP server becomes the host's `DomainPort`. A tool
+with `annotations.read_only_hint is True` is a `query://` op (the result becomes `TabularData`); every other tool is
+an Action with `tier="approve"` (`tier_for` overrides) whose `paramsSchema` is its `inputSchema` projected onto the
+closed `ActionParamsSchema` subset (or absent when it uses an `anyOf` other than the nullable `Optional[X]` form, `oneOf`, `$ref` or `additionalProperties: true`).
+It lives under the existing `mcp` extra (`pip install 'kohaku-ui[mcp]'`) and imports nothing from `mcp` itself: the
+official SDK's `Client` is passed in (any object with `list_tools(cursor=...)` / `call_tool(name, arguments)` works).
+
+```python
+from mcp import Client
+from kohaku.domain_mcp import create_mcp_domain_port, create_mcp_intents
+
+async with Client("http://upstream.example/mcp") as client:
+    domain = await create_mcp_domain_port(client=client)
+    intents = create_mcp_intents(domain, source="orders")  # one Intent per read-only tool
+    # domain.describe_shape(ref) -> DataShape | None, domain.data_version() -> "mcp:<bucket>"
+```
+
+`mcp_data_version()` is a time bucket (`mcp:<floor(now / 300)>`; its `now` takes epoch **seconds**, where the TS
+`now` takes milliseconds). The projection, string-ref-param coercion, result → `TabularData` conversion and
+`outputSchema` → `DataShape` are pinned to the TS output by the `domainMcp` section of the cross-language golden
+fixture. `query_ops` / `action_ops` are `frozenset`s (TS: `ReadonlySet`); `tools` is a read-only mapping in listing order, which
+is the order Intents are made in. `call_timeout_ms` is in milliseconds as in TS. See [docs/user-guide.md](../docs/user-guide.md) ("Starting from an existing MCP server").
 
 ## Verbose failure logging (`KOHAKU_DEBUG`, symmetric with TS)
 
@@ -552,40 +637,29 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   `sanitizeJsonSchema` performs, so the TS and Python adapters degrade the same way for the
   same schema). Validation of the returned object still uses the original, unsanitized
   schema.
-- **The Python `claude` adapter never sends `temperature`** (`KOHAKU_LLM_TEMPERATURE` and a
-  per-call `temperature` are accepted but not forwarded to Anthropic; the TS adapter still
-  sends it through `@ai-sdk/anthropic`). The `anthropic` SDK's `messages.create` has no such
+- **The `claude` adapter never sends `temperature`** (`KOHAKU_LLM_TEMPERATURE` and a
+  per-call `temperature` are accepted but not forwarded to Anthropic; the TS adapter stopped
+  sending it too, so the two ports agree). The `anthropic` SDK's `messages.create` has no such
   parameter, and under SDK 2.x's `anthropic-version: 2026-10-21` the Messages API rejects
   any request carrying `temperature` / `top_p` / `top_k` with a 400. kohaku's
   identical-display guarantee comes from the Spec cache, with temperature 0 only auxiliary,
   so the loss on older models is cosmetic.
+- **`kohaku.semantic_llm`'s catalog doc is not byte-identical to TS.** `render_catalog_doc` renders each
+  Intent's params JSON Schema from the params DSL (`kohaku.intents.ObjectSchema`), while TS uses zod's
+  `toJSONSchema`; the doc feeds only the NL-normalization LLM call (never a cache key or a validation).
+  The cross-language golden therefore covers `build_normalize_system_prompt` /
+  `build_normalize_user_prompt` (pure string builders), `normalize_gui_action` and
+  `default_output_locale`, but not `render_catalog_doc`. Two further notes: `describe_shape` answers
+  `None` (instead of being absent) when the option is omitted, and `IntentCatalogLike`'s optional members
+  (`revision`, `validate_params`) are probed with `getattr`.
 - Internal APIs (functions and methods that do not appear on the wire) follow Python's
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
-- **`ComponentDefinition.deprecated` has no `migrateProps` counterpart** (design.md #65):
-  TS's `migrateProps(props)` is a function attached next to `fallback`, so it is never
-  exported to `core-catalog.json` and has no Python field to hand-port it into either
-  (unlike `fallback.mapProps`, which *is* hand-ported into `_FALLBACK_MAP_PROPS`).
-  `host_core.catalog_migration`'s `plan_catalog_migration` therefore only rewrites a
-  deprecated node's `type`/`version` on the Python side; a rewrite whose props need
-  reshaping to satisfy the replacement's schema lands in `blocked` rather than `steps`,
-  the same outcome a TS catalog with no `migrateProps` declared would produce.
-- **The MCP Tasks extension (`io.modelcontextprotocol/tasks`) is not ported.** On the TS
-  side (`packages/host-mcp-apps/src/tasks.ts`), `kohaku_compose` and the intent tools
-  become task-capable for a request that opts in, but only when `AttachOptions.tasksEnabled`
-  is also turned on (default off). `host_mcp` always serves the compose family
-  synchronously and never declares the extension, regardless of what a request's
-  `_meta` asks for.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
   `CapabilityRevocationStore` and jti-based capability revocation;
-  the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters; `semantic-llm`;
+  the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters;
   and `admin-react`. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
-  (`semantic-llm`'s own `validateIntent` behavior is not left behind by this gap, though: since
-  the package itself has no Python mirror, its logic lives directly in `examples/sales-api`'s
-  `semantic_port.py` / `intents_catalog.py`, and that sample implements `validate_intent` /
-  `IntentCatalog.validate_params` matching TS's `createLlmSemanticPort` — see
-  `kohaku.spec.ports.SupportsValidateIntent` and `kohaku.host_core.intent.resolve_intent`.)
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant
 > reconcile for promotion → fully ported PromotedRegistry / projection / startup reconcile

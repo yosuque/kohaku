@@ -70,11 +70,15 @@ POLICY_EVENT_TYPES: tuple[str, ...] = ("policy.applied",)
 #   "approve" without a token).
 # - action.approved -- tier "approve" and the presented approval grant was successfully consumed
 #   (recorded in addition to, not instead of, action.invoked).
+# - action.approvalIssued -- an approver minted an approval token through POST /approvals (recorded only
+#   after issuance succeeded). Unlike every other action.* event its actor is the *approver*, not the
+#   requester. Carries no jti and nothing that could rebuild the token.
 ACTION_EVENT_TYPES: tuple[str, ...] = (
     "action.invoked",
     "action.denied",
     "action.approvalRequested",
     "action.approved",
+    "action.approvalIssued",
 )
 
 LineageEventType = Literal[
@@ -101,6 +105,7 @@ LineageEventType = Literal[
     "action.denied",
     "action.approvalRequested",
     "action.approved",
+    "action.approvalIssued",
 ]
 """Closed vocabulary of Lineage event types."""
 
@@ -301,6 +306,25 @@ class ActionApprovedPayload(TypedDict, total=False):
     payloadHash: str
     approverId: str
     requesterId: str
+    correlationId: str
+
+
+class ActionApprovalIssuedPayload(TypedDict, total=False):
+    """The action.approvalIssued payload (design.md #72): an approver minted an approval token for a
+    pending "approve"-tier action. The event's **actor is the approver** (`approverId`) -- the one exception
+    to the action.* convention that the actor is the requester whose invoke is being audited. Deliberately
+    carries no token id (`jti`) or any other value the token could be reconstructed from: the audit proves
+    *that* a specific (action, payloadHash) was approved for `requesterId` until `expiresAt`, nothing that
+    could be replayed. `expiresAt` is computed by the host as issue time + `ttlSeconds` (the ApprovalPort
+    does not report its own expiry), so it is advisory: it differs from the real expiry when the port's own default
+    TTL differs from DEFAULT_APPROVAL_TTL_SECONDS or when the port clamps the lifetime."""
+
+    action: str
+    payloadHash: str
+    requesterId: str
+    approverId: str
+    ttlSeconds: int
+    expiresAt: str
     correlationId: str
 
 

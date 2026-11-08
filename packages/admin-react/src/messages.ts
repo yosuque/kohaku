@@ -116,11 +116,16 @@ export interface AdminMessages {
     approveButton: string;
     /** Title of the disabled Approve button on a row whose recorded payload does not match its hash. */
     approveDisabledMismatch: string;
-    /** Title of the disabled Approve button while an issued token is still within its TTL. */
+    /** Title of the disabled Approve button while an issued token (this session's or one read from the lineage) is still within its TTL. */
     approveDisabledIssued: string;
     /** Info notice after a token is minted. */
     issuedNotice: (action: string) => string;
     tokenLabel: string;
+    /**
+     * Status line of a row whose token was already issued (by this or another approver, read from the lineage's
+     * `action.approvalIssued`): who issued it and how long (in seconds) it stays valid.
+     */
+    issuedBy: (approverId: string, remainingSeconds: number) => string;
     /** "issued N s ago (TTL M s)" under the token. */
     issuedAge: (seconds: number, ttlSeconds: number) => string;
     copyButton: string;
@@ -320,10 +325,16 @@ export const defaultAdminMessages: AdminMessages = {
     approveDisabledMismatch:
       "The recorded payload does not match the payload hash, so this request cannot be approved from here.",
     approveDisabledIssued:
-      "A token was already issued and is still valid. Hand it to the requester, or re-issue it after it expires.",
+      "An approval for this request was already issued and has not expired yet. Re-issue it after it expires, or re-issue it through the API.",
     issuedNotice: (action) =>
       `Approval token issued for ${action}. Copy it and hand it to the requester; it is a bearer secret.`,
     tokenLabel: "Approval token",
+    issuedBy: (approverId, remainingSeconds) =>
+      `Issued by ${approverId} — expires in ${
+        remainingSeconds < 60
+          ? `${remainingSeconds}s`
+          : `${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
+      }`,
     issuedAge: (seconds, ttlSeconds) => `issued ${seconds}s ago (TTL ${ttlSeconds}s)`,
     copyButton: "Copy",
     copied: "Copied",

@@ -70,11 +70,30 @@ import {
   signManifest,
   verifyManifestSignature,
 } from "../../packages/lineage/src/index.js";
+// Relative for the same reason: base-url.ts imports only a *type* from llm's env.ts, so nothing of
+// @kohaku-ui/llm (and its process.env usage) is pulled into this script.
+import { normalizeVendorBaseUrl } from "../../packages/llm/src/base-url.js";
+import type { LlmProvider } from "../../packages/llm/src/env.js";
 // Relative (not "@kohaku-ui/registry") import: the spec package deliberately does not declare
 // @kohaku-ui/registry as a dependency (this generator is its only consumer of the catalog's
 // fallback.mapProps functions), so this reaches the source file directly rather than adding a
 // package.json dependency edge + pnpm-lock.yaml churn for a single script.
 import { coreCatalog } from "../../packages/registry/src/core/index.js";
+// Relative, same reasoning as above: the semantic-llm default SemanticPort's deterministic pieces (GUI
+// normalization, prompt builders). The catalog and the case lists are shared with test/cross-language.test.ts.
+import {
+  buildNormalizeSystemPrompt,
+  buildNormalizeUserPrompt,
+  defaultOutputLocale,
+  normalizeGuiAction,
+} from "../../packages/semantic-llm/src/index.js";
+import {
+  createSemanticGuiCatalog,
+  SEMANTIC_GUI_CASES,
+  SEMANTIC_LOCALE_TAGS,
+  SEMANTIC_PROMPT_CASES,
+} from "../test/semantic-gui-catalog.js";
+import { buildDomainMcpFixtures } from "./domain-mcp-fixtures.js";
 
 const OUT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../test/fixtures");
 mkdirSync(OUT_DIR, { recursive: true });
@@ -403,6 +422,40 @@ async function main(): Promise<void> {
     return { ...c, mappedProps: def.fallback.mapProps(c.inputProps) };
   });
 
+  // semantic-llm: deterministic GUI normalization (never goes through the LLM) and the prompt builders. A
+  // failing case records the thrown message, which Python reproduces word for word.
+  const semanticGuiCatalog = createSemanticGuiCatalog();
+  const semanticGuiCases = await Promise.all(
+    SEMANTIC_GUI_CASES.map(async (c) => {
+      const current =
+        c.current != null
+          ? {
+              ...c.current,
+              hash: await computeIntentHash({ canonical: c.current.canonical, params: c.current.params }),
+            }
+          : undefined;
+      try {
+        const out = normalizeGuiAction(
+          { kind: "gui", action: c.action, params: c.params, ...(current != null ? { current } : {}) },
+          semanticGuiCatalog,
+        );
+        return { ...c, output: { canonical: out.canonical, params: out.params } };
+      } catch (e) {
+        return { ...c, error: (e as Error).message };
+      }
+    }),
+  );
+  const semanticPromptCases = SEMANTIC_PROMPT_CASES.map((c) => ({
+    ...c,
+    system: buildNormalizeSystemPrompt(c.rules),
+    user: buildNormalizeUserPrompt(c.catalogDoc, c.locale, c.text),
+  }));
+
+  const semanticLocaleCases = SEMANTIC_LOCALE_TAGS.map((tag) => ({
+    tag,
+    label: defaultOutputLocale(tag ?? undefined),
+  }));
+
   const exampleSpec = parseSpec(
     JSON.parse(readFileSync(join(OUT_DIR, "../../examples/quarterly-sales.spec.json"), "utf8")),
   );
@@ -660,6 +713,45 @@ async function main(): Promise<void> {
     });
   }
 
+  // KOHAKU_LLM_BASE_URL normalisation (docs/specification.md, "LLM providers"): claude / gemini take the vendor
+  // root with or without the API-version path and both spellings must name the same endpoint in both
+  // languages; openai / ollama / llama keep the OpenAI-compatible value untouched. `root` pins
+  // normalizeVendorBaseUrl / normalize_vendor_base_url; `requestUrl` (claude / gemini, model "m") is the
+  // final URL the REAL provider SDK of each language must hit, asserted by each language's wire test
+  // (packages/llm/test/ai-sdk-wire.test.ts, python/kohaku/tests/llm/test_*_wire / _sdk tests).
+  const llmBaseUrlInputs: { provider: LlmProvider; baseUrl: string }[] = [
+    { provider: "claude", baseUrl: "" },
+    { provider: "claude", baseUrl: "   " },
+    { provider: "claude", baseUrl: "https://gw.example" },
+    { provider: "claude", baseUrl: "https://gw.example/" },
+    { provider: "claude", baseUrl: "https://gw.example/v1" },
+    { provider: "claude", baseUrl: "https://gw.example/v1/" },
+    { provider: "claude", baseUrl: "https://gw.example/anthropic" },
+    { provider: "claude", baseUrl: "https://gw.example/anthropic/v1" },
+    { provider: "claude", baseUrl: "http://localhost:8080/v1" },
+    { provider: "gemini", baseUrl: "" },
+    { provider: "gemini", baseUrl: "https://gw.example" },
+    { provider: "gemini", baseUrl: "https://gw.example/v1beta" },
+    { provider: "gemini", baseUrl: "https://gw.example/v1beta/" },
+    { provider: "gemini", baseUrl: "https://gw.example/google" },
+    { provider: "gemini", baseUrl: "https://gw.example/google/v1beta" },
+    { provider: "openai", baseUrl: "" },
+    { provider: "openai", baseUrl: "https://gw.example/v1" },
+    { provider: "openai", baseUrl: "https://gw.example/v1/" },
+    { provider: "ollama", baseUrl: "http://localhost:11434/v1" },
+    { provider: "llama", baseUrl: "http://llama.example:8080/v1" },
+  ];
+  const llmBaseUrl = llmBaseUrlInputs.map(({ provider, baseUrl }) => {
+    const root = normalizeVendorBaseUrl(provider, baseUrl) ?? null;
+    const requestUrl =
+      provider === "claude"
+        ? `${root ?? "https://api.anthropic.com"}/v1/messages`
+        : provider === "gemini"
+          ? `${root ?? "https://generativelanguage.googleapis.com"}/v1beta/models/m:generateContent`
+          : null;
+    return { provider, baseUrl, root, requestUrl };
+  });
+
   // Pins byte compatibility of the distillation-dataset JSONL export (@kohaku-ui/evals's
   // exportDistillationDataset / kohaku.evals's export_distillation_dataset). Reuses the same example
   // Spec + its already-computed structureHash as a single human-approved FixationRecord, so a language
@@ -783,6 +875,23 @@ async function main(): Promise<void> {
       },
       tenant: EVIDENCE_TENANT,
     },
+    // action.approvalIssued (design.md #72): an approval-index member whose actor is the approver. It lands
+    // between eev-6 and eev-7 by `ts`; the id is the next free one so the earlier ids stay stable.
+    {
+      id: "eev-10",
+      ts: "2026-06-07T12:00:00.000Z",
+      actor: { kind: "user", id: "reviewer-1" },
+      type: "action.approvalIssued",
+      payload: {
+        action: "annotate",
+        payloadHash: `sha256:${"a".repeat(64)}`,
+        requesterId: "operator-1",
+        approverId: "reviewer-1",
+        ttlSeconds: 300,
+        expiresAt: "2026-06-07T12:05:00.000Z",
+      },
+      tenant: EVIDENCE_TENANT,
+    },
   ];
   const evidenceArtifactBSha256 = await sha256Hex(EVIDENCE_ARTIFACT_B_HTML);
   const evidencePromotions: PromotionState[] = [
@@ -867,6 +976,10 @@ async function main(): Promise<void> {
     styleProps: [...ALLOWED_STYLE_PROPS].sort(),
   };
 
+  // Pins @kohaku-ui/domain-mcp's pure functions (schema projection, argument coercion, tabular conversion,
+  // outputSchema -> DataShape) against their Python mirror kohaku.domain_mcp. See domain-mcp-fixtures.ts.
+  const domainMcp = buildDomainMcpFixtures();
+
   writeFileSync(
     join(OUT_DIR, "cross-language-canonical.json"),
     JSON.stringify(
@@ -884,13 +997,18 @@ async function main(): Promise<void> {
         promptFragments,
         judgePrompts,
         extractorPrompts,
+        domainMcp,
+        semanticGui: semanticGuiCases,
+        semanticPrompts: semanticPromptCases,
+        semanticLocale: semanticLocaleCases,
+        llmBaseUrl,
       },
       null,
       2,
     ) + "\n",
   );
   console.log(
-    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, promptRevision=${PROMPT_REVISION})`,
+    `generated: test/fixtures/cross-language-canonical.json (canonical=${canonicalCases.length}, intents=${intentCases.length}, cacheKey=${cacheKeyCases.length}, lineageCursor=${lineageCursorCases.length}, actionParams=${actionParamsCases.length}, actionPayloadScan=${actionPayloadScanCases.length}, fallback=${fallbackCases.length}, semanticGui=${semanticGuiCases.length}, semanticPrompts=${semanticPromptCases.length}, semanticLocale=${semanticLocaleCases.length}, domainMcp=${domainMcp.schemaProjection.length}+${domainMcp.argumentCoercion.length}+${domainMcp.tabular.length}+${domainMcp.shape.length}, promptRevision=${PROMPT_REVISION})`,
   );
   console.log(
     `generated: test/fixtures/evidence-pack/{store.json,manifest.json,manifest.sig} (events=${evidenceEvents.length}, promotions=${evidencePromotions.length}, fixations=${evidenceFixations.length}, artifacts=${builtEvidencePack.manifest.counts.artifacts}, warnings=${builtEvidencePack.manifest.warnings.length})`,

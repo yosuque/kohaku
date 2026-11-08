@@ -12,6 +12,7 @@ export {
 } from "./analytics.js";
 export {
   ACTION_EVENT_TYPES,
+  type ActionApprovalIssuedPayload,
   type ActionApprovalRequestedPayload,
   type ActionApprovedPayload,
   type ActionDeniedPayload,

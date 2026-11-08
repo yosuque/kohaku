@@ -13,6 +13,7 @@ import {
   type TextPart,
 } from "ai";
 import { z } from "zod";
+import { versionedBaseUrl } from "../base-url.js";
 import type { LlmConfig, StructuredMode } from "../env.js";
 import {
   type GenerateObjectRequest,
@@ -107,21 +108,35 @@ async function importProvider<T>(provider: LlmConfig["provider"], load: () => Pr
   }
 }
 
+/**
+ * The transport-level options every provider factory shares: `baseURL` (KOHAKU_LLM_BASE_URL, e.g. a gateway or
+ * proxy in front of the vendor API) and the test-only `fetch`. Both are omitted entirely when unset so the SDK
+ * keeps its own defaults. `fetch` is a function and so is never part of any cache key.
+ */
+function transportOptions(config: LlmConfig) {
+  // Normalised per provider (see base-url.ts): claude / gemini take the vendor root with or without the
+  // version path, so that the request URL matches the Python port; an empty value is ignored.
+  const baseURL = versionedBaseUrl(config.provider, config.baseUrl);
+  return {
+    ...(baseURL != null ? { baseURL } : {}),
+    ...(config.fetch != null ? { fetch: config.fetch } : {}),
+  };
+}
+
 async function resolveModel(config: LlmConfig): Promise<LanguageModel> {
+  const apiKey = config.apiKey != null ? { apiKey: config.apiKey } : {};
   switch (config.provider) {
     case "claude": {
       const { createAnthropic } = await importProvider("claude", () => import("@ai-sdk/anthropic"));
-      return createAnthropic({ ...(config.apiKey != null ? { apiKey: config.apiKey } : {}) })(config.model);
+      return createAnthropic({ ...apiKey, ...transportOptions(config) })(config.model);
     }
     case "openai": {
       const { createOpenAI } = await importProvider("openai", () => import("@ai-sdk/openai"));
-      return createOpenAI({ ...(config.apiKey != null ? { apiKey: config.apiKey } : {}) })(config.model);
+      return createOpenAI({ ...apiKey, ...transportOptions(config) })(config.model);
     }
     case "gemini": {
       const { createGoogleGenerativeAI } = await importProvider("gemini", () => import("@ai-sdk/google"));
-      return createGoogleGenerativeAI({
-        ...(config.apiKey != null ? { apiKey: config.apiKey } : {}),
-      })(config.model);
+      return createGoogleGenerativeAI({ ...apiKey, ...transportOptions(config) })(config.model);
     }
     case "ollama":
     case "llama": {
@@ -133,6 +148,7 @@ async function resolveModel(config: LlmConfig): Promise<LanguageModel> {
         name: config.provider,
         baseURL: config.baseUrl!,
         apiKey: config.apiKey ?? "not-required",
+        ...(config.fetch != null ? { fetch: config.fetch } : {}),
         // When this is false (the default), no JSON Schema is sent and the model generates free-form JSON
         // that fails validation. The /v1 endpoints of ollama / llama.cpp already support json_schema.
         supportsStructuredOutputs: true,
@@ -276,6 +292,16 @@ function resolveProviderOptions(
 }
 
 /**
+ * The sampling call-options for one call. `claude` gets none: from anthropic-version 2026-10-21 the Messages
+ * API rejects sampling parameters, newer models already ignore them, and @ai-sdk/anthropic drops
+ * `temperature` for them while logging a warning on every call. Sending nothing matches the Python port
+ * (ADR-0003). Every other provider keeps `temperature` (per-call override, else the configured default).
+ */
+function samplingOptions(req: { temperature?: number }, config: LlmConfig): { temperature?: number } {
+  return config.provider === "claude" ? {} : { temperature: req.temperature ?? config.temperature };
+}
+
+/**
  * The AI SDK call-option fields shared by every native/prompt call this adapter makes (the structured
  * generateText+Output.object call, the streamText+Output.object call, and both plain generateText call
  * sites) — model, an optional instructions (AI SDK 7's rename of `system`; same downstream system-message
@@ -308,7 +334,8 @@ function baseCallOptions(
     model,
     ...(req.system != null ? { instructions: req.system } : {}),
     prompt: resolvePromptInput(req, config),
-    temperature: req.temperature ?? config.temperature,
+    // claude: no sampling params at all (ADR-0003 applied to TypeScript; see samplingOptions).
+    ...samplingOptions(req, config),
     maxOutputTokens: budget.maxOutputTokens,
     abortSignal: budget.signal,
     // Retries are centrally managed in the llm layer (withProviderRetry). Disabled here because
