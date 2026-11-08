@@ -11,7 +11,9 @@ from .coerce import MCP_ARGUMENT_INVALID, McpArgumentError, coerce_tool_argument
 from .data_version import mcp_data_version
 from .intents import create_mcp_intents
 from .port import (
+    MCP_OUTCOME_UNKNOWN,
     McpDomainPort,
+    McpOutcomeUnknownError,
     McpTimeoutError,
     SchemaProjectionReport,
     SkipReport,
@@ -24,9 +26,11 @@ from .types import McpCallResult, McpToolClientLike, McpToolInfo
 
 __all__ = [
     "MCP_ARGUMENT_INVALID",
+    "MCP_OUTCOME_UNKNOWN",
     "McpArgumentError",
     "McpCallResult",
     "McpDomainPort",
+    "McpOutcomeUnknownError",
     "McpResultError",
     "McpTimeoutError",
     "McpToolClientLike",

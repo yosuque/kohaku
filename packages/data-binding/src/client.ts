@@ -330,6 +330,8 @@ export function createBindingClient(config: BindingClientConfig): BindingClient 
       if (status === 401 || status === 403) {
         throw new BindingError("UNAUTHORIZED", `action "${action}" denied`, { status });
       }
+      // No automatic retry on any failure, and above all not on a 503: SPEC ACT-OUT-001 lets a host answer 503
+      // INTERNAL for a write whose outcome is unknown, and re-sending the same approval would run it twice.
       if (status < 200 || status >= 300) {
         throw new BindingError("RESOLVE_FAILED", `action "${action}" failed (${status})`, { status });
       }

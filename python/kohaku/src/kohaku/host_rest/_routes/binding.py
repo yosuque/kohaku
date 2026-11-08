@@ -14,12 +14,14 @@ from starlette.responses import Response
 from kohaku.host_core import (
     ACTION_GATE_UNAVAILABLE_MESSAGE,
     GATED_READ_MESSAGE,
+    OUTCOME_UNKNOWN_MESSAGE,
     UNDECLARED_ACTION_MESSAGE,
     ActionAuditContext,
     ActionGateRequest,
     ActionGateResult,
     ParsedInvokableRefOk,
     apply_action_effects,
+    classify_host_error,
     parse_invokable_ref,
     record_action_gate_result,
     record_action_gate_unavailable_denial,
@@ -355,10 +357,16 @@ def register_binding_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
                 InvocationContext(principal=principal, capability=token, tenant=tenant),
             )
         except BaseException as e:
-            # A failure of the write itself (domain.invoke) is not yet committed, so respond with an error.
-            # The raw error message never reaches the client (see _REF_NOT_FOUND_MESSAGE).
+            # A failure of the write itself (domain.invoke) is 404, except a write whose effect cannot be told
+            # (host_core's is_outcome_unknown_error: the answer never came back, so it may have been applied):
+            # 503 INTERNAL with the fixed OUTCOME_UNKNOWN_MESSAGE, so the caller verifies before re-sending the
+            # same approval. The failure goes to the observability hook first. The raw error message never
+            # reaches the client (see _REF_NOT_FOUND_MESSAGE).
             request_id = request_id_of(request, deps)
             await report_host_error(deps, "binding/action", request_id, e)
+            cls = classify_host_error(e)
+            if cls.kind == "outcome_unknown":
+                return _error("INTERNAL", OUTCOME_UNKNOWN_MESSAGE, 503, request_id)
             return _error("REF_NOT_FOUND", _REF_NOT_FOUND_MESSAGE, 404, request_id)
         # Write-already-committed vs. side-effect-declaration failure: see host_core's apply_action_effects.
         # wide_catch=True preserves REST's pre-branch `except BaseException` at this call site.

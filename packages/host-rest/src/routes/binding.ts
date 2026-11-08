@@ -2,6 +2,7 @@ import {
   ACTION_GATE_UNAVAILABLE_MESSAGE,
   applyActionEffects,
   CAPABILITY_VERIFICATION_UNAVAILABLE_MESSAGE,
+  classifyHostError,
   errorMessage,
   GATED_READ_MESSAGE,
   type ParsedInvokableRef,
@@ -355,9 +356,14 @@ export function registerBindingRoutes(app: Hono, ctx: RouteContext): void {
         ...(tenant != null ? { tenant } : {}),
       });
     } catch (e) {
-      // Failure of the write itself (domain.invoke) is 404. Place the downstream failure on the
-      // observability hook, then map it. The raw error message never reaches the client (see REF_NOT_FOUND_MESSAGE).
+      // Failure of the write itself (domain.invoke) is 404, except a write whose effect cannot be told (host-core's
+      // isOutcomeUnknownError: the answer never came back, so it may have been applied): 503 INTERNAL with the
+      // fixed OUTCOME_UNKNOWN_MESSAGE, so the caller verifies before re-sending the same approval. Place the
+      // downstream failure on the observability hook first. The raw error message never reaches the client (see
+      // REF_NOT_FOUND_MESSAGE).
       await reportHostError(deps, "binding/action", requestId, e);
+      const cls = classifyHostError(e);
+      if (cls.kind === "outcomeUnknown") return c.json(errorBody("INTERNAL", cls.message, requestId), 503);
       return c.json(errorBody("REF_NOT_FOUND", REF_NOT_FOUND_MESSAGE, requestId), 404);
     }
     // Write-already-committed vs. side-effect-declaration failure: see host-core's applyActionEffects.

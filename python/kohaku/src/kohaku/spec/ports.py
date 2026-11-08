@@ -159,6 +159,14 @@ class DomainPort(Protocol):
     - `invoke` dispatches on the exact operation name it is given, with no case folding, trailing-slash
       stripping, percent-decoding or other normalization, so the name a host looked up in `list_operations()`
       is the operation that runs.
+
+    Failure contract (SPEC ACT-OUT-001): when a write fails in a way that does not tell whether it ran (a
+    timeout, a connection lost after the request may have left), `invoke` raises an exception whose string
+    `code` attribute is `OUTCOME_UNKNOWN` or ends in `_OUTCOME_UNKNOWN` (e.g. `MCP_OUTCOME_UNKNOWN`).
+    host_core's `classify_host_error` keys on that suffix: REST `POST /binding/action` then answers 503
+    `INTERNAL` and MCP a tool error, both with the fixed message `the action's outcome is unknown; verify
+    before retrying` (the exception's own text, which may name an upstream tool, goes to `on_error` only). Any
+    other raised exception is an ordinary failed write (404).
     """
 
     async def list_operations(self) -> list[OperationDescriptor]: ...

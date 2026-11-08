@@ -1564,7 +1564,10 @@ async function safeTool<T extends object>(
  * safeTool, or a background MCP Tasks compose failing in startComposeTask). An unavailable LLM provider
  * (LlmError PROVIDER / CONFIG / ABORTED) is an operator-side failure whose raw SDK wording must not reach the
  * model: host-core's classifyHostError gives it the same fixed message the REST profile answers with on 503.
- * A typed host error passes its own message through; everything else collapses to TOOL_INTERNAL_ERROR_MESSAGE.
+ * The same goes for a write whose outcome is unknown (an `*_OUTCOME_UNKNOWN` code, e.g. domain-mcp's write
+ * timeout): the fixed OUTCOME_UNKNOWN_MESSAGE, so the model checks before retrying and never reads the upstream
+ * tool's name from the error. A typed host error passes its own message through; everything else collapses to
+ * TOOL_INTERNAL_ERROR_MESSAGE.
  */
 function clientFailureMessage(e: unknown): string {
   const cls = hostCore.classifyHostError(e);
