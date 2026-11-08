@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from kohaku.spec import supports_compare_and_set
 from kohaku.storage import FileStoragePort, MemoryStoragePort
 from kohaku.storage.postgres import create_postgres_storage_port
 from kohaku.storage.redis import create_redis_storage_port
@@ -34,9 +35,13 @@ def _unique(prefix: str) -> str:
 
 
 @pytest.fixture(params=["memory", "file", "redis", "postgres"])
-def open_port(request: pytest.FixtureRequest, tmp_path: Path) -> PortOpener:
+def adapter(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
+@pytest.fixture
+def open_port(request: pytest.FixtureRequest, tmp_path: Path, adapter: str) -> PortOpener:
     """A factory for one fresh port of the adapter under test (an async context manager that closes it)."""
-    adapter: str = request.param
 
     if adapter == "memory":
 
@@ -91,10 +96,19 @@ def open_port(request: pytest.FixtureRequest, tmp_path: Path) -> PortOpener:
     raise AssertionError(f"unknown adapter {adapter}")
 
 
+SHARED_BACKEND_ADAPTERS = ("redis", "postgres")
+"""Adapters that serve several host instances and therefore MUST declare compare-and-set (the TS suites opt in with
+`requireCompareAndSet` for exactly these)."""
+
+
 @pytest.mark.parametrize("case", CASES, ids=[c.name for c in CASES])
-def test_storage_contract(open_port: PortOpener, case: ContractCase) -> None:
+def test_storage_contract(open_port: PortOpener, adapter: str, case: ContractCase) -> None:
     async def go() -> None:
         async with open_port() as port:
+            if case.requires_compare_and_set and not supports_compare_and_set(port):
+                if adapter in SHARED_BACKEND_ADAPTERS:
+                    pytest.fail(f"{adapter} must declare supports_compare_and_set")
+                pytest.skip(f"{adapter} does not declare compare-and-set (single process)")
             await case.run(port)
 
     asyncio.run(go())

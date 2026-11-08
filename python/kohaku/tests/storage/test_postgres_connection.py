@@ -485,3 +485,31 @@ class TestPortMigrateFalseCheck:
             assert len(calls) == 2  # the failure was not remembered; the pass was
 
         run(go())
+
+
+class TestSerializationFailureIsAConflict:
+    def test_sqlstate_40001_from_a_conditional_statement_is_a_storage_conflict(self) -> None:
+        from kohaku.spec import PromotionState, StorageConflictError
+        from kohaku.storage.postgres import create_postgres_storage_port
+
+        async def go() -> None:
+            port = create_postgres_storage_port(
+                pool=SimpleNamespace(closed=False),  # type: ignore[arg-type]
+                migrate=False,
+            )
+
+            async def fail(sql: str, params: Any = None) -> Any:
+                raise pg_errors.SerializationFailure("could not serialize access")
+
+            port._db.query = fail  # type: ignore[method-assign]
+            port._schema_verified = True
+            state = PromotionState(
+                artifactId="a1", status="x", updatedAt="2026", data={}, revision="r2"
+            )
+            for kwargs in ({"expected_revision": "r1"}, {"expected_revision": None}):
+                with pytest.raises(StorageConflictError):
+                    await port.put_promotion_state(state, **kwargs)
+            with pytest.raises(StorageConflictError):
+                await port.delete_fixation("h", None, expected_revision="r1")
+
+        run(go())

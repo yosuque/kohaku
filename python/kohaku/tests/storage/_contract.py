@@ -41,6 +41,13 @@ class ContractCase:
     name: str
     run: Callable[[Any], Awaitable[None]]
 
+    @property
+    def requires_compare_and_set(self) -> bool:
+        """The compare-and-set group. A single-process adapter (memory / file) may decline the extension, and then
+        these cases are skipped for it; the shared-backend adapters (redis / postgres) must declare it, and the runner
+        fails instead of skipping for them (see test_storage_contract.py)."""
+        return self.name.startswith("compare-and-set:")
+
 
 CASES: list[ContractCase] = []
 

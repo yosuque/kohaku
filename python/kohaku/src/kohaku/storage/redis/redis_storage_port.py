@@ -381,17 +381,22 @@ class RedisStoragePort:
         never share a WATCH), so no mutex is needed. The `async with` resets the pipeline on every exit path
         (UNWATCH, release), including a conflict raised before EXEC.
         """
-        async with self._redis.pipeline(transaction=True) as pipe:
-            await pipe.watch(key)
-            current: str | None = await pipe.get(key)
-            seq: int = await pipe.incr(seq_key) if seq_key is not None else 0
-            pipe.multi()
-            if build(current, pipe, seq) == "skip":
-                return
-            try:
+        try:
+            async with self._redis.pipeline(transaction=True) as pipe:
+                await pipe.watch(key)
+                current: str | None = await pipe.get(key)
+                seq: int = await pipe.incr(seq_key) if seq_key is not None else 0
+                pipe.multi()
+                if build(current, pipe, seq) == "skip":
+                    return
                 await pipe.execute()
-            except WatchError as error:
-                raise StorageConflictError(kind, record_id) from error
+        except WatchError as error:
+            # Raised by EXEC for a changed watched key, and by redis-py itself when the pinned connection dropped
+            # between WATCH and EXEC (it never retries or re-sends on a watching pipeline, and the server forgot
+            # the watch on reconnect): either way the read this write was based on may be stale, so it is a conflict
+            # -- the Python counterpart of the TS adapter's reconnect-epoch check. After a successful EXEC redis-py
+            # clears its watching flag, so no UNWATCH is sent.
+            raise StorageConflictError(kind, record_id) from error
 
 
 def _decode[T](raw: str, from_wire: Callable[[dict[str, Any]], T], label: str) -> T | None:

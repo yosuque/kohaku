@@ -879,3 +879,50 @@ class TestCompareAndSetAcrossInstances:
                 await client.aclose()
 
         _run(go())
+
+
+class TestCompareAndSetConnectionLoss:
+    def test_a_watch_error_from_any_step_of_the_transaction_is_a_conflict(
+        self, redis_url: str
+    ) -> None:
+        """redis-py raises WatchError from an immediate command (GET / INCR after WATCH) when the pinned
+        connection dropped, and never retries or re-sends on a watching pipeline; the watch the server held is gone,
+        so the read this write was based on may be stale: a conflict, not an error, and nothing is written."""
+        from unittest.mock import patch
+
+        from redis.asyncio.client import Pipeline
+        from redis.exceptions import WatchError
+
+        async def go() -> None:
+            port = create_redis_storage_port(url=redis_url, key_prefix=_prefix())
+            try:
+                with (
+                    patch.object(
+                        Pipeline, "get", side_effect=WatchError("A ConnectionError occurred")
+                    ),
+                    pytest.raises(StorageConflictError),
+                ):
+                    await port.put_promotion_state(
+                        _state("a1", revision="r1"), expected_revision=None
+                    )
+                assert await port.get_promotion_state("a1") is None
+            finally:
+                await port.close()
+
+        _run(go())
+
+    def test_a_successful_conditional_write_leaves_no_watch_behind(self, redis_url: str) -> None:
+        async def go() -> None:
+            client = Redis.from_url(redis_url, decode_responses=True)
+            port = create_redis_storage_port(client=client, key_prefix=_prefix())
+            try:
+                await port.put_promotion_state(_state("a1", revision="r1"), expected_revision=None)
+                # The pooled connection the transaction used is idle and un-watched: a plain write from another
+                # pipeline on it cannot be aborted by a stale watch.
+                await port.put_promotion_state(_state("a1", revision="r2"))
+                await port.put_promotion_state(_state("a1", revision="r3"), expected_revision="r2")
+                assert len(client.connection_pool._in_use_connections) == 0
+            finally:
+                await client.aclose()
+
+        _run(go())

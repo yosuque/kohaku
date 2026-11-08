@@ -12,9 +12,11 @@ import sys
 from collections.abc import Callable
 from typing import Any, Literal
 
+from psycopg import errors as pg_errors
+
 from kohaku.spec import UNSET, ExpectedRevision, StorageConflictError, normalize_tenant
 
-from .connection import PostgresPoolHandle
+from .connection import PostgresPoolHandle, QueryResult
 
 
 class TenantKeyedTable[T]:
@@ -38,6 +40,15 @@ class TenantKeyedTable[T]:
         # The payload is stored as text (see schema.py), so the revision predicate casts it to jsonb. No DDL: the
         # compare-and-set is one conditional statement whose rowcount says whether it applied.
         self._revision_of = f"({payload_column}::jsonb ->> 'revision')"
+
+    async def _cas_query(self, record_id: str, sql: str, params: list[Any]) -> QueryResult:
+        """Runs a conditional (compare-and-set) statement. SQLSTATE 40001 (serialization failure -- what a
+        SERIALIZABLE / REPEATABLE READ session, or a pool configured that way, raises when a concurrent writer
+        touched the row) means the same as a zero row count: another writer got there first, so it is a conflict."""
+        try:
+            return await self._db.query(sql, params)
+        except pg_errors.SerializationFailure as error:
+            raise StorageConflictError(self._kind, record_id) from error
 
     def _decode(self, raw: str) -> T | None:
         """Parses a stored payload, treating one that does not parse (a corrupted or hand-edited row) as absent with
@@ -72,7 +83,8 @@ class TenantKeyedTable[T]:
         payload = self._to_json(record)
         if expected_revision is None:
             # Must not exist yet: a lost insert race (or an existing row) inserts nothing.
-            inserted = await self._db.query(
+            inserted = await self._cas_query(
+                record_id,
                 f"INSERT INTO {self._table} (tenant, {self._id_column}, {self._payload_column}) VALUES (%s, %s, %s) "
                 f"ON CONFLICT (tenant, {self._id_column}) DO NOTHING",
                 [normalized, record_id, payload],
@@ -81,7 +93,8 @@ class TenantKeyedTable[T]:
                 raise StorageConflictError(self._kind, record_id)
             return
         if expected_revision is not UNSET:
-            updated = await self._db.query(
+            updated = await self._cas_query(
+                record_id,
                 f"UPDATE {self._table} SET {self._payload_column} = %s "
                 f"WHERE tenant = %s AND {self._id_column} = %s AND {self._revision_of} = %s::text",
                 [payload, normalized, record_id, expected_revision],
@@ -111,7 +124,8 @@ class TenantKeyedTable[T]:
                 [payload, normalized, record_id],
             )
             return
-        updated = await self._db.query(
+        updated = await self._cas_query(
+            record_id,
             f"UPDATE {self._table} SET {self._payload_column} = %s "
             f"WHERE tenant = %s AND {self._id_column} = %s AND {self._revision_of} = %s::text",
             [payload, normalized, record_id, expected_revision],
@@ -170,7 +184,8 @@ class TenantKeyedTable[T]:
         `StorageConflictError`."""
         normalized = normalize_tenant(tenant) or ""
         if expected_revision is not None:
-            deleted = await self._db.query(
+            deleted = await self._cas_query(
+                record_id,
                 f"DELETE FROM {self._table} WHERE tenant = %s AND {self._id_column} = %s "
                 f"AND {self._revision_of} = %s::text",
                 [normalized, record_id, expected_revision],
