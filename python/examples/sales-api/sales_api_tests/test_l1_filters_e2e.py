@@ -13,10 +13,10 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from kohaku.authz_hmac import create_hmac_authz_port
 from kohaku.llm import FakeLlm
 from kohaku.storage import MemoryStoragePort
 from sales_api.app import create_app
-from sales_api.authz_port import create_hmac_authz_port
 
 TREND_REF = "query://sales/trend?granularity=month&metric=revenue"
 
