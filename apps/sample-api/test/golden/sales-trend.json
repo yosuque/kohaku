@@ -67,6 +67,10 @@
     "refVersions": {
       "query://sales/trend?granularity=month&metric=revenue": "sales@seed-20260610.1+ade3e9a0a5de#bump-0"
     },
+    "state": {
+      "metric": "revenue",
+      "granularity": "month"
+    },
     "components": [
       {
         "id": "root",
@@ -77,9 +81,49 @@
           "gap": "md"
         },
         "children": [
+          "filter-metric",
+          "filter-granularity",
           "title1",
           "chart1"
         ]
+      },
+      {
+        "id": "filter-metric",
+        "type": "control.select",
+        "version": "1.0.0",
+        "props": {
+          "label": "Metric",
+          "options": [
+            {
+              "label": "Revenue",
+              "value": "revenue"
+            },
+            {
+              "label": "Units",
+              "value": "units"
+            }
+          ],
+          "value": "revenue"
+        }
+      },
+      {
+        "id": "filter-granularity",
+        "type": "control.select",
+        "version": "1.0.0",
+        "props": {
+          "label": "Granularity",
+          "options": [
+            {
+              "label": "Monthly",
+              "value": "month"
+            },
+            {
+              "label": "Quarterly",
+              "value": "quarter"
+            }
+          ],
+          "value": "month"
+        }
       },
       {
         "id": "title1",
@@ -100,16 +144,54 @@
           "y": "revenue"
         },
         "data": {
-          "$ref": "query://sales/trend?granularity=month&metric=revenue"
+          "$ref": "query://sales/trend?granularity=month&metric=revenue",
+          "bind": {
+            "granularity": {
+              "$state": "granularity",
+              "values": [
+                "month",
+                "quarter"
+              ]
+            },
+            "metric": {
+              "$state": "metric",
+              "values": [
+                "revenue",
+                "units"
+              ]
+            }
+          }
         }
       }
     ],
-    "events": [],
+    "events": [
+      {
+        "on": "filter-metric.change",
+        "emit": "state.set",
+        "payload": {
+          "key": "metric",
+          "value": "$value"
+        }
+      },
+      {
+        "on": "filter-granularity.change",
+        "emit": "state.set",
+        "payload": {
+          "key": "granularity",
+          "value": "$value"
+        }
+      }
+    ],
     "provenance": {
       "tier": "L1",
       "composedBy": "composer@0.1.0",
       "model": "fake-model",
-      "cache": "miss"
+      "cache": "miss",
+      "generatorVersion": "p13/fake-model/ds3",
+      "kit": {
+        "id": "kohaku",
+        "version": "1"
+      }
     }
   }
 }

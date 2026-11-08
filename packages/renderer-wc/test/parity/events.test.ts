@@ -311,6 +311,45 @@ describe("event behavior parity (control + A1 have identical external observatio
     expect(wc.obs.events).toEqual(react.obs.events); // neither forwards (self-contained within state.set)
   });
 
+  it("an L1-injected filter (hyphenated `filter-<param>` id, composer injectFilters shape) re-resolves identically in both", async () => {
+    const sc: Scenario = {
+      spec: spec({
+        state: { region: "japan" },
+        refVersions: { [BIND_REF]: "v1" },
+        components: [
+          { id: "root", type: "layout.stack", props: {}, children: ["filter-region", "tbl"] },
+          {
+            id: "filter-region",
+            type: "control.select",
+            props: {
+              label: "Region",
+              value: "japan",
+              options: [
+                { value: "japan", label: "Japan" },
+                { value: "us", label: "US" },
+              ],
+            },
+          },
+          {
+            id: "tbl",
+            type: "presentSpreadsheet",
+            props: {},
+            data: { $ref: BIND_REF, bind: { region: { $state: "region", values: ["japan", "us"] } } },
+          },
+        ],
+        events: [
+          { on: "filter-region.change", emit: "state.set", payload: { key: "region", value: "$value" } },
+        ],
+      }),
+      resolve: (ref) => (ref.includes("region=us") ? tableData([{ region: "us", revenue: 1 }]) : tableData()),
+      steps: [{ act: "select", sel: '[data-kohaku="filter-region"]', value: "us" }],
+    };
+    const { react, wc } = await bothObserve(sc);
+    expect(react.obs.resolves).toEqual([BIND_REF, "query://sales/records?region=us"]);
+    expect(wc.obs.resolves).toEqual(react.obs.resolves);
+    expect(wc.obs.events).toEqual(react.obs.events);
+  });
+
   it("write loop: submit → invokeAction → invalidates → distant table re-resolves (both match)", async () => {
     const sc: Scenario = {
       spec: spec({
