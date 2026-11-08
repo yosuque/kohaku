@@ -144,7 +144,7 @@ flowchart LR
 
 - **クロス言語互換の担保**は 3 点(golden fixture / core カタログ JSON export / conformance 黒箱)。レイヤ依存方向(逆流禁止)は import-linter の layers 契約で機械担保する(`uv run lint-imports`)。
 - **意図的な差異**: JS 検証(L2 の `L2_SCRIPT_SYNTAX` 構文検査 / `l2Smoke` ランナー)は同梱 TS CLI(`kohaku smoke-l2`)への **Node サイドカー委譲**で提供し、Node 非併設のスタンドアロン配備ではスキップ(仕様の「動的コード生成不可の環境ではスキップ」規定)。内部 API は snake_case、ワイヤ形状(JSON キー・エンドポイント・`_meta` キー)は TS と完全一致。恒久差異の全量とセットアップ手順は [../python/README.ja.md](../python/README.ja.md) が正。
-- **Python 移植の未対応事項**: `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`admin-react`。これらはいずれもまだ conformance スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない — 同じ一覧を最新に保つ [../python/README.md](../python/README.md) の "Known differences" を参照。
+- **Python 移植の未対応事項**: `storage-redis` / `storage-postgres` の本番アダプタ、`admin-react`。これらはいずれもまだ conformance スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない — 同じ一覧を最新に保つ [../python/README.md](../python/README.md) の "Known differences" を参照。
 
 ## 4. 中核データモデル
 

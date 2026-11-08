@@ -92,7 +92,6 @@ from kohaku.spec import (
     LineageEventRecord,
     LineageFilter,
     OperationDescriptor,
-    Principal,
     SessionContext,
     StoragePort,
 )
@@ -106,12 +105,17 @@ from .fixed_specs import create_fixed_specs, language_of
 from .intents_catalog import IntentCatalog
 from .promoted import PromotedEntry, promoted_component
 from .promoted_registry import PromotedRegistry, to_promoted_entry
+from .request_identity import RequestIdentity, create_header_identity
 from .semantic_port import create_semantic_port
 
 if TYPE_CHECKING:
-    # starlette is the "rest" extra. The Request annotations of the auth / tenant hooks are stringified (from __future__),
-    # so it is not imported at runtime (a design that does not require fastapi/starlette until attach_kohaku_routes is called).
+    # starlette is the "rest" extra; the middleware's Request / call_next annotations are stringified (from
+    # __future__), so it is not imported at runtime (a design that does not require fastapi/starlette until
+    # attach_kohaku_routes is called).
     from starlette.requests import Request
+    from starlette.responses import Response
+
+    from .request_identity import CallNext
 
 _logger = logging.getLogger(__name__)
 
@@ -119,11 +123,16 @@ _logger = logging.getLogger(__name__)
 # Declarative RBAC for the governance/audit plane (SPEC §6.1 "Authorization of the governance plane" [Draft]).
 # Identical in content to app.ts's createGovernancePolicy: admin=all permissions / reviewer=promotion review +
 # Lineage/usage-analytics read / viewer=read only. Unknown roles and out-of-scope permissions are denied
-# (deny-by-default). Role resolution is handled by _demo_auth.
+# (deny-by-default). Role resolution is handled by the RequestIdentity's auth hook (request_identity.py).
 _GOVERNANCE_POLICY = GovernancePolicy(
     roles={
         "admin": ["*"],
         "reviewer": ["promotion.*", "lineage.read", "analytics.read"],
+        # approver = the human who approves "approve"-tier governed Actions (design.md #62/#72): may issue approval
+        # tokens (POST /approvals) and read the lineage tail the console's Approvals tab derives its inbox from.
+        # analytics.read is needed because the console fetches /analytics/summary on every tab (re)load. Note
+        # lineage.read exposes the whole event log to this role -- acceptable for the demo, a product scopes it.
+        "approver": ["action.approve", "lineage.read", "analytics.read"],
         "viewer": [
             "lineage.read",
             "analytics.read",
@@ -134,23 +143,6 @@ _GOVERNANCE_POLICY = GovernancePolicy(
         ],
     }
 )
-
-
-def _demo_auth(request: Request) -> Principal:
-    """Principal resolution (a product responsibility). In production, principal and roles are resolved from an
-    authentication platform (JWT/OIDC, etc.).
-
-    The demo substitutes the x-kohaku-role header, and no header (the default) is treated as admin (so as not to break
-    the unauthenticated behavior of existing demos and existing tests; the legacy behavior where anyone passes the
-    governance plane is reproduced with the admin role).
-    """
-    role = request.headers.get("x-kohaku-role") or "admin"
-    return Principal(id=f"demo-{role}", roles=[role])
-
-
-def _demo_tenant(request: Request) -> str | None:
-    """Tenant resolution (a product responsibility). The demo looks at the x-kohaku-tenant header."""
-    return request.headers.get("x-kohaku-tenant") or None
 
 
 def admit_fixation_for_locale(_fixation: FixationRecord, session: SessionContext) -> bool:
@@ -301,6 +293,8 @@ async def create_app(
     prefix: str = "/api/kohaku",
     policy_file: KohakuPolicyFile | None = None,
     approvals: ApprovalPort | None = None,
+    identity: RequestIdentity | None = None,
+    demo_admin_routes: bool | None = None,
     schema_extractor: SchemaExtractor | None = None,
 ) -> SalesApp:
     """Assembles the FastAPI app by converging all packages (equivalent to app.ts's createApp).
@@ -318,6 +312,23 @@ async def create_app(
     be allowed (the gate returns denied), unchanged from before governed actions existed. __main__.py wires
     a real one (create_hmac_approval_port, reusing the same capability secret as the AuthzPort) for the
     running demo; mirrors TS sample-api's AppDeps.approvals.
+
+    identity (optional): how a request becomes a principal and a tenant (`RequestIdentity`). Default: the demo's
+    x-kohaku-role / x-kohaku-tenant headers (`create_header_identity`). The JWT scheme
+    (`request_identity_jwt.create_jwt_request_identity`) adds a middleware that verifies the bearer token on
+    every `{prefix}/*` route except the data plane `{prefix}/binding/*`: there the data-binding client sends the
+    HMAC *capability* (two base64url segments, not a JWS) in the same `Authorization: Bearer` header, so a JWT
+    verification would always fail with 401 and kill the data plane. host_rest verifies the capability on those
+    routes itself (fail-closed). Identity does not vanish there: /compose binds the JWT's tenant into the
+    capability it issues, and the data plane takes tenant, principal (capability `sub`) and rate-limit key from
+    that signed capability rather than from headers (SPEC CAP-TEN-002). Mirrors TS sample-api's AppDeps.identity.
+
+    demo_admin_routes (optional): registers the demo-only bump-data-version route. Cache-busting is free
+    LLM-spend amplification for anyone who can reach it, so under a real identity scheme it defaults to **off**
+    and must be opted into explicitly; with the header identity (the default) it defaults to on, unchanged
+    (the legacy unauthenticated `/api/admin/bump-data-version`). Under an explicit `identity` it is registered at
+    `{prefix}/admin/bump-data-version` behind the identity and the governance RBAC (`admin.bumpDataVersion`,
+    admin only), like TS sample-api's. Mirrors TS sample-api's AppDeps.demoAdminRoutes.
 
     schema_extractor (optional, off by default): LLM auto-extraction of the promotion schema at auto-nomination
     (advisory prefill for the approval form; fail-open inside lineage). Opt-in at the entry point (__main__.py)
@@ -811,6 +822,8 @@ async def create_app(
                 info.error,
             )
 
+    request_identity = identity if identity is not None else create_header_identity()
+    authorize_governance = create_governance_policy(_GOVERNANCE_POLICY)
     deps = KohakuHostDeps(
         compose=compose_ctx,
         domain=domain,
@@ -827,14 +840,30 @@ async def create_app(
         # Authorization of the governance/audit plane (symmetric with app.ts). auth resolves the role, and
         # authorize_governance permits/denies with declarative RBAC. With x-kohaku-role=viewer, approval/deletion
         # operations become 403 CAPABILITY_DENIED.
-        auth=_demo_auth,
-        tenant=_demo_tenant,
-        authorize_governance=create_governance_policy(_GOVERNANCE_POLICY),
+        auth=request_identity.auth,
+        tenant=request_identity.tenant,
+        authorize_governance=authorize_governance,
         rate_limiter=policy_runtime.rate_limiter if policy_runtime is not None else None,
         approvals=approvals,
     )
 
     app = FastAPI(title="kohaku sample sales API (Python)")
+
+    # When the identity scheme verifies a credential (JWT), authenticate the request before it reaches the routes
+    # (401 CAPABILITY_DENIED on a missing/invalid token). Absent for the default header identity (behavior
+    # unchanged). The data plane `{prefix}/binding/*` is excluded -- see create_app's `identity` docstring.
+    identity_middleware = request_identity.middleware
+    if identity_middleware is not None:
+        kohaku_prefix = prefix.rstrip("/") + "/"
+        binding_prefix = kohaku_prefix + "binding/"
+
+        @app.middleware("http")
+        async def authenticate(request: Request, call_next: CallNext) -> Response:
+            path = request.url.path
+            if path.startswith(kohaku_prefix) and not path.startswith(binding_prefix):
+                return await identity_middleware(request, call_next)
+            return await call_next(request)
+
     attach_kohaku_routes(app, deps, prefix=prefix)
 
     # FastAPI route parameter annotations are stringified under `from __future__ import annotations`, and FastAPI
@@ -855,10 +884,26 @@ async def create_app(
             "promoted": registry.all_promoted_component_types(),
         }
 
-    @app.post("/api/admin/bump-data-version")
-    def bump_data_version() -> dict[str, str]:
-        # A demo endpoint that advances the data version to demonstrate cache invalidation.
-        return {"dataVersion": repo.bump()}
+    # A demo endpoint that advances the data version to demonstrate cache invalidation. See create_app's
+    # `demo_admin_routes` docstring for why it is opt-in (and authenticated + authorized) under a real identity.
+    if demo_admin_routes if demo_admin_routes is not None else identity is None:
+        if identity is None:
+
+            @app.post("/api/admin/bump-data-version")
+            def bump_data_version() -> dict[str, str]:
+                return {"dataVersion": repo.bump()}
+
+        else:
+            from .demo_admin import attach_bump_data_version_route
+
+            attach_bump_data_version_route(
+                app,
+                path=f"{prefix.rstrip('/')}/admin/bump-data-version",
+                auth=request_identity.auth,
+                tenant=request_identity.tenant,
+                authorize_governance=authorize_governance,
+                bump=repo.bump,
+            )
 
     return SalesApp(
         app=app,

@@ -33,7 +33,9 @@ The key source (`{ secret }`, `{ jwks }`, or `{ jwksUrl }`) also fixes the defau
 
 **`requireTenant`** (default `false`): when true, a token with no (or an empty) tenant claim rejects with `JwtIdentityError({ code: "MISSING_TENANT" })` instead of resolving with `{ principal }` (no tenant). Only applies to the default claim mapping — a caller supplying `mapClaims` is responsible for its own tenant requirement, if any.
 
-Failures throw `JwtIdentityError` with a `code` (`MISSING_TOKEN` / `INVALID_TOKEN` / `MISSING_SUBJECT` / `MISSING_TENANT`) and, for `INVALID_TOKEN`, the underlying `jose` error as `cause`, so a host can log the real reason while returning an opaque message to the caller.
+A tenant claim that is not a valid tenant id (over 256 UTF-16 code units, or containing a control character -- the same rule `@kohaku-ui/authz-hmac` applies when binding a tenant into a capability, SPEC CAP-TEN-001) rejects with `INVALID_TENANT` whether or not `requireTenant` is set; it is never downgraded to "no tenant". This keeps an oversized tenant from passing identity resolution and then failing capability issuance as a server error. A caller-supplied `mapClaims` bypasses this check along with the rest of the default mapping.
+
+Failures throw `JwtIdentityError` with a `code` (`MISSING_TOKEN` / `INVALID_TOKEN` / `MISSING_SUBJECT` / `MISSING_TENANT` / `INVALID_TENANT`) and, for `INVALID_TOKEN`, the underlying `jose` error as `cause`, so a host can log the real reason while returning an opaque message to the caller.
 
 ## Capability tokens are unchanged, including revocation
 

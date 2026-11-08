@@ -5,7 +5,7 @@ name = "kohaku-sample-sales-api"
 version = "0.0.0"
 description = "kohaku sample: sales domain / Intent catalog / Port implementations (a port of the domain layer of TS apps/sample-api)"
 requires-python = ">=3.12"
-dependencies = ["kohaku-ui[rest,mcp]"]
+dependencies = ["kohaku-ui[rest,mcp,jwt]"]
 
 [build-system]
 requires = ["hatchling"]

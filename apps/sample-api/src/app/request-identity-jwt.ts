@@ -27,6 +27,15 @@ export function createJwtRequestIdentity(identity: JwtIdentityResolver): Request
         c.set(IDENTITY_VAR, await identity.fromAuthorizationHeader(c.req.header("authorization")));
       } catch (e) {
         const reason = e instanceof JwtIdentityError ? e.code : "INVALID_TOKEN";
+        // The 401 body stays opaque (only the code); the operator gets the real reason (e.g. the jose error
+        // behind INVALID_TOKEN: expired, wrong audience, unknown kid...). A missing header is routine and not
+        // logged. The token itself is never logged, and jose error messages do not carry it.
+        if (reason !== "MISSING_TOKEN") {
+          console.warn(
+            `[identity] bearer token rejected (${reason}):`,
+            e instanceof Error ? (e.cause ?? e) : e,
+          );
+        }
         return c.json(errorBody("CAPABILITY_DENIED", `authentication required (${reason})`), 401);
       }
       await next();

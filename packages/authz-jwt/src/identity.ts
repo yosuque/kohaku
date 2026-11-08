@@ -1,3 +1,4 @@
+import { isValidTenantClaim } from "@kohaku-ui/authz-hmac";
 import type { Principal } from "@kohaku-ui/spec-core";
 import {
   createLocalJWKSet,
@@ -52,7 +53,12 @@ export interface JwtIdentityOptions {
   requireTenant?: boolean;
 }
 
-export type JwtIdentityErrorCode = "MISSING_TOKEN" | "INVALID_TOKEN" | "MISSING_SUBJECT" | "MISSING_TENANT";
+export type JwtIdentityErrorCode =
+  | "MISSING_TOKEN"
+  | "INVALID_TOKEN"
+  | "MISSING_SUBJECT"
+  | "MISSING_TENANT"
+  | "INVALID_TENANT";
 
 /** Minimum HS256 shared-secret length (bytes, UTF-8), enforced at construction in `secret` mode. 32 bytes
  * (256 bits) matches HS256's own hash output size -- a shorter secret is brute-forceable well before the
@@ -126,7 +132,18 @@ function defaultMap(names: Required<JwtClaimNames>, requireTenant: boolean) {
     const roles = rolesOf(payload[names.roles]);
     if (roles != null) principal.roles = roles;
     const tenant = payload[names.tenant];
-    if (typeof tenant === "string" && tenant !== "") return { principal, tenant };
+    if (typeof tenant === "string" && tenant !== "") {
+      // The capability port refuses a tenant that is over-long or holds control characters (SPEC CAP-TEN-001);
+      // refusing it here turns what would be a 500 at capability issuance into a 401, and never downgrades a
+      // malformed tenant to "no tenant" (a different data scope).
+      if (!isValidTenantClaim(tenant)) {
+        throw new JwtIdentityError(
+          "INVALID_TENANT",
+          `token "${names.tenant}" claim is not a valid tenant id`,
+        );
+      }
+      return { principal, tenant };
+    }
     if (requireTenant) {
       throw new JwtIdentityError("MISSING_TENANT", `token has no "${names.tenant}" claim`);
     }
