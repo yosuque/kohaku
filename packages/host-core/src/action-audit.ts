@@ -72,4 +72,22 @@ export interface ActionAuditRecorder {
     tenant?: string;
     correlationId?: string;
   }): Promise<void>;
+  /**
+   * Records that `POST /approvals` minted an approval token (design.md #72; REST only -- MCP has no
+   * issuance tool). **Optional**: a custom recorder written before this event existed keeps working, the
+   * host simply skips it. `principal` is the *approver*, not the requester (`requesterId`) -- the one
+   * place an `action.*` event's actor is not the requester. The token and its id are never passed here.
+   * `expiresAt` is computed by the host as issue time + `ttlSeconds`.
+   */
+  approvalIssued?(args: {
+    action: string;
+    payloadHash: string;
+    requesterId: string;
+    approverId: string;
+    ttlSeconds: number;
+    expiresAt: string;
+    principal: Principal;
+    tenant?: string;
+    correlationId?: string;
+  }): Promise<void>;
 }

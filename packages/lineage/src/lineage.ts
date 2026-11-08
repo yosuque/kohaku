@@ -11,6 +11,7 @@ import {
 } from "@kohaku-ui/spec-core";
 import { ulid } from "ulid";
 import {
+  type ActionApprovalIssuedPayload,
   type ActionApprovalRequestedPayload,
   type ActionApprovedPayload,
   type ActionDeniedPayload,
@@ -282,6 +283,11 @@ export interface Lineage {
   ): Promise<void>;
   /** Records `action.approved` (design.md #63) -- a presented approval grant was successfully consumed. */
   actionApproved(event: ActionApprovedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
+  /**
+   * Records `action.approvalIssued` (design.md #72) -- an approver minted an approval token. The `actor`
+   * the caller passes is the *approver* (see `ActionApprovalIssuedPayload`).
+   */
+  actionApprovalIssued(event: ActionApprovalIssuedPayload, actor?: ActorKind, tenant?: string): Promise<void>;
 
   /** Audit query for "why was this view shown" */
   explainView(specHash: string): Promise<LineageEventRecord[]>;
@@ -513,6 +519,23 @@ export function createLineage(opts: { storage: StoragePort; newId?: () => string
           payloadHash: event.payloadHash,
           approverId: event.approverId,
           requesterId: event.requesterId,
+          ...(event.correlationId != null ? { correlationId: event.correlationId } : {}),
+        },
+        actor,
+        tenant,
+      );
+    },
+
+    async actionApprovalIssued(event, actor, tenant) {
+      await record(
+        "action.approvalIssued",
+        {
+          action: event.action,
+          payloadHash: event.payloadHash,
+          requesterId: event.requesterId,
+          approverId: event.approverId,
+          ttlSeconds: event.ttlSeconds,
+          expiresAt: event.expiresAt,
           ...(event.correlationId != null ? { correlationId: event.correlationId } : {}),
         },
         actor,

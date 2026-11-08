@@ -2,6 +2,7 @@
 
 - vocab.ts: the single source of value sets + display labels (define_vocabulary) and the shared schema fragments for fiscal year/quarter
 - catalog.ts: the single definitions (define_intent) of the normalized Intents this sample supports + IntentCatalog
+  (the mutable catalog itself is kohaku.semantic_llm's; this module only seeds it with the core INTENT_DEFS)
 
 From a single define_intent, the IntentDef for SemanticPort (to_intent_def), the GUI facet descriptor, and the MCP
 source are derived. IntentDef is single-defined in @kohaku-ui/intents; here it is re-exported as the product boundary.
@@ -9,7 +10,6 @@ source are derived. IntentDef is single-defined in @kohaku-ui/intents; here it i
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Any
 
 from kohaku.data_binding import format_query_ref
@@ -28,7 +28,9 @@ from kohaku.intents import (
     object_schema,
     string,
 )
-from kohaku.spec import IntentValidationIssue, JsonObject, JsonValue, QueryHandle, js_string
+from kohaku.semantic_llm import IntentCatalog as BaseIntentCatalog
+from kohaku.semantic_llm import ParamsValidation
+from kohaku.spec import JsonObject, JsonValue, QueryHandle, js_string
 
 from .domain import CHANNEL_LABELS, DEMO_FISCAL_YEAR, REGION_LABELS
 
@@ -555,82 +557,12 @@ INTENT_DEFINITIONS: list[IntentDefinition] = [
 INTENT_DEFS: list[IntentDef] = [d.to_intent_def() for d in INTENT_DEFINITIONS]
 
 
-@dataclass(frozen=True)
-class ParamsValidation:
-    """Result of IntentCatalog.validate_params: either the normalized params (defaults filled in) or a list
-    of client-safe issues. Backs SalesSemanticPort.validate_intent (port of TS sample-api's semantic-llm-based
-    validateIntent, via IntentCatalogLike.validateParams)."""
-
-    ok: bool
-    params: JsonObject | None = None
-    issues: list[IntentValidationIssue] = field(default_factory=list)
-
-
-class IntentCatalog:
-    """Holds core Intents + promoted Intents and provides the vocabulary for NL/GUI normalization and resolve_query."""
+class IntentCatalog(BaseIntentCatalog):
+    """The sales catalog: kohaku.semantic_llm's mutable IntentCatalog (core Intents + promoted Intents, with
+    validate_params and a revision counter), defaulting to the core INTENT_DEFS when no defs are given."""
 
     def __init__(self, defs: list[IntentDef] | None = None) -> None:
-        source = INTENT_DEFS if defs is None else defs
-        self._defs: dict[str, IntentDef] = {d.name: d for d in source}
-
-    def get(self, name: str) -> IntentDef | None:
-        return self._defs.get(name)
-
-    def list_defs(self) -> list[IntentDef]:
-        # Equivalent to TS's list(). In Python it is named list_defs to avoid collision with the builtin list
-        # (also matching the codebase's list_operations / list_events naming).
-        return list(self._defs.values())
-
-    def names(self) -> list[str]:
-        return list(self._defs.keys())
-
-    def add(self, def_: IntentDef) -> None:
-        """Adds a dynamic Intent via promotion (merged in from .data/intents.json)."""
-        self._defs[def_.name] = def_
-
-    def remove(self, name: str) -> None:
-        """Removes a dynamic Intent via promotion withdrawal (unpublish)."""
-        self._defs.pop(name, None)
-
-    def normalize_params(self, name: str, params: JsonObject) -> JsonObject | None:
-        """Validates params and returns the normalized form with defaults filled in. None on failure."""
-        def_ = self._defs.get(name)
-        if def_ is None:
-            return None
-        result = def_.params.safe_parse(params)
-        return result.data if result.success else None
-
-    def validate_params(self, name: str, params: JsonObject) -> ParamsValidation:
-        """Strict validation for a directly-specified Intent (backs SalesSemanticPort.validate_intent).
-        Unlike normalize_params, an unknown param key is itself reported as an issue instead of being
-        silently stripped (ObjectSchema.parse's default "strip unrecognized keys" behavior, mirroring zod's
-        own non-strict object parsing), and a failure carries structured, client-safe issues -- naming which
-        param failed -- instead of collapsing to None. Uses ObjectSchema.validate (not safe_parse) so every
-        field's issue is collected, not just the first.
-        """
-        def_ = self._defs.get(name)
-        if def_ is None:
-            return ParamsValidation(
-                ok=False,
-                issues=[IntentValidationIssue(path="", message=f'unknown intent "{name}"')],
-            )
-        shape = def_.params.shape
-        issues = [
-            IntentValidationIssue(path=key, message=f'unknown param "{key}"')
-            for key in params
-            if key not in shape
-        ]
-        result = def_.params.validate(params)
-        if not issues and result.success:
-            assert result.data is not None
-            return ParamsValidation(ok=True, params=result.data)
-        for issue in result.issues:
-            issues.append(
-                IntentValidationIssue(
-                    path=issue.path, message=f'param "{issue.path}": {issue.message}'
-                )
-            )
-        return ParamsValidation(ok=False, issues=issues)
+        super().__init__(INTENT_DEFS if defs is None else defs)
 
 
 __all__ = [

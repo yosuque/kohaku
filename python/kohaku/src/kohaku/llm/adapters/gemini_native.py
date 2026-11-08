@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ..abort import AbortSignal, TimeoutAbortError
+from ..base_url import normalize_vendor_base_url
 from ..env import LlmConfig
 from ..port import (
     GenerateObjectRequest,
@@ -213,8 +214,10 @@ def _build_sdk_transports(config: LlmConfig) -> tuple[GeminiTransport, GeminiStr
         ) from err
 
     client_kwargs: dict[str, Any] = {"api_key": config.api_key or "not-required"}
-    if config.base_url:
-        client_kwargs["http_options"] = types.HttpOptions(base_url=config.base_url)
+    # The vendor root without `/v1beta`: google-genai appends the API version itself (see base_url.py).
+    base_url = normalize_vendor_base_url(config.provider, config.base_url)
+    if base_url is not None:
+        client_kwargs["http_options"] = types.HttpOptions(base_url=base_url)
     client = genai.Client(**client_kwargs)
     return _SdkTransport(client, config), _SdkStreamTransport(client, config)
 

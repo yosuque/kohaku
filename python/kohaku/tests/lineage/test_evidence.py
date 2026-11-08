@@ -195,6 +195,50 @@ def test_build_evidence_pack_and_verify_roundtrip(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
+def test_build_evidence_pack_indexes_governed_action_decisions_but_not_action_invoked(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        storage = FileStoragePort(tmp_path)
+        for event_type in (
+            "action.invoked",
+            "action.approvalRequested",
+            "action.approved",
+            "action.approvalIssued",
+            "action.denied",
+            "policy.applied",
+            "view.composed",
+        ):
+            await seed(storage, event_type, {})
+
+        keypair = generate_ed25519_keypair()
+        key_id = derive_ed25519_key_id(export_ed25519_public_key_raw(keypair.public_key))
+        pack = await build_evidence_pack(
+            source=create_storage_evidence_source(storage),
+            scope=_SCOPE,
+            generator="pytest/1",
+            signer=EvidenceManifestSigner(alg="Ed25519", keyId=key_id),
+        )
+
+        approvals = next(f for f in pack.files if f.path == "approvals.jsonl")
+        types = [
+            json.loads(line)["type"] for line in approvals.content.decode().strip().split("\n")
+        ]
+        assert sorted(types) == sorted(
+            [
+                "action.approvalRequested",
+                "action.approved",
+                "action.approvalIssued",
+                "action.denied",
+                "policy.applied",
+            ]
+        )
+        assert pack.manifest.counts.approvals == 5
+        assert pack.manifest.counts.events == 7
+
+    asyncio.run(run())
+
+
 def test_build_evidence_pack_records_artifact_hash_mismatch_as_warning(tmp_path: Path) -> None:
     async def run() -> None:
         storage = FileStoragePort(tmp_path)

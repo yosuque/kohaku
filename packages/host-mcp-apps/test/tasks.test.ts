@@ -35,10 +35,18 @@ import { coreCatalog, resolveCatalog } from "@kohaku-ui/registry";
 import type { AuthzPort, DomainPort, Scope, TabularData, UISpec } from "@kohaku-ui/spec-core";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, McpServer } from "@modelcontextprotocol/server";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { attachKohakuToMcpServer, createTaskStore } from "../src/index.js";
 import { __getTaskStoreForTest } from "../src/server.js";
 import { connectModern, sendRawModern, taskExtensionEnvelope } from "./connect-modern.js";
+
+/** The owner every store test (and, via `rateLimitKey` below, every wire test) binds its tasks to. */
+const OWNER = "owner-a";
+/** What `deps.rateLimitKey` answers for the next request; a test flips it to play a second caller. */
+let currentOwner = OWNER;
+beforeEach(() => {
+  currentOwner = OWNER;
+});
 
 const TREND_REF = "query://sales/trend?granularity=month&metric=revenue";
 
@@ -240,7 +248,7 @@ function buildAttached(composeCtx: ComposeContext = fixedSpecComposeCtx(), tasks
   const server = new McpServer({ name: "kohaku-tasks-test", version: "0.1.0" });
   attachKohakuToMcpServer(
     server,
-    { compose: composeCtx, domain, authz, querySource: "sales" },
+    { compose: composeCtx, domain, authz, querySource: "sales", rateLimitKey: () => currentOwner },
     { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>", tasksEnabled },
   );
   return server;
@@ -253,39 +261,39 @@ async function tick(times = 20): Promise<void> {
 describe("TaskStore (createTaskStore, in-memory, no timer)", () => {
   it("create() returns a working task; get() returns the same snapshot", () => {
     const store = createTaskStore();
-    const { taskId, task } = store.create({ ttlMs: 60_000, pollIntervalMs: 2_000 });
+    const { taskId, task } = store.create({ owner: OWNER, ttlMs: 60_000, pollIntervalMs: 2_000 });
     expect(task.status).toBe("working");
     expect(task.taskId).toBe(taskId);
     expect(task.ttlMs).toBe(60_000);
     expect(task.pollIntervalMs).toBe(2_000);
-    expect(store.get(taskId)).toEqual(task);
+    expect(store.get(taskId, OWNER)).toEqual(task);
   });
 
   it("complete() transitions to completed and carries the result; a second complete()/fail() is a no-op", () => {
     const store = createTaskStore();
-    const { taskId } = store.create({ ttlMs: 60_000 });
+    const { taskId } = store.create({ owner: OWNER, ttlMs: 60_000 });
     store.complete(taskId, { spec: "x" });
-    const task = store.get(taskId);
+    const task = store.get(taskId, OWNER);
     expect(task?.status).toBe("completed");
     expect(task).toMatchObject({ status: "completed", result: { spec: "x" } });
 
     // No-op once terminal (matches the store's "already-terminal" guard).
     store.fail(taskId, { message: "too late" });
-    expect(store.get(taskId)?.status).toBe("completed");
+    expect(store.get(taskId, OWNER)?.status).toBe("completed");
   });
 
   it("fail() transitions to failed and carries the error", () => {
     const store = createTaskStore();
-    const { taskId } = store.create({ ttlMs: 60_000 });
+    const { taskId } = store.create({ owner: OWNER, ttlMs: 60_000 });
     store.fail(taskId, { message: "boom" });
-    expect(store.get(taskId)).toMatchObject({ status: "failed", error: { message: "boom" } });
+    expect(store.get(taskId, OWNER)).toMatchObject({ status: "failed", error: { message: "boom" } });
   });
 
   it("cancelled() transitions to cancelled with no extra fields", () => {
     const store = createTaskStore();
-    const { taskId } = store.create({ ttlMs: 60_000 });
+    const { taskId } = store.create({ owner: OWNER, ttlMs: 60_000 });
     store.cancelled(taskId);
-    const task = store.get(taskId);
+    const task = store.get(taskId, OWNER);
     expect(task?.status).toBe("cancelled");
     expect(task).not.toHaveProperty("result");
     expect(task).not.toHaveProperty("error");
@@ -293,45 +301,92 @@ describe("TaskStore (createTaskStore, in-memory, no timer)", () => {
 
   it("requestCancel() fires the task's AbortController exactly when it is still working, and always acks a known id", () => {
     const store = createTaskStore();
-    const { taskId, abort } = store.create({ ttlMs: 60_000 });
+    const { taskId, abort } = store.create({ owner: OWNER, ttlMs: 60_000 });
     expect(abort.signal.aborted).toBe(false);
 
-    expect(store.requestCancel(taskId)).toEqual({ ok: true });
+    expect(store.requestCancel(taskId, OWNER)).toEqual({ ok: true });
     expect(abort.signal.aborted).toBe(true);
 
     // A second cancel of an already-"working"-turned-"cancelled"(not yet, still working per the store's own
     // state machine — abort() firing does not itself flip status) is still idempotent and still acks.
-    expect(store.requestCancel(taskId)).toEqual({ ok: true });
+    expect(store.requestCancel(taskId, OWNER)).toEqual({ ok: true });
 
     // Once the task is terminal, a cancel still acks (non-error per the spec's non-blocking framing) but is a no-op abort-wise.
     store.complete(taskId, {});
-    expect(store.requestCancel(taskId)).toEqual({ ok: true });
+    expect(store.requestCancel(taskId, OWNER)).toEqual({ ok: true });
   });
 
   it("requestCancel() on an unknown id returns ok:false", () => {
     const store = createTaskStore();
-    expect(store.requestCancel("no-such-task")).toEqual({ ok: false });
+    expect(store.requestCancel("no-such-task", OWNER)).toEqual({ ok: false });
   });
 
   it("get()/requestCancel() lazily purge an expired task — an id past its ttlMs behaves as unknown", () => {
     let now = 1_000_000;
     const store = createTaskStore(() => now);
-    const { taskId } = store.create({ ttlMs: 1_000 });
-    expect(store.get(taskId)?.status).toBe("working");
+    const { taskId } = store.create({ owner: OWNER, ttlMs: 1_000 });
+    expect(store.get(taskId, OWNER)?.status).toBe("working");
 
     now += 1_001; // past ttlMs
-    expect(store.get(taskId)).toBeUndefined();
-    expect(store.requestCancel(taskId)).toEqual({ ok: false });
+    expect(store.get(taskId, OWNER)).toBeUndefined();
+    expect(store.requestCancel(taskId, OWNER)).toEqual({ ok: false });
+  });
+
+  it("a different owner sees the task exactly as unknown (get and requestCancel), the creator is unaffected", () => {
+    const store = createTaskStore();
+    const { taskId } = store.create({ owner: OWNER, ttlMs: 60_000 });
+    store.complete(taskId, { capability: "bearer-write-token" });
+
+    expect(store.get(taskId, "owner-b")).toBeUndefined();
+    expect(store.get(taskId, "owner-b")).toEqual(store.get("no-such-task", "owner-b"));
+    expect(store.requestCancel(taskId, "owner-b")).toEqual({ ok: false });
+    expect(store.requestCancel(taskId, "owner-b")).toEqual(store.requestCancel("no-such-task", "owner-b"));
+    expect(store.get(taskId, OWNER)).toBeDefined();
+  });
+
+  it("a foreign requestCancel does not fire the task's AbortController", () => {
+    const store = createTaskStore();
+    const { taskId, abort } = store.create({ owner: OWNER, ttlMs: 60_000 });
+    expect(store.requestCancel(taskId, "owner-b")).toEqual({ ok: false });
+    expect(abort.signal.aborted).toBe(false);
+  });
+
+  it("an expired working task is aborted when purged; an expired terminal task is not", () => {
+    let now = 0;
+    const store = createTaskStore(() => now);
+    const working = store.create({ owner: OWNER, ttlMs: 100 });
+    const done = store.create({ owner: OWNER, ttlMs: 100 });
+    store.complete(done.taskId, {});
+    now += 200;
+    expect(store.get(working.taskId, OWNER)).toBeUndefined();
+    expect(working.abort.signal.aborted).toBe(true);
+    expect(done.abort.signal.aborted).toBe(false);
+  });
+
+  it("cancel requested, then the work completes normally: the task settles as completed (cancellation is non-guaranteed)", () => {
+    const store = createTaskStore();
+    const { taskId } = store.create({ owner: OWNER, ttlMs: 60_000 });
+    expect(store.requestCancel(taskId, OWNER)).toEqual({ ok: true });
+    store.complete(taskId, { spec: "x" });
+    expect(store.get(taskId, OWNER)?.status).toBe("completed");
+  });
+
+  it("cancel requested, then the work throws: the task settles as failed", () => {
+    const store = createTaskStore();
+    const { taskId } = store.create({ owner: OWNER, ttlMs: 60_000 });
+    expect(store.requestCancel(taskId, OWNER)).toEqual({ ok: true });
+    store.fail(taskId, { message: "boom" });
+    expect(store.get(taskId, OWNER)).toMatchObject({ status: "failed", error: { message: "boom" } });
   });
 
   it("create() purges other expired tasks (bounded memory — no timer, see createTaskStore's doc comment)", () => {
     let now = 0;
     const store = createTaskStore(() => now);
-    const old = store.create({ ttlMs: 100 });
+    const old = store.create({ owner: OWNER, ttlMs: 100 });
     now += 200; // old has expired
-    const fresh = store.create({ ttlMs: 100 });
-    expect(store.get(old.taskId)).toBeUndefined();
-    expect(store.get(fresh.taskId)?.status).toBe("working");
+    const fresh = store.create({ owner: OWNER, ttlMs: 100 });
+    expect(store.get(old.taskId, OWNER)).toBeUndefined();
+    expect(store.get(fresh.taskId, OWNER)?.status).toBe("working");
   });
 });
 
@@ -381,7 +436,7 @@ describe("Per-request opt-in gate, with tasksEnabled:true (spec MUST: a server M
     // The store actually holds a "working" task under this id (proves the tool call really started a task,
     // not just stamped fake-looking fields on a synchronous response).
     const store = __getTaskStoreForTest(server);
-    expect(store?.get(result["taskId"] as string)?.status).toBe("working");
+    expect(store?.get(result["taskId"] as string, OWNER)?.status).toBe("working");
     await tick(); // let the fixedSpecs compose settle so it doesn't dangle past the test
   });
 
@@ -455,7 +510,7 @@ describe("AttachOptions.tasksEnabled default-off kill switch (see AttachOptions.
 describe("SDK reachability of tasks/get and tasks/cancel (flipped from a -32601 tripwire on SDK 2.0.0 to a reachability pin on SDK >= 2.3 — see registerTaskMethods's doc comment in server.ts)", () => {
   it("tasks/get reaches kohaku's handler and returns the task snapshot", async () => {
     const server = buildAttached();
-    const { taskId } = __getTaskStoreForTest(server)!.create({ ttlMs: 60_000 });
+    const { taskId } = __getTaskStoreForTest(server)!.create({ owner: OWNER, ttlMs: 60_000 });
     const { status, json } = await sendRawModern(() => server, {
       jsonrpc: "2.0",
       id: 1,
@@ -471,7 +526,7 @@ describe("SDK reachability of tasks/get and tasks/cancel (flipped from a -32601 
 
   it("tasks/cancel reaches kohaku's handler, acks, and fires the task's abort signal", async () => {
     const server = buildAttached();
-    const { taskId, abort } = __getTaskStoreForTest(server)!.create({ ttlMs: 60_000 });
+    const { taskId, abort } = __getTaskStoreForTest(server)!.create({ owner: OWNER, ttlMs: 60_000 });
     const { status, json } = await sendRawModern(() => server, {
       jsonrpc: "2.0",
       id: 1,
@@ -498,7 +553,7 @@ describe("SDK reachability of tasks/get and tasks/cancel (flipped from a -32601 
 
   it("a request without the Mcp-Name header is rejected with -32020 (HeaderMismatch) before dispatch (SEP-2663's HTTP binding)", async () => {
     const server = buildAttached();
-    const { taskId } = __getTaskStoreForTest(server)!.create({ ttlMs: 60_000 });
+    const { taskId } = __getTaskStoreForTest(server)!.create({ owner: OWNER, ttlMs: 60_000 });
     for (const method of ["tasks/get", "tasks/cancel"]) {
       const { status, json } = await sendRawModern(
         () => server,
@@ -573,7 +628,7 @@ describe("cancellation wiring: a real tasks/cancel rides the composer's existing
     const result = json["result"] as Record<string, unknown>;
     expect(result["resultType"]).toBe("task");
     const taskId = result["taskId"] as string;
-    expect(__getTaskStoreForTest(server)?.get(taskId)?.status).toBe("working");
+    expect(__getTaskStoreForTest(server)?.get(taskId, OWNER)?.status).toBe("working");
 
     // Wait until the LLM call is actually in flight before cancelling (see pendingUntilAbortLlm's doc comment
     // in mcp.test.ts's sibling test — a pre-abort would never exercise the in-flight abort path).
@@ -587,7 +642,7 @@ describe("cancellation wiring: a real tasks/cancel rides the composer's existing
     expect(cancelled.json["error"]).toBeUndefined();
 
     await tick();
-    const finalTask = __getTaskStoreForTest(server)?.get(taskId);
+    const finalTask = __getTaskStoreForTest(server)?.get(taskId, OWNER);
     expect(finalTask?.status).toBe("cancelled");
 
     // And a client polling over the wire sees the same terminal state.
@@ -598,5 +653,171 @@ describe("cancellation wiring: a real tasks/cancel rides the composer's existing
       params: { taskId, _meta: taskExtensionEnvelope() },
     });
     expect(polled.json["result"]).toMatchObject({ taskId, status: "cancelled" });
+  });
+});
+
+describe("task ownership: a leaked task id alone must not read or cancel the task", () => {
+  async function rawTasks(server: McpServer, method: "tasks/get" | "tasks/cancel", taskId: string) {
+    return sendRawModern(() => server, {
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params: { taskId, _meta: taskExtensionEnvelope() },
+    });
+  }
+
+  it("another caller gets the unknown-task answer for get and cancel, indistinguishable from an unknown id", async () => {
+    const server = buildAttached();
+    const { json } = await sendRawModern(() => server, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "kohaku_compose",
+        arguments: { question: "Monthly revenue trend" },
+        _meta: taskExtensionEnvelope(),
+      },
+    });
+    const taskId = (json["result"] as Record<string, unknown>)["taskId"] as string;
+    let polled: Record<string, unknown> | undefined;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      polled = (await rawTasks(server, "tasks/get", taskId)).json["result"] as Record<string, unknown>;
+      if (polled["status"] !== "working") break;
+      await tick(2);
+    }
+    expect(polled?.["status"]).toBe("completed");
+
+    currentOwner = "owner-b";
+    for (const method of ["tasks/get", "tasks/cancel"] as const) {
+      const known = (await rawTasks(server, method, taskId)).json["error"] as {
+        code?: number;
+        message?: string;
+      };
+      const unknown = (await rawTasks(server, method, "no-such-task")).json["error"] as {
+        code?: number;
+        message?: string;
+      };
+      expect(known.code).toBe(-32602);
+      expect(known.code).toBe(unknown.code);
+      expect(known.message?.replace(taskId, "ID")).toBe(unknown.message?.replace("no-such-task", "ID"));
+    }
+
+    // The creator still sees it, and the foreign cancel did not change anything.
+    currentOwner = OWNER;
+    const again = (await rawTasks(server, "tasks/get", taskId)).json["result"] as Record<string, unknown>;
+    expect(again["status"]).toBe("completed");
+  });
+
+  it("a foreign tasks/cancel does not abort the task", async () => {
+    const server = buildAttached();
+    const { taskId, abort } = __getTaskStoreForTest(server)!.create({ owner: "owner-a", ttlMs: 60_000 });
+    currentOwner = "owner-b";
+    const res = await rawTasks(server, "tasks/cancel", taskId);
+    expect((res.json["error"] as { code?: number } | undefined)?.code).toBe(-32602);
+    expect(abort.signal.aborted).toBe(false);
+  });
+
+  it("a task is attributed to the rateLimitKey of its creating call", async () => {
+    const server = buildAttached();
+    currentOwner = "owner-c";
+    const { json } = await sendRawModern(() => server, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "kohaku_compose",
+        arguments: { question: "Monthly revenue trend" },
+        _meta: taskExtensionEnvelope(),
+      },
+    });
+    const taskId = (json["result"] as Record<string, unknown>)["taskId"] as string;
+    expect(__getTaskStoreForTest(server)!.get(taskId, "owner-c")).toBeDefined();
+    expect(__getTaskStoreForTest(server)!.get(taskId, "owner-a")).toBeUndefined();
+    await tick();
+  });
+
+  it("the echoed task id in the error message is capped", async () => {
+    const server = buildAttached();
+    const huge = "x".repeat(5_000);
+    for (const method of ["tasks/get", "tasks/cancel"] as const) {
+      const err = (await rawTasks(server, method, huge)).json["error"] as { code?: number; message?: string };
+      expect(err.code).toBe(-32602);
+      expect(err.message?.length).toBeLessThan(200);
+      expect(err.message).not.toContain("x".repeat(129));
+    }
+  });
+});
+
+describe("cancel edge cases over the wire", () => {
+  it("cancel after completion and a double cancel ack and leave the status", async () => {
+    const server = buildAttached();
+    const { json } = await sendRawModern(() => server, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "kohaku_compose",
+        arguments: { question: "Monthly revenue trend" },
+        _meta: taskExtensionEnvelope(),
+      },
+    });
+    const taskId = (json["result"] as Record<string, unknown>)["taskId"] as string;
+    const get = async () =>
+      (
+        await sendRawModern(() => server, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tasks/get",
+          params: { taskId, _meta: taskExtensionEnvelope() },
+        })
+      ).json["result"] as Record<string, unknown>;
+    let polled = await get();
+    for (let attempt = 0; attempt < 50 && polled["status"] === "working"; attempt++) {
+      await tick(2);
+      polled = await get();
+    }
+    expect(polled["status"]).toBe("completed");
+
+    for (let i = 0; i < 2; i++) {
+      const cancelled = await sendRawModern(() => server, {
+        jsonrpc: "2.0",
+        id: 3 + i,
+        method: "tasks/cancel",
+        params: { taskId, _meta: taskExtensionEnvelope() },
+      });
+      expect(cancelled.json["error"]).toBeUndefined();
+    }
+    expect((await get())["status"]).toBe("completed");
+  });
+
+  it("a double cancel of a working task acks both times and the task settles as cancelled", async () => {
+    let started: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const server = buildAttached(noFixedComposeCtx(pendingUntilAbortLlm(() => started())));
+    const { json } = await sendRawModern(() => server, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "kohaku_compose",
+        arguments: { question: "Monthly revenue trend" },
+        _meta: taskExtensionEnvelope(),
+      },
+    });
+    const taskId = (json["result"] as Record<string, unknown>)["taskId"] as string;
+    await startedPromise;
+    for (let i = 0; i < 2; i++) {
+      const res = await sendRawModern(() => server, {
+        jsonrpc: "2.0",
+        id: 2 + i,
+        method: "tasks/cancel",
+        params: { taskId, _meta: taskExtensionEnvelope() },
+      });
+      expect(res.json["error"]).toBeUndefined();
+    }
+    await tick();
+    expect(__getTaskStoreForTest(server)?.get(taskId, OWNER)?.status).toBe("cancelled");
   });
 });

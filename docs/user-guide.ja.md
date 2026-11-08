@@ -72,6 +72,8 @@ pnpm dev                 # API :8787 + Web :5173
 | **Ollama(キー不要・ローカル)** | `KOHAKU_LLM_PROVIDER=ollama` + `KOHAKU_LLM_MODEL=gemma4:e4b` 等(モデル未指定時の既定は `llama3.3`) |
 | llama.cpp / vLLM 等 | `KOHAKU_LLM_PROVIDER=llama` + `KOHAKU_LLM_BASE_URL=http://…/v1` + `KOHAKU_LLM_MODEL=…` |
 
+`KOHAKU_LLM_BASE_URL` は、どのプロバイダでもゲートウェイやプロキシを指すのに使えます。値の書き方はプロバイダごとに違い、TypeScript と Python で同じです。**Claude** と **Gemini** は API バージョンのパスを含まないベンダーの根を指定します(`https://gw.example`。末尾の `/v1` や `/v1beta` が付いていても取り除きます)。**OpenAI・Ollama・llama.cpp**(OpenAI 互換)は `/v1` まで含めたベースを指定します(`http://…/v1`)。未設定ならベンダー自身のエンドポイントを使います。Ollama 用に残した値は Claude・OpenAI・Gemini のリクエストも向け先を変えてしまうので、プロバイダを切り替えるときは外してください。
+
 `@kohaku-ui/llm` と一緒にプロバイダの SDK をインストールしてください: Claude → `@ai-sdk/anthropic`、OpenAI → `@ai-sdk/openai`、Gemini → `@ai-sdk/google`、Ollama / llama.cpp → `@ai-sdk/openai-compatible`(任意の peer dependency。使わないプロバイダの分は何もインストールされません)。
 
 > **Ollama の注意**: 非思考(non-reasoning)のインストラクトモデルを推奨します。思考モデル(qwen3.5 等)は推論で出力トークンを使い切り、UI 合成が遅い・空になることがあります。また llama.cpp 系は大きなスキーマの構造化出力が不安定なことがありますが、既定の `KOHAKU_LLM_STRUCTURED_MODE=auto` が自動でプロンプト JSON 方式にフォールバックします。
@@ -156,7 +158,7 @@ uv run python -m sales_api          # Python サンプル REST ホスト(:8790�
 
   修正は次の提案に反映されます: `createSchemaExtractor({ llm, timeoutMs, examples })` に `examples: schemaEditExamples(storage, { limit: 2 })`(`@kohaku-ui/lineage` 由来。sample-api は配線済み)を渡すと、レビュアーが直した直近の提案(最終 draft、置き換えられた提案、HTML の先頭部分)が「Reviewer-corrected examples」として抽出器のプロンプトに加わり、以降の提案がレビュアーの守らせている慣習に沿うようになります。provider は `SchemaExtractionInput.tenant` を読みます: `extract` を呼ぶときに候補のテナントを渡すと、そのテナントの修正だけが再利用され、渡さなければテナントを持たない記録だけが再利用されます(design.md #73)。provider は修正の窓を 1 回だけ読み、実際に使う artifact だけを個別に引き、テナントごとの結果を 5 秒間(`cacheTtlMs`、`0` で無効)再利用するので、レビュアーの修正がプロンプトに届くまでにその分の遅れが出ることがあります。この読み込みには独立した予算 `examplesTimeoutMs`(既定 `min(3000, timeoutMs / 4)` ms)があり、遅い読み込み元で失うのは提案そのものではなく例だけです。`extractorVersion` は `0.2` です。
 - **固定化(L1→L0)**: 頻出 L1 Intent の候補(利用回数・構造安定度)→ 「L0 に固定化」。
-- **承認**(Approvals): `"approve"` tier の統制 Action の承認者向け受信箱。Lineage の末尾から導出する(`action.approvalRequested` から後続の `action.approved` を差し引く。デモ 5)。**承認する**(Approve)で持参人トークン(`POST /approvals`)を発行し、コピーして要求者に渡す。`action.approve` と `lineage.read` が必要で、つまり `admin` か `approver` ロール。
+- **承認**(Approvals): `"approve"` tier の統制 Action の承認者向け受信箱。Lineage の末尾から導出する(`action.approvalRequested` から後続の `action.approved` を差し引く。デモ 5。トークン発行済みの行には、`action.approvalIssued` から「Issued by … — expires in …」を表示する)。**承認する**(Approve)で持参人トークン(`POST /approvals`)を発行し、コピーして要求者に渡す。`action.approve` と `lineage.read` が必要で、つまり `admin` か `approver` ロール。
 - 「データ更新を模擬(bump)」: dataVersion を進めてキャッシュ無効化を再現します。`POST /api/kohaku/admin/bump-data-version` は Admin の他の操作と同じ identity + governance RBAC 配下にあり(`admin.bumpDataVersion`、admin のみ)、`KOHAKU_AUTHZ=jwt` ではサーバーが `KOHAKU_DEMO_ADMIN_ROUTES=1` を設定しない限りルート自体が無効(§7)で、その場合ボタンの実行は 404 になり赤いエラーバナーが出ます。
 - 5 タブとも上部バーで選択中の**テナント**でスコープされます(切り替えると各一覧が再取得され、テナント別に分離されていることが見えます)。分析タブの集計も選択テナントのイベントのみが対象です。
 - ロールを `viewer` にすると、承認・削除系の操作に加えて**昇格候補のプレビューも 403** になります(データ read capability の発行を伴うため。閲覧は可能)。RBAC の一連の動きはデモ 7 を参照してください。

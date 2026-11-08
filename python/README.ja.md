@@ -133,6 +133,8 @@ python/
 │  │  ├─ data_binding/     # ← packages/data-binding(予約パラメータ分割)
 │  │  ├─ intents/          # ← packages/intents(Intent DSL)
 │  │  ├─ llm/              # ← packages/llm(OpenAI 互換アダプタ / FakeLlm)
+│  │  ├─ semantic_llm/     # ← packages/semantic-llm(既定の SemanticPort: create_llm_semantic_port +
+│  │  │                    #   IntentCatalog。TS のファイルごとに 1 モジュール。sales サンプルはこの上に構築)
 │  │  ├─ composer/         # ← packages/composer(L0/L1/L2・single-flight・修復ループ。TS と異なり
 │  │  │                    #   tier ladder・single-flight・結果組み立てを compose.py から別モジュール
 │  │  │                    #   に分割していない — 挙動は同一で、ファイル構成が粗いだけ)
@@ -496,6 +498,9 @@ canonical-JSON sha256 である。`packages/spec-core/src/action-params.ts` に�
 を呼ぶ前に参照する同じ形である。`kohaku.host_core.action_audit` の `ActionAuditRecorder` プロトコルは
 任意の `action.*` lineage イベントの記録先である(`action.invoked` / `action.denied` /
 `action.approvalRequested` / `action.approved`。fail-open — recorder の失敗が書き込みを止めることは無い)。
+`POST /approvals` が記録する `action.approvalIssued`(actor は承認者)は、任意の
+`ApprovalIssuedRecorder.approval_issued` フックで、`getattr` で探すため、これを持たない recorder は
+飛ばされる。
 
 ステートレスな HMAC `ApprovalPort` の参照実装(`HmacApprovalPort` / `create_hmac_approval_port` /
 `MemoryApprovalStore`。TS の `packages/authz-hmac` パッケージが出す `"kohaku-approval.v2."` prefix の
@@ -588,20 +593,23 @@ failed catalog/structure validation」という文言とは別物にし、この
   そのノードの `description` に退避する(`@ai-sdk/anthropic` の `sanitizeJsonSchema` と
   同じ変換であり、TS と Python の両アダプタは同じスキーマに対して同じ劣化のしかたをする)。
   返ってきたオブジェクトの検証は、退避前の元のスキーマに対して行われる。
-- **Python の `claude` アダプタは `temperature` を送らない**(`KOHAKU_LLM_TEMPERATURE` と
-  呼び出しごとの `temperature` は受け付けるが Anthropic へは転送しない。TS のアダプタは
-  `@ai-sdk/anthropic` 経由で今も送る)。`anthropic` SDK の `messages.create` にはこの
+- **`claude` アダプタは `temperature` を送らない**(`KOHAKU_LLM_TEMPERATURE` と
+  呼び出しごとの `temperature` は受け付けるが Anthropic へは転送しない。TS のアダプタも
+  送らなくなったので、両言語は一致している)。`anthropic` SDK の `messages.create` にはこの
   パラメータが無く、SDK 2.x が送る `anthropic-version: 2026-10-21` では `temperature` /
   `top_p` / `top_k` を含むリクエストを Messages API が 400 で拒否するため。kohaku の
   同一表示の保証は Spec キャッシュによるもので temperature 0 は補助にすぎず、旧モデルでの
   影響は小さい。
+- **`kohaku.semantic_llm` のカタログ doc は TS とバイト一致しない**: `render_catalog_doc` は
+  各 Intent の params JSON Schema を params DSL(`kohaku.intents.ObjectSchema`)から描画する
+  (TS は zod の `toJSONSchema`)。この doc は NL 正規化の LLM 呼び出しにしか使われず、キャッシュ
+  キーにも検証にも入らない。そのため言語間 golden が押さえるのは `build_normalize_system_prompt` /
+  `build_normalize_user_prompt`(純粋な文字列ビルダー)、`normalize_gui_action`、
+  `default_output_locale` で、`render_catalog_doc` は含まない。ほかに、`describe_shape` は
+  オプション省略時に(欠落ではなく)`None` を返すこと、`IntentCatalogLike` の任意メンバー
+  (`revision`、`validate_params`)は `getattr` で探ることが TS との違いである。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
-- **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`)は未移植**。TS 側
-  (`packages/host-mcp-apps/src/tasks.ts`)では、リクエストがオプトインし、かつ
-  `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と
-  intent ツール群がタスク対応になる。`host_mcp` は compose ファミリを常に同期実行し、
-  リクエストの `_meta` が何を求めていてもこの拡張を宣言しない。
 - **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
   `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
   フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
@@ -610,15 +618,9 @@ failed catalog/structure validation」という文言とは別物にし、この
   design.md #74 / #73。`review` ブロックは引き続き未反映)、TS 側の rubric 0.4(Python の
   `kohaku.evals.judge.l2_promotion_rubric` はまだバージョン "0.3" で `suggestion_fidelity`
   を欠く)、`CapabilityRevocationStore` と jti ベースの capability 失効、
-  `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`semantic-llm`、
+  `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、
   `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
-  (ただし `semantic-llm` 自体の `validateIntent` 挙動はこのギャップに取り残されていない:
-  同パッケージには Python 移植先が無いため、そのロジックは `examples/sales-api` の
-  `semantic_port.py` / `intents_catalog.py` に直接存在し、このサンプルは TS の
-  `createLlmSemanticPort` と同じ `validate_intent` / `IntentCatalog.validate_params` を
-  実装している — `kohaku.spec.ports.SupportsValidateIntent` と
-  `kohaku.host_core.intent.resolve_intent` を参照。)
 
 > 2026-07-18 更新(解消済みの旧差異): ①昇格のテナント別 reconcile 最小実装 → sales-api に
 > PromotedRegistry / 投影 / 起動時 reconcile を完全移植 ②compose ストリーミングの暫定 patch

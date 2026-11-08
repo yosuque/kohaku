@@ -139,9 +139,10 @@ class ActionAuditRecorder:
     """Implements kohaku.host_core.action_audit.ActionAuditRecorder (structural typing -- Protocol, no
     inheritance needed), backed by `lineage`'s `action.*` event family. Every event is recorded with actor
     kohaku.spec.LineageActor(kind="user", id=principal.id) -- the principal that made the invoke request,
-    whether or not that specific attempt was allowed, denied, or left pending (an approval decision
-    itself, once made, is out of scope for this recorder: action.approved records *that* a given grant
-    was consumed by this invoke, not the separate act of the approver having issued it).
+    whether or not that specific attempt was allowed, denied, or left pending (action.approved records
+    *that* a given grant was consumed by this invoke). The single exception is action.approvalIssued,
+    which records the separate act of an approver issuing the grant and is therefore recorded with the
+    **approver** as its actor, not the requester.
     """
 
     def __init__(self, lineage: Lineage, *, record_payload: bool = False) -> None:
@@ -235,6 +236,36 @@ class ActionAuditRecorder:
         if correlation_id is not None:
             event["correlationId"] = correlation_id
         await self._lineage.action_approved(
+            event,  # type: ignore[arg-type]
+            LineageActor(kind="user", id=principal.id),
+            tenant,
+        )
+
+    async def approval_issued(
+        self,
+        *,
+        action: str,
+        payload_hash: str,
+        requester_id: str,
+        approver_id: str,
+        ttl_seconds: int,
+        expires_at: str,
+        principal: Principal,
+        tenant: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        """POST /approvals minted an approval token (design.md #72). `principal` is the **approver**."""
+        event: dict[str, object] = {
+            "action": action,
+            "payloadHash": payload_hash,
+            "requesterId": requester_id,
+            "approverId": approver_id,
+            "ttlSeconds": ttl_seconds,
+            "expiresAt": expires_at,
+        }
+        if correlation_id is not None:
+            event["correlationId"] = correlation_id
+        await self._lineage.action_approval_issued(
             event,  # type: ignore[arg-type]
             LineageActor(kind="user", id=principal.id),
             tenant,

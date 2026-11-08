@@ -34,6 +34,7 @@ from .meta import (
 from .renderer import DEFAULT_RENDERER_PLACEHOLDER_HTML, load_default_renderer_html
 from .server import attach_kohaku_to_mcp_server
 from .snapshot import inject_snapshot
+from .tasks import TASKS_EXTENSION_ID, TaskStore, create_task_store
 from .types import (
     ActionEffects,
     AttachOptions,
@@ -51,6 +52,7 @@ __all__ = [
     "RESOURCE_MIME_TYPE",
     "REQUEST_ID_META_KEY",
     "RESOURCE_URI_META_KEY",
+    "TASKS_EXTENSION_ID",
     "UI_META_KEY",
     "VISIBILITY_META_KEY",
     "ActionEffects",
@@ -61,8 +63,10 @@ __all__ = [
     "McpErrorInfo",
     "McpFixationsApi",
     "McpHostDeps",
+    "TaskStore",
     "ToolVisibility",
     "attach_kohaku_to_mcp_server",
+    "create_task_store",
     "inject_snapshot",
     "intent_tools_from_catalog",
     "load_default_renderer_html",
