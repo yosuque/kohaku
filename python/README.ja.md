@@ -70,6 +70,58 @@ uv run python -m sales_api.mcp_http
 #   pnpm --filter @kohaku-ui-sample/mcp build:renderer
 ```
 
+## Coding agent で導入する
+
+既存の FastAPI プロジェクトのルートで、Claude Code・Codex・Cursor にそのまま貼ります。既存のアプリに kohaku の REST プロファイルをマウントし、プロトコルの適合性スイートで自分の結果を確かめます。送る前に `<...>` のプレースホルダーを置き換えてください。
+
+```text
+You are adding kohaku (https://github.com/yosuque/kohaku) to an existing FastAPI app. Work in
+small steps and run the project's own tests after each one.
+
+GOAL
+Mount the kohaku REST profile on the app's FastAPI instance, so the frontend can ask for
+UI Specs (GET/POST under /api/kohaku) over the app's EXISTING data access.
+
+INSTALL
+pip install "kohaku-ui[rest,llm]"      # imports as `kohaku`; add [claude] or [gemini] for those providers
+
+RULES
+1. Never put row data in a Spec: Specs carry query:// references, and rows reach the screen
+   only through DomainPort.invoke, with a capability the host issues.
+2. Every write is a DomainPort operation in the operation list, with a paramsSchema and a
+   tier ("auto" | "confirm" | "approve"). Never mutate inside a read operation.
+3. Tests never call a real LLM: use FakeLlm.
+4. Demo auth and dev mode are localhost-only. Before anyone else can reach the host, wire real
+   authentication and governance authorization (else every request runs as ANONYMOUS and the
+   governance routes are open). Never remove auth to make a check pass.
+5. Generate KOHAKU_CAPABILITY_SECRET with openssl rand -base64 32; keep it in the environment,
+   never commit it, never hard-code a fallback.
+
+STEPS
+1. DomainPort (kohaku.spec): list_operations() and invoke(op, args, ctx) wrap EXISTING data access.
+2. The Python library has no one-call facade, so write the other Ports by hand, following
+   https://github.com/yosuque/kohaku/tree/main/python/examples/sales-api/src/sales_api/ :
+   authz_port.py (HmacAuthzPort: fail when the secret is unset, do not copy its dev
+   fallback), semantic_port.py (SemanticPort: normalize, resolve_query), intents_catalog.py
+   (define_intent from kohaku.intents), fixed_specs.py (L0 Specs: no model, no key).
+   Storage: kohaku.storage.FileStoragePort.
+3. Compose context: ComposeContext(catalog=resolve_catalog(core_catalog()), semantic=...,
+   storage=..., llm=create_llm_from_env()); core_catalog/resolve_catalog are in
+   kohaku.registry, ComposeContext in kohaku.composer, create_llm_from_env in kohaku.llm.
+4. Mount: attach_kohaku_routes(app, KohakuHostDeps(compose=..., domain=..., authz=...,
+   query_source="<source>", auth=<resolve the principal from the app's own identity>,
+   authorize_governance=create_governance_policy(...)), "/api/kohaku") with those names
+   from kohaku.host_rest. query_source must equal the source of every Intent. Leave existing
+   routes untouched; run with the app's usual uvicorn command.
+
+DONE WHEN
+- npx @kohaku-ui/cli conformance --rest http://localhost:<port>/api/kohaku
+  --intent '{"canonical":"<an L0 Intent of yours>","params":{}}' reports CONFORMANT (the CLI
+  sends no credentials: use a dev instance whose auth resolves a fixed dev principal);
+- POST /api/kohaku/compose with an Intent returns a Spec that holds no row values;
+- the project's tests (pytest), mypy and ruff pass.
+```
+
 ## 構成
 
 ```
@@ -519,14 +571,6 @@ failed catalog/structure validation」という文言とは別物にし、この
   影響は小さい。
 - 内部 API(ワイヤに出ない関数・メソッド)は Python 慣習の snake_case。ワイヤ形状
   (JSON キー・エンドポイント・_meta キー)は TS と完全一致。
-- **`ComponentDefinition.deprecated` に `migrateProps` 相当が無い**(design.md #65):
-  TS の `migrateProps(props)` は `fallback` の隣に付く関数であるため
-  `core-catalog.json` へは決して export されず、`fallback.mapProps` のように
-  手で移植する先の Python 側フィールドも存在しない。そのため
-  `host_core.catalog_migration` の `plan_catalog_migration` は、Python 側では
-  deprecated なノードの `type`/`version` のみを書き換える。置き換え先のスキーマに
-  合わせて props の形を変える必要がある書き換えは(TS で `migrateProps` を宣言しなかった
-  カタログと同じ結果として)`steps` ではなく `blocked` に入る。
 - **MCP Tasks 拡張(`io.modelcontextprotocol/tasks`)は未移植**。TS 側
   (`packages/host-mcp-apps/src/tasks.ts`)では、リクエストがオプトインし、かつ
   `AttachOptions.tasksEnabled`(既定オフ)もオンのときに限り、`kohaku_compose` と
