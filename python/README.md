@@ -11,7 +11,7 @@ wire-compatible with the TS implementation — because canonical JSON is byte-id
 intent.hash / specHash / cache keys / catalogFingerprint match across languages.
 
 **conformance**: the TS-side CLI (`node cli/bin/kohaku.js conformance --rest`) reports
-`MUST: 19/19 passed → CONFORMANT` against this implementation, and CI's `conformance-python`
+`MUST: 19/19 passed → CONFORMANT` against this implementation, and CI's `integration`
 job runs it on every commit. The 19 are
 the black-box-verifiable MUSTs of the 37 in the conformance manifest, and they are not all
 checks of the Python host:
@@ -302,7 +302,7 @@ backend with the TS sample's variables: `KOHAKU_STORAGE=file|memory|redis|postgr
 (`kohaku/tests/storage/_contract.py`, the mirror of `@kohaku-ui/port-contracts`' `describeStoragePortContract`) runs
 against memory / file / redis / postgres; the Redis / Postgres cases resolve their backend from
 `KOHAKU_TEST_REDIS_URL` / `KOHAKU_TEST_POSTGRES_URL`, else a throwaway testcontainers container, else skip
-(`KOHAKU_ADAPTER_TESTS=require` forbids the skip, as in CI's `adapters` job; `=skip` forces it).
+(`KOHAKU_ADAPTER_TESTS=require` forbids the skip, as in CI's `integration` job; `=skip` forces it).
 
 **`kohaku explain` / DevTools (design.md #54/#55)**: `ComposeTrace.cacheKeyParts` (the `cache_key()`
 call's own components, matching TS byte-for-byte) and the same correlation id described above now also reach
@@ -327,7 +327,7 @@ work identically against a Python-hosted REST host: both are plain REST clients 
   notation, numeric-ascending priority for array-index keys, UTF-16 code-unit order
   sorting, and even the escaping of lone surrogates). The implementation is
   `kohaku/src/kohaku/spec/canonical_json.py`.
-- **conformance**: CI's `conformance-python` job starts the Python host and runs the
+- **conformance**: CI's `integration` job starts the Python host (on each of file / redis / postgres) and runs the
   TS-side CLI's black-box inspection against it.
 - **lineage forward-paging cursor** (design.md #53): `kohaku.spec.lineage_page`'s
   `encode_seq_cursor` / `decode_seq_cursor` produce and accept the same opaque

@@ -45,8 +45,9 @@ jobs:
           mkdir -p apps/docs-site/dist/playground
           cp -r apps/playground/dist/. apps/docs-site/dist/playground/
       # Replays whatever fixtures actually ship with this build against a fresh host (no real LLM) — the
-      # same check `ci.yml`'s non-blocking `playground-drift` job runs, but blocking here: a bad fixture is
-      # something worth catching before it goes out under a real public URL, not just noting.
+      # only place it runs in CI: ci.yml leaves it out until a fixture has been recorded (it would check
+      # nothing), and here it is blocking — a bad fixture is worth catching before it goes out under a real
+      # public URL.
       - run: pnpm vitest run --project playground-drift
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
