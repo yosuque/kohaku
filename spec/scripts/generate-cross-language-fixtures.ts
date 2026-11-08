@@ -11,7 +11,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJudge, exportDistillationDataset, l2PromotionRubric } from "@kohaku-ui/evals";
+import {
+  createJudge,
+  createSchemaExtractor,
+  exportDistillationDataset,
+  l2PromotionRubric,
+} from "@kohaku-ui/evals";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import {
   type ActionParamsSchema,
@@ -564,6 +569,97 @@ async function main(): Promise<void> {
     });
   }
 
+  // Pins the schema extractor's system + user prompt (design.md #73), the same FakeLlm-recording way as
+  // judgePrompts: the data-refs / allowlist / lint / catalog / examples sections and the system prompt, byte for
+  // byte. Deliberately limited to HTML with NO script syntax error: the TS collectL2Issues also compiles the
+  // script with `new Function` (L2_SCRIPT_SYNTAX), which Python has no JS runtime to mirror, so a syntax-error
+  // fixture would diverge by design. The lexical lint rules (unknown API, missing ready) are the same in both.
+  const extractorPromptCases: { name: string; input: Record<string, unknown>; examples: unknown[] }[] = [
+    {
+      name: "plain",
+      input: {
+        html: "<!DOCTYPE html><html><body><div id=hm></div><script>window.kohaku.fetchData('query://sales/trend?fy=2026&granularity=month&metric=revenue').then(function(d){window.kohaku.emit('cellSelected',{});window.kohaku.ready();});</script></body></html>",
+        request: "Sales as a calendar heatmap",
+        namespace: "sales",
+        queryPaths: ["trend", "summary", "kpi"],
+        catalogSummary: "- sales.trendChart (core component)\n- sales.trend (core intent)",
+      },
+      examples: [],
+    },
+    {
+      name: "lint-issues-and-examples",
+      input: {
+        html: "<html><body><script>window.kohaku.fetchAll('query://sales/kpi'); /* ``` */</script></body></html>",
+        request: "r",
+        namespace: "sales",
+      },
+      examples: [
+        {
+          htmlExcerpt: "<div>dial</div>",
+          suggestion: {
+            componentType: "sales.gauge",
+            version: "1.0.0",
+            intentName: "sales.gauge",
+            description: "gauge",
+          },
+          final: {
+            componentType: "sales.gaugeDial",
+            version: "1.0.0",
+            intentName: "sales.gauge_dial",
+            description: "Show attainment as a dial",
+            paramsJsonSchema: { type: "object", properties: { target: { type: "number", default: 1.5 } } },
+            queryTemplate: { path: "kpi", paramMap: { target: "t" } },
+          },
+        },
+        {
+          final: {
+            componentType: "sales.second",
+            version: "1.0.0",
+            intentName: "sales.second",
+            description: "d",
+          },
+        },
+      ],
+    },
+  ];
+  const extractorPrompts: {
+    name: string;
+    input: Record<string, unknown>;
+    examples: unknown[];
+    system: string;
+    prompt: string;
+    extractorId: string;
+    extractorVersion: string;
+  }[] = [];
+  for (const c of extractorPromptCases) {
+    const llm = new FakeLlm({
+      objects: [
+        {
+          componentType: "sales.calendarHeatmap",
+          intentName: "sales.calendar_heatmap",
+          description: "d",
+          paramsJsonSchema: { type: "object", properties: {} },
+          events: [],
+          confidence: 0.5,
+        },
+      ],
+    });
+    const suggestion = await createSchemaExtractor({
+      llm,
+      examples: async () => c.examples as never,
+    }).extract(c.input as never);
+    const call = llm.calls[0]!;
+    extractorPrompts.push({
+      name: c.name,
+      input: c.input,
+      examples: c.examples,
+      system: call.system!,
+      prompt: call.prompt,
+      extractorId: suggestion.extractorId,
+      extractorVersion: suggestion.extractorVersion,
+    });
+  }
+
   // Pins byte compatibility of the distillation-dataset JSONL export (@kohaku-ui/evals's
   // exportDistillationDataset / kohaku.evals's export_distillation_dataset). Reuses the same example
   // Spec + its already-computed structureHash as a single human-approved FixationRecord, so a language
@@ -787,6 +883,7 @@ async function main(): Promise<void> {
         fallback: fallbackCases,
         promptFragments,
         judgePrompts,
+        extractorPrompts,
       },
       null,
       2,

@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJudge, exportDistillationDataset, l2PromotionRubric } from "@kohaku-ui/evals";
+import {
+  createJudge,
+  createSchemaExtractor,
+  exportDistillationDataset,
+  l2PromotionRubric,
+} from "@kohaku-ui/evals";
 import { FakeLlm } from "@kohaku-ui/llm/fake";
 import {
   type ActionParamIssue,
@@ -93,6 +98,15 @@ interface Fixture {
     rubricId: string;
     rubricVersion: string;
     rubricVariant?: string;
+  }[];
+  extractorPrompts: {
+    name: string;
+    input: Record<string, unknown>;
+    examples: unknown[];
+    system: string;
+    prompt: string;
+    extractorId: string;
+    extractorVersion: string;
   }[];
 }
 
@@ -247,6 +261,35 @@ describe("cross-language golden (prompt fragments)", () => {
       expect(verdict.rubricId, c.name).toBe(c.rubricId);
       expect(verdict.rubricVersion, c.name).toBe(c.rubricVersion);
       expect(verdict.rubricVariant, c.name).toBe(c.rubricVariant);
+    }
+  });
+});
+
+describe("cross-language golden (schema extractor prompt, design.md #73)", () => {
+  it("the extractor's system + user prompt (with and without reviewer-corrected examples) reproduces the fixture", async () => {
+    expect(fixture.extractorPrompts.length).toBeGreaterThan(1);
+    for (const c of fixture.extractorPrompts) {
+      const llm = new FakeLlm({
+        objects: [
+          {
+            componentType: "sales.calendarHeatmap",
+            intentName: "sales.calendar_heatmap",
+            description: "d",
+            paramsJsonSchema: { type: "object", properties: {} },
+            events: [],
+            confidence: 0.5,
+          },
+        ],
+      });
+      const suggestion = await createSchemaExtractor({
+        llm,
+        examples: async () => c.examples as never,
+      }).extract(c.input as never);
+      const call = llm.calls[0]!;
+      expect(call.system, c.name).toBe(c.system);
+      expect(call.prompt, c.name).toBe(c.prompt);
+      expect(suggestion.extractorId, c.name).toBe(c.extractorId);
+      expect(suggestion.extractorVersion, c.name).toBe(c.extractorVersion);
     }
   });
 });

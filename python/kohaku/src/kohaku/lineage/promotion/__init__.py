@@ -28,6 +28,7 @@ from .machine import (
 )
 from .service import (
     DEFAULT_PROMOTION_POLICY,
+    DEFAULT_SUGGEST_CONCURRENCY,
     ArtifactNotFoundError,
     JudgeContext,
     PromotionCandidate,
@@ -41,18 +42,22 @@ from .service import (
     PublishContext,
     ReconcileSummary,
     SuggestContext,
+    SuggestSchema,
     UnpublishContext,
     ValidatePublishContext,
     create_promotions,
 )
-from .suggestion import DRAFT_DIFF_FIELDS, DraftDiffField, diff_draft
+from .suggestion import DRAFT_DIFF_FIELDS, DraftDiff, DraftDiffField, DraftFieldChange, diff_draft
 
 __all__ = [
     "DEFAULT_PROMOTION_POLICY",
+    "DEFAULT_SUGGEST_CONCURRENCY",
     "DRAFT_DIFF_FIELDS",
     "ArtifactNotFoundError",
     "ComponentDraft",
+    "DraftDiff",
     "DraftDiffField",
+    "DraftFieldChange",
     "JudgeContext",
     "JudgeResult",
     "JudgeStart",
@@ -81,6 +86,7 @@ __all__ = [
     "SchemaEditExamplesProvider",
     "SchemaPropose",
     "SuggestContext",
+    "SuggestSchema",
     "TransitionError",
     "Unpublish",
     "UnpublishContext",

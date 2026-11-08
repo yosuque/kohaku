@@ -12,7 +12,7 @@ on load.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 from kohaku.spec import canonical_stringify
 
@@ -37,9 +37,24 @@ DRAFT_DIFF_FIELDS: tuple[DraftDiffField, ...] = (
 mining reads later, so it is not the insertion order of either input)."""
 
 
-def _field_key(value: Any) -> str:
-    """Canonical JSON of a draft field; an absent optional field compares as the empty string."""
-    return "" if value is None else canonical_stringify(value)
+class DraftFieldChange(TypedDict):
+    """One changed field. `suggested` / `final` are omitted when that side has no such key (TS's `undefined`);
+    an explicit JSON `null` is a value and is kept."""
+
+    field: DraftDiffField
+    suggested: NotRequired[Any]
+    final: NotRequired[Any]
+
+
+class DraftDiff(TypedDict):
+    changed: list[DraftFieldChange]
+    unchanged: list[DraftDiffField]
+
+
+def _field_key(fields: Mapping[str, Any], field: str) -> str:
+    """Canonical JSON of a draft field. Only an *absent* key compares as the empty string (TS's `undefined`);
+    an explicit JSON `null` is a value and compares as `"null"`, so absent and `null` are different."""
+    return canonical_stringify(fields[field]) if field in fields else ""
 
 
 def _draft_fields(draft: Any) -> Mapping[str, Any]:
@@ -58,7 +73,7 @@ def _draft_fields(draft: Any) -> Mapping[str, Any]:
     raise TypeError(f"a draft must be a mapping or expose to_wire(), got {type(draft).__name__}")
 
 
-def diff_draft(suggested: Any, final: Any) -> dict[str, Any]:
+def diff_draft(suggested: Any, final: Any) -> DraftDiff:
     """Field-level diff between the extractor's suggested draft and the draft the reviewer finally submitted.
 
     Pure. Object fields (paramsJsonSchema / queryTemplate) are compared by canonical JSON, so a reviewer who only
@@ -67,21 +82,25 @@ def diff_draft(suggested: Any, final: Any) -> dict[str, Any]:
     """
     suggested_fields = _draft_fields(suggested)
     final_fields = _draft_fields(final)
-    changed: list[dict[str, Any]] = []
-    unchanged: list[str] = []
+    changed: list[DraftFieldChange] = []
+    unchanged: list[DraftDiffField] = []
     for field in DRAFT_DIFF_FIELDS:
-        before = suggested_fields.get(field)
-        after = final_fields.get(field)
-        if _field_key(before) == _field_key(after):
+        if _field_key(suggested_fields, field) == _field_key(final_fields, field):
             unchanged.append(field)
         else:
-            change: dict[str, Any] = {"field": field}
-            if before is not None:
-                change["suggested"] = before
-            if after is not None:
-                change["final"] = after
+            change: DraftFieldChange = {"field": field}
+            if field in suggested_fields:
+                change["suggested"] = suggested_fields[field]
+            if field in final_fields:
+                change["final"] = final_fields[field]
             changed.append(change)
     return {"changed": changed, "unchanged": unchanged}
 
 
-__all__ = ["DRAFT_DIFF_FIELDS", "DraftDiffField", "diff_draft"]
+__all__ = [
+    "DRAFT_DIFF_FIELDS",
+    "DraftDiff",
+    "DraftDiffField",
+    "DraftFieldChange",
+    "diff_draft",
+]

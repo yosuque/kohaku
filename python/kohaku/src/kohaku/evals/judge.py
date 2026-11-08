@@ -15,7 +15,6 @@ languages). The judging schema is a pydantic model (passing it as a SchemaInput 
 from __future__ import annotations
 
 import dataclasses
-import json
 import math
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -23,8 +22,9 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, Field
 
 from kohaku.llm import GenerateObjectRequest, LlmPort
-from kohaku.spec import UISpec, js_string
+from kohaku.spec import UISpec
 
+from .js_json import json_stringify, json_stringify_pretty
 from .prompt_guard import untrusted_block
 
 # --- Rubric definitions ---
@@ -604,7 +604,7 @@ class _JudgeImpl:
         if input.draft is not None:
             parts.append(
                 "## Schema being registered (verify this against the HTML for schema fidelity)\n"
-                + untrusted_block("DRAFT", _json_stringify_pretty(_defined(input.draft)), "json")
+                + untrusted_block("DRAFT", json_stringify_pretty(_defined(input.draft)), "json")
             )
         if input.suggestion is not None:
             qualifier = (
@@ -615,7 +615,7 @@ class _JudgeImpl:
             parts.append(
                 f"## Proposed schema (machine-extracted{qualifier})\n"
                 + untrusted_block(
-                    "SUGGESTION", _json_stringify_pretty(_defined(input.suggestion)), "json"
+                    "SUGGESTION", json_stringify_pretty(_defined(input.suggestion)), "json"
                 )
             )
         parts.append(f"## HTML under review\n{untrusted_block('HTML', input.html[:12000], 'html')}")
@@ -645,7 +645,7 @@ class _JudgeImpl:
             columns_block.append(f"## Data column metadata\n{lines}")
         parts = [
             f"## Intent\ncanonical={input.intent.canonical}\n"
-            f"params={_json_stringify(input.intent.params if input.intent.params is not None else {})}",
+            f"params={json_stringify(input.intent.params if input.intent.params is not None else {})}",
             *columns_block,
         ]
         if input.catalog_summary is not None:
@@ -747,84 +747,6 @@ def _num(x: float) -> str:
     return repr(x)
 
 
-def _json_stringify(value: object) -> str:
-    """Equivalent to JS's JSON.stringify (preserves key order, no whitespace, passes non-ASCII through).
-
-    Unlike canonical_stringify, keys are not sorted (JSON.stringify's insertion order is kept). Only numbers are
-    delegated to the spec layer's js_string (= ES Number::toString) rather than json.dumps: json.dumps outputs an
-    integer-valued float as "1.0", whereas JS's JSON.stringify outputs "1" (String(1.0) === "1"), so a mismatch in
-    formatting would shift FixtureLlm's sha256 key across languages (this function's output goes into the scoring
-    prompt, and the prompt is used directly as key material). Non-number formatting (string escaping / separators)
-    matches between json.dumps and JSON.stringify, so that part is delegated to json.dumps.
-    """
-    out: list[str] = []
-    _write_js_json(value, out)
-    return "".join(out)
-
-
-def _json_stringify_pretty(value: object, indent: int = 2) -> str:
-    """Equivalent to JS's `JSON.stringify(value, null, indent)` (2-space indent by default; `key: value`; empty
-    containers stay `[]` / `{}`). Same number formatting and key-order rules as `_json_stringify`."""
-    out: list[str] = []
-    _write_js_json(value, out, " " * indent, 0)
-    return "".join(out)
-
-
-def _write_js_json(
-    value: object, out: list[str], indent: str | None = None, level: int = 0
-) -> None:
-    """Append JSON.stringify-equivalent tokens to out (numbers in ES notation, everything else via json.dumps).
-
-    `indent` None is the compact form; otherwise the pretty form of `JSON.stringify(value, null, indent)` at
-    nesting `level`.
-    """
-    if value is None or isinstance(value, bool):
-        out.append("true" if value is True else "false" if value is False else "null")
-    elif isinstance(value, (int, float)):
-        # JSON.stringify(NaN/Infinity) === "null". Finite values are delegated to ES Number::toString.
-        if isinstance(value, float) and not math.isfinite(value):
-            out.append("null")
-        else:
-            out.append(js_string(value))
-    elif isinstance(value, str):
-        out.append(json.dumps(value, ensure_ascii=False))
-    elif isinstance(value, (list, tuple)):
-        if indent is not None and len(value) == 0:
-            out.append("[]")
-            return
-        out.append("[")
-        for i, item in enumerate(value):
-            if i > 0:
-                out.append(",")
-            if indent is not None:
-                out.append("\n" + indent * (level + 1))
-            _write_js_json(item, out, indent, level + 1)
-        if indent is not None:
-            out.append("\n" + indent * level)
-        out.append("]")
-    elif isinstance(value, dict):
-        if indent is not None and len(value) == 0:
-            out.append("{}")
-            return
-        out.append("{")
-        first = True
-        for k, v in value.items():
-            if not first:
-                out.append(",")
-            first = False
-            if indent is not None:
-                out.append("\n" + indent * (level + 1))
-            out.append(json.dumps(str(k), ensure_ascii=False))
-            out.append(": " if indent is not None else ":")
-            _write_js_json(v, out, indent, level + 1)
-        if indent is not None:
-            out.append("\n" + indent * level)
-        out.append("}")
-    else:
-        # Delegate unexpected types to json.dumps to surface them early (TypeError).
-        out.append(json.dumps(value, separators=(",", ":"), ensure_ascii=False))
-
-
 def _round_weight(weight: float) -> float:
     """Rounds a computed weight to 4 decimal places, half-up (TS's `Math.round(w * 10_000) / 10_000`).
 
@@ -885,7 +807,7 @@ def _summarize_spec(spec: UISpec) -> str:
     for c in spec.components:
         parts = [f"{c.id}: {c.type}"]
         if c.props:
-            parts.append(f"props={_json_stringify(c.props)}")
+            parts.append(f"props={json_stringify(c.props)}")
         if c.data is not None and c.data.ref is not None:
             parts.append(f"data={c.data.ref}")
         comps.append(f"- {' '.join(parts)}")

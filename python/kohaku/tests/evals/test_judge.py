@@ -350,14 +350,14 @@ class TestJsonStringifyEsNumbers:
     """D3b: _json_stringify formats numbers with ES Number::toString (matching JS's JSON.stringify)."""
 
     def test_integer_valued_float_has_no_trailing_zero(self) -> None:
-        from kohaku.evals.judge import _json_stringify
+        from kohaku.evals.js_json import json_stringify
 
         # json.dumps outputs "1.0"/"2026.0" but JS outputs "1"/"2026". Decimals pass through, and key order is kept even for exponents.
-        assert _json_stringify({"a": 1.0, "b": 0.3, "c": [2.0, 3.5], "d": 2026.0}) == (
+        assert json_stringify({"a": 1.0, "b": 0.3, "c": [2.0, 3.5], "d": 2026.0}) == (
             '{"a":1,"b":0.3,"c":[2,3.5],"d":2026}'
         )
         # bool / None / integers are as before.
-        assert _json_stringify({"t": True, "n": None, "i": 3}) == '{"t":true,"n":null,"i":3}'
+        assert json_stringify({"t": True, "n": None, "i": 3}) == '{"t":true,"n":null,"i":3}'
 
     def test_judge_spec_prompt_formats_float_params_like_js(self, l1_spec: UISpec) -> None:
         """params containing an integer-valued float become "2026" (= JS) in the scoring prompt (the premise of FixtureLlm key matching)."""

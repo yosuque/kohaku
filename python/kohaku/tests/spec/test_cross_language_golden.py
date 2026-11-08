@@ -440,3 +440,55 @@ def test_judge_prompts_reproduce_the_fixture(cross_language_fixture: dict[str, A
         assert verdict.rubric_id == case["rubricId"], case["name"]
         assert verdict.rubric_version == case["rubricVersion"], case["name"]
         assert verdict.rubric_variant == case["rubricVariant"], case["name"]
+
+
+# --- schema extractor prompt (design.md #73) ---
+
+
+def test_extractor_prompts_reproduce_the_fixture(cross_language_fixture: dict[str, Any]) -> None:
+    """The schema extractor's system + user prompt, byte for byte, with and without reviewer-corrected examples.
+
+    The fixture HTML has no script syntax error on purpose: TS's `collect_l2_issues` also compiles the script
+    (`L2_SCRIPT_SYNTAX`), which Python has no JS runtime to mirror, so such an input would differ by design. The
+    lexical lint rules (unknown API, missing ready()) are the same in both languages.
+    """
+    from kohaku.evals import SchemaExtractionInput, create_schema_extractor
+    from kohaku.llm import FakeLlm
+
+    cases = cross_language_fixture["extractorPrompts"]
+    assert len(cases) > 1
+    for case in cases:
+        raw = case["input"]
+        llm = FakeLlm(
+            objects=[
+                {
+                    "componentType": "sales.calendarHeatmap",
+                    "intentName": "sales.calendar_heatmap",
+                    "description": "d",
+                    "paramsJsonSchema": {"type": "object", "properties": {}},
+                    "events": [],
+                    "confidence": 0.5,
+                }
+            ]
+        )
+
+        async def examples(_input: Any, signal: Any, _case: dict[str, Any] = case) -> Any:
+            return _case["examples"]
+
+        extractor = create_schema_extractor(llm=llm, examples=examples)
+        suggestion = asyncio.run(
+            extractor.extract(
+                SchemaExtractionInput(
+                    html=raw["html"],
+                    request=raw["request"],
+                    namespace=raw["namespace"],
+                    query_paths=raw.get("queryPaths"),
+                    catalog_summary=raw.get("catalogSummary"),
+                )
+            )
+        )
+        call = llm.calls[0]
+        assert call.system == case["system"], case["name"]
+        assert call.prompt == case["prompt"], case["name"]
+        assert suggestion.extractorId == case["extractorId"], case["name"]
+        assert suggestion.extractorVersion == case["extractorVersion"], case["name"]

@@ -18,8 +18,8 @@ Differences from TS:
 - HTML is cut by Python code points, TS cuts by UTF-16 code units (the judge has the same pre-existing difference).
 - The prompt's "Bridge-contract lint issues" block is built by the Python `collect_l2_issues`, which does not run
   TS's `new Function` script-syntax check (Python has no JS runtime): for HTML with a script syntax error the two
-  languages' prompts differ in that one block. The extractor prompt is therefore not pinned by the cross-language
-  golden (only the judge prompt is).
+  languages' prompts differ in that one block. The extractor's system + user prompt is otherwise pinned
+  byte for byte by the `extractorPrompts` cross-language golden, whose fixtures deliberately avoid such HTML.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from kohaku.llm import AbortSignal, GenerateObjectRequest, LlmPort
 from kohaku.spec import SchemaSuggestion, SuggestedDraft, SuggestedEvent
 from kohaku.spec.models import CANONICAL_NAME_PATTERN
 
-from .judge import _json_stringify
+from .js_json import json_stringify
 from .prompt_guard import untrusted_block
 
 SCHEMA_EXTRACTOR_ID = "l2-schema-extraction"
@@ -174,7 +174,7 @@ def _draft_wire(draft: Any) -> Any:
 
 def _draft_json(draft: Any) -> str:
     """`JSON.stringify` cut to the draft budget (a cut draft is no longer valid JSON; the block is data, not parsed)."""
-    return _json_stringify(_draft_wire(draft))[:_EXAMPLE_DRAFT_BUDGET]
+    return json_stringify(_draft_wire(draft))[:_EXAMPLE_DRAFT_BUDGET]
 
 
 def _examples_section(examples: Sequence[Any]) -> list[str]:
