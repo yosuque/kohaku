@@ -149,7 +149,7 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation);
 │  │  │                    #   evidence.py = the whole Compliance Evidence Pack module
 │  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
-│  │  ├─ evals/            # ← packages/evals (judge / golden / FixtureLlm / distillation dataset export)
+│  │  ├─ evals/            # ← packages/evals (judge / schema extractor / golden / FixtureLlm / distillation dataset export)
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
 │  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
 │  │  │                    #   (← intent.ts) + allowed_actions.py (← allowed-actions.ts) +
@@ -409,7 +409,7 @@ used to decide whether either is worth turning on for a given model/provider.
 ## L1 filters / `l1Filters` (symmetric with TS)
 
 `ComposePolicy(l1Filters=True)` (default `False`) turns on deterministic filter injection into
-L1-generated Specs, mirroring TS's `ComposePolicy.l1Filters` (design.md #77):
+L1-generated Specs, mirroring TS's `ComposePolicy.l1Filters` (design.md #78):
 
 - `kohaku.intents`: `IntentDef.filters(params, locale=None)` derives `FilterDescriptor`s
   (`kohaku.spec`) from the Intent's `facets` + `queries[].paramMap`.
@@ -575,7 +575,7 @@ guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full w
 
 `kohaku.domain_mcp` mirrors `@kohaku-ui/domain-mcp`: an existing MCP server becomes the host's `DomainPort`. A tool
 with `annotations.read_only_hint is True` is a `query://` op (the result becomes `TabularData`); every other tool is
-an Action with `tier="approve"` (`tier_for` overrides) whose `paramsSchema` is its `inputSchema` projected onto the
+an Action with `tier="approve"` (`tier_for` overrides; `tier_for(tool) == "auto"` on a write tool leaves it reachable through a `query://` read ref without the `paramsSchema` check, because the host refuses only `confirm` / `approve` operations on the read path, SPEC ACT-RD-001) whose `paramsSchema` is its `inputSchema` projected onto the
 closed `ActionParamsSchema` subset (or absent when it uses an `anyOf` other than the nullable `Optional[X]` form, `oneOf`, `$ref` or `additionalProperties: true`).
 It lives under the existing `mcp` extra (`pip install 'kohaku-ui[mcp]'`) and imports nothing from `mcp` itself: the
 official SDK's `Client` is passed in (any object with `list_tools(cursor=...)` / `call_tool(name, arguments)` works).
@@ -681,15 +681,9 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   snake_case convention. The wire shapes (JSON keys, endpoints, _meta keys) match TS
   exactly.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
-  the lineage events `component.schemaSuggested` / `component.schemaEdited` (including the
-  `acknowledged` payload field) and their rubric variants; the analytics `review` block and
-  the `schemaSuggested` / `schemaEdited` counters (the analytics `usage` rows, `l2ByIntent` and
-  `schemaEditsByComponent`, by contrast, are mirrored: `summarize_usage` and `summarize_lineage`,
-  design.md #74 / #73; the `review` block stays unported); rubric 0.4 on the TS side (Python's
-  `kohaku.evals.judge.l2_promotion_rubric` is still at version "0.3", missing
-  `suggestion_fidelity`); `CapabilityRevocationStore` and jti-based capability revocation;
+  `CapabilityRevocationStore` and jti-based capability revocation;
   the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters;
-  `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised
+  and `admin-react`. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
 
 > Updated 2026-07-18 (previously-listed differences now resolved): ① minimal per-tenant

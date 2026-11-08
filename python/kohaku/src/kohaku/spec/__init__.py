@@ -176,6 +176,7 @@ from .sandbox_dom import (
     to_kebab_case,
 )
 from .spec_text import spec_to_text
+from .suggestion import SchemaSuggestion, SuggestedDraft, SuggestedEvent
 from .tabular import ColumnType, DataShape, DataShapeColumn, TabularColumn, TabularData
 from .validate import (
     MAX_BIND_VARIANTS,
@@ -288,6 +289,7 @@ __all__ = [
     "SafeParsePatchResult",
     "SafeParseResult",
     "SandboxArtifactRef",
+    "SchemaSuggestion",
     "Scope",
     "SemanticInput",
     "SemanticPort",
@@ -300,6 +302,8 @@ __all__ = [
     "SpecParseOk",
     "SpecPatch",
     "StoragePort",
+    "SuggestedDraft",
+    "SuggestedEvent",
     "SupportsBatchPromotionStates",
     "SupportsDescribeFilters",
     "SupportsValidateIntent",

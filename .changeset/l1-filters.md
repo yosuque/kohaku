@@ -9,7 +9,7 @@
 "@kohaku-ui/renderer-react": minor
 ---
 
-Filters on generated screens: `ComposePolicy.l1Filters` (default `false`, design.md #77) makes the composer inject the Intent's filters into an L1-generated Spec deterministically, so changing a filter re-resolves the data with no recompose and no model call. The model decides nothing about the filter set or its value domain.
+Filters on generated screens: `ComposePolicy.l1Filters` (default `false`, design.md #78) makes the composer inject the Intent's filters into an L1-generated Spec deterministically, so changing a filter re-resolves the data with no recompose and no model call. The model decides nothing about the filter set or its value domain.
 
 - `@kohaku-ui/spec-core`: `FilterDescriptor` (`{ param, queryParam, label, options }`) and the optional `SemanticPort.describeFilters?(intent, { tenant?, locale? })`.
 - `@kohaku-ui/intents`: `IntentDef.filters?(params, locale?)`, derived from `defineIntent`'s `facets` + `queries[].paramMap` for every discrete, string-valued `select` facet (numeric facets, `control: "number"`, an ambiguous `paramMap` and callback `queries` are skipped).

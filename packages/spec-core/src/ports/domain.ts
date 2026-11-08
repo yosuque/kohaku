@@ -64,6 +64,17 @@ export interface InvocationContext {
 }
 
 export interface DomainPort {
+  /**
+   * Every operation this port can run, with its governance `tier`. Contract (SPEC ACT-RD-001, design.md #77): every
+   * operation with side effects MUST be listed here with its tier, because the host guards both the action
+   * path and the data-plane read path (`query://` refs) off this list, and an operation it does not list is
+   * treated as a plain query.
+   */
   listOperations(): Promise<OperationDescriptor[]>;
+  /**
+   * Runs `op`. Contract (SPEC ACT-RD-001): `invoke` MUST dispatch on the exact operation name it is given, with
+   * no case folding, trailing-slash stripping, percent-decoding or other normalization, so the name a host
+   * looked up in `listOperations()` is the operation that runs.
+   */
   invoke(op: string, args: JsonObject, ctx: InvocationContext): Promise<unknown>;
 }

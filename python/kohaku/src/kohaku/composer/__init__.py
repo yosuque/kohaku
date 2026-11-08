@@ -66,6 +66,7 @@ from .fixation import FixationCheck, materialize_fixation
 from .inject_filters import InjectFiltersResult, inject_filters
 from .l2_js_sidecar import L2JsSidecar, create_l2_js_sidecar
 from .l2_lint import (
+    KOHAKU_API_ALLOWLIST_ORDERED,
     collect_l2_issues,
     collect_unknown_kit_classes,
     extract_html_document,
@@ -104,6 +105,7 @@ __all__ = [
     "DEFAULT_KIT_SKELETON",
     "DEFAULT_KIT_VOCABULARY",
     "DEFAULT_TOKEN_DESCRIPTIONS",
+    "KOHAKU_API_ALLOWLIST_ORDERED",
     "L1_SYSTEM_PROMPT",
     "L2_SYSTEM_PROMPT",
     "PROMPT_REVISION",

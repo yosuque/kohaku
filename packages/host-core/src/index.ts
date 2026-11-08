@@ -103,6 +103,17 @@ export {
   settleFixation,
   withFixationLock,
 } from "./fixation.js";
+export {
+  createGatedReadGuard,
+  GATED_READ_MESSAGE,
+  type GatedOperationEntry,
+  type GatedReadGuard,
+  type GatedReadGuardInput,
+  type GatedReadOutcome,
+  isGatedOperation,
+  type RunGatedReadGuardInput,
+  runGatedReadGuard,
+} from "./gated-read.js";
 export { type IntentSource, resolveGuiDelta, resolveIntent } from "./intent.js";
 export {
   createOperationIndex,

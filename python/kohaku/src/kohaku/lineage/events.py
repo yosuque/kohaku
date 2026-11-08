@@ -32,8 +32,14 @@ COMPONENT_EVENT_TYPES: tuple[str, ...] = (
     "component.generated",
     "component.used",
     "component.nominated",
+    # A machine-extracted registration proposal attached to a freshly nominated candidate (advisory; see
+    # promotion/suggestion.py). Recorded with a model actor right after component.nominated.
+    "component.schemaSuggested",
     "component.judged",
     "component.reviewed",
+    # The reviewer's field-level edits against the suggestion, recorded on the approve path next to
+    # component.schemaProposed. `changed: []` means the suggestion was accepted as-is.
+    "component.schemaEdited",
     "component.schemaProposed",
     "component.published",
     "component.withdrawn",
@@ -83,8 +89,10 @@ LineageEventType = Literal[
     "component.generated",
     "component.used",
     "component.nominated",
+    "component.schemaSuggested",
     "component.judged",
     "component.reviewed",
+    "component.schemaEdited",
     "component.schemaProposed",
     "component.published",
     "component.withdrawn",
