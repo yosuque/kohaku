@@ -223,12 +223,7 @@ describe("cross-language golden (prompt fragments)", () => {
   });
 
   it("the L2 promotion judge's system + user prompt (rubric 0.4, both variants) reproduces the fixture", async () => {
-    expect(fixture.judgePrompts.map((c) => c.rubricVariant)).toEqual([
-      "no-schema",
-      "full",
-      "full",
-      "full",
-    ]);
+    expect(fixture.judgePrompts.map((c) => c.rubricVariant)).toEqual(["no-schema", "full", "full", "full"]);
     for (const c of fixture.judgePrompts) {
       const llm = new FakeLlm({
         objects: [

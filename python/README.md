@@ -91,7 +91,7 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage (recording / promotion / fixation);
 │  │  │                    #   evidence.py = the whole Compliance Evidence Pack module
 │  │  │                    #   (← lineage/src/evidence/*.ts, kept in one file)
-│  │  ├─ evals/            # ← packages/evals (judge / golden / FixtureLlm / distillation dataset export)
+│  │  ├─ evals/            # ← packages/evals (judge / schema extractor / golden / FixtureLlm / distillation dataset export)
 │  │  ├─ storage/          # FileStoragePort (equivalent to sample-api's storage-port.ts)
 │  │  ├─ host_core/        # ← packages/host-core (framework-free shared host core): intent.py
 │  │  │                    #   (← intent.ts) + allowed_actions.py (← allowed-actions.ts) +
@@ -577,15 +577,9 @@ cause without `clientSafe = True` is left exactly as before, so internals never 
   synchronously and never declares the extension, regardless of what a request's
   `_meta` asks for.
 - **Not yet ported (mirror gap, not intentional/permanent — tracked for a future pass):**
-  the lineage events `component.schemaSuggested` / `component.schemaEdited` (including the
-  `acknowledged` payload field) and their rubric variants; the analytics `review` block and
-  the `schemaSuggested` / `schemaEdited` counters (the analytics `usage` rows, `l2ByIntent` and
-  `schemaEditsByComponent`, by contrast, are mirrored: `summarize_usage` and `summarize_lineage`,
-  design.md #74 / #73; the `review` block stays unported); rubric 0.4 on the TS side (Python's
-  `kohaku.evals.judge.l2_promotion_rubric` is still at version "0.3", missing
-  `suggestion_fidelity`); `CapabilityRevocationStore` and jti-based capability revocation;
+  `CapabilityRevocationStore` and jti-based capability revocation;
   the `storage-redis` / `storage-postgres` / `authz-jwt` production adapters; `semantic-llm`;
-  `admin-react`; and `SchemaSuggestion` on promotion candidates. None of these are exercised
+  and `admin-react`. None of these are exercised
   by the conformance suite yet, so the CONFORMANT status above does not cover them.
   (`semantic-llm`'s own `validateIntent` behavior is not left behind by this gap, though: since
   the package itself has no Python mirror, its logic lives directly in `examples/sales-api`'s

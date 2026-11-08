@@ -87,7 +87,7 @@ python/
 │  │  ├─ lineage/          # ← packages/lineage(記録・昇格・固定化)。
 │  │  │                    #   evidence.py = Compliance Evidence Pack のモジュール全体
 │  │  │                    #   (← lineage/src/evidence/*.ts を 1 ファイルにまとめたもの)
-│  │  ├─ evals/            # ← packages/evals(judge / golden / FixtureLlm / 蒸留データセット export)
+│  │  ├─ evals/            # ← packages/evals(judge / スキーマ抽出 / golden / FixtureLlm / 蒸留データセット export)
 │  │  ├─ storage/          # FileStoragePort(sample-api の storage-port.ts 相当)
 │  │  ├─ host_core/        # ← packages/host-core(framework-free な共有ホスト核): intent.py
 │  │  │                    #   (← intent.ts)+ allowed_actions.py(← allowed-actions.ts)+
@@ -530,15 +530,9 @@ failed catalog/structure validation」という文言とは別物にし、この
   intent ツール群がタスク対応になる。`host_mcp` は compose ファミリを常に同期実行し、
   リクエストの `_meta` が何を求めていてもこの拡張を宣言しない。
 - **未移植(移植ギャップ。意図的・恒久ではなく今後の移植対象):** lineage イベントの
-  `component.schemaSuggested` / `component.schemaEdited`(`acknowledged` ペイロード
-  フィールドを含む)とそのルーブリック派生形、analytics の `review` ブロックと
-  `schemaSuggested` / `schemaEdited` カウンタ(一方 analytics の `usage` 行、`l2ByIntent`、
-  `schemaEditsByComponent` は反映済み: `summarize_usage` と `summarize_lineage`、
-  design.md #74 / #73。`review` ブロックは引き続き未反映)、TS 側の rubric 0.4(Python の
-  `kohaku.evals.judge.l2_promotion_rubric` はまだバージョン "0.3" で `suggestion_fidelity`
-  を欠く)、`CapabilityRevocationStore` と jti ベースの capability 失効、
+  `CapabilityRevocationStore` と jti ベースの capability 失効、
   `storage-redis` / `storage-postgres` / `authz-jwt` の本番アダプタ、`semantic-llm`、
-  `admin-react`、昇格候補上の `SchemaSuggestion`。これらはいずれもまだ conformance
+  `admin-react`。これらはいずれもまだ conformance
   スイートの検査対象外であり、上記の CONFORMANT ステータスはこれらをカバーしていない。
   (ただし `semantic-llm` 自体の `validateIntent` 挙動はこのギャップに取り残されていない:
   同パッケージには Python 移植先が無いため、そのロジックは `examples/sales-api` の
