@@ -3241,3 +3241,149 @@ describe("bounded snapshot resolution shared with initial-data preresolution (ho
     expect(calls).toHaveLength(3);
   });
 });
+
+describe("initial-data preresolution of a wide bind fan-out (L1 filter injection can reach 256 variants)", () => {
+  const WIDE_VALUES = Array.from({ length: 40 }, (_, i) => `r${i}`);
+
+  function wideBindComposeCtx(): ComposeContext {
+    const base = makeComposeCtx();
+    return {
+      ...base,
+      policy: {
+        fixedSpecs: {
+          async lookup() {
+            return (intentArg): UISpec => ({
+              kohaku: "0.2",
+              intent: intentArg,
+              dataVersion: "x",
+              state: { region: "r0" },
+              components: [
+                { id: "root", type: "layout.stack", props: {}, children: ["c"] },
+                {
+                  id: "c",
+                  type: "presentChart",
+                  props: { kind: "line", x: "month", y: "revenue" },
+                  data: {
+                    $ref: "query://sales/trend?granularity=month&metric=revenue&region=r0",
+                    bind: { region: { $state: "region", values: WIDE_VALUES } },
+                  },
+                },
+              ],
+              events: [],
+              provenance: { tier: "L0", composedBy: "test", cache: "miss" },
+            });
+          },
+        },
+      },
+    };
+  }
+
+  it("resolves every initial ref but caps the eagerly pre-resolved secondary variants (the rest resolve on demand)", async () => {
+    const invoked: string[] = [];
+    const countingDomain: DomainPort = {
+      async listOperations() {
+        return [];
+      },
+      async invoke(_op, args) {
+        invoked.push(String((args as Record<string, unknown>)["region"]));
+        return { columns: [{ key: "month", type: "string" }], rows: [{ month: "Jan" }], dataVersion: "sales@seed-1" } as TabularData;
+      },
+    };
+    const server = new McpServer({ name: "kohaku-wide", version: "0.1.0" });
+    attachKohakuToMcpServer(
+      server,
+      { compose: wideBindComposeCtx(), domain: countingDomain, authz, querySource: "sales" },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+    const client = new Client({ name: "wide-client", version: "0.0.1" });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+
+    const result = await client.callTool({ name: "kohaku_compose", arguments: { question: "Monthly revenue trend" } });
+    const initial = result._meta?.[INITIAL_DATA_META_KEY] as Record<string, TabularData>;
+    // The initial variant (r0) is always embedded; of the 39 others, at most the first 32 are pre-resolved.
+    expect(invoked).toContain("r0");
+    expect(invoked.length).toBe(1 + 32);
+    expect(Object.keys(initial).length).toBe(1 + 32);
+    expect(invoked).not.toContain("r39");
+  });
+});
+
+describe("L1 filter injection over MCP (ComposePolicy.l1Filters)", () => {
+  const L1_REF = "query://sales/trend?granularity=month&metric=revenue&region=us";
+
+  /** An L1-generating compose ctx (scripted FakeLlm) whose SemanticPort declares a region filter. */
+  function l1FilterComposeCtx(): ComposeContext {
+    const base = makeComposeCtx();
+    return {
+      ...base,
+      llm: new FakeLlm({
+        objects: [
+          {
+            components: [
+              { id: "root", type: "layout.stack", props: { direction: "vertical", gap: null }, children: ["c"] },
+              {
+                id: "c",
+                type: "presentChart",
+                props: { kind: "line", x: "month", y: "revenue", series: null, stacked: null, title: null },
+                children: null,
+                data: { $ref: L1_REF },
+              },
+            ],
+            events: [],
+          },
+        ],
+      }),
+      semantic: {
+        ...base.semantic,
+        async resolveQuery() {
+          return { uri: L1_REF };
+        },
+        async describeFilters() {
+          return [
+            {
+              param: "region",
+              queryParam: "region",
+              label: "Region",
+              options: ["us", "eu", "jp"].map((v) => ({ value: v, label: v })),
+            },
+          ];
+        },
+      },
+      policy: { l1Filters: true },
+    };
+  }
+
+  it("kohaku_compose delivers the injected Spec and a capability that resolves every filter variant", async () => {
+    const server = new McpServer({ name: "kohaku-l1-filters", version: "0.1.0" });
+    attachKohakuToMcpServer(
+      server,
+      { compose: l1FilterComposeCtx(), domain, authz, querySource: "sales" },
+      { rendererHtml: "<!DOCTYPE html><html><body>renderer</body></html>" },
+    );
+    const client = new Client({ name: "l1-filters-client", version: "0.0.1" });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(st), client.connect(ct)]);
+
+    const composeResult = await client.callTool({
+      name: "kohaku_compose",
+      arguments: { question: "Monthly revenue trend" },
+    });
+    const spec = (composeResult.structuredContent as { spec: UISpec }).spec;
+    expect(spec.provenance.tier).toBe("L1");
+    expect(spec.state).toEqual({ region: "us" });
+    expect(spec.components.some((c) => c.type === "control.select")).toBe(true);
+
+    const capability = capabilityOf(composeResult);
+    for (const region of ["us", "eu", "jp"]) {
+      const resolved = await client.callTool({
+        name: "kohaku_resolve_binding",
+        arguments: {
+          ref: `query://sales/trend?granularity=month&metric=revenue&region=${region}`,
+          capability,
+        },
+      });
+      expect(resolved.isError).toBeFalsy();
+    }
+  });
+});

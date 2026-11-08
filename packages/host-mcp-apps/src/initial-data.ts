@@ -31,6 +31,13 @@ const PRERESOLVE_TIMEOUT_MS = 2000;
  */
 const PRERESOLVE_TOTAL_TIMEOUT_MS = 10_000;
 
+/**
+ * The most non-initial bind variants preresolveInitialData resolves eagerly per compose (the initial variants are
+ * always all resolved). Generous for hand-written cross-filters (a region switch is a handful of variants) while
+ * keeping a wide L1 filter fan-out (up to 256 variants) from becoming that many upstream calls per compose.
+ */
+const PRERESOLVE_MAX_SECONDARY_REFS = 32;
+
 /** Bounded concurrency (ops) for preresolveInitialData's ref resolution pool. See PRERESOLVE_TOTAL_TIMEOUT_MS. */
 const PRERESOLVE_CONCURRENCY = 8;
 
@@ -252,6 +259,11 @@ export async function preresolveInitialData(
       if (variant !== initial) secondaryRefs.push(variant);
     }
   }
+  // Bound the eager fan-out: a Spec can carry up to MAX_BIND_VARIANTS (256) variants (ComposePolicy.l1Filters
+  // injects them), and pre-resolving all of them would cost that many upstream calls on every compose even
+  // though the 100,000-char budget could embed only a few. Beyond the cap a variant is simply resolved on
+  // demand (kohaku_resolve_binding), exactly like any ref that did not fit the budget.
+  secondaryRefs.length = Math.min(secondaryRefs.length, PRERESOLVE_MAX_SECONDARY_REFS);
 
   // Dedup while preserving the initial-then-secondary priority order (the budget loop below walks this same
   // order), so a ref shared by several components/variants is resolved exactly once regardless of concurrency.
