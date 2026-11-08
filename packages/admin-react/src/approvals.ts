@@ -117,7 +117,7 @@ export async function derivePendingApprovals(
 
   const groups = new Map<string, Group>();
   const settledAt = new Map<string, string>();
-  const issuedAt = new Map<string, NonNullable<PendingApproval["issued"]>>();
+  const latestIssuance = new Map<string, NonNullable<PendingApproval["issued"]>>();
 
   for (const ev of ordered) {
     const action = str(ev.payload.action);
@@ -143,7 +143,7 @@ export async function derivePendingApprovals(
       const expiresAt = str(ev.payload.expiresAt);
       if (requesterId == null || approverId == null || expiresAt == null) continue;
       // `ordered` is ascending, so a later event of the same key overwrites an earlier one (the latest wins).
-      issuedAt.set(keyOf(requesterId, action, payloadHash), { issuedAt: ev.ts, expiresAt, approverId });
+      latestIssuance.set(keyOf(requesterId, action, payloadHash), { issuedAt: ev.ts, expiresAt, approverId });
     }
   }
 
@@ -163,7 +163,7 @@ export async function derivePendingApprovals(
       latestTs: latest.ts,
     };
     if (group.requesterId != null) row.requesterId = group.requesterId;
-    const issued = issuedAt.get(key);
+    const issued = latestIssuance.get(key);
     if (
       issued != null &&
       (settled == null || compareTs(issued.issuedAt, settled) > 0) &&

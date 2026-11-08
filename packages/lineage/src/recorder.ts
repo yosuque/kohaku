@@ -142,9 +142,11 @@ export interface RestActionAuditRecorder {
   }): Promise<void>;
   /**
    * `POST /approvals` minted an approval token (design.md #72). `principal` is the **approver** -- the
-   * one `action.*` event whose actor is not the requester (the requester is `requesterId`).
+   * one `action.*` event whose actor is not the requester (the requester is `requesterId`). Optional,
+   * like `ActionAuditRecorder.approvalIssued` in host-core, so an external implementation of this exported
+   * type written before the event existed keeps compiling.
    */
-  approvalIssued(args: {
+  approvalIssued?(args: {
     action: string;
     payloadHash: string;
     requesterId: string;
@@ -170,15 +172,17 @@ export interface CreateActionAuditRecorderOptions {
 /**
  * Builds the `ActionAuditRecorder` implementation backed by `lineage`'s `action.*` event family. Every
  * event is recorded with actor `{ kind: "user", id: principal.id }` -- the principal that made the
- * invoke request, whether or not that specific attempt was allowed, denied, or left pending (an approval
- * `action.approved` records *that* a given grant was consumed by this invoke). The single exception is
- * `action.approvalIssued`, which records the separate act of an approver issuing the grant and is
- * therefore recorded with the **approver** as its actor, not the requester).
+ * invoke request, whether or not that specific attempt was allowed, denied, or left pending.
+ * `action.approved` records *that* a given grant was consumed by this invoke, not the separate act of the
+ * approver having issued it. That act is `action.approvalIssued`, the single exception to the rule above:
+ * it is recorded with the **approver** as its actor, not the requester.
+ *
+ * The returned object always implements the otherwise-optional `approvalIssued`.
  */
 export function createActionAuditRecorder(
   lineage: Lineage,
   options: CreateActionAuditRecorderOptions = {},
-): RestActionAuditRecorder {
+): RestActionAuditRecorder & Required<Pick<RestActionAuditRecorder, "approvalIssued">> {
   const recordPayload = options.recordPayload ?? false;
 
   return {

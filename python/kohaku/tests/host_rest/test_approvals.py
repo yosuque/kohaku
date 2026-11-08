@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from kohaku.host_rest._routes import governance
 from kohaku.host_rest.deps import AuthorizeGovernanceHook
 from kohaku.spec import ApprovalIssueError, Principal
 
@@ -265,12 +267,15 @@ class _RecorderWithoutIssuedHook:
         pass
 
 
-def _parse_iso(value: str) -> datetime:
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", value), value
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _pin_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins the clock POST /approvals stamps `expires_at` from to 2026-11-08T00:00:00Z."""
+    monkeypatch.setattr(governance, "_now", lambda: datetime(2026, 11, 8, tzinfo=UTC))
 
 
-def test_records_one_approval_issued_event_with_the_approver_as_principal(tmp_path: Path) -> None:
+def test_records_one_approval_issued_event_with_the_approver_as_principal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_clock(monkeypatch)
     approvals = _RecordingApprovals(token="kohaku-approval.v2.secret-token")
     recorder = _IssuedAuditRecorder()
     harness = build_harness(
@@ -279,10 +284,9 @@ def test_records_one_approval_issued_event_with_the_approver_as_principal(tmp_pa
         auth=role_auth("approver"),
         authorize_governance=_allow_all,
         action_audit_recorder=recorder,
+        tenant=lambda _request: "tenant-a",
     )
-    before = datetime.now(UTC)
     res = harness.client.post(_url("/approvals"), json={**VALID_BODY, "ttlSeconds": 60})
-    after = datetime.now(UTC)
     assert res.status_code == 200
 
     assert len(recorder.issued_calls) == 1
@@ -293,13 +297,16 @@ def test_records_one_approval_issued_event_with_the_approver_as_principal(tmp_pa
     assert call["approver_id"] == "demo-approver"
     assert call["principal"].id == "demo-approver"
     assert call["ttl_seconds"] == 60
-    expires = _parse_iso(call["expires_at"])
-    assert before.timestamp() + 60 - 0.002 <= expires.timestamp() <= after.timestamp() + 60 + 0.002
+    assert call["expires_at"] == "2026-11-08T00:01:00.000Z"
+    assert call["tenant"] == "tenant-a"
     # The token (or anything that could rebuild it) must never reach the audit trail.
     assert "secret-token" not in repr(call)
 
 
-def test_approval_issued_uses_the_default_ttl_when_the_body_omits_it(tmp_path: Path) -> None:
+def test_approval_issued_uses_the_default_ttl_when_the_body_omits_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_clock(monkeypatch)
     recorder = _IssuedAuditRecorder()
     harness = build_harness(
         tmp_path,
@@ -310,6 +317,7 @@ def test_approval_issued_uses_the_default_ttl_when_the_body_omits_it(tmp_path: P
     )
     harness.client.post(_url("/approvals"), json=VALID_BODY)
     assert recorder.issued_calls[0]["ttl_seconds"] == 300
+    assert recorder.issued_calls[0]["expires_at"] == "2026-11-08T00:05:00.000Z"
 
 
 def test_approval_issued_recorder_failure_is_fail_open_and_reported(tmp_path: Path) -> None:
@@ -365,3 +373,17 @@ def test_approval_issued_is_skipped_quietly_for_a_recorder_without_the_hook(tmp_
         action_audit_recorder=_RecorderWithoutIssuedHook(),
     )
     assert harness.client.post(_url("/approvals"), json=VALID_BODY).status_code == 200
+
+
+def test_approval_issued_is_not_recorded_on_a_generic_issue_failure(tmp_path: Path) -> None:
+    recorder = _IssuedAuditRecorder()
+    harness = build_harness(
+        tmp_path,
+        approvals=_ThrowingApprovals(RuntimeError("store connection string leaked")),
+        auth=role_auth("approver"),
+        authorize_governance=_allow_all,
+        action_audit_recorder=recorder,
+    )
+    res = harness.client.post(_url("/approvals"), json=VALID_BODY)
+    assert res.status_code == 500
+    assert recorder.issued_calls == []

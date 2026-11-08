@@ -308,7 +308,8 @@ class ActionApprovalIssuedPayload(TypedDict, total=False):
     carries no token id (`jti`) or any other value the token could be reconstructed from: the audit proves
     *that* a specific (action, payloadHash) was approved for `requesterId` until `expiresAt`, nothing that
     could be replayed. `expiresAt` is computed by the host as issue time + `ttlSeconds` (the ApprovalPort
-    does not report its own expiry), so it is advisory if the port clamps the lifetime."""
+    does not report its own expiry), so it is advisory: it differs from the real expiry when the port's own default
+    TTL differs from DEFAULT_APPROVAL_TTL_SECONDS or when the port clamps the lifetime."""
 
     action: str
     payloadHash: str

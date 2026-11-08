@@ -288,6 +288,7 @@ describe("POST /approvals", () => {
           approvals: approvalsPort(),
           auth: async () => ({ id: "approver-1", roles: ["approver"] }),
           actionAuditRecorder: recorderWith(approvalIssued),
+          tenant: async () => "tenant-a",
         });
 
         const res = await postApprovals(deps, { ...VALID_BODY, ttlSeconds: 60 });
@@ -302,6 +303,7 @@ describe("POST /approvals", () => {
           ttlSeconds: 60,
           expiresAt: "2026-11-08T00:01:00.000Z",
           principal: { id: "approver-1" },
+          tenant: "tenant-a",
         });
         // The token (or anything that could rebuild it) must never reach the audit trail.
         expect(JSON.stringify(args)).not.toContain("secret-token");
@@ -368,6 +370,24 @@ describe("POST /approvals", () => {
         actionAuditRecorder: recorderWith(approvalIssued),
       });
       expect((await postApprovals(selfApproval, VALID_BODY)).status).toBe(400);
+      expect(approvalIssued).not.toHaveBeenCalled();
+    });
+
+    it("records nothing and answers a fixed-text 500 when issueApproval throws a generic error", async () => {
+      const approvalIssued = vi.fn(async () => {});
+      const broken: ApprovalPort = {
+        issueApproval: async () => {
+          throw new Error("store connection string leaked");
+        },
+        verifyApproval: async () => ({ ok: true }),
+      };
+      const deps = baseDeps({
+        approvals: broken,
+        auth: async () => ({ id: "approver-1", roles: ["approver"] }),
+        actionAuditRecorder: recorderWith(approvalIssued),
+      });
+      const res = await postApprovals(deps, VALID_BODY);
+      expect(res.status).toBe(500);
       expect(approvalIssued).not.toHaveBeenCalled();
     });
 

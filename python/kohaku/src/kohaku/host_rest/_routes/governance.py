@@ -6,13 +6,13 @@ Split out of the former monolithic `_fastapi_routes.py` to mirror packages/host-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter
 from starlette.requests import Request
 from starlette.responses import Response
 
-from kohaku.host_core import fail_open
+from kohaku.host_core import ApprovalIssuedRecorder, fail_open
 from kohaku.spec import (
     APPROVAL_ISSUE_ERROR_CODE,
     DEFAULT_APPROVAL_TTL_SECONDS,
@@ -56,6 +56,11 @@ _APPROVAL_AUTHORIZATION_REQUIRED_MESSAGE = (
 # Aggregation window for usage analytics. Default 200 / max 1000 (aligned with the /lineage window constraint).
 ANALYTICS_DEFAULT_LIMIT = 200
 ANALYTICS_MAX_LIMIT = 1000
+
+
+def _now() -> datetime:
+    """The wall clock `POST /approvals` stamps `expires_at` from (a module-level seam so tests can pin it)."""
+    return datetime.now(UTC)
 
 
 def _iso_utc(moment: datetime) -> str:
@@ -259,17 +264,23 @@ def register_governance_routes(router: APIRouter, deps: KohakuHostDeps) -> None:
         # Audit the issuance (design.md #72), only now that it succeeded and fail-open like every other
         # action.* record: a recording failure must never turn a minted token into an error response. The
         # event carries the approver as its actor and never the token itself. The ApprovalPort does not report
-        # its own expiry, so `expires_at` is issue time + the requested (or default) TTL -- advisory if the
-        # port clamps it. A recorder without the optional `approval_issued` hook is skipped.
-        record_issued = getattr(deps.action_audit_recorder, "approval_issued", None)
-        if record_issued is not None:
+        # its own expiry, so `expires_at` is issue time + the requested TTL (or DEFAULT_APPROVAL_TTL_SECONDS).
+        # That is advisory: it differs from the real expiry when the port's own default TTL differs from that
+        # constant, or when the port clamps the TTL. Future fix: ApprovalPort.issue_approval returns the expiry.
+        # A recorder without the optional `approval_issued` hook is skipped.
+        recorder = (
+            cast(ApprovalIssuedRecorder, deps.action_audit_recorder)
+            if hasattr(deps.action_audit_recorder, "approval_issued")
+            else None
+        )
+        if recorder is not None:
             ttl_seconds = (
                 body.ttl_seconds if body.ttl_seconds is not None else DEFAULT_APPROVAL_TTL_SECONDS
             )
-            expires_at = _iso_utc(datetime.now(UTC) + timedelta(seconds=ttl_seconds))
+            expires_at = _iso_utc(_now() + timedelta(seconds=ttl_seconds))
 
             async def _record_issued() -> None:
-                await record_issued(
+                await recorder.approval_issued(
                     action=body.action,
                     payload_hash=body.payload_hash,
                     requester_id=body.requester_id,

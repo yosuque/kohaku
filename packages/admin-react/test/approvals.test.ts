@@ -296,6 +296,19 @@ describe("derivePendingApprovals", () => {
       expect(out[0]!.issued?.approverId).toBe("second");
     });
 
+    it("does not attach an issuance whose action or payloadHash differs from the row", async () => {
+      const out = await derivePendingApprovals(
+        [
+          requested("2026-10-05T10:00:00.000Z"),
+          issuedEv("2026-10-05T10:02:00.000Z", "2026-10-05T10:07:00.000Z", { action: "sales.other" }),
+          issuedEv("2026-10-05T10:02:10.000Z", "2026-10-05T10:07:00.000Z", { payloadHash: "sha256:bbb" }),
+        ],
+        { now: NOW },
+      );
+      expect(out).toHaveLength(1);
+      expect(out[0]!.issued).toBeUndefined();
+    });
+
     it("skips a malformed issuance (no expiresAt / unparseable)", async () => {
       const out = await derivePendingApprovals(
         [

@@ -102,6 +102,43 @@ describe("ApprovalsTab", () => {
     expect(screen.queryByText(m.approvals.reissue)).toBeNull();
   });
 
+  it("hides the lineage-derived issued line while this session holds the token itself", async () => {
+    let events: unknown[] = [requestedEvent()];
+    renderInAdmin(<ApprovalsTab />, {
+      handlers: {
+        "GET /lineage": () => jsonResponse({ events }),
+        "POST /approvals": () => jsonResponse({ approval: "tok.local" }),
+      },
+    });
+    await screen.findByText("sales.refund");
+    fireEvent.click(screen.getByText(m.approvals.approveButton));
+    await screen.findByLabelText(m.approvals.tokenLabel);
+
+    // After a reload the lineage now carries this very issuance; the row must not show it a second time.
+    events = [
+      requestedEvent(),
+      {
+        id: "ev-issued",
+        ts: new Date().toISOString(),
+        type: "action.approvalIssued",
+        actor: { kind: "user", id: "demo-approver" },
+        payload: {
+          action: "sales.refund",
+          payloadHash: "sha256:0123456789abcdef0123",
+          requesterId: "demo-viewer",
+          approverId: "demo-approver",
+          ttlSeconds: 300,
+          expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        },
+      },
+    ];
+    fireEvent.click(screen.getByText(m.refresh));
+    await waitFor(() => expect(screen.getByText("sales.refund")).toBeTruthy());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByText(/demo-approver/)).toBeNull();
+    expect((screen.getByLabelText(m.approvals.tokenLabel) as HTMLInputElement).value).toBe("tok.local");
+  });
+
   it("copies the token to the clipboard", async () => {
     const written: string[] = [];
     Object.defineProperty(globalThis.navigator, "clipboard", {
