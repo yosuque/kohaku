@@ -250,6 +250,13 @@ class _RemoteJwks:
             owner = inflight is None
             if inflight is None:
                 inflight = self._inflight = Future()
+                # Mark it RUNNING at once: a RUNNING future cannot be cancelled, so `asyncio.wrap_future`'s
+                # cancel-propagation (a cancelled waiter calls `cancel()` on the future it wraps) is a no-op
+                # instead of cancelling the fetch for every sibling waiter -- and `set_result` /
+                # `set_exception` below can never hit InvalidStateError on a cancelled future. (Chosen over
+                # `asyncio.shield` because this class is shared across event loops; a Future owned by one
+                # loop's task would not be.)
+                inflight.set_running_or_notify_cancel()
         if not owner:
             await asyncio.wrap_future(inflight)
             return

@@ -232,6 +232,70 @@ class TestJwks:
         resolver = create_jwt_identity_resolver(JwtJwksKey(pair.jwks), audience="kohaku")
         assert _code_of(resolver, pair.sign({"sub": "rs"}, aud="someone-else")) == "INVALID_TOKEN"
 
+    def test_cancelling_one_waiter_of_a_shared_fetch_does_not_fail_the_others(
+        self, jwks_server: tuple[str, type[_JwksHandler]]
+    ) -> None:
+        # The waiters share one in-flight fetch. A cancelled waiter must drop out alone: it must neither cancel
+        # the shared future for its siblings nor make the fetching request fail with InvalidStateError.
+        url, handler = jwks_server
+        pair = RsaKeyPair()
+        handler.body = json.dumps(pair.jwks).encode()
+        handler.delay = 0.3
+        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+
+        async def go() -> list[object]:
+            owner = asyncio.create_task(resolver.resolve(pair.sign({"sub": "owner"}, aud="kohaku")))
+            await asyncio.sleep(0.05)  # the owner is now fetching
+            cancelled = asyncio.create_task(
+                resolver.resolve(pair.sign({"sub": "cancelled"}, aud="kohaku"))
+            )
+            bystander = asyncio.create_task(
+                resolver.resolve(pair.sign({"sub": "bystander"}, aud="kohaku"))
+            )
+            await asyncio.sleep(0.05)  # both are now waiting on the shared fetch
+            cancelled.cancel()
+            return list(await asyncio.gather(owner, cancelled, bystander, return_exceptions=True))
+
+        owner_r, cancelled_r, bystander_r = run(go())
+        assert isinstance(cancelled_r, asyncio.CancelledError)
+        assert isinstance(owner_r, ResolvedIdentity) and owner_r.principal.id == "owner"
+        assert isinstance(bystander_r, ResolvedIdentity) and bystander_r.principal.id == "bystander"
+        assert handler.hits == 1
+
+    def test_cancelling_the_fetching_request_never_hands_its_cancellation_to_the_waiters(
+        self, jwks_server: tuple[str, type[_JwksHandler]]
+    ) -> None:
+        url, handler = jwks_server
+        pair = RsaKeyPair()
+        handler.body = json.dumps(pair.jwks).encode()
+        handler.delay = 0.3
+        resolver = create_jwt_identity_resolver(JwtJwksUrlKey(url), audience="kohaku")
+
+        async def go() -> list[object]:
+            owner = asyncio.create_task(resolver.resolve(pair.sign({"sub": "owner"}, aud="kohaku")))
+            await asyncio.sleep(0.05)
+            waiters = [
+                asyncio.create_task(resolver.resolve(pair.sign({"sub": f"w{i}"}, aud="kohaku")))
+                for i in range(2)
+            ]
+            await asyncio.sleep(0.05)
+            owner.cancel()
+            return list(await asyncio.gather(owner, *waiters, return_exceptions=True))
+
+        owner_r, *waiter_rs = run(go())
+        assert isinstance(owner_r, asyncio.CancelledError)
+        for r in waiter_rs:
+            # Either outcome is fine -- the identity, or the fetch error (INVALID_TOKEN) -- but never
+            # the owner's CancelledError, and never an InvalidStateError leaking from the shared future.
+            assert isinstance(r, ResolvedIdentity) or (
+                isinstance(r, JwtIdentityError) and r.code == "INVALID_TOKEN"
+            )
+        # The interrupted fetch is not cached: the next resolution fetches again and succeeds.
+        handler.delay = 0.0
+        assert (
+            run(resolver.resolve(pair.sign({"sub": "later"}, aud="kohaku"))).principal.id == "later"
+        )
+
     def test_a_single_key_without_kid_verifies_a_token_without_kid(self) -> None:
         pair = RsaKeyPair()
         jwks = {"keys": [{k: v for k, v in pair.jwk.items() if k != "kid"}]}
