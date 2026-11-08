@@ -1793,6 +1793,191 @@
         }
       },
       {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "orderId": {
+              "type": "string"
+            },
+            "amount": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Amount"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string",
+                  "enum": [
+                    "full",
+                    "partial"
+                  ]
+                }
+              ]
+            }
+          },
+          "required": [
+            "orderId",
+            "amount"
+          ]
+        },
+        "expected": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "orderId": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number",
+                "minimum": 0
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "partial"
+                ]
+              }
+            },
+            "required": [
+              "orderId"
+            ],
+            "additionalProperties": false
+          },
+          "dropped": [
+            "properties.amount.default",
+            "properties.amount.title"
+          ],
+          "omitted": false,
+          "reasons": []
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "a"
+          ]
+        },
+        "expected": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "dropped": [],
+          "omitted": false,
+          "reasons": []
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.anyOf"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "oneOf": []
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.oneOf"
+          ]
+        }
+      },
+      {
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "a": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.anyOf"
+          ]
+        }
+      },
+      {
         "inputSchema": null,
         "expected": {
           "schema": null,
@@ -1815,7 +2000,253 @@
         }
       }
     ],
+    "schemaProjectionRaw": [
+      {
+        "json": "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\",\"minimum\":1e999}}}",
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.minimum"
+          ]
+        }
+      },
+      {
+        "json": "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\",\"maximum\":10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}}}",
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.maximum"
+          ]
+        }
+      },
+      {
+        "json": "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\",\"maxLength\":10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}}}",
+        "expected": {
+          "schema": null,
+          "dropped": [],
+          "omitted": true,
+          "reasons": [
+            "properties.a.maxLength"
+          ]
+        }
+      },
+      {
+        "json": "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"string\",\"maxLength\":1.0,\"minLength\":2}}}",
+        "expected": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "a": {
+                "type": "string",
+                "maxLength": 1,
+                "minLength": 2
+              }
+            },
+            "additionalProperties": false
+          },
+          "dropped": [],
+          "omitted": false,
+          "reasons": []
+        }
+      }
+    ],
     "argumentCoercion": [
+      {
+        "args": {
+          "limit": "3",
+          "_limit": "5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 3
+        }
+      },
+      {
+        "args": {
+          "limit": 4,
+          "_limit": "5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 4
+        }
+      },
+      {
+        "args": {
+          "limit": "5000"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 1000
+        }
+      },
+      {
+        "args": {
+          "_limit": "2000"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": {
+          "limit": 1000
+        }
+      },
+      {
+        "args": {
+          "limit": "50",
+          "_limit": "40"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "maxLimit": 10,
+        "expected": {
+          "limit": 10
+        }
+      },
+      {
+        "args": {
+          "limit": "5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "maxLimit": 10,
+        "expected": {
+          "limit": 5
+        }
+      },
+      {
+        "args": {
+          "n": "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "n": {
+              "type": "number"
+            },
+            "b": {
+              "type": "boolean"
+            },
+            "s": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer"
+            }
+          }
+        },
+        "expected": null
+      },
+      {
+        "args": {
+          "_limit": "5"
+        },
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "string"
+            }
+          }
+        },
+        "expected": {}
+      },
       {
         "args": {
           "n": "3",
@@ -3153,6 +3584,171 @@
         },
         "dataVersion": "mcp:1",
         "expected": null
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "a": 1
+            },
+            {
+              "a": 2
+            },
+            {
+              "a": 3
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "limits": {
+          "maxRows": 2
+        },
+        "expected": null
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "a": 1
+            },
+            {
+              "a": 2
+            },
+            {
+              "a": 3
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "limits": {
+          "maxRows": 3
+        },
+        "expected": {
+          "columns": [
+            {
+              "key": "a",
+              "type": "number"
+            }
+          ],
+          "rows": [
+            {
+              "a": 1
+            },
+            {
+              "a": 2
+            },
+            {
+              "a": 3
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "a": 1
+            },
+            {
+              "a": 2
+            },
+            {
+              "a": 3
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "limits": {
+          "maxResultBytes": 24
+        },
+        "expected": null
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "a": 1
+            },
+            {
+              "a": 2
+            },
+            {
+              "a": 3
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "limits": {
+          "maxResultBytes": 25
+        },
+        "expected": {
+          "columns": [
+            {
+              "key": "a",
+              "type": "number"
+            }
+          ],
+          "rows": [
+            {
+              "a": 1
+            },
+            {
+              "a": 2
+            },
+            {
+              "a": 3
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "a": "日本語"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "limits": {
+          "maxResultBytes": 18
+        },
+        "expected": null
+      },
+      {
+        "result": {
+          "content": [],
+          "structuredContent": [
+            {
+              "a": "日本語"
+            }
+          ]
+        },
+        "dataVersion": "mcp:1",
+        "limits": {
+          "maxResultBytes": 19
+        },
+        "expected": {
+          "columns": [
+            {
+              "key": "a",
+              "type": "string"
+            }
+          ],
+          "rows": [
+            {
+              "a": "日本語"
+            }
+          ],
+          "dataVersion": "mcp:1"
+        }
       }
     ],
     "shape": [

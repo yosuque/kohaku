@@ -1,17 +1,29 @@
 import type { JsonObject, JsonValue } from "@kohaku-ui/spec-core";
 import { unwrapNullable } from "./nullable.js";
 
+/** The code of `McpArgumentError`. Not `ACTION_PARAMS_INVALID`, which is the action path's 422 wire code. */
+export const MCP_ARGUMENT_INVALID = "MCP_ARGUMENT_INVALID";
+
+/** Default ceiling for the `limit` argument forwarded to a tool (see {@link CoerceOptions.maxLimit}). */
+export const DEFAULT_MAX_LIMIT = 1000;
+
 /**
  * A `query://` ref carries its parameters as strings, but an MCP tool declares typed arguments. This is thrown
- * when a string cannot be converted to the type the tool's `inputSchema` asks for. It carries the wire code
- * `ACTION_PARAMS_INVALID` (a host-authored validation error, safe to show to the caller).
+ * when a string cannot be converted to the type the tool's `inputSchema` asks for. It carries the code
+ * `MCP_ARGUMENT_INVALID` (a host-authored validation error: its message is safe to show to the caller). Raised
+ * inside `DomainPort.invoke` for a read, the REST host reports it like any failed read: 404 `REF_NOT_FOUND`.
  */
 export class McpArgumentError extends Error {
-  readonly code = "ACTION_PARAMS_INVALID";
+  readonly code = MCP_ARGUMENT_INVALID;
   constructor(message: string) {
     super(message);
     this.name = "McpArgumentError";
   }
+}
+
+export interface CoerceOptions {
+  /** Ceiling applied to the tool's numeric `limit` argument, however it was supplied (default 1000). */
+  maxLimit?: number;
 }
 
 /** Reserved ref parameters (data-binding's `KNOWN_RESERVED_PARAMS`) that are never forwarded to a tool as-is. */
@@ -63,23 +75,35 @@ function coerceValue(name: string, value: JsonValue, type: string | undefined): 
  * - each string is converted to the `type` the tool's `inputSchema` declares for it (`number`, `integer`,
  *   `boolean`; everything else stays a string), and a value that does not convert throws `McpArgumentError`;
  * - the reserved parameters (`_cursor`, `_limit`, `_sort`, `_dir`) are never forwarded, except that `_limit` is
- *   mapped onto the tool's own `limit` argument when its `inputSchema` declares one (and then wins over an
- *   explicit `limit`);
+ *   mapped onto the tool's own numeric `limit` argument when its `inputSchema` declares one. `_limit` is not
+ *   covered by the capability's signed ref, so it can only *lower* the signed `limit`: when both are present the
+ *   smaller wins, and `maxLimit` (default 1000) then caps whatever is left;
  * - a value that is not a string (already typed) is kept as is.
  *
  * Pure, so the Python mirror (`kohaku.domain_mcp.coerce`) is pinned to it by the cross-language golden fixture.
  */
-export function coerceToolArguments(args: JsonObject, inputSchema: InputSchemaLike): JsonObject {
+export function coerceToolArguments(
+  args: JsonObject,
+  inputSchema: InputSchemaLike,
+  options: CoerceOptions = {},
+): JsonObject {
   const out: JsonObject = {};
   const reserved = new Set<string>(RESERVED);
   for (const [name, value] of Object.entries(args)) {
     if (reserved.has(name)) continue;
     out[name] = coerceValue(name, value, propertyType(inputSchema, name));
   }
-  const limit = args["_limit"];
   const limitType = propertyType(inputSchema, "limit");
-  if (limit !== undefined && limitType !== undefined) {
-    out["limit"] = coerceValue("limit", limit, limitType);
+  if (limitType === "number" || limitType === "integer") {
+    const candidates: number[] = [];
+    if (typeof out["limit"] === "number") candidates.push(out["limit"]);
+    if (args["_limit"] !== undefined) {
+      const lowered = coerceValue("limit", args["_limit"], limitType);
+      if (typeof lowered === "number") candidates.push(lowered);
+    }
+    if (candidates.length > 0) {
+      out["limit"] = Math.min(...candidates, options.maxLimit ?? DEFAULT_MAX_LIMIT);
+    }
   }
   return out;
 }

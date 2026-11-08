@@ -33,10 +33,34 @@ def test_never_forwards_the_reserved_parameters() -> None:
     assert coerce_tool_arguments(args, {"type": "object"}) == {"s": "x"}
 
 
-def test_limit_wins_over_an_explicit_limit_and_is_ignored_without_a_limit_argument() -> None:
-    assert coerce_tool_arguments({"limit": "9", "_limit": "5"}, INPUT_SCHEMA) == {"limit": 5}
+def test_limit_is_ignored_when_the_tool_has_no_limit_argument() -> None:
     schema = {"type": "object", "properties": {"s": {"type": "string"}}}
     assert coerce_tool_arguments({"_limit": "5", "s": "x"}, schema) == {"s": "x"}
+
+
+def test_limit_only_lowers_the_signed_limit_the_smaller_of_the_two_wins() -> None:
+    assert coerce_tool_arguments({"limit": "3", "_limit": "5"}, INPUT_SCHEMA) == {"limit": 3}
+    assert coerce_tool_arguments({"limit": "9", "_limit": "5"}, INPUT_SCHEMA) == {"limit": 5}
+    assert coerce_tool_arguments({"limit": 4, "_limit": "5"}, INPUT_SCHEMA) == {"limit": 4}
+
+
+def test_caps_the_limit_at_max_limit_whichever_way_it_was_supplied() -> None:
+    assert coerce_tool_arguments({"limit": "5000"}, INPUT_SCHEMA) == {"limit": 1000}
+    assert coerce_tool_arguments({"_limit": "2000"}, INPUT_SCHEMA) == {"limit": 1000}
+    capped = coerce_tool_arguments({"limit": "50", "_limit": "40"}, INPUT_SCHEMA, max_limit=10)
+    assert capped == {"limit": 10}
+    assert coerce_tool_arguments({"limit": "5"}, INPUT_SCHEMA, max_limit=10) == {"limit": 5}
+
+
+def test_does_not_invent_a_limit_nor_map_limit_onto_a_non_numeric_limit() -> None:
+    assert coerce_tool_arguments({"s": "x"}, INPUT_SCHEMA) == {"s": "x"}
+    string_limit = {"type": "object", "properties": {"limit": {"type": "string"}}}
+    assert coerce_tool_arguments({"_limit": "5"}, string_limit) == {}
+
+
+def test_a_400_digit_number_string_is_not_finite() -> None:
+    with pytest.raises(McpArgumentError):
+        coerce_tool_arguments({"n": "1" + "0" * 400}, INPUT_SCHEMA)
 
 
 def test_passes_strings_through_for_string_unknown_and_untyped_properties() -> None:
@@ -73,10 +97,10 @@ def test_accepts_an_integral_decimal_for_integer_and_rejects_a_fractional_one() 
         {"n": "٣"},
     ],
 )
-def test_throws_action_params_invalid(args: dict[str, Any]) -> None:
+def test_throws_mcp_argument_invalid(args: dict[str, Any]) -> None:
     with pytest.raises(McpArgumentError) as info:
         coerce_tool_arguments(args, INPUT_SCHEMA)
-    assert info.value.code == "ACTION_PARAMS_INVALID"
+    assert info.value.code == "MCP_ARGUMENT_INVALID"
 
 
 def test_reads_the_type_through_a_nullable_any_of() -> None:

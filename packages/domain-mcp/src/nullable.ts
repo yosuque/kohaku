@@ -1,6 +1,4 @@
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isPlainObject } from "./internal.js";
 
 /**
  * Unwraps the "optional" encoding some MCP SDKs produce for a parameter that may be null: Pydantic (the Python

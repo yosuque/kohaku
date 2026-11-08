@@ -66,5 +66,10 @@ class McpToolClientLike(Protocol):
     async def list_tools(self, *, cursor: str | None = None) -> McpListToolsResultLike: ...
 
     async def call_tool(
-        self, name: str, arguments: dict[str, Any] | None = None
-    ) -> McpCallResult: ...
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        read_timeout_seconds: float | None = None,
+    ) -> McpCallResult:
+        """`read_timeout_seconds` is the SDK's own per-call deadline (the Python twin of the TS `timeout`)."""
+        ...

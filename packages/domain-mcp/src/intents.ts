@@ -1,5 +1,6 @@
 import { defineIntent, type IntentDef } from "@kohaku-ui/intents";
 import { z } from "zod";
+import { isPlainObject } from "./internal.js";
 import { unwrapNullable } from "./nullable.js";
 import type { McpDomainPort } from "./port.js";
 import type { McpToolInfo } from "./types.js";
@@ -15,10 +16,6 @@ export interface McpIntentsOptions {
 }
 
 const SOURCE_PATTERN = /^[a-z][a-z0-9_]*$/;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** `Get-Orders` -> `get_orders`, `9lives` -> `t_9lives`: a name `CanonicalNameSchema` accepts as one segment. */
 function canonicalSegment(toolName: string): string {
@@ -77,9 +74,17 @@ function paramsFor(tool: McpToolInfo): { shape: Record<string, z.ZodType> } | { 
 /**
  * One `IntentDef` per read-only tool of the port: the params come from the tool's `inputSchema` (strings,
  * numbers, integers and string enums; other optional parameters are left out, and a tool that requires one is
- * skipped), `queries` is `[{ path: tool.name }]` on `source`, and the canonical name is
- * `<source>.<tool name lowercased>`. Actions never get an Intent: a `query://` ref, and so a read capability,
- * can only ever be issued for an Intent's resolved refs, which is what keeps a write tool from being read.
+ * skipped, with `onSkip`), `queries` is `[{ path: tool.name }]` on `source`, and the canonical name is
+ * `<source>.<segment>`, where the segment is the tool name lowercased with every character outside `[a-z0-9_]`
+ * (`-`, `.`, ...) replaced by `_`, and prefixed `t_` if it would not start with a letter. Two tools that map to the
+ * same canonical name make this throw.
+ *
+ * Silent limits: an optional parameter of a type an Intent cannot carry (boolean, array, object, a genuine union)
+ * is left out, so it can never be set through an Intent.
+ *
+ * Actions never get an Intent: a `query://` ref, and so a read capability, can only ever be issued for an Intent's
+ * resolved refs, which is what keeps a write tool from being read. A hand-written Intent must never point at an
+ * action op (`port.actionOps`).
  */
 export function createMcpIntents(port: McpDomainPort, options: McpIntentsOptions): IntentDef[] {
   if (!SOURCE_PATTERN.test(options.source)) {
@@ -89,9 +94,9 @@ export function createMcpIntents(port: McpDomainPort, options: McpIntentsOptions
   }
   const intents: IntentDef[] = [];
   const names = new Map<string, string>();
-  for (const name of port.queryOps) {
-    const tool = port.tools.get(name);
-    if (tool == null) continue;
+  const queryOps = port.queryOps;
+  for (const [name, tool] of port.tools) {
+    if (!queryOps.has(name)) continue;
     const params = paramsFor(tool);
     if ("skip" in params) {
       options.onSkip?.({ tool: name, reason: params.skip });

@@ -16,7 +16,7 @@
 import { coerceToolArguments } from "../../packages/domain-mcp/src/coerce.js";
 import { projectInputSchema } from "../../packages/domain-mcp/src/schema-projection.js";
 import { shapeFromOutputSchema } from "../../packages/domain-mcp/src/shape.js";
-import { toTabularData } from "../../packages/domain-mcp/src/tabular.js";
+import { type TabularLimits, toTabularData } from "../../packages/domain-mcp/src/tabular.js";
 import type { McpCallResult } from "../../packages/domain-mcp/src/types.js";
 
 const PROJECTION_INPUTS: unknown[] = [
@@ -62,6 +62,26 @@ const PROJECTION_INPUTS: unknown[] = [
   { type: "object", properties: { a: { type: "string", someVendorThing: 1, "x-note": "n" } } },
   { type: "object", required: "a" },
   { type: "object", properties: [] },
+  {
+    type: "object",
+    properties: {
+      orderId: { type: "string" },
+      amount: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }], default: null, title: "Amount" },
+      mode: { anyOf: [{ type: "null" }, { type: "string", enum: ["full", "partial"] }] },
+    },
+    required: ["orderId", "amount"],
+  },
+  {
+    type: "object",
+    properties: { a: { anyOf: [{ type: "integer" }, { type: "null" }] } },
+    required: ["a"],
+  },
+  {
+    type: "object",
+    properties: { a: { anyOf: [{ type: "integer" }, { type: "string" }, { type: "null" }] } },
+  },
+  { type: "object", properties: { a: { anyOf: [{ type: "integer" }, { type: "null" }], oneOf: [] } } },
+  { type: "object", properties: { a: { anyOf: [{ type: "null" }, { type: "null" }] } } },
   null,
   true,
 ];
@@ -76,7 +96,30 @@ const COERCION_SCHEMA = {
   },
 };
 
-const COERCION_CASES: { args: Record<string, unknown>; inputSchema: unknown }[] = [
+/**
+ * Cases that need a raw JSON text, because a literal such as `1e999` (or a 400-digit integer) cannot survive being
+ * built as a JS value and re-serialized: it is `Infinity` in JS, and `JSON.stringify` writes that as `null`.
+ * Both languages parse `json` themselves, so a number beyond the double range is non-finite on both sides.
+ */
+const PROJECTION_RAW_JSON: string[] = [
+  '{"type":"object","properties":{"a":{"type":"number","minimum":1e999}}}',
+  `{"type":"object","properties":{"a":{"type":"number","maximum":1${"0".repeat(400)}}}}`,
+  `{"type":"object","properties":{"a":{"type":"string","maxLength":1${"0".repeat(400)}}}}`,
+  '{"type":"object","properties":{"a":{"type":"string","maxLength":1.0,"minLength":2}}}',
+];
+
+const COERCION_CASES: { args: Record<string, unknown>; inputSchema: unknown; maxLimit?: number }[] = [
+  { args: { limit: "3", _limit: "5" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: 4, _limit: "5" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "5000" }, inputSchema: COERCION_SCHEMA },
+  { args: { _limit: "2000" }, inputSchema: COERCION_SCHEMA },
+  { args: { limit: "50", _limit: "40" }, inputSchema: COERCION_SCHEMA, maxLimit: 10 },
+  { args: { limit: "5" }, inputSchema: COERCION_SCHEMA, maxLimit: 10 },
+  { args: { n: "1".padEnd(401, "0") }, inputSchema: COERCION_SCHEMA },
+  {
+    args: { _limit: "5" },
+    inputSchema: { type: "object", properties: { limit: { type: "string" } } },
+  },
   { args: { n: "3", b: "true", s: "x", _limit: "5", _sort: "a" }, inputSchema: COERCION_SCHEMA },
   { args: { n: "-1.5", b: "false" }, inputSchema: COERCION_SCHEMA },
   { args: { n: "1e3", limit: "7" }, inputSchema: COERCION_SCHEMA },
@@ -157,6 +200,17 @@ const TABULAR_CASES: McpCallResult[] = [
   { isError: true, content: [{ type: "text", text: "boom" }] },
 ];
 
+const THREE_ROWS = [{ a: 1 }, { a: 2 }, { a: 3 }];
+// Byte sizes: `[{"a":1},{"a":2},{"a":3}]` is 25 bytes, and `[{"a":"日本語"}]` is 19 bytes in UTF-8 (but 13 characters).
+const TABULAR_LIMIT_CASES: { result: McpCallResult; limits: TabularLimits }[] = [
+  { result: { content: [], structuredContent: THREE_ROWS }, limits: { maxRows: 2 } },
+  { result: { content: [], structuredContent: THREE_ROWS }, limits: { maxRows: 3 } },
+  { result: { content: [], structuredContent: THREE_ROWS }, limits: { maxResultBytes: 24 } },
+  { result: { content: [], structuredContent: THREE_ROWS }, limits: { maxResultBytes: 25 } },
+  { result: { content: [], structuredContent: [{ a: "日本語" }] }, limits: { maxResultBytes: 18 } },
+  { result: { content: [], structuredContent: [{ a: "日本語" }] }, limits: { maxResultBytes: 19 } },
+];
+
 const SHAPE_ROW = {
   type: "object",
   properties: {
@@ -196,15 +250,26 @@ export function buildDomainMcpFixtures() {
       inputSchema,
       expected: projectInputSchema(inputSchema),
     })),
-    argumentCoercion: COERCION_CASES.map(({ args, inputSchema }) => ({
+    schemaProjectionRaw: PROJECTION_RAW_JSON.map((json) => ({
+      json,
+      expected: projectInputSchema(JSON.parse(json)),
+    })),
+    argumentCoercion: COERCION_CASES.map(({ args, inputSchema, maxLimit }) => ({
       args,
       inputSchema,
-      expected: attempt(() => coerceToolArguments(args as never, inputSchema as never)),
+      ...(maxLimit !== undefined ? { maxLimit } : {}),
+      expected: attempt(() =>
+        coerceToolArguments(args as never, inputSchema as never, maxLimit !== undefined ? { maxLimit } : {}),
+      ),
     })),
-    tabular: TABULAR_CASES.map((result) => ({
+    tabular: [
+      ...TABULAR_CASES.map((result) => ({ result, limits: undefined as TabularLimits | undefined })),
+      ...TABULAR_LIMIT_CASES,
+    ].map(({ result, limits }) => ({
       result,
       dataVersion: "mcp:1",
-      expected: attempt(() => toTabularData(result, "mcp:1")),
+      ...(limits !== undefined ? { limits } : {}),
+      expected: attempt(() => toTabularData(result, "mcp:1", undefined, limits ?? {})),
     })),
     shape: SHAPE_INPUTS.map((outputSchema) => ({
       outputSchema,

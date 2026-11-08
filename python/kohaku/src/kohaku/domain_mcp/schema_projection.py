@@ -11,6 +11,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from .nullable import unwrap_nullable
+
 # Keywords carried over into the subset (type-specific ones are kept only on a node of that type).
 _OBJECT_KEYWORDS = ("properties", "required", "additionalProperties")
 _NUMBER_KEYWORDS = ("minimum", "maximum")
@@ -60,7 +62,10 @@ class SchemaProjection:
     schema: dict[str, Any] | None
     """The projected schema, or None when the input cannot be represented in the subset (`omitted`)."""
     dropped: list[str] = field(default_factory=list)
-    """Dot-separated paths of the keywords dropped on the way (`properties.q.description`)."""
+    """Dot-separated paths of the keywords dropped on the way (`properties.q.description`): annotations, or
+    constraints the subset lacks (`pattern`, `format`, ...), whose loss loosens the gate. The projection can also
+    be *stricter* than the upstream in one way: every object is closed with `additionalProperties: false`, so an
+    extra key the upstream would have accepted is refused."""
     omitted: bool = False
     """True when no schema is attached to the operation (see `reasons`)."""
     reasons: list[str] = field(default_factory=list)
@@ -77,16 +82,21 @@ class SchemaProjection:
 
 def _is_finite_number(value: object) -> bool:
     # bool is an int subclass in Python; JSON booleans are not numbers.
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        # A huge integer literal is an exact int in Python but Infinity in JS: float() overflows exactly there.
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
 
 
 def _is_non_negative_integer(value: object) -> bool:
-    if isinstance(value, bool):
+    if not _is_finite_number(value):
         return False
-    if isinstance(value, int):
-        return value >= 0
     # JS Number.isInteger(1.0) is true, and json.loads("1.0") is a float here.
-    return isinstance(value, float) and value.is_integer() and value >= 0
+    assert isinstance(value, (int, float))
+    return value >= 0 and (isinstance(value, int) or value.is_integer())
 
 
 def _join(path: str, key: str) -> str:
@@ -100,7 +110,10 @@ def project_input_schema(input_schema: object) -> SchemaProjection:
     `pattern`, ...) are dropped and listed in `dropped`. Every object node is closed with
     `additionalProperties: false`. `anyOf` / `oneOf` / `allOf` / `not` / `$ref`, a `type` array, a tuple `items`,
     a malformed keyword value or an unknown keyword make the schema unrepresentable: `omitted` is True and
-    `schema` is None. The walk never stops early, so `dropped` and `reasons` are complete and deterministic.
+    `schema` is None. A property written as the nullable two-branch `anyOf` (`anyOf: [X, {"type": "null"}]`, how
+    Pydantic writes `Optional[X]`) is projected as the optional property `X`: kept, removed from `required`, and an
+    explicit null is then rejected by the gate. The walk never stops early, so `dropped` and `reasons` are
+    complete and deterministic.
     """
     dropped: list[str] = []
     reasons: list[str] = []
@@ -126,10 +139,13 @@ def _project_node(
         result["type"] = node_type
 
     # Walk the keywords in the input's own order so `dropped` / `reasons` are deterministic.
+    nullable_names: list[str] = []
     for key in node:
         key_path = _join(path, key)
         if key == "type":
             continue
+        # `x-` keys are vendor extensions and are dropped like annotations. A vendor keyword without the `x-`
+        # prefix is unknown, not an extension, and falls through to the "unknown keyword" branch below.
         if key.startswith("x-") or key in _DROPPED_KEYWORDS:
             dropped.append(key_path)
             continue
@@ -138,7 +154,9 @@ def _project_node(
                 # JSON Schema ignores a keyword on a node of another type, so dropping it changes nothing.
                 dropped.append(key_path)
                 continue
-            _project_keyword(key, node[key], key_path, result, dropped, reasons)
+            nullable_names.extend(
+                _project_keyword(key, node[key], key_path, result, dropped, reasons)
+            )
             continue
         if key == "enum":
             _project_enum(node[key], key_path, result, reasons)
@@ -150,9 +168,35 @@ def _project_node(
     # cannot be represented. A tool's arguments are always an object, so the root must be one.
     if (not valid_type or (is_root and node_type != "object")) and len(reasons) == reasons_before:
         reasons.append(_join(path, "type"))
+    # A nullable property is optional: take it out of `required` (and drop `required` if that emptied it).
+    required = result.get("required")
+    if nullable_names and isinstance(required, list):
+        kept = [name for name in required if name not in nullable_names]
+        if not kept:
+            del result["required"]
+        else:
+            result["required"] = kept
     if node_type == "object" and "additionalProperties" not in result:
         result["additionalProperties"] = False
     return result
+
+
+def _read_property(
+    raw: object, path: str, dropped: list[str], reasons: list[str]
+) -> tuple[object, bool]:
+    """A property schema with its nullable `anyOf` wrapper (if any) removed; the wrapper's keywords are triaged."""
+    inner = unwrap_nullable(raw)
+    if inner is raw or not isinstance(raw, dict):
+        return raw, False
+    for key in raw:
+        if key == "anyOf":
+            continue
+        key_path = _join(path, key)
+        if key.startswith("x-") or key in _DROPPED_KEYWORDS:
+            dropped.append(key_path)
+        else:
+            reasons.append(key_path)
+    return inner, True
 
 
 def _is_kept_keyword(key: str) -> bool:
@@ -181,37 +225,44 @@ def _project_keyword(
     result: dict[str, Any],
     dropped: list[str],
     reasons: list[str],
-) -> None:
+) -> list[str]:
+    """Project one kept keyword into `result`. Returns the nullable property names it saw (`properties` only)."""
     if key == "properties":
         if not isinstance(value, dict):
             reasons.append(path)
-            return
+            return []
         properties: dict[str, Any] = {}
+        nullable: list[str] = []
         for name in value:
-            child = _project_node(value[name], _join(path, name), dropped, reasons)
+            prop_path = _join(path, name)
+            schema, is_nullable = _read_property(value[name], prop_path, dropped, reasons)
+            child = _project_node(schema, prop_path, dropped, reasons)
             if child is not None:
                 properties[name] = child
+            if is_nullable:
+                nullable.append(name)
         result["properties"] = properties
-    elif key == "required":
+        return nullable
+    if key == "required":
         if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
             reasons.append(path)
-            return
+            return []
         result["required"] = list(value)
     elif key == "additionalProperties":
         # Only a literal `false` is representable. `true` / a schema object means "extra keys welcome".
         if value is not False:
             reasons.append(path)
-            return
+            return []
         result["additionalProperties"] = False
     elif key in ("minimum", "maximum"):
         if not _is_finite_number(value):
             reasons.append(path)
-            return
+            return []
         result[key] = value
     elif key in ("minLength", "maxLength", "maxItems"):
         if not _is_non_negative_integer(value):
             reasons.append(path)
-            return
+            return []
         result[key] = int(cast("int | float", value))  # validated just above
     elif key == "items":
         # A tuple form (a list of schemas) or a boolean schema has no equivalent in the subset.
@@ -220,6 +271,7 @@ def _project_keyword(
             result["items"] = child
     else:
         reasons.append(path)
+    return []
 
 
 def _project_enum(value: object, path: str, result: dict[str, Any], reasons: list[str]) -> None:
@@ -230,3 +282,38 @@ def _project_enum(value: object, path: str, result: dict[str, Any], reasons: lis
         reasons.append(path)
         return
     result["enum"] = list(value)
+
+
+# The dropped keywords that are validation constraints (not annotations): losing one loosens the gate.
+_CONSTRAINT_KEYWORDS = frozenset(
+    {
+        "pattern",
+        "format",
+        "const",
+        "multipleOf",
+        "exclusiveMinimum",
+        "exclusiveMaximum",
+        "minItems",
+        "uniqueItems",
+        "minProperties",
+        "maxProperties",
+        "contentMediaType",
+        "contentEncoding",
+    }
+)
+
+
+def dropped_constraints(dropped: list[str]) -> tuple[int, list[str]]:
+    """The dropped constraint keywords in a `SchemaProjection.dropped` list: how many dropped paths were
+    constraints, and their bare keyword names in first-appearance order without repeats. Annotations
+    (`description`, `title`, `default`, ...) are not constraints and are not counted."""
+    keywords: list[str] = []
+    count = 0
+    for path in dropped:
+        keyword = path.rsplit(".", 1)[-1]
+        if keyword not in _CONSTRAINT_KEYWORDS:
+            continue
+        count += 1
+        if keyword not in keywords:
+            keywords.append(keyword)
+    return count, keywords

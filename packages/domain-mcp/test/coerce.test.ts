@@ -29,11 +29,32 @@ describe("coerceToolArguments", () => {
     ).toEqual({ s: "x" });
   });
 
-  it("lets _limit win over an explicit limit, and ignores _limit when the tool has no limit argument", () => {
+  it("ignores _limit when the tool has no limit argument", () => {
     expect(coerceToolArguments({ limit: "9", _limit: "5" }, INPUT_SCHEMA)).toEqual({ limit: 5 });
     expect(
       coerceToolArguments({ _limit: "5", s: "x" }, { type: "object", properties: { s: { type: "string" } } }),
     ).toEqual({ s: "x" });
+  });
+
+  it("lets _limit only lower the signed limit: the smaller of the two wins", () => {
+    expect(coerceToolArguments({ limit: "3", _limit: "5" }, INPUT_SCHEMA)).toEqual({ limit: 3 });
+    expect(coerceToolArguments({ limit: "9", _limit: "5" }, INPUT_SCHEMA)).toEqual({ limit: 5 });
+    expect(coerceToolArguments({ limit: 4, _limit: "5" }, INPUT_SCHEMA)).toEqual({ limit: 4 });
+  });
+
+  it("caps the limit at maxLimit (default 1000), whichever way it was supplied", () => {
+    expect(coerceToolArguments({ limit: "5000" }, INPUT_SCHEMA)).toEqual({ limit: 1000 });
+    expect(coerceToolArguments({ _limit: "2000" }, INPUT_SCHEMA)).toEqual({ limit: 1000 });
+    expect(coerceToolArguments({ limit: "50", _limit: "40" }, INPUT_SCHEMA, { maxLimit: 10 })).toEqual({
+      limit: 10,
+    });
+    expect(coerceToolArguments({ limit: "5" }, INPUT_SCHEMA, { maxLimit: 10 })).toEqual({ limit: 5 });
+  });
+
+  it("does not invent a limit when none is supplied, nor map _limit onto a non-numeric limit", () => {
+    expect(coerceToolArguments({ s: "x" }, INPUT_SCHEMA)).toEqual({ s: "x" });
+    const stringLimit = { type: "object", properties: { limit: { type: "string" } } };
+    expect(coerceToolArguments({ _limit: "5" }, stringLimit)).toEqual({});
   });
 
   it("passes strings through for string, unknown, and untyped properties", () => {
@@ -67,13 +88,13 @@ describe("coerceToolArguments", () => {
     ["a non-boolean boolean", { b: "yes" }],
     ["a capitalised boolean", { b: "True" }],
     ["a bad _limit", { _limit: "many" }],
-  ])("throws ACTION_PARAMS_INVALID for %s", (_label, args) => {
+  ])("throws MCP_ARGUMENT_INVALID for %s", (_label, args) => {
     try {
       coerceToolArguments(args, INPUT_SCHEMA);
       expect.unreachable("expected a throw");
     } catch (error) {
       expect(error).toBeInstanceOf(McpArgumentError);
-      expect((error as McpArgumentError).code).toBe("ACTION_PARAMS_INVALID");
+      expect((error as McpArgumentError).code).toBe("MCP_ARGUMENT_INVALID");
     }
   });
 

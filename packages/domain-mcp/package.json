@@ -17,13 +17,7 @@
     "@kohaku-ui/spec-core": "workspace:^"
   },
   "peerDependencies": {
-    "@modelcontextprotocol/client": "catalog:",
     "zod": "catalog:"
-  },
-  "peerDependenciesMeta": {
-    "@modelcontextprotocol/client": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@kohaku-ui/authz-hmac": "workspace:^",

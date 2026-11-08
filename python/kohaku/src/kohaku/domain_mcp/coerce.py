@@ -8,11 +8,17 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from kohaku.spec import JsonObject, JsonValue
 
 from .nullable import unwrap_nullable
+
+# The code of McpArgumentError. Not ACTION_PARAMS_INVALID, which is the action path's 422 wire code.
+MCP_ARGUMENT_INVALID = "MCP_ARGUMENT_INVALID"
+
+# Default ceiling for the `limit` argument forwarded to a tool (see coerce_tool_arguments's max_limit).
+DEFAULT_MAX_LIMIT = 1000
 
 # The reserved ref parameters (data_binding's KNOWN_RESERVED_PARAMS) that are never forwarded as-is.
 _RESERVED = frozenset({"_cursor", "_limit", "_sort", "_dir"})
@@ -28,10 +34,17 @@ _SAFE_INTEGER = 2**53
 class McpArgumentError(ValueError):
     """A string argument cannot be converted to the type the tool's `inputSchema` asks for.
 
-    Carries the wire code `ACTION_PARAMS_INVALID` (a host-authored validation error, safe to show the caller).
+    Carries the code `MCP_ARGUMENT_INVALID` (a host-authored validation error: its message is safe to show the
+    caller). Raised inside `DomainPort.invoke` for a read, the REST host reports it like any failed read: 404
+    `REF_NOT_FOUND`.
     """
 
-    code = "ACTION_PARAMS_INVALID"
+    code = MCP_ARGUMENT_INVALID
+
+
+def _is_number(value: object) -> bool:
+    # bool is an int subclass in Python; a JSON boolean is not a number.
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _property_type(input_schema: Mapping[str, Any], name: str) -> str | None:
@@ -65,15 +78,20 @@ def _coerce_value(name: str, value: JsonValue, type_: str | None) -> JsonValue:
 
 
 def coerce_tool_arguments(
-    args: Mapping[str, JsonValue], input_schema: Mapping[str, Any]
+    args: Mapping[str, JsonValue],
+    input_schema: Mapping[str, Any],
+    *,
+    max_limit: int | float = DEFAULT_MAX_LIMIT,
 ) -> JsonObject:
     """Convert ref parameters into MCP tool arguments.
 
     Each string is converted to the `type` the tool's `inputSchema` declares for it (`number`, `integer`,
     `boolean`; everything else stays a string), and a value that does not convert raises `McpArgumentError`. The
     reserved parameters (`_cursor`, `_limit`, `_sort`, `_dir`) are never forwarded, except that `_limit` is
-    mapped onto the tool's own `limit` argument when its `inputSchema` declares one (and then wins over an
-    explicit `limit`). A value that is not a string is kept as is.
+    mapped onto the tool's own numeric `limit` argument when its `inputSchema` declares one. `_limit` is not
+    covered by the capability's signed ref, so it can only *lower* the signed `limit`: when both are present the
+    smaller wins, and `max_limit` (default 1000) then caps whatever is left. A value that is not a string is kept
+    as is.
     """
     out: JsonObject = {}
     for name, value in args.items():
@@ -81,6 +99,15 @@ def coerce_tool_arguments(
             continue
         out[name] = _coerce_value(name, value, _property_type(input_schema, name))
     limit_type = _property_type(input_schema, "limit")
-    if "_limit" in args and limit_type is not None:
-        out["limit"] = _coerce_value("limit", args["_limit"], limit_type)
+    if limit_type in ("number", "integer"):
+        candidates: list[int | float] = []
+        current = out.get("limit")
+        if _is_number(current):
+            candidates.append(cast("int | float", current))
+        if "_limit" in args:
+            lowered = _coerce_value("limit", args["_limit"], limit_type)
+            if _is_number(lowered):
+                candidates.append(cast("int | float", lowered))
+        if candidates:
+            out["limit"] = min(*candidates, max_limit)
     return out

@@ -10,12 +10,14 @@ import pytest
 from kohaku.domain_mcp import (
     McpArgumentError,
     McpResultError,
+    McpTimeoutError,
     McpToolError,
     SchemaProjectionReport,
     SkipReport,
     create_mcp_domain_port,
     mcp_data_version,
 )
+from kohaku.domain_mcp.port import MAX_LIST_PAGES
 from kohaku.spec import InvocationContext, Principal, QueryRef
 
 from ._fakes import (
@@ -23,6 +25,7 @@ from ._fakes import (
     ORDER_ROWS,
     REFUND_ORDER,
     UNANNOTATED,
+    FakeAnnotations,
     FakeClient,
     FakeContent,
     FakeResult,
@@ -50,8 +53,8 @@ def test_lists_read_only_tools_without_a_tier_and_every_other_tool_as_approve() 
         assert ops["refund_order"].tier == "approve"
         # No annotation at all is treated as a write (the MCP default for readOnlyHint is false).
         assert ops["touch_thing"].tier == "approve"
-        assert list(port.query_ops) == ["list_orders"]
-        assert list(port.action_ops) == ["refund_order", "touch_thing"]
+        assert sorted(port.query_ops) == ["list_orders"]
+        assert sorted(port.action_ops) == ["refund_order", "touch_thing"]
 
     asyncio.run(run())
 
@@ -305,3 +308,230 @@ def test_mcp_data_version_defaults_to_a_300_second_bucket_and_rejects_a_bad_buck
         mcp_data_version(bucket_seconds=0)
     with pytest.raises(ValueError):
         mcp_data_version(bucket_seconds=True)
+
+
+_TRICKY_WRITE = FakeTool(
+    name="wipe",
+    input_schema={"type": "object"},
+    annotations=FakeAnnotations(read_only_hint=True),
+)
+
+
+def test_is_read_only_replaces_the_read_only_hint_default() -> None:
+    async def run() -> None:
+        port = await create_mcp_domain_port(
+            client=FakeClient([LIST_ORDERS, _TRICKY_WRITE]),
+            is_read_only=lambda tool: tool.name == "list_orders",
+        )
+        assert sorted(port.query_ops) == ["list_orders"]
+        assert sorted(port.action_ops) == ["wipe"]
+        ops = {op.name: op for op in await port.list_operations()}
+        assert ops["wipe"].tier == "approve"
+
+    asyncio.run(run())
+
+
+def test_tier_for_returning_none_keeps_approve() -> None:
+    async def run() -> None:
+        port = await create_mcp_domain_port(
+            client=FakeClient([REFUND_ORDER]), tier_for=lambda tool: None
+        )
+        assert (await port.list_operations())[0].tier == "approve"
+
+    asyncio.run(run())
+
+
+def test_applies_include_before_the_duplicate_check() -> None:
+    skips: list[SkipReport] = []
+    second = FakeTool(
+        name=LIST_ORDERS.name,
+        input_schema=LIST_ORDERS.input_schema,
+        description="second",
+        annotations=LIST_ORDERS.annotations,
+    )
+
+    async def run() -> None:
+        port = await create_mcp_domain_port(
+            client=FakeClient([LIST_ORDERS, second]),
+            include=lambda tool: tool.description == "second",
+            on_skip=skips.append,
+        )
+        assert [op.description for op in await port.list_operations()] == ["second"]
+
+    asyncio.run(run())
+    assert skips == []
+
+
+def test_drops_every_copy_of_a_name_whose_copies_disagree_fail_closed() -> None:
+    skips: list[SkipReport] = []
+    as_write = FakeTool(
+        name=LIST_ORDERS.name,
+        input_schema=LIST_ORDERS.input_schema,
+        description=LIST_ORDERS.description,
+        annotations=FakeAnnotations(read_only_hint=False),
+    )
+
+    async def run() -> None:
+        port = await create_mcp_domain_port(
+            client=FakeClient([LIST_ORDERS, as_write, REFUND_ORDER]), on_skip=skips.append
+        )
+        assert [op.name for op in await port.list_operations()] == ["refund_order"]
+
+    asyncio.run(run())
+    assert len(skips) == 2
+    assert "disagree" in skips[0].reason
+
+
+def test_stops_listing_at_max_list_pages_and_says_so() -> None:
+    client = FakeClient([LIST_ORDERS], endless=True)
+
+    async def run() -> None:
+        await create_mcp_domain_port(client=client)
+
+    with pytest.raises(RuntimeError, match="did not end after 100 pages"):
+        asyncio.run(run())
+    assert len(client.list_calls) == MAX_LIST_PAGES
+
+
+def test_hands_out_immutable_views() -> None:
+    async def run() -> None:
+        port = await create_mcp_domain_port(client=_standard_client())
+        assert isinstance(port.query_ops, frozenset)
+        assert isinstance(port.action_ops, frozenset)
+        with pytest.raises(TypeError):
+            port.tools["x"] = LIST_ORDERS  # type: ignore[index]
+        assert len(port.tools) == 3
+        ops = await port.list_operations()
+        ops[0] = ops[1]
+        assert (await port.list_operations())[0].name == "list_orders"
+        # Intent order follows the listing order, not a hash order.
+        assert list(port.tools) == ["list_orders", "refund_order", "touch_thing"]
+
+    asyncio.run(run())
+
+
+def test_tells_the_approver_which_constraints_the_projection_dropped() -> None:
+    constrained = FakeTool(
+        name="pay",
+        description="Pay it",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": "^p-",
+                    "format": "uuid",
+                    "description": "kept out",
+                },
+                "n": {"type": "integer", "exclusiveMinimum": 0, "multipleOf": 2},
+            },
+        },
+    )
+    odd = FakeTool(
+        name="weird",
+        description="Weird",
+        input_schema={
+            "type": "object",
+            "properties": {"a": {"anyOf": [{"type": "string"}, {"type": "number"}]}},
+        },
+    )
+    clean = FakeTool(name="tidy", description="Tidy", input_schema={"type": "object"})
+
+    async def run() -> None:
+        port = await create_mcp_domain_port(client=FakeClient([constrained, odd, clean]))
+        by_name = {op.name: op.description for op in await port.list_operations()}
+        assert by_name["pay"] == (
+            "Pay it (4 schema constraints omitted: pattern, format, exclusiveMinimum, multipleOf)"
+        )
+        assert by_name["weird"] == "Weird (parameter schema omitted: the payload is not validated)"
+        assert by_name["tidy"] == "Tidy"
+
+    asyncio.run(run())
+
+
+def test_forwards_the_lowered_capped_limit_to_the_tool() -> None:
+    client = _standard_client()
+
+    async def run() -> None:
+        port = await create_mcp_domain_port(client=client, max_limit=50)
+        await port.invoke("list_orders", {"limit": "40", "_limit": "500"}, CTX)
+        await port.invoke("list_orders", {"limit": "5000"}, CTX)
+
+    asyncio.run(run())
+    assert [arguments for _, arguments in client.calls] == [{"limit": 40}, {"limit": 50}]
+
+
+def test_refuses_a_query_result_over_max_rows_or_max_result_bytes() -> None:
+    client = _standard_client()
+
+    async def run() -> None:
+        rows = await create_mcp_domain_port(client=client, max_rows=1)
+        with pytest.raises(McpResultError):
+            await rows.invoke("list_orders", {}, CTX)
+        size = await create_mcp_domain_port(client=client, max_result_bytes=10)
+        with pytest.raises(McpResultError):
+            await size.invoke("list_orders", {}, CTX)
+
+    asyncio.run(run())
+
+
+def test_passes_the_sdk_timeout_to_the_client() -> None:
+    client = _standard_client()
+
+    async def run() -> None:
+        port = await create_mcp_domain_port(client=client, call_timeout_ms=1000)
+        await port.invoke("list_orders", {}, CTX)
+
+    asyncio.run(run())
+    assert client.timeouts[0] is not None
+    assert client.timeouts[0] > 1.0
+
+
+def test_times_out_a_query_that_never_answers_cancelling_the_request() -> None:
+    client = FakeClient([LIST_ORDERS, REFUND_ORDER], hang=("list_orders",))
+
+    async def run() -> None:
+        port = await create_mcp_domain_port(client=client, call_timeout_ms=20)
+        with pytest.raises(McpTimeoutError) as info:
+            await port.invoke("list_orders", {}, CTX)
+        assert "effect is unknown" not in str(info.value)
+
+    asyncio.run(run())
+    assert client.cancelled == ["list_orders"]
+
+
+def test_times_out_a_write_without_retrying_it_and_says_its_effect_is_unknown() -> None:
+    client = FakeClient([REFUND_ORDER], hang=("refund_order",))
+
+    async def run() -> None:
+        port = await create_mcp_domain_port(client=client, call_timeout_ms=20)
+        with pytest.raises(McpTimeoutError) as info:
+            await port.invoke("refund_order", {"orderId": "o"}, CTX)
+        assert "the upstream tool did not answer in time; its effect is unknown" in str(info.value)
+
+    asyncio.run(run())
+    assert len(client.calls) == 1
+
+
+def test_rejects_a_non_positive_call_timeout() -> None:
+    async def run() -> None:
+        await create_mcp_domain_port(client=_standard_client(), call_timeout_ms=0)
+
+    with pytest.raises(ValueError, match="call_timeout_ms"):
+        asyncio.run(run())
+
+
+def test_data_composed_across_a_bucket_boundary_carries_the_later_version() -> None:
+    now = [299.0]  # seconds: 1s before the first boundary at 300s
+    version = mcp_data_version(bucket_seconds=300, now=lambda: now[0])
+
+    async def run() -> None:
+        port = await create_mcp_domain_port(client=_standard_client(), data_version=version)
+        spec_version = port.data_version()  # what a Spec composed now would carry
+        now[0] = 301.0
+        data = await port.invoke("list_orders", {}, CTX)
+        # The Spec is now one bucket behind the data: it goes stale once, which is the documented behaviour.
+        assert spec_version == "mcp:0"
+        assert data.dataVersion == "mcp:1"  # type: ignore[attr-defined]
+
+    asyncio.run(run())

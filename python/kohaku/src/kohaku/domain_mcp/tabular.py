@@ -121,11 +121,24 @@ def infer_columns(rows: list[JsonObject]) -> list[TabularColumn]:
     return columns
 
 
+# Default cap on the number of rows of one query result.
+DEFAULT_MAX_ROWS = 10_000
+
+# Default cap on the serialized size (UTF-8 bytes of the compact JSON) of one query result.
+DEFAULT_MAX_RESULT_BYTES = 10 * 1024 * 1024
+
+
 def to_tabular_data(
-    result: McpCallResult, data_version: str, tool: str | None = None
+    result: McpCallResult,
+    data_version: str,
+    tool: str | None = None,
+    *,
+    max_rows: int = DEFAULT_MAX_ROWS,
+    max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES,
 ) -> TabularData:
     """Convert a successful MCP tool result into `TabularData`. Raises `McpToolError` for `is_error`, and
-    `McpResultError` when the result is not (a wrapper around) a list of objects."""
+    `McpResultError` when the result is not (a wrapper around) a list of objects or exceeds `max_rows` /
+    `max_result_bytes`. The limit errors carry fixed messages that never echo upstream content."""
     assert_tool_succeeded(result, tool)
     label = "" if tool is None else f' "{tool}"'
     rows_list = find_row_list(payload_of(result))
@@ -134,7 +147,14 @@ def to_tabular_data(
             f"MCP tool{label} returned something other than a list of rows "
             "(expected an array, or an object with a `rows` array, in structuredContent or as JSON text)"
         )
+    if len(rows_list) > max_rows:
+        raise McpResultError(f"MCP tool{label} returned more than {max_rows} rows")
     if not all(isinstance(row, dict) for row in rows_list):
         raise McpResultError(f"MCP tool{label} returned a list whose items are not all objects")
+    serialized = json.dumps(rows_list, separators=(",", ":"), ensure_ascii=False)
+    if len(serialized.encode("utf-8")) > max_result_bytes:
+        raise McpResultError(
+            f"MCP tool{label} returned a result larger than {max_result_bytes} bytes"
+        )
     rows = cast("list[JsonObject]", rows_list)
     return TabularData(columns=infer_columns(rows), rows=rows, dataVersion=data_version)

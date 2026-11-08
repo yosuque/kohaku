@@ -7,34 +7,28 @@ so this package imports fine without the `mcp` extra (`pip install 'kohaku-ui[mc
 client).
 """
 
-from .coerce import McpArgumentError, coerce_tool_arguments
-from .data_version import DEFAULT_BUCKET_SECONDS, mcp_data_version
+from .coerce import MCP_ARGUMENT_INVALID, McpArgumentError, coerce_tool_arguments
+from .data_version import mcp_data_version
 from .intents import create_mcp_intents
 from .port import (
     McpDomainPort,
+    McpTimeoutError,
     SchemaProjectionReport,
     SkipReport,
     create_mcp_domain_port,
 )
 from .schema_projection import SchemaProjection, project_input_schema
 from .shape import shape_from_output_schema
-from .tabular import (
-    COLUMN_INFERENCE_ROWS,
-    McpResultError,
-    McpToolError,
-    find_row_list,
-    infer_columns,
-    to_tabular_data,
-)
+from .tabular import McpResultError, McpToolError, to_tabular_data
 from .types import McpCallResult, McpToolClientLike, McpToolInfo
 
 __all__ = [
-    "COLUMN_INFERENCE_ROWS",
-    "DEFAULT_BUCKET_SECONDS",
+    "MCP_ARGUMENT_INVALID",
     "McpArgumentError",
     "McpCallResult",
     "McpDomainPort",
     "McpResultError",
+    "McpTimeoutError",
     "McpToolClientLike",
     "McpToolError",
     "McpToolInfo",
@@ -44,8 +38,6 @@ __all__ = [
     "coerce_tool_arguments",
     "create_mcp_domain_port",
     "create_mcp_intents",
-    "find_row_list",
-    "infer_columns",
     "mcp_data_version",
     "project_input_schema",
     "shape_from_output_schema",

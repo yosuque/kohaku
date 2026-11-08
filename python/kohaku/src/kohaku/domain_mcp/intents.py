@@ -88,11 +88,19 @@ def create_mcp_intents(
     """One `IntentDef` per read-only tool of the port.
 
     The params come from the tool's `inputSchema` (strings, numbers, integers and string enums; other optional
-    parameters are left out, and a tool that requires one is skipped), `queries` is `[{path: tool.name}]` on
-    `source`, and the canonical name is `<source>.<tool name lowercased>`. `source` is the host's query source and
-    must be lowercase letters, digits and underscores, starting with a letter. Actions never get an Intent: a
-    `query://` ref, and so a read capability, can only ever be issued for an Intent's resolved refs, which is
-    what keeps a write tool from being read.
+    parameters are left out, and a tool that requires one is skipped, with `on_skip`), `queries` is
+    `[{path: tool.name}]` on `source`, and the canonical name is `<source>.<segment>`, where the segment is the
+    tool name lowercased with every character outside `[a-z0-9_]` (`-`, `.`, ...) replaced by `_`, and prefixed
+    `t_` if it would not start with a letter. Two tools that map to the same canonical name make this raise.
+    `source` is the host's query source and must be lowercase letters, digits and underscores, starting with a
+    letter.
+
+    Silent limits: an optional parameter of a type an Intent cannot carry (boolean, array, object, a genuine
+    union) is left out, so it can never be set through an Intent.
+
+    Actions never get an Intent: a `query://` ref, and so a read capability, can only ever be issued for an
+    Intent's resolved refs, which is what keeps a write tool from being read. A hand-written Intent must never
+    point at an action op (`port.action_ops`).
     """
     if _SOURCE_PATTERN.fullmatch(source) is None:
         raise ValueError(
@@ -101,9 +109,8 @@ def create_mcp_intents(
         )
     intents: list[IntentDef] = []
     names: dict[str, str] = {}
-    for name in port.query_ops:
-        tool = port.tools.get(name)
-        if tool is None:
+    for name, tool in port.tools.items():
+        if name not in port.query_ops:
             continue
         shape, skip = _params_for(tool)
         if shape is None:

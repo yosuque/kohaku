@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -48,22 +49,43 @@ class FakeClient:
         tools: list[FakeTool],
         results: dict[str, FakeResult] | None = None,
         page_size: int | None = None,
+        *,
+        hang: tuple[str, ...] = (),
+        endless: bool = False,
     ) -> None:
         self._tools = tools
         self._results = results or {}
         self._page_size = page_size if page_size is not None else max(len(tools), 1)
+        self._hang = hang
+        self._endless = endless
         self.calls: list[tuple[str, dict[str, Any] | None]] = []
+        self.timeouts: list[float | None] = []
         self.list_calls: list[str | None] = []
+        self.cancelled: list[str] = []
 
     async def list_tools(self, *, cursor: str | None = None) -> FakeListResult:
         self.list_calls.append(cursor)
+        if self._endless:
+            return FakeListResult(tools=self._tools, next_cursor=str(len(self.list_calls)))
         start = 0 if cursor is None else int(cursor)
         end = start + self._page_size
         page = self._tools[start:end]
         return FakeListResult(tools=page, next_cursor=str(end) if end < len(self._tools) else None)
 
-    async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> FakeResult:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+        read_timeout_seconds: float | None = None,
+    ) -> FakeResult:
         self.calls.append((name, arguments))
+        self.timeouts.append(read_timeout_seconds)
+        if name in self._hang:
+            try:
+                await asyncio.Event().wait()  # never answers; only a cancellation ends it
+            except asyncio.CancelledError:
+                self.cancelled.append(name)
+                raise
         result = self._results.get(name)
         if result is None:
             raise RuntimeError(f"no scripted result for {name}")

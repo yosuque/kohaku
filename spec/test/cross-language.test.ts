@@ -44,7 +44,7 @@ import { L2_SYSTEM_PROMPT, PROMPT_REVISION } from "../../packages/composer/src/p
 import { coerceToolArguments } from "../../packages/domain-mcp/src/coerce.js";
 import { projectInputSchema } from "../../packages/domain-mcp/src/schema-projection.js";
 import { shapeFromOutputSchema } from "../../packages/domain-mcp/src/shape.js";
-import { toTabularData } from "../../packages/domain-mcp/src/tabular.js";
+import { type TabularLimits, toTabularData } from "../../packages/domain-mcp/src/tabular.js";
 // Relative (not "@kohaku-ui/lineage") import, same reasoning as generate-cross-language-fixtures.ts's
 // own lineage import.
 import {
@@ -86,8 +86,9 @@ interface Fixture {
   distillation: { jsonl: string };
   domainMcp: {
     schemaProjection: { inputSchema: unknown; expected: unknown }[];
-    argumentCoercion: { args: unknown; inputSchema: unknown; expected: unknown }[];
-    tabular: { result: unknown; dataVersion: string; expected: unknown }[];
+    schemaProjectionRaw: { json: string; expected: unknown }[];
+    argumentCoercion: { args: unknown; inputSchema: unknown; maxLimit?: number; expected: unknown }[];
+    tabular: { result: unknown; dataVersion: string; limits?: TabularLimits; expected: unknown }[];
     shape: { outputSchema: unknown; expected: unknown }[];
   };
   promptFragments: {
@@ -186,17 +187,27 @@ describe("cross-language golden (byte compatibility of canonical JSON / hash)", 
     for (const c of fixture.domainMcp.schemaProjection) {
       same(projectInputSchema(c.inputSchema), c.expected);
     }
+    expect(fixture.domainMcp.schemaProjectionRaw.length).toBeGreaterThan(0);
+    for (const c of fixture.domainMcp.schemaProjectionRaw) {
+      same(projectInputSchema(JSON.parse(c.json)), c.expected);
+    }
     expect(fixture.domainMcp.argumentCoercion.length).toBeGreaterThan(0);
     for (const c of fixture.domainMcp.argumentCoercion) {
       same(
-        attempt(() => coerceToolArguments(c.args as never, c.inputSchema as never)),
+        attempt(() =>
+          coerceToolArguments(
+            c.args as never,
+            c.inputSchema as never,
+            c.maxLimit !== undefined ? { maxLimit: c.maxLimit } : {},
+          ),
+        ),
         c.expected,
       );
     }
     expect(fixture.domainMcp.tabular.length).toBeGreaterThan(0);
     for (const c of fixture.domainMcp.tabular) {
       same(
-        attempt(() => toTabularData(c.result as never, c.dataVersion)),
+        attempt(() => toTabularData(c.result as never, c.dataVersion, undefined, c.limits ?? {})),
         c.expected,
       );
     }

@@ -150,3 +150,93 @@ def test_a_boolean_is_not_a_number_for_the_numeric_keywords() -> None:
         {"type": "object", "properties": {"a": {"type": "number", "minimum": True}}}
     )
     assert result.omitted is True
+
+
+def test_projects_a_nullable_any_of_as_the_optional_property() -> None:
+    result = project_input_schema(
+        {
+            "type": "object",
+            "properties": {
+                "orderId": {"type": "string"},
+                "amount": {
+                    "anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}],
+                    "default": None,
+                    "title": "Amount",
+                },
+                "mode": {
+                    "anyOf": [{"type": "null"}, {"type": "string", "enum": ["full", "partial"]}]
+                },
+            },
+            "required": ["orderId", "amount"],
+        }
+    )
+    assert result.omitted is False
+    assert result.schema == {
+        "type": "object",
+        "properties": {
+            "orderId": {"type": "string"},
+            "amount": {"type": "number", "minimum": 0},
+            "mode": {"type": "string", "enum": ["full", "partial"]},
+        },
+        "required": ["orderId"],
+        "additionalProperties": False,
+    }
+    assert result.dropped == ["properties.amount.default", "properties.amount.title"]
+    assert result.schema is not None
+    assert_valid_action_params_schema("refund", result.schema)
+
+
+def test_drops_required_when_only_nullable_properties_were_required() -> None:
+    result = project_input_schema(
+        {
+            "type": "object",
+            "properties": {"a": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
+            "required": ["a"],
+        }
+    )
+    assert result.schema == {
+        "type": "object",
+        "properties": {"a": {"type": "integer"}},
+        "additionalProperties": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "prop",
+    [
+        {"anyOf": [{"type": "integer"}, {"type": "string"}]},
+        {"anyOf": [{"type": "integer"}, {"type": "string"}, {"type": "null"}]},
+        {"anyOf": [{"type": "integer"}, {"type": "null"}], "oneOf": []},
+        {"anyOf": [{"type": "null"}, {"type": "null"}]},
+    ],
+)
+def test_still_omits_for_any_other_any_of(prop: dict[str, Any]) -> None:
+    result = project_input_schema({"type": "object", "properties": {"a": prop}})
+    assert result.omitted is True
+    assert result.schema is None
+
+
+def test_a_huge_number_literal_is_non_finite_not_a_crash() -> None:
+    import json
+
+    for text in (
+        '{"type":"object","properties":{"a":{"type":"number","minimum":1e999}}}',
+        '{"type":"object","properties":{"a":{"type":"number","maximum":1' + "0" * 400 + "}}}",
+        '{"type":"object","properties":{"a":{"type":"string","maxLength":1' + "0" * 400 + "}}}",
+    ):
+        result = project_input_schema(json.loads(text))
+        assert result.omitted is True
+        assert result.schema is None
+
+
+def test_accepts_an_integral_float_length() -> None:
+    import json
+
+    result = project_input_schema(
+        json.loads('{"type":"object","properties":{"a":{"type":"string","maxLength":1.0}}}')
+    )
+    assert result.schema == {
+        "type": "object",
+        "properties": {"a": {"type": "string", "maxLength": 1}},
+        "additionalProperties": False,
+    }

@@ -57,6 +57,62 @@ describe("projectInputSchema", () => {
     });
   });
 
+  it("projects a nullable anyOf (Pydantic's Optional[X]) as the optional property X", () => {
+    const result = projectInputSchema({
+      type: "object",
+      properties: {
+        orderId: { type: "string" },
+        amount: { anyOf: [{ type: "number", minimum: 0 }, { type: "null" }], default: null, title: "Amount" },
+        mode: { anyOf: [{ type: "null" }, { type: "string", enum: ["full", "partial"] }] },
+      },
+      required: ["orderId", "amount"],
+    });
+    expect(result.omitted).toBe(false);
+    expect(result.schema).toEqual({
+      type: "object",
+      properties: {
+        orderId: { type: "string" },
+        amount: { type: "number", minimum: 0 },
+        mode: { type: "string", enum: ["full", "partial"] },
+      },
+      required: ["orderId"],
+      additionalProperties: false,
+    });
+    expect(result.dropped).toEqual(["properties.amount.default", "properties.amount.title"]);
+    expect(ActionParamsSchemaSchema.safeParse(result.schema).success).toBe(true);
+  });
+
+  it("drops `required` when only nullable properties were required", () => {
+    const result = projectInputSchema({
+      type: "object",
+      properties: { a: { anyOf: [{ type: "integer" }, { type: "null" }] } },
+      required: ["a"],
+    });
+    expect(result.schema).toEqual({
+      type: "object",
+      properties: { a: { type: "integer" } },
+      additionalProperties: false,
+    });
+  });
+
+  it("still omits for any other anyOf, or a nullable anyOf carrying an unknown sibling keyword", () => {
+    for (const property of [
+      { anyOf: [{ type: "integer" }, { type: "string" }] },
+      { anyOf: [{ type: "integer" }, { type: "string" }, { type: "null" }] },
+      { anyOf: [{ type: "integer" }, { type: "null" }], oneOf: [] },
+    ]) {
+      expect(projectInputSchema({ type: "object", properties: { a: property } })).toMatchObject({
+        schema: null,
+        omitted: true,
+      });
+    }
+  });
+
+  it("treats a number literal beyond the double range as non-finite and omits", () => {
+    const huge = JSON.parse(`{"type":"object","properties":{"a":{"type":"number","minimum":1e999}}}`);
+    expect(projectInputSchema(huge)).toMatchObject({ schema: null, omitted: true });
+  });
+
   it("closes a property-less object schema", () => {
     expect(projectInputSchema({ type: "object" }).schema).toEqual({
       type: "object",

@@ -118,3 +118,24 @@ def test_throws_mcp_tool_error_without_a_wire_code_when_the_tool_reports_is_erro
         to_tabular_data(result, "v1")
     assert "boom" in str(info.value)
     assert not hasattr(info.value, "code")
+
+
+def test_refuses_a_result_over_max_rows_or_max_result_bytes() -> None:
+    rows = [{"a": 1}, {"a": 2}, {"a": 3}]
+    result = FakeResult(structured_content=rows)
+    with pytest.raises(McpResultError, match="more than 2 rows"):
+        to_tabular_data(result, "v1", "t", max_rows=2)
+    assert len(to_tabular_data(result, "v1", "t", max_rows=3).rows) == 3
+    size = len(json.dumps(rows, separators=(",", ":")).encode())
+    with pytest.raises(McpResultError, match="larger than"):
+        to_tabular_data(result, "v1", "t", max_result_bytes=size - 1)
+    assert len(to_tabular_data(result, "v1", "t", max_result_bytes=size).rows) == 3
+
+
+def test_measures_the_size_in_utf8_bytes_not_characters() -> None:
+    result = FakeResult(structured_content=[{"a": "日本語"}])
+    size = len(json.dumps([{"a": "日本語"}], separators=(",", ":"), ensure_ascii=False).encode())
+    assert size == 19
+    with pytest.raises(McpResultError):
+        to_tabular_data(result, "v1", "t", max_result_bytes=size - 1)
+    assert len(to_tabular_data(result, "v1", "t", max_result_bytes=size).rows) == 1

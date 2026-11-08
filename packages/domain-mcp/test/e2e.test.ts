@@ -130,7 +130,7 @@ async function setup() {
     llm,
     intents,
     describeShape: (ref) => port.describeShape(ref),
-    // The port stamps the data with this very function, so the Spec's version and the data's never disagree.
+    // The port stamps the data with this very function (they only differ across a bucket boundary, once).
     dataVersion: port.dataVersion,
     authz,
     routes: {

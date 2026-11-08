@@ -499,7 +499,7 @@ guide](../docs/user-guide.md)'s "Governed actions: tiers" section for the full w
 `kohaku.domain_mcp` mirrors `@kohaku-ui/domain-mcp`: an existing MCP server becomes the host's `DomainPort`. A tool
 with `annotations.read_only_hint is True` is a `query://` op (the result becomes `TabularData`); every other tool is
 an Action with `tier="approve"` (`tier_for` overrides) whose `paramsSchema` is its `inputSchema` projected onto the
-closed `ActionParamsSchema` subset (or absent when it uses `anyOf` / `oneOf` / `$ref` / `additionalProperties: true`).
+closed `ActionParamsSchema` subset (or absent when it uses an `anyOf` other than the nullable `Optional[X]` form, `oneOf`, `$ref` or `additionalProperties: true`).
 It lives under the existing `mcp` extra (`pip install 'kohaku-ui[mcp]'`) and imports nothing from `mcp` itself: the
 official SDK's `Client` is passed in (any object with `list_tools(cursor=...)` / `call_tool(name, arguments)` works).
 
@@ -516,8 +516,8 @@ async with Client("http://upstream.example/mcp") as client:
 `mcp_data_version()` is a time bucket (`mcp:<floor(now / 300)>`; its `now` takes epoch **seconds**, where the TS
 `now` takes milliseconds). The projection, string-ref-param coercion, result → `TabularData` conversion and
 `outputSchema` → `DataShape` are pinned to the TS output by the `domainMcp` section of the cross-language golden
-fixture. `query_ops` / `action_ops` are ordered tuples where TS has `ReadonlySet`s (the Intent order follows the
-tool listing order). See [docs/user-guide.md](../docs/user-guide.md) ("Starting from an existing MCP server").
+fixture. `query_ops` / `action_ops` are `frozenset`s (TS: `ReadonlySet`); `tools` is a read-only mapping in listing order, which
+is the order Intents are made in. `call_timeout_ms` is in milliseconds as in TS. See [docs/user-guide.md](../docs/user-guide.md) ("Starting from an existing MCP server").
 
 ## Verbose failure logging (`KOHAKU_DEBUG`, symmetric with TS)
 

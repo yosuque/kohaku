@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { McpArgumentError } from "../src/coerce.js";
 import { mcpDataVersion } from "../src/data-version.js";
-import { createMcpDomainPort } from "../src/port.js";
+import { createMcpDomainPort, MAX_LIST_PAGES, McpTimeoutError } from "../src/port.js";
 import { McpResultError, McpToolError } from "../src/tabular.js";
+import type { McpToolInfo } from "../src/types.js";
 import { fakeClient, LIST_ORDERS, ORDER_ROWS, REFUND_ORDER, UNANNOTATED } from "./fake-client.js";
 
 const CTX = { principal: { id: "u1" } };
@@ -115,7 +116,9 @@ describe("createMcpDomainPort", () => {
       rows: ORDER_ROWS,
       dataVersion: "mcp:42",
     });
-    expect(client.calls).toEqual([{ name: "list_orders", arguments: { status: "open", limit: 5 } }]);
+    expect(client.calls.map(({ name, arguments: a }) => ({ name, arguments: a }))).toEqual([
+      { name: "list_orders", arguments: { status: "open", limit: 5 } },
+    ]);
   });
 
   it("surfaces a bad string argument as ACTION_PARAMS_INVALID without calling the tool", async () => {
@@ -148,7 +151,9 @@ describe("createMcpDomainPort", () => {
     const port = await createMcpDomainPort({ client });
     const result = await port.invoke("refund_order", { orderId: "o-1", amount: 5 }, CTX);
     expect(result).toEqual({ refunded: true, orderId: "o-1" });
-    expect(client.calls).toEqual([{ name: "refund_order", arguments: { orderId: "o-1", amount: 5 } }]);
+    expect(client.calls.map(({ name, arguments: a }) => ({ name, arguments: a }))).toEqual([
+      { name: "refund_order", arguments: { orderId: "o-1", amount: 5 } },
+    ]);
   });
 
   it("returns the JSON text result of an Action, wraps a non-object, and acknowledges an empty one", async () => {
@@ -192,6 +197,161 @@ describe("createMcpDomainPort", () => {
     const dataVersion = () => "fixed";
     const port = await createMcpDomainPort({ client: standardClient(), dataVersion });
     expect(port.dataVersion()).toBe("fixed");
+  });
+});
+
+describe("createMcpDomainPort: classification and listing", () => {
+  const TRICKY_WRITE: McpToolInfo = {
+    name: "wipe",
+    inputSchema: { type: "object" },
+    annotations: { readOnlyHint: true },
+  };
+
+  it("lets isReadOnly replace the readOnlyHint default (the hint is untrusted)", async () => {
+    const port = await createMcpDomainPort({
+      client: fakeClient({ tools: [LIST_ORDERS, TRICKY_WRITE] }),
+      isReadOnly: (tool) => tool.name === "list_orders",
+    });
+    expect([...port.queryOps]).toEqual(["list_orders"]);
+    expect([...port.actionOps]).toEqual(["wipe"]);
+    const ops = await port.listOperations();
+    expect(ops.find((op) => op.name === "wipe")?.tier).toBe("approve");
+  });
+
+  it("applies include before the duplicate check, so a left-out copy is not a duplicate", async () => {
+    const onSkip = vi.fn();
+    const second = { ...LIST_ORDERS, description: "second" };
+    const port = await createMcpDomainPort({
+      client: fakeClient({ tools: [LIST_ORDERS, second] }),
+      include: (tool) => tool.description === "second",
+      onSkip,
+    });
+    expect(onSkip).not.toHaveBeenCalled();
+    expect((await port.listOperations()).map((op) => op.description)).toEqual(["second"]);
+  });
+
+  it("drops every copy of a name whose copies disagree on read-only vs write (fail closed)", async () => {
+    const onSkip = vi.fn();
+    const asWrite: McpToolInfo = { ...LIST_ORDERS, annotations: { readOnlyHint: false } };
+    const port = await createMcpDomainPort({
+      client: fakeClient({ tools: [LIST_ORDERS, asWrite, REFUND_ORDER] }),
+      onSkip,
+    });
+    expect((await port.listOperations()).map((op) => op.name)).toEqual(["refund_order"]);
+    expect(onSkip).toHaveBeenCalledTimes(2);
+    expect(onSkip.mock.calls[0]?.[0].reason).toMatch(/disagree/);
+  });
+
+  it("stops listing at MAX_LIST_PAGES pages and says so", async () => {
+    const client = fakeClient({ tools: [LIST_ORDERS], endless: true });
+    await expect(createMcpDomainPort({ client })).rejects.toThrow(/did not end after 100 pages/);
+    expect(client.listCalls).toHaveLength(MAX_LIST_PAGES);
+  });
+
+  it("hands out copies, so a caller cannot mutate what invoke branches on", async () => {
+    const port = await createMcpDomainPort({ client: standardClient() });
+    (port.queryOps as Set<string>).add("refund_order");
+    (port.actionOps as Set<string>).clear();
+    (port.tools as Map<string, McpToolInfo>).clear();
+    expect([...port.queryOps]).toEqual(["list_orders"]);
+    expect([...port.actionOps]).toEqual(["refund_order", "touch_thing"]);
+    expect(port.tools.size).toBe(3);
+    const ops = await port.listOperations();
+    ops[0] = { name: "x", description: "x" };
+    expect((await port.listOperations())[0]?.name).toBe("list_orders");
+    await port.invoke("refund_order", { orderId: "o-1" }, CTX); // still an Action, not coerced like a query
+  });
+
+  it("tells the approver which constraints the projection dropped, and when no schema was attached", async () => {
+    const constrained: McpToolInfo = {
+      name: "pay",
+      description: "Pay it",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string", pattern: "^p-", format: "uuid", description: "kept out" },
+          n: { type: "integer", exclusiveMinimum: 0, multipleOf: 2 },
+        },
+      },
+    };
+    const odd: McpToolInfo = {
+      name: "weird",
+      description: "Weird",
+      inputSchema: { type: "object", properties: { a: { anyOf: [{ type: "string" }, { type: "number" }] } } },
+    };
+    const clean: McpToolInfo = { name: "tidy", description: "Tidy", inputSchema: { type: "object" } };
+    const port = await createMcpDomainPort({ client: fakeClient({ tools: [constrained, odd, clean] }) });
+    const byName = Object.fromEntries((await port.listOperations()).map((op) => [op.name, op.description]));
+    expect(byName["pay"]).toBe(
+      "Pay it (4 schema constraints omitted: pattern, format, exclusiveMinimum, multipleOf)",
+    );
+    expect(byName["weird"]).toBe("Weird (parameter schema omitted: the payload is not validated)");
+    expect(byName["tidy"]).toBe("Tidy");
+  });
+});
+
+describe("createMcpDomainPort: limits and deadlines", () => {
+  it("forwards the lowered, capped limit to the tool", async () => {
+    const client = standardClient();
+    const port = await createMcpDomainPort({ client, maxLimit: 50 });
+    await port.invoke("list_orders", { limit: "40", _limit: "500" }, CTX);
+    await port.invoke("list_orders", { limit: "5000" }, CTX);
+    expect(client.calls.map((c) => c.arguments)).toEqual([{ limit: 40 }, { limit: 50 }]);
+  });
+
+  it("refuses a query result over maxRows or maxResultBytes", async () => {
+    const client = standardClient();
+    const rows = await createMcpDomainPort({ client, maxRows: 1 });
+    await expect(rows.invoke("list_orders", {}, CTX)).rejects.toBeInstanceOf(McpResultError);
+    const bytes = await createMcpDomainPort({ client, maxResultBytes: 10 });
+    await expect(bytes.invoke("list_orders", {}, CTX)).rejects.toBeInstanceOf(McpResultError);
+  });
+
+  it("passes an abort signal and the SDK timeout to the client", async () => {
+    const client = standardClient();
+    const port = await createMcpDomainPort({ client, callTimeoutMs: 1000 });
+    await port.invoke("list_orders", {}, CTX);
+    const options = client.calls[0]?.options;
+    expect(options?.signal).toBeInstanceOf(AbortSignal);
+    expect(options?.timeout).toBeGreaterThan(1000);
+  });
+
+  it("times out a query that never answers, aborting the request", async () => {
+    const client = fakeClient({ tools: [LIST_ORDERS, REFUND_ORDER], hang: ["list_orders"] });
+    const port = await createMcpDomainPort({ client, callTimeoutMs: 20 });
+    const failure = await port.invoke("list_orders", {}, CTX).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(McpTimeoutError);
+    expect((failure as Error).message).not.toMatch(/effect is unknown/);
+    expect(client.aborted).toEqual(["list_orders"]);
+  });
+
+  it("times out a write without retrying it, and says its effect is unknown", async () => {
+    const client = fakeClient({ tools: [REFUND_ORDER], hang: ["refund_order"] });
+    const port = await createMcpDomainPort({ client, callTimeoutMs: 20 });
+    const failure = await port.invoke("refund_order", { orderId: "o" }, CTX).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(McpTimeoutError);
+    expect((failure as Error).message).toContain(
+      "the upstream tool did not answer in time; its effect is unknown",
+    );
+    expect(client.calls).toHaveLength(1);
+  });
+
+  it("rejects a non-positive callTimeoutMs", async () => {
+    await expect(createMcpDomainPort({ client: standardClient(), callTimeoutMs: 0 })).rejects.toThrow(
+      /callTimeoutMs/,
+    );
+  });
+
+  it("stamps data composed across a bucket boundary with the version of the moment it was read", async () => {
+    let now = 299_000; // ms: 1s before the first boundary at 300s
+    const version = mcpDataVersion({ bucketSeconds: 300, now: () => now });
+    const port = await createMcpDomainPort({ client: standardClient(), dataVersion: version });
+    const specVersion = port.dataVersion(); // what a Spec composed now would carry
+    now = 301_000;
+    const data = (await port.invoke("list_orders", {}, CTX)) as { dataVersion: string };
+    // The Spec is now one bucket behind the data: it goes stale once, which is the documented behaviour.
+    expect(specVersion).toBe("mcp:0");
+    expect(data.dataVersion).toBe("mcp:1");
   });
 });
 

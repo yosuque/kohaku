@@ -144,6 +144,9 @@ def test_domain_mcp(cross_language_fixture: dict[str, Any]) -> None:
     from types import SimpleNamespace
 
     from kohaku.domain_mcp import (
+        McpArgumentError,
+        McpResultError,
+        McpToolError,
         coerce_tool_arguments,
         project_input_schema,
         shape_from_output_schema,
@@ -157,12 +160,23 @@ def test_domain_mcp(cross_language_fixture: dict[str, Any]) -> None:
         got = project_input_schema(case["inputSchema"]).to_wire()
         _canonical_equal(got, case["expected"], f"projection mismatch for {case['inputSchema']!r}")
 
+    assert fixture["schemaProjectionRaw"]
+    for case in fixture["schemaProjectionRaw"]:
+        # The fixture holds raw JSON text: a number beyond the double range is Infinity in JS, which a
+        # re-serialized value could not carry. Python parses the text itself (a huge int stays an exact int).
+        got = project_input_schema(json.loads(case["json"])).to_wire()
+        _canonical_equal(
+            got, case["expected"], f"raw projection mismatch for {case['json'][:80]!r}"
+        )
+
     assert fixture["argumentCoercion"]
     for case in fixture["argumentCoercion"]:
         coerced: object
         try:
-            coerced = coerce_tool_arguments(case["args"], case["inputSchema"])
-        except ValueError:
+            coerced = coerce_tool_arguments(
+                case["args"], case["inputSchema"], max_limit=case.get("maxLimit", 1000)
+            )
+        except McpArgumentError:
             coerced = None  # McpArgumentError: the fixture's `expected: null`
         _canonical_equal(coerced, case["expected"], f"coercion mismatch for {case['args']!r}")
 
@@ -176,8 +190,14 @@ def test_domain_mcp(cross_language_fixture: dict[str, Any]) -> None:
         )
         tabular: object
         try:
-            tabular = to_tabular_data(result, case["dataVersion"]).to_wire()
-        except (ValueError, RuntimeError):
+            limits = case.get("limits", {})
+            tabular = to_tabular_data(
+                result,
+                case["dataVersion"],
+                max_rows=limits.get("maxRows", 10_000),
+                max_result_bytes=limits.get("maxResultBytes", 10 * 1024 * 1024),
+            ).to_wire()
+        except (McpResultError, McpToolError):
             tabular = None  # McpResultError / McpToolError: the fixture's `expected: null`
         _canonical_equal(tabular, case["expected"], f"tabular mismatch for {raw!r}")
 

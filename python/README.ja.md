@@ -462,7 +462,7 @@ Python 側ではそもそも独立パッケージ境界を持たないため(TS 
 `kohaku.domain_mcp` は `@kohaku-ui/domain-mcp` のミラーで、既存の MCP サーバーをホストの `DomainPort` にします。
 `annotations.read_only_hint is True` のツールは `query://` の op(結果は `TabularData`)、それ以外のツールは
 `tier="approve"` の Action(`tier_for` で上書き可)で、その `paramsSchema` は `inputSchema` を閉じた
-`ActionParamsSchema` の部分集合へ射影したものです(`anyOf` / `oneOf` / `$ref` / `additionalProperties: true` を使う場合は付きません)。
+`ActionParamsSchema` の部分集合へ射影したものです(nullable な `Optional[X]` 形以外の `anyOf`、`oneOf`、`$ref`、`additionalProperties: true` を使う場合は付きません)。
 既存の `mcp` extra(`pip install 'kohaku-ui[mcp]'`)に含まれ、`mcp` 自体は import しません: 公式 SDK の `Client` を
 引数で渡します(`list_tools(cursor=...)` / `call_tool(name, arguments)` を持つ任意のオブジェクトで可)。
 
@@ -478,8 +478,8 @@ async with Client("http://upstream.example/mcp") as client:
 
 `mcp_data_version()` は時間の区切り(`mcp:<floor(now / 300)>`)です。`now` が受け取るのはエポック**秒**で、TS の
 `now` はミリ秒です。射影・文字列 ref パラメタの型変換・結果 → `TabularData` の変換・`outputSchema` → `DataShape` は、
-言語間 golden fixture の `domainMcp` セクションで TS の出力に固定されています。`query_ops` / `action_ops` は、TS の
-`ReadonlySet` に対して順序付きの tuple です(Intent の順序はツール一覧の順に従います)。
+言語間 golden fixture の `domainMcp` セクションで TS の出力に固定されています。`query_ops` / `action_ops` は `frozenset`(TS は
+`ReadonlySet`)、`tools` はツール一覧の順の読み取り専用 mapping で、Intent はこの順に作られます。`call_timeout_ms` は TS と同じくミリ秒です。
 [docs/user-guide.ja.md](../docs/user-guide.ja.md)(「既存の MCP サーバーから始める」)も参照してください。
 
 ## 詳細な失敗ログ(`KOHAKU_DEBUG`、TS と対称)

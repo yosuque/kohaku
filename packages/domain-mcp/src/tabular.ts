@@ -1,4 +1,5 @@
 import type { ColumnType, JsonObject, TabularColumn, TabularData } from "@kohaku-ui/spec-core";
+import { isPlainObject } from "./internal.js";
 import type { McpCallResult } from "./types.js";
 
 /** The tool ran but reported `isError: true`. No wire `code`: the upstream text must not reach a UI client verbatim. */
@@ -24,10 +25,6 @@ export const COLUMN_INFERENCE_ROWS = 50;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}([Tt]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:\d{2})?)?$/;
 
 const MAX_ERROR_TEXT = 500;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * Picks the list out of a decoded tool result: the value itself when it is an array, otherwise the `rows`
@@ -116,23 +113,49 @@ export function inferColumns(rows: JsonObject[]): TabularColumn[] {
   return columns;
 }
 
+/** Default cap on the number of rows of one query result. */
+export const DEFAULT_MAX_ROWS = 10_000;
+
+/** Default cap on the serialized size (UTF-8 bytes of the compact JSON) of one query result. */
+export const DEFAULT_MAX_RESULT_BYTES = 10 * 1024 * 1024;
+
+export interface TabularLimits {
+  /** Maximum number of rows (default {@link DEFAULT_MAX_ROWS}). More is an `McpResultError`. */
+  maxRows?: number;
+  /** Maximum serialized size in bytes (default {@link DEFAULT_MAX_RESULT_BYTES}). More is an `McpResultError`. */
+  maxResultBytes?: number;
+}
+
 /**
  * Converts a successful MCP tool result into kohaku's `TabularData`. Throws `McpToolError` for `isError`, and
- * `McpResultError` when the result is not (a wrapper around) a list of objects.
+ * `McpResultError` when the result is not (a wrapper around) a list of objects or exceeds `limits`. The limit
+ * errors carry fixed messages that never echo upstream content.
  */
-export function toTabularData(result: McpCallResult, dataVersion: string, tool?: string): TabularData {
+export function toTabularData(
+  result: McpCallResult,
+  dataVersion: string,
+  tool?: string,
+  limits: TabularLimits = {},
+): TabularData {
   assertToolSucceeded(result, tool);
+  const label = tool == null ? "" : ` "${tool}"`;
   const list = findRowList(payloadOf(result));
   if (list == null) {
     throw new McpResultError(
-      `MCP tool${tool == null ? "" : ` "${tool}"`} returned something other than a list of rows ` +
+      `MCP tool${label} returned something other than a list of rows ` +
         "(expected an array, or an object with a `rows` array, in structuredContent or as JSON text)",
     );
   }
+  const maxRows = limits.maxRows ?? DEFAULT_MAX_ROWS;
+  if (list.length > maxRows) {
+    throw new McpResultError(`MCP tool${label} returned more than ${maxRows} rows`);
+  }
   if (!list.every(isPlainObject)) {
-    throw new McpResultError(
-      `MCP tool${tool == null ? "" : ` "${tool}"`} returned a list whose items are not all objects`,
-    );
+    throw new McpResultError(`MCP tool${label} returned a list whose items are not all objects`);
+  }
+  const maxBytes = limits.maxResultBytes ?? DEFAULT_MAX_RESULT_BYTES;
+  if (new TextEncoder().encode(JSON.stringify(list)).length > maxBytes) {
+    throw new McpResultError(`MCP tool${label} returned a result larger than ${maxBytes} bytes`);
   }
   const rows = list as JsonObject[];
   return { columns: inferColumns(rows), rows, dataVersion };

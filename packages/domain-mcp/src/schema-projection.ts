@@ -1,4 +1,6 @@
 import type { JsonObject, JsonValue } from "@kohaku-ui/spec-core";
+import { isPlainObject } from "./internal.js";
+import { unwrapNullable } from "./nullable.js";
 
 /**
  * The result of projecting an MCP tool's `inputSchema` onto kohaku's closed `paramsSchema` subset
@@ -9,8 +11,10 @@ export interface SchemaProjection {
   schema: JsonObject | null;
   /**
    * Dot-separated paths of the keywords that were dropped on the way (`properties.q.description`). They are
-   * annotations or constraints the subset has no equivalent for; dropping one only ever makes the gate more
-   * permissive than the upstream server, never stricter. Reported even when the schema was omitted.
+   * annotations, or constraints the subset has no equivalent for (`pattern`, `format`, ...): a dropped
+   * constraint makes the gate more permissive than the upstream server for that keyword. The projection can
+   * also be *stricter* than the upstream in one way: every object is closed with `additionalProperties: false`,
+   * so an extra key the upstream would have accepted is refused. Reported even when the schema was omitted.
    */
   dropped: string[];
   /** True when no schema is attached to the operation (see `reasons`). */
@@ -59,6 +63,39 @@ const DROPPED_KEYWORDS: ReadonlySet<string> = new Set([
   "contentEncoding",
 ]);
 
+/** The dropped keywords that are validation constraints (not annotations): losing one loosens the gate. */
+const CONSTRAINT_KEYWORDS: ReadonlySet<string> = new Set([
+  "pattern",
+  "format",
+  "const",
+  "multipleOf",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "minItems",
+  "uniqueItems",
+  "minProperties",
+  "maxProperties",
+  "contentMediaType",
+  "contentEncoding",
+]);
+
+/**
+ * The dropped constraint keywords in `dropped` (a `SchemaProjection.dropped` list), as bare keyword names in
+ * first-appearance order without repeats, plus how many dropped paths were constraints. Annotations
+ * (`description`, `title`, `default`, ...) are not constraints and are not counted.
+ */
+export function droppedConstraints(dropped: string[]): { count: number; keywords: string[] } {
+  const keywords: string[] = [];
+  let count = 0;
+  for (const path of dropped) {
+    const keyword = path.slice(path.lastIndexOf(".") + 1);
+    if (!CONSTRAINT_KEYWORDS.has(keyword)) continue;
+    count += 1;
+    if (!keywords.includes(keyword)) keywords.push(keyword);
+  }
+  return { count, keywords };
+}
+
 const SCALAR_TYPES: ReadonlySet<string> = new Set([
   "object",
   "array",
@@ -67,10 +104,6 @@ const SCALAR_TYPES: ReadonlySet<string> = new Set([
   "integer",
   "boolean",
 ]);
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -96,6 +129,9 @@ interface Collector {
  *   `pattern`, ...) are dropped and listed in `dropped`.
  * - Every object node is closed with `additionalProperties: false`, as the subset's only supported form. A
  *   schema that explicitly allows additional properties cannot be represented.
+ * - A property written as the nullable two-branch `anyOf` (`anyOf: [X, { type: "null" }]`, how Pydantic writes
+ *   `Optional[X]`) is projected as the optional property `X`: kept, removed from `required`, and an explicit
+ *   null is then rejected by the gate. Any other `anyOf` is unrepresentable.
  * - `anyOf` / `oneOf` / `allOf` / `not` / `$ref`, a `type` array, a tuple `items`, a malformed keyword value
  *   or any keyword this function does not know make the schema unrepresentable: `omitted` is true and
  *   `schema` is null, so the operation is exposed without a `paramsSchema`. For an `approve`-tier Action the
@@ -129,9 +165,12 @@ function projectNode(node: unknown, path: string, out: Collector, isRoot = false
   if (validType) result["type"] = type;
 
   // Walk the keywords in the input's own order so `dropped` / `reasons` are deterministic.
+  const nullableNames: string[] = [];
   for (const key of Object.keys(node)) {
     const keyPath = join(path, key);
     if (key === "type") continue;
+    // `x-` keys are vendor extensions and are dropped like annotations. A vendor keyword without the `x-`
+    // prefix is unknown, not an extension, and falls through to the "unknown keyword" branch below.
     if (key.startsWith("x-") || DROPPED_KEYWORDS.has(key)) {
       out.dropped.push(keyPath);
       continue;
@@ -142,7 +181,7 @@ function projectNode(node: unknown, path: string, out: Collector, isRoot = false
         out.dropped.push(keyPath);
         continue;
       }
-      projectKeyword(key, node[key], keyPath, result, out);
+      nullableNames.push(...projectKeyword(key, node[key], keyPath, result, out));
       continue;
     }
     if (key === "enum") {
@@ -159,10 +198,30 @@ function projectNode(node: unknown, path: string, out: Collector, isRoot = false
   if ((!validType || (isRoot && type !== "object")) && out.reasons.length === reasonsBefore) {
     out.reasons.push(join(path, "type"));
   }
+  // A nullable property is optional: take it out of `required` (and drop `required` if that emptied it).
+  const required = result["required"];
+  if (nullableNames.length > 0 && Array.isArray(required)) {
+    const kept = (required as string[]).filter((name) => !nullableNames.includes(name));
+    if (kept.length === 0) delete result["required"];
+    else result["required"] = kept;
+  }
   if (type === "object" && result["additionalProperties"] === undefined) {
     result["additionalProperties"] = false;
   }
   return result;
+}
+
+/** A property schema with its nullable `anyOf` wrapper (if any) removed; the wrapper's own keywords are triaged. */
+function readProperty(raw: unknown, path: string, out: Collector): { schema: unknown; nullable: boolean } {
+  const inner = unwrapNullable(raw);
+  if (inner === raw || !isPlainObject(raw)) return { schema: raw, nullable: false };
+  for (const key of Object.keys(raw)) {
+    if (key === "anyOf") continue;
+    const keyPath = join(path, key);
+    if (key.startsWith("x-") || DROPPED_KEYWORDS.has(key)) out.dropped.push(keyPath);
+    else out.reasons.push(keyPath);
+  }
+  return { schema: inner, nullable: true };
 }
 
 function isKeptKeyword(key: string): boolean {
@@ -181,65 +240,77 @@ function keywordAppliesTo(key: string, type: unknown): boolean {
   return type === "array";
 }
 
-function projectKeyword(key: string, value: unknown, path: string, result: JsonObject, out: Collector): void {
+/** Projects one kept keyword into `result`. Returns the names of the nullable properties it saw (`properties` only). */
+function projectKeyword(
+  key: string,
+  value: unknown,
+  path: string,
+  result: JsonObject,
+  out: Collector,
+): string[] {
   switch (key) {
     case "properties": {
       if (!isPlainObject(value)) {
         out.reasons.push(path);
-        return;
+        return [];
       }
       const properties: Record<string, JsonValue> = {};
+      const nullable: string[] = [];
       for (const name of Object.keys(value)) {
-        const child = projectNode(value[name], join(path, name), out);
+        const propPath = join(path, name);
+        const prop = readProperty(value[name], propPath, out);
+        const child = projectNode(prop.schema, propPath, out);
         if (child !== null) properties[name] = child;
+        if (prop.nullable) nullable.push(name);
       }
       result["properties"] = properties;
-      return;
+      return nullable;
     }
     case "required": {
       if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
         out.reasons.push(path);
-        return;
+        return [];
       }
       result["required"] = value as string[];
-      return;
+      return [];
     }
     case "additionalProperties": {
       // Only a literal `false` is representable. `true` / a schema object means "extra keys welcome".
       if (value !== false) {
         out.reasons.push(path);
-        return;
+        return [];
       }
       result["additionalProperties"] = false;
-      return;
+      return [];
     }
     case "minimum":
     case "maximum": {
       if (!isFiniteNumber(value)) {
         out.reasons.push(path);
-        return;
+        return [];
       }
       result[key] = value;
-      return;
+      return [];
     }
     case "minLength":
     case "maxLength":
     case "maxItems": {
       if (!isNonNegativeInteger(value)) {
         out.reasons.push(path);
-        return;
+        return [];
       }
       result[key] = value;
-      return;
+      return [];
     }
     case "items": {
       // A tuple form (an array of schemas) or a boolean schema has no equivalent in the subset.
       const child = projectNode(value, path, out);
       if (child !== null) result["items"] = child;
-      return;
+      return [];
     }
     default:
       out.reasons.push(path);
+      return [];
   }
 }
 

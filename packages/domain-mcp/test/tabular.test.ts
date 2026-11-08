@@ -88,6 +88,23 @@ describe("toTabularData", () => {
     expect(() => toTabularData(result, "v1")).toThrow(McpResultError);
   });
 
+  it("refuses a result with more rows than maxRows, and one larger than maxResultBytes", () => {
+    const rows = [{ a: 1 }, { a: 2 }, { a: 3 }];
+    const result = { content: [], structuredContent: rows };
+    expect(() => toTabularData(result, "v1", "t", { maxRows: 2 })).toThrow(/more than 2 rows/);
+    expect(toTabularData(result, "v1", "t", { maxRows: 3 }).rows).toHaveLength(3);
+    const size = new TextEncoder().encode(JSON.stringify(rows)).length;
+    expect(() => toTabularData(result, "v1", "t", { maxResultBytes: size - 1 })).toThrow(/larger than/);
+    expect(toTabularData(result, "v1", "t", { maxResultBytes: size }).rows).toHaveLength(3);
+  });
+
+  it("measures the size in UTF-8 bytes, not characters", () => {
+    const result = { content: [], structuredContent: [{ a: "日本語" }] };
+    const bytes = new TextEncoder().encode(JSON.stringify([{ a: "日本語" }])).length;
+    expect(() => toTabularData(result, "v1", "t", { maxResultBytes: bytes - 1 })).toThrow(McpResultError);
+    expect(toTabularData(result, "v1", "t", { maxResultBytes: bytes }).rows).toHaveLength(1);
+  });
+
   it("throws McpToolError, without a wire code, when the tool reports isError", () => {
     try {
       toTabularData({ isError: true, content: [{ type: "text", text: "boom" }] }, "v1");

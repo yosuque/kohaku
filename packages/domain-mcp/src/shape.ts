@@ -1,10 +1,7 @@
 import type { DataShape } from "@kohaku-ui/spec-core";
+import { isPlainObject } from "./internal.js";
 
 type ShapeColumn = DataShape["columns"][number];
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** The item schema of the list an `outputSchema` describes (the schema twin of tabular.ts's `findRowList`). */
 function rowSchemaOf(outputSchema: Record<string, unknown>): Record<string, unknown> | null {
