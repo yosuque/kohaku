@@ -31,7 +31,9 @@ from .judge import (
     l2_promotion_rubric,
     l2_promotion_rubric_v0_1,
     l2_promotion_rubric_v0_2,
+    l2_promotion_rubric_v0_3,
 )
+from .prompt_guard import untrusted_block
 from .quality import (
     QualityCase,
     QualityCaseResult,
@@ -66,8 +68,10 @@ __all__ = [
     "l2_promotion_rubric",
     "l2_promotion_rubric_v0_1",
     "l2_promotion_rubric_v0_2",
+    "l2_promotion_rubric_v0_3",
     "normalize_for_match",
     "run_golden",
     "run_quality",
     "specs_match",
+    "untrusted_block",
 ]

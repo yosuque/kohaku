@@ -11,7 +11,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { exportDistillationDataset } from "@kohaku-ui/evals";
+import { createJudge, exportDistillationDataset, l2PromotionRubric } from "@kohaku-ui/evals";
+import { FakeLlm } from "@kohaku-ui/llm/fake";
 import {
   type ActionParamsSchema,
   ALLOWED_ATTRS,
@@ -458,6 +459,111 @@ async function main(): Promise<void> {
     promptRevision: PROMPT_REVISION,
   };
 
+  // Pins the L2 promotion judge's prompt text (rubric 0.4: the criterion list in the system prompt with its
+  // weights, and the user prompt with the DRAFT / SUGGESTION blocks) byte for byte across both languages, for
+  // both rubric variants ("full" and "no-schema", see JudgeVerdict.rubricVariant). A FakeLlm records exactly what
+  // the judge sent, so no prompt-building function needs to be exported; each case carries its input so the
+  // Python side rebuilds the same JudgeInput and compares system + prompt. Covers key order, nested indentation
+  // (JSON.stringify(x, null, 2)), an integer-valued float, an empty container, a backtick run in the HTML (the
+  // fence length), and every optional prompt section.
+  const judgePromptCases: { name: string; input: Record<string, unknown> }[] = [
+    {
+      name: "no-schema",
+      input: {
+        html: "<html><body><script>window.kohaku.ready()</script></body></html>",
+        request: "Sales as a calendar heatmap",
+        usage: { uses: 3, sessions: 2 },
+      },
+    },
+    {
+      name: "draft-only",
+      input: {
+        html: "<div>```nested fence```</div>",
+        request: "r",
+        usage: { uses: 5, sessions: 3 },
+        draft: {
+          componentType: "sales.calendarHeatmap",
+          intentName: "sales.calendar_heatmap",
+          paramsJsonSchema: {
+            type: "object",
+            properties: { fy: { type: "integer", minimum: 2020 }, ratio: { type: "number", default: 1.5 } },
+            required: ["fy"],
+          },
+          events: [],
+        },
+      },
+    },
+    {
+      name: "suggestion-only",
+      input: {
+        html: "<html></html>",
+        request: "as a table",
+        usage: { uses: 1, sessions: 1 },
+        suggestion: {
+          componentType: "sales.calendarHeatmap",
+          intentName: "sales.calendar_heatmap",
+          description: "Monthly heatmap",
+          events: [{ name: "cellSelected", description: "clicked" }],
+        },
+      },
+    },
+    {
+      name: "draft-and-suggestion-with-context",
+      input: {
+        html: "<html></html>",
+        request: "r",
+        usage: { uses: 5, sessions: 3 },
+        telemetry: { renderedCount: 4, errorCount: 1 },
+        catalogSummary: "- sales.trend (core intent)",
+        draft: { componentType: "sales.calendarHeatmap", intentName: "sales.calendar_heatmap" },
+        suggestion: {
+          componentType: "sales.oldSuggestion",
+          intentName: "sales.old_suggestion",
+          description: "d",
+          paramsJsonSchema: { type: "object", properties: {} },
+          events: [],
+        },
+      },
+    },
+  ];
+  const judgePrompts: {
+    name: string;
+    input: Record<string, unknown>;
+    system: string;
+    prompt: string;
+    rubricId: string;
+    rubricVersion: string;
+    rubricVariant: string | undefined;
+  }[] = [];
+  for (const c of judgePromptCases) {
+    const llm = new FakeLlm({
+      objects: [
+        {
+          criteria: l2PromotionRubric.criteria.map((criterion) => ({
+            id: criterion.id,
+            score: 0.5,
+            reasoning: criterion.id,
+          })),
+          summary: "scored",
+        },
+      ],
+    });
+    const verdict = await createJudge({ llm }).judge({
+      kind: "l2-component",
+      ...(c.input as Omit<Parameters<ReturnType<typeof createJudge>["judge"]>[0], "kind">),
+    });
+    const call = llm.calls[0]!;
+    judgePrompts.push({
+      name: c.name,
+      input: c.input,
+      system: call.system!,
+      prompt: call.prompt,
+      rubricId: verdict.rubricId,
+      rubricVersion: verdict.rubricVersion,
+      rubricVariant: verdict.rubricVariant,
+    });
+  }
+
   // Pins byte compatibility of the distillation-dataset JSONL export (@kohaku-ui/evals's
   // exportDistillationDataset / kohaku.evals's export_distillation_dataset). Reuses the same example
   // Spec + its already-computed structureHash as a single human-approved FixationRecord, so a language
@@ -680,6 +786,7 @@ async function main(): Promise<void> {
         distillation,
         fallback: fallbackCases,
         promptFragments,
+        judgePrompts,
       },
       null,
       2,

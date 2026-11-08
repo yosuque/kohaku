@@ -120,7 +120,7 @@ class _RawApprove(_Promotions):
         reviewer: Principal,
         tenant: str | None = None,
         **kwargs: Any,
-    ) -> Any:  # type: ignore[override]
+    ) -> Any:
         self._spy.approves.append({"id": artifact_id, "kwargs": dict(kwargs)})
         return {"artifactId": artifact_id, "status": "published"}
 
@@ -181,7 +181,8 @@ def test_approve_forwards_an_optional_acknowledged_suggestion_absent_when_unspec
 def test_approve_rejects_a_non_boolean_acknowledged_suggestion_with_400(tmp_path: Path) -> None:
     spy = _Spy()
     client = _client(tmp_path, _Promotions(spy))
-    for bad in ("yes", 1, None, {}):
+    bad_values: list[Any] = ["yes", 1, None, {}]
+    for bad in bad_values:
         res = client.post(
             _url("/promotions/known/approve"),
             json={"draft": _DRAFT, "acknowledgedSuggestion": bad},

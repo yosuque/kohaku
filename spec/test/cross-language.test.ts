@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { exportDistillationDataset } from "@kohaku-ui/evals";
+import { createJudge, exportDistillationDataset, l2PromotionRubric } from "@kohaku-ui/evals";
+import { FakeLlm } from "@kohaku-ui/llm/fake";
 import {
   type ActionParamIssue,
   type ActionParamsSchema,
@@ -84,6 +85,15 @@ interface Fixture {
     designBrief: string[];
     promptRevision: string;
   };
+  judgePrompts: {
+    name: string;
+    input: Record<string, unknown>;
+    system: string;
+    prompt: string;
+    rubricId: string;
+    rubricVersion: string;
+    rubricVariant?: string;
+  }[];
 }
 
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as Fixture;
@@ -210,6 +220,39 @@ describe("cross-language golden (prompt fragments)", () => {
 
   it("PROMPT_REVISION reproduces the fixture (catches an accidental, unbumped prompt change)", () => {
     expect(PROMPT_REVISION).toBe(fixture.promptFragments.promptRevision);
+  });
+
+  it("the L2 promotion judge's system + user prompt (rubric 0.4, both variants) reproduces the fixture", async () => {
+    expect(fixture.judgePrompts.map((c) => c.rubricVariant)).toEqual([
+      "no-schema",
+      "full",
+      "full",
+      "full",
+    ]);
+    for (const c of fixture.judgePrompts) {
+      const llm = new FakeLlm({
+        objects: [
+          {
+            criteria: l2PromotionRubric.criteria.map((criterion) => ({
+              id: criterion.id,
+              score: 0.5,
+              reasoning: criterion.id,
+            })),
+            summary: "scored",
+          },
+        ],
+      });
+      const verdict = await createJudge({ llm }).judge({
+        kind: "l2-component",
+        ...(c.input as Omit<Parameters<ReturnType<typeof createJudge>["judge"]>[0], "kind">),
+      });
+      const call = llm.calls[0]!;
+      expect(call.system, c.name).toBe(c.system);
+      expect(call.prompt, c.name).toBe(c.prompt);
+      expect(verdict.rubricId, c.name).toBe(c.rubricId);
+      expect(verdict.rubricVersion, c.name).toBe(c.rubricVersion);
+      expect(verdict.rubricVariant, c.name).toBe(c.rubricVariant);
+    }
   });
 });
 

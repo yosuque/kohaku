@@ -367,6 +367,30 @@ async def create_app(
         rendered, errors = await telemetry_for(candidate.artifactId, context.tenant)
         # Transcribe only when there is actual-render observation (with 0 observations, it is not placed in the prompt, as before).
         telemetry = Telemetry(rendered_count=rendered, error_count=errors) if rendered > 0 else None
+        # The schema actually being registered (approve()'s own draft, forwarded via context.draft; #1) is the
+        # source of truth for the "schema fidelity" criterion. ComponentDraft carries no events field, so this
+        # block never claims events for it -- a candidate's machine-extracted suggestion may have proposed some,
+        # but those are unverified proposal data, surfaced below as `suggestion` context only.
+        draft: dict[str, Any] | None = None
+        if context.draft is not None:
+            draft = {
+                "componentType": context.draft.componentType,
+                "intentName": context.draft.intentName,
+                "paramsJsonSchema": context.draft.paramsJsonSchema,
+            }
+        # The advisory proposal attached at nomination, handed to the judge as context (rubric 0.4's "schema
+        # fidelity" criterion verifies `draft` above when present; `suggestion` alone is verified directly when
+        # `draft` is unknown).
+        suggestion: dict[str, Any] | None = None
+        if candidate.suggestion is not None:
+            suggested_draft = candidate.suggestion.get("draft") or {}
+            suggestion = {
+                "componentType": suggested_draft.get("componentType"),
+                "intentName": suggested_draft.get("intentName"),
+                "description": suggested_draft.get("description"),
+                "paramsJsonSchema": suggested_draft.get("paramsJsonSchema"),
+                "events": candidate.suggestion.get("events") or [],
+            }
         verdict = await judge.judge(
             JudgeInput(
                 kind="l2-component",
@@ -374,6 +398,8 @@ async def create_app(
                 request=candidate.request if candidate.request is not None else "",
                 usage=JudgeUsage(uses=candidate.uses, sessions=candidate.sessions),
                 telemetry=telemetry,
+                draft=draft,
+                suggestion=suggestion,
             )
         )
         # Return the rubric version and summary to the verdict, stamping "which version judged how" into component.judged.

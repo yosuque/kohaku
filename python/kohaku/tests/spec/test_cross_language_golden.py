@@ -379,3 +379,64 @@ def test_evidence_pack_signature_covers_the_raw_manifest_json() -> None:
         tampered = copy.deepcopy(fixture["manifest"])
         tamper(tampered)
         assert verify_manifest_signature(tampered, fixture["signature"], public_key) is False
+
+
+# --- L2 promotion judge prompt (rubric 0.4, both variants) ---
+
+
+def test_judge_prompts_reproduce_the_fixture(cross_language_fixture: dict[str, Any]) -> None:
+    """The L2 promotion judge's system + user prompt, byte for byte, for the "full" and "no-schema" rubric
+    variants. The fixture is TS-generated from what the TS judge sent a FakeLlm; here the Python judge is driven
+    with the same input and its FakeLlm-recorded system + prompt must be identical."""
+    from kohaku.evals import (
+        JudgeInput,
+        JudgeUsage,
+        Telemetry,
+        create_judge,
+        l2_promotion_rubric,
+    )
+    from kohaku.llm import FakeLlm
+
+    cases = cross_language_fixture["judgePrompts"]
+    assert [c["rubricVariant"] for c in cases] == ["no-schema", "full", "full", "full"]
+    for case in cases:
+        raw = case["input"]
+        telemetry = raw.get("telemetry")
+        llm = FakeLlm(
+            objects=[
+                {
+                    "criteria": [
+                        {"id": c.id, "score": 0.5, "reasoning": c.id}
+                        for c in l2_promotion_rubric.criteria
+                    ],
+                    "summary": "scored",
+                }
+            ]
+        )
+        judge = create_judge(llm=llm)
+        verdict = asyncio.run(
+            judge.judge(
+                JudgeInput(
+                    html=raw["html"],
+                    request=raw["request"],
+                    usage=JudgeUsage(uses=raw["usage"]["uses"], sessions=raw["usage"]["sessions"]),
+                    catalog_summary=raw.get("catalogSummary"),
+                    telemetry=(
+                        Telemetry(
+                            rendered_count=telemetry["renderedCount"],
+                            error_count=telemetry["errorCount"],
+                        )
+                        if telemetry is not None
+                        else None
+                    ),
+                    draft=raw.get("draft"),
+                    suggestion=raw.get("suggestion"),
+                )
+            )
+        )
+        call = llm.calls[0]
+        assert call.system == case["system"], case["name"]
+        assert call.prompt == case["prompt"], case["name"]
+        assert verdict.rubric_id == case["rubricId"], case["name"]
+        assert verdict.rubric_version == case["rubricVersion"], case["name"]
+        assert verdict.rubric_variant == case["rubricVariant"], case["name"]

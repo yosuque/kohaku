@@ -7,6 +7,8 @@ fail-fast validation (does not call a real LLM).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import re
 from typing import Any
 
 import pytest
@@ -25,6 +27,7 @@ from kohaku.evals import (
     l2_promotion_rubric,
     l2_promotion_rubric_v0_1,
     l2_promotion_rubric_v0_2,
+    l2_promotion_rubric_v0_3,
 )
 from kohaku.llm import FakeLlm
 from kohaku.spec import UISpec, parse_spec
@@ -72,6 +75,13 @@ class TestJudgePromotion:
                     html="<html><body><script>window.kohaku.ready()</script></body></html>",
                     request="as a heatmap",
                     usage=JudgeUsage(uses=3, sessions=2),
+                    # A draft is supplied so this exercises the "full" rubric (all 7 criteria, including
+                    # suggestion_fidelity) -- see TestRubricVariantSelection for the no-draft/no-suggestion
+                    # ("no-schema") behavior.
+                    draft={
+                        "componentType": "sales.calendarHeatmap",
+                        "intentName": "sales.calendar_heatmap",
+                    },
                 )
             )
             # All criteria 0.8 and weight sum 1.0, so the combined score is also 0.8. safety's floor is
@@ -80,7 +90,7 @@ class TestJudgePromotion:
             assert verdict.pass_ is True
             assert verdict.vetoed_by == []
             assert verdict.rubric_id == "l2-promotion"
-            assert verdict.rubric_version == "0.3"
+            assert verdict.rubric_version == "0.4"
             assert verdict.summary == "worthy of promotion"
 
         asyncio.run(run())
@@ -213,7 +223,17 @@ class TestJudgeAbnormal:
             )
             judge = create_judge(llm=llm, pass_score=0.5)
             verdict = await judge.judge(
-                JudgeInput(html="<html></html>", request="r", usage=JudgeUsage(uses=1, sessions=1))
+                JudgeInput(
+                    html="<html></html>",
+                    request="r",
+                    usage=JudgeUsage(uses=1, sessions=1),
+                    # A draft keeps this on the "full" rubric variant (all 7 criteria) so the unknown-extra-id
+                    # assertion below is exercised against the same criteria set the response was scripted from.
+                    draft={
+                        "componentType": "sales.calendarHeatmap",
+                        "intentName": "sales.calendar_heatmap",
+                    },
+                )
             )
             # Only the rubric's criteria are scored. The unknown id does not appear in verdict.criteria.
             assert [c.id for c in verdict.criteria] == [c.id for c in l2_promotion_rubric.criteria]
@@ -394,12 +414,12 @@ class TestWeightNormalization:
 
 
 class TestL2PromotionRubric:
-    """l2_promotion_rubric (v0.3, current — pinned criteria id order, weights, and safety's floor;
+    """l2_promotion_rubric (v0.4, current — pinned criteria id order, weights, and safety's floor;
     mirrors TS's l2PromotionRubric test, m-21/Task 8)."""
 
     def test_shape(self) -> None:
         assert l2_promotion_rubric.id == "l2-promotion"
-        assert l2_promotion_rubric.version == "0.3"
+        assert l2_promotion_rubric.version == "0.4"
         assert [c.id for c in l2_promotion_rubric.criteria] == [
             "safety",
             "determinism",
@@ -407,14 +427,22 @@ class TestL2PromotionRubric:
             "schema_inferability",
             "generality",
             "visual_quality",
+            "suggestion_fidelity",
         ]
         weights = [c.weight for c in l2_promotion_rubric.criteria]
-        assert weights == [0.25, 0.2, 0.15, 0.15, 0.05, 0.2]
+        assert weights == [0.25, 0.2, 0.15, 0.05, 0.05, 0.2, 0.1]
         assert sum(weights) == pytest.approx(1.0)
+
+    def test_carries_suggestion_fidelity_with_weights_still_summing_to_one(self) -> None:
+        ids = [c.id for c in l2_promotion_rubric.criteria]
+        assert "suggestion_fidelity" in ids
+        assert "schema_inferability" in ids
+        assert abs(sum(c.weight for c in l2_promotion_rubric.criteria) - 1) < 1e-9
 
     def test_only_safety_has_a_floor(self) -> None:
         assert [c.floor for c in l2_promotion_rubric.criteria] == [
             0.5,
+            None,
             None,
             None,
             None,
@@ -528,5 +556,310 @@ class TestL2PromotionRubricV0_2:
             # pinned pre-Task-8 snapshot — a consumer who pinned v0.2 keeps the exact pre-Task-8 behavior.
             assert verdict.vetoed_by == []
             assert verdict.pass_ is True
+
+        asyncio.run(run())
+
+
+class TestL2PromotionRubricV0_3:
+    """l2_promotion_rubric_v0_3 (pinned pre-suggestion_fidelity rubric; mirrors TS's l2PromotionRubricV0_3)."""
+
+    def test_shape(self) -> None:
+        assert l2_promotion_rubric_v0_3.id == "l2-promotion"
+        assert l2_promotion_rubric_v0_3.version == "0.3"
+        assert [c.id for c in l2_promotion_rubric_v0_3.criteria] == [
+            "safety",
+            "determinism",
+            "a11y",
+            "schema_inferability",
+            "generality",
+            "visual_quality",
+        ]
+        weights = [c.weight for c in l2_promotion_rubric_v0_3.criteria]
+        assert weights == [0.25, 0.2, 0.15, 0.15, 0.05, 0.2]
+        assert [c.floor for c in l2_promotion_rubric_v0_3.criteria] == [
+            0.5,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ]
+        assert sum(weights) == pytest.approx(1.0)
+
+    def test_pinned_via_judge_rubric_option_without_suggestion_fidelity(self) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_uniform_verdict(l2_promotion_rubric_v0_3, 0.9)])
+            judge = create_judge(llm=llm, pass_score=0.5, rubric=l2_promotion_rubric_v0_3)
+            verdict = await judge.judge(
+                JudgeInput(
+                    html="<html><body><script>window.kohaku.ready()</script></body></html>",
+                    request="as a table",
+                    usage=JudgeUsage(uses=1, sessions=1),
+                )
+            )
+            assert verdict.rubric_version == "0.3"
+            assert [c.id for c in verdict.criteria] == [
+                c.id for c in l2_promotion_rubric_v0_3.criteria
+            ]
+            assert "suggestion_fidelity" not in [c.id for c in verdict.criteria]
+
+        asyncio.run(run())
+
+
+_HTML_INPUT = JudgeInput(html="<html></html>", request="r", usage=JudgeUsage(uses=1, sessions=1))
+
+# Deliberately non-uniform per-criterion scores, so the two variants would diverge if their weights actually
+# differed (a uniform score would trivially agree regardless of the weight distribution).
+_SCORES = {
+    "safety": 0.9,
+    "determinism": 0.8,
+    "a11y": 0.7,
+    "schema_inferability": 0.6,
+    "generality": 0.5,
+    "visual_quality": 0.4,
+    "suggestion_fidelity": 1,
+}
+
+
+def _scripted_for(rubric: Rubric) -> dict[str, Any]:
+    return {
+        "criteria": [
+            {"id": c.id, "score": _SCORES[c.id], "reasoning": c.id} for c in rubric.criteria
+        ],
+        "summary": "scored",
+    }
+
+
+class TestJudgeSchemaPrompt:
+    def test_copies_a_supplied_suggestion_into_the_prompt_as_untrusted_evidence(self) -> None:
+        async def run() -> None:
+            llm = FakeLlm(
+                objects=[
+                    _uniform_verdict(l2_promotion_rubric, 0.7),
+                    _uniform_verdict(l2_promotion_rubric, 0.7),
+                ]
+            )
+            judge = create_judge(llm=llm, pass_score=0.5)
+            base = JudgeInput(
+                html="<html><body><script>window.kohaku.ready()</script></body></html>",
+                request="as a heatmap",
+                usage=JudgeUsage(uses=3, sessions=2),
+            )
+            await judge.judge(
+                dataclasses.replace(
+                    base,
+                    suggestion={
+                        "componentType": "sales.calendarHeatmap",
+                        "intentName": "sales.calendar_heatmap",
+                        "description": "Monthly heatmap",
+                        "paramsJsonSchema": {"type": "object", "properties": {}},
+                        "events": [{"name": "cellSelected", "description": "clicked"}],
+                    },
+                )
+            )
+            await judge.judge(base)
+            assert "## Proposed schema (machine-extracted; verify it against the HTML)" in (
+                llm.calls[0].prompt
+            )
+            assert "sales.calendarHeatmap" in llm.calls[0].prompt
+            assert "<<<BEGIN SUGGESTION" in llm.calls[0].prompt
+            assert "## Proposed schema" not in llm.calls[1].prompt
+
+        asyncio.run(run())
+
+    def test_shows_the_draft_as_the_verification_target_and_the_suggestion_as_context_only(
+        self,
+    ) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_scripted_for(l2_promotion_rubric)])
+            judge = create_judge(llm=llm, pass_score=0.5)
+            await judge.judge(
+                dataclasses.replace(
+                    _HTML_INPUT,
+                    draft={
+                        "componentType": "sales.calendarHeatmap",
+                        "intentName": "sales.calendar_heatmap",
+                    },
+                    suggestion={
+                        "componentType": "sales.oldSuggestion",
+                        "intentName": "sales.old_suggestion",
+                        "description": "d",
+                        "events": [],
+                    },
+                )
+            )
+            prompt = llm.calls[0].prompt
+            assert (
+                "## Schema being registered (verify this against the HTML for schema fidelity)"
+                in prompt
+            )
+            assert "sales.calendarHeatmap" in prompt
+            assert (
+                "## Proposed schema (machine-extracted; context only — the schema being registered "
+                "above is the one actually published)"
+            ) in prompt
+            assert "sales.oldSuggestion" in prompt
+
+        asyncio.run(run())
+
+    def test_pretty_prints_draft_and_suggestion_like_json_stringify_with_two_space_indent(
+        self,
+    ) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_scripted_for(l2_promotion_rubric)])
+            judge = create_judge(llm=llm, pass_score=0.5)
+            await judge.judge(
+                dataclasses.replace(
+                    _HTML_INPUT,
+                    draft={
+                        "componentType": "a.b",
+                        "intentName": "a.c",
+                        "paramsJsonSchema": {
+                            "type": "object",
+                            "properties": {},
+                            "required": ["n"],
+                            "x": 1.0,
+                        },
+                        "events": [],
+                        "omitted": None,
+                    },
+                )
+            )
+            assert (
+                '```json\n{\n  "componentType": "a.b",\n  "intentName": "a.c",\n'
+                '  "paramsJsonSchema": {\n    "type": "object",\n    "properties": {},\n'
+                '    "required": [\n      "n"\n    ],\n    "x": 1\n  },\n  "events": []\n}\n```'
+            ) in llm.calls[0].prompt
+
+        asyncio.run(run())
+
+
+class TestRubricVariantSelection:
+    """#14: suggestion_fidelity drop and renormalization with no known schema."""
+
+    def test_drops_suggestion_fidelity_and_reports_no_schema_when_neither_is_given(self) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_scripted_for(l2_promotion_rubric_v0_3)])
+            judge = create_judge(llm=llm, pass_score=0.5)
+            verdict = await judge.judge(_HTML_INPUT)
+            assert [c.id for c in verdict.criteria] == [
+                c.id for c in l2_promotion_rubric_v0_3.criteria
+            ]
+            assert "suggestion_fidelity" not in [c.id for c in verdict.criteria]
+            assert verdict.rubric_variant == "no-schema"
+            # rubric_version always names the CONFIGURED rubric (here the default, "0.4").
+            assert verdict.rubric_version == "0.4"
+
+        asyncio.run(run())
+
+    def test_keeps_suggestion_fidelity_and_reports_full_when_a_draft_is_supplied(self) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_scripted_for(l2_promotion_rubric)])
+            judge = create_judge(llm=llm, pass_score=0.5)
+            verdict = await judge.judge(
+                dataclasses.replace(
+                    _HTML_INPUT,
+                    draft={
+                        "componentType": "sales.calendarHeatmap",
+                        "intentName": "sales.calendar_heatmap",
+                    },
+                )
+            )
+            assert [c.id for c in verdict.criteria] == [c.id for c in l2_promotion_rubric.criteria]
+            assert verdict.rubric_variant == "full"
+            assert verdict.rubric_version == "0.4"
+
+        asyncio.run(run())
+
+    def test_keeps_suggestion_fidelity_and_reports_full_when_only_a_suggestion_is_supplied(
+        self,
+    ) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_scripted_for(l2_promotion_rubric)])
+            judge = create_judge(llm=llm, pass_score=0.5)
+            verdict = await judge.judge(
+                dataclasses.replace(
+                    _HTML_INPUT,
+                    suggestion={
+                        "componentType": "sales.calendarHeatmap",
+                        "intentName": "sales.calendar_heatmap",
+                        "description": "d",
+                        "events": [],
+                    },
+                )
+            )
+            assert verdict.rubric_variant == "full"
+            assert verdict.rubric_version == "0.4"
+
+        asyncio.run(run())
+
+    def test_rounds_a_custom_rubrics_renormalized_weight(self) -> None:
+        async def run() -> None:
+            # 0.1 / 0.3 in IEEE 754 doubles is 0.33333333333333337, not a clean 0.3333 -- exactly the kind of
+            # value the generic proportional-renormalization branch must round before it reaches the prompt.
+            custom = Rubric(
+                id="custom",
+                version="1.0",
+                criteria=[
+                    Criterion(id="a", description="a", weight=0.1),
+                    Criterion(id="b", description="b", weight=0.1),
+                    Criterion(id="c", description="c", weight=0.1),
+                    Criterion(id="suggestion_fidelity", description="sf", weight=0.7),
+                ],
+            )
+            llm = FakeLlm(
+                objects=[
+                    {
+                        "criteria": [
+                            {"id": "a", "score": 1, "reasoning": "a"},
+                            {"id": "b", "score": 1, "reasoning": "b"},
+                            {"id": "c", "score": 1, "reasoning": "c"},
+                        ],
+                        "summary": "scored",
+                    }
+                ]
+            )
+            judge = create_judge(llm=llm, rubric=custom, pass_score=0.5)
+            await judge.judge(_HTML_INPUT)
+            system = llm.calls[0].system
+            assert system is not None
+            assert "a (weight 0.3333)" in system
+            assert not re.search(r"weight 0\.\d{5,}", system)
+
+        asyncio.run(run())
+
+    def test_both_variants_weights_sum_to_one(self) -> None:
+        assert sum(c.weight for c in l2_promotion_rubric.criteria) == pytest.approx(1)
+        assert sum(c.weight for c in l2_promotion_rubric_v0_3.criteria) == pytest.approx(1)
+
+    def test_a_no_suggestion_input_scores_identically_to_pinning_rubric_0_3(self) -> None:
+        async def run() -> None:
+            auto = await create_judge(
+                llm=FakeLlm(objects=[_scripted_for(l2_promotion_rubric_v0_3)]), pass_score=0.5
+            ).judge(_HTML_INPUT)
+            pinned = await create_judge(
+                llm=FakeLlm(objects=[_scripted_for(l2_promotion_rubric_v0_3)]),
+                pass_score=0.5,
+                rubric=l2_promotion_rubric_v0_3,
+            ).judge(_HTML_INPUT)
+            assert auto.score == pinned.score
+            assert auto.pass_ == pinned.pass_
+            assert auto.vetoed_by == pinned.vetoed_by
+            assert auto.criteria == pinned.criteria
+            # The only observable difference is the additive rubric_variant stamp.
+            assert auto.rubric_variant == "no-schema"
+            assert pinned.rubric_variant is None
+
+        asyncio.run(run())
+
+    def test_the_no_schema_system_prompt_lists_the_renormalized_default_weights(self) -> None:
+        async def run() -> None:
+            llm = FakeLlm(objects=[_scripted_for(l2_promotion_rubric_v0_3)])
+            await create_judge(llm=llm, pass_score=0.5).judge(_HTML_INPUT)
+            system = llm.calls[0].system
+            assert system is not None
+            # 0.05 + 0.1 would print 0.15000000000000002 without the 4-decimal half-up rounding.
+            assert "- schema_inferability (weight 0.15):" in system
+            assert "suggestion_fidelity" not in system
 
         asyncio.run(run())
