@@ -370,6 +370,12 @@ const JA: UIStrings = {
       issuedNotice: (action) =>
         `${action} の承認トークンを発行しました。コピーして要求者に渡してください(持参人トークンです)。`,
       tokenLabel: "承認トークン",
+      issuedBy: (approverId, remainingSeconds) =>
+        `${approverId} が発行済み — 残り ${
+          remainingSeconds < 60
+            ? `${remainingSeconds} 秒`
+            : `${Math.floor(remainingSeconds / 60)} 分 ${remainingSeconds % 60} 秒`
+        }`,
       issuedAge: (seconds, ttlSeconds) => `${seconds} 秒前に発行(有効期間 ${ttlSeconds} 秒)`,
       copyButton: "コピー",
       copied: "コピーしました",

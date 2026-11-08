@@ -215,16 +215,16 @@ export function useFixations(): {
 /** How far back the inbox looks. Older requests are not shown (and the event cap below applies on top). */
 const APPROVAL_INBOX_WINDOW_MS = 24 * 60 * 60 * 1000;
 /**
- * Only the two event types the derivation needs. `action.invoked` is deliberately not read: every `"auto"`-tier
+ * Only the three event types the derivation needs. `action.invoked` is deliberately not read: every `"auto"`-tier
  * write records one, so on a busy host they would crowd the capped tail and push real requests out of it.
  */
-const APPROVAL_INBOX_EVENT_TYPES = ["action.approvalRequested", "action.approved"];
+const APPROVAL_INBOX_EVENT_TYPES = ["action.approvalRequested", "action.approved", "action.approvalIssued"];
 /** Tail cap of one inbox read (the largest `limit` GET /lineage accepts). */
 export const APPROVAL_INBOX_EVENT_LIMIT = 1000;
 
 /**
  * The approver's inbox (design.md #72): reads the lineage tail (GET /lineage, the last 24 hours, at most 1000
- * `action.approvalRequested` / `action.approved` events) and derives the pending approvals from it with
+ * `action.approvalRequested` / `action.approved` / `action.approvalIssued` events) and derives the pending approvals from it with
  * `derivePendingApprovals` — there is no server-side pending store. `windowFull` is true when the read hit the
  * cap, so older requests may be missing from the list. A 401 / 403 becomes the role explanation, anything else
  * the generic fetchFailed text. The previous list stays visible while a reload is in flight so a row's local
@@ -253,7 +253,7 @@ export function useApprovalInbox(): {
       })
       .then(async (events) => ({
         full: events.length >= APPROVAL_INBOX_EVENT_LIMIT,
-        result: await derivePendingApprovals(events),
+        result: await derivePendingApprovals(events, { now: now.getTime() }),
       }))
       .then(({ full, result }) => {
         if (!stillCurrent()) return;

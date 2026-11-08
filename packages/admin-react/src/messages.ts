@@ -121,6 +121,11 @@ export interface AdminMessages {
     /** Info notice after a token is minted. */
     issuedNotice: (action: string) => string;
     tokenLabel: string;
+    /**
+     * Status line of a row whose token was already issued (by this or another approver, read from the lineage's
+     * `action.approvalIssued`): who issued it and how long (in seconds) it stays valid.
+     */
+    issuedBy: (approverId: string, remainingSeconds: number) => string;
     /** "issued N s ago (TTL M s)" under the token. */
     issuedAge: (seconds: number, ttlSeconds: number) => string;
     copyButton: string;
@@ -324,6 +329,12 @@ export const defaultAdminMessages: AdminMessages = {
     issuedNotice: (action) =>
       `Approval token issued for ${action}. Copy it and hand it to the requester; it is a bearer secret.`,
     tokenLabel: "Approval token",
+    issuedBy: (approverId, remainingSeconds) =>
+      `Issued by ${approverId} — expires in ${
+        remainingSeconds < 60
+          ? `${remainingSeconds}s`
+          : `${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s`
+      }`,
     issuedAge: (seconds, ttlSeconds) => `issued ${seconds}s ago (TTL ${ttlSeconds}s)`,
     copyButton: "Copy",
     copied: "Copied",

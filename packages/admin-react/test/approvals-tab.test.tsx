@@ -40,7 +40,7 @@ describe("ApprovalsTab", () => {
     const lineageCall = view.calls.find((c) => c.url.includes("/lineage"))!;
     const params = new URL(lineageCall.url, "http://x").searchParams;
     // action.invoked is not read: every auto-tier write records one and would crowd the 1000-event tail.
-    expect(params.get("type")).toBe("action.approvalRequested,action.approved");
+    expect(params.get("type")).toBe("action.approvalRequested,action.approved,action.approvalIssued");
     expect(params.get("limit")).toBe("1000");
     expect(Date.parse(params.get("since")!)).toBeLessThan(Date.now() - 23 * 3600_000);
   });
@@ -297,6 +297,43 @@ describe("ApprovalsTab", () => {
         expect((screen.getByLabelText(m.approvals.tokenLabel) as HTMLInputElement).value).toBe("tok.2"),
       );
       expect(screen.queryByText(m.approvals.reissue)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows an issued-and-unused token from the lineage, disables Approve, and lets it lapse with the clock", async () => {
+    // Only Date and the interval are faked (setTimeout stays real for testing-library's polling).
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const issuedEvent = {
+        id: "ev-issued",
+        ts: new Date(Date.now() - 30_000).toISOString(),
+        type: "action.approvalIssued",
+        actor: { kind: "user", id: "other-approver" },
+        payload: {
+          action: "sales.refund",
+          payloadHash: "sha256:0123456789abcdef0123",
+          requesterId: "demo-viewer",
+          approverId: "other-approver",
+          ttlSeconds: 300,
+          expiresAt: new Date(Date.now() + 90_000).toISOString(),
+        },
+      };
+      renderInAdmin(<ApprovalsTab />, {
+        handlers: { "GET /lineage": lineage([requestedEvent(), issuedEvent]) },
+      });
+      await screen.findByText("sales.refund");
+      await screen.findByText(m.approvals.issuedBy("other-approver", 90));
+      const approve = screen.getByText(m.approvals.approveButton) as HTMLButtonElement;
+      expect(approve.disabled).toBe(true);
+      expect(approve.title).toBe(m.approvals.approveDisabledIssued);
+
+      await act(async () => {
+        vi.advanceTimersByTime(91_000);
+      });
+      expect(screen.queryByText(/other-approver/)).toBeNull();
+      expect((screen.getByText(m.approvals.approveButton) as HTMLButtonElement).disabled).toBe(false);
     } finally {
       vi.useRealTimers();
     }

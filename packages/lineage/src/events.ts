@@ -69,12 +69,16 @@ export const POLICY_EVENT_TYPES = ["policy.applied"] as const;
  *   `"approve"` without a token).
  * - `action.approved` — tier `"approve"` and the presented approval grant was successfully consumed
  *   (recorded in addition to, not instead of, `action.invoked`).
+ * - `action.approvalIssued` — an approver minted an approval token through `POST /approvals`
+ *   (recorded only after issuance succeeded). Unlike every other `action.*` event its actor is the
+ *   *approver*, not the requester. Carries no `jti` and nothing that could rebuild the token.
  */
 export const ACTION_EVENT_TYPES = [
   "action.invoked",
   "action.denied",
   "action.approvalRequested",
   "action.approved",
+  "action.approvalIssued",
 ] as const;
 
 export type LineageEventType =
@@ -291,6 +295,26 @@ export interface ActionApprovedPayload {
   payloadHash: string;
   approverId: string;
   requesterId: string;
+  correlationId?: string;
+}
+
+/**
+ * Payload of `action.approvalIssued` (design.md #72): an approver minted an approval token for a pending
+ * `"approve"`-tier action. The event's **actor is the approver** (`approverId`) -- the one exception to
+ * the `action.*` convention that the actor is the requester whose invoke is being audited. Deliberately
+ * carries no token id (`jti`) or any other value the token could be reconstructed from: the audit proves
+ * *that* a specific `(action, payloadHash)` was approved for `requesterId` until `expiresAt`, nothing
+ * that could be replayed. `expiresAt` is computed by the host as issue time + `ttlSeconds` (the
+ * `ApprovalPort` does not report its own expiry), so it is advisory if the port clamps the lifetime.
+ */
+export interface ActionApprovalIssuedPayload {
+  action: string;
+  payloadHash: string;
+  requesterId: string;
+  approverId: string;
+  ttlSeconds: number;
+  /** ISO-8601, computed by the host as issue time + ttlSeconds. */
+  expiresAt: string;
   correlationId?: string;
 }
 

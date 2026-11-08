@@ -140,6 +140,21 @@ export interface RestActionAuditRecorder {
     tenant?: string;
     correlationId?: string;
   }): Promise<void>;
+  /**
+   * `POST /approvals` minted an approval token (design.md #72). `principal` is the **approver** -- the
+   * one `action.*` event whose actor is not the requester (the requester is `requesterId`).
+   */
+  approvalIssued(args: {
+    action: string;
+    payloadHash: string;
+    requesterId: string;
+    approverId: string;
+    ttlSeconds: number;
+    expiresAt: string;
+    principal: Principal;
+    tenant?: string;
+    correlationId?: string;
+  }): Promise<void>;
 }
 
 export interface CreateActionAuditRecorderOptions {
@@ -156,8 +171,9 @@ export interface CreateActionAuditRecorderOptions {
  * Builds the `ActionAuditRecorder` implementation backed by `lineage`'s `action.*` event family. Every
  * event is recorded with actor `{ kind: "user", id: principal.id }` -- the principal that made the
  * invoke request, whether or not that specific attempt was allowed, denied, or left pending (an approval
- * decision itself, once made, is out of scope for this recorder: `action.approved` records *that* a
- * given grant was consumed by this invoke, not the separate act of the approver having issued it).
+ * `action.approved` records *that* a given grant was consumed by this invoke). The single exception is
+ * `action.approvalIssued`, which records the separate act of an approver issuing the grant and is
+ * therefore recorded with the **approver** as its actor, not the requester).
  */
 export function createActionAuditRecorder(
   lineage: Lineage,
@@ -212,6 +228,21 @@ export function createActionAuditRecorder(
           payloadHash: args.payloadHash,
           approverId: args.grant.approverId,
           requesterId: args.grant.requesterId,
+          ...(args.correlationId != null ? { correlationId: args.correlationId } : {}),
+        },
+        { kind: "user", id: args.principal.id },
+        args.tenant,
+      );
+    },
+    async approvalIssued(args) {
+      await lineage.actionApprovalIssued(
+        {
+          action: args.action,
+          payloadHash: args.payloadHash,
+          requesterId: args.requesterId,
+          approverId: args.approverId,
+          ttlSeconds: args.ttlSeconds,
+          expiresAt: args.expiresAt,
           ...(args.correlationId != null ? { correlationId: args.correlationId } : {}),
         },
         { kind: "user", id: args.principal.id },

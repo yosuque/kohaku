@@ -22,6 +22,13 @@ export interface PendingApproval {
   count: number;
   /** `ts` of the most recent request. */
   latestTs: string;
+  /**
+   * Present when an approver has already minted a token for this exact row (an `action.approvalIssued` newer
+   * than the latest `action.approved`) and that token has not yet expired as of the derivation's `now`. It
+   * never settles the row: the token is a bearer secret the lineage does not hold, and whether it was ever
+   * used is known only from the later `action.approved`.
+   */
+  issued?: { issuedAt: string; expiresAt: string; approverId: string };
   /** The first recorded payload of the unsettled requests. Present only when the host records payloads (`recordPayload: true`). */
   payload?: unknown;
   /**
@@ -93,14 +100,24 @@ async function payloadHashStateOf(
  * Async because the recorded payload (when the host records it) is re-hashed with spec-core's
  * `actionPayloadHash` (WebCrypto) to detect a payload that no longer matches its hash. A re-hash that throws
  * marks only that row `payloadHashState: "unverifiable"`; it never fails the whole derivation.
+ *
+ * An `action.approvalIssued` event (keyed by its payload's `requesterId`) decorates a row with `issued` while
+ * it is newer than the latest `action.approved` and its `expiresAt` is still in the future (`options.now`,
+ * injectable for tests). It is purely informational: it neither creates a row nor settles one, and an expired
+ * or malformed issuance is simply ignored, which puts the row back to plain "pending".
  */
 export async function derivePendingApprovals(
   events: readonly LineageEventRecord[],
+  options: {
+    /** Epoch milliseconds; decides whether an issued token has expired. Defaults to `Date.now()`. */ now?: number;
+  } = {},
 ): Promise<PendingApproval[]> {
+  const nowMs = options.now ?? Date.now();
   const ordered = [...events].sort((a, b) => compareTs(a.ts, b.ts));
 
   const groups = new Map<string, Group>();
   const settledAt = new Map<string, string>();
+  const issuedAt = new Map<string, NonNullable<PendingApproval["issued"]>>();
 
   for (const ev of ordered) {
     const action = str(ev.payload.action);
@@ -120,6 +137,13 @@ export async function derivePendingApprovals(
       const key = keyOf(str(ev.payload.requesterId), action, payloadHash);
       const prev = settledAt.get(key);
       if (prev == null || compareTs(ev.ts, prev) > 0) settledAt.set(key, ev.ts);
+    } else if (ev.type === "action.approvalIssued") {
+      const requesterId = str(ev.payload.requesterId);
+      const approverId = str(ev.payload.approverId);
+      const expiresAt = str(ev.payload.expiresAt);
+      if (requesterId == null || approverId == null || expiresAt == null) continue;
+      // `ordered` is ascending, so a later event of the same key overwrites an earlier one (the latest wins).
+      issuedAt.set(keyOf(requesterId, action, payloadHash), { issuedAt: ev.ts, expiresAt, approverId });
     }
   }
 
@@ -139,6 +163,14 @@ export async function derivePendingApprovals(
       latestTs: latest.ts,
     };
     if (group.requesterId != null) row.requesterId = group.requesterId;
+    const issued = issuedAt.get(key);
+    if (
+      issued != null &&
+      (settled == null || compareTs(issued.issuedAt, settled) > 0) &&
+      Date.parse(issued.expiresAt) > nowMs
+    ) {
+      row.issued = issued;
+    }
     const recorded = open.find((r) => r.payload !== undefined);
     if (recorded != null) {
       row.payload = recorded.payload;
